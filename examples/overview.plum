@@ -1,0 +1,189 @@
+// Plum syntax sketch — illustrative only, the parser does not implement
+// this yet. Second pass: first draft leaned Rust-shaped (`fn`, `::`,
+// mandatory annotations) and reading it back made clear it looked like
+// Rust with renamed types, not ML. Revised per DESIGN.md's "Surface
+// syntax" section: `let` for definitions, `.` for both field and
+// variant/module access, annotations optional (inference fills them
+// in), a pipe operator for composition. `fn` survives in exactly one
+// place: `extern` declarations, which are foreign signatures with no
+// body and always-mandatory types — see the FFI section below.
+//
+// Built-in type names are still ML-flavored, not Rust's sized-integer
+// zoo: Int, Float, Bool, String, Unit.
+
+// --- Pure functions, expression-orientation, recursion ---
+//
+// No `return`, no mandatory parameter types: full inference. Tail calls
+// are guaranteed eliminated by the LLVM backend (`tail call` in LLVM
+// IR), so this compiles to a loop, not a stack-growing call chain.
+let sum n acc =
+    if n == 0 { acc } else { sum (n - 1) (acc + n) }
+
+// Explicit annotations are still legal and equivalent — recommended for
+// exported/top-level signatures so the public API is pinned on purpose
+// rather than drifting with whatever the implementation currently
+// infers. Both forms below are the same function.
+let double (n: Int): Int = n * 2
+let double n = n * 2
+
+// --- Algebraic data types + exhaustive pattern matching ---
+//
+// `enum` for sum types — already means exactly "algebraic data type" to
+// anyone coming from Rust, no reason to rename it.
+enum Shape {
+    Circle(Float),
+    Rectangle(Float, Float),
+    Triangle(Float, Float, Float),
+}
+
+let area shape =
+    match shape {
+        Shape.Circle(r) => 3.14159 * r * r,
+        Shape.Rectangle(w, h) => w * h,
+        Shape.Triangle(a, b, c) => {
+            let s = (a + b + c) / 2.0;
+            sqrt(s * (s - a) * (s - b) * (s - c))
+        }
+    }
+    // No wildcard arm: match is exhaustive over Shape's variants,
+    // checked at compile time. Adding a variant to Shape without
+    // updating this match is a compile error, same as Rust.
+
+// --- Pattern grammar: guards, or-patterns, wildcard ---
+//
+// `is_flat` exercises the fuller pattern grammar from DESIGN.md that
+// `area` above didn't need: a guard clause, an or-pattern combining two
+// variant shapes into one arm, and a trailing wildcard. Same `..` token
+// as struct-update/ranges, different job again — grammatical position
+// disambiguates all three uses.
+let is_flat shape =
+    match shape {
+        Shape.Rectangle(w, h) if w == h => true,
+        Shape.Circle(r) if r == 0.0 => true,
+        Shape.Rectangle(_, _) | Shape.Triangle(_, _, _) => false,
+        _ => false,
+    }
+
+// --- Records ---
+//
+// `struct`, field access with `.`, functional update with `..p`. Struct
+// field types are mandatory (see DESIGN.md — there's no body to infer
+// them from), everything else about a struct's use stays inferred.
+struct Point {
+    x: Float,
+    y: Float,
+}
+
+let move_right p dx = Point { x: p.x + dx, ..p }
+    // FBIP means this compiles to an in-place field write when `p` is
+    // uniquely owned at this call site, and a real copy only when it
+    // isn't. The programmer never has to know or say which.
+
+// Struct-destructuring pattern, tuple pattern, and closures — the rest
+// of the pattern grammar and the tuple/closure syntax from DESIGN.md.
+let distance_from_origin (Point { x, y }) = sqrt(x * x + y * y)
+
+let swap (a, b) = (b, a)
+
+// A one-element tuple needs a trailing comma to distinguish it from a
+// plain parenthesized expression: `(5)` is just `5`, `(5,)` is a tuple.
+let one_tuple = (5,)
+
+// Closures: `|params| expr`, no `move` keyword needed — there's nothing
+// to borrow-check, so captures just work. (Array/list literals and a
+// `map` stdlib function aren't decided yet — see DESIGN.md's open
+// questions — so this stays deliberately small rather than reaching for
+// either.)
+let apply_twice f x = f(f(x))
+let add_dx = |p| move_right p 1.0
+let shifted = apply_twice add_dx (Point { x: 0.0, y: 0.0 })
+
+// --- Local mutability, without escaping ---
+//
+// `let mut` is for genuinely local, non-escaping mutation — proven safe
+// by the same uniqueness analysis that powers FBIP, since it's no
+// riskier than recursion. This is a different mechanism from `Ref`
+// below, which is for state that's actually shared or escapes.
+let sum_range n =
+    let mut total = 0;
+    for i in 0..n {
+        total = total + i;
+    };
+    // ^ trailing `;` required even though `for { }` has its own closing
+    // brace — DESIGN.md's block rule has no exemption for block-shaped
+    // statements, unlike Rust.
+    total
+
+// --- The pipe operator ---
+//
+// Purely additive ML idiom, left-to-right call composition. Nothing
+// here that isn't already expressible with nested calls — it's a
+// readability win, not new semantics.
+let describe_shape shape =
+    shape
+        |> area
+        |> to_string
+        |> print
+
+// --- The Ref type: opt-in shared mutability ---
+//
+// The escape hatch for graph-shaped state FBIP's uniqueness analysis
+// can't help with — e.g. a game entity whose position multiple systems
+// read and update across frames.
+struct Vec2 {
+    x: Float,
+    y: Float,
+}
+
+struct Entity {
+    position: Ref[Vec2],
+    velocity: Vec2,
+}
+
+let tick entity dt =
+    entity.position.update(|p| Point { x: p.x + entity.velocity.x * dt, ..p })
+    // .update takes the current value, produces a new one — never
+    // exposes a raw mutable reference/borrow the way Rust's
+    // RefCell::borrow_mut() does. The only rule is "the closure returns
+    // the new value."
+
+let read_position entity = entity.position.get()
+
+// Ref.new is how you opt in; ordinary values never need this. Note `.`
+// here too, not `::` — see DESIGN.md, there's only one access operator.
+let spawn_entity start vel = Entity { position: Ref.new(start), velocity: vel }
+
+// --- FFI: calling into C ---
+//
+// extern blocks are the one place `fn` survives: they're declarations
+// of a foreign symbol, not definitions — no body, no inference possible,
+// so full annotation is mandatory rather than optional (see DESIGN.md's
+// "Type annotations" section). Calls are wrapped in `unsafe {}`, the
+// propagating trust-boundary marker from "Effect/unsafe tracking".
+extern "C" {
+    fn sqrt(x: Float) -> Float;
+}
+
+let hypotenuse a b = unsafe { sqrt(a * a + b * b) }
+
+// --- Concurrency: tasks and channels ---
+//
+// `spawn` starts a lightweight task. `channel[T]()` creates a typed
+// channel — square brackets for generic instantiation, not `::<T>`
+// turbofish (see DESIGN.md's "Generics and type parameter syntax").
+// Sending is a MOVE: after `tx.send(msg)`, the compiler treats `msg` as
+// used for the last time — reusing it below is a compile error, not a
+// runtime race, because ownership transferred rather than being
+// shared. This is the "beats Go" claim from DESIGN.md made concrete.
+let producer tx =
+    let msg = 42;
+    tx.send(msg)
+    // tx.send(msg); // <- would be a compile error: `msg` already moved
+
+let example () =
+    let (tx, rx) = channel[Int]();
+    spawn { producer(tx) };
+    match rx.recv() {
+        Some(value) => print(value),
+        None => print("channel closed"),
+    }
