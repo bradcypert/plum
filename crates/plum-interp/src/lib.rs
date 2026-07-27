@@ -1,6 +1,7 @@
 mod heap;
 
-use plum_ir::ir::{BinOp, Expr, RcOp, UnOp};
+use plum_ir::ir::{BinOp, Expr, Function, Program, RcOp, UnOp};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -20,6 +21,13 @@ pub enum Value {
 pub struct Interpreter {
     env: Vec<(String, Value)>,
     heap: heap::Heap,
+    // Separate from `env` on purpose: a named top-level function must
+    // NEVER see whatever local variables happen to exist wherever it
+    // was called from — only its own parameters. Keeping functions in
+    // their own table (rather than pushing them onto `env`) is what
+    // makes that isolation structural rather than something `call` has
+    // to remember to enforce.
+    functions: HashMap<String, Function>,
 }
 
 impl Interpreter {
@@ -27,7 +35,41 @@ impl Interpreter {
         Interpreter {
             env: Vec::new(),
             heap: heap::Heap::new(),
+            functions: HashMap::new(),
         }
+    }
+
+    pub fn load_program(&mut self, program: &Program) {
+        for f in &program.functions {
+            self.functions.insert(f.name.clone(), f.clone());
+        }
+    }
+
+    /// Invokes a named top-level function with concrete argument
+    /// values. Swaps in a completely FRESH environment containing only
+    /// the parameters (not whatever `env` currently holds), evaluates
+    /// the body, then restores the caller's environment — this swap-
+    /// and-restore is what gives correct isolation, and it's also
+    /// exactly what makes recursion work for free: a function calling
+    /// itself just looks itself up in `functions` again, fresh.
+    pub fn call(&mut self, name: &str, args: Vec<Value>) -> Result<Value, String> {
+        let func = self
+            .functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("unknown function: {name}"))?;
+        if func.params.len() != args.len() {
+            return Err(format!(
+                "{name} expects {} argument(s), found {}",
+                func.params.len(),
+                args.len()
+            ));
+        }
+        let fresh_env: Vec<(String, Value)> = func.params.into_iter().zip(args).collect();
+        let caller_env = std::mem::replace(&mut self.env, fresh_env);
+        let result = self.eval(&func.body);
+        self.env = caller_env;
+        result
     }
 
     fn lookup(&self, name: &str) -> Result<Value, String> {
@@ -110,11 +152,19 @@ impl Interpreter {
                 Value::Bool(false) => self.eval(else_branch),
                 v => Err(format!("`if` condition must be Bool, found {v:?}")),
             },
-            Expr::Call { .. } => Err(
-                "function calls not yet supported by the interpreter (no function \
-                 values/environment yet — waits for Item-level lowering)"
-                    .to_string(),
-            ),
+            Expr::Call { callee, args } => {
+                // Only a bare name naming a known top-level function is
+                // supported — calling anything else (a closure value,
+                // an unbound name) waits for closures to exist at all.
+                let Expr::Var(name) = callee.as_ref() else {
+                    return Err(
+                        "calling a non-function-name value is not yet supported (no closures yet)"
+                            .to_string(),
+                    );
+                };
+                let arg_values = args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
+                self.call(name, arg_values)
+            }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
                 // non-heap name (shouldn't happen given how fbip.rs
@@ -406,9 +456,11 @@ mod tests {
     }
 
     #[test]
-    fn calls_are_not_yet_supported() {
-        // No function values or environment exist yet — that waits for
-        // Item-level lowering (let-defs becoming callable functions).
+    fn calling_an_undefined_function_is_an_error() {
+        // Calls themselves work now (see the "real function
+        // definitions and calls" tests below) — this specific `eval`
+        // helper never loads any program, so `f` is genuinely unknown
+        // here, not "calls aren't supported" in general anymore.
         eval_err("f(1)");
     }
 
@@ -650,5 +702,117 @@ mod tests {
             "the swap should cost zero extra allocations — that's the whole point of FBIP"
         );
         assert_eq!(interp.heap.read(addr).unwrap(), ("Point", &[Value::Float(2.0), Value::Float(1.0)][..]));
+    }
+
+    // --- Real function definitions and calls, including recursion —
+    // the big remaining gap this whole thread has been flagging since
+    // the very first interpreter tests.
+
+    use plum_ir::lower::lower_program;
+
+    fn run(src: &str, fn_name: &str, args: Vec<Value>) -> Value {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let ctx = LoweringContext::from_items(&program.items);
+        let ir_program = lower_program(&program, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
+        let mut interp = Interpreter::new();
+        interp.load_program(&ir_program);
+        interp
+            .call(fn_name, args)
+            .unwrap_or_else(|e| panic!("call error: {e}"))
+    }
+
+    fn run_err(src: &str, fn_name: &str, args: Vec<Value>) -> String {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let ctx = LoweringContext::from_items(&program.items);
+        let ir_program = lower_program(&program, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
+        let mut interp = Interpreter::new();
+        interp.load_program(&ir_program);
+        interp.call(fn_name, args).expect_err("expected call to fail")
+    }
+
+    #[test]
+    fn call_single_param_function() {
+        assert_eq!(run("let double n = n * 2", "double", vec![Value::Int(5)]), Value::Int(10));
+    }
+
+    #[test]
+    fn call_multi_param_function() {
+        assert_eq!(
+            run("let add a b = a + b", "add", vec![Value::Int(2), Value::Int(3)]),
+            Value::Int(5)
+        );
+    }
+
+    #[test]
+    fn recursion() {
+        // The capstone this whole thread has been building toward:
+        // first real recursive Plum function actually running.
+        let src = "let sum n acc = if n == 0 { acc } else { sum(n - 1, acc + n) }";
+        assert_eq!(run(src, "sum", vec![Value::Int(5), Value::Int(0)]), Value::Int(15));
+    }
+
+    #[test]
+    fn cross_function_calls() {
+        let src = "let square x = x * x\nlet sum_of_squares a b = square(a) + square(b)";
+        assert_eq!(
+            run(src, "sum_of_squares", vec![Value::Int(3), Value::Int(4)]),
+            Value::Int(25)
+        );
+    }
+
+    #[test]
+    fn wrong_argument_count_is_an_error() {
+        run_err("let add a b = a + b", "add", vec![Value::Int(1)]);
+    }
+
+    #[test]
+    fn unknown_function_is_an_error() {
+        run_err("let double n = n * 2", "triple", vec![Value::Int(1)]);
+    }
+
+    #[test]
+    fn function_body_cannot_see_the_caller_environment() {
+        // A function's body must only ever see its own parameters —
+        // never whatever locals happened to exist wherever it was
+        // called from. Proven by pre-populating the interpreter's env
+        // with a binding the function references but never receives
+        // as a parameter, and confirming the call still fails to find
+        // it — if isolation were broken (e.g. `call` accidentally
+        // reused `self.env` instead of swapping in a fresh one), this
+        // would incorrectly succeed.
+        let src = "let leak_check unused_param = outer_var + 1";
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap();
+        let ctx = LoweringContext::new();
+        let ir_program = lower_program(&program, &ctx).unwrap();
+
+        let mut interp = Interpreter::new();
+        interp.load_program(&ir_program);
+        interp.env.push(("outer_var".to_string(), Value::Int(99)));
+
+        let err = interp.call("leak_check", vec![Value::Int(0)]).expect_err("expected call to fail");
+        assert!(err.contains("outer_var"), "expected an unbound-variable error, got: {err}");
+    }
+
+    #[test]
+    fn calling_a_non_name_callee_is_not_yet_supported() {
+        // No closures yet — only a bare name naming a known function
+        // can be called. `(if true { f } else { g })(1)` is a
+        // legitimate future case (calling a computed function value)
+        // that simply isn't representable yet.
+        let call_expr = Expr::Call {
+            callee: Box::new(Expr::If {
+                cond: Box::new(Expr::Bool(true)),
+                then_branch: Box::new(Expr::Int(0)),
+                else_branch: Box::new(Expr::Int(0)),
+            }),
+            args: vec![],
+        };
+        assert!(Interpreter::new().eval(&call_expr).is_err());
     }
 }

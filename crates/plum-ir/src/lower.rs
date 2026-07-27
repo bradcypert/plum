@@ -40,6 +40,56 @@ impl Default for LoweringContext {
     }
 }
 
+/// Lowers a whole program's `let`-defined functions into `ir::Function`s.
+/// Only `let` items with 1+ parameters become functions. Deliberately
+/// out of scope, both with a clear error rather than a silent skip:
+/// zero-param top-level `let`s (a "global" needs its own design — is it
+/// referenced bare or called? — not conflated with this), and
+/// destructuring params (same restriction as block-level `let`).
+/// Generics are simply IGNORED, not rejected — see ir.rs's `Function`
+/// doc comment: a type parameter has no runtime effect without a type
+/// checker, so this is deliberate erasure.
+pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir::Program, String> {
+    let mut functions = Vec::new();
+    for item in &program.items {
+        if let ast::ItemKind::Let(def) = &item.kind {
+            if def.params.is_empty() {
+                return Err(format!(
+                    "lowering not yet implemented for zero-parameter top-level `let` \
+                     (a \"global\" needs its own design) at {:?}",
+                    def.span
+                ));
+            }
+            let params = def
+                .params
+                .iter()
+                .map(lower_param_name)
+                .collect::<Result<Vec<_>, _>>()?;
+            let body = lower_expr(&def.body, ctx)?;
+            functions.push(ir::Function {
+                name: def.name.clone(),
+                params,
+                body,
+            });
+        }
+        // struct/enum/extern/use declarations don't produce runtime
+        // functions — they're consumed elsewhere (LoweringContext) or
+        // not consumed at all yet (extern, use).
+    }
+    Ok(ir::Program { functions })
+}
+
+fn lower_param_name(param: &ast::Param) -> Result<String, String> {
+    match &param.kind {
+        ast::ParamKind::Ident(name) => Ok(name.clone()),
+        ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => Ok(name.clone()),
+        _ => Err(format!(
+            "lowering not yet implemented for destructuring function parameters at {:?}",
+            param.span
+        )),
+    }
+}
+
 pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
     match expr {
         ast::Expr::Int(n, _) => Ok(ir::Expr::Int(*n)),
@@ -790,5 +840,100 @@ mod tests {
     #[test]
     fn closure_is_not_yet_supported() {
         lower_err("|x| x");
+    }
+
+    // --- Item-level lowering: `let`-defined functions -> ir::Function
+
+    fn lower_program(src: &str) -> ir::Program {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser
+            .parse_program()
+            .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let ctx = LoweringContext::from_items(&program.items);
+        super::lower_program(&program, &ctx).unwrap_or_else(|e| panic!("program lowering error for {src:?}: {e}"))
+    }
+
+    fn lower_program_err(src: &str) -> String {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser
+            .parse_program()
+            .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let ctx = LoweringContext::from_items(&program.items);
+        super::lower_program(&program, &ctx).expect_err(&format!("expected lowering of {src:?} to fail"))
+    }
+
+    #[test]
+    fn single_param_function() {
+        let program = lower_program("let double n = n * 2");
+        assert_eq!(
+            program.functions,
+            vec![ir::Function {
+                name: "double".to_string(),
+                params: vec!["n".to_string()],
+                body: ir::Expr::Binary(
+                    ir::BinOp::Mul,
+                    Box::new(ir::Expr::Var("n".to_string())),
+                    Box::new(ir::Expr::Int(2)),
+                ),
+            }]
+        );
+    }
+
+    #[test]
+    fn annotations_do_not_affect_lowering() {
+        let annotated = lower_program("let double (n: Int): Int = n * 2");
+        let bare = lower_program("let double n = n * 2");
+        assert_eq!(annotated.functions, bare.functions);
+    }
+
+    #[test]
+    fn multi_param_function() {
+        let program = lower_program("let add a b = a + b");
+        assert_eq!(program.functions[0].params, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn generics_are_ignored_not_rejected() {
+        // No type checker exists yet, so a type parameter has no
+        // runtime effect — this is deliberate erasure, not a missing
+        // feature. Proven by lowering succeeding at all here.
+        let program = lower_program("let identity[T] (x: T): T = x");
+        assert_eq!(program.functions[0].params, vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn struct_and_enum_and_use_items_produce_no_functions() {
+        let program = lower_program(
+            "struct Point { x: Float, y: Float }\n\
+             enum Shape { Circle(Float) }\n\
+             use shapes;\n\
+             let double n = n * 2",
+        );
+        assert_eq!(program.functions.len(), 1);
+        assert_eq!(program.functions[0].name, "double");
+    }
+
+    #[test]
+    fn multiple_functions_lower_in_order() {
+        let program = lower_program("let square x = x * x\nlet cube x = x * x * x");
+        let names: Vec<&str> = program.functions.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["square", "cube"]);
+    }
+
+    #[test]
+    fn zero_param_let_is_not_yet_supported() {
+        // Deliberately deferred: a zero-param top-level `let` should
+        // be referenced bare (`x`), not called (`x()`) — supporting
+        // that needs "evaluate globals eagerly into the environment"
+        // machinery this pass doesn't build. Loud error, not a silent
+        // skip, so this isn't mistaken for "just doesn't show up."
+        lower_program_err("let x = 5");
+    }
+
+    #[test]
+    fn destructuring_param_is_not_yet_supported() {
+        lower_program_err("let swap (a, b) = (b, a)");
     }
 }

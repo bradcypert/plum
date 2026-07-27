@@ -122,3 +122,20 @@ pub struct MatchArm {
     pub bindings: Vec<String>,
     pub body: Expr,
 }
+
+// A named, top-level, non-closure function — see lower.rs's
+// `lower_program` scope note for exactly what does and doesn't lower
+// into one of these yet (only plain-identifier params; no zero-param
+// "globals" yet; generics are ignored entirely, since a type parameter
+// has no runtime effect without a type checker).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Function {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Program {
+    pub functions: Vec<Function>,
+}
