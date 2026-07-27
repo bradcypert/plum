@@ -267,8 +267,9 @@ fn values_equal(a: &Value, b: &Value) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plum_ir::lower::lower_expr;
+    use plum_ir::lower::{lower_expr, LoweringContext};
     use plum_syntax::lexer::Lexer;
+    use plum_syntax::ast;
     use plum_syntax::parser::Parser;
 
     fn eval(src: &str) -> Value {
@@ -277,7 +278,8 @@ mod tests {
         let ast = parser
             .parse_expr()
             .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
-        let ir = lower_expr(&ast).unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"));
+        let ir = lower_expr(&ast, &LoweringContext::new())
+            .unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"));
         Interpreter::new()
             .eval(&ir)
             .unwrap_or_else(|e| panic!("eval error for {src:?}: {e}"))
@@ -289,7 +291,8 @@ mod tests {
         let ast = parser
             .parse_expr()
             .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
-        let ir = lower_expr(&ast).unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"));
+        let ir = lower_expr(&ast, &LoweringContext::new())
+            .unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"));
         Interpreter::new()
             .eval(&ir)
             .expect_err(&format!("expected eval of {src:?} to fail"))
@@ -609,5 +612,43 @@ mod tests {
         assert_eq!(interp.alloc_count(), 2, "the shared path must allocate a fresh cell");
         assert_eq!(interp.heap.read(0).unwrap(), ("Point", &[Value::Int(1), Value::Int(2)][..]));
         assert_eq!(interp.heap.read(new_addr).unwrap(), ("Point", &[Value::Int(2), Value::Int(1)][..]));
+    }
+
+    // --- The capstone: real Plum SOURCE TEXT, through the entire
+    // pipeline for the first time — parse -> lower (resolving a real
+    // struct declaration's field order) -> FBIP optimize (refcount
+    // insertion + reuse analysis) -> evaluate on the simulated heap.
+    // Every other test in this whole thread used hand-built IR
+    // specifically to isolate what was being validated; this is where
+    // all of it is proven to actually fit together.
+
+    #[test]
+    fn end_to_end_real_source_struct_swap_via_reuse() {
+        let src = "struct Point { x: Float, y: Float }\n\
+                   let result = { let p = Point { x: 1.0, y: 2.0 }; match p { Point(x, y) => Point { x: y, y: x } } }";
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let ctx = LoweringContext::from_items(&program.items);
+
+        let ast::ItemKind::Let(def) = &program.items[1].kind else {
+            panic!("expected the second item to be a let definition");
+        };
+        let ir = lower_expr(&def.body, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
+        let optimized = plum_ir::fbip::optimize(ir);
+
+        let mut interp = Interpreter::new();
+        let result = interp.eval(&optimized).unwrap_or_else(|e| panic!("eval error: {e}"));
+
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_eq!(addr, 0, "single owner, single use — reuse should recycle the original cell");
+        assert_eq!(
+            interp.alloc_count(),
+            1,
+            "the swap should cost zero extra allocations — that's the whole point of FBIP"
+        );
+        assert_eq!(interp.heap.read(addr).unwrap(), ("Point", &[Value::Float(2.0), Value::Float(1.0)][..]));
     }
 }

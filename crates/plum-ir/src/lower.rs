@@ -1,7 +1,46 @@
 use crate::ir;
 use plum_syntax::ast;
+use std::collections::HashMap;
 
-pub fn lower_expr(expr: &ast::Expr) -> Result<ir::Expr, String> {
+/// A minimal symbol table, built from a program's `struct` declarations
+/// before lowering any expressions that use them. Needed because
+/// struct literals are named-field (`Point { y: 2.0, x: 1.0 }`, any
+/// order) but the IR's `Ctor` is positional (matching Perceus's own
+/// minimal core calculus) — resolving "what position does field `y`
+/// go in" requires knowing the struct's DECLARED field order, which a
+/// single expression can't know about in isolation. This is the first
+/// place lowering needs to be program-aware rather than purely
+/// per-expression.
+pub struct LoweringContext {
+    struct_fields: HashMap<String, Vec<String>>,
+}
+
+impl LoweringContext {
+    pub fn new() -> Self {
+        LoweringContext {
+            struct_fields: HashMap::new(),
+        }
+    }
+
+    pub fn from_items(items: &[ast::Item]) -> Self {
+        let mut ctx = Self::new();
+        for item in items {
+            if let ast::ItemKind::Struct(decl) = &item.kind {
+                let fields = decl.fields.iter().map(|f| f.name.clone()).collect();
+                ctx.struct_fields.insert(decl.name.clone(), fields);
+            }
+        }
+        ctx
+    }
+}
+
+impl Default for LoweringContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
     match expr {
         ast::Expr::Int(n, _) => Ok(ir::Expr::Int(*n)),
         ast::Expr::Float(f, _) => Ok(ir::Expr::Float(*f)),
@@ -11,21 +50,21 @@ pub fn lower_expr(expr: &ast::Expr) -> Result<ir::Expr, String> {
         ast::Expr::Tuple(elems, _) if elems.is_empty() => Ok(ir::Expr::Unit),
         ast::Expr::Tuple(_, span) => Err(format!(
             "lowering not yet implemented for non-empty tuples (heap-allocated \
-             — waits for the same pass as structs/enums) at {span:?}"
+             — waits for its own pass) at {span:?}"
         )),
         ast::Expr::Unary { op, expr, .. } => {
             let ir_op = match op {
                 ast::UnaryOp::Neg => ir::UnOp::Neg,
                 ast::UnaryOp::Not => ir::UnOp::Not,
             };
-            Ok(ir::Expr::Unary(ir_op, Box::new(lower_expr(expr)?)))
+            Ok(ir::Expr::Unary(ir_op, Box::new(lower_expr(expr, ctx)?)))
         }
         ast::Expr::Binary {
             op: ast::BinaryOp::Pipe,
             lhs,
             rhs,
             ..
-        } => lower_pipe(lhs, rhs),
+        } => lower_pipe(lhs, rhs, ctx),
         ast::Expr::Binary {
             op: ast::BinaryOp::Range,
             span,
@@ -36,20 +75,20 @@ pub fn lower_expr(expr: &ast::Expr) -> Result<ir::Expr, String> {
         )),
         ast::Expr::Binary { op, lhs, rhs, .. } => Ok(ir::Expr::Binary(
             lower_binop(op),
-            Box::new(lower_expr(lhs)?),
-            Box::new(lower_expr(rhs)?),
+            Box::new(lower_expr(lhs, ctx)?),
+            Box::new(lower_expr(rhs, ctx)?),
         )),
-        ast::Expr::Block(block, _) => lower_block(block),
+        ast::Expr::Block(block, _) => lower_block(block, ctx),
         ast::Expr::If {
             cond,
             then_branch,
             else_branch,
             ..
         } => {
-            let ir_cond = lower_expr(cond)?;
-            let ir_then = lower_block(then_branch)?;
+            let ir_cond = lower_expr(cond, ctx)?;
+            let ir_then = lower_block(then_branch, ctx)?;
             let ir_else = match else_branch {
-                Some(e) => lower_expr(e)?,
+                Some(e) => lower_expr(e, ctx)?,
                 None => ir::Expr::Unit,
             };
             Ok(ir::Expr::If {
@@ -59,18 +98,124 @@ pub fn lower_expr(expr: &ast::Expr) -> Result<ir::Expr, String> {
             })
         }
         ast::Expr::Call { callee, args, .. } => {
-            let ir_callee = lower_expr(callee)?;
-            let ir_args = args.iter().map(lower_expr).collect::<Result<_, _>>()?;
+            let ir_callee = lower_expr(callee, ctx)?;
+            let ir_args = args.iter().map(|a| lower_expr(a, ctx)).collect::<Result<_, _>>()?;
             Ok(ir::Expr::Call {
                 callee: Box::new(ir_callee),
                 args: ir_args,
             })
         }
-        // Everything heap-shaped (structs, enum variants, closures) or
-        // requiring pattern-matching machinery (match) waits for the
-        // FBIP pass itself — see this module's and ir.rs's scope notes.
+        ast::Expr::StructLiteral {
+            path,
+            fields,
+            spread,
+            span,
+        } => lower_struct_literal(path, fields, spread, *span, ctx),
+        ast::Expr::Match { scrutinee, arms, .. } => lower_match(scrutinee, arms, ctx),
+        // Closures, unsafe/spawn blocks, for-loops, field access,
+        // generic instantiation, and indexing are all still deferred —
+        // none of them are needed to validate struct/match lowering.
         other => Err(format!(
             "lowering not yet implemented for this expression form at {:?}",
+            other.span()
+        )),
+    }
+}
+
+fn lower_struct_literal(
+    path: &[String],
+    fields: &[ast::FieldInit],
+    spread: &Option<Box<ast::Expr>>,
+    span: plum_syntax::span::Span,
+    ctx: &LoweringContext,
+) -> Result<ir::Expr, String> {
+    if spread.is_some() {
+        return Err(format!(
+            "lowering not yet implemented for struct update/spread syntax (`..expr`) at {span:?}"
+        ));
+    }
+    let tag = path.last().cloned().expect("a path always has at least one segment");
+    let Some(declared_fields) = ctx.struct_fields.get(&tag) else {
+        return Err(format!(
+            "unknown struct type {tag:?} at {span:?} (no declaration found in this lowering context)"
+        ));
+    };
+
+    let mut by_name: HashMap<&str, &ast::Expr> = HashMap::new();
+    for f in fields {
+        if by_name.insert(f.name.as_str(), &f.value).is_some() {
+            return Err(format!("field {:?} specified more than once at {:?}", f.name, f.span));
+        }
+    }
+
+    let mut ir_fields = Vec::with_capacity(declared_fields.len());
+    for declared_name in declared_fields {
+        let Some(value_expr) = by_name.remove(declared_name.as_str()) else {
+            return Err(format!("missing field {declared_name:?} for struct {tag:?} at {span:?}"));
+        };
+        ir_fields.push(lower_expr(value_expr, ctx)?);
+    }
+    if let Some((extra_name, _)) = by_name.into_iter().next() {
+        return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+    }
+
+    Ok(ir::Expr::Ctor { tag, fields: ir_fields })
+}
+
+fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringContext) -> Result<ir::Expr, String> {
+    let ir_scrutinee = lower_expr(scrutinee, ctx)?;
+    let mut ir_arms = Vec::with_capacity(arms.len());
+    for arm in arms {
+        if arm.guard.is_some() {
+            return Err(format!(
+                "lowering not yet implemented for match guards at {:?}",
+                arm.span
+            ));
+        }
+        let (tag, bindings) = lower_variant_pattern(&arm.pattern)?;
+        let body = lower_expr(&arm.body, ctx)?;
+        ir_arms.push(ir::MatchArm { tag, bindings, body });
+    }
+    Ok(ir::Expr::Match {
+        scrutinee: Box::new(ir_scrutinee),
+        arms: ir_arms,
+    })
+}
+
+// Only the simple `Path(bindings...)` / bare `Path` shape our minimal
+// IR Match can represent. Notably NOT supported yet: a bare wildcard
+// `_` as a whole arm (no "default arm" concept exists in the IR —
+// Match dispatches strictly by tag; see ir.rs's scope note), or-
+// patterns, literal patterns, struct patterns, tuple patterns, and
+// nested patterns inside a variant's args (only `Ident`/`Wildcard`
+// args are supported, since those map directly onto a positional
+// binding name).
+fn lower_variant_pattern(pattern: &ast::Pattern) -> Result<(String, Vec<String>), String> {
+    match pattern {
+        ast::Pattern::Variant { path, args, .. } => {
+            let tag = path.last().cloned().expect("a path always has at least one segment");
+            let mut bindings = Vec::with_capacity(args.len());
+            for arg in args {
+                match arg {
+                    ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
+                    // `_` can never collide with a real user binding —
+                    // the lexer treats it as a distinct Underscore
+                    // token, not a valid Ident, so no genuine Plum
+                    // variable can ever be named "_".
+                    ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
+                    other => {
+                        return Err(format!(
+                            "lowering not yet implemented for nested patterns inside a \
+                             variant arm's arguments at {:?}",
+                            other.span()
+                        ));
+                    }
+                }
+            }
+            Ok((tag, bindings))
+        }
+        other => Err(format!(
+            "lowering not yet implemented for this pattern shape as a match arm at {:?}",
             other.span()
         )),
     }
@@ -81,19 +226,20 @@ pub fn lower_expr(expr: &ast::Expr) -> Result<ir::Expr, String> {
 // zero-argument call before insertion. This is DESIGN.md's pipe
 // desugaring rule, and it's a compile-time rewrite, not a runtime
 // capability — it doesn't need currying to work, see DESIGN.md.
-fn lower_pipe(lhs: &ast::Expr, rhs: &ast::Expr) -> Result<ir::Expr, String> {
-    let ir_lhs = lower_expr(lhs)?;
+fn lower_pipe(lhs: &ast::Expr, rhs: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+    let ir_lhs = lower_expr(lhs, ctx)?;
     match rhs {
         ast::Expr::Call { callee, args, .. } => {
-            let mut ir_args: Vec<ir::Expr> = args.iter().map(lower_expr).collect::<Result<_, _>>()?;
+            let mut ir_args: Vec<ir::Expr> =
+                args.iter().map(|a| lower_expr(a, ctx)).collect::<Result<_, _>>()?;
             ir_args.push(ir_lhs);
             Ok(ir::Expr::Call {
-                callee: Box::new(lower_expr(callee)?),
+                callee: Box::new(lower_expr(callee, ctx)?),
                 args: ir_args,
             })
         }
         other => Ok(ir::Expr::Call {
-            callee: Box::new(lower_expr(other)?),
+            callee: Box::new(lower_expr(other, ctx)?),
             args: vec![ir_lhs],
         }),
     }
@@ -123,9 +269,9 @@ fn lower_binop(op: &ast::BinaryOp) -> ir::BinOp {
 // Folds a block's statement list into nested `let`s, right to left — a
 // discarded expression-statement becomes `let _ = expr in rest`, the
 // standard way to represent sequencing without a dedicated IR node.
-fn lower_block(block: &ast::Block) -> Result<ir::Expr, String> {
+fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, String> {
     let mut result = match &block.tail {
-        Some(t) => lower_expr(t)?,
+        Some(t) => lower_expr(t, ctx)?,
         None => ir::Expr::Unit,
     };
     for stmt in block.stmts.iter().rev() {
@@ -134,13 +280,13 @@ fn lower_block(block: &ast::Block) -> Result<ir::Expr, String> {
                 let name = plain_ident(pattern)?;
                 ir::Expr::Let {
                     name,
-                    value: Box::new(lower_expr(value)?),
+                    value: Box::new(lower_expr(value, ctx)?),
                     body: Box::new(result),
                 }
             }
             ast::Stmt::Expr(e) => ir::Expr::Let {
                 name: "_".to_string(),
-                value: Box::new(lower_expr(e)?),
+                value: Box::new(lower_expr(e, ctx)?),
                 body: Box::new(result),
             },
             ast::Stmt::Assign { span, .. } => {
@@ -172,21 +318,38 @@ mod tests {
     use plum_syntax::parser::Parser;
 
     fn lower(src: &str) -> ir::Expr {
-        let tokens = Lexer::new(src).tokenize();
-        let mut parser = Parser::new(tokens);
-        let ast = parser
-            .parse_expr()
-            .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
-        lower_expr(&ast).unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"))
+        lower_with(src, &LoweringContext::new())
     }
 
     fn lower_err(src: &str) -> String {
+        lower_with_err(src, &LoweringContext::new())
+    }
+
+    fn lower_with(src: &str, ctx: &LoweringContext) -> ir::Expr {
         let tokens = Lexer::new(src).tokenize();
         let mut parser = Parser::new(tokens);
         let ast = parser
             .parse_expr()
             .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
-        lower_expr(&ast).expect_err(&format!("expected lowering of {src:?} to fail"))
+        lower_expr(&ast, ctx).unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"))
+    }
+
+    fn lower_with_err(src: &str, ctx: &LoweringContext) -> String {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser
+            .parse_expr()
+            .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        lower_expr(&ast, ctx).expect_err(&format!("expected lowering of {src:?} to fail"))
+    }
+
+    fn context_from_program(src: &str) -> LoweringContext {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser
+            .parse_program()
+            .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        LoweringContext::from_items(&program.items)
     }
 
     #[test]
@@ -437,6 +600,176 @@ mod tests {
         );
     }
 
+    // --- Struct literals: need a LoweringContext to resolve declared
+    // field order, since a literal can specify fields in any order but
+    // the IR's Ctor is positional.
+
+    #[test]
+    fn struct_literal_basic() {
+        let ctx = context_from_program("struct Point { x: Float, y: Float }");
+        assert_eq!(
+            lower_with("Point { x: 1.0, y: 2.0 }", &ctx),
+            ir::Expr::Ctor {
+                tag: "Point".to_string(),
+                fields: vec![ir::Expr::Float(1.0), ir::Expr::Float(2.0)],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_literal_field_order_is_independent_of_declared_order() {
+        let ctx = context_from_program("struct Point { x: Float, y: Float }");
+        // Fields written in the OPPOSITE order from the declaration —
+        // the resulting Ctor must still put x before y, since that's
+        // Ctor's positional slot 0 and 1 by declaration, not by
+        // whatever order the programmer happened to write them in.
+        assert_eq!(
+            lower_with("Point { y: 2.0, x: 1.0 }", &ctx),
+            ir::Expr::Ctor {
+                tag: "Point".to_string(),
+                fields: vec![ir::Expr::Float(1.0), ir::Expr::Float(2.0)],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_literal_unknown_type_is_an_error() {
+        lower_with_err("Foo { x: 1.0 }", &LoweringContext::new());
+    }
+
+    #[test]
+    fn struct_literal_missing_field_is_an_error() {
+        let ctx = context_from_program("struct Point { x: Float, y: Float }");
+        lower_with_err("Point { x: 1.0 }", &ctx);
+    }
+
+    #[test]
+    fn struct_literal_unknown_field_is_an_error() {
+        let ctx = context_from_program("struct Point { x: Float, y: Float }");
+        lower_with_err("Point { x: 1.0, y: 2.0, z: 3.0 }", &ctx);
+    }
+
+    #[test]
+    fn struct_literal_duplicate_field_is_an_error() {
+        let ctx = context_from_program("struct Point { x: Float, y: Float }");
+        lower_with_err("Point { x: 1.0, x: 2.0 }", &ctx);
+    }
+
+    #[test]
+    fn struct_literal_spread_is_not_yet_supported() {
+        let ctx = context_from_program("struct Point { x: Float, y: Float }");
+        lower_with_err("Point { x: 1.0, ..other }", &ctx);
+    }
+
+    // --- Match: variant patterns lower to tag + positional bindings.
+
+    #[test]
+    fn match_variant_arms() {
+        assert_eq!(
+            lower("match shape { Shape.Circle(r) => r, Shape.Rectangle(w, h) => w * h }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("shape".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "Circle".to_string(),
+                        bindings: vec!["r".to_string()],
+                        body: ir::Expr::Var("r".to_string()),
+                    },
+                    ir::MatchArm {
+                        tag: "Rectangle".to_string(),
+                        bindings: vec!["w".to_string(), "h".to_string()],
+                        body: ir::Expr::Binary(
+                            ir::BinOp::Mul,
+                            Box::new(ir::Expr::Var("w".to_string())),
+                            Box::new(ir::Expr::Var("h".to_string())),
+                        ),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn match_zero_arg_variant() {
+        assert_eq!(
+            lower("match x { None => 0, Some(v) => v }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("x".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "None".to_string(),
+                        bindings: vec![],
+                        body: ir::Expr::Int(0),
+                    },
+                    ir::MatchArm {
+                        tag: "Some".to_string(),
+                        bindings: vec!["v".to_string()],
+                        body: ir::Expr::Var("v".to_string()),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn match_variant_with_wildcard_args() {
+        assert_eq!(
+            lower("match shape { Shape.Rectangle(_, _) => true }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("shape".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Rectangle".to_string(),
+                    bindings: vec!["_".to_string(), "_".to_string()],
+                    body: ir::Expr::Bool(true),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn match_bare_wildcard_arm_is_not_yet_supported() {
+        // No "default arm" concept exists in the IR's Match yet — it
+        // dispatches strictly by tag. A bare `_` as a WHOLE arm (as
+        // opposed to `_` used inside a variant's args, which works
+        // fine — see match_variant_with_wildcard_args) needs a real
+        // IR extension, deliberately deferred.
+        lower_err("match x { _ => 1 }");
+    }
+
+    #[test]
+    fn match_or_pattern_is_not_yet_supported() {
+        lower_err("match x { A(v) | B(v) => v }");
+    }
+
+    #[test]
+    fn match_guard_is_not_yet_supported() {
+        lower_err("match x { A(v) if v > 0 => v, B(v) => v }");
+    }
+
+    // --- End to end: real parsed program source, not a synthetic
+    // one-off expression — proves a struct declaration and its use
+    // genuinely connect through a full parse_program() call.
+
+    #[test]
+    fn end_to_end_struct_from_real_program_source() {
+        let src = "struct Point { x: Float, y: Float }\nlet origin = Point { x: 0.0, y: 0.0 }";
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let ctx = LoweringContext::from_items(&program.items);
+
+        let ast::ItemKind::Let(def) = &program.items[1].kind else {
+            panic!("expected the second item to be a let definition");
+        };
+        assert_eq!(
+            lower_expr(&def.body, &ctx).unwrap(),
+            ir::Expr::Ctor {
+                tag: "Point".to_string(),
+                fields: vec![ir::Expr::Float(0.0), ir::Expr::Float(0.0)],
+            }
+        );
+    }
+
     // --- Explicit, honest gaps — not yet supported ---
 
     #[test]
@@ -452,16 +785,6 @@ mod tests {
     #[test]
     fn range_is_not_yet_supported() {
         lower_err("0..5");
-    }
-
-    #[test]
-    fn match_is_not_yet_supported() {
-        lower_err("match x { _ => 1 }");
-    }
-
-    #[test]
-    fn struct_literal_is_not_yet_supported() {
-        lower_err("Point { x: 1.0 }");
     }
 
     #[test]
