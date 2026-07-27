@@ -1,4 +1,6 @@
-use plum_ir::ir::{BinOp, Expr, UnOp};
+mod heap;
+
+use plum_ir::ir::{BinOp, Expr, RcOp, UnOp};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -7,6 +9,7 @@ pub enum Value {
     Str(String),
     Bool(bool),
     Unit,
+    HeapRef(usize),
 }
 
 // A flat, innermost-last scope stack — `let` pushes one entry, evaluates
@@ -16,11 +19,41 @@ pub enum Value {
 // from leaking into code that comes lexically after it.
 pub struct Interpreter {
     env: Vec<(String, Value)>,
+    heap: heap::Heap,
 }
 
 impl Interpreter {
     pub fn new() -> Self {
-        Interpreter { env: Vec::new() }
+        Interpreter {
+            env: Vec::new(),
+            heap: heap::Heap::new(),
+        }
+    }
+
+    fn lookup(&self, name: &str) -> Result<Value, String> {
+        self.env
+            .iter()
+            .rev()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.clone())
+            .ok_or_else(|| format!("unbound variable: {name}"))
+    }
+
+    /// Total number of fresh heap allocations performed so far — does
+    /// NOT count `CtorReuse` overwriting an existing cell, so this is
+    /// what actually demonstrates FBIP's reuse-in-place saving a real
+    /// allocation, not just that a `CtorReuse` node was present.
+    pub fn alloc_count(&self) -> usize {
+        self.heap.alloc_count()
+    }
+
+    /// The current live refcount of a heap value — `Err` if `value`
+    /// isn't a `HeapRef` or points at already-freed memory.
+    pub fn refcount(&self, value: &Value) -> Result<usize, String> {
+        match value {
+            Value::HeapRef(addr) => self.heap.refcount(*addr),
+            other => Err(format!("{other:?} is not a heap value")),
+        }
     }
 
     pub fn eval(&mut self, expr: &Expr) -> Result<Value, String> {
@@ -30,13 +63,7 @@ impl Interpreter {
             Expr::Str(s) => Ok(Value::Str(s.clone())),
             Expr::Bool(b) => Ok(Value::Bool(*b)),
             Expr::Unit => Ok(Value::Unit),
-            Expr::Var(name) => self
-                .env
-                .iter()
-                .rev()
-                .find(|(n, _)| n == name)
-                .map(|(_, v)| v.clone())
-                .ok_or_else(|| format!("unbound variable: {name}")),
+            Expr::Var(name) => self.lookup(name),
             Expr::Unary(op, e) => {
                 let v = self.eval(e)?;
                 eval_unary(op, v)
@@ -88,13 +115,62 @@ impl Interpreter {
                  values/environment yet — waits for Item-level lowering)"
                     .to_string(),
             ),
-            Expr::RcAnnotated { rest, .. } => self.eval(rest),
-            // Evaluating a real heap (allocating Ctor, matching by
-            // tag) is its own piece of work — this session is scoped
-            // to proving the FBIP algorithm on the IR, not simulating
-            // an actual heap yet.
-            Expr::Ctor { .. } | Expr::Match { .. } | Expr::CtorReuse { .. } => {
-                Err("evaluation of heap-shaped values not yet implemented".to_string())
+            Expr::RcAnnotated { op, target, rest } => {
+                // Only heap values are affected — a stray Inc/Dec on a
+                // non-heap name (shouldn't happen given how fbip.rs
+                // scopes its analysis, but nothing here assumes it
+                // can't) is a harmless no-op.
+                if let Value::HeapRef(addr) = self.lookup(target)? {
+                    match op {
+                        RcOp::Inc => self.heap.inc(addr)?,
+                        RcOp::Dec => self.heap.dec(addr)?,
+                    }
+                }
+                self.eval(rest)
+            }
+            Expr::Ctor { tag, fields } => {
+                let values = fields.iter().map(|f| self.eval(f)).collect::<Result<Vec<_>, _>>()?;
+                let addr = self.heap.alloc(tag.clone(), values);
+                Ok(Value::HeapRef(addr))
+            }
+            Expr::CtorReuse { reuse_of, tag, fields } => {
+                // Fields are evaluated BEFORE touching the reused
+                // cell — this is symbolic (we don't manipulate real
+                // memory here), but it mirrors the real constraint a
+                // codegen backend has: compute the new values first,
+                // then overwrite, so a partial in-place write never
+                // reads back its own not-yet-written bytes.
+                let values = fields.iter().map(|f| self.eval(f)).collect::<Result<Vec<_>, _>>()?;
+                let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
+                    return Err(format!("reuse target {reuse_of:?} is not a heap value"));
+                };
+                let result_addr = self.heap.dec_and_maybe_reuse(addr, tag.clone(), values)?;
+                Ok(Value::HeapRef(result_addr))
+            }
+            Expr::Match { scrutinee, arms } => {
+                let Value::HeapRef(addr) = self.eval(scrutinee)? else {
+                    return Err("match scrutinee must be a heap value".to_string());
+                };
+                let (tag, fields) = self.heap.read(addr)?;
+                let tag = tag.to_string();
+                let fields = fields.to_vec();
+                let arm = arms
+                    .iter()
+                    .find(|a| a.tag == tag)
+                    .ok_or_else(|| format!("no match arm for tag {tag:?}"))?;
+                if arm.bindings.len() != fields.len() {
+                    return Err(format!(
+                        "arm for {tag:?} expects {} field(s), found {}",
+                        arm.bindings.len(),
+                        fields.len()
+                    ));
+                }
+                let bound: Vec<(String, Value)> =
+                    arm.bindings.iter().cloned().zip(fields.iter().cloned()).collect();
+                self.env.extend(bound);
+                let result = self.eval(&arm.body);
+                self.env.truncate(self.env.len() - arm.bindings.len());
+                result
             }
         }
     }
@@ -331,5 +407,207 @@ mod tests {
         // No function values or environment exist yet — that waits for
         // Item-level lowering (let-defs becoming callable functions).
         eval_err("f(1)");
+    }
+
+    // --- Heap-shaped values: Ctor/Match/CtorReuse/RcAnnotated ---
+    //
+    // No surface syntax lowers to these yet (see plum-ir's scope
+    // notes), so — same as fbip.rs — these tests construct small
+    // ir::Expr trees by hand rather than going through the parser.
+
+    use plum_ir::ir::{MatchArm, RcOp};
+
+    fn var(name: &str) -> Expr {
+        Expr::Var(name.to_string())
+    }
+    fn int(n: i64) -> Expr {
+        Expr::Int(n)
+    }
+    fn ctor(tag: &str, fields: Vec<Expr>) -> Expr {
+        Expr::Ctor {
+            tag: tag.to_string(),
+            fields,
+        }
+    }
+    fn ctor_reuse(reuse_of: &str, tag: &str, fields: Vec<Expr>) -> Expr {
+        Expr::CtorReuse {
+            reuse_of: reuse_of.to_string(),
+            tag: tag.to_string(),
+            fields,
+        }
+    }
+    fn let_(name: &str, value: Expr, body: Expr) -> Expr {
+        Expr::Let {
+            name: name.to_string(),
+            value: Box::new(value),
+            body: Box::new(body),
+        }
+    }
+    fn match_(scrutinee: Expr, arms: Vec<MatchArm>) -> Expr {
+        Expr::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        }
+    }
+    fn arm(tag: &str, bindings: Vec<&str>, body: Expr) -> MatchArm {
+        MatchArm {
+            tag: tag.to_string(),
+            bindings: bindings.into_iter().map(|s| s.to_string()).collect(),
+            body,
+        }
+    }
+    fn inc(name: &str, rest: Expr) -> Expr {
+        Expr::RcAnnotated {
+            op: RcOp::Inc,
+            target: name.to_string(),
+            rest: Box::new(rest),
+        }
+    }
+    fn dec(name: &str, rest: Expr) -> Expr {
+        Expr::RcAnnotated {
+            op: RcOp::Dec,
+            target: name.to_string(),
+            rest: Box::new(rest),
+        }
+    }
+
+    fn eval_ir(ir: &Expr) -> Value {
+        Interpreter::new()
+            .eval(ir)
+            .unwrap_or_else(|e| panic!("eval error: {e}"))
+    }
+
+    fn eval_ir_err(ir: &Expr) -> String {
+        Interpreter::new()
+            .eval(ir)
+            .expect_err("expected evaluation to fail")
+    }
+
+    #[test]
+    fn construct_and_match_extracts_fields() {
+        let program = let_(
+            "p",
+            ctor("Point", vec![int(1), int(2)]),
+            match_(var("p"), vec![arm("Point", vec!["x", "y"], Expr::Binary(BinOp::Add, Box::new(var("x")), Box::new(var("y"))))]),
+        );
+        assert_eq!(eval_ir(&program), Value::Int(3));
+    }
+
+    #[test]
+    fn match_with_no_matching_arm_is_an_error() {
+        let program = let_(
+            "p",
+            ctor("Foo", vec![]),
+            match_(var("p"), vec![arm("Bar", vec![], int(0))]),
+        );
+        let err = eval_ir_err(&program);
+        assert!(err.contains("Foo"), "error should mention the unmatched tag, got: {err}");
+    }
+
+    #[test]
+    fn match_on_non_heap_scrutinee_is_an_error() {
+        let program = match_(int(5), vec![arm("Whatever", vec![], int(0))]);
+        eval_ir_err(&program);
+    }
+
+    #[test]
+    fn rc_inc_dec_actually_change_the_refcount() {
+        // Proves the interpreter's RcAnnotated evaluation is really
+        // wired to the heap (not just heap.rs's own unit tests of the
+        // Heap type in isolation): alloc (rc=1) -> inc (rc=2) -> dec
+        // (rc=1, must still be alive — if Inc were a no-op, this dec
+        // alone would already free it) -> dec again (rc=0, now freed).
+        // A bare `Var(p)` never dereferences the heap, so "still
+        // alive"/"freed" can only be proven by actually reading via
+        // Match at each checkpoint.
+        let read = || match_(var("p"), vec![arm("Point", vec![], int(0))]);
+
+        let still_alive = let_("p", ctor("Point", vec![]), inc("p", dec("p", read())));
+        assert_eq!(eval_ir(&still_alive), Value::Int(0), "should still be readable after inc+dec");
+
+        let now_freed = let_("p", ctor("Point", vec![]), inc("p", dec("p", dec("p", read()))));
+        let err = eval_ir_err(&now_freed);
+        assert!(err.contains("free"), "expected a use-after-free error, got: {err}");
+    }
+
+    #[test]
+    fn dec_to_zero_makes_the_value_unreadable_afterward() {
+        // Construct, drop explicitly, then try to match on it — proves
+        // Dec actually freed the cell, using the heap's own
+        // use-after-free detection as the check.
+        let program = let_(
+            "p",
+            ctor("Point", vec![int(1), int(2)]),
+            dec("p", match_(var("p"), vec![arm("Point", vec!["x", "y"], var("x"))])),
+        );
+        let err = eval_ir_err(&program);
+        assert!(err.contains("free"), "expected a use-after-free error, got: {err}");
+    }
+
+    #[test]
+    fn reuse_when_uniquely_owned_recycles_the_same_allocation() {
+        // p has exactly one reference (the match itself) — FBIP's
+        // analysis would leave this use bare (no preceding Inc), so at
+        // runtime the match's implicit ownership transfer means
+        // refcount is 1 at the CtorReuse, and reuse should fire.
+        let mut interp = Interpreter::new();
+        let program = let_(
+            "p",
+            ctor("Point", vec![int(1), int(2)]),
+            match_(
+                var("p"),
+                vec![arm(
+                    "Point",
+                    vec!["x", "y"],
+                    ctor_reuse("p", "Point", vec![var("y"), var("x")]),
+                )],
+            ),
+        );
+        let result = interp.eval(&program).unwrap();
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_eq!(addr, 0, "should reuse address 0 — the original Point's cell");
+        assert_eq!(interp.alloc_count(), 1, "reuse must not count as a second allocation");
+        assert_eq!(interp.refcount(&result).unwrap(), 1);
+        let (tag, fields) = interp.heap.read(addr).unwrap();
+        assert_eq!(tag, "Point");
+        assert_eq!(fields, &[Value::Int(2), Value::Int(1)]);
+    }
+
+    #[test]
+    fn reuse_when_shared_allocates_fresh_and_preserves_the_alias() {
+        // `saved` aliases `p`, so by the time the match runs, the
+        // cell's refcount is 2 (bumped by the Inc a real FBIP pass
+        // would insert for the non-last use in `saved`'s binding).
+        // Reuse must refuse, allocate a NEW cell, and `saved` must
+        // still see the ORIGINAL untouched data afterward — this is
+        // the actual safety property the whole refcount-gated design
+        // exists to guarantee.
+        let mut interp = Interpreter::new();
+        let program = let_(
+            "p",
+            ctor("Point", vec![int(1), int(2)]),
+            let_(
+                "saved",
+                inc("p", var("p")), // the Inc a real FBIP pass would insert here
+                match_(
+                    var("p"),
+                    vec![arm(
+                        "Point",
+                        vec!["x", "y"],
+                        ctor_reuse("p", "Point", vec![var("y"), var("x")]),
+                    )],
+                ),
+            ),
+        );
+        let result = interp.eval(&program).unwrap();
+        let Value::HeapRef(new_addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_ne!(new_addr, 0, "must not reuse memory that `saved` still references");
+        assert_eq!(interp.alloc_count(), 2, "the shared path must allocate a fresh cell");
+        assert_eq!(interp.heap.read(0).unwrap(), ("Point", &[Value::Int(1), Value::Int(2)][..]));
+        assert_eq!(interp.heap.read(new_addr).unwrap(), ("Point", &[Value::Int(2), Value::Int(1)][..]));
     }
 }
