@@ -96,6 +96,19 @@ pub enum Expr {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
     },
+    // A reuse-in-place candidate, inserted by fbip.rs's reuse analysis
+    // — the second half of FBIP, on top of refcount insertion. Means:
+    // "construct (tag, fields), but if `reuse_of`'s refcount is 1 at
+    // this point, overwrite its memory in place instead of allocating
+    // fresh." Codegen would turn this into a single `if rc == 1`
+    // branch (see DESIGN.md's memory model section) — this IR node
+    // just marks WHERE that's safe, it doesn't simulate the memory
+    // itself.
+    CtorReuse {
+        reuse_of: String,
+        tag: String,
+        fields: Vec<Expr>,
+    },
     RcAnnotated {
         op: RcOp,
         target: String,

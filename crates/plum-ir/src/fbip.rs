@@ -16,6 +16,102 @@ pub fn insert_refcount_ops(expr: Expr) -> Expr {
     transform(expr, &HashSet::new())
 }
 
+/// Runs the full FBIP pipeline in order: refcount insertion, then
+/// reuse-in-place analysis on top of its output. This is the function
+/// a later pass (eventually codegen) would actually call.
+pub fn optimize(expr: Expr) -> Expr {
+    mark_reuse(insert_refcount_ops(expr))
+}
+
+/// Reuse-in-place analysis — the second half of FBIP, run after
+/// `insert_refcount_ops`. Marks `Ctor` constructions as `CtorReuse`
+/// candidates when they appear directly as a match arm's body and have
+/// the same field count as what that arm deconstructed (field COUNT is
+/// this pass's stand-in for real layout/size compatibility, which
+/// needs a type checker we don't have yet).
+pub fn mark_reuse(expr: Expr) -> Expr {
+    match expr {
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) => expr,
+        Expr::Unary(op, e) => Expr::Unary(op, Box::new(mark_reuse(*e))),
+        Expr::Binary(op, l, r) => Expr::Binary(op, Box::new(mark_reuse(*l)), Box::new(mark_reuse(*r))),
+        Expr::Let { name, value, body } => Expr::Let {
+            name,
+            value: Box::new(mark_reuse(*value)),
+            body: Box::new(mark_reuse(*body)),
+        },
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => Expr::If {
+            cond: Box::new(mark_reuse(*cond)),
+            then_branch: Box::new(mark_reuse(*then_branch)),
+            else_branch: Box::new(mark_reuse(*else_branch)),
+        },
+        Expr::Call { callee, args } => Expr::Call {
+            callee: Box::new(mark_reuse(*callee)),
+            args: args.into_iter().map(mark_reuse).collect(),
+        },
+        Expr::Ctor { tag, fields } => Expr::Ctor {
+            tag,
+            fields: fields.into_iter().map(mark_reuse).collect(),
+        },
+        Expr::CtorReuse {
+            reuse_of,
+            tag,
+            fields,
+        } => Expr::CtorReuse {
+            reuse_of,
+            tag,
+            fields: fields.into_iter().map(mark_reuse).collect(),
+        },
+        Expr::RcAnnotated { op, target, rest } => Expr::RcAnnotated {
+            op,
+            target,
+            rest: Box::new(mark_reuse(*rest)),
+        },
+        Expr::Match { scrutinee, arms } => {
+            // Only a plain variable names a specific cell we could
+            // reuse — a call result or anything else isn't something
+            // we can point reuse at.
+            let reuse_target = match scrutinee.as_ref() {
+                Expr::Var(name) => Some(name.clone()),
+                _ => None,
+            };
+            let new_arms = arms
+                .into_iter()
+                .map(|arm| {
+                    let arity = arm.bindings.len();
+                    let body = mark_reuse(arm.body);
+                    let body = match (&reuse_target, &body) {
+                        // 0-field constructions (e.g. `Nil`) have
+                        // nothing worth reusing.
+                        (Some(reuse_of), Expr::Ctor { tag, fields })
+                            if arity > 0 && fields.len() == arity =>
+                        {
+                            Expr::CtorReuse {
+                                reuse_of: reuse_of.clone(),
+                                tag: tag.clone(),
+                                fields: fields.clone(),
+                            }
+                        }
+                        _ => body,
+                    };
+                    MatchArm {
+                        tag: arm.tag,
+                        bindings: arm.bindings,
+                        body,
+                    }
+                })
+                .collect();
+            Expr::Match {
+                scrutinee: Box::new(mark_reuse(*scrutinee)),
+                arms: new_arms,
+            }
+        }
+    }
+}
+
 /// Walks the whole tree, and at every `Let`, decides whether the bound
 /// name is heap-shaped and — if so — runs `mark_last_uses` over its
 /// body to insert the actual Inc/Dec ops for that one name.
@@ -42,6 +138,14 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             args: args.into_iter().map(|a| transform(a, known_heap)).collect(),
         },
         Expr::Ctor { tag, fields } => Expr::Ctor {
+            tag,
+            fields: fields.into_iter().map(|f| transform(f, known_heap)).collect(),
+        },
+        // Shouldn't normally appear as input here — CtorReuse is
+        // produced BY the reuse pass, which runs after this one — but
+        // handled for robustness in case pass ordering ever changes.
+        Expr::CtorReuse { reuse_of, tag, fields } => Expr::CtorReuse {
+            reuse_of,
             tag,
             fields: fields.into_iter().map(|f| transform(f, known_heap)).collect(),
         },
@@ -195,6 +299,28 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 acc_used,
             )
         }
+        Expr::CtorReuse {
+            reuse_of,
+            tag,
+            fields,
+        } => {
+            let mut acc_used = live_after;
+            let mut new_fields = Vec::with_capacity(fields.len());
+            for f in fields.into_iter().rev() {
+                let (f_t, used) = mark_last_uses(f, name, acc_used);
+                acc_used = acc_used || used;
+                new_fields.push(f_t);
+            }
+            new_fields.reverse();
+            (
+                Expr::CtorReuse {
+                    reuse_of,
+                    tag,
+                    fields: new_fields,
+                },
+                acc_used,
+            )
+        }
         Expr::If {
             cond,
             then_branch,
@@ -339,6 +465,169 @@ mod tests {
             op: RcOp::Dec,
             target: name.to_string(),
             rest: Box::new(rest),
+        }
+    }
+    fn ctor_reuse(reuse_of: &str, tag: &str, fields: Vec<Expr>) -> Expr {
+        Expr::CtorReuse {
+            reuse_of: reuse_of.to_string(),
+            tag: tag.to_string(),
+            fields,
+        }
+    }
+    fn match_(scrutinee: Expr, arms: Vec<MatchArm>) -> Expr {
+        Expr::Match {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        }
+    }
+    fn arm(tag: &str, bindings: Vec<&str>, body: Expr) -> MatchArm {
+        MatchArm {
+            tag: tag.to_string(),
+            bindings: bindings.into_iter().map(|s| s.to_string()).collect(),
+            body,
+        }
+    }
+    fn call(callee: Expr, args: Vec<Expr>) -> Expr {
+        Expr::Call {
+            callee: Box::new(callee),
+            args,
+        }
+    }
+
+    #[test]
+    fn map_like_shape_marks_reuse() {
+        // The canonical Perceus example: deconstruct a 2-field Cons,
+        // reconstruct a 2-field Cons with entirely different (computed)
+        // field values. Field COUNT matches (2 == 2), so this is a
+        // reuse candidate even though no field is a bare copy of what
+        // was torn down.
+        let input = match_(
+            var("list"),
+            vec![
+                arm(
+                    "Cons",
+                    vec!["head", "tail"],
+                    ctor(
+                        "Cons",
+                        vec![call(var("f"), vec![var("head")]), call(var("map"), vec![var("f"), var("tail")])],
+                    ),
+                ),
+                arm("Nil", vec![], ctor("Nil", vec![])),
+            ],
+        );
+        let expected = match_(
+            var("list"),
+            vec![
+                arm(
+                    "Cons",
+                    vec!["head", "tail"],
+                    ctor_reuse(
+                        "list",
+                        "Cons",
+                        vec![call(var("f"), vec![var("head")]), call(var("map"), vec![var("f"), var("tail")])],
+                    ),
+                ),
+                // Nil has 0 fields — nothing worth reusing, stays a
+                // plain Ctor. See zero_arity_is_not_a_reuse_candidate.
+                arm("Nil", vec![], ctor("Nil", vec![])),
+            ],
+        );
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn zero_arity_is_not_a_reuse_candidate() {
+        let input = match_(var("list"), vec![arm("Nil", vec![], ctor("Nil", vec![]))]);
+        assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
+    fn mismatched_arity_is_not_a_reuse_candidate() {
+        // Deconstructs 2 fields but reconstructs a 3-field value —
+        // different shape, not safe to overwrite in place.
+        let input = match_(
+            var("pair"),
+            vec![arm(
+                "Pair",
+                vec!["a", "b"],
+                ctor("Triple", vec![var("a"), var("b"), int(0)]),
+            )],
+        );
+        assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
+    fn arm_body_not_a_direct_ctor_is_not_a_reuse_candidate() {
+        let input = match_(
+            var("pair"),
+            vec![arm("Pair", vec!["a", "b"], var("a"))],
+        );
+        assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
+    fn non_variable_scrutinee_is_not_a_reuse_candidate() {
+        // Can't name a specific cell to reuse if the scrutinee isn't a
+        // plain variable (e.g. it's a call result).
+        let input = match_(
+            call(var("get_pair"), vec![]),
+            vec![arm(
+                "Pair",
+                vec!["a", "b"],
+                ctor("Pair", vec![var("b"), var("a")]),
+            )],
+        );
+        assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
+    fn recurses_into_nested_matches() {
+        let inner = match_(
+            var("inner_list"),
+            vec![arm(
+                "Cons",
+                vec!["h", "t"],
+                ctor("Cons", vec![var("h"), var("t")]),
+            )],
+        );
+        let expected_inner = match_(
+            var("inner_list"),
+            vec![arm(
+                "Cons",
+                vec!["h", "t"],
+                ctor_reuse("inner_list", "Cons", vec![var("h"), var("t")]),
+            )],
+        );
+        let input = let_("inner_list", var("outer"), inner);
+        let expected = let_("inner_list", var("outer"), expected_inner);
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn composes_after_refcount_insertion() {
+        // The realistic pipeline: refcount insertion runs first, then
+        // reuse marking on its output.
+        let input = match_(
+            var("list"),
+            vec![
+                arm(
+                    "Cons",
+                    vec!["head", "tail"],
+                    ctor("Cons", vec![var("head"), var("tail")]),
+                ),
+                arm("Nil", vec![], ctor("Nil", vec![])),
+            ],
+        );
+        let piped = optimize(input);
+        match &piped {
+            Expr::Match { arms, .. } => match &arms[0].body {
+                Expr::CtorReuse { reuse_of, tag, .. } => {
+                    assert_eq!(reuse_of, "list");
+                    assert_eq!(tag, "Cons");
+                }
+                other => panic!("expected a CtorReuse candidate, got {other:?}"),
+            },
+            other => panic!("expected a Match, got {other:?}"),
         }
     }
 

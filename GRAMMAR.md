@@ -217,8 +217,9 @@ same shorthand Rust's struct literals allow.
 
 ```
 Block      ::= "{" { BlockItem ";" } [ Expr ] "}"
-BlockItem  ::= LetStmt | Expr
+BlockItem  ::= LetStmt | AssignStmt | Expr
 LetStmt    ::= "let" [ "mut" ] Pattern [ ":" Type ] "=" Expr
+AssignStmt ::= Identifier "=" Expr
 ```
 
 Every `BlockItem` requires its trailing `;` — **no exemption** for
@@ -227,6 +228,17 @@ Rust. The final, unterminated `Expr` (if present) is the block's value;
 its absence (or a trailing `;` on the last item) makes the block's
 value `Unit`. See DESIGN.md's "Block statement/expression rule" for the
 reasoning.
+
+`AssignStmt` was missing from an earlier draft of this document even
+though DESIGN.md always discussed assignment (`total = total + i`) as a
+statement, not a general expression (see "Operator precedence and pipe
+semantics" — assignment is deliberately excluded from the expression
+grammar). Its target is restricted to a plain `Identifier`, not a
+general `Pattern` or arbitrary lvalue path — this matches `let mut`
+only ever binding a plain identifier (see "Local mutability"), and it
+means `Ref[T]` mutation stays exclusively through `.get()`/`.set()`/
+`.update()`, never through assignment syntax. `p.x = 5` is not valid
+Plum; there is no field-assignment form.
 
 `let mut` is only meaningful with a plain `Identifier` pattern in
 practice (a "mutable slot" doesn't make sense for a destructured
@@ -294,3 +306,19 @@ implementation decisions, not open language-design questions:
   grammar — not yet decided (see DESIGN.md's open questions). Adding it
   later should slot into `PrimaryExpr` without disturbing anything else
   here.
+- **`f (a) (b)` parses successfully but is a semantic trap, not a
+  two-argument call.** Because `Postfix` repeats (see "Expressions"
+  above), a call immediately followed by another parenthesized group is
+  parsed as two *chained* single-argument calls — `f(a)` first, then
+  the parenthesized `(b)` applied again to *that result* — the same
+  shape currying would produce, even though Plum doesn't have currying
+  (see DESIGN.md's "Surface syntax," deliberately deferred). This isn't
+  a parse error; it silently produces the wrong arity, and would only
+  surface as a type error once type-checking exists. Found by parsing
+  `examples/overview.plum`'s original `sum (n - 1) (acc + n)`, which
+  looked like an OCaml-style two-argument call but actually meant
+  something else entirely — the example was corrected to
+  `sum(n - 1, acc + n)`. The only real fix here is discipline (always
+  use one comma-separated argument list per call) until/unless currying
+  is revisited; a parser-level warning for "call result immediately
+  called again" is possible future tooling, not a grammar change.

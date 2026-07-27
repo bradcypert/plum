@@ -93,7 +93,7 @@ impl Interpreter {
             // tag) is its own piece of work — this session is scoped
             // to proving the FBIP algorithm on the IR, not simulating
             // an actual heap yet.
-            Expr::Ctor { .. } | Expr::Match { .. } => {
+            Expr::Ctor { .. } | Expr::Match { .. } | Expr::CtorReuse { .. } => {
                 Err("evaluation of heap-shaped values not yet implemented".to_string())
             }
         }
