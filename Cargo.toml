@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/plumc",
     "crates/plum-syntax",
+    "crates/plum-types",
     "crates/plum-ir",
     "crates/plum-interp",
 ]
