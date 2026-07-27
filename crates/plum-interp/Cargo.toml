@@ -5,3 +5,6 @@ edition.workspace = true
 
 [dependencies]
 plum-ir = { path = "../plum-ir" }
+
+[dev-dependencies]
+plum-syntax = { path = "../plum-syntax" }

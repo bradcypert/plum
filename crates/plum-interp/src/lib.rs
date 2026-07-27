@@ -1,26 +1,93 @@
-use plum_ir::ir::Expr;
+use plum_ir::ir::{BinOp, Expr, UnOp};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
+    Float(f64),
+    Str(String),
+    Bool(bool),
     Unit,
 }
 
-pub struct Interpreter;
+// A flat, innermost-last scope stack — `let` pushes one entry, evaluates
+// its body, then pops. Variable lookup scans from the end so shadowing
+// (an inner `let x` hiding an outer one) falls out for free, and
+// popping on the way back out of a `let`'s body is what keeps a binding
+// from leaking into code that comes lexically after it.
+pub struct Interpreter {
+    env: Vec<(String, Value)>,
+}
 
 impl Interpreter {
     pub fn new() -> Self {
-        Interpreter
+        Interpreter { env: Vec::new() }
     }
 
     pub fn eval(&mut self, expr: &Expr) -> Result<Value, String> {
         match expr {
             Expr::Int(n) => Ok(Value::Int(*n)),
-            Expr::Var(name) => Err(format!("unbound variable: {name}")),
-            Expr::Let { value, body, .. } => {
-                let _ = self.eval(value)?;
-                self.eval(body)
+            Expr::Float(f) => Ok(Value::Float(*f)),
+            Expr::Str(s) => Ok(Value::Str(s.clone())),
+            Expr::Bool(b) => Ok(Value::Bool(*b)),
+            Expr::Unit => Ok(Value::Unit),
+            Expr::Var(name) => self
+                .env
+                .iter()
+                .rev()
+                .find(|(n, _)| n == name)
+                .map(|(_, v)| v.clone())
+                .ok_or_else(|| format!("unbound variable: {name}")),
+            Expr::Unary(op, e) => {
+                let v = self.eval(e)?;
+                eval_unary(op, v)
             }
+            // && and || short-circuit: the right side is only
+            // evaluated when the left side doesn't already determine
+            // the result. This has to be handled here, before the
+            // operands are evaluated, not inside a generic binary-op
+            // helper that's already given both values.
+            Expr::Binary(BinOp::And, l, r) => match self.eval(l)? {
+                Value::Bool(false) => Ok(Value::Bool(false)),
+                Value::Bool(true) => match self.eval(r)? {
+                    Value::Bool(b) => Ok(Value::Bool(b)),
+                    v => Err(format!("`&&` requires Bool operands, found {v:?}")),
+                },
+                v => Err(format!("`&&` requires Bool operands, found {v:?}")),
+            },
+            Expr::Binary(BinOp::Or, l, r) => match self.eval(l)? {
+                Value::Bool(true) => Ok(Value::Bool(true)),
+                Value::Bool(false) => match self.eval(r)? {
+                    Value::Bool(b) => Ok(Value::Bool(b)),
+                    v => Err(format!("`||` requires Bool operands, found {v:?}")),
+                },
+                v => Err(format!("`||` requires Bool operands, found {v:?}")),
+            },
+            Expr::Binary(op, l, r) => {
+                let lv = self.eval(l)?;
+                let rv = self.eval(r)?;
+                eval_binary(op, lv, rv)
+            }
+            Expr::Let { name, value, body } => {
+                let v = self.eval(value)?;
+                self.env.push((name.clone(), v));
+                let result = self.eval(body);
+                self.env.pop();
+                result
+            }
+            Expr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => match self.eval(cond)? {
+                Value::Bool(true) => self.eval(then_branch),
+                Value::Bool(false) => self.eval(else_branch),
+                v => Err(format!("`if` condition must be Bool, found {v:?}")),
+            },
+            Expr::Call { .. } => Err(
+                "function calls not yet supported by the interpreter (no function \
+                 values/environment yet — waits for Item-level lowering)"
+                    .to_string(),
+            ),
             Expr::RcAnnotated { rest, .. } => self.eval(rest),
         }
     }
@@ -29,5 +96,233 @@ impl Interpreter {
 impl Default for Interpreter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn eval_unary(op: &UnOp, v: Value) -> Result<Value, String> {
+    match (op, v) {
+        (UnOp::Neg, Value::Int(n)) => n
+            .checked_neg()
+            .map(Value::Int)
+            .ok_or_else(|| "integer overflow negating i64::MIN".to_string()),
+        (UnOp::Neg, Value::Float(f)) => Ok(Value::Float(-f)),
+        (UnOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
+        (op, v) => Err(format!("type error: cannot apply {op:?} to {v:?}")),
+    }
+}
+
+fn eval_binary(op: &BinOp, lv: Value, rv: Value) -> Result<Value, String> {
+    match op {
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => eval_arith(op, lv, rv),
+        BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => eval_order(op, lv, rv),
+        BinOp::Eq => values_equal(&lv, &rv).map(Value::Bool),
+        BinOp::Ne => values_equal(&lv, &rv).map(|b| Value::Bool(!b)),
+        BinOp::And | BinOp::Or => {
+            unreachable!("And/Or are handled with short-circuit evaluation in Interpreter::eval")
+        }
+    }
+}
+
+fn eval_arith(op: &BinOp, lv: Value, rv: Value) -> Result<Value, String> {
+    match (lv, rv) {
+        (Value::Int(a), Value::Int(b)) => {
+            let result = match op {
+                BinOp::Add => a.checked_add(b),
+                BinOp::Sub => a.checked_sub(b),
+                BinOp::Mul => a.checked_mul(b),
+                BinOp::Div if b == 0 => return Err("division by zero".to_string()),
+                BinOp::Div => a.checked_div(b),
+                BinOp::Rem if b == 0 => return Err("division by zero".to_string()),
+                BinOp::Rem => a.checked_rem(b),
+                _ => unreachable!(),
+            };
+            result.map(Value::Int).ok_or_else(|| "integer overflow".to_string())
+        }
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(match op {
+            BinOp::Add => a + b,
+            BinOp::Sub => a - b,
+            BinOp::Mul => a * b,
+            BinOp::Div => a / b,
+            BinOp::Rem => a % b,
+            _ => unreachable!(),
+        })),
+        (a, b) => Err(format!(
+            "type error: no implicit numeric coercion, cannot apply {op:?} to {a:?} and {b:?}"
+        )),
+    }
+}
+
+fn eval_order(op: &BinOp, lv: Value, rv: Value) -> Result<Value, String> {
+    let ordering = match (&lv, &rv) {
+        (Value::Int(a), Value::Int(b)) => a.partial_cmp(b),
+        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
+        _ => return Err(format!("type error: cannot order-compare {lv:?} and {rv:?}")),
+    };
+    let Some(ord) = ordering else {
+        return Err("comparison produced no ordering (NaN?)".to_string());
+    };
+    Ok(Value::Bool(match op {
+        BinOp::Lt => ord.is_lt(),
+        BinOp::Gt => ord.is_gt(),
+        BinOp::Le => ord.is_le(),
+        BinOp::Ge => ord.is_ge(),
+        _ => unreachable!(),
+    }))
+}
+
+fn values_equal(a: &Value, b: &Value) -> Result<bool, String> {
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => Ok(x == y),
+        (Value::Float(x), Value::Float(y)) => Ok(x == y),
+        (Value::Bool(x), Value::Bool(y)) => Ok(x == y),
+        (Value::Str(x), Value::Str(y)) => Ok(x == y),
+        (Value::Unit, Value::Unit) => Ok(true),
+        _ => Err(format!("type error: cannot compare {a:?} and {b:?} for equality")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use plum_ir::lower::lower_expr;
+    use plum_syntax::lexer::Lexer;
+    use plum_syntax::parser::Parser;
+
+    fn eval(src: &str) -> Value {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser
+            .parse_expr()
+            .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let ir = lower_expr(&ast).unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"));
+        Interpreter::new()
+            .eval(&ir)
+            .unwrap_or_else(|e| panic!("eval error for {src:?}: {e}"))
+    }
+
+    fn eval_err(src: &str) -> String {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser
+            .parse_expr()
+            .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let ir = lower_expr(&ast).unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"));
+        Interpreter::new()
+            .eval(&ir)
+            .expect_err(&format!("expected eval of {src:?} to fail"))
+    }
+
+    #[test]
+    fn literals() {
+        assert_eq!(eval("5"), Value::Int(5));
+        assert_eq!(eval("3.14"), Value::Float(3.14));
+        assert_eq!(eval("\"hi\""), Value::Str("hi".to_string()));
+        assert_eq!(eval("true"), Value::Bool(true));
+        assert_eq!(eval("()"), Value::Unit);
+    }
+
+    #[test]
+    fn integer_arithmetic() {
+        assert_eq!(eval("1 + 2"), Value::Int(3));
+        assert_eq!(eval("10 - 3"), Value::Int(7));
+        assert_eq!(eval("4 * 5"), Value::Int(20));
+        assert_eq!(eval("10 / 3"), Value::Int(3));
+        assert_eq!(eval("10 % 3"), Value::Int(1));
+    }
+
+    #[test]
+    fn division_by_zero_is_an_error_not_a_panic() {
+        eval_err("5 / 0");
+        eval_err("5 % 0");
+    }
+
+    #[test]
+    fn float_arithmetic() {
+        assert_eq!(eval("1.5 + 2.5"), Value::Float(4.0));
+    }
+
+    #[test]
+    fn mixed_int_float_arithmetic_is_a_type_error() {
+        // No implicit numeric coercion — see DESIGN.md's small built-in
+        // trait set (Num); this interpreter doesn't implement overload
+        // resolution, just checks the operand types match.
+        eval_err("1 + 1.0");
+    }
+
+    #[test]
+    fn comparisons() {
+        assert_eq!(eval("3 < 5"), Value::Bool(true));
+        assert_eq!(eval("5 <= 5"), Value::Bool(true));
+        assert_eq!(eval("5 > 3"), Value::Bool(true));
+        assert_eq!(eval("5 >= 6"), Value::Bool(false));
+    }
+
+    #[test]
+    fn equality() {
+        assert_eq!(eval("3 == 3"), Value::Bool(true));
+        assert_eq!(eval("3 != 4"), Value::Bool(true));
+        assert_eq!(eval("\"a\" == \"a\""), Value::Bool(true));
+        assert_eq!(eval("true == false"), Value::Bool(false));
+    }
+
+    #[test]
+    fn logical_and_or_short_circuit() {
+        // The right-hand side must NOT be evaluated when the left side
+        // already determines the result — proven here by putting a
+        // division-by-zero on the side that should never run. If
+        // short-circuiting were broken, these would error instead of
+        // returning cleanly.
+        assert_eq!(eval("false && (1 / 0 == 0)"), Value::Bool(false));
+        assert_eq!(eval("true || (1 / 0 == 0)"), Value::Bool(true));
+        assert_eq!(eval("true && false"), Value::Bool(false));
+        assert_eq!(eval("false || true"), Value::Bool(true));
+    }
+
+    #[test]
+    fn unary_operators() {
+        assert_eq!(eval("-5"), Value::Int(-5));
+        assert_eq!(eval("-3.14"), Value::Float(-3.14));
+        assert_eq!(eval("!true"), Value::Bool(false));
+    }
+
+    #[test]
+    fn if_expression() {
+        assert_eq!(eval("if true { 1 } else { 2 }"), Value::Int(1));
+        assert_eq!(eval("if false { 1 } else { 2 }"), Value::Int(2));
+    }
+
+    #[test]
+    fn if_condition_must_be_bool() {
+        eval_err("if 5 { 1 } else { 2 }");
+    }
+
+    #[test]
+    fn let_binding() {
+        assert_eq!(eval("{ let x = 5; x + 1 }"), Value::Int(6));
+    }
+
+    #[test]
+    fn let_shadowing_inner_wins() {
+        assert_eq!(eval("{ let x = 1; let x = 2; x }"), Value::Int(2));
+    }
+
+    #[test]
+    fn let_binding_does_not_leak_after_its_scope() {
+        // Both `x`s are independent — the outer `x` is unreachable from
+        // inside the inner block's own `x`, and once a `let`'s body
+        // finishes evaluating, that binding is gone.
+        assert_eq!(eval("{ let x = 1; { let x = x + 1; x } }"), Value::Int(2));
+    }
+
+    #[test]
+    fn unbound_variable_is_an_error() {
+        eval_err("y");
+    }
+
+    #[test]
+    fn calls_are_not_yet_supported() {
+        // No function values or environment exist yet — that waits for
+        // Item-level lowering (let-defs becoming callable functions).
+        eval_err("f(1)");
     }
 }

@@ -4,7 +4,11 @@ use plum_syntax::lexer::Lexer;
 use plum_syntax::parser::Parser;
 
 fn main() {
-    let source = "0";
+    // Item-level lowering (functions, structs) doesn't exist yet — see
+    // plum-ir's scope notes — so this runs one expression, not a real
+    // .plum file. First real end-to-end run of the whole pipeline:
+    // lex -> parse -> lower -> evaluate.
+    let source = "{ let n = 5; if n == 5 { n * 2 } else { 0 } }";
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize();
     let mut parser = Parser::new(tokens);
@@ -20,6 +24,6 @@ fn main() {
             }
             Err(e) => eprintln!("lowering error: {e}"),
         },
-        Err(e) => eprintln!("plumc: {e} (parser is a stub — this is expected for now)"),
+        Err(e) => eprintln!("parse error: {e}"),
     }
 }
