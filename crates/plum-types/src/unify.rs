@@ -13,6 +13,9 @@ pub fn unify(a: &Type, b: &Type) -> Result<Subst, String> {
         | (Type::Str, Type::Str)
         | (Type::Unit, Type::Unit) => Ok(Subst::empty()),
 
+        (Type::Struct(a_name), Type::Struct(b_name)) if a_name == b_name => Ok(Subst::empty()),
+        (Type::Enum(a_name), Type::Enum(b_name)) if a_name == b_name => Ok(Subst::empty()),
+
         // Checked before the general Var arms below so that unifying a
         // variable with itself is recognized as a no-op rather than
         // routed through bind_var (which would still handle it
@@ -117,6 +120,35 @@ mod tests {
     fn matching_function_types_unify() {
         let f = fn_ty(vec![Type::Int], Type::Bool);
         assert_eq!(unify(&f, &f).unwrap(), Subst::empty());
+    }
+
+    #[test]
+    fn matching_struct_types_unify() {
+        assert_eq!(
+            unify(&Type::Struct("Point".to_string()), &Type::Struct("Point".to_string())).unwrap(),
+            Subst::empty()
+        );
+    }
+
+    #[test]
+    fn different_struct_types_are_an_error() {
+        assert!(unify(&Type::Struct("Point".to_string()), &Type::Struct("Vector".to_string())).is_err());
+    }
+
+    #[test]
+    fn matching_enum_types_unify() {
+        assert_eq!(
+            unify(&Type::Enum("Shape".to_string()), &Type::Enum("Shape".to_string())).unwrap(),
+            Subst::empty()
+        );
+    }
+
+    #[test]
+    fn struct_and_enum_with_the_same_name_do_not_unify() {
+        // Nominal typing is per-KIND, not just per-name — a struct and
+        // an enum sharing a name (unusual, but not forbidden) are
+        // still different types.
+        assert!(unify(&Type::Struct("Thing".to_string()), &Type::Enum("Thing".to_string())).is_err());
     }
 
     #[test]

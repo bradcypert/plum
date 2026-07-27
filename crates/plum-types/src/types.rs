@@ -4,12 +4,15 @@
 // subst.rs) that resolves every Var to a concrete type, or to report
 // where that's impossible.
 //
-// Scope note: primitives matching DESIGN.md's unboxed set, plus
-// Function — enough to make unification's occurs-check and recursive
-// substitution genuinely meaningful (see subst.rs/unify.rs), without
-// yet reaching generics, structs, or enums as their own type formers.
-// Those come once real expression-by-expression inference exists on
-// top of this.
+// Scope note: primitives matching DESIGN.md's unboxed set, Function,
+// and NOMINAL struct/enum types (identified by declared name only, no
+// structural comparison — two structs with identical fields are still
+// different types, matching Rust/most ML languages). Deliberately NOT
+// generic: `Struct`/`Enum` carry no type parameters, and
+// `TypeContext::from_items` (context.rs) rejects any struct/enum
+// declared with generics rather than pretending to erase them — unlike
+// a function's unused generic parameter, a generic struct FIELD's type
+// genuinely depends on the parameter, so there's nothing safe to erase.
 
 pub type TypeVarId = usize;
 
@@ -22,4 +25,6 @@ pub enum Type {
     Unit,
     Var(TypeVarId),
     Function(Vec<Type>, Box<Type>),
+    Struct(String),
+    Enum(String),
 }

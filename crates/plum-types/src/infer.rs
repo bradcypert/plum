@@ -42,19 +42,29 @@ impl Default for TypeEnv {
 /// top-level docs / the surrounding conversation).
 pub struct Infer {
     next_var: TypeVarId,
+    ctx: crate::context::TypeContext,
 }
 
 impl Infer {
     pub fn new() -> Self {
-        Infer { next_var: 0 }
+        Infer {
+            next_var: 0,
+            ctx: crate::context::TypeContext::new(),
+        }
     }
 
-    /// Generates a never-before-used type variable. Not called by any
-    /// `infer_expr` case yet (nothing in this pass's scope needs one —
-    /// no unannotated parameters, no polymorphism to instantiate), but
-    /// genuinely useful to expose now rather than build later: the
-    /// next pass needs it, and it's a reasonable thing for a consumer
-    /// of this crate to want directly regardless.
+    /// For inferring anything that touches struct literals or `match`
+    /// — see context.rs. Plain `new()` still works for everything that
+    /// doesn't (an empty context just means struct/enum lookups always
+    /// fail with "unknown type").
+    pub fn with_context(ctx: crate::context::TypeContext) -> Self {
+        Infer { next_var: 0, ctx }
+    }
+
+    /// Generates a never-before-used type variable — used internally
+    /// for unannotated function/closure parameters and call return
+    /// types, and exposed publicly since it's a reasonable thing for a
+    /// consumer of this crate to want directly too.
     pub fn fresh(&mut self) -> Type {
         let id = self.next_var;
         self.next_var += 1;
@@ -181,6 +191,14 @@ impl Infer {
                 let arg_refs: Vec<&ast::Expr> = args.iter().collect();
                 self.infer_call(callee, &arg_refs, env)
             }
+            ast::Expr::StructLiteral {
+                path,
+                fields,
+                spread,
+                span,
+            } => self.infer_struct_literal(path, fields, spread, *span, env),
+            ast::Expr::Match { scrutinee, arms, .. } => self.infer_match(scrutinee, arms, env),
+            ast::Expr::Closure { params, body, .. } => self.infer_closure(params, body, env),
             other => Err(format!(
                 "type inference not yet implemented for this expression form at {:?}",
                 other.span()
@@ -219,6 +237,171 @@ impl Infer {
         let s = unify(&acc.apply(&callee_ty), &expected_fn_ty).map_err(|e| format!("call: {e}"))?;
         acc = s.compose(&acc);
         Ok((acc.apply(&ret_var), acc))
+    }
+
+    fn infer_struct_literal(
+        &mut self,
+        path: &[String],
+        fields: &[ast::FieldInit],
+        spread: &Option<Box<ast::Expr>>,
+        span: plum_syntax::span::Span,
+        env: &TypeEnv,
+    ) -> Result<(Type, Subst), String> {
+        if spread.is_some() {
+            return Err(format!(
+                "type inference not yet implemented for struct update/spread syntax at {span:?}"
+            ));
+        }
+        let tag = path.last().cloned().expect("a path always has at least one segment");
+        let declared_fields = self
+            .ctx
+            .struct_fields(&tag)
+            .ok_or_else(|| format!("unknown struct type {tag:?} at {span:?}"))?
+            .to_vec();
+
+        let mut by_name: HashMap<&str, &ast::Expr> = HashMap::new();
+        for f in fields {
+            if by_name.insert(f.name.as_str(), &f.value).is_some() {
+                return Err(format!("field {:?} specified more than once at {:?}", f.name, f.span));
+            }
+        }
+
+        let mut acc = Subst::empty();
+        for (declared_name, declared_ty) in &declared_fields {
+            let Some(value_expr) = by_name.remove(declared_name.as_str()) else {
+                return Err(format!("missing field {declared_name:?} for struct {tag:?} at {span:?}"));
+            };
+            let (val_ty, s) = self.infer_expr(value_expr, env)?;
+            acc = s.compose(&acc);
+            let s = unify(&acc.apply(&val_ty), &acc.apply(declared_ty))
+                .map_err(|e| format!("field {declared_name:?} of struct {tag:?}: {e}"))?;
+            acc = s.compose(&acc);
+        }
+        if let Some((extra_name, _)) = by_name.into_iter().next() {
+            return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+        }
+
+        Ok((Type::Struct(tag), acc))
+    }
+
+    // Only the simple `Path(bindings...)` shape is supported, same
+    // restriction as lower.rs's `lower_variant_pattern` — see that
+    // function's comment for exactly why (no nested patterns, no
+    // "default arm" concept for a bare `_`, etc.).
+    fn variant_pattern_info(pattern: &ast::Pattern) -> Result<(String, Vec<String>), String> {
+        match pattern {
+            ast::Pattern::Variant { path, args, .. } => {
+                let tag = path.last().cloned().expect("a path always has at least one segment");
+                let mut bindings = Vec::with_capacity(args.len());
+                for arg in args {
+                    match arg {
+                        ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
+                        ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
+                        other => {
+                            return Err(format!(
+                                "type inference not yet implemented for nested patterns inside \
+                                 a variant arm's arguments at {:?}",
+                                other.span()
+                            ));
+                        }
+                    }
+                }
+                Ok((tag, bindings))
+            }
+            other => Err(format!(
+                "type inference not yet implemented for this pattern shape as a match arm at {:?}",
+                other.span()
+            )),
+        }
+    }
+
+    fn infer_match(&mut self, scrutinee: &ast::Expr, arms: &[ast::MatchArm], env: &TypeEnv) -> Result<(Type, Subst), String> {
+        let (scrutinee_ty, s) = self.infer_expr(scrutinee, env)?;
+        let mut acc = s;
+
+        let mut result_ty: Option<Type> = None;
+        let mut owning_enum: Option<String> = None;
+
+        for arm in arms {
+            if arm.guard.is_some() {
+                return Err(format!(
+                    "type inference not yet implemented for match guards at {:?}",
+                    arm.span
+                ));
+            }
+            let (tag, bindings) = Self::variant_pattern_info(&arm.pattern)?;
+            let (enum_name, payload_types) = self
+                .ctx
+                .variant(&tag)
+                .cloned()
+                .ok_or_else(|| format!("unknown variant {tag:?} at {:?}", arm.pattern.span()))?;
+
+            match &owning_enum {
+                None => owning_enum = Some(enum_name.clone()),
+                Some(prev) if *prev != enum_name => {
+                    return Err(format!(
+                        "match arms mix variants from different enums ({prev:?} and {enum_name:?})"
+                    ));
+                }
+                _ => {}
+            }
+
+            if bindings.len() != payload_types.len() {
+                return Err(format!(
+                    "variant {tag:?} expects {} field(s), found {} binding(s)",
+                    payload_types.len(),
+                    bindings.len()
+                ));
+            }
+
+            let mut arm_env = env.clone();
+            for (binding_name, payload_ty) in bindings.iter().zip(payload_types.iter()) {
+                arm_env = arm_env.extend(binding_name.clone(), acc.apply(payload_ty));
+            }
+
+            let (body_ty, s) = self.infer_expr(&arm.body, &arm_env)?;
+            acc = s.compose(&acc);
+
+            match &result_ty {
+                None => result_ty = Some(acc.apply(&body_ty)),
+                Some(prev) => {
+                    let s = unify(&acc.apply(prev), &acc.apply(&body_ty))
+                        .map_err(|e| format!("match arms must produce the same type: {e}"))?;
+                    acc = s.compose(&acc);
+                    result_ty = Some(acc.apply(prev));
+                }
+            }
+        }
+
+        if let Some(enum_name) = owning_enum {
+            let s = unify(&acc.apply(&scrutinee_ty), &Type::Enum(enum_name))
+                .map_err(|e| format!("match scrutinee: {e}"))?;
+            acc = s.compose(&acc);
+        }
+
+        let final_ty = result_ty.ok_or_else(|| "match with no arms has no result type".to_string())?;
+        Ok((acc.apply(&final_ty), acc))
+    }
+
+    // Unlike a named top-level function (which gets a totally fresh,
+    // isolated environment — see plum-interp's `function_body_cannot_
+    // see_the_caller_environment`), a closure DOES see the surrounding
+    // scope — that's the actual definition of a closure. `closure_env`
+    // extends the caller's `env`, not a fresh one, on purpose.
+    fn infer_closure(&mut self, params: &[ast::ClosureParam], body: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), String> {
+        let mut param_types = Vec::with_capacity(params.len());
+        let mut closure_env = env.clone();
+        for p in params {
+            let ty = match &p.ty {
+                Some(annotation) => ast_type_to_type(annotation)?,
+                None => self.fresh(),
+            };
+            closure_env = closure_env.extend(p.name.clone(), ty.clone());
+            param_types.push(ty);
+        }
+        let (body_ty, acc) = self.infer_expr(body, &closure_env)?;
+        let resolved_params = param_types.iter().map(|t| acc.apply(t)).collect();
+        Ok((Type::Function(resolved_params, Box::new(acc.apply(&body_ty))), acc))
     }
 
     fn infer_unary(&mut self, op: &ast::UnaryOp, expr: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), String> {
@@ -400,7 +583,12 @@ fn plain_param_name(param: &ast::Param) -> Result<String, String> {
     }
 }
 
-fn ast_type_to_type(ty: &ast::Type) -> Result<Type, String> {
+// pub(crate) so context.rs can reuse it for struct field / enum
+// variant payload type annotations. Deliberately primitive-only for
+// now — a field/payload type referencing ANOTHER struct or enum (or a
+// generic) is a real, deferred gap (nested declaration ordering is a
+// separate problem this pass doesn't solve), not silently mishandled.
+pub(crate) fn ast_type_to_type(ty: &ast::Type) -> Result<Type, String> {
     match ty {
         ast::Type::Path(segments, span) => match segments.last().map(String::as_str) {
             Some("Int") => Ok(Type::Int),
@@ -626,21 +814,207 @@ mod tests {
         );
     }
 
-    // --- Explicit, honest gaps — not yet supported ---
+    // --- Struct literals: need a TypeContext to resolve declared
+    // field types, same shape as lower.rs's LoweringContext resolves
+    // field ORDER. See context.rs.
 
-    #[test]
-    fn match_is_not_yet_supported() {
-        infer_err("match x { _ => 1 }");
+    use crate::context::TypeContext;
+
+    fn context(src: &str) -> TypeContext {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        TypeContext::from_items(&program.items).unwrap_or_else(|e| panic!("context error for {src:?}: {e}"))
+    }
+
+    fn infer_expr_with(infer: &mut Infer, src: &str, env: &TypeEnv) -> Type {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let (ty, subst) = infer
+            .infer_expr(&ast, env)
+            .unwrap_or_else(|e| panic!("inference error for {src:?}: {e}"));
+        subst.apply(&ty)
+    }
+
+    fn infer_expr_with_err(infer: &mut Infer, src: &str, env: &TypeEnv) -> String {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        infer
+            .infer_expr(&ast, env)
+            .expect_err(&format!("expected inference of {src:?} to fail"))
     }
 
     #[test]
-    fn struct_literal_is_not_yet_supported() {
-        infer_err("Point { x: 1.0 }");
+    fn struct_literal_basic() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Point { x: 1.0, y: 2.0 }", &TypeEnv::new()),
+            Type::Struct("Point".to_string())
+        );
     }
 
     #[test]
-    fn closure_is_not_yet_supported() {
-        infer_err("|x| x");
+    fn struct_literal_field_order_independent() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Point { y: 2.0, x: 1.0 }", &TypeEnv::new()),
+            Type::Struct("Point".to_string())
+        );
+    }
+
+    #[test]
+    fn struct_literal_field_type_mismatch_is_an_error() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        infer_expr_with_err(&mut infer, "Point { x: 1, y: 2.0 }", &TypeEnv::new());
+    }
+
+    #[test]
+    fn struct_literal_unknown_type_is_an_error() {
+        let mut infer = Infer::new();
+        infer_expr_with_err(&mut infer, "Foo { x: 1.0 }", &TypeEnv::new());
+    }
+
+    #[test]
+    fn struct_literal_missing_field_is_an_error() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        infer_expr_with_err(&mut infer, "Point { x: 1.0 }", &TypeEnv::new());
+    }
+
+    #[test]
+    fn struct_literal_unknown_field_is_an_error() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        infer_expr_with_err(&mut infer, "Point { x: 1.0, y: 2.0, z: 3.0 }", &TypeEnv::new());
+    }
+
+    #[test]
+    fn struct_literal_duplicate_field_is_an_error() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        infer_expr_with_err(&mut infer, "Point { x: 1.0, x: 2.0 }", &TypeEnv::new());
+    }
+
+    #[test]
+    fn struct_literal_spread_is_not_yet_supported() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        infer_expr_with_err(&mut infer, "Point { x: 1.0, ..other }", &TypeEnv::new());
+    }
+
+    // --- Match: enum variant patterns, resolved against the SAME
+    // TypeContext (enum variant tag -> owning enum + payload types).
+
+    #[test]
+    fn match_variant_arms_produce_a_common_type() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Rectangle(Float, Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        assert_eq!(
+            infer_expr_with(
+                &mut infer,
+                "match shape { Shape.Circle(r) => r, Shape.Rectangle(w, h) => w }",
+                &env
+            ),
+            Type::Float
+        );
+    }
+
+    #[test]
+    fn match_scrutinee_type_is_inferred_from_the_arms() {
+        // `x`'s type isn't known ahead of time (a fresh var) — matching
+        // it against Shape's variants is what pins it down.
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        let env = TypeEnv::new().extend("x".to_string(), Type::Var(0));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match x { Shape.Circle(r) => r }", &env),
+            Type::Float
+        );
+    }
+
+    #[test]
+    fn match_arms_must_produce_the_same_type() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Rectangle(Float, Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        infer_expr_with_err(
+            &mut infer,
+            "match shape { Shape.Circle(r) => r, Shape.Rectangle(w, h) => true }",
+            &env,
+        );
+    }
+
+    #[test]
+    fn match_unknown_variant_is_an_error() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        infer_expr_with_err(&mut infer, "match shape { Shape.Triangle(a) => a }", &env);
+    }
+
+    #[test]
+    fn match_variant_wrong_arity_is_an_error() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        infer_expr_with_err(&mut infer, "match shape { Shape.Circle(a, b) => a }", &env);
+    }
+
+    #[test]
+    fn match_mixing_variants_from_different_enums_is_an_error() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }\nenum Color { Red, Blue }"));
+        let env = TypeEnv::new().extend("x".to_string(), Type::Var(0));
+        infer_expr_with_err(&mut infer, "match x { Shape.Circle(r) => 1, Color.Red => 2 }", &env);
+    }
+
+    #[test]
+    fn match_bare_wildcard_arm_is_not_yet_supported() {
+        // No "default arm" concept exists yet — same limitation as
+        // lower.rs's IR Match. `_` used INSIDE a variant's args (e.g.
+        // `Shape.Rectangle(_, _)`) is fine; a bare `_` as a WHOLE arm
+        // isn't.
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        infer_expr_with_err(&mut infer, "match shape { _ => 1 }", &env);
+    }
+
+    #[test]
+    fn match_or_pattern_is_not_yet_supported() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Empty }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        infer_expr_with_err(&mut infer, "match shape { Shape.Circle(a) | Shape.Empty => 1 }", &env);
+    }
+
+    #[test]
+    fn match_guard_is_not_yet_supported() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        infer_expr_with_err(&mut infer, "match shape { Shape.Circle(r) if r > 0.0 => r }", &env);
+    }
+
+    // --- Closures: unlike named top-level functions (which get a
+    // totally fresh, isolated environment — see plum-interp's
+    // `function_body_cannot_see_the_caller_environment`), a closure
+    // CAN see the surrounding scope. That's the actual definition of a
+    // closure, and it's a deliberate difference from function
+    // inference, not an oversight.
+
+    #[test]
+    fn closure_annotated_param() {
+        assert_eq!(infer("|x: Int| x + 1"), fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn closure_unannotated_param_inferred_from_body() {
+        // No annotation on `x` — its type comes entirely from how it's
+        // used inside the body (here, `+ 1` pins it to Int, same
+        // defaulting rule as everywhere else).
+        assert_eq!(infer("|x| x + 1"), fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn closure_multiple_params() {
+        assert_eq!(infer("|a, b| a + b"), fn_ty(vec![Type::Int, Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn closure_can_see_the_surrounding_scope() {
+        let env = TypeEnv::new().extend("outer".to_string(), Type::Int);
+        assert_eq!(infer_in("|x| x + outer", &env), fn_ty(vec![Type::Int], Type::Int));
     }
 
     #[test]
