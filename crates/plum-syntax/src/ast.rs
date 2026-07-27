@@ -1,11 +1,9 @@
 use crate::span::Span;
 
-// Scope note: this AST now covers the "expression core," the Pattern
-// grammar, and the block-level expression forms (if/match/for/
-// closures/unsafe/spawn/struct-literals/blocks) from GRAMMAR.md.
-// Deliberately not yet covered: the Item grammar (let defs, struct/enum
-// decls, extern blocks, use decls). See DESIGN.md/GRAMMAR.md for the
-// full grammar this is being built out against incrementally.
+// Scope note: this AST now covers the full grammar in GRAMMAR.md —
+// expressions, patterns, block-level forms, and the Item grammar
+// (let defs, struct/enum decls, extern blocks, use decls). A `Program`
+// is just `{ Item }`, so this is enough to parse a whole `.plum` file.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnaryOp {
@@ -45,6 +43,14 @@ pub enum Type {
         args: Vec<Type>,
         span: Span,
     },
+}
+
+impl Type {
+    pub fn span(&self) -> Span {
+        match self {
+            Type::Path(_, s) | Type::Generic { span: s, .. } => *s,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -254,4 +260,124 @@ impl Pattern {
             | Pattern::Or(_, s) => *s,
         }
     }
+}
+
+// --- Item grammar: let defs, struct/enum decls, extern blocks, use
+// decls. A directory is a module (see DESIGN.md's "Module system") —
+// there is no `mod` declaration in this AST, just a flat Program.
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Program {
+    pub items: Vec<Item>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Item {
+    pub is_pub: bool,
+    pub kind: ItemKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ItemKind {
+    Let(LetDef),
+    Struct(StructDecl),
+    Enum(EnumDecl),
+    Extern(ExternBlock),
+    Use(UseDecl),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericParam {
+    pub name: String,
+    // Empty = unbounded. Multiple = `+`-combined (`[T: Num + Eq]`).
+    pub bound: Vec<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParamKind {
+    Ident(String),
+    // `(Pattern [: Type])` — see GRAMMAR.md's "Known ambiguities" note
+    // on Param-parens vs. Pattern's own tuple-parens; this covers every
+    // case actually used in examples/overview.plum (annotated bindings,
+    // struct-destructuring) without fully resolving the double-paren
+    // tuple-destructuring-param edge case, which was deliberately left
+    // as a parser-implementation detail, not a language design one.
+    Pattern(Pattern, Option<Type>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    pub kind: ParamKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LetDef {
+    pub name: String,
+    pub generics: Vec<GenericParam>,
+    pub params: Vec<Param>,
+    pub ret_ty: Option<Type>,
+    pub body: Expr,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructField {
+    pub is_pub: bool,
+    pub name: String,
+    pub ty: Type,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructDecl {
+    pub name: String,
+    pub generics: Vec<GenericParam>,
+    pub fields: Vec<StructField>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumVariant {
+    pub name: String,
+    pub payload: Vec<Type>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumDecl {
+    pub name: String,
+    pub generics: Vec<GenericParam>,
+    pub variants: Vec<EnumVariant>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternParam {
+    pub name: String,
+    pub ty: Type,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternFn {
+    pub name: String,
+    pub params: Vec<ExternParam>,
+    pub ret_ty: Option<Type>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternBlock {
+    pub abi: String,
+    pub fns: Vec<ExternFn>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseDecl {
+    pub path: Vec<String>,
+    pub span: Span,
 }

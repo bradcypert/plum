@@ -17,7 +17,7 @@
 // are guaranteed eliminated by the LLVM backend (`tail call` in LLVM
 // IR), so this compiles to a loop, not a stack-growing call chain.
 let sum n acc =
-    if n == 0 { acc } else { sum (n - 1) (acc + n) }
+    if n == 0 { acc } else { sum(n - 1, acc + n) }
 
 // Explicit annotations are still legal and equivalent — recommended for
 // exported/top-level signatures so the public API is pinned on purpose
@@ -95,8 +95,8 @@ let one_tuple = (5,)
 // questions — so this stays deliberately small rather than reaching for
 // either.)
 let apply_twice f x = f(f(x))
-let add_dx = |p| move_right p 1.0
-let shifted = apply_twice add_dx (Point { x: 0.0, y: 0.0 })
+let add_dx = |p| move_right(p, 1.0)
+let shifted = apply_twice(add_dx, Point { x: 0.0, y: 0.0 })
 
 // --- Local mutability, without escaping ---
 //
@@ -104,7 +104,7 @@ let shifted = apply_twice add_dx (Point { x: 0.0, y: 0.0 })
 // by the same uniqueness analysis that powers FBIP, since it's no
 // riskier than recursion. This is a different mechanism from `Ref`
 // below, which is for state that's actually shared or escapes.
-let sum_range n =
+let sum_range n = {
     let mut total = 0;
     for i in 0..n {
         total = total + i;
@@ -113,6 +113,7 @@ let sum_range n =
     // brace — DESIGN.md's block rule has no exemption for block-shaped
     // statements, unlike Rust.
     total
+}
 
 // --- The pipe operator ---
 //
@@ -175,15 +176,17 @@ let hypotenuse a b = unsafe { sqrt(a * a + b * b) }
 // used for the last time — reusing it below is a compile error, not a
 // runtime race, because ownership transferred rather than being
 // shared. This is the "beats Go" claim from DESIGN.md made concrete.
-let producer tx =
+let producer tx = {
     let msg = 42;
     tx.send(msg)
     // tx.send(msg); // <- would be a compile error: `msg` already moved
+}
 
-let example () =
+let example () = {
     let (tx, rx) = channel[Int]();
     spawn { producer(tx) };
     match rx.recv() {
         Some(value) => print(value),
         None => print("channel closed"),
     }
+}

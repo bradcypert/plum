@@ -1,6 +1,7 @@
 use crate::ast::{
-    BinaryOp, Block, ClosureParam, Expr, FieldInit, FieldPattern, MatchArm, Pattern, Stmt, Type,
-    UnaryOp,
+    BinaryOp, Block, ClosureParam, EnumDecl, EnumVariant, Expr, ExternBlock, ExternFn,
+    ExternParam, FieldInit, FieldPattern, GenericParam, Item, ItemKind, LetDef, MatchArm, Param,
+    ParamKind, Pattern, Program, Stmt, StructDecl, StructField, Type, UnaryOp, UseDecl,
 };
 use crate::lexer::{Token, TokenKind};
 use crate::span::Span;
@@ -29,6 +30,347 @@ impl Parser {
 
     pub fn is_at_eof(&self) -> bool {
         matches!(self.tokens[self.pos].kind, TokenKind::Eof)
+    }
+
+    // --- item grammar: a Program is just `{ Item }` — see GRAMMAR.md's
+    // "Program structure" section. No `mod` declaration exists; a
+    // directory is a module (see DESIGN.md's "Module system"), so this
+    // is enough to parse one whole `.plum` file. ---
+
+    pub fn parse_program(&mut self) -> Result<Program, String> {
+        let mut items = Vec::new();
+        while !self.is_at_eof() {
+            items.push(self.parse_item()?);
+        }
+        Ok(Program { items })
+    }
+
+    fn parse_item(&mut self) -> Result<Item, String> {
+        let pub_tok = if self.check(&TokenKind::Pub) {
+            Some(self.advance())
+        } else {
+            None
+        };
+        let is_pub = pub_tok.is_some();
+        let kind_start = self.peek().span;
+        let kind = match self.peek_kind() {
+            TokenKind::Let => ItemKind::Let(self.parse_let_def()?),
+            TokenKind::Struct => ItemKind::Struct(self.parse_struct_decl()?),
+            TokenKind::Enum => ItemKind::Enum(self.parse_enum_decl()?),
+            TokenKind::Extern => ItemKind::Extern(self.parse_extern_block()?),
+            TokenKind::Use => ItemKind::Use(self.parse_use_decl()?),
+            other => {
+                return Err(format!(
+                    "expected an item (let/struct/enum/extern/use), found {other:?} at {:?}",
+                    self.peek().span
+                ));
+            }
+        };
+        let kind_span = match &kind {
+            ItemKind::Let(d) => d.span,
+            ItemKind::Struct(d) => d.span,
+            ItemKind::Enum(d) => d.span,
+            ItemKind::Extern(d) => d.span,
+            ItemKind::Use(d) => d.span,
+        };
+        let start = pub_tok.map(|t| t.span).unwrap_or(kind_start);
+        Ok(Item {
+            is_pub,
+            kind,
+            span: start.to(kind_span),
+        })
+    }
+
+    fn parse_generic_params(&mut self) -> Result<Vec<GenericParam>, String> {
+        self.expect(TokenKind::LBracket, "'['")?;
+        let mut params = Vec::new();
+        if !self.check(&TokenKind::RBracket) {
+            params.push(self.parse_generic_param()?);
+            while self.bump_if(&TokenKind::Comma) {
+                if self.check(&TokenKind::RBracket) {
+                    break;
+                }
+                params.push(self.parse_generic_param()?);
+            }
+        }
+        self.expect(TokenKind::RBracket, "']'")?;
+        Ok(params)
+    }
+
+    fn parse_generic_param(&mut self) -> Result<GenericParam, String> {
+        let name_tok = self.expect_ident("a generic parameter")?;
+        let name = Self::ident_text(&name_tok);
+        let mut end = name_tok.span;
+        let mut bound = Vec::new();
+        if self.bump_if(&TokenKind::Colon) {
+            let first = self.expect_ident("a trait bound")?;
+            end = first.span;
+            bound.push(Self::ident_text(&first));
+            while self.bump_if(&TokenKind::Plus) {
+                let next = self.expect_ident("a trait bound")?;
+                end = next.span;
+                bound.push(Self::ident_text(&next));
+            }
+        }
+        Ok(GenericParam {
+            name,
+            bound,
+            span: name_tok.span.to(end),
+        })
+    }
+
+    fn parse_let_def(&mut self) -> Result<LetDef, String> {
+        let start = self.expect(TokenKind::Let, "'let'")?.span;
+        let name_tok = self.expect_ident("a name")?;
+        let name = Self::ident_text(&name_tok);
+        let generics = if self.check(&TokenKind::LBracket) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
+        let mut params = Vec::new();
+        while matches!(self.peek_kind(), TokenKind::Ident(_) | TokenKind::LParen) {
+            params.push(self.parse_param()?);
+        }
+        let ret_ty = if self.bump_if(&TokenKind::Colon) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect(TokenKind::Eq, "'='")?;
+        let body = self.parse_expr()?;
+        let span = start.to(body.span());
+        Ok(LetDef {
+            name,
+            generics,
+            params,
+            ret_ty,
+            body,
+            span,
+        })
+    }
+
+    fn parse_param(&mut self) -> Result<Param, String> {
+        let tok = self.peek().clone();
+        match &tok.kind {
+            TokenKind::Ident(name) => {
+                self.advance();
+                Ok(Param {
+                    kind: ParamKind::Ident(name.clone()),
+                    span: tok.span,
+                })
+            }
+            TokenKind::LParen => {
+                let open = self.advance();
+                if self.check(&TokenKind::RParen) {
+                    // `()` — the Unit pattern.
+                    let close = self.advance();
+                    let span = open.span.to(close.span);
+                    return Ok(Param {
+                        kind: ParamKind::Pattern(Pattern::Tuple(vec![], span), None),
+                        span,
+                    });
+                }
+                let first = self.parse_pattern()?;
+                if self.bump_if(&TokenKind::Comma) {
+                    // Tuple-destructuring param, single-paren form —
+                    // `let swap (a, b) = ...` from examples/overview.plum.
+                    // No `: Type` suffix in this form (unlike the
+                    // singleton case below); resolves the ambiguity
+                    // GRAMMAR.md flags between Param's own parens and
+                    // Pattern's tuple-pattern parens by treating them
+                    // as the same parens rather than requiring
+                    // double-wrapping.
+                    let mut elems = vec![first];
+                    if !self.check(&TokenKind::RParen) {
+                        elems.push(self.parse_pattern()?);
+                        while self.bump_if(&TokenKind::Comma) {
+                            if self.check(&TokenKind::RParen) {
+                                break;
+                            }
+                            elems.push(self.parse_pattern()?);
+                        }
+                    }
+                    let close = self.expect(TokenKind::RParen, "')'")?;
+                    let span = open.span.to(close.span);
+                    return Ok(Param {
+                        kind: ParamKind::Pattern(Pattern::Tuple(elems, span), None),
+                        span,
+                    });
+                }
+                let ty = if self.bump_if(&TokenKind::Colon) {
+                    Some(self.parse_type()?)
+                } else {
+                    None
+                };
+                let close = self.expect(TokenKind::RParen, "')'")?;
+                Ok(Param {
+                    kind: ParamKind::Pattern(first, ty),
+                    span: open.span.to(close.span),
+                })
+            }
+            other => Err(format!("expected a parameter, found {other:?} at {:?}", tok.span)),
+        }
+    }
+
+    fn parse_struct_decl(&mut self) -> Result<StructDecl, String> {
+        let start = self.expect(TokenKind::Struct, "'struct'")?.span;
+        let name_tok = self.expect_ident("a struct name")?;
+        let name = Self::ident_text(&name_tok);
+        let generics = if self.check(&TokenKind::LBracket) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
+        self.expect(TokenKind::LBrace, "'{'")?;
+        let mut fields = Vec::new();
+        if !self.check(&TokenKind::RBrace) {
+            fields.push(self.parse_struct_field()?);
+            while self.bump_if(&TokenKind::Comma) {
+                if self.check(&TokenKind::RBrace) {
+                    break;
+                }
+                fields.push(self.parse_struct_field()?);
+            }
+        }
+        let close = self.expect(TokenKind::RBrace, "'}'")?;
+        Ok(StructDecl {
+            name,
+            generics,
+            fields,
+            span: start.to(close.span),
+        })
+    }
+
+    fn parse_struct_field(&mut self) -> Result<StructField, String> {
+        let is_pub = self.bump_if(&TokenKind::Pub);
+        let name_tok = self.expect_ident("a field name")?;
+        let name = Self::ident_text(&name_tok);
+        self.expect(TokenKind::Colon, "':'")?;
+        let ty = self.parse_type()?;
+        let span = name_tok.span.to(ty.span());
+        Ok(StructField { is_pub, name, ty, span })
+    }
+
+    fn parse_enum_decl(&mut self) -> Result<EnumDecl, String> {
+        let start = self.expect(TokenKind::Enum, "'enum'")?.span;
+        let name_tok = self.expect_ident("an enum name")?;
+        let name = Self::ident_text(&name_tok);
+        let generics = if self.check(&TokenKind::LBracket) {
+            self.parse_generic_params()?
+        } else {
+            Vec::new()
+        };
+        self.expect(TokenKind::LBrace, "'{'")?;
+        let mut variants = Vec::new();
+        if !self.check(&TokenKind::RBrace) {
+            variants.push(self.parse_enum_variant()?);
+            while self.bump_if(&TokenKind::Comma) {
+                if self.check(&TokenKind::RBrace) {
+                    break;
+                }
+                variants.push(self.parse_enum_variant()?);
+            }
+        }
+        let close = self.expect(TokenKind::RBrace, "'}'")?;
+        Ok(EnumDecl {
+            name,
+            generics,
+            variants,
+            span: start.to(close.span),
+        })
+    }
+
+    fn parse_enum_variant(&mut self) -> Result<EnumVariant, String> {
+        let name_tok = self.expect_ident("a variant name")?;
+        let name = Self::ident_text(&name_tok);
+        let mut end = name_tok.span;
+        let mut payload = Vec::new();
+        if self.bump_if(&TokenKind::LParen) {
+            if !self.check(&TokenKind::RParen) {
+                payload.push(self.parse_type()?);
+                while self.bump_if(&TokenKind::Comma) {
+                    if self.check(&TokenKind::RParen) {
+                        break;
+                    }
+                    payload.push(self.parse_type()?);
+                }
+            }
+            let close = self.expect(TokenKind::RParen, "')'")?;
+            end = close.span;
+        }
+        Ok(EnumVariant {
+            name,
+            payload,
+            span: name_tok.span.to(end),
+        })
+    }
+
+    fn parse_extern_block(&mut self) -> Result<ExternBlock, String> {
+        let start = self.expect(TokenKind::Extern, "'extern'")?.span;
+        let abi_tok = self.expect_str("a string literal (the ABI, e.g. \"C\")")?;
+        let abi = Self::str_text(&abi_tok);
+        self.expect(TokenKind::LBrace, "'{'")?;
+        let mut fns = Vec::new();
+        while !self.check(&TokenKind::RBrace) {
+            fns.push(self.parse_extern_fn()?);
+        }
+        let close = self.expect(TokenKind::RBrace, "'}'")?;
+        Ok(ExternBlock {
+            abi,
+            fns,
+            span: start.to(close.span),
+        })
+    }
+
+    fn parse_extern_fn(&mut self) -> Result<ExternFn, String> {
+        let start = self.expect(TokenKind::Fn, "'fn'")?.span;
+        let name_tok = self.expect_ident("a function name")?;
+        let name = Self::ident_text(&name_tok);
+        self.expect(TokenKind::LParen, "'('")?;
+        let mut params = Vec::new();
+        if !self.check(&TokenKind::RParen) {
+            params.push(self.parse_extern_param()?);
+            while self.bump_if(&TokenKind::Comma) {
+                if self.check(&TokenKind::RParen) {
+                    break;
+                }
+                params.push(self.parse_extern_param()?);
+            }
+        }
+        self.expect(TokenKind::RParen, "')'")?;
+        let ret_ty = if self.bump_if(&TokenKind::Arrow) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        let semi = self.expect(TokenKind::Semicolon, "';'")?;
+        Ok(ExternFn {
+            name,
+            params,
+            ret_ty,
+            span: start.to(semi.span),
+        })
+    }
+
+    fn parse_extern_param(&mut self) -> Result<ExternParam, String> {
+        let name_tok = self.expect_ident("a parameter name")?;
+        let name = Self::ident_text(&name_tok);
+        self.expect(TokenKind::Colon, "':'")?;
+        let ty = self.parse_type()?;
+        let span = name_tok.span.to(ty.span());
+        Ok(ExternParam { name, ty, span })
+    }
+
+    fn parse_use_decl(&mut self) -> Result<UseDecl, String> {
+        let start = self.expect(TokenKind::Use, "'use'")?.span;
+        let segments = self.parse_expr_path()?;
+        let path: Vec<String> = segments.iter().map(|(name, _)| name.clone()).collect();
+        let semi = self.expect(TokenKind::Semicolon, "';'")?;
+        Ok(UseDecl {
+            path,
+            span: start.to(semi.span),
+        })
     }
 
     // --- pattern grammar, matching GRAMMAR.md's "Patterns" section ---
@@ -286,6 +628,25 @@ impl Parser {
         match &tok.kind {
             TokenKind::Ident(s) => s.clone(),
             _ => unreachable!("ident_text called on a non-identifier token"),
+        }
+    }
+
+    fn expect_str(&mut self, what: &str) -> Result<Token, String> {
+        if matches!(self.peek_kind(), TokenKind::Str(_)) {
+            Ok(self.advance())
+        } else {
+            Err(format!(
+                "expected {what}, found {:?} at {:?}",
+                self.peek_kind(),
+                self.peek().span
+            ))
+        }
+    }
+
+    fn str_text(tok: &Token) -> String {
+        match &tok.kind {
+            TokenKind::Str(s) => s.clone(),
+            _ => unreachable!("str_text called on a non-string token"),
         }
     }
 
@@ -1727,5 +2088,323 @@ mod tests {
             "(call (field (field entity position) update) \
              (closure (p) (struct-lit Point x=(+ (field p x) (* (field (field entity velocity) x) dt)) ..p)))"
         );
+    }
+
+    // --- Item grammar: let defs, struct/enum decls, extern blocks,
+    // use decls ---
+
+    fn parse_program(src: &str) -> Program {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser
+            .parse_program()
+            .unwrap_or_else(|e| panic!("program parse error for {src:?}: {e}"));
+        assert!(
+            parser.is_at_eof(),
+            "leftover tokens after parsing {src:?}: {:?}",
+            &parser.tokens[parser.pos..]
+        );
+        program
+    }
+
+    fn program_parse_err(src: &str) {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        match parser.parse_program() {
+            Err(_) => {}
+            Ok(_) if !parser.is_at_eof() => {}
+            Ok(p) => panic!("expected {src:?} to be rejected, got {}", render_program(&p)),
+        }
+    }
+
+    fn render_generic_params(params: &[GenericParam]) -> String {
+        if params.is_empty() {
+            return String::new();
+        }
+        let rendered: Vec<String> = params
+            .iter()
+            .map(|p| {
+                if p.bound.is_empty() {
+                    p.name.clone()
+                } else {
+                    format!("{}:{}", p.name, p.bound.join("+"))
+                }
+            })
+            .collect();
+        format!("[{}]", rendered.join(","))
+    }
+
+    fn render_param(param: &Param) -> String {
+        match &param.kind {
+            ParamKind::Ident(name) => name.clone(),
+            ParamKind::Pattern(pattern, Some(ty)) => {
+                format!("({}:{})", render_pattern(pattern), render_type(ty))
+            }
+            ParamKind::Pattern(pattern, None) => format!("({})", render_pattern(pattern)),
+        }
+    }
+
+    fn render_item(item: &Item) -> String {
+        let pub_marker = if item.is_pub { "pub " } else { "" };
+        match &item.kind {
+            ItemKind::Let(def) => {
+                let mut parts = vec!["let".to_string(), format!("{pub_marker}{}", def.name)];
+                let generics = render_generic_params(&def.generics);
+                if !generics.is_empty() {
+                    parts.push(generics);
+                }
+                parts.push(format!(
+                    "({})",
+                    def.params.iter().map(render_param).collect::<Vec<_>>().join(" ")
+                ));
+                if let Some(ty) = &def.ret_ty {
+                    parts.push(format!("->{}", render_type(ty)));
+                }
+                parts.push(render(&def.body));
+                format!("({})", parts.join(" "))
+            }
+            ItemKind::Struct(decl) => {
+                let mut parts = vec!["struct".to_string(), format!("{pub_marker}{}", decl.name)];
+                let generics = render_generic_params(&decl.generics);
+                if !generics.is_empty() {
+                    parts.push(generics);
+                }
+                for f in &decl.fields {
+                    let fpub = if f.is_pub { "pub " } else { "" };
+                    parts.push(format!("{fpub}{}:{}", f.name, render_type(&f.ty)));
+                }
+                format!("({})", parts.join(" "))
+            }
+            ItemKind::Enum(decl) => {
+                let mut parts = vec!["enum".to_string(), format!("{pub_marker}{}", decl.name)];
+                let generics = render_generic_params(&decl.generics);
+                if !generics.is_empty() {
+                    parts.push(generics);
+                }
+                for v in &decl.variants {
+                    if v.payload.is_empty() {
+                        parts.push(v.name.clone());
+                    } else {
+                        let payload: Vec<String> = v.payload.iter().map(render_type).collect();
+                        parts.push(format!("{}({})", v.name, payload.join(",")));
+                    }
+                }
+                format!("({})", parts.join(" "))
+            }
+            ItemKind::Extern(block) => {
+                let mut parts = vec!["extern".to_string(), format!("{:?}", block.abi)];
+                for f in &block.fns {
+                    let params: Vec<String> = f
+                        .params
+                        .iter()
+                        .map(|p| format!("{}:{}", p.name, render_type(&p.ty)))
+                        .collect();
+                    let ret = match &f.ret_ty {
+                        Some(ty) => format!("->{}", render_type(ty)),
+                        None => String::new(),
+                    };
+                    parts.push(format!("fn {}({}){ret}", f.name, params.join(",")));
+                }
+                format!("({})", parts.join(" "))
+            }
+            ItemKind::Use(decl) => format!("({pub_marker}use {})", decl.path.join(".")),
+        }
+    }
+
+    fn render_program(program: &Program) -> String {
+        let items: Vec<String> = program.items.iter().map(render_item).collect();
+        format!("({})", items.join(" "))
+    }
+
+    #[test]
+    fn item_let_value_binding() {
+        assert_eq!(render_program(&parse_program("let x = 5")), "((let x () 5))");
+    }
+
+    #[test]
+    fn item_let_function_no_annotations() {
+        // NOTE: `sum (n - 1) (acc + n)` (juxtaposed parenthesized
+        // arguments, no comma) would ALSO parse under this grammar —
+        // but as two chained single-arg calls (`sum(n - 1)` and then
+        // calling *that result* with `(acc + n)`), not as one two-arg
+        // call. That's a real semantic footgun since Plum has no
+        // currying, caught by writing this test against the real
+        // examples/overview.plum source and noticing the rendered
+        // shape didn't match the intended two-argument call — the
+        // example was fixed to explicit comma-call syntax instead.
+        assert_eq!(
+            render_program(&parse_program(
+                "let sum n acc = if n == 0 { acc } else { sum(n - 1, acc + n) }"
+            )),
+            "((let sum (n acc) (if (== n 0) (block acc) (block (call sum (- n 1) (+ acc n))))))"
+        );
+    }
+
+    #[test]
+    fn item_let_with_annotations() {
+        assert_eq!(
+            render_program(&parse_program("let double (n: Int): Int = n * 2")),
+            "((let double ((n:Int)) ->Int (* n 2)))"
+        );
+    }
+
+    #[test]
+    fn item_let_with_generics_and_bound() {
+        assert_eq!(
+            render_program(&parse_program("let sum_list[T: Num] (list: T): T = list")),
+            "((let sum_list [T:Num] ((list:T)) ->T list))"
+        );
+    }
+
+    #[test]
+    fn item_let_with_multiple_bounds() {
+        assert_eq!(
+            render_program(&parse_program("let f[T: Num + Eq] (x: T): T = x")),
+            "((let f [T:Num+Eq] ((x:T)) ->T x))"
+        );
+    }
+
+    #[test]
+    fn item_pub_let() {
+        assert_eq!(
+            render_program(&parse_program("pub let area c = 3.14159 * c.radius * c.radius")),
+            "((let pub area (c) (* (* 3.14159 (field c radius)) (field c radius))))"
+        );
+    }
+
+    #[test]
+    fn item_let_with_struct_destructuring_param() {
+        assert_eq!(
+            render_program(&parse_program(
+                "let distance_from_origin (Point { x, y }) = sqrt(x * x + y * y)"
+            )),
+            "((let distance_from_origin (((struct Point x=x y=y))) (call sqrt (+ (* x x) (* y y)))))"
+        );
+    }
+
+    #[test]
+    fn item_let_with_tuple_destructuring_param() {
+        // From examples/overview.plum: `let swap (a, b) = (b, a)` — a
+        // single-paren tuple-destructuring param, not the double-paren
+        // form GRAMMAR.md's literal grammar would suggest. Resolves the
+        // ambiguity flagged in GRAMMAR.md's "Known ambiguities" note.
+        assert_eq!(
+            render_program(&parse_program("let swap (a, b) = (b, a)")),
+            "((let swap (((tuple a b))) (tuple b a)))"
+        );
+    }
+
+    #[test]
+    fn item_struct_decl() {
+        assert_eq!(
+            render_program(&parse_program("struct Point { x: Float, y: Float }")),
+            "((struct Point x:Float y:Float))"
+        );
+    }
+
+    #[test]
+    fn item_struct_decl_with_pub_field() {
+        assert_eq!(
+            render_program(&parse_program("struct Circle { pub radius: Float }")),
+            "((struct Circle pub radius:Float))"
+        );
+    }
+
+    #[test]
+    fn item_struct_decl_with_generics() {
+        assert_eq!(
+            render_program(&parse_program("struct Pair[T] { first: T, second: T }")),
+            "((struct Pair [T] first:T second:T))"
+        );
+    }
+
+    #[test]
+    fn item_enum_decl() {
+        assert_eq!(
+            render_program(&parse_program(
+                "enum Shape { Circle(Float), Rectangle(Float, Float), Triangle(Float, Float, Float) }"
+            )),
+            "((enum Shape Circle(Float) Rectangle(Float,Float) Triangle(Float,Float,Float)))"
+        );
+    }
+
+    #[test]
+    fn item_enum_decl_with_unit_variant() {
+        assert_eq!(
+            render_program(&parse_program("enum Option[T] { Some(T), None }")),
+            "((enum Option [T] Some(T) None))"
+        );
+    }
+
+    #[test]
+    fn item_extern_block() {
+        assert_eq!(
+            render_program(&parse_program("extern \"C\" { fn sqrt(x: Float) -> Float; }")),
+            "((extern \"C\" fn sqrt(x:Float)->Float))"
+        );
+    }
+
+    #[test]
+    fn item_extern_block_multiple_fns() {
+        assert_eq!(
+            render_program(&parse_program(
+                "extern \"C\" { fn sqrt(x: Float) -> Float; fn abs(x: Float) -> Float; }"
+            )),
+            "((extern \"C\" fn sqrt(x:Float)->Float fn abs(x:Float)->Float))"
+        );
+    }
+
+    #[test]
+    fn item_use_decl() {
+        assert_eq!(render_program(&parse_program("use shapes;")), "((use shapes))");
+    }
+
+    #[test]
+    fn item_use_decl_dotted() {
+        assert_eq!(
+            render_program(&parse_program("use shapes.Circle;")),
+            "((use shapes.Circle))"
+        );
+    }
+
+    #[test]
+    fn item_pub_use_decl() {
+        assert_eq!(
+            render_program(&parse_program("pub use shapes.Circle;")),
+            "((pub use shapes.Circle))"
+        );
+    }
+
+    #[test]
+    fn program_multiple_items_no_separator_needed() {
+        assert_eq!(
+            render_program(&parse_program(
+                "struct Point { x: Float, y: Float } let origin = Point { x: 0.0, y: 0.0 }"
+            )),
+            "((struct Point x:Float y:Float) (let origin () (struct-lit Point x=0 y=0)))"
+        );
+    }
+
+    #[test]
+    fn unknown_item_start_is_an_error() {
+        program_parse_err("5 + 5");
+    }
+
+    #[test]
+    fn full_overview_plum_example_file_parses() {
+        // End-to-end sanity check against the real, hand-written
+        // decided-syntax sketch, not just synthetic snippets.
+        let src = include_str!("../../../examples/overview.plum");
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser
+            .parse_program()
+            .unwrap_or_else(|e| panic!("examples/overview.plum failed to parse: {e}"));
+        assert!(
+            parser.is_at_eof(),
+            "leftover tokens after parsing examples/overview.plum: {:?}",
+            &parser.tokens[parser.pos..]
+        );
+        assert!(!program.items.is_empty());
     }
 }
