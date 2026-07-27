@@ -1,4 +1,4 @@
-use crate::ir::{Expr, MatchArm, RcOp};
+use crate::ir::{Expr, Function, MatchArm, Program, RcOp};
 use std::collections::HashSet;
 
 /// Inserts explicit refcount inc/dec operations via last-use analysis
@@ -21,6 +21,25 @@ pub fn insert_refcount_ops(expr: Expr) -> Expr {
 /// a later pass (eventually codegen) would actually call.
 pub fn optimize(expr: Expr) -> Expr {
     mark_reuse(insert_refcount_ops(expr))
+}
+
+/// Runs `optimize` over every function body in a program. This is the
+/// entry point a real driver (plumc) should call between lowering and
+/// loading a program into the interpreter — without it, functions run
+/// with no refcounting or reuse-in-place at all, since `optimize` only
+/// ever touched whatever single expression was handed to it directly.
+pub fn optimize_program(program: Program) -> Program {
+    Program {
+        functions: program
+            .functions
+            .into_iter()
+            .map(|f| Function {
+                name: f.name,
+                params: f.params,
+                body: optimize(f.body),
+            })
+            .collect(),
+    }
 }
 
 /// Reuse-in-place analysis — the second half of FBIP, run after
@@ -709,6 +728,50 @@ mod tests {
             dec("p", let_("p", ctor("Inner", vec![]), var("p"))),
         );
         assert_eq!(insert_refcount_ops(input), expected);
+    }
+
+    #[test]
+    fn optimize_program_runs_optimize_on_every_function_body() {
+        // A function that just constructs a value should come out with
+        // refcount ops inserted, exactly as if `optimize` had been
+        // called on its body directly — proving the program-level
+        // wrapper isn't a no-op.
+        let program = Program {
+            functions: vec![Function {
+                name: "make".to_string(),
+                params: vec![],
+                body: let_("p", ctor("Point", vec![int(1), int(2)]), var("p")),
+            }],
+        };
+        let optimized = optimize_program(program);
+        assert_eq!(optimized.functions.len(), 1);
+        assert_eq!(
+            optimized.functions[0].body,
+            optimize(let_("p", ctor("Point", vec![int(1), int(2)]), var("p")))
+        );
+    }
+
+    #[test]
+    fn optimize_program_preserves_function_names_params_and_order() {
+        let program = Program {
+            functions: vec![
+                Function {
+                    name: "first".to_string(),
+                    params: vec!["a".to_string()],
+                    body: var("a"),
+                },
+                Function {
+                    name: "second".to_string(),
+                    params: vec!["b".to_string(), "c".to_string()],
+                    body: var("b"),
+                },
+            ],
+        };
+        let optimized = optimize_program(program);
+        assert_eq!(optimized.functions[0].name, "first");
+        assert_eq!(optimized.functions[0].params, vec!["a".to_string()]);
+        assert_eq!(optimized.functions[1].name, "second");
+        assert_eq!(optimized.functions[1].params, vec!["b".to_string(), "c".to_string()]);
     }
 
     #[test]

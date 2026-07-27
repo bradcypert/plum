@@ -35,4 +35,5 @@ dependencies = [
  "plum-interp",
  "plum-ir",
  "plum-syntax",
+ "plum-types",
 ]

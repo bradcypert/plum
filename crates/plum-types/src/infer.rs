@@ -28,6 +28,23 @@ impl TypeEnv {
     pub fn lookup(&self, name: &str) -> Option<&Type> {
         self.0.iter().rev().find(|(n, _)| n == name).map(|(_, t)| t)
     }
+
+    /// Refines every binding already in the env through `subst` — not
+    /// just newly-added ones. Without this, a name whose type is
+    /// pinned down while inferring one subexpression (e.g. a function
+    /// parameter constrained by an `if` condition) keeps its stale,
+    /// unconstrained `Var` when a SIBLING subexpression (the `then`
+    /// branch) looks it up, so a real conflict there gets a fresh,
+    /// uninformed binding instead of being checked against what's
+    /// already known — the conflict then silently disappears the
+    /// moment substitutions are composed, since `compose` intentionally
+    /// prefers the more-authoritative (outer, already-established)
+    /// binding for a repeated variable rather than treating it as an
+    /// error. Call this any time `acc` grows and more of the same env
+    /// will be consulted again.
+    pub fn apply_subst(&self, subst: &Subst) -> TypeEnv {
+        TypeEnv(self.0.iter().map(|(n, t)| (n.clone(), subst.apply(t))).collect())
+    }
 }
 
 impl Default for TypeEnv {
@@ -226,10 +243,12 @@ impl Infer {
     fn infer_call(&mut self, callee: &ast::Expr, args: &[&ast::Expr], env: &TypeEnv) -> Result<(Type, Subst), String> {
         let (callee_ty, s) = self.infer_expr(callee, env)?;
         let mut acc = s;
+        let mut refined_env = env.apply_subst(&acc);
         let mut arg_types = Vec::with_capacity(args.len());
         for arg in args {
-            let (t, s) = self.infer_expr(arg, env)?;
+            let (t, s) = self.infer_expr(arg, &refined_env)?;
             acc = s.compose(&acc);
+            refined_env = refined_env.apply_subst(&acc);
             arg_types.push(acc.apply(&t));
         }
         let ret_var = self.fresh();
@@ -320,7 +339,13 @@ impl Infer {
         let mut acc = s;
 
         let mut result_ty: Option<Type> = None;
-        let mut owning_enum: Option<String> = None;
+        // What the scrutinee is being deconstructed as. A tag matches
+        // either a real enum variant OR a whole struct, since lowering
+        // erases that distinction (both become a positional `Ctor`/
+        // `Match` by tag) — see lower.rs's Pattern::Variant handling,
+        // which the parser also uses for `Point(x, y)` against a
+        // *struct* named Point, not just real enum variants.
+        let mut owning_type: Option<Type> = None;
 
         for arm in arms {
             if arm.guard.is_some() {
@@ -330,17 +355,24 @@ impl Infer {
                 ));
             }
             let (tag, bindings) = Self::variant_pattern_info(&arm.pattern)?;
-            let (enum_name, payload_types) = self
-                .ctx
-                .variant(&tag)
-                .cloned()
-                .ok_or_else(|| format!("unknown variant {tag:?} at {:?}", arm.pattern.span()))?;
+            let (this_type, payload_types) = match self.ctx.variant(&tag) {
+                Some((enum_name, payload_types)) => (Type::Enum(enum_name.clone()), payload_types.clone()),
+                None => match self.ctx.struct_fields(&tag) {
+                    Some(fields) => (
+                        Type::Struct(tag.clone()),
+                        fields.iter().map(|(_, ty)| ty.clone()).collect(),
+                    ),
+                    None => {
+                        return Err(format!("unknown variant {tag:?} at {:?}", arm.pattern.span()));
+                    }
+                },
+            };
 
-            match &owning_enum {
-                None => owning_enum = Some(enum_name.clone()),
-                Some(prev) if *prev != enum_name => {
+            match &owning_type {
+                None => owning_type = Some(this_type.clone()),
+                Some(prev) if *prev != this_type => {
                     return Err(format!(
-                        "match arms mix variants from different enums ({prev:?} and {enum_name:?})"
+                        "match arms mix incompatible types ({prev:?} and {this_type:?})"
                     ));
                 }
                 _ => {}
@@ -373,9 +405,8 @@ impl Infer {
             }
         }
 
-        if let Some(enum_name) = owning_enum {
-            let s = unify(&acc.apply(&scrutinee_ty), &Type::Enum(enum_name))
-                .map_err(|e| format!("match scrutinee: {e}"))?;
+        if let Some(ty) = owning_type {
+            let s = unify(&acc.apply(&scrutinee_ty), &ty).map_err(|e| format!("match scrutinee: {e}"))?;
             acc = s.compose(&acc);
         }
 
@@ -436,7 +467,7 @@ impl Infer {
             let mut acc = s;
             let s = unify(&acc.apply(&lty), &Type::Bool).map_err(|e| format!("logical operator: {e}"))?;
             acc = s.compose(&acc);
-            let (rty, s) = self.infer_expr(rhs, env)?;
+            let (rty, s) = self.infer_expr(rhs, &env.apply_subst(&acc))?;
             acc = s.compose(&acc);
             let s = unify(&acc.apply(&rty), &Type::Bool).map_err(|e| format!("logical operator: {e}"))?;
             acc = s.compose(&acc);
@@ -447,7 +478,7 @@ impl Infer {
         // unify with each other first.
         let (lty, s) = self.infer_expr(lhs, env)?;
         let mut acc = s;
-        let (rty, s) = self.infer_expr(rhs, env)?;
+        let (rty, s) = self.infer_expr(rhs, &env.apply_subst(&acc))?;
         acc = s.compose(&acc);
         let s = unify(&acc.apply(&lty), &acc.apply(&rty)).map_err(|e| format!("operator: {e}"))?;
         acc = s.compose(&acc);
@@ -480,13 +511,15 @@ impl Infer {
         let mut acc = s;
         let s = unify(&acc.apply(&cond_ty), &Type::Bool).map_err(|e| format!("`if` condition: {e}"))?;
         acc = s.compose(&acc);
+        let mut refined_env = env.apply_subst(&acc);
 
-        let (then_ty, s) = self.infer_block(then_branch, env)?;
+        let (then_ty, s) = self.infer_block(then_branch, &refined_env)?;
         acc = s.compose(&acc);
+        refined_env = refined_env.apply_subst(&acc);
 
         match else_branch {
             Some(else_expr) => {
-                let (else_ty, s) = self.infer_expr(else_expr, env)?;
+                let (else_ty, s) = self.infer_expr(else_expr, &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&then_ty), &acc.apply(&else_ty))
                     .map_err(|e| format!("`if`/`else` branches must match: {e}"))?;
@@ -520,10 +553,12 @@ impl Infer {
                         resolved = acc.apply(&resolved);
                     }
                     cur_env = cur_env.extend(name, resolved);
+                    cur_env = cur_env.apply_subst(&acc);
                 }
                 ast::Stmt::Expr(e) => {
                     let (_, s) = self.infer_expr(e, &cur_env)?;
                     acc = s.compose(&acc);
+                    cur_env = cur_env.apply_subst(&acc);
                 }
                 ast::Stmt::Assign { span, .. } => {
                     return Err(format!(
@@ -617,6 +652,31 @@ mod tests {
     use super::*;
     use plum_syntax::lexer::Lexer;
     use plum_syntax::parser::Parser;
+
+    #[test]
+    fn if_condition_constraint_on_an_existing_binding_propagates_into_sibling_branches() {
+        // Regression test: before `TypeEnv::apply_subst` was threaded
+        // through infer_if between the condition and the branches, a
+        // name's type learned from the condition (`n` pinned to Int by
+        // `n == 0`) was invisible when inferring the then-branch, since
+        // that branch still looked `n` up as its original, unconstrained
+        // `Var`. A conflicting local unification there (`!n`, which
+        // needs Bool) then silently WON when substitutions were
+        // composed — `compose` favors the caller's already-established
+        // binding for a repeated variable, so the fresh, uninformed one
+        // from inside the branch just got discarded rather than caught
+        // as a conflict. `n` can't be both Int and Bool; this must error.
+        let mut infer = Infer::new();
+        let n_var = infer.fresh();
+        let env = TypeEnv::new().extend("n".to_string(), n_var);
+        let tokens = Lexer::new("if n == 0 { !n } else { true }").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let err = infer
+            .infer_expr(&ast, &env)
+            .expect_err("expected a type error: n can't be both Int (from `n == 0`) and Bool (from `!n`)");
+        assert!(err.contains("`!`"), "expected the conflict caught at `!n`, got: {err}");
+    }
 
     #[test]
     fn fresh_variables_are_distinct_and_increasing() {
@@ -926,6 +986,30 @@ mod tests {
         assert_eq!(
             infer_expr_with(&mut infer, "match x { Shape.Circle(r) => r }", &env),
             Type::Float
+        );
+    }
+
+    #[test]
+    fn match_can_destructure_a_struct_by_tag_like_a_variant() {
+        // lower.rs erases the struct-vs-enum-variant distinction: both
+        // `Point(x, y)` against a struct and `Shape.Circle(r)` against
+        // an enum become the same positional `Ctor`/`Match` by tag. The
+        // type checker needs to accept the same syntax, falling back to
+        // struct_fields when a tag isn't a registered enum variant.
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        assert_eq!(infer_expr_with(&mut infer, "match p { Point(x, y) => x }", &env), Type::Float);
+    }
+
+    #[test]
+    fn match_mixing_a_struct_and_an_unrelated_enum_is_an_error() {
+        let mut infer =
+            Infer::with_context(context("struct Point { x: Float, y: Float }\nenum Shape { Circle(Float) }"));
+        let env = TypeEnv::new().extend("x".to_string(), Type::Var(0));
+        infer_expr_with_err(
+            &mut infer,
+            "match x { Point(a, b) => a, Shape.Circle(r) => r }",
+            &env,
         );
     }
 
