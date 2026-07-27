@@ -2,6 +2,7 @@ use crate::subst::Subst;
 use crate::types::{Type, TypeVarId};
 use crate::unify::unify;
 use plum_syntax::ast;
+use std::collections::HashMap;
 
 /// A simple, monomorphic scope stack — same shadowing/scoping shape as
 /// plum-interp's `env`, just mapping names to Types instead of Values.
@@ -60,6 +61,85 @@ impl Infer {
         Type::Var(id)
     }
 
+    /// Infers a type for every `let`-defined function in a program.
+    /// See this method's implementation comment for the two-phase
+    /// approach (pre-declare signatures, then infer bodies) that makes
+    /// self- and mutual recursion work.
+    pub fn infer_program(&mut self, program: &ast::Program) -> Result<HashMap<String, Type>, String> {
+        // Phase 1: pre-declare EVERY function's signature with fresh
+        // type variables before inferring any body — this is what
+        // makes self- and mutual recursion type-check. A recursive (or
+        // mutually recursive) call finds a signature already sitting
+        // in the environment, even though it isn't resolved to
+        // concrete types yet; unification fills those in as bodies get
+        // processed.
+        let mut global_env = TypeEnv::new();
+        let mut signatures: HashMap<String, (Vec<Type>, Type)> = HashMap::new();
+        let mut defs: Vec<&ast::LetDef> = Vec::new();
+
+        for item in &program.items {
+            if let ast::ItemKind::Let(def) = &item.kind {
+                if def.params.is_empty() {
+                    return Err(format!(
+                        "type inference not yet implemented for zero-parameter top-level \
+                         `let` at {:?}",
+                        def.span
+                    ));
+                }
+                let param_vars: Vec<Type> = def.params.iter().map(|_| self.fresh()).collect();
+                let ret_var = self.fresh();
+                let fn_ty = Type::Function(param_vars.clone(), Box::new(ret_var.clone()));
+                global_env = global_env.extend(def.name.clone(), fn_ty);
+                signatures.insert(def.name.clone(), (param_vars, ret_var));
+                defs.push(def);
+            }
+        }
+
+        // Phase 2: infer each body against the SHARED global env (so
+        // it can call itself or any sibling function), threading ONE
+        // substitution accumulator across every function — a call from
+        // function A into function B's still-fresh signature has to be
+        // able to constrain B before B's own body gets processed.
+        let mut acc = Subst::empty();
+        for def in &defs {
+            let (param_vars, ret_var) = signatures.get(&def.name).cloned().expect("just inserted above");
+            let mut body_env = global_env.clone();
+            for (param, param_ty) in def.params.iter().zip(param_vars.iter()) {
+                let name = plain_param_name(param)?;
+                body_env = body_env.extend(name, acc.apply(param_ty));
+            }
+            let (body_ty, s) = self.infer_expr(&def.body, &body_env)?;
+            acc = s.compose(&acc);
+            let s = unify(&acc.apply(&body_ty), &acc.apply(&ret_var)).map_err(|e| {
+                format!("function {:?}: body type does not match its return type: {e}", def.name)
+            })?;
+            acc = s.compose(&acc);
+
+            // Critical: refresh THIS function's entry in `global_env`
+            // to what was actually just learned about it, not the raw
+            // Phase-1 placeholder. Without this, a LATER function
+            // calling this one would unify against unconstrained fresh
+            // variables instead of the real signature — silently
+            // accepting calls that should be type errors, and leaving
+            // callers' inferred types full of never-resolved variables.
+            // `extend` appends rather than replaces, but `lookup` scans
+            // from the end, so this correctly shadows the old entry.
+            let resolved_fn_ty = Type::Function(
+                param_vars.iter().map(|t| acc.apply(t)).collect(),
+                Box::new(acc.apply(&ret_var)),
+            );
+            global_env = global_env.extend(def.name.clone(), resolved_fn_ty);
+        }
+
+        let mut result = HashMap::new();
+        for (name, (param_vars, ret_var)) in &signatures {
+            let params = param_vars.iter().map(|t| acc.apply(t)).collect();
+            let ret = acc.apply(ret_var);
+            result.insert(name.clone(), Type::Function(params, Box::new(ret)));
+        }
+        Ok(result)
+    }
+
     pub fn infer_expr(&mut self, expr: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), String> {
         match expr {
             ast::Expr::Int(_, _) => Ok((Type::Int, Subst::empty())),
@@ -80,11 +160,10 @@ impl Infer {
             ast::Expr::Unary { op, expr, .. } => self.infer_unary(op, expr, env),
             ast::Expr::Binary {
                 op: ast::BinaryOp::Pipe,
-                span,
+                lhs,
+                rhs,
                 ..
-            } => Err(format!(
-                "type inference not yet implemented for `|>` (waits for call inference) at {span:?}"
-            )),
+            } => self.infer_pipe(lhs, rhs, env),
             ast::Expr::Binary {
                 op: ast::BinaryOp::Range,
                 span,
@@ -98,6 +177,10 @@ impl Infer {
                 else_branch,
                 ..
             } => self.infer_if(cond, then_branch, else_branch, env),
+            ast::Expr::Call { callee, args, .. } => {
+                let arg_refs: Vec<&ast::Expr> = args.iter().collect();
+                self.infer_call(callee, &arg_refs, env)
+            }
             other => Err(format!(
                 "type inference not yet implemented for this expression form at {:?}",
                 other.span()
@@ -105,13 +188,47 @@ impl Infer {
         }
     }
 
+    // `x |> rhs` type-checks by desugaring EXACTLY the way lower.rs's
+    // `lower_pipe` does at the IR level — `x |> f` is a call to `f`
+    // with `x`; `x |> f(a, b)` is a call to `f` with `(a, b, x)`, the
+    // piped value appended as the LAST argument. Kept as its own
+    // function so the two shapes share `infer_call` rather than
+    // duplicating its unification logic.
+    fn infer_pipe(&mut self, lhs: &ast::Expr, rhs: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), String> {
+        match rhs {
+            ast::Expr::Call { callee, args, .. } => {
+                let mut all_args: Vec<&ast::Expr> = args.iter().collect();
+                all_args.push(lhs);
+                self.infer_call(callee, &all_args, env)
+            }
+            other => self.infer_call(other, &[lhs], env),
+        }
+    }
+
+    fn infer_call(&mut self, callee: &ast::Expr, args: &[&ast::Expr], env: &TypeEnv) -> Result<(Type, Subst), String> {
+        let (callee_ty, s) = self.infer_expr(callee, env)?;
+        let mut acc = s;
+        let mut arg_types = Vec::with_capacity(args.len());
+        for arg in args {
+            let (t, s) = self.infer_expr(arg, env)?;
+            acc = s.compose(&acc);
+            arg_types.push(acc.apply(&t));
+        }
+        let ret_var = self.fresh();
+        let expected_fn_ty = Type::Function(arg_types, Box::new(ret_var.clone()));
+        let s = unify(&acc.apply(&callee_ty), &expected_fn_ty).map_err(|e| format!("call: {e}"))?;
+        acc = s.compose(&acc);
+        Ok((acc.apply(&ret_var), acc))
+    }
+
     fn infer_unary(&mut self, op: &ast::UnaryOp, expr: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), String> {
         let (operand_ty, mut acc) = self.infer_expr(expr, env)?;
         match op {
             ast::UnaryOp::Neg => {
                 let resolved = acc.apply(&operand_ty);
-                require_numeric(&resolved)?;
-                Ok((resolved, acc))
+                let (final_ty, s) = default_numeric(&resolved)?;
+                acc = s.compose(&acc);
+                Ok((final_ty, acc))
             }
             ast::UnaryOp::Not => {
                 let s = unify(&acc.apply(&operand_ty), &Type::Bool).map_err(|e| format!("`!`: {e}"))?;
@@ -156,12 +273,14 @@ impl Infer {
         match op {
             Eq | Ne => Ok((Type::Bool, acc)),
             Lt | Gt | Le | Ge => {
-                require_numeric(&operand_ty)?;
+                let (_, s) = default_numeric(&operand_ty)?;
+                acc = s.compose(&acc);
                 Ok((Type::Bool, acc))
             }
             Add | Sub | Mul | Div | Rem => {
-                require_numeric(&operand_ty)?;
-                Ok((operand_ty, acc))
+                let (final_ty, s) = default_numeric(&operand_ty)?;
+                acc = s.compose(&acc);
+                Ok((final_ty, acc))
             }
             And | Or | Pipe | Range => unreachable!("handled above or by the Binary match arm in infer_expr"),
         }
@@ -241,9 +360,21 @@ impl Infer {
     }
 }
 
-fn require_numeric(ty: &Type) -> Result<(), String> {
+/// Checks that `ty` is numeric, WITH a deliberate simplification: if
+/// `ty` is still an unresolved type variable (nothing else pinned it —
+/// e.g. `let add a b = a + b`, where neither `a` nor `b` is ever
+/// compared against a literal), it gets DEFAULTED to `Int` rather than
+/// rejected. No typeclass/constraint machinery exists yet — a real
+/// system would infer a polymorphic `Num a => a -> a -> a` here
+/// instead. This is the same spirit as Rust defaulting an ambiguous
+/// integer literal's type, not a permanent design decision. Returns
+/// the resolved type AND the substitution recording the default, if
+/// one was applied — the caller must compose it into their own
+/// accumulator, same as any other substitution.
+fn default_numeric(ty: &Type) -> Result<(Type, Subst), String> {
     match ty {
-        Type::Int | Type::Float => Ok(()),
+        Type::Int | Type::Float => Ok((ty.clone(), Subst::empty())),
+        Type::Var(id) => Ok((Type::Int, Subst::single(*id, Type::Int))),
         other => Err(format!("expected a numeric type (Int or Float), found {other:?}")),
     }
 }
@@ -254,6 +385,17 @@ fn plain_ident(pattern: &ast::Pattern) -> Result<String, String> {
         other => Err(format!(
             "type inference not yet implemented for destructuring let-bindings at {:?}",
             other.span()
+        )),
+    }
+}
+
+fn plain_param_name(param: &ast::Param) -> Result<String, String> {
+    match &param.kind {
+        ast::ParamKind::Ident(name) => Ok(name.clone()),
+        ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => Ok(name.clone()),
+        _ => Err(format!(
+            "type inference not yet implemented for destructuring function parameters at {:?}",
+            param.span
         )),
     }
 }
@@ -497,22 +639,164 @@ mod tests {
     }
 
     #[test]
-    fn call_is_not_yet_supported() {
-        infer_err("f(1)");
-    }
-
-    #[test]
     fn closure_is_not_yet_supported() {
         infer_err("|x| x");
     }
 
     #[test]
-    fn pipe_is_not_yet_supported() {
-        infer_err("x |> f");
+    fn pipe_desugars_exactly_like_lower_rs_does() {
+        // `x |> f` and `x |> f(a)` type-check by desugaring the same
+        // way lower.rs's `lower_pipe` does at the IR level — proven
+        // here at the type level, independently of lowering.
+        let env = TypeEnv::new().extend(
+            "f".to_string(),
+            Type::Function(vec![Type::Int], Box::new(Type::Bool)),
+        );
+        assert_eq!(infer_in("5 |> f", &env), Type::Bool);
+
+        let env2 = TypeEnv::new().extend(
+            "f".to_string(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Bool)),
+        );
+        // `5 |> f(1)` desugars to `f(1, 5)` — piped value appended LAST.
+        assert_eq!(infer_in("5 |> f(1)", &env2), Type::Bool);
     }
 
     #[test]
     fn assign_statement_is_not_yet_supported() {
         infer_err("{ let mut x = 5; x = 6; x }");
+    }
+
+    // --- Call expressions, against a manually-populated env (no
+    // program-level machinery needed to test this in isolation) ---
+
+    #[test]
+    fn call_with_matching_argument_types() {
+        let env = TypeEnv::new().extend(
+            "f".to_string(),
+            Type::Function(vec![Type::Int], Box::new(Type::Bool)),
+        );
+        assert_eq!(infer_in("f(5)", &env), Type::Bool);
+    }
+
+    #[test]
+    fn call_with_wrong_argument_type_is_an_error() {
+        let env = TypeEnv::new().extend(
+            "f".to_string(),
+            Type::Function(vec![Type::Int], Box::new(Type::Bool)),
+        );
+        infer_err_in("f(true)", &env);
+    }
+
+    #[test]
+    fn call_with_wrong_arity_is_an_error() {
+        let env = TypeEnv::new().extend(
+            "f".to_string(),
+            Type::Function(vec![Type::Int], Box::new(Type::Bool)),
+        );
+        infer_err_in("f(1, 2)", &env);
+    }
+
+    #[test]
+    fn calling_a_non_function_is_an_error() {
+        let env = TypeEnv::new().extend("x".to_string(), Type::Int);
+        infer_err_in("x(1)", &env);
+    }
+
+    #[test]
+    fn unconstrained_numeric_operator_defaults_to_int() {
+        // No typeclass/constraint machinery exists — a real system
+        // would infer `Num a => a -> a -> a` here. This is a
+        // deliberate, documented simplification: when a numeric
+        // operator's operand is still an unresolved type variable
+        // (nothing else pinned it), default it to Int, the same
+        // spirit as Rust defaulting an ambiguous integer literal.
+        let env = TypeEnv::new()
+            .extend("a".to_string(), Type::Var(0))
+            .extend("b".to_string(), Type::Var(1));
+        assert_eq!(infer_in("a + b", &env), Type::Int);
+    }
+
+    // --- Program-level inference: function signatures, including
+    // self- and mutual recursion, pre-declared with fresh type
+    // variables before any body is inferred — this is what lets a
+    // recursive call type-check at all.
+
+    fn infer_program(src: &str) -> HashMap<String, Type> {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let mut infer = Infer::new();
+        infer
+            .infer_program(&program)
+            .unwrap_or_else(|e| panic!("program inference error for {src:?}: {e}"))
+    }
+
+    fn infer_program_err(src: &str) -> String {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let mut infer = Infer::new();
+        infer
+            .infer_program(&program)
+            .expect_err(&format!("expected inference of {src:?} to fail"))
+    }
+
+    fn fn_ty(params: Vec<Type>, ret: Type) -> Type {
+        Type::Function(params, Box::new(ret))
+    }
+
+    #[test]
+    fn infer_program_simple_function() {
+        let types = infer_program("let double n = n * 2");
+        assert_eq!(types["double"], fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn infer_program_defaults_fully_generic_arithmetic_to_int() {
+        let types = infer_program("let add a b = a + b");
+        assert_eq!(types["add"], fn_ty(vec![Type::Int, Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn infer_program_self_recursion() {
+        let src = "let sum n acc = if n == 0 { acc } else { sum(n - 1, acc + n) }";
+        let types = infer_program(src);
+        assert_eq!(types["sum"], fn_ty(vec![Type::Int, Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn infer_program_cross_function_calls() {
+        let src = "let square x = x * x\nlet sum_of_squares a b = square(a) + square(b)";
+        let types = infer_program(src);
+        assert_eq!(types["square"], fn_ty(vec![Type::Int], Type::Int));
+        assert_eq!(types["sum_of_squares"], fn_ty(vec![Type::Int, Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn infer_program_mutual_recursion() {
+        // is_even references is_odd BEFORE is_odd has been inferred —
+        // only works because signatures are pre-declared in Phase 1
+        // before either body is processed in Phase 2.
+        let src = "let is_even n = if n == 0 { true } else { is_odd(n - 1) }\n\
+                   let is_odd n = if n == 0 { false } else { is_even(n - 1) }";
+        let types = infer_program(src);
+        assert_eq!(types["is_even"], fn_ty(vec![Type::Int], Type::Bool));
+        assert_eq!(types["is_odd"], fn_ty(vec![Type::Int], Type::Bool));
+    }
+
+    #[test]
+    fn infer_program_call_arity_mismatch_is_an_error() {
+        infer_program_err("let double n = n * 2\nlet caller x = double(x, x)");
+    }
+
+    #[test]
+    fn infer_program_call_type_mismatch_is_an_error() {
+        infer_program_err("let want_bool b = !b\nlet caller x = want_bool(x + 1)");
+    }
+
+    #[test]
+    fn infer_program_zero_param_let_is_not_yet_supported() {
+        infer_program_err("let x = 5");
     }
 }
