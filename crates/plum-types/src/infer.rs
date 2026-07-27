@@ -2,17 +2,83 @@ use crate::subst::Subst;
 use crate::types::{Type, TypeVarId};
 use crate::unify::unify;
 use plum_syntax::ast;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-/// A simple, monomorphic scope stack — same shadowing/scoping shape as
-/// plum-interp's `env`, just mapping names to Types instead of Values.
-/// Deliberately NOT polymorphic yet: a `let`-bound name gets exactly
-/// one concrete (possibly still-a-variable) type, not a generalized
-/// scheme that can be instantiated differently at each use. That's
-/// `let`-polymorphism, a real and separate next step — see this
-/// module's scope note.
+/// A polytype: `ty` with every variable listed in `vars` universally
+/// quantified. An empty `vars` is exactly a monomorphic type — every
+/// binding this module used to store directly is really just a Scheme
+/// with nothing quantified. Only top-level function bindings are ever
+/// generalized (see `generalize`/`Infer::instantiate`); everything else
+/// (params, closure args, match bindings, local `let`s) stays
+/// monomorphic, matching ML's usual value restriction in spirit — we
+/// don't have mutable references yet, so the real motivation doesn't
+/// apply, but generalizing arbitrary local bindings isn't needed for
+/// anything currently in the language either.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scheme {
+    pub vars: Vec<TypeVarId>,
+    pub ty: Type,
+}
+
+impl Scheme {
+    fn monomorphic(ty: Type) -> Scheme {
+        Scheme { vars: Vec::new(), ty }
+    }
+}
+
+/// Every type variable appearing anywhere inside `ty`.
+fn free_vars(ty: &Type) -> HashSet<TypeVarId> {
+    match ty {
+        Type::Var(id) => {
+            let mut set = HashSet::new();
+            set.insert(*id);
+            set
+        }
+        Type::Function(params, ret) => {
+            let mut set = free_vars(ret);
+            for p in params {
+                set.extend(free_vars(p));
+            }
+            set
+        }
+        Type::Int | Type::Float | Type::Bool | Type::Str | Type::Unit | Type::Struct(_) | Type::Enum(_) => {
+            HashSet::new()
+        }
+    }
+}
+
+/// A scheme's free variables are its type's free variables MINUS the
+/// ones it quantifies over — the quantified ones are bound, not free.
+fn free_vars_scheme(scheme: &Scheme) -> HashSet<TypeVarId> {
+    let mut vars = free_vars(&scheme.ty);
+    for bound in &scheme.vars {
+        vars.remove(bound);
+    }
+    vars
+}
+
+/// Generalizing `ty` into a Scheme: quantify every variable that's free
+/// in `ty` but NOT free anywhere in `env` — those are the ones truly
+/// local to what's being generalized, not still tied to some outer,
+/// not-yet-resolved context (e.g. a sibling function in the same
+/// mutually-recursive group that hasn't been generalized itself yet).
+/// Variables free in `env` must stay exactly as they are, since a
+/// FUTURE unification involving that outer context still needs to
+/// pin them down consistently — quantifying them here would let each
+/// instantiation drift independently, silently losing that constraint.
+fn generalize(ty: &Type, env: &TypeEnv) -> Scheme {
+    let env_vars: HashSet<TypeVarId> = env.0.iter().flat_map(|(_, s)| free_vars_scheme(s)).collect();
+    let vars: Vec<TypeVarId> = free_vars(ty).difference(&env_vars).copied().collect();
+    Scheme { vars, ty: ty.clone() }
+}
+
+/// A simple scope stack — same shadowing/scoping shape as
+/// plum-interp's `env`, just mapping names to Schemes instead of
+/// Values. Most bindings are monomorphic Schemes (nothing quantified);
+/// only top-level functions are ever stored as genuinely polymorphic
+/// ones — see `generalize`.
 #[derive(Clone)]
-pub struct TypeEnv(Vec<(String, Type)>);
+pub struct TypeEnv(Vec<(String, Scheme)>);
 
 impl TypeEnv {
     pub fn new() -> Self {
@@ -20,13 +86,17 @@ impl TypeEnv {
     }
 
     pub fn extend(&self, name: String, ty: Type) -> TypeEnv {
+        self.extend_scheme(name, Scheme::monomorphic(ty))
+    }
+
+    pub fn extend_scheme(&self, name: String, scheme: Scheme) -> TypeEnv {
         let mut v = self.0.clone();
-        v.push((name, ty));
+        v.push((name, scheme));
         TypeEnv(v)
     }
 
-    pub fn lookup(&self, name: &str) -> Option<&Type> {
-        self.0.iter().rev().find(|(n, _)| n == name).map(|(_, t)| t)
+    fn lookup_scheme(&self, name: &str) -> Option<&Scheme> {
+        self.0.iter().rev().find(|(n, _)| n == name).map(|(_, s)| s)
     }
 
     /// Refines every binding already in the env through `subst` — not
@@ -42,8 +112,27 @@ impl TypeEnv {
     /// binding for a repeated variable rather than treating it as an
     /// error. Call this any time `acc` grows and more of the same env
     /// will be consulted again.
+    ///
+    /// Safe to apply to a Scheme's quantified vars too: a bound var's
+    /// id, once generalized, never appears in anything unification
+    /// touches again (instantiation always mints fresh replacements
+    /// before a scheme is used), so `subst` can never have an opinion
+    /// about one.
     pub fn apply_subst(&self, subst: &Subst) -> TypeEnv {
-        TypeEnv(self.0.iter().map(|(n, t)| (n.clone(), subst.apply(t))).collect())
+        TypeEnv(
+            self.0
+                .iter()
+                .map(|(n, s)| {
+                    (
+                        n.clone(),
+                        Scheme {
+                            vars: s.vars.clone(),
+                            ty: subst.apply(&s.ty),
+                        },
+                    )
+                })
+                .collect(),
+        )
     }
 }
 
@@ -86,6 +175,25 @@ impl Infer {
         let id = self.next_var;
         self.next_var += 1;
         Type::Var(id)
+    }
+
+    /// Instantiates a Scheme: every quantified variable gets replaced
+    /// with a BRAND NEW fresh variable, independently at each call —
+    /// this is what makes `identity(true)` and `identity(1)` in the
+    /// same program both type-check even though they need `identity`
+    /// to behave as `Bool -> Bool` and `Int -> Int` respectively. A
+    /// monomorphic scheme (empty `vars`, the common case) instantiates
+    /// to exactly its own type, unchanged.
+    fn instantiate(&mut self, scheme: &Scheme) -> Type {
+        if scheme.vars.is_empty() {
+            return scheme.ty.clone();
+        }
+        let mut subst = Subst::empty();
+        for &v in &scheme.vars {
+            let fresh = self.fresh();
+            subst = Subst::single(v, fresh).compose(&subst);
+        }
+        subst.apply(&scheme.ty)
     }
 
     /// Infers a type for every `let`-defined function in a program.
@@ -155,7 +263,26 @@ impl Infer {
                 param_vars.iter().map(|t| acc.apply(t)).collect(),
                 Box::new(acc.apply(&ret_var)),
             );
-            global_env = global_env.extend(def.name.clone(), resolved_fn_ty);
+            // Generalize against every OTHER function's current best-
+            // known signature (deliberately excluding `def`'s own — its
+            // own placeholder resolves to exactly `resolved_fn_ty`, so
+            // including it would "protect" every one of its own free
+            // vars from generalization and defeat the point). A
+            // variable still free in some not-yet-processed sibling's
+            // Phase-1 placeholder must stay exactly as-is, since a
+            // later mutually-recursive call still needs unification to
+            // pin it down consistently across both functions, not let
+            // each instantiation drift independently.
+            let mut outer_env = TypeEnv::new();
+            for (name, (p_vars, r_var)) in &signatures {
+                if name == &def.name {
+                    continue;
+                }
+                let fn_ty = Type::Function(p_vars.iter().map(|t| acc.apply(t)).collect(), Box::new(acc.apply(r_var)));
+                outer_env = outer_env.extend(name.clone(), fn_ty);
+            }
+            let scheme = generalize(&resolved_fn_ty, &outer_env);
+            global_env = global_env.extend_scheme(def.name.clone(), scheme);
         }
 
         let mut result = HashMap::new();
@@ -178,11 +305,11 @@ impl Infer {
                 "type inference not yet implemented for non-empty tuples at {span:?}"
             )),
             ast::Expr::Ident(name, span) => {
-                let ty = env
-                    .lookup(name)
+                let scheme = env
+                    .lookup_scheme(name)
                     .cloned()
                     .ok_or_else(|| format!("unbound variable: {name} at {span:?}"))?;
-                Ok((ty, Subst::empty()))
+                Ok((self.instantiate(&scheme), Subst::empty()))
             }
             ast::Expr::Unary { op, expr, .. } => self.infer_unary(op, expr, env),
             ast::Expr::Binary {
@@ -1241,6 +1368,40 @@ mod tests {
         let types = infer_program(src);
         assert_eq!(types["is_even"], fn_ty(vec![Type::Int], Type::Bool));
         assert_eq!(types["is_odd"], fn_ty(vec![Type::Int], Type::Bool));
+    }
+
+    #[test]
+    fn top_level_functions_are_generalized_and_used_polymorphically_at_each_call_site() {
+        // Without let-polymorphism, `identity`'s single type variable
+        // would get pinned to Bool by the first call and then conflict
+        // with the second call's Int, even though `identity` is
+        // obviously generic. Real let-polymorphism instantiates a
+        // FRESH copy of a previously-inferred function's type at each
+        // call site.
+        let types = infer_program(
+            "let identity x = x\n\
+             let use_it n = if identity(true) { identity(n) } else { 0 }",
+        );
+        assert_eq!(types["use_it"], fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn a_generic_functions_own_signature_still_shares_one_variable_across_its_own_uses() {
+        // identity's own representative type (returned for external
+        // inspection, before generalization hides the variable behind
+        // a scheme) still ties its parameter and return type to the
+        // SAME variable — it's specifically FUTURE call sites that each
+        // get an independent, freshly-instantiated copy, not identity's
+        // own signature.
+        let types = infer_program("let identity x = x");
+        match &types["identity"] {
+            Type::Function(params, ret) => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(&params[0], ret.as_ref());
+                assert!(matches!(params[0], Type::Var(_)));
+            }
+            other => panic!("expected a function type, got {other:?}"),
+        }
     }
 
     #[test]
