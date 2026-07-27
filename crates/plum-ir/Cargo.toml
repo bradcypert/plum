@@ -1,0 +1,7 @@
+[package]
+name = "plum-ir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+plum-syntax = { path = "../plum-syntax" }

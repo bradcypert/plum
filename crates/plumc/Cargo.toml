@@ -1,0 +1,13 @@
+[package]
+name = "plumc"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "plumc"
+path = "src/main.rs"
+
+[dependencies]
+plum-syntax = { path = "../plum-syntax" }
+plum-ir = { path = "../plum-ir" }
+plum-interp = { path = "../plum-interp" }

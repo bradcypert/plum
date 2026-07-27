@@ -1,0 +1,7 @@
+[package]
+name = "plum-interp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+plum-ir = { path = "../plum-ir" }
