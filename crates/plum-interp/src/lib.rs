@@ -89,6 +89,13 @@ impl Interpreter {
                     .to_string(),
             ),
             Expr::RcAnnotated { rest, .. } => self.eval(rest),
+            // Evaluating a real heap (allocating Ctor, matching by
+            // tag) is its own piece of work — this session is scoped
+            // to proving the FBIP algorithm on the IR, not simulating
+            // an actual heap yet.
+            Expr::Ctor { .. } | Expr::Match { .. } => {
+                Err("evaluation of heap-shaped values not yet implemented".to_string())
+            }
         }
     }
 }

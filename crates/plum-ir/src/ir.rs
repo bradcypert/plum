@@ -6,11 +6,15 @@
 // original AST node's span, not carry one through into the IR itself.
 //
 // Scope note: this currently covers literals, variables, let, unary/
-// binary operators, if, and calls — enough for arithmetic and control
-// flow. Deliberately NOT yet covered: anything heap-shaped (structs,
-// enum variants, closures) or Match — FBIP has nothing to do until
-// there's an actual allocation to reuse, so those come with the FBIP
-// pass itself, not before it.
+// binary operators, if, calls, and now a minimal heap-shaped value
+// (`Ctor`/`Match`) — just enough for the FBIP pass to have something
+// real to refcount. `Ctor`/`Match` are deliberately NOT the full
+// struct/enum surface grammar: fields are positional, not named
+// (matching Perceus's own minimal core calculus), and `Match` only
+// deconstructs by tag, with no nested patterns, guards, or or-patterns.
+// Lowering the real surface syntax down to this is separate, later,
+// comparatively mechanical work — this is scoped to give the algorithm
+// something to work on, not to be a complete compilation target yet.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -78,9 +82,30 @@ pub enum Expr {
         callee: Box<Expr>,
         args: Vec<Expr>,
     },
+    // A heap-allocated, tagged value with positional fields — the
+    // minimal representation of "a struct or an enum variant" this IR
+    // needs. E.g. `Ctor("Point", [x, y])` or `Ctor("Cons", [head, tail])`.
+    Ctor {
+        tag: String,
+        fields: Vec<Expr>,
+    },
+    // Deconstructs `scrutinee` by tag; the matching arm's `bindings`
+    // name the fields positionally. No nested patterns, guards, or
+    // or-patterns — see this file's scope note.
+    Match {
+        scrutinee: Box<Expr>,
+        arms: Vec<MatchArm>,
+    },
     RcAnnotated {
         op: RcOp,
         target: String,
         rest: Box<Expr>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub tag: String,
+    pub bindings: Vec<String>,
+    pub body: Expr,
 }
