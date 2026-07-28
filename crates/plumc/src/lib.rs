@@ -93,6 +93,14 @@ mod tests {
     }
 
     #[test]
+    fn closures_run_through_the_full_gated_pipeline_including_as_arguments() {
+        let src = "let apply f x = f(x)\n\
+                    let use_it n = apply(|x| x + 1, n)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Int(5)]);
+        assert_eq!(result, Ok(Value::Int(6)));
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])

@@ -95,6 +95,10 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             end: Box::new(mark_reuse(*end)),
             body: Box::new(mark_reuse(*body)),
         },
+        Expr::Closure { params, body } => Expr::Closure {
+            params,
+            body: Box::new(mark_reuse(*body)),
+        },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
             // reuse — a call result or anything else isn't something
@@ -206,6 +210,14 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             end: Box::new(transform(*end, known_heap)),
             body: Box::new(transform(*body, known_heap)),
         },
+        // Params aren't added to known_heap, same as a function's own
+        // params never are — this pass starts fresh (`HashSet::new()`)
+        // for every function body, so a param is never provably
+        // heap-shaped without a type checker either way.
+        Expr::Closure { params, body } => Expr::Closure {
+            params,
+            body: Box::new(transform(*body, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -269,6 +281,7 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::For { start, end, body, .. } => {
             expr_mentions_var(start, name) || expr_mentions_var(end, name) || expr_mentions_var(body, name)
         }
+        Expr::Closure { body, .. } => expr_mentions_var(body, name),
     }
 }
 
@@ -484,6 +497,29 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 used_start || used_end || used_in_body,
             )
         }
+        Expr::Closure { params, body } => {
+            // Even more than a loop body, a closure can ESCAPE this
+            // expression entirely — returned, stored, called later, or
+            // called many times. A use of an outer heap-tracked
+            // variable inside it can never be treated as a last use of
+            // the OUTER binding; same forced-live-after, leak-not-
+            // unsoundness tradeoff as `For`'s body above. Unlike `For`,
+            // there's no separate start/end to analyze — a closure
+            // literal has no other subexpressions.
+            let (body_t, used) = if expr_mentions_var(&body, name) {
+                let (t, _) = mark_last_uses(*body, name, true);
+                (t, true)
+            } else {
+                (*body, false)
+            };
+            (
+                Expr::Closure {
+                    params,
+                    body: Box::new(body_t),
+                },
+                live_after || used,
+            )
+        }
         Expr::Let {
             name: bound,
             value,
@@ -596,6 +632,12 @@ mod tests {
             var: var_name.to_string(),
             start: Box::new(start),
             end: Box::new(end),
+            body: Box::new(body),
+        }
+    }
+    fn closure_(params: Vec<&str>, body: Expr) -> Expr {
+        Expr::Closure {
+            params: params.into_iter().map(|s| s.to_string()).collect(),
             body: Box::new(body),
         }
     }
@@ -881,6 +923,41 @@ mod tests {
             "i",
             int(0),
             int(5),
+            match_(
+                var("list"),
+                vec![arm("Cons", vec!["h", "t"], ctor_reuse("list", "Cons", vec![var("h"), var("t")]))],
+            ),
+        );
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn a_heap_value_used_inside_a_closure_body_is_always_dupd_never_moved() {
+        // `p` is bound before the closure literal and used inside its
+        // body. The closure might be called zero, one, or many times,
+        // at some unknown LATER point (it could be returned, stored,
+        // passed elsewhere) — same hazard as `For`'s body, so the same
+        // conservative treatment applies: always Inc, never move.
+        let input = let_("p", ctor("Point", vec![]), closure_(vec!["x"], var("p")));
+        let expected = let_("p", ctor("Point", vec![]), closure_(vec!["x"], inc("p", var("p"))));
+        assert_eq!(insert_refcount_ops(input), expected);
+    }
+
+    #[test]
+    fn a_heap_value_never_used_in_a_closure_is_dropped_immediately_as_usual() {
+        let input = let_("p", ctor("Point", vec![]), closure_(vec!["x"], var("x")));
+        let expected = let_("p", ctor("Point", vec![]), dec("p", closure_(vec!["x"], var("x"))));
+        assert_eq!(insert_refcount_ops(input), expected);
+    }
+
+    #[test]
+    fn mark_reuse_recurses_into_a_closure_body() {
+        let input = closure_(
+            vec!["list"],
+            match_(var("list"), vec![arm("Cons", vec!["h", "t"], ctor("Cons", vec![var("h"), var("t")]))]),
+        );
+        let expected = closure_(
+            vec!["list"],
             match_(
                 var("list"),
                 vec![arm("Cons", vec!["h", "t"], ctor_reuse("list", "Cons", vec![var("h"), var("t")]))],

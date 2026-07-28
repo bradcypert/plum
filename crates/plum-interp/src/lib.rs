@@ -11,6 +11,25 @@ pub enum Value {
     Bool(bool),
     Unit,
     HeapRef(usize),
+    // An index into `Interpreter::closures`, not a heap address — kept
+    // in its own id space (not `HeapRef`) so the two can never be
+    // confused, since they're looked up in entirely different tables.
+    Closure(usize),
+}
+
+// A closure's defining environment, captured WHOLE at creation time
+// (every binding currently in scope, not just the free variables the
+// body actually uses) — the simple, obviously-correct choice; a real
+// free-variable analysis to capture only what's needed is a later
+// precision improvement, not a correctness requirement. Captured heap
+// values are NOT refcounted (see fbip.rs's `Closure` handling) — this
+// can leak a reference the closure never gives back, same deliberate
+// tradeoff as `For`'s body.
+#[derive(Debug, Clone, PartialEq)]
+struct ClosureValue {
+    params: Vec<String>,
+    body: Expr,
+    captured: Vec<(String, Value)>,
 }
 
 // A flat, innermost-last scope stack — `let` pushes one entry, evaluates
@@ -28,6 +47,8 @@ pub struct Interpreter {
     // makes that isolation structural rather than something `call` has
     // to remember to enforce.
     functions: HashMap<String, Function>,
+    closures: HashMap<usize, ClosureValue>,
+    next_closure_id: usize,
 }
 
 impl Interpreter {
@@ -36,6 +57,8 @@ impl Interpreter {
             env: Vec::new(),
             heap: heap::Heap::new(),
             functions: HashMap::new(),
+            closures: HashMap::new(),
+            next_closure_id: 0,
         }
     }
 
@@ -68,6 +91,35 @@ impl Interpreter {
         let fresh_env: Vec<(String, Value)> = func.params.into_iter().zip(args).collect();
         let caller_env = std::mem::replace(&mut self.env, fresh_env);
         let result = self.eval(&func.body);
+        self.env = caller_env;
+        result
+    }
+
+    /// Invokes a closure value: the fresh environment is the CAPTURED
+    /// environment (a snapshot from creation time) with the params
+    /// pushed on top, not the caller's env — same isolation reasoning
+    /// as `call`, except a closure's "outer scope" is whatever was in
+    /// scope where it was DEFINED, not whatever's in scope where it's
+    /// CALLED from. Pushing params after the captured bindings means a
+    /// param correctly shadows a captured binding of the same name
+    /// (`lookup` scans from the end).
+    fn call_closure(&mut self, id: usize, args: Vec<Value>) -> Result<Value, String> {
+        let closure = self
+            .closures
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| format!("invalid closure reference: {id}"))?;
+        if closure.params.len() != args.len() {
+            return Err(format!(
+                "closure expects {} argument(s), found {}",
+                closure.params.len(),
+                args.len()
+            ));
+        }
+        let mut fresh_env = closure.captured;
+        fresh_env.extend(closure.params.into_iter().zip(args));
+        let caller_env = std::mem::replace(&mut self.env, fresh_env);
+        let result = self.eval(&closure.body);
         self.env = caller_env;
         result
     }
@@ -153,17 +205,41 @@ impl Interpreter {
                 v => Err(format!("`if` condition must be Bool, found {v:?}")),
             },
             Expr::Call { callee, args } => {
-                // Only a bare name naming a known top-level function is
-                // supported — calling anything else (a closure value,
-                // an unbound name) waits for closures to exist at all.
-                let Expr::Var(name) = callee.as_ref() else {
-                    return Err(
-                        "calling a non-function-name value is not yet supported (no closures yet)"
-                            .to_string(),
-                    );
+                // A bare name naming a known top-level function is the
+                // fast path, unchanged from before closures existed — a
+                // top-level function's name is NOT itself a value (it
+                // isn't in `env`), only callable by name directly. Only
+                // when the callee ISN'T a known top-level function name
+                // do we fall through to evaluating it as an ordinary
+                // expression, which must then produce a closure value —
+                // covers a closure literal called directly, a variable/
+                // parameter holding one, or one returned from a call.
+                if let Expr::Var(name) = callee.as_ref() {
+                    if self.functions.contains_key(name) {
+                        let arg_values =
+                            args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
+                        return self.call(name, arg_values);
+                    }
+                }
+                let callee_v = self.eval(callee)?;
+                let Value::Closure(id) = callee_v else {
+                    return Err(format!("cannot call {callee_v:?} — not a function or closure"));
                 };
                 let arg_values = args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
-                self.call(name, arg_values)
+                self.call_closure(id, arg_values)
+            }
+            Expr::Closure { params, body } => {
+                let id = self.next_closure_id;
+                self.next_closure_id += 1;
+                self.closures.insert(
+                    id,
+                    ClosureValue {
+                        params: params.clone(),
+                        body: (**body).clone(),
+                        captured: self.env.clone(),
+                    },
+                );
+                Ok(Value::Closure(id))
             }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
@@ -544,6 +620,79 @@ mod tests {
         assert_eq!(interp.alloc_count(), 5);
     }
 
+    // --- Closures ---
+
+    #[test]
+    fn calling_a_closure_literal_directly() {
+        assert_eq!(eval("(|x| x + 1)(5)"), Value::Int(6));
+    }
+
+    #[test]
+    fn calling_a_closure_stored_in_a_variable() {
+        assert_eq!(eval("{ let f = |x| x + 1; f(5) }"), Value::Int(6));
+    }
+
+    #[test]
+    fn closure_with_multiple_params() {
+        assert_eq!(eval("{ let add = |a, b| a + b; add(2, 3) }"), Value::Int(5));
+    }
+
+    #[test]
+    fn closure_with_zero_params() {
+        assert_eq!(eval("{ let five = || 5; five() }"), Value::Int(5));
+    }
+
+    #[test]
+    fn closure_captures_the_defining_environment() {
+        assert_eq!(eval("{ let n = 10; let add_n = |x| x + n; add_n(5) }"), Value::Int(15));
+    }
+
+    #[test]
+    fn closure_capture_is_a_snapshot_not_a_live_reference() {
+        // `n` inside the closure is whatever it was AT CREATION time —
+        // the inner shadowing `let n = 99` never reaches a closure
+        // already captured before it exists.
+        assert_eq!(
+            eval("{ let n = 1; let f = |x| x + n; let n = 99; f(0) }"),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn closure_param_shadows_a_captured_binding_of_the_same_name() {
+        assert_eq!(eval("{ let x = 100; let f = |x| x + 1; f(5) }"), Value::Int(6));
+    }
+
+    #[test]
+    fn wrong_closure_argument_count_is_an_error() {
+        eval_err("(|x, y| x + y)(1)");
+    }
+
+    #[test]
+    fn calling_a_non_function_value_is_an_error() {
+        eval_err("5(1)");
+    }
+
+    #[test]
+    fn a_named_function_can_receive_a_closure_argument_and_call_it() {
+        // `apply`'s param `f` is bound to a Closure value like any
+        // other value — no special-casing needed there. Inside
+        // `apply`'s body, `f(x)` calls it: `f` isn't a known top-level
+        // function name, so the Call falls through to evaluating it as
+        // an ordinary expression, finds a Closure in `env`, and calls
+        // that.
+        let src = "let apply f x = f(x)\n\
+                    let use_it n = apply(|x| x + 1, n)";
+        assert_eq!(run(src, "use_it", vec![Value::Int(5)]), Value::Int(6));
+    }
+
+    #[test]
+    fn a_closure_can_call_a_named_top_level_function() {
+        let src = "let double n = n * 2\n\
+                    let use_it n = { let f = |x| double(x); f(n) }";
+        assert_eq!(run(src, "use_it", vec![Value::Int(5)]), Value::Int(10));
+    }
+
     // --- Heap-shaped values: Ctor/Match/CtorReuse/RcAnnotated ---
     //
     // No surface syntax lowers to these yet (see plum-ir's scope
@@ -880,11 +1029,12 @@ mod tests {
     }
 
     #[test]
-    fn calling_a_non_name_callee_is_not_yet_supported() {
-        // No closures yet — only a bare name naming a known function
-        // can be called. `(if true { f } else { g })(1)` is a
-        // legitimate future case (calling a computed function value)
-        // that simply isn't representable yet.
+    fn calling_a_computed_non_closure_value_is_an_error() {
+        // A non-name callee IS supported now (see the closure tests
+        // above) — it's evaluated like any other expression. But
+        // whatever it produces still has to actually BE a closure;
+        // `if true { 0 } else { 0 }` computes to a plain Int, which
+        // isn't callable.
         let call_expr = Expr::Call {
             callee: Box::new(Expr::If {
                 cond: Box::new(Expr::Bool(true)),

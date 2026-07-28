@@ -127,6 +127,20 @@ pub enum Expr {
         end: Box<Expr>,
         body: Box<Expr>,
     },
+    // A closure LITERAL — evaluates to a first-class function value
+    // that captures its defining environment. Only plain-identifier
+    // params exist at the AST level for closures (unlike function
+    // params, there's no destructuring-Pattern case to reject here).
+    // Captured heap values are NOT refcounted by this pass yet — see
+    // fbip.rs's `Closure` handling in `mark_last_uses` for why (a
+    // closure can escape and be called later or multiple times, so a
+    // use inside it is conservatively never treated as a last use,
+    // same tradeoff as `For`'s body: a deliberate leak, not a
+    // use-after-free).
+    Closure {
+        params: Vec<String>,
+        body: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

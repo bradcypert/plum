@@ -180,8 +180,17 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
             "lowering not yet implemented for `spawn` (blocked on heap ownership across \
              tasks, not the concurrency model itself — see DESIGN.md) at {span:?}"
         )),
-        // Closures, field access, generic instantiation, and indexing
-        // are all still deferred — none of them are needed to validate
+        // Unlike function params, a closure param is ALWAYS a plain
+        // identifier at the AST level (`ClosureParam` has no Pattern
+        // case) — no destructuring restriction to enforce here.
+        // Annotations are ignored, same as everywhere else lowering
+        // erases them.
+        ast::Expr::Closure { params, body, .. } => Ok(ir::Expr::Closure {
+            params: params.iter().map(|p| p.name.clone()).collect(),
+            body: Box::new(lower_expr(body, ctx)?),
+        }),
+        // Field access, generic instantiation, and indexing are all
+        // still deferred — none of them are needed to validate
         // struct/match lowering.
         other => Err(format!(
             "lowering not yet implemented for this expression form at {:?}",
@@ -901,9 +910,71 @@ mod tests {
         lower_err("0..5");
     }
 
+    // --- Closures ---
+
     #[test]
-    fn closure_is_not_yet_supported() {
-        lower_err("|x| x");
+    fn closure_lowers_to_ir_closure() {
+        assert_eq!(
+            lower("|x| x + 1"),
+            ir::Expr::Closure {
+                params: vec!["x".to_string()],
+                body: Box::new(ir::Expr::Binary(
+                    ir::BinOp::Add,
+                    Box::new(ir::Expr::Var("x".to_string())),
+                    Box::new(ir::Expr::Int(1)),
+                )),
+            }
+        );
+    }
+
+    #[test]
+    fn closure_multiple_params() {
+        assert_eq!(
+            lower("|a, b| a + b"),
+            ir::Expr::Closure {
+                params: vec!["a".to_string(), "b".to_string()],
+                body: Box::new(ir::Expr::Binary(
+                    ir::BinOp::Add,
+                    Box::new(ir::Expr::Var("a".to_string())),
+                    Box::new(ir::Expr::Var("b".to_string())),
+                )),
+            }
+        );
+    }
+
+    #[test]
+    fn closure_zero_params() {
+        assert_eq!(
+            lower("|| 5"),
+            ir::Expr::Closure {
+                params: vec![],
+                body: Box::new(ir::Expr::Int(5)),
+            }
+        );
+    }
+
+    #[test]
+    fn closure_param_annotations_do_not_affect_lowering() {
+        assert_eq!(lower("|x: Int| x"), lower("|x| x"));
+    }
+
+    #[test]
+    fn closure_body_can_be_a_block() {
+        assert_eq!(
+            lower("|x| { let y = x + 1; y }"),
+            ir::Expr::Closure {
+                params: vec!["x".to_string()],
+                body: Box::new(ir::Expr::Let {
+                    name: "y".to_string(),
+                    value: Box::new(ir::Expr::Binary(
+                        ir::BinOp::Add,
+                        Box::new(ir::Expr::Var("x".to_string())),
+                        Box::new(ir::Expr::Int(1)),
+                    )),
+                    body: Box::new(ir::Expr::Var("y".to_string())),
+                }),
+            }
+        );
     }
 
     // --- `for`/`unsafe`/`spawn` ---

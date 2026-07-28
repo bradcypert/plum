@@ -1350,6 +1350,21 @@ mod tests {
     }
 
     #[test]
+    fn a_named_function_can_take_a_closure_argument_and_call_it() {
+        // `infer_call` doesn't special-case what the callee expression
+        // IS — it just infers a type and unifies against a Function
+        // shape, so `f(x)` inside `apply`'s body works identically
+        // whether `f` names a top-level function or a closure-typed
+        // parameter. This is the type-level counterpart to
+        // plum-interp's `a_named_function_can_receive_a_closure_argument_and_call_it`.
+        let types = infer_program(
+            "let apply f x = f(x)\n\
+             let use_it n = apply(|x| x + 1, n)",
+        );
+        assert_eq!(types["use_it"], fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    #[test]
     fn pipe_desugars_exactly_like_lower_rs_does() {
         // `x |> f` and `x |> f(a)` type-check by desugaring the same
         // way lower.rs's `lower_pipe` does at the IR level — proven
