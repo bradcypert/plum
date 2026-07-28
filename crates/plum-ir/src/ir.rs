@@ -161,6 +161,31 @@ pub enum Expr {
         value: Box<Expr>,
         rest: Box<Expr>,
     },
+    // `spawn { block }` — runs `block` on a genuinely separate OS
+    // thread (DESIGN.md's "OS threads first" concurrency model) with
+    // its own fresh `Interpreter`/`Heap`. Evaluates to a `Value::Task`
+    // handle. See DESIGN.md's "Implementation blocker: heap ownership
+    // across tasks" for why this needs its own heap at all: a
+    // `Value::HeapRef` is only meaningful within the `Heap` that
+    // allocated it, so `block` can't simply share the spawning
+    // thread's heap. Every heap-shaped value `block` can see (captured
+    // locals, globals) crosses via a deep copy into the new thread's
+    // OWN heap, DECIDED over a genuinely shared atomically-refcounted
+    // heap specifically to keep every `Heap` single-owner and
+    // non-atomic — see `Interpreter::to_portable`/`from_portable`.
+    Spawn {
+        block: Box<Expr>,
+    },
+    // `t.join()` — blocks until the task handle `task` (evaluated from
+    // `task`, expected to be a `Value::Task`) finishes, and returns its
+    // result deep-copied BACK into the joining thread's own heap (the
+    // same crossing mechanism as `Spawn`, just in the other
+    // direction). A second `.join()` on the same handle is a runtime
+    // error — `JoinHandle::join` itself consumes the handle, so
+    // there's nothing left to join a second time.
+    TaskJoin {
+        task: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

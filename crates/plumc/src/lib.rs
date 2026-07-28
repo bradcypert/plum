@@ -419,6 +419,22 @@ mod tests {
     }
 
     #[test]
+    fn spawn_and_join_run_through_the_full_gated_pipeline() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let p = Point { x: 3, y: 4 }; let t = spawn { match p { Point(a, b) => a + b } }; t.join() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn joining_a_non_task_value_is_rejected_before_running() {
+        let src = "let use_it dummy = 5.join()";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])

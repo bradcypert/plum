@@ -187,7 +187,7 @@ first (heavier per-task, semantically identical to the eventual model),
 and treat a real green-thread scheduler as a later performance upgrade,
 not a v1 requirement.
 
-### Implementation blocker: heap ownership across tasks — Open
+### Implementation blocker: heap ownership across tasks — Decided
 
 Found while scoping `spawn`'s lowering (2026-07-27): the CURRENT
 tree-walking interpreter (`plum-interp`) gives each `Interpreter` its
@@ -197,33 +197,45 @@ meaningful within the `Heap` that allocated it. If `spawn` ran a block
 on a real OS thread with its own `Interpreter` (the natural reading of
 "OS threads first" above), sending a struct/enum value across a channel
 to a DIFFERENT thread wouldn't resolve — the address wouldn't exist in
-the receiving thread's heap at all. This is a genuinely unresolved
-question, not just unimplemented plumbing, and it's serious enough that
-none of the three options below should be picked reflexively:
+the receiving thread's heap at all. Three options were weighed
+(2026-07-28):
 
 - **Deep-copy heap values on channel send.** Simplest to reason about,
   keeps "non-atomic by default" fully intact (each heap genuinely never
   sees concurrent access), but means "move" semantics for channel send
   (see above) would need to become "copy" for anything heap-shaped,
   which undercuts the compile-time race-freedom claim resting on
-  ownership TRANSFER rather than duplication — needs real thought
-  before committing.
+  ownership TRANSFER rather than duplication.
 - **A genuinely shared heap for values that cross tasks.** Closer to
   true move semantics (no copy), but reintroduces exactly the
   concurrent-access-to-a-refcount problem the non-atomic-by-default
   design was built to avoid for the COMMON case — would need every
-  cross-task-reachable value to opt into atomic refcounting somehow,
-  raising the question of how that's tracked/enforced.
+  cross-task-reachable value to opt into atomic refcounting somehow
+  (a Send/Sync-style marker Plum has no precedent for — the only
+  existing trait mechanism is the small, closed `Num`/`Eq`/`Show` set),
+  raising the question of how that's tracked/enforced. Substantial,
+  currently-undesigned work with no scaffolding to build on yet.
 - **Restrict channels to non-heap (primitive) values for a first cut**,
   deferring the real answer entirely. Fast to ship, but doesn't
   validate the design's actual hard part, and callers would hit a wall
   the moment they try to send anything struct/enum-shaped.
 
-Not resolving this now. `spawn`'s lowering keeps erroring loudly at
-`lower.rs` (see `lower_for`'s sibling `Expr::Spawn` case) — the error
-message should be updated to point at THIS blocker specifically, not
-just "concurrency model is undecided," since the model itself is now
-Decided above; what's actually missing is this.
+**Decision: deep-copy on channel send.** Same precedent as the memory-
+model GC decision above — ship the simple, correct mechanism first;
+don't build the harder shared-heap-with-atomics machinery speculatively
+before real Plum code has actually needed it. Concretely: `tx.send(v)`
+deep-copies `v` into a fresh cell reachable from the RECEIVING task's
+own `Heap`, then the original binding is dropped — from the SOURCE
+LANGUAGE's perspective this still looks and type-checks exactly like a
+move (reusing `v` after `send` is still a compile error, via the same
+last-use analysis), it just isn't zero-copy underneath. Every `Heap`
+stays single-owner and non-atomic, exactly as already documented
+elsewhere — no concurrent-refcount machinery needed anywhere. Revisit
+the shared-heap-with-atomics option later ONLY if real workloads show
+the copy cost actually matters (same "validate before building"
+discipline as the GC decision) — switching later is an implementation
+change, not a language-semantics change, since `send` already reads as
+a move at the source level either way.
 
 ## Syntax and surface semantics
 

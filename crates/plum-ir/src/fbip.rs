@@ -112,6 +112,12 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             value: Box::new(mark_reuse(*value)),
             rest: Box::new(mark_reuse(*rest)),
         },
+        Expr::Spawn { block } => Expr::Spawn {
+            block: Box::new(mark_reuse(*block)),
+        },
+        Expr::TaskJoin { task } => Expr::TaskJoin {
+            task: Box::new(mark_reuse(*task)),
+        },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
             // reuse — a call result or anything else isn't something
@@ -244,6 +250,16 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             value: Box::new(transform(*value, known_heap)),
             rest: Box::new(transform(*rest, known_heap)),
         },
+        // `block` runs on another thread entirely — no heap tracking
+        // carries across (see ir.rs's `Spawn` doc comment), but nested
+        // constructs WITHIN `block` still need ordinary transformation,
+        // same as a `Closure` body.
+        Expr::Spawn { block } => Expr::Spawn {
+            block: Box::new(transform(*block, known_heap)),
+        },
+        Expr::TaskJoin { task } => Expr::TaskJoin {
+            task: Box::new(transform(*task, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -313,6 +329,8 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         }
         Expr::Closure { body, .. } => expr_mentions_var(body, name),
         Expr::Assign { value, rest, .. } => expr_mentions_var(value, name) || expr_mentions_var(rest, name),
+        Expr::Spawn { block } => expr_mentions_var(block, name),
+        Expr::TaskJoin { task } => expr_mentions_var(task, name),
     }
 }
 
@@ -567,6 +585,31 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 },
                 live_after || used,
             )
+        }
+        // `block` runs on a genuinely separate thread/heap — even more
+        // isolated than a `Closure`, since nothing inside it can
+        // actually ALIAS a heap-tracked value from out here at all
+        // (crossing means a deep copy, not a shared reference — see
+        // ir.rs's `Spawn` doc comment). Still, the SOURCE-side use of
+        // `name` (before it gets copied across) needs the same
+        // forced-live-after treatment as `Closure`'s body: `block` may
+        // run at some unknown later point, possibly after what would
+        // otherwise look like `name`'s last use out here.
+        Expr::Spawn { block } => {
+            let (block_t, used) = if expr_mentions_var(&block, name) {
+                let (t, _) = mark_last_uses(*block, name, true);
+                (t, true)
+            } else {
+                (*block, false)
+            };
+            (Expr::Spawn { block: Box::new(block_t) }, live_after || used)
+        }
+        // An ordinary single-child node — `task` evaluates to a
+        // `Value::Task`, never itself heap-tracked (see `is_syntactically_
+        // heap`'s scope note), so no special escaping treatment applies.
+        Expr::TaskJoin { task } => {
+            let (task_t, used) = mark_last_uses(*task, name, live_after);
+            (Expr::TaskJoin { task: Box::new(task_t) }, used)
         }
         // The reassignment TARGET (`name`) is a plain String field,
         // never an `Expr::Var` occurrence — so, unlike `Let`, there's

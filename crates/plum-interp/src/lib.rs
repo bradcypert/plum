@@ -1,7 +1,10 @@
 mod heap;
 
 use plum_ir::ir::{BinOp, Expr, Function, Program, RcOp, UnOp};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
+use std::thread;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -25,6 +28,48 @@ pub enum Value {
     // — it only ever appears when a function's name is evaluated in a
     // NON-call position (see `lookup`).
     Function(String),
+    // A `spawn { .. }` task handle — see `TaskHandle`'s doc comment.
+    Task(TaskHandle),
+}
+
+/// A joinable handle to a task spawned on a real OS thread (see
+/// DESIGN.md's concurrency model — "OS threads first"). Wraps
+/// `Option` so `.join()` can `take()` the `JoinHandle` out (it's
+/// consumed by `JoinHandle::join`, so a value can only be joined
+/// once), and `Rc<RefCell<..>>` so `Value::Task` stays cheaply
+/// `Clone` like every other `Value` — cloning a `Value::Task` gives
+/// another handle to the SAME task, not a second task, matching how
+/// `Value::Closure`'s id-based sharing already works.
+///
+/// `PartialEq` is hand-written (can't derive through `JoinHandle`,
+/// which has none) as identity comparison — two `Value::Task`s are
+/// equal exactly when they're handles to the SAME spawned task.
+#[derive(Debug, Clone)]
+pub struct TaskHandle(Rc<RefCell<Option<thread::JoinHandle<Result<PortableValue, String>>>>>);
+
+impl PartialEq for TaskHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// A `Value` with every heap reference resolved into owned, self-
+/// contained data — the deep-copy form DECIDED in DESIGN.md's
+/// "Implementation blocker: heap ownership across tasks" for crossing
+/// a thread boundary (`spawn`'s captured environment going IN, a
+/// task's result coming back out via `.join()`, and eventually a
+/// channel `send`/`recv`). A `Value::HeapRef` is only meaningful
+/// within the `Heap` that allocated it, so nothing containing one can
+/// cross as-is; a `PortableValue` owns its data outright instead of
+/// pointing at any particular heap.
+#[derive(Debug, Clone)]
+pub enum PortableValue {
+    Int(i64),
+    Float(f64),
+    Str(String),
+    Bool(bool),
+    Unit,
+    Ctor(String, Vec<PortableValue>),
 }
 
 // A closure's defining environment, captured WHOLE at creation time
@@ -173,6 +218,62 @@ impl Interpreter {
             .ok_or_else(|| format!("unbound variable: {name}"))
     }
 
+    /// Deep-copies `value` into a self-contained, thread-portable
+    /// form — recursively resolving every heap cell it transitively
+    /// reaches into owned data (see `PortableValue`'s doc comment).
+    /// Closures, top-level function references, and task handles
+    /// aren't portable — their identity (a captured environment, a
+    /// name only meaningful in THIS interpreter's `functions` table, a
+    /// `JoinHandle` tied to this specific thread) can't cross a thread
+    /// boundary at all yet. A real, documented v1 limitation: a
+    /// spawned task can't capture a closure, a bare function value, or
+    /// another task handle.
+    fn to_portable(&self, value: &Value) -> Result<PortableValue, String> {
+        match value {
+            Value::Int(n) => Ok(PortableValue::Int(*n)),
+            Value::Float(f) => Ok(PortableValue::Float(*f)),
+            Value::Str(s) => Ok(PortableValue::Str(s.clone())),
+            Value::Bool(b) => Ok(PortableValue::Bool(*b)),
+            Value::Unit => Ok(PortableValue::Unit),
+            Value::HeapRef(addr) => {
+                let (tag, fields) = self.heap.read(*addr)?;
+                let tag = tag.to_string();
+                let portable_fields =
+                    fields.iter().map(|f| self.to_portable(f)).collect::<Result<Vec<_>, _>>()?;
+                Ok(PortableValue::Ctor(tag, portable_fields))
+            }
+            Value::Closure(_) => {
+                Err("cannot send a closure across a task boundary (not yet supported)".to_string())
+            }
+            Value::Function(name) => {
+                Err(format!("cannot send function {name:?} across a task boundary (not yet supported)"))
+            }
+            Value::Task(_) => {
+                Err("cannot send a task handle across a task boundary (not yet supported)".to_string())
+            }
+        }
+    }
+
+    /// The inverse of `to_portable`: materializes a portable value
+    /// into THIS interpreter's own heap, allocating a FRESH cell for
+    /// every `Ctor` — never reusing whatever address it happened to
+    /// have in the originating thread's heap, since that address means
+    /// nothing here.
+    fn from_portable(&mut self, value: PortableValue) -> Value {
+        match value {
+            PortableValue::Int(n) => Value::Int(n),
+            PortableValue::Float(f) => Value::Float(f),
+            PortableValue::Str(s) => Value::Str(s),
+            PortableValue::Bool(b) => Value::Bool(b),
+            PortableValue::Unit => Value::Unit,
+            PortableValue::Ctor(tag, fields) => {
+                let values: Vec<Value> = fields.into_iter().map(|f| self.from_portable(f)).collect();
+                let addr = self.heap.alloc(tag, values);
+                Value::HeapRef(addr)
+            }
+        }
+    }
+
     /// Total number of fresh heap allocations performed so far — does
     /// NOT count `CtorReuse` overwriting an existing cell, so this is
     /// what actually demonstrates FBIP's reuse-in-place saving a real
@@ -293,6 +394,58 @@ impl Interpreter {
                     },
                 );
                 Ok(Value::Closure(id))
+            }
+            Expr::Spawn { block } => {
+                // Snapshot everything `block` can see and convert it
+                // to portable form BEFORE crossing the thread boundary
+                // — see `to_portable`'s doc comment. Fails loudly (in
+                // THIS thread, before anything spawns) if the captured
+                // environment contains something that can't cross yet
+                // (a closure, a bare function value, a task handle).
+                let portable_env = self
+                    .env
+                    .iter()
+                    .map(|(name, v)| Ok((name.clone(), self.to_portable(v)?)))
+                    .collect::<Result<Vec<(String, PortableValue)>, String>>()?;
+                let portable_globals = self
+                    .globals
+                    .iter()
+                    .map(|(name, v)| Ok((name.clone(), self.to_portable(v)?)))
+                    .collect::<Result<Vec<(String, PortableValue)>, String>>()?;
+                let functions = self.functions.clone();
+                let block = (**block).clone();
+
+                let join_handle = thread::spawn(move || -> Result<PortableValue, String> {
+                    let mut task_interp = Interpreter::new();
+                    task_interp.functions = functions;
+                    for (name, pv) in portable_globals {
+                        let v = task_interp.from_portable(pv);
+                        task_interp.globals.insert(name, v);
+                    }
+                    for (name, pv) in portable_env {
+                        let v = task_interp.from_portable(pv);
+                        task_interp.env.push((name, v));
+                    }
+                    let result = task_interp.eval(&block)?;
+                    task_interp.to_portable(&result)
+                });
+
+                Ok(Value::Task(TaskHandle(Rc::new(RefCell::new(Some(join_handle))))))
+            }
+            Expr::TaskJoin { task } => {
+                let Value::Task(handle) = self.eval(task)? else {
+                    return Err("`.join()` requires a Task value".to_string());
+                };
+                let join_handle = handle
+                    .0
+                    .borrow_mut()
+                    .take()
+                    .ok_or_else(|| "task already joined".to_string())?;
+                match join_handle.join() {
+                    Ok(Ok(portable)) => Ok(self.from_portable(portable)),
+                    Ok(Err(e)) => Err(format!("spawned task failed: {e}")),
+                    Err(_) => Err("spawned task panicked".to_string()),
+                }
             }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
@@ -918,6 +1071,74 @@ mod tests {
         let src = "let double n = n * 2\n\
                     let use_it n = { let f = |x| double(x); f(n) }";
         assert_eq!(run(src, "use_it", vec![Value::Int(5)]), Value::Int(10));
+    }
+
+    // --- `spawn` / `.join()` — a real OS thread, per DESIGN.md's
+    // "OS threads first" concurrency model.
+
+    #[test]
+    fn spawn_runs_the_block_on_a_real_thread_and_join_returns_its_result() {
+        assert_eq!(eval("spawn { 1 + 2 }.join()"), Value::Int(3));
+    }
+
+    #[test]
+    fn spawn_can_call_a_named_top_level_function() {
+        let src = "let double n = n * 2\n\
+                    let use_it n = spawn { double(n) }.join()";
+        assert_eq!(run(src, "use_it", vec![Value::Int(5)]), Value::Int(10));
+    }
+
+    #[test]
+    fn spawn_captures_local_bindings_deep_copied_into_the_new_thread() {
+        // `n` is a plain Int, trivially portable — proves the captured-
+        // environment crossing mechanism works for the simple case
+        // before the heap-shaped case below.
+        assert_eq!(eval("{ let n = 41; spawn { n + 1 }.join() }"), Value::Int(42));
+    }
+
+    #[test]
+    fn spawn_captures_a_heap_shaped_local_via_deep_copy() {
+        // `p` is a struct (heap-shaped) — this is the actual DECIDED
+        // mechanism (deep-copy across the thread boundary, not a
+        // shared heap) actually being exercised, not just primitives.
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let p = Point { x: 3, y: 4 }; spawn { match p { Point(a, b) => a + b } }.join() }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(7));
+    }
+
+    #[test]
+    fn spawned_tasks_result_is_usable_back_in_the_joining_threads_own_heap() {
+        // The result crosses BACK too — constructed in the spawned
+        // thread's heap, `.join()` deep-copies it into the CALLING
+        // thread's heap, and it's usable there afterward (matched,
+        // not just discarded) exactly like any other value.
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let t = spawn { Point { x: 1, y: 2 } }; match t.join() { Point(a, b) => a + b } }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(3));
+    }
+
+    #[test]
+    fn nested_spawn_inside_a_spawned_task() {
+        assert_eq!(eval("spawn { spawn { 5 }.join() + 1 }.join()"), Value::Int(6));
+    }
+
+    #[test]
+    fn joining_the_same_task_twice_is_a_runtime_error() {
+        let src = "let use_it dummy = { let t = spawn { 1 }; { t.join(); t.join() } }";
+        let err = run_err(src, "use_it", vec![Value::Unit]);
+        assert!(err.contains("already joined"), "expected an already-joined error, got: {err}");
+    }
+
+    #[test]
+    fn a_spawned_task_that_errors_surfaces_the_error_at_join() {
+        let src = "let use_it dummy = spawn { 1 / 0 }.join()";
+        let err = run_err(src, "use_it", vec![Value::Unit]);
+        assert!(err.contains("spawned task failed"), "expected a propagated task error, got: {err}");
+    }
+
+    #[test]
+    fn joining_a_non_task_value_is_a_runtime_error() {
+        eval_err("5.join()");
     }
 
     // --- A bare top-level function name as a first-class value ---

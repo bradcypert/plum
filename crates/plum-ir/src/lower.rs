@@ -446,6 +446,25 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                 else_branch: Box::new(ir_else),
             })
         }
+        // `t.join()` — checked BEFORE the general Call/Field handling
+        // below, the same "check the callee's SHAPE, not its type"
+        // precedent already established for variant-tag detection
+        // (lowering has no type information to confirm `t` is really a
+        // `Task`). `join` isn't validated against anything else either
+        // — a struct that happens to have a zero-arg callable field
+        // literally named `join` would collide with this, an accepted,
+        // narrow ambiguity matching that same precedent, not something
+        // worth a whole side-channel (like `field_owners`) to resolve.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "join") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::TaskJoin {
+                task: Box::new(lower_expr(base, ctx)?),
+            })
+        }
         ast::Expr::Call { callee, args, span } => {
             // `Circle(1.0)` or `Shape.Circle(1.0)` constructs a variant
             // if the callee names one — checked BEFORE falling back to
@@ -498,17 +517,14 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         // language grows something `unsafe` actually gates, THAT'S
         // what needs an IR-level marker, not the block itself.
         ast::Expr::Unsafe(block, _) => lower_block(block, ctx),
-        // The concurrency MODEL itself is Decided (see DESIGN.md) —
-        // what's actually blocking this is unresolved: a `Value::
-        // HeapRef` is only meaningful within the single `Heap` that
-        // allocated it, so a value sent across a channel to a task
-        // running on another thread's `Interpreter` couldn't resolve.
-        // See DESIGN.md's "Implementation blocker: heap ownership
-        // across tasks" for the real options under consideration.
-        ast::Expr::Spawn(_, span) => Err(format!(
-            "lowering not yet implemented for `spawn` (blocked on heap ownership across \
-             tasks, not the concurrency model itself — see DESIGN.md) at {span:?}"
-        )),
+        // DESIGN.md's "Implementation blocker: heap ownership across
+        // tasks" is now Decided: deep-copy on crossing (see ir.rs's
+        // `Spawn` doc comment) — `plum-interp` does the actual copying
+        // at runtime, so lowering just needs to carry the block
+        // through unchanged.
+        ast::Expr::Spawn(block, _) => Ok(ir::Expr::Spawn {
+            block: Box::new(lower_block(block, ctx)?),
+        }),
         // Unlike function params, a closure param is ALWAYS a plain
         // identifier at the AST level (`ClosureParam` has no Pattern
         // case) — no destructuring restriction to enforce here.
@@ -1945,11 +1961,35 @@ mod tests {
     }
 
     #[test]
-    fn spawn_is_not_yet_supported() {
-        // The concurrency MODEL is Decided now — this is blocked on a
-        // real open implementation question (heap ownership across
-        // tasks), not an undecided design. See DESIGN.md.
-        lower_err("spawn { 1 }");
+    fn spawn_lowers_to_a_spawn_node_wrapping_the_block() {
+        assert_eq!(
+            lower("spawn { 1 }"),
+            ir::Expr::Spawn {
+                block: Box::new(ir::Expr::Int(1)),
+            }
+        );
+    }
+
+    #[test]
+    fn task_join_lowers_to_a_task_join_node() {
+        assert_eq!(
+            lower("t.join()"),
+            ir::Expr::TaskJoin {
+                task: Box::new(ir::Expr::Var("t".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn task_join_on_a_compound_expression() {
+        assert_eq!(
+            lower("(spawn { 1 }).join()"),
+            ir::Expr::TaskJoin {
+                task: Box::new(ir::Expr::Spawn {
+                    block: Box::new(ir::Expr::Int(1)),
+                }),
+            }
+        );
     }
 
     // --- Item-level lowering: `let`-defined functions -> ir::Function

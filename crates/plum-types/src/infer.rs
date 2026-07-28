@@ -506,6 +506,32 @@ impl Infer {
                 else_branch,
                 ..
             } => self.infer_if(cond, then_branch, else_branch, env),
+            // `t.join()` — the type-level counterpart to lower.rs's
+            // identical `Call` handling: ANY `expr.join()` call shape
+            // is always treated as a task join, matching lowering's
+            // own shape-only precedent exactly (so the two passes never
+            // disagree about which node a given expression becomes).
+            // `base`'s type is unified against `Task[T]` — if `base`
+            // genuinely is a `Task`, this resolves `T`; if it's
+            // anything else (including a struct with an ordinary,
+            // unrelated field literally named `join`), unification
+            // fails with a normal, honest type error rather than
+            // silently falling through to field-access handling that
+            // would only go on to be mislowered anyway.
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "join") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let result_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Task".to_string(), vec![result_ty.clone()]))
+                    .map_err(|e| format!("`.join()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((acc.apply(&result_ty), acc))
+            }
             ast::Expr::Call { callee, args, span } => {
                 // `Circle(1.0)` / `Shape.Circle(1.0)` constructs a
                 // variant if the callee names one, checked BEFORE
@@ -561,6 +587,20 @@ impl Infer {
             // transparently. Whatever the block's type is, that's this
             // expression's type too.
             ast::Expr::Unsafe(block, _) => self.infer_block(block, env),
+            // `spawn { block }` — DESIGN.md's heap-ownership-across-
+            // tasks blocker is now Decided (deep-copy on crossing, see
+            // `plum-interp`), so this just infers the block's type and
+            // wraps it as `Task[T]`. `Task` is a BUILTIN pseudo-generic
+            // type, not a real `TypeContext`-registered struct: it has
+            // no declared fields (`.join()` is special-cased above, not
+            // ordinary field access), so `Type::Struct("Task", vec![T])`
+            // is used purely for its structural unify/subst/occurs
+            // behavior (see unify.rs — nominal in name, structural in
+            // arguments), never looked up in `self.ctx`.
+            ast::Expr::Spawn(block, _) => {
+                let (block_ty, acc) = self.infer_block(block, env)?;
+                Ok((Type::Struct("Task".to_string(), vec![block_ty]), acc))
+            }
             ast::Expr::For {
                 pattern,
                 iter,
@@ -1519,6 +1559,34 @@ mod tests {
     fn unsafe_block_infers_like_its_inner_block() {
         assert_eq!(infer("unsafe { 1 + 2 }"), Type::Int);
         assert_eq!(infer("unsafe { true }"), Type::Bool);
+    }
+
+    // --- `spawn` / `.join()` ---
+
+    #[test]
+    fn spawn_infers_as_task_of_the_blocks_type() {
+        assert_eq!(infer("spawn { 1 + 2 }"), Type::Struct("Task".to_string(), vec![Type::Int]));
+    }
+
+    #[test]
+    fn task_join_infers_as_the_blocks_type() {
+        assert_eq!(infer("spawn { 1 + 2 }.join()"), Type::Int);
+    }
+
+    #[test]
+    fn task_join_on_a_non_task_value_is_an_error() {
+        infer_err("5.join()");
+    }
+
+    #[test]
+    fn joining_the_same_task_twice_type_checks_the_same_way_both_times() {
+        // Whether joining TWICE is a runtime error is `plum-interp`'s
+        // concern (a `JoinHandle` is consumed by its first `.join()`) —
+        // nothing about the SECOND `.join()` is distinguishable at the
+        // type level, so both must infer identically.
+        let env = TypeEnv::new().extend("t".to_string(), Type::Struct("Task".to_string(), vec![Type::Bool]));
+        assert_eq!(infer_in("t.join()", &env), Type::Bool);
+        assert_eq!(infer_in("{ t.join(); t.join() }", &env), Type::Bool);
     }
 
     #[test]
