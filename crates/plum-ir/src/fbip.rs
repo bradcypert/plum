@@ -142,6 +142,7 @@ pub fn mark_reuse(expr: Expr) -> Expr {
                     MatchArm {
                         tag: arm.tag,
                         bindings: arm.bindings,
+                        guard: arm.guard.map(|g| Box::new(mark_reuse(*g))),
                         body,
                     }
                 })
@@ -203,6 +204,7 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
                     // call/match results. A future type checker closes
                     // this the same way it closes the others.
                     bindings: arm.bindings,
+                    guard: arm.guard.map(|g| Box::new(transform(*g, known_heap))),
                     body: transform(arm.body, known_heap),
                 })
                 .collect(),
@@ -300,7 +302,11 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::CtorReuse { fields, .. } => fields.iter().any(|f| expr_mentions_var(f, name)),
         Expr::RcAnnotated { rest, .. } => expr_mentions_var(rest, name),
         Expr::Match { scrutinee, arms } => {
-            expr_mentions_var(scrutinee, name) || arms.iter().any(|a| expr_mentions_var(&a.body, name))
+            expr_mentions_var(scrutinee, name)
+                || arms.iter().any(|a| {
+                    expr_mentions_var(&a.body, name)
+                        || a.guard.as_deref().is_some_and(|g| expr_mentions_var(g, name))
+                })
         }
         Expr::For { start, end, body, .. } => {
             expr_mentions_var(start, name) || expr_mentions_var(end, name) || expr_mentions_var(body, name)
@@ -456,14 +462,31 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 .map(|arm| {
                     if arm.bindings.iter().any(|b| b == name) {
                         // This arm shadows `name` via its own bindings
-                        // — its body can't refer to the outer name.
+                        // — its body (and guard) can't refer to the
+                        // outer name.
                         arm
                     } else {
-                        let (body_t, used) = mark_last_uses(arm.body, name, live_after);
+                        let (body_t, used_body) = mark_last_uses(arm.body, name, live_after);
+                        // The guard runs BEFORE the body but AFTER the
+                        // bindings, and — since body only runs if the
+                        // guard passes — a use in the guard is
+                        // conservatively always `live_after = true`
+                        // when the body also uses `name`, same
+                        // "leak over use-after-free" tradeoff as
+                        // `For`'s body just below.
+                        let (guard_t, used_guard) = match arm.guard {
+                            Some(g) => {
+                                let (g_t, used) = mark_last_uses(*g, name, live_after || used_body);
+                                (Some(Box::new(g_t)), used)
+                            }
+                            None => (None, false),
+                        };
+                        let used = used_body || used_guard;
                         used_any_arm = used_any_arm || used;
                         MatchArm {
                             tag: arm.tag,
                             bindings: arm.bindings,
+                            guard: guard_t,
                             body: body_t,
                         }
                     }
@@ -666,6 +689,7 @@ mod tests {
         MatchArm {
             tag: tag.to_string(),
             bindings: bindings.into_iter().map(|s| s.to_string()).collect(),
+            guard: None,
             body,
         }
     }

@@ -305,23 +305,47 @@ impl Interpreter {
                 let (tag, fields) = self.heap.read(addr)?;
                 let tag = tag.to_string();
                 let fields = fields.to_vec();
-                let arm = arms
-                    .iter()
-                    .find(|a| a.tag == tag)
-                    .ok_or_else(|| format!("no match arm for tag {tag:?}"))?;
-                if arm.bindings.len() != fields.len() {
-                    return Err(format!(
-                        "arm for {tag:?} expects {} field(s), found {}",
-                        arm.bindings.len(),
-                        fields.len()
-                    ));
+                // Arms are tried in order: the first one whose tag
+                // matches AND whose guard (if any) evaluates truthy
+                // wins — see ir.rs's `MatchArm` doc comment for why
+                // more than one arm can share a tag.
+                for arm in arms {
+                    if arm.tag != tag {
+                        continue;
+                    }
+                    if arm.bindings.len() != fields.len() {
+                        return Err(format!(
+                            "arm for {tag:?} expects {} field(s), found {}",
+                            arm.bindings.len(),
+                            fields.len()
+                        ));
+                    }
+                    let bound: Vec<(String, Value)> =
+                        arm.bindings.iter().cloned().zip(fields.iter().cloned()).collect();
+                    self.env.extend(bound);
+                    if let Some(guard) = &arm.guard {
+                        let guard_result = self.eval(guard);
+                        let passed = match guard_result {
+                            Ok(Value::Bool(b)) => b,
+                            Ok(other) => {
+                                self.env.truncate(self.env.len() - arm.bindings.len());
+                                return Err(format!("match guard must evaluate to a Bool, found {other:?}"));
+                            }
+                            Err(e) => {
+                                self.env.truncate(self.env.len() - arm.bindings.len());
+                                return Err(e);
+                            }
+                        };
+                        if !passed {
+                            self.env.truncate(self.env.len() - arm.bindings.len());
+                            continue;
+                        }
+                    }
+                    let result = self.eval(&arm.body);
+                    self.env.truncate(self.env.len() - arm.bindings.len());
+                    return result;
                 }
-                let bound: Vec<(String, Value)> =
-                    arm.bindings.iter().cloned().zip(fields.iter().cloned()).collect();
-                self.env.extend(bound);
-                let result = self.eval(&arm.body);
-                self.env.truncate(self.env.len() - arm.bindings.len());
-                result
+                Err(format!("no match arm for tag {tag:?}"))
             }
             Expr::For { var, start, end, body } => {
                 let Value::Int(start) = self.eval(start)? else {
@@ -964,6 +988,29 @@ mod tests {
     }
 
     #[test]
+    fn match_guard_falls_through_to_the_next_arm_sharing_the_same_tag() {
+        let src = "enum Shape { Circle(Float) }\n\
+                    let classify r = match (Circle(r)) { Circle(r) if r > 5.0 => 1, Circle(r) => 0 }";
+        assert_eq!(run(src, "classify", vec![Value::Float(10.0)]), Value::Int(1));
+        assert_eq!(run(src, "classify", vec![Value::Float(2.0)]), Value::Int(0));
+    }
+
+    #[test]
+    fn match_guard_can_reference_the_arms_own_bindings() {
+        let src = "enum Shape { Circle(Float), Rectangle(Float, Float) }\n\
+                    let use_it dummy = match (Rectangle(3.0, 3.0)) { Rectangle(w, h) if w == h => 1, Rectangle(w, h) => 0, Circle(r) => 2 }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(1));
+    }
+
+    #[test]
+    fn no_matching_guarded_arm_is_a_runtime_error() {
+        let src = "enum Shape { Circle(Float) }\n\
+                    let use_it dummy = match (Circle(1.0)) { Circle(r) if r > 5.0 => 1 }";
+        let err = run_err(src, "use_it", vec![Value::Unit]);
+        assert!(err.contains("no match arm"), "expected a no-match error, got: {err}");
+    }
+
+    #[test]
     fn block_let_struct_destructure() {
         let src = "struct Point { x: Int, y: Int }\n\
                     let use_it dummy = { let Point { x, y } = Point { x: 3, y: 4 }; x + y }";
@@ -1095,6 +1142,7 @@ mod tests {
         MatchArm {
             tag: tag.to_string(),
             bindings: bindings.into_iter().map(|s| s.to_string()).collect(),
+            guard: None,
             body,
         }
     }

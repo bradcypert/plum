@@ -193,6 +193,23 @@ mod tests {
     }
 
     #[test]
+    fn match_guards_run_through_the_full_gated_pipeline() {
+        let src = "enum Shape { Circle(Float) }\n\
+                    let classify r = match (Circle(r)) { Circle(r) if r > 5.0 => 1, Circle(r) => 0 }";
+        let result = typecheck_and_run(src, "classify", vec![Value::Float(10.0)]);
+        assert_eq!(result, Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn a_non_bool_match_guard_is_rejected_before_running() {
+        let src = "enum Shape { Circle(Float) }\n\
+                    let classify r = match (Circle(r)) { Circle(r) if r => 1, Circle(r) => 0 }";
+        let err = typecheck_and_run(src, "classify", vec![Value::Float(10.0)])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])

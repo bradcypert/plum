@@ -90,8 +90,11 @@ pub enum Expr {
         fields: Vec<Expr>,
     },
     // Deconstructs `scrutinee` by tag; the matching arm's `bindings`
-    // name the fields positionally. No nested patterns, guards, or
-    // or-patterns — see this file's scope note.
+    // name the fields positionally. No or-patterns yet — see this
+    // file's scope note. Arms are tried in order: the first arm whose
+    // tag matches AND whose `guard` (if any) evaluates truthy wins: see
+    // `MatchArm`'s doc comment for why this means more than one arm can
+    // share a tag.
     Match {
         scrutinee: Box<Expr>,
         arms: Vec<MatchArm>,
@@ -164,6 +167,19 @@ pub enum Expr {
 pub struct MatchArm {
     pub tag: String,
     pub bindings: Vec<String>,
+    // `if <guard>` on a match arm — evaluated with `bindings` already
+    // in scope, AFTER a tag match but BEFORE running `body`. If it
+    // evaluates to `false`, this arm is skipped as though its tag
+    // hadn't matched at all, and evaluation moves on to the next arm —
+    // which is why more than one arm is allowed to share the same tag
+    // (`Circle(r) if r > 0.0 => ..., Circle(r) => ...`), unlike the
+    // guard-free case where `Expr::Match`'s scope note used to imply
+    // (by "the matching arm") there'd only ever be one arm per tag.
+    // Scoped to plain top-level bindings only for now: an arm whose
+    // pattern needs NESTED destructuring (bindings only introduced
+    // partway through evaluating `body`, via `wrap_nested_destructures`)
+    // can't yet combine with a guard — see lower.rs's `lower_match`.
+    pub guard: Option<Box<Expr>>,
     pub body: Expr,
 }
 

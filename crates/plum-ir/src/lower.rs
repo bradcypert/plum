@@ -156,7 +156,7 @@ fn wrap_destructure(
     let body = wrap_nested_destructures(nested, ctx, rest)?;
     Ok(ir::Expr::Match {
         scrutinee: Box::new(ir::Expr::Var(scrutinee_name)),
-        arms: vec![ir::MatchArm { tag, bindings, body }],
+        arms: vec![ir::MatchArm { tag, bindings, guard: None, body }],
     })
 }
 
@@ -183,6 +183,7 @@ fn wrap_nested_destructures(
             arms: vec![ir::MatchArm {
                 tag,
                 bindings,
+                guard: None,
                 body: inner_body,
             }],
         };
@@ -542,6 +543,7 @@ fn lower_struct_literal(
         arms: vec![ir::MatchArm {
             tag: tag.clone(),
             bindings,
+            guard: None,
             body: ir::Expr::Ctor { tag, fields: ir_fields },
         }],
     })
@@ -551,16 +553,30 @@ fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringCont
     let ir_scrutinee = lower_expr(scrutinee, ctx)?;
     let mut ir_arms = Vec::with_capacity(arms.len());
     for arm in arms {
-        if arm.guard.is_some() {
-            return Err(format!(
-                "lowering not yet implemented for match guards at {:?}",
-                arm.span
-            ));
-        }
         let (tag, bindings, nested) = lower_tag_pattern(&arm.pattern, ctx)?;
+        // A guard is only supported on an arm whose pattern needs NO
+        // nested destructuring — `nested` non-empty means some of
+        // `bindings` are still synthetic placeholders at this point
+        // (real names only exist further down, inside the
+        // `wrap_nested_destructures` chain wrapped around the BODY),
+        // so a guard referencing them here couldn't see the real
+        // bindings yet. Lifting this restriction would mean wrapping
+        // the guard in the same destructure chain as the body, which
+        // is real, separate follow-up work.
+        let guard = match &arm.guard {
+            Some(g) if !nested.is_empty() => {
+                return Err(format!(
+                    "lowering not yet implemented for a match guard combined with a nested \
+                     pattern at {:?}",
+                    arm.span
+                ));
+            }
+            Some(g) => Some(Box::new(lower_expr(g, ctx)?)),
+            None => None,
+        };
         let arm_body = lower_expr(&arm.body, ctx)?;
         let body = wrap_nested_destructures(nested, ctx, arm_body)?;
-        ir_arms.push(ir::MatchArm { tag, bindings, body });
+        ir_arms.push(ir::MatchArm { tag, bindings, guard, body });
     }
     Ok(ir::Expr::Match {
         scrutinee: Box::new(ir_scrutinee),
@@ -696,6 +712,7 @@ fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, St
                     arms: vec![ir::MatchArm {
                         tag,
                         bindings,
+                        guard: None,
                         body,
                     }],
                 }
@@ -1211,6 +1228,7 @@ mod tests {
                     fields: vec![ir::Expr::Float(1.0)],
                 }),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Circle".to_string(),
                     bindings: vec!["r".to_string()],
                     body: ir::Expr::Var("r".to_string()),
@@ -1227,6 +1245,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("other".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Point".to_string(),
                     bindings: vec!["__spread0".to_string(), "__spread1".to_string()],
                     body: ir::Expr::Ctor {
@@ -1246,6 +1265,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("other".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Point".to_string(),
                     bindings: vec!["__spread0".to_string(), "__spread1".to_string()],
                     body: ir::Expr::Ctor {
@@ -1273,11 +1293,13 @@ mod tests {
                 scrutinee: Box::new(ir::Expr::Var("shape".to_string())),
                 arms: vec![
                     ir::MatchArm {
+                        guard: None,
                         tag: "Circle".to_string(),
                         bindings: vec!["r".to_string()],
                         body: ir::Expr::Var("r".to_string()),
                     },
                     ir::MatchArm {
+                        guard: None,
                         tag: "Rectangle".to_string(),
                         bindings: vec!["w".to_string(), "h".to_string()],
                         body: ir::Expr::Binary(
@@ -1299,11 +1321,13 @@ mod tests {
                 scrutinee: Box::new(ir::Expr::Var("x".to_string())),
                 arms: vec![
                     ir::MatchArm {
+                        guard: None,
                         tag: "None".to_string(),
                         bindings: vec![],
                         body: ir::Expr::Int(0),
                     },
                     ir::MatchArm {
+                        guard: None,
                         tag: "Some".to_string(),
                         bindings: vec!["v".to_string()],
                         body: ir::Expr::Var("v".to_string()),
@@ -1320,6 +1344,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("shape".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Rectangle".to_string(),
                     bindings: vec!["_".to_string(), "_".to_string()],
                     body: ir::Expr::Bool(true),
@@ -1344,8 +1369,64 @@ mod tests {
     }
 
     #[test]
-    fn match_guard_is_not_yet_supported() {
-        lower_err("match x { A(v) if v > 0 => v, B(v) => v }");
+    fn match_guard_lowers_to_an_arm_with_a_guard_expression() {
+        assert_eq!(
+            lower("match x { A(v) if v > 0 => v, B(v) => v }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("x".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "A".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: Some(Box::new(ir::Expr::Binary(
+                            ir::BinOp::Gt,
+                            Box::new(ir::Expr::Var("v".to_string())),
+                            Box::new(ir::Expr::Int(0)),
+                        ))),
+                        body: ir::Expr::Var("v".to_string()),
+                    },
+                    ir::MatchArm {
+                        tag: "B".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: None,
+                        body: ir::Expr::Var("v".to_string()),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn two_arms_may_share_a_tag_when_only_the_guarded_one_comes_first() {
+        assert_eq!(
+            lower("match x { A(v) if v > 0 => 1, A(v) => 0 }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("x".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "A".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: Some(Box::new(ir::Expr::Binary(
+                            ir::BinOp::Gt,
+                            Box::new(ir::Expr::Var("v".to_string())),
+                            Box::new(ir::Expr::Int(0)),
+                        ))),
+                        body: ir::Expr::Int(1),
+                    },
+                    ir::MatchArm {
+                        tag: "A".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: None,
+                        body: ir::Expr::Int(0),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn match_guard_combined_with_a_nested_pattern_is_not_yet_supported() {
+        lower_err("match p { (A(v), n) if v > 0 => n, (B(v), n) => n }");
     }
 
     // --- End to end: real parsed program source, not a synthetic
@@ -1406,6 +1487,7 @@ mod tests {
                     fields: vec![ir::Expr::Int(1), ir::Expr::Int(2)],
                 }),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "2Tuple".to_string(),
                     bindings: vec!["a".to_string(), "b".to_string()],
                     body: ir::Expr::Binary(
@@ -1425,6 +1507,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("p".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "2Tuple".to_string(),
                     bindings: vec!["a".to_string(), "b".to_string()],
                     body: ir::Expr::Binary(
@@ -1444,6 +1527,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("p".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "2Tuple".to_string(),
                     bindings: vec!["__nested0".to_string(), "b".to_string()],
                     body: ir::Expr::Match {
@@ -1451,6 +1535,7 @@ mod tests {
                         arms: vec![ir::MatchArm {
                             tag: "Point".to_string(),
                             bindings: vec!["x".to_string(), "y".to_string()],
+                            guard: None,
                             body: ir::Expr::Var("b".to_string()),
                         }],
                     },
@@ -1761,6 +1846,7 @@ mod tests {
                 body: ir::Expr::Match {
                     scrutinee: Box::new(ir::Expr::Var("__param0".to_string())),
                     arms: vec![ir::MatchArm {
+                        guard: None,
                         tag: "2Tuple".to_string(),
                         bindings: vec!["a".to_string(), "b".to_string()],
                         body: ir::Expr::Ctor {
@@ -1788,6 +1874,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("__param0".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Point".to_string(),
                     bindings: vec!["x".to_string(), "y".to_string()],
                     body: ir::Expr::Binary(
@@ -1811,6 +1898,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("__param0".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Point".to_string(),
                     bindings: vec!["x".to_string(), "y".to_string()],
                     body: ir::Expr::Binary(
@@ -1831,6 +1919,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("__param0".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Point".to_string(),
                     bindings: vec!["px".to_string(), "py".to_string()],
                     body: ir::Expr::Binary(
@@ -1851,6 +1940,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("__param0".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Point".to_string(),
                     bindings: vec!["x".to_string(), "_".to_string()],
                     body: ir::Expr::Var("x".to_string()),
@@ -1882,6 +1972,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("p".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Point".to_string(),
                     bindings: vec!["x".to_string(), "y".to_string()],
                     body: ir::Expr::Binary(
@@ -1902,6 +1993,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("p".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Point".to_string(),
                     bindings: vec!["x".to_string(), "y".to_string()],
                     body: ir::Expr::Binary(
@@ -1928,6 +2020,7 @@ mod tests {
             ir::Expr::Match {
                 scrutinee: Box::new(ir::Expr::Var("p".to_string())),
                 arms: vec![ir::MatchArm {
+                    guard: None,
                     tag: "Outer".to_string(),
                     bindings: vec!["__nested0".to_string(), "y".to_string()],
                     body: ir::Expr::Match {
@@ -1935,6 +2028,7 @@ mod tests {
                         arms: vec![ir::MatchArm {
                             tag: "Inner".to_string(),
                             bindings: vec!["v".to_string()],
+                            guard: None,
                             body: ir::Expr::Binary(
                                 ir::BinOp::Add,
                                 Box::new(ir::Expr::Var("v".to_string())),

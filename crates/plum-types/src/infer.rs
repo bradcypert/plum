@@ -698,9 +698,22 @@ impl Infer {
         let mut result_ty: Option<Type> = None;
 
         for arm in arms {
-            if arm.guard.is_some() {
+            // Mirrors lower.rs's `lower_match`/`classify_subpattern`
+            // restriction: a guard can only see bindings introduced
+            // directly by the arm's OWN pattern, not ones that only
+            // exist deep inside `wrap_nested_destructures`'s Match
+            // chain around the BODY — so a guard combined with a
+            // pattern that itself contains a nested Variant/Tuple/
+            // Struct sub-pattern isn't accepted here either, even
+            // though `bind_pattern` itself has no trouble binding
+            // nested names (it needs no synthetic names at all — see
+            // `bind_pattern`'s doc comment). Keeping this restriction
+            // in sync with lowering avoids code that type-checks but
+            // then fails at the lowering gate right after.
+            if arm.guard.is_some() && pattern_has_nested_tag_subpattern(&arm.pattern) {
                 return Err(format!(
-                    "type inference not yet implemented for match guards at {:?}",
+                    "type inference not yet implemented for a match guard combined with a \
+                     nested pattern at {:?}",
                     arm.span
                 ));
             }
@@ -730,6 +743,13 @@ impl Infer {
             // two arms that are both some N-tuple.
             let arm_env = self.bind_pattern(&arm.pattern, &acc.apply(&scrutinee_ty), env.clone(), &mut acc)?;
             let arm_env = arm_env.apply_subst(&acc);
+
+            if let Some(guard) = &arm.guard {
+                let (guard_ty, s) = self.infer_expr(guard, &arm_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&guard_ty), &Type::Bool).map_err(|e| format!("match guard: {e}"))?;
+                acc = s.compose(&acc);
+            }
 
             let (body_ty, s) = self.infer_expr(&arm.body, &arm_env)?;
             acc = s.compose(&acc);
@@ -1039,6 +1059,26 @@ fn default_numeric(ty: &Type) -> Result<(Type, Subst), String> {
         Type::Int | Type::Float => Ok((ty.clone(), Subst::empty())),
         Type::Var(id) => Ok((Type::Int, Subst::single(*id, Type::Int))),
         other => Err(format!("expected a numeric type (Int or Float), found {other:?}")),
+    }
+}
+
+// Mirrors lower.rs's `classify_subpattern`: true if any DIRECT
+// sub-position of `pattern` is itself a Variant/Tuple/Struct pattern —
+// exactly the shapes that make lowering defer to a synthetic name and
+// a follow-up `Match` (see `wrap_nested_destructures`), which is why a
+// guard can't yet see bindings introduced that way. A bare top-level
+// Ident/Wildcard pattern (already rejected earlier in `infer_match`
+// for an unrelated reason) and a tag pattern with only plain
+// Ident/Wildcard sub-positions both return `false`.
+fn pattern_has_nested_tag_subpattern(pattern: &ast::Pattern) -> bool {
+    fn is_nested_shape(p: &ast::Pattern) -> bool {
+        matches!(p, ast::Pattern::Variant { .. } | ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. })
+    }
+    match pattern {
+        ast::Pattern::Variant { args, .. } => args.iter().any(|a| is_nested_shape(a)),
+        ast::Pattern::Tuple(elems, _) => elems.iter().any(|e| is_nested_shape(e)),
+        ast::Pattern::Struct { fields, .. } => fields.iter().any(|f| is_nested_shape(&f.pattern)),
+        _ => false,
     }
 }
 
@@ -1952,10 +1992,32 @@ mod tests {
     }
 
     #[test]
-    fn match_guard_is_not_yet_supported() {
+    fn match_guard_infers_using_the_arms_own_bindings() {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
         let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
-        infer_expr_with_err(&mut infer, "match shape { Shape.Circle(r) if r > 0.0 => r }", &env);
+        let ty = infer_expr_with(&mut infer, "match shape { Shape.Circle(r) if r > 0.0 => r, Shape.Circle(r) => 0.0 }", &env);
+        assert_eq!(ty, Type::Float);
+    }
+
+    #[test]
+    fn match_guard_must_be_a_bool() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        infer_expr_with_err(&mut infer, "match shape { Shape.Circle(r) if r => r, Shape.Circle(r) => 0.0 }", &env);
+    }
+
+    #[test]
+    fn match_guard_combined_with_a_nested_pattern_is_not_yet_supported() {
+        let mut infer = Infer::with_context(context("struct Point { x: Int, y: Int }"));
+        let env = TypeEnv::new().extend(
+            "p".to_string(),
+            Type::Tuple(vec![Type::Struct("Point".to_string()), Type::Int]),
+        );
+        infer_expr_with_err(
+            &mut infer,
+            "match p { (Point { x, y }, n) if x > 0 => n, (Point { x, y }, n) => n }",
+            &env,
+        );
     }
 
     // --- Closures: unlike named top-level functions (which get a
