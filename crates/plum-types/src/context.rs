@@ -37,6 +37,15 @@ pub struct TypeContext {
     // know `Pair`'s own arity BEFORE `Pair` itself is necessarily fully
     // resolved.
     generic_params: HashMap<String, Vec<String>>,
+    // struct/enum name -> each declared parameter's trait bounds, in
+    // the SAME positional order as `generic_params` (`struct Box[T:
+    // Num] { .. }` -> `[["Num"]]`; `[T: Num + Eq]` -> `[["Num", "Eq"]]`;
+    // an unbounded param -> `[]` at that position). Checked once a
+    // construction site's generic arguments are FULLY resolved (see
+    // `Infer::check_generic_bounds`) — DESIGN.md's small, closed
+    // `Num`/`Eq`/`Show` trait set makes this closed-set membership
+    // checking, never general typeclass resolution.
+    generic_bounds: HashMap<String, Vec<Vec<String>>>,
 }
 
 impl TypeContext {
@@ -47,6 +56,7 @@ impl TypeContext {
             struct_names: HashSet::new(),
             enum_names: HashSet::new(),
             generic_params: HashMap::new(),
+            generic_bounds: HashMap::new(),
         }
     }
 
@@ -61,11 +71,15 @@ impl TypeContext {
                     ctx.struct_names.insert(decl.name.clone());
                     let params = decl.generics.iter().map(|g| g.name.clone()).collect();
                     ctx.generic_params.insert(decl.name.clone(), params);
+                    let bounds = decl.generics.iter().map(|g| g.bound.clone()).collect();
+                    ctx.generic_bounds.insert(decl.name.clone(), bounds);
                 }
                 ast::ItemKind::Enum(decl) => {
                     ctx.enum_names.insert(decl.name.clone());
                     let params = decl.generics.iter().map(|g| g.name.clone()).collect();
                     ctx.generic_params.insert(decl.name.clone(), params);
+                    let bounds = decl.generics.iter().map(|g| g.bound.clone()).collect();
+                    ctx.generic_bounds.insert(decl.name.clone(), bounds);
                 }
                 _ => {}
             }
@@ -127,6 +141,13 @@ impl TypeContext {
     /// `name` isn't declared at all.
     pub(crate) fn generic_params(&self, name: &str) -> Option<&[String]> {
         self.generic_params.get(name).map(|v| v.as_slice())
+    }
+
+    /// `name`'s own declared parameters' trait bounds, in the SAME
+    /// positional order as `generic_params` — see `generic_bounds`'s
+    /// doc comment.
+    pub(crate) fn generic_bounds(&self, name: &str) -> Option<&[Vec<String>]> {
+        self.generic_bounds.get(name).map(|v| v.as_slice())
     }
 }
 
@@ -213,6 +234,33 @@ mod tests {
     fn generic_instantiation_with_wrong_arity_is_an_error() {
         let err = context_err("struct Pair[T] { first: T, second: T }\nstruct Bad { p: Pair[Int, Bool] }");
         assert!(err.contains("generic argument"), "expected a generic-argument-count error, got: {err}");
+    }
+
+    #[test]
+    fn generic_param_bound_is_recorded() {
+        let ctx = context("struct Box[T: Num] { val: T }");
+        assert_eq!(ctx.generic_bounds("Box").unwrap(), &[vec!["Num".to_string()]]);
+    }
+
+    #[test]
+    fn combined_generic_param_bounds_are_recorded() {
+        let ctx = context("struct Box[T: Num + Eq] { val: T }");
+        assert_eq!(ctx.generic_bounds("Box").unwrap(), &[vec!["Num".to_string(), "Eq".to_string()]]);
+    }
+
+    #[test]
+    fn unbounded_generic_param_has_an_empty_bound_list() {
+        let ctx = context("struct Pair[T] { first: T, second: T }");
+        assert_eq!(ctx.generic_bounds("Pair").unwrap(), &[Vec::<String>::new()]);
+    }
+
+    #[test]
+    fn multiple_params_bounds_track_independently() {
+        let ctx = context("struct Pair[A: Num, B] { first: A, second: B }");
+        assert_eq!(
+            ctx.generic_bounds("Pair").unwrap(),
+            &[vec!["Num".to_string()], Vec::<String>::new()]
+        );
     }
 
     #[test]

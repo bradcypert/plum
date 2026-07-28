@@ -260,6 +260,38 @@ impl Infer {
         (substituted, args)
     }
 
+    /// Checks `resolved_args` (a construction site's FINAL, fully-
+    /// resolved generic arguments — `acc.apply`'d, not the fresh vars
+    /// `instantiate_generic` minted) against `decl_name`'s own declared
+    /// bounds, positionally. Only ever called at a CONSTRUCTION site
+    /// (a struct literal, a variant call, a bare variant constructor),
+    /// never at a pattern-match site — once a value exists, it was
+    /// only ever constructible if it already satisfied its bounds, so
+    /// re-checking on every match would be redundant. An argument
+    /// that's STILL an unresolved `Type::Var` (nothing pinned it to a
+    /// concrete type yet — e.g. a bare `None` from `Option[T: Num]`)
+    /// is skipped rather than rejected: there's nothing concrete yet
+    /// to check a bound against.
+    fn check_generic_bounds(&self, decl_name: &str, resolved_args: &[Type], span: plum_syntax::span::Span) -> Result<(), String> {
+        let Some(bounds) = self.ctx.generic_bounds(decl_name) else {
+            return Ok(());
+        };
+        for (arg_ty, param_bounds) in resolved_args.iter().zip(bounds.iter()) {
+            if matches!(arg_ty, Type::Var(_)) {
+                continue;
+            }
+            for bound in param_bounds {
+                if !satisfies_bound(arg_ty, bound) {
+                    return Err(format!(
+                        "{decl_name:?} requires its type argument to satisfy `{bound}`, but {arg_ty:?} does not \
+                         (at {span:?})"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Infers a type for every `let`-defined function in a program.
     /// See this method's implementation comment for the two-phase
     /// approach (pre-declare signatures, then infer bodies) that makes
@@ -631,7 +663,8 @@ impl Infer {
                             acc = s.compose(&acc);
                             refined_env = refined_env.apply_subst(&acc);
                         }
-                        let enum_args = enum_args.iter().map(|a| acc.apply(a)).collect();
+                        let enum_args: Vec<Type> = enum_args.iter().map(|a| acc.apply(a)).collect();
+                        self.check_generic_bounds(&enum_name, &enum_args, *span)?;
                         return Ok((Type::Enum(enum_name, enum_args), acc));
                     }
                 }
@@ -819,7 +852,8 @@ impl Infer {
             return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
         }
 
-        let struct_args = struct_args.iter().map(|a| acc.apply(a)).collect();
+        let struct_args: Vec<Type> = struct_args.iter().map(|a| acc.apply(a)).collect();
+        self.check_generic_bounds(&tag, &struct_args, span)?;
         Ok((Type::Struct(tag, struct_args), acc))
     }
 
@@ -1365,6 +1399,29 @@ fn subst_params(ty: &Type, mapping: &HashMap<String, Type>) -> Type {
     }
 }
 
+// DESIGN.md's "Ad-hoc polymorphism (v1)": a small, FIXED, compiler-
+// known set of overloadable traits (`Num`, `Eq`, `Show`) — no user-
+// definable typeclasses, so checking a bound is closed-set membership
+// checking against this function, never general typeclass resolution.
+// `Task`/`Sender`/`Receiver` are deliberately excluded from `Eq`/`Show`
+// even though they're plain `Type::Struct` under the hood (see their
+// own doc comments in `plum-interp`) — they're opaque runtime handles
+// with no meaningful equality or display, unlike a real user struct.
+fn satisfies_bound(ty: &Type, bound: &str) -> bool {
+    let is_opaque_runtime_handle = matches!(ty, Type::Struct(n, _) if n == "Task" || n == "Sender" || n == "Receiver");
+    match bound {
+        "Num" => matches!(ty, Type::Int | Type::Float),
+        "Eq" | "Show" => !matches!(ty, Type::Function(..)) && !is_opaque_runtime_handle,
+        // An unrecognized bound name isn't rejected here — DESIGN.md's
+        // closed trait set is a small, fixed list, but a genuinely
+        // unknown trait name is a separate, not-yet-implemented gap
+        // (no parser/context-level validation of bound NAMES exists
+        // yet either), not something this permissive fallback should
+        // block on.
+        _ => true,
+    }
+}
+
 // Mirrors lower.rs's `classify_subpattern`: true if any DIRECT
 // sub-position of `pattern` is itself a Variant/Tuple/Struct pattern —
 // exactly the shapes that make lowering defer to a synthetic name and
@@ -1699,6 +1756,67 @@ mod tests {
         let mut infer = Infer::with_context(context("struct Point { x: Int, y: Int }"));
         let expr_src = "{ let (tx, rx) = channel[Point](); tx.send(Point { x: 1, y: 2 }); match rx.recv() { Point(a, b) => a + b } }";
         assert_eq!(infer_expr_with(&mut infer, expr_src, &TypeEnv::new()), Type::Int);
+    }
+
+    // --- Ad-hoc polymorphism: `[T: Num]` bounds on generic structs/enums ---
+
+    #[test]
+    fn a_bound_satisfying_generic_struct_literal_is_accepted() {
+        let mut infer = Infer::with_context(context("struct Box[T: Num] { val: T }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Box { val: 5 }", &TypeEnv::new()),
+            Type::Struct("Box".to_string(), vec![Type::Int])
+        );
+        assert_eq!(
+            infer_expr_with(&mut infer, "Box { val: 1.5 }", &TypeEnv::new()),
+            Type::Struct("Box".to_string(), vec![Type::Float])
+        );
+    }
+
+    #[test]
+    fn a_bound_violating_generic_struct_literal_is_an_error() {
+        let mut infer = Infer::with_context(context("struct Box[T: Num] { val: T }"));
+        let err = infer_expr_with_err(&mut infer, "Box { val: true }", &TypeEnv::new());
+        assert!(err.contains("Num"), "expected a Num-bound error, got: {err}");
+    }
+
+    #[test]
+    fn a_bound_violating_generic_variant_construction_is_an_error() {
+        let mut infer = Infer::with_context(context("enum Numeric[T: Num] { Val(T) }"));
+        let err = infer_expr_with_err(&mut infer, "Val(true)", &TypeEnv::new());
+        assert!(err.contains("Num"), "expected a Num-bound error, got: {err}");
+    }
+
+    #[test]
+    fn a_bound_satisfying_generic_variant_construction_is_accepted() {
+        let mut infer = Infer::with_context(context("enum Numeric[T: Num] { Val(T) }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Val(5)", &TypeEnv::new()),
+            Type::Enum("Numeric".to_string(), vec![Type::Int])
+        );
+    }
+
+    #[test]
+    fn combined_bounds_reject_a_type_failing_either_one() {
+        let mut infer = Infer::with_context(context("struct Box[T: Num + Eq] { val: T }"));
+        // Bool satisfies Eq but not Num.
+        infer_expr_with_err(&mut infer, "Box { val: true }", &TypeEnv::new());
+    }
+
+    #[test]
+    fn a_generic_struct_bound_by_eq_rejects_a_function() {
+        let mut infer = Infer::with_context(context("struct Box[T: Eq] { val: T }"));
+        let env = TypeEnv::new().extend("f".to_string(), fn_ty(vec![Type::Int], Type::Int));
+        infer_expr_with_err(&mut infer, "Box { val: f }", &env);
+    }
+
+    #[test]
+    fn an_unbounded_generic_struct_accepts_anything() {
+        let mut infer = Infer::with_context(context("struct Pair[T] { first: T, second: T }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Pair { first: true, second: false }", &TypeEnv::new()),
+            Type::Struct("Pair".to_string(), vec![Type::Bool])
+        );
     }
 
     #[test]

@@ -454,6 +454,23 @@ mod tests {
     }
 
     #[test]
+    fn a_bound_satisfying_generic_struct_runs_through_the_full_gated_pipeline() {
+        let src = "struct Box[T: Num] { val: T }\n\
+                    let use_it dummy = match (Box { val: 5 }) { Box(v) => v }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(5)));
+    }
+
+    #[test]
+    fn a_bound_violating_generic_struct_is_rejected_before_running() {
+        let src = "struct Box[T: Num] { val: T }\n\
+                    let use_it dummy = Box { val: true }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn joining_a_non_task_value_is_rejected_before_running() {
         let src = "let use_it dummy = 5.join()";
         let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
