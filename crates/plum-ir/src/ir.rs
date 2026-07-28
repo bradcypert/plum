@@ -141,6 +141,23 @@ pub enum Expr {
         params: Vec<String>,
         body: Box<Expr>,
     },
+    // `name = value; rest` — reassigns an EXISTING binding (never
+    // introduces one; that's still `Let`) and continues into `rest`,
+    // the same "statement sequencing via nested expression" shape as
+    // `Let` uses for a discarded expression-statement. Evaluates
+    // `value` to Unit's worth of side effect, not a value used by
+    // anything. Nothing checks the target was actually declared `let
+    // mut` (DESIGN.md's "non-escaping local mutation" story) — that's
+    // a static mutability check that doesn't exist at any layer yet,
+    // lowering included; see lower.rs's `Stmt::Assign` handling.
+    // Heap-shaped reassignment isn't precisely refcounted yet either —
+    // see fbip.rs's `Assign` handling for why that's an accepted leak,
+    // not a soundness gap, matching `For`/`Closure`.
+    Assign {
+        name: String,
+        value: Box<Expr>,
+        rest: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

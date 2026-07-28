@@ -314,6 +314,22 @@ impl Interpreter {
                 }
                 Ok(Value::Unit)
             }
+            Expr::Assign { name, value, rest } => {
+                let v = self.eval(value)?;
+                // The target must already exist — `Assign` never
+                // introduces a binding, only `Let` does. Search from
+                // the end, same direction `lookup` scans, so shadowing
+                // is respected: assigning `x` mutates the INNERMOST
+                // `x` currently in scope, not some outer one.
+                let slot = self
+                    .env
+                    .iter_mut()
+                    .rev()
+                    .find(|(n, _)| n == name)
+                    .ok_or_else(|| format!("assignment to undefined variable: {name}"))?;
+                slot.1 = v;
+                self.eval(rest)
+            }
         }
     }
 }
@@ -618,6 +634,63 @@ mod tests {
             .unwrap_or_else(|e| panic!("call error: {e}"));
         assert_eq!(result, Value::Unit);
         assert_eq!(interp.alloc_count(), 5);
+    }
+
+    // --- Mutation (`let mut` + assignment) ---
+
+    #[test]
+    fn assign_mutates_an_existing_binding() {
+        assert_eq!(eval("{ let mut x = 5; x = 6; x }"), Value::Int(6));
+    }
+
+    #[test]
+    fn assign_value_can_reference_the_current_binding() {
+        assert_eq!(eval("{ let mut x = 5; x = x + 1; x }"), Value::Int(6));
+    }
+
+    #[test]
+    fn multiple_assigns_apply_in_order() {
+        assert_eq!(eval("{ let mut x = 0; x = x + 1; x = x + 1; x = x + 1; x }"), Value::Int(3));
+    }
+
+    #[test]
+    fn assign_to_an_undefined_variable_is_an_error() {
+        eval_err("x = 5");
+    }
+
+    #[test]
+    fn assign_mutates_the_innermost_shadowed_binding_only() {
+        // Two DIFFERENT `x`s — the inner block's assignment must not
+        // touch the outer one at all.
+        assert_eq!(
+            eval("{ let mut x = 1; { let mut x = 2; x = 99; }; x }"),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn a_closure_capturing_a_mutable_variable_sees_the_snapshot_at_capture_time() {
+        // Same "capture is a snapshot" behavior proven for shadowing
+        // earlier — reassignment after a closure captures its
+        // environment doesn't retroactively change what the closure
+        // sees either, since `captured` is a plain value copy, not a
+        // live reference into `env`.
+        assert_eq!(
+            eval("{ let mut n = 1; let f = |x| x + n; n = 99; f(0) }"),
+            Value::Int(1)
+        );
+    }
+
+    #[test]
+    fn the_classic_for_loop_accumulator_from_design_md() {
+        // DESIGN.md's own motivating example for `let mut`: "the
+        // classic for-loop-with-an-accumulator case." First real proof
+        // that `for` and mutation compose into something actually
+        // useful — up to now `for` could only ever produce Unit.
+        assert_eq!(
+            eval("{ let mut sum = 0; for i in 0..5 { sum = sum + i; }; sum }"),
+            Value::Int(10)
+        );
     }
 
     // --- Closures ---

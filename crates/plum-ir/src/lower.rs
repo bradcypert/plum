@@ -412,12 +412,15 @@ fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, St
                 value: Box::new(lower_expr(e, ctx)?),
                 body: Box::new(result),
             },
-            ast::Stmt::Assign { span, .. } => {
-                return Err(format!(
-                    "lowering not yet implemented for assignment statements \
-                     (mutable-slot IR representation not yet designed) at {span:?}"
-                ));
-            }
+            // Nothing checks `name` was actually declared `let mut` —
+            // that's a static mutability check that doesn't exist yet
+            // at this layer (or any layer); see ir.rs's `Assign` doc
+            // comment.
+            ast::Stmt::Assign { name, value, .. } => ir::Expr::Assign {
+                name: name.clone(),
+                value: Box::new(lower_expr(value, ctx)?),
+                rest: Box::new(result),
+            },
         };
     }
     Ok(result)
@@ -708,17 +711,75 @@ mod tests {
     }
 
     #[test]
-    fn block_let_mut_lowers_like_plain_let_for_now() {
-        // Mutation itself isn't representable in the IR yet (see
-        // block_assign_is_not_yet_supported below) — `let mut` just
-        // introduces a binding, same as `let`, until the mutable-slot
-        // story is designed alongside FBIP.
+    fn block_let_mut_lowers_like_plain_let() {
+        // `let mut` itself still just introduces an ordinary binding —
+        // `Assign` (below) is the new node, not a different flavor of
+        // `Let`. Nothing at this layer distinguishes a `let mut`
+        // binding from a plain one; see ir.rs's `Assign` doc comment
+        // for why that's a deliberate, documented gap for now.
         assert_eq!(
             lower("{ let mut x = 5; x }"),
             ir::Expr::Let {
                 name: "x".to_string(),
                 value: Box::new(ir::Expr::Int(5)),
                 body: Box::new(ir::Expr::Var("x".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn block_assign_lowers_to_ir_assign() {
+        assert_eq!(
+            lower("{ let mut x = 5; x = 6; x }"),
+            ir::Expr::Let {
+                name: "x".to_string(),
+                value: Box::new(ir::Expr::Int(5)),
+                body: Box::new(ir::Expr::Assign {
+                    name: "x".to_string(),
+                    value: Box::new(ir::Expr::Int(6)),
+                    rest: Box::new(ir::Expr::Var("x".to_string())),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn block_multiple_assigns_nest_in_order() {
+        assert_eq!(
+            lower("{ let mut x = 0; x = 1; x = 2; x }"),
+            ir::Expr::Let {
+                name: "x".to_string(),
+                value: Box::new(ir::Expr::Int(0)),
+                body: Box::new(ir::Expr::Assign {
+                    name: "x".to_string(),
+                    value: Box::new(ir::Expr::Int(1)),
+                    rest: Box::new(ir::Expr::Assign {
+                        name: "x".to_string(),
+                        value: Box::new(ir::Expr::Int(2)),
+                        rest: Box::new(ir::Expr::Var("x".to_string())),
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn assign_value_can_reference_the_current_binding() {
+        // The classic accumulator shape: `sum = sum + i`.
+        assert_eq!(
+            lower("{ let mut sum = 0; sum = sum + 1; sum }"),
+            ir::Expr::Let {
+                name: "sum".to_string(),
+                value: Box::new(ir::Expr::Int(0)),
+                body: Box::new(ir::Expr::Assign {
+                    name: "sum".to_string(),
+                    value: Box::new(ir::Expr::Binary(
+                        ir::BinOp::Add,
+                        Box::new(ir::Expr::Var("sum".to_string())),
+                        Box::new(ir::Expr::Int(1)),
+                    )),
+                    rest: Box::new(ir::Expr::Var("sum".to_string())),
+                }),
             }
         );
     }
@@ -894,11 +955,6 @@ mod tests {
     }
 
     // --- Explicit, honest gaps — not yet supported ---
-
-    #[test]
-    fn block_assign_is_not_yet_supported() {
-        lower_err("{ let mut x = 5; x = 6; x }");
-    }
 
     #[test]
     fn non_empty_tuple_is_not_yet_supported() {

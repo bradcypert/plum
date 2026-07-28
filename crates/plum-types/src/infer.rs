@@ -753,10 +753,26 @@ impl Infer {
                     acc = s.compose(&acc);
                     cur_env = cur_env.apply_subst(&acc);
                 }
-                ast::Stmt::Assign { span, .. } => {
-                    return Err(format!(
-                        "type inference not yet implemented for assignment statements at {span:?}"
-                    ));
+                ast::Stmt::Assign { name, value, span } => {
+                    // The target must already be in scope, and the
+                    // assigned value's type must match its EXISTING
+                    // type — reassignment can't change what a variable
+                    // holds. What's NOT checked: that `name` was
+                    // actually declared `let mut` — no static
+                    // mutability check exists at this layer yet, same
+                    // deliberate gap as lowering (see ir.rs's `Assign`
+                    // doc comment).
+                    let existing = cur_env
+                        .lookup_scheme(name)
+                        .cloned()
+                        .ok_or_else(|| format!("assignment to undefined variable {name:?} at {span:?}"))?;
+                    let existing_ty = self.instantiate(&existing);
+                    let (val_ty, s) = self.infer_expr(value, &cur_env)?;
+                    acc = s.compose(&acc);
+                    let s = unify(&acc.apply(&existing_ty), &acc.apply(&val_ty))
+                        .map_err(|e| format!("assignment to {name:?}: {e}"))?;
+                    acc = s.compose(&acc);
+                    cur_env = cur_env.apply_subst(&acc);
                 }
             }
         }
@@ -1113,6 +1129,39 @@ mod tests {
         infer_err("{ let x: Bool = 5; x }");
     }
 
+    // --- Mutation (`let mut` + assignment) ---
+
+    #[test]
+    fn assign_infers_as_unit_and_preserves_the_variables_type() {
+        assert_eq!(infer("{ let mut x = 5; x = 6; x }"), Type::Int);
+    }
+
+    #[test]
+    fn assign_value_can_reference_the_current_binding() {
+        assert_eq!(infer("{ let mut x = 5; x = x + 1; x }"), Type::Int);
+    }
+
+    #[test]
+    fn assign_type_mismatch_is_an_error() {
+        infer_err("{ let mut x = 5; x = true; x }");
+    }
+
+    #[test]
+    fn assign_to_an_undefined_variable_is_an_error() {
+        infer_err("x = 5");
+    }
+
+    #[test]
+    fn the_classic_for_loop_accumulator_type_checks() {
+        // Same DESIGN.md motivating example proven at the type level:
+        // `for`'s loop variable is Int, `sum`'s type is preserved
+        // across every reassignment.
+        assert_eq!(
+            infer("{ let mut sum = 0; for i in 0..5 { sum = sum + i; }; sum }"),
+            Type::Int
+        );
+    }
+
     #[test]
     fn combined_block_if_arithmetic_comparison() {
         let env = TypeEnv::new().extend("n".to_string(), Type::Int);
@@ -1381,11 +1430,6 @@ mod tests {
         );
         // `5 |> f(1)` desugars to `f(1, 5)` — piped value appended LAST.
         assert_eq!(infer_in("5 |> f(1)", &env2), Type::Bool);
-    }
-
-    #[test]
-    fn assign_statement_is_not_yet_supported() {
-        infer_err("{ let mut x = 5; x = 6; x }");
     }
 
     // --- Call expressions, against a manually-populated env (no

@@ -101,6 +101,16 @@ mod tests {
     }
 
     #[test]
+    fn the_classic_for_loop_accumulator_runs_through_the_full_gated_pipeline() {
+        // DESIGN.md's own motivating example for `let mut`, proven all
+        // the way through: parse -> type-check -> lower -> FBIP
+        // optimize -> run.
+        let src = "let sum_to n = { let mut sum = 0; for i in 0..n { sum = sum + i; }; sum }";
+        let result = typecheck_and_run(src, "sum_to", vec![Value::Int(5)]);
+        assert_eq!(result, Ok(Value::Int(10)));
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])

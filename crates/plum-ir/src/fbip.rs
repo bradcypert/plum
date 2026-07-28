@@ -99,6 +99,11 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             params,
             body: Box::new(mark_reuse(*body)),
         },
+        Expr::Assign { name, value, rest } => Expr::Assign {
+            name,
+            value: Box::new(mark_reuse(*value)),
+            rest: Box::new(mark_reuse(*rest)),
+        },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
             // reuse — a call result or anything else isn't something
@@ -218,6 +223,17 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             params,
             body: Box::new(transform(*body, known_heap)),
         },
+        // See ir.rs's `Assign` doc comment: reassigning a heap-tracked
+        // name doesn't Dec the value it's overwriting — the old cell
+        // is simply orphaned (a leak, not a soundness gap), since this
+        // pass doesn't track per-binding "generations." `value`/`rest`
+        // still need ordinary recursion so nested constructs elsewhere
+        // in them get transformed.
+        Expr::Assign { name, value, rest } => Expr::Assign {
+            name,
+            value: Box::new(transform(*value, known_heap)),
+            rest: Box::new(transform(*rest, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -282,6 +298,7 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
             expr_mentions_var(start, name) || expr_mentions_var(end, name) || expr_mentions_var(body, name)
         }
         Expr::Closure { body, .. } => expr_mentions_var(body, name),
+        Expr::Assign { value, rest, .. } => expr_mentions_var(value, name) || expr_mentions_var(rest, name),
     }
 }
 
@@ -520,6 +537,29 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 live_after || used,
             )
         }
+        // The reassignment TARGET (`name`) is a plain String field,
+        // never an `Expr::Var` occurrence — so, unlike `Let`, there's
+        // no shadowing case to special-case here even when the target
+        // happens to equal the variable being tracked. `value` and
+        // `rest` are just two ordinary sequential subexpressions
+        // (`value` evaluates first), so this is standard backward
+        // analysis, no forced-live-after needed the way `For`/`Closure`
+        // bodies need it. What's NOT handled: if `name` is itself the
+        // tracked heap-shaped variable, its OLD value isn't Dec'd at
+        // the reassignment point — see ir.rs's `Assign` doc comment,
+        // same accepted-leak precedent as `For`/`Closure`.
+        Expr::Assign { name: target, value, rest } => {
+            let (rest_t, used_rest) = mark_last_uses(*rest, name, live_after);
+            let (value_t, used_value) = mark_last_uses(*value, name, used_rest || live_after);
+            (
+                Expr::Assign {
+                    name: target,
+                    value: Box::new(value_t),
+                    rest: Box::new(rest_t),
+                },
+                used_rest || used_value,
+            )
+        }
         Expr::Let {
             name: bound,
             value,
@@ -639,6 +679,13 @@ mod tests {
         Expr::Closure {
             params: params.into_iter().map(|s| s.to_string()).collect(),
             body: Box::new(body),
+        }
+    }
+    fn assign_(name: &str, value: Expr, rest: Expr) -> Expr {
+        Expr::Assign {
+            name: name.to_string(),
+            value: Box::new(value),
+            rest: Box::new(rest),
         }
     }
 
@@ -961,6 +1008,63 @@ mod tests {
             match_(
                 var("list"),
                 vec![arm("Cons", vec!["h", "t"], ctor_reuse("list", "Cons", vec![var("h"), var("t")]))],
+            ),
+        );
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn reassigning_a_non_heap_value_inserts_no_refcount_ops() {
+        // The classic accumulator shape (`sum = sum + i`) never touches
+        // anything heap-shaped, so this pass should be a complete
+        // no-op on it — proves ordinary numeric mutation doesn't drag
+        // in any refcounting machinery at all.
+        let input = let_(
+            "sum",
+            int(0),
+            assign_(
+                "sum",
+                Expr::Binary(BinOp::Add, Box::new(var("sum")), Box::new(int(1))),
+                var("sum"),
+            ),
+        );
+        assert_eq!(insert_refcount_ops(input.clone()), input);
+    }
+
+    #[test]
+    fn reassigning_a_heap_tracked_variable_leaks_the_old_value_by_design() {
+        // See ir.rs's `Assign` doc comment: the ORIGINAL `Point{}` is
+        // never Dec'd anywhere in the output — reassignment orphans it.
+        // This is the accepted, documented leak (never a soundness
+        // issue, since nothing ever double-frees or use-after-frees
+        // it — it's just never freed at all), matching the same
+        // tradeoff already made for `For`/`Closure`. Proven here by
+        // showing the WHOLE tree comes back completely unchanged: no
+        // Dec appears for the orphaned original anywhere.
+        let input = let_(
+            "p",
+            ctor("Point", vec![]),
+            assign_("p", ctor("Point", vec![]), var("p")),
+        );
+        assert_eq!(insert_refcount_ops(input.clone()), input);
+    }
+
+    #[test]
+    fn mark_reuse_recurses_into_assign_value_and_rest() {
+        let input = assign_(
+            "x",
+            match_(var("list"), vec![arm("Cons", vec!["h", "t"], ctor("Cons", vec![var("h"), var("t")]))]),
+            match_(var("list2"), vec![arm("Cons", vec!["h", "t"], ctor("Cons", vec![var("h"), var("t")]))]),
+        );
+        let expected = assign_(
+            "x",
+            match_(
+                var("list"),
+                vec![arm("Cons", vec!["h", "t"], ctor_reuse("list", "Cons", vec![var("h"), var("t")]))],
+            ),
+            match_(
+                var("list2"),
+                vec![arm("Cons", vec!["h", "t"], ctor_reuse("list2", "Cons", vec![var("h"), var("t")]))],
             ),
         );
         assert_eq!(mark_reuse(input), expected);
