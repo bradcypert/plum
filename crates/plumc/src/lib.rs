@@ -23,14 +23,11 @@ enum Result[T, E] { Ok(T), Err(E) }
 /// Parses the prelude once and prepends its items to `program`'s own —
 /// items earlier in the list are declared FIRST, but `TypeContext`'s
 /// two-phase construction (see its doc comment) already makes
-/// declaration order not matter for name resolution, so this ordering
-/// is only significant for one thing: a user program declaring its
-/// OWN `Option`/`Result` (or anything else with the SAME name) shadows
-/// the prelude's version, since later insertions into the same-keyed
-/// maps win. There's no duplicate-declaration detection anywhere in
-/// this codebase yet (a real gap, but a PRE-EXISTING one, not
-/// introduced here) — redeclaring a prelude name silently overrides it
-/// rather than erroring, same as redeclaring any other name would.
+/// declaration order not matter for name resolution. A user program
+/// declaring its OWN `Option`/`Result` (or anything else with the SAME
+/// name) is now a real "already declared" error, same as redeclaring
+/// any other name — see `TypeContext::from_items`'s duplicate-name
+/// check.
 fn with_prelude(program: ast::Program) -> ast::Program {
     let prelude_tokens = Lexer::new(PRELUDE_SRC).tokenize();
     let prelude_items = Parser::new(prelude_tokens)
@@ -60,6 +57,14 @@ pub fn typecheck_and_run(src: &str, fn_name: &str, args: Vec<Value>) -> Result<V
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
     let mut infer = Infer::with_context(type_ctx);
     infer.infer_program(&program).map_err(|e| format!("type error: {e}"))?;
+
+    // A second, independent static gate — DESIGN.md's "channel send is
+    // a move": reusing a value after `tx.send(v)` is a compile error.
+    // Runs on the AST (see `movecheck`'s own doc comment for why), so
+    // it doesn't need to wait for lowering; placed after type-checking
+    // simply to keep the "cheapest/most-fundamental check first" order,
+    // not because either gate depends on the other.
+    plum_ir::movecheck::check_moves(&program).map_err(|e| format!("move error: {e}"))?;
 
     // `p.x` needs to know WHICH struct `p` is to lower correctly —
     // lowering has no type information of its own, so this carries
@@ -477,6 +482,21 @@ mod tests {
         let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
             .expect_err("expected a type error, not a successful run");
         assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn using_a_channel_send_value_afterward_is_rejected_before_running() {
+        let src = "let use_it dummy = { let (tx, rx) = channel[Int](); let p = 5; tx.send(p); p }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a move error, not a successful run");
+        assert!(err.starts_with("move error:"), "expected a move error, got: {err}");
+    }
+
+    #[test]
+    fn sending_a_value_and_never_reusing_it_runs_normally() {
+        let src = "let use_it dummy = { let (tx, rx) = channel[Int](); let p = 5; tx.send(p); rx.recv() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(5)));
     }
 
     #[test]
