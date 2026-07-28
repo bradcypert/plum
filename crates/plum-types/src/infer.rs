@@ -197,6 +197,15 @@ pub struct Infer {
     // carrying a type. See `lower.rs`'s `LoweringContext::field_owners`
     // doc comment for how it's consumed.
     field_owners: HashMap<plum_syntax::span::Span, String>,
+    // `for` loops whose iterand resolved to `Array[T]` rather than
+    // `Range` — keyed by the `Expr::For` node's own span, for the same
+    // reason `field_owners` is span-keyed (lowering has no type
+    // information and needs a stable handle back to this answer).
+    // `lower_for`'s literal-range fast path never touches this (it's
+    // syntactically obvious); only the general fallback needs to know
+    // which of the two totally different desugarings — Range-Match-
+    // unwrap vs. index-based array loop — applies.
+    array_for_loops: std::collections::HashSet<plum_syntax::span::Span>,
 }
 
 impl Infer {
@@ -205,6 +214,7 @@ impl Infer {
             next_var: 0,
             ctx: crate::context::TypeContext::new(),
             field_owners: HashMap::new(),
+            array_for_loops: std::collections::HashSet::new(),
         }
     }
 
@@ -217,6 +227,7 @@ impl Infer {
             next_var: 0,
             ctx,
             field_owners: HashMap::new(),
+            array_for_loops: std::collections::HashSet::new(),
         }
     }
 
@@ -226,6 +237,13 @@ impl Infer {
     /// comment for why a span-keyed side-channel, not a typed IR.
     pub fn field_owners(&self) -> &HashMap<plum_syntax::span::Span, String> {
         &self.field_owners
+    }
+
+    /// The set of `for` loops (keyed by the `Expr::For` node's own
+    /// span) whose iterand is `Array[T]` rather than `Range` — see
+    /// `array_for_loops`'s doc comment.
+    pub fn array_for_loops(&self) -> &std::collections::HashSet<plum_syntax::span::Span> {
+        &self.array_for_loops
     }
 
     /// Generates a never-before-used type variable — used internally
@@ -1556,7 +1574,33 @@ impl Infer {
             _ => {
                 let (iter_ty, s) = self.infer_expr(iter, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&iter_ty), &Type::Range)
+                let resolved_iter_ty = acc.apply(&iter_ty);
+                // `for x in arr` — the iterand is an `Array[T]`, not a
+                // `Range`. Checked by matching the ALREADY-RESOLVED
+                // shape directly, rather than by trying to `unify`
+                // against `Array[fresh]` and seeing if it succeeds:
+                // an unresolved type variable (e.g. a still-generic
+                // function parameter's type, as in `let sum_range r =
+                // for i in r {...}`) would trivially unify against
+                // EITHER Array or Range, since unifying a bare var
+                // just binds it — that would wrongly commit a
+                // genuinely Range-typed polymorphic loop to the array
+                // desugaring. Matching the resolved shape means only
+                // an iterand that's ALREADY definitely `Array[T]`
+                // takes this path; everything else (including a still-
+                // unresolved var) falls through to the existing
+                // Range-unifying behavior below, unchanged.
+                if let Type::Struct(name, args) = &resolved_iter_ty {
+                    if name == "Array" && args.len() == 1 {
+                        self.array_for_loops.insert(span);
+                        let elem_ty = args[0].clone();
+                        let body_env = env.apply_subst(&acc).extend(var, elem_ty);
+                        let (_, s) = self.infer_block(body, &body_env)?;
+                        acc = s.compose(&acc);
+                        return Ok((Type::Unit, acc));
+                    }
+                }
+                let s = unify(&resolved_iter_ty, &Type::Range)
                     .map_err(|e| format!("`for` at {span:?}: {e}"))?;
                 acc = s.compose(&acc);
                 acc
@@ -3710,6 +3754,64 @@ mod tests {
     #[test]
     fn push_on_a_non_array_is_an_error() {
         infer_err("5.push(1)");
+    }
+
+    #[test]
+    fn for_over_an_array_infers_as_unit_and_binds_the_element_type() {
+        assert_eq!(infer("for x in [1, 2, 3] { x + 1 }"), Type::Unit);
+    }
+
+    #[test]
+    fn for_over_an_array_of_structs_binds_the_struct_type() {
+        let mut infer = Infer::with_context(context("struct Point { x: Int, y: Int }"));
+        let tokens = Lexer::new("for p in [Point { x: 1, y: 2 }] { p.x }").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap();
+        let (ty, subst) = infer.infer_expr(&ast, &TypeEnv::new()).unwrap_or_else(|e| panic!("inference error: {e}"));
+        assert_eq!(subst.apply(&ty), Type::Unit);
+    }
+
+    #[test]
+    fn for_over_an_array_element_type_mismatch_inside_the_body_is_an_error() {
+        infer_err("for x in [true, false] { x + 1 }");
+    }
+
+    #[test]
+    fn for_over_an_array_records_the_loops_span_in_array_for_loops() {
+        let tokens = Lexer::new("for x in [1, 2, 3] { x }").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap();
+        let mut infer = Infer::new();
+        infer.infer_expr(&ast, &TypeEnv::new()).unwrap();
+        assert_eq!(infer.array_for_loops().len(), 1);
+    }
+
+    #[test]
+    fn for_over_a_range_does_not_record_anything_in_array_for_loops() {
+        let tokens = Lexer::new("for x in 0..5 { x }").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap();
+        let mut infer = Infer::new();
+        infer.infer_expr(&ast, &TypeEnv::new()).unwrap();
+        assert!(infer.array_for_loops().is_empty());
+    }
+
+    #[test]
+    fn a_polymorphic_for_loop_over_a_still_unresolved_var_still_defaults_to_range() {
+        // Regression test for a real bug caught while implementing
+        // array iteration: unifying a still-unresolved type variable
+        // against `Array[fresh]` trivially succeeds (it just binds the
+        // var), which would wrongly commit a genuinely Range-typed
+        // polymorphic loop to the array desugaring. `sum_range`'s `r`
+        // parameter has no annotation, so its type is a bare `Var` at
+        // the point `for i in r` is inferred.
+        let src = "let sum_range r = { let mut sum = 0; for i in r { sum = sum + i; }; sum }";
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let mut infer = Infer::new();
+        infer.infer_program(&program).unwrap_or_else(|e| panic!("inference error: {e}"));
+        assert!(infer.array_for_loops().is_empty());
     }
 
     #[test]

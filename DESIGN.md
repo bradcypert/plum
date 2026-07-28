@@ -528,10 +528,42 @@ had, written ahead of a real collection type to use it with).
 v1 operations, deliberately minimal: construction (`[1, 2, 3]`),
 `arr[i]` (index read, runtime-bounds-checked, not a compile-time
 check), `.len()`, `.push(v)`. Deliberately NOT yet decided/implemented:
-`pop`/`set-at-index`/`remove`, `map`/`filter`/`fold` and friends, and
-`for x in arr` iteration (`for` still only ever accepts a `Range`,
-literal or stored in a variable — not yet extended to arrays at all) —
-all real, separate follow-up work, not ruled out, just not v1.
+`pop`/`set-at-index`/`remove`, `map`/`filter`/`fold` and friends. `for x
+in arr` iteration IS now supported (see below) — `for` accepts either a
+`Range` or an `Array[T]`.
+
+**`for x in arr` iteration — Decided (2026-07-28).** `for` now accepts
+`Array[T]` as well as `Range`. Desugars into an index-based loop reusing
+only EXISTING IR nodes (`Let`, `For`, `ArrayLen`, `Index`) — no new IR
+node needed, following the file's established "reuse what exists"
+lowering philosophy:
+```
+let __for_arr = <iter> in
+  for __for_i in 0 .. __for_arr.len() {
+    let x = __for_arr[__for_i] in <body>
+  }
+```
+The genuinely new piece is a second span-keyed inference→lowering
+side-channel, `Infer::array_for_loops: HashSet<Span>` (mirroring the
+existing `field_owners` pattern), because lowering has no type
+information of its own and a bare `for x in y { ... }` doesn't
+syntactically say whether `y` is a `Range` or an `Array[T]`. Populated
+in `infer_for`'s general (non-literal-range) branch by matching the
+iterand's ALREADY-RESOLVED type shape directly against `Struct("Array",
+[T])` — NOT by trial-unifying against `Array[fresh]` and checking
+success, since an unresolved type variable (e.g. a still-generic
+function parameter's type) would trivially unify against either Array
+or Range, wrongly committing a genuinely Range-typed polymorphic loop
+to the array desugaring. This was a real bug caught by the existing
+`a_range_stored_and_passed_around` test before landing. A consequence
+inherited from Hindley-Milner having no ad-hoc "iterable" trait: a
+single function body with an unannotated `for i in x { ... }` still
+commits `x`'s type to exactly ONE of Range or Array for that whole
+function (whichever shape inference resolves first) — annotate the
+parameter explicitly (`arr: Array[Int]`) to force the array reading,
+though builtin-type parameter annotations for `Array`/`Task`/`Sender`/
+`Receiver` aren't wired into `resolve_annotation` yet (a real, separate
+gap — those names are deliberately never registered in `TypeContext`).
 
 Implementation note on the mutability decision above: `.push(v)`
 currently always allocates a fresh cell (copies every existing element
@@ -698,12 +730,14 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 
 - Exact design of the `Ref`/`Shared` mutable type and its interaction
   with pattern matching and FBIP.
-- `Array[T]`'s v1 scope is Decided (see "Arrays" above) but its
-  IN-PLACE-growth optimization for `.push()` is not yet designed (needs
-  new FBIP analysis beyond what `CtorReuse` already does), nor are
-  `pop`/`set-at-index`/`remove`, `map`/`filter`/`fold`, `for x in arr`
-  iteration, or String's own growth strategy (presumably similar, not
-  yet worked through explicitly).
+- `Array[T]`'s v1 scope is Decided (see "Arrays" above), and `for x in
+  arr` iteration is now Decided too (see "`for x in arr` iteration"
+  above), but the IN-PLACE-growth optimization for `.push()` is not yet
+  designed (needs new FBIP analysis beyond what `CtorReuse` already
+  does), nor are `pop`/`set-at-index`/`remove`, `map`/`filter`/`fold`,
+  builtin-type (`Array`/`Task`/`Sender`/`Receiver`) parameter
+  annotations in `resolve_annotation`, or String's own growth strategy
+  (presumably similar, not yet worked through explicitly).
 - Recursive closures that capture themselves (named top-level recursive
   functions should compile to direct calls, sidestepping this; true
   anonymous self-referential closures are a deferred detail).

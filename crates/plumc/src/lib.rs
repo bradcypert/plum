@@ -71,7 +71,9 @@ pub fn typecheck_and_run(src: &str, fn_name: &str, args: Vec<Value>) -> Result<V
     // inference's own answer across as a span-keyed side-channel. See
     // `Infer::field_owners`/`LoweringContext::field_owners`'s doc
     // comments for the full reasoning.
-    let lowering_ctx = LoweringContext::from_items(&program.items).with_field_owners(infer.field_owners().clone());
+    let lowering_ctx = LoweringContext::from_items(&program.items)
+        .with_field_owners(infer.field_owners().clone())
+        .with_array_for_loops(infer.array_for_loops().clone());
     let ir_program = lower_program(&program, &lowering_ctx).map_err(|e| format!("lowering error: {e}"))?;
     let ir_program = optimize_program(ir_program);
 
@@ -154,6 +156,39 @@ mod tests {
         // optimize -> run.
         let src = "let sum_to n = { let mut sum = 0; for i in 0..n { sum = sum + i; }; sum }";
         let result = typecheck_and_run(src, "sum_to", vec![Value::Int(5)]);
+        assert_eq!(result, Ok(Value::Int(10)));
+    }
+
+    #[test]
+    fn for_over_an_array_bound_to_a_local_runs_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let arr = [1, 2, 3, 4]; let mut sum = 0; for x in arr { sum = sum + x; }; sum }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(10)));
+    }
+
+    #[test]
+    fn for_over_an_array_literal_directly_runs_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let mut sum = 0; for x in [10, 20, 30] { sum = sum + x; }; sum }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(60)));
+    }
+
+    #[test]
+    fn for_over_an_empty_array_runs_zero_iterations() {
+        let src = "let use_it dummy = { let mut sum = 0; for x in [] { sum = sum + x; }; sum }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(0)));
+    }
+
+    #[test]
+    fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
+        // Regression coverage alongside `a_range_stored_and_passed_around_
+        // runs_through_the_full_gated_pipeline` above: a genuinely
+        // Range-typed, still-generic-at-the-point-of-inference loop
+        // variable must not get misclassified as array-typed.
+        let src = "let sum_range r = { let mut sum = 0; for i in r { sum = sum + i; }; sum }\n\
+                    let use_it dummy = sum_range(0..5)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Int(10)));
     }
 

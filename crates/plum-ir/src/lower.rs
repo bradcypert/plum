@@ -36,6 +36,14 @@ pub struct LoweringContext {
     // populating this map gets a clear "unresolved field access"
     // error, not a wrong/guessed answer.
     field_owners: HashMap<plum_syntax::span::Span, String>,
+    // `for` loops (keyed by the `Expr::For` node's own span) whose
+    // iterand is `Array[T]` rather than `Range`, exactly as
+    // `plum_types::Infer::array_for_loops` recorded it during
+    // inference — see that field's doc comment. Empty by default: a
+    // lowering-only test that never populates this (and never uses
+    // `for x in arr`) is unaffected, since the literal-range fast path
+    // and the ordinary Range-Match-unwrap fallback don't consult it.
+    array_for_loops: std::collections::HashSet<plum_syntax::span::Span>,
 }
 
 impl LoweringContext {
@@ -44,6 +52,7 @@ impl LoweringContext {
             struct_fields: HashMap::new(),
             variants: HashMap::new(),
             field_owners: HashMap::new(),
+            array_for_loops: std::collections::HashSet::new(),
         }
     }
 
@@ -51,6 +60,13 @@ impl LoweringContext {
     /// computed during inference — see `field_owners`'s doc comment.
     pub fn with_field_owners(mut self, field_owners: HashMap<plum_syntax::span::Span, String>) -> Self {
         self.field_owners = field_owners;
+        self
+    }
+
+    /// Attaches the set of array-typed `for` loops `plum-types`
+    /// computed during inference — see `array_for_loops`'s doc comment.
+    pub fn with_array_for_loops(mut self, array_for_loops: std::collections::HashSet<plum_syntax::span::Span>) -> Self {
+        self.array_for_loops = array_for_loops;
         self
     }
 
@@ -592,7 +608,7 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         } => lower_struct_literal(path, fields, spread, *span, ctx),
         ast::Expr::Match { scrutinee, arms, .. } => lower_match(scrutinee, arms, ctx),
         ast::Expr::Select { arms, .. } => lower_select(arms, ctx),
-        ast::Expr::For { pattern, iter, body, .. } => lower_for(pattern, iter, body, ctx),
+        ast::Expr::For { pattern, iter, body, span } => lower_for(pattern, iter, body, *span, ctx),
         // `unsafe` has nothing to mark yet — no IR operation is
         // unsafe-only (no raw pointers, no unchecked ops), so the block
         // lowers exactly as if the keyword weren't there. When the
@@ -837,6 +853,7 @@ fn lower_for(
     pattern: &ast::Pattern,
     iter: &ast::Expr,
     body: &ast::Block,
+    span: plum_syntax::span::Span,
     ctx: &LoweringContext,
 ) -> Result<ir::Expr, String> {
     let var = match pattern {
@@ -869,6 +886,38 @@ fn lower_for(
             start: Box::new(lower_expr(lhs, ctx)?),
             end: Box::new(lower_expr(rhs, ctx)?),
             body: Box::new(lower_block(body, ctx)?),
+        });
+    }
+    // `for x in arr` — `plum_types::Infer::array_for_loops` (threaded
+    // in via `LoweringContext::with_array_for_loops`) already decided,
+    // during inference, that this loop's iterand is `Array[T]` rather
+    // than `Range`. Desugar into an index-based loop reusing only
+    // EXISTING IR nodes (`Let`, `For`, `ArrayLen`, `Index`) — no new IR
+    // node needed, matching this file's established "reuse what
+    // already exists" convention: evaluate the array once into a
+    // synthetic binding, loop an index from 0 to its length, and bind
+    // the user's variable to `arr[i]` each iteration.
+    if ctx.array_for_loops.contains(&span) {
+        let arr_name = "__for_arr".to_string();
+        let idx_name = "__for_i".to_string();
+        return Ok(ir::Expr::Let {
+            name: arr_name.clone(),
+            value: Box::new(lower_expr(iter, ctx)?),
+            body: Box::new(ir::Expr::For {
+                var: idx_name.clone(),
+                start: Box::new(ir::Expr::Int(0)),
+                end: Box::new(ir::Expr::ArrayLen {
+                    array: Box::new(ir::Expr::Var(arr_name.clone())),
+                }),
+                body: Box::new(ir::Expr::Let {
+                    name: var,
+                    value: Box::new(ir::Expr::Index {
+                        base: Box::new(ir::Expr::Var(arr_name)),
+                        index: Box::new(ir::Expr::Var(idx_name)),
+                    }),
+                    body: Box::new(lower_block(body, ctx)?),
+                }),
+            }),
         });
     }
     let ir_iter = lower_expr(iter, ctx)?;
@@ -2279,6 +2328,51 @@ mod tests {
                 value: Box::new(ir::Expr::Int(5)),
             }
         );
+    }
+
+    #[test]
+    fn for_over_an_array_desugars_to_an_index_based_loop() {
+        let tokens = Lexer::new("for x in [1, 2, 3] { x }").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap();
+        let mut array_for_loops = std::collections::HashSet::new();
+        array_for_loops.insert(ast.span());
+        let ctx = LoweringContext::new().with_array_for_loops(array_for_loops);
+        let result = lower_expr(&ast, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
+        assert_eq!(
+            result,
+            ir::Expr::Let {
+                name: "__for_arr".to_string(),
+                value: Box::new(ir::Expr::Ctor {
+                    tag: "0Array".to_string(),
+                    fields: vec![ir::Expr::Int(1), ir::Expr::Int(2), ir::Expr::Int(3)],
+                }),
+                body: Box::new(ir::Expr::For {
+                    var: "__for_i".to_string(),
+                    start: Box::new(ir::Expr::Int(0)),
+                    end: Box::new(ir::Expr::ArrayLen {
+                        array: Box::new(ir::Expr::Var("__for_arr".to_string())),
+                    }),
+                    body: Box::new(ir::Expr::Let {
+                        name: "x".to_string(),
+                        value: Box::new(ir::Expr::Index {
+                            base: Box::new(ir::Expr::Var("__for_arr".to_string())),
+                            index: Box::new(ir::Expr::Var("__for_i".to_string())),
+                        }),
+                        body: Box::new(ir::Expr::Var("x".to_string())),
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_for_loop_not_recorded_in_array_for_loops_still_desugars_as_a_range() {
+        // With no `array_for_loops` entry at all (the default —
+        // exactly what a lowering-only test or a Range-typed loop
+        // gets), a non-literal iterand still falls through to the
+        // pre-existing Range-Match-unwrap desugaring, unchanged.
+        assert!(matches!(lower("for x in r { x }"), ir::Expr::Match { .. }));
     }
 
     // --- Item-level lowering: `let`-defined functions -> ir::Function
