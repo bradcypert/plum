@@ -64,10 +64,20 @@ impl TypeContext {
         let mut ctx = Self::new();
 
         // Phase 1: collect every declared name AND generic-parameter
-        // list FIRST — see this struct's doc comments for why.
+        // list FIRST — see this struct's doc comments for why. Also
+        // where a struct/enum name collision (with EITHER another
+        // struct or an enum — they share one flat type-level namespace,
+        // same as `ast_type_to_type` resolves both identically) is
+        // caught: checked BEFORE inserting, so redeclaring a prelude
+        // type (`enum Option[T] { .. }`, injected by `plumc::
+        // with_prelude` ahead of the user's own items) is now a real
+        // error too, not silent shadowing.
         for item in items {
             match &item.kind {
                 ast::ItemKind::Struct(decl) => {
+                    if ctx.struct_names.contains(&decl.name) || ctx.enum_names.contains(&decl.name) {
+                        return Err(format!("{:?} is already declared (at {:?})", decl.name, decl.span));
+                    }
                     ctx.struct_names.insert(decl.name.clone());
                     let params = decl.generics.iter().map(|g| g.name.clone()).collect();
                     ctx.generic_params.insert(decl.name.clone(), params);
@@ -75,6 +85,9 @@ impl TypeContext {
                     ctx.generic_bounds.insert(decl.name.clone(), bounds);
                 }
                 ast::ItemKind::Enum(decl) => {
+                    if ctx.struct_names.contains(&decl.name) || ctx.enum_names.contains(&decl.name) {
+                        return Err(format!("{:?} is already declared (at {:?})", decl.name, decl.span));
+                    }
                     ctx.enum_names.insert(decl.name.clone());
                     let params = decl.generics.iter().map(|g| g.name.clone()).collect();
                     ctx.generic_params.insert(decl.name.clone(), params);
@@ -360,5 +373,25 @@ mod tests {
     #[test]
     fn struct_field_referencing_an_undeclared_type_is_still_an_error() {
         context_err("struct Line { start: Undeclared }");
+    }
+
+    // --- Duplicate declarations ---
+
+    #[test]
+    fn redeclaring_a_struct_is_an_error() {
+        let err = context_err("struct Point { x: Int }\nstruct Point { y: Int }");
+        assert!(err.contains("already declared"), "expected an already-declared error, got: {err}");
+    }
+
+    #[test]
+    fn redeclaring_an_enum_is_an_error() {
+        let err = context_err("enum Shape { Circle(Float) }\nenum Shape { Square(Float) }");
+        assert!(err.contains("already declared"), "expected an already-declared error, got: {err}");
+    }
+
+    #[test]
+    fn a_struct_and_an_enum_sharing_a_name_is_an_error() {
+        let err = context_err("struct Thing { x: Int }\nenum Thing { A }");
+        assert!(err.contains("already declared"), "expected an already-declared error, got: {err}");
     }
 }

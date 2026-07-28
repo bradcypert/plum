@@ -390,15 +390,16 @@ mod tests {
     }
 
     #[test]
-    fn a_program_redeclaring_option_itself_shadows_the_prelude_without_erroring() {
-        // No duplicate-declaration detection exists anywhere in this
-        // codebase yet (a real, pre-existing, separate gap) — a user's
-        // OWN `Option` simply wins over the prelude's, matching how any
-        // other duplicate top-level name would already behave.
+    fn a_program_redeclaring_option_itself_is_now_a_real_error() {
+        // Previously silently shadowed the prelude's `Option` (no
+        // duplicate-declaration detection existed anywhere) — now that
+        // detection exists, redeclaring a prelude type is caught the
+        // same as redeclaring anything else.
         let src = "enum Option[T] { Some(T), None, Neither }\n\
                     let use_it dummy = match (Neither) { Some(x) => 1, None => 2, Neither => 3 }";
-        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
-        assert_eq!(result, Ok(Value::Int(3)));
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.contains("already declared"), "expected an already-declared error, got: {err}");
     }
 
     #[test]
@@ -465,6 +466,14 @@ mod tests {
     fn a_bound_violating_generic_struct_is_rejected_before_running() {
         let src = "struct Box[T: Num] { val: T }\n\
                     let use_it dummy = Box { val: true }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn a_redeclared_function_is_rejected_before_running() {
+        let src = "let square x = x * x\nlet square x = x + x\nlet use_it dummy = square(3)";
         let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
             .expect_err("expected a type error, not a successful run");
         assert!(err.starts_with("type error:"), "expected a type error, got: {err}");

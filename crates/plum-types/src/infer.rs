@@ -311,9 +311,22 @@ impl Infer {
         // FILE ORDER — see ir.rs's `Global` doc comment (plum-ir) for
         // why order among them matters, unlike functions.
         let mut global_defs: Vec<&ast::LetDef> = Vec::new();
+        // Functions and globals share ONE flat top-level namespace
+        // (both ultimately live in `global_env`/`Interpreter::
+        // functions`+`globals`) — a name reused between them, or
+        // between two functions, previously just silently overwrote
+        // whichever `HashMap` entry came first, with NO warning; two
+        // same-named FUNCTIONS were actively broken (both bodies got
+        // processed, the second one's `global_env` entry winning,
+        // regardless of which one a caller probably meant). Checked
+        // here, before anything else touches `signatures`/`global_defs`.
+        let mut declared_names: HashSet<String> = HashSet::new();
 
         for item in &program.items {
             if let ast::ItemKind::Let(def) = &item.kind {
+                if !declared_names.insert(def.name.clone()) {
+                    return Err(format!("{:?} is already declared (at {:?})", def.name, def.span));
+                }
                 if def.params.is_empty() {
                     global_defs.push(def);
                     continue;
@@ -2981,6 +2994,26 @@ mod tests {
     fn declared_return_type_referencing_the_wrong_struct_is_an_error() {
         let src = "struct Point { x: Int, y: Int }\nlet origin dummy: Int = Point { x: 0, y: 0 }";
         infer_program_err(src);
+    }
+
+    // --- Duplicate top-level declarations ---
+
+    #[test]
+    fn redeclaring_a_function_is_an_error() {
+        let err = infer_program_err("let f x = x + 1\nlet f x = x + 2");
+        assert!(err.contains("already declared"), "expected an already-declared error, got: {err}");
+    }
+
+    #[test]
+    fn redeclaring_a_global_is_an_error() {
+        let err = infer_program_err("let x = 1\nlet x = 2");
+        assert!(err.contains("already declared"), "expected an already-declared error, got: {err}");
+    }
+
+    #[test]
+    fn a_function_and_a_global_sharing_a_name_is_an_error() {
+        let err = infer_program_err("let f = 1\nlet f x = x");
+        assert!(err.contains("already declared"), "expected an already-declared error, got: {err}");
     }
 
     #[test]
