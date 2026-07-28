@@ -210,6 +210,22 @@ mod tests {
     }
 
     #[test]
+    fn a_range_stored_and_passed_around_runs_through_the_full_gated_pipeline() {
+        let src = "let sum_range r = { let mut sum = 0; for i in r { sum = sum + i; }; sum }\n\
+                    let use_it dummy = { let r = 0..5; sum_range(r) }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(10)));
+    }
+
+    #[test]
+    fn for_over_a_non_range_value_is_rejected_before_running() {
+        let src = "let use_it dummy = for i in 5 { i }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])

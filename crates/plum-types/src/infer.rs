@@ -48,7 +48,7 @@ fn free_vars(ty: &Type) -> HashSet<TypeVarId> {
             }
             set
         }
-        Type::Int | Type::Float | Type::Bool | Type::Str | Type::Unit | Type::Struct(_) | Type::Enum(_) => {
+        Type::Int | Type::Float | Type::Bool | Type::Str | Type::Unit | Type::Range | Type::Struct(_) | Type::Enum(_) => {
             HashSet::new()
         }
     }
@@ -399,9 +399,20 @@ impl Infer {
             } => self.infer_pipe(lhs, rhs, env),
             ast::Expr::Binary {
                 op: ast::BinaryOp::Range,
-                span,
+                lhs,
+                rhs,
                 ..
-            } => Err(format!("type inference not yet implemented for ranges at {span:?}")),
+            } => {
+                let (lhs_ty, s) = self.infer_expr(lhs, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&lhs_ty), &Type::Int).map_err(|e| format!("range start: {e}"))?;
+                acc = s.compose(&acc);
+                let (rhs_ty, s) = self.infer_expr(rhs, env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&rhs_ty), &Type::Int).map_err(|e| format!("range end: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Range, acc))
+            }
             ast::Expr::Binary { op, lhs, rhs, .. } => self.infer_binary(op, lhs, rhs, env),
             ast::Expr::Block(block, _) => self.infer_block(block, env),
             ast::Expr::If {
@@ -791,12 +802,14 @@ impl Infer {
     }
 
     // `for pattern in iter { body }` — mirrors lower.rs's `lower_for`
-    // restrictions exactly (plain-identifier pattern, iter must be a
-    // literal Range), since accepting anything lowering rejects would
-    // mean a program could pass type-checking and then fail to lower —
-    // the type checker's job is to predict what actually runs, not a
-    // superset of it. Always produces Unit: `body`'s value is discarded
-    // every iteration, same as a statement-expression in a block.
+    // restrictions exactly (plain-identifier pattern; `iter` must be
+    // EITHER a literal `start..end` Range or any expression whose
+    // inferred type is `Type::Range`), since accepting anything
+    // lowering rejects would mean a program could pass type-checking
+    // and then fail to lower — the type checker's job is to predict
+    // what actually runs, not a superset of it. Always produces Unit:
+    // `body`'s value is discarded every iteration, same as a
+    // statement-expression in a block.
     fn infer_for(
         &mut self,
         pattern: &ast::Pattern,
@@ -814,31 +827,41 @@ impl Infer {
                 ));
             }
         };
-        let ast::Expr::Binary {
-            op: ast::BinaryOp::Range,
-            lhs,
-            rhs,
-            ..
-        } = iter
-        else {
-            return Err(format!(
-                "type inference not yet implemented for `for` over anything but a literal \
-                 range (`start..end`) at {span:?}"
-            ));
+
+        let mut acc = match iter {
+            // The literal shape: check start/end are each Int directly
+            // (a slightly more direct route to the same place as
+            // falling through to the general Range-typed case below,
+            // but with error messages that point at the literal bounds
+            // rather than a generic "Range" mismatch).
+            ast::Expr::Binary {
+                op: ast::BinaryOp::Range,
+                lhs,
+                rhs,
+                ..
+            } => {
+                let (start_ty, s) = self.infer_expr(lhs, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&start_ty), &Type::Int).map_err(|e| format!("`for` range start: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+
+                let (end_ty, s) = self.infer_expr(rhs, &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&end_ty), &Type::Int).map_err(|e| format!("`for` range end: {e}"))?;
+                s.compose(&acc)
+            }
+            _ => {
+                let (iter_ty, s) = self.infer_expr(iter, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&iter_ty), &Type::Range)
+                    .map_err(|e| format!("`for` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                acc
+            }
         };
 
-        let (start_ty, s) = self.infer_expr(lhs, env)?;
-        let mut acc = s;
-        let s = unify(&acc.apply(&start_ty), &Type::Int).map_err(|e| format!("`for` range start: {e}"))?;
-        acc = s.compose(&acc);
-        let refined_env = env.apply_subst(&acc);
-
-        let (end_ty, s) = self.infer_expr(rhs, &refined_env)?;
-        acc = s.compose(&acc);
-        let s = unify(&acc.apply(&end_ty), &Type::Int).map_err(|e| format!("`for` range end: {e}"))?;
-        acc = s.compose(&acc);
-
-        let body_env = refined_env.apply_subst(&acc).extend(var, Type::Int);
+        let body_env = env.apply_subst(&acc).extend(var, Type::Int);
         let (_, s) = self.infer_block(body, &body_env)?;
         acc = s.compose(&acc);
 
@@ -1212,6 +1235,17 @@ mod tests {
     // --- `for`/`unsafe` ---
 
     #[test]
+    fn range_as_a_standalone_expression_infers_as_range() {
+        assert_eq!(infer("0..5"), Type::Range);
+    }
+
+    #[test]
+    fn range_bounds_must_be_int_even_as_a_standalone_expression() {
+        infer_err("true..5");
+        infer_err("0..false");
+    }
+
+    #[test]
     fn for_loop_over_a_literal_range_infers_as_unit() {
         assert_eq!(infer("for i in 0..5 { i }"), Type::Unit);
     }
@@ -1244,8 +1278,14 @@ mod tests {
     }
 
     #[test]
-    fn for_loop_over_anything_but_a_literal_range_is_not_yet_supported() {
-        infer_err("for i in xs { i }");
+    fn for_loop_over_a_range_typed_variable_infers_as_unit() {
+        let env = TypeEnv::new().extend("xs".to_string(), Type::Range);
+        assert_eq!(infer_in("for i in xs { i }", &env), Type::Unit);
+    }
+
+    #[test]
+    fn for_loop_over_a_non_range_typed_expression_is_still_rejected() {
+        infer_err("for i in 5 { i }");
     }
 
     #[test]

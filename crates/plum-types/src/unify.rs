@@ -11,7 +11,8 @@ pub fn unify(a: &Type, b: &Type) -> Result<Subst, String> {
         | (Type::Float, Type::Float)
         | (Type::Bool, Type::Bool)
         | (Type::Str, Type::Str)
-        | (Type::Unit, Type::Unit) => Ok(Subst::empty()),
+        | (Type::Unit, Type::Unit)
+        | (Type::Range, Type::Range) => Ok(Subst::empty()),
 
         (Type::Struct(a_name), Type::Struct(b_name)) if a_name == b_name => Ok(Subst::empty()),
         (Type::Enum(a_name), Type::Enum(b_name)) if a_name == b_name => Ok(Subst::empty()),

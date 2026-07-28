@@ -109,6 +109,13 @@ fn tuple_tag(arity: usize) -> String {
     format!("{arity}Tuple")
 }
 
+// A `start..end` Range's synthetic tag, used the same way `tuple_tag`
+// is: a leading digit makes it unreachable by any real identifier
+// (`is_ident_start` forbids one), so it can never collide with a
+// user's own `struct Range { .. }` or `enum Range { .. }` — unlike
+// `"Range"` alone, which genuinely could.
+const RANGE_TAG: &str = "0Range";
+
 // Lowers a param list into (top-level flat param names, body-wrapping
 // destructures). A tuple-pattern param becomes a synthetic positional
 // name (`__param0`, ...) PLUS a destructure to apply around the
@@ -364,14 +371,21 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
             rhs,
             ..
         } => lower_pipe(lhs, rhs, ctx),
+        // A first-class `start..end` value — used outside `for`'s
+        // iterand position (which still gets its own zero-allocation
+        // fast path, see `lower_for`), represented as a heap `Ctor`
+        // exactly like tuples/structs are, so nothing downstream
+        // (FBIP, the interpreter's heap) needs a whole new value kind
+        // just for this.
         ast::Expr::Binary {
             op: ast::BinaryOp::Range,
-            span,
+            lhs,
+            rhs,
             ..
-        } => Err(format!(
-            "lowering not yet implemented for ranges (waits for `for`-loop \
-             lowering) at {span:?}"
-        )),
+        } => Ok(ir::Expr::Ctor {
+            tag: RANGE_TAG.to_string(),
+            fields: vec![lower_expr(lhs, ctx)?, lower_expr(rhs, ctx)?],
+        }),
         ast::Expr::Binary { op, lhs, rhs, .. } => Ok(ir::Expr::Binary(
             lower_binop(op),
             Box::new(lower_expr(lhs, ctx)?),
@@ -441,7 +455,7 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
             span,
         } => lower_struct_literal(path, fields, spread, *span, ctx),
         ast::Expr::Match { scrutinee, arms, .. } => lower_match(scrutinee, arms, ctx),
-        ast::Expr::For { pattern, iter, body, span } => lower_for(pattern, iter, body, *span, ctx),
+        ast::Expr::For { pattern, iter, body, .. } => lower_for(pattern, iter, body, ctx),
         // `unsafe` has nothing to mark yet — no IR operation is
         // unsafe-only (no raw pointers, no unchecked ops), so the block
         // lowers exactly as if the keyword weren't there. When the
@@ -598,7 +612,6 @@ fn lower_for(
     pattern: &ast::Pattern,
     iter: &ast::Expr,
     body: &ast::Block,
-    span: plum_syntax::span::Span,
     ctx: &LoweringContext,
 ) -> Result<ir::Expr, String> {
     let var = match pattern {
@@ -610,23 +623,45 @@ fn lower_for(
             ));
         }
     };
-    let ast::Expr::Binary {
+    // The literal shape (`for i in 0..n`) skips constructing a heap
+    // Range value at all — `start`/`end` go straight into `ir::Expr::
+    // For`, no allocation, no Match. Anything else that TYPE-CHECKS as
+    // a Range (a variable, a call result, ...) still has no
+    // array/list/collection type to iterate — the only other thing
+    // `for` can mean is "destructure the Range value I was handed,"
+    // via the exact same construct-then-match shape used everywhere
+    // else in this file: evaluate `iter`, `Match` it against
+    // `RANGE_TAG` to pull out `start`/`end`, then loop between those.
+    if let ast::Expr::Binary {
         op: ast::BinaryOp::Range,
         lhs,
         rhs,
         ..
     } = iter
-    else {
-        return Err(format!(
-            "lowering not yet implemented for `for` over anything but a literal range \
-             (`start..end`) — no array/list/collection type exists yet at {span:?}"
-        ));
-    };
-    Ok(ir::Expr::For {
-        var,
-        start: Box::new(lower_expr(lhs, ctx)?),
-        end: Box::new(lower_expr(rhs, ctx)?),
-        body: Box::new(lower_block(body, ctx)?),
+    {
+        return Ok(ir::Expr::For {
+            var,
+            start: Box::new(lower_expr(lhs, ctx)?),
+            end: Box::new(lower_expr(rhs, ctx)?),
+            body: Box::new(lower_block(body, ctx)?),
+        });
+    }
+    let ir_iter = lower_expr(iter, ctx)?;
+    let start_name = "__range_start".to_string();
+    let end_name = "__range_end".to_string();
+    Ok(ir::Expr::Match {
+        scrutinee: Box::new(ir_iter),
+        arms: vec![ir::MatchArm {
+            tag: RANGE_TAG.to_string(),
+            bindings: vec![start_name.clone(), end_name.clone()],
+            guard: None,
+            body: ir::Expr::For {
+                var,
+                start: Box::new(ir::Expr::Var(start_name)),
+                end: Box::new(ir::Expr::Var(end_name)),
+                body: Box::new(lower_block(body, ctx)?),
+            },
+        }],
     })
 }
 
@@ -1568,8 +1603,14 @@ mod tests {
     }
 
     #[test]
-    fn range_is_not_yet_supported() {
-        lower_err("0..5");
+    fn range_as_a_standalone_expression_lowers_to_a_synthetic_ctor() {
+        assert_eq!(
+            lower("0..5"),
+            ir::Expr::Ctor {
+                tag: "0Range".to_string(),
+                fields: vec![ir::Expr::Int(0), ir::Expr::Int(5)],
+            }
+        );
     }
 
     // --- Closures ---
@@ -1689,11 +1730,24 @@ mod tests {
     }
 
     #[test]
-    fn for_over_anything_but_a_literal_range_is_not_yet_supported() {
-        // No array/list/collection type exists yet at the IR level —
-        // not even a variable that HAPPENS to hold a range works, since
-        // there's no Range value, only the literal syntax.
-        lower_err("for i in xs { i }");
+    fn for_over_a_variable_holding_a_range_destructures_it_via_match() {
+        assert_eq!(
+            lower("for i in xs { i }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("xs".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "0Range".to_string(),
+                    bindings: vec!["__range_start".to_string(), "__range_end".to_string()],
+                    guard: None,
+                    body: ir::Expr::For {
+                        var: "i".to_string(),
+                        start: Box::new(ir::Expr::Var("__range_start".to_string())),
+                        end: Box::new(ir::Expr::Var("__range_end".to_string())),
+                        body: Box::new(ir::Expr::Var("i".to_string())),
+                    },
+                }],
+            }
+        );
     }
 
     #[test]

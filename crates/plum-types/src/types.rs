@@ -27,6 +27,13 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     Struct(String),
     Enum(String),
+    // `start..end` as a first-class value, not just `for`'s iterand.
+    // No type parameter: every range is an `Int` range (there's no
+    // `Float`/other-bound range anywhere in the language yet — see
+    // `infer_expr`'s Range handling and `lower_for`'s bound-type
+    // restriction), so this is a plain nominal-like marker, the same
+    // shape as `Unit`.
+    Range,
     // Unlike Struct/Enum, tuples are STRUCTURAL, not nominal — there's
     // no declaration to name them, so two tuple types are equal
     // exactly when their element types are (see unify.rs). The empty

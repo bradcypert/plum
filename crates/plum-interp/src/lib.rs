@@ -642,6 +642,22 @@ mod tests {
     }
 
     #[test]
+    fn range_is_a_first_class_value_stored_in_a_let_binding() {
+        // No field-access syntax exists yet, so the result is checked
+        // by using the bound range directly as a `for`-loop iterand
+        // rather than reading its start/end back out.
+        let src = "{ let mut sum = 0; let r = 0..3; for i in r { sum = sum + i; }; sum }";
+        assert_eq!(eval(src), Value::Int(3));
+    }
+
+    #[test]
+    fn for_loop_over_a_range_passed_as_a_function_argument() {
+        let src = "let sum_range r = { let mut sum = 0; for i in r { sum = sum + i; }; sum }\n\
+                    let use_it dummy = sum_range(0..5)";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(10));
+    }
+
+    #[test]
     fn for_loop_variable_does_not_leak_past_the_loop() {
         eval_err("{ for i in 0..3 { i }; i }");
     }
