@@ -222,6 +222,22 @@ impl Interpreter {
                 self.env.truncate(self.env.len() - arm.bindings.len());
                 result
             }
+            Expr::For { var, start, end, body } => {
+                let Value::Int(start) = self.eval(start)? else {
+                    return Err("`for` loop range start must be Int".to_string());
+                };
+                let Value::Int(end) = self.eval(end)? else {
+                    return Err("`for` loop range end must be Int".to_string());
+                };
+                // `..` is exclusive of `end`, matching Rust's Range.
+                for i in start..end {
+                    self.env.push((var.clone(), Value::Int(i)));
+                    let result = self.eval(body);
+                    self.env.pop();
+                    result?;
+                }
+                Ok(Value::Unit)
+            }
         }
     }
 }
@@ -462,6 +478,70 @@ mod tests {
         // helper never loads any program, so `f` is genuinely unknown
         // here, not "calls aren't supported" in general anymore.
         eval_err("f(1)");
+    }
+
+    // --- `for` loops: real surface syntax, since lowering supports it
+    // now (unlike Ctor/Match/CtorReuse below, which still need hand-
+    // built IR trees).
+
+    #[test]
+    fn for_loop_evaluates_to_unit() {
+        assert_eq!(eval("for i in 0..5 { i }"), Value::Unit);
+    }
+
+    #[test]
+    fn for_loop_over_an_empty_range_does_not_iterate_and_is_still_unit() {
+        assert_eq!(eval("for i in 5..5 { i }"), Value::Unit);
+        assert_eq!(eval("for i in 5..0 { i }"), Value::Unit);
+    }
+
+    #[test]
+    fn for_loop_bounds_can_be_arbitrary_expressions() {
+        assert_eq!(eval("{ let n = 3; for i in 0..n { i } }"), Value::Unit);
+    }
+
+    #[test]
+    fn for_loop_variable_does_not_leak_past_the_loop() {
+        eval_err("{ for i in 0..3 { i }; i }");
+    }
+
+    #[test]
+    fn for_loop_does_not_disturb_code_after_it() {
+        assert_eq!(eval("{ for i in 0..3 { i }; 42 }"), Value::Int(42));
+    }
+
+    #[test]
+    fn for_loop_bounds_must_be_int() {
+        eval_err("for i in true..false { i }");
+    }
+
+    #[test]
+    fn for_loop_body_error_propagates_out_of_the_loop() {
+        eval_err("for i in 0..3 { 1 / 0 }");
+    }
+
+    #[test]
+    fn for_loop_actually_runs_the_body_once_per_iteration() {
+        // Nothing observable exists inside the language itself (no I/O,
+        // no mutation) to watch a loop run — but each iteration
+        // constructing a struct is a real heap allocation, and
+        // `alloc_count` is exposed for exactly this kind of proof (see
+        // its doc comment). Proves the loop runs exactly `n` times, not
+        // once, and not "not at all."
+        let src = "struct Boxed { x: Int }\n\
+                    let make_n n = for i in 0..n { Boxed { x: i } }";
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let ctx = LoweringContext::from_items(&program.items);
+        let ir_program = plum_ir::lower::lower_program(&program, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
+        let mut interp = Interpreter::new();
+        interp.load_program(&ir_program);
+        let result = interp
+            .call("make_n", vec![Value::Int(5)])
+            .unwrap_or_else(|e| panic!("call error: {e}"));
+        assert_eq!(result, Value::Unit);
+        assert_eq!(interp.alloc_count(), 5);
     }
 
     // --- Heap-shaped values: Ctor/Match/CtorReuse/RcAnnotated ---

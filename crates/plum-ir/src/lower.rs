@@ -162,9 +162,20 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
             span,
         } => lower_struct_literal(path, fields, spread, *span, ctx),
         ast::Expr::Match { scrutinee, arms, .. } => lower_match(scrutinee, arms, ctx),
-        // Closures, unsafe/spawn blocks, for-loops, field access,
-        // generic instantiation, and indexing are all still deferred —
-        // none of them are needed to validate struct/match lowering.
+        ast::Expr::For { pattern, iter, body, span } => lower_for(pattern, iter, body, *span, ctx),
+        // `unsafe` has nothing to mark yet — no IR operation is
+        // unsafe-only (no raw pointers, no unchecked ops), so the block
+        // lowers exactly as if the keyword weren't there. When the
+        // language grows something `unsafe` actually gates, THAT'S
+        // what needs an IR-level marker, not the block itself.
+        ast::Expr::Unsafe(block, _) => lower_block(block, ctx),
+        ast::Expr::Spawn(_, span) => Err(format!(
+            "lowering not yet implemented for `spawn` (concurrency model is still an open \
+             design question — see DESIGN.md) at {span:?}"
+        )),
+        // Closures, field access, generic instantiation, and indexing
+        // are all still deferred — none of them are needed to validate
+        // struct/match lowering.
         other => Err(format!(
             "lowering not yet implemented for this expression form at {:?}",
             other.span()
@@ -229,6 +240,52 @@ fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringCont
     Ok(ir::Expr::Match {
         scrutinee: Box::new(ir_scrutinee),
         arms: ir_arms,
+    })
+}
+
+// `for pattern in iter { body }`. Only two things are supported so far,
+// both erroring loudly rather than silently otherwise:
+//   - `pattern` must be a plain identifier — same restriction as
+//     function/let-binding patterns elsewhere in this file, for the
+//     same reason (destructuring needs its own pass).
+//   - `iter` must be a literal Range (`start..end`) written directly —
+//     no array/list/collection type exists yet at the IR level to
+//     iterate over otherwise, so anything else (a variable, a call
+//     result, even a variable that HOLDS a range) can't be lowered
+//     until one does.
+fn lower_for(
+    pattern: &ast::Pattern,
+    iter: &ast::Expr,
+    body: &ast::Block,
+    span: plum_syntax::span::Span,
+    ctx: &LoweringContext,
+) -> Result<ir::Expr, String> {
+    let var = match pattern {
+        ast::Pattern::Ident(name, _) => name.clone(),
+        other => {
+            return Err(format!(
+                "lowering not yet implemented for destructuring `for` patterns at {:?}",
+                other.span()
+            ));
+        }
+    };
+    let ast::Expr::Binary {
+        op: ast::BinaryOp::Range,
+        lhs,
+        rhs,
+        ..
+    } = iter
+    else {
+        return Err(format!(
+            "lowering not yet implemented for `for` over anything but a literal range \
+             (`start..end`) — no array/list/collection type exists yet at {span:?}"
+        ));
+    };
+    Ok(ir::Expr::For {
+        var,
+        start: Box::new(lower_expr(lhs, ctx)?),
+        end: Box::new(lower_expr(rhs, ctx)?),
+        body: Box::new(lower_block(body, ctx)?),
     })
 }
 
@@ -840,6 +897,80 @@ mod tests {
     #[test]
     fn closure_is_not_yet_supported() {
         lower_err("|x| x");
+    }
+
+    // --- `for`/`unsafe`/`spawn` ---
+
+    #[test]
+    fn for_over_a_literal_range_lowers_to_ir_for() {
+        assert_eq!(
+            lower("for i in 0..5 { i }"),
+            ir::Expr::For {
+                var: "i".to_string(),
+                start: Box::new(ir::Expr::Int(0)),
+                end: Box::new(ir::Expr::Int(5)),
+                body: Box::new(ir::Expr::Var("i".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn for_range_bounds_can_be_arbitrary_expressions() {
+        assert_eq!(
+            lower("for i in a..(b + 1) { i }"),
+            ir::Expr::For {
+                var: "i".to_string(),
+                start: Box::new(ir::Expr::Var("a".to_string())),
+                end: Box::new(ir::Expr::Binary(
+                    ir::BinOp::Add,
+                    Box::new(ir::Expr::Var("b".to_string())),
+                    Box::new(ir::Expr::Int(1)),
+                )),
+                body: Box::new(ir::Expr::Var("i".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn for_body_is_a_real_block_with_statements() {
+        assert_eq!(
+            lower("for i in 0..5 { let x = i; x }"),
+            ir::Expr::For {
+                var: "i".to_string(),
+                start: Box::new(ir::Expr::Int(0)),
+                end: Box::new(ir::Expr::Int(5)),
+                body: Box::new(ir::Expr::Let {
+                    name: "x".to_string(),
+                    value: Box::new(ir::Expr::Var("i".to_string())),
+                    body: Box::new(ir::Expr::Var("x".to_string())),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn for_over_anything_but_a_literal_range_is_not_yet_supported() {
+        // No array/list/collection type exists yet at the IR level —
+        // not even a variable that HAPPENS to hold a range works, since
+        // there's no Range value, only the literal syntax.
+        lower_err("for i in xs { i }");
+    }
+
+    #[test]
+    fn for_destructuring_pattern_is_not_yet_supported() {
+        lower_err("for (a, b) in 0..5 { a }");
+    }
+
+    #[test]
+    fn unsafe_block_lowers_transparently() {
+        assert_eq!(lower("unsafe { 1 + 2 }"), lower("{ 1 + 2 }"));
+    }
+
+    #[test]
+    fn spawn_is_not_yet_supported() {
+        // Concurrency model is still an open design question — see
+        // DESIGN.md — not just an unimplemented-but-decided feature.
+        lower_err("spawn { 1 }");
     }
 
     // --- Item-level lowering: `let`-defined functions -> ir::Function

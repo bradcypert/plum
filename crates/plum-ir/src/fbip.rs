@@ -89,6 +89,12 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             target,
             rest: Box::new(mark_reuse(*rest)),
         },
+        Expr::For { var, start, end, body } => Expr::For {
+            var,
+            start: Box::new(mark_reuse(*start)),
+            end: Box::new(mark_reuse(*end)),
+            body: Box::new(mark_reuse(*body)),
+        },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
             // reuse — a call result or anything else isn't something
@@ -189,6 +195,17 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             target,
             rest: Box::new(transform(*rest, known_heap)),
         },
+        // The loop variable is always an Int (the only iterable
+        // supported is a Range — see ir.rs's `For` doc comment), so it
+        // never needs heap tracking. `body` is transformed with the
+        // SAME known_heap as the surrounding context, not extended —
+        // it doesn't introduce anything new the way a `Let` does.
+        Expr::For { var, start, end, body } => Expr::For {
+            var,
+            start: Box::new(transform(*start, known_heap)),
+            end: Box::new(transform(*end, known_heap)),
+            body: Box::new(transform(*body, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -221,6 +238,36 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
                 value: Box::new(value_t),
                 body: Box::new(final_body),
             }
+        }
+    }
+}
+
+/// A coarse (shadowing-unaware, over-approximating is fine — see the
+/// `For` arm of `mark_last_uses`) check for whether `name` appears
+/// anywhere inside `expr` at all.
+fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Var(n) => n == name,
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit => false,
+        Expr::Unary(_, e) => expr_mentions_var(e, name),
+        Expr::Binary(_, l, r) => expr_mentions_var(l, name) || expr_mentions_var(r, name),
+        Expr::Let { value, body, .. } => expr_mentions_var(value, name) || expr_mentions_var(body, name),
+        Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => expr_mentions_var(cond, name) || expr_mentions_var(then_branch, name) || expr_mentions_var(else_branch, name),
+        Expr::Call { callee, args } => {
+            expr_mentions_var(callee, name) || args.iter().any(|a| expr_mentions_var(a, name))
+        }
+        Expr::Ctor { fields, .. } => fields.iter().any(|f| expr_mentions_var(f, name)),
+        Expr::CtorReuse { fields, .. } => fields.iter().any(|f| expr_mentions_var(f, name)),
+        Expr::RcAnnotated { rest, .. } => expr_mentions_var(rest, name),
+        Expr::Match { scrutinee, arms } => {
+            expr_mentions_var(scrutinee, name) || arms.iter().any(|a| expr_mentions_var(&a.body, name))
+        }
+        Expr::For { start, end, body, .. } => {
+            expr_mentions_var(start, name) || expr_mentions_var(end, name) || expr_mentions_var(body, name)
         }
     }
 }
@@ -405,6 +452,38 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 used,
             )
         }
+        Expr::For { var, start, end, body } => {
+            // `body` is a SINGLE syntactic subtree that may run zero,
+            // one, or many times at runtime — ordinary last-use
+            // reasoning doesn't apply to it. Marking a use of an OUTER
+            // heap-tracked variable inside `body` as "the last use"
+            // would insert a Dec that fires on the FIRST iteration,
+            // freeing something a LATER iteration still needs.
+            // Conservatively force `live_after = true` for the whole
+            // body, so any use there always gets Inc'd (dup'd) rather
+            // than treated as a move — this leaks one reference per
+            // iteration instead of risking a use-after-free, the safe
+            // direction to be wrong in. Precise per-iteration Dec
+            // accounting is real loop-refcounting work, deferred.
+            let (body_t, used_in_body) = if expr_mentions_var(&body, name) {
+                let (t, _) = mark_last_uses(*body, name, true);
+                (t, true)
+            } else {
+                (*body, false)
+            };
+            let after_loop = live_after || used_in_body;
+            let (end_t, used_end) = mark_last_uses(*end, name, after_loop);
+            let (start_t, used_start) = mark_last_uses(*start, name, after_loop || used_end);
+            (
+                Expr::For {
+                    var,
+                    start: Box::new(start_t),
+                    end: Box::new(end_t),
+                    body: Box::new(body_t),
+                },
+                used_start || used_end || used_in_body,
+            )
+        }
         Expr::Let {
             name: bound,
             value,
@@ -510,6 +589,14 @@ mod tests {
         Expr::Call {
             callee: Box::new(callee),
             args,
+        }
+    }
+    fn for_(var_name: &str, start: Expr, end: Expr, body: Expr) -> Expr {
+        Expr::For {
+            var: var_name.to_string(),
+            start: Box::new(start),
+            end: Box::new(end),
+            body: Box::new(body),
         }
     }
 
@@ -728,6 +815,78 @@ mod tests {
             dec("p", let_("p", ctor("Inner", vec![]), var("p"))),
         );
         assert_eq!(insert_refcount_ops(input), expected);
+    }
+
+    #[test]
+    fn a_heap_value_used_inside_a_loop_body_is_always_dupd_never_moved() {
+        // `p` is bound before the loop and used inside `body`, which may
+        // run zero, one, or many times at runtime. If this used ordinary
+        // last-use reasoning, the (syntactically single) use inside the
+        // loop body would be treated as the LAST use and the binding
+        // would move there with no Inc — freeing `p` after the FIRST
+        // iteration and leaving nothing for a second one. It must always
+        // be Inc'd instead.
+        let input = let_(
+            "p",
+            ctor("Point", vec![]),
+            for_("i", int(0), int(5), var("p")),
+        );
+        let expected = let_(
+            "p",
+            ctor("Point", vec![]),
+            for_("i", int(0), int(5), inc("p", var("p"))),
+        );
+        assert_eq!(insert_refcount_ops(input), expected);
+    }
+
+    #[test]
+    fn a_heap_value_never_used_in_the_loop_is_dropped_immediately_as_usual() {
+        // Same "never referenced at all" handling as everywhere else in
+        // this pass (see transform's Let arm) — a loop that doesn't
+        // touch `p` at all is no different from any other dead binding.
+        let input = let_("p", ctor("Point", vec![]), for_("i", int(0), int(5), int(0)));
+        let expected = let_(
+            "p",
+            ctor("Point", vec![]),
+            dec("p", for_("i", int(0), int(5), int(0))),
+        );
+        assert_eq!(insert_refcount_ops(input), expected);
+    }
+
+    #[test]
+    fn the_loop_variable_itself_is_never_treated_as_heap_shaped() {
+        // `i` is an Int (the only iterable is a Range), so a `Let`
+        // binding a Ctor to the same-shaped name elsewhere shouldn't be
+        // confused by anything the loop does with `i` — this mostly
+        // proves `transform`/`mark_reuse` recurse into a `For` without
+        // panicking on a node shape they don't otherwise touch.
+        let input = for_("i", int(0), int(5), var("i"));
+        assert_eq!(insert_refcount_ops(input.clone()), input);
+    }
+
+    #[test]
+    fn mark_reuse_recurses_into_a_loop_body() {
+        // A reuse-eligible shape (deconstruct-then-reconstruct-same-
+        // arity) still gets marked even when it's inside a loop body —
+        // `mark_reuse` doesn't need to special-case `For` the way
+        // `mark_last_uses` does, since it isn't reasoning about
+        // sequencing/liveness, just local match-arm shapes.
+        let input = for_(
+            "i",
+            int(0),
+            int(5),
+            match_(var("list"), vec![arm("Cons", vec!["h", "t"], ctor("Cons", vec![var("h"), var("t")]))]),
+        );
+        let expected = for_(
+            "i",
+            int(0),
+            int(5),
+            match_(
+                var("list"),
+                vec![arm("Cons", vec!["h", "t"], ctor_reuse("list", "Cons", vec![var("h"), var("t")]))],
+            ),
+        );
+        assert_eq!(mark_reuse(input), expected);
     }
 
     #[test]

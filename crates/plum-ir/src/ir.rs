@@ -114,6 +114,19 @@ pub enum Expr {
         target: String,
         rest: Box<Expr>,
     },
+    // `for var in start..end { body }`, lowered from the ONLY iterable
+    // shape currently supported — a literal Range (see lower.rs's
+    // `lower_for` for why: no array/list/collection type exists yet to
+    // iterate over otherwise). `..` is exclusive of `end`, matching
+    // Rust's `Range` — DESIGN.md now records this as Decided. The loop
+    // itself always evaluates to Unit; `body`'s value is discarded each
+    // iteration, same as a statement-expression inside a block.
+    For {
+        var: String,
+        start: Box<Expr>,
+        end: Box<Expr>,
+        body: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

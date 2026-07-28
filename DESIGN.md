@@ -334,7 +334,11 @@ Tightest-binding first:
 3. `*`, `/`, `%`
 4. `+`, `-`
 5. `..` (range) — binds looser than arithmetic, so `0..n+1` parses as
-   `0..(n+1)`
+   `0..(n+1)`. **Decided**: `..` is exclusive of its end, matching
+   Rust's `Range` (`for i in 0..n` runs `n` times, over `0..=n-1`) —
+   there's no `..=` form. Currently the only place a range means
+   anything at all is as a `for` loop's iterable (`lower.rs` rejects a
+   bare range anywhere else); ranges aren't a first-class value.
 6. `==`, `!=`, `<`, `>`, `<=`, `>=` — **non-associative**, no chaining
    without parens (`a < b < c` is a compile error, not "true if both
    hold") — mirrors Rust's rule specifically because silent
