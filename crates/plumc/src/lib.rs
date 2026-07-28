@@ -427,6 +427,33 @@ mod tests {
     }
 
     #[test]
+    fn channel_send_and_recv_run_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let (tx, rx) = channel[Int](); tx.send(42); rx.recv() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn a_value_crosses_a_real_thread_boundary_via_spawn_and_a_channel() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let (tx, rx) = channel[Point]();\
+                    let t = spawn { tx.send(Point { x: 5, y: 6 }) };\
+                    let p = rx.recv();\
+                    t.join();\
+                    match p { Point(a, b) => a + b } }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(11)));
+    }
+
+    #[test]
+    fn sending_the_wrong_element_type_is_rejected_before_running() {
+        let src = "let use_it dummy = { let (tx, rx) = channel[Int](); tx.send(true) }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn joining_a_non_task_value_is_rejected_before_running() {
         let src = "let use_it dummy = 5.join()";
         let err = typecheck_and_run(src, "use_it", vec![Value::Unit])

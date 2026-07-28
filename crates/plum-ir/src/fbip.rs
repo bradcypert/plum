@@ -118,6 +118,14 @@ pub fn mark_reuse(expr: Expr) -> Expr {
         Expr::TaskJoin { task } => Expr::TaskJoin {
             task: Box::new(mark_reuse(*task)),
         },
+        Expr::Channel => Expr::Channel,
+        Expr::ChannelSend { sender, value } => Expr::ChannelSend {
+            sender: Box::new(mark_reuse(*sender)),
+            value: Box::new(mark_reuse(*value)),
+        },
+        Expr::ChannelRecv { receiver } => Expr::ChannelRecv {
+            receiver: Box::new(mark_reuse(*receiver)),
+        },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
             // reuse — a call result or anything else isn't something
@@ -260,6 +268,14 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         Expr::TaskJoin { task } => Expr::TaskJoin {
             task: Box::new(transform(*task, known_heap)),
         },
+        Expr::Channel => Expr::Channel,
+        Expr::ChannelSend { sender, value } => Expr::ChannelSend {
+            sender: Box::new(transform(*sender, known_heap)),
+            value: Box::new(transform(*value, known_heap)),
+        },
+        Expr::ChannelRecv { receiver } => Expr::ChannelRecv {
+            receiver: Box::new(transform(*receiver, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -331,6 +347,11 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::Assign { value, rest, .. } => expr_mentions_var(value, name) || expr_mentions_var(rest, name),
         Expr::Spawn { block } => expr_mentions_var(block, name),
         Expr::TaskJoin { task } => expr_mentions_var(task, name),
+        Expr::Channel => false,
+        Expr::ChannelSend { sender, value } => {
+            expr_mentions_var(sender, name) || expr_mentions_var(value, name)
+        }
+        Expr::ChannelRecv { receiver } => expr_mentions_var(receiver, name),
     }
 }
 
@@ -610,6 +631,28 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
         Expr::TaskJoin { task } => {
             let (task_t, used) = mark_last_uses(*task, name, live_after);
             (Expr::TaskJoin { task: Box::new(task_t) }, used)
+        }
+        Expr::Channel => (Expr::Channel, live_after),
+        // `sender.send(value)`: evaluation order is sender-then-value
+        // (matching an ordinary method-style call), so backward
+        // analysis processes `value` first. Neither is heap-tracked
+        // itself in the Ctor sense (a `Value::Sender` isn't a
+        // `HeapRef`) — this is just ordinary sequential-subexpression
+        // bookkeeping, same shape as `Binary`.
+        Expr::ChannelSend { sender, value } => {
+            let (value_t, used_value) = mark_last_uses(*value, name, live_after);
+            let (sender_t, used_sender) = mark_last_uses(*sender, name, live_after || used_value);
+            (
+                Expr::ChannelSend {
+                    sender: Box::new(sender_t),
+                    value: Box::new(value_t),
+                },
+                used_sender || used_value,
+            )
+        }
+        Expr::ChannelRecv { receiver } => {
+            let (receiver_t, used) = mark_last_uses(*receiver, name, live_after);
+            (Expr::ChannelRecv { receiver: Box::new(receiver_t) }, used)
         }
         // The reassignment TARGET (`name`) is a plain String field,
         // never an `Expr::Var` occurrence — so, unlike `Let`, there's

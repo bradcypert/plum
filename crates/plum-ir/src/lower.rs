@@ -465,6 +465,46 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                 task: Box::new(lower_expr(base, ctx)?),
             })
         }
+        // `tx.send(v)` — same shape-only precedent as `.join()` above,
+        // one arg instead of zero.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "send") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ChannelSend {
+                sender: Box::new(lower_expr(base, ctx)?),
+                value: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
+        // `rx.recv()` — same shape-only precedent, zero args.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "recv") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ChannelRecv {
+                receiver: Box::new(lower_expr(base, ctx)?),
+            })
+        }
+        // `channel[T]()` — a generic-instantiation callee named
+        // `channel` with exactly one type argument, called with zero
+        // value args. `T` is erased entirely, matching every other
+        // generic in the language; nothing about it is checked here
+        // (lowering never checks types) — `plum-types` is what
+        // actually validates the arity/shape at the type level.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty()
+                && matches!(
+                    callee.as_ref(),
+                    ast::Expr::GenericInst { callee, args, .. }
+                        if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "channel")
+                ) =>
+        {
+            Ok(ir::Expr::Channel)
+        }
         ast::Expr::Call { callee, args, span } => {
             // `Circle(1.0)` or `Shape.Circle(1.0)` constructs a variant
             // if the callee names one — checked BEFORE falling back to
@@ -1988,6 +2028,32 @@ mod tests {
                 task: Box::new(ir::Expr::Spawn {
                     block: Box::new(ir::Expr::Int(1)),
                 }),
+            }
+        );
+    }
+
+    #[test]
+    fn channel_generic_instantiation_lowers_to_a_channel_node() {
+        assert_eq!(lower("channel[Int]()"), ir::Expr::Channel);
+    }
+
+    #[test]
+    fn channel_send_lowers_to_a_channel_send_node() {
+        assert_eq!(
+            lower("tx.send(5)"),
+            ir::Expr::ChannelSend {
+                sender: Box::new(ir::Expr::Var("tx".to_string())),
+                value: Box::new(ir::Expr::Int(5)),
+            }
+        );
+    }
+
+    #[test]
+    fn channel_recv_lowers_to_a_channel_recv_node() {
+        assert_eq!(
+            lower("rx.recv()"),
+            ir::Expr::ChannelRecv {
+                receiver: Box::new(ir::Expr::Var("rx".to_string())),
             }
         );
     }

@@ -186,6 +186,36 @@ pub enum Expr {
     TaskJoin {
         task: Box<Expr>,
     },
+    // `channel[T]()` — creates a new channel and evaluates to a
+    // `(Sender[T], Receiver[T])` pair (an ordinary `Ctor`-backed
+    // 2-tuple, same as any other tuple; the two FIELDS are what carry
+    // the actual `Value::Sender`/`Value::Receiver` runtime handles). No
+    // fields here: `T` is fully erased at this layer, matching every
+    // other generic in the language — the interpreter only ever needs
+    // to know "make a channel," never what it carries.
+    Channel,
+    // `tx.send(v)` — pushes `v`, deep-copied into portable form (the
+    // SAME crossing mechanism `Spawn`/`TaskJoin` use — see
+    // `Interpreter::to_portable`), onto the channel `sender` (expected
+    // to be a `Value::Sender`) identifies. Evaluates to `Unit`.
+    // DESIGN.md's "channel send is a move" (checked via FBIP's last-
+    // use analysis, same as any other move) is NOT enforced yet —
+    // reusing `value` after sending it is not currently a compile
+    // error, an explicit, documented v1 gap (spawn's captured
+    // environment has this exact same gap already).
+    ChannelSend {
+        sender: Box<Expr>,
+        value: Box<Expr>,
+    },
+    // `rx.recv()` — blocks until a value arrives on the channel
+    // `receiver` identifies (expected to be a `Value::Receiver`), then
+    // deep-copies it BACK into the receiving thread's own heap (the
+    // same crossing mechanism as `TaskJoin`'s result). A disconnected
+    // channel (every `Sender` dropped with nothing left to receive) is
+    // a runtime error, not a silent hang or a `None`.
+    ChannelRecv {
+        receiver: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

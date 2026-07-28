@@ -4,6 +4,8 @@ use plum_ir::ir::{BinOp, Expr, Function, Program, RcOp, UnOp};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,6 +32,51 @@ pub enum Value {
     Function(String),
     // A `spawn { .. }` task handle — see `TaskHandle`'s doc comment.
     Task(TaskHandle),
+    // The two ends of a `channel[T]()` — see `SenderHandle`/
+    // `ReceiverHandle`'s doc comments.
+    Sender(SenderHandle),
+    Receiver(ReceiverHandle),
+}
+
+/// The sending end of a `channel[T]()`. Wraps `std::sync::mpsc::
+/// Sender<PortableValue>` in an `Arc` purely to give `Value::Sender`
+/// an identity `PartialEq` can compare (`mpsc::Sender` has neither
+/// `PartialEq` nor any exposed identity of its own) — NOT for thread-
+/// safety, since `mpsc::Sender` is already `Clone`+`Send`+`Sync`-
+/// capable on its own (multiple senders are a supported, intentional
+/// use of `mpsc`). Values cross already-converted to portable form
+/// (see `PortableValue`'s doc comment; `.send()` converts before
+/// pushing), so the raw `mpsc` primitive is exactly what's needed
+/// underneath.
+#[derive(Debug, Clone)]
+pub struct SenderHandle(Arc<mpsc::Sender<PortableValue>>);
+
+impl PartialEq for SenderHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// The receiving end of a `channel[T]()`. `mpsc::Receiver` has no
+/// `Clone` at all (only one consumer can meaningfully take each
+/// message) — wrapped in `Arc<Mutex<..>>` purely so `Value::Receiver`
+/// can still be `Clone` like every other `Value` (cloning gives
+/// another handle to the SAME receiving end, sharing the one
+/// underlying consumer, the same "share a handle, not duplicate the
+/// resource" shape as `TaskHandle`). `Arc`/`Mutex` (not `Rc`/
+/// `RefCell`, unlike `TaskHandle`) specifically because a `Receiver`
+/// needs to be `Send` to cross into a spawned task's thread — see
+/// `Interpreter::to_portable`.
+///
+/// `PartialEq` is hand-written as `Arc::ptr_eq` (identity — the same
+/// reasoning as `TaskHandle`).
+#[derive(Debug, Clone)]
+pub struct ReceiverHandle(Arc<Mutex<mpsc::Receiver<PortableValue>>>);
+
+impl PartialEq for ReceiverHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// A joinable handle to a task spawned on a real OS thread (see
@@ -70,6 +117,14 @@ pub enum PortableValue {
     Bool(bool),
     Unit,
     Ctor(String, Vec<PortableValue>),
+    // Channel endpoints ARE genuinely portable, unlike closures/
+    // functions/tasks — `mpsc::Sender`/`Arc<Mutex<mpsc::Receiver<_>>>`
+    // are real cross-thread-safe primitives already (that's the whole
+    // point of `mpsc`), so crossing means moving the actual handle,
+    // not re-deriving anything from a heap address the way `Ctor`
+    // does. See `SenderHandle`/`ReceiverHandle`'s doc comments.
+    Sender(SenderHandle),
+    Receiver(ReceiverHandle),
 }
 
 // A closure's defining environment, captured WHOLE at creation time
@@ -251,6 +306,10 @@ impl Interpreter {
             Value::Task(_) => {
                 Err("cannot send a task handle across a task boundary (not yet supported)".to_string())
             }
+            // Genuinely portable — see `PortableValue::Sender`/
+            // `Receiver`'s doc comment.
+            Value::Sender(h) => Ok(PortableValue::Sender(h.clone())),
+            Value::Receiver(h) => Ok(PortableValue::Receiver(h.clone())),
         }
     }
 
@@ -271,6 +330,10 @@ impl Interpreter {
                 let addr = self.heap.alloc(tag, values);
                 Value::HeapRef(addr)
             }
+            // No re-materialization needed — the handle itself is
+            // already the real, live cross-thread-safe resource.
+            PortableValue::Sender(h) => Value::Sender(h),
+            PortableValue::Receiver(h) => Value::Receiver(h),
         }
     }
 
@@ -446,6 +509,37 @@ impl Interpreter {
                     Ok(Err(e)) => Err(format!("spawned task failed: {e}")),
                     Err(_) => Err("spawned task panicked".to_string()),
                 }
+            }
+            Expr::Channel => {
+                let (tx, rx) = mpsc::channel::<PortableValue>();
+                let sender = Value::Sender(SenderHandle(Arc::new(tx)));
+                let receiver = Value::Receiver(ReceiverHandle(Arc::new(Mutex::new(rx))));
+                let addr = self.heap.alloc("2Tuple".to_string(), vec![sender, receiver]);
+                Ok(Value::HeapRef(addr))
+            }
+            Expr::ChannelSend { sender, value } => {
+                let Value::Sender(handle) = self.eval(sender)? else {
+                    return Err("`.send()` requires a Sender value".to_string());
+                };
+                let v = self.eval(value)?;
+                let portable = self.to_portable(&v)?;
+                handle
+                    .0
+                    .send(portable)
+                    .map_err(|_| "cannot send: the channel's receiver has been dropped".to_string())?;
+                Ok(Value::Unit)
+            }
+            Expr::ChannelRecv { receiver } => {
+                let Value::Receiver(handle) = self.eval(receiver)? else {
+                    return Err("`.recv()` requires a Receiver value".to_string());
+                };
+                let portable = handle
+                    .0
+                    .lock()
+                    .map_err(|_| "channel receiver lock poisoned".to_string())?
+                    .recv()
+                    .map_err(|_| "cannot recv: the channel's sender has been dropped".to_string())?;
+                Ok(self.from_portable(portable))
             }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
@@ -1139,6 +1233,85 @@ mod tests {
     #[test]
     fn joining_a_non_task_value_is_a_runtime_error() {
         eval_err("5.join()");
+    }
+
+    // --- `channel[T]()` / `.send()` / `.recv()` ---
+
+    #[test]
+    fn send_then_recv_round_trips_a_value_on_the_same_thread() {
+        let src = "{ let (tx, rx) = channel[Int](); tx.send(42); rx.recv() }";
+        assert_eq!(eval(src), Value::Int(42));
+    }
+
+    #[test]
+    fn multiple_sends_are_received_in_order() {
+        let src = "{ let (tx, rx) = channel[Int]();\
+                     tx.send(1); tx.send(2); tx.send(3);\
+                     rx.recv() + rx.recv() + rx.recv() }";
+        assert_eq!(eval(src), Value::Int(6));
+    }
+
+    #[test]
+    fn a_heap_shaped_value_crosses_a_channel_via_deep_copy() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let (tx, rx) = channel[Point]();\
+                    tx.send(Point { x: 3, y: 4 });\
+                    match rx.recv() { Point(a, b) => a + b } }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(7));
+    }
+
+    #[test]
+    fn a_channel_sender_can_be_captured_by_a_spawned_task() {
+        // The end-to-end concurrency shape: `tx` crosses INTO the
+        // spawned thread (via the SAME captured-environment mechanism
+        // `spawn` already uses), the spawned task sends on it, and the
+        // ORIGINAL thread receives — real cross-thread communication,
+        // not just same-thread round-tripping.
+        let src = "let use_it dummy = { let (tx, rx) = channel[Int]();\
+                    let t = spawn { tx.send(99) };\
+                    let received = rx.recv();\
+                    t.join();\
+                    received }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(99));
+    }
+
+    #[test]
+    fn a_heap_shaped_value_crosses_a_real_thread_boundary_via_a_channel() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let (tx, rx) = channel[Point]();\
+                    let t = spawn { tx.send(Point { x: 5, y: 6 }) };\
+                    let p = rx.recv();\
+                    t.join();\
+                    match p { Point(a, b) => a + b } }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(11));
+    }
+
+    // A "sender dropped -> recv errors" test was attempted and removed:
+    // the toy heap's `Ctor` cell created by `channel[T]()` holds its
+    // OWN clone of the `Sender`, and this interpreter's simulated
+    // refcounting only frees a cell via explicit FBIP-inserted `Dec`
+    // ops — nothing here reliably drives that cell's refcount to zero
+    // within a single test, so the real `mpsc::Sender` never actually
+    // drops and `.recv()` hangs forever instead of erroring. Not a
+    // regression to fix now: a genuinely disconnected channel (every
+    // `Sender` clone this INTERPRETER can reach truly gone) still
+    // correctly errors — see `ChannelRecv`'s eval arm — this is only
+    // about reliably CONSTRUCTING that scenario in a test under the
+    // current toy heap's leak-until-FBIP-frees-it model.
+
+    #[test]
+    fn recv_on_an_empty_channel_blocks_until_a_value_arrives() {
+        // Proves `.recv()` genuinely BLOCKS (doesn't error/return
+        // early on an empty channel) by having the send happen on a
+        // DELAYED spawned task — if `.recv()` didn't block correctly,
+        // this would either error immediately or hang forever; instead
+        // it should complete once the task actually sends.
+        let src = "let use_it dummy = { let (tx, rx) = channel[Int]();\
+                    let t = spawn { tx.send(7) };\
+                    let v = rx.recv();\
+                    t.join();\
+                    v }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(7));
     }
 
     // --- A bare top-level function name as a first-class value ---

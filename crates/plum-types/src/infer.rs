@@ -532,6 +532,70 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((acc.apply(&result_ty), acc))
             }
+            // `tx.send(v)` — same shape-only precedent as `.join()`
+            // above. `base` unifies against `Sender[T]`, `v` against
+            // that same `T`; always evaluates to `Unit`.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "send") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Sender".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.send()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (val_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&val_ty), &acc.apply(&elem_ty))
+                    .map_err(|e| format!("`.send()` argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Unit, acc))
+            }
+            // `rx.recv()` — `base` unifies against `Receiver[T]`,
+            // evaluates to that `T`.
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "recv") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Receiver".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.recv()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((acc.apply(&elem_ty), acc))
+            }
+            // `channel[T]()` — a generic-instantiation callee named
+            // `channel` with exactly one type argument, called with
+            // zero value args (mirrors lower.rs's identical shape
+            // check). Evaluates to `(Sender[T], Receiver[T])`.
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty()
+                    && matches!(
+                        callee.as_ref(),
+                        ast::Expr::GenericInst { callee, args, .. }
+                            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "channel")
+                    ) =>
+            {
+                let ast::Expr::GenericInst { args: type_args, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let elem_ty = ast_type_to_type(&type_args[0], &self.ctx, &[])
+                    .map_err(|e| format!("`channel[..]` type argument at {span:?}: {e}"))?;
+                Ok((
+                    Type::Tuple(vec![
+                        Type::Struct("Sender".to_string(), vec![elem_ty.clone()]),
+                        Type::Struct("Receiver".to_string(), vec![elem_ty]),
+                    ]),
+                    Subst::empty(),
+                ))
+            }
             ast::Expr::Call { callee, args, span } => {
                 // `Circle(1.0)` / `Shape.Circle(1.0)` constructs a
                 // variant if the callee names one, checked BEFORE
@@ -1587,6 +1651,54 @@ mod tests {
         let env = TypeEnv::new().extend("t".to_string(), Type::Struct("Task".to_string(), vec![Type::Bool]));
         assert_eq!(infer_in("t.join()", &env), Type::Bool);
         assert_eq!(infer_in("{ t.join(); t.join() }", &env), Type::Bool);
+    }
+
+    // --- `channel[T]()` / `.send()` / `.recv()` ---
+
+    #[test]
+    fn channel_instantiation_infers_a_sender_receiver_pair() {
+        assert_eq!(
+            infer("channel[Int]()"),
+            Type::Tuple(vec![
+                Type::Struct("Sender".to_string(), vec![Type::Int]),
+                Type::Struct("Receiver".to_string(), vec![Type::Int]),
+            ])
+        );
+    }
+
+    #[test]
+    fn channel_send_and_recv_round_trip_through_the_same_element_type() {
+        let ty = infer("{ let (tx, rx) = channel[Bool](); tx.send(true); rx.recv() }");
+        assert_eq!(ty, Type::Bool);
+    }
+
+    #[test]
+    fn channel_send_argument_type_is_checked_against_the_element_type() {
+        let env = TypeEnv::new().extend("tx".to_string(), Type::Struct("Sender".to_string(), vec![Type::Int]));
+        infer_expr_with_err(&mut Infer::new(), "tx.send(true)", &env);
+    }
+
+    #[test]
+    fn channel_recv_infers_as_the_element_type() {
+        let env = TypeEnv::new().extend("rx".to_string(), Type::Struct("Receiver".to_string(), vec![Type::Bool]));
+        assert_eq!(infer_in("rx.recv()", &env), Type::Bool);
+    }
+
+    #[test]
+    fn send_on_a_non_sender_is_an_error() {
+        infer_err("5.send(1)");
+    }
+
+    #[test]
+    fn recv_on_a_non_receiver_is_an_error() {
+        infer_err("5.recv()");
+    }
+
+    #[test]
+    fn a_struct_value_can_cross_a_channel() {
+        let mut infer = Infer::with_context(context("struct Point { x: Int, y: Int }"));
+        let expr_src = "{ let (tx, rx) = channel[Point](); tx.send(Point { x: 1, y: 2 }); match rx.recv() { Point(a, b) => a + b } }";
+        assert_eq!(infer_expr_with(&mut infer, expr_src, &TypeEnv::new()), Type::Int);
     }
 
     #[test]
