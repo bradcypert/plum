@@ -24,7 +24,12 @@ pub fn typecheck_and_run(src: &str, fn_name: &str, args: Vec<Value>) -> Result<V
     let mut infer = Infer::with_context(type_ctx);
     infer.infer_program(&program).map_err(|e| format!("type error: {e}"))?;
 
-    let lowering_ctx = LoweringContext::from_items(&program.items);
+    // `p.x` needs to know WHICH struct `p` is to lower correctly —
+    // lowering has no type information of its own, so this carries
+    // inference's own answer across as a span-keyed side-channel. See
+    // `Infer::field_owners`/`LoweringContext::field_owners`'s doc
+    // comments for the full reasoning.
+    let lowering_ctx = LoweringContext::from_items(&program.items).with_field_owners(infer.field_owners().clone());
     let ir_program = lower_program(&program, &lowering_ctx).map_err(|e| format!("lowering error: {e}"))?;
     let ir_program = optimize_program(ir_program);
 
@@ -267,6 +272,48 @@ mod tests {
                     let use_it dummy = match apply(Circle, 5.0) { Circle(r) => r }";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Float(5.0)));
+    }
+
+    #[test]
+    fn field_access_runs_through_the_full_gated_pipeline() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let p = Point { x: 3, y: 4 }; p.x + p.y }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn field_access_on_a_function_call_result() {
+        // Unlike a bare function PARAMETER (which has no annotation
+        // syntax to pin its type — see this session's memory notes on
+        // why `let f p = p.x` alone is correctly rejected as ambiguous
+        // in a nominal type system with no row polymorphism), a
+        // function's RETURN type is always fully determined from its
+        // own body, independent of field access — so `.x` on a call
+        // result works with no extra help.
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let make_point dummy = Point { x: 5, y: 6 }\n\
+                    let use_it dummy = make_point(dummy).x";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(5)));
+    }
+
+    #[test]
+    fn chained_field_access_through_a_nested_struct() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    struct Line { start: Point, end: Point }\n\
+                    let use_it dummy = { let l = Line { start: Point { x: 1, y: 2 }, end: Point { x: 9, y: 9 } }; l.start.x }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn field_access_on_an_unknown_field_is_rejected_before_running() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let p = Point { x: 1, y: 2 }; p.z }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
     }
 
     #[test]

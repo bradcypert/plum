@@ -156,6 +156,17 @@ impl Default for TypeEnv {
 pub struct Infer {
     next_var: TypeVarId,
     ctx: crate::context::TypeContext,
+    // Records, for every `p.x`-shaped field access encountered, WHICH
+    // struct `p` resolved to — keyed by the `Expr::Field` node's own
+    // span, since that's the only stable handle lowering (which runs
+    // as a totally separate pass over the same AST, with no type
+    // information of its own) can use to find its way back to this
+    // answer. This is a deliberately narrow side-channel rather than a
+    // full "typed IR": lowering still only ever consults this one map,
+    // for this one expression shape, instead of every node in the IR
+    // carrying a type. See `lower.rs`'s `LoweringContext::field_owners`
+    // doc comment for how it's consumed.
+    field_owners: HashMap<plum_syntax::span::Span, String>,
 }
 
 impl Infer {
@@ -163,6 +174,7 @@ impl Infer {
         Infer {
             next_var: 0,
             ctx: crate::context::TypeContext::new(),
+            field_owners: HashMap::new(),
         }
     }
 
@@ -171,7 +183,19 @@ impl Infer {
     /// doesn't (an empty context just means struct/enum lookups always
     /// fail with "unknown type").
     pub fn with_context(ctx: crate::context::TypeContext) -> Self {
-        Infer { next_var: 0, ctx }
+        Infer {
+            next_var: 0,
+            ctx,
+            field_owners: HashMap::new(),
+        }
+    }
+
+    /// The `Expr::Field` span -> owning-struct-name map built up during
+    /// inference — `plumc` passes this to `LoweringContext` so `p.x`
+    /// can lower correctly. See this struct's `field_owners` doc
+    /// comment for why a span-keyed side-channel, not a typed IR.
+    pub fn field_owners(&self) -> &HashMap<plum_syntax::span::Span, String> {
+        &self.field_owners
     }
 
     /// Generates a never-before-used type variable — used internally
@@ -501,6 +525,38 @@ impl Infer {
                 body,
                 span,
             } => self.infer_for(pattern, iter, body, *span, env),
+            // `p.x` — reads a single declared field straight off a
+            // struct value. Requires `base`'s type to ALREADY resolve
+            // to a KNOWN, concrete struct at this point (no row/
+            // structural typing exists — two structs sharing a field
+            // name are still unrelated types, matching every other
+            // nominal-typing choice in this crate), so an
+            // as-yet-unresolved type variable is a real, reported
+            // error, not something deferred. On success, records
+            // `span -> struct name` into `field_owners` — see this
+            // struct's field doc comment for why lowering needs this.
+            ast::Expr::Field { base, name, span } => {
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let acc = s;
+                let resolved_base_ty = acc.apply(&base_ty);
+                let Type::Struct(struct_name) = &resolved_base_ty else {
+                    return Err(format!(
+                        "field access `.{name}` at {span:?} requires a struct value with a \
+                         statically known type, found {resolved_base_ty:?}"
+                    ));
+                };
+                let declared_fields = self
+                    .ctx
+                    .struct_fields(struct_name)
+                    .ok_or_else(|| format!("unknown struct type {struct_name:?} at {span:?}"))?;
+                let field_ty = declared_fields
+                    .iter()
+                    .find(|(field_name, _)| field_name == name)
+                    .map(|(_, ty)| ty.clone())
+                    .ok_or_else(|| format!("struct {struct_name:?} has no field named {name:?} (at {span:?})"))?;
+                self.field_owners.insert(*span, struct_name.clone());
+                Ok((acc.apply(&field_ty), acc))
+            }
             other => Err(format!(
                 "type inference not yet implemented for this expression form at {:?}",
                 other.span()
@@ -1807,6 +1863,57 @@ mod tests {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
         let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Point".to_string()));
         infer_expr_with_err(&mut infer, "Point { z: 1.0, ..other }", &env);
+    }
+
+    // --- Field access (`p.x`) ---
+
+    #[test]
+    fn field_access_infers_the_declared_field_type() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Bool }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        assert_eq!(infer_expr_with(&mut infer, "p.x", &env), Type::Float);
+        assert_eq!(infer_expr_with(&mut infer, "p.y", &env), Type::Bool);
+    }
+
+    #[test]
+    fn field_access_records_the_owning_struct_by_span() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        infer_expr_with(&mut infer, "p.x", &env);
+        assert_eq!(infer.field_owners().len(), 1);
+        assert_eq!(infer.field_owners().values().next().unwrap(), "Point");
+    }
+
+    #[test]
+    fn field_access_on_an_unknown_field_is_an_error() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        infer_expr_with_err(&mut infer, "p.z", &env);
+    }
+
+    #[test]
+    fn field_access_on_a_non_struct_is_an_error() {
+        let mut infer = Infer::new();
+        let env = TypeEnv::new().extend("n".to_string(), Type::Int);
+        infer_expr_with_err(&mut infer, "n.x", &env);
+    }
+
+    #[test]
+    fn field_access_on_a_struct_literal_directly() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "(Point { x: 1.0, y: 2.0 }).x", &TypeEnv::new()),
+            Type::Float
+        );
+    }
+
+    #[test]
+    fn field_access_referencing_another_struct_field_type() {
+        let mut infer = Infer::with_context(context(
+            "struct Point { x: Int, y: Int }\nstruct Line { start: Point, end: Point }",
+        ));
+        let env = TypeEnv::new().extend("l".to_string(), Type::Struct("Line".to_string()));
+        assert_eq!(infer_expr_with(&mut infer, "l.start", &env), Type::Struct("Point".to_string()));
     }
 
     // --- Match: enum variant patterns, resolved against the SAME

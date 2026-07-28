@@ -22,6 +22,20 @@ pub struct LoweringContext {
     // validated against the variant's REAL owning enum — tags are
     // looked up by name alone, matching that established precedent.
     variants: HashMap<String, usize>,
+    // `Expr::Field` span -> owning struct name, exactly as
+    // `plum_types::Infer::field_owners` recorded it during inference.
+    // Lowering has NO type information of its own (see this struct's
+    // own doc comment on why it only ever resolves field ORDER, not
+    // field TYPES) — a plain `p.x` doesn't say what struct `p` is, so
+    // without this side-channel there'd be no way to know which
+    // struct's declared field order to index into. Empty by default
+    // (`new`/`from_items`): only `plumc`'s real pipeline — which runs
+    // type inference BEFORE lowering — ever populates it via
+    // `with_field_owners`. A program with no field access at all never
+    // needs it; a lowering-only test that DOES use `p.x` without
+    // populating this map gets a clear "unresolved field access"
+    // error, not a wrong/guessed answer.
+    field_owners: HashMap<plum_syntax::span::Span, String>,
 }
 
 impl LoweringContext {
@@ -29,7 +43,15 @@ impl LoweringContext {
         LoweringContext {
             struct_fields: HashMap::new(),
             variants: HashMap::new(),
+            field_owners: HashMap::new(),
         }
+    }
+
+    /// Attaches the span -> owning-struct-name map `plum-types`
+    /// computed during inference — see `field_owners`'s doc comment.
+    pub fn with_field_owners(mut self, field_owners: HashMap<plum_syntax::span::Span, String>) -> Self {
+        self.field_owners = field_owners;
+        self
     }
 
     pub fn from_items(items: &[ast::Item]) -> Self {
@@ -496,9 +518,48 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
             params: params.iter().map(|p| p.name.clone()).collect(),
             body: Box::new(lower_expr(body, ctx)?),
         }),
-        // Field access, generic instantiation, and indexing are all
-        // still deferred — none of them are needed to validate
-        // struct/match lowering.
+        // `p.x` — there's no field-access IR node (see `ir.rs`'s scope
+        // note), so this reuses the exact SAME construct-then-match
+        // shape struct spread already established: destructure `base`
+        // by tag, binding only the wanted field to a real name and
+        // everything else to `"_"`, then the arm body is just that one
+        // binding. `ctx.field_owners` (populated from `plum-types`'
+        // inference pass — see its doc comment) is what says WHICH
+        // struct `base` is, since the bare syntax alone doesn't.
+        ast::Expr::Field { base, name, span } => {
+            let Some(struct_name) = ctx.field_owners.get(span) else {
+                return Err(format!(
+                    "lowering not yet implemented for field access without a resolved owner \
+                     (internal: type inference must run before lowering to populate \
+                     `LoweringContext::field_owners`) at {span:?}"
+                ));
+            };
+            let Some(declared_fields) = ctx.struct_fields.get(struct_name) else {
+                return Err(format!(
+                    "unknown struct type {struct_name:?} at {span:?} (no declaration found in \
+                     this lowering context)"
+                ));
+            };
+            if !declared_fields.iter().any(|f| f == name) {
+                return Err(format!("struct {struct_name:?} has no field named {name:?} (at {span:?})"));
+            }
+            let result_name = "__field_result".to_string();
+            let bindings = declared_fields
+                .iter()
+                .map(|f| if f == name { result_name.clone() } else { "_".to_string() })
+                .collect();
+            Ok(ir::Expr::Match {
+                scrutinee: Box::new(lower_expr(base, ctx)?),
+                arms: vec![ir::MatchArm {
+                    tag: struct_name.clone(),
+                    bindings,
+                    guard: None,
+                    body: ir::Expr::Var(result_name),
+                }],
+            })
+        }
+        // Generic instantiation and indexing are still deferred — not
+        // needed to validate struct/match lowering.
         other => Err(format!(
             "lowering not yet implemented for this expression form at {:?}",
             other.span()
@@ -831,6 +892,27 @@ mod tests {
             .parse_program()
             .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
         LoweringContext::from_items(&program.items)
+    }
+
+    // Field access needs `LoweringContext::field_owners` populated —
+    // normally `plum-types` inference does this by walking the WHOLE
+    // program and recording every `Expr::Field`'s span. These tests
+    // only ever contain ONE field access, always as the outermost
+    // expression, so its span is just the parsed expression's own span
+    // — a real caller (`plumc`) has no such luxury and needs the real
+    // inference pass instead (see the `plumc` end-to-end tests for that
+    // proof).
+    fn lower_field_access(struct_decls: &str, expr_src: &str, struct_name: &str) -> ir::Expr {
+        let ctx = context_from_program(struct_decls);
+        let tokens = Lexer::new(expr_src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser
+            .parse_expr()
+            .unwrap_or_else(|e| panic!("parse error for {expr_src:?}: {e}"));
+        let mut field_owners = HashMap::new();
+        field_owners.insert(ast.span(), struct_name.to_string());
+        let ctx = ctx.with_field_owners(field_owners);
+        lower_expr(&ast, &ctx).unwrap_or_else(|e| panic!("lowering error for {expr_src:?}: {e}"))
     }
 
     #[test]
@@ -1363,6 +1445,61 @@ mod tests {
     fn struct_literal_spread_with_unknown_field_is_still_an_error() {
         let ctx = context_from_program("struct Point { x: Float, y: Float }");
         lower_with_err("Point { z: 1.0, ..other }", &ctx);
+    }
+
+    // --- Field access (`p.x`) ---
+
+    #[test]
+    fn field_access_lowers_to_a_match_that_extracts_one_binding() {
+        assert_eq!(
+            lower_field_access("struct Point { x: Float, y: Float }", "p.x", "Point"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("p".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Point".to_string(),
+                    bindings: vec!["__field_result".to_string(), "_".to_string()],
+                    guard: None,
+                    body: ir::Expr::Var("__field_result".to_string()),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn field_access_binds_the_wanted_field_at_its_declared_position() {
+        assert_eq!(
+            lower_field_access("struct Point { x: Float, y: Float }", "p.y", "Point"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("p".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Point".to_string(),
+                    bindings: vec!["_".to_string(), "__field_result".to_string()],
+                    guard: None,
+                    body: ir::Expr::Var("__field_result".to_string()),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn field_access_on_an_unknown_field_is_an_error() {
+        let ctx = context_from_program("struct Point { x: Float, y: Float }");
+        let mut field_owners = HashMap::new();
+        let tokens = Lexer::new("p.z").tokenize();
+        let ast = Parser::new(tokens).parse_expr().unwrap();
+        field_owners.insert(ast.span(), "Point".to_string());
+        let ctx = ctx.with_field_owners(field_owners);
+        lower_expr(&ast, &ctx).expect_err("expected lowering of \"p.z\" to fail");
+    }
+
+    #[test]
+    fn field_access_without_a_resolved_owner_is_an_error() {
+        // No `field_owners` entry at all — simulates lowering running
+        // WITHOUT type inference first, which is exactly the case this
+        // guards against (`plumc`'s real pipeline always runs inference
+        // first; this is what protects a future caller that forgets to).
+        let ctx = context_from_program("struct Point { x: Float, y: Float }");
+        lower_with_err("p.x", &ctx);
     }
 
     // --- Match: variant patterns lower to tag + positional bindings.
