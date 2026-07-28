@@ -60,12 +60,11 @@ pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir
                     def.span
                 ));
             }
-            let params = def
-                .params
-                .iter()
-                .map(lower_param_name)
-                .collect::<Result<Vec<_>, _>>()?;
-            let body = lower_expr(&def.body, ctx)?;
+            let (params, destructures) = lower_params(&def.params)?;
+            let mut body = lower_expr(&def.body, ctx)?;
+            for (synthetic, pattern) in destructures.into_iter().rev() {
+                body = wrap_destructure(synthetic, &pattern, body)?;
+            }
             functions.push(ir::Function {
                 name: def.name.clone(),
                 params,
@@ -79,13 +78,90 @@ pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir
     Ok(ir::Program { functions })
 }
 
-fn lower_param_name(param: &ast::Param) -> Result<String, String> {
-    match &param.kind {
-        ast::ParamKind::Ident(name) => Ok(name.clone()),
-        ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => Ok(name.clone()),
-        _ => Err(format!(
-            "lowering not yet implemented for destructuring function parameters at {:?}",
-            param.span
+// A tag no user struct/enum declaration can ever produce (identifiers
+// can't start with a digit — see plum-syntax's `is_ident_start`), so a
+// tuple's synthetic tag can never collide with a real type name.
+fn tuple_tag(arity: usize) -> String {
+    format!("{arity}Tuple")
+}
+
+// Lowers a param list into (top-level flat param names, body-wrapping
+// destructures). A tuple-pattern param becomes a synthetic positional
+// name (`__param0`, ...) PLUS a destructure to apply around the
+// function body — IR functions only ever have a flat `Vec<String>` of
+// params (see ir::Function), so there's nowhere else for the
+// destructuring to live except as a `Match` wrapped around the body,
+// reusing the exact same tag-based mechanism `Ctor`/`Match` already
+// give every other heap-shaped value.
+fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast::Pattern)>), String> {
+    let mut names = Vec::with_capacity(params.len());
+    let mut destructures = Vec::new();
+    for (i, param) in params.iter().enumerate() {
+        match &param.kind {
+            ast::ParamKind::Ident(name) => names.push(name.clone()),
+            ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => names.push(name.clone()),
+            ast::ParamKind::Pattern(pattern @ ast::Pattern::Tuple(..), _) => {
+                let synthetic = format!("__param{i}");
+                names.push(synthetic.clone());
+                destructures.push((synthetic, pattern.clone()));
+            }
+            _ => {
+                return Err(format!(
+                    "lowering not yet implemented for destructuring function parameters of \
+                     this shape (only tuples and plain identifiers so far) at {:?}",
+                    param.span
+                ));
+            }
+        }
+    }
+    Ok((names, destructures))
+}
+
+// Wraps `rest` in a `Match` that destructures `scrutinee_name` (a
+// synthetic param name — see `lower_params`) according to `pattern`.
+// Only tuple patterns, one level deep, are supported — same
+// restriction `lower_variant_pattern` places on match arms, since both
+// go through the identical tag+positional-bindings mechanism.
+fn wrap_destructure(scrutinee_name: String, pattern: &ast::Pattern, rest: ir::Expr) -> Result<ir::Expr, String> {
+    let (tag, bindings) = lower_destructurable_pattern(pattern)?;
+    Ok(ir::Expr::Match {
+        scrutinee: Box::new(ir::Expr::Var(scrutinee_name)),
+        arms: vec![ir::MatchArm { tag, bindings, body: rest }],
+    })
+}
+
+// The shared core of "destructure a tuple into plain-identifier
+// bindings" — used for match arms (`lower_variant_pattern`), function
+// params (`wrap_destructure`), and block-level `let` (`lower_let_stmt`)
+// alike, so all three accept exactly the same shapes.
+fn lower_destructurable_pattern(pattern: &ast::Pattern) -> Result<(String, Vec<String>), String> {
+    match pattern {
+        ast::Pattern::Tuple(elems, span) => {
+            if elems.is_empty() {
+                return Err(format!(
+                    "lowering not yet implemented for destructuring against the empty tuple \
+                     pattern at {span:?} (there's nothing to bind — match against `()` instead)"
+                ));
+            }
+            let mut bindings = Vec::with_capacity(elems.len());
+            for e in elems {
+                match e {
+                    ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
+                    ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
+                    other => {
+                        return Err(format!(
+                            "lowering not yet implemented for nested patterns inside a \
+                             tuple pattern at {:?}",
+                            other.span()
+                        ));
+                    }
+                }
+            }
+            Ok((tuple_tag(bindings.len()), bindings))
+        }
+        other => Err(format!(
+            "lowering not yet implemented for this pattern shape as a tuple destructure at {:?}",
+            other.span()
         )),
     }
 }
@@ -98,10 +174,17 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         ast::Expr::Bool(b, _) => Ok(ir::Expr::Bool(*b)),
         ast::Expr::Ident(name, _) => Ok(ir::Expr::Var(name.clone())),
         ast::Expr::Tuple(elems, _) if elems.is_empty() => Ok(ir::Expr::Unit),
-        ast::Expr::Tuple(_, span) => Err(format!(
-            "lowering not yet implemented for non-empty tuples (heap-allocated \
-             — waits for its own pass) at {span:?}"
-        )),
+        // A non-empty tuple is heap-allocated, positional, same as a
+        // struct — `tuple_tag` picks a tag no user identifier can ever
+        // spell (`is_ident_start` forbids a leading digit), so it can
+        // never collide with a real struct/enum name.
+        ast::Expr::Tuple(elems, _) => {
+            let fields = elems.iter().map(|e| lower_expr(e, ctx)).collect::<Result<_, _>>()?;
+            Ok(ir::Expr::Ctor {
+                tag: tuple_tag(elems.len()),
+                fields,
+            })
+        }
         ast::Expr::Unary { op, expr, .. } => {
             let ir_op = match op {
                 ast::UnaryOp::Neg => ir::UnOp::Neg,
@@ -337,6 +420,12 @@ fn lower_variant_pattern(pattern: &ast::Pattern) -> Result<(String, Vec<String>)
             }
             Ok((tag, bindings))
         }
+        // A tuple pattern goes through the exact same tag+positional-
+        // bindings mechanism as a variant, via the shared helper also
+        // used for destructuring params/`let` — `(a, b) => ...` and
+        // `Shape.Circle(r) => ...` are both just "dispatch on tag,
+        // bind fields positionally" underneath.
+        tuple @ ast::Pattern::Tuple(..) => lower_destructurable_pattern(tuple),
         other => Err(format!(
             "lowering not yet implemented for this pattern shape as a match arm at {:?}",
             other.span()
@@ -399,13 +488,42 @@ fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, St
     };
     for stmt in block.stmts.iter().rev() {
         result = match stmt {
-            ast::Stmt::Let { pattern, value, .. } => {
-                let name = plain_ident(pattern)?;
-                ir::Expr::Let {
-                    name,
-                    value: Box::new(lower_expr(value, ctx)?),
-                    body: Box::new(result),
+            ast::Stmt::Let {
+                pattern: ast::Pattern::Ident(name, _),
+                value,
+                ..
+            } => ir::Expr::Let {
+                name: name.clone(),
+                value: Box::new(lower_expr(value, ctx)?),
+                body: Box::new(result),
+            },
+            // `let (a, b) = expr;` destructures directly against the
+            // VALUE, no synthetic name needed — unlike a function
+            // param (which needs a flat name to seed the initial env
+            // before any destructuring can run), a block-level `let`'s
+            // value is just an ordinary expression a `Match` can
+            // scrutinize directly.
+            ast::Stmt::Let {
+                pattern: tuple @ ast::Pattern::Tuple(..),
+                value,
+                ..
+            } => {
+                let (tag, bindings) = lower_destructurable_pattern(tuple)?;
+                ir::Expr::Match {
+                    scrutinee: Box::new(lower_expr(value, ctx)?),
+                    arms: vec![ir::MatchArm {
+                        tag,
+                        bindings,
+                        body: result,
+                    }],
                 }
+            }
+            ast::Stmt::Let { pattern, .. } => {
+                return Err(format!(
+                    "lowering not yet implemented for destructuring let-bindings of this \
+                     shape (only tuples and plain identifiers so far) at {:?}",
+                    pattern.span()
+                ));
             }
             ast::Stmt::Expr(e) => ir::Expr::Let {
                 name: "_".to_string(),
@@ -424,17 +542,6 @@ fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, St
         };
     }
     Ok(result)
-}
-
-fn plain_ident(pattern: &ast::Pattern) -> Result<String, String> {
-    match pattern {
-        ast::Pattern::Ident(name, _) => Ok(name.clone()),
-        other => Err(format!(
-            "lowering not yet implemented for destructuring let-bindings \
-             (only plain identifiers so far) at {:?}",
-            other.span()
-        )),
-    }
 }
 
 #[cfg(test)]
@@ -957,8 +1064,71 @@ mod tests {
     // --- Explicit, honest gaps — not yet supported ---
 
     #[test]
-    fn non_empty_tuple_is_not_yet_supported() {
-        lower_err("(1, 2)");
+    fn non_empty_tuple_lowers_to_a_ctor_with_a_synthetic_tag() {
+        assert_eq!(
+            lower("(1, 2)"),
+            ir::Expr::Ctor {
+                tag: "2Tuple".to_string(),
+                fields: vec![ir::Expr::Int(1), ir::Expr::Int(2)],
+            }
+        );
+    }
+
+    #[test]
+    fn three_element_tuple_uses_its_own_arity_tag() {
+        assert_eq!(
+            lower("(1, 2, 3)"),
+            ir::Expr::Ctor {
+                tag: "3Tuple".to_string(),
+                fields: vec![ir::Expr::Int(1), ir::Expr::Int(2), ir::Expr::Int(3)],
+            }
+        );
+    }
+
+    #[test]
+    fn block_let_tuple_destructure() {
+        assert_eq!(
+            lower("{ let (a, b) = (1, 2); a + b }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Ctor {
+                    tag: "2Tuple".to_string(),
+                    fields: vec![ir::Expr::Int(1), ir::Expr::Int(2)],
+                }),
+                arms: vec![ir::MatchArm {
+                    tag: "2Tuple".to_string(),
+                    bindings: vec!["a".to_string(), "b".to_string()],
+                    body: ir::Expr::Binary(
+                        ir::BinOp::Add,
+                        Box::new(ir::Expr::Var("a".to_string())),
+                        Box::new(ir::Expr::Var("b".to_string())),
+                    ),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn match_arm_tuple_pattern() {
+        assert_eq!(
+            lower("match p { (a, b) => a + b }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("p".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "2Tuple".to_string(),
+                    bindings: vec!["a".to_string(), "b".to_string()],
+                    body: ir::Expr::Binary(
+                        ir::BinOp::Add,
+                        Box::new(ir::Expr::Var("a".to_string())),
+                        Box::new(ir::Expr::Var("b".to_string())),
+                    ),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn nested_pattern_inside_a_tuple_pattern_is_not_yet_supported() {
+        lower_err("match p { (Point(x, y), b) => b }");
     }
 
     #[test]
@@ -1199,7 +1369,39 @@ mod tests {
     }
 
     #[test]
-    fn destructuring_param_is_not_yet_supported() {
-        lower_program_err("let swap (a, b) = (b, a)");
+    fn tuple_destructuring_param_wraps_the_body_in_a_match() {
+        // The flagship example from examples/overview.plum, now real —
+        // a synthetic name seeds the flat param list, then a `Match`
+        // destructures it before the real body runs.
+        let program = lower_program("let swap (a, b) = (b, a)");
+        assert_eq!(
+            program.functions,
+            vec![ir::Function {
+                name: "swap".to_string(),
+                params: vec!["__param0".to_string()],
+                body: ir::Expr::Match {
+                    scrutinee: Box::new(ir::Expr::Var("__param0".to_string())),
+                    arms: vec![ir::MatchArm {
+                        tag: "2Tuple".to_string(),
+                        bindings: vec!["a".to_string(), "b".to_string()],
+                        body: ir::Expr::Ctor {
+                            tag: "2Tuple".to_string(),
+                            fields: vec![ir::Expr::Var("b".to_string()), ir::Expr::Var("a".to_string())],
+                        },
+                    }],
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn tuple_destructuring_param_can_be_mixed_with_plain_params() {
+        let program = lower_program("let f x (a, b) y = x + a + b + y");
+        assert_eq!(program.functions[0].params, vec!["x", "__param1", "y"]);
+    }
+
+    #[test]
+    fn struct_destructuring_param_is_not_yet_supported() {
+        lower_program_err("let area (Point { x, y }) = x * y");
     }
 }

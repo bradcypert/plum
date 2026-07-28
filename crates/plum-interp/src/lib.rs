@@ -766,6 +766,71 @@ mod tests {
         assert_eq!(run(src, "use_it", vec![Value::Int(5)]), Value::Int(10));
     }
 
+    // --- Tuples ---
+
+    #[test]
+    fn tuple_construct_and_match() {
+        assert_eq!(eval("match (1, 2) { (a, b) => a + b }"), Value::Int(3));
+    }
+
+    #[test]
+    fn three_element_tuple_construct_and_match() {
+        assert_eq!(eval("match (1, 2, 3) { (a, b, c) => a + b + c }"), Value::Int(6));
+    }
+
+    #[test]
+    fn block_let_tuple_destructure() {
+        assert_eq!(eval("{ let (a, b) = (1, 2); a + b }"), Value::Int(3));
+    }
+
+    #[test]
+    fn tuple_of_different_arity_does_not_match() {
+        eval_err("match (1, 2) { (a, b, c) => a }");
+    }
+
+    #[test]
+    fn the_swap_example_from_design_md() {
+        // `let swap (a, b) = (b, a)` — the flagship destructuring-param
+        // example, now real end to end: a synthetic param, a Match
+        // destructure, a real tuple construction on the way back out.
+        let src = "let swap p = match p { (a, b) => (b, a) }\n\
+                    let use_it dummy = match swap((1, 2)) { (x, y) => x * 10 + y }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(21));
+    }
+
+    #[test]
+    fn swap_with_real_tuple_destructuring_param_syntax() {
+        let src = "let swap (a, b) = (b, a)\n\
+                    let use_it dummy = match swap((1, 2)) { (x, y) => x * 10 + y }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(21));
+    }
+
+    #[test]
+    fn tuple_reuse_in_place_fires_via_fbip() {
+        // Same reuse mechanism as structs — a same-arity deconstruct-
+        // then-reconstruct is exactly the shape `mark_reuse` looks for,
+        // and tuples lower to the identical `Ctor`/`Match` nodes.
+        let tokens = Lexer::new("match p { (a, b) => (b, a) }").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let ir = lower_expr(&ast, &LoweringContext::new()).unwrap_or_else(|e| panic!("lowering error: {e}"));
+        let optimized = plum_ir::fbip::optimize(ir);
+        let mut interp = Interpreter::new();
+        // Construct the initial tuple directly on the heap, matching
+        // the capstone struct-reuse test's approach.
+        let addr = {
+            let tuple_val = interp.eval(&Expr::Ctor {
+                tag: "2Tuple".to_string(),
+                fields: vec![Expr::Int(1), Expr::Int(2)],
+            });
+            let Ok(Value::HeapRef(addr)) = tuple_val else { panic!("expected a HeapRef") };
+            addr
+        };
+        interp.env.push(("p".to_string(), Value::HeapRef(addr)));
+        let result = interp.eval(&optimized).unwrap_or_else(|e| panic!("eval error: {e}"));
+        assert_eq!(result, Value::HeapRef(addr), "reuse should recycle the original cell");
+    }
+
     // --- Heap-shaped values: Ctor/Match/CtorReuse/RcAnnotated ---
     //
     // No surface syntax lowers to these yet (see plum-ir's scope
