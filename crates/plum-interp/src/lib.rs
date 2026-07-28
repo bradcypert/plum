@@ -1037,6 +1037,21 @@ mod tests {
         assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Float(6.0));
     }
 
+    #[test]
+    fn bare_variant_constructor_is_a_real_callable_value() {
+        let src = "enum Shape { Circle(Float) }\n\
+                    let use_it dummy = { let make = Circle; match make(3.0) { Circle(r) => r } }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Float(3.0));
+    }
+
+    #[test]
+    fn bare_variant_constructor_passed_as_a_higher_order_argument() {
+        let src = "enum Shape { Circle(Float) }\n\
+                    let apply f x = f(x)\n\
+                    let use_it dummy = match apply(Circle, 5.0) { Circle(r) => r }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Float(5.0));
+    }
+
     // --- Struct patterns (`Point { x, y }`) ---
 
     #[test]

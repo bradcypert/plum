@@ -335,16 +335,30 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         ast::Expr::Bool(b, _) => Ok(ir::Expr::Bool(*b)),
         // A bare capitalized name referencing a zero-arity variant
         // (`None`, not `None()`) constructs it directly — there's no
-        // other surface syntax for a nullary variant. A variant with a
-        // NON-zero arity referenced bare (not called) falls through to
-        // `Var` unchanged: like a bare top-level function name, it
-        // isn't a first-class value yet (an unbound-variable error at
-        // runtime unless it happens to also be a real local binding) —
-        // a separate, already-known gap, not something this fixes.
+        // other surface syntax for a nullary variant.
         ast::Expr::Ident(name, _) if ctx.variants.get(name) == Some(&0) => Ok(ir::Expr::Ctor {
             tag: name.clone(),
             fields: vec![],
         }),
+        // A non-zero-arity variant referenced BARE (not called) is its
+        // constructor as a function value — eta-expanded into a real
+        // `Closure` (`Circle` alone lowers as if it had been written
+        // `|__ctor_arg0| Circle(__ctor_arg0)`), reusing the SAME
+        // `Ctor`/`Closure` IR nodes everything else in this file does
+        // rather than inventing a new "constructor value" IR node.
+        // Mirrors `infer.rs`'s identical `Ident` case at the type level.
+        ast::Expr::Ident(name, _) if ctx.variants.get(name).is_some_and(|&arity| arity > 0) => {
+            let arity = ctx.variants[name];
+            let params: Vec<String> = (0..arity).map(|i| format!("__ctor_arg{i}")).collect();
+            let fields = params.iter().cloned().map(ir::Expr::Var).collect();
+            Ok(ir::Expr::Closure {
+                params,
+                body: Box::new(ir::Expr::Ctor {
+                    tag: name.clone(),
+                    fields,
+                }),
+            })
+        }
         ast::Expr::Ident(name, _) => Ok(ir::Expr::Var(name.clone())),
         ast::Expr::Tuple(elems, _) if elems.is_empty() => Ok(ir::Expr::Unit),
         // A non-empty tuple is heap-allocated, positional, same as a
@@ -1236,6 +1250,39 @@ mod tests {
     fn variant_call_wrong_arity_is_an_error() {
         let ctx = context_from_program("enum Shape { Circle(Float) }");
         lower_with_err("Circle(1.0, 2.0)", &ctx);
+    }
+
+    #[test]
+    fn bare_non_zero_arity_variant_eta_expands_into_a_closure() {
+        let ctx = context_from_program("enum Shape { Circle(Float) }");
+        assert_eq!(
+            lower_with("Circle", &ctx),
+            ir::Expr::Closure {
+                params: vec!["__ctor_arg0".to_string()],
+                body: Box::new(ir::Expr::Ctor {
+                    tag: "Circle".to_string(),
+                    fields: vec![ir::Expr::Var("__ctor_arg0".to_string())],
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn bare_multi_field_variant_eta_expands_with_one_param_per_field() {
+        let ctx = context_from_program("enum Shape { Rectangle(Float, Float) }");
+        assert_eq!(
+            lower_with("Rectangle", &ctx),
+            ir::Expr::Closure {
+                params: vec!["__ctor_arg0".to_string(), "__ctor_arg1".to_string()],
+                body: Box::new(ir::Expr::Ctor {
+                    tag: "Rectangle".to_string(),
+                    fields: vec![
+                        ir::Expr::Var("__ctor_arg0".to_string()),
+                        ir::Expr::Var("__ctor_arg1".to_string()),
+                    ],
+                }),
+            }
+        );
     }
 
     #[test]

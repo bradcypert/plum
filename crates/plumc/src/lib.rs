@@ -261,6 +261,15 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_variant_constructor_as_a_value_runs_through_the_full_gated_pipeline() {
+        let src = "enum Shape { Circle(Float) }\n\
+                    let apply f x = f(x)\n\
+                    let use_it dummy = match apply(Circle, 5.0) { Circle(r) => r }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Float(5.0)));
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])

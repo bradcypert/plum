@@ -389,14 +389,20 @@ impl Infer {
             }
             // A bare capitalized name referencing a zero-arity variant
             // (`None`, not `None()`) constructs it directly — mirrors
-            // lower.rs's identical `Ident` case. A non-zero-arity
-            // variant referenced bare falls through to the ordinary
-            // `Ident` lookup below unchanged (still an unbound-variable
-            // error, same as a bare top-level function name — neither
-            // is a first-class value yet).
+            // lower.rs's identical `Ident` case.
             ast::Expr::Ident(name, _) if matches!(self.ctx.variant(name), Some((_, p)) if p.is_empty()) => {
                 let (enum_name, _) = self.ctx.variant(name).expect("just matched Some above").clone();
                 Ok((Type::Enum(enum_name), Subst::empty()))
+            }
+            // A non-zero-arity variant referenced BARE (not called) is
+            // its constructor as a function value — `Circle` alone has
+            // type `Function([Float], Enum("Shape"))`, the same type
+            // `Circle(1.0)` would eventually produce once applied.
+            // Mirrors lower.rs's identical `Ident` case, which
+            // eta-expands the SAME bare reference into a real Closure.
+            ast::Expr::Ident(name, _) if matches!(self.ctx.variant(name), Some((_, p)) if !p.is_empty()) => {
+                let (enum_name, payload) = self.ctx.variant(name).expect("just matched Some above").clone();
+                Ok((Type::Function(payload, Box::new(Type::Enum(enum_name))), Subst::empty()))
             }
             ast::Expr::Ident(name, span) => {
                 let scheme = env
@@ -1678,6 +1684,34 @@ mod tests {
     fn bare_zero_arity_variant_infers_the_owning_enum_type() {
         let mut infer = Infer::with_context(context("enum Shape { Empty }"));
         assert_eq!(infer_expr_with(&mut infer, "Empty", &TypeEnv::new()), Type::Enum("Shape".to_string()));
+    }
+
+    #[test]
+    fn bare_non_zero_arity_variant_infers_as_its_constructor_function_type() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Circle", &TypeEnv::new()),
+            fn_ty(vec![Type::Float], Type::Enum("Shape".to_string()))
+        );
+    }
+
+    #[test]
+    fn bare_multi_field_variant_infers_a_multi_arg_constructor_function_type() {
+        let mut infer = Infer::with_context(context("enum Shape { Rectangle(Float, Float) }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Rectangle", &TypeEnv::new()),
+            fn_ty(vec![Type::Float, Type::Float], Type::Enum("Shape".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_bare_variant_constructor_can_be_used_as_a_higher_order_argument() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        let env = TypeEnv::new().extend(
+            "apply".to_string(),
+            fn_ty(vec![fn_ty(vec![Type::Float], Type::Enum("Shape".to_string())), Type::Float], Type::Enum("Shape".to_string())),
+        );
+        assert_eq!(infer_expr_with(&mut infer, "apply(Circle, 1.0)", &env), Type::Enum("Shape".to_string()));
     }
 
     #[test]
