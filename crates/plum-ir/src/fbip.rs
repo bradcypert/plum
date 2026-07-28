@@ -142,20 +142,68 @@ pub fn mark_reuse(expr: Expr) -> Expr {
         Expr::ArrayLen { array } => Expr::ArrayLen {
             array: Box::new(mark_reuse(*array)),
         },
-        Expr::ArrayPush { array, value } => Expr::ArrayPush {
-            array: Box::new(mark_reuse(*array)),
+        // A plain-variable `array` is a reuse-in-place CANDIDATE — same
+        // "only a bare variable names a specific cell we could target"
+        // precedent as `Match`'s scrutinee below. Whether reuse
+        // actually fires is decided at RUNTIME (via the refcount check
+        // in `Interpreter::eval`'s handling of the `*Reuse` nodes), not
+        // here: this is purely a structural rewrite, safe regardless of
+        // whether `array` turns out to still be shared, exactly like
+        // `Match` -> `CtorReuse` needs no additional liveness check of
+        // its own either.
+        Expr::ArrayPush { array, value } => match array.as_ref() {
+            Expr::Var(name) => Expr::ArrayPushReuse {
+                reuse_of: name.clone(),
+                value: Box::new(mark_reuse(*value)),
+            },
+            _ => Expr::ArrayPush {
+                array: Box::new(mark_reuse(*array)),
+                value: Box::new(mark_reuse(*value)),
+            },
+        },
+        Expr::ArrayPop { array } => match array.as_ref() {
+            Expr::Var(name) => Expr::ArrayPopReuse { reuse_of: name.clone() },
+            _ => Expr::ArrayPop {
+                array: Box::new(mark_reuse(*array)),
+            },
+        },
+        Expr::ArraySet { array, index, value } => match array.as_ref() {
+            Expr::Var(name) => Expr::ArraySetReuse {
+                reuse_of: name.clone(),
+                index: Box::new(mark_reuse(*index)),
+                value: Box::new(mark_reuse(*value)),
+            },
+            _ => Expr::ArraySet {
+                array: Box::new(mark_reuse(*array)),
+                index: Box::new(mark_reuse(*index)),
+                value: Box::new(mark_reuse(*value)),
+            },
+        },
+        Expr::ArrayRemove { array, index } => match array.as_ref() {
+            Expr::Var(name) => Expr::ArrayRemoveReuse {
+                reuse_of: name.clone(),
+                index: Box::new(mark_reuse(*index)),
+            },
+            _ => Expr::ArrayRemove {
+                array: Box::new(mark_reuse(*array)),
+                index: Box::new(mark_reuse(*index)),
+            },
+        },
+        // Shouldn't normally appear as INPUT here — these are produced
+        // BY this pass, same "handled for robustness in case pass
+        // ordering ever changes" precedent as `CtorReuse` below.
+        Expr::ArrayPushReuse { reuse_of, value } => Expr::ArrayPushReuse {
+            reuse_of,
             value: Box::new(mark_reuse(*value)),
         },
-        Expr::ArrayPop { array } => Expr::ArrayPop {
-            array: Box::new(mark_reuse(*array)),
-        },
-        Expr::ArraySet { array, index, value } => Expr::ArraySet {
-            array: Box::new(mark_reuse(*array)),
+        Expr::ArrayPopReuse { reuse_of } => Expr::ArrayPopReuse { reuse_of },
+        Expr::ArraySetReuse { reuse_of, index, value } => Expr::ArraySetReuse {
+            reuse_of,
             index: Box::new(mark_reuse(*index)),
             value: Box::new(mark_reuse(*value)),
         },
-        Expr::ArrayRemove { array, index } => Expr::ArrayRemove {
-            array: Box::new(mark_reuse(*array)),
+        Expr::ArrayRemoveReuse { reuse_of, index } => Expr::ArrayRemoveReuse {
+            reuse_of,
             index: Box::new(mark_reuse(*index)),
         },
         Expr::Match { scrutinee, arms } => {
@@ -344,6 +392,24 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             array: Box::new(transform(*array, known_heap)),
             index: Box::new(transform(*index, known_heap)),
         },
+        // Shouldn't normally appear as input here — these are produced
+        // BY `mark_reuse`, which runs AFTER this pass — but handled for
+        // robustness in case pass ordering ever changes, same
+        // precedent as `CtorReuse` above.
+        Expr::ArrayPushReuse { reuse_of, value } => Expr::ArrayPushReuse {
+            reuse_of,
+            value: Box::new(transform(*value, known_heap)),
+        },
+        Expr::ArrayPopReuse { reuse_of } => Expr::ArrayPopReuse { reuse_of },
+        Expr::ArraySetReuse { reuse_of, index, value } => Expr::ArraySetReuse {
+            reuse_of,
+            index: Box::new(transform(*index, known_heap)),
+            value: Box::new(transform(*value, known_heap)),
+        },
+        Expr::ArrayRemoveReuse { reuse_of, index } => Expr::ArrayRemoveReuse {
+            reuse_of,
+            index: Box::new(transform(*index, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -431,6 +497,13 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
             expr_mentions_var(array, name) || expr_mentions_var(index, name) || expr_mentions_var(value, name)
         }
         Expr::ArrayRemove { array, index } => expr_mentions_var(array, name) || expr_mentions_var(index, name),
+        // `reuse_of` isn't checked against `name` here, same as
+        // `CtorReuse`'s `reuse_of` isn't — see that precedent's own
+        // comment above.
+        Expr::ArrayPushReuse { value, .. } => expr_mentions_var(value, name),
+        Expr::ArrayPopReuse { .. } => false,
+        Expr::ArraySetReuse { index, value, .. } => expr_mentions_var(index, name) || expr_mentions_var(value, name),
+        Expr::ArrayRemoveReuse { index, .. } => expr_mentions_var(index, name),
     }
 }
 
@@ -834,6 +907,44 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 used_array || used_index,
             )
         }
+        // Shouldn't normally appear as input here — same "produced BY
+        // `mark_reuse`, which runs after this" precedent as
+        // `CtorReuse`'s own case just above. `reuse_of` (a bare
+        // String, not an `Expr`) isn't itself walked, same as
+        // `CtorReuse`'s `reuse_of`.
+        Expr::ArrayPushReuse { reuse_of, value } => {
+            let (value_t, used) = mark_last_uses(*value, name, live_after);
+            (
+                Expr::ArrayPushReuse {
+                    reuse_of,
+                    value: Box::new(value_t),
+                },
+                used,
+            )
+        }
+        Expr::ArrayPopReuse { reuse_of } => (Expr::ArrayPopReuse { reuse_of }, live_after),
+        Expr::ArraySetReuse { reuse_of, index, value } => {
+            let (value_t, used_value) = mark_last_uses(*value, name, live_after);
+            let (index_t, used_index) = mark_last_uses(*index, name, live_after || used_value);
+            (
+                Expr::ArraySetReuse {
+                    reuse_of,
+                    index: Box::new(index_t),
+                    value: Box::new(value_t),
+                },
+                used_index || used_value,
+            )
+        }
+        Expr::ArrayRemoveReuse { reuse_of, index } => {
+            let (index_t, used) = mark_last_uses(*index, name, live_after);
+            (
+                Expr::ArrayRemoveReuse {
+                    reuse_of,
+                    index: Box::new(index_t),
+                },
+                used,
+            )
+        }
         // The reassignment TARGET (`name`) is a plain String field,
         // never an `Expr::Var` occurrence — so, unlike `Let`, there's
         // no shadowing case to special-case here even when the target
@@ -1070,6 +1181,65 @@ mod tests {
                 ctor("Pair", vec![var("b"), var("a")]),
             )],
         );
+        assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
+    fn array_push_on_a_plain_variable_marks_reuse() {
+        let input = Expr::ArrayPush {
+            array: Box::new(var("a")),
+            value: Box::new(int(3)),
+        };
+        let expected = Expr::ArrayPushReuse {
+            reuse_of: "a".to_string(),
+            value: Box::new(int(3)),
+        };
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn array_pop_on_a_plain_variable_marks_reuse() {
+        let input = Expr::ArrayPop { array: Box::new(var("a")) };
+        let expected = Expr::ArrayPopReuse { reuse_of: "a".to_string() };
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn array_set_on_a_plain_variable_marks_reuse() {
+        let input = Expr::ArraySet {
+            array: Box::new(var("a")),
+            index: Box::new(int(0)),
+            value: Box::new(int(9)),
+        };
+        let expected = Expr::ArraySetReuse {
+            reuse_of: "a".to_string(),
+            index: Box::new(int(0)),
+            value: Box::new(int(9)),
+        };
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn array_remove_on_a_plain_variable_marks_reuse() {
+        let input = Expr::ArrayRemove {
+            array: Box::new(var("a")),
+            index: Box::new(int(0)),
+        };
+        let expected = Expr::ArrayRemoveReuse {
+            reuse_of: "a".to_string(),
+            index: Box::new(int(0)),
+        };
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn array_push_on_a_non_variable_base_is_not_a_reuse_candidate() {
+        // Can't name a specific cell to reuse if the base isn't a plain
+        // variable — same "non_variable_scrutinee" precedent as Match.
+        let input = Expr::ArrayPush {
+            array: Box::new(call(var("get_array"), vec![])),
+            value: Box::new(int(3)),
+        };
         assert_eq!(mark_reuse(input.clone()), input);
     }
 

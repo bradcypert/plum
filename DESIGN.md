@@ -533,10 +533,9 @@ below) — `for` accepts either a `Range` or an `Array[T]`.
 
 `.pop()`/`.set(i, v)`/`.remove(i)` (2026-07-28) follow `.push(v)`'s
 exact precedent: new primitive IR nodes (`ArrayPop`/`ArraySet`/
-`ArrayRemove`), always allocate a fresh heap cell (no reuse-in-place,
-same honestly-deferred optimization gap as `.push()`), runtime-checked
-bounds (`.set`/`.remove`) or runtime-checked non-emptiness (`.pop()`)
-rather than a compile-time check.
+`ArrayRemove`), runtime-checked bounds (`.set`/`.remove`) or
+runtime-checked non-emptiness (`.pop()`) rather than a compile-time
+check. All four now reuse-in-place when uniquely owned — see below.
 
 `.map(f)`/`.filter(f)`/`.fold(init, f)` (2026-07-28) take a DIFFERENT
 approach: no new IR nodes at all. Each desugars directly into a small
@@ -593,16 +592,50 @@ these four names are DELIBERATELY never registered in `TypeContext`
 opaque-pseudo-generic-builtin-types precedent above). Closes the gap
 flagged when `for x in arr` landed.
 
-Implementation note on the mutability decision above: `.push(v)`
-currently always allocates a fresh cell (copies every existing element
-plus the new one) — REUSE-IN-PLACE for `push` specifically needs
-genuinely new FBIP analysis, not just wiring into what already exists,
-since the existing `CtorReuse` mechanism only ever recognizes
-SAME-arity reconstruction (a struct/tuple/enum's field count never
-changes at runtime); growing a cell's field count by one is a different
-shape of optimization. Deferred, honestly, not silently pretended into
-place — the functional API surface is what stays stable regardless of
-when (or whether) that optimization lands.
+**`.push()`/`.pop()`/`.set()`/`.remove()` reuse-in-place — Decided
+(2026-07-28).** All four now recycle the SAME heap cell instead of
+always allocating fresh, whenever the array is uniquely owned at that
+point — the functional API surface (`let b = a.push(v)`) is completely
+unchanged; this is purely a memory-savings optimization underneath it,
+never a semantic one. Unlike `CtorReuse` (which only ever recognizes
+SAME-arity struct/tuple/enum reconstruction inside a `Match` arm),
+these operations aren't Match-shaped and can genuinely grow or shrink a
+cell's field count — so this needed its own mechanism, though one that
+directly mirrors `CtorReuse`'s existing safety argument rather than
+inventing a new one:
+  - Four new `*Reuse` IR nodes (`ArrayPushReuse`/`ArrayPopReuse`/
+    `ArraySetReuse`/`ArrayRemoveReuse`), each carrying a `reuse_of:
+    String` naming the array's plain-variable binding — exactly like
+    `CtorReuse`'s own `reuse_of` field, and for the same reason: only a
+    bare variable names a specific cell reuse can target.
+  - `mark_reuse` (fbip.rs, the existing reuse-in-place pass, which
+    always runs AFTER refcount-insertion) gained a structural rewrite:
+    `ArrayPush{array: Var(x), ..}` (and the other three) unconditionally
+    becomes the `*Reuse` form whenever `array` is a plain `Var` — no
+    arity/shape check needed here at all, unlike `CtorReuse`'s
+    same-arity requirement, since array ops have no fixed shape to
+    match against.
+  - The actual SAFETY decision is made entirely at RUNTIME, in
+    `Interpreter::eval`, via the EXACT SAME `Heap::dec_and_maybe_reuse`
+    primitive `CtorReuse` already uses: decrement `reuse_of`'s
+    refcount first, and only reuse the SAME address if that reaches
+    zero (nobody else holds a reference); otherwise allocate fresh,
+    exactly as before. The structural rewrite in `mark_reuse` is safe
+    regardless of whether `array` turns out to still be shared — if `a`
+    is used again later in the same scope (e.g. `let b = a.push(v);
+    a.len()`), `insert_refcount_ops` (which always runs BEFORE
+    `mark_reuse`) already inserted an `Inc` for that later use, keeping
+    the runtime refcount above zero at the `*Reuse` site and correctly
+    forcing the fresh-allocation path — identical to how `CtorReuse`
+    already handles the same "used again later" case.
+  - Tests added at every layer: plum-ir (`mark_reuse`'s structural
+    rewrite, including "non-variable base is not a candidate"), plum-
+    interp (hand-built-IR reuse-fires-when-unique/allocates-fresh-when-
+    shared pairs mirroring `CtorReuse`'s own existing tests exactly,
+    plus real-source `alloc_count`-proof end-to-end tests), plumc
+    (full-pipeline correctness — reused values still see original
+    contents, chained push/set/remove/pop still produce correct
+    results). Workspace is now 838 tests, clean build, zero warnings.
 
 ### Effect/unsafe tracking — Leaning
 
@@ -759,12 +792,12 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 - Exact design of the `Ref`/`Shared` mutable type and its interaction
   with pattern matching and FBIP.
 - `Array[T]`'s v1 scope, `for x in arr` iteration, the `.pop()`/
-  `.set()`/`.remove()`/`.map()`/`.filter()`/`.fold()` operations, and
-  builtin-type parameter/return annotations are all now Decided (see
-  "Arrays" above). Still open: the IN-PLACE-growth optimization for
-  `.push()`/`.pop()`/`.set()`/`.remove()` (needs new FBIP analysis
-  beyond what `CtorReuse` already does), and String's own growth
-  strategy (presumably similar, not yet worked through explicitly).
+  `.set()`/`.remove()`/`.map()`/`.filter()`/`.fold()` operations,
+  builtin-type parameter/return annotations, and `.push()`/`.pop()`/
+  `.set()`/`.remove()`'s reuse-in-place optimization are all now
+  Decided (see "Arrays" above). Still open: String's own growth
+  strategy (presumably similar to arrays', not yet worked through
+  explicitly).
 - Recursive closures that capture themselves (named top-level recursive
   functions should compile to direct calls, sidestepping this; true
   anonymous self-referential closures are a deferred detail).

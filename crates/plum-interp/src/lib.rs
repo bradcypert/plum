@@ -684,6 +684,81 @@ impl Interpreter {
                 let new_addr = self.heap.alloc(tag, new_fields);
                 Ok(Value::HeapRef(new_addr))
             }
+            // The reuse-in-place counterparts to `ArrayPush`/`ArrayPop`/
+            // `ArraySet`/`ArrayRemove` — see ir.rs's `ArrayPushReuse`
+            // doc comment for the full safety argument. Mirrors
+            // `CtorReuse`'s own eval exactly: the new field list is
+            // always computed FIRST, then `dec_and_maybe_reuse` decides
+            // whether that overwrites the SAME cell (uniquely owned) or
+            // allocates a fresh one (still shared) — this node never
+            // decides that itself.
+            Expr::ArrayPushReuse { reuse_of, value } => {
+                let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
+                    return Err(format!("reuse target {reuse_of:?} is not a heap value"));
+                };
+                let v = self.eval(value)?;
+                let (tag, fields) = self.heap.read(addr)?;
+                let tag = tag.to_string();
+                let mut new_fields = fields.to_vec();
+                new_fields.push(v);
+                let new_addr = self.heap.dec_and_maybe_reuse(addr, tag, new_fields)?;
+                Ok(Value::HeapRef(new_addr))
+            }
+            Expr::ArrayPopReuse { reuse_of } => {
+                let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
+                    return Err(format!("reuse target {reuse_of:?} is not a heap value"));
+                };
+                let (tag, fields) = self.heap.read(addr)?;
+                if fields.is_empty() {
+                    return Err("cannot pop from an empty array".to_string());
+                }
+                let tag = tag.to_string();
+                let mut new_fields = fields.to_vec();
+                new_fields.pop();
+                let new_addr = self.heap.dec_and_maybe_reuse(addr, tag, new_fields)?;
+                Ok(Value::HeapRef(new_addr))
+            }
+            Expr::ArraySetReuse { reuse_of, index, value } => {
+                let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
+                    return Err(format!("reuse target {reuse_of:?} is not a heap value"));
+                };
+                let Value::Int(i) = self.eval(index)? else {
+                    return Err("`.set()` index must be an Int".to_string());
+                };
+                let v = self.eval(value)?;
+                let (tag, fields) = self.heap.read(addr)?;
+                let tag = tag.to_string();
+                let mut new_fields = fields.to_vec();
+                let Ok(i) = usize::try_from(i) else {
+                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                };
+                if i >= new_fields.len() {
+                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                }
+                new_fields[i] = v;
+                let new_addr = self.heap.dec_and_maybe_reuse(addr, tag, new_fields)?;
+                Ok(Value::HeapRef(new_addr))
+            }
+            Expr::ArrayRemoveReuse { reuse_of, index } => {
+                let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
+                    return Err(format!("reuse target {reuse_of:?} is not a heap value"));
+                };
+                let Value::Int(i) = self.eval(index)? else {
+                    return Err("`.remove()` index must be an Int".to_string());
+                };
+                let (tag, fields) = self.heap.read(addr)?;
+                let tag = tag.to_string();
+                let mut new_fields = fields.to_vec();
+                let Ok(i) = usize::try_from(i) else {
+                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                };
+                if i >= new_fields.len() {
+                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                }
+                new_fields.remove(i);
+                let new_addr = self.heap.dec_and_maybe_reuse(addr, tag, new_fields)?;
+                Ok(Value::HeapRef(new_addr))
+            }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
                 // non-heap name (shouldn't happen given how fbip.rs
@@ -1975,6 +2050,18 @@ mod tests {
             body,
         }
     }
+    fn array_ctor(fields: Vec<Expr>) -> Expr {
+        Expr::Ctor {
+            tag: "0Array".to_string(),
+            fields,
+        }
+    }
+    fn array_push_reuse(reuse_of: &str, value: Expr) -> Expr {
+        Expr::ArrayPushReuse {
+            reuse_of: reuse_of.to_string(),
+            value: Box::new(value),
+        }
+    }
     fn inc(name: &str, rest: Expr) -> Expr {
         Expr::RcAnnotated {
             op: RcOp::Inc,
@@ -2130,6 +2217,50 @@ mod tests {
         assert_eq!(interp.heap.read(new_addr).unwrap(), ("Point", &[Value::Int(2), Value::Int(1)][..]));
     }
 
+    #[test]
+    fn array_push_reuse_recycles_the_same_address_when_uniquely_owned() {
+        // `a` has exactly one reference — same shape as the CtorReuse
+        // test above, but for `ArrayPushReuse`.
+        let mut interp = Interpreter::new();
+        let program = let_(
+            "a",
+            array_ctor(vec![int(1), int(2)]),
+            array_push_reuse("a", int(3)),
+        );
+        let result = interp.eval(&program).unwrap();
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_eq!(addr, 0, "should reuse address 0 — the original array's cell");
+        assert_eq!(interp.alloc_count(), 1, "reuse must not count as a second allocation");
+        assert_eq!(interp.heap.read(addr).unwrap(), ("0Array", &[Value::Int(1), Value::Int(2), Value::Int(3)][..]));
+    }
+
+    #[test]
+    fn array_push_reuse_allocates_fresh_and_preserves_the_alias_when_shared() {
+        let mut interp = Interpreter::new();
+        let program = let_(
+            "a",
+            array_ctor(vec![int(1), int(2)]),
+            let_(
+                "saved",
+                inc("a", var("a")), // the Inc a real FBIP pass would insert here
+                array_push_reuse("a", int(3)),
+            ),
+        );
+        let result = interp.eval(&program).unwrap();
+        let Value::HeapRef(new_addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_ne!(new_addr, 0, "must not reuse memory that `saved` still references");
+        assert_eq!(interp.alloc_count(), 2, "the shared path must allocate a fresh cell");
+        assert_eq!(interp.heap.read(0).unwrap(), ("0Array", &[Value::Int(1), Value::Int(2)][..]));
+        assert_eq!(
+            interp.heap.read(new_addr).unwrap(),
+            ("0Array", &[Value::Int(1), Value::Int(2), Value::Int(3)][..])
+        );
+    }
+
     // --- The capstone: real Plum SOURCE TEXT, through the entire
     // pipeline for the first time — parse -> lower (resolving a real
     // struct declaration's field order) -> FBIP optimize (refcount
@@ -2166,6 +2297,39 @@ mod tests {
             "the swap should cost zero extra allocations — that's the whole point of FBIP"
         );
         assert_eq!(interp.heap.read(addr).unwrap(), ("Point", &[Value::Float(2.0), Value::Float(1.0)][..]));
+    }
+
+    #[test]
+    fn end_to_end_real_source_array_push_reuse() {
+        let src = "{ let a = [1, 2]; a.push(3) }";
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let ir = lower_expr(&ast, &LoweringContext::new()).unwrap_or_else(|e| panic!("lowering error: {e}"));
+        let optimized = plum_ir::fbip::optimize(ir);
+
+        let mut interp = Interpreter::new();
+        let result = interp.eval(&optimized).unwrap_or_else(|e| panic!("eval error: {e}"));
+
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_eq!(addr, 0, "single owner, single use — reuse should recycle the original cell");
+        assert_eq!(
+            interp.alloc_count(),
+            1,
+            "push-in-place should cost zero extra allocations — that's the whole point of this optimization"
+        );
+        assert_eq!(interp.heap.read(addr).unwrap(), ("0Array", &[Value::Int(1), Value::Int(2), Value::Int(3)][..]));
+    }
+
+    #[test]
+    fn end_to_end_real_source_array_reused_across_two_uses_allocates_fresh() {
+        // `a` is used again (`a.len()`) after the push — reuse must NOT
+        // fire, since `a` still needs to see its ORIGINAL contents.
+        let src = "let use_it dummy = { let a = [1, 2]; let b = a.push(3); a.len() + b.len() }";
+        let result = run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Value::Int(5));
     }
 
     // --- Real function definitions and calls, including recursion —

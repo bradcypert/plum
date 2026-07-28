@@ -255,6 +255,13 @@ pub enum Expr {
     // `push` grow the old cell in place when uniquely owned needs
     // genuinely new analysis, not just wiring into what already
     // exists — deliberately deferred, not silently pretended-away.
+    // `arr.push(v)` — evaluates to a NEW array with `v` appended.
+    // Allocates a fresh heap cell UNLESS `mark_reuse` (fbip.rs) proved
+    // `array` is a plain variable and rewrote this into `ArrayPushReuse`
+    // — see that variant's doc comment for the actual reuse-in-place
+    // mechanism. This node itself is unchanged from before that pass
+    // existed: it's the "might still need a fresh allocation" fallback
+    // shape, not a "never reuses" one.
     ArrayPush {
         array: Box<Expr>,
         value: Box<Expr>,
@@ -262,14 +269,16 @@ pub enum Expr {
     // `arr.pop()` — evaluates to a NEW array with the LAST element
     // removed. A reported runtime error on an empty array (same
     // "runtime-checked, not compile-time" convention as `Index`'s
-    // out-of-bounds), not a panic. Same "always a fresh allocation, no
-    // reuse-in-place yet" honesty as `ArrayPush`.
+    // out-of-bounds), not a panic. See `ArrayPush`'s doc comment for
+    // the reuse-in-place relationship to `ArrayPopReuse`.
     ArrayPop {
         array: Box<Expr>,
     },
     // `arr.set(i, v)` — evaluates to a NEW array with the element at
     // RUNTIME index `index` replaced by `value`; every other element
     // unchanged. Bounds-checked at runtime, same convention as `Index`.
+    // See `ArrayPush`'s doc comment for the reuse-in-place relationship
+    // to `ArraySetReuse`.
     ArraySet {
         array: Box<Expr>,
         index: Box<Expr>,
@@ -277,9 +286,46 @@ pub enum Expr {
     },
     // `arr.remove(i)` — evaluates to a NEW array with the element at
     // RUNTIME index `index` removed (later elements shift down by one).
-    // Bounds-checked at runtime, same convention as `Index`.
+    // Bounds-checked at runtime, same convention as `Index`. See
+    // `ArrayPush`'s doc comment for the reuse-in-place relationship to
+    // `ArrayRemoveReuse`.
     ArrayRemove {
         array: Box<Expr>,
+        index: Box<Expr>,
+    },
+    // The reuse-in-place counterpart to `ArrayPush`/`ArrayPop`/
+    // `ArraySet`/`ArrayRemove` — produced ONLY by `mark_reuse`
+    // (fbip.rs), never by lowering directly, exactly mirroring how
+    // `CtorReuse` relates to `Ctor`. `reuse_of` names the SAME plain
+    // variable the ordinary node's `array` field held (only a bare
+    // variable names a specific cell reuse can target — see
+    // `mark_reuse`'s `Match` case for the identical precedent). At
+    // runtime (`Interpreter::eval`), `reuse_of`'s cell has its
+    // reference count decremented FIRST; if that reaches zero (nobody
+    // else holds a reference), the SAME heap address is recycled with
+    // the new field list instead of allocating fresh — otherwise a
+    // fresh cell is allocated exactly as the ordinary node would.
+    // Safety comes entirely from that runtime refcount check, not from
+    // this node's mere presence: if `reuse_of` were used again
+    // elsewhere in the same scope, `insert_refcount_ops` (which always
+    // runs BEFORE `mark_reuse`) would already have inserted an `Inc`
+    // for that other use, keeping the refcount above zero here and
+    // correctly forcing the fresh-allocation path — the exact same
+    // argument that already makes `CtorReuse` safe.
+    ArrayPushReuse {
+        reuse_of: String,
+        value: Box<Expr>,
+    },
+    ArrayPopReuse {
+        reuse_of: String,
+    },
+    ArraySetReuse {
+        reuse_of: String,
+        index: Box<Expr>,
+        value: Box<Expr>,
+    },
+    ArrayRemoveReuse {
+        reuse_of: String,
         index: Box<Expr>,
     },
 }

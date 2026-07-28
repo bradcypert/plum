@@ -204,6 +204,30 @@ mod tests {
     }
 
     #[test]
+    fn array_push_pop_set_remove_reuse_in_place_end_to_end() {
+        // The reuse-in-place path (uniquely-owned `a` fed straight into
+        // `.push()`/`.pop()`/`.set()`/`.remove()`) must produce the same
+        // RESULTS as the always-copy path — reuse is purely a memory
+        // optimization, never a semantic change.
+        let src = "let use_it dummy = { let a = [1, 2, 3]; a.push(4).set(0, 99).remove(1).pop().len() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        // [1,2,3] -> push 4 -> [1,2,3,4] -> set(0,99) -> [99,2,3,4] ->
+        // remove(1) -> [99,3,4] -> pop -> [99,3] -> len -> 2
+        assert_eq!(result, Ok(Value::Int(2)));
+    }
+
+    #[test]
+    fn array_reused_after_a_reuse_in_place_operation_still_sees_its_original_contents() {
+        // `a` is used again after `.push()` — the exact case that must
+        // NOT reuse in place (see the plum-ir/plum-interp tests proving
+        // this at the mark_reuse/heap-refcount level); this proves it
+        // holds true through the entire real pipeline too.
+        let src = "let use_it dummy = { let a = [1, 2, 3]; let b = a.push(4); a.len() + b.len() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely
