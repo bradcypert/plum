@@ -41,6 +41,13 @@ fn free_vars(ty: &Type) -> HashSet<TypeVarId> {
             }
             set
         }
+        Type::Tuple(elems) => {
+            let mut set = HashSet::new();
+            for e in elems {
+                set.extend(free_vars(e));
+            }
+            set
+        }
         Type::Int | Type::Float | Type::Bool | Type::Str | Type::Unit | Type::Struct(_) | Type::Enum(_) => {
             HashSet::new()
         }
@@ -240,8 +247,44 @@ impl Infer {
             let (param_vars, ret_var) = signatures.get(&def.name).cloned().expect("just inserted above");
             let mut body_env = global_env.clone();
             for (param, param_ty) in def.params.iter().zip(param_vars.iter()) {
-                let name = plain_param_name(param)?;
-                body_env = body_env.extend(name, acc.apply(param_ty));
+                match &param.kind {
+                    ast::ParamKind::Ident(name) | ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => {
+                        body_env = body_env.extend(name.clone(), acc.apply(param_ty));
+                    }
+                    // Same "unify against a fresh N-tuple, then bind
+                    // each element" approach as tuple `let`/match arms
+                    // — see infer_block's Stmt::Let case for the fuller
+                    // explanation. Here `param_ty` is the SINGLE fresh
+                    // var Phase 1 gave this (flat-arity) parameter.
+                    ast::ParamKind::Pattern(ast::Pattern::Tuple(elems, _), _) => {
+                        let fresh_vars: Vec<Type> = elems.iter().map(|_| self.fresh()).collect();
+                        let s = unify(&acc.apply(param_ty), &Type::Tuple(fresh_vars.clone()))
+                            .map_err(|e| format!("function {:?} parameter: {e}", def.name))?;
+                        acc = s.compose(&acc);
+                        for (elem_pat, var_ty) in elems.iter().zip(fresh_vars.iter()) {
+                            match elem_pat {
+                                ast::Pattern::Ident(name, _) => {
+                                    body_env = body_env.extend(name.clone(), acc.apply(var_ty));
+                                }
+                                ast::Pattern::Wildcard(_) => {}
+                                other => {
+                                    return Err(format!(
+                                        "type inference not yet implemented for nested \
+                                         patterns inside a tuple parameter at {:?}",
+                                        other.span()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(format!(
+                            "type inference not yet implemented for destructuring function \
+                             parameters of this shape at {:?}",
+                            param.span
+                        ));
+                    }
+                }
             }
             let (body_ty, s) = self.infer_expr(&def.body, &body_env)?;
             acc = s.compose(&acc);
@@ -301,9 +344,19 @@ impl Infer {
             ast::Expr::Str(_, _) => Ok((Type::Str, Subst::empty())),
             ast::Expr::Bool(_, _) => Ok((Type::Bool, Subst::empty())),
             ast::Expr::Tuple(elems, _) if elems.is_empty() => Ok((Type::Unit, Subst::empty())),
-            ast::Expr::Tuple(_, span) => Err(format!(
-                "type inference not yet implemented for non-empty tuples at {span:?}"
-            )),
+            ast::Expr::Tuple(elems, _) => {
+                let mut acc = Subst::empty();
+                let mut refined_env = env.clone();
+                let mut elem_types = Vec::with_capacity(elems.len());
+                for e in elems {
+                    let (t, s) = self.infer_expr(e, &refined_env)?;
+                    acc = s.compose(&acc);
+                    refined_env = refined_env.apply_subst(&acc);
+                    elem_types.push(t);
+                }
+                let resolved = elem_types.iter().map(|t| acc.apply(t)).collect();
+                Ok((Type::Tuple(resolved), acc))
+            }
             ast::Expr::Ident(name, span) => {
                 let scheme = env
                     .lookup_scheme(name)
@@ -492,33 +545,74 @@ impl Infer {
                     arm.span
                 ));
             }
-            let (tag, bindings) = Self::variant_pattern_info(&arm.pattern)?;
-            let (this_type, payload_types) = match self.ctx.variant(&tag) {
-                Some((enum_name, payload_types)) => (Type::Enum(enum_name.clone()), payload_types.clone()),
-                None => match self.ctx.struct_fields(&tag) {
-                    Some(fields) => (
-                        Type::Struct(tag.clone()),
-                        fields.iter().map(|(_, ty)| ty.clone()).collect(),
-                    ),
-                    None => {
-                        return Err(format!("unknown variant {tag:?} at {:?}", arm.pattern.span()));
+            // A tuple pattern has no tag/declaration to look up — its
+            // shape comes entirely from fresh variables unified against
+            // whatever the scrutinee turns out to be, unlike a Struct/
+            // Enum tag's payload types, which are already known from
+            // `ctx`.
+            let (this_type, bindings, payload_types): (Type, Vec<String>, Vec<Type>) = match &arm.pattern {
+                ast::Pattern::Tuple(elems, _) => {
+                    let fresh_vars: Vec<Type> = elems.iter().map(|_| self.fresh()).collect();
+                    let mut bindings = Vec::with_capacity(elems.len());
+                    for e in elems {
+                        match e {
+                            ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
+                            ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
+                            other => {
+                                return Err(format!(
+                                    "type inference not yet implemented for nested patterns \
+                                     inside a tuple match arm at {:?}",
+                                    other.span()
+                                ));
+                            }
+                        }
                     }
-                },
+                    (Type::Tuple(fresh_vars.clone()), bindings, fresh_vars)
+                }
+                _ => {
+                    let (tag, bindings) = Self::variant_pattern_info(&arm.pattern)?;
+                    let (t, payload_types) = match self.ctx.variant(&tag) {
+                        Some((enum_name, payload_types)) => {
+                            (Type::Enum(enum_name.clone()), payload_types.clone())
+                        }
+                        None => match self.ctx.struct_fields(&tag) {
+                            Some(fields) => (
+                                Type::Struct(tag.clone()),
+                                fields.iter().map(|(_, ty)| ty.clone()).collect(),
+                            ),
+                            None => {
+                                return Err(format!("unknown variant {tag:?} at {:?}", arm.pattern.span()));
+                            }
+                        },
+                    };
+                    (t, bindings, payload_types)
+                }
             };
 
+            // Unifying (rather than a strict `!=` check) is what makes
+            // this work for tuples: two arms that are BOTH, say,
+            // 2-tuples get DIFFERENT fresh variables each time, so a
+            // naive equality check would wrongly call them "mixed"
+            // types even though they're perfectly compatible shapes.
+            // Unification still correctly rejects a genuine mismatch
+            // (Struct vs Enum, or mismatched tuple arity), and is a
+            // strict generalization of the old nominal-only check —
+            // `unify(Enum("Shape"), Enum("Shape"))` still trivially
+            // succeeds via the direct name-match arm in unify.rs.
             match &owning_type {
                 None => owning_type = Some(this_type.clone()),
-                Some(prev) if *prev != this_type => {
-                    return Err(format!(
-                        "match arms mix incompatible types ({prev:?} and {this_type:?})"
-                    ));
+                Some(prev) => {
+                    let s = unify(&acc.apply(prev), &acc.apply(&this_type))
+                        .map_err(|e| format!("match arms mix incompatible types: {e}"))?;
+                    acc = s.compose(&acc);
+                    owning_type = Some(acc.apply(prev));
                 }
-                _ => {}
             }
 
             if bindings.len() != payload_types.len() {
                 return Err(format!(
-                    "variant {tag:?} expects {} field(s), found {} binding(s)",
+                    "pattern at {:?} expects {} field(s), found {} binding(s)",
+                    arm.pattern.span(),
                     payload_types.len(),
                     bindings.len()
                 ));
@@ -733,8 +827,12 @@ impl Infer {
         let mut cur_env = env.clone();
         for stmt in &block.stmts {
             match stmt {
-                ast::Stmt::Let { pattern, value, ty, .. } => {
-                    let name = plain_ident(pattern)?;
+                ast::Stmt::Let {
+                    pattern: ast::Pattern::Ident(name, _),
+                    value,
+                    ty,
+                    ..
+                } => {
                     let (val_ty, s) = self.infer_expr(value, &cur_env)?;
                     acc = s.compose(&acc);
                     let mut resolved = acc.apply(&val_ty);
@@ -745,8 +843,58 @@ impl Infer {
                         acc = s.compose(&acc);
                         resolved = acc.apply(&resolved);
                     }
-                    cur_env = cur_env.extend(name, resolved);
+                    cur_env = cur_env.extend(name.clone(), resolved);
                     cur_env = cur_env.apply_subst(&acc);
+                }
+                // `let (a, b) = expr;` — unify the value's type against
+                // a fresh N-element tuple type to peel apart the
+                // element types, then bind each name. No type
+                // annotation support here yet: `ast::Type` has no
+                // Tuple case at the SURFACE grammar level at all (only
+                // ever inferred, never spelled), so there's nothing to
+                // unify an annotation against even if one were written.
+                ast::Stmt::Let {
+                    pattern: ast::Pattern::Tuple(elems, pspan),
+                    value,
+                    ty,
+                    span,
+                    ..
+                } => {
+                    if ty.is_some() {
+                        return Err(format!(
+                            "type inference not yet implemented for type annotations on \
+                             tuple destructuring `let` at {pspan:?}"
+                        ));
+                    }
+                    let (val_ty, s) = self.infer_expr(value, &cur_env)?;
+                    acc = s.compose(&acc);
+                    let fresh_vars: Vec<Type> = elems.iter().map(|_| self.fresh()).collect();
+                    let s = unify(&acc.apply(&val_ty), &Type::Tuple(fresh_vars.clone()))
+                        .map_err(|e| format!("tuple `let` at {span:?}: {e}"))?;
+                    acc = s.compose(&acc);
+                    for (elem_pat, var_ty) in elems.iter().zip(fresh_vars.iter()) {
+                        match elem_pat {
+                            ast::Pattern::Ident(name, _) => {
+                                cur_env = cur_env.extend(name.clone(), acc.apply(var_ty));
+                            }
+                            ast::Pattern::Wildcard(_) => {}
+                            other => {
+                                return Err(format!(
+                                    "type inference not yet implemented for nested patterns \
+                                     inside a tuple `let` at {:?}",
+                                    other.span()
+                                ));
+                            }
+                        }
+                    }
+                    cur_env = cur_env.apply_subst(&acc);
+                }
+                ast::Stmt::Let { pattern, .. } => {
+                    return Err(format!(
+                        "type inference not yet implemented for destructuring let-bindings \
+                         of this shape at {:?}",
+                        pattern.span()
+                    ));
                 }
                 ast::Stmt::Expr(e) => {
                     let (_, s) = self.infer_expr(e, &cur_env)?;
@@ -803,27 +951,6 @@ fn default_numeric(ty: &Type) -> Result<(Type, Subst), String> {
         Type::Int | Type::Float => Ok((ty.clone(), Subst::empty())),
         Type::Var(id) => Ok((Type::Int, Subst::single(*id, Type::Int))),
         other => Err(format!("expected a numeric type (Int or Float), found {other:?}")),
-    }
-}
-
-fn plain_ident(pattern: &ast::Pattern) -> Result<String, String> {
-    match pattern {
-        ast::Pattern::Ident(name, _) => Ok(name.clone()),
-        other => Err(format!(
-            "type inference not yet implemented for destructuring let-bindings at {:?}",
-            other.span()
-        )),
-    }
-}
-
-fn plain_param_name(param: &ast::Param) -> Result<String, String> {
-    match &param.kind {
-        ast::ParamKind::Ident(name) => Ok(name.clone()),
-        ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => Ok(name.clone()),
-        _ => Err(format!(
-            "type inference not yet implemented for destructuring function parameters at {:?}",
-            param.span
-        )),
     }
 }
 
@@ -1001,6 +1128,129 @@ mod tests {
     #[test]
     fn unsafe_block_type_errors_propagate() {
         infer_err("unsafe { 1 + true }");
+    }
+
+    // --- Tuples ---
+
+    #[test]
+    fn tuple_literal_infers_element_types() {
+        assert_eq!(infer("(1, true)"), Type::Tuple(vec![Type::Int, Type::Bool]));
+    }
+
+    #[test]
+    fn three_element_tuple_literal() {
+        assert_eq!(
+            infer("(1, true, \"hi\")"),
+            Type::Tuple(vec![Type::Int, Type::Bool, Type::Str])
+        );
+    }
+
+    #[test]
+    fn empty_tuple_is_unit_not_tuple() {
+        assert_eq!(infer("()"), Type::Unit);
+    }
+
+    #[test]
+    fn block_let_tuple_destructure() {
+        assert_eq!(infer("{ let (a, b) = (1, true); if b { a } else { 0 } }"), Type::Int);
+    }
+
+    #[test]
+    fn block_let_tuple_destructure_with_wildcard() {
+        assert_eq!(infer("{ let (a, _) = (1, true); a }"), Type::Int);
+    }
+
+    #[test]
+    fn block_let_tuple_arity_mismatch_is_an_error() {
+        infer_err("{ let (a, b, c) = (1, 2); a }");
+    }
+
+    #[test]
+    fn block_let_tuple_annotation_is_not_yet_supported() {
+        // `ast::Type` has no Tuple case at the surface grammar level at
+        // all — there's no syntax to even try to write here yet.
+        infer_err("{ let (a, b): Int = (1, 2); a }");
+    }
+
+    #[test]
+    fn match_arm_tuple_pattern() {
+        let env = TypeEnv::new().extend("p".to_string(), Type::Tuple(vec![Type::Int, Type::Bool]));
+        assert_eq!(infer_in("match p { (a, b) => if b { a } else { 0 } }", &env), Type::Int);
+    }
+
+    #[test]
+    fn match_scrutinee_tuple_type_is_inferred_from_the_arm() {
+        // `p`'s type isn't known ahead of time — matching it against a
+        // tuple pattern is what pins it down, same as the existing
+        // enum-scrutinee-inference test. `a + 1` forces `a` (the
+        // tuple's first element) concretely to Int, giving a clean,
+        // predictable result type instead of an arbitrary unresolved
+        // fresh variable. `p`'s var id is picked far from 0 — unlike
+        // the enum/struct case, a tuple ARM allocates its own fresh
+        // vars (one per element) starting from the SAME counter, so a
+        // low hand-picked id here could accidentally collide with one
+        // of those and alias two logically-unrelated variables.
+        let env = TypeEnv::new().extend("p".to_string(), Type::Var(999));
+        assert_eq!(infer_in("match p { (a, b) => a + 1 }", &env), Type::Int);
+    }
+
+    #[test]
+    fn two_tuple_match_arms_of_the_same_arity_are_not_mixed() {
+        // Two arms that are BOTH 2-tuples get independent fresh
+        // variables each — this must NOT be treated as "mixing
+        // incompatible types" the way a real struct-vs-enum mix would.
+        assert_eq!(
+            infer("match (1, true) { (a, b) => a, (c, d) => c }"),
+            Type::Int
+        );
+    }
+
+    #[test]
+    fn match_arms_mixing_a_tuple_and_a_struct_is_an_error() {
+        let mut infer = Infer::with_context(context("struct Point { x: Int, y: Int }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Var(0));
+        infer_expr_with_err(&mut infer, "match p { (a, b) => a, Point(x, y) => x }", &env);
+    }
+
+    #[test]
+    fn tuple_destructuring_function_param() {
+        // The flagship example from examples/overview.plum / DESIGN.md.
+        // Exact fresh-variable IDs are an implementation detail, so
+        // this checks the SHAPE (one tuple param, one tuple return,
+        // both 2 elements, elements swapped and still Vars) rather than
+        // hardcoding specific IDs.
+        let types = infer_program("let swap (a, b) = (b, a)");
+        match &types["swap"] {
+            Type::Function(params, ret) => {
+                let Type::Tuple(param_elems) = &params[0] else {
+                    panic!("expected a tuple param, got {:?}", params[0]);
+                };
+                let Type::Tuple(ret_elems) = ret.as_ref() else {
+                    panic!("expected a tuple return, got {ret:?}");
+                };
+                assert_eq!(param_elems.len(), 2);
+                assert_eq!(ret_elems.len(), 2);
+                assert!(matches!(param_elems[0], Type::Var(_)));
+                assert!(matches!(param_elems[1], Type::Var(_)));
+                // swapped: ret[0] is param[1], ret[1] is param[0]
+                assert_eq!(ret_elems[0], param_elems[1]);
+                assert_eq!(ret_elems[1], param_elems[0]);
+            }
+            other => panic!("expected a function type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tuple_destructuring_param_used_concretely() {
+        // `swap((n, true))` returns `(true, n)` — so `y` (the SECOND
+        // destructured element), not `x`, carries `n`'s type. Using `y`
+        // in a Bool-only context (`if y {...}`) pins `n` concretely to
+        // Bool via `swap`'s polymorphic instantiation.
+        let types = infer_program(
+            "let swap p = match p { (a, b) => (b, a) }\n\
+             let use_it n = match swap((n, true)) { (x, y) => if y { 1 } else { 0 } }",
+        );
+        assert_eq!(types["use_it"], fn_ty(vec![Type::Bool], Type::Int));
     }
 
     #[test]

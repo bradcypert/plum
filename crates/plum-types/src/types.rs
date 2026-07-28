@@ -27,4 +27,12 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     Struct(String),
     Enum(String),
+    // Unlike Struct/Enum, tuples are STRUCTURAL, not nominal — there's
+    // no declaration to name them, so two tuple types are equal
+    // exactly when their element types are (see unify.rs). The empty
+    // tuple isn't represented here at all: `()` is Unit itself (see
+    // DESIGN.md's "Tuples and closures"), not `Tuple(vec![])` — a
+    // separate, redundant zero-element case would just be two spellings
+    // of the same type.
+    Tuple(Vec<Type>),
 }

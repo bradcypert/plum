@@ -42,6 +42,25 @@ pub fn unify(a: &Type, b: &Type) -> Result<Subst, String> {
             Ok(step.compose(&subst))
         }
 
+        // Structural, unlike Struct/Enum: two tuple types unify exactly
+        // when they have the same arity AND every element unifies
+        // pairwise — no declared name to compare instead.
+        (Type::Tuple(e1), Type::Tuple(e2)) => {
+            if e1.len() != e2.len() {
+                return Err(format!(
+                    "tuple arity mismatch: expected {}-tuple, found {}-tuple",
+                    e1.len(),
+                    e2.len()
+                ));
+            }
+            let mut subst = Subst::empty();
+            for (t1, t2) in e1.iter().zip(e2.iter()) {
+                let step = unify(&subst.apply(t1), &subst.apply(t2))?;
+                subst = step.compose(&subst);
+            }
+            Ok(subst)
+        }
+
         (a, b) => Err(format!("type mismatch: expected {a:?}, found {b:?}")),
     }
 }
@@ -61,6 +80,7 @@ fn occurs(id: TypeVarId, ty: &Type) -> bool {
     match ty {
         Type::Var(other) => *other == id,
         Type::Function(params, ret) => params.iter().any(|p| occurs(id, p)) || occurs(id, ret),
+        Type::Tuple(elems) => elems.iter().any(|e| occurs(id, e)),
         _ => false,
     }
 }
@@ -149,6 +169,47 @@ mod tests {
         // an enum sharing a name (unusual, but not forbidden) are
         // still different types.
         assert!(unify(&Type::Struct("Thing".to_string()), &Type::Enum("Thing".to_string())).is_err());
+    }
+
+    #[test]
+    fn matching_tuple_types_unify() {
+        let t = Type::Tuple(vec![Type::Int, Type::Bool]);
+        assert_eq!(unify(&t, &t).unwrap(), Subst::empty());
+    }
+
+    #[test]
+    fn tuples_unify_structurally_element_by_element() {
+        let a = Type::Tuple(vec![Type::Var(0), Type::Int]);
+        let b = Type::Tuple(vec![Type::Bool, Type::Var(1)]);
+        let s = unify(&a, &b).unwrap();
+        assert_eq!(s.apply(&Type::Var(0)), Type::Bool);
+        assert_eq!(s.apply(&Type::Var(1)), Type::Int);
+    }
+
+    #[test]
+    fn mismatched_tuple_arity_is_an_error() {
+        let a = Type::Tuple(vec![Type::Int, Type::Int]);
+        let b = Type::Tuple(vec![Type::Int, Type::Int, Type::Int]);
+        assert!(unify(&a, &b).is_err());
+    }
+
+    #[test]
+    fn mismatched_tuple_element_types_are_an_error() {
+        let a = Type::Tuple(vec![Type::Int, Type::Bool]);
+        let b = Type::Tuple(vec![Type::Int, Type::Str]);
+        assert!(unify(&a, &b).is_err());
+    }
+
+    #[test]
+    fn tuple_and_struct_do_not_unify() {
+        assert!(unify(&Type::Tuple(vec![Type::Int]), &Type::Struct("Point".to_string())).is_err());
+    }
+
+    #[test]
+    fn occurs_check_rejects_infinite_types_inside_tuples() {
+        let err = unify(&Type::Var(0), &Type::Tuple(vec![Type::Var(0), Type::Int]))
+            .expect_err("expected an infinite-type error");
+        assert!(err.contains("infinite"), "expected an infinite-type error, got: {err}");
     }
 
     #[test]

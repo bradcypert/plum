@@ -33,6 +33,7 @@ impl Subst {
                 params.iter().map(|p| self.apply(p)).collect(),
                 Box::new(self.apply(ret)),
             ),
+            Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.apply(e)).collect()),
             other => other.clone(),
         }
     }
@@ -96,6 +97,16 @@ mod tests {
         assert_eq!(
             s.apply(&fn_ty),
             Type::Function(vec![Type::Int], Box::new(Type::Int))
+        );
+    }
+
+    #[test]
+    fn apply_recurses_into_tuple_types() {
+        let s = Subst::single(0, Type::Int);
+        let tuple_ty = Type::Tuple(vec![Type::Var(0), Type::Bool, Type::Var(0)]);
+        assert_eq!(
+            s.apply(&tuple_ty),
+            Type::Tuple(vec![Type::Int, Type::Bool, Type::Int])
         );
     }
 

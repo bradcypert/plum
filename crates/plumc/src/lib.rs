@@ -111,6 +111,20 @@ mod tests {
     }
 
     #[test]
+    fn the_swap_example_runs_through_the_full_gated_pipeline() {
+        // Tuples now have real type-checker support (previously they
+        // could run at the interpreter level but were rejected by the
+        // type-check gate) — this is the same flagship
+        // `let swap (a, b) = (b, a)` example proven at the interpreter
+        // level, now proven through the FULL pipeline including the
+        // type-check gate.
+        let src = "let swap (a, b) = (b, a)\n\
+                    let use_it n = match swap((n, true)) { (x, y) => x }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Int(7)]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])
