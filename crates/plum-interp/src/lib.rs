@@ -852,6 +852,46 @@ mod tests {
         assert_eq!(run(src, "use_it", vec![Value::Int(5)]), Value::Int(10));
     }
 
+    // --- Struct patterns (`Point { x, y }`) ---
+
+    #[test]
+    fn struct_destructuring_param() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let area (Point { x, y }) = x * y\n\
+                    let use_it dummy = area(Point { x: 3, y: 4 })";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(12));
+    }
+
+    #[test]
+    fn struct_destructuring_param_field_rename() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let area (Point { x: px, y: py }) = px * py\n\
+                    let use_it dummy = area(Point { x: 3, y: 4 })";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(12));
+    }
+
+    #[test]
+    fn struct_destructuring_param_with_rest() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let get_x (Point { x, .. }) = x\n\
+                    let use_it dummy = get_x(Point { x: 3, y: 4 })";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(3));
+    }
+
+    #[test]
+    fn match_arm_struct_pattern() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = match (Point { x: 3, y: 4 }) { Point { x, y } => x * y }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(12));
+    }
+
+    #[test]
+    fn block_let_struct_destructure() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let Point { x, y } = Point { x: 3, y: 4 }; x + y }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(7));
+    }
+
     // --- Tuples ---
 
     #[test]

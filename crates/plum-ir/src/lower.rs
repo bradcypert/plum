@@ -69,7 +69,7 @@ pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir
             let (params, destructures) = lower_params(&def.params)?;
             let mut body = lower_expr(&def.body, ctx)?;
             for (synthetic, pattern) in destructures.into_iter().rev() {
-                body = wrap_destructure(synthetic, &pattern, body)?;
+                body = wrap_destructure(synthetic, &pattern, ctx, body)?;
             }
             functions.push(ir::Function {
                 name: def.name.clone(),
@@ -106,7 +106,7 @@ fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast:
         match &param.kind {
             ast::ParamKind::Ident(name) => names.push(name.clone()),
             ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => names.push(name.clone()),
-            ast::ParamKind::Pattern(pattern @ ast::Pattern::Tuple(..), _) => {
+            ast::ParamKind::Pattern(pattern @ (ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. }), _) => {
                 let synthetic = format!("__param{i}");
                 names.push(synthetic.clone());
                 destructures.push((synthetic, pattern.clone()));
@@ -114,7 +114,7 @@ fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast:
             _ => {
                 return Err(format!(
                     "lowering not yet implemented for destructuring function parameters of \
-                     this shape (only tuples and plain identifiers so far) at {:?}",
+                     this shape (only tuples, structs, and plain identifiers so far) at {:?}",
                     param.span
                 ));
             }
@@ -125,22 +125,28 @@ fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast:
 
 // Wraps `rest` in a `Match` that destructures `scrutinee_name` (a
 // synthetic param name — see `lower_params`) according to `pattern`.
-// Only tuple patterns, one level deep, are supported — same
+// Tuple and struct patterns, one level deep, are supported — same
 // restriction `lower_variant_pattern` places on match arms, since both
 // go through the identical tag+positional-bindings mechanism.
-fn wrap_destructure(scrutinee_name: String, pattern: &ast::Pattern, rest: ir::Expr) -> Result<ir::Expr, String> {
-    let (tag, bindings) = lower_destructurable_pattern(pattern)?;
+fn wrap_destructure(
+    scrutinee_name: String,
+    pattern: &ast::Pattern,
+    ctx: &LoweringContext,
+    rest: ir::Expr,
+) -> Result<ir::Expr, String> {
+    let (tag, bindings) = lower_destructurable_pattern(pattern, ctx)?;
     Ok(ir::Expr::Match {
         scrutinee: Box::new(ir::Expr::Var(scrutinee_name)),
         arms: vec![ir::MatchArm { tag, bindings, body: rest }],
     })
 }
 
-// The shared core of "destructure a tuple into plain-identifier
-// bindings" — used for match arms (`lower_variant_pattern`), function
-// params (`wrap_destructure`), and block-level `let` (`lower_let_stmt`)
-// alike, so all three accept exactly the same shapes.
-fn lower_destructurable_pattern(pattern: &ast::Pattern) -> Result<(String, Vec<String>), String> {
+// The shared core of "destructure a tuple or struct pattern into
+// plain-identifier bindings" — used for match arms
+// (`lower_variant_pattern`), function params (`wrap_destructure`), and
+// block-level `let` alike, so all three accept exactly the same
+// shapes.
+fn lower_destructurable_pattern(pattern: &ast::Pattern, ctx: &LoweringContext) -> Result<(String, Vec<String>), String> {
     match pattern {
         ast::Pattern::Tuple(elems, span) => {
             if elems.is_empty() {
@@ -165,8 +171,65 @@ fn lower_destructurable_pattern(pattern: &ast::Pattern) -> Result<(String, Vec<S
             }
             Ok((tuple_tag(bindings.len()), bindings))
         }
+        // `Point { x, y }` / `Point { x: px, .. }` — named fields need
+        // the struct's DECLARED order (same reason struct literals need
+        // `ctx`; see LoweringContext's doc comment), not the order
+        // they're written in the pattern. `has_rest` (`..`) means "I
+        // don't care about the fields I didn't mention" — the omitted
+        // DECLARED positions still need SOME binding slot (Match
+        // requires exactly one binding per declared field), so they
+        // get `"_"`, same as an explicit wildcard. `has_rest` does NOT
+        // relax the unknown-field check: naming a field the struct
+        // doesn't have is still always an error.
+        ast::Pattern::Struct {
+            path,
+            fields,
+            has_rest,
+            span,
+        } => {
+            let tag = path.last().cloned().expect("a path always has at least one segment");
+            let Some(declared_fields) = ctx.struct_fields.get(&tag) else {
+                return Err(format!(
+                    "unknown struct type {tag:?} at {span:?} (no declaration found in this \
+                     lowering context)"
+                ));
+            };
+            let mut by_name: HashMap<&str, &ast::Pattern> = HashMap::new();
+            for f in fields {
+                if by_name.insert(f.name.as_str(), &f.pattern).is_some() {
+                    return Err(format!("field {:?} specified more than once at {:?}", f.name, f.span));
+                }
+            }
+            let mut bindings = Vec::with_capacity(declared_fields.len());
+            for declared_name in declared_fields {
+                match by_name.remove(declared_name.as_str()) {
+                    Some(sub_pattern) => match sub_pattern {
+                        ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
+                        ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
+                        other => {
+                            return Err(format!(
+                                "lowering not yet implemented for nested patterns inside a \
+                                 struct pattern at {:?}",
+                                other.span()
+                            ));
+                        }
+                    },
+                    None if *has_rest => bindings.push("_".to_string()),
+                    None => {
+                        return Err(format!(
+                            "missing field {declared_name:?} for struct {tag:?} pattern at {span:?} \
+                             (add `..` to ignore it)"
+                        ));
+                    }
+                }
+            }
+            if let Some((extra_name, _)) = by_name.into_iter().next() {
+                return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+            }
+            Ok((tag, bindings))
+        }
         other => Err(format!(
-            "lowering not yet implemented for this pattern shape as a tuple destructure at {:?}",
+            "lowering not yet implemented for this pattern shape as a destructure at {:?}",
             other.span()
         )),
     }
@@ -338,7 +401,7 @@ fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringCont
                 arm.span
             ));
         }
-        let (tag, bindings) = lower_variant_pattern(&arm.pattern)?;
+        let (tag, bindings) = lower_variant_pattern(&arm.pattern, ctx)?;
         let body = lower_expr(&arm.body, ctx)?;
         ir_arms.push(ir::MatchArm { tag, bindings, body });
     }
@@ -395,14 +458,14 @@ fn lower_for(
 }
 
 // Only the simple `Path(bindings...)` / bare `Path` shape our minimal
-// IR Match can represent. Notably NOT supported yet: a bare wildcard
-// `_` as a whole arm (no "default arm" concept exists in the IR —
-// Match dispatches strictly by tag; see ir.rs's scope note), or-
-// patterns, literal patterns, struct patterns, tuple patterns, and
-// nested patterns inside a variant's args (only `Ident`/`Wildcard`
-// args are supported, since those map directly onto a positional
-// binding name).
-fn lower_variant_pattern(pattern: &ast::Pattern) -> Result<(String, Vec<String>), String> {
+// IR Match can represent, PLUS tuple and struct patterns (delegated to
+// `lower_destructurable_pattern`). Notably NOT supported yet: a bare
+// wildcard `_` as a whole arm (no "default arm" concept exists in the
+// IR — Match dispatches strictly by tag; see ir.rs's scope note), or-
+// patterns, literal patterns, and nested patterns inside a variant's
+// args (only `Ident`/`Wildcard` args are supported, since those map
+// directly onto a positional binding name).
+fn lower_variant_pattern(pattern: &ast::Pattern, ctx: &LoweringContext) -> Result<(String, Vec<String>), String> {
     match pattern {
         ast::Pattern::Variant { path, args, .. } => {
             let tag = path.last().cloned().expect("a path always has at least one segment");
@@ -426,12 +489,13 @@ fn lower_variant_pattern(pattern: &ast::Pattern) -> Result<(String, Vec<String>)
             }
             Ok((tag, bindings))
         }
-        // A tuple pattern goes through the exact same tag+positional-
-        // bindings mechanism as a variant, via the shared helper also
-        // used for destructuring params/`let` — `(a, b) => ...` and
-        // `Shape.Circle(r) => ...` are both just "dispatch on tag,
-        // bind fields positionally" underneath.
-        tuple @ ast::Pattern::Tuple(..) => lower_destructurable_pattern(tuple),
+        // A tuple or struct pattern goes through the exact same
+        // tag+positional-bindings mechanism as a variant, via the
+        // shared helper also used for destructuring params/`let` —
+        // `(a, b) => ...`, `Point { x, y } => ...`, and
+        // `Shape.Circle(r) => ...` are all just "dispatch on tag, bind
+        // fields positionally" underneath.
+        p @ (ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. }) => lower_destructurable_pattern(p, ctx),
         other => Err(format!(
             "lowering not yet implemented for this pattern shape as a match arm at {:?}",
             other.span()
@@ -503,18 +567,18 @@ fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, St
                 value: Box::new(lower_expr(value, ctx)?),
                 body: Box::new(result),
             },
-            // `let (a, b) = expr;` destructures directly against the
-            // VALUE, no synthetic name needed — unlike a function
-            // param (which needs a flat name to seed the initial env
-            // before any destructuring can run), a block-level `let`'s
-            // value is just an ordinary expression a `Match` can
-            // scrutinize directly.
+            // `let (a, b) = expr;` / `let Point { x, y } = expr;`
+            // destructure directly against the VALUE, no synthetic name
+            // needed — unlike a function param (which needs a flat name
+            // to seed the initial env before any destructuring can
+            // run), a block-level `let`'s value is just an ordinary
+            // expression a `Match` can scrutinize directly.
             ast::Stmt::Let {
-                pattern: tuple @ ast::Pattern::Tuple(..),
+                pattern: p @ (ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. }),
                 value,
                 ..
             } => {
-                let (tag, bindings) = lower_destructurable_pattern(tuple)?;
+                let (tag, bindings) = lower_destructurable_pattern(p, ctx)?;
                 ir::Expr::Match {
                     scrutinee: Box::new(lower_expr(value, ctx)?),
                     arms: vec![ir::MatchArm {
@@ -527,7 +591,7 @@ fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, St
             ast::Stmt::Let { pattern, .. } => {
                 return Err(format!(
                     "lowering not yet implemented for destructuring let-bindings of this \
-                     shape (only tuples and plain identifiers so far) at {:?}",
+                     shape (only tuples, structs, and plain identifiers so far) at {:?}",
                     pattern.span()
                 ));
             }
@@ -1435,7 +1499,151 @@ mod tests {
     }
 
     #[test]
-    fn struct_destructuring_param_is_not_yet_supported() {
+    fn struct_destructuring_param_wraps_the_body_in_a_match() {
+        let program = lower_program("struct Point { x: Int, y: Int }\nlet area (Point { x, y }) = x * y");
+        assert_eq!(program.functions[0].params, vec!["__param0".to_string()]);
+        assert_eq!(
+            program.functions[0].body,
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("__param0".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Point".to_string(),
+                    bindings: vec!["x".to_string(), "y".to_string()],
+                    body: ir::Expr::Binary(
+                        ir::BinOp::Mul,
+                        Box::new(ir::Expr::Var("x".to_string())),
+                        Box::new(ir::Expr::Var("y".to_string())),
+                    ),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_destructuring_param_field_order_is_declared_order_not_written_order() {
+        // Fields written in the OPPOSITE order from the declaration —
+        // bindings must still come out x-then-y (declared order), same
+        // guarantee struct literals already give.
+        let program = lower_program("struct Point { x: Int, y: Int }\nlet area (Point { y, x }) = x * y");
+        assert_eq!(
+            program.functions[0].body,
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("__param0".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Point".to_string(),
+                    bindings: vec!["x".to_string(), "y".to_string()],
+                    body: ir::Expr::Binary(
+                        ir::BinOp::Mul,
+                        Box::new(ir::Expr::Var("x".to_string())),
+                        Box::new(ir::Expr::Var("y".to_string())),
+                    ),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_destructuring_param_field_rename() {
+        let program = lower_program("struct Point { x: Int, y: Int }\nlet area (Point { x: px, y: py }) = px * py");
+        assert_eq!(
+            program.functions[0].body,
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("__param0".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Point".to_string(),
+                    bindings: vec!["px".to_string(), "py".to_string()],
+                    body: ir::Expr::Binary(
+                        ir::BinOp::Mul,
+                        Box::new(ir::Expr::Var("px".to_string())),
+                        Box::new(ir::Expr::Var("py".to_string())),
+                    ),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_destructuring_param_with_rest_fills_omitted_fields_with_wildcard() {
+        let program = lower_program("struct Point { x: Int, y: Int }\nlet get_x (Point { x, .. }) = x");
+        assert_eq!(
+            program.functions[0].body,
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("__param0".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Point".to_string(),
+                    bindings: vec!["x".to_string(), "_".to_string()],
+                    body: ir::Expr::Var("x".to_string()),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_destructuring_param_missing_field_without_rest_is_an_error() {
+        lower_program_err("struct Point { x: Int, y: Int }\nlet get_x (Point { x }) = x");
+    }
+
+    #[test]
+    fn struct_destructuring_param_unknown_field_is_an_error() {
+        lower_program_err("struct Point { x: Int, y: Int }\nlet get_x (Point { x, y, z }) = x");
+    }
+
+    #[test]
+    fn struct_destructuring_param_unknown_struct_is_an_error() {
         lower_program_err("let area (Point { x, y }) = x * y");
+    }
+
+    #[test]
+    fn match_arm_struct_pattern() {
+        let ctx = context_from_program("struct Point { x: Int, y: Int }");
+        assert_eq!(
+            lower_with("match p { Point { x, y } => x + y }", &ctx),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("p".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Point".to_string(),
+                    bindings: vec!["x".to_string(), "y".to_string()],
+                    body: ir::Expr::Binary(
+                        ir::BinOp::Add,
+                        Box::new(ir::Expr::Var("x".to_string())),
+                        Box::new(ir::Expr::Var("y".to_string())),
+                    ),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn block_let_struct_destructure() {
+        let ctx = context_from_program("struct Point { x: Int, y: Int }");
+        assert_eq!(
+            lower_with("{ let Point { x, y } = p; x + y }", &ctx),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("p".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Point".to_string(),
+                    bindings: vec!["x".to_string(), "y".to_string()],
+                    body: ir::Expr::Binary(
+                        ir::BinOp::Add,
+                        Box::new(ir::Expr::Var("x".to_string())),
+                        Box::new(ir::Expr::Var("y".to_string())),
+                    ),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_pattern_duplicate_field_is_an_error() {
+        let ctx = context_from_program("struct Point { x: Int, y: Int }");
+        lower_with_err("match p { Point { x, x } => x }", &ctx);
+    }
+
+    #[test]
+    fn struct_pattern_nested_pattern_is_not_yet_supported() {
+        let ctx = context_from_program(
+            "struct Inner { v: Int }\nstruct Outer { inner: Inner, y: Int }",
+        );
+        lower_with_err("match p { Outer { inner: Inner { v }, y } => v + y }", &ctx);
     }
 }

@@ -299,6 +299,29 @@ impl Infer {
                             }
                         }
                     }
+                    // Field types are already known from `ctx` — same
+                    // "unify against the nominal type, bind declared
+                    // field types directly" approach as a struct `let`.
+                    ast::ParamKind::Pattern(
+                        ast::Pattern::Struct {
+                            path,
+                            fields,
+                            has_rest,
+                            span: pspan,
+                        },
+                        _,
+                    ) => {
+                        let (tag, bindings, payload_types) =
+                            Self::struct_pattern_info(path, fields, *has_rest, *pspan, &self.ctx)?;
+                        let s = unify(&acc.apply(param_ty), &Type::Struct(tag))
+                            .map_err(|e| format!("function {:?} parameter: {e}", def.name))?;
+                        acc = s.compose(&acc);
+                        for (name, field_ty) in bindings.iter().zip(payload_types.iter()) {
+                            if name != "_" {
+                                body_env = body_env.extend(name.clone(), acc.apply(field_ty));
+                            }
+                        }
+                    }
                     _ => {
                         return Err(format!(
                             "type inference not yet implemented for destructuring function \
@@ -556,6 +579,71 @@ impl Infer {
         }
     }
 
+    // Resolves a struct pattern (`Point { x, y }` / `Point { x: px, .. }`)
+    // against the struct's DECLARED field order/types from `ctx` — the
+    // type-level counterpart to lower.rs's `lower_destructurable_pattern`
+    // struct arm (which resolves field ORDER; this resolves field
+    // TYPES too, so there's no fresh-var step needed the way tuple
+    // patterns need one). Returns (tag, bindings, DECLARED field types)
+    // in declared order, the same shape `variant_pattern_info`-derived
+    // callers already expect.
+    fn struct_pattern_info(
+        path: &[String],
+        fields: &[ast::FieldPattern],
+        has_rest: bool,
+        span: plum_syntax::span::Span,
+        ctx: &crate::context::TypeContext,
+    ) -> Result<(String, Vec<String>, Vec<Type>), String> {
+        let tag = path.last().cloned().expect("a path always has at least one segment");
+        let declared_fields = ctx
+            .struct_fields(&tag)
+            .ok_or_else(|| format!("unknown struct type {tag:?} at {span:?}"))?
+            .to_vec();
+
+        let mut by_name: HashMap<&str, &ast::Pattern> = HashMap::new();
+        for f in fields {
+            if by_name.insert(f.name.as_str(), &f.pattern).is_some() {
+                return Err(format!("field {:?} specified more than once at {:?}", f.name, f.span));
+            }
+        }
+
+        let mut bindings = Vec::with_capacity(declared_fields.len());
+        let mut payload_types = Vec::with_capacity(declared_fields.len());
+        for (declared_name, declared_ty) in &declared_fields {
+            match by_name.remove(declared_name.as_str()) {
+                Some(ast::Pattern::Ident(name, _)) => {
+                    bindings.push(name.clone());
+                    payload_types.push(declared_ty.clone());
+                }
+                Some(ast::Pattern::Wildcard(_)) => {
+                    bindings.push("_".to_string());
+                    payload_types.push(declared_ty.clone());
+                }
+                Some(other) => {
+                    return Err(format!(
+                        "type inference not yet implemented for nested patterns inside a \
+                         struct pattern at {:?}",
+                        other.span()
+                    ));
+                }
+                None if has_rest => {
+                    bindings.push("_".to_string());
+                    payload_types.push(declared_ty.clone());
+                }
+                None => {
+                    return Err(format!(
+                        "missing field {declared_name:?} for struct {tag:?} pattern at {span:?} \
+                         (add `..` to ignore it)"
+                    ));
+                }
+            }
+        }
+        if let Some((extra_name, _)) = by_name.into_iter().next() {
+            return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+        }
+        Ok((tag, bindings, payload_types))
+    }
+
     fn infer_match(&mut self, scrutinee: &ast::Expr, arms: &[ast::MatchArm], env: &TypeEnv) -> Result<(Type, Subst), String> {
         let (scrutinee_ty, s) = self.infer_expr(scrutinee, env)?;
         let mut acc = s;
@@ -599,6 +687,16 @@ impl Infer {
                         }
                     }
                     (Type::Tuple(fresh_vars.clone()), bindings, fresh_vars)
+                }
+                ast::Pattern::Struct {
+                    path,
+                    fields,
+                    has_rest,
+                    span,
+                } => {
+                    let (tag, bindings, payload_types) =
+                        Self::struct_pattern_info(path, fields, *has_rest, *span, &self.ctx)?;
+                    (Type::Struct(tag), bindings, payload_types)
                 }
                 _ => {
                     let (tag, bindings) = Self::variant_pattern_info(&arm.pattern)?;
@@ -916,6 +1014,44 @@ impl Infer {
                                     other.span()
                                 ));
                             }
+                        }
+                    }
+                    cur_env = cur_env.apply_subst(&acc);
+                }
+                // `let Point { x, y } = expr;` — unlike a tuple `let`,
+                // field TYPES are already known from `ctx` (no
+                // fresh-var peeling needed), so this just unifies the
+                // value's type against the nominal `Struct` type and
+                // binds the declared field types directly.
+                ast::Stmt::Let {
+                    pattern:
+                        ast::Pattern::Struct {
+                            path,
+                            fields,
+                            has_rest,
+                            span: pspan,
+                        },
+                    value,
+                    ty,
+                    span,
+                    ..
+                } => {
+                    if ty.is_some() {
+                        return Err(format!(
+                            "type inference not yet implemented for type annotations on \
+                             struct destructuring `let` at {pspan:?}"
+                        ));
+                    }
+                    let (val_ty, s) = self.infer_expr(value, &cur_env)?;
+                    acc = s.compose(&acc);
+                    let (tag, bindings, payload_types) =
+                        Self::struct_pattern_info(path, fields, *has_rest, *pspan, &self.ctx)?;
+                    let s = unify(&acc.apply(&val_ty), &Type::Struct(tag))
+                        .map_err(|e| format!("struct `let` at {span:?}: {e}"))?;
+                    acc = s.compose(&acc);
+                    for (name, field_ty) in bindings.iter().zip(payload_types.iter()) {
+                        if name != "_" {
+                            cur_env = cur_env.extend(name.clone(), acc.apply(field_ty));
                         }
                     }
                     cur_env = cur_env.apply_subst(&acc);
@@ -1579,6 +1715,74 @@ mod tests {
         assert_eq!(infer_expr_with(&mut infer, "match p { Point(x, y) => x }", &env), Type::Float);
     }
 
+    // --- Struct patterns (`Point { x, y }`), as opposed to the
+    // variant-call-syntax fallback above (`Point(x, y)`) ---
+
+    #[test]
+    fn match_arm_struct_pattern() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        assert_eq!(infer_expr_with(&mut infer, "match p { Point { x, y } => x }", &env), Type::Float);
+    }
+
+    #[test]
+    fn match_arm_struct_pattern_field_rename() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match p { Point { x: px, y: py } => px + py }", &env),
+            Type::Float
+        );
+    }
+
+    #[test]
+    fn match_arm_struct_pattern_with_rest() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        assert_eq!(infer_expr_with(&mut infer, "match p { Point { x, .. } => x }", &env), Type::Float);
+    }
+
+    #[test]
+    fn match_arm_struct_pattern_missing_field_without_rest_is_an_error() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        infer_expr_with_err(&mut infer, "match p { Point { x } => x }", &env);
+    }
+
+    #[test]
+    fn match_arm_struct_pattern_unknown_field_is_an_error() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        infer_expr_with_err(&mut infer, "match p { Point { x, y, z } => x }", &env);
+    }
+
+    #[test]
+    fn match_arm_struct_pattern_unknown_struct_is_an_error() {
+        let mut infer = Infer::new();
+        let env = TypeEnv::new().extend("p".to_string(), Type::Var(0));
+        infer_expr_with_err(&mut infer, "match p { Point { x, y } => x }", &env);
+    }
+
+    #[test]
+    fn block_let_struct_destructure() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        assert_eq!(infer_expr_with(&mut infer, "{ let Point { x, y } = p; x + y }", &env), Type::Float);
+    }
+
+    #[test]
+    fn block_let_struct_destructure_type_annotation_is_not_yet_supported() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        infer_expr_with_err(&mut infer, "{ let Point { x, y }: Point = p; x }", &env);
+    }
+
+    #[test]
+    fn struct_destructuring_function_param() {
+        let types = infer_program("struct Point { x: Float, y: Float }\nlet area (Point { x, y }) = x * y");
+        assert_eq!(types["area"], fn_ty(vec![Type::Struct("Point".to_string())], Type::Float));
+    }
+
     #[test]
     fn match_mixing_a_struct_and_an_unrelated_enum_is_an_error() {
         let mut infer =
@@ -1768,11 +1972,17 @@ mod tests {
     // variables before any body is inferred — this is what lets a
     // recursive call type-check at all.
 
+    // Builds the TypeContext from the SOURCE ITSELF (mirroring what
+    // `plumc::typecheck_and_run` actually does) rather than an empty
+    // one — needed for any program-level test whose struct/enum
+    // declarations live in `src`, not passed in separately.
     fn infer_program(src: &str) -> HashMap<String, Type> {
         let tokens = Lexer::new(src).tokenize();
         let mut parser = Parser::new(tokens);
         let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
-        let mut infer = Infer::new();
+        let ctx = crate::context::TypeContext::from_items(&program.items)
+            .unwrap_or_else(|e| panic!("context error for {src:?}: {e}"));
+        let mut infer = Infer::with_context(ctx);
         infer
             .infer_program(&program)
             .unwrap_or_else(|e| panic!("program inference error for {src:?}: {e}"))
@@ -1782,7 +1992,9 @@ mod tests {
         let tokens = Lexer::new(src).tokenize();
         let mut parser = Parser::new(tokens);
         let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
-        let mut infer = Infer::new();
+        let ctx = crate::context::TypeContext::from_items(&program.items)
+            .unwrap_or_else(|e| panic!("context error for {src:?}: {e}"));
+        let mut infer = Infer::with_context(ctx);
         infer
             .infer_program(&program)
             .expect_err(&format!("expected inference of {src:?} to fail"))
