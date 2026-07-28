@@ -81,4 +81,22 @@ mod tests {
         let result = typecheck_and_run(src, "run", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Int(2)));
     }
+
+    #[test]
+    fn for_and_unsafe_run_through_the_full_gated_pipeline() {
+        // `for`/`unsafe` are the newest lowered forms — this proves
+        // they're accepted by the type-check gate (not just runnable if
+        // it were skipped) AND actually execute correctly together.
+        let src = "let count n = unsafe { for i in 0..n { i } }";
+        let result = typecheck_and_run(src, "count", vec![Value::Int(5)]);
+        assert_eq!(result, Ok(Value::Unit));
+    }
+
+    #[test]
+    fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
+        let src = "let bad n = for i in true..n { i }";
+        let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
 }

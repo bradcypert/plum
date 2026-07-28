@@ -169,9 +169,16 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         // language grows something `unsafe` actually gates, THAT'S
         // what needs an IR-level marker, not the block itself.
         ast::Expr::Unsafe(block, _) => lower_block(block, ctx),
+        // The concurrency MODEL itself is Decided (see DESIGN.md) —
+        // what's actually blocking this is unresolved: a `Value::
+        // HeapRef` is only meaningful within the single `Heap` that
+        // allocated it, so a value sent across a channel to a task
+        // running on another thread's `Interpreter` couldn't resolve.
+        // See DESIGN.md's "Implementation blocker: heap ownership
+        // across tasks" for the real options under consideration.
         ast::Expr::Spawn(_, span) => Err(format!(
-            "lowering not yet implemented for `spawn` (concurrency model is still an open \
-             design question — see DESIGN.md) at {span:?}"
+            "lowering not yet implemented for `spawn` (blocked on heap ownership across \
+             tasks, not the concurrency model itself — see DESIGN.md) at {span:?}"
         )),
         // Closures, field access, generic instantiation, and indexing
         // are all still deferred — none of them are needed to validate
@@ -968,8 +975,9 @@ mod tests {
 
     #[test]
     fn spawn_is_not_yet_supported() {
-        // Concurrency model is still an open design question — see
-        // DESIGN.md — not just an unimplemented-but-decided feature.
+        // The concurrency MODEL is Decided now — this is blocked on a
+        // real open implementation question (heap ownership across
+        // tasks), not an undecided design. See DESIGN.md.
         lower_err("spawn { 1 }");
     }
 

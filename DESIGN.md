@@ -130,11 +130,24 @@ core differentiation argument for Plum existing at all.
 
 ## Concurrency
 
-### Model — Leaning
+### Model — Decided
 
 Go-inspired: lightweight tasks (goroutine-equivalent) + typed channels +
 `select`-style multiplexing, as the ergonomic baseline to match or beat.
 Explicitly open to innovating beyond Go, not just copying it.
+
+`spawn { block }` starts a task running `block` concurrently; the
+expression itself evaluates to a task handle (shape TBD — at minimum
+something joinable, `Task[T]` where `T` is the block's result type).
+`channel[T]()` (already sketched under Generics syntax) creates a
+typed, bounded-or-unbounded-TBD channel and returns `(tx, rx)` — a
+`Sender[T]`/`Receiver[T]` pair, matching the `let (tx, rx) =
+channel[Int]()` example already on record. Concrete operations, naming
+still open (bikeshed, not blocking): something like `tx.send(v)` /
+`rx.recv()`, plus a `select { rx1.recv() => ..., rx2.recv() => ... }`
+form for multiplexing over several channels at once — exact surface
+syntax for `select` is deferred until it's actually being implemented,
+not needed to lock the model.
 
 ### How this interacts with non-atomic refcounts — Leaning
 
@@ -173,6 +186,44 @@ model (spawn a task, channels, `select`) on top of plain OS threads
 first (heavier per-task, semantically identical to the eventual model),
 and treat a real green-thread scheduler as a later performance upgrade,
 not a v1 requirement.
+
+### Implementation blocker: heap ownership across tasks — Open
+
+Found while scoping `spawn`'s lowering (2026-07-27): the CURRENT
+tree-walking interpreter (`plum-interp`) gives each `Interpreter` its
+own single, non-atomic-refcounted `Heap` (a plain `Vec` of cells,
+addressed by a bare `usize`). A `Value::HeapRef(addr)` is only
+meaningful within the `Heap` that allocated it. If `spawn` ran a block
+on a real OS thread with its own `Interpreter` (the natural reading of
+"OS threads first" above), sending a struct/enum value across a channel
+to a DIFFERENT thread wouldn't resolve — the address wouldn't exist in
+the receiving thread's heap at all. This is a genuinely unresolved
+question, not just unimplemented plumbing, and it's serious enough that
+none of the three options below should be picked reflexively:
+
+- **Deep-copy heap values on channel send.** Simplest to reason about,
+  keeps "non-atomic by default" fully intact (each heap genuinely never
+  sees concurrent access), but means "move" semantics for channel send
+  (see above) would need to become "copy" for anything heap-shaped,
+  which undercuts the compile-time race-freedom claim resting on
+  ownership TRANSFER rather than duplication — needs real thought
+  before committing.
+- **A genuinely shared heap for values that cross tasks.** Closer to
+  true move semantics (no copy), but reintroduces exactly the
+  concurrent-access-to-a-refcount problem the non-atomic-by-default
+  design was built to avoid for the COMMON case — would need every
+  cross-task-reachable value to opt into atomic refcounting somehow,
+  raising the question of how that's tracked/enforced.
+- **Restrict channels to non-heap (primitive) values for a first cut**,
+  deferring the real answer entirely. Fast to ship, but doesn't
+  validate the design's actual hard part, and callers would hit a wall
+  the moment they try to send anything struct/enum-shaped.
+
+Not resolving this now. `spawn`'s lowering keeps erroring loudly at
+`lower.rs` (see `lower_for`'s sibling `Expr::Spawn` case) — the error
+message should be updated to point at THIS blocker specifically, not
+just "concurrency model is undecided," since the model itself is now
+Decided above; what's actually missing is this.
 
 ## Syntax and surface semantics
 

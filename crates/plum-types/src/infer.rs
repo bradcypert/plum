@@ -343,6 +343,17 @@ impl Infer {
             } => self.infer_struct_literal(path, fields, spread, *span, env),
             ast::Expr::Match { scrutinee, arms, .. } => self.infer_match(scrutinee, arms, env),
             ast::Expr::Closure { params, body, .. } => self.infer_closure(params, body, env),
+            // `unsafe` gates nothing at the type level either — see
+            // lower.rs's identical reasoning for why it lowers
+            // transparently. Whatever the block's type is, that's this
+            // expression's type too.
+            ast::Expr::Unsafe(block, _) => self.infer_block(block, env),
+            ast::Expr::For {
+                pattern,
+                iter,
+                body,
+                span,
+            } => self.infer_for(pattern, iter, body, *span, env),
             other => Err(format!(
                 "type inference not yet implemented for this expression form at {:?}",
                 other.span()
@@ -560,6 +571,61 @@ impl Infer {
         let (body_ty, acc) = self.infer_expr(body, &closure_env)?;
         let resolved_params = param_types.iter().map(|t| acc.apply(t)).collect();
         Ok((Type::Function(resolved_params, Box::new(acc.apply(&body_ty))), acc))
+    }
+
+    // `for pattern in iter { body }` — mirrors lower.rs's `lower_for`
+    // restrictions exactly (plain-identifier pattern, iter must be a
+    // literal Range), since accepting anything lowering rejects would
+    // mean a program could pass type-checking and then fail to lower —
+    // the type checker's job is to predict what actually runs, not a
+    // superset of it. Always produces Unit: `body`'s value is discarded
+    // every iteration, same as a statement-expression in a block.
+    fn infer_for(
+        &mut self,
+        pattern: &ast::Pattern,
+        iter: &ast::Expr,
+        body: &ast::Block,
+        span: plum_syntax::span::Span,
+        env: &TypeEnv,
+    ) -> Result<(Type, Subst), String> {
+        let var = match pattern {
+            ast::Pattern::Ident(name, _) => name.clone(),
+            other => {
+                return Err(format!(
+                    "type inference not yet implemented for destructuring `for` patterns at {:?}",
+                    other.span()
+                ));
+            }
+        };
+        let ast::Expr::Binary {
+            op: ast::BinaryOp::Range,
+            lhs,
+            rhs,
+            ..
+        } = iter
+        else {
+            return Err(format!(
+                "type inference not yet implemented for `for` over anything but a literal \
+                 range (`start..end`) at {span:?}"
+            ));
+        };
+
+        let (start_ty, s) = self.infer_expr(lhs, env)?;
+        let mut acc = s;
+        let s = unify(&acc.apply(&start_ty), &Type::Int).map_err(|e| format!("`for` range start: {e}"))?;
+        acc = s.compose(&acc);
+        let refined_env = env.apply_subst(&acc);
+
+        let (end_ty, s) = self.infer_expr(rhs, &refined_env)?;
+        acc = s.compose(&acc);
+        let s = unify(&acc.apply(&end_ty), &Type::Int).map_err(|e| format!("`for` range end: {e}"))?;
+        acc = s.compose(&acc);
+
+        let body_env = refined_env.apply_subst(&acc).extend(var, Type::Int);
+        let (_, s) = self.infer_block(body, &body_env)?;
+        acc = s.compose(&acc);
+
+        Ok((Type::Unit, acc))
     }
 
     fn infer_unary(&mut self, op: &ast::UnaryOp, expr: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), String> {
@@ -864,6 +930,61 @@ mod tests {
     #[test]
     fn unbound_variable_is_an_error() {
         infer_err("y");
+    }
+
+    // --- `for`/`unsafe` ---
+
+    #[test]
+    fn for_loop_over_a_literal_range_infers_as_unit() {
+        assert_eq!(infer("for i in 0..5 { i }"), Type::Unit);
+    }
+
+    #[test]
+    fn for_loop_variable_is_bound_as_int_inside_the_body() {
+        assert_eq!(infer("for i in 0..5 { i + 1 }"), Type::Unit);
+    }
+
+    #[test]
+    fn for_loop_variable_does_not_leak_past_the_loop() {
+        infer_err("{ for i in 0..5 { i }; i }");
+    }
+
+    #[test]
+    fn for_loop_range_bounds_must_be_int() {
+        infer_err("for i in true..5 { i }");
+        infer_err("for i in 0..false { i }");
+    }
+
+    #[test]
+    fn for_loop_range_bounds_can_be_arbitrary_int_expressions() {
+        let env = TypeEnv::new().extend("n".to_string(), Type::Int);
+        assert_eq!(infer_in("for i in 0..(n + 1) { i }", &env), Type::Unit);
+    }
+
+    #[test]
+    fn for_loop_body_type_errors_propagate() {
+        infer_err("for i in 0..5 { 1 + true }");
+    }
+
+    #[test]
+    fn for_loop_over_anything_but_a_literal_range_is_not_yet_supported() {
+        infer_err("for i in xs { i }");
+    }
+
+    #[test]
+    fn for_loop_destructuring_pattern_is_not_yet_supported() {
+        infer_err("for (a, b) in 0..5 { a }");
+    }
+
+    #[test]
+    fn unsafe_block_infers_like_its_inner_block() {
+        assert_eq!(infer("unsafe { 1 + 2 }"), Type::Int);
+        assert_eq!(infer("unsafe { true }"), Type::Bool);
+    }
+
+    #[test]
+    fn unsafe_block_type_errors_propagate() {
+        infer_err("unsafe { 1 + true }");
     }
 
     #[test]
