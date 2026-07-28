@@ -198,11 +198,9 @@ pub enum Expr {
     // SAME crossing mechanism `Spawn`/`TaskJoin` use — see
     // `Interpreter::to_portable`), onto the channel `sender` (expected
     // to be a `Value::Sender`) identifies. Evaluates to `Unit`.
-    // DESIGN.md's "channel send is a move" (checked via FBIP's last-
-    // use analysis, same as any other move) is NOT enforced yet —
-    // reusing `value` after sending it is not currently a compile
-    // error, an explicit, documented v1 gap (spawn's captured
-    // environment has this exact same gap already).
+    // DESIGN.md's "channel send is a move" IS enforced — see
+    // `plum-ir::movecheck` — as a separate AST-level static pass, not
+    // by anything at this IR layer.
     ChannelSend {
         sender: Box<Expr>,
         value: Box<Expr>,
@@ -216,6 +214,57 @@ pub enum Expr {
     ChannelRecv {
         receiver: Box<Expr>,
     },
+    // `select { pattern = expr => body, ... }` — blocks until ONE of
+    // `arms`' `receiver`s has a value ready, then evaluates that ONE
+    // arm's `body`. `body` already has `pattern`'s destructuring baked
+    // in via the SAME `wrap_destructure` machinery a function param
+    // uses (see `lower.rs`'s `lower_select`) — it references a FIXED
+    // synthetic name (`"__select_recv"`) the interpreter is
+    // responsible for binding to the actually-received value right
+    // before evaluating `body`. Every arm's `receiver` is evaluated
+    // exactly ONCE up front (not re-evaluated on every poll — see
+    // `Interpreter::eval`'s `Select` case), so an expression with side
+    // effects there behaves as expected.
+    Select {
+        arms: Vec<SelectArm>,
+    },
+    // `arr[i]` — reads the field at RUNTIME index `index` out of the
+    // heap value `base` (an `Array[T]`, represented as an ordinary
+    // `Ctor` — see `lower.rs`'s `ARRAY_TAG` — but this node works on
+    // ANY tagged heap value with enough fields; nothing about it is
+    // Array-specific at this layer). A genuinely NEW node, unlike
+    // reading a Struct/tuple field: `Match`'s bindings are fixed at
+    // COMPILE time (one name per DECLARED field position), but an
+    // array index is only known at RUNTIME. Out-of-bounds is a
+    // reported runtime error, not a panic or silent wraparound.
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+    },
+    // `arr.len()` — the heap cell's field COUNT. Same "check the
+    // callee's shape" convention as `.join()`/`.send()`/`.recv()`.
+    ArrayLen {
+        array: Box<Expr>,
+    },
+    // `arr.push(v)` — evaluates to a NEW array with `v` appended.
+    // Always allocates a fresh heap cell (old fields cloned, `v`
+    // appended) — genuinely, honestly NOT reuse-in-place optimized
+    // yet: FBIP's existing `CtorReuse` mechanism only ever recognizes
+    // SAME-arity reconstruction (a struct/tuple/enum's field COUNT
+    // never changes), never a cell GROWING by one field, so making
+    // `push` grow the old cell in place when uniquely owned needs
+    // genuinely new analysis, not just wiring into what already
+    // exists — deliberately deferred, not silently pretended-away.
+    ArrayPush {
+        array: Box<Expr>,
+        value: Box<Expr>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectArm {
+    pub receiver: Expr,
+    pub body: Expr,
 }
 
 #[derive(Debug, Clone, PartialEq)]

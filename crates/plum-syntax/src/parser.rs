@@ -1,7 +1,7 @@
 use crate::ast::{
     BinaryOp, Block, ClosureParam, EnumDecl, EnumVariant, Expr, ExternBlock, ExternFn,
     ExternParam, FieldInit, FieldPattern, GenericParam, Item, ItemKind, LetDef, MatchArm, Param,
-    ParamKind, Pattern, Program, Stmt, StructDecl, StructField, Type, UnaryOp, UseDecl,
+    ParamKind, Pattern, Program, SelectArm, Stmt, StructDecl, StructField, Type, UnaryOp, UseDecl,
 };
 use crate::lexer::{Token, TokenKind};
 use crate::span::Span;
@@ -898,6 +898,25 @@ impl Parser {
         Ok((args, close.span))
     }
 
+    // `[e1, e2, ...]` — mirrors `parse_arguments`'s comma-separated,
+    // optional-trailing-comma shape exactly, just bracketed instead of
+    // parenthesized and with no callee to attach to.
+    fn parse_array_literal(&mut self) -> Result<Expr, String> {
+        let start = self.expect(TokenKind::LBracket, "'['")?.span;
+        let mut elements = Vec::new();
+        if !self.check(&TokenKind::RBracket) {
+            elements.push(self.parse_expr_allowing_struct_literal()?);
+            while self.bump_if(&TokenKind::Comma) {
+                if self.check(&TokenKind::RBracket) {
+                    break;
+                }
+                elements.push(self.parse_expr_allowing_struct_literal()?);
+            }
+        }
+        let close = self.expect(TokenKind::RBracket, "']'")?;
+        Ok(Expr::ArrayLiteral(elements, start.to(close.span)))
+    }
+
     fn parse_generic_args(&mut self) -> Result<(Vec<Type>, Span), String> {
         self.expect(TokenKind::LBracket, "'['")?;
         let mut args = Vec::new();
@@ -968,6 +987,7 @@ impl Parser {
             // not the first.
             TokenKind::Ident(_) => self.parse_path_shaped_expr(),
             TokenKind::LParen => self.parse_paren_or_tuple(),
+            TokenKind::LBracket => self.parse_array_literal(),
             TokenKind::LBrace => {
                 let block = self.parse_block()?;
                 let span = block.span;
@@ -975,6 +995,7 @@ impl Parser {
             }
             TokenKind::If => self.parse_if_expr(),
             TokenKind::Match => self.parse_match_expr(),
+            TokenKind::Select => self.parse_select_expr(),
             TokenKind::For => self.parse_for_expr(),
             // `||` lexes as a single OrOr token (maximal munch), which
             // must be treated as an empty closure parameter list rather
@@ -1169,6 +1190,44 @@ impl Parser {
         let close = self.expect(TokenKind::RBrace, "'}'")?;
         Ok(Expr::Match {
             scrutinee: Box::new(scrutinee),
+            arms,
+            span: start.to(close.span),
+        })
+    }
+
+    // `select { pattern = expr => body, ... }` — deliberately mirrors
+    // `parse_match_expr`'s shape (comma-separated arms, optional
+    // trailing comma) as closely as possible; the only real difference
+    // is each arm has a `pattern = expr` prefix instead of matching
+    // against one shared scrutinee. `expr` is parsed as an ordinary
+    // expression here — this parser does NOT require it to look like
+    // `X.recv()`; that shape check happens downstream (lowering/
+    // inference), the same "grammar doesn't know about method-call-
+    // shaped builtins" precedent `.join()`/`.send()`/`.recv()`
+    // themselves already established.
+    fn parse_select_expr(&mut self) -> Result<Expr, String> {
+        let start = self.expect(TokenKind::Select, "'select'")?.span;
+        self.expect(TokenKind::LBrace, "'{'")?;
+        let mut arms = Vec::new();
+        while !self.check(&TokenKind::RBrace) {
+            let pattern = self.parse_pattern()?;
+            self.expect(TokenKind::Eq, "'='")?;
+            let expr = self.parse_expr_no_struct_literal()?;
+            self.expect(TokenKind::FatArrow, "'=>'")?;
+            let body = self.parse_expr()?;
+            let span = pattern.span().to(body.span());
+            arms.push(SelectArm {
+                pattern,
+                expr,
+                body,
+                span,
+            });
+            if !self.bump_if(&TokenKind::Comma) {
+                break;
+            }
+        }
+        let close = self.expect(TokenKind::RBrace, "'}'")?;
+        Ok(Expr::Select {
             arms,
             span: start.to(close.span),
         })
@@ -1386,6 +1445,11 @@ mod tests {
                 parts.extend(elems.iter().map(render));
                 format!("({})", parts.join(" "))
             }
+            Expr::ArrayLiteral(elems, _) => {
+                let mut parts = vec!["array".to_string()];
+                parts.extend(elems.iter().map(render));
+                format!("({})", parts.join(" "))
+            }
             Expr::Unary { op, expr, .. } => {
                 let sym = match op {
                     UnaryOp::Neg => "-",
@@ -1465,6 +1529,11 @@ mod tests {
                 }
                 format!("({})", parts.join(" "))
             }
+            Expr::Select { arms, .. } => {
+                let mut parts = vec!["select".to_string()];
+                parts.extend(arms.iter().map(render_select_arm));
+                format!("({})", parts.join(" "))
+            }
         }
     }
 
@@ -1503,6 +1572,15 @@ mod tests {
             ),
             None => format!("(arm {} {})", render_pattern(&arm.pattern), render(&arm.body)),
         }
+    }
+
+    fn render_select_arm(arm: &crate::ast::SelectArm) -> String {
+        format!(
+            "(arm {} = {} {})",
+            render_pattern(&arm.pattern),
+            render(&arm.expr),
+            render(&arm.body)
+        )
     }
 
     #[test]
@@ -2053,6 +2131,57 @@ mod tests {
     #[test]
     fn spawn_block() {
         assert_eq!(render(&parse("spawn { producer(tx) }")), "(spawn (block (call producer tx)))");
+    }
+
+    #[test]
+    fn select_basic() {
+        assert_eq!(
+            render(&parse("select { v = rx1.recv() => v, w = rx2.recv() => w }")),
+            "(select (arm v = (call (field rx1 recv)) v) (arm w = (call (field rx2 recv)) w))"
+        );
+    }
+
+    #[test]
+    fn select_with_wildcard_arm() {
+        assert_eq!(
+            render(&parse("select { v = rx1.recv() => v, _ = rx2.recv() => 0 }")),
+            "(select (arm v = (call (field rx1 recv)) v) (arm _ = (call (field rx2 recv)) 0))"
+        );
+    }
+
+    #[test]
+    fn select_trailing_comma() {
+        assert_eq!(
+            render(&parse("select { v = rx.recv() => v, }")),
+            "(select (arm v = (call (field rx recv)) v))"
+        );
+    }
+
+    // --- Arrays ---
+
+    #[test]
+    fn array_literal_basic() {
+        assert_eq!(render(&parse("[1, 2, 3]")), "(array 1 2 3)");
+    }
+
+    #[test]
+    fn array_literal_empty() {
+        assert_eq!(render(&parse("[]")), "(array)");
+    }
+
+    #[test]
+    fn array_literal_trailing_comma() {
+        assert_eq!(render(&parse("[1, 2,]")), "(array 1 2)");
+    }
+
+    #[test]
+    fn array_index_lowercase_disambiguates_from_generic_instantiation() {
+        assert_eq!(render(&parse("arr[i]")), "(index arr i)");
+    }
+
+    #[test]
+    fn array_index_on_a_literal() {
+        assert_eq!(render(&parse("[1, 2, 3][0]")), "(index (array 1 2 3) 0)");
     }
 
     #[test]

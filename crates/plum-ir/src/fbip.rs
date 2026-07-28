@@ -1,4 +1,4 @@
-use crate::ir::{Expr, Function, Global, MatchArm, Program, RcOp};
+use crate::ir::{Expr, Function, Global, MatchArm, Program, RcOp, SelectArm};
 use std::collections::HashSet;
 
 /// Inserts explicit refcount inc/dec operations via last-use analysis
@@ -125,6 +125,26 @@ pub fn mark_reuse(expr: Expr) -> Expr {
         },
         Expr::ChannelRecv { receiver } => Expr::ChannelRecv {
             receiver: Box::new(mark_reuse(*receiver)),
+        },
+        Expr::Select { arms } => Expr::Select {
+            arms: arms
+                .into_iter()
+                .map(|arm| SelectArm {
+                    receiver: mark_reuse(arm.receiver),
+                    body: mark_reuse(arm.body),
+                })
+                .collect(),
+        },
+        Expr::Index { base, index } => Expr::Index {
+            base: Box::new(mark_reuse(*base)),
+            index: Box::new(mark_reuse(*index)),
+        },
+        Expr::ArrayLen { array } => Expr::ArrayLen {
+            array: Box::new(mark_reuse(*array)),
+        },
+        Expr::ArrayPush { array, value } => Expr::ArrayPush {
+            array: Box::new(mark_reuse(*array)),
+            value: Box::new(mark_reuse(*value)),
         },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
@@ -276,6 +296,30 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         Expr::ChannelRecv { receiver } => Expr::ChannelRecv {
             receiver: Box::new(transform(*receiver, known_heap)),
         },
+        // Arm bindings (whatever a `Let`/`Match` node WITHIN `body`
+        // introduces for the received value — see ir.rs's `Select` doc
+        // comment) aren't added to `known_heap` here either, same
+        // reasoning as `Match`'s own arm bodies just below.
+        Expr::Select { arms } => Expr::Select {
+            arms: arms
+                .into_iter()
+                .map(|arm| SelectArm {
+                    receiver: transform(arm.receiver, known_heap),
+                    body: transform(arm.body, known_heap),
+                })
+                .collect(),
+        },
+        Expr::Index { base, index } => Expr::Index {
+            base: Box::new(transform(*base, known_heap)),
+            index: Box::new(transform(*index, known_heap)),
+        },
+        Expr::ArrayLen { array } => Expr::ArrayLen {
+            array: Box::new(transform(*array, known_heap)),
+        },
+        Expr::ArrayPush { array, value } => Expr::ArrayPush {
+            array: Box::new(transform(*array, known_heap)),
+            value: Box::new(transform(*value, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -352,6 +396,12 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
             expr_mentions_var(sender, name) || expr_mentions_var(value, name)
         }
         Expr::ChannelRecv { receiver } => expr_mentions_var(receiver, name),
+        Expr::Select { arms } => arms
+            .iter()
+            .any(|arm| expr_mentions_var(&arm.receiver, name) || expr_mentions_var(&arm.body, name)),
+        Expr::Index { base, index } => expr_mentions_var(base, name) || expr_mentions_var(index, name),
+        Expr::ArrayLen { array } => expr_mentions_var(array, name),
+        Expr::ArrayPush { array, value } => expr_mentions_var(array, name) || expr_mentions_var(value, name),
     }
 }
 
@@ -653,6 +703,76 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
         Expr::ChannelRecv { receiver } => {
             let (receiver_t, used) = mark_last_uses(*receiver, name, live_after);
             (Expr::ChannelRecv { receiver: Box::new(receiver_t) }, used)
+        }
+        // Bodies are ALTERNATIVES — only ONE arm's `body` actually
+        // runs at runtime (whichever channel becomes ready first) —
+        // same treatment as `Match`'s arms: each processed with the
+        // SAME `live_after`, combined with OR. No separate shadowing
+        // check is needed here the way `Match` needs one for its own
+        // `bindings` field: a `Select` arm's received-value binding is
+        // baked directly into `body` as an ordinary `Let`/`Match` node
+        // (see `lower.rs`'s `wrap_select_arm_pattern`), so `body`'s own
+        // existing shadowing logic already handles it correctly.
+        // Receivers are evaluated UNCONDITIONALLY and SEQUENTIALLY
+        // (every arm's channel expression runs, in order, before
+        // waiting on any of them) — same backward-threading treatment
+        // as `Call`'s args, starting from whatever the bodies
+        // collectively needed.
+        Expr::Select { arms } => {
+            let mut used_any_body = false;
+            let (receivers, bodies): (Vec<Expr>, Vec<Expr>) = arms.into_iter().map(|arm| (arm.receiver, arm.body)).unzip();
+            let new_bodies: Vec<Expr> = bodies
+                .into_iter()
+                .map(|body| {
+                    let (body_t, used) = mark_last_uses(body, name, live_after);
+                    used_any_body = used_any_body || used;
+                    body_t
+                })
+                .collect();
+            let mut acc_used = live_after || used_any_body;
+            let mut new_receivers = Vec::with_capacity(receivers.len());
+            for r in receivers.into_iter().rev() {
+                let (r_t, used) = mark_last_uses(r, name, acc_used);
+                acc_used = acc_used || used;
+                new_receivers.push(r_t);
+            }
+            new_receivers.reverse();
+            let new_arms = new_receivers
+                .into_iter()
+                .zip(new_bodies)
+                .map(|(receiver, body)| SelectArm { receiver, body })
+                .collect();
+            (Expr::Select { arms: new_arms }, acc_used)
+        }
+        // `base[index]` — evaluation order is `base` then `index`
+        // (matching how a normal method-style call would evaluate its
+        // receiver before its argument), so backward analysis
+        // processes `index` first.
+        Expr::Index { base, index } => {
+            let (index_t, used_index) = mark_last_uses(*index, name, live_after);
+            let (base_t, used_base) = mark_last_uses(*base, name, live_after || used_index);
+            (
+                Expr::Index {
+                    base: Box::new(base_t),
+                    index: Box::new(index_t),
+                },
+                used_base || used_index,
+            )
+        }
+        Expr::ArrayLen { array } => {
+            let (array_t, used) = mark_last_uses(*array, name, live_after);
+            (Expr::ArrayLen { array: Box::new(array_t) }, used)
+        }
+        Expr::ArrayPush { array, value } => {
+            let (value_t, used_value) = mark_last_uses(*value, name, live_after);
+            let (array_t, used_array) = mark_last_uses(*array, name, live_after || used_value);
+            (
+                Expr::ArrayPush {
+                    array: Box::new(array_t),
+                    value: Box::new(value_t),
+                },
+                used_array || used_value,
+            )
         }
         // The reassignment TARGET (`name`) is a plain String field,
         // never an `Expr::Var` occurrence — so, unlike `Let`, there's

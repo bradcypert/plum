@@ -500,6 +500,122 @@ mod tests {
     }
 
     #[test]
+    fn a_correctly_annotated_parameter_runs_through_the_full_gated_pipeline() {
+        let src = "let square (x: Int) = x * x";
+        let result = typecheck_and_run(src, "square", vec![Value::Int(6)]);
+        assert_eq!(result, Ok(Value::Int(36)));
+    }
+
+    #[test]
+    fn a_mismatched_parameter_annotation_is_rejected_before_running() {
+        let src = "let use_it (x: Bool) = x + 1";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Bool(true)])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn a_struct_typed_parameter_annotation_runs_through_the_full_gated_pipeline() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let dx (p: Point) = match p { Point(a, b) => a }\n\
+                    let use_it dummy = dx(Point { x: 7, y: 0 })";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn a_generic_function_annotation_runs_through_the_full_gated_pipeline() {
+        let src = "let identity[T] (x: T): T = x\nlet use_it dummy = identity(42)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn mismatched_shared_generic_parameters_are_rejected_before_running() {
+        let src = "let pair[T] (a: T) (b: T): T = a\nlet use_it dummy = pair(1, true)";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn a_bound_satisfying_generic_function_call_runs_through_the_full_gated_pipeline() {
+        let src = "let f[T: Num] (x: T): T = x\nlet use_it dummy = f(21)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(21)));
+    }
+
+    #[test]
+    fn a_bound_violating_generic_function_call_is_rejected_before_running() {
+        let src = "let f[T: Num] (x: T): T = x\nlet use_it dummy = f(true)";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn select_runs_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let (tx1, rx1) = channel[Int]();\
+                    let (tx2, rx2) = channel[Int]();\
+                    tx2.send(7);\
+                    select { v = rx1.recv() => v, w = rx2.recv() => w } }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn select_waits_on_a_spawned_task_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let (tx, rx) = channel[Int]();\
+                    let t = spawn { tx.send(11) };\
+                    let v = select { v = rx.recv() => v };\
+                    t.join();\
+                    v }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(11)));
+    }
+
+    #[test]
+    fn select_arms_with_mismatched_result_types_are_rejected_before_running() {
+        let src = "let use_it dummy = { let (tx, rx) = channel[Int](); tx.send(1);\
+                    select { v = rx.recv() => v, w = rx.recv() => true } }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn array_construction_indexing_and_push_run_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let a = [1, 2, 3]; let b = a.push(4); a[0] + b[3] + b.len() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(1 + 4 + 4)));
+    }
+
+    #[test]
+    fn an_array_of_structs_runs_through_the_full_gated_pipeline() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let arr = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }];\
+                    match arr[1] { Point(a, b) => a + b } }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn array_element_type_mismatch_is_rejected_before_running() {
+        let src = "let use_it dummy = [1, true]";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn array_index_out_of_bounds_is_a_runtime_error_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = [1, 2, 3][10]";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a runtime error, not a successful run");
+        assert!(err.contains("out of bounds"), "expected an out-of-bounds error, got: {err}");
+    }
+
+    #[test]
     fn joining_a_non_task_value_is_rejected_before_running() {
         let src = "let use_it dummy = 5.join()";
         let err = typecheck_and_run(src, "use_it", vec![Value::Unit])

@@ -138,6 +138,10 @@ fn tuple_tag(arity: usize) -> String {
 // `"Range"` alone, which genuinely could.
 const RANGE_TAG: &str = "0Range";
 
+// An `Array[T]` literal's synthetic tag — same leading-digit,
+// unreachable-by-any-real-identifier trick as `RANGE_TAG`/`tuple_tag`.
+const ARRAY_TAG: &str = "0Array";
+
 // Lowers a param list into (top-level flat param names, body-wrapping
 // destructures). A tuple-pattern param becomes a synthetic positional
 // name (`__param0`, ...) PLUS a destructure to apply around the
@@ -394,6 +398,20 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                 fields,
             })
         }
+        // `[e1, e2, ...]` — heap-allocated exactly like a tuple/struct,
+        // via the SAME `Ctor` node, just with a synthetic tag no
+        // struct/enum declaration can ever spell (see `ARRAY_TAG`).
+        ast::Expr::ArrayLiteral(elements, _) => {
+            let fields = elements.iter().map(|e| lower_expr(e, ctx)).collect::<Result<_, _>>()?;
+            Ok(ir::Expr::Ctor {
+                tag: ARRAY_TAG.to_string(),
+                fields,
+            })
+        }
+        ast::Expr::Index { base, index, .. } => Ok(ir::Expr::Index {
+            base: Box::new(lower_expr(base, ctx)?),
+            index: Box::new(lower_expr(index, ctx)?),
+        }),
         ast::Expr::Unary { op, expr, .. } => {
             let ir_op = match op {
                 ast::UnaryOp::Neg => ir::UnOp::Neg,
@@ -505,6 +523,29 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         {
             Ok(ir::Expr::Channel)
         }
+        // `arr.len()` — same shape-only precedent, zero args.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "len") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ArrayLen {
+                array: Box::new(lower_expr(base, ctx)?),
+            })
+        }
+        // `arr.push(v)` — same shape-only precedent, one arg.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "push") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ArrayPush {
+                array: Box::new(lower_expr(base, ctx)?),
+                value: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
         ast::Expr::Call { callee, args, span } => {
             // `Circle(1.0)` or `Shape.Circle(1.0)` constructs a variant
             // if the callee names one — checked BEFORE falling back to
@@ -550,6 +591,7 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
             span,
         } => lower_struct_literal(path, fields, spread, *span, ctx),
         ast::Expr::Match { scrutinee, arms, .. } => lower_match(scrutinee, arms, ctx),
+        ast::Expr::Select { arms, .. } => lower_select(arms, ctx),
         ast::Expr::For { pattern, iter, body, .. } => lower_for(pattern, iter, body, ctx),
         // `unsafe` has nothing to mark yet — no IR operation is
         // unsafe-only (no raw pointers, no unchecked ops), so the block
@@ -727,6 +769,58 @@ fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringCont
         scrutinee: Box::new(ir_scrutinee),
         arms: ir_arms,
     })
+}
+
+// `pattern = expr` in a `select` arm: binds the received value the
+// SAME way `lower_params` binds a function parameter — a plain `Ident`/
+// `Wildcard` needs no `Match` at all (direct `Let`, or nothing);
+// anything tag-shaped (`Variant`/`Tuple`/`Struct`) reuses the exact
+// same `wrap_destructure` a struct-destructuring function param does.
+// `"__select_recv"` is the FIXED synthetic name `Interpreter::eval`'s
+// `Select` case binds to the actually-received value before
+// evaluating this wrapped body — see ir.rs's `Select` doc comment.
+fn wrap_select_arm_pattern(pattern: &ast::Pattern, ctx: &LoweringContext, body: ir::Expr) -> Result<ir::Expr, String> {
+    match pattern {
+        ast::Pattern::Ident(name, _) => Ok(ir::Expr::Let {
+            name: name.clone(),
+            value: Box::new(ir::Expr::Var("__select_recv".to_string())),
+            body: Box::new(body),
+        }),
+        ast::Pattern::Wildcard(_) => Ok(body),
+        ast::Pattern::Variant { .. } | ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. } => {
+            wrap_destructure("__select_recv".to_string(), pattern, ctx, body)
+        }
+        other => Err(format!(
+            "lowering not yet implemented for this pattern shape in a `select` arm at {:?}",
+            other.span()
+        )),
+    }
+}
+
+// `select { pattern = expr => body, ... }` — `expr` is required to be
+// an `X.recv()` call SHAPE (checked here, not by the parser — see
+// ast.rs's `Select` doc comment); `X` becomes the arm's `receiver`.
+fn lower_select(arms: &[ast::SelectArm], ctx: &LoweringContext) -> Result<ir::Expr, String> {
+    let mut ir_arms = Vec::with_capacity(arms.len());
+    for arm in arms {
+        let ast::Expr::Call { callee, args, span } = &arm.expr else {
+            return Err(format!(
+                "`select` arm requires an `expr.recv()` call at {:?}",
+                arm.expr.span()
+            ));
+        };
+        let ast::Expr::Field { base, name, .. } = callee.as_ref() else {
+            return Err(format!("`select` arm requires an `expr.recv()` call at {span:?}"));
+        };
+        if name != "recv" || !args.is_empty() {
+            return Err(format!("`select` arm requires an `expr.recv()` call at {span:?}"));
+        }
+        let receiver = lower_expr(base, ctx)?;
+        let arm_body = lower_expr(&arm.body, ctx)?;
+        let body = wrap_select_arm_pattern(&arm.pattern, ctx, arm_body)?;
+        ir_arms.push(ir::SelectArm { receiver, body });
+    }
+    Ok(ir::Expr::Select { arms: ir_arms })
 }
 
 // `for pattern in iter { body }`. Only two things are supported so far,
@@ -2054,6 +2148,135 @@ mod tests {
             lower("rx.recv()"),
             ir::Expr::ChannelRecv {
                 receiver: Box::new(ir::Expr::Var("rx".to_string())),
+            }
+        );
+    }
+
+    // --- `select` ---
+
+    #[test]
+    fn select_with_ident_arms_lowers_to_a_select_node() {
+        assert_eq!(
+            lower("select { v = rx1.recv() => v, w = rx2.recv() => w }"),
+            ir::Expr::Select {
+                arms: vec![
+                    ir::SelectArm {
+                        receiver: ir::Expr::Var("rx1".to_string()),
+                        body: ir::Expr::Let {
+                            name: "v".to_string(),
+                            value: Box::new(ir::Expr::Var("__select_recv".to_string())),
+                            body: Box::new(ir::Expr::Var("v".to_string())),
+                        },
+                    },
+                    ir::SelectArm {
+                        receiver: ir::Expr::Var("rx2".to_string()),
+                        body: ir::Expr::Let {
+                            name: "w".to_string(),
+                            value: Box::new(ir::Expr::Var("__select_recv".to_string())),
+                            body: Box::new(ir::Expr::Var("w".to_string())),
+                        },
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn select_wildcard_arm_needs_no_binding() {
+        assert_eq!(
+            lower("select { _ = rx.recv() => 0 }"),
+            ir::Expr::Select {
+                arms: vec![ir::SelectArm {
+                    receiver: ir::Expr::Var("rx".to_string()),
+                    body: ir::Expr::Int(0),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn select_tuple_pattern_arm_reuses_wrap_destructure() {
+        assert_eq!(
+            lower("select { (a, b) = rx.recv() => a }"),
+            ir::Expr::Select {
+                arms: vec![ir::SelectArm {
+                    receiver: ir::Expr::Var("rx".to_string()),
+                    body: ir::Expr::Match {
+                        scrutinee: Box::new(ir::Expr::Var("__select_recv".to_string())),
+                        arms: vec![ir::MatchArm {
+                            tag: "2Tuple".to_string(),
+                            bindings: vec!["a".to_string(), "b".to_string()],
+                            guard: None,
+                            body: ir::Expr::Var("a".to_string()),
+                        }],
+                    },
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn select_arm_not_shaped_like_a_recv_call_is_an_error() {
+        lower_err("select { v = 5 => v }");
+    }
+
+    #[test]
+    fn select_arm_calling_something_other_than_recv_is_an_error() {
+        lower_err("select { v = rx.join() => v }");
+    }
+
+    // --- Arrays ---
+
+    #[test]
+    fn array_literal_lowers_to_a_ctor_with_a_synthetic_tag() {
+        assert_eq!(
+            lower("[1, 2, 3]"),
+            ir::Expr::Ctor {
+                tag: "0Array".to_string(),
+                fields: vec![ir::Expr::Int(1), ir::Expr::Int(2), ir::Expr::Int(3)],
+            }
+        );
+    }
+
+    #[test]
+    fn empty_array_literal_lowers_to_a_ctor_with_no_fields() {
+        assert_eq!(
+            lower("[]"),
+            ir::Expr::Ctor {
+                tag: "0Array".to_string(),
+                fields: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn array_index_lowers_to_an_index_node() {
+        assert_eq!(
+            lower("arr[0]"),
+            ir::Expr::Index {
+                base: Box::new(ir::Expr::Var("arr".to_string())),
+                index: Box::new(ir::Expr::Int(0)),
+            }
+        );
+    }
+
+    #[test]
+    fn array_len_lowers_to_an_array_len_node() {
+        assert_eq!(
+            lower("arr.len()"),
+            ir::Expr::ArrayLen {
+                array: Box::new(ir::Expr::Var("arr".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn array_push_lowers_to_an_array_push_node() {
+        assert_eq!(
+            lower("arr.push(5)"),
+            ir::Expr::ArrayPush {
+                array: Box::new(ir::Expr::Var("arr".to_string())),
+                value: Box::new(ir::Expr::Int(5)),
             }
         );
     }

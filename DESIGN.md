@@ -496,6 +496,54 @@ capture, a distinction that only exists because of the borrow checker.
 Plum doesn't expose borrows at the surface at all, so captures just
 work, with nothing to choose.
 
+### Arrays — Decided (v1 scope)
+
+`Array[T]` is the first collection type — no array/list/collection
+existed anywhere in the language before this (`for` could only ever
+iterate a literal `start..end` range). Decided 2026-07-29, after
+weighing `Array[T]`/`List[T]`/`Vec[T]` as the name: **`Array[T]`** —
+the growth semantics decided below are conceptually Rust's `Vec`
+(capacity-header realloc, in-place growth when uniquely owned), and
+`List[T]` risked the wrong mental model for anyone coming from OCaml/
+F#/Haskell, where `list` means an immutable singly-linked cons-list
+with O(n) indexing — the opposite of what's being built here (O(1)
+index, amortized-O(1) push).
+
+**Mutability model: a purely functional API, with FBIP making it fast
+in place** — the SAME choice already made for every other heap value
+in the language, not a new mutation model invented for arrays
+specifically. `arr.push(v)` is an ordinary VALUE-returning operation
+(`let b = a.push(v)`); nothing about the surface syntax exposes
+mutation. The `let mut`-based genuine-in-place-mutation alternative was
+explicitly considered and rejected for v1: it would need real aliasing
+rules (can two `let`-bound names alias the same array? what happens on
+push if they do?) that don't exist anywhere in the language yet, for a
+problem FBIP's existing reuse-in-place philosophy already has a proven
+answer to.
+
+Literal syntax: `[e1, e2, ...]` — a genuinely new primary-expression
+grammar production (unlike `arr[i]` indexing, which the parser already
+had, written ahead of a real collection type to use it with).
+
+v1 operations, deliberately minimal: construction (`[1, 2, 3]`),
+`arr[i]` (index read, runtime-bounds-checked, not a compile-time
+check), `.len()`, `.push(v)`. Deliberately NOT yet decided/implemented:
+`pop`/`set-at-index`/`remove`, `map`/`filter`/`fold` and friends, and
+`for x in arr` iteration (`for` still only ever accepts a `Range`,
+literal or stored in a variable — not yet extended to arrays at all) —
+all real, separate follow-up work, not ruled out, just not v1.
+
+Implementation note on the mutability decision above: `.push(v)`
+currently always allocates a fresh cell (copies every existing element
+plus the new one) — REUSE-IN-PLACE for `push` specifically needs
+genuinely new FBIP analysis, not just wiring into what already exists,
+since the existing `CtorReuse` mechanism only ever recognizes
+SAME-arity reconstruction (a struct/tuple/enum's field count never
+changes at runtime); growing a cell's field count by one is a different
+shape of optimization. Deferred, honestly, not silently pretended into
+place — the functional API surface is what stays stable regardless of
+when (or whether) that optimization lands.
+
 ### Effect/unsafe tracking — Leaning
 
 A lightweight `unsafe`/`extern` marker that propagates from FFI call
@@ -650,12 +698,12 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 
 - Exact design of the `Ref`/`Shared` mutable type and its interaction
   with pattern matching and FBIP.
-- Array/string growth strategy under FBIP (capacity headers, in-place
-  realloc when uniquely owned) — conceptually similar to `Vec`/`String`
-  in Rust, but inferred rather than explicit `&mut`. Includes literal
-  syntax for arrays/lists (not yet decided — deliberately avoided in
-  `examples/overview.plum`'s closure example to avoid sneaking in an
-  undecided feature) and standard collection operations like `map`.
+- `Array[T]`'s v1 scope is Decided (see "Arrays" above) but its
+  IN-PLACE-growth optimization for `.push()` is not yet designed (needs
+  new FBIP analysis beyond what `CtorReuse` already does), nor are
+  `pop`/`set-at-index`/`remove`, `map`/`filter`/`fold`, `for x in arr`
+  iteration, or String's own growth strategy (presumably similar, not
+  yet worked through explicitly).
 - Recursive closures that capture themselves (named top-level recursive
   functions should compile to direct calls, sidestepping this; true
   anonymous self-referential closures are a deferred detail).

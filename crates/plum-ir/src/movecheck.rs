@@ -94,6 +94,7 @@ fn check_expr(expr: &ast::Expr, moved: &mut HashSet<String>) -> Result<(), Strin
             check_expr(rhs, moved)
         }
         ast::Expr::Tuple(elems, _) => elems.iter().try_for_each(|e| check_expr(e, moved)),
+        ast::Expr::ArrayLiteral(elems, _) => elems.iter().try_for_each(|e| check_expr(e, moved)),
         ast::Expr::Field { base, .. } => check_expr(base, moved),
         // `expr.send(value)` — checked BEFORE generic `Call` handling,
         // the same shape `lower.rs`'s `Call` arm already special-cases
@@ -151,6 +152,32 @@ fn check_expr(expr: &ast::Expr, moved: &mut HashSet<String>) -> Result<(), Strin
                 }
                 if let Some(guard) = &arm.guard {
                     check_expr(guard, &mut arm_moved)?;
+                }
+                check_expr(&arm.body, &mut arm_moved)?;
+            }
+            Ok(())
+        }
+        // `select { pattern = expr => body, ... }` — every arm's
+        // `expr` (the channel being received from) is evaluated
+        // unconditionally, so those are checked SEQUENTIALLY against
+        // the SAME threaded `moved` set, same as `Call`'s args. Only
+        // ONE arm's `body` actually runs (whichever channel becomes
+        // ready first, decided at runtime) — same "alternatives"
+        // treatment as `Match`'s arms just above: each `body` is
+        // checked from a CLONE of `moved` (so a violation already
+        // established before the `select` still fires inside it), the
+        // arm's own pattern-bound name is cleared first (shadowing),
+        // and nothing newly moved inside a body propagates back out.
+        ast::Expr::Select { arms, .. } => {
+            for arm in arms {
+                check_expr(&arm.expr, moved)?;
+            }
+            for arm in arms {
+                let mut arm_moved = moved.clone();
+                let mut bound = Vec::new();
+                pattern_names(&arm.pattern, &mut bound);
+                for name in &bound {
+                    arm_moved.remove(name);
                 }
                 check_expr(&arm.body, &mut arm_moved)?;
             }

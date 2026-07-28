@@ -18,11 +18,26 @@ use std::collections::{HashMap, HashSet};
 pub struct Scheme {
     pub vars: Vec<TypeVarId>,
     pub ty: Type,
+    // Ad-hoc polymorphism bounds (DESIGN.md's `Num`/`Eq`/`Show`) on
+    // whichever of `vars` came from an EXPLICIT function-level generic
+    // annotation with a bound (`let f[T: Num] (x: T) = ...`) — keyed by
+    // the SAME (pre-instantiation) var id `vars` uses. Empty for every
+    // monomorphic scheme and for any quantified var with no declared
+    // bound. Checked at each CALL site, not here at generalization time
+    // — see `Infer::instantiate_with_bounds`'s doc comment for why a
+    // function's own generic var is usually still genuinely
+    // UNRESOLVED at the point it's generalized, so there's nothing
+    // concrete yet to check a bound against.
+    pub bounds: HashMap<TypeVarId, Vec<String>>,
 }
 
 impl Scheme {
     fn monomorphic(ty: Type) -> Scheme {
-        Scheme { vars: Vec::new(), ty }
+        Scheme {
+            vars: Vec::new(),
+            ty,
+            bounds: HashMap::new(),
+        }
     }
 }
 
@@ -86,7 +101,11 @@ fn free_vars_scheme(scheme: &Scheme) -> HashSet<TypeVarId> {
 fn generalize(ty: &Type, env: &TypeEnv) -> Scheme {
     let env_vars: HashSet<TypeVarId> = env.0.iter().flat_map(|(_, s)| free_vars_scheme(s)).collect();
     let vars: Vec<TypeVarId> = free_vars(ty).difference(&env_vars).copied().collect();
-    Scheme { vars, ty: ty.clone() }
+    Scheme {
+        vars,
+        ty: ty.clone(),
+        bounds: HashMap::new(),
+    }
 }
 
 /// A simple scope stack — same shadowing/scoping shape as
@@ -145,6 +164,7 @@ impl TypeEnv {
                         Scheme {
                             vars: s.vars.clone(),
                             ty: subst.apply(&s.ty),
+                            bounds: s.bounds.clone(),
                         },
                     )
                 })
@@ -224,17 +244,48 @@ impl Infer {
     /// same program both type-check even though they need `identity`
     /// to behave as `Bool -> Bool` and `Int -> Int` respectively. A
     /// monomorphic scheme (empty `vars`, the common case) instantiates
-    /// to exactly its own type, unchanged.
+    /// to exactly its own type, unchanged. Discards bound-checking
+    /// entirely — for a BARE reference to a bounded generic function
+    /// (not called), same shape as struct/enum construction skipping a
+    /// still-unresolved `Var`. See `instantiate_with_bounds` for the
+    /// version an actual CALL site needs.
     fn instantiate(&mut self, scheme: &Scheme) -> Type {
+        self.instantiate_with_bounds(scheme).0
+    }
+
+    /// Same substitution `instantiate` does, but ALSO returns which of
+    /// the freshly-minted vars carry a bound (`scheme.bounds`, re-keyed
+    /// from the scheme's original var ids to the NEW fresh ones) —
+    /// what a real call site needs to actually CHECK a bound.
+    ///
+    /// Bounds are deliberately checked HERE, at instantiation/call time,
+    /// never back when the scheme was generalized: a function's own
+    /// generic var (`let f[T: Num] (x: T) = ...`) is usually still
+    /// completely UNRESOLVED at that point — nothing inside `f`'s own
+    /// body necessarily pins `T` to any concrete type, so there's
+    /// nothing yet to check it against. It only becomes checkable once
+    /// a REAL call supplies a concrete argument, exactly mirroring why
+    /// `Infer::check_generic_bounds` (struct/enum construction) checks
+    /// the FINAL resolved argument, not the fresh var `instantiate_generic`
+    /// mints. The caller is responsible for actually running the check
+    /// AFTER unifying call arguments — see `infer_call_with_callee`.
+    fn instantiate_with_bounds(&mut self, scheme: &Scheme) -> (Type, Vec<(TypeVarId, Vec<String>)>) {
         if scheme.vars.is_empty() {
-            return scheme.ty.clone();
+            return (scheme.ty.clone(), Vec::new());
         }
         let mut subst = Subst::empty();
+        let mut pending = Vec::new();
         for &v in &scheme.vars {
             let fresh = self.fresh();
+            if let Some(bounds) = scheme.bounds.get(&v) {
+                let Type::Var(fresh_id) = &fresh else {
+                    unreachable!("Infer::fresh always returns Type::Var");
+                };
+                pending.push((*fresh_id, bounds.clone()));
+            }
             subst = Subst::single(v, fresh).compose(&subst);
         }
-        subst.apply(&scheme.ty)
+        (subst.apply(&scheme.ty), pending)
     }
 
     /// Instantiates a generic struct/enum declaration named `decl_name`
@@ -290,6 +341,78 @@ impl Infer {
             }
         }
         Ok(())
+    }
+
+    /// Resolves a function param/return annotation, ALSO understanding
+    /// that function's own declared generic names (`generic_vars`,
+    /// built once per function in `infer_program` — see its own doc
+    /// comment) — the function-signature counterpart to `ast_type_to_type`'s
+    /// `in_scope_params`/`Type::Param` handling for struct/enum
+    /// declarations, but deliberately NOT the same mechanism: a
+    /// function's own generic name resolves DIRECTLY to the one fresh
+    /// `Var` `generic_vars` minted for it, not to a `Type::Param`
+    /// template. There's no separate "instantiate later" step needed
+    /// here the way a struct/enum construction site needs one — a
+    /// function's body is inferred exactly ONCE (right here, in Phase
+    /// 2), and per-call-site polymorphism already comes entirely from
+    /// ordinary `generalize`/`instantiate` on the RESULT of that single
+    /// inference, ordinary Hindley-Milner let-polymorphism machinery
+    /// that already existed before this method did.
+    ///
+    /// Everything else (primitives, a struct/enum name, a generic
+    /// instantiation like `Option[T]` where `T` is itself one of this
+    /// function's generics) falls through to `ast_type_to_type`,
+    /// recursing back through THIS method for any nested type
+    /// arguments so a function generic can appear arbitrarily deep
+    /// (`Option[Pair[T]]` and similar).
+    ///
+    /// CALLER MUST `acc.apply()` the result before unifying with it.
+    /// A `generic_vars` entry is a RAW `Var` fixed once per function,
+    /// not re-resolved here — by the time a LATER annotation in the
+    /// same signature (e.g. the return type, checked after every
+    /// parameter) consults it, `acc` may already have resolved that
+    /// same `Var` further. Skipping this step once during development
+    /// produced a genuine infinite loop: unifying an un-applied stale
+    /// `Var` could bind it back onto something `acc` already resolved
+    /// FROM it, creating a self-referential `Subst` entry that
+    /// `Subst::apply`'s chain-following recurses on forever.
+    fn resolve_annotation(&self, ty: &ast::Type, generic_vars: &HashMap<String, Type>) -> Result<Type, String> {
+        match ty {
+            ast::Type::Path(segments, _) => match segments.last() {
+                Some(name) if generic_vars.contains_key(name) => Ok(generic_vars[name].clone()),
+                _ => ast_type_to_type(ty, &self.ctx, &[]),
+            },
+            ast::Type::Generic { base, args, span } => {
+                let name = base.last().cloned().ok_or_else(|| {
+                    format!("type inference not yet implemented for this type annotation at {span:?}")
+                })?;
+                let Some(declared_params) = self.ctx.generic_params(&name) else {
+                    return Err(format!(
+                        "type inference not yet implemented for this type annotation at {span:?}"
+                    ));
+                };
+                if args.len() != declared_params.len() {
+                    return Err(format!(
+                        "{name:?} expects {} generic argument(s), found {} at {span:?}",
+                        declared_params.len(),
+                        args.len()
+                    ));
+                }
+                let resolved_args = args
+                    .iter()
+                    .map(|a| self.resolve_annotation(a, generic_vars))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if self.ctx.is_struct(&name) {
+                    Ok(Type::Struct(name, resolved_args))
+                } else if self.ctx.is_enum(&name) {
+                    Ok(Type::Enum(name, resolved_args))
+                } else {
+                    Err(format!(
+                        "type inference not yet implemented for this type annotation at {span:?}"
+                    ))
+                }
+            }
+        }
     }
 
     /// Infers a type for every `let`-defined function in a program.
@@ -370,17 +493,59 @@ impl Infer {
         for def in &defs {
             let (param_vars, ret_var) = signatures.get(&def.name).cloned().expect("just inserted above");
             let mut body_env = global_env.apply_subst(&acc);
+            // One fresh `Var` per THIS function's own declared generic
+            // name (`let pair[T] (a: T) (b: T): T = a` mints ONE var for
+            // `T`, shared across every annotation that mentions it) —
+            // see `resolve_annotation`'s doc comment for why this is a
+            // direct `Var` substitution, not the `Type::Param`-template
+            // machinery struct/enum declarations use.
+            let generic_vars: HashMap<String, Type> =
+                def.generics.iter().map(|g| (g.name.clone(), self.fresh())).collect();
             for (param, param_ty) in def.params.iter().zip(param_vars.iter()) {
                 match &param.kind {
-                    ast::ParamKind::Ident(name) | ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => {
+                    ast::ParamKind::Ident(name) => {
+                        body_env = body_env.extend(name.clone(), acc.apply(param_ty));
+                    }
+                    // `(x: Int)` — a declared PARAMETER annotation,
+                    // previously parsed (`ParamKind::Pattern`'s second
+                    // field) but silently discarded here regardless —
+                    // every param got a bare fresh var no matter what
+                    // it said. Now resolved (via `resolve_annotation`,
+                    // which ALSO understands this function's own
+                    // declared generic names — `x: T` resolves to the
+                    // SAME `Var` `generic_vars` minted for `T`, shared
+                    // across every annotation in this signature that
+                    // mentions it) and unified against that fresh var —
+                    // a MISMATCH between the annotation and how the
+                    // body actually uses the parameter is now a real,
+                    // reported type error, not silently accepted.
+                    ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), annotation) => {
+                        if let Some(ty) = annotation {
+                            let annotated_ty = self.resolve_annotation(ty, &generic_vars)?;
+                            let s = unify(&acc.apply(param_ty), &acc.apply(&annotated_ty)).map_err(|e| {
+                                format!("function {:?} parameter {name:?}: {e}", def.name)
+                            })?;
+                            acc = s.compose(&acc);
+                        }
                         body_env = body_env.extend(name.clone(), acc.apply(param_ty));
                     }
                     // `bind_pattern` unifies `param_ty` (the single
                     // fresh var Phase 1 gave this flat-arity parameter)
                     // against whatever shape the pattern requires and
                     // binds every name it introduces, including nested
-                    // ones — see `bind_pattern`'s doc comment.
-                    ast::ParamKind::Pattern(pattern @ (ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. }), _) => {
+                    // ones — see `bind_pattern`'s doc comment. An
+                    // annotation here (`(Point { x, y }: Point)`) is
+                    // checked the SAME way, before `bind_pattern` runs
+                    // — largely redundant with what the pattern itself
+                    // already implies, but still a real, honest check
+                    // rather than a silently ignored one.
+                    ast::ParamKind::Pattern(pattern @ (ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. }), annotation) => {
+                        if let Some(ty) = annotation {
+                            let annotated_ty = self.resolve_annotation(ty, &generic_vars)?;
+                            let s = unify(&acc.apply(param_ty), &acc.apply(&annotated_ty))
+                                .map_err(|e| format!("function {:?} parameter: {e}", def.name))?;
+                            acc = s.compose(&acc);
+                        }
                         body_env = self
                             .bind_pattern(pattern, &acc.apply(param_ty), body_env, &mut acc)
                             .map_err(|e| format!("function {:?} parameter: {e}", def.name))?;
@@ -409,8 +574,8 @@ impl Infer {
             // against what the body actually produced, same as any
             // other annotation.
             if let Some(annotated) = &def.ret_ty {
-                let annotated_ty = ast_type_to_type(annotated, &self.ctx, &[])?;
-                let s = unify(&acc.apply(&ret_var), &annotated_ty).map_err(|e| {
+                let annotated_ty = self.resolve_annotation(annotated, &generic_vars)?;
+                let s = unify(&acc.apply(&ret_var), &acc.apply(&annotated_ty)).map_err(|e| {
                     format!("function {:?}: declared return type does not match its body: {e}", def.name)
                 })?;
                 acc = s.compose(&acc);
@@ -447,7 +612,42 @@ impl Infer {
                 let fn_ty = Type::Function(p_vars.iter().map(|t| acc.apply(t)).collect(), Box::new(acc.apply(r_var)));
                 outer_env = outer_env.extend(name.clone(), fn_ty);
             }
-            let scheme = generalize(&resolved_fn_ty, &outer_env);
+            let mut scheme = generalize(&resolved_fn_ty, &outer_env);
+            // Attach THIS function's own declared generic bounds to the
+            // scheme, keyed by whichever var id each generic name
+            // resolved to — usually still a genuinely free `Var` (which
+            // `generalize` just quantified over), recorded for
+            // `instantiate_with_bounds` to check later at each call
+            // site. If a generic ALREADY resolved to something concrete
+            // (the function's own body pinned it internally — e.g. `let
+            // f[T: Num] (x: T): T = x + 1` forces `T = Int` on its own),
+            // there's no var left to attach a bound to — checked RIGHT
+            // NOW instead, the same "check as soon as it's checkable"
+            // principle `instantiate_with_bounds` follows for the
+            // call-site case.
+            for g in &def.generics {
+                if g.bound.is_empty() {
+                    continue;
+                }
+                let Some(var) = generic_vars.get(&g.name) else {
+                    continue;
+                };
+                match acc.apply(var) {
+                    Type::Var(id) => {
+                        scheme.bounds.insert(id, g.bound.clone());
+                    }
+                    resolved => {
+                        for bound in &g.bound {
+                            if !satisfies_bound(&resolved, bound) {
+                                return Err(format!(
+                                    "function {:?}: generic parameter {:?} requires `{bound}`, but {resolved:?} does not satisfy it",
+                                    def.name, g.name
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             global_env = global_env.extend_scheme(def.name.clone(), scheme);
         }
 
@@ -488,6 +688,44 @@ impl Infer {
                 }
                 let resolved = elem_types.iter().map(|t| acc.apply(t)).collect();
                 Ok((Type::Tuple(resolved), acc))
+            }
+            // `[e1, e2, ...]` — every element must unify to ONE shared
+            // `T`, giving `Array[T]`. `[]` alone leaves `T` a fresh,
+            // completely unconstrained var — same "stays free until
+            // something else pins it" story as any other never-used
+            // type variable elsewhere (an unused function parameter,
+            // a bare `None`, ...).
+            ast::Expr::ArrayLiteral(elements, _) => {
+                let elem_ty = self.fresh();
+                let mut acc = Subst::empty();
+                let mut refined_env = env.clone();
+                for e in elements {
+                    let (t, s) = self.infer_expr(e, &refined_env)?;
+                    acc = s.compose(&acc);
+                    refined_env = refined_env.apply_subst(&acc);
+                    let s = unify(&acc.apply(&t), &acc.apply(&elem_ty)).map_err(|e| format!("array element: {e}"))?;
+                    acc = s.compose(&acc);
+                    refined_env = refined_env.apply_subst(&acc);
+                }
+                Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
+            }
+            // `arr[i]` — `arr` must be `Array[T]`, `i` must be `Int`;
+            // evaluates to `T`. Out-of-bounds is a RUNTIME error (the
+            // index's actual VALUE isn't known at type-checking time),
+            // not something caught here.
+            ast::Expr::Index { base, index, span } => {
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("indexing at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (index_ty, s) = self.infer_expr(index, &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&index_ty), &Type::Int).map_err(|e| format!("array index at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((acc.apply(&elem_ty), acc))
             }
             // A bare capitalized name referencing a zero-arity variant
             // (`None`, not `None()`) constructs it directly — mirrors
@@ -641,6 +879,44 @@ impl Infer {
                     Subst::empty(),
                 ))
             }
+            // `arr.len()` — `arr` must be `Array[T]` for SOME `T`
+            // (never checked further); evaluates to `Int`.
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "len") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty]))
+                    .map_err(|e| format!("`.len()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Int, acc))
+            }
+            // `arr.push(v)` — `arr` must be `Array[T]`, `v` must be
+            // that SAME `T`; evaluates to a (new) `Array[T]`.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "push") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.push()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (val_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&val_ty), &acc.apply(&elem_ty))
+                    .map_err(|e| format!("`.push()` argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
+            }
             ast::Expr::Call { callee, args, span } => {
                 // `Circle(1.0)` / `Shape.Circle(1.0)` constructs a
                 // variant if the callee names one, checked BEFORE
@@ -681,6 +957,32 @@ impl Infer {
                         return Ok((Type::Enum(enum_name, enum_args), acc));
                     }
                 }
+                // Calling a BOUNDED generic function by its bare name
+                // directly (`identity_num(5)`, not through an alias —
+                // see `instantiate`'s doc comment on that narrow, known
+                // gap) — instantiate with bound-tracking instead of the
+                // ordinary path, so `infer_call_with_callee` can check
+                // each bound against the FINAL, fully-unified argument
+                // types. Checked here rather than inside `infer_call`
+                // itself so the ordinary (unbounded, the overwhelming
+                // common case) call path never pays for a scheme
+                // lookup it doesn't need.
+                if let ast::Expr::Ident(name, _) = callee.as_ref() {
+                    if let Some(scheme) = env.lookup_scheme(name) {
+                        if !scheme.bounds.is_empty() {
+                            let scheme = scheme.clone();
+                            let (callee_ty, pending_bounds) = self.instantiate_with_bounds(&scheme);
+                            let arg_refs: Vec<&ast::Expr> = args.iter().collect();
+                            return self.infer_call_with_callee(
+                                callee_ty,
+                                Subst::empty(),
+                                &arg_refs,
+                                env,
+                                pending_bounds,
+                            );
+                        }
+                    }
+                }
                 let arg_refs: Vec<&ast::Expr> = args.iter().collect();
                 self.infer_call(callee, &arg_refs, env)
             }
@@ -691,6 +993,7 @@ impl Infer {
                 span,
             } => self.infer_struct_literal(path, fields, spread, *span, env),
             ast::Expr::Match { scrutinee, arms, .. } => self.infer_match(scrutinee, arms, env),
+            ast::Expr::Select { arms, span } => self.infer_select(arms, *span, env),
             ast::Expr::Closure { params, body, .. } => self.infer_closure(params, body, env),
             // `unsafe` gates nothing at the type level either — see
             // lower.rs's identical reasoning for why it lowers
@@ -786,7 +1089,27 @@ impl Infer {
 
     fn infer_call(&mut self, callee: &ast::Expr, args: &[&ast::Expr], env: &TypeEnv) -> Result<(Type, Subst), String> {
         let (callee_ty, s) = self.infer_expr(callee, env)?;
-        let mut acc = s;
+        self.infer_call_with_callee(callee_ty, s, args, env, Vec::new())
+    }
+
+    /// The shared core of "call this function type with these
+    /// arguments" — `infer_call` is the ordinary case (an already-
+    /// inferred callee, nothing to bound-check); the `Call` arm's
+    /// bounded-generic special case (see its own comment) instead
+    /// instantiates the callee itself via `instantiate_with_bounds`
+    /// and passes the resulting `pending_bounds` through here, so
+    /// they're checked with the FINAL, fully-unified argument types —
+    /// exactly the point `instantiate_with_bounds`'s doc comment says
+    /// they only become checkable.
+    fn infer_call_with_callee(
+        &mut self,
+        callee_ty: Type,
+        callee_subst: Subst,
+        args: &[&ast::Expr],
+        env: &TypeEnv,
+        pending_bounds: Vec<(TypeVarId, Vec<String>)>,
+    ) -> Result<(Type, Subst), String> {
+        let mut acc = callee_subst;
         let mut refined_env = env.apply_subst(&acc);
         let mut arg_types = Vec::with_capacity(args.len());
         for arg in args {
@@ -799,6 +1122,23 @@ impl Infer {
         let expected_fn_ty = Type::Function(arg_types, Box::new(ret_var.clone()));
         let s = unify(&acc.apply(&callee_ty), &expected_fn_ty).map_err(|e| format!("call: {e}"))?;
         acc = s.compose(&acc);
+        for (var_id, bounds) in pending_bounds {
+            let resolved = acc.apply(&Type::Var(var_id));
+            // Still unresolved (nothing pinned this specific generic
+            // down, even after unifying every argument) — nothing
+            // concrete to check yet, same skip `check_generic_bounds`
+            // already applies for struct/enum construction.
+            if matches!(resolved, Type::Var(_)) {
+                continue;
+            }
+            for bound in &bounds {
+                if !satisfies_bound(&resolved, bound) {
+                    return Err(format!(
+                        "generic parameter requires `{bound}`, but {resolved:?} does not satisfy it"
+                    ));
+                }
+            }
+        }
         Ok((acc.apply(&ret_var), acc))
     }
 
@@ -1079,6 +1419,66 @@ impl Infer {
         }
 
         let final_ty = result_ty.ok_or_else(|| "match with no arms has no result type".to_string())?;
+        Ok((acc.apply(&final_ty), acc))
+    }
+
+    // `select { pattern = expr => body, ... }` — each arm gets its OWN
+    // independent "scrutinee" (whatever ITS channel receives), unlike
+    // `infer_match`'s arms which all deconstruct the SAME shared
+    // scrutinee type. Because of that, a bare `Ident`/`Wildcard` arm
+    // pattern is perfectly valid here (the common case, even —
+    // `v = rx.recv() => ...`) and needs none of `infer_match`'s "no
+    // default-arm concept" restriction; `bind_pattern` already handles
+    // it correctly on its own. Every arm's `expr` is required to be an
+    // `X.recv()` call shape — checked here the same way lower.rs's
+    // `lower_select` checks it, so a program that type-checks never
+    // fails at the lowering gate right after for a DIFFERENT reason.
+    fn infer_select(&mut self, arms: &[ast::SelectArm], span: plum_syntax::span::Span, env: &TypeEnv) -> Result<(Type, Subst), String> {
+        let mut acc = Subst::empty();
+        let mut result_ty: Option<Type> = None;
+
+        for arm in arms {
+            let ast::Expr::Call {
+                callee,
+                args,
+                span: call_span,
+            } = &arm.expr
+            else {
+                return Err(format!("`select` arm requires an `expr.recv()` call at {:?}", arm.expr.span()));
+            };
+            let ast::Expr::Field { base, name, .. } = callee.as_ref() else {
+                return Err(format!("`select` arm requires an `expr.recv()` call at {call_span:?}"));
+            };
+            if name != "recv" || !args.is_empty() {
+                return Err(format!("`select` arm requires an `expr.recv()` call at {call_span:?}"));
+            }
+
+            let (base_ty, s) = self.infer_expr(base, env)?;
+            acc = s.compose(&acc);
+            let elem_ty = self.fresh();
+            let s = unify(&acc.apply(&base_ty), &Type::Struct("Receiver".to_string(), vec![elem_ty.clone()]))
+                .map_err(|e| format!("`select` arm at {call_span:?}: {e}"))?;
+            acc = s.compose(&acc);
+
+            let refined_env = env.apply_subst(&acc);
+            let arm_env = self.bind_pattern(&arm.pattern, &acc.apply(&elem_ty), refined_env, &mut acc)?;
+            let arm_env = arm_env.apply_subst(&acc);
+
+            let (body_ty, s) = self.infer_expr(&arm.body, &arm_env)?;
+            acc = s.compose(&acc);
+
+            match &result_ty {
+                None => result_ty = Some(acc.apply(&body_ty)),
+                Some(prev) => {
+                    let s = unify(&acc.apply(prev), &acc.apply(&body_ty))
+                        .map_err(|e| format!("select arms must produce the same type: {e}"))?;
+                    acc = s.compose(&acc);
+                    result_ty = Some(acc.apply(prev));
+                }
+            }
+        }
+
+        let final_ty = result_ty.ok_or_else(|| format!("select with no arms has no result type at {span:?}"))?;
         Ok((acc.apply(&final_ty), acc))
     }
 
@@ -2994,6 +3394,333 @@ mod tests {
     fn declared_return_type_referencing_the_wrong_struct_is_an_error() {
         let src = "struct Point { x: Int, y: Int }\nlet origin dummy: Int = Point { x: 0, y: 0 }";
         infer_program_err(src);
+    }
+
+    // --- Function parameter type annotations ---
+
+    #[test]
+    fn a_matching_parameter_annotation_is_accepted() {
+        let types = infer_program("let f (x: Int) = x + 1");
+        assert_eq!(types["f"], fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn a_mismatched_parameter_annotation_is_an_error() {
+        // Previously silently accepted — the annotation was parsed but
+        // never consulted, so `x` would just get a fresh, unconstrained
+        // var regardless of what the annotation said. The annotation
+        // itself always unifies fine against `x`'s still-fresh var (an
+        // unconstrained var accepts anything); the actual conflict
+        // correctly surfaces once the BODY tries to use the now-Bool
+        // `x` numerically — proving the annotation genuinely took
+        // effect rather than being silently dropped.
+        infer_program_err("let f (x: Bool) = x + 1");
+    }
+
+    #[test]
+    fn a_parameter_annotation_constrains_an_otherwise_generic_body() {
+        // Nothing else in the body pins `x`'s type — the annotation is
+        // the ONLY source of that constraint, same proof shape as the
+        // earlier `ret_ty` gap's equivalent test.
+        let types = infer_program("let f (x: Bool) = x");
+        assert_eq!(types["f"], fn_ty(vec![Type::Bool], Type::Bool));
+    }
+
+    #[test]
+    fn a_struct_typed_parameter_annotation_is_checked() {
+        let src = "struct Point { x: Int, y: Int }\nlet dx (p: Point) = match p { Point(a, b) => a }";
+        let types = infer_program(src);
+        assert_eq!(types["dx"], fn_ty(vec![Type::Struct("Point".to_string(), vec![])], Type::Int));
+    }
+
+    #[test]
+    fn a_second_parameter_annotation_is_also_checked() {
+        infer_program_err("let f (x: Int) (y: Bool) = x + y");
+    }
+
+    #[test]
+    fn an_unannotated_parameter_alongside_an_annotated_one_still_infers_normally() {
+        let types = infer_program("let f x (y: Int) = x + y");
+        assert_eq!(types["f"], fn_ty(vec![Type::Int, Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn a_destructuring_parameter_annotation_mismatched_with_its_own_pattern_is_an_error() {
+        // `Point { x, y }` already implies `Point` — an explicit `:
+        // Color` annotation on top of it is a real, checked
+        // contradiction, not just redundant.
+        let src = "struct Point { x: Int, y: Int }\n\
+                    struct Color { r: Int, g: Int, b: Int }\n\
+                    let sum_of (Point { x, y }: Color) = x + y";
+        infer_program_err(src);
+    }
+
+    // --- Function-level generic annotations ---
+
+    #[test]
+    fn a_generic_parameter_annotation_infers_a_polymorphic_identity() {
+        let types = infer_program("let identity[T] (x: T): T = x");
+        match &types["identity"] {
+            Type::Function(params, ret) => {
+                assert_eq!(params.len(), 1);
+                assert_eq!(&params[0], ret.as_ref());
+            }
+            other => panic!("expected a Function type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_generic_identity_is_still_usable_polymorphically_at_each_call_site() {
+        // Proves the fresh-var-per-generic-name mechanism doesn't
+        // accidentally pin `identity` to ONE concrete type — ordinary
+        // let-polymorphism (`generalize`/`instantiate`) still applies
+        // to the RESULT of inferring its (now-annotated) signature.
+        let src = "let identity[T] (x: T): T = x\n\
+                    let use_it dummy = { let a = identity(1); let b = identity(true); a }";
+        let types = infer_program(src);
+        match &types["use_it"] {
+            Type::Function(params, ret) => {
+                assert_eq!(params.len(), 1);
+                assert!(matches!(params[0], Type::Var(_)), "expected dummy to stay unconstrained, got {:?}", params[0]);
+                assert_eq!(**ret, Type::Int);
+            }
+            other => panic!("expected a Function type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn two_parameters_sharing_a_generic_name_must_share_one_type() {
+        let types = infer_program("let pair[T] (a: T) (b: T): T = a");
+        match &types["pair"] {
+            Type::Function(params, ret) => {
+                assert_eq!(params.len(), 2);
+                assert_eq!(&params[0], &params[1]);
+                assert_eq!(&params[0], ret.as_ref());
+            }
+            other => panic!("expected a Function type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn two_parameters_sharing_a_generic_name_reject_mismatched_arguments_at_the_call_site() {
+        let src = "let pair[T] (a: T) (b: T): T = a\nlet use_it dummy = pair(1, true)";
+        infer_program_err(src);
+    }
+
+    #[test]
+    fn a_generic_annotation_referencing_a_generic_struct_resolves() {
+        let src = "struct Pair[A, B] { first: A, second: B }\n\
+                    let wrap[T] (x: T): Pair[T, T] = Pair { first: x, second: x }";
+        let types = infer_program(src);
+        // Only the SHAPE (both args equal each other, both are Vars,
+        // and both match the param) matters — the exact id isn't
+        // meaningful, so check structurally rather than hardcoding one.
+        match &types["wrap"] {
+            Type::Function(params, ret) => match ret.as_ref() {
+                Type::Struct(name, args) => {
+                    assert_eq!(name, "Pair");
+                    assert_eq!(args.len(), 2);
+                    assert_eq!(&args[0], &args[1]);
+                    assert_eq!(&args[0], &params[0]);
+                }
+                other => panic!("expected a Struct return type, got {other:?}"),
+            },
+            other => panic!("expected a Function type, got {other:?}"),
+        }
+    }
+
+    // --- Function generic bounds (`[T: Num]`), checked at call sites ---
+
+    #[test]
+    fn a_bound_satisfying_call_site_is_accepted() {
+        let src = "let f[T: Num] (x: T): T = x\nlet use_it dummy = f(5)";
+        let types = infer_program(src);
+        match &types["use_it"] {
+            Type::Function(_, ret) => assert_eq!(**ret, Type::Int),
+            other => panic!("expected a Function type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bound_violating_call_site_is_an_error() {
+        let src = "let f[T: Num] (x: T): T = x\nlet use_it dummy = f(true)";
+        let err = infer_program_err(src);
+        assert!(err.contains("Num"), "expected a Num-bound error, got: {err}");
+    }
+
+    #[test]
+    fn a_generic_still_unresolved_at_definition_time_is_checked_later_at_the_call_site() {
+        // Nothing inside `f`'s OWN body pins `T` to anything — the
+        // bound can only be checked once a REAL call supplies a
+        // concrete argument.
+        let ok_src = "let f[T: Num] (x: T): T = x\nlet use_it dummy = f(5)";
+        infer_program(ok_src);
+        let err_src = "let f[T: Num] (x: T): T = x\nlet use_it dummy = f(true)";
+        infer_program_err(err_src);
+    }
+
+    #[test]
+    fn a_generic_already_pinned_inside_the_functions_own_body_is_checked_immediately() {
+        // `x + 1` pins `T = Int` before any call site even exists —
+        // checked right at generalization time, not deferred.
+        infer_program("let f[T: Num] (x: T): T = x + 1");
+        let err = infer_program_err("let f[T: Num] (x: T) = x && true");
+        assert!(err.contains("Num"), "expected a Num-bound error, got: {err}");
+    }
+
+    #[test]
+    fn a_bounded_generic_function_stays_genuinely_polymorphic_across_call_sites() {
+        // Proves bound-tracking doesn't accidentally pin `f` to ONE
+        // concrete type the way a mistaken implementation might —
+        // ordinary let-polymorphism still applies as long as EVERY
+        // call site's argument satisfies the bound.
+        let src = "let f[T: Num] (x: T): T = x\nlet use_it dummy = { let a = f(1); let b = f(2.5); a }";
+        let types = infer_program(src);
+        match &types["use_it"] {
+            Type::Function(_, ret) => assert_eq!(**ret, Type::Int),
+            other => panic!("expected a Function type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unbounded_generic_function_accepts_any_call_site() {
+        let src = "let identity[T] (x: T): T = x\nlet use_it dummy = identity(true)";
+        let types = infer_program(src);
+        match &types["use_it"] {
+            Type::Function(_, ret) => assert_eq!(**ret, Type::Bool),
+            other => panic!("expected a Function type, got {other:?}"),
+        }
+    }
+
+    // --- `select` ---
+
+    #[test]
+    fn select_infers_the_shared_element_type_across_arms() {
+        let env = TypeEnv::new()
+            .extend("rx1".to_string(), Type::Struct("Receiver".to_string(), vec![Type::Int]))
+            .extend("rx2".to_string(), Type::Struct("Receiver".to_string(), vec![Type::Int]));
+        let ty = infer_in("select { v = rx1.recv() => v, w = rx2.recv() => w }", &env);
+        assert_eq!(ty, Type::Int);
+    }
+
+    #[test]
+    fn select_arms_can_have_different_element_types_but_must_agree_on_result_type() {
+        let env = TypeEnv::new()
+            .extend("rx1".to_string(), Type::Struct("Receiver".to_string(), vec![Type::Int]))
+            .extend("rx2".to_string(), Type::Struct("Receiver".to_string(), vec![Type::Bool]));
+        let ty = infer_in("select { v = rx1.recv() => 1, w = rx2.recv() => 2 }", &env);
+        assert_eq!(ty, Type::Int);
+    }
+
+    #[test]
+    fn select_arms_with_mismatched_result_types_are_an_error() {
+        let env = TypeEnv::new()
+            .extend("rx1".to_string(), Type::Struct("Receiver".to_string(), vec![Type::Int]))
+            .extend("rx2".to_string(), Type::Struct("Receiver".to_string(), vec![Type::Int]));
+        infer_expr_with_err(&mut Infer::new(), "select { v = rx1.recv() => v, w = rx2.recv() => true }", &env);
+    }
+
+    #[test]
+    fn select_wildcard_arm_ignores_the_received_value() {
+        let env = TypeEnv::new().extend("rx".to_string(), Type::Struct("Receiver".to_string(), vec![Type::Int]));
+        assert_eq!(infer_in("select { _ = rx.recv() => 0 }", &env), Type::Int);
+    }
+
+    #[test]
+    fn select_on_a_non_receiver_value_is_an_error() {
+        let env = TypeEnv::new().extend("x".to_string(), Type::Int);
+        infer_expr_with_err(&mut Infer::new(), "select { v = x.recv() => v }", &env);
+    }
+
+    #[test]
+    fn select_arm_not_shaped_like_a_recv_call_is_an_error() {
+        infer_expr_with_err(&mut Infer::new(), "select { v = 5 => v }", &TypeEnv::new());
+    }
+
+    #[test]
+    fn a_struct_value_can_be_received_through_select() {
+        let mut infer = Infer::with_context(context("struct Point { x: Int, y: Int }"));
+        let env = TypeEnv::new().extend(
+            "rx".to_string(),
+            Type::Struct("Receiver".to_string(), vec![Type::Struct("Point".to_string(), vec![])]),
+        );
+        let ty = infer_expr_with(&mut infer, "select { p = rx.recv() => match p { Point(a, b) => a } }", &env);
+        assert_eq!(ty, Type::Int);
+    }
+
+    // --- Arrays ---
+
+    #[test]
+    fn array_literal_infers_the_shared_element_type() {
+        assert_eq!(infer("[1, 2, 3]"), Type::Struct("Array".to_string(), vec![Type::Int]));
+    }
+
+    #[test]
+    fn empty_array_literal_has_an_unconstrained_element_type() {
+        match infer("[]") {
+            Type::Struct(name, args) => {
+                assert_eq!(name, "Array");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0], Type::Var(_)), "expected an unconstrained var, got {:?}", args[0]);
+            }
+            other => panic!("expected an Array type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn array_literal_with_mismatched_element_types_is_an_error() {
+        infer_err("[1, true]");
+    }
+
+    #[test]
+    fn array_index_infers_the_element_type() {
+        assert_eq!(infer("[1, 2, 3][0]"), Type::Int);
+    }
+
+    #[test]
+    fn array_index_requires_an_int_index() {
+        infer_err("[1, 2, 3][true]");
+    }
+
+    #[test]
+    fn indexing_a_non_array_is_an_error() {
+        infer_err("5[0]");
+    }
+
+    #[test]
+    fn array_len_infers_as_int() {
+        assert_eq!(infer("[1, 2, 3].len()"), Type::Int);
+    }
+
+    #[test]
+    fn len_on_a_non_array_is_an_error() {
+        infer_err("5.len()");
+    }
+
+    #[test]
+    fn array_push_infers_as_the_same_array_type() {
+        assert_eq!(infer("[1, 2].push(3)"), Type::Struct("Array".to_string(), vec![Type::Int]));
+    }
+
+    #[test]
+    fn array_push_argument_type_is_checked() {
+        infer_err("[1, 2].push(true)");
+    }
+
+    #[test]
+    fn push_on_a_non_array_is_an_error() {
+        infer_err("5.push(1)");
+    }
+
+    #[test]
+    fn a_struct_value_can_live_in_an_array() {
+        let mut infer = Infer::with_context(context("struct Point { x: Int, y: Int }"));
+        let ty = infer_expr_with(
+            &mut infer,
+            "match [Point { x: 1, y: 2 }][0] { Point(a, b) => a }",
+            &TypeEnv::new(),
+        );
+        assert_eq!(ty, Type::Int);
     }
 
     // --- Duplicate top-level declarations ---

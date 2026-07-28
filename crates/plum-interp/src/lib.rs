@@ -5,8 +5,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::mpsc;
+use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -540,6 +542,92 @@ impl Interpreter {
                     .recv()
                     .map_err(|_| "cannot recv: the channel's sender has been dropped".to_string())?;
                 Ok(self.from_portable(portable))
+            }
+            Expr::Select { arms } => {
+                // Every arm's channel is evaluated exactly ONCE, up
+                // front — never re-evaluated on later poll sweeps (see
+                // ir.rs's `Select` doc comment).
+                let mut handles = Vec::with_capacity(arms.len());
+                for arm in arms {
+                    let Value::Receiver(handle) = self.eval(&arm.receiver)? else {
+                        return Err("`select` arm requires a Receiver value".to_string());
+                    };
+                    handles.push(handle);
+                }
+                loop {
+                    let mut any_still_open = false;
+                    for (i, handle) in handles.iter().enumerate() {
+                        let attempt = handle
+                            .0
+                            .lock()
+                            .map_err(|_| "channel receiver lock poisoned".to_string())?
+                            .try_recv();
+                        match attempt {
+                            Ok(portable) => {
+                                let v = self.from_portable(portable);
+                                self.env.push(("__select_recv".to_string(), v));
+                                let result = self.eval(&arms[i].body);
+                                self.env.pop();
+                                return result;
+                            }
+                            Err(TryRecvError::Empty) => any_still_open = true,
+                            Err(TryRecvError::Disconnected) => {}
+                        }
+                    }
+                    // Every channel disconnected with nothing EVER
+                    // received on any of them — blocking forever here
+                    // would just hang, so this is a real, reported
+                    // error instead.
+                    if !any_still_open {
+                        return Err("select: every channel is disconnected with nothing received".to_string());
+                    }
+                    // A brief, deliberately simple busy-poll — this
+                    // interpreter has no native cross-channel select
+                    // primitive (plain `std::sync::mpsc` doesn't offer
+                    // one), and no async runtime to wait on instead.
+                    // Correct (nothing is ever missed — a message
+                    // sent between sweeps is caught on the NEXT one),
+                    // just not maximally efficient; a real scheduler
+                    // is a later performance upgrade, same status
+                    // DESIGN.md already gives the rest of the
+                    // concurrency model.
+                    thread::sleep(Duration::from_millis(1));
+                }
+            }
+            Expr::Index { base, index } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("indexing requires an Array value".to_string());
+                };
+                let Value::Int(i) = self.eval(index)? else {
+                    return Err("array index must be an Int".to_string());
+                };
+                let (_, fields) = self.heap.read(addr)?;
+                let Ok(i) = usize::try_from(i) else {
+                    return Err(format!("array index out of bounds: {i} (len {})", fields.len()));
+                };
+                fields
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| format!("array index out of bounds: {i} (len {})", fields.len()))
+            }
+            Expr::ArrayLen { array } => {
+                let Value::HeapRef(addr) = self.eval(array)? else {
+                    return Err("`.len()` requires an Array value".to_string());
+                };
+                let (_, fields) = self.heap.read(addr)?;
+                Ok(Value::Int(fields.len() as i64))
+            }
+            Expr::ArrayPush { array, value } => {
+                let Value::HeapRef(addr) = self.eval(array)? else {
+                    return Err("`.push()` requires an Array value".to_string());
+                };
+                let v = self.eval(value)?;
+                let (tag, fields) = self.heap.read(addr)?;
+                let tag = tag.to_string();
+                let mut new_fields = fields.to_vec();
+                new_fields.push(v);
+                let new_addr = self.heap.alloc(tag, new_fields);
+                Ok(Value::HeapRef(new_addr))
             }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
@@ -1312,6 +1400,115 @@ mod tests {
                     t.join();\
                     v }";
         assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(7));
+    }
+
+    // --- `select` ---
+
+    #[test]
+    fn select_picks_the_one_arm_with_a_value_already_ready() {
+        let src = "{ let (tx, rx) = channel[Int](); tx.send(5); select { v = rx.recv() => v } }";
+        assert_eq!(eval(src), Value::Int(5));
+    }
+
+    #[test]
+    fn select_picks_whichever_of_several_channels_is_ready() {
+        let src = "{ let (tx1, rx1) = channel[Int]();\
+                     let (tx2, rx2) = channel[Int]();\
+                     tx2.send(99);\
+                     select { v = rx1.recv() => v, w = rx2.recv() => w } }";
+        assert_eq!(eval(src), Value::Int(99));
+    }
+
+    #[test]
+    fn select_wildcard_arm_discards_the_received_value() {
+        let src = "{ let (tx, rx) = channel[Int](); tx.send(5); select { _ = rx.recv() => 42 } }";
+        assert_eq!(eval(src), Value::Int(42));
+    }
+
+    #[test]
+    fn select_receives_a_heap_shaped_value() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let (tx, rx) = channel[Point]();\
+                    tx.send(Point { x: 3, y: 4 });\
+                    select { p = rx.recv() => match p { Point(a, b) => a + b } } }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(7));
+    }
+
+    #[test]
+    fn select_waits_for_a_delayed_send_from_a_spawned_task() {
+        // The genuine end-to-end concurrency shape: nothing is ready
+        // when `select` starts polling — it correctly blocks (busy-
+        // polls) until the SPAWNED task actually sends, rather than
+        // erroring or returning early.
+        let src = "let use_it dummy = { let (tx, rx) = channel[Int]();\
+                    let t = spawn { tx.send(11) };\
+                    let v = select { v = rx.recv() => v };\
+                    t.join();\
+                    v }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(11));
+    }
+
+    #[test]
+    fn selecting_on_a_non_receiver_value_is_a_runtime_error() {
+        eval_err("select { v = 5.recv() => v }");
+    }
+
+    // --- Arrays ---
+
+    #[test]
+    fn array_literal_and_index_round_trip() {
+        assert_eq!(eval("[10, 20, 30][1]"), Value::Int(20));
+    }
+
+    #[test]
+    fn array_index_zero_and_last() {
+        assert_eq!(eval("[7, 8, 9][0]"), Value::Int(7));
+        assert_eq!(eval("[7, 8, 9][2]"), Value::Int(9));
+    }
+
+    #[test]
+    fn array_index_out_of_bounds_is_a_runtime_error() {
+        eval_err("[1, 2, 3][5]");
+    }
+
+    #[test]
+    fn array_index_negative_is_a_runtime_error() {
+        eval_err("[1, 2, 3][0 - 1]");
+    }
+
+    #[test]
+    fn array_len() {
+        assert_eq!(eval("[1, 2, 3].len()"), Value::Int(3));
+        assert_eq!(eval("[].len()"), Value::Int(0));
+    }
+
+    #[test]
+    fn array_push_returns_a_new_longer_array() {
+        assert_eq!(eval("[1, 2].push(3).len()"), Value::Int(3));
+        assert_eq!(eval("[1, 2].push(3)[2]"), Value::Int(3));
+    }
+
+    #[test]
+    fn array_push_does_not_mutate_the_original() {
+        // Purely functional semantics: `a` is unaffected by `a.push(_)`
+        // — this is what makes future in-place-growth optimization
+        // (still deferred — see ir.rs's `ArrayPush` doc comment) purely
+        // a PERFORMANCE change later, never a semantic one.
+        let src = "{ let a = [1, 2]; let b = a.push(3); a.len() }";
+        assert_eq!(eval(src), Value::Int(2));
+    }
+
+    #[test]
+    fn array_of_heap_shaped_values() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let arr = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }];\
+                    match arr[1] { Point(a, b) => a + b } }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(7));
+    }
+
+    #[test]
+    fn indexing_a_non_array_is_a_runtime_error() {
+        eval_err("5[0]");
     }
 
     // --- A bare top-level function name as a first-class value ---

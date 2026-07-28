@@ -61,6 +61,12 @@ pub enum Expr {
     Bool(bool, Span),
     Ident(String, Span),
     Tuple(Vec<Expr>, Span),
+    // `[e1, e2, ...]` — an `Array[T]` literal. Every element must
+    // unify to the SAME type `T` (checked downstream, not here — this
+    // is purely a parse tree). `[]` is valid (an array with nothing to
+    // constrain its element type yet, same "stays an unresolved
+    // fresh var" story as any other never-constrained type elsewhere).
+    ArrayLiteral(Vec<Expr>, Span),
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
@@ -126,6 +132,27 @@ pub enum Expr {
         spread: Option<Box<Expr>>,
         span: Span,
     },
+    // `select { pattern = expr.recv() => body, ... }` — blocks until
+    // ONE of the arms' channels has a value ready, binds it via that
+    // arm's `pattern` (reusing the exact `Pattern = Expr` shape `let`
+    // already uses, just without the `let` keyword), then evaluates
+    // that arm's `body`. `expr` is grammatically an ordinary `Expr`,
+    // not a dedicated production — it's required (checked downstream,
+    // not by the parser) to be an `X.recv()` call, the same "shape,
+    // not a new grammar production" convention `.join()`/`.send()`/
+    // `.recv()` themselves already established.
+    Select {
+        arms: Vec<SelectArm>,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectArm {
+    pub pattern: Pattern,
+    pub expr: Expr,
+    pub body: Expr,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -189,6 +216,7 @@ impl Expr {
             | Expr::Bool(_, s)
             | Expr::Ident(_, s)
             | Expr::Tuple(_, s)
+            | Expr::ArrayLiteral(_, s)
             | Expr::Unary { span: s, .. }
             | Expr::Binary { span: s, .. }
             | Expr::Field { span: s, .. }
@@ -202,7 +230,8 @@ impl Expr {
             | Expr::Closure { span: s, .. }
             | Expr::Unsafe(_, s)
             | Expr::Spawn(_, s)
-            | Expr::StructLiteral { span: s, .. } => *s,
+            | Expr::StructLiteral { span: s, .. }
+            | Expr::Select { span: s, .. } => *s,
         }
     }
 }

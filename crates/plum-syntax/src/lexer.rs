@@ -31,6 +31,7 @@ pub enum TokenKind {
     Extern,
     Unsafe,
     Spawn,
+    Select,
 
     // Punctuation and operators
     LParen,
@@ -256,6 +257,7 @@ impl<'a> Lexer<'a> {
             "extern" => TokenKind::Extern,
             "unsafe" => TokenKind::Unsafe,
             "spawn" => TokenKind::Spawn,
+            "select" => TokenKind::Select,
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "_" => TokenKind::Underscore,
@@ -374,10 +376,10 @@ mod tests {
     fn keywords() {
         use TokenKind::*;
         assert_eq!(
-            kinds("let mut fn struct enum match if else for in pub use mod extern unsafe spawn"),
+            kinds("let mut fn struct enum match if else for in pub use mod extern unsafe spawn select"),
             vec![
                 Let, Mut, Fn, Struct, Enum, Match, If, Else, For, In, Pub, Use, Mod, Extern,
-                Unsafe, Spawn,
+                Unsafe, Spawn, Select,
             ]
         );
     }
