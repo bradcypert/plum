@@ -484,11 +484,6 @@ fn lower_struct_literal(
     span: plum_syntax::span::Span,
     ctx: &LoweringContext,
 ) -> Result<ir::Expr, String> {
-    if spread.is_some() {
-        return Err(format!(
-            "lowering not yet implemented for struct update/spread syntax (`..expr`) at {span:?}"
-        ));
-    }
     let tag = path.last().cloned().expect("a path always has at least one segment");
     let Some(declared_fields) = ctx.struct_fields.get(&tag) else {
         return Err(format!(
@@ -503,18 +498,53 @@ fn lower_struct_literal(
         }
     }
 
+    // No `..expr`: every field must be given explicitly.
+    let Some(spread_expr) = spread else {
+        let mut ir_fields = Vec::with_capacity(declared_fields.len());
+        for declared_name in declared_fields {
+            let Some(value_expr) = by_name.remove(declared_name.as_str()) else {
+                return Err(format!("missing field {declared_name:?} for struct {tag:?} at {span:?}"));
+            };
+            ir_fields.push(lower_expr(value_expr, ctx)?);
+        }
+        if let Some((extra_name, _)) = by_name.into_iter().next() {
+            return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+        }
+        return Ok(ir::Expr::Ctor { tag, fields: ir_fields });
+    };
+
+    // `Point { x: 1, ..other }`: fields not given explicitly come from
+    // `other`, which must itself be a `Point`. There's no field-access
+    // IR node — the IR only knows how to pull fields out of a heap
+    // value by tag via `Match` — so this reuses the SAME
+    // construct-then-match-then-reconstruct shape lowering already
+    // produces for ordinary nested destructuring, binding every
+    // declared field of `other` positionally and reconstructing with
+    // the explicit fields substituted in.
+    let ir_spread = lower_expr(spread_expr, ctx)?;
+    let mut bindings = Vec::with_capacity(declared_fields.len());
     let mut ir_fields = Vec::with_capacity(declared_fields.len());
-    for declared_name in declared_fields {
-        let Some(value_expr) = by_name.remove(declared_name.as_str()) else {
-            return Err(format!("missing field {declared_name:?} for struct {tag:?} at {span:?}"));
-        };
-        ir_fields.push(lower_expr(value_expr, ctx)?);
+    for (i, declared_name) in declared_fields.iter().enumerate() {
+        let synthetic = format!("__spread{i}");
+        if let Some(value_expr) = by_name.remove(declared_name.as_str()) {
+            ir_fields.push(lower_expr(value_expr, ctx)?);
+        } else {
+            ir_fields.push(ir::Expr::Var(synthetic.clone()));
+        }
+        bindings.push(synthetic);
     }
     if let Some((extra_name, _)) = by_name.into_iter().next() {
         return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
     }
 
-    Ok(ir::Expr::Ctor { tag, fields: ir_fields })
+    Ok(ir::Expr::Match {
+        scrutinee: Box::new(ir_spread),
+        arms: vec![ir::MatchArm {
+            tag: tag.clone(),
+            bindings,
+            body: ir::Expr::Ctor { tag, fields: ir_fields },
+        }],
+    })
 }
 
 fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringContext) -> Result<ir::Expr, String> {
@@ -1190,9 +1220,47 @@ mod tests {
     }
 
     #[test]
-    fn struct_literal_spread_is_not_yet_supported() {
+    fn struct_literal_spread_lowers_to_a_match_that_rebuilds_the_ctor() {
         let ctx = context_from_program("struct Point { x: Float, y: Float }");
-        lower_with_err("Point { x: 1.0, ..other }", &ctx);
+        assert_eq!(
+            lower_with("Point { x: 1.0, ..other }", &ctx),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("other".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Point".to_string(),
+                    bindings: vec!["__spread0".to_string(), "__spread1".to_string()],
+                    body: ir::Expr::Ctor {
+                        tag: "Point".to_string(),
+                        fields: vec![ir::Expr::Float(1.0), ir::Expr::Var("__spread1".to_string())],
+                    },
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_literal_spread_with_every_field_overridden_still_binds_but_ignores_them() {
+        let ctx = context_from_program("struct Point { x: Float, y: Float }");
+        assert_eq!(
+            lower_with("Point { x: 1.0, y: 2.0, ..other }", &ctx),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("other".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Point".to_string(),
+                    bindings: vec!["__spread0".to_string(), "__spread1".to_string()],
+                    body: ir::Expr::Ctor {
+                        tag: "Point".to_string(),
+                        fields: vec![ir::Expr::Float(1.0), ir::Expr::Float(2.0)],
+                    },
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn struct_literal_spread_with_unknown_field_is_still_an_error() {
+        let ctx = context_from_program("struct Point { x: Float, y: Float }");
+        lower_with_err("Point { z: 1.0, ..other }", &ctx);
     }
 
     // --- Match: variant patterns lower to tag + positional bindings.

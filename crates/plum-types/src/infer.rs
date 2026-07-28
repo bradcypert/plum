@@ -519,11 +519,6 @@ impl Infer {
         span: plum_syntax::span::Span,
         env: &TypeEnv,
     ) -> Result<(Type, Subst), String> {
-        if spread.is_some() {
-            return Err(format!(
-                "type inference not yet implemented for struct update/spread syntax at {span:?}"
-            ));
-        }
         let tag = path.last().cloned().expect("a path always has at least one segment");
         let declared_fields = self
             .ctx
@@ -539,8 +534,24 @@ impl Infer {
         }
 
         let mut acc = Subst::empty();
+
+        // `..expr`: `expr` must itself be a `tag`, so any field NOT
+        // given explicitly is guaranteed (by that unification alone)
+        // to already have the right type — no per-field unification
+        // needed for those, unlike the explicit fields below.
+        if let Some(spread_expr) = spread {
+            let (spread_ty, s) = self.infer_expr(spread_expr, env)?;
+            acc = s.compose(&acc);
+            let s = unify(&acc.apply(&spread_ty), &Type::Struct(tag.clone()))
+                .map_err(|e| format!("struct update `..` for {tag:?}: {e}"))?;
+            acc = s.compose(&acc);
+        }
+
         for (declared_name, declared_ty) in &declared_fields {
             let Some(value_expr) = by_name.remove(declared_name.as_str()) else {
+                if spread.is_some() {
+                    continue;
+                }
                 return Err(format!("missing field {declared_name:?} for struct {tag:?} at {span:?}"));
             };
             let (val_ty, s) = self.infer_expr(value_expr, env)?;
@@ -1639,9 +1650,34 @@ mod tests {
     }
 
     #[test]
-    fn struct_literal_spread_is_not_yet_supported() {
+    fn struct_literal_spread_infers_the_struct_type() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        infer_expr_with_err(&mut infer, "Point { x: 1.0, ..other }", &TypeEnv::new());
+        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Point".to_string()));
+        let ty = infer_expr_with(&mut infer, "Point { x: 1.0, ..other }", &env);
+        assert_eq!(ty, Type::Struct("Point".to_string()));
+    }
+
+    #[test]
+    fn struct_literal_spread_requires_the_spread_expr_to_be_the_same_struct() {
+        let mut infer = Infer::with_context(context(
+            "struct Point { x: Float, y: Float }\nstruct Color { r: Int, g: Int, b: Int }",
+        ));
+        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Color".to_string()));
+        infer_expr_with_err(&mut infer, "Point { x: 1.0, ..other }", &env);
+    }
+
+    #[test]
+    fn struct_literal_spread_still_checks_explicit_field_types() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Point".to_string()));
+        infer_expr_with_err(&mut infer, "Point { x: true, ..other }", &env);
+    }
+
+    #[test]
+    fn struct_literal_spread_still_rejects_an_unknown_field() {
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Point".to_string()));
+        infer_expr_with_err(&mut infer, "Point { z: 1.0, ..other }", &env);
     }
 
     // --- Match: enum variant patterns, resolved against the SAME

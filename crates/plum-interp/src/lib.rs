@@ -970,6 +970,22 @@ mod tests {
         assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(7));
     }
 
+    #[test]
+    fn struct_literal_spread_copies_omitted_fields() {
+        // No field-access syntax exists yet, so the result is checked
+        // by matching back out of it rather than `q.x + q.y`.
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let p = Point { x: 3, y: 4 }; let q = Point { x: 9, ..p }; match q { Point { x, y } => x + y } }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(13));
+    }
+
+    #[test]
+    fn struct_literal_spread_with_no_fields_overridden_is_a_copy() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = match (Point { x: 3, ..(Point { x: 3, y: 4 }) }) { Point { x, y } => x + y }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(7));
+    }
+
     // --- Tuples ---
 
     #[test]

@@ -175,6 +175,24 @@ mod tests {
     }
 
     #[test]
+    fn struct_update_spread_runs_through_the_full_gated_pipeline() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let p = Point { x: 3, y: 4 }; let q = Point { x: 9, ..p }; match q { Point { x, y } => x + y } }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(13)));
+    }
+
+    #[test]
+    fn struct_update_spread_with_a_mismatched_struct_type_is_rejected_before_running() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    struct Color { r: Int, g: Int, b: Int }\n\
+                    let use_it dummy = { let c = Color { r: 1, g: 2, b: 3 }; Point { x: 9, ..c } }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])
