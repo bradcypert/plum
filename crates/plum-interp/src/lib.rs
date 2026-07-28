@@ -852,6 +852,46 @@ mod tests {
         assert_eq!(run(src, "use_it", vec![Value::Int(5)]), Value::Int(10));
     }
 
+    // --- Nested patterns ---
+
+    #[test]
+    fn struct_nested_inside_tuple_pattern() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = match (Point { x: 3, y: 4 }, 10) { (Point { x, y }, n) => x + y + n }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(17));
+    }
+
+    #[test]
+    fn struct_nested_inside_struct_pattern() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    struct Line { start: Point, end: Point }\n\
+                    let dx (Line { start: Point { x: x0, .. }, end: Point { x: x1, .. } }) = x1 - x0\n\
+                    let use_it dummy = dx(Line { start: Point { x: 1, y: 0 }, end: Point { x: 9, y: 0 } })";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(8));
+    }
+
+    #[test]
+    fn variant_pattern_syntax_nested_inside_tuple_pattern() {
+        // `Point(x, y)` is `Pattern::Variant` syntax (distinct from the
+        // `Point { x, y }` struct-pattern tests above) — matched here
+        // against a struct value, since constructing a real ENUM
+        // variant as an EXPRESSION (`Circle(5)`) is a separate,
+        // pre-existing gap unrelated to pattern nesting (only variant
+        // PATTERNS and struct literals are lowered as expressions so
+        // far; discovered while writing this test, not introduced by
+        // it). This still proves a Variant-shaped nested pattern works.
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = match (Point { x: 3, y: 4 }, 1) { (Point(x, y), n) => x + y + n }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(8));
+    }
+
+    #[test]
+    fn deeply_nested_pattern_three_levels() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = match ((Point { x: 1, y: 2 }, 3), 4) { ((Point { x, y }, a), b) => x + y + a + b }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(10));
+    }
+
     // --- Struct patterns (`Point { x, y }`) ---
 
     #[test]

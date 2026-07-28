@@ -273,54 +273,15 @@ impl Infer {
                     ast::ParamKind::Ident(name) | ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => {
                         body_env = body_env.extend(name.clone(), acc.apply(param_ty));
                     }
-                    // Same "unify against a fresh N-tuple, then bind
-                    // each element" approach as tuple `let`/match arms
-                    // — see infer_block's Stmt::Let case for the fuller
-                    // explanation. Here `param_ty` is the SINGLE fresh
-                    // var Phase 1 gave this (flat-arity) parameter.
-                    ast::ParamKind::Pattern(ast::Pattern::Tuple(elems, _), _) => {
-                        let fresh_vars: Vec<Type> = elems.iter().map(|_| self.fresh()).collect();
-                        let s = unify(&acc.apply(param_ty), &Type::Tuple(fresh_vars.clone()))
+                    // `bind_pattern` unifies `param_ty` (the single
+                    // fresh var Phase 1 gave this flat-arity parameter)
+                    // against whatever shape the pattern requires and
+                    // binds every name it introduces, including nested
+                    // ones — see `bind_pattern`'s doc comment.
+                    ast::ParamKind::Pattern(pattern @ (ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. }), _) => {
+                        body_env = self
+                            .bind_pattern(pattern, &acc.apply(param_ty), body_env, &mut acc)
                             .map_err(|e| format!("function {:?} parameter: {e}", def.name))?;
-                        acc = s.compose(&acc);
-                        for (elem_pat, var_ty) in elems.iter().zip(fresh_vars.iter()) {
-                            match elem_pat {
-                                ast::Pattern::Ident(name, _) => {
-                                    body_env = body_env.extend(name.clone(), acc.apply(var_ty));
-                                }
-                                ast::Pattern::Wildcard(_) => {}
-                                other => {
-                                    return Err(format!(
-                                        "type inference not yet implemented for nested \
-                                         patterns inside a tuple parameter at {:?}",
-                                        other.span()
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                    // Field types are already known from `ctx` — same
-                    // "unify against the nominal type, bind declared
-                    // field types directly" approach as a struct `let`.
-                    ast::ParamKind::Pattern(
-                        ast::Pattern::Struct {
-                            path,
-                            fields,
-                            has_rest,
-                            span: pspan,
-                        },
-                        _,
-                    ) => {
-                        let (tag, bindings, payload_types) =
-                            Self::struct_pattern_info(path, fields, *has_rest, *pspan, &self.ctx)?;
-                        let s = unify(&acc.apply(param_ty), &Type::Struct(tag))
-                            .map_err(|e| format!("function {:?} parameter: {e}", def.name))?;
-                        acc = s.compose(&acc);
-                        for (name, field_ty) in bindings.iter().zip(payload_types.iter()) {
-                            if name != "_" {
-                                body_env = body_env.extend(name.clone(), acc.apply(field_ty));
-                            }
-                        }
                     }
                     _ => {
                         return Err(format!(
@@ -549,113 +510,134 @@ impl Infer {
     }
 
     // Only the simple `Path(bindings...)` shape is supported, same
-    // restriction as lower.rs's `lower_variant_pattern` — see that
-    // function's comment for exactly why (no nested patterns, no
-    // "default arm" concept for a bare `_`, etc.).
-    fn variant_pattern_info(pattern: &ast::Pattern) -> Result<(String, Vec<String>), String> {
+    // Recursively binds `pattern` against `scrutinee_ty`, unifying as
+    // needed and returning `env` extended with every name the pattern
+    // introduces — including transitively, for nested tuple/struct/
+    // variant patterns. The type-level counterpart to lower.rs's
+    // `lower_tag_pattern`/`classify_subpattern`/`wrap_nested_destructures`
+    // — unlike lowering, no synthetic names are needed here: type
+    // inference doesn't need a runtime identifier for an intermediate
+    // destructure, just to accumulate bindings into `env` directly.
+    //
+    // A `Variant` pattern matches either a real enum variant OR a whole
+    // struct (lowering erases that distinction — both become a
+    // positional `Ctor`/`Match` by tag; see lower.rs's `lower_tag_pattern`
+    // doc comment), so `Point(x, y)` here falls back to `ctx.struct_fields`
+    // exactly like `infer_match` always has.
+    fn bind_pattern(
+        &mut self,
+        pattern: &ast::Pattern,
+        scrutinee_ty: &Type,
+        env: TypeEnv,
+        acc: &mut Subst,
+    ) -> Result<TypeEnv, String> {
         match pattern {
-            ast::Pattern::Variant { path, args, .. } => {
+            ast::Pattern::Ident(name, _) => Ok(env.extend(name.clone(), acc.apply(scrutinee_ty))),
+            ast::Pattern::Wildcard(_) => Ok(env),
+            ast::Pattern::Tuple(elems, span) => {
+                if elems.is_empty() {
+                    return Err(format!(
+                        "type inference not yet implemented for destructuring against the \
+                         empty tuple pattern at {span:?}"
+                    ));
+                }
+                let fresh_vars: Vec<Type> = elems.iter().map(|_| self.fresh()).collect();
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Tuple(fresh_vars.clone()))
+                    .map_err(|e| format!("tuple pattern at {span:?}: {e}"))?;
+                *acc = s.compose(acc);
+                let mut env = env;
+                for (elem_pat, var_ty) in elems.iter().zip(fresh_vars.iter()) {
+                    env = self.bind_pattern(elem_pat, var_ty, env, acc)?;
+                    env = env.apply_subst(acc);
+                }
+                Ok(env)
+            }
+            // `has_rest` (`..`) means "I don't care about the fields I
+            // didn't mention" — it does NOT relax the unknown-field
+            // check: naming a field the struct doesn't have is always
+            // an error.
+            ast::Pattern::Struct {
+                path,
+                fields,
+                has_rest,
+                span,
+            } => {
                 let tag = path.last().cloned().expect("a path always has at least one segment");
-                let mut bindings = Vec::with_capacity(args.len());
-                for arg in args {
-                    match arg {
-                        ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
-                        ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
-                        other => {
+                let declared_fields = self
+                    .ctx
+                    .struct_fields(&tag)
+                    .ok_or_else(|| format!("unknown struct type {tag:?} at {span:?}"))?
+                    .to_vec();
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Struct(tag.clone()))
+                    .map_err(|e| format!("struct pattern at {span:?}: {e}"))?;
+                *acc = s.compose(acc);
+
+                let mut by_name: HashMap<&str, &ast::Pattern> = HashMap::new();
+                for f in fields {
+                    if by_name.insert(f.name.as_str(), &f.pattern).is_some() {
+                        return Err(format!("field {:?} specified more than once at {:?}", f.name, f.span));
+                    }
+                }
+                let mut env = env;
+                for (declared_name, declared_ty) in &declared_fields {
+                    match by_name.remove(declared_name.as_str()) {
+                        Some(sub_pattern) => {
+                            env = self.bind_pattern(sub_pattern, declared_ty, env, acc)?;
+                            env = env.apply_subst(acc);
+                        }
+                        None if *has_rest => {}
+                        None => {
                             return Err(format!(
-                                "type inference not yet implemented for nested patterns inside \
-                                 a variant arm's arguments at {:?}",
-                                other.span()
+                                "missing field {declared_name:?} for struct {tag:?} pattern \
+                                 at {span:?} (add `..` to ignore it)"
                             ));
                         }
                     }
                 }
-                Ok((tag, bindings))
+                if let Some((extra_name, _)) = by_name.into_iter().next() {
+                    return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+                }
+                Ok(env)
+            }
+            ast::Pattern::Variant { path, args, span } => {
+                let tag = path.last().cloned().expect("a path always has at least one segment");
+                let (owning_ty, payload_types) = match self.ctx.variant(&tag) {
+                    Some((enum_name, payload_types)) => (Type::Enum(enum_name.clone()), payload_types.clone()),
+                    None => match self.ctx.struct_fields(&tag) {
+                        Some(fields) => (
+                            Type::Struct(tag.clone()),
+                            fields.iter().map(|(_, ty)| ty.clone()).collect(),
+                        ),
+                        None => return Err(format!("unknown variant {tag:?} at {span:?}")),
+                    },
+                };
+                let s = unify(&acc.apply(scrutinee_ty), &owning_ty).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                *acc = s.compose(acc);
+                if args.len() != payload_types.len() {
+                    return Err(format!(
+                        "pattern at {span:?} expects {} field(s), found {} binding(s)",
+                        payload_types.len(),
+                        args.len()
+                    ));
+                }
+                let mut env = env;
+                for (arg_pat, payload_ty) in args.iter().zip(payload_types.iter()) {
+                    env = self.bind_pattern(arg_pat, payload_ty, env, acc)?;
+                    env = env.apply_subst(acc);
+                }
+                Ok(env)
             }
             other => Err(format!(
-                "type inference not yet implemented for this pattern shape as a match arm at {:?}",
+                "type inference not yet implemented for this pattern shape at {:?}",
                 other.span()
             )),
         }
     }
 
-    // Resolves a struct pattern (`Point { x, y }` / `Point { x: px, .. }`)
-    // against the struct's DECLARED field order/types from `ctx` — the
-    // type-level counterpart to lower.rs's `lower_destructurable_pattern`
-    // struct arm (which resolves field ORDER; this resolves field
-    // TYPES too, so there's no fresh-var step needed the way tuple
-    // patterns need one). Returns (tag, bindings, DECLARED field types)
-    // in declared order, the same shape `variant_pattern_info`-derived
-    // callers already expect.
-    fn struct_pattern_info(
-        path: &[String],
-        fields: &[ast::FieldPattern],
-        has_rest: bool,
-        span: plum_syntax::span::Span,
-        ctx: &crate::context::TypeContext,
-    ) -> Result<(String, Vec<String>, Vec<Type>), String> {
-        let tag = path.last().cloned().expect("a path always has at least one segment");
-        let declared_fields = ctx
-            .struct_fields(&tag)
-            .ok_or_else(|| format!("unknown struct type {tag:?} at {span:?}"))?
-            .to_vec();
-
-        let mut by_name: HashMap<&str, &ast::Pattern> = HashMap::new();
-        for f in fields {
-            if by_name.insert(f.name.as_str(), &f.pattern).is_some() {
-                return Err(format!("field {:?} specified more than once at {:?}", f.name, f.span));
-            }
-        }
-
-        let mut bindings = Vec::with_capacity(declared_fields.len());
-        let mut payload_types = Vec::with_capacity(declared_fields.len());
-        for (declared_name, declared_ty) in &declared_fields {
-            match by_name.remove(declared_name.as_str()) {
-                Some(ast::Pattern::Ident(name, _)) => {
-                    bindings.push(name.clone());
-                    payload_types.push(declared_ty.clone());
-                }
-                Some(ast::Pattern::Wildcard(_)) => {
-                    bindings.push("_".to_string());
-                    payload_types.push(declared_ty.clone());
-                }
-                Some(other) => {
-                    return Err(format!(
-                        "type inference not yet implemented for nested patterns inside a \
-                         struct pattern at {:?}",
-                        other.span()
-                    ));
-                }
-                None if has_rest => {
-                    bindings.push("_".to_string());
-                    payload_types.push(declared_ty.clone());
-                }
-                None => {
-                    return Err(format!(
-                        "missing field {declared_name:?} for struct {tag:?} pattern at {span:?} \
-                         (add `..` to ignore it)"
-                    ));
-                }
-            }
-        }
-        if let Some((extra_name, _)) = by_name.into_iter().next() {
-            return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
-        }
-        Ok((tag, bindings, payload_types))
-    }
-
     fn infer_match(&mut self, scrutinee: &ast::Expr, arms: &[ast::MatchArm], env: &TypeEnv) -> Result<(Type, Subst), String> {
         let (scrutinee_ty, s) = self.infer_expr(scrutinee, env)?;
         let mut acc = s;
-
         let mut result_ty: Option<Type> = None;
-        // What the scrutinee is being deconstructed as. A tag matches
-        // either a real enum variant OR a whole struct, since lowering
-        // erases that distinction (both become a positional `Ctor`/
-        // `Match` by tag) — see lower.rs's Pattern::Variant handling,
-        // which the parser also uses for `Point(x, y)` against a
-        // *struct* named Point, not just real enum variants.
-        let mut owning_type: Option<Type> = None;
 
         for arm in arms {
             if arm.guard.is_some() {
@@ -664,93 +646,32 @@ impl Infer {
                     arm.span
                 ));
             }
-            // A tuple pattern has no tag/declaration to look up — its
-            // shape comes entirely from fresh variables unified against
-            // whatever the scrutinee turns out to be, unlike a Struct/
-            // Enum tag's payload types, which are already known from
-            // `ctx`.
-            let (this_type, bindings, payload_types): (Type, Vec<String>, Vec<Type>) = match &arm.pattern {
-                ast::Pattern::Tuple(elems, _) => {
-                    let fresh_vars: Vec<Type> = elems.iter().map(|_| self.fresh()).collect();
-                    let mut bindings = Vec::with_capacity(elems.len());
-                    for e in elems {
-                        match e {
-                            ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
-                            ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
-                            other => {
-                                return Err(format!(
-                                    "type inference not yet implemented for nested patterns \
-                                     inside a tuple match arm at {:?}",
-                                    other.span()
-                                ));
-                            }
-                        }
-                    }
-                    (Type::Tuple(fresh_vars.clone()), bindings, fresh_vars)
-                }
-                ast::Pattern::Struct {
-                    path,
-                    fields,
-                    has_rest,
-                    span,
-                } => {
-                    let (tag, bindings, payload_types) =
-                        Self::struct_pattern_info(path, fields, *has_rest, *span, &self.ctx)?;
-                    (Type::Struct(tag), bindings, payload_types)
-                }
-                _ => {
-                    let (tag, bindings) = Self::variant_pattern_info(&arm.pattern)?;
-                    let (t, payload_types) = match self.ctx.variant(&tag) {
-                        Some((enum_name, payload_types)) => {
-                            (Type::Enum(enum_name.clone()), payload_types.clone())
-                        }
-                        None => match self.ctx.struct_fields(&tag) {
-                            Some(fields) => (
-                                Type::Struct(tag.clone()),
-                                fields.iter().map(|(_, ty)| ty.clone()).collect(),
-                            ),
-                            None => {
-                                return Err(format!("unknown variant {tag:?} at {:?}", arm.pattern.span()));
-                            }
-                        },
-                    };
-                    (t, bindings, payload_types)
-                }
-            };
-
-            // Unifying (rather than a strict `!=` check) is what makes
-            // this work for tuples: two arms that are BOTH, say,
-            // 2-tuples get DIFFERENT fresh variables each time, so a
-            // naive equality check would wrongly call them "mixed"
-            // types even though they're perfectly compatible shapes.
-            // Unification still correctly rejects a genuine mismatch
-            // (Struct vs Enum, or mismatched tuple arity), and is a
-            // strict generalization of the old nominal-only check —
-            // `unify(Enum("Shape"), Enum("Shape"))` still trivially
-            // succeeds via the direct name-match arm in unify.rs.
-            match &owning_type {
-                None => owning_type = Some(this_type.clone()),
-                Some(prev) => {
-                    let s = unify(&acc.apply(prev), &acc.apply(&this_type))
-                        .map_err(|e| format!("match arms mix incompatible types: {e}"))?;
-                    acc = s.compose(&acc);
-                    owning_type = Some(acc.apply(prev));
-                }
-            }
-
-            if bindings.len() != payload_types.len() {
+            // `bind_pattern` accepts a bare identifier/wildcard fine —
+            // correct for a NESTED sub-position, but wrong for a WHOLE
+            // top-level arm: the IR's `Match` dispatches strictly by
+            // tag (no "default arm" concept exists — see ir.rs's scope
+            // note), so lower.rs's `lower_tag_pattern` has no case for
+            // Ident/Wildcard at this level and would reject it. Guard
+            // here so the type checker doesn't accept more than what
+            // actually lowers.
+            if matches!(arm.pattern, ast::Pattern::Ident(..) | ast::Pattern::Wildcard(..)) {
                 return Err(format!(
-                    "pattern at {:?} expects {} field(s), found {} binding(s)",
-                    arm.pattern.span(),
-                    payload_types.len(),
-                    bindings.len()
+                    "type inference not yet implemented for a bare identifier or wildcard as \
+                     a whole match arm (no default-arm concept exists yet) at {:?}",
+                    arm.pattern.span()
                 ));
             }
-
-            let mut arm_env = env.clone();
-            for (binding_name, payload_ty) in bindings.iter().zip(payload_types.iter()) {
-                arm_env = arm_env.extend(binding_name.clone(), acc.apply(payload_ty));
-            }
+            // Every arm unifies its OWN pattern shape against the SAME
+            // `scrutinee_ty`, via `bind_pattern` — this is what enforces
+            // "every arm deconstructs the same type" for free, with no
+            // separate cross-arm bookkeeping needed: arm 2 unifying
+            // against a `scrutinee_ty` arm 1 has ALREADY pinned to some
+            // shape naturally fails if arm 2's shape is incompatible,
+            // and naturally succeeds (without over-constraining fresh
+            // variables against each other) when it's compatible, e.g.
+            // two arms that are both some N-tuple.
+            let arm_env = self.bind_pattern(&arm.pattern, &acc.apply(&scrutinee_ty), env.clone(), &mut acc)?;
+            let arm_env = arm_env.apply_subst(&acc);
 
             let (body_ty, s) = self.infer_expr(&arm.body, &arm_env)?;
             acc = s.compose(&acc);
@@ -764,11 +685,6 @@ impl Infer {
                     result_ty = Some(acc.apply(prev));
                 }
             }
-        }
-
-        if let Some(ty) = owning_type {
-            let s = unify(&acc.apply(&scrutinee_ty), &ty).map_err(|e| format!("match scrutinee: {e}"))?;
-            acc = s.compose(&acc);
         }
 
         let final_ty = result_ty.ok_or_else(|| "match with no arms has no result type".to_string())?;
@@ -975,85 +891,32 @@ impl Infer {
                     cur_env = cur_env.extend(name.clone(), resolved);
                     cur_env = cur_env.apply_subst(&acc);
                 }
-                // `let (a, b) = expr;` — unify the value's type against
-                // a fresh N-element tuple type to peel apart the
-                // element types, then bind each name. No type
+                // `let (a, b) = expr;` / `let Point { x, y } = expr;` —
+                // `bind_pattern` unifies the value's type against
+                // whatever shape the pattern requires and binds every
+                // name it introduces, including nested ones. No type
                 // annotation support here yet: `ast::Type` has no
                 // Tuple case at the SURFACE grammar level at all (only
-                // ever inferred, never spelled), so there's nothing to
-                // unify an annotation against even if one were written.
+                // ever inferred, never spelled), and a struct pattern's
+                // annotation would be redundant with its own path, so
+                // neither has anything meaningful to unify against.
                 ast::Stmt::Let {
-                    pattern: ast::Pattern::Tuple(elems, pspan),
+                    pattern: pattern @ (ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. }),
                     value,
                     ty,
-                    span,
                     ..
                 } => {
                     if ty.is_some() {
                         return Err(format!(
                             "type inference not yet implemented for type annotations on \
-                             tuple destructuring `let` at {pspan:?}"
+                             destructuring `let` at {:?}",
+                            pattern.span()
                         ));
                     }
                     let (val_ty, s) = self.infer_expr(value, &cur_env)?;
                     acc = s.compose(&acc);
-                    let fresh_vars: Vec<Type> = elems.iter().map(|_| self.fresh()).collect();
-                    let s = unify(&acc.apply(&val_ty), &Type::Tuple(fresh_vars.clone()))
-                        .map_err(|e| format!("tuple `let` at {span:?}: {e}"))?;
-                    acc = s.compose(&acc);
-                    for (elem_pat, var_ty) in elems.iter().zip(fresh_vars.iter()) {
-                        match elem_pat {
-                            ast::Pattern::Ident(name, _) => {
-                                cur_env = cur_env.extend(name.clone(), acc.apply(var_ty));
-                            }
-                            ast::Pattern::Wildcard(_) => {}
-                            other => {
-                                return Err(format!(
-                                    "type inference not yet implemented for nested patterns \
-                                     inside a tuple `let` at {:?}",
-                                    other.span()
-                                ));
-                            }
-                        }
-                    }
-                    cur_env = cur_env.apply_subst(&acc);
-                }
-                // `let Point { x, y } = expr;` — unlike a tuple `let`,
-                // field TYPES are already known from `ctx` (no
-                // fresh-var peeling needed), so this just unifies the
-                // value's type against the nominal `Struct` type and
-                // binds the declared field types directly.
-                ast::Stmt::Let {
-                    pattern:
-                        ast::Pattern::Struct {
-                            path,
-                            fields,
-                            has_rest,
-                            span: pspan,
-                        },
-                    value,
-                    ty,
-                    span,
-                    ..
-                } => {
-                    if ty.is_some() {
-                        return Err(format!(
-                            "type inference not yet implemented for type annotations on \
-                             struct destructuring `let` at {pspan:?}"
-                        ));
-                    }
-                    let (val_ty, s) = self.infer_expr(value, &cur_env)?;
-                    acc = s.compose(&acc);
-                    let (tag, bindings, payload_types) =
-                        Self::struct_pattern_info(path, fields, *has_rest, *pspan, &self.ctx)?;
-                    let s = unify(&acc.apply(&val_ty), &Type::Struct(tag))
-                        .map_err(|e| format!("struct `let` at {span:?}: {e}"))?;
-                    acc = s.compose(&acc);
-                    for (name, field_ty) in bindings.iter().zip(payload_types.iter()) {
-                        if name != "_" {
-                            cur_env = cur_env.extend(name.clone(), acc.apply(field_ty));
-                        }
-                    }
+                    let scrutinee_ty = acc.apply(&val_ty);
+                    cur_env = self.bind_pattern(pattern, &scrutinee_ty, cur_env, &mut acc)?;
                     cur_env = cur_env.apply_subst(&acc);
                 }
                 ast::Stmt::Let { pattern, .. } => {
@@ -1781,6 +1644,84 @@ mod tests {
     fn struct_destructuring_function_param() {
         let types = infer_program("struct Point { x: Float, y: Float }\nlet area (Point { x, y }) = x * y");
         assert_eq!(types["area"], fn_ty(vec![Type::Struct("Point".to_string())], Type::Float));
+    }
+
+    // --- Nested patterns ---
+
+    #[test]
+    fn struct_nested_inside_tuple_match_arm() {
+        let ctx = context("struct Point { x: Int, y: Int }");
+        let mut infer = Infer::with_context(ctx);
+        let env = TypeEnv::new().extend("pair".to_string(), Type::Tuple(vec![Type::Struct("Point".to_string()), Type::Int]));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match pair { (Point { x, y }, n) => x + y + n }", &env),
+            Type::Int
+        );
+    }
+
+    // Struct-nested-inside-struct isn't tested here: it needs a struct
+    // declared with a FIELD whose type is another struct (`struct Line
+    // { start: Point, end: Point }`), which hits a separate, already-
+    // documented, pre-existing gap — `ast_type_to_type` only resolves a
+    // fixed primitive set and doesn't yet resolve a field type that's
+    // itself a struct/enum reference. Struct-in-tuple and variant-in-
+    // tuple nesting (below) already exercise the same `bind_pattern`
+    // recursion this would, so the core capability is still covered.
+
+    #[test]
+    fn variant_pattern_nested_inside_tuple_match_arm() {
+        let ctx = context("struct Point { x: Int, y: Int }");
+        let mut infer = Infer::with_context(ctx);
+        let env = TypeEnv::new().extend("pair".to_string(), Type::Tuple(vec![Type::Struct("Point".to_string()), Type::Int]));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match pair { (Point(x, y), n) => x + y + n }", &env),
+            Type::Int
+        );
+    }
+
+    #[test]
+    fn deeply_nested_pattern_three_levels() {
+        let ctx = context("struct Point { x: Int, y: Int }");
+        let mut infer = Infer::with_context(ctx);
+        let env = TypeEnv::new().extend(
+            "v".to_string(),
+            Type::Tuple(vec![Type::Tuple(vec![Type::Struct("Point".to_string()), Type::Int]), Type::Int]),
+        );
+        assert_eq!(
+            infer_expr_with(&mut infer, "match v { ((Point { x, y }, a), b) => x + y + a + b }", &env),
+            Type::Int
+        );
+    }
+
+    #[test]
+    fn nested_pattern_type_mismatch_is_an_error() {
+        let ctx = context("struct Point { x: Int, y: Int }");
+        let mut infer = Infer::with_context(ctx);
+        let env = TypeEnv::new().extend("pair".to_string(), Type::Tuple(vec![Type::Struct("Point".to_string()), Type::Int]));
+        // Second tuple position is Int, not a Point — the NESTED
+        // destructure should fail, not be silently accepted.
+        infer_expr_with_err(&mut infer, "match pair { (n, Point { x, y }) => x }", &env);
+    }
+
+    #[test]
+    fn nested_tuple_destructuring_function_param() {
+        // A tuple-in-tuple destructuring param, proving nesting flows
+        // through `infer_program`'s param-binding loop too, not just
+        // match arms and block-level `let`.
+        let types = infer_program("let f ((a, b), c) = a + b + c");
+        assert_eq!(types["f"], fn_ty(vec![Type::Tuple(vec![Type::Tuple(vec![Type::Int, Type::Int]), Type::Int])], Type::Int));
+    }
+
+    #[test]
+    fn nested_or_pattern_is_still_not_yet_supported() {
+        // Nesting works for tag-based patterns (variant/tuple/struct)
+        // — an or-pattern nested inside one is a genuinely separate,
+        // still-unsupported gap, mirroring lower.rs's identical
+        // restriction.
+        let ctx = context("struct Point { x: Int, y: Int }");
+        let mut infer = Infer::with_context(ctx);
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        infer_expr_with_err(&mut infer, "match p { Point { x: 1 | 2, y } => y }", &env);
     }
 
     #[test]

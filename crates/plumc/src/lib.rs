@@ -125,6 +125,14 @@ mod tests {
     }
 
     #[test]
+    fn nested_patterns_run_through_the_full_gated_pipeline() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = match (Point { x: 3, y: 4 }, 10) { (Point { x, y }, n) => x + y + n }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(17)));
+    }
+
+    #[test]
     fn struct_destructuring_params_run_through_the_full_gated_pipeline() {
         let src = "struct Point { x: Int, y: Int }\n\
                     let area (Point { x, y }) = x * y\n\

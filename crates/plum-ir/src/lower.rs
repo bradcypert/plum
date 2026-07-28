@@ -125,29 +125,111 @@ fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast:
 
 // Wraps `rest` in a `Match` that destructures `scrutinee_name` (a
 // synthetic param name — see `lower_params`) according to `pattern`.
-// Tuple and struct patterns, one level deep, are supported — same
-// restriction `lower_variant_pattern` places on match arms, since both
-// go through the identical tag+positional-bindings mechanism.
+// Variant, tuple, and struct patterns are supported, INCLUDING nested
+// ones (a struct pattern inside a tuple, etc. — see `lower_tag_pattern`
+// and `wrap_nested_destructures`).
 fn wrap_destructure(
     scrutinee_name: String,
     pattern: &ast::Pattern,
     ctx: &LoweringContext,
     rest: ir::Expr,
 ) -> Result<ir::Expr, String> {
-    let (tag, bindings) = lower_destructurable_pattern(pattern, ctx)?;
+    let (tag, bindings, nested) = lower_tag_pattern(pattern, ctx)?;
+    let body = wrap_nested_destructures(nested, ctx, rest)?;
     Ok(ir::Expr::Match {
         scrutinee: Box::new(ir::Expr::Var(scrutinee_name)),
-        arms: vec![ir::MatchArm { tag, bindings, body: rest }],
+        arms: vec![ir::MatchArm { tag, bindings, body }],
     })
 }
 
-// The shared core of "destructure a tuple or struct pattern into
-// plain-identifier bindings" — used for match arms
-// (`lower_variant_pattern`), function params (`wrap_destructure`), and
-// block-level `let` alike, so all three accept exactly the same
-// shapes.
-fn lower_destructurable_pattern(pattern: &ast::Pattern, ctx: &LoweringContext) -> Result<(String, Vec<String>), String> {
+// Wraps `body` in a chain of `Match`es, one per (synthetic name, sub-
+// pattern) pair `lower_tag_pattern` deferred — this is what makes
+// NESTED patterns work (`(Point { x, y }, z)`, `Some(Point { x, y })`,
+// ...): a nested position gets a synthetic binding at its OWN level,
+// then this function destructures THAT synthetic binding further,
+// recursively, exactly the same way `wrap_destructure` already
+// destructures a synthetic function-param name. Order among sibling
+// nested patterns doesn't matter (each becomes its own independent
+// `Match`, scoped only around what comes after it).
+fn wrap_nested_destructures(
+    nested: Vec<(String, ast::Pattern)>,
+    ctx: &LoweringContext,
+    body: ir::Expr,
+) -> Result<ir::Expr, String> {
+    let mut result = body;
+    for (name, pattern) in nested.into_iter().rev() {
+        let (tag, bindings, more_nested) = lower_tag_pattern(&pattern, ctx)?;
+        let inner_body = wrap_nested_destructures(more_nested, ctx, result)?;
+        result = ir::Expr::Match {
+            scrutinee: Box::new(ir::Expr::Var(name)),
+            arms: vec![ir::MatchArm {
+                tag,
+                bindings,
+                body: inner_body,
+            }],
+        };
+    }
+    Ok(result)
+}
+
+// Classifies one sub-pattern position (a variant arg, tuple element, or
+// struct field's sub-pattern) into `bindings`/`nested`: a plain
+// identifier or wildcard binds directly; a variant/tuple/struct pattern
+// gets a fresh synthetic name pushed into `bindings` AND queued in
+// `nested` for `wrap_nested_destructures` to destructure further.
+// Anything else (literal patterns, or-patterns, ...) is still rejected
+// — nesting THOSE is a separate, unrelated gap.
+fn classify_subpattern(
+    pattern: &ast::Pattern,
+    next_synthetic: &mut usize,
+    bindings: &mut Vec<String>,
+    nested: &mut Vec<(String, ast::Pattern)>,
+) -> Result<(), String> {
     match pattern {
+        ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
+        // `_` can never collide with a real user binding — the lexer
+        // treats it as a distinct Underscore token, not a valid Ident,
+        // so no genuine Plum variable can ever be named "_".
+        ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
+        p @ (ast::Pattern::Variant { .. } | ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. }) => {
+            let synthetic = format!("__nested{next_synthetic}");
+            *next_synthetic += 1;
+            bindings.push(synthetic.clone());
+            nested.push((synthetic, p.clone()));
+        }
+        other => {
+            return Err(format!(
+                "lowering not yet implemented for this pattern shape nested inside \
+                 another pattern at {:?}",
+                other.span()
+            ));
+        }
+    }
+    Ok(())
+}
+
+// The shared core of "resolve a tag-based pattern (variant, tuple, or
+// struct) into a tag plus positional bindings" — used for match arms,
+// function params, and block-level `let` alike, so all three accept
+// exactly the same shapes. A binding is either a real name (or `"_"`)
+// or a SYNTHETIC name standing in for a nested sub-pattern still
+// waiting to be destructured — see `classify_subpattern` and
+// `wrap_nested_destructures`.
+fn lower_tag_pattern(
+    pattern: &ast::Pattern,
+    ctx: &LoweringContext,
+) -> Result<(String, Vec<String>, Vec<(String, ast::Pattern)>), String> {
+    let mut next_synthetic = 0;
+    match pattern {
+        ast::Pattern::Variant { path, args, .. } => {
+            let tag = path.last().cloned().expect("a path always has at least one segment");
+            let mut bindings = Vec::with_capacity(args.len());
+            let mut nested = Vec::new();
+            for arg in args {
+                classify_subpattern(arg, &mut next_synthetic, &mut bindings, &mut nested)?;
+            }
+            Ok((tag, bindings, nested))
+        }
         ast::Pattern::Tuple(elems, span) => {
             if elems.is_empty() {
                 return Err(format!(
@@ -156,20 +238,11 @@ fn lower_destructurable_pattern(pattern: &ast::Pattern, ctx: &LoweringContext) -
                 ));
             }
             let mut bindings = Vec::with_capacity(elems.len());
+            let mut nested = Vec::new();
             for e in elems {
-                match e {
-                    ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
-                    ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
-                    other => {
-                        return Err(format!(
-                            "lowering not yet implemented for nested patterns inside a \
-                             tuple pattern at {:?}",
-                            other.span()
-                        ));
-                    }
-                }
+                classify_subpattern(e, &mut next_synthetic, &mut bindings, &mut nested)?;
             }
-            Ok((tuple_tag(bindings.len()), bindings))
+            Ok((tuple_tag(bindings.len()), bindings, nested))
         }
         // `Point { x, y }` / `Point { x: px, .. }` — named fields need
         // the struct's DECLARED order (same reason struct literals need
@@ -201,19 +274,12 @@ fn lower_destructurable_pattern(pattern: &ast::Pattern, ctx: &LoweringContext) -
                 }
             }
             let mut bindings = Vec::with_capacity(declared_fields.len());
+            let mut nested = Vec::new();
             for declared_name in declared_fields {
                 match by_name.remove(declared_name.as_str()) {
-                    Some(sub_pattern) => match sub_pattern {
-                        ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
-                        ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
-                        other => {
-                            return Err(format!(
-                                "lowering not yet implemented for nested patterns inside a \
-                                 struct pattern at {:?}",
-                                other.span()
-                            ));
-                        }
-                    },
+                    Some(sub_pattern) => {
+                        classify_subpattern(sub_pattern, &mut next_synthetic, &mut bindings, &mut nested)?;
+                    }
                     None if *has_rest => bindings.push("_".to_string()),
                     None => {
                         return Err(format!(
@@ -226,7 +292,7 @@ fn lower_destructurable_pattern(pattern: &ast::Pattern, ctx: &LoweringContext) -
             if let Some((extra_name, _)) = by_name.into_iter().next() {
                 return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
             }
-            Ok((tag, bindings))
+            Ok((tag, bindings, nested))
         }
         other => Err(format!(
             "lowering not yet implemented for this pattern shape as a destructure at {:?}",
@@ -401,8 +467,9 @@ fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringCont
                 arm.span
             ));
         }
-        let (tag, bindings) = lower_variant_pattern(&arm.pattern, ctx)?;
-        let body = lower_expr(&arm.body, ctx)?;
+        let (tag, bindings, nested) = lower_tag_pattern(&arm.pattern, ctx)?;
+        let arm_body = lower_expr(&arm.body, ctx)?;
+        let body = wrap_nested_destructures(nested, ctx, arm_body)?;
         ir_arms.push(ir::MatchArm { tag, bindings, body });
     }
     Ok(ir::Expr::Match {
@@ -455,52 +522,6 @@ fn lower_for(
         end: Box::new(lower_expr(rhs, ctx)?),
         body: Box::new(lower_block(body, ctx)?),
     })
-}
-
-// Only the simple `Path(bindings...)` / bare `Path` shape our minimal
-// IR Match can represent, PLUS tuple and struct patterns (delegated to
-// `lower_destructurable_pattern`). Notably NOT supported yet: a bare
-// wildcard `_` as a whole arm (no "default arm" concept exists in the
-// IR — Match dispatches strictly by tag; see ir.rs's scope note), or-
-// patterns, literal patterns, and nested patterns inside a variant's
-// args (only `Ident`/`Wildcard` args are supported, since those map
-// directly onto a positional binding name).
-fn lower_variant_pattern(pattern: &ast::Pattern, ctx: &LoweringContext) -> Result<(String, Vec<String>), String> {
-    match pattern {
-        ast::Pattern::Variant { path, args, .. } => {
-            let tag = path.last().cloned().expect("a path always has at least one segment");
-            let mut bindings = Vec::with_capacity(args.len());
-            for arg in args {
-                match arg {
-                    ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
-                    // `_` can never collide with a real user binding —
-                    // the lexer treats it as a distinct Underscore
-                    // token, not a valid Ident, so no genuine Plum
-                    // variable can ever be named "_".
-                    ast::Pattern::Wildcard(_) => bindings.push("_".to_string()),
-                    other => {
-                        return Err(format!(
-                            "lowering not yet implemented for nested patterns inside a \
-                             variant arm's arguments at {:?}",
-                            other.span()
-                        ));
-                    }
-                }
-            }
-            Ok((tag, bindings))
-        }
-        // A tuple or struct pattern goes through the exact same
-        // tag+positional-bindings mechanism as a variant, via the
-        // shared helper also used for destructuring params/`let` —
-        // `(a, b) => ...`, `Point { x, y } => ...`, and
-        // `Shape.Circle(r) => ...` are all just "dispatch on tag, bind
-        // fields positionally" underneath.
-        p @ (ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. }) => lower_destructurable_pattern(p, ctx),
-        other => Err(format!(
-            "lowering not yet implemented for this pattern shape as a match arm at {:?}",
-            other.span()
-        )),
-    }
 }
 
 // `x |> rhs` inserts `x` as the LAST argument of the call `rhs`
@@ -578,13 +599,14 @@ fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, St
                 value,
                 ..
             } => {
-                let (tag, bindings) = lower_destructurable_pattern(p, ctx)?;
+                let (tag, bindings, nested) = lower_tag_pattern(p, ctx)?;
+                let body = wrap_nested_destructures(nested, ctx, result)?;
                 ir::Expr::Match {
                     scrutinee: Box::new(lower_expr(value, ctx)?),
                     arms: vec![ir::MatchArm {
                         tag,
                         bindings,
-                        body: result,
+                        body,
                     }],
                 }
             }
@@ -1197,8 +1219,48 @@ mod tests {
     }
 
     #[test]
-    fn nested_pattern_inside_a_tuple_pattern_is_not_yet_supported() {
-        lower_err("match p { (Point(x, y), b) => b }");
+    fn nested_pattern_inside_a_tuple_pattern_lowers_to_a_nested_match() {
+        assert_eq!(
+            lower("match p { (Point(x, y), b) => b }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("p".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "2Tuple".to_string(),
+                    bindings: vec!["__nested0".to_string(), "b".to_string()],
+                    body: ir::Expr::Match {
+                        scrutinee: Box::new(ir::Expr::Var("__nested0".to_string())),
+                        arms: vec![ir::MatchArm {
+                            tag: "Point".to_string(),
+                            bindings: vec!["x".to_string(), "y".to_string()],
+                            body: ir::Expr::Var("b".to_string()),
+                        }],
+                    },
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn nested_pattern_inside_a_struct_destructuring_function_param() {
+        // Proves nesting also flows through the synthetic-param-name
+        // path, not just match arms directly.
+        let program = lower_program(
+            "struct Point { x: Int, y: Int }\n\
+             struct Line { start: Point, end: Point }\n\
+             let dx (Line { start: Point { x: x0, y: _ }, end: Point { x: x1, y: _ } }) = x1 - x0",
+        );
+        assert_eq!(program.functions[0].params, vec!["__param0".to_string()]);
+        // Just prove it lowers successfully with the expected shape of
+        // nesting (outer Line match wrapping two Point matches) rather
+        // than asserting the whole tree by hand.
+        let ir::Expr::Match { arms, .. } = &program.functions[0].body else {
+            panic!("expected the body to be a Match");
+        };
+        assert_eq!(arms[0].tag, "Line");
+        assert_eq!(arms[0].bindings.len(), 2);
+        let ir::Expr::Match { .. } = &arms[0].body else {
+            panic!("expected the Line arm's body to be a nested Match for `start`/`end`");
+        };
     }
 
     #[test]
@@ -1640,10 +1702,39 @@ mod tests {
     }
 
     #[test]
-    fn struct_pattern_nested_pattern_is_not_yet_supported() {
-        let ctx = context_from_program(
-            "struct Inner { v: Int }\nstruct Outer { inner: Inner, y: Int }",
+    fn struct_pattern_nested_pattern_lowers_to_a_nested_match() {
+        let ctx = context_from_program("struct Inner { v: Int }\nstruct Outer { inner: Inner, y: Int }");
+        assert_eq!(
+            lower_with("match p { Outer { inner: Inner { v }, y } => v + y }", &ctx),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("p".to_string())),
+                arms: vec![ir::MatchArm {
+                    tag: "Outer".to_string(),
+                    bindings: vec!["__nested0".to_string(), "y".to_string()],
+                    body: ir::Expr::Match {
+                        scrutinee: Box::new(ir::Expr::Var("__nested0".to_string())),
+                        arms: vec![ir::MatchArm {
+                            tag: "Inner".to_string(),
+                            bindings: vec!["v".to_string()],
+                            body: ir::Expr::Binary(
+                                ir::BinOp::Add,
+                                Box::new(ir::Expr::Var("v".to_string())),
+                                Box::new(ir::Expr::Var("y".to_string())),
+                            ),
+                        }],
+                    },
+                }],
+            }
         );
-        lower_with_err("match p { Outer { inner: Inner { v }, y } => v + y }", &ctx);
+    }
+
+    #[test]
+    fn nested_or_pattern_is_still_not_yet_supported() {
+        // Nesting works for tag-based patterns (variant/tuple/struct)
+        // — an or-pattern nested inside one is a genuinely separate,
+        // still-unsupported gap (or-patterns aren't lowerable at all
+        // yet, nested or not).
+        let ctx = context_from_program("struct Point { x: Int, y: Int }");
+        lower_with_err("match p { Point { x: 1 | 2, y } => y }", &ctx);
     }
 }
