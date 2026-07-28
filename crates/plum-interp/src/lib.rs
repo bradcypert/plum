@@ -49,6 +49,14 @@ pub struct Interpreter {
     functions: HashMap<String, Function>,
     closures: HashMap<usize, ClosureValue>,
     next_closure_id: usize,
+    // Zero-parameter top-level `let`s — plain values, evaluated ONCE
+    // by `load_program` (never re-evaluated), and — like `functions` —
+    // deliberately NOT part of `env`: `call`/`call_closure` completely
+    // REPLACE `env` per invocation for isolation, so anything a
+    // function body needs to see regardless of call site has to live
+    // in its own permanent table instead. `lookup` falls back here
+    // after scanning `env` comes up empty.
+    globals: HashMap<String, Value>,
 }
 
 impl Interpreter {
@@ -59,13 +67,29 @@ impl Interpreter {
             functions: HashMap::new(),
             closures: HashMap::new(),
             next_closure_id: 0,
+            globals: HashMap::new(),
         }
     }
 
-    pub fn load_program(&mut self, program: &Program) {
+    /// Registers every function, then evaluates every global's
+    /// initializer ONCE, in declaration order — functions first and
+    /// unconditionally, since a function isn't evaluated until called
+    /// and so can be registered regardless of where it sits relative to
+    /// a global that might reference it. Globals are evaluated with
+    /// `self.globals` already containing every EARLIER global (each one
+    /// is inserted immediately after being evaluated), so a global's
+    /// initializer naturally sees prior globals via ordinary `Var`
+    /// lookup — see ir.rs's `Global` doc comment for why later/self
+    /// references aren't meaningful here and aren't supported.
+    pub fn load_program(&mut self, program: &Program) -> Result<(), String> {
         for f in &program.functions {
             self.functions.insert(f.name.clone(), f.clone());
         }
+        for g in &program.globals {
+            let value = self.eval(&g.value)?;
+            self.globals.insert(g.name.clone(), value);
+        }
+        Ok(())
     }
 
     /// Invokes a named top-level function with concrete argument
@@ -130,6 +154,7 @@ impl Interpreter {
             .rev()
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.clone())
+            .or_else(|| self.globals.get(name).cloned())
             .ok_or_else(|| format!("unbound variable: {name}"))
     }
 
@@ -628,12 +653,73 @@ mod tests {
         let ctx = LoweringContext::from_items(&program.items);
         let ir_program = plum_ir::lower::lower_program(&program, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
         let mut interp = Interpreter::new();
-        interp.load_program(&ir_program);
+        interp.load_program(&ir_program).unwrap_or_else(|e| panic!("load error: {e}"));
         let result = interp
             .call("make_n", vec![Value::Int(5)])
             .unwrap_or_else(|e| panic!("call error: {e}"));
         assert_eq!(result, Value::Unit);
         assert_eq!(interp.alloc_count(), 5);
+    }
+
+    // --- Zero-parameter top-level `let` (globals) ---
+
+    #[test]
+    fn a_global_is_referenced_bare() {
+        assert_eq!(run("let x = 5\nlet use_it n = x + n", "use_it", vec![Value::Int(1)]), Value::Int(6));
+    }
+
+    #[test]
+    fn a_global_can_reference_an_earlier_global() {
+        assert_eq!(
+            run("let a = 1\nlet b = a + 1\nlet use_it n = b + n", "use_it", vec![Value::Int(1)]),
+            Value::Int(3)
+        );
+    }
+
+    #[test]
+    fn a_global_can_call_a_function_regardless_of_declaration_order() {
+        // `double` is declared AFTER `x` textually — fine, since
+        // functions are all registered before ANY global evaluates.
+        assert_eq!(run("let x = double(5)\nlet double n = n * 2\nlet use_it dummy = x", "use_it", vec![Value::Unit]), Value::Int(10));
+    }
+
+    #[test]
+    fn a_function_can_reference_a_global_declared_earlier() {
+        assert_eq!(run("let pi_ish = 3\nlet area r = pi_ish * r * r", "area", vec![Value::Int(2)]), Value::Int(12));
+    }
+
+    #[test]
+    fn globals_are_evaluated_exactly_once() {
+        // Each call to `use_it` re-reads the SAME already-evaluated
+        // global — proven by allocating a heap value as a global and
+        // checking `alloc_count` stays 1 across multiple calls, not
+        // growing per call.
+        let src = "struct Boxed { x: Int }\n\
+                    let origin = Boxed { x: 0 }\n\
+                    let use_it dummy = match origin { Boxed(x) => x }";
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let ctx = LoweringContext::from_items(&program.items);
+        let ir_program = lower_program(&program, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
+        let mut interp = Interpreter::new();
+        interp.load_program(&ir_program).unwrap_or_else(|e| panic!("load error: {e}"));
+        assert_eq!(interp.alloc_count(), 1);
+        interp.call("use_it", vec![Value::Unit]).unwrap();
+        interp.call("use_it", vec![Value::Unit]).unwrap();
+        interp.call("use_it", vec![Value::Unit]).unwrap();
+        assert_eq!(interp.alloc_count(), 1, "the global's struct must be allocated once, not once per call");
+    }
+
+    #[test]
+    fn a_failing_global_initializer_fails_load_program() {
+        let tokens = Lexer::new("let x = 1 / 0").tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap();
+        let ctx = LoweringContext::new();
+        let ir_program = lower_program(&program, &ctx).unwrap();
+        let mut interp = Interpreter::new();
+        assert!(interp.load_program(&ir_program).is_err());
     }
 
     // --- Mutation (`let mut` + assignment) ---
@@ -1084,7 +1170,7 @@ mod tests {
         let ctx = LoweringContext::from_items(&program.items);
         let ir_program = lower_program(&program, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
         let mut interp = Interpreter::new();
-        interp.load_program(&ir_program);
+        interp.load_program(&ir_program).unwrap_or_else(|e| panic!("load error: {e}"));
         interp
             .call(fn_name, args)
             .unwrap_or_else(|e| panic!("call error: {e}"))
@@ -1097,7 +1183,7 @@ mod tests {
         let ctx = LoweringContext::from_items(&program.items);
         let ir_program = lower_program(&program, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
         let mut interp = Interpreter::new();
-        interp.load_program(&ir_program);
+        interp.load_program(&ir_program).unwrap_or_else(|e| panic!("load error: {e}"));
         interp.call(fn_name, args).expect_err("expected call to fail")
     }
 
@@ -1159,7 +1245,7 @@ mod tests {
         let ir_program = lower_program(&program, &ctx).unwrap();
 
         let mut interp = Interpreter::new();
-        interp.load_program(&ir_program);
+        interp.load_program(&ir_program).unwrap();
         interp.env.push(("outer_var".to_string(), Value::Int(99)));
 
         let err = interp.call("leak_check", vec![Value::Int(0)]).expect_err("expected call to fail");

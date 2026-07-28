@@ -169,9 +169,9 @@ pub struct MatchArm {
 
 // A named, top-level, non-closure function — see lower.rs's
 // `lower_program` scope note for exactly what does and doesn't lower
-// into one of these yet (only plain-identifier params; no zero-param
-// "globals" yet; generics are ignored entirely, since a type parameter
-// has no runtime effect without a type checker).
+// into one of these yet (only plain-identifier params; generics are
+// ignored entirely, since a type parameter has no runtime effect
+// without a type checker).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     pub name: String,
@@ -179,7 +179,21 @@ pub struct Function {
     pub body: Expr,
 }
 
+// A zero-parameter top-level `let` — a plain, eagerly-evaluated value,
+// not a function. `Program.globals` is ORDERED: a global's `value` may
+// only reference EARLIER globals (never a later one, never itself —
+// there's no lazy/recursive-let story here), since a real interpreter
+// evaluates them once, in this exact order, before anything else runs.
+// Referencing any function is fine regardless of order, since a
+// function isn't evaluated until called.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Global {
+    pub name: String,
+    pub value: Expr,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
+    pub globals: Vec<Global>,
 }

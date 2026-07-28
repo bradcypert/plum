@@ -29,7 +29,7 @@ pub fn typecheck_and_run(src: &str, fn_name: &str, args: Vec<Value>) -> Result<V
     let ir_program = optimize_program(ir_program);
 
     let mut interp = Interpreter::new();
-    interp.load_program(&ir_program);
+    interp.load_program(&ir_program).map_err(|e| format!("load error: {e}"))?;
     interp.call(fn_name, args)
 }
 
@@ -108,6 +108,20 @@ mod tests {
         let src = "let sum_to n = { let mut sum = 0; for i in 0..n { sum = sum + i; }; sum }";
         let result = typecheck_and_run(src, "sum_to", vec![Value::Int(5)]);
         assert_eq!(result, Ok(Value::Int(10)));
+    }
+
+    #[test]
+    fn globals_run_through_the_full_gated_pipeline() {
+        let src = "let pi_ish = 3\nlet area r = pi_ish * r * r";
+        let result = typecheck_and_run(src, "area", vec![Value::Int(2)]);
+        assert_eq!(result, Ok(Value::Int(12)));
+    }
+
+    #[test]
+    fn a_global_forward_reference_is_rejected_before_running() {
+        let src = "let a = b\nlet b = 1";
+        let err = typecheck_and_run(src, "a", vec![]).expect_err("expected a type error");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
     }
 
     #[test]

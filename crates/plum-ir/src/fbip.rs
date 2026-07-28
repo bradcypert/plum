@@ -1,4 +1,4 @@
-use crate::ir::{Expr, Function, MatchArm, Program, RcOp};
+use crate::ir::{Expr, Function, Global, MatchArm, Program, RcOp};
 use std::collections::HashSet;
 
 /// Inserts explicit refcount inc/dec operations via last-use analysis
@@ -37,6 +37,14 @@ pub fn optimize_program(program: Program) -> Program {
                 name: f.name,
                 params: f.params,
                 body: optimize(f.body),
+            })
+            .collect(),
+        globals: program
+            .globals
+            .into_iter()
+            .map(|g| Global {
+                name: g.name,
+                value: optimize(g.value),
             })
             .collect(),
     }
@@ -1082,6 +1090,7 @@ mod tests {
                 params: vec![],
                 body: let_("p", ctor("Point", vec![int(1), int(2)]), var("p")),
             }],
+            globals: vec![],
         };
         let optimized = optimize_program(program);
         assert_eq!(optimized.functions.len(), 1);
@@ -1106,12 +1115,30 @@ mod tests {
                     body: var("b"),
                 },
             ],
+            globals: vec![],
         };
         let optimized = optimize_program(program);
         assert_eq!(optimized.functions[0].name, "first");
         assert_eq!(optimized.functions[0].params, vec!["a".to_string()]);
         assert_eq!(optimized.functions[1].name, "second");
         assert_eq!(optimized.functions[1].params, vec!["b".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn optimize_program_runs_optimize_on_every_global_too() {
+        let program = Program {
+            functions: vec![],
+            globals: vec![Global {
+                name: "origin".to_string(),
+                value: let_("p", ctor("Point", vec![int(1), int(2)]), var("p")),
+            }],
+        };
+        let optimized = optimize_program(program);
+        assert_eq!(optimized.globals[0].name, "origin");
+        assert_eq!(
+            optimized.globals[0].value,
+            optimize(let_("p", ctor("Point", vec![int(1), int(2)]), var("p")))
+        );
     }
 
     #[test]

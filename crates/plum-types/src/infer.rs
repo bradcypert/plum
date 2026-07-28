@@ -218,15 +218,16 @@ impl Infer {
         let mut global_env = TypeEnv::new();
         let mut signatures: HashMap<String, (Vec<Type>, Type)> = HashMap::new();
         let mut defs: Vec<&ast::LetDef> = Vec::new();
+        // Zero-parameter top-level `let`s, collected separately and IN
+        // FILE ORDER — see ir.rs's `Global` doc comment (plum-ir) for
+        // why order among them matters, unlike functions.
+        let mut global_defs: Vec<&ast::LetDef> = Vec::new();
 
         for item in &program.items {
             if let ast::ItemKind::Let(def) = &item.kind {
                 if def.params.is_empty() {
-                    return Err(format!(
-                        "type inference not yet implemented for zero-parameter top-level \
-                         `let` at {:?}",
-                        def.span
-                    ));
+                    global_defs.push(def);
+                    continue;
                 }
                 let param_vars: Vec<Type> = def.params.iter().map(|_| self.fresh()).collect();
                 let ret_var = self.fresh();
@@ -237,12 +238,33 @@ impl Infer {
             }
         }
 
-        // Phase 2: infer each body against the SHARED global env (so
-        // it can call itself or any sibling function), threading ONE
-        // substitution accumulator across every function — a call from
-        // function A into function B's still-fresh signature has to be
-        // able to constrain B before B's own body gets processed.
         let mut acc = Subst::empty();
+
+        // Phase 1.5: globals, in file order, BEFORE any function body
+        // is inferred — a global stays monomorphic (never generalized,
+        // same as a block-level `let`), and each one's initializer sees
+        // every function (Phase 1 above pre-declared every signature
+        // regardless of order) plus every EARLIER global (this loop
+        // extends `global_env` immediately after each one, so a LATER
+        // global or a function body can see it — see ir.rs's `Global`
+        // doc comment for why the reverse, a global seeing a LATER
+        // global, isn't meaningful and isn't supported).
+        let mut global_types: HashMap<String, Type> = HashMap::new();
+        for def in &global_defs {
+            let (ty, s) = self.infer_expr(&def.body, &global_env)?;
+            acc = s.compose(&acc);
+            let resolved = acc.apply(&ty);
+            global_env = global_env.extend(def.name.clone(), resolved.clone());
+            global_env = global_env.apply_subst(&acc);
+            global_types.insert(def.name.clone(), resolved);
+        }
+
+        // Phase 2: infer each function body against the SHARED global
+        // env (so it can call itself, any sibling function, OR any
+        // global), threading the SAME substitution accumulator — a
+        // call from function A into function B's still-fresh signature
+        // has to be able to constrain B before B's own body gets
+        // processed.
         for def in &defs {
             let (param_vars, ret_var) = signatures.get(&def.name).cloned().expect("just inserted above");
             let mut body_env = global_env.clone();
@@ -333,6 +355,15 @@ impl Infer {
             let params = param_vars.iter().map(|t| acc.apply(t)).collect();
             let ret = acc.apply(ret_var);
             result.insert(name.clone(), Type::Function(params, Box::new(ret)));
+        }
+        // Re-applying the FINAL acc here (not just what was known when
+        // each global was inferred) matters: a global calling a
+        // function declared LATER in the file only saw that function's
+        // still-fresh Phase-1 placeholder at the time, and Phase 2
+        // resolves it further — same reasoning as the function-vs-
+        // function cross-reference fix above.
+        for (name, ty) in &global_types {
+            result.insert(name.clone(), acc.apply(ty));
         }
         Ok(result)
     }
@@ -1845,7 +1876,47 @@ mod tests {
     }
 
     #[test]
-    fn infer_program_zero_param_let_is_not_yet_supported() {
-        infer_program_err("let x = 5");
+    fn infer_program_zero_param_let_is_a_global() {
+        let types = infer_program("let x = 5");
+        assert_eq!(types["x"], Type::Int);
+    }
+
+    #[test]
+    fn infer_program_global_can_reference_an_earlier_global() {
+        let types = infer_program("let a = 1\nlet b = a + 1");
+        assert_eq!(types["a"], Type::Int);
+        assert_eq!(types["b"], Type::Int);
+    }
+
+    #[test]
+    fn infer_program_global_type_error_is_reported() {
+        infer_program_err("let x = 1 + true");
+    }
+
+    #[test]
+    fn infer_program_global_referencing_a_later_global_is_an_error() {
+        // No forward reference — a global can only see EARLIER globals.
+        infer_program_err("let a = b\nlet b = 1");
+    }
+
+    #[test]
+    fn infer_program_a_global_can_call_a_function_regardless_of_declaration_order() {
+        let types = infer_program("let x = double(5)\nlet double n = n * 2");
+        assert_eq!(types["x"], Type::Int);
+        assert_eq!(types["double"], fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn infer_program_a_function_can_reference_an_earlier_global() {
+        let types = infer_program("let pi_ish = 3\nlet area r = pi_ish * r * r");
+        assert_eq!(types["area"], fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn infer_program_globals_and_functions_can_be_interleaved() {
+        let types = infer_program("let a = 1\nlet double n = n * 2\nlet b = double(a)");
+        assert_eq!(types["a"], Type::Int);
+        assert_eq!(types["b"], Type::Int);
+        assert_eq!(types["double"], fn_ty(vec![Type::Int], Type::Int));
     }
 }

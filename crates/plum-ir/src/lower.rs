@@ -40,25 +40,31 @@ impl Default for LoweringContext {
     }
 }
 
-/// Lowers a whole program's `let`-defined functions into `ir::Function`s.
-/// Only `let` items with 1+ parameters become functions. Deliberately
-/// out of scope, both with a clear error rather than a silent skip:
-/// zero-param top-level `let`s (a "global" needs its own design — is it
-/// referenced bare or called? — not conflated with this), and
-/// destructuring params (same restriction as block-level `let`).
-/// Generics are simply IGNORED, not rejected — see ir.rs's `Function`
-/// doc comment: a type parameter has no runtime effect without a type
+/// Lowers a whole program's `let`-defined items: 1+ parameters becomes
+/// an `ir::Function`, zero parameters becomes an `ir::Global` (a plain,
+/// eagerly-evaluated value — see ir.rs's `Global` doc comment). A
+/// top-level `let` always binds a single NAME (`ast::LetDef.name` is a
+/// bare `String`, never a general `Pattern`), so — unlike block-level
+/// `let` or function params — there's no destructuring case to reject
+/// here for globals specifically; destructuring FUNCTION params is
+/// still its own, separate restriction (see `lower_params`). Generics
+/// are simply IGNORED, not rejected — see ir.rs's `Function` doc
+/// comment: a type parameter has no runtime effect without a type
 /// checker, so this is deliberate erasure.
 pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir::Program, String> {
     let mut functions = Vec::new();
+    let mut globals = Vec::new();
     for item in &program.items {
         if let ast::ItemKind::Let(def) = &item.kind {
             if def.params.is_empty() {
-                return Err(format!(
-                    "lowering not yet implemented for zero-parameter top-level `let` \
-                     (a \"global\" needs its own design) at {:?}",
-                    def.span
-                ));
+                // A "global" — see ir.rs's `Global` doc comment for why
+                // order among globals matters and functions don't need
+                // any special ordering relative to them.
+                globals.push(ir::Global {
+                    name: def.name.clone(),
+                    value: lower_expr(&def.body, ctx)?,
+                });
+                continue;
             }
             let (params, destructures) = lower_params(&def.params)?;
             let mut body = lower_expr(&def.body, ctx)?;
@@ -75,7 +81,7 @@ pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir
         // functions — they're consumed elsewhere (LoweringContext) or
         // not consumed at all yet (extern, use).
     }
-    Ok(ir::Program { functions })
+    Ok(ir::Program { functions, globals })
 }
 
 // A tag no user struct/enum declaration can ever produce (identifiers
@@ -1359,13 +1365,41 @@ mod tests {
     }
 
     #[test]
-    fn zero_param_let_is_not_yet_supported() {
-        // Deliberately deferred: a zero-param top-level `let` should
-        // be referenced bare (`x`), not called (`x()`) — supporting
-        // that needs "evaluate globals eagerly into the environment"
-        // machinery this pass doesn't build. Loud error, not a silent
-        // skip, so this isn't mistaken for "just doesn't show up."
-        lower_program_err("let x = 5");
+    fn zero_param_let_lowers_to_a_global() {
+        let program = lower_program("let x = 5");
+        assert_eq!(program.functions, vec![]);
+        assert_eq!(
+            program.globals,
+            vec![ir::Global {
+                name: "x".to_string(),
+                value: ir::Expr::Int(5),
+            }]
+        );
+    }
+
+    #[test]
+    fn multiple_globals_lower_in_order() {
+        let program = lower_program("let a = 1\nlet b = 2");
+        let names: Vec<&str> = program.globals.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn a_global_can_reference_an_earlier_global() {
+        let program = lower_program("let a = 1\nlet b = a + 1");
+        assert_eq!(
+            program.globals[1].value,
+            ir::Expr::Binary(ir::BinOp::Add, Box::new(ir::Expr::Var("a".to_string())), Box::new(ir::Expr::Int(1)))
+        );
+    }
+
+    #[test]
+    fn globals_and_functions_can_be_interleaved_in_source_order() {
+        let program = lower_program("let a = 1\nlet double n = n * 2\nlet b = 2");
+        assert_eq!(program.functions.len(), 1);
+        assert_eq!(program.functions[0].name, "double");
+        let global_names: Vec<&str> = program.globals.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(global_names, vec!["a", "b"]);
     }
 
     #[test]
