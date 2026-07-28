@@ -582,6 +582,34 @@ mod tests {
     }
 
     #[test]
+    fn an_array_typed_parameter_annotation_runs_through_the_full_gated_pipeline() {
+        // This is the gap flagged when `for x in arr` landed: `arr`'s
+        // type couldn't previously be pinned via an explicit `Array[T]`
+        // annotation, only inferred structurally.
+        let src = "let sum_array (arr: Array[Int]) = { let mut sum = 0; for x in arr { sum = sum + x; }; sum }\n\
+                    let use_it dummy = sum_array([1, 2, 3, 4])";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(10)));
+    }
+
+    #[test]
+    fn a_mismatched_array_typed_parameter_annotation_is_rejected_before_running() {
+        let src = "let sum_array (arr: Array[Int]) = arr.len()\n\
+                    let use_it dummy = sum_array([true, false])";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn an_array_typed_return_annotation_runs_through_the_full_gated_pipeline() {
+        let src = "let doubled (arr: Array[Int]): Array[Int] = arr.map(|x| x * 2)\n\
+                    let use_it dummy = doubled([1, 2, 3])[1]";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(4)));
+    }
+
+    #[test]
     fn a_generic_function_annotation_runs_through_the_full_gated_pipeline() {
         let src = "let identity[T] (x: T): T = x\nlet use_it dummy = identity(42)";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);

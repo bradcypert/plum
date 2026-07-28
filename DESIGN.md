@@ -581,10 +581,17 @@ inherited from Hindley-Milner having no ad-hoc "iterable" trait: a
 single function body with an unannotated `for i in x { ... }` still
 commits `x`'s type to exactly ONE of Range or Array for that whole
 function (whichever shape inference resolves first) — annotate the
-parameter explicitly (`arr: Array[Int]`) to force the array reading,
-though builtin-type parameter annotations for `Array`/`Task`/`Sender`/
-`Receiver` aren't wired into `resolve_annotation` yet (a real, separate
-gap — those names are deliberately never registered in `TypeContext`).
+parameter explicitly (`arr: Array[Int]`) to force the array reading.
+
+**Builtin-type parameter/return annotations — Decided (2026-07-28).**
+`resolve_annotation` now accepts `Array[T]`/`Task[T]`/`Sender[T]`/
+`Receiver[T]` in function parameter and return-type annotations, not
+just real user-declared structs/enums. Needed its own fixed-arity-one
+check ahead of the ordinary `ctx.generic_params`-lookup path, since
+these four names are DELIBERATELY never registered in `TypeContext`
+(they exist purely for their structural unify behavior — see the
+opaque-pseudo-generic-builtin-types precedent above). Closes the gap
+flagged when `for x in arr` landed.
 
 Implementation note on the mutability decision above: `.push(v)`
 currently always allocates a fresh cell (copies every existing element
@@ -751,14 +758,13 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 
 - Exact design of the `Ref`/`Shared` mutable type and its interaction
   with pattern matching and FBIP.
-- `Array[T]`'s v1 scope, `for x in arr` iteration, and the `.pop()`/
-  `.set()`/`.remove()`/`.map()`/`.filter()`/`.fold()` operations are all
-  now Decided (see "Arrays" above). Still open: the IN-PLACE-growth
-  optimization for `.push()`/`.pop()`/`.set()`/`.remove()` (needs new
-  FBIP analysis beyond what `CtorReuse` already does), builtin-type
-  (`Array`/`Task`/`Sender`/`Receiver`) parameter annotations in
-  `resolve_annotation`, and String's own growth strategy (presumably
-  similar, not yet worked through explicitly).
+- `Array[T]`'s v1 scope, `for x in arr` iteration, the `.pop()`/
+  `.set()`/`.remove()`/`.map()`/`.filter()`/`.fold()` operations, and
+  builtin-type parameter/return annotations are all now Decided (see
+  "Arrays" above). Still open: the IN-PLACE-growth optimization for
+  `.push()`/`.pop()`/`.set()`/`.remove()` (needs new FBIP analysis
+  beyond what `CtorReuse` already does), and String's own growth
+  strategy (presumably similar, not yet worked through explicitly).
 - Recursive closures that capture themselves (named top-level recursive
   functions should compile to direct calls, sidestepping this; true
   anonymous self-referential closures are a deferred detail).

@@ -404,6 +404,26 @@ impl Infer {
                 let name = base.last().cloned().ok_or_else(|| {
                     format!("type inference not yet implemented for this type annotation at {span:?}")
                 })?;
+                // The opaque pseudo-generic builtin types (`Array[T]`,
+                // `Task[T]`, `Sender[T]`, `Receiver[T]`) are DELIBERATELY
+                // never registered in `self.ctx` (see the type's own
+                // construction sites — e.g. `.push()`'s `Type::Struct(
+                // "Array", ...)` — for why: they exist purely for their
+                // structural unify behavior, not as real declarations).
+                // That means `ctx.generic_params` can never answer for
+                // them, so they need their own fixed-arity-one check
+                // here, checked BEFORE falling through to the ordinary
+                // ctx-registered-declaration path below.
+                if matches!(name.as_str(), "Array" | "Task" | "Sender" | "Receiver") {
+                    if args.len() != 1 {
+                        return Err(format!(
+                            "{name:?} expects 1 generic argument, found {} at {span:?}",
+                            args.len()
+                        ));
+                    }
+                    let resolved_arg = self.resolve_annotation(&args[0], generic_vars)?;
+                    return Ok(Type::Struct(name, vec![resolved_arg]));
+                }
                 let Some(declared_params) = self.ctx.generic_params(&name) else {
                     return Err(format!(
                         "type inference not yet implemented for this type annotation at {span:?}"
@@ -3632,6 +3652,47 @@ mod tests {
     #[test]
     fn a_second_parameter_annotation_is_also_checked() {
         infer_program_err("let f (x: Int) (y: Bool) = x + y");
+    }
+
+    #[test]
+    fn an_array_typed_parameter_annotation_is_checked() {
+        // `Array`/`Task`/`Sender`/`Receiver` are opaque pseudo-generic
+        // builtins, deliberately never registered in `TypeContext` —
+        // `resolve_annotation` needs its own fixed-arity-one case for
+        // them rather than the ordinary ctx-registered-declaration path
+        // real structs/enums go through.
+        let types = infer_program("let f (arr: Array[Int]) = arr.len()");
+        assert_eq!(
+            types["f"],
+            fn_ty(vec![Type::Struct("Array".to_string(), vec![Type::Int])], Type::Int)
+        );
+    }
+
+    #[test]
+    fn an_array_typed_parameter_annotation_constrains_the_body() {
+        infer_program_err("let f (arr: Array[Bool]) = arr.push(1)");
+    }
+
+    #[test]
+    fn an_array_typed_return_annotation_is_checked() {
+        let types = infer_program("let f (arr: Array[Int]): Array[Int] = arr");
+        assert_eq!(
+            types["f"],
+            fn_ty(
+                vec![Type::Struct("Array".to_string(), vec![Type::Int])],
+                Type::Struct("Array".to_string(), vec![Type::Int]),
+            )
+        );
+    }
+
+    #[test]
+    fn a_mismatched_array_typed_return_annotation_is_an_error() {
+        infer_program_err("let f (arr: Array[Int]): Array[Bool] = arr");
+    }
+
+    #[test]
+    fn array_generic_annotation_arity_is_checked() {
+        infer_program_err("let f (arr: Array[Int, Bool]) = arr");
     }
 
     #[test]
