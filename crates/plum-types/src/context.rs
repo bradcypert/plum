@@ -1,7 +1,7 @@
 use crate::infer::ast_type_to_type;
 use crate::types::Type;
 use plum_syntax::ast;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Struct/enum declarations' field and variant payload types, resolved
 /// once from a program's items before inferring anything that uses
@@ -17,6 +17,15 @@ pub struct TypeContext {
     struct_fields: HashMap<String, Vec<(String, Type)>>,
     // variant tag -> (owning enum name, payload types)
     variants: HashMap<String, (String, Vec<Type>)>,
+    // Every declared struct/enum NAME — populated in a first pass,
+    // before ANY field/payload type is resolved, so `ast_type_to_type`
+    // can turn a field type that's itself a struct/enum reference
+    // (`struct Line { start: Point, end: Point }`, even forward or
+    // mutually-recursive references like `struct A { b: B } struct B
+    // { a: A }`) into `Type::Struct`/`Type::Enum`, regardless of
+    // declaration order.
+    struct_names: HashSet<String>,
+    enum_names: HashSet<String>,
 }
 
 impl TypeContext {
@@ -24,11 +33,33 @@ impl TypeContext {
         TypeContext {
             struct_fields: HashMap::new(),
             variants: HashMap::new(),
+            struct_names: HashSet::new(),
+            enum_names: HashSet::new(),
         }
     }
 
     pub fn from_items(items: &[ast::Item]) -> Result<Self, String> {
         let mut ctx = Self::new();
+
+        // Phase 1: collect every declared name FIRST — see this
+        // struct's doc comment on `struct_names`/`enum_names` for why.
+        for item in items {
+            match &item.kind {
+                ast::ItemKind::Struct(decl) => {
+                    ctx.struct_names.insert(decl.name.clone());
+                }
+                ast::ItemKind::Enum(decl) => {
+                    ctx.enum_names.insert(decl.name.clone());
+                }
+                _ => {}
+            }
+        }
+
+        // Phase 2: resolve field/payload types, now that EVERY name is
+        // known — `ast_type_to_type(_, &ctx)` only ever needs
+        // `struct_names`/`enum_names` (already fully populated), never
+        // the `struct_fields`/`variants` maps still being filled in
+        // here, so reading from `ctx` mid-construction is safe.
         for item in items {
             match &item.kind {
                 ast::ItemKind::Struct(decl) => {
@@ -41,7 +72,7 @@ impl TypeContext {
                     }
                     let mut fields = Vec::with_capacity(decl.fields.len());
                     for f in &decl.fields {
-                        fields.push((f.name.clone(), ast_type_to_type(&f.ty)?));
+                        fields.push((f.name.clone(), ast_type_to_type(&f.ty, &ctx)?));
                     }
                     ctx.struct_fields.insert(decl.name.clone(), fields);
                 }
@@ -57,7 +88,7 @@ impl TypeContext {
                         let payload = variant
                             .payload
                             .iter()
-                            .map(ast_type_to_type)
+                            .map(|t| ast_type_to_type(t, &ctx))
                             .collect::<Result<Vec<_>, _>>()?;
                         ctx.variants.insert(variant.name.clone(), (decl.name.clone(), payload));
                     }
@@ -74,6 +105,14 @@ impl TypeContext {
 
     pub fn variant(&self, tag: &str) -> Option<&(String, Vec<Type>)> {
         self.variants.get(tag)
+    }
+
+    pub(crate) fn is_struct(&self, name: &str) -> bool {
+        self.struct_names.contains(name)
+    }
+
+    pub(crate) fn is_enum(&self, name: &str) -> bool {
+        self.enum_names.contains(name)
     }
 }
 
@@ -160,5 +199,57 @@ mod tests {
         assert!(ctx.struct_fields("Point").is_some());
         assert!(ctx.struct_fields("Color").is_some());
         assert!(ctx.variant("Circle").is_some());
+    }
+
+    // --- A field/payload type that's itself a struct or enum ---
+
+    #[test]
+    fn struct_field_referencing_another_struct_resolves() {
+        let ctx = context("struct Point { x: Int, y: Int }\nstruct Line { start: Point, end: Point }");
+        assert_eq!(
+            ctx.struct_fields("Line").unwrap(),
+            &[
+                ("start".to_string(), Type::Struct("Point".to_string())),
+                ("end".to_string(), Type::Struct("Point".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn struct_field_referencing_another_struct_works_regardless_of_declaration_order() {
+        // `Line` declared BEFORE `Point` — phase 1 already collected
+        // every name before phase 2 resolves any field type.
+        let ctx = context("struct Line { start: Point, end: Point }\nstruct Point { x: Int, y: Int }");
+        assert_eq!(
+            ctx.struct_fields("Line").unwrap()[0],
+            ("start".to_string(), Type::Struct("Point".to_string()))
+        );
+    }
+
+    #[test]
+    fn mutually_recursive_struct_fields_resolve() {
+        let ctx = context("struct A { b: B }\nstruct B { a: A }");
+        assert_eq!(ctx.struct_fields("A").unwrap(), &[("b".to_string(), Type::Struct("B".to_string()))]);
+        assert_eq!(ctx.struct_fields("B").unwrap(), &[("a".to_string(), Type::Struct("A".to_string()))]);
+    }
+
+    #[test]
+    fn enum_payload_referencing_a_struct_resolves() {
+        let ctx = context("struct Point { x: Int, y: Int }\nenum Shape { AtOrigin, At(Point) }");
+        assert_eq!(ctx.variant("At").unwrap(), &("Shape".to_string(), vec![Type::Struct("Point".to_string())]));
+    }
+
+    #[test]
+    fn struct_field_referencing_an_enum_resolves() {
+        let ctx = context("enum Shape { Circle(Float) }\nstruct Canvas { shape: Shape }");
+        assert_eq!(
+            ctx.struct_fields("Canvas").unwrap(),
+            &[("shape".to_string(), Type::Enum("Shape".to_string()))]
+        );
+    }
+
+    #[test]
+    fn struct_field_referencing_an_undeclared_type_is_still_an_error() {
+        context_err("struct Line { start: Undeclared }");
     }
 }

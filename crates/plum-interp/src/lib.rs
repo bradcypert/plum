@@ -874,15 +874,23 @@ mod tests {
     fn variant_pattern_syntax_nested_inside_tuple_pattern() {
         // `Point(x, y)` is `Pattern::Variant` syntax (distinct from the
         // `Point { x, y }` struct-pattern tests above) — matched here
-        // against a struct value, since constructing a real ENUM
-        // variant as an EXPRESSION (`Circle(5)`) is a separate,
-        // pre-existing gap unrelated to pattern nesting (only variant
-        // PATTERNS and struct literals are lowered as expressions so
-        // far; discovered while writing this test, not introduced by
-        // it). This still proves a Variant-shaped nested pattern works.
+        // against a struct value, proving a Variant-shaped nested
+        // pattern works regardless of what it's matching against.
         let src = "struct Point { x: Int, y: Int }\n\
                     let use_it dummy = match (Point { x: 3, y: 4 }, 1) { (Point(x, y), n) => x + y + n }";
         assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(8));
+    }
+
+    #[test]
+    fn real_enum_variant_nested_inside_tuple_pattern() {
+        // Now that variant CONSTRUCTION expressions are lowered too
+        // (previously only variant PATTERNS and struct literals were),
+        // this proves the same nesting with a genuine enum end to end:
+        // constructing `Circle(5.0)`, then destructuring it nested
+        // inside a tuple pattern.
+        let src = "enum Shape { Circle(Float) }\n\
+                    let use_it dummy = match (Circle(5.0), 1.0) { (Shape.Circle(r), n) => r + n }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Float(6.0));
     }
 
     #[test]
@@ -890,6 +898,36 @@ mod tests {
         let src = "struct Point { x: Int, y: Int }\n\
                     let use_it dummy = match ((Point { x: 1, y: 2 }, 3), 4) { ((Point { x, y }, a), b) => x + y + a + b }";
         assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(10));
+    }
+
+    // --- Variant construction ---
+
+    #[test]
+    fn bare_variant_construction_and_immediate_match() {
+        let src = "enum Shape { Circle(Float) }\n\
+                    let use_it dummy = match Circle(3.0) { Circle(r) => r }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Float(3.0));
+    }
+
+    #[test]
+    fn qualified_variant_construction_and_immediate_match() {
+        let src = "enum Shape { Circle(Float) }\n\
+                    let use_it dummy = match Shape.Circle(3.0) { Circle(r) => r }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Float(3.0));
+    }
+
+    #[test]
+    fn zero_arity_variant_construction() {
+        let src = "enum Shape { Empty, Circle(Float) }\n\
+                    let use_it dummy = match Empty { Empty => 1, Circle(r) => 0 }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(1));
+    }
+
+    #[test]
+    fn multi_field_variant_construction() {
+        let src = "enum Shape { Rectangle(Float, Float) }\n\
+                    let use_it dummy = match Rectangle(2.0, 3.0) { Rectangle(w, h) => w * h }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Float(6.0));
     }
 
     // --- Struct patterns (`Point { x, y }`) ---

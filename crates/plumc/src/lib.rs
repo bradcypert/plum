@@ -133,6 +133,25 @@ mod tests {
     }
 
     #[test]
+    fn variant_construction_runs_through_the_full_gated_pipeline() {
+        let src = "enum Shape { Circle(Float) }\n\
+                    let area shape = match shape { Circle(r) => r * r }\n\
+                    let use_it dummy = area(Circle(3.0))";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Float(9.0)));
+    }
+
+    #[test]
+    fn struct_field_referencing_another_struct_runs_through_the_full_gated_pipeline() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    struct Line { start: Point, end: Point }\n\
+                    let dx (Line { start: Point { x: x0, .. }, end: Point { x: x1, .. } }) = x1 - x0\n\
+                    let use_it dummy = dx(Line { start: Point { x: 1, y: 0 }, end: Point { x: 9, y: 0 } })";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(8)));
+    }
+
+    #[test]
     fn struct_destructuring_params_run_through_the_full_gated_pipeline() {
         let src = "struct Point { x: Int, y: Int }\n\
                     let area (Point { x, y }) = x * y\n\

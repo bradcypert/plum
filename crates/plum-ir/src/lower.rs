@@ -13,21 +13,39 @@ use std::collections::HashMap;
 /// per-expression.
 pub struct LoweringContext {
     struct_fields: HashMap<String, Vec<String>>,
+    // Variant tag -> arity. Needed to lower a variant CONSTRUCTION
+    // expression (`Circle(1.0)`, `Shape.Circle(1.0)`, or a bare `None`)
+    // into a `Ctor`, the same way `struct_fields` is needed to lower a
+    // struct literal — see `lower_expr`'s `Call`/`Ident` handling.
+    // Just like pattern lowering already does for `Shape.Circle(r)`
+    // (see `lower_tag_pattern`), the qualifier before `.` is never
+    // validated against the variant's REAL owning enum — tags are
+    // looked up by name alone, matching that established precedent.
+    variants: HashMap<String, usize>,
 }
 
 impl LoweringContext {
     pub fn new() -> Self {
         LoweringContext {
             struct_fields: HashMap::new(),
+            variants: HashMap::new(),
         }
     }
 
     pub fn from_items(items: &[ast::Item]) -> Self {
         let mut ctx = Self::new();
         for item in items {
-            if let ast::ItemKind::Struct(decl) = &item.kind {
-                let fields = decl.fields.iter().map(|f| f.name.clone()).collect();
-                ctx.struct_fields.insert(decl.name.clone(), fields);
+            match &item.kind {
+                ast::ItemKind::Struct(decl) => {
+                    let fields = decl.fields.iter().map(|f| f.name.clone()).collect();
+                    ctx.struct_fields.insert(decl.name.clone(), fields);
+                }
+                ast::ItemKind::Enum(decl) => {
+                    for variant in &decl.variants {
+                        ctx.variants.insert(variant.name.clone(), variant.payload.len());
+                    }
+                }
+                _ => {}
             }
         }
         ctx
@@ -307,6 +325,18 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         ast::Expr::Float(f, _) => Ok(ir::Expr::Float(*f)),
         ast::Expr::Str(s, _) => Ok(ir::Expr::Str(s.clone())),
         ast::Expr::Bool(b, _) => Ok(ir::Expr::Bool(*b)),
+        // A bare capitalized name referencing a zero-arity variant
+        // (`None`, not `None()`) constructs it directly — there's no
+        // other surface syntax for a nullary variant. A variant with a
+        // NON-zero arity referenced bare (not called) falls through to
+        // `Var` unchanged: like a bare top-level function name, it
+        // isn't a first-class value yet (an unbound-variable error at
+        // runtime unless it happens to also be a real local binding) —
+        // a separate, already-known gap, not something this fixes.
+        ast::Expr::Ident(name, _) if ctx.variants.get(name) == Some(&0) => Ok(ir::Expr::Ctor {
+            tag: name.clone(),
+            fields: vec![],
+        }),
         ast::Expr::Ident(name, _) => Ok(ir::Expr::Var(name.clone())),
         ast::Expr::Tuple(elems, _) if elems.is_empty() => Ok(ir::Expr::Unit),
         // A non-empty tuple is heap-allocated, positional, same as a
@@ -365,7 +395,37 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                 else_branch: Box::new(ir_else),
             })
         }
-        ast::Expr::Call { callee, args, .. } => {
+        ast::Expr::Call { callee, args, span } => {
+            // `Circle(1.0)` or `Shape.Circle(1.0)` constructs a variant
+            // if the callee names one — checked BEFORE falling back to
+            // an ordinary call, mirroring how struct literals already
+            // get their own construction syntax. `Shape.Circle(...)`'s
+            // qualifier (`Shape`) is parsed generically as
+            // `Expr::Field` (there's no dedicated "qualified path"
+            // node); it's never actually validated against the
+            // variant's real owning enum here, matching the same
+            // established precedent as pattern lowering (see
+            // `LoweringContext::variants`' doc comment).
+            let variant_tag = match callee.as_ref() {
+                ast::Expr::Ident(name, _) => Some(name.as_str()),
+                ast::Expr::Field { name, .. } => Some(name.as_str()),
+                _ => None,
+            };
+            if let Some(tag) = variant_tag {
+                if let Some(&arity) = ctx.variants.get(tag) {
+                    if args.len() != arity {
+                        return Err(format!(
+                            "variant {tag:?} expects {arity} field(s), found {} at {span:?}",
+                            args.len()
+                        ));
+                    }
+                    let fields = args.iter().map(|a| lower_expr(a, ctx)).collect::<Result<_, _>>()?;
+                    return Ok(ir::Expr::Ctor {
+                        tag: tag.to_string(),
+                        fields,
+                    });
+                }
+            }
             let ir_callee = lower_expr(callee, ctx)?;
             let ir_args = args.iter().map(|a| lower_expr(a, ctx)).collect::<Result<_, _>>()?;
             Ok(ir::Expr::Call {
@@ -1036,6 +1096,97 @@ mod tests {
     fn struct_literal_duplicate_field_is_an_error() {
         let ctx = context_from_program("struct Point { x: Float, y: Float }");
         lower_with_err("Point { x: 1.0, x: 2.0 }", &ctx);
+    }
+
+    // --- Variant construction: `Circle(1.0)`, `Shape.Circle(1.0)`,
+    // and a bare zero-arity `None` all construct a `Ctor`, the
+    // expression-side counterpart to variant PATTERNS.
+
+    #[test]
+    fn bare_variant_call_constructs_a_ctor() {
+        let ctx = context_from_program("enum Shape { Circle(Float) }");
+        assert_eq!(
+            lower_with("Circle(1.0)", &ctx),
+            ir::Expr::Ctor {
+                tag: "Circle".to_string(),
+                fields: vec![ir::Expr::Float(1.0)],
+            }
+        );
+    }
+
+    #[test]
+    fn qualified_variant_call_constructs_a_ctor() {
+        let ctx = context_from_program("enum Shape { Circle(Float) }");
+        assert_eq!(
+            lower_with("Shape.Circle(1.0)", &ctx),
+            ir::Expr::Ctor {
+                tag: "Circle".to_string(),
+                fields: vec![ir::Expr::Float(1.0)],
+            }
+        );
+    }
+
+    #[test]
+    fn multi_field_variant_call() {
+        let ctx = context_from_program("enum Shape { Rectangle(Float, Float) }");
+        assert_eq!(
+            lower_with("Rectangle(1.0, 2.0)", &ctx),
+            ir::Expr::Ctor {
+                tag: "Rectangle".to_string(),
+                fields: vec![ir::Expr::Float(1.0), ir::Expr::Float(2.0)],
+            }
+        );
+    }
+
+    #[test]
+    fn bare_zero_arity_variant_constructs_a_ctor() {
+        let ctx = context_from_program("enum Shape { Empty }");
+        assert_eq!(
+            lower_with("Empty", &ctx),
+            ir::Expr::Ctor {
+                tag: "Empty".to_string(),
+                fields: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn variant_call_wrong_arity_is_an_error() {
+        let ctx = context_from_program("enum Shape { Circle(Float) }");
+        lower_with_err("Circle(1.0, 2.0)", &ctx);
+    }
+
+    #[test]
+    fn ordinary_function_calls_are_unaffected_by_variant_lowering() {
+        let ctx = context_from_program("enum Shape { Circle(Float) }");
+        assert_eq!(
+            lower_with("double(5)", &ctx),
+            ir::Expr::Call {
+                callee: Box::new(ir::Expr::Var("double".to_string())),
+                args: vec![ir::Expr::Int(5)],
+            }
+        );
+    }
+
+    #[test]
+    fn variant_construction_and_pattern_round_trip() {
+        // Construct via the expression side, immediately destructure
+        // via the pattern side — proves both halves agree on the tag.
+        let ctx = context_from_program("enum Shape { Circle(Float) }");
+        assert_eq!(
+            lower_with("match Circle(1.0) { Circle(r) => r }", &ctx),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Ctor {
+                    tag: "Circle".to_string(),
+                    fields: vec![ir::Expr::Float(1.0)],
+                }),
+                arms: vec![ir::MatchArm {
+                    tag: "Circle".to_string(),
+                    bindings: vec!["r".to_string()],
+                    body: ir::Expr::Var("r".to_string()),
+                }],
+            }
+        );
     }
 
     #[test]

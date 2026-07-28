@@ -372,6 +372,17 @@ impl Infer {
                 let resolved = elem_types.iter().map(|t| acc.apply(t)).collect();
                 Ok((Type::Tuple(resolved), acc))
             }
+            // A bare capitalized name referencing a zero-arity variant
+            // (`None`, not `None()`) constructs it directly — mirrors
+            // lower.rs's identical `Ident` case. A non-zero-arity
+            // variant referenced bare falls through to the ordinary
+            // `Ident` lookup below unchanged (still an unbound-variable
+            // error, same as a bare top-level function name — neither
+            // is a first-class value yet).
+            ast::Expr::Ident(name, _) if matches!(self.ctx.variant(name), Some((_, p)) if p.is_empty()) => {
+                let (enum_name, _) = self.ctx.variant(name).expect("just matched Some above").clone();
+                Ok((Type::Enum(enum_name), Subst::empty()))
+            }
             ast::Expr::Ident(name, span) => {
                 let scheme = env
                     .lookup_scheme(name)
@@ -399,7 +410,43 @@ impl Infer {
                 else_branch,
                 ..
             } => self.infer_if(cond, then_branch, else_branch, env),
-            ast::Expr::Call { callee, args, .. } => {
+            ast::Expr::Call { callee, args, span } => {
+                // `Circle(1.0)` / `Shape.Circle(1.0)` constructs a
+                // variant if the callee names one, checked BEFORE
+                // falling back to an ordinary call — the type-level
+                // counterpart to lower.rs's identical `Call` handling.
+                // The qualifier before `.` (`Shape`) is never validated
+                // against the variant's real owning enum, matching that
+                // same established precedent (tags are looked up by
+                // name alone).
+                let variant_tag = match callee.as_ref() {
+                    ast::Expr::Ident(name, _) => Some(name.as_str()),
+                    ast::Expr::Field { name, .. } => Some(name.as_str()),
+                    _ => None,
+                };
+                if let Some(tag) = variant_tag {
+                    if let Some((enum_name, payload_types)) = self.ctx.variant(tag).cloned() {
+                        if args.len() != payload_types.len() {
+                            return Err(format!(
+                                "variant {tag:?} expects {} field(s), found {} at {span:?}",
+                                payload_types.len(),
+                                args.len()
+                            ));
+                        }
+                        let mut acc = Subst::empty();
+                        let mut refined_env = env.clone();
+                        for (arg, expected_ty) in args.iter().zip(payload_types.iter()) {
+                            let (t, s) = self.infer_expr(arg, &refined_env)?;
+                            acc = s.compose(&acc);
+                            refined_env = refined_env.apply_subst(&acc);
+                            let s = unify(&acc.apply(&t), &acc.apply(expected_ty))
+                                .map_err(|e| format!("variant {tag:?} argument: {e}"))?;
+                            acc = s.compose(&acc);
+                            refined_env = refined_env.apply_subst(&acc);
+                        }
+                        return Ok((Type::Enum(enum_name), acc));
+                    }
+                }
                 let arg_refs: Vec<&ast::Expr> = args.iter().collect();
                 self.infer_call(callee, &arg_refs, env)
             }
@@ -701,7 +748,7 @@ impl Infer {
         let mut closure_env = env.clone();
         for p in params {
             let ty = match &p.ty {
-                Some(annotation) => ast_type_to_type(annotation)?,
+                Some(annotation) => ast_type_to_type(annotation, &self.ctx)?,
                 None => self.fresh(),
             };
             closure_env = closure_env.extend(p.name.clone(), ty.clone());
@@ -882,7 +929,7 @@ impl Infer {
                     acc = s.compose(&acc);
                     let mut resolved = acc.apply(&val_ty);
                     if let Some(annotation) = ty {
-                        let ann_ty = ast_type_to_type(annotation)?;
+                        let ann_ty = ast_type_to_type(annotation, &self.ctx)?;
                         let s = unify(&resolved, &ann_ty)
                             .map_err(|e| format!("`let` annotation for {name:?}: {e}"))?;
                         acc = s.compose(&acc);
@@ -985,11 +1032,15 @@ fn default_numeric(ty: &Type) -> Result<(Type, Subst), String> {
 }
 
 // pub(crate) so context.rs can reuse it for struct field / enum
-// variant payload type annotations. Deliberately primitive-only for
-// now — a field/payload type referencing ANOTHER struct or enum (or a
-// generic) is a real, deferred gap (nested declaration ordering is a
-// separate problem this pass doesn't solve), not silently mishandled.
-pub(crate) fn ast_type_to_type(ty: &ast::Type) -> Result<Type, String> {
+// variant payload type annotations. Resolves a name against `ctx`'s
+// known struct/enum names (see `TypeContext::from_items`'s two-phase
+// construction — names are all collected BEFORE any field/payload type
+// is resolved, so `struct Line { start: Point, end: Point }` and even
+// forward/mutual references like `struct A { b: B } struct B { a: A }`
+// both work regardless of declaration order) — still primitive-and-
+// nominal-only: a GENERIC type annotation remains a real, separate,
+// deferred gap.
+pub(crate) fn ast_type_to_type(ty: &ast::Type, ctx: &crate::context::TypeContext) -> Result<Type, String> {
     match ty {
         ast::Type::Path(segments, span) => match segments.last().map(String::as_str) {
             Some("Int") => Ok(Type::Int),
@@ -997,6 +1048,8 @@ pub(crate) fn ast_type_to_type(ty: &ast::Type) -> Result<Type, String> {
             Some("Bool") => Ok(Type::Bool),
             Some("String") => Ok(Type::Str),
             Some("Unit") => Ok(Type::Unit),
+            Some(name) if ctx.is_struct(name) => Ok(Type::Struct(name.to_string())),
+            Some(name) if ctx.is_enum(name) => Ok(Type::Enum(name.to_string())),
             _ => Err(format!(
                 "type inference not yet implemented for this type annotation at {span:?}"
             )),
@@ -1483,6 +1536,60 @@ mod tests {
             .expect_err(&format!("expected inference of {src:?} to fail"))
     }
 
+    // --- Variant construction ---
+
+    #[test]
+    fn bare_variant_call_infers_the_owning_enum_type() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Circle(1.0)", &TypeEnv::new()),
+            Type::Enum("Shape".to_string())
+        );
+    }
+
+    #[test]
+    fn qualified_variant_call_infers_the_owning_enum_type() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Shape.Circle(1.0)", &TypeEnv::new()),
+            Type::Enum("Shape".to_string())
+        );
+    }
+
+    #[test]
+    fn variant_call_argument_type_is_checked() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        infer_expr_with_err(&mut infer, "Circle(true)", &TypeEnv::new());
+    }
+
+    #[test]
+    fn variant_call_wrong_arity_is_an_error() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        infer_expr_with_err(&mut infer, "Circle(1.0, 2.0)", &TypeEnv::new());
+    }
+
+    #[test]
+    fn bare_zero_arity_variant_infers_the_owning_enum_type() {
+        let mut infer = Infer::with_context(context("enum Shape { Empty }"));
+        assert_eq!(infer_expr_with(&mut infer, "Empty", &TypeEnv::new()), Type::Enum("Shape".to_string()));
+    }
+
+    #[test]
+    fn ordinary_function_calls_are_unaffected_by_variant_inference() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        let env = TypeEnv::new().extend("double".to_string(), fn_ty(vec![Type::Int], Type::Int));
+        assert_eq!(infer_expr_with(&mut infer, "double(5)", &env), Type::Int);
+    }
+
+    #[test]
+    fn variant_construction_and_pattern_round_trip() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match Circle(1.0) { Circle(r) => r }", &TypeEnv::new()),
+            Type::Float
+        );
+    }
+
     #[test]
     fn struct_literal_basic() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
@@ -1659,14 +1766,26 @@ mod tests {
         );
     }
 
-    // Struct-nested-inside-struct isn't tested here: it needs a struct
-    // declared with a FIELD whose type is another struct (`struct Line
-    // { start: Point, end: Point }`), which hits a separate, already-
-    // documented, pre-existing gap — `ast_type_to_type` only resolves a
-    // fixed primitive set and doesn't yet resolve a field type that's
-    // itself a struct/enum reference. Struct-in-tuple and variant-in-
-    // tuple nesting (below) already exercise the same `bind_pattern`
-    // recursion this would, so the core capability is still covered.
+    #[test]
+    fn struct_nested_inside_struct_match_arm() {
+        // Previously untestable here — needs a struct declared with a
+        // FIELD whose type is another struct (`Line { start: Point,
+        // end: Point }`), which depended on `ast_type_to_type`
+        // resolving a struct/enum-valued field type. Now that that gap
+        // is closed (see context.rs), this is real coverage, not just
+        // struct-in-tuple/variant-in-tuple standing in for it.
+        let ctx = context("struct Point { x: Int, y: Int }\nstruct Line { start: Point, end: Point }");
+        let mut infer = Infer::with_context(ctx);
+        let env = TypeEnv::new().extend("l".to_string(), Type::Struct("Line".to_string()));
+        assert_eq!(
+            infer_expr_with(
+                &mut infer,
+                "match l { Line { start: Point { x, .. }, end: Point { x: x2, .. } } => x2 - x }",
+                &env
+            ),
+            Type::Int
+        );
+    }
 
     #[test]
     fn variant_pattern_nested_inside_tuple_match_arm() {
@@ -1710,6 +1829,16 @@ mod tests {
         // match arms and block-level `let`.
         let types = infer_program("let f ((a, b), c) = a + b + c");
         assert_eq!(types["f"], fn_ty(vec![Type::Tuple(vec![Type::Tuple(vec![Type::Int, Type::Int]), Type::Int])], Type::Int));
+    }
+
+    #[test]
+    fn nested_struct_destructuring_function_param() {
+        let types = infer_program(
+            "struct Point { x: Int, y: Int }\n\
+             struct Line { start: Point, end: Point }\n\
+             let dx (Line { start: Point { x: x0, .. }, end: Point { x: x1, .. } }) = x1 - x0",
+        );
+        assert_eq!(types["dx"], fn_ty(vec![Type::Struct("Line".to_string())], Type::Int));
     }
 
     #[test]
