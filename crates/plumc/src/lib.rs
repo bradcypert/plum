@@ -1,10 +1,46 @@
 use plum_interp::{Interpreter, Value};
 use plum_ir::fbip::optimize_program;
 use plum_ir::lower::{lower_program, LoweringContext};
+use plum_syntax::ast;
 use plum_syntax::lexer::Lexer;
 use plum_syntax::parser::Parser;
 use plum_types::context::TypeContext;
 use plum_types::infer::Infer;
+
+/// `Option[T]`/`Result[T, E]` — DESIGN.md's "no null, anywhere, ever"
+/// story specs these as ORDINARY generic enums, "under the hood," not
+/// as compiler-magic types. This is exactly that: real Plum source,
+/// prepended to every program before anything else sees it, rather
+/// than a special-cased builtin type baked into `plum-types`/`plum-ir`
+/// directly. A user program is free to pattern-match `Some`/`None`/
+/// `Ok`/`Err` with no declaration of its own, exactly as if it had
+/// written this itself at the top of the file.
+const PRELUDE_SRC: &str = "\
+enum Option[T] { Some(T), None }
+enum Result[T, E] { Ok(T), Err(E) }
+";
+
+/// Parses the prelude once and prepends its items to `program`'s own —
+/// items earlier in the list are declared FIRST, but `TypeContext`'s
+/// two-phase construction (see its doc comment) already makes
+/// declaration order not matter for name resolution, so this ordering
+/// is only significant for one thing: a user program declaring its
+/// OWN `Option`/`Result` (or anything else with the SAME name) shadows
+/// the prelude's version, since later insertions into the same-keyed
+/// maps win. There's no duplicate-declaration detection anywhere in
+/// this codebase yet (a real gap, but a PRE-EXISTING one, not
+/// introduced here) — redeclaring a prelude name silently overrides it
+/// rather than erroring, same as redeclaring any other name would.
+fn with_prelude(program: ast::Program) -> ast::Program {
+    let prelude_tokens = Lexer::new(PRELUDE_SRC).tokenize();
+    let prelude_items = Parser::new(prelude_tokens)
+        .parse_program()
+        .expect("PRELUDE_SRC is fixed, valid Plum source")
+        .items;
+    let mut items = prelude_items;
+    items.extend(program.items);
+    ast::Program { items }
+}
 
 /// Runs the whole pipeline — parse, type-check, lower, optimize, load,
 /// call — and returns the result of calling `fn_name` with `args`.
@@ -19,6 +55,7 @@ pub fn typecheck_and_run(src: &str, fn_name: &str, args: Vec<Value>) -> Result<V
     let tokens = Lexer::new(src).tokenize();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().map_err(|e| format!("parse error: {e}"))?;
+    let program = with_prelude(program);
 
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
     let mut infer = Infer::with_context(type_ctx);
@@ -317,24 +354,51 @@ mod tests {
     }
 
     #[test]
-    fn a_user_defined_generic_option_enum_runs_through_the_full_gated_pipeline() {
-        // The exact shape DESIGN.md specs for the built-in `Option[T]`
-        // — proven end to end as an ordinary user-declared generic
-        // enum, since the compiler doesn't inject a real builtin yet.
-        let src = "enum Option[T] { Some(T), None }\n\
-                    let unwrap_or default o = match o { Some(x) => x, None => default }\n\
+    fn the_prelude_option_type_is_available_with_no_declaration_of_its_own() {
+        // No `enum Option[T] { .. }` anywhere in `src` — DESIGN.md's
+        // "no null, anywhere, ever" story means `Option`/`Result` are
+        // always available, injected via `with_prelude` before this
+        // source is even parsed against.
+        let src = "let unwrap_or default o = match o { Some(x) => x, None => default }\n\
                     let use_it dummy = unwrap_or(0, Some(42))";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Int(42)));
     }
 
     #[test]
-    fn a_generic_none_runs_through_the_full_gated_pipeline() {
-        let src = "enum Option[T] { Some(T), None }\n\
-                    let unwrap_or default o = match o { Some(x) => x, None => default }\n\
+    fn the_prelude_none_case_works_with_no_declaration_of_its_own() {
+        let src = "let unwrap_or default o = match o { Some(x) => x, None => default }\n\
                     let use_it dummy = unwrap_or(7, None)";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn the_prelude_result_type_is_available_with_no_declaration_of_its_own() {
+        let src = "let unwrap_or default r = match r { Ok(x) => x, Err(e) => default }\n\
+                    let use_it dummy = unwrap_or(0, Ok(42))";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn the_prelude_result_err_case_works_with_no_declaration_of_its_own() {
+        let src = "let unwrap_or default r = match r { Ok(x) => x, Err(e) => default }\n\
+                    let use_it dummy = unwrap_or(0, Err(true))";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(0)));
+    }
+
+    #[test]
+    fn a_program_redeclaring_option_itself_shadows_the_prelude_without_erroring() {
+        // No duplicate-declaration detection exists anywhere in this
+        // codebase yet (a real, pre-existing, separate gap) — a user's
+        // OWN `Option` simply wins over the prelude's, matching how any
+        // other duplicate top-level name would already behave.
+        let src = "enum Option[T] { Some(T), None, Neither }\n\
+                    let use_it dummy = match (Neither) { Some(x) => 1, None => 2, Neither => 3 }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(3)));
     }
 
     #[test]
