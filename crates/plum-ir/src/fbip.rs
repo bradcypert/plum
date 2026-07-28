@@ -146,6 +146,18 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             array: Box::new(mark_reuse(*array)),
             value: Box::new(mark_reuse(*value)),
         },
+        Expr::ArrayPop { array } => Expr::ArrayPop {
+            array: Box::new(mark_reuse(*array)),
+        },
+        Expr::ArraySet { array, index, value } => Expr::ArraySet {
+            array: Box::new(mark_reuse(*array)),
+            index: Box::new(mark_reuse(*index)),
+            value: Box::new(mark_reuse(*value)),
+        },
+        Expr::ArrayRemove { array, index } => Expr::ArrayRemove {
+            array: Box::new(mark_reuse(*array)),
+            index: Box::new(mark_reuse(*index)),
+        },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
             // reuse — a call result or anything else isn't something
@@ -320,6 +332,18 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             array: Box::new(transform(*array, known_heap)),
             value: Box::new(transform(*value, known_heap)),
         },
+        Expr::ArrayPop { array } => Expr::ArrayPop {
+            array: Box::new(transform(*array, known_heap)),
+        },
+        Expr::ArraySet { array, index, value } => Expr::ArraySet {
+            array: Box::new(transform(*array, known_heap)),
+            index: Box::new(transform(*index, known_heap)),
+            value: Box::new(transform(*value, known_heap)),
+        },
+        Expr::ArrayRemove { array, index } => Expr::ArrayRemove {
+            array: Box::new(transform(*array, known_heap)),
+            index: Box::new(transform(*index, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -402,6 +426,11 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::Index { base, index } => expr_mentions_var(base, name) || expr_mentions_var(index, name),
         Expr::ArrayLen { array } => expr_mentions_var(array, name),
         Expr::ArrayPush { array, value } => expr_mentions_var(array, name) || expr_mentions_var(value, name),
+        Expr::ArrayPop { array } => expr_mentions_var(array, name),
+        Expr::ArraySet { array, index, value } => {
+            expr_mentions_var(array, name) || expr_mentions_var(index, name) || expr_mentions_var(value, name)
+        }
+        Expr::ArrayRemove { array, index } => expr_mentions_var(array, name) || expr_mentions_var(index, name),
     }
 }
 
@@ -772,6 +801,37 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                     value: Box::new(value_t),
                 },
                 used_array || used_value,
+            )
+        }
+        Expr::ArrayPop { array } => {
+            let (array_t, used) = mark_last_uses(*array, name, live_after);
+            (Expr::ArrayPop { array: Box::new(array_t) }, used)
+        }
+        // Evaluation order `array`, then `index`, then `value` — same
+        // as `ArrayPush`'s "receiver, then argument(s)" convention, so
+        // backward analysis processes them in reverse.
+        Expr::ArraySet { array, index, value } => {
+            let (value_t, used_value) = mark_last_uses(*value, name, live_after);
+            let (index_t, used_index) = mark_last_uses(*index, name, live_after || used_value);
+            let (array_t, used_array) = mark_last_uses(*array, name, live_after || used_value || used_index);
+            (
+                Expr::ArraySet {
+                    array: Box::new(array_t),
+                    index: Box::new(index_t),
+                    value: Box::new(value_t),
+                },
+                used_array || used_index || used_value,
+            )
+        }
+        Expr::ArrayRemove { array, index } => {
+            let (index_t, used_index) = mark_last_uses(*index, name, live_after);
+            let (array_t, used_array) = mark_last_uses(*array, name, live_after || used_index);
+            (
+                Expr::ArrayRemove {
+                    array: Box::new(array_t),
+                    index: Box::new(index_t),
+                },
+                used_array || used_index,
             )
         }
         // The reassignment TARGET (`name`) is a plain String field,

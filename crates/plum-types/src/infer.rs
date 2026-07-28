@@ -935,6 +935,158 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
+            // `arr.pop()` — `arr` must be `Array[T]`; evaluates to a
+            // (new) `Array[T]`. Whether the array is actually non-empty
+            // isn't checked here — same "runtime-checked, not compile-
+            // time" split as `Index`'s out-of-bounds.
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "pop") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.pop()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
+            }
+            // `arr.set(i, v)` — `arr` must be `Array[T]`, `i` must be
+            // `Int`, `v` must be that SAME `T`; evaluates to a (new)
+            // `Array[T]`.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 2 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "set") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.set()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (idx_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&idx_ty), &Type::Int).map_err(|e| format!("`.set()` index at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (val_ty, s) = self.infer_expr(&args[1], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&val_ty), &acc.apply(&elem_ty))
+                    .map_err(|e| format!("`.set()` argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
+            }
+            // `arr.remove(i)` — `arr` must be `Array[T]`, `i` must be
+            // `Int`; evaluates to a (new) `Array[T]`.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "remove") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.remove()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (idx_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&idx_ty), &Type::Int).map_err(|e| format!("`.remove()` index at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
+            }
+            // `arr.map(f)` — `arr` must be `Array[T]`, `f` must be a
+            // ONE-argument function from `T` to some `U`; evaluates to
+            // `Array[U]`.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "map") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.map()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (f_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let out_ty = self.fresh();
+                let s = unify(
+                    &acc.apply(&f_ty),
+                    &Type::Function(vec![acc.apply(&elem_ty)], Box::new(out_ty.clone())),
+                )
+                .map_err(|e| format!("`.map()` function argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("Array".to_string(), vec![acc.apply(&out_ty)]), acc))
+            }
+            // `arr.filter(f)` — `arr` must be `Array[T]`, `f` must be a
+            // ONE-argument function from `T` to `Bool`; evaluates to
+            // `Array[T]` (unchanged element type).
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "filter") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.filter()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (f_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(
+                    &acc.apply(&f_ty),
+                    &Type::Function(vec![acc.apply(&elem_ty)], Box::new(Type::Bool)),
+                )
+                .map_err(|e| format!("`.filter()` function argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
+            }
+            // `arr.fold(init, f)` — `arr` must be `Array[T]`, `f` must
+            // be a TWO-argument function `(U, T) -> U` where `U` is
+            // `init`'s type; evaluates to `U`.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 2 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "fold") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.fold()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (init_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (f_ty, s) = self.infer_expr(&args[1], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(
+                    &acc.apply(&f_ty),
+                    &Type::Function(
+                        vec![acc.apply(&init_ty), acc.apply(&elem_ty)],
+                        Box::new(acc.apply(&init_ty)),
+                    ),
+                )
+                .map_err(|e| format!("`.fold()` function argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((acc.apply(&init_ty), acc))
+            }
             ast::Expr::Call { callee, args, span } => {
                 // `Circle(1.0)` / `Shape.Circle(1.0)` constructs a
                 // variant if the callee names one, checked BEFORE
@@ -3754,6 +3906,126 @@ mod tests {
     #[test]
     fn push_on_a_non_array_is_an_error() {
         infer_err("5.push(1)");
+    }
+
+    #[test]
+    fn array_pop_infers_as_the_same_array_type() {
+        assert_eq!(infer("[1, 2].pop()"), Type::Struct("Array".to_string(), vec![Type::Int]));
+    }
+
+    #[test]
+    fn pop_on_a_non_array_is_an_error() {
+        infer_err("5.pop()");
+    }
+
+    #[test]
+    fn array_set_infers_as_the_same_array_type() {
+        assert_eq!(infer("[1, 2].set(0, 9)"), Type::Struct("Array".to_string(), vec![Type::Int]));
+    }
+
+    #[test]
+    fn array_set_requires_an_int_index() {
+        infer_err("[1, 2].set(true, 9)");
+    }
+
+    #[test]
+    fn array_set_argument_type_is_checked() {
+        infer_err("[1, 2].set(0, true)");
+    }
+
+    #[test]
+    fn set_on_a_non_array_is_an_error() {
+        infer_err("5.set(0, 1)");
+    }
+
+    #[test]
+    fn array_remove_infers_as_the_same_array_type() {
+        assert_eq!(infer("[1, 2].remove(0)"), Type::Struct("Array".to_string(), vec![Type::Int]));
+    }
+
+    #[test]
+    fn array_remove_requires_an_int_index() {
+        infer_err("[1, 2].remove(true)");
+    }
+
+    #[test]
+    fn remove_on_a_non_array_is_an_error() {
+        infer_err("5.remove(0)");
+    }
+
+    #[test]
+    fn array_map_infers_as_an_array_of_the_functions_return_type() {
+        let env = TypeEnv::new().extend(
+            "to_str".to_string(),
+            Type::Function(vec![Type::Int], Box::new(Type::Str)),
+        );
+        assert_eq!(
+            infer_in("[1, 2, 3].map(to_str)", &env),
+            Type::Struct("Array".to_string(), vec![Type::Str])
+        );
+    }
+
+    #[test]
+    fn array_map_function_argument_type_is_checked() {
+        let env = TypeEnv::new().extend(
+            "to_str".to_string(),
+            Type::Function(vec![Type::Int], Box::new(Type::Str)),
+        );
+        infer_err_in("[true, false].map(to_str)", &env);
+    }
+
+    #[test]
+    fn map_on_a_non_array_is_an_error() {
+        infer_err("5.map(f)");
+    }
+
+    #[test]
+    fn array_filter_infers_as_the_same_array_type() {
+        let env = TypeEnv::new().extend(
+            "is_pos".to_string(),
+            Type::Function(vec![Type::Int], Box::new(Type::Bool)),
+        );
+        assert_eq!(
+            infer_in("[1, 2, 3].filter(is_pos)", &env),
+            Type::Struct("Array".to_string(), vec![Type::Int])
+        );
+    }
+
+    #[test]
+    fn array_filter_function_must_return_bool() {
+        let env = TypeEnv::new().extend(
+            "to_str".to_string(),
+            Type::Function(vec![Type::Int], Box::new(Type::Str)),
+        );
+        infer_err_in("[1, 2, 3].filter(to_str)", &env);
+    }
+
+    #[test]
+    fn filter_on_a_non_array_is_an_error() {
+        infer_err("5.filter(f)");
+    }
+
+    #[test]
+    fn array_fold_infers_as_the_accumulator_type() {
+        let env = TypeEnv::new().extend(
+            "add".to_string(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        assert_eq!(infer_in("[1, 2, 3].fold(0, add)", &env), Type::Int);
+    }
+
+    #[test]
+    fn array_fold_function_argument_types_are_checked() {
+        let env = TypeEnv::new().extend(
+            "add".to_string(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        infer_err_in("[true, false].fold(0, add)", &env);
+    }
+
+    #[test]
+    fn fold_on_a_non_array_is_an_error() {
+        infer_err("5.fold(0, f)");
     }
 
     #[test]

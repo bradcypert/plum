@@ -259,6 +259,29 @@ pub enum Expr {
         array: Box<Expr>,
         value: Box<Expr>,
     },
+    // `arr.pop()` — evaluates to a NEW array with the LAST element
+    // removed. A reported runtime error on an empty array (same
+    // "runtime-checked, not compile-time" convention as `Index`'s
+    // out-of-bounds), not a panic. Same "always a fresh allocation, no
+    // reuse-in-place yet" honesty as `ArrayPush`.
+    ArrayPop {
+        array: Box<Expr>,
+    },
+    // `arr.set(i, v)` — evaluates to a NEW array with the element at
+    // RUNTIME index `index` replaced by `value`; every other element
+    // unchanged. Bounds-checked at runtime, same convention as `Index`.
+    ArraySet {
+        array: Box<Expr>,
+        index: Box<Expr>,
+        value: Box<Expr>,
+    },
+    // `arr.remove(i)` — evaluates to a NEW array with the element at
+    // RUNTIME index `index` removed (later elements shift down by one).
+    // Bounds-checked at runtime, same convention as `Index`.
+    ArrayRemove {
+        array: Box<Expr>,
+        index: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

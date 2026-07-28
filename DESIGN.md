@@ -525,12 +525,33 @@ Literal syntax: `[e1, e2, ...]` — a genuinely new primary-expression
 grammar production (unlike `arr[i]` indexing, which the parser already
 had, written ahead of a real collection type to use it with).
 
-v1 operations, deliberately minimal: construction (`[1, 2, 3]`),
-`arr[i]` (index read, runtime-bounds-checked, not a compile-time
-check), `.len()`, `.push(v)`. Deliberately NOT yet decided/implemented:
-`pop`/`set-at-index`/`remove`, `map`/`filter`/`fold` and friends. `for x
-in arr` iteration IS now supported (see below) — `for` accepts either a
-`Range` or an `Array[T]`.
+Operations: construction (`[1, 2, 3]`), `arr[i]` (index read, runtime-
+bounds-checked, not a compile-time check), `.len()`, `.push(v)`,
+`.pop()`, `.set(i, v)`, `.remove(i)`, `.map(f)`, `.filter(f)`,
+`.fold(init, f)`. `for x in arr` iteration IS now supported (see
+below) — `for` accepts either a `Range` or an `Array[T]`.
+
+`.pop()`/`.set(i, v)`/`.remove(i)` (2026-07-28) follow `.push(v)`'s
+exact precedent: new primitive IR nodes (`ArrayPop`/`ArraySet`/
+`ArrayRemove`), always allocate a fresh heap cell (no reuse-in-place,
+same honestly-deferred optimization gap as `.push()`), runtime-checked
+bounds (`.set`/`.remove`) or runtime-checked non-emptiness (`.pop()`)
+rather than a compile-time check.
+
+`.map(f)`/`.filter(f)`/`.fold(init, f)` (2026-07-28) take a DIFFERENT
+approach: no new IR nodes at all. Each desugars directly into a small
+tree of EXISTING IR nodes (`Let`, `For`, `ArrayLen`, `Index`,
+`ArrayPush`, `Assign`, `If`, `Call`) — the same "reuse what exists"
+philosophy `for x in arr` and the array literal already established.
+`.map(f)` builds a fresh output array and pushes `f(elem)` for each
+element; `.filter(f)` does the same but only pushes when `f(elem)` is
+`true`; `.fold(init, f)` accumulates a scalar via `acc = f(acc, elem)`
+instead of building a new array. Because these are ordinary desugarings
+into existing nodes, FBIP/movecheck needed ZERO changes to support
+them — only `lower.rs` (three new shape-detected `Call` cases dispatch
+to three new `lower_array_*` desugaring functions) and `infer.rs`
+(three new `Call`-shape cases unifying against `Type::Function`) needed
+touching.
 
 **`for x in arr` iteration — Decided (2026-07-28).** `for` now accepts
 `Array[T]` as well as `Range`. Desugars into an index-based loop reusing
@@ -730,14 +751,14 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 
 - Exact design of the `Ref`/`Shared` mutable type and its interaction
   with pattern matching and FBIP.
-- `Array[T]`'s v1 scope is Decided (see "Arrays" above), and `for x in
-  arr` iteration is now Decided too (see "`for x in arr` iteration"
-  above), but the IN-PLACE-growth optimization for `.push()` is not yet
-  designed (needs new FBIP analysis beyond what `CtorReuse` already
-  does), nor are `pop`/`set-at-index`/`remove`, `map`/`filter`/`fold`,
-  builtin-type (`Array`/`Task`/`Sender`/`Receiver`) parameter
-  annotations in `resolve_annotation`, or String's own growth strategy
-  (presumably similar, not yet worked through explicitly).
+- `Array[T]`'s v1 scope, `for x in arr` iteration, and the `.pop()`/
+  `.set()`/`.remove()`/`.map()`/`.filter()`/`.fold()` operations are all
+  now Decided (see "Arrays" above). Still open: the IN-PLACE-growth
+  optimization for `.push()`/`.pop()`/`.set()`/`.remove()` (needs new
+  FBIP analysis beyond what `CtorReuse` already does), builtin-type
+  (`Array`/`Task`/`Sender`/`Receiver`) parameter annotations in
+  `resolve_annotation`, and String's own growth strategy (presumably
+  similar, not yet worked through explicitly).
 - Recursive closures that capture themselves (named top-level recursive
   functions should compile to direct calls, sidestepping this; true
   anonymous self-referential closures are a deferred detail).

@@ -629,6 +629,61 @@ impl Interpreter {
                 let new_addr = self.heap.alloc(tag, new_fields);
                 Ok(Value::HeapRef(new_addr))
             }
+            Expr::ArrayPop { array } => {
+                let Value::HeapRef(addr) = self.eval(array)? else {
+                    return Err("`.pop()` requires an Array value".to_string());
+                };
+                let (tag, fields) = self.heap.read(addr)?;
+                if fields.is_empty() {
+                    return Err("cannot pop from an empty array".to_string());
+                }
+                let tag = tag.to_string();
+                let mut new_fields = fields.to_vec();
+                new_fields.pop();
+                let new_addr = self.heap.alloc(tag, new_fields);
+                Ok(Value::HeapRef(new_addr))
+            }
+            Expr::ArraySet { array, index, value } => {
+                let Value::HeapRef(addr) = self.eval(array)? else {
+                    return Err("`.set()` requires an Array value".to_string());
+                };
+                let Value::Int(i) = self.eval(index)? else {
+                    return Err("`.set()` index must be an Int".to_string());
+                };
+                let v = self.eval(value)?;
+                let (tag, fields) = self.heap.read(addr)?;
+                let tag = tag.to_string();
+                let mut new_fields = fields.to_vec();
+                let Ok(i) = usize::try_from(i) else {
+                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                };
+                if i >= new_fields.len() {
+                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                }
+                new_fields[i] = v;
+                let new_addr = self.heap.alloc(tag, new_fields);
+                Ok(Value::HeapRef(new_addr))
+            }
+            Expr::ArrayRemove { array, index } => {
+                let Value::HeapRef(addr) = self.eval(array)? else {
+                    return Err("`.remove()` requires an Array value".to_string());
+                };
+                let Value::Int(i) = self.eval(index)? else {
+                    return Err("`.remove()` index must be an Int".to_string());
+                };
+                let (tag, fields) = self.heap.read(addr)?;
+                let tag = tag.to_string();
+                let mut new_fields = fields.to_vec();
+                let Ok(i) = usize::try_from(i) else {
+                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                };
+                if i >= new_fields.len() {
+                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                }
+                new_fields.remove(i);
+                let new_addr = self.heap.alloc(tag, new_fields);
+                Ok(Value::HeapRef(new_addr))
+            }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
                 // non-heap name (shouldn't happen given how fbip.rs
@@ -1496,6 +1551,91 @@ mod tests {
         // a PERFORMANCE change later, never a semantic one.
         let src = "{ let a = [1, 2]; let b = a.push(3); a.len() }";
         assert_eq!(eval(src), Value::Int(2));
+    }
+
+    #[test]
+    fn array_pop_returns_a_new_shorter_array() {
+        assert_eq!(eval("[1, 2, 3].pop().len()"), Value::Int(2));
+        assert_eq!(eval("[1, 2, 3].pop()[1]"), Value::Int(2));
+    }
+
+    #[test]
+    fn array_pop_does_not_mutate_the_original() {
+        let src = "{ let a = [1, 2, 3]; let b = a.pop(); a.len() }";
+        assert_eq!(eval(src), Value::Int(3));
+    }
+
+    #[test]
+    fn popping_an_empty_array_is_a_runtime_error() {
+        eval_err("[].pop()");
+    }
+
+    #[test]
+    fn array_set_replaces_the_element_at_the_given_index() {
+        assert_eq!(eval("[1, 2, 3].set(1, 99)[1]"), Value::Int(99));
+        assert_eq!(eval("[1, 2, 3].set(1, 99).len()"), Value::Int(3));
+    }
+
+    #[test]
+    fn array_set_does_not_mutate_the_original() {
+        let src = "{ let a = [1, 2, 3]; let b = a.set(0, 99); a[0] }";
+        assert_eq!(eval(src), Value::Int(1));
+    }
+
+    #[test]
+    fn array_set_out_of_bounds_is_a_runtime_error() {
+        eval_err("[1, 2, 3].set(5, 0)");
+        eval_err("[1, 2, 3].set(-1, 0)");
+    }
+
+    #[test]
+    fn array_remove_shifts_later_elements_down() {
+        assert_eq!(eval("[1, 2, 3].remove(1).len()"), Value::Int(2));
+        assert_eq!(eval("[1, 2, 3].remove(1)[1]"), Value::Int(3));
+    }
+
+    #[test]
+    fn array_remove_does_not_mutate_the_original() {
+        let src = "{ let a = [1, 2, 3]; let b = a.remove(0); a.len() }";
+        assert_eq!(eval(src), Value::Int(3));
+    }
+
+    #[test]
+    fn array_remove_out_of_bounds_is_a_runtime_error() {
+        eval_err("[1, 2, 3].remove(5)");
+    }
+
+    #[test]
+    fn array_map_applies_the_function_to_every_element() {
+        assert_eq!(eval("[1, 2, 3].map(|x| x * 2).len()"), Value::Int(3));
+        assert_eq!(eval("[1, 2, 3].map(|x| x * 2)[0]"), Value::Int(2));
+        assert_eq!(eval("[1, 2, 3].map(|x| x * 2)[2]"), Value::Int(6));
+    }
+
+    #[test]
+    fn array_map_on_an_empty_array_is_empty() {
+        assert_eq!(eval("[].map(|x| x * 2).len()"), Value::Int(0));
+    }
+
+    #[test]
+    fn array_filter_keeps_only_matching_elements() {
+        assert_eq!(eval("[1, 2, 3, 4].filter(|x| x > 2).len()"), Value::Int(2));
+        assert_eq!(eval("[1, 2, 3, 4].filter(|x| x > 2)[0]"), Value::Int(3));
+    }
+
+    #[test]
+    fn array_filter_preserves_relative_order() {
+        assert_eq!(eval("[3, 1, 4, 1, 5].filter(|x| x > 2)[1]"), Value::Int(4));
+    }
+
+    #[test]
+    fn array_fold_accumulates_left_to_right() {
+        assert_eq!(eval("[1, 2, 3, 4].fold(0, |acc, x| acc + x)"), Value::Int(10));
+    }
+
+    #[test]
+    fn array_fold_on_an_empty_array_returns_the_initial_value() {
+        assert_eq!(eval("[].fold(42, |acc, x| acc + x)"), Value::Int(42));
     }
 
     #[test]

@@ -181,6 +181,29 @@ mod tests {
     }
 
     #[test]
+    fn array_pop_set_remove_run_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let a = [1, 2, 3]; a.pop().len() + a.set(0, 99)[0] + a.remove(1)[1] }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        // pop().len() = 2, set(0,99)[0] = 99, remove(1)[1] = 3
+        assert_eq!(result, Ok(Value::Int(2 + 99 + 3)));
+    }
+
+    #[test]
+    fn array_map_filter_fold_run_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = [1, 2, 3, 4, 5].map(|x| x * 2).filter(|x| x > 4).fold(0, |acc, x| acc + x)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        // [2,4,6,8,10] -> filter >4 -> [6,8,10] -> fold sum -> 24
+        assert_eq!(result, Ok(Value::Int(24)));
+    }
+
+    #[test]
+    fn array_map_can_change_the_element_type() {
+        let src = "let use_it dummy = [1, 2, 3].map(|x| x > 1).filter(|b| b).len()";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(2)));
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely

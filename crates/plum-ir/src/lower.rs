@@ -562,6 +562,76 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                 value: Box::new(lower_expr(&args[0], ctx)?),
             })
         }
+        // `arr.pop()` — same shape-only precedent, zero args.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "pop") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ArrayPop {
+                array: Box::new(lower_expr(base, ctx)?),
+            })
+        }
+        // `arr.set(i, v)` — same shape-only precedent, two args.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 2 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "set") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ArraySet {
+                array: Box::new(lower_expr(base, ctx)?),
+                index: Box::new(lower_expr(&args[0], ctx)?),
+                value: Box::new(lower_expr(&args[1], ctx)?),
+            })
+        }
+        // `arr.remove(i)` — same shape-only precedent, one arg.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "remove") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ArrayRemove {
+                array: Box::new(lower_expr(base, ctx)?),
+                index: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
+        // `arr.map(f)` — desugars into an index-based loop reusing only
+        // EXISTING IR nodes (`Let`, `For`, `ArrayLen`, `Index`,
+        // `ArrayPush`, `Assign`), same convention as `for x in arr`'s
+        // own desugaring: build a fresh output array, push `f(elem)`
+        // for each element in order.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "map") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            lower_array_map(base, &args[0], ctx)
+        }
+        // `arr.filter(f)` — same desugaring shape as `.map()`, but only
+        // pushes an element when `f(elem)` is true.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "filter") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            lower_array_filter(base, &args[0], ctx)
+        }
+        // `arr.fold(init, f)` — same desugaring family, but accumulates
+        // into a scalar (`f(acc, elem)`) instead of building a new
+        // array.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 2 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "fold") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            lower_array_fold(base, &args[0], &args[1], ctx)
+        }
         ast::Expr::Call { callee, args, span } => {
             // `Circle(1.0)` or `Shape.Circle(1.0)` constructs a variant
             // if the callee names one — checked BEFORE falling back to
@@ -837,6 +907,175 @@ fn lower_select(arms: &[ast::SelectArm], ctx: &LoweringContext) -> Result<ir::Ex
         ir_arms.push(ir::SelectArm { receiver, body });
     }
     Ok(ir::Expr::Select { arms: ir_arms })
+}
+
+// `arr.map(f)` — desugars to:
+//   let __map_arr = <arr> in
+//     let __map_out = [] in
+//       let _ = for __map_i in 0..__map_arr.len() {
+//         __map_out = __map_out.push(f(__map_arr[__map_i]));
+//       } in
+//       __map_out
+// Built directly as `ir::Expr` (not via `ast`/`lower_expr` on a
+// synthesized AST) — the same approach `lower_for`'s own array-loop
+// desugaring below already takes, since there's no surface syntax this
+// shape corresponds to.
+fn lower_array_map(base: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+    let arr_name = "__map_arr".to_string();
+    let out_name = "__map_out".to_string();
+    let idx_name = "__map_i".to_string();
+    let ir_base = lower_expr(base, ctx)?;
+    let ir_f = lower_expr(f, ctx)?;
+    Ok(ir::Expr::Let {
+        name: arr_name.clone(),
+        value: Box::new(ir_base),
+        body: Box::new(ir::Expr::Let {
+            name: out_name.clone(),
+            value: Box::new(ir::Expr::Ctor {
+                tag: ARRAY_TAG.to_string(),
+                fields: vec![],
+            }),
+            body: Box::new(ir::Expr::Let {
+                name: "_".to_string(),
+                value: Box::new(ir::Expr::For {
+                    var: idx_name.clone(),
+                    start: Box::new(ir::Expr::Int(0)),
+                    end: Box::new(ir::Expr::ArrayLen {
+                        array: Box::new(ir::Expr::Var(arr_name.clone())),
+                    }),
+                    body: Box::new(ir::Expr::Assign {
+                        name: out_name.clone(),
+                        value: Box::new(ir::Expr::ArrayPush {
+                            array: Box::new(ir::Expr::Var(out_name.clone())),
+                            value: Box::new(ir::Expr::Call {
+                                callee: Box::new(ir_f),
+                                args: vec![ir::Expr::Index {
+                                    base: Box::new(ir::Expr::Var(arr_name.clone())),
+                                    index: Box::new(ir::Expr::Var(idx_name)),
+                                }],
+                            }),
+                        }),
+                        rest: Box::new(ir::Expr::Unit),
+                    }),
+                }),
+                body: Box::new(ir::Expr::Var(out_name)),
+            }),
+        }),
+    })
+}
+
+// `arr.filter(f)` — same shape as `lower_array_map`, but only pushes
+// an element when `f(elem)` evaluates to `true`:
+//   let __filter_arr = <arr> in
+//     let __filter_out = [] in
+//       let _ = for __filter_i in 0..__filter_arr.len() {
+//         let __filter_elem = __filter_arr[__filter_i] in
+//           if f(__filter_elem) {
+//             __filter_out = __filter_out.push(__filter_elem);
+//           } else { () }
+//       } in
+//       __filter_out
+fn lower_array_filter(base: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+    let arr_name = "__filter_arr".to_string();
+    let out_name = "__filter_out".to_string();
+    let idx_name = "__filter_i".to_string();
+    let elem_name = "__filter_elem".to_string();
+    let ir_base = lower_expr(base, ctx)?;
+    let ir_f = lower_expr(f, ctx)?;
+    Ok(ir::Expr::Let {
+        name: arr_name.clone(),
+        value: Box::new(ir_base),
+        body: Box::new(ir::Expr::Let {
+            name: out_name.clone(),
+            value: Box::new(ir::Expr::Ctor {
+                tag: ARRAY_TAG.to_string(),
+                fields: vec![],
+            }),
+            body: Box::new(ir::Expr::Let {
+                name: "_".to_string(),
+                value: Box::new(ir::Expr::For {
+                    var: idx_name.clone(),
+                    start: Box::new(ir::Expr::Int(0)),
+                    end: Box::new(ir::Expr::ArrayLen {
+                        array: Box::new(ir::Expr::Var(arr_name.clone())),
+                    }),
+                    body: Box::new(ir::Expr::Let {
+                        name: elem_name.clone(),
+                        value: Box::new(ir::Expr::Index {
+                            base: Box::new(ir::Expr::Var(arr_name.clone())),
+                            index: Box::new(ir::Expr::Var(idx_name)),
+                        }),
+                        body: Box::new(ir::Expr::If {
+                            cond: Box::new(ir::Expr::Call {
+                                callee: Box::new(ir_f),
+                                args: vec![ir::Expr::Var(elem_name.clone())],
+                            }),
+                            then_branch: Box::new(ir::Expr::Assign {
+                                name: out_name.clone(),
+                                value: Box::new(ir::Expr::ArrayPush {
+                                    array: Box::new(ir::Expr::Var(out_name.clone())),
+                                    value: Box::new(ir::Expr::Var(elem_name)),
+                                }),
+                                rest: Box::new(ir::Expr::Unit),
+                            }),
+                            else_branch: Box::new(ir::Expr::Unit),
+                        }),
+                    }),
+                }),
+                body: Box::new(ir::Expr::Var(out_name)),
+            }),
+        }),
+    })
+}
+
+// `arr.fold(init, f)` — same desugaring family, accumulating a scalar
+// instead of building a new array:
+//   let __fold_arr = <arr> in
+//     let __fold_acc = <init> in
+//       let _ = for __fold_i in 0..__fold_arr.len() {
+//         __fold_acc = f(__fold_acc, __fold_arr[__fold_i]);
+//       } in
+//       __fold_acc
+fn lower_array_fold(base: &ast::Expr, init: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+    let arr_name = "__fold_arr".to_string();
+    let acc_name = "__fold_acc".to_string();
+    let idx_name = "__fold_i".to_string();
+    let ir_base = lower_expr(base, ctx)?;
+    let ir_init = lower_expr(init, ctx)?;
+    let ir_f = lower_expr(f, ctx)?;
+    Ok(ir::Expr::Let {
+        name: arr_name.clone(),
+        value: Box::new(ir_base),
+        body: Box::new(ir::Expr::Let {
+            name: acc_name.clone(),
+            value: Box::new(ir_init),
+            body: Box::new(ir::Expr::Let {
+                name: "_".to_string(),
+                value: Box::new(ir::Expr::For {
+                    var: idx_name.clone(),
+                    start: Box::new(ir::Expr::Int(0)),
+                    end: Box::new(ir::Expr::ArrayLen {
+                        array: Box::new(ir::Expr::Var(arr_name.clone())),
+                    }),
+                    body: Box::new(ir::Expr::Assign {
+                        name: acc_name.clone(),
+                        value: Box::new(ir::Expr::Call {
+                            callee: Box::new(ir_f),
+                            args: vec![
+                                ir::Expr::Var(acc_name.clone()),
+                                ir::Expr::Index {
+                                    base: Box::new(ir::Expr::Var(arr_name.clone())),
+                                    index: Box::new(ir::Expr::Var(idx_name)),
+                                },
+                            ],
+                        }),
+                        rest: Box::new(ir::Expr::Unit),
+                    }),
+                }),
+                body: Box::new(ir::Expr::Var(acc_name)),
+            }),
+        }),
+    })
 }
 
 // `for pattern in iter { body }`. Only two things are supported so far,
@@ -2326,6 +2565,146 @@ mod tests {
             ir::Expr::ArrayPush {
                 array: Box::new(ir::Expr::Var("arr".to_string())),
                 value: Box::new(ir::Expr::Int(5)),
+            }
+        );
+    }
+
+    #[test]
+    fn array_pop_lowers_to_an_array_pop_node() {
+        assert_eq!(
+            lower("arr.pop()"),
+            ir::Expr::ArrayPop {
+                array: Box::new(ir::Expr::Var("arr".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn array_set_lowers_to_an_array_set_node() {
+        assert_eq!(
+            lower("arr.set(0, 5)"),
+            ir::Expr::ArraySet {
+                array: Box::new(ir::Expr::Var("arr".to_string())),
+                index: Box::new(ir::Expr::Int(0)),
+                value: Box::new(ir::Expr::Int(5)),
+            }
+        );
+    }
+
+    #[test]
+    fn array_remove_lowers_to_an_array_remove_node() {
+        assert_eq!(
+            lower("arr.remove(0)"),
+            ir::Expr::ArrayRemove {
+                array: Box::new(ir::Expr::Var("arr".to_string())),
+                index: Box::new(ir::Expr::Int(0)),
+            }
+        );
+    }
+
+    #[test]
+    fn array_map_desugars_to_an_index_based_loop_that_pushes() {
+        assert_eq!(
+            lower("arr.map(f)"),
+            ir::Expr::Let {
+                name: "__map_arr".to_string(),
+                value: Box::new(ir::Expr::Var("arr".to_string())),
+                body: Box::new(ir::Expr::Let {
+                    name: "__map_out".to_string(),
+                    value: Box::new(ir::Expr::Ctor {
+                        tag: "0Array".to_string(),
+                        fields: vec![],
+                    }),
+                    body: Box::new(ir::Expr::Let {
+                        name: "_".to_string(),
+                        value: Box::new(ir::Expr::For {
+                            var: "__map_i".to_string(),
+                            start: Box::new(ir::Expr::Int(0)),
+                            end: Box::new(ir::Expr::ArrayLen {
+                                array: Box::new(ir::Expr::Var("__map_arr".to_string())),
+                            }),
+                            body: Box::new(ir::Expr::Assign {
+                                name: "__map_out".to_string(),
+                                value: Box::new(ir::Expr::ArrayPush {
+                                    array: Box::new(ir::Expr::Var("__map_out".to_string())),
+                                    value: Box::new(ir::Expr::Call {
+                                        callee: Box::new(ir::Expr::Var("f".to_string())),
+                                        args: vec![ir::Expr::Index {
+                                            base: Box::new(ir::Expr::Var("__map_arr".to_string())),
+                                            index: Box::new(ir::Expr::Var("__map_i".to_string())),
+                                        }],
+                                    }),
+                                }),
+                                rest: Box::new(ir::Expr::Unit),
+                            }),
+                        }),
+                        body: Box::new(ir::Expr::Var("__map_out".to_string())),
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn array_filter_desugars_to_an_index_based_loop_with_an_if() {
+        let result = lower("arr.filter(f)");
+        match result {
+            ir::Expr::Let { name, body, .. } => {
+                assert_eq!(name, "__filter_arr");
+                match *body {
+                    ir::Expr::Let { name, body, .. } => {
+                        assert_eq!(name, "__filter_out");
+                        match *body {
+                            ir::Expr::Let { value, body, .. } => {
+                                assert!(matches!(*value, ir::Expr::For { .. }));
+                                assert_eq!(*body, ir::Expr::Var("__filter_out".to_string()));
+                            }
+                            other => panic!("expected inner Let, got {other:?}"),
+                        }
+                    }
+                    other => panic!("expected __filter_out Let, got {other:?}"),
+                }
+            }
+            other => panic!("expected outer Let, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn array_fold_desugars_to_an_index_based_accumulator_loop() {
+        assert_eq!(
+            lower("arr.fold(0, f)"),
+            ir::Expr::Let {
+                name: "__fold_arr".to_string(),
+                value: Box::new(ir::Expr::Var("arr".to_string())),
+                body: Box::new(ir::Expr::Let {
+                    name: "__fold_acc".to_string(),
+                    value: Box::new(ir::Expr::Int(0)),
+                    body: Box::new(ir::Expr::Let {
+                        name: "_".to_string(),
+                        value: Box::new(ir::Expr::For {
+                            var: "__fold_i".to_string(),
+                            start: Box::new(ir::Expr::Int(0)),
+                            end: Box::new(ir::Expr::ArrayLen {
+                                array: Box::new(ir::Expr::Var("__fold_arr".to_string())),
+                            }),
+                            body: Box::new(ir::Expr::Assign {
+                                name: "__fold_acc".to_string(),
+                                value: Box::new(ir::Expr::Call {
+                                    callee: Box::new(ir::Expr::Var("f".to_string())),
+                                    args: vec![
+                                        ir::Expr::Var("__fold_acc".to_string()),
+                                        ir::Expr::Index {
+                                            base: Box::new(ir::Expr::Var("__fold_arr".to_string())),
+                                            index: Box::new(ir::Expr::Var("__fold_i".to_string())),
+                                        },
+                                    ],
+                                }),
+                                rest: Box::new(ir::Expr::Unit),
+                            }),
+                        }),
+                        body: Box::new(ir::Expr::Var("__fold_acc".to_string())),
+                    }),
+                }),
             }
         );
     }
