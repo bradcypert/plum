@@ -299,6 +299,21 @@ impl Infer {
             })?;
             acc = s.compose(&acc);
 
+            // A declared return-type annotation (`let f x: Bool = ...`)
+            // was PARSED (`LetDef.ret_ty`) but never actually consulted
+            // here before — silently accepted regardless of what it
+            // said, unlike a closure or `let`-binding annotation, both
+            // of which already go through `ast_type_to_type`. Unify it
+            // against what the body actually produced, same as any
+            // other annotation.
+            if let Some(annotated) = &def.ret_ty {
+                let annotated_ty = ast_type_to_type(annotated, &self.ctx)?;
+                let s = unify(&acc.apply(&ret_var), &annotated_ty).map_err(|e| {
+                    format!("function {:?}: declared return type does not match its body: {e}", def.name)
+                })?;
+                acc = s.compose(&acc);
+            }
+
             // Critical: refresh THIS function's entry in `global_env`
             // to what was actually just learned about it, not the raw
             // Phase-1 placeholder. Without this, a LATER function
@@ -2237,6 +2252,48 @@ mod tests {
         let types = infer_program(src);
         assert_eq!(types["square"], fn_ty(vec![Type::Int], Type::Int));
         assert_eq!(types["sum_of_squares"], fn_ty(vec![Type::Int, Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn declared_return_type_matching_the_body_is_accepted() {
+        let src = "let f x: Int = x + 1";
+        let types = infer_program(src);
+        assert_eq!(types["f"], fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn declared_return_type_conflicting_with_the_body_is_an_error() {
+        // Was PREVIOUSLY silently accepted — `ret_ty` was parsed but
+        // never consulted by inference at all.
+        let err = infer_program_err("let f x: Bool = x + 1");
+        assert!(err.contains("return type"), "expected a return-type error, got: {err}");
+    }
+
+    #[test]
+    fn declared_return_type_constrains_an_otherwise_generic_body() {
+        // Without consulting `ret_ty`, `identity`'s body alone gives no
+        // reason to pick Bool over any other type — the annotation is
+        // the ONLY source of that constraint.
+        let src = "let f x: Bool = x";
+        let types = infer_program(src);
+        assert_eq!(types["f"], fn_ty(vec![Type::Bool], Type::Bool));
+    }
+
+    #[test]
+    fn declared_return_type_referencing_a_struct_is_accepted_when_it_matches() {
+        let src = "struct Point { x: Int, y: Int }\nlet origin dummy: Point = Point { x: 0, y: 0 }";
+        let types = infer_program(src);
+        let (_, ret) = match &types["origin"] {
+            Type::Function(params, ret) => (params.clone(), (**ret).clone()),
+            other => panic!("expected a function type, got {other:?}"),
+        };
+        assert_eq!(ret, Type::Struct("Point".to_string()));
+    }
+
+    #[test]
+    fn declared_return_type_referencing_the_wrong_struct_is_an_error() {
+        let src = "struct Point { x: Int, y: Int }\nlet origin dummy: Int = Point { x: 0, y: 0 }";
+        infer_program_err(src);
     }
 
     #[test]

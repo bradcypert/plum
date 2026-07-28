@@ -226,6 +226,23 @@ mod tests {
     }
 
     #[test]
+    fn a_correct_return_type_annotation_runs_through_the_full_gated_pipeline() {
+        let src = "let square x: Int = x * x";
+        let result = typecheck_and_run(src, "square", vec![Value::Int(4)]);
+        assert_eq!(result, Ok(Value::Int(16)));
+    }
+
+    #[test]
+    fn a_mismatched_return_type_annotation_is_rejected_before_running() {
+        // Previously silently accepted: `ret_ty` was parsed but never
+        // consulted by `plum-types` at all.
+        let src = "let square x: Bool = x * x";
+        let err = typecheck_and_run(src, "square", vec![Value::Int(4)])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])
