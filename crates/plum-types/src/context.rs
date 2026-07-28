@@ -8,10 +8,13 @@ use std::collections::{HashMap, HashSet};
 /// them — the type-level counterpart to `lower.rs`'s `LoweringContext`
 /// (which resolves field ORDER; this resolves field TYPES).
 ///
-/// Deliberately rejects any struct/enum declared with generics, rather
-/// than trying to erase them the way function generics are erased —
-/// see types.rs's doc comment for why those two cases aren't
-/// analogous.
+/// Generic struct/enum declarations (`struct Pair[T] { .. }`) ARE
+/// supported: a field/payload type that mentions one of the
+/// declaration's own type parameters is stored as `Type::Param(name)`
+/// — see that variant's doc comment for the full instantiate-at-each-
+/// use story. `generic_params` records each declaration's parameter
+/// NAMES in order, which is what lets a later use site build the right
+/// `Type::Struct(name, args)`/`Type::Enum(name, args)` shape.
 #[derive(Debug)]
 pub struct TypeContext {
     struct_fields: HashMap<String, Vec<(String, Type)>>,
@@ -26,6 +29,14 @@ pub struct TypeContext {
     // declaration order.
     struct_names: HashSet<String>,
     enum_names: HashSet<String>,
+    // struct/enum name -> its OWN declared generic parameter names, in
+    // declaration order (`struct Pair[T, U] { .. }` -> `["T", "U"]`).
+    // Empty for a non-generic declaration. Populated in the SAME first
+    // pass as `struct_names`/`enum_names`, for the same reason:
+    // resolving `struct Wrapper[T] { inner: Pair[T] }`'s field needs to
+    // know `Pair`'s own arity BEFORE `Pair` itself is necessarily fully
+    // resolved.
+    generic_params: HashMap<String, Vec<String>>,
 }
 
 impl TypeContext {
@@ -35,60 +46,56 @@ impl TypeContext {
             variants: HashMap::new(),
             struct_names: HashSet::new(),
             enum_names: HashSet::new(),
+            generic_params: HashMap::new(),
         }
     }
 
     pub fn from_items(items: &[ast::Item]) -> Result<Self, String> {
         let mut ctx = Self::new();
 
-        // Phase 1: collect every declared name FIRST — see this
-        // struct's doc comment on `struct_names`/`enum_names` for why.
+        // Phase 1: collect every declared name AND generic-parameter
+        // list FIRST — see this struct's doc comments for why.
         for item in items {
             match &item.kind {
                 ast::ItemKind::Struct(decl) => {
                     ctx.struct_names.insert(decl.name.clone());
+                    let params = decl.generics.iter().map(|g| g.name.clone()).collect();
+                    ctx.generic_params.insert(decl.name.clone(), params);
                 }
                 ast::ItemKind::Enum(decl) => {
                     ctx.enum_names.insert(decl.name.clone());
+                    let params = decl.generics.iter().map(|g| g.name.clone()).collect();
+                    ctx.generic_params.insert(decl.name.clone(), params);
                 }
                 _ => {}
             }
         }
 
-        // Phase 2: resolve field/payload types, now that EVERY name is
-        // known — `ast_type_to_type(_, &ctx)` only ever needs
-        // `struct_names`/`enum_names` (already fully populated), never
-        // the `struct_fields`/`variants` maps still being filled in
-        // here, so reading from `ctx` mid-construction is safe.
+        // Phase 2: resolve field/payload types, now that EVERY name
+        // (and every declaration's generic-parameter list) is known.
+        // Each declaration's OWN parameter names are passed as
+        // `in_scope_params` so `ast_type_to_type` can turn a bare `T`
+        // into `Type::Param("T")` — but ONLY while resolving THAT
+        // declaration's own fields/payloads; every other call site
+        // (including a DIFFERENT struct's fields) passes `&[]`, since a
+        // generic parameter is scoped to its own declaration alone.
         for item in items {
             match &item.kind {
                 ast::ItemKind::Struct(decl) => {
-                    if !decl.generics.is_empty() {
-                        return Err(format!(
-                            "type inference not yet implemented for generic structs \
-                             (no generic type formers yet) at {:?}",
-                            decl.span
-                        ));
-                    }
+                    let params: Vec<String> = decl.generics.iter().map(|g| g.name.clone()).collect();
                     let mut fields = Vec::with_capacity(decl.fields.len());
                     for f in &decl.fields {
-                        fields.push((f.name.clone(), ast_type_to_type(&f.ty, &ctx)?));
+                        fields.push((f.name.clone(), ast_type_to_type(&f.ty, &ctx, &params)?));
                     }
                     ctx.struct_fields.insert(decl.name.clone(), fields);
                 }
                 ast::ItemKind::Enum(decl) => {
-                    if !decl.generics.is_empty() {
-                        return Err(format!(
-                            "type inference not yet implemented for generic enums \
-                             (no generic type formers yet) at {:?}",
-                            decl.span
-                        ));
-                    }
+                    let params: Vec<String> = decl.generics.iter().map(|g| g.name.clone()).collect();
                     for variant in &decl.variants {
                         let payload = variant
                             .payload
                             .iter()
-                            .map(|t| ast_type_to_type(t, &ctx))
+                            .map(|t| ast_type_to_type(t, &ctx, &params))
                             .collect::<Result<Vec<_>, _>>()?;
                         ctx.variants.insert(variant.name.clone(), (decl.name.clone(), payload));
                     }
@@ -113,6 +120,13 @@ impl TypeContext {
 
     pub(crate) fn is_enum(&self, name: &str) -> bool {
         self.enum_names.contains(name)
+    }
+
+    /// `name`'s own declared generic parameter names, in order — empty
+    /// (not `None`) for a non-generic struct/enum, `None` only if
+    /// `name` isn't declared at all.
+    pub(crate) fn generic_params(&self, name: &str) -> Option<&[String]> {
+        self.generic_params.get(name).map(|v| v.as_slice())
     }
 }
 
@@ -158,9 +172,47 @@ mod tests {
     }
 
     #[test]
-    fn generic_struct_declaration_is_rejected() {
-        let err = context_err("struct Pair[T] { first: T, second: T }");
-        assert!(err.contains("generic"), "expected a generic-related error, got: {err}");
+    fn generic_struct_fields_resolve_to_param_placeholders() {
+        let ctx = context("struct Pair[T] { first: T, second: T }");
+        assert_eq!(
+            ctx.struct_fields("Pair").unwrap(),
+            &[("first".to_string(), Type::Param("T".to_string())), ("second".to_string(), Type::Param("T".to_string()))]
+        );
+        assert_eq!(ctx.generic_params("Pair").unwrap(), &["T".to_string()]);
+    }
+
+    #[test]
+    fn non_generic_struct_has_no_generic_params() {
+        let ctx = context("struct Point { x: Int, y: Int }");
+        assert_eq!(ctx.generic_params("Point").unwrap(), &[] as &[String]);
+    }
+
+    #[test]
+    fn multi_param_generic_struct_resolves_each_param_independently() {
+        let ctx = context("struct Pair[A, B] { first: A, second: B }");
+        assert_eq!(
+            ctx.struct_fields("Pair").unwrap(),
+            &[
+                ("first".to_string(), Type::Param("A".to_string())),
+                ("second".to_string(), Type::Param("B".to_string())),
+            ]
+        );
+        assert_eq!(ctx.generic_params("Pair").unwrap(), &["A".to_string(), "B".to_string()]);
+    }
+
+    #[test]
+    fn generic_struct_field_referencing_another_generic_struct_resolves() {
+        let ctx = context("struct Pair[T] { first: T, second: T }\nstruct Wrapper[T] { inner: Pair[T] }");
+        assert_eq!(
+            ctx.struct_fields("Wrapper").unwrap(),
+            &[("inner".to_string(), Type::Struct("Pair".to_string(), vec![Type::Param("T".to_string())]))]
+        );
+    }
+
+    #[test]
+    fn generic_instantiation_with_wrong_arity_is_an_error() {
+        let err = context_err("struct Pair[T] { first: T, second: T }\nstruct Bad { p: Pair[Int, Bool] }");
+        assert!(err.contains("generic argument"), "expected a generic-argument-count error, got: {err}");
     }
 
     #[test]
@@ -184,9 +236,18 @@ mod tests {
     }
 
     #[test]
-    fn generic_enum_declaration_is_rejected() {
-        let err = context_err("enum Option[T] { Some(T), None }");
-        assert!(err.contains("generic"), "expected a generic-related error, got: {err}");
+    fn generic_enum_payload_resolves_to_param_placeholders() {
+        let ctx = context("enum Option[T] { Some(T), None }");
+        assert_eq!(ctx.variant("Some").unwrap(), &("Option".to_string(), vec![Type::Param("T".to_string())]));
+        assert_eq!(ctx.variant("None").unwrap(), &("Option".to_string(), vec![]));
+        assert_eq!(ctx.generic_params("Option").unwrap(), &["T".to_string()]);
+    }
+
+    #[test]
+    fn generic_enum_referencing_a_generic_struct_field() {
+        let ctx = context("struct Point { x: Int, y: Int }\nenum Result[T, E] { Ok(T), Err(E) }");
+        assert_eq!(ctx.variant("Ok").unwrap(), &("Result".to_string(), vec![Type::Param("T".to_string())]));
+        assert_eq!(ctx.variant("Err").unwrap(), &("Result".to_string(), vec![Type::Param("E".to_string())]));
     }
 
     #[test]
@@ -209,8 +270,8 @@ mod tests {
         assert_eq!(
             ctx.struct_fields("Line").unwrap(),
             &[
-                ("start".to_string(), Type::Struct("Point".to_string())),
-                ("end".to_string(), Type::Struct("Point".to_string())),
+                ("start".to_string(), Type::Struct("Point".to_string(), vec![])),
+                ("end".to_string(), Type::Struct("Point".to_string(), vec![])),
             ]
         );
     }
@@ -222,21 +283,21 @@ mod tests {
         let ctx = context("struct Line { start: Point, end: Point }\nstruct Point { x: Int, y: Int }");
         assert_eq!(
             ctx.struct_fields("Line").unwrap()[0],
-            ("start".to_string(), Type::Struct("Point".to_string()))
+            ("start".to_string(), Type::Struct("Point".to_string(), vec![]))
         );
     }
 
     #[test]
     fn mutually_recursive_struct_fields_resolve() {
         let ctx = context("struct A { b: B }\nstruct B { a: A }");
-        assert_eq!(ctx.struct_fields("A").unwrap(), &[("b".to_string(), Type::Struct("B".to_string()))]);
-        assert_eq!(ctx.struct_fields("B").unwrap(), &[("a".to_string(), Type::Struct("A".to_string()))]);
+        assert_eq!(ctx.struct_fields("A").unwrap(), &[("b".to_string(), Type::Struct("B".to_string(), vec![]))]);
+        assert_eq!(ctx.struct_fields("B").unwrap(), &[("a".to_string(), Type::Struct("A".to_string(), vec![]))]);
     }
 
     #[test]
     fn enum_payload_referencing_a_struct_resolves() {
         let ctx = context("struct Point { x: Int, y: Int }\nenum Shape { AtOrigin, At(Point) }");
-        assert_eq!(ctx.variant("At").unwrap(), &("Shape".to_string(), vec![Type::Struct("Point".to_string())]));
+        assert_eq!(ctx.variant("At").unwrap(), &("Shape".to_string(), vec![Type::Struct("Point".to_string(), vec![])]));
     }
 
     #[test]
@@ -244,7 +305,7 @@ mod tests {
         let ctx = context("enum Shape { Circle(Float) }\nstruct Canvas { shape: Shape }");
         assert_eq!(
             ctx.struct_fields("Canvas").unwrap(),
-            &[("shape".to_string(), Type::Enum("Shape".to_string()))]
+            &[("shape".to_string(), Type::Enum("Shape".to_string(), vec![]))]
         );
     }
 

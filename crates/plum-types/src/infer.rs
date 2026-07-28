@@ -48,9 +48,19 @@ fn free_vars(ty: &Type) -> HashSet<TypeVarId> {
             }
             set
         }
-        Type::Int | Type::Float | Type::Bool | Type::Str | Type::Unit | Type::Range | Type::Struct(_) | Type::Enum(_) => {
-            HashSet::new()
+        Type::Struct(_, args) | Type::Enum(_, args) => {
+            let mut set = HashSet::new();
+            for a in args {
+                set.extend(free_vars(a));
+            }
+            set
         }
+        // `Param` is a declaration-scoped placeholder, never a real
+        // inference metavariable — see its doc comment. It should
+        // never reach here in practice (every use site instantiates it
+        // to a fresh `Var` first), so it contributes no free vars
+        // either way.
+        Type::Int | Type::Float | Type::Bool | Type::Str | Type::Unit | Type::Range | Type::Param(_) => HashSet::new(),
     }
 }
 
@@ -227,6 +237,29 @@ impl Infer {
         subst.apply(&scheme.ty)
     }
 
+    /// Instantiates a generic struct/enum declaration named `decl_name`
+    /// at a CONSTRUCTION or PATTERN site: mints one brand-new fresh
+    /// `Var` per declared parameter name (shared across every field —
+    /// `struct Pair[T] { first: T, second: T }` gets the SAME fresh var
+    /// substituted for both occurrences of `T`), substitutes those into
+    /// `field_types` (declared field/payload types, which may contain
+    /// `Type::Param`), and returns both the substituted field types AND
+    /// the ordered `Vec<Type>` of fresh args — the second is exactly
+    /// what a `Type::Struct(decl_name, args)`/`Type::Enum(decl_name,
+    /// args)` result type needs. A non-generic declaration (no declared
+    /// params) is unaffected: `field_types` pass through unchanged and
+    /// `args` comes back empty, exactly like before generics existed.
+    fn instantiate_generic(&mut self, decl_name: &str, field_types: &[Type]) -> (Vec<Type>, Vec<Type>) {
+        let param_names: Vec<String> = self.ctx.generic_params(decl_name).unwrap_or(&[]).to_vec();
+        if param_names.is_empty() {
+            return (field_types.to_vec(), Vec::new());
+        }
+        let mapping: HashMap<String, Type> = param_names.iter().map(|p| (p.clone(), self.fresh())).collect();
+        let substituted = field_types.iter().map(|t| subst_params(t, &mapping)).collect();
+        let args = param_names.iter().map(|p| mapping[p].clone()).collect();
+        (substituted, args)
+    }
+
     /// Infers a type for every `let`-defined function in a program.
     /// See this method's implementation comment for the two-phase
     /// approach (pre-declare signatures, then infer bodies) that makes
@@ -331,7 +364,7 @@ impl Infer {
             // against what the body actually produced, same as any
             // other annotation.
             if let Some(annotated) = &def.ret_ty {
-                let annotated_ty = ast_type_to_type(annotated, &self.ctx)?;
+                let annotated_ty = ast_type_to_type(annotated, &self.ctx, &[])?;
                 let s = unify(&acc.apply(&ret_var), &annotated_ty).map_err(|e| {
                     format!("function {:?}: declared return type does not match its body: {e}", def.name)
                 })?;
@@ -416,7 +449,13 @@ impl Infer {
             // lower.rs's identical `Ident` case.
             ast::Expr::Ident(name, _) if matches!(self.ctx.variant(name), Some((_, p)) if p.is_empty()) => {
                 let (enum_name, _) = self.ctx.variant(name).expect("just matched Some above").clone();
-                Ok((Type::Enum(enum_name), Subst::empty()))
+                // Empty payload, but the ENUM itself may still be
+                // generic (`None` from `Option[T] { Some(T), None }`) —
+                // nothing here reveals what `T` is, so it gets its own
+                // fresh, still-unconstrained arg, same as an unapplied
+                // polymorphic function would.
+                let (_, args) = self.instantiate_generic(&enum_name, &[]);
+                Ok((Type::Enum(enum_name, args), Subst::empty()))
             }
             // A non-zero-arity variant referenced BARE (not called) is
             // its constructor as a function value — `Circle` alone has
@@ -426,7 +465,8 @@ impl Infer {
             // eta-expands the SAME bare reference into a real Closure.
             ast::Expr::Ident(name, _) if matches!(self.ctx.variant(name), Some((_, p)) if !p.is_empty()) => {
                 let (enum_name, payload) = self.ctx.variant(name).expect("just matched Some above").clone();
-                Ok((Type::Function(payload, Box::new(Type::Enum(enum_name))), Subst::empty()))
+                let (payload, args) = self.instantiate_generic(&enum_name, &payload);
+                Ok((Type::Function(payload, Box::new(Type::Enum(enum_name, args))), Subst::empty()))
             }
             ast::Expr::Ident(name, span) => {
                 let scheme = env
@@ -489,6 +529,7 @@ impl Infer {
                                 args.len()
                             ));
                         }
+                        let (payload_types, enum_args) = self.instantiate_generic(&enum_name, &payload_types);
                         let mut acc = Subst::empty();
                         let mut refined_env = env.clone();
                         for (arg, expected_ty) in args.iter().zip(payload_types.iter()) {
@@ -500,7 +541,8 @@ impl Infer {
                             acc = s.compose(&acc);
                             refined_env = refined_env.apply_subst(&acc);
                         }
-                        return Ok((Type::Enum(enum_name), acc));
+                        let enum_args = enum_args.iter().map(|a| acc.apply(a)).collect();
+                        return Ok((Type::Enum(enum_name, enum_args), acc));
                     }
                 }
                 let arg_refs: Vec<&ast::Expr> = args.iter().collect();
@@ -539,7 +581,7 @@ impl Infer {
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let acc = s;
                 let resolved_base_ty = acc.apply(&base_ty);
-                let Type::Struct(struct_name) = &resolved_base_ty else {
+                let Type::Struct(struct_name, struct_args) = &resolved_base_ty else {
                     return Err(format!(
                         "field access `.{name}` at {span:?} requires a struct value with a \
                          statically known type, found {resolved_base_ty:?}"
@@ -554,6 +596,17 @@ impl Infer {
                     .find(|(field_name, _)| field_name == name)
                     .map(|(_, ty)| ty.clone())
                     .ok_or_else(|| format!("struct {struct_name:?} has no field named {name:?} (at {span:?})"))?;
+                // The declared field type may mention the struct's OWN
+                // generic parameters (`Type::Param`) — `base`'s type
+                // already carries the CONCRETE argument for each one
+                // (`struct_args`, in the same declared order), so this
+                // substitutes those in directly rather than minting
+                // fresh vars (there's nothing fresh to infer here: the
+                // struct is already fully known).
+                let param_names = self.ctx.generic_params(struct_name).unwrap_or(&[]).to_vec();
+                let mapping: HashMap<String, Type> =
+                    param_names.into_iter().zip(struct_args.iter().cloned()).collect();
+                let field_ty = subst_params(&field_ty, &mapping);
                 self.field_owners.insert(*span, struct_name.clone());
                 Ok((acc.apply(&field_ty), acc))
             }
@@ -613,6 +666,16 @@ impl Infer {
             .struct_fields(&tag)
             .ok_or_else(|| format!("unknown struct type {tag:?} at {span:?}"))?
             .to_vec();
+        let (declared_field_names, declared_field_types): (Vec<String>, Vec<Type>) =
+            declared_fields.into_iter().unzip();
+        // ONE shared instantiation for the whole literal: every field's
+        // template type (and the spread check below) needs the SAME
+        // fresh var per generic parameter — `struct Pair[T] { first: T,
+        // second: T }` requires both fields AND the spread source to
+        // agree on one `T`, not each pick their own.
+        let (declared_field_types, struct_args) = self.instantiate_generic(&tag, &declared_field_types);
+        let declared_fields: Vec<(String, Type)> =
+            declared_field_names.into_iter().zip(declared_field_types).collect();
 
         let mut by_name: HashMap<&str, &ast::Expr> = HashMap::new();
         for f in fields {
@@ -630,7 +693,7 @@ impl Infer {
         if let Some(spread_expr) = spread {
             let (spread_ty, s) = self.infer_expr(spread_expr, env)?;
             acc = s.compose(&acc);
-            let s = unify(&acc.apply(&spread_ty), &Type::Struct(tag.clone()))
+            let s = unify(&acc.apply(&spread_ty), &Type::Struct(tag.clone(), struct_args.clone()))
                 .map_err(|e| format!("struct update `..` for {tag:?}: {e}"))?;
             acc = s.compose(&acc);
         }
@@ -652,7 +715,8 @@ impl Infer {
             return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
         }
 
-        Ok((Type::Struct(tag), acc))
+        let struct_args = struct_args.iter().map(|a| acc.apply(a)).collect();
+        Ok((Type::Struct(tag, struct_args), acc))
     }
 
     // Only the simple `Path(bindings...)` shape is supported, same
@@ -714,7 +778,12 @@ impl Infer {
                     .struct_fields(&tag)
                     .ok_or_else(|| format!("unknown struct type {tag:?} at {span:?}"))?
                     .to_vec();
-                let s = unify(&acc.apply(scrutinee_ty), &Type::Struct(tag.clone()))
+                let (declared_field_names, declared_field_types): (Vec<String>, Vec<Type>) =
+                    declared_fields.into_iter().unzip();
+                let (declared_field_types, struct_args) = self.instantiate_generic(&tag, &declared_field_types);
+                let declared_fields: Vec<(String, Type)> =
+                    declared_field_names.into_iter().zip(declared_field_types).collect();
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Struct(tag.clone(), struct_args))
                     .map_err(|e| format!("struct pattern at {span:?}: {e}"))?;
                 *acc = s.compose(acc);
 
@@ -748,12 +817,17 @@ impl Infer {
             ast::Pattern::Variant { path, args, span } => {
                 let tag = path.last().cloned().expect("a path always has at least one segment");
                 let (owning_ty, payload_types) = match self.ctx.variant(&tag) {
-                    Some((enum_name, payload_types)) => (Type::Enum(enum_name.clone()), payload_types.clone()),
+                    Some((enum_name, payload_types)) => {
+                        let enum_name = enum_name.clone();
+                        let (payload_types, args) = self.instantiate_generic(&enum_name, &payload_types.clone());
+                        (Type::Enum(enum_name, args), payload_types)
+                    }
                     None => match self.ctx.struct_fields(&tag) {
-                        Some(fields) => (
-                            Type::Struct(tag.clone()),
-                            fields.iter().map(|(_, ty)| ty.clone()).collect(),
-                        ),
+                        Some(fields) => {
+                            let field_types: Vec<Type> = fields.iter().map(|(_, ty)| ty.clone()).collect();
+                            let (payload_types, args) = self.instantiate_generic(&tag, &field_types);
+                            (Type::Struct(tag.clone(), args), payload_types)
+                        }
                         None => return Err(format!("unknown variant {tag:?} at {span:?}")),
                     },
                 };
@@ -867,7 +941,7 @@ impl Infer {
         let mut closure_env = env.clone();
         for p in params {
             let ty = match &p.ty {
-                Some(annotation) => ast_type_to_type(annotation, &self.ctx)?,
+                Some(annotation) => ast_type_to_type(annotation, &self.ctx, &[])?,
                 None => self.fresh(),
             };
             closure_env = closure_env.extend(p.name.clone(), ty.clone());
@@ -1060,7 +1134,7 @@ impl Infer {
                     acc = s.compose(&acc);
                     let mut resolved = acc.apply(&val_ty);
                     if let Some(annotation) = ty {
-                        let ann_ty = ast_type_to_type(annotation, &self.ctx)?;
+                        let ann_ty = ast_type_to_type(annotation, &self.ctx, &[])?;
                         let s = unify(&resolved, &ann_ty)
                             .map_err(|e| format!("`let` annotation for {name:?}: {e}"))?;
                         acc = s.compose(&acc);
@@ -1162,6 +1236,31 @@ fn default_numeric(ty: &Type) -> Result<(Type, Subst), String> {
     }
 }
 
+// Replaces every `Type::Param(name)` inside `ty` per `mapping`,
+// recursing structurally — the declaration-template-scoped counterpart
+// to `Subst::apply` (which only ever resolves `Type::Var` metavariables,
+// never `Type::Param`s). A name missing from `mapping` is left as-is
+// (should never happen in practice: only a declaration's OWN parameter
+// names ever appear inside ITS OWN stored field/payload types — see
+// `TypeContext::from_items`) rather than panicking, since a stray
+// unresolved `Param` still gets caught later, as a clear internal-error
+// message, by `unify.rs`.
+fn subst_params(ty: &Type, mapping: &HashMap<String, Type>) -> Type {
+    match ty {
+        Type::Param(name) => mapping.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::Function(params, ret) => Type::Function(
+            params.iter().map(|p| subst_params(p, mapping)).collect(),
+            Box::new(subst_params(ret, mapping)),
+        ),
+        Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| subst_params(e, mapping)).collect()),
+        Type::Struct(name, args) => {
+            Type::Struct(name.clone(), args.iter().map(|a| subst_params(a, mapping)).collect())
+        }
+        Type::Enum(name, args) => Type::Enum(name.clone(), args.iter().map(|a| subst_params(a, mapping)).collect()),
+        other => other.clone(),
+    }
+}
+
 // Mirrors lower.rs's `classify_subpattern`: true if any DIRECT
 // sub-position of `pattern` is itself a Variant/Tuple/Struct pattern —
 // exactly the shapes that make lowering defer to a synthetic name and
@@ -1188,10 +1287,23 @@ fn pattern_has_nested_tag_subpattern(pattern: &ast::Pattern) -> bool {
 // construction — names are all collected BEFORE any field/payload type
 // is resolved, so `struct Line { start: Point, end: Point }` and even
 // forward/mutual references like `struct A { b: B } struct B { a: A }`
-// both work regardless of declaration order) — still primitive-and-
-// nominal-only: a GENERIC type annotation remains a real, separate,
-// deferred gap.
-pub(crate) fn ast_type_to_type(ty: &ast::Type, ctx: &crate::context::TypeContext) -> Result<Type, String> {
+// both work regardless of declaration order).
+//
+// `in_scope_params` is the CURRENT struct/enum declaration's own
+// generic parameter names (empty for every non-declaration call site —
+// closures, `let` annotations, and any OTHER declaration's fields all
+// pass `&[]`, since a parameter is scoped to its own declaration
+// alone): a bare name matching one of them resolves to `Type::Param`
+// instead of erroring, which is what lets `struct Pair[T] { first: T,
+// second: T }` refer to its own `T`. This deliberately does NOT cover
+// a generic annotation on a top-level FUNCTION (`let f[T] (x: T)`) —
+// top-level function params have no annotation syntax at all yet (a
+// separate, already-known gap), so that combination can't arise here.
+pub(crate) fn ast_type_to_type(
+    ty: &ast::Type,
+    ctx: &crate::context::TypeContext,
+    in_scope_params: &[String],
+) -> Result<Type, String> {
     match ty {
         ast::Type::Path(segments, span) => match segments.last().map(String::as_str) {
             Some("Int") => Ok(Type::Int),
@@ -1199,15 +1311,48 @@ pub(crate) fn ast_type_to_type(ty: &ast::Type, ctx: &crate::context::TypeContext
             Some("Bool") => Ok(Type::Bool),
             Some("String") => Ok(Type::Str),
             Some("Unit") => Ok(Type::Unit),
-            Some(name) if ctx.is_struct(name) => Ok(Type::Struct(name.to_string())),
-            Some(name) if ctx.is_enum(name) => Ok(Type::Enum(name.to_string())),
+            Some(name) if in_scope_params.iter().any(|p| p == name) => Ok(Type::Param(name.to_string())),
+            Some(name) if ctx.is_struct(name) => Ok(Type::Struct(name.to_string(), Vec::new())),
+            Some(name) if ctx.is_enum(name) => Ok(Type::Enum(name.to_string(), Vec::new())),
             _ => Err(format!(
                 "type inference not yet implemented for this type annotation at {span:?}"
             )),
         },
-        ast::Type::Generic { span, .. } => Err(format!(
-            "type inference not yet implemented for generic type annotations at {span:?}"
-        )),
+        // `Thing[Arg, ...]` — `base` names a generic struct/enum,
+        // `args` are its type arguments at THIS use (each resolved
+        // recursively, so `Wrapper[Pair[Int]]` works). Arity is
+        // checked against the declaration's own `generic_params`
+        // count.
+        ast::Type::Generic { base, args, span } => {
+            let name = base.last().map(String::as_str).ok_or_else(|| {
+                format!("type inference not yet implemented for this type annotation at {span:?}")
+            })?;
+            let Some(declared_params) = ctx.generic_params(name) else {
+                return Err(format!(
+                    "type inference not yet implemented for this type annotation at {span:?}"
+                ));
+            };
+            if args.len() != declared_params.len() {
+                return Err(format!(
+                    "{name:?} expects {} generic argument(s), found {} at {span:?}",
+                    declared_params.len(),
+                    args.len()
+                ));
+            }
+            let resolved_args = args
+                .iter()
+                .map(|a| ast_type_to_type(a, ctx, in_scope_params))
+                .collect::<Result<Vec<_>, _>>()?;
+            if ctx.is_struct(name) {
+                Ok(Type::Struct(name.to_string(), resolved_args))
+            } else if ctx.is_enum(name) {
+                Ok(Type::Enum(name.to_string(), resolved_args))
+            } else {
+                Err(format!(
+                    "type inference not yet implemented for this type annotation at {span:?}"
+                ))
+            }
+        }
     }
 }
 
@@ -1711,7 +1856,7 @@ mod tests {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
         assert_eq!(
             infer_expr_with(&mut infer, "Circle(1.0)", &TypeEnv::new()),
-            Type::Enum("Shape".to_string())
+            Type::Enum("Shape".to_string(), vec![])
         );
     }
 
@@ -1720,7 +1865,7 @@ mod tests {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
         assert_eq!(
             infer_expr_with(&mut infer, "Shape.Circle(1.0)", &TypeEnv::new()),
-            Type::Enum("Shape".to_string())
+            Type::Enum("Shape".to_string(), vec![])
         );
     }
 
@@ -1739,7 +1884,7 @@ mod tests {
     #[test]
     fn bare_zero_arity_variant_infers_the_owning_enum_type() {
         let mut infer = Infer::with_context(context("enum Shape { Empty }"));
-        assert_eq!(infer_expr_with(&mut infer, "Empty", &TypeEnv::new()), Type::Enum("Shape".to_string()));
+        assert_eq!(infer_expr_with(&mut infer, "Empty", &TypeEnv::new()), Type::Enum("Shape".to_string(), vec![]));
     }
 
     #[test]
@@ -1747,7 +1892,7 @@ mod tests {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
         assert_eq!(
             infer_expr_with(&mut infer, "Circle", &TypeEnv::new()),
-            fn_ty(vec![Type::Float], Type::Enum("Shape".to_string()))
+            fn_ty(vec![Type::Float], Type::Enum("Shape".to_string(), vec![]))
         );
     }
 
@@ -1756,7 +1901,7 @@ mod tests {
         let mut infer = Infer::with_context(context("enum Shape { Rectangle(Float, Float) }"));
         assert_eq!(
             infer_expr_with(&mut infer, "Rectangle", &TypeEnv::new()),
-            fn_ty(vec![Type::Float, Type::Float], Type::Enum("Shape".to_string()))
+            fn_ty(vec![Type::Float, Type::Float], Type::Enum("Shape".to_string(), vec![]))
         );
     }
 
@@ -1765,9 +1910,9 @@ mod tests {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
         let env = TypeEnv::new().extend(
             "apply".to_string(),
-            fn_ty(vec![fn_ty(vec![Type::Float], Type::Enum("Shape".to_string())), Type::Float], Type::Enum("Shape".to_string())),
+            fn_ty(vec![fn_ty(vec![Type::Float], Type::Enum("Shape".to_string(), vec![])), Type::Float], Type::Enum("Shape".to_string(), vec![])),
         );
-        assert_eq!(infer_expr_with(&mut infer, "apply(Circle, 1.0)", &env), Type::Enum("Shape".to_string()));
+        assert_eq!(infer_expr_with(&mut infer, "apply(Circle, 1.0)", &env), Type::Enum("Shape".to_string(), vec![]));
     }
 
     #[test]
@@ -1791,8 +1936,111 @@ mod tests {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
         assert_eq!(
             infer_expr_with(&mut infer, "Point { x: 1.0, y: 2.0 }", &TypeEnv::new()),
-            Type::Struct("Point".to_string())
+            Type::Struct("Point".to_string(), vec![])
         );
+    }
+
+    // --- Generic structs/enums ---
+
+    #[test]
+    fn generic_struct_literal_infers_its_type_argument_from_field_values() {
+        let mut infer = Infer::with_context(context("struct Pair[T] { first: T, second: T }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Pair { first: 1, second: 2 }", &TypeEnv::new()),
+            Type::Struct("Pair".to_string(), vec![Type::Int])
+        );
+    }
+
+    #[test]
+    fn generic_struct_requires_the_same_type_argument_across_every_field() {
+        let mut infer = Infer::with_context(context("struct Pair[T] { first: T, second: T }"));
+        infer_expr_with_err(&mut infer, "Pair { first: 1, second: true }", &TypeEnv::new());
+    }
+
+    #[test]
+    fn generic_struct_with_independent_type_parameters() {
+        let mut infer = Infer::with_context(context("struct Pair[A, B] { first: A, second: B }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Pair { first: 1, second: true }", &TypeEnv::new()),
+            Type::Struct("Pair".to_string(), vec![Type::Int, Type::Bool])
+        );
+    }
+
+    #[test]
+    fn generic_struct_field_access_substitutes_the_concrete_argument() {
+        let mut infer = Infer::with_context(context("struct Pair[T] { first: T, second: T }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Pair".to_string(), vec![Type::Bool]));
+        assert_eq!(infer_expr_with(&mut infer, "p.first", &env), Type::Bool);
+    }
+
+    #[test]
+    fn user_defined_option_some_and_none_share_the_same_enum_type() {
+        // The exact shape DESIGN.md specs for the built-in `Option[T]`
+        // — proven here as an ORDINARY user-declared generic enum,
+        // since the compiler doesn't inject a real builtin yet.
+        let mut infer = Infer::with_context(context("enum Option[T] { Some(T), None }"));
+        assert_eq!(
+            infer_expr_with(&mut infer, "Some(5)", &TypeEnv::new()),
+            Type::Enum("Option".to_string(), vec![Type::Int])
+        );
+    }
+
+    #[test]
+    fn bare_none_alone_has_an_unconstrained_type_argument() {
+        let mut infer = Infer::with_context(context("enum Option[T] { Some(T), None }"));
+        let ty = infer_expr_with(&mut infer, "None", &TypeEnv::new());
+        match ty {
+            Type::Enum(name, args) => {
+                assert_eq!(name, "Option");
+                assert_eq!(args.len(), 1);
+                assert!(matches!(args[0], Type::Var(_)), "expected an unconstrained var, got {:?}", args[0]);
+            }
+            other => panic!("expected an Enum type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generic_variant_pattern_binds_the_instantiated_payload_type() {
+        let mut infer = Infer::with_context(context("enum Option[T] { Some(T), None }"));
+        let env = TypeEnv::new().extend("o".to_string(), Type::Enum("Option".to_string(), vec![Type::Bool]));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match o { Some(x) => x, None => false }", &env),
+            Type::Bool
+        );
+    }
+
+    #[test]
+    fn mismatched_generic_arguments_are_a_type_error() {
+        let mut infer = Infer::with_context(context("enum Option[T] { Some(T), None }"));
+        let env = TypeEnv::new().extend("o".to_string(), Type::Enum("Option".to_string(), vec![Type::Int]));
+        infer_expr_with_err(&mut infer, "match o { Some(x) => x, None => true }", &env);
+    }
+
+    #[test]
+    fn a_bare_variant_constructor_of_a_generic_enum_is_a_function_value() {
+        let mut infer = Infer::with_context(context("enum Option[T] { Some(T), None }"));
+        let ty = infer_expr_with(&mut infer, "Some", &TypeEnv::new());
+        match ty {
+            Type::Function(params, ret) => {
+                assert_eq!(params.len(), 1);
+                assert!(matches!(params[0], Type::Var(_)));
+                assert!(matches!(*ret, Type::Enum(ref name, _) if name == "Option"));
+            }
+            other => panic!("expected a Function type, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn generic_type_annotation_is_checked_against_the_expression() {
+        let mut infer = Infer::with_context(context("enum Option[T] { Some(T), None }"));
+        let ty = infer_expr_with(&mut infer, "{ let x: Option[Int] = Some(5); x }", &TypeEnv::new());
+        assert_eq!(ty, Type::Enum("Option".to_string(), vec![Type::Int]));
+    }
+
+    #[test]
+    fn generic_type_annotation_mismatch_is_an_error() {
+        let mut infer = Infer::with_context(context("enum Option[T] { Some(T), None }"));
+        infer_expr_with_err(&mut infer, "{ let x: Option[Bool] = Some(5); x }", &TypeEnv::new());
     }
 
     #[test]
@@ -1800,7 +2048,7 @@ mod tests {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
         assert_eq!(
             infer_expr_with(&mut infer, "Point { y: 2.0, x: 1.0 }", &TypeEnv::new()),
-            Type::Struct("Point".to_string())
+            Type::Struct("Point".to_string(), vec![])
         );
     }
 
@@ -1837,9 +2085,9 @@ mod tests {
     #[test]
     fn struct_literal_spread_infers_the_struct_type() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Point".to_string(), vec![]));
         let ty = infer_expr_with(&mut infer, "Point { x: 1.0, ..other }", &env);
-        assert_eq!(ty, Type::Struct("Point".to_string()));
+        assert_eq!(ty, Type::Struct("Point".to_string(), vec![]));
     }
 
     #[test]
@@ -1847,21 +2095,21 @@ mod tests {
         let mut infer = Infer::with_context(context(
             "struct Point { x: Float, y: Float }\nstruct Color { r: Int, g: Int, b: Int }",
         ));
-        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Color".to_string()));
+        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Color".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "Point { x: 1.0, ..other }", &env);
     }
 
     #[test]
     fn struct_literal_spread_still_checks_explicit_field_types() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Point".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "Point { x: true, ..other }", &env);
     }
 
     #[test]
     fn struct_literal_spread_still_rejects_an_unknown_field() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("other".to_string(), Type::Struct("Point".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "Point { z: 1.0, ..other }", &env);
     }
 
@@ -1870,7 +2118,7 @@ mod tests {
     #[test]
     fn field_access_infers_the_declared_field_type() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Bool }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         assert_eq!(infer_expr_with(&mut infer, "p.x", &env), Type::Float);
         assert_eq!(infer_expr_with(&mut infer, "p.y", &env), Type::Bool);
     }
@@ -1878,7 +2126,7 @@ mod tests {
     #[test]
     fn field_access_records_the_owning_struct_by_span() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         infer_expr_with(&mut infer, "p.x", &env);
         assert_eq!(infer.field_owners().len(), 1);
         assert_eq!(infer.field_owners().values().next().unwrap(), "Point");
@@ -1887,7 +2135,7 @@ mod tests {
     #[test]
     fn field_access_on_an_unknown_field_is_an_error() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "p.z", &env);
     }
 
@@ -1912,8 +2160,8 @@ mod tests {
         let mut infer = Infer::with_context(context(
             "struct Point { x: Int, y: Int }\nstruct Line { start: Point, end: Point }",
         ));
-        let env = TypeEnv::new().extend("l".to_string(), Type::Struct("Line".to_string()));
-        assert_eq!(infer_expr_with(&mut infer, "l.start", &env), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("l".to_string(), Type::Struct("Line".to_string(), vec![]));
+        assert_eq!(infer_expr_with(&mut infer, "l.start", &env), Type::Struct("Point".to_string(), vec![]));
     }
 
     // --- Match: enum variant patterns, resolved against the SAME
@@ -1922,7 +2170,7 @@ mod tests {
     #[test]
     fn match_variant_arms_produce_a_common_type() {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Rectangle(Float, Float) }"));
-        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
         assert_eq!(
             infer_expr_with(
                 &mut infer,
@@ -1953,7 +2201,7 @@ mod tests {
         // type checker needs to accept the same syntax, falling back to
         // struct_fields when a tag isn't a registered enum variant.
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         assert_eq!(infer_expr_with(&mut infer, "match p { Point(x, y) => x }", &env), Type::Float);
     }
 
@@ -1963,14 +2211,14 @@ mod tests {
     #[test]
     fn match_arm_struct_pattern() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         assert_eq!(infer_expr_with(&mut infer, "match p { Point { x, y } => x }", &env), Type::Float);
     }
 
     #[test]
     fn match_arm_struct_pattern_field_rename() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         assert_eq!(
             infer_expr_with(&mut infer, "match p { Point { x: px, y: py } => px + py }", &env),
             Type::Float
@@ -1980,21 +2228,21 @@ mod tests {
     #[test]
     fn match_arm_struct_pattern_with_rest() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         assert_eq!(infer_expr_with(&mut infer, "match p { Point { x, .. } => x }", &env), Type::Float);
     }
 
     #[test]
     fn match_arm_struct_pattern_missing_field_without_rest_is_an_error() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "match p { Point { x } => x }", &env);
     }
 
     #[test]
     fn match_arm_struct_pattern_unknown_field_is_an_error() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "match p { Point { x, y, z } => x }", &env);
     }
 
@@ -2008,21 +2256,21 @@ mod tests {
     #[test]
     fn block_let_struct_destructure() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         assert_eq!(infer_expr_with(&mut infer, "{ let Point { x, y } = p; x + y }", &env), Type::Float);
     }
 
     #[test]
     fn block_let_struct_destructure_type_annotation_is_not_yet_supported() {
         let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "{ let Point { x, y }: Point = p; x }", &env);
     }
 
     #[test]
     fn struct_destructuring_function_param() {
         let types = infer_program("struct Point { x: Float, y: Float }\nlet area (Point { x, y }) = x * y");
-        assert_eq!(types["area"], fn_ty(vec![Type::Struct("Point".to_string())], Type::Float));
+        assert_eq!(types["area"], fn_ty(vec![Type::Struct("Point".to_string(), vec![])], Type::Float));
     }
 
     // --- Nested patterns ---
@@ -2031,7 +2279,7 @@ mod tests {
     fn struct_nested_inside_tuple_match_arm() {
         let ctx = context("struct Point { x: Int, y: Int }");
         let mut infer = Infer::with_context(ctx);
-        let env = TypeEnv::new().extend("pair".to_string(), Type::Tuple(vec![Type::Struct("Point".to_string()), Type::Int]));
+        let env = TypeEnv::new().extend("pair".to_string(), Type::Tuple(vec![Type::Struct("Point".to_string(), vec![]), Type::Int]));
         assert_eq!(
             infer_expr_with(&mut infer, "match pair { (Point { x, y }, n) => x + y + n }", &env),
             Type::Int
@@ -2048,7 +2296,7 @@ mod tests {
         // struct-in-tuple/variant-in-tuple standing in for it.
         let ctx = context("struct Point { x: Int, y: Int }\nstruct Line { start: Point, end: Point }");
         let mut infer = Infer::with_context(ctx);
-        let env = TypeEnv::new().extend("l".to_string(), Type::Struct("Line".to_string()));
+        let env = TypeEnv::new().extend("l".to_string(), Type::Struct("Line".to_string(), vec![]));
         assert_eq!(
             infer_expr_with(
                 &mut infer,
@@ -2063,7 +2311,7 @@ mod tests {
     fn variant_pattern_nested_inside_tuple_match_arm() {
         let ctx = context("struct Point { x: Int, y: Int }");
         let mut infer = Infer::with_context(ctx);
-        let env = TypeEnv::new().extend("pair".to_string(), Type::Tuple(vec![Type::Struct("Point".to_string()), Type::Int]));
+        let env = TypeEnv::new().extend("pair".to_string(), Type::Tuple(vec![Type::Struct("Point".to_string(), vec![]), Type::Int]));
         assert_eq!(
             infer_expr_with(&mut infer, "match pair { (Point(x, y), n) => x + y + n }", &env),
             Type::Int
@@ -2076,7 +2324,7 @@ mod tests {
         let mut infer = Infer::with_context(ctx);
         let env = TypeEnv::new().extend(
             "v".to_string(),
-            Type::Tuple(vec![Type::Tuple(vec![Type::Struct("Point".to_string()), Type::Int]), Type::Int]),
+            Type::Tuple(vec![Type::Tuple(vec![Type::Struct("Point".to_string(), vec![]), Type::Int]), Type::Int]),
         );
         assert_eq!(
             infer_expr_with(&mut infer, "match v { ((Point { x, y }, a), b) => x + y + a + b }", &env),
@@ -2088,7 +2336,7 @@ mod tests {
     fn nested_pattern_type_mismatch_is_an_error() {
         let ctx = context("struct Point { x: Int, y: Int }");
         let mut infer = Infer::with_context(ctx);
-        let env = TypeEnv::new().extend("pair".to_string(), Type::Tuple(vec![Type::Struct("Point".to_string()), Type::Int]));
+        let env = TypeEnv::new().extend("pair".to_string(), Type::Tuple(vec![Type::Struct("Point".to_string(), vec![]), Type::Int]));
         // Second tuple position is Int, not a Point — the NESTED
         // destructure should fail, not be silently accepted.
         infer_expr_with_err(&mut infer, "match pair { (n, Point { x, y }) => x }", &env);
@@ -2110,7 +2358,7 @@ mod tests {
              struct Line { start: Point, end: Point }\n\
              let dx (Line { start: Point { x: x0, .. }, end: Point { x: x1, .. } }) = x1 - x0",
         );
-        assert_eq!(types["dx"], fn_ty(vec![Type::Struct("Line".to_string())], Type::Int));
+        assert_eq!(types["dx"], fn_ty(vec![Type::Struct("Line".to_string(), vec![])], Type::Int));
     }
 
     #[test]
@@ -2121,7 +2369,7 @@ mod tests {
         // restriction.
         let ctx = context("struct Point { x: Int, y: Int }");
         let mut infer = Infer::with_context(ctx);
-        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string()));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "match p { Point { x: 1 | 2, y } => y }", &env);
     }
 
@@ -2140,7 +2388,7 @@ mod tests {
     #[test]
     fn match_arms_must_produce_the_same_type() {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Rectangle(Float, Float) }"));
-        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
         infer_expr_with_err(
             &mut infer,
             "match shape { Shape.Circle(r) => r, Shape.Rectangle(w, h) => true }",
@@ -2151,14 +2399,14 @@ mod tests {
     #[test]
     fn match_unknown_variant_is_an_error() {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
-        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "match shape { Shape.Triangle(a) => a }", &env);
     }
 
     #[test]
     fn match_variant_wrong_arity_is_an_error() {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
-        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "match shape { Shape.Circle(a, b) => a }", &env);
     }
 
@@ -2176,21 +2424,21 @@ mod tests {
         // `Shape.Rectangle(_, _)`) is fine; a bare `_` as a WHOLE arm
         // isn't.
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
-        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "match shape { _ => 1 }", &env);
     }
 
     #[test]
     fn match_or_pattern_is_not_yet_supported() {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Empty }"));
-        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "match shape { Shape.Circle(a) | Shape.Empty => 1 }", &env);
     }
 
     #[test]
     fn match_guard_infers_using_the_arms_own_bindings() {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
-        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
         let ty = infer_expr_with(&mut infer, "match shape { Shape.Circle(r) if r > 0.0 => r, Shape.Circle(r) => 0.0 }", &env);
         assert_eq!(ty, Type::Float);
     }
@@ -2198,7 +2446,7 @@ mod tests {
     #[test]
     fn match_guard_must_be_a_bool() {
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
-        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string()));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "match shape { Shape.Circle(r) if r => r, Shape.Circle(r) => 0.0 }", &env);
     }
 
@@ -2207,7 +2455,7 @@ mod tests {
         let mut infer = Infer::with_context(context("struct Point { x: Int, y: Int }"));
         let env = TypeEnv::new().extend(
             "p".to_string(),
-            Type::Tuple(vec![Type::Struct("Point".to_string()), Type::Int]),
+            Type::Tuple(vec![Type::Struct("Point".to_string(), vec![]), Type::Int]),
         );
         infer_expr_with_err(
             &mut infer,
@@ -2428,7 +2676,7 @@ mod tests {
             Type::Function(params, ret) => (params.clone(), (**ret).clone()),
             other => panic!("expected a function type, got {other:?}"),
         };
-        assert_eq!(ret, Type::Struct("Point".to_string()));
+        assert_eq!(ret, Type::Struct("Point".to_string(), vec![]));
     }
 
     #[test]

@@ -14,8 +14,32 @@ pub fn unify(a: &Type, b: &Type) -> Result<Subst, String> {
         | (Type::Unit, Type::Unit)
         | (Type::Range, Type::Range) => Ok(Subst::empty()),
 
-        (Type::Struct(a_name), Type::Struct(b_name)) if a_name == b_name => Ok(Subst::empty()),
-        (Type::Enum(a_name), Type::Enum(b_name)) if a_name == b_name => Ok(Subst::empty()),
+        // Nominal in NAME (still gated by `a_name == b_name` — two
+        // differently-named structs never unify no matter their
+        // arguments) but structural in ARGUMENTS once the name
+        // matches, mirroring Tuple's element-wise treatment just
+        // below. Arity between `a_args`/`b_args` is never actually
+        // mismatched in practice (both sides are instantiations of the
+        // SAME declaration once the name matches), but zipping instead
+        // of indexing costs nothing and avoids a panic if that
+        // invariant is ever violated.
+        (Type::Struct(a_name, a_args), Type::Struct(b_name, b_args)) if a_name == b_name => {
+            unify_args(a_args, b_args)
+        }
+        (Type::Enum(a_name, a_args), Type::Enum(b_name, b_args)) if a_name == b_name => {
+            unify_args(a_args, b_args)
+        }
+
+        // A `Param` reaching unification at all means SOMETHING failed
+        // to instantiate a struct/enum declaration's template before
+        // using it — every real construction/pattern site is supposed
+        // to substitute every `Param` for a fresh `Var` first (see
+        // `Type::Param`'s doc comment). Not a user-facing type
+        // mismatch; an internal-error assertion.
+        (Type::Param(name), _) | (_, Type::Param(name)) => Err(format!(
+            "internal error: unresolved generic parameter {name:?} reached unification \
+             (should have been instantiated to a fresh type variable first)"
+        )),
 
         // Checked before the general Var arms below so that unifying a
         // variable with itself is recognized as a no-op rather than
@@ -66,6 +90,26 @@ pub fn unify(a: &Type, b: &Type) -> Result<Subst, String> {
     }
 }
 
+/// Unifies two structs'/enums' type-argument lists pairwise, threading
+/// a `Subst` accumulator exactly like `Tuple`'s element-wise unify does
+/// — extracted as its own function since both `Struct` and `Enum`
+/// need the identical treatment.
+fn unify_args(a_args: &[Type], b_args: &[Type]) -> Result<Subst, String> {
+    if a_args.len() != b_args.len() {
+        return Err(format!(
+            "generic argument count mismatch: expected {}, found {}",
+            a_args.len(),
+            b_args.len()
+        ));
+    }
+    let mut subst = Subst::empty();
+    for (t1, t2) in a_args.iter().zip(b_args.iter()) {
+        let step = unify(&subst.apply(t1), &subst.apply(t2))?;
+        subst = step.compose(&subst);
+    }
+    Ok(subst)
+}
+
 fn bind_var(id: TypeVarId, ty: &Type) -> Result<Subst, String> {
     if occurs(id, ty) {
         return Err(format!("infinite type: T{id} occurs within {ty:?}"));
@@ -82,6 +126,7 @@ fn occurs(id: TypeVarId, ty: &Type) -> bool {
         Type::Var(other) => *other == id,
         Type::Function(params, ret) => params.iter().any(|p| occurs(id, p)) || occurs(id, ret),
         Type::Tuple(elems) => elems.iter().any(|e| occurs(id, e)),
+        Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(|a| occurs(id, a)),
         _ => false,
     }
 }
@@ -146,20 +191,20 @@ mod tests {
     #[test]
     fn matching_struct_types_unify() {
         assert_eq!(
-            unify(&Type::Struct("Point".to_string()), &Type::Struct("Point".to_string())).unwrap(),
+            unify(&Type::Struct("Point".to_string(), vec![]), &Type::Struct("Point".to_string(), vec![])).unwrap(),
             Subst::empty()
         );
     }
 
     #[test]
     fn different_struct_types_are_an_error() {
-        assert!(unify(&Type::Struct("Point".to_string()), &Type::Struct("Vector".to_string())).is_err());
+        assert!(unify(&Type::Struct("Point".to_string(), vec![]), &Type::Struct("Vector".to_string(), vec![])).is_err());
     }
 
     #[test]
     fn matching_enum_types_unify() {
         assert_eq!(
-            unify(&Type::Enum("Shape".to_string()), &Type::Enum("Shape".to_string())).unwrap(),
+            unify(&Type::Enum("Shape".to_string(), vec![]), &Type::Enum("Shape".to_string(), vec![])).unwrap(),
             Subst::empty()
         );
     }
@@ -169,7 +214,7 @@ mod tests {
         // Nominal typing is per-KIND, not just per-name — a struct and
         // an enum sharing a name (unusual, but not forbidden) are
         // still different types.
-        assert!(unify(&Type::Struct("Thing".to_string()), &Type::Enum("Thing".to_string())).is_err());
+        assert!(unify(&Type::Struct("Thing".to_string(), vec![]), &Type::Enum("Thing".to_string(), vec![])).is_err());
     }
 
     #[test]
@@ -203,7 +248,7 @@ mod tests {
 
     #[test]
     fn tuple_and_struct_do_not_unify() {
-        assert!(unify(&Type::Tuple(vec![Type::Int]), &Type::Struct("Point".to_string())).is_err());
+        assert!(unify(&Type::Tuple(vec![Type::Int]), &Type::Struct("Point".to_string(), vec![])).is_err());
     }
 
     #[test]

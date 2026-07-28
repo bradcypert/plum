@@ -317,6 +317,44 @@ mod tests {
     }
 
     #[test]
+    fn a_user_defined_generic_option_enum_runs_through_the_full_gated_pipeline() {
+        // The exact shape DESIGN.md specs for the built-in `Option[T]`
+        // — proven end to end as an ordinary user-declared generic
+        // enum, since the compiler doesn't inject a real builtin yet.
+        let src = "enum Option[T] { Some(T), None }\n\
+                    let unwrap_or default o = match o { Some(x) => x, None => default }\n\
+                    let use_it dummy = unwrap_or(0, Some(42))";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn a_generic_none_runs_through_the_full_gated_pipeline() {
+        let src = "enum Option[T] { Some(T), None }\n\
+                    let unwrap_or default o = match o { Some(x) => x, None => default }\n\
+                    let use_it dummy = unwrap_or(7, None)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn a_generic_struct_runs_through_the_full_gated_pipeline() {
+        let src = "struct Pair[T] { first: T, second: T }\n\
+                    let use_it dummy = { let p = Pair { first: 3, second: 4 }; match p { Pair(a, b) => a + b } }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn mismatched_generic_type_arguments_are_rejected_before_running() {
+        let src = "struct Pair[T] { first: T, second: T }\n\
+                    let use_it dummy = Pair { first: 1, second: true }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])

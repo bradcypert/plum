@@ -5,14 +5,14 @@
 // where that's impossible.
 //
 // Scope note: primitives matching DESIGN.md's unboxed set, Function,
-// and NOMINAL struct/enum types (identified by declared name only, no
-// structural comparison — two structs with identical fields are still
-// different types, matching Rust/most ML languages). Deliberately NOT
-// generic: `Struct`/`Enum` carry no type parameters, and
-// `TypeContext::from_items` (context.rs) rejects any struct/enum
-// declared with generics rather than pretending to erase them — unlike
-// a function's unused generic parameter, a generic struct FIELD's type
-// genuinely depends on the parameter, so there's nothing safe to erase.
+// and NOMINAL struct/enum types (identified by declared name AND type
+// arguments — two structs with the same name and matching arguments
+// are the same type; identical fields under a DIFFERENT name are
+// still different types, matching Rust/most ML languages). `Struct`/
+// `Enum` DO carry type parameters (`struct Pair[T] { .. }` is
+// `Type::Struct("Pair", vec![T's argument])` at each use) — see
+// `Param`'s own doc comment for how a declaration's parameter NAMES
+// (`T`) relate to a use site's concrete/metavariable ARGUMENTS.
 
 pub type TypeVarId = usize;
 
@@ -25,8 +25,33 @@ pub enum Type {
     Unit,
     Var(TypeVarId),
     Function(Vec<Type>, Box<Type>),
-    Struct(String),
-    Enum(String),
+    // The `Vec<Type>` is the struct's type ARGUMENTS at this use site —
+    // empty for a non-generic struct (matching `Enum`/every other
+    // nominal type before generics existed), one entry per declared
+    // parameter for a generic one, in DECLARED order. See `Param`'s
+    // doc comment for how a declaration turns into these.
+    Struct(String, Vec<Type>),
+    Enum(String, Vec<Type>),
+    // A generic struct/enum DECLARATION's own type parameter, named
+    // exactly as written (`T` in `struct Pair[T] { first: T, second: T
+    // }`) — this is what `TypeContext::struct_fields`/`variants`
+    // stores a field/payload's type AS, whenever that field's
+    // annotation mentions one of the struct's own declared params.
+    // Deliberately NOT a `Var`: a declaration is inferred exactly
+    // ONCE, up front, with no unification of its own to solve — `Var`
+    // is reserved for actual inference metavariables a `Subst` will
+    // eventually resolve, and reusing it here would risk exactly the
+    // kind of accidental id collision this codebase has hit before
+    // (see plum-types' test-authoring notes on hand-picked `Var` ids).
+    // A `Param` is only ever meant to exist TRANSIENTLY inside a
+    // stored declaration template — every real USE (a struct literal,
+    // pattern, or variant construction) immediately substitutes each
+    // `Param` for a FRESH `Var` scoped to that one use (mirroring how
+    // a polymorphic function's `Scheme` is instantiated fresh at each
+    // call site), so a `Param` should never reach `unify`/`Subst` in
+    // practice — `unify.rs` treats seeing one as an internal-error
+    // defensive case, not a real type mismatch.
+    Param(String),
     // `start..end` as a first-class value, not just `for`'s iterand.
     // No type parameter: every range is an `Int` range (there's no
     // `Float`/other-bound range anywhere in the language yet — see

@@ -34,6 +34,8 @@ impl Subst {
                 Box::new(self.apply(ret)),
             ),
             Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| self.apply(e)).collect()),
+            Type::Struct(name, args) => Type::Struct(name.clone(), args.iter().map(|a| self.apply(a)).collect()),
+            Type::Enum(name, args) => Type::Enum(name.clone(), args.iter().map(|a| self.apply(a)).collect()),
             other => other.clone(),
         }
     }
