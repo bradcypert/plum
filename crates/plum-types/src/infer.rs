@@ -267,7 +267,7 @@ impl Infer {
         // processed.
         for def in &defs {
             let (param_vars, ret_var) = signatures.get(&def.name).cloned().expect("just inserted above");
-            let mut body_env = global_env.clone();
+            let mut body_env = global_env.apply_subst(&acc);
             for (param, param_ty) in def.params.iter().zip(param_vars.iter()) {
                 match &param.kind {
                     ast::ParamKind::Ident(name) | ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => {
@@ -2306,6 +2306,30 @@ mod tests {
         let types = infer_program(src);
         assert_eq!(types["is_even"], fn_ty(vec![Type::Int], Type::Bool));
         assert_eq!(types["is_odd"], fn_ty(vec![Type::Int], Type::Bool));
+    }
+
+    #[test]
+    fn a_global_aliasing_a_function_declared_earlier_resolves_calls_through_it_fully() {
+        // Regression test for a real bug: `body_env` for a function was
+        // built from a bare `global_env.clone()`, never re-applying the
+        // accumulated `acc` — so a GLOBAL whose initializer merely
+        // copied another function's type (`let f = square`, no call)
+        // captured that function's still-unresolved Phase-1 placeholder
+        // type variables verbatim. Any LATER function calling through
+        // that global (`f(5)`) unified against those stale, disconnected
+        // variable ids instead of the REAL, by-then-fully-resolved
+        // signature — silently leaving the caller's own return type an
+        // unresolved variable instead of `Int`. Fixed by building
+        // `body_env` via `global_env.apply_subst(&acc)` instead of a
+        // bare `.clone()`.
+        let src = "let square x = x * x\nlet f = square\nlet g dummy = f(5)";
+        let types = infer_program(src);
+        assert_eq!(types["f"], fn_ty(vec![Type::Int], Type::Int));
+        let (_, g_ret) = match &types["g"] {
+            Type::Function(params, ret) => (params.clone(), (**ret).clone()),
+            other => panic!("expected a function type, got {other:?}"),
+        };
+        assert_eq!(g_ret, Type::Int);
     }
 
     #[test]

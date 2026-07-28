@@ -15,6 +15,16 @@ pub enum Value {
     // in its own id space (not `HeapRef`) so the two can never be
     // confused, since they're looked up in entirely different tables.
     Closure(usize),
+    // A reference to a named TOP-LEVEL function, used as a value rather
+    // than called directly — e.g. `let f = square; f(5)`, or passing
+    // `square` itself as a higher-order argument. Named by String
+    // (matching `Interpreter::functions`' own key type), not an id,
+    // since top-level functions are looked up by name, unlike closures.
+    // Calling a function DIRECTLY BY NAME (`square(5)`) still takes the
+    // pre-existing fast path in `Expr::Call` and never constructs this
+    // — it only ever appears when a function's name is evaluated in a
+    // NON-call position (see `lookup`).
+    Function(String),
 }
 
 // A closure's defining environment, captured WHOLE at creation time
@@ -155,6 +165,11 @@ impl Interpreter {
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.clone())
             .or_else(|| self.globals.get(name).cloned())
+            // A local/global binding always shadows a same-named
+            // top-level function, matching `Expr::Call`'s own fast-path
+            // precedence (a local variable holding a closure named the
+            // same as a real function still calls the closure).
+            .or_else(|| self.functions.contains_key(name).then(|| Value::Function(name.to_string())))
             .ok_or_else(|| format!("unbound variable: {name}"))
     }
 
@@ -231,27 +246,40 @@ impl Interpreter {
             },
             Expr::Call { callee, args } => {
                 // A bare name naming a known top-level function is the
-                // fast path, unchanged from before closures existed — a
-                // top-level function's name is NOT itself a value (it
-                // isn't in `env`), only callable by name directly. Only
-                // when the callee ISN'T a known top-level function name
-                // do we fall through to evaluating it as an ordinary
-                // expression, which must then produce a closure value —
-                // covers a closure literal called directly, a variable/
-                // parameter holding one, or one returned from a call.
+                // fast path, unchanged from before closures existed —
+                // this skips constructing a `Value::Function` just to
+                // immediately unwrap it again. Only taken when NOTHING
+                // local shadows the name first (a `let`/param/closure-
+                // capture binding of the same name takes precedence,
+                // matching ordinary lexical scoping and `lookup`'s own
+                // precedence — see its doc comment). When the callee
+                // ISN'T a known top-level function name (or IS shadowed)
+                // we fall through to evaluating it as an ordinary
+                // expression, which must then produce a Closure or
+                // Function value — covers a closure literal called
+                // directly, a variable/parameter holding one, a bare
+                // function name used as a value, or one returned from a
+                // call.
                 if let Expr::Var(name) = callee.as_ref() {
-                    if self.functions.contains_key(name) {
+                    let shadowed = self.env.iter().rev().any(|(n, _)| n == name);
+                    if !shadowed && self.functions.contains_key(name) {
                         let arg_values =
                             args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
                         return self.call(name, arg_values);
                     }
                 }
                 let callee_v = self.eval(callee)?;
-                let Value::Closure(id) = callee_v else {
-                    return Err(format!("cannot call {callee_v:?} — not a function or closure"));
-                };
-                let arg_values = args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
-                self.call_closure(id, arg_values)
+                match callee_v {
+                    Value::Closure(id) => {
+                        let arg_values = args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
+                        self.call_closure(id, arg_values)
+                    }
+                    Value::Function(name) => {
+                        let arg_values = args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
+                        self.call(&name, arg_values)
+                    }
+                    other => Err(format!("cannot call {other:?} — not a function or closure")),
+                }
             }
             Expr::Closure { params, body } => {
                 let id = self.next_closure_id;
@@ -890,6 +918,45 @@ mod tests {
         let src = "let double n = n * 2\n\
                     let use_it n = { let f = |x| double(x); f(n) }";
         assert_eq!(run(src, "use_it", vec![Value::Int(5)]), Value::Int(10));
+    }
+
+    // --- A bare top-level function name as a first-class value ---
+
+    #[test]
+    fn a_bare_function_name_stored_in_a_variable_can_be_called() {
+        let src = "let square x = x * x\n\
+                    let use_it n = { let f = square; f(n) }";
+        assert_eq!(run(src, "use_it", vec![Value::Int(5)]), Value::Int(25));
+    }
+
+    #[test]
+    fn a_bare_function_name_passed_as_a_higher_order_argument() {
+        // `square` itself, not a closure wrapping it — proves a
+        // top-level function is a real value usable anywhere a closure
+        // would be, not just storable in a `let`.
+        let src = "let square x = x * x\n\
+                    let apply f x = f(x)\n\
+                    let use_it n = apply(square, n)";
+        assert_eq!(run(src, "use_it", vec![Value::Int(4)]), Value::Int(16));
+    }
+
+    #[test]
+    fn a_global_aliasing_a_function_can_be_called_through() {
+        let src = "let square x = x * x\n\
+                    let f = square\n\
+                    let use_it n = f(n)";
+        assert_eq!(run(src, "use_it", vec![Value::Int(6)]), Value::Int(36));
+    }
+
+    #[test]
+    fn calling_directly_by_name_still_works_alongside_first_class_values() {
+        // A local binding of the SAME name as a real function shadows
+        // it, matching ordinary lexical scoping — `lookup`'s function
+        // fallback only kicks in when nothing else already bound the
+        // name.
+        let src = "let square x = x * x\n\
+                    let use_it n = { let square = |x| x + 1; square(n) }";
+        assert_eq!(run(src, "use_it", vec![Value::Int(5)]), Value::Int(6));
     }
 
     // --- Nested patterns ---

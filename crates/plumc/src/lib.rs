@@ -243,6 +243,24 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_top_level_function_name_as_a_value_runs_through_the_full_gated_pipeline() {
+        let src = "let square x = x * x\n\
+                    let f = square\n\
+                    let use_it n = f(n)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Int(5)]);
+        assert_eq!(result, Ok(Value::Int(25)));
+    }
+
+    #[test]
+    fn a_bare_function_name_passed_as_a_higher_order_argument_runs_through_the_full_gated_pipeline() {
+        let src = "let square x = x * x\n\
+                    let apply f x = f(x)\n\
+                    let use_it n = apply(square, n)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Int(4)]);
+        assert_eq!(result, Ok(Value::Int(16)));
+    }
+
+    #[test]
     fn for_loop_with_mistyped_range_bounds_is_rejected_before_running() {
         let src = "let bad n = for i in true..n { i }";
         let err = typecheck_and_run(src, "bad", vec![Value::Int(5)])
