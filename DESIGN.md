@@ -729,6 +729,56 @@ capture, a distinction that only exists because of the borrow checker.
 Plum doesn't expose borrows at the surface at all, so captures just
 work, with nothing to choose.
 
+**Self-referential closures — Decided (2026-07-29).** `let fib = |n| if
+n < 2 { n } else { fib(n-1) + fib(n-2) }` now works, for BOTH a
+top-level (`Global`) closure and a local block-level one — closing the
+"recursive closures that capture themselves" gap this document
+previously listed as an unresolved detail. Deliberately SELF-recursion
+only, not mutual recursion between two separately-declared closures
+(`let is_even = |n| .. is_odd(n-1) ..` / `let is_odd = |n| .. is_even
+..` calling each other) — globals are never pre-declared as a whole
+batch the way top-level FUNCTIONS already are (see the ordinary
+`Global` ordering rule elsewhere in this document: a global can only
+ever see EARLIER globals, never a later or mutually-recursive sibling),
+so only a closure's OWN name is ever made visible early.
+
+Two GENUINELY different fixes were needed, one at each layer, because
+the top-level and local cases have different root causes:
+- **Type-checking** (`plum-types`): BOTH the `Global` case (`infer_
+  program`'s Phase 1.5) and the local-block-`let` case (`infer_block`'s
+  `Stmt::Let`) needed the SAME fix — when a `let`'s value is a closure
+  LITERAL, pre-bind the `let`-bound name to a fresh placeholder type
+  BEFORE inferring the closure's body (so a recursive call inside the
+  body resolves against something, even though it isn't concretely
+  resolved yet), then unify that placeholder against the closure's
+  actual inferred type afterward. The exact same "fresh var now, unify
+  with the real type after" trick already used for top-level FUNCTION
+  self/mutual recursion (Phase 1) — just applied one level differently,
+  since a closure-valued `let` doesn't get its own pre-declaration
+  phase the way named functions do.
+- **The interpreter** (`plum-interp`) needed a fix ONLY for the LOCAL
+  case, not the global one — a real asymmetry worth remembering. A
+  `Value::Closure`'s captured environment is a one-time SNAPSHOT of
+  `self.env` taken at CREATION time; for a local `let`, that snapshot
+  happens BEFORE the `Let` node ever pushes the new name onto `self.
+  env`, so a naive implementation would leave a recursive self-call
+  unbound at runtime even after the type-checker allowed it. Fixed with
+  the classic `letrec` trick: `Expr::Let`'s eval special-cases a
+  closure-literal `value`, reserving the closure's id up front and
+  seeding `(name, Value::Closure(id))` into its OWN captured snapshot
+  (in addition to the ordinary outer-scope push). The GLOBAL case needs
+  NONE of this at the interpreter level: `Interpreter::load_program`
+  finishes evaluating and inserting every global into `self.globals`
+  BEFORE any function or closure is ever actually CALLED, and free-
+  variable lookup inside a closure body already falls through to `self.
+  globals` at CALL time (not creation time) regardless of what got
+  captured — so a global closure calling itself by name already just
+  worked, for free, once the type-checker stopped rejecting it.
+
+Needed ZERO lowering or FBIP changes — lowering is purely structural
+(it doesn't reason about binding/scoping at all), and closures were
+already outside FBIP's tracking before this change and remain so.
+
 ### Arrays — Decided (v1 scope)
 
 `Array[T]` is the first collection type — no array/list/collection
@@ -1248,18 +1298,31 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
   is now Decided too (see "Pattern grammar" above — a sentinel
   `MatchArm.tag`, no IR shape change needed), and so is `Pattern::Or`
   for tag-shaped alternatives (`A(v) | B(v) => ..`) and enum match
-  EXHAUSTIVENESS checking. Still open: a catch-all in any NON-last
-  position mixed among Ctor-tag arms, or-patterns over LITERAL
-  alternatives (`1 | 2 => ..`), and — genuinely still undecided, not
-  just deferred — whether a GUARDED arm should keep counting as
-  covering its variant for exhaustiveness purposes, or whether that
-  should tighten to match Rust's own stricter rule (see "Pattern
-  grammar" above for the full tradeoff; explicitly flagged as a
-  revisit candidate when the permissive version was chosen, not a
-  closed question).
-- Recursive closures that capture themselves (named top-level recursive
-  functions should compile to direct calls, sidestepping this; true
-  anonymous self-referential closures are a deferred detail).
+  EXHAUSTIVENESS checking. Still open/unimplemented in `match`,
+  tracked here so none of it gets lost:
+  - A catch-all in any NON-last position mixed among Ctor-tag arms
+    (only the trailing position gets the `DEFAULT_ARM_TAG` sentinel
+    treatment today).
+  - Or-patterns over LITERAL alternatives (`1 | 2 => ..`) — today's
+    `Pattern::Or` support only covers tag-shaped (Variant/Tuple/Struct)
+    alternatives.
+  - Or-patterns whose alternatives contain a NESTED Variant/Tuple/
+    Struct sub-pattern (`A((x, y)) | B((x, y)) => ..`) — rejected at
+    both `infer_or_pattern` and `lower_match` today; lowering's
+    synthetic-placeholder destructuring mechanism doesn't currently
+    compose across multiple arms sharing one body.
+  - Genuinely still UNDECIDED, not just deferred: whether a GUARDED arm
+    should keep counting as covering its variant for exhaustiveness
+    purposes, or whether that should tighten to match Rust's own
+    stricter rule (see "Pattern grammar" above for the full tradeoff;
+    explicitly flagged as a revisit candidate when the permissive
+    version was chosen — Brad said he isn't sure he prefers it — not a
+    closed question).
+- Self-referential closures are now Decided (see "Tuples and closures"
+  above — SELF-recursion only). Mutual recursion between two separately
+  -declared closure-valued globals (as opposed to two named top-level
+  FUNCTIONS, which already support mutual recursion) remains genuinely
+  unsupported — a real, separate gap, not just an oversight.
 - Standard library scope.
 - Whether/when to build the scoped incremental cycle collector for
   `Shared` values (see Memory model above — deliberately deferred until

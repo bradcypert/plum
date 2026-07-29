@@ -515,7 +515,40 @@ impl Infer {
         // global, isn't meaningful and isn't supported).
         let mut global_types: HashMap<String, Type> = HashMap::new();
         for def in &global_defs {
-            let (ty, s) = self.infer_expr(&def.body, &global_env)?;
+            // Self-referential closures (`let fib = |n| .. fib(n-1) ..`)
+            // need `def.name` visible to `def.body`'s OWN inference
+            // when `def.body` is itself a closure literal — pre-bind it
+            // to a fresh placeholder type first, same "fresh var now,
+            // unify with the real type after" trick Phase 1 above
+            // already uses for top-level FUNCTION self/mutual
+            // recursion. Deliberately SELF-recursion only, not mutual
+            // recursion between two closure-valued globals: unlike
+            // functions, globals are never pre-declared as a whole
+            // batch (see this loop's own doc comment on why a global
+            // seeing a LATER global isn't supported), so only a
+            // global's OWN name is ever added early, never a
+            // still-to-come sibling's. The interpreter needs NO
+            // matching fix for this case (unlike the local-block-let
+            // case below) — `Interpreter::load_program` evaluates every
+            // global's initializer before any closure is ever actually
+            // CALLED, and closures resolve free names through `self.
+            // globals` at call time regardless of what was captured at
+            // creation time, so a recursive call into a global name
+            // already just works once `self.globals` is fully
+            // populated.
+            let is_closure_literal = matches!(def.body, ast::Expr::Closure { .. });
+            let (ty, s) = if is_closure_literal {
+                let placeholder = self.fresh();
+                let rec_env = global_env.extend(def.name.clone(), placeholder.clone());
+                let (body_ty, s) = self.infer_expr(&def.body, &rec_env)?;
+                let mut acc2 = s;
+                let s2 = unify(&acc2.apply(&placeholder), &acc2.apply(&body_ty))
+                    .map_err(|e| format!("recursive closure {:?}: {e}", def.name))?;
+                acc2 = s2.compose(&acc2);
+                (acc2.apply(&body_ty), acc2)
+            } else {
+                self.infer_expr(&def.body, &global_env)?
+            };
             acc = s.compose(&acc);
             let resolved = acc.apply(&ty);
             global_env = global_env.extend(def.name.clone(), resolved.clone());
@@ -2406,7 +2439,30 @@ impl Infer {
                     ty,
                     ..
                 } => {
-                    let (val_ty, s) = self.infer_expr(value, &cur_env)?;
+                    // Self-referential closures (`let fib = |n| ..
+                    // fib(n-1) ..;`) need `name` visible to `value`'s
+                    // OWN inference when `value` is itself a closure
+                    // literal — pre-bind it to a fresh placeholder type
+                    // first, same trick the top-level global case in
+                    // `infer_program` uses (see that loop's own doc
+                    // comment for the full reasoning). Unlike the
+                    // global case, this ALSO needs a matching runtime
+                    // fix — see `Interpreter::eval`'s `Let` case — since
+                    // a local closure's captured environment is a
+                    // one-time SNAPSHOT taken at creation time, not a
+                    // live lookup chain the way globals are.
+                    let (val_ty, s) = if matches!(value, ast::Expr::Closure { .. }) {
+                        let placeholder = self.fresh();
+                        let rec_env = cur_env.extend(name.clone(), placeholder.clone());
+                        let (body_ty, s) = self.infer_expr(value, &rec_env)?;
+                        let mut acc2 = s;
+                        let s2 = unify(&acc2.apply(&placeholder), &acc2.apply(&body_ty))
+                            .map_err(|e| format!("recursive closure {name:?}: {e}"))?;
+                        acc2 = s2.compose(&acc2);
+                        (acc2.apply(&body_ty), acc2)
+                    } else {
+                        self.infer_expr(value, &cur_env)?
+                    };
                     acc = s.compose(&acc);
                     let mut resolved = acc.apply(&val_ty);
                     if let Some(annotation) = ty {
@@ -4312,6 +4368,23 @@ mod tests {
         let src = "let sum n acc = if n == 0 { acc } else { sum(n - 1, acc + n) }";
         let types = infer_program(src);
         assert_eq!(types["sum"], fn_ty(vec![Type::Int, Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn a_self_referential_closure_global_infers_correctly() {
+        let src = "let fib = |n| if n < 2 { n } else { fib(n - 1) + fib(n - 2) }";
+        let types = infer_program(src);
+        assert_eq!(types["fib"], fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    #[test]
+    fn a_self_referential_local_closure_infers_correctly() {
+        let src = "let use_it dummy = { let fib = |n| if n < 2 { n } else { fib(n - 1) + fib(n - 2) }; fib(5) }";
+        let types = infer_program(src);
+        let Type::Function(_, ret) = &types["use_it"] else {
+            panic!("expected a function type, got {:?}", types["use_it"]);
+        };
+        assert_eq!(*ret.as_ref(), Type::Int);
     }
 
     #[test]

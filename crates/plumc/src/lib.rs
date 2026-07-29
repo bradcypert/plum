@@ -528,6 +528,21 @@ mod tests {
     }
 
     #[test]
+    fn a_self_referential_global_closure_runs_through_the_full_gated_pipeline() {
+        let src = "let fib = |n| if n < 2 { n } else { fib(n - 1) + fib(n - 2) }\n\
+                    let use_it dummy = fib(10)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(55)));
+    }
+
+    #[test]
+    fn a_self_referential_local_closure_runs_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let fib = |n| if n < 2 { n } else { fib(n - 1) + fib(n - 2) }; fib(10) }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(55)));
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely

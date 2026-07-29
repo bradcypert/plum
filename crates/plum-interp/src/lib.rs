@@ -456,7 +456,39 @@ impl Interpreter {
                 eval_binary(op, lv, rv, &self.heap)
             }
             Expr::Let { name, value, body } => {
-                let v = self.eval(value)?;
+                // A self-referential closure (`let fib = |n| ..
+                // fib(n-1) ..; body`) needs `name` visible inside its
+                // OWN captured environment, not just the OUTER `body`
+                // below — an ordinary closure literal's `captured`
+                // snapshot is taken from `self.env` BEFORE this `Let`
+                // ever pushes `name` onto it (see the plain `Expr::
+                // Closure` case below), so a recursive call to `name`
+                // from WITHIN the closure's own body would otherwise be
+                // unbound. Reserving the closure's id up front and
+                // seeding it into its OWN captured snapshot (in
+                // addition to the ordinary `self.env` push below, for
+                // the surrounding `body` to see it too) is the classic
+                // `letrec` trick — see plum-types' `infer_block`/
+                // `infer_program` for the matching TYPE-level fix (a
+                // fresh placeholder type, unified after the fact).
+                let v = match value.as_ref() {
+                    Expr::Closure { params, body: closure_body } => {
+                        let id = self.next_closure_id;
+                        self.next_closure_id += 1;
+                        let mut captured = self.env.clone();
+                        captured.push((name.clone(), Value::Closure(id)));
+                        self.closures.insert(
+                            id,
+                            ClosureValue {
+                                params: params.clone(),
+                                body: (**closure_body).clone(),
+                                captured,
+                            },
+                        );
+                        Value::Closure(id)
+                    }
+                    _ => self.eval(value)?,
+                };
                 self.env.push((name.clone(), v));
                 let result = self.eval(body);
                 self.env.pop();
@@ -1964,6 +1996,33 @@ mod tests {
     #[test]
     fn calling_a_closure_stored_in_a_variable() {
         assert_eq!(eval("{ let f = |x| x + 1; f(5) }"), Value::Int(6));
+    }
+
+    #[test]
+    fn a_self_referential_local_closure_can_call_itself() {
+        let src = "{ let fib = |n| if n < 2 { n } else { fib(n - 1) + fib(n - 2) }; fib(10) }";
+        assert_eq!(eval(src), Value::Int(55));
+    }
+
+    #[test]
+    fn a_self_referential_local_closure_base_case_does_not_recurse() {
+        let src = "{ let fib = |n| if n < 2 { n } else { fib(n - 1) + fib(n - 2) }; fib(1) }";
+        assert_eq!(eval(src), Value::Int(1));
+    }
+
+    #[test]
+    fn an_ordinary_non_recursive_local_closure_still_works_unchanged() {
+        // Regression coverage: the self-reference binding added to
+        // EVERY `let name = |..| ..` closure's captured env (whether
+        // or not the body actually uses it) must not shadow or
+        // interfere with a closure that ISN'T recursive at all.
+        assert_eq!(eval("{ let double = |x| x * 2; double(21) }"), Value::Int(42));
+    }
+
+    #[test]
+    fn a_self_referential_closure_still_correctly_captures_outer_bindings_too() {
+        let src = "{ let step = 3; let count_by = |n| if n <= 0 { 0 } else { step + count_by(n - 1) }; count_by(2) }";
+        assert_eq!(eval(src), Value::Int(6));
     }
 
     #[test]
