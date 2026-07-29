@@ -991,6 +991,39 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![Type::Int]), acc))
             }
+            // `s.trim()` — `s` must be `Str`; evaluates to `Str`.
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "trim") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.trim()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Str, acc))
+            }
+            // `s.split(sep)` — `s` and `sep` must both be `Str`;
+            // evaluates to `Array[Str]`.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "split") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.split()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (sep_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&sep_ty), &Type::Str)
+                    .map_err(|e| format!("`.split()` argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("Array".to_string(), vec![Type::Str]), acc))
+            }
             // `arr.push(v)` — `arr` must be `Array[T]`, `v` must be
             // that SAME `T`; evaluates to a (new) `Array[T]`.
             ast::Expr::Call { callee, args, span }
@@ -4020,6 +4053,31 @@ mod tests {
     #[test]
     fn runes_on_a_non_string_is_an_error() {
         infer_err("5.runes()");
+    }
+
+    #[test]
+    fn string_trim_infers_as_str() {
+        assert_eq!(infer("\"  hi  \".trim()"), Type::Str);
+    }
+
+    #[test]
+    fn trim_on_a_non_string_is_an_error() {
+        infer_err("5.trim()");
+    }
+
+    #[test]
+    fn string_split_infers_as_array_of_str() {
+        assert_eq!(infer("\"a,b,c\".split(\",\")"), Type::Struct("Array".to_string(), vec![Type::Str]));
+    }
+
+    #[test]
+    fn string_split_argument_type_is_checked() {
+        infer_err("\"a,b,c\".split(5)");
+    }
+
+    #[test]
+    fn split_on_a_non_string_is_an_error() {
+        infer_err("5.split(\",\")");
     }
 
     #[test]

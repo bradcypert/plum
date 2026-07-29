@@ -710,6 +710,24 @@ from): unlike `.len()`/`s[i]`, UTF-8 decoding needs bit manipulation
 the IR has no operators for, so it can't be expressed as a desugaring
 into existing nodes the way `.map()`/`.filter()`/`.fold()` could be.
 
+**`.trim()`/`.split(sep)` — Decided (2026-07-28).** Rounded out the same
+evening as indexing/`.runes()`. `.trim()` follows `.concat()`'s exact
+precedent: delegates directly to Rust's own `str::trim()` (Unicode
+whitespace both ends), gets the full `StrTrim`/`StrTrimReuse` reuse-
+in-place treatment (same `Heap::dec_and_maybe_reuse_str` mechanism).
+`.split(sep)` evaluates to `Array[Str]`, delegating directly to Rust's
+own `str::split()` INCLUDING its edge-case behavior, deliberately not
+special-cased: consecutive separators yield empty-string elements, no
+match yields one whole-string element, an empty `sep` yields one
+element per character plus empty leading/trailing entries. Like
+`StrRunes`, `StrSplit` is a genuinely new primitive node with NO
+reuse-in-place counterpart — it builds a whole new array of freshly
+allocated string cells (a differently-shaped heap value), never
+transforming one existing cell in place. Because the result is an
+ordinary `Array[Str]`, `for`/`.map()`/`.filter()`/`.fold()`/indexing
+all already work on split output for free — confirmed with a dedicated
+test summing `.len()` across `for part in "...".split(",")`.
+
 **`.len()`'s shared-node trick.** `.len()` is shape-detected IDENTICALLY
 for arrays and strings at lowering time — lowering has no type
 information to tell `arr.len()` from `s.len()` apart, so both still
@@ -916,15 +934,16 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
   builtin-type parameter/return annotations, and `.push()`/`.pop()`/
   `.set()`/`.remove()`'s reuse-in-place optimization are all now
   Decided (see "Arrays" above). Strings becoming heap-backed/refcounted,
-  `.len()`, `.concat()`, heap-aware `==`, byte-indexing `s[i]`, and
-  `.runes()` are likewise now Decided (see "Strings" above). Still
-  open, for strings specifically: `split`/`trim`/`to_upper` and other
-  standard string operations, grapheme-cluster-aware operations (a
-  "rune" is a Unicode SCALAR VALUE / codepoint, not a user-perceived
-  character — a grapheme cluster like an emoji with modifiers can span
-  multiple runes; `.runes()` doesn't attempt that level), and string
-  literal PATTERN matching in `match` (a pre-existing gap, not
-  introduced by the heap-backing change).
+  `.len()`, `.concat()`, heap-aware `==`, byte-indexing `s[i]`,
+  `.runes()`, `.trim()`, and `.split(sep)` are likewise now Decided
+  (see "Strings" above). Still open, for strings specifically:
+  `to_upper`/`to_lower`/`contains`/`starts_with`/`ends_with`/`replace`
+  and other standard string operations, grapheme-cluster-aware
+  operations (a "rune" is a Unicode SCALAR VALUE / codepoint, not a
+  user-perceived character — a grapheme cluster like an emoji with
+  modifiers can span multiple runes; `.runes()` doesn't attempt that
+  level), and string literal PATTERN matching in `match` (a
+  pre-existing gap, not introduced by the heap-backing change).
 - Recursive closures that capture themselves (named top-level recursive
   functions should compile to direct calls, sidestepping this; true
   anonymous self-referential closures are a deferred detail).

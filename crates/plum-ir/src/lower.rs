@@ -630,6 +630,29 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                 base: Box::new(lower_expr(base, ctx)?),
             })
         }
+        // `s.trim()` — same shape-only precedent, zero args.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "trim") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::StrTrim {
+                base: Box::new(lower_expr(base, ctx)?),
+            })
+        }
+        // `s.split(sep)` — same shape-only precedent, one arg.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "split") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::StrSplit {
+                base: Box::new(lower_expr(base, ctx)?),
+                sep: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
         // `arr.map(f)` — desugars into an index-based loop reusing only
         // EXISTING IR nodes (`Let`, `For`, `ArrayLen`, `Index`,
         // `ArrayPush`, `Assign`), same convention as `for x in arr`'s
@@ -2682,6 +2705,27 @@ mod tests {
             lower("s.runes()"),
             ir::Expr::StrRunes {
                 base: Box::new(ir::Expr::Var("s".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn string_trim_lowers_to_a_str_trim_node() {
+        assert_eq!(
+            lower("s.trim()"),
+            ir::Expr::StrTrim {
+                base: Box::new(ir::Expr::Var("s".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn string_split_lowers_to_a_str_split_node() {
+        assert_eq!(
+            lower("s.split(\",\")"),
+            ir::Expr::StrSplit {
+                base: Box::new(ir::Expr::Var("s".to_string())),
+                sep: Box::new(ir::Expr::Str(",".to_string())),
             }
         );
     }

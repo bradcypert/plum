@@ -225,6 +225,17 @@ pub fn mark_reuse(expr: Expr) -> Expr {
         Expr::StrRunes { base } => Expr::StrRunes {
             base: Box::new(mark_reuse(*base)),
         },
+        Expr::StrTrim { base } => match base.as_ref() {
+            Expr::Var(name) => Expr::StrTrimReuse { reuse_of: name.clone() },
+            _ => Expr::StrTrim {
+                base: Box::new(mark_reuse(*base)),
+            },
+        },
+        Expr::StrTrimReuse { reuse_of } => Expr::StrTrimReuse { reuse_of },
+        Expr::StrSplit { base, sep } => Expr::StrSplit {
+            base: Box::new(mark_reuse(*base)),
+            sep: Box::new(mark_reuse(*sep)),
+        },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
             // reuse — a call result or anything else isn't something
@@ -440,6 +451,14 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         Expr::StrRunes { base } => Expr::StrRunes {
             base: Box::new(transform(*base, known_heap)),
         },
+        Expr::StrTrim { base } => Expr::StrTrim {
+            base: Box::new(transform(*base, known_heap)),
+        },
+        Expr::StrTrimReuse { reuse_of } => Expr::StrTrimReuse { reuse_of },
+        Expr::StrSplit { base, sep } => Expr::StrSplit {
+            base: Box::new(transform(*base, known_heap)),
+            sep: Box::new(transform(*sep, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -537,6 +556,9 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::StrConcat { base, other } => expr_mentions_var(base, name) || expr_mentions_var(other, name),
         Expr::StrConcatReuse { other, .. } => expr_mentions_var(other, name),
         Expr::StrRunes { base } => expr_mentions_var(base, name),
+        Expr::StrTrim { base } => expr_mentions_var(base, name),
+        Expr::StrTrimReuse { .. } => false,
+        Expr::StrSplit { base, sep } => expr_mentions_var(base, name) || expr_mentions_var(sep, name),
     }
 }
 
@@ -906,6 +928,23 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
             let (base_t, used) = mark_last_uses(*base, name, live_after);
             (Expr::StrRunes { base: Box::new(base_t) }, used)
         }
+        Expr::StrTrim { base } => {
+            let (base_t, used) = mark_last_uses(*base, name, live_after);
+            (Expr::StrTrim { base: Box::new(base_t) }, used)
+        }
+        // Evaluation order `base`, then `sep` — same "receiver, then
+        // argument" convention as `StrConcat`.
+        Expr::StrSplit { base, sep } => {
+            let (sep_t, used_sep) = mark_last_uses(*sep, name, live_after);
+            let (base_t, used_base) = mark_last_uses(*base, name, live_after || used_sep);
+            (
+                Expr::StrSplit {
+                    base: Box::new(base_t),
+                    sep: Box::new(sep_t),
+                },
+                used_base || used_sep,
+            )
+        }
         Expr::ArrayPush { array, value } => {
             let (value_t, used_value) = mark_last_uses(*value, name, live_after);
             let (array_t, used_array) = mark_last_uses(*array, name, live_after || used_value);
@@ -1009,6 +1048,7 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 used,
             )
         }
+        Expr::StrTrimReuse { reuse_of } => (Expr::StrTrimReuse { reuse_of }, live_after),
         // The reassignment TARGET (`name`) is a plain String field,
         // never an `Expr::Var` occurrence — so, unlike `Let`, there's
         // no shadowing case to special-case here even when the target
@@ -1325,6 +1365,21 @@ mod tests {
         let input = Expr::StrConcat {
             base: Box::new(call(var("get_str"), vec![])),
             other: Box::new(Expr::Str("x".to_string())),
+        };
+        assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
+    fn str_trim_on_a_plain_variable_marks_reuse() {
+        let input = Expr::StrTrim { base: Box::new(var("s")) };
+        let expected = Expr::StrTrimReuse { reuse_of: "s".to_string() };
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn str_trim_on_a_non_variable_base_is_not_a_reuse_candidate() {
+        let input = Expr::StrTrim {
+            base: Box::new(call(var("get_str"), vec![])),
         };
         assert_eq!(mark_reuse(input.clone()), input);
     }

@@ -851,6 +851,53 @@ impl Interpreter {
                 let new_addr = self.heap.alloc("0Array".to_string(), runes);
                 Ok(Value::HeapRef(new_addr))
             }
+            // `s.trim()` — delegates to Rust's own `str::trim()`
+            // (Unicode whitespace on both ends). Always allocates a
+            // fresh string cell; see `StrTrimReuse` (below) for the
+            // reuse-in-place counterpart `mark_reuse` (fbip.rs)
+            // rewrites this into when `base` is a plain variable.
+            Expr::StrTrim { base } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`.trim()` requires a String value".to_string());
+                };
+                let trimmed = self.heap.read_str(addr)?.trim().to_string();
+                let new_addr = self.heap.alloc_str(trimmed);
+                Ok(Value::HeapRef(new_addr))
+            }
+            // The reuse-in-place counterpart to `StrTrim` — see
+            // `ArrayPushReuse`'s doc comment (ir.rs) for the full
+            // safety argument, which applies identically here (same
+            // `Heap::dec_and_maybe_reuse_str` runtime refcount check).
+            Expr::StrTrimReuse { reuse_of } => {
+                let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
+                    return Err(format!("reuse target {reuse_of:?} is not a heap value"));
+                };
+                let trimmed = self.heap.read_str(addr)?.trim().to_string();
+                let new_addr = self.heap.dec_and_maybe_reuse_str(addr, trimmed)?;
+                Ok(Value::HeapRef(new_addr))
+            }
+            // `s.split(sep)` — delegates to Rust's own `str::split()`,
+            // including its edge-case behavior (see `ir::Expr::
+            // StrSplit`'s doc comment). Builds a whole new array of
+            // freshly allocated string cells — no reuse-in-place
+            // counterpart, same reasoning as `StrRunes`.
+            Expr::StrSplit { base, sep } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`.split()` requires a String value".to_string());
+                };
+                let sep_addr = match self.eval(sep)? {
+                    Value::HeapRef(addr) => addr,
+                    _ => return Err("`.split()` argument must be a String value".to_string()),
+                };
+                let base_str = self.heap.read_str(addr)?.to_string();
+                let sep_str = self.heap.read_str(sep_addr)?.to_string();
+                let parts: Vec<Value> = base_str
+                    .split(sep_str.as_str())
+                    .map(|part| Value::HeapRef(self.heap.alloc_str(part.to_string())))
+                    .collect();
+                let new_addr = self.heap.alloc("0Array".to_string(), parts);
+                Ok(Value::HeapRef(new_addr))
+            }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
                 // non-heap name (shouldn't happen given how fbip.rs
@@ -1174,6 +1221,43 @@ mod tests {
     #[test]
     fn string_runes_on_an_empty_string_is_empty() {
         assert_eq!(eval("\"\".runes().len()"), Value::Int(0));
+    }
+
+    #[test]
+    fn string_trim_removes_leading_and_trailing_whitespace() {
+        assert_eq!(eval("\"  hi  \".trim() == \"hi\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_trim_on_an_already_trimmed_string_is_unchanged() {
+        assert_eq!(eval("\"hi\".trim() == \"hi\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_trim_does_not_mutate_the_original() {
+        let src = "{ let a = \"  hi  \"; let b = a.trim(); a.len() }";
+        assert_eq!(eval(src), Value::Int(6));
+    }
+
+    #[test]
+    fn string_split_returns_the_expected_number_of_parts() {
+        assert_eq!(eval("\"a,b,c\".split(\",\").len()"), Value::Int(3));
+        assert_eq!(eval("\"a,b,c\".split(\",\")[0] == \"a\""), Value::Bool(true));
+        assert_eq!(eval("\"a,b,c\".split(\",\")[2] == \"c\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_split_on_consecutive_separators_yields_empty_elements() {
+        // Matches Rust's own `str::split` semantics exactly (not
+        // special-cased) — see `ir::Expr::StrSplit`'s doc comment.
+        assert_eq!(eval("\"a,,b\".split(\",\").len()"), Value::Int(3));
+        assert_eq!(eval("\"a,,b\".split(\",\")[1] == \"\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_split_on_a_string_with_no_separator_returns_one_element() {
+        assert_eq!(eval("\"abc\".split(\",\").len()"), Value::Int(1));
+        assert_eq!(eval("\"abc\".split(\",\")[0] == \"abc\""), Value::Bool(true));
     }
 
     #[test]
@@ -2237,6 +2321,11 @@ mod tests {
             other: Box::new(other),
         }
     }
+    fn str_trim_reuse(reuse_of: &str) -> Expr {
+        Expr::StrTrimReuse {
+            reuse_of: reuse_of.to_string(),
+        }
+    }
     fn inc(name: &str, rest: Expr) -> Expr {
         Expr::RcAnnotated {
             op: RcOp::Inc,
@@ -2480,6 +2569,41 @@ mod tests {
         assert_eq!(interp.alloc_count(), 3, "the shared path must allocate a fresh cell");
         assert_eq!(interp.heap.read_str(0).unwrap(), "hello");
         assert_eq!(interp.heap.read_str(new_addr).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn str_trim_reuse_recycles_the_same_address_when_uniquely_owned() {
+        let mut interp = Interpreter::new();
+        let program = let_("s", Expr::Str("  hi  ".to_string()), str_trim_reuse("s"));
+        let result = interp.eval(&program).unwrap();
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_eq!(addr, 0, "should reuse address 0 — the original string's cell");
+        assert_eq!(interp.alloc_count(), 1, "reuse must not count as a second allocation");
+        assert_eq!(interp.heap.read_str(addr).unwrap(), "hi");
+    }
+
+    #[test]
+    fn str_trim_reuse_allocates_fresh_and_preserves_the_alias_when_shared() {
+        let mut interp = Interpreter::new();
+        let program = let_(
+            "s",
+            Expr::Str("  hi  ".to_string()),
+            let_(
+                "saved",
+                inc("s", var("s")), // the Inc a real FBIP pass would insert here
+                str_trim_reuse("s"),
+            ),
+        );
+        let result = interp.eval(&program).unwrap();
+        let Value::HeapRef(new_addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_ne!(new_addr, 0, "must not reuse memory that `saved` still references");
+        assert_eq!(interp.alloc_count(), 2, "the shared path must allocate a fresh cell");
+        assert_eq!(interp.heap.read_str(0).unwrap(), "  hi  ");
+        assert_eq!(interp.heap.read_str(new_addr).unwrap(), "hi");
     }
 
     // --- The capstone: real Plum SOURCE TEXT, through the entire

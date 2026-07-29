@@ -302,6 +302,38 @@ mod tests {
     }
 
     #[test]
+    fn string_trim_and_split_run_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let parts = \"  a, b, c  \".trim().split(\", \"); parts.len() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(3)));
+    }
+
+    #[test]
+    fn string_split_parts_can_be_further_processed() {
+        // Combines this evening's chunks: `.split()` produces
+        // `Array[Str]`, which `.map()`/`.filter()`/`for` all already
+        // handle for free, same as `.runes()`.
+        let src = "let use_it dummy = { let mut total = 0; for part in \"ab,cde,f\".split(\",\") { total = total + part.len(); }; total }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(6)));
+    }
+
+    #[test]
+    fn string_trim_reused_after_a_reuse_in_place_operation_still_sees_its_original_contents() {
+        let src = "let use_it dummy = { let s = \"  ab  \"; let t = s.trim(); s.len() + t.len() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(8)));
+    }
+
+    #[test]
+    fn split_argument_type_mismatch_is_rejected_before_running() {
+        let src = "let use_it dummy = \"a,b\".split(5)";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely

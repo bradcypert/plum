@@ -367,6 +367,32 @@ pub enum Expr {
     StrRunes {
         base: Box<Expr>,
     },
+    // `s.trim()` — evaluates to a NEW string with leading/trailing
+    // Unicode whitespace removed (delegates directly to Rust's own
+    // `str::trim()` — same "just call the underlying Rust method"
+    // precedent as `.runes()`'s `str::chars()`). Same reuse-in-place
+    // relationship to `StrTrimReuse` that `StrConcat` has to
+    // `StrConcatReuse` — see `ArrayPushReuse`'s doc comment for the
+    // full safety argument.
+    StrTrim {
+        base: Box<Expr>,
+    },
+    StrTrimReuse {
+        reuse_of: String,
+    },
+    // `s.split(sep)` — evaluates to `Array[Str]`, one element per
+    // substring, delegating directly to Rust's own `str::split()`
+    // (including ITS edge-case behavior: consecutive separators yield
+    // empty-string elements, an empty `sep` yields one element per
+    // character plus empty leading/trailing entries — deliberately not
+    // special-cased). A genuinely new primitive node: like `StrRunes`,
+    // this builds a whole new differently-shaped heap value (an array
+    // of freshly allocated string cells) rather than transforming one
+    // existing cell, so there's no reuse-in-place counterpart.
+    StrSplit {
+        base: Box<Expr>,
+        sep: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
