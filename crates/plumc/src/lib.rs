@@ -356,6 +356,49 @@ mod tests {
     }
 
     #[test]
+    fn to_string_runs_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let n = 42; \"the answer is \".concat(n.to_string()) == \"the answer is 42\" }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn to_string_on_a_still_unresolved_generic_parameter_is_permitted_and_works_when_called() {
+        // Regression coverage: `.to_string()` used inside a generic
+        // function body (where the parameter's type isn't resolved
+        // until a call site pins it) must type-check and run
+        // correctly — this is exactly the shape `.map(|x| x.to_string())`
+        // needs, just spelled out as an ordinary top-level function.
+        let src = "let stringify x = x.to_string()\n\
+                    let use_it dummy = stringify(42) == \"42\"";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn to_string_on_an_unsupported_type_reached_only_through_a_generic_parameter_is_a_runtime_error() {
+        // The other half of the permissive-at-compile-time tradeoff:
+        // if a generic `.to_string()` call's parameter type turns out
+        // to be something unsupported (here, `Array[Int]`) ONLY
+        // discoverable at the call site rather than the definition,
+        // the interpreter's own runtime check is what catches it.
+        let src = "let stringify x = x.to_string()\n\
+                    let use_it dummy = stringify([1, 2])";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a runtime error, not a successful run");
+        assert!(err.contains("not yet supported"), "expected a not-yet-supported error, got: {err}");
+    }
+
+    #[test]
+    fn to_string_composes_with_map_and_fold_to_build_a_string() {
+        // Combines several of tonight's chunks: build a string out of
+        // numbers via .map()/.to_string()/.concat()/.fold().
+        let src = "let use_it dummy = [1, 2, 3].map(|x| x.to_string()).fold(\"\", |acc, s| acc.concat(s)) == \"123\"";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely

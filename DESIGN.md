@@ -747,6 +747,41 @@ confirming the "just call the underlying Rust method" and "Bool-
 returning ops need no reuse variant" patterns already implicit in
 `.len()` and `==`.
 
+**`.to_string()` — Decided (2026-07-28), scoped to `Int`/`Float`/`Bool`/
+`Str`.** Closes the real, glaring gap of having no way to convert a
+number into a string at all (so no way to build a display string
+dynamically). Genuinely different from every other `.method()` above:
+`base` can be ANY of four unrelated concrete types, not one specific
+type to unify against, so there's a single shared `ToString` node
+(lowering still has no type info to pick a per-type node anyway) whose
+`Interpreter::eval` dispatches on the ACTUAL `Value` variant `base`
+evaluates to at runtime — `Int`/`Float`/`Bool` render via their own
+`to_string()`, a `Str` is a no-op content-wise. Deliberately NOT yet
+extended to structs/enums/arrays/tuples — the IR carries no field
+NAMES at all (see ir.rs's own top-of-file doc comment), so even a
+minimal positional rendering needs real design, not just wiring; a
+real, separate gap, not silently pretended away.
+
+`infer.rs`'s check is deliberately PERMISSIVE when `base`'s type is
+STILL an unresolved type variable at the call site — a real regression
+was caught and fixed here (not shipped-then-patched): the first
+implementation attempt eagerly errored whenever `base`'s resolved type
+wasn't already one of the four, which wrongly rejected the natural,
+expected `[1,2,3].map(|x| x.to_string())` — inside the closure body,
+`x`'s type isn't unified against the array's element type until AFTER
+the closure's own inference finishes, so it's still a bare `Var` at
+the point `.to_string()` is checked. Fixed to only reject a type that's
+ALREADY concretely known and wrong; an unresolved var passes through,
+with the interpreter's own runtime check (already written, since it
+has to handle any `Value` regardless) as the fallback if that var
+later turns out to be something unsupported. Same "compile-time check
+when possible, runtime check as the honest fallback otherwise" split
+`Index`'s out-of-bounds checking already established — confirmed with
+a dedicated pair of tests: a generic function using `.to_string()`
+type-checks and runs correctly when called with a supported type, and
+produces a clear RUNTIME (not compile-time) error when called with an
+unsupported one only discoverable at that call site.
+
 **`.len()`'s shared-node trick.** `.len()` is shape-detected IDENTICALLY
 for arrays and strings at lowering time — lowering has no type
 information to tell `arr.len()` from `s.len()` apart, so both still
@@ -955,13 +990,15 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
   Decided (see "Arrays" above). Strings becoming heap-backed/refcounted,
   `.len()`, `.concat()`, heap-aware `==`, byte-indexing `s[i]`,
   `.runes()`, `.trim()`, `.split(sep)`, `.to_upper()`, `.to_lower()`,
-  `.contains()`, `.starts_with()`, `.ends_with()`, and `.replace()` are
-  likewise now Decided (see "Strings" above). Still open, for strings
-  specifically: other standard string operations (e.g. `repeat`, a
-  `String.from_int`/formatting story), grapheme-cluster-aware
-  operations (a "rune" is a Unicode SCALAR VALUE / codepoint, not a
-  user-perceived character — a grapheme cluster like an emoji with
-  modifiers can span multiple runes; `.runes()` doesn't attempt that
+  `.contains()`, `.starts_with()`, `.ends_with()`, `.replace()`, and
+  `.to_string()` (scoped to Int/Float/Bool/Str) are likewise now
+  Decided (see "Strings" above). Still open, for strings specifically:
+  `.to_string()` for structs/enums/arrays/tuples (needs real design —
+  the IR carries no field names to render with), other standard string
+  operations (e.g. `repeat`), grapheme-cluster-aware operations (a
+  "rune" is a Unicode SCALAR VALUE / codepoint, not a user-perceived
+  character — a grapheme cluster like an emoji with modifiers can span
+  multiple runes; `.runes()` doesn't attempt that
   level), and string literal PATTERN matching in `match` (a
   pre-existing gap, not introduced by the heap-backing change).
 - Recursive closures that capture themselves (named top-level recursive

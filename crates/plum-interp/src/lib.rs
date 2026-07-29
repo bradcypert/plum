@@ -1013,6 +1013,31 @@ impl Interpreter {
                 let new_addr = self.heap.dec_and_maybe_reuse_str(addr, replaced)?;
                 Ok(Value::HeapRef(new_addr))
             }
+            // `x.to_string()` — dispatches on the actual `Value`
+            // variant `base` evaluates to (see `ir::Expr::ToString`'s
+            // doc comment for why lowering couldn't pick a
+            // type-specific node itself). Scoped to Int/Float/Bool/Str
+            // — anything else (a struct/array/tuple `HeapRef`,
+            // closure, etc.) is a clear, reported error, not a silent
+            // best-effort rendering.
+            Expr::ToString { base } => {
+                let v = self.eval(base)?;
+                let rendered = match v {
+                    Value::Int(n) => n.to_string(),
+                    Value::Float(f) => f.to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::HeapRef(addr) if self.heap.read_str(addr).is_ok() => {
+                        self.heap.read_str(addr)?.to_string()
+                    }
+                    other => {
+                        return Err(format!(
+                            "`.to_string()` is not yet supported for {other:?} (only Int/Float/Bool/Str)"
+                        ));
+                    }
+                };
+                let new_addr = self.heap.alloc_str(rendered);
+                Ok(Value::HeapRef(new_addr))
+            }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
                 // non-heap name (shouldn't happen given how fbip.rs
@@ -1429,6 +1454,33 @@ mod tests {
     fn string_replace_does_not_mutate_the_original() {
         let src = "{ let a = \"a-b\"; let c = a.replace(\"-\", \"_\"); a == \"a-b\" }";
         assert_eq!(eval(src), Value::Bool(true));
+    }
+
+    #[test]
+    fn int_to_string_renders_the_decimal_digits() {
+        assert_eq!(eval("42.to_string() == \"42\""), Value::Bool(true));
+        assert_eq!(eval("(0 - 5).to_string() == \"-5\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn float_to_string_renders_a_decimal_point() {
+        assert_eq!(eval("3.5.to_string() == \"3.5\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn bool_to_string_renders_true_or_false() {
+        assert_eq!(eval("true.to_string() == \"true\""), Value::Bool(true));
+        assert_eq!(eval("false.to_string() == \"false\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn str_to_string_is_a_no_op_content_wise() {
+        assert_eq!(eval("\"hi\".to_string() == \"hi\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn to_string_on_an_array_is_a_runtime_error() {
+        eval_err("[1, 2].to_string()");
     }
 
     #[test]

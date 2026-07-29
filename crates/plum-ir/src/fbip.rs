@@ -279,6 +279,9 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             from: Box::new(mark_reuse(*from)),
             to: Box::new(mark_reuse(*to)),
         },
+        Expr::ToString { base } => Expr::ToString {
+            base: Box::new(mark_reuse(*base)),
+        },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
             // reuse — a call result or anything else isn't something
@@ -532,6 +535,9 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             from: Box::new(transform(*from, known_heap)),
             to: Box::new(transform(*to, known_heap)),
         },
+        Expr::ToString { base } => Expr::ToString {
+            base: Box::new(transform(*base, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -643,6 +649,7 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
             expr_mentions_var(base, name) || expr_mentions_var(from, name) || expr_mentions_var(to, name)
         }
         Expr::StrReplaceReuse { from, to, .. } => expr_mentions_var(from, name) || expr_mentions_var(to, name),
+        Expr::ToString { base } => expr_mentions_var(base, name),
     }
 }
 
@@ -1011,6 +1018,10 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
         Expr::StrRunes { base } => {
             let (base_t, used) = mark_last_uses(*base, name, live_after);
             (Expr::StrRunes { base: Box::new(base_t) }, used)
+        }
+        Expr::ToString { base } => {
+            let (base_t, used) = mark_last_uses(*base, name, live_after);
+            (Expr::ToString { base: Box::new(base_t) }, used)
         }
         Expr::StrTrim { base } => {
             let (base_t, used) = mark_last_uses(*base, name, live_after);

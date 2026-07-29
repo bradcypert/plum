@@ -723,6 +723,21 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                 to: Box::new(lower_expr(&args[1], ctx)?),
             })
         }
+        // `x.to_string()` — same shape-only precedent, zero args.
+        // Unlike every other `.method()` shape above, `base` isn't
+        // required to be ANY particular type at lowering time (there's
+        // no type info here regardless) — see `ir::Expr::ToString`'s
+        // doc comment for the runtime dispatch this implies.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "to_string") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ToString {
+                base: Box::new(lower_expr(base, ctx)?),
+            })
+        }
         // `arr.map(f)` — desugars into an index-based loop reusing only
         // EXISTING IR nodes (`Let`, `For`, `ArrayLen`, `Index`,
         // `ArrayPush`, `Assign`), same convention as `for x in arr`'s
@@ -2861,6 +2876,16 @@ mod tests {
                 base: Box::new(ir::Expr::Var("s".to_string())),
                 from: Box::new(ir::Expr::Str("x".to_string())),
                 to: Box::new(ir::Expr::Str("y".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn to_string_lowers_to_a_to_string_node() {
+        assert_eq!(
+            lower("x.to_string()"),
+            ir::Expr::ToString {
+                base: Box::new(ir::Expr::Var("x".to_string())),
             }
         );
     }

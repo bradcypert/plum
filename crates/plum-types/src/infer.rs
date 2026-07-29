@@ -1134,6 +1134,46 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((Type::Str, acc))
             }
+            // `x.to_string()` — `x` should resolve to `Int`, `Float`,
+            // `Bool`, or `Str` (checked directly against the
+            // ALREADY-RESOLVED type, not via `unify`, since there's no
+            // single target type to unify against — see `ir::Expr::
+            // ToString`'s doc comment for why this is scoped to just
+            // these four types for now). Evaluates to `Str`.
+            //
+            // Deliberately PERMISSIVE when `base`'s type is STILL an
+            // unresolved `Var` at this point (e.g. a closure parameter
+            // whose type is only pinned by a LATER unification, as in
+            // `[1,2,3].map(|x| x.to_string())` — inside the closure
+            // body, `x` isn't unified against the array's element type
+            // until after the closure's own inference finishes) —
+            // erroring here would be a false rejection of valid code.
+            // Only a CONCRETE, already-known-wrong type is rejected at
+            // compile time; an unresolved var falls through to the
+            // interpreter's own clear runtime error if it turns out to
+            // be something unsupported (same "compile-time check when
+            // possible, runtime fallback otherwise" split `Index`'s
+            // out-of-bounds already uses).
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "to_string") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let acc = s;
+                let resolved = acc.apply(&base_ty);
+                let is_concrete_and_unsupported = !matches!(
+                    resolved,
+                    Type::Int | Type::Float | Type::Bool | Type::Str | Type::Var(_)
+                );
+                if is_concrete_and_unsupported {
+                    return Err(format!(
+                        "`.to_string()` at {span:?}: not yet supported for {resolved:?} (only Int/Float/Bool/Str)"
+                    ));
+                }
+                Ok((Type::Str, acc))
+            }
             // `arr.push(v)` — `arr` must be `Array[T]`, `v` must be
             // that SAME `T`; evaluates to a (new) `Array[T]`.
             ast::Expr::Call { callee, args, span }
@@ -4259,6 +4299,49 @@ mod tests {
     #[test]
     fn replace_on_a_non_string_is_an_error() {
         infer_err("5.replace(\"h\", \"H\")");
+    }
+
+    #[test]
+    fn int_to_string_infers_as_str() {
+        assert_eq!(infer("5.to_string()"), Type::Str);
+    }
+
+    #[test]
+    fn float_to_string_infers_as_str() {
+        assert_eq!(infer("3.14.to_string()"), Type::Str);
+    }
+
+    #[test]
+    fn bool_to_string_infers_as_str() {
+        assert_eq!(infer("true.to_string()"), Type::Str);
+    }
+
+    #[test]
+    fn str_to_string_infers_as_str() {
+        assert_eq!(infer("\"hi\".to_string()"), Type::Str);
+    }
+
+    #[test]
+    fn to_string_on_an_array_is_not_yet_supported() {
+        infer_err("[1, 2].to_string()");
+    }
+
+    #[test]
+    fn to_string_on_a_still_unresolved_generic_parameter_is_permitted() {
+        // Deliberately PERMISSIVE, not an error — see the real
+        // regression this caught: `[1,2,3].map(|x| x.to_string())`
+        // needs `x`'s still-unresolved type inside the closure body to
+        // pass through here, since it's only pinned by unifying the
+        // closure's OWN function type against the array's element type
+        // afterward. A genuinely wrong concrete type (e.g. calling
+        // `f` with an Array) is still caught — just not until that
+        // concrete type is known.
+        let types = infer_program("let f x = x.to_string()");
+        let Type::Function(params, ret) = &types["f"] else {
+            panic!("expected a function type, got {:?}", types["f"]);
+        };
+        assert_eq!(*ret.as_ref(), Type::Str);
+        assert!(matches!(&params[0], Type::Var(_)), "expected an unresolved param type, got {:?}", params[0]);
     }
 
     #[test]

@@ -443,6 +443,26 @@ pub enum Expr {
         from: Box<Expr>,
         to: Box<Expr>,
     },
+    // `x.to_string()` — converts `x` to its `Str` representation.
+    // Scoped narrowly, deliberately: `x` must evaluate to an `Int`,
+    // `Float`, `Bool`, or `Str` (a no-op clone in the `Str` case) —
+    // structs/enums/arrays/tuples are NOT supported yet (a real,
+    // separate gap: the IR carries no field NAMES at all by this
+    // point — see ir.rs's own top-of-file doc comment — so even a
+    // minimal positional "Point(1, 2)"-style rendering would need new
+    // design, not just wiring). A single shared node handles all FOUR
+    // supported cases via runtime dispatch on the actual `Value`
+    // variant `base` evaluates to — lowering has no type info to pick
+    // a different node per type the way, say, `.push()` picks `Array`-
+    // specific nodes, so (same "dispatch at runtime" convention as
+    // `.len()`/`ArrayLen`) there's exactly one node here, not four.
+    // Always allocates a fresh string cell — no reuse-in-place
+    // counterpart, since `base` isn't necessarily a string itself (an
+    // `Int`'s cell, if it even had one, wouldn't be a candidate for
+    // holding string bytes).
+    ToString {
+        base: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
