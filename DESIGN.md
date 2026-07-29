@@ -672,6 +672,44 @@ exactly (a special check before ever reaching the shared per-pattern
 function), rather than teaching the shared, recursively-used function
 about a shape it should only ever see at the top.
 
+**Enum match exhaustiveness — Decided (2026-07-29), discussed via
+`AskUserQuestion` first (a real new static check with rejection risk,
+not implemented solo).** `match` over an `Enum`-typed scrutinee must
+now cover every declared variant — with a real Ctor-tag arm naming it,
+an or-pattern alternative naming it, or a valid trailing catch-all
+(`_`/bare-ident, which by construction already accepts anything) — or
+it's a COMPILE-TIME error naming exactly which variant(s) are missing,
+instead of today's `no match arm for tag` error only firing if that
+code path is ever actually reached at runtime. This is the headline
+"robust pattern matching" feature this whole family of `match` work
+has been building toward. Applies to the prelude's `Option`/`Result`
+exactly like any user-declared enum, with zero special-casing needed
+(they're ordinary ADT declarations under the hood). Struct/Tuple
+scrutinees need no such check — their single Ctor tag is trivially
+covered by any arm that type-checks against them at all. Lives entirely
+in `infer_match` (type-checking); needed ZERO lowering or interpreter
+changes, and — somewhat surprisingly — caused ZERO fallout across the
+whole pre-existing test suite when it landed (every existing match
+already either covered every variant or already had a catch-all).
+`TypeContext` gained one new accessor for this, `enum_variant_tags`
+(the REVERSE direction from the existing tag-keyed `variants` map — an
+enum name to ALL its declared tags, in declaration order).
+
+A GUARDED arm still counts as covering its variant, EVEN THOUGH the
+guard could fail at runtime and fall through to the pre-existing "no
+match arm for tag" error — a deliberate choice, matching this project's
+established "prefer false negatives over false positives" risk
+direction (the same principle behind movecheck.rs's permissiveness),
+discussed and picked explicitly over the stricter alternative (Rust's
+own rule: a variant reachable ONLY through a guarded arm is still
+flagged as non-exhaustive). **Explicitly flagged, at the point this was
+decided, as a genuine revisit candidate — not a settled-forever
+choice**: the stricter rule remains real, plausible follow-up work if
+the permissive version turns out to hide too many real bugs in
+practice; it would need tracking guarded vs. unguarded coverage
+separately, more implementation complexity than the version that
+shipped.
+
 ### Tuples and closures — Decided
 
 Tuple types are `(T1, T2, ...)`, values are `(v1, v2, ...)`. `()` is
@@ -1209,10 +1247,16 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 - A trailing catch-all mixed into an otherwise Ctor-tag-shaped `match`
   is now Decided too (see "Pattern grammar" above — a sentinel
   `MatchArm.tag`, no IR shape change needed), and so is `Pattern::Or`
-  for tag-shaped alternatives (`A(v) | B(v) => ..`). Still open: a
-  catch-all in any NON-last position mixed among Ctor-tag arms, and
-  or-patterns over LITERAL alternatives (`1 | 2 => ..`) — both remain
-  genuinely unimplemented.
+  for tag-shaped alternatives (`A(v) | B(v) => ..`) and enum match
+  EXHAUSTIVENESS checking. Still open: a catch-all in any NON-last
+  position mixed among Ctor-tag arms, or-patterns over LITERAL
+  alternatives (`1 | 2 => ..`), and — genuinely still undecided, not
+  just deferred — whether a GUARDED arm should keep counting as
+  covering its variant for exhaustiveness purposes, or whether that
+  should tighten to match Rust's own stricter rule (see "Pattern
+  grammar" above for the full tradeoff; explicitly flagged as a
+  revisit candidate when the permissive version was chosen, not a
+  closed question).
 - Recursive closures that capture themselves (named top-level recursive
   functions should compile to direct calls, sidestepping this; true
   anonymous self-referential closures are a deferred detail).

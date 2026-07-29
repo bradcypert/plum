@@ -500,6 +500,34 @@ mod tests {
     }
 
     #[test]
+    fn a_non_exhaustive_match_is_rejected_before_running() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let use_it dummy = match (Circle(1.0)) { Circle(r) => r }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+        assert!(err.contains("Square"), "expected the missing variant named, got: {err}");
+    }
+
+    #[test]
+    fn an_exhaustive_match_runs_through_the_full_gated_pipeline() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let area shape = match shape { Circle(r) => 3.14 * r * r, Square(s) => s * s }\n\
+                    let use_it dummy = area(Square(4.0))";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Float(16.0)));
+    }
+
+    #[test]
+    fn a_match_missing_none_on_the_prelude_option_is_rejected_before_running() {
+        let src = "let use_it dummy = match Some(5) { Some(x) => x }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+        assert!(err.contains("None"), "expected None named as missing, got: {err}");
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely

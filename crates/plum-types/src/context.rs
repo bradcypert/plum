@@ -20,6 +20,13 @@ pub struct TypeContext {
     struct_fields: HashMap<String, Vec<(String, Type)>>,
     // variant tag -> (owning enum name, payload types)
     variants: HashMap<String, (String, Vec<Type>)>,
+    // enum name -> every one of its declared variant tags, in
+    // DECLARATION order — the reverse direction from `variants` (which
+    // is keyed by tag, not enum name). Exists purely for match
+    // exhaustiveness checking (`Infer::infer_match`'s "does every
+    // declared variant have a covering arm" check) — nothing else
+    // needs to enumerate ALL of an enum's tags at once.
+    enum_variant_tags: HashMap<String, Vec<String>>,
     // Every declared struct/enum NAME — populated in a first pass,
     // before ANY field/payload type is resolved, so `ast_type_to_type`
     // can turn a field type that's itself a struct/enum reference
@@ -53,6 +60,7 @@ impl TypeContext {
         TypeContext {
             struct_fields: HashMap::new(),
             variants: HashMap::new(),
+            enum_variant_tags: HashMap::new(),
             struct_names: HashSet::new(),
             enum_names: HashSet::new(),
             generic_params: HashMap::new(),
@@ -118,6 +126,7 @@ impl TypeContext {
                 }
                 ast::ItemKind::Enum(decl) => {
                     let params: Vec<String> = decl.generics.iter().map(|g| g.name.clone()).collect();
+                    let mut tags = Vec::with_capacity(decl.variants.len());
                     for variant in &decl.variants {
                         let payload = variant
                             .payload
@@ -125,7 +134,9 @@ impl TypeContext {
                             .map(|t| ast_type_to_type(t, &ctx, &params))
                             .collect::<Result<Vec<_>, _>>()?;
                         ctx.variants.insert(variant.name.clone(), (decl.name.clone(), payload));
+                        tags.push(variant.name.clone());
                     }
+                    ctx.enum_variant_tags.insert(decl.name.clone(), tags);
                 }
                 _ => {}
             }
@@ -139,6 +150,15 @@ impl TypeContext {
 
     pub fn variant(&self, tag: &str) -> Option<&(String, Vec<Type>)> {
         self.variants.get(tag)
+    }
+
+    /// Every one of `name`'s declared variant TAGS, in declaration
+    /// order — `None` only if `name` isn't a declared enum at all.
+    /// `Some(&[])` is possible too (`enum Empty {}` parses, zero
+    /// variants — trivially exhaustive, any match against it needs no
+    /// arms at all to be exhaustive).
+    pub(crate) fn enum_variant_tags(&self, name: &str) -> Option<&[String]> {
+        self.enum_variant_tags.get(name).map(|v| v.as_slice())
     }
 
     pub(crate) fn is_struct(&self, name: &str) -> bool {
@@ -294,6 +314,27 @@ mod tests {
     fn unknown_variant_tag_is_none() {
         let ctx = context("enum Shape { Circle(Float) }");
         assert!(ctx.variant("Triangle").is_none());
+    }
+
+    #[test]
+    fn enum_variant_tags_lists_every_tag_in_declaration_order() {
+        let ctx = context("enum Shape { Circle(Float), Rectangle(Float, Float), Empty }");
+        assert_eq!(
+            ctx.enum_variant_tags("Shape").unwrap(),
+            &["Circle".to_string(), "Rectangle".to_string(), "Empty".to_string()]
+        );
+    }
+
+    #[test]
+    fn unknown_enum_name_has_no_variant_tags() {
+        let ctx = context("enum Shape { Circle(Float) }");
+        assert!(ctx.enum_variant_tags("NotAnEnum").is_none());
+    }
+
+    #[test]
+    fn a_struct_name_has_no_variant_tags() {
+        let ctx = context("struct Point { x: Int, y: Int }");
+        assert!(ctx.enum_variant_tags("Point").is_none());
     }
 
     #[test]

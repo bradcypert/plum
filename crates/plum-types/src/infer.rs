@@ -2054,6 +2054,69 @@ impl Infer {
             }
         }
 
+        // Exhaustiveness: if the scrutinee is a known ENUM type, every
+        // declared variant must be covered — by a real Ctor-tag arm
+        // naming it directly, an or-pattern alternative naming it, or a
+        // valid trailing catch-all (which is, by construction, already
+        // proven to accept anything — see `is_catchall_pattern`). A
+        // missing variant is a compile-time error here instead of the
+        // SAME runtime "no match arm for tag" error Ctor-matching
+        // already has for other reasons (a failed guard, for instance)
+        // — see DESIGN.md's "Pattern grammar" section for the full
+        // reasoning. Struct/Tuple scrutinees need no such check: their
+        // single Ctor tag is trivially covered by any arm that type-
+        // checks against them at all.
+        //
+        // A GUARDED arm still counts as covering its tag here — a
+        // deliberate, discussed choice (not an oversight), matching
+        // this project's established "prefer false negatives over
+        // false positives" risk direction (same principle behind
+        // movecheck.rs's permissiveness): a variant reachable ONLY
+        // through a guarded arm whose guard fails still hits the
+        // existing runtime error, unchanged — this check simply adds a
+        // compile-time net for the MORE common case (a variant with NO
+        // arm at all), without trying to reason about guard truth at
+        // compile time. Flagged as a genuine revisit candidate, not a
+        // settled-forever design: a future stricter mode requiring
+        // UNGUARDED coverage (matching Rust's own rule) is real,
+        // plausible follow-up work, not ruled out.
+        let resolved_scrutinee_ty = acc.apply(&scrutinee_ty);
+        if let Type::Enum(enum_name, _) = &resolved_scrutinee_ty {
+            if let Some(all_tags) = self.ctx.enum_variant_tags(enum_name) {
+                let has_catchall = arms.last().map(|last| is_catchall_pattern(&last.pattern)).unwrap_or(false);
+                if !has_catchall {
+                    let mut covered: HashSet<&str> = HashSet::new();
+                    for arm in arms {
+                        match &arm.pattern {
+                            ast::Pattern::Variant { path, .. } => {
+                                if let Some(tag) = path.last() {
+                                    covered.insert(tag.as_str());
+                                }
+                            }
+                            ast::Pattern::Or(alts, _) => {
+                                for alt in alts {
+                                    if let ast::Pattern::Variant { path, .. } = alt {
+                                        if let Some(tag) = path.last() {
+                                            covered.insert(tag.as_str());
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    let missing: Vec<&str> =
+                        all_tags.iter().map(String::as_str).filter(|t| !covered.contains(t)).collect();
+                    if !missing.is_empty() {
+                        return Err(format!(
+                            "match is not exhaustive — missing variant(s): {}",
+                            missing.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+
         let final_ty = result_ty.ok_or_else(|| "match with no arms has no result type".to_string())?;
         Ok((acc.apply(&final_ty), acc))
     }
@@ -3927,6 +3990,86 @@ mod tests {
         ));
         let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
         infer_expr_with_err(&mut infer, "match shape { A(Point { x, y }) | B(Point { x, y }) => x }", &env);
+    }
+
+    // --- Match exhaustiveness ---
+
+    #[test]
+    fn a_match_missing_a_variant_is_rejected() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        let err = infer_expr_with_err(&mut infer, "match shape { Circle(r) => r }", &env);
+        assert!(err.contains("not exhaustive"), "expected an exhaustiveness error, got: {err}");
+        assert!(err.contains("Square"), "expected the missing variant named, got: {err}");
+    }
+
+    #[test]
+    fn a_match_covering_every_variant_is_accepted() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match shape { Circle(r) => r, Square(r) => r }", &env),
+            Type::Float
+        );
+    }
+
+    #[test]
+    fn a_match_with_a_trailing_catchall_is_exempt_from_the_check() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        assert_eq!(infer_expr_with(&mut infer, "match shape { Circle(r) => r, _ => 0.0 }", &env), Type::Float);
+    }
+
+    #[test]
+    fn an_or_pattern_covering_the_remaining_variants_satisfies_exhaustiveness() {
+        let mut infer =
+            Infer::with_context(context("enum Shape { Circle(Float), Square(Float), Triangle(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match shape { Circle(r) => r, Square(r) | Triangle(r) => r }", &env),
+            Type::Float
+        );
+    }
+
+    #[test]
+    fn a_guarded_arm_still_counts_as_covering_its_variant() {
+        // Deliberate, discussed choice — see `infer_match`'s own doc
+        // comment on this exact tradeoff.
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match shape { Circle(r) if r > 0.0 => r, Square(r) => r }", &env),
+            Type::Float
+        );
+    }
+
+    #[test]
+    fn multiple_missing_variants_are_all_named() {
+        let mut infer =
+            Infer::with_context(context("enum Shape { Circle(Float), Square(Float), Triangle(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        let err = infer_expr_with_err(&mut infer, "match shape { Circle(r) => r }", &env);
+        assert!(err.contains("Square"), "expected Square named as missing, got: {err}");
+        assert!(err.contains("Triangle"), "expected Triangle named as missing, got: {err}");
+    }
+
+    #[test]
+    fn struct_matches_need_no_exhaustiveness_check() {
+        let mut infer = Infer::with_context(context("struct Point { x: Int, y: Int }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
+        assert_eq!(infer_expr_with(&mut infer, "match p { Point { x, y } => x + y }", &env), Type::Int);
+    }
+
+    #[test]
+    fn option_match_missing_none_is_rejected() {
+        // The prelude's `Option`/`Result` are ordinary enums under the
+        // hood (see DESIGN.md's "Pattern grammar" section) — this
+        // check applies to them exactly like any user-declared enum,
+        // with no special-casing needed.
+        let mut infer = Infer::with_context(context("enum Option[T] { Some(T), None }"));
+        let env = TypeEnv::new().extend("opt".to_string(), Type::Enum("Option".to_string(), vec![Type::Int]));
+        let err = infer_expr_with_err(&mut infer, "match opt { Some(x) => x }", &env);
+        assert!(err.contains("not exhaustive"), "expected an exhaustiveness error, got: {err}");
     }
 
     #[test]
