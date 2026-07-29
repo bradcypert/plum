@@ -44,6 +44,16 @@ pub struct LoweringContext {
     // `for x in arr`) is unaffected, since the literal-range fast path
     // and the ordinary Range-Match-unwrap fallback don't consult it.
     array_for_loops: std::collections::HashSet<plum_syntax::span::Span>,
+    // Declared `extern "C"` function names -> their signatures, gathered
+    // from every `ItemKind::Extern` block up front (same "program-aware
+    // pass before lowering expressions" reasoning as `struct_fields`).
+    // Used two ways: `lower_program` turns each entry into an
+    // `ir::ExternFn` in `Program.externs`, and `lower_expr`'s `Call`
+    // handling consults just the name set to recognize `sqrt(2.0)` as
+    // an `ExternCall` rather than an ordinary `Call` — the same
+    // "shape-detected, not a real grammar production" precedent as
+    // `variants`.
+    extern_fns: HashMap<String, ir::ExternFn>,
 }
 
 impl LoweringContext {
@@ -53,6 +63,7 @@ impl LoweringContext {
             variants: HashMap::new(),
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
+            extern_fns: HashMap::new(),
         }
     }
 
@@ -83,11 +94,56 @@ impl LoweringContext {
                         ctx.variants.insert(variant.name.clone(), variant.payload.len());
                     }
                 }
+                ast::ItemKind::Extern(block) => {
+                    for f in &block.fns {
+                        // Resolution errors (an unsupported param/return
+                        // type) surface later, from `lower_program`'s own
+                        // pass over the same blocks — see its doc
+                        // comment. `from_items` only builds LOOKUP
+                        // tables, it never returns `Result`, so a bad
+                        // type here is silently skipped rather than
+                        // reported twice.
+                        if let Ok(extern_fn) = resolve_extern_fn(f) {
+                            ctx.extern_fns.insert(f.name.clone(), extern_fn);
+                        }
+                    }
+                }
                 _ => {}
             }
         }
         ctx
     }
+}
+
+// `Int`/`Float`/`Bool` only for v1 (see ir.rs's `ExternType` doc
+// comment) — anything else, including an unrecognized path or a
+// generic type, is rejected with a clear error rather than silently
+// guessed at.
+fn resolve_extern_type(ty: &ast::Type) -> Result<ir::ExternType, String> {
+    match ty {
+        ast::Type::Path(segments, span) if segments.len() == 1 => match segments[0].as_str() {
+            "Int" => Ok(ir::ExternType::Int),
+            "Float" => Ok(ir::ExternType::Float),
+            "Bool" => Ok(ir::ExternType::Bool),
+            other => Err(format!(
+                "extern functions only support Int, Float, or Bool types, found {other:?} at {span:?}"
+            )),
+        },
+        other => Err(format!(
+            "extern functions only support Int, Float, or Bool types, found {other:?} at {:?}",
+            other.span()
+        )),
+    }
+}
+
+fn resolve_extern_fn(f: &ast::ExternFn) -> Result<ir::ExternFn, String> {
+    let param_types = f.params.iter().map(|p| resolve_extern_type(&p.ty)).collect::<Result<_, _>>()?;
+    let ret_type = f.ret_ty.as_ref().map(resolve_extern_type).transpose()?;
+    Ok(ir::ExternFn {
+        name: f.name.clone(),
+        param_types,
+        ret_type,
+    })
 }
 
 impl Default for LoweringContext {
@@ -110,6 +166,14 @@ impl Default for LoweringContext {
 pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir::Program, String> {
     let mut functions = Vec::new();
     let mut globals = Vec::new();
+    let mut externs = Vec::new();
+    for item in &program.items {
+        if let ast::ItemKind::Extern(block) = &item.kind {
+            for f in &block.fns {
+                externs.push(resolve_extern_fn(f)?);
+            }
+        }
+    }
     for item in &program.items {
         if let ast::ItemKind::Let(def) = &item.kind {
             if def.params.is_empty() {
@@ -137,7 +201,7 @@ pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir
         // functions — they're consumed elsewhere (LoweringContext) or
         // not consumed at all yet (extern, use).
     }
-    Ok(ir::Program { functions, globals })
+    Ok(ir::Program { functions, globals, externs })
 }
 
 // A tag no user struct/enum declaration can ever produce (identifiers
@@ -858,6 +922,22 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                     return Ok(ir::Expr::Ctor {
                         tag: tag.to_string(),
                         fields,
+                    });
+                }
+            }
+            // `sqrt(2.0)` where `sqrt` names a declared `extern "C"`
+            // function — a genuinely separate IR node, not a value call
+            // (see `ir::Expr::ExternCall`'s doc comment). Only this
+            // direct call-by-name shape is recognized; an extern
+            // function referenced bare (`let f = sqrt`) falls through to
+            // the ordinary `Var` case above and is a real name, not a
+            // function value, at every later stage.
+            if let ast::Expr::Ident(name, _) = callee.as_ref() {
+                if ctx.extern_fns.contains_key(name) {
+                    let ir_args = args.iter().map(|a| lower_expr(a, ctx)).collect::<Result<_, _>>()?;
+                    return Ok(ir::Expr::ExternCall {
+                        name: name.clone(),
+                        args: ir_args,
                     });
                 }
             }

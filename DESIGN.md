@@ -1112,12 +1112,31 @@ unresolved-var-defaults-to-Array regression), plumc (concat/len/
 equality/struct-field/reuse-still-correct end-to-end). Workspace is now
 865 tests, clean build, zero warnings.
 
-### Effect/unsafe tracking — Leaning
+### Effect/unsafe tracking — Decided
 
 A lightweight `unsafe`/`extern` marker that propagates from FFI call
 sites, not a full Koka-style effect system. Full effect tracking is its
 own multi-year research project layered on an already-ambitious
 language; scoped down to just marking the FFI trust boundary for v1.
+
+Implemented exactly that narrow scope: `unsafe { .. }` was already valid
+syntax (parsed since early on) but a pure no-op everywhere downstream —
+it lowered, type-checked, and move-checked transparently, gating
+nothing. It now gates exactly one thing: calling a declared `extern`
+function. `plum-types::Infer` tracks an `in_unsafe: bool`, set true for
+the duration of inferring an `unsafe` block's body (saved/restored, not
+reset to `false`, so nesting behaves sensibly) and checked the instant a
+`Call`'s callee resolves to a name declared in some `extern "C" { .. }`
+block; calling one outside `unsafe` is a type error, reported before
+lowering or interpretation ever run. This is enforced entirely at
+type-checking time — by the time `plum-ir`'s lowering produces an
+`ExternCall` node, the call has already been proven safe to make, so
+neither lowering nor the interpreter re-check anything.
+
+No other operation is `unsafe`-gated (no raw pointers, no unchecked
+arithmetic) — extending this to cover something else, should the
+language ever grow such a thing, is unscoped future work, not implied by
+today's implementation.
 
 ## Module system — Decided
 
@@ -1183,7 +1202,7 @@ use shapes;
 let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 ```
 
-## FFI and C interop
+## FFI and C interop — Decided (v1 scope)
 
 - Calling **into** existing C libraries matters more early than being
   called **from** C/other languages, though both are goals.
@@ -1193,16 +1212,93 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
   visible.
 - A `#[repr(C)]`-equivalent for structs that cross the boundary, since
   Plum's native structs may carry a refcount header or different field
-  ordering than C expects.
+  ordering than C expects. **Not yet implemented** — v1 has no struct
+  params/returns at the FFI boundary at all (see the type scope below).
 - Callbacks: C APIs often want bare function pointers. Plum closures
   that capture an environment can't be handed to C directly without a
   trampoline. Practical answer (same as Rust): only non-capturing
   closures convert directly to C function pointers; capturing ones need
-  explicit adapter machinery. Not yet designed in detail.
+  explicit adapter machinery. **Not yet implemented** — v1 has no way to
+  pass a Plum function as a C callback at all.
 - Because refcounting (not tracing GC) is the primary mechanism, values
   crossing the FFI boundary don't need root registration the way OCaml's
   GC-tracked values do — this is a concrete, structural advantage over
   OCaml's FFI story, not just a claim.
+
+### What's actually implemented (v1)
+
+`extern "C" { fn name(param: Type, ...) -> RetType; }` blocks were
+already valid grammar (parser support predates this feature); they now
+have real lowering, type-checking, and runtime behavior:
+
+- **Type scope**: `Int`/`Float`/`Bool` only (mapping to C `long long` /
+  `double` / `int`) — no strings, pointers, or structs yet. An extern
+  signature naming any other type is rejected with a clear error at
+  `TypeContext::from_items` time, before inference even runs.
+- **Calling convention**: `sqrt(2.0)` where `sqrt` names a declared
+  extern function is a genuinely separate IR node (`ir::Expr::
+  ExternCall`), not a special shape of the ordinary `Call` node — an
+  extern function isn't backed by a `Function`/`ClosureValue` at all.
+  Deliberately **not first-class**: `let f = sqrt` doesn't work, only
+  the direct `sqrt(...)` call shape is recognized (mirrors the existing
+  `channel[T]()`/`ref(v)`/`.push()` shape-detection precedent used
+  throughout `lower.rs`).
+- **`unsafe`-gating**: see "Effect/unsafe tracking" above — calling an
+  extern function outside `unsafe { .. }` is a type error.
+- **Symbol resolution**: against the CURRENT PROCESS's own dynamic
+  symbol table (covers already-linked libc/libm functions like
+  `sqrt`/`abs`), via the `libloading` crate's Unix-only `Library::this()`
+  API. `ExternBlock` has no library-path field, so there's no way to
+  `dlopen` an arbitrary `.so` yet — only symbols already loaded into the
+  running process are reachable. **Unix-only for v1** (Linux/macOS);
+  Windows has no clean equivalent to "resolve against the running
+  process" and is an honest, documented gap, not a silent wrong answer.
+  `plum-interp`/`plumc`'s own `build.rs` link `libm` explicitly so
+  standard math functions are actually present in the process to
+  resolve against — a plain Rust binary that never calls a libm function
+  itself doesn't pull it in by default.
+- **Calling mechanism**: the `libffi` crate (Rust bindings to the real C
+  `libffi`), used because the C function's signature is only known at
+  *runtime* (parsed from Plum source), not at Rust-compile-time — there's
+  no way to write a Rust `extern "C" fn` type for it ahead of time. Each
+  declared extern function resolves ONCE, in `Interpreter::load_program`,
+  into an `ExternFnHandle` (a `libffi::middle::Cif` + `CodePtr`); calling
+  it marshals `Value::{Int,Float,Bool}` arguments into the shapes
+  `libffi`'s call API expects and marshals the C return value back.
+- **Dependency-choice rationale** (recorded because it set a standing
+  policy, not just a one-off choice — see the "Self-hosting-viability"
+  note below): `libffi`/`libloading` are used ONLY inside `plum-interp`,
+  confined behind this project's OWN `ir::ExternType`/`ir::ExternFn`
+  types — `plum-ir`, `plum-types`, and the AST never see libffi's own
+  type representation. This is deliberate: an LLVM/native backend won't
+  need a *dynamic-signature* calling mechanism at all (a compiled Plum
+  program calling C becomes an ordinary call instruction via codegen),
+  so the dependency naturally stops mattering rather than needing a hard
+  "unwind." A hypothetical future self-hosted Plum interpreter facing
+  the same runtime-unknown-signature problem would conventionally link
+  against the *real* C `libffi` library directly (the same technique
+  PyPy/LuaJIT use), not port the Rust crate — so today's crate choice
+  doesn't block that path either.
+
+**Self-hosting-viability is now a standing dependency-choice policy**:
+before adding any new external Rust crate, ask whether it would paint a
+future self-hosted Plum compiler/tooling into a corner. If a crate is
+confined to solving a problem specific to the CURRENT Rust
+implementation (like dynamic-signature FFI calls in a tree-walking
+interpreter), it's fine even if a future self-hosted version would solve
+the same problem differently — the crate just stops being relevant. A
+crate whose specific *API shape* leaks into `plum-ir`/`plum-types`/the
+AST is the actual risk to avoid, not "used an external crate at all."
+
+Tests added at every layer: plum-ir (lowering + FBIP passthrough for the
+new `ExternCall` node), plum-types (unsafe-gating accept/reject,
+unsupported-type rejection, extern/global name collision, void-return-
+is-Unit), plum-interp (real `sqrt`/`abs` calls through actual libffi,
+unresolvable-symbol load error, argument-count runtime error, full
+lower-and-run pipeline), plumc (full gated pipeline, both accepting
+`unsafe`-wrapped calls and rejecting unwrapped ones before the
+interpreter ever runs). Workspace is now 1084 tests, clean build, zero
+warnings.
 
 ## Target platforms
 

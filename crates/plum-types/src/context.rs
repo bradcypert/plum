@@ -53,6 +53,18 @@ pub struct TypeContext {
     // `Num`/`Eq`/`Show` trait set makes this closed-set membership
     // checking, never general typeclass resolution.
     generic_bounds: HashMap<String, Vec<Vec<String>>>,
+    // Declared `extern "C"` function names -> (parameter types, return
+    // type) — a void return (`ret_ty: None`) is stored as `Type::Unit`,
+    // matching how an ordinary Plum function with no meaningful return
+    // value is typed, even though `ir::ExternFn::ret_type` itself keeps
+    // `None`/`Some` distinct (see that struct's doc comment for why the
+    // IR layer needs the distinction and the type layer doesn't).
+    // Populated in `from_items`'s Phase 1, alongside struct/enum names —
+    // `Infer::infer_program` uses this to pre-declare each extern
+    // function's signature into `global_env`, and `Infer::infer_expr`'s
+    // `Call` handling consults it to enforce `unsafe`-gating (see
+    // `Infer::in_unsafe`'s doc comment).
+    extern_fns: HashMap<String, (Vec<Type>, Type)>,
 }
 
 impl TypeContext {
@@ -65,6 +77,7 @@ impl TypeContext {
             enum_names: HashSet::new(),
             generic_params: HashMap::new(),
             generic_bounds: HashMap::new(),
+            extern_fns: HashMap::new(),
         }
     }
 
@@ -101,6 +114,20 @@ impl TypeContext {
                     ctx.generic_params.insert(decl.name.clone(), params);
                     let bounds = decl.generics.iter().map(|g| g.bound.clone()).collect();
                     ctx.generic_bounds.insert(decl.name.clone(), bounds);
+                }
+                ast::ItemKind::Extern(block) => {
+                    for f in &block.fns {
+                        let param_types = f
+                            .params
+                            .iter()
+                            .map(|p| extern_ast_type_to_type(&p.ty))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let ret_type = match &f.ret_ty {
+                            Some(t) => extern_ast_type_to_type(t)?,
+                            None => Type::Unit,
+                        };
+                        ctx.extern_fns.insert(f.name.clone(), (param_types, ret_type));
+                    }
                 }
                 _ => {}
             }
@@ -181,6 +208,36 @@ impl TypeContext {
     /// doc comment.
     pub(crate) fn generic_bounds(&self, name: &str) -> Option<&[Vec<String>]> {
         self.generic_bounds.get(name).map(|v| v.as_slice())
+    }
+
+    /// `name`'s declared `extern "C"` signature, if `name` was declared
+    /// in some `extern "C" { .. }` block — see `extern_fns`'s doc
+    /// comment.
+    pub(crate) fn extern_fn(&self, name: &str) -> Option<&(Vec<Type>, Type)> {
+        self.extern_fns.get(name)
+    }
+}
+
+// `Int`/`Float`/`Bool` only for v1 (see `ir::ExternType`'s doc comment
+// in plum-ir — this mirrors that same narrow scope at the type level).
+// Deliberately NOT `ast_type_to_type` itself: that function resolves
+// struct/enum/generic references too, none of which make sense as a C
+// ABI type, so a bad extern signature gets its own clear error instead
+// of silently going through a resolution path built for something else.
+fn extern_ast_type_to_type(ty: &ast::Type) -> Result<Type, String> {
+    match ty {
+        ast::Type::Path(segments, span) if segments.len() == 1 => match segments[0].as_str() {
+            "Int" => Ok(Type::Int),
+            "Float" => Ok(Type::Float),
+            "Bool" => Ok(Type::Bool),
+            other => Err(format!(
+                "extern functions only support Int, Float, or Bool types, found {other:?} at {span:?}"
+            )),
+        },
+        other => Err(format!(
+            "extern functions only support Int, Float, or Bool types, found {other:?} at {:?}",
+            other.span()
+        )),
     }
 }
 

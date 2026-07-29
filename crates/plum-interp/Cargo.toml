@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 plum-ir = { path = "../plum-ir" }
+libffi = "4"
+libloading = "0.8"
 
 [dev-dependencies]
 plum-syntax = { path = "../plum-syntax" }

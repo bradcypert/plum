@@ -1,6 +1,6 @@
 mod heap;
 
-use plum_ir::ir::{BinOp, Expr, Function, Program, RcOp, UnOp};
+use plum_ir::ir::{BinOp, Expr, ExternType, Function, Program, RcOp, UnOp};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -197,6 +197,60 @@ struct ClosureValue {
     captured: Vec<(String, Value)>,
 }
 
+// A resolved, ready-to-call `extern "C"` function — built ONCE, in
+// `load_program`, from its declared `ir::ExternFn` signature. Confined
+// entirely to this crate (see DESIGN.md's "FFI and C interop" section):
+// `ir::ExternFn`/`ExternType` are this project's OWN types, so swapping
+// out `libffi`/`libloading` later only ever touches this struct and the
+// two functions that build/invoke it, never `plum-ir` or `plum-types`.
+#[derive(Debug, Clone)]
+struct ExternFnHandle {
+    cif: libffi::middle::Cif,
+    code: libffi::middle::CodePtr,
+    param_types: Vec<ExternType>,
+    ret_type: Option<ExternType>,
+}
+
+fn extern_type_to_ffi(ty: ExternType) -> libffi::middle::Type {
+    match ty {
+        // C `long long` / `double` / `int` — see `ir::ExternType`'s doc
+        // comment for why v1 stops at this narrow, fixed-width set.
+        ExternType::Int => libffi::middle::Type::i64(),
+        ExternType::Float => libffi::middle::Type::f64(),
+        ExternType::Bool => libffi::middle::Type::i32(),
+    }
+}
+
+// Resolves `f.name` against the CURRENT PROCESS's own dynamic symbol
+// table (covers already-linked libc functions like `sqrt`/`abs`, since
+// `ExternBlock` has no library-path field yet to `dlopen` something
+// else) and builds the `libffi` call interface for it. Unix-only for
+// v1 — `libloading::os::unix::Library::this()`-style "resolve against
+// the running process" has no clean cross-platform equivalent, an
+// honest, documented gap rather than a silently wrong Windows behavior
+// (see DESIGN.md's "FFI and C interop" section).
+fn resolve_extern_fn(f: &plum_ir::ir::ExternFn) -> Result<ExternFnHandle, String> {
+    let lib = libloading::os::unix::Library::this();
+    let symbol = unsafe {
+        lib.get::<*const std::ffi::c_void>(f.name.as_bytes())
+            .map_err(|e| format!("failed to resolve extern function {:?}: {e}", f.name))?
+    };
+    let code = libffi::middle::CodePtr(symbol.as_raw_ptr() as *mut std::ffi::c_void);
+    let arg_types: Vec<libffi::middle::Type> =
+        f.param_types.iter().map(|t| extern_type_to_ffi(*t)).collect();
+    let ret_ffi_type = match f.ret_type {
+        Some(t) => extern_type_to_ffi(t),
+        None => libffi::middle::Type::void(),
+    };
+    let cif = libffi::middle::Cif::new(arg_types, ret_ffi_type);
+    Ok(ExternFnHandle {
+        cif,
+        code,
+        param_types: f.param_types.clone(),
+        ret_type: f.ret_type,
+    })
+}
+
 // A flat, innermost-last scope stack — `let` pushes one entry, evaluates
 // its body, then pops. Variable lookup scans from the end so shadowing
 // (an inner `let x` hiding an outer one) falls out for free, and
@@ -222,6 +276,12 @@ pub struct Interpreter {
     // in its own permanent table instead. `lookup` falls back here
     // after scanning `env` comes up empty.
     globals: HashMap<String, Value>,
+    // Resolved `extern "C"` functions — see `ExternFnHandle`'s doc
+    // comment. Populated once by `load_program`; empty in a task
+    // thread's own `Interpreter::new()` (see `Expr::Spawn`'s handling),
+    // an honest v1 gap — an extern call inside a spawned block fails
+    // with "unknown extern function" rather than silently working.
+    extern_fns: HashMap<String, ExternFnHandle>,
 }
 
 impl Interpreter {
@@ -233,6 +293,7 @@ impl Interpreter {
             closures: HashMap::new(),
             next_closure_id: 0,
             globals: HashMap::new(),
+            extern_fns: HashMap::new(),
         }
     }
 
@@ -249,6 +310,10 @@ impl Interpreter {
     pub fn load_program(&mut self, program: &Program) -> Result<(), String> {
         for f in &program.functions {
             self.functions.insert(f.name.clone(), f.clone());
+        }
+        for extern_fn in &program.externs {
+            let handle = resolve_extern_fn(extern_fn)?;
+            self.extern_fns.insert(extern_fn.name.clone(), handle);
         }
         for g in &program.globals {
             let value = self.eval(&g.value)?;
@@ -538,6 +603,67 @@ impl Interpreter {
                         self.call(&name, arg_values)
                     }
                     other => Err(format!("cannot call {other:?} — not a function or closure")),
+                }
+            }
+            // `sqrt(2.0)` — a call to a resolved `extern "C"` function
+            // (see `ExternFnHandle`'s doc comment). By the time this
+            // node exists, `plum-types` has already proven the call
+            // site is lexically inside an `unsafe` block; nothing here
+            // re-checks that.
+            Expr::ExternCall { name, args } => {
+                let handle = self
+                    .extern_fns
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| format!("unknown extern function: {name}"))?;
+                if handle.param_types.len() != args.len() {
+                    return Err(format!(
+                        "{name} expects {} argument(s), found {}",
+                        handle.param_types.len(),
+                        args.len()
+                    ));
+                }
+                let arg_values = args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
+                // Marshalled owned locals — kept alive across the call
+                // since `libffi::middle::Arg` only borrows them.
+                enum Marshaled {
+                    Int(i64),
+                    Float(f64),
+                    Bool(i32),
+                }
+                let mut marshaled = Vec::with_capacity(arg_values.len());
+                for (v, ty) in arg_values.iter().zip(&handle.param_types) {
+                    let m = match (v, ty) {
+                        (Value::Int(n), ExternType::Int) => Marshaled::Int(*n),
+                        (Value::Float(f), ExternType::Float) => Marshaled::Float(*f),
+                        (Value::Bool(b), ExternType::Bool) => Marshaled::Bool(if *b { 1 } else { 0 }),
+                        (other, ty) => {
+                            return Err(format!("{name}: argument {other:?} does not match declared type {ty:?}"))
+                        }
+                    };
+                    marshaled.push(m);
+                }
+                let ffi_args: Vec<libffi::middle::Arg> = marshaled
+                    .iter()
+                    .map(|m| match m {
+                        Marshaled::Int(n) => libffi::middle::arg(n),
+                        Marshaled::Float(f) => libffi::middle::arg(f),
+                        Marshaled::Bool(b) => libffi::middle::arg(b),
+                    })
+                    .collect();
+                unsafe {
+                    match handle.ret_type {
+                        Some(ExternType::Int) => Ok(Value::Int(handle.cif.call(handle.code, &ffi_args))),
+                        Some(ExternType::Float) => Ok(Value::Float(handle.cif.call(handle.code, &ffi_args))),
+                        Some(ExternType::Bool) => {
+                            let raw: i32 = handle.cif.call(handle.code, &ffi_args);
+                            Ok(Value::Bool(raw != 0))
+                        }
+                        None => {
+                            let (): () = handle.cif.call(handle.code, &ffi_args);
+                            Ok(Value::Unit)
+                        }
+                    }
                 }
             }
             Expr::Closure { params, body } => {
@@ -3450,5 +3576,108 @@ mod tests {
             args: vec![],
         };
         assert!(Interpreter::new().eval(&call_expr).is_err());
+    }
+
+    #[test]
+    fn extern_call_invokes_a_real_libc_function() {
+        let program = Program {
+            functions: vec![],
+            globals: vec![],
+            externs: vec![plum_ir::ir::ExternFn {
+                name: "sqrt".to_string(),
+                param_types: vec![ExternType::Float],
+                ret_type: Some(ExternType::Float),
+            }],
+        };
+        let mut interp = Interpreter::new();
+        interp.load_program(&program).expect("load_program should resolve sqrt");
+        let result = interp
+            .eval(&Expr::ExternCall {
+                name: "sqrt".to_string(),
+                args: vec![Expr::Float(16.0)],
+            })
+            .expect("eval of extern call should succeed");
+        assert_eq!(result, Value::Float(4.0));
+    }
+
+    #[test]
+    fn extern_call_marshals_int_and_bool_args_and_return() {
+        // `abs` — a plain libc function taking and returning a C `int`,
+        // covering the Int leg of the v1 ABI type scope in addition to
+        // Float (see the `sqrt` test above).
+        let program = Program {
+            functions: vec![],
+            globals: vec![],
+            externs: vec![plum_ir::ir::ExternFn {
+                name: "abs".to_string(),
+                param_types: vec![ExternType::Int],
+                ret_type: Some(ExternType::Int),
+            }],
+        };
+        let mut interp = Interpreter::new();
+        interp.load_program(&program).expect("load_program should resolve abs");
+        let result = interp
+            .eval(&Expr::ExternCall {
+                name: "abs".to_string(),
+                args: vec![Expr::Int(-7)],
+            })
+            .expect("eval of extern call should succeed");
+        assert_eq!(result, Value::Int(7));
+    }
+
+    #[test]
+    fn extern_call_through_the_full_lower_and_run_pipeline() {
+        let src = r#"
+            extern "C" {
+                fn sqrt(x: Float) -> Float;
+            }
+            let result = unsafe { sqrt(25.0) }
+        "#;
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap();
+        let ctx = LoweringContext::from_items(&program.items);
+        let ir_program = lower_program(&program, &ctx).unwrap();
+
+        let mut interp = Interpreter::new();
+        interp.load_program(&ir_program).unwrap();
+        assert_eq!(interp.globals.get("result"), Some(&Value::Float(5.0)));
+    }
+
+    #[test]
+    fn extern_call_to_an_unresolvable_symbol_is_a_load_error() {
+        let program = Program {
+            functions: vec![],
+            globals: vec![],
+            externs: vec![plum_ir::ir::ExternFn {
+                name: "definitely_not_a_real_libc_symbol_xyz".to_string(),
+                param_types: vec![],
+                ret_type: None,
+            }],
+        };
+        let err = Interpreter::new().load_program(&program).expect_err("expected symbol resolution to fail");
+        assert!(err.contains("definitely_not_a_real_libc_symbol_xyz"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extern_call_with_wrong_argument_count_is_a_runtime_error() {
+        let program = Program {
+            functions: vec![],
+            globals: vec![],
+            externs: vec![plum_ir::ir::ExternFn {
+                name: "sqrt".to_string(),
+                param_types: vec![ExternType::Float],
+                ret_type: Some(ExternType::Float),
+            }],
+        };
+        let mut interp = Interpreter::new();
+        interp.load_program(&program).unwrap();
+        let err = interp
+            .eval(&Expr::ExternCall {
+                name: "sqrt".to_string(),
+                args: vec![],
+            })
+            .expect_err("expected argument count mismatch to fail");
+        assert!(err.contains("expects 1 argument"), "unexpected error: {err}");
     }
 }

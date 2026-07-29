@@ -47,6 +47,7 @@ pub fn optimize_program(program: Program) -> Program {
                 value: optimize(g.value),
             })
             .collect(),
+        externs: program.externs,
     }
 }
 
@@ -77,6 +78,10 @@ pub fn mark_reuse(expr: Expr) -> Expr {
         },
         Expr::Call { callee, args } => Expr::Call {
             callee: Box::new(mark_reuse(*callee)),
+            args: args.into_iter().map(mark_reuse).collect(),
+        },
+        Expr::ExternCall { name, args } => Expr::ExternCall {
+            name,
             args: args.into_iter().map(mark_reuse).collect(),
         },
         Expr::Ctor { tag, fields } => Expr::Ctor {
@@ -360,6 +365,10 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             callee: Box::new(transform(*callee, known_heap)),
             args: args.into_iter().map(|a| transform(a, known_heap)).collect(),
         },
+        Expr::ExternCall { name, args } => Expr::ExternCall {
+            name,
+            args: args.into_iter().map(|a| transform(a, known_heap)).collect(),
+        },
         Expr::Ctor { tag, fields } => Expr::Ctor {
             tag,
             fields: fields.into_iter().map(|f| transform(f, known_heap)).collect(),
@@ -612,6 +621,7 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::Call { callee, args } => {
             expr_mentions_var(callee, name) || args.iter().any(|a| expr_mentions_var(a, name))
         }
+        Expr::ExternCall { args, .. } => args.iter().any(|a| expr_mentions_var(a, name)),
         Expr::Ctor { fields, .. } => fields.iter().any(|f| expr_mentions_var(f, name)),
         Expr::CtorReuse { fields, .. } => fields.iter().any(|f| expr_mentions_var(f, name)),
         Expr::RcAnnotated { rest, .. } => expr_mentions_var(rest, name),
@@ -754,6 +764,23 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                     args: new_args,
                 },
                 used_callee || acc_used,
+            )
+        }
+        Expr::ExternCall { name: fn_name, args } => {
+            let mut acc_used = live_after;
+            let mut new_args = Vec::with_capacity(args.len());
+            for a in args.into_iter().rev() {
+                let (a_t, used) = mark_last_uses(a, name, acc_used);
+                acc_used = acc_used || used;
+                new_args.push(a_t);
+            }
+            new_args.reverse();
+            (
+                Expr::ExternCall {
+                    name: fn_name,
+                    args: new_args,
+                },
+                acc_used,
             )
         }
         Expr::Ctor { tag, fields } => {
@@ -1987,6 +2014,7 @@ mod tests {
                 body: let_("p", ctor("Point", vec![int(1), int(2)]), var("p")),
             }],
             globals: vec![],
+            externs: vec![],
         };
         let optimized = optimize_program(program);
         assert_eq!(optimized.functions.len(), 1);
@@ -2012,6 +2040,7 @@ mod tests {
                 },
             ],
             globals: vec![],
+            externs: vec![],
         };
         let optimized = optimize_program(program);
         assert_eq!(optimized.functions[0].name, "first");
@@ -2028,6 +2057,7 @@ mod tests {
                 name: "origin".to_string(),
                 value: let_("p", ctor("Point", vec![int(1), int(2)]), var("p")),
             }],
+            externs: vec![],
         };
         let optimized = optimize_program(program);
         assert_eq!(optimized.globals[0].name, "origin");

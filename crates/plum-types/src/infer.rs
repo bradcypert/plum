@@ -206,6 +206,15 @@ pub struct Infer {
     // which of the two totally different desugarings — Range-Match-
     // unwrap vs. index-based array loop — applies.
     array_for_loops: std::collections::HashSet<plum_syntax::span::Span>,
+    // Whether the expression currently being inferred is lexically
+    // inside an `unsafe { .. }` block — toggled true/false around
+    // `ast::Expr::Unsafe`'s own handling, not a stack (nested `unsafe`
+    // just leaves it `true`; there's no reason to ever set it back to
+    // `false` partway through an outer `unsafe` block). Consulted only
+    // at a `Call` whose callee names a declared `extern` function (see
+    // `TypeContext::extern_fn`) — DESIGN.md's "Effect/unsafe tracking"
+    // section's whole scope, not a general Koka-style effect system.
+    in_unsafe: bool,
 }
 
 impl Infer {
@@ -215,6 +224,7 @@ impl Infer {
             ctx: crate::context::TypeContext::new(),
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
+            in_unsafe: false,
         }
     }
 
@@ -228,6 +238,7 @@ impl Infer {
             ctx,
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
+            in_unsafe: false,
         }
     }
 
@@ -483,6 +494,35 @@ impl Infer {
         // regardless of which one a caller probably meant). Checked
         // here, before anything else touches `signatures`/`global_defs`.
         let mut declared_names: HashSet<String> = HashSet::new();
+
+        // Phase 0: declared `extern "C"` functions — their signatures
+        // are already fully concrete (no fresh type variables needed,
+        // unlike an ordinary function's Phase 1 below, since an extern
+        // signature can never be recursive or need inference of its
+        // own). `TypeContext::from_items` already resolved and
+        // validated each one; this just seeds `global_env` so an
+        // ordinary `Call` against the name type-checks through the
+        // normal path once `unsafe`-gating (see `in_unsafe`) lets it
+        // through. Extern names share the same top-level namespace as
+        // functions/globals — checked here too, so `extern "C" { fn
+        // sqrt(..); } let sqrt = 1` collides loudly instead of one
+        // silently shadowing the other.
+        for item in &program.items {
+            if let ast::ItemKind::Extern(block) = &item.kind {
+                for f in &block.fns {
+                    if !declared_names.insert(f.name.clone()) {
+                        return Err(format!("{:?} is already declared (at {:?})", f.name, f.span));
+                    }
+                    let (param_types, ret_type) = self
+                        .ctx
+                        .extern_fn(&f.name)
+                        .cloned()
+                        .ok_or_else(|| format!("internal error: extern function {:?} not in context", f.name))?;
+                    let fn_ty = Type::Function(param_types, Box::new(ret_type));
+                    global_env = global_env.extend(f.name.clone(), fn_ty);
+                }
+            }
+        }
 
         for item in &program.items {
             if let ast::ItemKind::Let(def) = &item.kind {
@@ -1446,6 +1486,21 @@ impl Infer {
                 // against the variant's real owning enum, matching that
                 // same established precedent (tags are looked up by
                 // name alone).
+                // `sqrt(2.0)` where `sqrt` names a declared `extern
+                // "C"` function — enforce `unsafe`-gating right here,
+                // before falling through to the ordinary call-inference
+                // path below (which, once this check passes, handles an
+                // extern call exactly like any other named call: its
+                // signature is already sitting in `global_env`, seeded
+                // by `infer_program`'s own extern pre-declaration pass
+                // — see that function's doc comment).
+                if let ast::Expr::Ident(name, _) = callee.as_ref() {
+                    if self.ctx.extern_fn(name).is_some() && !self.in_unsafe {
+                        return Err(format!(
+                            "calling extern function {name:?} requires being inside an unsafe block, at {span:?}"
+                        ));
+                    }
+                }
                 let variant_tag = match callee.as_ref() {
                     ast::Expr::Ident(name, _) => Some(name.as_str()),
                     ast::Expr::Field { name, .. } => Some(name.as_str()),
@@ -1515,11 +1570,23 @@ impl Infer {
             ast::Expr::Match { scrutinee, arms, .. } => self.infer_match(scrutinee, arms, env),
             ast::Expr::Select { arms, span } => self.infer_select(arms, *span, env),
             ast::Expr::Closure { params, body, .. } => self.infer_closure(params, body, env),
-            // `unsafe` gates nothing at the type level either — see
-            // lower.rs's identical reasoning for why it lowers
-            // transparently. Whatever the block's type is, that's this
-            // expression's type too.
-            ast::Expr::Unsafe(block, _) => self.infer_block(block, env),
+            // `unsafe` doesn't change the block's TYPE (its type is
+            // whatever the block's own type is, same as a plain block)
+            // — but unlike before extern functions existed, it's no
+            // longer a pure no-op: entering it is what makes an extern
+            // call inside legal (see `in_unsafe`'s doc comment and the
+            // `Call` case below). Saves/restores rather than assuming
+            // `false` on the way out, so `unsafe { unsafe { .. } }`
+            // (silly but not rejected) and an `unsafe` block nested
+            // inside a closure defined outside one both behave
+            // correctly.
+            ast::Expr::Unsafe(block, _) => {
+                let was_unsafe = self.in_unsafe;
+                self.in_unsafe = true;
+                let result = self.infer_block(block, env);
+                self.in_unsafe = was_unsafe;
+                result
+            }
             // `spawn { block }` — DESIGN.md's heap-ownership-across-
             // tasks blocker is now Decided (deep-copy on crossing, see
             // `plum-interp`), so this just infers the block's type and
@@ -5347,6 +5414,90 @@ mod tests {
     fn infer_program_zero_param_let_is_a_global() {
         let types = infer_program("let x = 5");
         assert_eq!(types["x"], Type::Int);
+    }
+
+    // --- extern "C" / unsafe ---
+
+    #[test]
+    fn extern_call_inside_unsafe_type_checks() {
+        let types = infer_program(
+            r#"
+            extern "C" {
+                fn sqrt(x: Float) -> Float;
+            }
+            let result = unsafe { sqrt(16.0) }
+            "#,
+        );
+        assert_eq!(types["result"], Type::Float);
+    }
+
+    #[test]
+    fn extern_call_outside_unsafe_is_an_error() {
+        let err = infer_program_err(
+            r#"
+            extern "C" {
+                fn sqrt(x: Float) -> Float;
+            }
+            let result = sqrt(16.0)
+            "#,
+        );
+        assert!(err.contains("unsafe"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extern_call_with_wrong_argument_type_inside_unsafe_is_still_an_error() {
+        let err = infer_program_err(
+            r#"
+            extern "C" {
+                fn sqrt(x: Float) -> Float;
+            }
+            let result = unsafe { sqrt(true) }
+            "#,
+        );
+        assert!(!err.contains("unsafe"), "should be a type mismatch, not an unsafe-gating error: {err}");
+    }
+
+    #[test]
+    fn extern_function_with_no_return_type_is_unit() {
+        let types = infer_program(
+            r#"
+            extern "C" {
+                fn srand(seed: Int);
+            }
+            let result = unsafe { srand(1) }
+            "#,
+        );
+        assert_eq!(types["result"], Type::Unit);
+    }
+
+    #[test]
+    fn extern_function_name_colliding_with_a_global_is_an_error() {
+        let err = infer_program_err(
+            r#"
+            extern "C" {
+                fn sqrt(x: Float) -> Float;
+            }
+            let sqrt = 1
+            "#,
+        );
+        assert!(err.contains("already declared"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extern_function_with_an_unsupported_type_is_rejected() {
+        let tokens = Lexer::new(
+            r#"
+            extern "C" {
+                fn foo(x: Str) -> Int;
+            }
+            "#,
+        )
+        .tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap();
+        let err = crate::context::TypeContext::from_items(&program.items)
+            .expect_err("expected an unsupported extern param type to be rejected");
+        assert!(err.contains("Int, Float, or Bool"), "unexpected error: {err}");
     }
 
     #[test]

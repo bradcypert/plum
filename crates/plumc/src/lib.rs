@@ -94,6 +94,30 @@ mod tests {
     }
 
     #[test]
+    fn extern_call_inside_unsafe_runs_through_the_full_gated_pipeline() {
+        let src = r#"
+            extern "C" {
+                fn sqrt(x: Float) -> Float;
+            }
+            let main x = unsafe { sqrt(x) }
+        "#;
+        let result = typecheck_and_run(src, "main", vec![Value::Float(9.0)]);
+        assert_eq!(result, Ok(Value::Float(3.0)));
+    }
+
+    #[test]
+    fn extern_call_outside_unsafe_is_rejected_before_it_ever_reaches_the_interpreter() {
+        let src = r#"
+            extern "C" {
+                fn sqrt(x: Float) -> Float;
+            }
+            let main x = sqrt(x)
+        "#;
+        let err = typecheck_and_run(src, "main", vec![Value::Float(9.0)]).expect_err("expected a type error");
+        assert!(err.contains("unsafe"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn ill_typed_program_is_rejected_before_it_ever_reaches_the_interpreter() {
         // `n` is inferred Int from `n == 0`, so passing it to `want_bool`
         // (which requires a Bool) is a real type error. Before wiring,

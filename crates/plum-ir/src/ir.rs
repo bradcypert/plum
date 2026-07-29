@@ -90,6 +90,25 @@ pub enum Expr {
         callee: Box<Expr>,
         args: Vec<Expr>,
     },
+    // `sqrt(2.0)` where `sqrt` names a DECLARED `extern "C"` function —
+    // a genuinely separate node from `Call`, not just a special callee
+    // shape reusing it: an extern function isn't backed by a
+    // `Function`/`ClosureValue` at all, it's resolved once (via
+    // `libffi`/`libloading` — see `Interpreter::load_program`) into a
+    // real foreign code pointer this node's `Interpreter::eval` case
+    // invokes directly. Deliberately NOT a first-class value the way an
+    // ordinary top-level function name is (`let f = sqrt` doesn't
+    // work) — only this direct-call shape is recognized, by both
+    // `lower.rs` and `plum-types`, mirroring the same "shape-detected,
+    // not a general value" precedent `channel[T]()`/`ref(v)` already
+    // established. `unsafe` gating (DESIGN.md's "Effect/unsafe
+    // tracking" section) is enforced entirely at type-checking time,
+    // before this node is ever produced — by the time lowering/eval see
+    // it, the call was already proven to be inside an `unsafe` block.
+    ExternCall {
+        name: String,
+        args: Vec<Expr>,
+    },
     // A heap-allocated, tagged value with positional fields — the
     // minimal representation of "a struct or an enum variant" this IR
     // needs. E.g. `Ctor("Point", [x, y])` or `Ctor("Cons", [head, tail])`.
@@ -535,19 +554,55 @@ pub struct Function {
 
 // A zero-parameter top-level `let` — a plain, eagerly-evaluated value,
 // not a function. `Program.globals` is ORDERED: a global's `value` may
-// only reference EARLIER globals (never a later one, never itself —
-// there's no lazy/recursive-let story here), since a real interpreter
-// evaluates them once, in this exact order, before anything else runs.
+// only reference EARLIER globals, never a LATER one (a real interpreter
+// evaluates them once, in this exact order, before anything else runs).
 // Referencing any function is fine regardless of order, since a
-// function isn't evaluated until called.
+// function isn't evaluated until called. Self-reference IS supported,
+// but only through the narrow `letrec`-style trick a closure-literal
+// `value` gets (see `Interpreter::eval`'s `Let` case and `plum-types`'
+// matching type-level fix) — it's not a general "any global can see
+// itself" story, just enough for a self-referential closure.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Global {
     pub name: String,
     pub value: Expr,
 }
 
+// A C ABI type an `extern` function's parameter or return type resolved
+// to — deliberately a small, closed v1 set (see `ExternFn`'s own doc
+// comment for the full scope note). Kept as this project's OWN enum,
+// not any FFI crate's type representation, specifically so the choice
+// of WHICH crate/mechanism `plum-interp` uses to actually perform a
+// call stays a contained, swappable implementation detail behind this
+// boundary — see DESIGN.md's "FFI and C interop" section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternType {
+    Int,
+    Float,
+    Bool,
+}
+
+// `extern "C" { fn sqrt(x: Float) -> Float; }` — one declared foreign
+// function signature. `ret_type: None` means a C `void` return (no
+// `-> Type` written) — DELIBERATELY represented as `Option`, not
+// defaulting to `Unit`, since a genuinely void C function has no value
+// to hand back at all (unlike an ordinary Plum function, which always
+// produces something). Scoped to `Int`/`Float`/`Bool` parameters and
+// return types for v1 — no strings, pointers, or `#[repr(C)]`-style
+// structs yet (DESIGN.md's own "FFI and C interop" section already
+// flags struct-layout and string-lifetime questions as separate,
+// undesigned work); `lower.rs`'s `lower_extern_fn` is where an
+// unsupported type gets rejected.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternFn {
+    pub name: String,
+    pub param_types: Vec<ExternType>,
+    pub ret_type: Option<ExternType>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub functions: Vec<Function>,
     pub globals: Vec<Global>,
+    pub externs: Vec<ExternFn>,
 }
