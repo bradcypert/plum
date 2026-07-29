@@ -12,6 +12,7 @@ use crate::with_prelude;
 use plum_codegen::{CgType, FnSig};
 use plum_ir::fbip::optimize_program;
 use plum_ir::lower::{lower_program, LoweringContext};
+use plum_syntax::ast;
 use plum_syntax::lexer::Lexer;
 use plum_syntax::parser::Parser;
 use plum_types::context::TypeContext;
@@ -50,10 +51,57 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
         PlumType::Float => Ok(CgType::Float),
         PlumType::Bool => Ok(CgType::Bool),
         PlumType::Unit => Ok(CgType::Unit),
+        // A non-generic struct/enum reference — `args` empty means the
+        // type has no type parameters of its own AND isn't a generic
+        // INSTANTIATION either (e.g. `Option[Int]` is `Enum("Option",
+        // [Int])`, non-empty, rejected here too) — see DESIGN.md:
+        // monomorphization is separate, later work, since generics are
+        // fully erased by lowering and a generic type's field types
+        // can't be resolved to one concrete LLVM representation from
+        // the erased IR alone.
+        PlumType::Struct(_, args) | PlumType::Enum(_, args) if args.is_empty() => Ok(CgType::Heap),
         other => Err(format!(
-            "codegen v1 only supports Int/Float/Bool/Unit typed functions, found a signature involving {other:?}"
+            "codegen only supports Int/Float/Bool/Unit or a non-generic struct/enum, found a signature \
+             involving {other:?}"
         )),
     }
+}
+
+/// Every non-generic struct/enum-variant declared in `program`,
+/// resolved to its fields' `CgType`s via `type_ctx` — see `plum_codegen::
+/// TagFields`'s doc comment for how this is used. A struct/enum with
+/// type parameters of its own, or any field whose type resolves
+/// through `plum_type_to_cg_type` as unsupported (including a field
+/// that's itself a GENERIC instantiation, like `Option[Int]`), is
+/// simply OMITTED here rather than failing this whole derivation —
+/// `plum_codegen::emit_program` reports a clear "unknown tag" error
+/// only if the program's REACHABLE code actually tries to construct or
+/// match that specific type, rather than failing the whole compile
+/// over an unrelated, unused generic declaration.
+fn derive_tag_fields(program: &ast::Program, type_ctx: &TypeContext) -> plum_codegen::TagFields {
+    let mut tag_fields = plum_codegen::TagFields::new();
+    for item in &program.items {
+        match &item.kind {
+            ast::ItemKind::Struct(decl) if decl.generics.is_empty() => {
+                if let Some(fields) = type_ctx.struct_fields(&decl.name) {
+                    if let Ok(cg_fields) = fields.iter().map(|(_, ty)| plum_type_to_cg_type(ty)).collect::<Result<Vec<_>, _>>() {
+                        tag_fields.insert(decl.name.clone(), cg_fields);
+                    }
+                }
+            }
+            ast::ItemKind::Enum(decl) if decl.generics.is_empty() => {
+                for variant in &decl.variants {
+                    if let Some((_, payload)) = type_ctx.variant(&variant.name) {
+                        if let Ok(cg_fields) = payload.iter().map(plum_type_to_cg_type).collect::<Result<Vec<_>, _>>() {
+                            tag_fields.insert(variant.name.clone(), cg_fields);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    tag_fields
 }
 
 /// Compiles `src` all the way to a native executable and runs it,
@@ -80,6 +128,7 @@ pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<St
     let program = with_prelude(program);
 
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
+    let tag_fields = derive_tag_fields(&program, &type_ctx);
     let mut infer = Infer::with_context(type_ctx);
     let types = infer.infer_program(&program).map_err(|e| format!("type error: {e}"))?;
 
@@ -132,8 +181,18 @@ pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<St
             ));
         }
     }
+    // A heap-shaped entry-point RETURN isn't printable (this chunk
+    // adds no `ToString`-equivalent for compiled heap values) — real
+    // programs construct/consume heap values INTERNALLY; only the
+    // scalar entry-point signatures this whole test suite already uses
+    // are supported for the compiled `main` wrapper itself.
+    if sig.ret == CgType::Heap {
+        return Err(format!(
+            "codegen: {entry_fn:?} returns a heap-shaped value, which the compiled entry point can't print yet"
+        ));
+    }
 
-    let body_ir = plum_codegen::emit_program(&ir_program, &signatures)?;
+    let body_ir = plum_codegen::emit_program(&ir_program, &signatures, &tag_fields)?;
     let main_ir = emit_main(entry_fn, sig.ret, args);
     let full_ir = format!("{body_ir}\n{main_ir}");
 
@@ -176,6 +235,15 @@ fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
                 "  %r = call i1 @{entry_fn}({args_ir})\n  %rz = zext i1 %r to i32\n  call i32 (ptr, ...) @printf(ptr @fmt, i32 %rz)\n"
             ),
         ),
+        // `compile_and_run` already rejects a `Heap`-returning entry
+        // point before ever calling this function — see its own doc
+        // comment on why. Unreachable in practice, kept as a defensive
+        // error (not a panic) rather than silently producing garbage
+        // IR if that check is ever bypassed.
+        CgType::Heap => {
+            return "; unreachable: compile_and_run rejects a Heap-returning entry point before this point"
+                .to_string()
+        }
     };
     format!(
         "declare i32 @printf(ptr, ...)\n@fmt = constant [{fmt_len} x i8] c\"{fmt_bytes}\"\n\ndefine i32 @main() {{\nentry:\n{call_line}  ret i32 0\n}}\n"
@@ -287,21 +355,100 @@ mod tests {
     }
 
     #[test]
-    fn a_construct_outside_v1_scope_is_a_clear_error() {
+    fn a_construct_outside_codegen_scope_is_a_clear_error() {
         // `go`'s own DECLARED signature is Int -> Int (fully within
-        // v1 scope), but its BODY constructs a struct — this exercises
+        // supported scope), but its BODY constructs a string — a real
+        // construct still outside codegen's scope (structs/enums are
+        // now supported — see the heap-value tests below) — exercising
         // `plum_codegen`'s own per-expression rejection, not just
         // `plumc`'s signature-conversion gate (see the next test for
         // that one).
-        let src = "struct Point { x: Int }\nlet go (n: Int): Int = { let p = Point { x: n }; 5 }";
+        let src = "let go (n: Int): Int = { let s = \"hi\"; 5 }";
         let err = compile_and_run(src, "go", &[CgValue::Int(1)]).expect_err("expected a codegen scope error");
         assert!(err.contains("does not yet support"), "unexpected error: {err}");
     }
 
     #[test]
-    fn a_function_whose_signature_is_outside_v1_scope_is_a_clear_error() {
-        let src = "struct Point { x: Int }\nlet go () = Point { x: 1 }";
+    fn a_function_whose_signature_is_outside_codegen_scope_is_a_clear_error() {
+        // `Option` is generic — its signature can't resolve to one
+        // concrete LLVM representation (see DESIGN.md: monomorphization
+        // is separate, later work).
+        let src = "let go (): Option[Int] = Some(1)";
         let err = compile_and_run(src, "go", &[CgValue::Unit]).expect_err("expected a signature-scope error");
-        assert!(err.contains("Int/Float/Bool/Unit"), "unexpected error: {err}");
+        assert!(err.contains("non-generic"), "unexpected error: {err}");
+    }
+
+    // --- heap values: structs, enums, refcounting, Match ---
+
+    #[test]
+    fn a_struct_is_constructed_and_its_fields_read_back_via_match() {
+        // Field access (`p.x`) desugars through `Match`, same as
+        // everywhere else in this codebase — so this exercises Ctor
+        // construction AND Match-based field extraction together.
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Int = { let p = Point { x: 3, y: 4 }; p.x + p.y }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "7");
+    }
+
+    #[test]
+    fn a_recursive_enum_linked_list_sums_via_tail_recursion() {
+        // Proves Ctor/Match/refcounting and guaranteed tail calls all
+        // compose correctly: a real self-referential enum (`List`
+        // contains a `List`), built via nested `Ctor`s, summed via a
+        // TAIL-recursive accumulator function.
+        let src = "\
+            enum List { Cons(Int, List), Nil }\n\
+            let sum_acc (lst: List) (acc: Int): Int = match lst {\n\
+                Cons(h, t) => sum_acc(t, acc + h),\n\
+                Nil => acc,\n\
+            }\n\
+            let go (): Int = sum_acc(Cons(1, Cons(2, Cons(3, Nil))), 0)\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "6");
+    }
+
+    #[test]
+    fn a_match_guard_falls_through_to_the_next_arm_when_it_fails() {
+        let src = "\
+            enum Shape { Circle(Int), Square(Int) }\n\
+            let classify (s: Shape): Int = match s {\n\
+                Circle(r) if r > 10 => 1,\n\
+                Circle(r) => 2,\n\
+                Square(side) => 3,\n\
+            }\n\
+            let go (): Int = classify(Circle(5))\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "2");
+    }
+
+    #[test]
+    fn ctor_reuse_produces_correct_output_for_a_real_reuse_eligible_program() {
+        // `inc_all`'s `Cons(h + 1, inc_all(t))` arm is exactly FBIP's
+        // reuse-in-place shape (bare-`Var` scrutinee `lst`, arm body a
+        // direct same-arity `Ctor`) — `plum-codegen`'s own unit test
+        // (`ctor_reuse_never_calls_plum_alloc_on_the_reuse_path`)
+        // already verifies the REUSE-vs-fresh-alloc branch SHAPE
+        // structurally; this test verifies the shape actually EXECUTES
+        // correctly end to end, which a text-only IR inspection can't
+        // prove by itself.
+        let src = "\
+            enum List { Cons(Int, List), Nil }\n\
+            let inc_all (lst: List): List = match lst {\n\
+                Cons(h, t) => Cons(h + 1, inc_all(t)),\n\
+                Nil => Nil,\n\
+            }\n\
+            let sum_acc (lst: List) (acc: Int): Int = match lst {\n\
+                Cons(h, t) => sum_acc(t, acc + h),\n\
+                Nil => acc,\n\
+            }\n\
+            let go (): Int = sum_acc(inc_all(Cons(1, Cons(2, Cons(3, Nil)))), 0)\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "9");
     }
 }

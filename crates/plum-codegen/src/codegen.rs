@@ -1,5 +1,5 @@
 //! The actual `ir::Expr` -> LLVM IR text walk. See lib.rs's `emit_program`
-//! doc comment for v1 scope. Everything here works over `String`
+//! doc comment for supported scope. Everything here works over `String`
 //! instruction lines — no LLVM binding, no typed IR builder, just text
 //! (see DESIGN.md's "Implementation plan" for why: this project shells
 //! out to `clang` to compile the emitted `.ll` rather than binding to
@@ -20,17 +20,81 @@
 //!
 //! The recursive tail-position RULE (which sub-expressions inherit
 //! `tail` from their parent) is: a function's whole body; both
-//! branches of an `If` that is itself in tail position; a `Let`'s
-//! `body` (never its `value`). Nothing else is ever a tail position —
-//! `Binary`/`Unary` operands, `Call` arguments, and `If`'s `cond` are
-//! always evaluated via `codegen_value` (implicitly `tail=false`).
+//! branches of an `If`/arms of a `Match` that are themselves in tail
+//! position; a `Let`'s `body` and an `RcAnnotated`'s `rest` (never a
+//! `Let`'s `value`, an `RcAnnotated`'s `target`, or a `Match`'s
+//! `scrutinee`/guards). Nothing else is ever a tail position —
+//! `Binary`/`Unary` operands and `Call` arguments are always evaluated
+//! via `codegen_value` (implicitly `tail=false`).
+//!
+//! # Heap values (`Ctor`/`CtorReuse`/`RcAnnotated`/`Match`)
+//!
+//! Every heap cell — regardless of which Plum struct/enum-variant it
+//! represents — shares ONE layout: `{ i64 refcount, i64 tag, i64
+//! fields[N] }`, allocated via `@plum_alloc` (see `crate::runtime_ir`
+//! for the four emitted runtime functions this all calls into). Every
+//! field slot is a raw 64-bit word regardless of its OWN type —
+//! `Int`/`Bool` stored directly (Bool zero-extended), `Float` via a
+//! bit-preserving `bitcast` (not a numeric conversion), a nested heap
+//! pointer via `ptrtoint`/`inttoptr` — see `store_field_word`/
+//! `load_field_word`. This uniform-word scheme means codegen never
+//! needs a distinct LLVM struct TYPE per Plum struct/enum: one generic
+//! block shape works for everything, and "which fields are heap-
+//! shaped" (`Ctx::tag_fields`) is the only per-tag information needed.
+//!
+//! `Match` dispatch and the runtime's own recursive-field-release
+//! logic both use a plain sequential `icmp`+`br` chain, never an LLVM
+//! `switch` — `Match`'s own semantics (arms tried in order, the SAME
+//! tag may appear in more than one arm with different guards) don't
+//! map cleanly onto `switch`'s one-label-per-case-value shape anyway,
+//! and a chain is simplest to get right, consistent with how `If`/
+//! short-circuit `&&`/`||` already work.
 
 use crate::{CgType, FnSig};
-use plum_ir::ir::{BinOp, Expr, UnOp};
+use plum_ir::ir::{BinOp, Expr, MatchArm, RcOp, UnOp};
 use std::collections::HashMap;
 
 type Env = HashMap<String, (String, CgType)>;
-type Sigs = HashMap<String, FnSig>;
+
+/// The sentinel `MatchArm.tag` lowering uses for a catch-all arm
+/// (`_`/bare-ident) mixed into an otherwise Ctor-tag-shaped match —
+/// see `lower.rs`'s own `DEFAULT_ARM_TAG` doc comment for the full
+/// "why a sentinel string, not a new IR field" reasoning. Duplicated
+/// here rather than exported across the crate boundary, matching the
+/// established precedent for this exact kind of cross-crate shape
+/// constant elsewhere in this codebase (e.g. `plum-interp` keeps its
+/// own copy rather than importing one from `plum-ir`).
+const DEFAULT_ARM_TAG: &str = "0Default";
+
+/// Everything `codegen_expr`/`codegen_value` need beyond the current
+/// expression and local environment — bundled into one struct (rather
+/// than three separate parameters threaded through every function)
+/// once heap-value codegen needed two more tables alongside the
+/// pre-existing function-signature one.
+pub(crate) struct Ctx<'a> {
+    pub(crate) sigs: &'a HashMap<String, FnSig>,
+    /// The signature of the function CURRENTLY being emitted —
+    /// constant for the whole body (unlike `tail`/the local `Env`),
+    /// so it lives here rather than as a separate threaded parameter.
+    /// Needed ONLY to decide whether a tail-position call can safely
+    /// use `musttail`: LLVM requires the CALLER's own prototype to
+    /// match the CALLEE's for `musttail` to be valid at all (a real
+    /// constraint discovered via an actual `clang` compile failure —
+    /// "cannot guarantee tail call due to mismatched parameter
+    /// counts" — not something documented up front). A tail call to a
+    /// function with a DIFFERENT signature than the current one (e.g.
+    /// a zero-arg entry point tail-calling a two-arg accumulator
+    /// function) falls back to an ordinary `call` + `ret` instead —
+    /// still correct, just not a `musttail`-GUARANTEED elimination.
+    pub(crate) caller_sig: &'a FnSig,
+    /// Every known tag (struct name or enum variant name) -> its
+    /// compile-time-interned small integer — see `crate::intern_tags`.
+    pub(crate) tag_ids: &'a HashMap<String, i64>,
+    /// Every known tag -> its fields' `CgType`s, in declared order —
+    /// `crate::emit_program`'s caller derives this from `plum_types::
+    /// TypeContext::struct_fields`/`variant`.
+    pub(crate) tag_fields: &'a HashMap<String, Vec<CgType>>,
+}
 
 /// Accumulates a function body's instructions as flat text lines (each
 /// LLVM basic block is just a `"label:"` line followed by its
@@ -87,8 +151,8 @@ impl Emitter {
 
     /// Starts a new basic block: pushes its label line and updates
     /// `current_block` — callers doing multi-block control flow (`If`,
-    /// short-circuit `&&`/`||`) must capture `current_block` again
-    /// AFTER codegen'ing a sub-expression that might itself have
+    /// short-circuit `&&`/`||`, `Match`) must capture `current_block`
+    /// again AFTER codegen'ing a sub-expression that might itself have
     /// opened further nested blocks, since that's the real block a
     /// `phi` needs to name as its predecessor, not necessarily the
     /// block this function just started.
@@ -118,20 +182,13 @@ fn expect_direct_callee(callee: &Expr) -> Result<&str, String> {
     }
 }
 
-fn codegen_call_args(
-    args: &[Expr],
-    env: &Env,
-    em: &mut Emitter,
-    sigs: &Sigs,
-    sig: &FnSig,
-    name: &str,
-) -> Result<String, String> {
+fn codegen_call_args(args: &[Expr], env: &Env, em: &mut Emitter, ctx: &Ctx, sig: &FnSig, name: &str) -> Result<String, String> {
     if args.len() != sig.params.len() {
         return Err(format!("{name:?} expects {} argument(s), found {}", sig.params.len(), args.len()));
     }
     let mut parts = Vec::with_capacity(args.len());
     for (arg, expected_ty) in args.iter().zip(&sig.params) {
-        let (reg, ty) = codegen_value(arg, env, em, sigs)?;
+        let (reg, ty) = codegen_value(arg, env, em, ctx)?;
         if ty != *expected_ty {
             return Err(format!("{name:?}: argument type mismatch — expected {expected_ty:?}, found {ty:?}"));
         }
@@ -181,9 +238,9 @@ fn codegen_binop(op: BinOp, l: String, r: String, ty: CgType, em: &mut Emitter) 
 /// produces an ordinary SSA value via its own internal merge block —
 /// it never itself decides tail position (its caller, `codegen_value`,
 /// is only ever invoked from a non-tail context).
-fn codegen_and_or(op: BinOp, l: &Expr, r: &Expr, env: &Env, em: &mut Emitter, sigs: &Sigs) -> Result<(String, CgType), String> {
+fn codegen_and_or(op: BinOp, l: &Expr, r: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
     let op_name = if op == BinOp::And { "&&" } else { "||" };
-    let (l_reg, l_ty) = codegen_value(l, env, em, sigs)?;
+    let (l_reg, l_ty) = codegen_value(l, env, em, ctx)?;
     if l_ty != CgType::Bool {
         return Err(format!("`{op_name}` requires Bool operands, found {l_ty:?}"));
     }
@@ -203,7 +260,7 @@ fn codegen_and_or(op: BinOp, l: &Expr, r: &Expr, env: &Env, em: &mut Emitter, si
     let short_end_block = em.current_block.clone();
 
     em.start_block(&rhs_label);
-    let (r_reg, r_ty) = codegen_value(r, env, em, sigs)?;
+    let (r_reg, r_ty) = codegen_value(r, env, em, ctx)?;
     if r_ty != CgType::Bool {
         return Err(format!("`{op_name}` requires Bool operands, found {r_ty:?}"));
     }
@@ -218,13 +275,125 @@ fn codegen_and_or(op: BinOp, l: &Expr, r: &Expr, env: &Env, em: &mut Emitter, si
     Ok((phi_reg, CgType::Bool))
 }
 
+fn field_byte_offset(index: usize) -> i64 {
+    // Header is 2 words (refcount, tag) = 16 bytes; each field slot is
+    // one more 8-byte word after that.
+    16 + (index as i64) * 8
+}
+
+/// Writes `value` (already computed, in its OWN native LLVM
+/// representation — `i64`/`double`/`i1`/`ptr`) into field `index` of
+/// the cell at `cell_ptr`, converting it to the uniform 64-bit word
+/// representation every field slot uses — see this module's doc
+/// comment.
+fn store_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, value: &str, ty: CgType) {
+    let addr = em.fresh_reg();
+    em.push(format!("  {addr} = getelementptr i8, ptr {cell_ptr}, i64 {}", field_byte_offset(index)));
+    let word = match ty {
+        CgType::Int => value.to_string(),
+        CgType::Bool | CgType::Unit => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = zext i1 {value} to i64"));
+            r
+        }
+        CgType::Float => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = bitcast double {value} to i64"));
+            r
+        }
+        CgType::Heap => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
+            r
+        }
+    };
+    em.push(format!("  store i64 {word}, ptr {addr}"));
+}
+
+/// The inverse of `store_field_word` — reads field `index` of the cell
+/// at `cell_ptr` back out, converting the raw word into `expected_ty`'s
+/// own native LLVM representation.
+fn load_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, expected_ty: CgType) -> String {
+    let addr = em.fresh_reg();
+    em.push(format!("  {addr} = getelementptr i8, ptr {cell_ptr}, i64 {}", field_byte_offset(index)));
+    let word = em.fresh_reg();
+    em.push(format!("  {word} = load i64, ptr {addr}"));
+    match expected_ty {
+        CgType::Int => word,
+        CgType::Bool | CgType::Unit => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = trunc i64 {word} to i1"));
+            r
+        }
+        CgType::Float => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = bitcast i64 {word} to double"));
+            r
+        }
+        CgType::Heap => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
+            r
+        }
+    }
+}
+
+fn tag_field_types<'a>(ctx: &'a Ctx, tag: &str) -> Result<&'a [CgType], String> {
+    ctx.tag_fields
+        .get(tag)
+        .map(|v| v.as_slice())
+        .ok_or_else(|| format!("codegen: unknown tag {tag:?} (no struct/enum-variant declaration found)"))
+}
+
+fn tag_id(ctx: &Ctx, tag: &str) -> Result<i64, String> {
+    ctx.tag_ids
+        .get(tag)
+        .copied()
+        .ok_or_else(|| format!("codegen: unknown tag {tag:?} (no struct/enum-variant declaration found)"))
+}
+
+/// `Expr::Ctor{tag, fields}` — always an ordinary value (never itself a
+/// tail position, same as any other allocation); shared by both the
+/// plain-`Ctor` codegen path and `CtorReuse`'s own "refcount wasn't 1,
+/// fall back to a fresh allocation" branch.
+fn codegen_ctor_alloc(tag: &str, field_vals: &[(String, CgType)], em: &mut Emitter, ctx: &Ctx) -> Result<String, String> {
+    let id = tag_id(ctx, tag)?;
+    let cell = em.fresh_reg();
+    em.push(format!("  {cell} = call ptr @plum_alloc(i64 {id}, i64 {})", field_vals.len()));
+    for (i, (reg, ty)) in field_vals.iter().enumerate() {
+        store_field_word(em, &cell, i, reg, *ty);
+    }
+    Ok(cell)
+}
+
+fn codegen_ctor_fields(tag: &str, fields: &[Expr], env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<Vec<(String, CgType)>, String> {
+    let field_types = tag_field_types(ctx, tag)?.to_vec();
+    if field_types.len() != fields.len() {
+        return Err(format!(
+            "codegen: constructor {tag:?} expects {} field(s), found {}",
+            field_types.len(),
+            fields.len()
+        ));
+    }
+    let mut vals = Vec::with_capacity(fields.len());
+    for (i, (fexpr, expected)) in fields.iter().zip(&field_types).enumerate() {
+        let (reg, ty) = codegen_value(fexpr, env, em, ctx)?;
+        if ty != *expected {
+            return Err(format!("codegen: constructor {tag:?} field {i}: expected {expected:?}, found {ty:?}"));
+        }
+        vals.push((reg, ty));
+    }
+    Ok(vals)
+}
+
 /// Computes an ordinary SSA value for `expr` — used for every position
 /// that is NEVER a tail position (operands, call arguments, `If`'s
-/// `cond`, a `Let`'s `value`). `Let`/`If` themselves are still valid
-/// here (an `if`/`let` can appear as an ordinary sub-expression, e.g.
-/// `1 + if b { 2 } else { 3 }`) — delegated to `codegen_expr` with
-/// `tail=false`, which is guaranteed to return `Some` in that mode.
-fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, sigs: &Sigs) -> Result<(String, CgType), String> {
+/// `cond`, a `Let`'s `value`, `Match`'s `scrutinee`/guards, an
+/// `RcAnnotated`'s `target` lookup). `Let`/`If`/`Match` themselves are
+/// still valid here (e.g. `1 + if b { 2 } else { 3 }`) — delegated to
+/// `codegen_expr` with `tail=false`, which is guaranteed to return
+/// `Some` in that mode.
+fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
     match expr {
         Expr::Int(n) => Ok((n.to_string(), CgType::Int)),
         Expr::Float(f) => Ok((format_double(*f), CgType::Float)),
@@ -235,7 +404,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, sigs: &Sigs) -> Resul
             .cloned()
             .ok_or_else(|| format!("codegen: unbound variable {name:?}")),
         Expr::Unary(op, inner) => {
-            let (reg, ty) = codegen_value(inner, env, em, sigs)?;
+            let (reg, ty) = codegen_value(inner, env, em, ctx)?;
             match (op, ty) {
                 (UnOp::Neg, CgType::Int) => {
                     let r = em.fresh_reg();
@@ -255,12 +424,10 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, sigs: &Sigs) -> Resul
                 (op, ty) => Err(format!("codegen: unary {op:?} is not supported for {ty:?}")),
             }
         }
-        Expr::Binary(op, l, r) if *op == BinOp::And || *op == BinOp::Or => {
-            codegen_and_or(op.clone(), l, r, env, em, sigs)
-        }
+        Expr::Binary(op, l, r) if *op == BinOp::And || *op == BinOp::Or => codegen_and_or(op.clone(), l, r, env, em, ctx),
         Expr::Binary(op, l, r) => {
-            let (l_reg, l_ty) = codegen_value(l, env, em, sigs)?;
-            let (r_reg, r_ty) = codegen_value(r, env, em, sigs)?;
+            let (l_reg, l_ty) = codegen_value(l, env, em, ctx)?;
+            let (r_reg, r_ty) = codegen_value(r, env, em, ctx)?;
             if l_ty != r_ty {
                 return Err(format!("codegen: `{op:?}` operand type mismatch — {l_ty:?} vs {r_ty:?}"));
             }
@@ -268,44 +435,134 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, sigs: &Sigs) -> Resul
         }
         Expr::Call { callee, args } => {
             let name = expect_direct_callee(callee)?.to_string();
-            let sig = sigs
-                .get(&name)
-                .cloned()
-                .ok_or_else(|| format!("codegen: unknown function {name:?}"))?;
-            let args_ir = codegen_call_args(args, env, em, sigs, &sig, &name)?;
+            let sig = ctx.sigs.get(&name).cloned().ok_or_else(|| format!("codegen: unknown function {name:?}"))?;
+            let args_ir = codegen_call_args(args, env, em, ctx, &sig, &name)?;
             let reg = em.fresh_reg();
             em.push(format!("  {reg} = call {} @{name}({args_ir})", sig.ret.llvm_type()));
             Ok((reg, sig.ret))
         }
-        Expr::Let { .. } | Expr::If { .. } => match codegen_expr(expr, env, em, sigs, false)? {
-            Some(v) => Ok(v),
-            None => unreachable!("codegen_expr with tail=false always returns Some"),
-        },
+        Expr::Ctor { tag, fields } => {
+            let vals = codegen_ctor_fields(tag, fields, env, em, ctx)?;
+            let cell = codegen_ctor_alloc(tag, &vals, em, ctx)?;
+            Ok((cell, CgType::Heap))
+        }
+        Expr::CtorReuse { reuse_of, tag, fields } => {
+            let (old_ptr, old_ty) = env
+                .get(reuse_of)
+                .cloned()
+                .ok_or_else(|| format!("codegen: unbound variable {reuse_of:?}"))?;
+            if old_ty != CgType::Heap {
+                return Err(format!("codegen: internal error — CtorReuse target {reuse_of:?} is not heap-shaped"));
+            }
+            let field_vals = codegen_ctor_fields(tag, fields, env, em, ctx)?;
+            let id = tag_id(ctx, tag)?;
+
+            let rc = em.fresh_reg();
+            em.push(format!("  {rc} = load i64, ptr {old_ptr}"));
+            let rc2 = em.fresh_reg();
+            em.push(format!("  {rc2} = sub i64 {rc}, 1"));
+            em.push(format!("  store i64 {rc2}, ptr {old_ptr}"));
+            let is_zero = em.fresh_reg();
+            em.push(format!("  {is_zero} = icmp eq i64 {rc2}, 0"));
+
+            let reuse_label = em.fresh_label("reuse");
+            let alloc_label = em.fresh_label("reuse_alloc_fresh");
+            let merge_label = em.fresh_label("reuse_merge");
+            em.push(format!("  br i1 {is_zero}, label %{reuse_label}, label %{alloc_label}"));
+
+            em.start_block(&reuse_label);
+            // Release whatever the OLD cell used to hold (recursively
+            // dec any heap-shaped field) WITHOUT calling `free` — its
+            // memory is about to be reused in place, not returned to
+            // the allocator.
+            em.push(format!("  call void @plum_release_fields(ptr {old_ptr})"));
+            let tag_addr = em.fresh_reg();
+            em.push(format!("  {tag_addr} = getelementptr i8, ptr {old_ptr}, i64 8"));
+            em.push(format!("  store i64 {id}, ptr {tag_addr}"));
+            for (i, (reg, ty)) in field_vals.iter().enumerate() {
+                store_field_word(em, &old_ptr, i, reg, *ty);
+            }
+            em.push(format!("  store i64 1, ptr {old_ptr}"));
+            em.push(format!("  br label %{merge_label}"));
+
+            em.start_block(&alloc_label);
+            let fresh = codegen_ctor_alloc(tag, &field_vals, em, ctx)?;
+            em.push(format!("  br label %{merge_label}"));
+
+            em.start_block(&merge_label);
+            let result = em.fresh_reg();
+            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            Ok((result, CgType::Heap))
+        }
+        Expr::Let { .. } | Expr::If { .. } | Expr::Match { .. } | Expr::RcAnnotated { .. } => {
+            match codegen_expr(expr, env, em, ctx, false)? {
+                Some(v) => Ok(v),
+                None => unreachable!("codegen_expr with tail=false always returns Some"),
+            }
+        }
         other => Err(format!("codegen does not yet support this construct: {other:?}")),
     }
 }
 
+/// Starts binding `arm` for `scrutinee_ptr` (already known to have
+/// `arm`'s tag): returns a fresh copy of `env` for the arm's own scope
+/// to extend. The `DEFAULT_ARM_TAG` catch-all case is special-cased
+/// here in full — its (at most one) binding names the WHOLE scrutinee
+/// value directly, not an extracted field, so there's nothing further
+/// for the caller to bind. For an ordinary tag, this only validates
+/// arity; the caller (`codegen_expr`'s `Match` case) does the actual
+/// per-field extraction — see that code for why: it needs the field
+/// TYPES to load each slot correctly, and already has `ctx` in scope
+/// there too, so there's nothing this function could usefully do that
+/// the caller doesn't already need to do itself.
+fn bind_match_arm(arm: &MatchArm, scrutinee_ptr: &str, env: &Env, ctx: &Ctx) -> Result<Env, String> {
+    let mut arm_env = env.clone();
+    if arm.tag == DEFAULT_ARM_TAG {
+        if let Some(name) = arm.bindings.first() {
+            arm_env.insert(name.clone(), (scrutinee_ptr.to_string(), CgType::Heap));
+        }
+        return Ok(arm_env);
+    }
+    let field_types = tag_field_types(ctx, &arm.tag)?;
+    if field_types.len() != arm.bindings.len() {
+        return Err(format!(
+            "codegen: match arm for {:?} expects {} binding(s), found {}",
+            arm.tag,
+            field_types.len(),
+            arm.bindings.len()
+        ));
+    }
+    Ok(arm_env)
+}
+
 /// See this module's doc comment for the full tail-position story.
-pub(crate) fn codegen_expr(
-    expr: &Expr,
-    env: &Env,
-    em: &mut Emitter,
-    sigs: &Sigs,
-    tail: bool,
-) -> Result<Option<(String, CgType)>, String> {
+pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, tail: bool) -> Result<Option<(String, CgType)>, String> {
     match expr {
         Expr::Let { name, value, body } => {
-            let bound = codegen_value(value, env, em, sigs)?;
+            let bound = codegen_value(value, env, em, ctx)?;
             let mut inner_env = env.clone();
             inner_env.insert(name.clone(), bound);
-            codegen_expr(body, &inner_env, em, sigs, tail)
+            codegen_expr(body, &inner_env, em, ctx, tail)
+        }
+        Expr::RcAnnotated { op, target, rest } => {
+            let (reg, ty) = env.get(target).cloned().ok_or_else(|| format!("codegen: unbound variable {target:?}"))?;
+            if ty != CgType::Heap {
+                return Err(format!(
+                    "codegen: internal error — RcAnnotated target {target:?} is not heap-shaped ({ty:?})"
+                ));
+            }
+            match op {
+                RcOp::Inc => em.push(format!("  call void @plum_rc_inc(ptr {reg})")),
+                RcOp::Dec => em.push(format!("  call void @plum_rc_dec(ptr {reg})")),
+            }
+            codegen_expr(rest, env, em, ctx, tail)
         }
         Expr::If {
             cond,
             then_branch,
             else_branch,
         } => {
-            let (cond_reg, cond_ty) = codegen_value(cond, env, em, sigs)?;
+            let (cond_reg, cond_ty) = codegen_value(cond, env, em, ctx)?;
             if cond_ty != CgType::Bool {
                 return Err(format!("codegen: `if` condition must be Bool, found {cond_ty:?}"));
             }
@@ -322,14 +579,14 @@ pub(crate) fn codegen_expr(
             em.push(format!("  br i1 {cond_reg}, label %{then_label}, label %{else_label}"));
 
             em.start_block(&then_label);
-            let then_result = codegen_expr(then_branch, env, em, sigs, tail)?;
+            let then_result = codegen_expr(then_branch, env, em, ctx, tail)?;
             if then_result.is_some() {
                 em.push(format!("  br label %{merge_label}"));
             }
             let then_end_block = em.current_block.clone();
 
             em.start_block(&else_label);
-            let else_result = codegen_expr(else_branch, env, em, sigs, tail)?;
+            let else_result = codegen_expr(else_branch, env, em, ctx, tail)?;
             if else_result.is_some() {
                 em.push(format!("  br label %{merge_label}"));
             }
@@ -359,26 +616,116 @@ pub(crate) fn codegen_expr(
                 _ => unreachable!("both `if` arms share the same tail-ness"),
             }
         }
+        Expr::Match { scrutinee, arms } => {
+            let (scrutinee_ptr, scrutinee_ty) = codegen_value(scrutinee, env, em, ctx)?;
+            if scrutinee_ty != CgType::Heap {
+                return Err(format!("codegen: `match` scrutinee must be a heap-shaped value, found {scrutinee_ty:?}"));
+            }
+            let tag_addr = em.fresh_reg();
+            em.push(format!("  {tag_addr} = getelementptr i8, ptr {scrutinee_ptr}, i64 8"));
+            let scrutinee_tag = em.fresh_reg();
+            em.push(format!("  {scrutinee_tag} = load i64, ptr {tag_addr}"));
+
+            let done_label = em.fresh_label("match_done");
+            let mut non_tail_results: Vec<(String, CgType, String)> = Vec::new();
+
+            for arm in arms {
+                let next_label = em.fresh_label("arm_next");
+
+                if arm.tag != DEFAULT_ARM_TAG {
+                    let id = tag_id(ctx, &arm.tag)?;
+                    let matched = em.fresh_reg();
+                    em.push(format!("  {matched} = icmp eq i64 {scrutinee_tag}, {id}"));
+                    let matched_label = em.fresh_label("arm_matched");
+                    em.push(format!("  br i1 {matched}, label %{matched_label}, label %{next_label}"));
+                    em.start_block(&matched_label);
+                }
+
+                let mut arm_env = bind_match_arm(arm, &scrutinee_ptr, env, ctx)?;
+                if arm.tag != DEFAULT_ARM_TAG {
+                    let field_types = tag_field_types(ctx, &arm.tag)?.to_vec();
+                    for (i, (name, fty)) in arm.bindings.iter().zip(&field_types).enumerate() {
+                        let val = load_field_word(em, &scrutinee_ptr, i, *fty);
+                        if *fty == CgType::Heap {
+                            em.push(format!("  call void @plum_rc_inc(ptr {val})"));
+                        }
+                        arm_env.insert(name.clone(), (val, *fty));
+                    }
+                }
+
+                if let Some(guard) = &arm.guard {
+                    let (greg, gty) = codegen_value(guard, &arm_env, em, ctx)?;
+                    if gty != CgType::Bool {
+                        return Err(format!("codegen: match guard must be Bool, found {gty:?}"));
+                    }
+                    let pass_label = em.fresh_label("arm_guard_pass");
+                    em.push(format!("  br i1 {greg}, label %{pass_label}, label %{next_label}"));
+                    em.start_block(&pass_label);
+                }
+
+                let body_result = codegen_expr(&arm.body, &arm_env, em, ctx, tail)?;
+                if let Some((reg, ty)) = body_result {
+                    em.push(format!("  br label %{done_label}"));
+                    non_tail_results.push((reg, ty, em.current_block.clone()));
+                }
+                em.start_block(&next_label);
+            }
+            // Every arm's tag/guard check failed — `plum-types` already
+            // proved match exhaustiveness before codegen ever runs, so
+            // this is genuinely unreachable for a well-typed program,
+            // not just "shouldn't happen."
+            em.push("  unreachable");
+
+            if tail {
+                Ok(None)
+            } else {
+                em.start_block(&done_label);
+                let ty = non_tail_results
+                    .first()
+                    .map(|(_, ty, _)| *ty)
+                    .ok_or_else(|| "codegen: internal error — match produced no reachable result".to_string())?;
+                let phi_reg = em.fresh_reg();
+                let parts: Vec<String> =
+                    non_tail_results.iter().map(|(reg, _, block)| format!("[ {reg}, %{block} ]")).collect();
+                em.push(format!("  {phi_reg} = phi {} {}", ty.llvm_type(), parts.join(", ")));
+                Ok(Some((phi_reg, ty)))
+            }
+        }
         Expr::Call { callee, args } if tail => {
             let name = expect_direct_callee(callee)?.to_string();
-            let sig = sigs
-                .get(&name)
-                .cloned()
-                .ok_or_else(|| format!("codegen: unknown function {name:?}"))?;
-            let args_ir = codegen_call_args(args, env, em, sigs, &sig, &name)?;
+            let sig = ctx.sigs.get(&name).cloned().ok_or_else(|| format!("codegen: unknown function {name:?}"))?;
+            let args_ir = codegen_call_args(args, env, em, ctx, &sig, &name)?;
             let reg = em.fresh_reg();
-            // The exact shape `musttail` requires: the call and the
-            // `ret` are the ONLY two instructions, with nothing in
-            // between — this is what gives LLVM's guaranteed,
-            // portable tail-call elimination (the whole reason
-            // DESIGN.md picked LLVM as the backend over compiling
-            // through C, which has no such guarantee).
-            em.push(format!("  {reg} = musttail call {} @{name}({args_ir})", sig.ret.llvm_type()));
+            // `musttail` is only VALID when the caller's own prototype
+            // matches the callee's (a real LLVM constraint — "cannot
+            // guarantee tail call due to mismatched parameter counts"
+            // — found via an actual `clang` compile failure, not
+            // documented up front; see `Ctx::caller_sig`'s doc
+            // comment). Self-recursion always trivially qualifies;
+            // mutual recursion only does when both functions happen to
+            // share a signature. A tail call to a DIFFERENT-shaped
+            // function falls back to an ordinary `call` + `ret` —
+            // still correct, just not `musttail`-GUARANTEED to reuse
+            // the stack frame (LLVM's optimizer may still do it as a
+            // best-effort sibling call under `-O2`, just not at `-O0`
+            // the way `musttail` promises).
+            if *ctx.caller_sig == sig {
+                // The exact shape `musttail` requires: the call and
+                // the `ret` are the ONLY two instructions, with
+                // nothing in between — this is what gives LLVM's
+                // guaranteed, portable tail-call elimination (the
+                // whole reason DESIGN.md picked LLVM as the backend
+                // over compiling through C, which has no such
+                // guarantee).
+                em.push(format!("  {reg} = musttail call {} @{name}({args_ir})", sig.ret.llvm_type()));
+            } else {
+                em.push(format!("  {reg} = call {} @{name}({args_ir})", sig.ret.llvm_type()));
+            }
             em.push(format!("  ret {} {reg}", sig.ret.llvm_type()));
             Ok(None)
         }
         _ => {
-            let (reg, ty) = codegen_value(expr, env, em, sigs)?;
+            let (reg, ty) = codegen_value(expr, env, em, ctx)?;
             if tail {
                 em.push(format!("  ret {} {reg}", ty.llvm_type()));
                 Ok(None)

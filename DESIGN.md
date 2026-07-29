@@ -1503,7 +1503,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1 implemented (scalars + control flow + tail calls)
+### LLVM backend — v1+v2 implemented (scalars, control flow, tail calls, non-generic heap values)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1516,43 +1516,90 @@ policy): a future self-hosted Plum compiler would do the exact same
 thing — generate text, shell to `clang` — so there's no Rust-crate-
 specific API shape to ever "unwind."
 
-**v1 scope**: scalars (`Int`/`Float`/`Bool`/`Unit`), `Var`, `Unary`,
+**Scope**: scalars (`Int`/`Float`/`Bool`/`Unit`), `Var`, `Unary`,
 `Binary` (including short-circuit `&&`/`||`, compiled as real
 branching + `phi`, not a plain `and`/`or` instruction — must match the
 interpreter's exact short-circuit semantics: the untaken side's code
-must never execute), `Let`, `If`, and plain named `Call`. Everything
-else in `ir::Expr` (heap/`Ctor`/`Match`, strings, arrays, closures,
-concurrency, FFI, `For`, `Assign`, `ToString`, ...) is out of scope for
-now and produces a clear codegen error naming what's missing, never a
-panic — heap codegen needs its own C-ABI runtime (malloc-based cells,
-inc/dec/free, tag-to-integer interning) and is real, separate design
-work for a later chunk.
+must never execute), `Let`, `If`, plain named `Call`, and — as of a
+follow-on chunk — non-generic struct/enum heap values (`Ctor`/
+`CtorReuse`/`RcAnnotated`/`Match`, refcounted via a small emitted
+runtime — see below). Everything else in `ir::Expr` (strings, arrays,
+closures, concurrency, FFI, `For`, `Assign`, `ToString`, generic
+types/monomorphization, ...) is still out of scope and produces a
+clear codegen error naming what's missing, never a panic.
 
 **Guaranteed tail calls**: any call in tail position (the function's
-own body; both branches of a tail-positioned `If`; a `Let`'s `body`) to
-a directly-named function — self- OR mutual-recursive — compiles to
+own body; both branches of a tail-positioned `If`/arms of a tail-
+positioned `Match`; a `Let`'s `body`/an `RcAnnotated`'s `rest`) to a
+directly-named function — self- OR mutual-recursive — compiles to
 `%r = musttail call <ty> @callee(...)` immediately followed by
-`ret <ty> %r`, the exact shape LLVM's `musttail` requires. Verified as
-a REAL, unconditional guarantee (not just an optimizer hint under
-`-O2`): a compiled 1,000,000-deep self-recursive accumulator and a
-1,000,001-deep mutual-recursion pair both run correctly at `-O0`,
-which would stack-overflow without genuine tail-call elimination.
+`ret <ty> %r`, the exact shape LLVM's `musttail` requires, PROVIDED
+the caller's own function prototype matches the callee's exactly — a
+real LLVM constraint discovered via an actual `clang` compile failure
+("cannot guarantee tail call due to mismatched parameter counts"), not
+documented up front: `musttail` is only valid between functions with
+identical signatures, not "any tail call to a directly-named
+function" as originally assumed. A tail call to a different-shaped
+function (e.g. a zero-arg entry point tail-calling a two-arg
+accumulator) falls back to an ordinary `call` + `ret` — still correct,
+just not `musttail`-guaranteed to reuse the stack frame at `-O0` (LLVM
+may still eliminate it as a best-effort sibling call under `-O2`).
+Verified as a REAL, unconditional guarantee where it DOES apply (not
+just an optimizer hint under `-O2`): a compiled 1,000,000-deep self-
+recursive accumulator and a 1,000,001-deep mutual-recursion pair (both
+same-signature) run correctly at `-O0`, which would stack-overflow
+without genuine tail-call elimination.
 
 **Type handling**: `ir::Function`/`ir::Global` carry no type
 information at all (`ir::Type` is vestigial/unused). `plum-codegen`
-defines its own minimal `CgType { Int, Float, Bool, Unit }` (not
+defines its own minimal `CgType { Int, Float, Bool, Unit, Heap }` (not
 reusing `plum_types::Type`, keeping the crate self-contained and
 testable in isolation with hand-built `ir::Program` values, matching
 every other crate's own precedent) and expects a `HashMap<String,
-FnSig>` — every top-level function's concrete param/return types —
-supplied by the caller. `plumc::compile_and_run` derives this from
+FnSig>` (function signatures) plus a `TagFields` map (every non-
+generic struct name/enum-variant name -> its fields' `CgType`s) —
+supplied by the caller. `plumc::compile_and_run` derives `FnSig` from
 `Infer::infer_program`'s own results (the only place real type
-information exists in the pipeline), erroring clearly if any
-function's signature involves something outside the four supported
-primitives. Within a function body, codegen does its own simple
-bottom-up type-propagation walk as it emits instructions — not full
-Hindley-Milner (the program already passed real type-checking before
-reaching codegen), just "what LLVM type does this node need."
+information exists in the pipeline) and `TagFields` from
+`TypeContext::struct_fields`/`variant`, restricted to non-generic
+types only (see "Heap values" below). Within a function body, codegen
+does its own simple bottom-up type-propagation walk as it emits
+instructions — not full Hindley-Milner (the program already passed
+real type-checking before reaching codegen), just "what LLVM type does
+this node need."
+
+**Heap values (non-generic structs/enums, refcounting, `Match`)**:
+one uniform cell layout for every struct/enum-variant, `{ i64
+refcount, i64 tag, i64 fields[N] }` — every field slot is a raw 64-bit
+word regardless of its own type (`Int`/`Bool` direct, `Float` via a
+bit-preserving `bitcast` not a numeric conversion, a nested heap
+pointer via `ptrtoint`/`inttoptr`), so codegen never needs a distinct
+LLVM struct type per Plum type. Every distinct tag gets a compile-
+time-interned small integer; `Match` dispatch and the runtime's own
+recursive-field-release logic are both a plain sequential `icmp`+`br`
+chain, never an LLVM `switch` (`Match`'s real semantics — arms tried
+in order, the SAME tag may appear in more than one arm with different
+guards — don't map onto `switch`'s one-label-per-case-value shape
+anyway). Four small runtime functions are emitted as TEXT into every
+program's own `.ll` output (no separate hand-written runtime file at
+all, consistent with this whole backend's style and the self-hosting-
+viability policy): `@plum_alloc`, `@plum_rc_inc`, `@plum_rc_dec`
+(frees + recursively releases heap-shaped fields at refcount zero),
+`@plum_release_fields` (the shared recursive-release logic, also used
+by `CtorReuse`'s in-place-overwrite path without a `free` call).
+`CtorReuse` (FBIP's ALREADY-COMPUTED reuse-in-place decision) branches
+on the old cell's refcount at runtime: if it hit zero, releases the
+old fields and overwrites in place; otherwise falls back to an
+ordinary fresh allocation — FBIP already guarantees matching field
+counts whenever it emits this node, so the in-place path never needs
+a realloc. A `Match` arm's bound field gets `@plum_rc_inc`'d if
+heap-shaped — a deliberate FIX over the interpreter's own established
+(if accepted) gap, where a bound field is implicitly borrowed from its
+scrutinee with no refcount bump. **Non-generic types only**: generics
+are fully erased by lowering (no type arguments survive into the IR),
+so a generic type's field types can't be resolved to one concrete LLVM
+representation — `Option`/`Result`/any user generic type don't compile
+yet; monomorphization is separate, later design work.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck
@@ -1563,7 +1610,8 @@ written LLVM `main` that calls the entry function and `printf`s its
 result, writes the `.ll` to a temp file, shells to `clang` to compile
 and link, runs the resulting native binary, and returns its captured
 stdout — proven via tests that actually compile and execute real
-binaries, not just inspect emitted IR text.
+binaries (including a real recursive enum linked list, tail-recursively
+summed), not just inspect emitted IR text.
 - **Sequencing**: validate the memory model (refcount insertion + FBIP
   reuse analysis) on a simplified typed IR using a tree-walking
   interpreter *before* investing in the LLVM backend. The risky,
