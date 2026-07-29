@@ -440,6 +440,30 @@ mod tests {
     }
 
     #[test]
+    fn literal_match_runs_through_the_full_gated_pipeline() {
+        let src = "let classify n = match n { 0 => \"zero\", 1 => \"one\", _ => \"many\" }\n\
+                    let use_it dummy = classify(1) == \"one\" && classify(5) == \"many\"";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn literal_match_without_a_trailing_catchall_is_rejected_before_running() {
+        let src = "let use_it dummy = match 1 { 0 => \"zero\", 1 => \"one\" }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn match_single_wildcard_arm_runs_through_the_full_gated_pipeline() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = match (Point { x: 1, y: 2 }) { _ => 42 }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely

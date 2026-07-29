@@ -2539,6 +2539,65 @@ mod tests {
     }
 
     #[test]
+    fn match_over_int_literals_picks_the_matching_arm() {
+        assert_eq!(eval("(match 2 { 1 => \"one\", 2 => \"two\", _ => \"many\" }) == \"two\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn match_over_int_literals_falls_through_to_the_wildcard() {
+        assert_eq!(eval("(match 99 { 1 => \"one\", 2 => \"two\", _ => \"many\" }) == \"many\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn match_over_string_literals_picks_the_matching_arm() {
+        assert_eq!(eval("match \"b\" { \"a\" => 1, \"b\" => 2, _ => 0 }"), Value::Int(2));
+    }
+
+    #[test]
+    fn match_over_bool_literals_picks_the_matching_arm() {
+        // Even though `Bool` has only two values, the trailing catch-
+        // all rule is kept UNIFORM across all four literal types
+        // rather than special-casing `Bool` as "exhaustible by
+        // enumeration" — deliberate simplicity, not an oversight.
+        assert_eq!(eval("match true { true => 1, _ => 0 }"), Value::Int(1));
+    }
+
+    #[test]
+    fn match_over_float_literals_picks_the_matching_arm() {
+        assert_eq!(
+            eval("(match 2.5 { 1.0 => \"one\", 2.5 => \"two-and-a-half\", _ => \"other\" }) == \"two-and-a-half\""),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn match_with_a_trailing_ident_binds_and_uses_the_scrutinee() {
+        assert_eq!(eval("match 5 { 1 => 100, other => other * 10 }"), Value::Int(50));
+    }
+
+    #[test]
+    fn match_literal_arm_guard_is_checked() {
+        let src = "{ let flag = false; match 1 { 1 if flag => 100, _ => 0 } }";
+        assert_eq!(eval(src), Value::Int(0));
+    }
+
+    #[test]
+    fn match_literal_arm_guard_true_takes_that_arm() {
+        let src = "{ let flag = true; match 1 { 1 if flag => 100, _ => 0 } }";
+        assert_eq!(eval(src), Value::Int(100));
+    }
+
+    #[test]
+    fn match_single_wildcard_arm_discards_the_scrutinee() {
+        assert_eq!(eval("match [1, 2, 3] { _ => 42 }"), Value::Int(42));
+    }
+
+    #[test]
+    fn match_single_ident_arm_binds_the_whole_scrutinee() {
+        assert_eq!(eval("match [1, 2, 3] { arr => arr.len() }"), Value::Int(3));
+    }
+
+    #[test]
     fn block_let_struct_destructure() {
         let src = "struct Point { x: Int, y: Int }\n\
                     let use_it dummy = { let Point { x, y } = Point { x: 3, y: 4 }; x + y }";

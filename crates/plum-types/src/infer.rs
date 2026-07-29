@@ -1722,6 +1722,31 @@ impl Infer {
         match pattern {
             ast::Pattern::Ident(name, _) => Ok(env.extend(name.clone(), acc.apply(scrutinee_ty))),
             ast::Pattern::Wildcard(_) => Ok(env),
+            // Literal patterns bind no names (same as movecheck.rs's
+            // own treatment) — just unify the scrutinee against the
+            // literal's own type. See lower.rs's `lower_literal_match`
+            // for why these can only appear as non-last arms of a
+            // match that ends with a required catch-all.
+            ast::Pattern::Int(_, span) => {
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Int).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                *acc = s.compose(acc);
+                Ok(env)
+            }
+            ast::Pattern::Float(_, span) => {
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Float).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                *acc = s.compose(acc);
+                Ok(env)
+            }
+            ast::Pattern::Bool(_, span) => {
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Bool).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                *acc = s.compose(acc);
+                Ok(env)
+            }
+            ast::Pattern::Str(_, span) => {
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Str).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                *acc = s.compose(acc);
+                Ok(env)
+            }
             ast::Pattern::Tuple(elems, span) => {
                 if elems.is_empty() {
                     return Err(format!(
@@ -1837,6 +1862,45 @@ impl Infer {
         let mut acc = s;
         let mut result_ty: Option<Type> = None;
 
+        // Two shapes lower.rs's `lower_match` now accepts a bare
+        // identifier/wildcard for — see `lower_catchall_only_match`/
+        // `lower_literal_match`'s own doc comments there for the full
+        // reasoning; this mirrors those two functions' detection
+        // exactly, and for the same reason the guard-nesting check
+        // above exists: type-checking must reject anything that would
+        // otherwise fail at the lowering gate right after.
+        let is_single_catchall =
+            arms.len() == 1 && is_catchall_pattern(&arms[0].pattern) && arms[0].guard.is_none();
+        let is_literal = is_literal_match(arms);
+        // A literal pattern ANYWHERE, without the whole match satisfying
+        // `is_literal_match`'s shape (all-literal-plus-trailing-
+        // catchall), means there's no valid trailing catch-all —
+        // `bind_pattern`'s new Int/Float/Bool/Str cases would otherwise
+        // happily accept each arm individually with no complaint, so
+        // this has to be checked explicitly, same reasoning as the
+        // guard check just below.
+        let has_literal_arm = arms
+            .iter()
+            .any(|arm| matches!(arm.pattern, ast::Pattern::Int(..) | ast::Pattern::Float(..) | ast::Pattern::Bool(..) | ast::Pattern::Str(..)));
+        if has_literal_arm && !is_literal {
+            return Err(format!(
+                "a `match` over literal patterns must end with a wildcard (`_`) or \
+                 bare-identifier arm at {:?}",
+                arms.last().expect("has_literal_arm implies at least one arm").span
+            ));
+        }
+        if is_literal {
+            let last = arms.last().expect("is_literal_match already checked arms is non-empty");
+            if last.guard.is_some() {
+                return Err(format!(
+                    "the trailing wildcard/identifier arm of a literal `match` cannot have a \
+                     guard (it must be able to unconditionally catch anything earlier arms \
+                     didn't) at {:?}",
+                    last.span
+                ));
+            }
+        }
+
         for arm in arms {
             // Mirrors lower.rs's `lower_match`/`classify_subpattern`
             // restriction: a guard can only see bindings introduced
@@ -1858,17 +1922,21 @@ impl Infer {
                 ));
             }
             // `bind_pattern` accepts a bare identifier/wildcard fine —
-            // correct for a NESTED sub-position, but wrong for a WHOLE
-            // top-level arm: the IR's `Match` dispatches strictly by
-            // tag (no "default arm" concept exists — see ir.rs's scope
-            // note), so lower.rs's `lower_tag_pattern` has no case for
-            // Ident/Wildcard at this level and would reject it. Guard
-            // here so the type checker doesn't accept more than what
-            // actually lowers.
-            if matches!(arm.pattern, ast::Pattern::Ident(..) | ast::Pattern::Wildcard(..)) {
+            // correct for a NESTED sub-position, and now ALSO correct
+            // as a WHOLE top-level arm in the two shapes checked above
+            // (a lone catch-all, or the required trailing arm of a
+            // literal match) — but still wrong anywhere else: mixing a
+            // catch-all into an otherwise Ctor-tag-shaped match (e.g.
+            // `Circle(r) => .., _ => ..`) has no lowering yet (the IR's
+            // `Match` dispatches strictly by tag, no "default arm"
+            // concept — see ir.rs's scope note), so `lower_tag_pattern`
+            // would reject it. Guard here so the type checker doesn't
+            // accept more than what actually lowers.
+            if matches!(arm.pattern, ast::Pattern::Ident(..) | ast::Pattern::Wildcard(..)) && !is_single_catchall && !is_literal {
                 return Err(format!(
-                    "type inference not yet implemented for a bare identifier or wildcard as \
-                     a whole match arm (no default-arm concept exists yet) at {:?}",
+                    "type inference not yet implemented for a bare identifier or wildcard \
+                     mixed into an otherwise tag-shaped match (no default-arm concept exists \
+                     yet) at {:?}",
                     arm.pattern.span()
                 ));
             }
@@ -2333,6 +2401,32 @@ fn subst_params(ty: &Type, mapping: &HashMap<String, Type>) -> Type {
 // even though they're plain `Type::Struct` under the hood (see their
 // own doc comments in `plum-interp`) — they're opaque runtime handles
 // with no meaningful equality or display, unlike a real user struct.
+// Mirrors lower.rs's identically-named free functions exactly — see
+// `lower_catchall_only_match`/`lower_literal_match`'s doc comments
+// there for the full reasoning. Duplicated rather than shared (this
+// crate and plum-ir don't share code — the same established pattern
+// every other shape-detection check in this file already follows,
+// e.g. `.push()`/`.len()`/etc. are each independently checked in both
+// lower.rs and infer.rs).
+fn is_catchall_pattern(pattern: &ast::Pattern) -> bool {
+    matches!(pattern, ast::Pattern::Wildcard(_) | ast::Pattern::Ident(..))
+}
+
+fn is_literal_match(arms: &[ast::MatchArm]) -> bool {
+    match arms.split_last() {
+        Some((last, rest)) => {
+            is_catchall_pattern(&last.pattern)
+                && rest.iter().all(|arm| {
+                    matches!(
+                        arm.pattern,
+                        ast::Pattern::Int(..) | ast::Pattern::Float(..) | ast::Pattern::Bool(..) | ast::Pattern::Str(..)
+                    )
+                })
+        }
+        None => false,
+    }
+}
+
 fn satisfies_bound(ty: &Type, bound: &str) -> bool {
     let is_opaque_runtime_handle =
         matches!(ty, Type::Struct(n, _) if n == "Task" || n == "Sender" || n == "Receiver" || n == "Ref");
@@ -3658,14 +3752,60 @@ mod tests {
     }
 
     #[test]
-    fn match_bare_wildcard_arm_is_not_yet_supported() {
-        // No "default arm" concept exists yet — same limitation as
-        // lower.rs's IR Match. `_` used INSIDE a variant's args (e.g.
-        // `Shape.Rectangle(_, _)`) is fine; a bare `_` as a WHOLE arm
-        // isn't.
+    fn match_single_bare_wildcard_arm_works_for_any_scrutinee_type() {
+        // A LONE catch-all arm needs no tag inspection at all, so it
+        // works for ANY scrutinee type, including an enum — `_` used
+        // INSIDE a variant's args (e.g. `Shape.Rectangle(_, _)`) has
+        // always worked; this is the WHOLE-arm case, now supported too.
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float) }"));
         let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
-        infer_expr_with_err(&mut infer, "match shape { _ => 1 }", &env);
+        assert_eq!(infer_expr_with(&mut infer, "match shape { _ => 1 }", &env), Type::Int);
+    }
+
+    #[test]
+    fn match_wildcard_mixed_into_a_tag_shaped_match_is_still_an_error() {
+        // Unlike the LONE-arm case above, mixing a catch-all into an
+        // otherwise Ctor-tag-shaped match still has no lowering (the
+        // IR's `Match` has no "default arm" concept) — deliberately
+        // still rejected.
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        infer_expr_with_err(&mut infer, "match shape { Circle(r) => r, _ => 0.0 }", &env);
+    }
+
+    #[test]
+    fn match_over_int_literals_with_a_trailing_wildcard_infers_correctly() {
+        assert_eq!(infer("match 2 { 1 => \"one\", 2 => \"two\", _ => \"many\" }"), Type::Str);
+    }
+
+    #[test]
+    fn match_over_string_literals_with_a_trailing_ident_infers_correctly() {
+        assert_eq!(infer("match \"b\" { \"a\" => 1, \"b\" => 2, other => 0 }"), Type::Int);
+    }
+
+    #[test]
+    fn match_over_bool_literals_requires_the_scrutinee_to_be_bool() {
+        infer_err("match 5 { true => 1, false => 2, _ => 0 }");
+    }
+
+    #[test]
+    fn literal_match_without_a_trailing_catchall_is_an_error() {
+        infer_err("match 2 { 1 => \"one\", 2 => \"two\" }");
+    }
+
+    #[test]
+    fn literal_match_with_a_guarded_trailing_arm_is_an_error() {
+        infer_err("match 2 { 1 => \"one\", n if n > 0 => \"positive\" }");
+    }
+
+    #[test]
+    fn literal_match_arms_must_produce_the_same_type() {
+        infer_err("match 2 { 1 => \"one\", _ => 2 }");
+    }
+
+    #[test]
+    fn literal_match_arm_guards_are_checked_against_bool() {
+        infer_err("match 2 { 1 if 5 => \"one\", _ => \"other\" }");
     }
 
     #[test]

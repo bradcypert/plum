@@ -1005,7 +1005,138 @@ fn lower_struct_literal(
     })
 }
 
+// A catch-all pattern — matches ANY value unconditionally (no tag
+// inspection needed at all), used by both special cases below.
+fn is_catchall_pattern(pattern: &ast::Pattern) -> bool {
+    matches!(pattern, ast::Pattern::Wildcard(_) | ast::Pattern::Ident(..))
+}
+
+// A `match` whose arms are ALL literal patterns (`Int`/`Float`/`Bool`/
+// `Str`) except a REQUIRED trailing catch-all — see `lower_literal_
+// match`'s own doc comment for why this shape gets a totally different
+// desugaring than the ordinary Ctor-tag path below.
+fn is_literal_match(arms: &[ast::MatchArm]) -> bool {
+    match arms.split_last() {
+        Some((last, rest)) => {
+            is_catchall_pattern(&last.pattern)
+                && rest
+                    .iter()
+                    .all(|arm| matches!(arm.pattern, ast::Pattern::Int(..) | ast::Pattern::Float(..) | ast::Pattern::Bool(..) | ast::Pattern::Str(..)))
+        }
+        None => false,
+    }
+}
+
+// `match anything { _ => body }` / `match anything { x => body }` — a
+// SINGLE catch-all arm works for ANY scrutinee type at all (no tag
+// inspection needed), so this doesn't need to go through either the
+// literal-chain desugaring OR the Ctor-tag path. Desugars directly to
+// an ordinary `Let` (or a discarded-binding `Let` for `_`, matching
+// this file's established "expression-statement" convention).
+// Deliberately excludes a GUARDED sole arm: a guard could still fail
+// at runtime with nothing left to fall back to, which is exactly the
+// exhaustiveness gap this whole match-literals feature was designed to
+// close at compile time instead — see `lower_literal_match`'s
+// identical restriction on its own trailing arm.
+fn lower_catchall_only_match(scrutinee: &ast::Expr, arm: &ast::MatchArm, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+    let ir_scrutinee = lower_expr(scrutinee, ctx)?;
+    let body = lower_expr(&arm.body, ctx)?;
+    let name = match &arm.pattern {
+        ast::Pattern::Ident(name, _) => name.clone(),
+        ast::Pattern::Wildcard(_) => "_".to_string(),
+        _ => unreachable!("caller already checked this is a catch-all pattern"),
+    };
+    Ok(ir::Expr::Let {
+        name,
+        value: Box::new(ir_scrutinee),
+        body: Box::new(body),
+    })
+}
+
+// `match x { 1 => .., 2 => .., _ => .. }` — Plum's `Match` IR node
+// (below) is fundamentally Ctor-TAG-based: it reads a heap cell's tag
+// and dispatches on it. That works great for enums/structs/tuples/
+// arrays (all `Ctor`-shaped), but `Int`/`Float`/`Bool` aren't heap
+// values at all, and even heap-backed `Str` isn't `Ctor`-shaped either
+// (see heap.rs's `CellData::Str`) — none of them have a "tag" to
+// dispatch on. So a literal match desugars into something completely
+// different: an ordinary `If`/`Binary(Eq)` chain, reusing existing IR
+// nodes end to end (no new node needed).
+//
+// The exhaustiveness problem this creates — literal domains are
+// infinite (or, for `Str`, at least not enumerable), so listing a
+// finite set of literals can NEVER be exhaustive the way a finite
+// enum's tag set can — is closed at COMPILE time, not deferred to a
+// runtime "no arm matched" error the way Ctor-matching's own
+// (separate) exhaustiveness gap already is: `is_literal_match` (the
+// caller) already required a trailing catch-all arm, and this function
+// additionally rejects that arm having its OWN guard (a guard that
+// evaluates false would reopen exactly the gap the trailing arm exists
+// to close, and there is deliberately no new "runtime match failure"
+// IR node to fall back to here).
+fn lower_literal_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringContext) -> Result<ir::Expr, String> {
+    let (last, rest) = arms.split_last().expect("is_literal_match already checked arms is non-empty");
+    if last.guard.is_some() {
+        return Err(format!(
+            "the trailing wildcard/identifier arm of a literal `match` cannot have a guard \
+             (it must be able to unconditionally catch anything earlier arms didn't) at {:?}",
+            last.span
+        ));
+    }
+
+    let scrutinee_name = "__match_scrutinee".to_string();
+    let ir_scrutinee = lower_expr(scrutinee, ctx)?;
+
+    let last_body = lower_expr(&last.body, ctx)?;
+    let mut tail = match &last.pattern {
+        ast::Pattern::Ident(name, _) => ir::Expr::Let {
+            name: name.clone(),
+            value: Box::new(ir::Expr::Var(scrutinee_name.clone())),
+            body: Box::new(last_body),
+        },
+        ast::Pattern::Wildcard(_) => last_body,
+        _ => unreachable!("is_literal_match already checked the last arm is a catch-all"),
+    };
+
+    for arm in rest.iter().rev() {
+        let literal_expr = match &arm.pattern {
+            ast::Pattern::Int(n, _) => ir::Expr::Int(*n),
+            ast::Pattern::Float(f, _) => ir::Expr::Float(*f),
+            ast::Pattern::Bool(b, _) => ir::Expr::Bool(*b),
+            ast::Pattern::Str(s, _) => ir::Expr::Str(s.clone()),
+            _ => unreachable!("is_literal_match already checked every non-last arm is a literal"),
+        };
+        let eq_cond = ir::Expr::Binary(
+            ir::BinOp::Eq,
+            Box::new(ir::Expr::Var(scrutinee_name.clone())),
+            Box::new(literal_expr),
+        );
+        let cond = match &arm.guard {
+            Some(g) => ir::Expr::Binary(ir::BinOp::And, Box::new(eq_cond), Box::new(lower_expr(g, ctx)?)),
+            None => eq_cond,
+        };
+        let body = lower_expr(&arm.body, ctx)?;
+        tail = ir::Expr::If {
+            cond: Box::new(cond),
+            then_branch: Box::new(body),
+            else_branch: Box::new(tail),
+        };
+    }
+
+    Ok(ir::Expr::Let {
+        name: scrutinee_name,
+        value: Box::new(ir_scrutinee),
+        body: Box::new(tail),
+    })
+}
+
 fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringContext) -> Result<ir::Expr, String> {
+    if arms.len() == 1 && is_catchall_pattern(&arms[0].pattern) && arms[0].guard.is_none() {
+        return lower_catchall_only_match(scrutinee, &arms[0], ctx);
+    }
+    if is_literal_match(arms) {
+        return lower_literal_match(scrutinee, arms, ctx);
+    }
     let ir_scrutinee = lower_expr(scrutinee, ctx)?;
     let mut ir_arms = Vec::with_capacity(arms.len());
     for arm in arms {
@@ -2194,18 +2325,146 @@ mod tests {
     }
 
     #[test]
-    fn match_bare_wildcard_arm_is_not_yet_supported() {
-        // No "default arm" concept exists in the IR's Match yet — it
-        // dispatches strictly by tag. A bare `_` as a WHOLE arm (as
-        // opposed to `_` used inside a variant's args, which works
-        // fine — see match_variant_with_wildcard_args) needs a real
-        // IR extension, deliberately deferred.
-        lower_err("match x { _ => 1 }");
+    fn match_bare_wildcard_arm_desugars_to_a_discarding_let() {
+        // A SINGLE catch-all arm (as opposed to `_` used inside a
+        // variant's args, which already worked — see
+        // match_variant_with_wildcard_args) now works for ANY
+        // scrutinee type, since it needs no tag inspection at all.
+        assert_eq!(
+            lower("match x { _ => 1 }"),
+            ir::Expr::Let {
+                name: "_".to_string(),
+                value: Box::new(ir::Expr::Var("x".to_string())),
+                body: Box::new(ir::Expr::Int(1)),
+            }
+        );
+    }
+
+    #[test]
+    fn match_bare_ident_arm_binds_the_whole_scrutinee() {
+        assert_eq!(
+            lower("match x { y => y + 1 }"),
+            ir::Expr::Let {
+                name: "y".to_string(),
+                value: Box::new(ir::Expr::Var("x".to_string())),
+                body: Box::new(ir::Expr::Binary(
+                    ir::BinOp::Add,
+                    Box::new(ir::Expr::Var("y".to_string())),
+                    Box::new(ir::Expr::Int(1)),
+                )),
+            }
+        );
     }
 
     #[test]
     fn match_or_pattern_is_not_yet_supported() {
         lower_err("match x { A(v) | B(v) => v }");
+    }
+
+    #[test]
+    fn literal_match_desugars_to_an_if_else_chain() {
+        assert_eq!(
+            lower("match x { 1 => \"one\", 2 => \"two\", _ => \"many\" }"),
+            ir::Expr::Let {
+                name: "__match_scrutinee".to_string(),
+                value: Box::new(ir::Expr::Var("x".to_string())),
+                body: Box::new(ir::Expr::If {
+                    cond: Box::new(ir::Expr::Binary(
+                        ir::BinOp::Eq,
+                        Box::new(ir::Expr::Var("__match_scrutinee".to_string())),
+                        Box::new(ir::Expr::Int(1)),
+                    )),
+                    then_branch: Box::new(ir::Expr::Str("one".to_string())),
+                    else_branch: Box::new(ir::Expr::If {
+                        cond: Box::new(ir::Expr::Binary(
+                            ir::BinOp::Eq,
+                            Box::new(ir::Expr::Var("__match_scrutinee".to_string())),
+                            Box::new(ir::Expr::Int(2)),
+                        )),
+                        then_branch: Box::new(ir::Expr::Str("two".to_string())),
+                        else_branch: Box::new(ir::Expr::Str("many".to_string())),
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn literal_match_with_a_trailing_ident_binds_the_scrutinee() {
+        assert_eq!(
+            lower("match x { 1 => 10, other => other }"),
+            ir::Expr::Let {
+                name: "__match_scrutinee".to_string(),
+                value: Box::new(ir::Expr::Var("x".to_string())),
+                body: Box::new(ir::Expr::If {
+                    cond: Box::new(ir::Expr::Binary(
+                        ir::BinOp::Eq,
+                        Box::new(ir::Expr::Var("__match_scrutinee".to_string())),
+                        Box::new(ir::Expr::Int(1)),
+                    )),
+                    then_branch: Box::new(ir::Expr::Int(10)),
+                    else_branch: Box::new(ir::Expr::Let {
+                        name: "other".to_string(),
+                        value: Box::new(ir::Expr::Var("__match_scrutinee".to_string())),
+                        body: Box::new(ir::Expr::Var("other".to_string())),
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn literal_match_arm_guard_combines_with_the_equality_check_via_and() {
+        assert_eq!(
+            lower("match x { 1 if flag => 10, _ => 0 }"),
+            ir::Expr::Let {
+                name: "__match_scrutinee".to_string(),
+                value: Box::new(ir::Expr::Var("x".to_string())),
+                body: Box::new(ir::Expr::If {
+                    cond: Box::new(ir::Expr::Binary(
+                        ir::BinOp::And,
+                        Box::new(ir::Expr::Binary(
+                            ir::BinOp::Eq,
+                            Box::new(ir::Expr::Var("__match_scrutinee".to_string())),
+                            Box::new(ir::Expr::Int(1)),
+                        )),
+                        Box::new(ir::Expr::Var("flag".to_string())),
+                    )),
+                    then_branch: Box::new(ir::Expr::Int(10)),
+                    else_branch: Box::new(ir::Expr::Int(0)),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn literal_match_without_a_trailing_catchall_is_an_error() {
+        lower_err("match x { 1 => 10, 2 => 20 }");
+    }
+
+    #[test]
+    fn literal_match_with_a_guarded_trailing_arm_is_an_error() {
+        lower_err("match x { 1 => 10, n if n > 0 => 1 }");
+    }
+
+    #[test]
+    fn string_literal_match_desugars_correctly() {
+        assert_eq!(
+            lower("match s { \"a\" => 1, _ => 0 }"),
+            ir::Expr::Let {
+                name: "__match_scrutinee".to_string(),
+                value: Box::new(ir::Expr::Var("s".to_string())),
+                body: Box::new(ir::Expr::If {
+                    cond: Box::new(ir::Expr::Binary(
+                        ir::BinOp::Eq,
+                        Box::new(ir::Expr::Var("__match_scrutinee".to_string())),
+                        Box::new(ir::Expr::Str("a".to_string())),
+                    )),
+                    then_branch: Box::new(ir::Expr::Int(1)),
+                    else_branch: Box::new(ir::Expr::Int(0)),
+                }),
+            }
+        );
     }
 
     #[test]

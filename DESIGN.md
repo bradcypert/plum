@@ -550,6 +550,63 @@ Because `Option[T]`/`Result[T, E]` are ordinary enums under the hood,
 `Some(x)`, `None`, `Ok(v)`, `Err(e)` all fall directly out of the
 enum-variant pattern rule — nothing type-specific needed for them.
 
+**Literal patterns and whole-arm catch-alls — Decided (2026-07-28).**
+`match`'s IR node has always been fundamentally Ctor-TAG-based (it
+reads a heap cell's tag and dispatches on it) — great for enums/
+structs/tuples/arrays, but `Int`/`Float`/`Bool` aren't heap values at
+all, and `Str` (heap-backed, but not `Ctor`-shaped — see heap.rs's
+`CellData::Str`) isn't either. A bare `_`/identifier as a WHOLE
+top-level arm (as opposed to nested inside a variant's args, which
+always worked) had the identical problem: no tag to dispatch on. Both
+gaps are closed now, via two ADDITIONAL desugarings in `lower_match`
+(checked before the existing Ctor-tag path, which is otherwise
+completely unchanged — zero regression risk for any match that already
+worked):
+
+- **A single catch-all arm** (`match anything { _ => .. }` or `match
+  anything { x => .. }`, and ONLY that one arm) works for ANY
+  scrutinee type — no tag inspection needed at all, so it desugars
+  directly to `Let{name, value: scrutinee, body}` (or a discarded
+  binding for `_`). This is deliberately excluded when the sole arm has
+  a GUARD: a guard evaluating false would have nothing left to fall
+  back to.
+- **A literal match** (`match x { 1 => .., 2 => .., _ => .. }`) — every
+  arm is `Int`/`Float`/`Bool`/`Str` EXCEPT a REQUIRED trailing catch-
+  all — desugars to an ordinary `If`/`Binary(Eq)` chain (a guard, if
+  present, combines via `Binary(And, eq_cond, guard)` — reusing the
+  EXISTING short-circuit `&&` node, not a fresh boolean check, so no
+  arm's tail gets duplicated in the IR). No new IR node needed for
+  either case.
+
+**Why the trailing catch-all is REQUIRED, not optional — a real,
+discussed design decision (`AskUserQuestion`), not assumed solo.**
+Ctor-tag matching has its OWN separate exhaustiveness gap already
+(unmatched tag → a RUNTIME "no match arm for tag" error) — a literal
+match could have mirrored that by adding a small new "runtime match
+failure" IR node instead. Two real options were on the table; the
+chosen one was: literal domains are infinite (or, for `Str`, at least
+not enumerable) in a way a finite enum's tag set never is, so a
+missing catch-all is REJECTED AT COMPILE TIME (mirroring Rust's own
+rule for its own literal match arms) rather than deferred to a runtime
+surprise — and it comes for free with the if-chain desugaring, no new
+IR node required. The trailing arm additionally can't have its OWN
+guard (a guard evaluating false there would reopen exactly the gap
+this rule exists to close, with nothing left to fall back to and no
+"runtime match failure" node to fall back to using) — checked
+identically at BOTH the type-checking (`infer_match`) and lowering
+(`lower_match`) gates, so a program that fails one always fails the
+other with a consistent message, never a confusing gap between them.
+Deliberately uniform across all four literal types — `Bool` having
+only two values (and thus being technically enumerable) was
+considered and rejected as a special case, in favor of one simple
+rule everywhere.
+
+Deliberately still out of scope: mixing a catch-all INTO an otherwise
+Ctor-tag-shaped match (`Circle(r) => .., _ => ..`) — that needs a real
+"default arm" concept added to the IR's `Match` node itself, which
+this chunk didn't attempt; `Pattern::Or` (`1 | 2 => ..`) remains
+unimplemented too, unchanged by this chunk either way.
+
 ### Tuples and closures — Decided
 
 Tuple types are `(T1, T2, ...)`, values are `(v1, v2, ...)`. `()` is
@@ -1077,12 +1134,19 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
   Decided (see "Strings" above). Still open, for strings specifically:
   `.to_string()` for structs/enums/arrays/tuples (needs real design —
   the IR carries no field names to render with), other standard string
-  operations (e.g. `repeat`), grapheme-cluster-aware operations (a
+  operations (e.g. `repeat`), and grapheme-cluster-aware operations (a
   "rune" is a Unicode SCALAR VALUE / codepoint, not a user-perceived
   character — a grapheme cluster like an emoji with modifiers can span
-  multiple runes; `.runes()` doesn't attempt that
-  level), and string literal PATTERN matching in `match` (a
-  pre-existing gap, not introduced by the heap-backing change).
+  multiple runes; `.runes()` doesn't attempt that level). String (and
+  Int/Float/Bool) literal PATTERN matching in `match` is now Decided
+  too (see "Pattern grammar" above) — closing what used to be listed
+  here as a pre-existing gap.
+- Mixing a catch-all arm INTO an otherwise Ctor-tag-shaped `match`
+  (`Circle(r) => .., _ => ..`) and `Pattern::Or` (`1 | 2 => ..`) both
+  remain genuinely unimplemented (see "Pattern grammar" above) — the
+  former needs a real "default arm" concept added to the IR's `Match`
+  node itself, which the literal-match/single-catch-all work above
+  deliberately didn't attempt.
 - Recursive closures that capture themselves (named top-level recursive
   functions should compile to direct calls, sidestepping this; true
   anonymous self-referential closures are a deferred detail).
