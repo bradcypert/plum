@@ -405,16 +405,17 @@ impl Infer {
                     format!("type inference not yet implemented for this type annotation at {span:?}")
                 })?;
                 // The opaque pseudo-generic builtin types (`Array[T]`,
-                // `Task[T]`, `Sender[T]`, `Receiver[T]`) are DELIBERATELY
-                // never registered in `self.ctx` (see the type's own
-                // construction sites — e.g. `.push()`'s `Type::Struct(
-                // "Array", ...)` — for why: they exist purely for their
-                // structural unify behavior, not as real declarations).
-                // That means `ctx.generic_params` can never answer for
-                // them, so they need their own fixed-arity-one check
-                // here, checked BEFORE falling through to the ordinary
-                // ctx-registered-declaration path below.
-                if matches!(name.as_str(), "Array" | "Task" | "Sender" | "Receiver") {
+                // `Task[T]`, `Sender[T]`, `Receiver[T]`, `Ref[T]`) are
+                // DELIBERATELY never registered in `self.ctx` (see the
+                // type's own construction sites — e.g. `.push()`'s
+                // `Type::Struct("Array", ...)` — for why: they exist
+                // purely for their structural unify behavior, not as
+                // real declarations). That means `ctx.generic_params`
+                // can never answer for them, so they need their own
+                // fixed-arity-one check here, checked BEFORE falling
+                // through to the ordinary ctx-registered-declaration
+                // path below.
+                if matches!(name.as_str(), "Array" | "Task" | "Sender" | "Receiver" | "Ref") {
                     if args.len() != 1 {
                         return Err(format!(
                             "{name:?} expects 1 generic argument, found {} at {span:?}",
@@ -928,6 +929,61 @@ impl Infer {
                     ]),
                     Subst::empty(),
                 ))
+            }
+            // `ref(v)` — a bare-Ident callee named `ref`, called with
+            // exactly one value arg (mirrors lower.rs's identical
+            // shape check, and the same "checked BEFORE the general
+            // variant-construction fallback" precedent `channel[T]()`
+            // already established). Evaluates to `Ref[T]`, `T` inferred
+            // directly from `v` — no explicit type argument needed,
+            // unlike `channel[T]()`, since there's already a real value
+            // to infer from.
+            ast::Expr::Call { callee, args, .. }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "ref") =>
+            {
+                let (value_ty, acc) = self.infer_expr(&args[0], env)?;
+                Ok((Type::Struct("Ref".to_string(), vec![value_ty]), acc))
+            }
+            // `r.get()` — `r` must be `Ref[T]` for some `T`; evaluates
+            // to `T`.
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "get") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Ref".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.get()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((acc.apply(&elem_ty), acc))
+            }
+            // `r.set(v)` — `r` must be `Ref[T]`, `v` must be that SAME
+            // `T`; evaluates to `Unit` (a genuine imperative mutation,
+            // NOT the "returns a new value" convention every other
+            // `.set()`/mutating-looking method uses — see `ir::Expr::
+            // RefSet`'s doc comment).
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "set") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let elem_ty = self.fresh();
+                let s = unify(&acc.apply(&base_ty), &Type::Struct("Ref".to_string(), vec![elem_ty.clone()]))
+                    .map_err(|e| format!("`.set()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (value_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&value_ty), &acc.apply(&elem_ty))
+                    .map_err(|e| format!("`.set()` argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Unit, acc))
             }
             // `arr.len()` / `s.len()` — `arr`/`s` must be `Array[T]` for
             // SOME `T`, or `Str`; evaluates to `Int` either way. Same
@@ -2278,7 +2334,8 @@ fn subst_params(ty: &Type, mapping: &HashMap<String, Type>) -> Type {
 // own doc comments in `plum-interp`) — they're opaque runtime handles
 // with no meaningful equality or display, unlike a real user struct.
 fn satisfies_bound(ty: &Type, bound: &str) -> bool {
-    let is_opaque_runtime_handle = matches!(ty, Type::Struct(n, _) if n == "Task" || n == "Sender" || n == "Receiver");
+    let is_opaque_runtime_handle =
+        matches!(ty, Type::Struct(n, _) if n == "Task" || n == "Sender" || n == "Receiver" || n == "Ref");
     match bound {
         "Num" => matches!(ty, Type::Int | Type::Float),
         "Eq" | "Show" => !matches!(ty, Type::Function(..)) && !is_opaque_runtime_handle,
@@ -2358,6 +2415,21 @@ pub(crate) fn ast_type_to_type(
             let name = base.last().map(String::as_str).ok_or_else(|| {
                 format!("type inference not yet implemented for this type annotation at {span:?}")
             })?;
+            // Same opaque-pseudo-generic-builtin-types gap `resolve_
+            // annotation` already had to check for, in exactly the
+            // same way — this function is the OTHER `ast::Type ->
+            // Type` converter (struct/enum field declarations,
+            // generic type arguments, etc.), so it needs its own copy
+            // of the same fixed-arity-one check. A real, pre-existing
+            // gap for ALL FOUR names, not just `Ref` — caught here via
+            // `struct Counter { value: Ref[Int] }`.
+            if matches!(name, "Array" | "Task" | "Sender" | "Receiver" | "Ref") {
+                if args.len() != 1 {
+                    return Err(format!("{name:?} expects 1 generic argument, found {} at {span:?}", args.len()));
+                }
+                let resolved_arg = ast_type_to_type(&args[0], ctx, in_scope_params)?;
+                return Ok(Type::Struct(name.to_string(), vec![resolved_arg]));
+            }
             let Some(declared_params) = ctx.generic_params(name) else {
                 return Err(format!(
                     "type inference not yet implemented for this type annotation at {span:?}"
@@ -4342,6 +4414,68 @@ mod tests {
         };
         assert_eq!(*ret.as_ref(), Type::Str);
         assert!(matches!(&params[0], Type::Var(_)), "expected an unresolved param type, got {:?}", params[0]);
+    }
+
+    #[test]
+    fn ref_new_infers_the_ref_of_the_values_type() {
+        assert_eq!(infer("ref(5)"), Type::Struct("Ref".to_string(), vec![Type::Int]));
+    }
+
+    #[test]
+    fn ref_get_infers_the_underlying_type() {
+        assert_eq!(infer("ref(5).get()"), Type::Int);
+    }
+
+    #[test]
+    fn ref_set_infers_as_unit() {
+        assert_eq!(infer("ref(5).set(6)"), Type::Unit);
+    }
+
+    #[test]
+    fn ref_set_argument_type_is_checked() {
+        infer_err("ref(5).set(true)");
+    }
+
+    #[test]
+    fn get_on_a_non_ref_is_an_error() {
+        infer_err("5.get()");
+    }
+
+    #[test]
+    fn set_with_one_argument_on_a_non_ref_is_an_error() {
+        infer_err("5.set(6)");
+    }
+
+    #[test]
+    fn ref_of_a_struct_round_trips() {
+        let mut infer = Infer::with_context(context("struct Point { x: Int, y: Int }"));
+        let tokens = Lexer::new("ref(Point { x: 1, y: 2 }).get()").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap();
+        let (ty, subst) = infer.infer_expr(&ast, &TypeEnv::new()).unwrap_or_else(|e| panic!("inference error: {e}"));
+        assert_eq!(subst.apply(&ty), Type::Struct("Point".to_string(), vec![]));
+    }
+
+    #[test]
+    fn ref_annotation_is_accepted_in_a_parameter_position() {
+        let types = infer_program("let f (r: Ref[Int]) = r.get()");
+        assert_eq!(types["f"], fn_ty(vec![Type::Struct("Ref".to_string(), vec![Type::Int])], Type::Int));
+    }
+
+    #[test]
+    fn builtin_types_are_accepted_in_struct_field_declarations() {
+        // Regression coverage for a real, pre-existing gap caught while
+        // testing `Ref`: `ast_type_to_type` (used for struct/enum field
+        // declarations) needed its OWN copy of the same opaque-
+        // pseudo-generic-builtin check `resolve_annotation` (used for
+        // function param/return annotations) already had — this
+        // affected `Array`/`Task`/`Sender`/`Receiver` too, not just
+        // `Ref`, since none of them were ever handled here before.
+        let ctx = context("struct Counter { value: Ref[Int] }");
+        assert_eq!(
+            ctx.struct_fields("Counter"),
+            Some(&[("value".to_string(), Type::Struct("Ref".to_string(), vec![Type::Int]))][..])
+        );
     }
 
     #[test]

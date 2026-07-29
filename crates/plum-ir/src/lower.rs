@@ -539,6 +539,49 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         {
             Ok(ir::Expr::Channel)
         }
+        // `ref(v)` — a bare-Ident callee named `ref`, called with
+        // exactly one value arg. Checked BEFORE the general variant-
+        // construction fallback further below (same precedent as
+        // `channel[T]()`'s own special-case): a bare capitalized-or-
+        // lowercase Ident-call is otherwise assumed to name a declared
+        // enum variant, so a real user-declared variant named `ref`
+        // (variant names aren't required to be capitalized in this
+        // grammar) would collide — an accepted, documented precedent-
+        // matching risk, not a new one.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "ref") =>
+        {
+            Ok(ir::Expr::RefNew {
+                value: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
+        // `r.get()` — same shape-only precedent, zero args.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "get") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::RefGet {
+                base: Box::new(lower_expr(base, ctx)?),
+            })
+        }
+        // `r.set(v)` — same shape-only precedent, one arg. Note this
+        // name COULD collide with `Array`'s own `.set(i, v)` (two
+        // args) — but arity alone (`args.len() == 1` here vs `== 2`
+        // for arrays) already disambiguates them at the pattern-match
+        // level, so no further check is needed.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "set") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::RefSet {
+                base: Box::new(lower_expr(base, ctx)?),
+                value: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
         // `arr.len()` — same shape-only precedent, zero args.
         ast::Expr::Call { callee, args, .. }
             if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "len") =>
@@ -2886,6 +2929,52 @@ mod tests {
             lower("x.to_string()"),
             ir::Expr::ToString {
                 base: Box::new(ir::Expr::Var("x".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn ref_new_lowers_to_a_ref_new_node() {
+        assert_eq!(
+            lower("ref(5)"),
+            ir::Expr::RefNew {
+                value: Box::new(ir::Expr::Int(5)),
+            }
+        );
+    }
+
+    #[test]
+    fn ref_get_lowers_to_a_ref_get_node() {
+        assert_eq!(
+            lower("r.get()"),
+            ir::Expr::RefGet {
+                base: Box::new(ir::Expr::Var("r".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn ref_set_lowers_to_a_ref_set_node() {
+        assert_eq!(
+            lower("r.set(6)"),
+            ir::Expr::RefSet {
+                base: Box::new(ir::Expr::Var("r".to_string())),
+                value: Box::new(ir::Expr::Int(6)),
+            }
+        );
+    }
+
+    #[test]
+    fn array_set_with_two_args_still_lowers_to_array_set_not_ref_set() {
+        // Arity disambiguates `Array`'s `.set(i, v)` from `Ref`'s
+        // `.set(v)` — confirms the two shape-detection rules coexist
+        // without either shadowing the other.
+        assert_eq!(
+            lower("arr.set(0, 9)"),
+            ir::Expr::ArraySet {
+                array: Box::new(ir::Expr::Var("arr".to_string())),
+                index: Box::new(ir::Expr::Int(0)),
+                value: Box::new(ir::Expr::Int(9)),
             }
         );
     }

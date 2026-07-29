@@ -463,6 +463,36 @@ pub enum Expr {
     ToString {
         base: Box<Expr>,
     },
+    // `ref(v)` — allocates a genuinely SHARED mutable cell (DESIGN.md's
+    // "Mutability and cycles" section), holding `v` initially. Evaluates
+    // to `Value::Ref`, a handle OUTSIDE the toy refcounted heap
+    // entirely (see `Interpreter::eval`'s doc comment on `RefNew` for
+    // why) — same "opaque runtime handle, not FBIP-tracked" treatment
+    // `Task`/`Sender`/`Receiver` already get, and for the same reason:
+    // a `Ref` cell must ALWAYS be mutated in place and ALWAYS stay
+    // visible to every alias, which is the opposite of what the toy
+    // heap's refcount-gated "maybe reuse, maybe copy" `CtorReuse`
+    // machinery does. This is why `Ref` needs NO fbip.rs changes
+    // beyond exhaustive-match passthrough — it was never a candidate
+    // for that analysis in the first place.
+    RefNew {
+        value: Box<Expr>,
+    },
+    // `r.get()` — reads a COPY of the cell's current contents.
+    RefGet {
+        base: Box<Expr>,
+    },
+    // `r.set(v)` — UNCONDITIONALLY overwrites the cell's contents with
+    // `v`, visible through every other handle to the SAME cell.
+    // Evaluates to `Unit` — the first genuinely imperative, always-
+    // visible-mutation primitive in the language beyond `let mut`'s
+    // own `Assign`, deliberately NOT following the "returns a new
+    // value" functional-update convention every other mutating-looking
+    // method (`.push()`, `.set()` on arrays, `.concat()`, etc.) uses.
+    RefSet {
+        base: Box<Expr>,
+        value: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

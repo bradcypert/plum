@@ -399,6 +399,47 @@ mod tests {
     }
 
     #[test]
+    fn ref_aliasing_runs_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let a = ref(1); let b = a; b.set(99); a.get() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(99)));
+    }
+
+    #[test]
+    fn ref_used_as_a_counter_through_a_for_loop() {
+        // A real-world-shaped use case: a Ref accumulator threaded
+        // through a `for` loop, mutated on every iteration.
+        let src = "let use_it dummy = { let counter = ref(0); for i in 0..5 { counter.set(counter.get() + i); }; counter.get() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(0 + 1 + 2 + 3 + 4)));
+    }
+
+    #[test]
+    fn ref_set_argument_type_mismatch_is_rejected_before_running() {
+        let src = "let use_it dummy = { let r = ref(5); r.set(true) }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn a_struct_field_can_hold_a_ref() {
+        let src = "struct Counter { value: Ref[Int] }\n\
+                    let increment (c: Counter) = c.value.set(c.value.get() + 1)\n\
+                    let use_it dummy = { let c = Counter { value: ref(0) }; increment(c); increment(c); c.value.get() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(2)));
+    }
+
+    #[test]
+    fn capturing_a_ref_across_a_spawn_boundary_is_rejected_at_runtime() {
+        let src = "let use_it dummy = { let r = ref(5); spawn { r.get() }.join() }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a runtime error, not a successful run");
+        assert!(err.contains("Ref"), "expected a Ref-boundary error, got: {err}");
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely

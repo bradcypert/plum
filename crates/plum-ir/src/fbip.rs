@@ -126,6 +126,16 @@ pub fn mark_reuse(expr: Expr) -> Expr {
         Expr::ChannelRecv { receiver } => Expr::ChannelRecv {
             receiver: Box::new(mark_reuse(*receiver)),
         },
+        Expr::RefNew { value } => Expr::RefNew {
+            value: Box::new(mark_reuse(*value)),
+        },
+        Expr::RefGet { base } => Expr::RefGet {
+            base: Box::new(mark_reuse(*base)),
+        },
+        Expr::RefSet { base, value } => Expr::RefSet {
+            base: Box::new(mark_reuse(*base)),
+            value: Box::new(mark_reuse(*value)),
+        },
         Expr::Select { arms } => Expr::Select {
             arms: arms
                 .into_iter()
@@ -432,6 +442,16 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         Expr::ChannelRecv { receiver } => Expr::ChannelRecv {
             receiver: Box::new(transform(*receiver, known_heap)),
         },
+        Expr::RefNew { value } => Expr::RefNew {
+            value: Box::new(transform(*value, known_heap)),
+        },
+        Expr::RefGet { base } => Expr::RefGet {
+            base: Box::new(transform(*base, known_heap)),
+        },
+        Expr::RefSet { base, value } => Expr::RefSet {
+            base: Box::new(transform(*base, known_heap)),
+            value: Box::new(transform(*value, known_heap)),
+        },
         // Arm bindings (whatever a `Let`/`Match` node WITHIN `body`
         // introduces for the received value — see ir.rs's `Select` doc
         // comment) aren't added to `known_heap` here either, same
@@ -614,6 +634,9 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
             expr_mentions_var(sender, name) || expr_mentions_var(value, name)
         }
         Expr::ChannelRecv { receiver } => expr_mentions_var(receiver, name),
+        Expr::RefNew { value } => expr_mentions_var(value, name),
+        Expr::RefGet { base } => expr_mentions_var(base, name),
+        Expr::RefSet { base, value } => expr_mentions_var(base, name) || expr_mentions_var(value, name),
         Expr::Select { arms } => arms
             .iter()
             .any(|arm| expr_mentions_var(&arm.receiver, name) || expr_mentions_var(&arm.body, name)),
@@ -955,6 +978,25 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
         Expr::ChannelRecv { receiver } => {
             let (receiver_t, used) = mark_last_uses(*receiver, name, live_after);
             (Expr::ChannelRecv { receiver: Box::new(receiver_t) }, used)
+        }
+        Expr::RefNew { value } => {
+            let (value_t, used) = mark_last_uses(*value, name, live_after);
+            (Expr::RefNew { value: Box::new(value_t) }, used)
+        }
+        Expr::RefGet { base } => {
+            let (base_t, used) = mark_last_uses(*base, name, live_after);
+            (Expr::RefGet { base: Box::new(base_t) }, used)
+        }
+        Expr::RefSet { base, value } => {
+            let (value_t, used_value) = mark_last_uses(*value, name, live_after);
+            let (base_t, used_base) = mark_last_uses(*base, name, live_after || used_value);
+            (
+                Expr::RefSet {
+                    base: Box::new(base_t),
+                    value: Box::new(value_t),
+                },
+                used_base || used_value,
+            )
         }
         // Bodies are ALTERNATIVES — only ONE arm's `body` actually
         // runs at runtime (whichever channel becomes ready first) —
@@ -1597,6 +1639,33 @@ mod tests {
             needle: Box::new(Expr::Str("x".to_string())),
         };
         assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
+    fn ref_set_is_never_a_reuse_candidate() {
+        // `Ref` cells always mutate unconditionally in place at
+        // runtime already (see `RefHandle`'s doc comment, plum-interp)
+        // — `mark_reuse` never touches `RefNew`/`RefGet`/`RefSet` at
+        // all, regardless of whether `base` is a plain variable.
+        let input = Expr::RefSet {
+            base: Box::new(var("r")),
+            value: Box::new(int(6)),
+        };
+        assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
+    fn a_let_bound_ref_is_not_tracked_as_heap_shaped() {
+        // `Ref` lives entirely outside the toy `Heap`/FBIP's refcount-
+        // insertion machinery (unlike `Ctor`/`Str`) — a `let`-bound
+        // `Ref` with zero further uses does NOT get the "insert a Dec"
+        // treatment `zero_uses_drops_immediately` proves for `Ctor`.
+        let input = let_(
+            "r",
+            Expr::RefNew { value: Box::new(int(5)) },
+            int(10),
+        );
+        assert_eq!(insert_refcount_ops(input.clone()), input);
     }
 
     #[test]

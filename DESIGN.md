@@ -88,11 +88,84 @@ for graph-shaped, genuinely shared mutable state (entity/component
 references, scene graphs, caches) — FBIP's uniqueness analysis has
 nothing to exploit when there's no single owner.
 
-Resolution: an explicit, opt-in mutable-reference/shared type (working
-name: `Ref[T]` or `Shared[T]`, TBD when we design the type system)
-for the cases that need real sharing — same shape as OCaml's `ref`,
-Rust's `Cell`/`RefCell`, Swift's reference types. Reference cycles are
-only possible through this explicit type, not through ordinary values.
+Resolution: an explicit, opt-in mutable-reference/shared type — same
+shape as OCaml's `ref`, Rust's `Cell`/`RefCell`, Swift's reference
+types. Reference cycles are only possible through this explicit type,
+not through ordinary values.
+
+**Naming and surface syntax — Decided (2026-07-28).** `Ref[T]`, not
+`Shared[T]` — `Shared` was rejected specifically because the word
+already means something else, precisely, in this codebase (a
+refcounted heap cell whose count is `> 1`, i.e. NOT safe to reuse-in-
+place — see `fbip.rs`/the "Core mechanism" section above), and
+overloading it for the type name would be confusing every time both
+concepts come up in the same sentence. Construction is `ref(v)` — a
+PLAIN lowercase function call, `T` inferred directly from `v` (no
+explicit type argument needed the way `channel[T]()` needs one, since
+`ref` always starts from a real value). This needed zero new parser
+grammar: a bare-Ident call already parses; the ONLY new piece was a
+shape-detection check (in both `lower.rs` and `infer.rs`) recognizing
+a callee literally named `ref`, checked BEFORE the general variant-
+construction fallback — same precedent `channel[T]()`'s own bare-Ident
+special-case already established. Reading is `.get()` (returns a
+COPY of the current contents); writing is `.set(v)` (UNCONDITIONALLY
+overwrites the cell, visible through every other handle to the same
+cell, evaluates to `Unit`) — the first genuinely imperative, always-
+visible mutation primitive in the language beyond `let mut`'s own
+`Assign`, deliberately NOT following the "returns a new value"
+functional-update convention every other mutating-looking method
+(`.push()`, arrays' own `.set()`, `.concat()`, etc.) uses.
+
+**Representation and FBIP/pattern-matching interaction — Decided
+(2026-07-28), resolving DESIGN.md's own longstanding open question.**
+`Value::Ref(RefHandle)` where `RefHandle(Rc<RefCell<Value>>)` — Rust's
+OWN `Rc`/`RefCell` give real multi-owner shared-mutation semantics
+natively, DELIBERATELY kept entirely OUTSIDE the toy refcounted `Heap`
+(`heap.rs`): that heap's `CtorReuse`/`dec_and_maybe_reuse`-style "maybe
+copy, maybe reuse based on refcount" logic is exactly backwards for a
+`Ref` cell, which must ALWAYS mutate in place and ALWAYS stay visible
+through every alias, unconditionally — never conditionally reused,
+never conditionally copied. This puts `Ref` in the exact same category
+as `Task`/`Sender`/`Receiver`: an opaque runtime handle FBIP never
+tracks or reuses at all — `fbip.rs` needed ONLY exhaustive-match
+passthrough cases for the three new IR nodes (`RefNew`/`RefGet`/
+`RefSet`), no `is_syntactically_heap` case (unlike `Ctor`/`Str`), and
+`mark_reuse` never touches them. This directly ANSWERS the "interaction
+with pattern matching" half of the original open question too: there
+isn't one — `Ref` is not directly pattern-matchable, same as `Task`/
+`Sender`/`Receiver` aren't today (no `Ctor` shape to match against);
+`match r.get() { ... }` is how you'd match on a `Ref`'s contents.
+Equality (`==`) is IDENTITY (`Rc::ptr_eq`), matching how `Task`/
+`Sender`/`Receiver` already implement `PartialEq` — two DIFFERENT
+cells holding equal contents are NOT `==`, which is genuinely what
+makes `Ref` useful for aliasing in the first place.
+
+**Concurrency boundary — Decided (2026-07-28).** A plain (non-atomic)
+`Rc` isn't `Send`, so `Ref` crossing a `spawn`/`channel` boundary is a
+clear, reported error (`to_portable` rejects it, same as it already
+rejects closures/bare function values/task handles) — NOT a silent
+deep-copy, which would quietly defeat the entire point of `Ref`'s
+shared-mutation semantics by splitting one cell into two independent
+ones without any warning. Real cross-thread shared mutation would need
+atomic refcounts (`Arc`) and real synchronization (`Mutex`), which
+DESIGN.md's own concurrency section ("How this interacts with non-
+atomic refcounts") already flags as a separate, deliberately deferred
+question — this chunk didn't try to solve it, just made sure the
+current limitation fails loudly instead of silently.
+
+**A real, pre-existing bug caught and fixed while testing, not Ref-
+specific:** `struct Counter { value: Ref[Int] }` (a builtin opaque type
+used in a STRUCT FIELD declaration) initially failed with "type
+inference not yet implemented for this type annotation" — `ast_type_
+to_type` (the OTHER `ast::Type -> Type` converter, used for struct/enum
+field declarations and generic type arguments, as opposed to `resolve_
+annotation`, used for function param/return annotations) had never
+received the same opaque-pseudo-generic-builtin-types fixed-arity-one
+check `resolve_annotation` already got when THAT gap was closed
+earlier. This affected `Array[T]`/`Task[T]`/`Sender[T]`/`Receiver[T]`
+too, not just `Ref[T]` — none of the four could ever have been used as
+a struct/enum field's type before this fix, a real, previously-unnoticed
+gap now closed for all four at once.
 
 ### Cycle collection — Leaning, deliberately deferred
 
@@ -981,8 +1054,17 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 
 ## Open questions (not yet decided, flagged so we don't forget them)
 
-- Exact design of the `Ref`/`Shared` mutable type and its interaction
-  with pattern matching and FBIP.
+- `Ref[T]`'s naming, construction (`ref(v)`), `.get()`/`.set()`,
+  representation (`Rc<RefCell<Value>>`, outside the toy heap/FBIP
+  entirely), pattern-matching interaction (none — not directly
+  matchable), and concurrency-boundary behavior (a reported error, not
+  a silent deep-copy) are all now Decided (see "Mutability and cycles"
+  above). Still open: cycle collection strategy (deliberately deferred,
+  see "Cycle collection" above — a `Ref` that reference-cycles with
+  itself/another `Ref` currently just leaks, by design, until that's
+  revisited), and whether `Ref` should ever get real cross-thread
+  sharing (would need `Arc`/`Mutex`, a genuinely different
+  representation — not a small extension of the current one).
 - `Array[T]`'s v1 scope, `for x in arr` iteration, the `.pop()`/
   `.set()`/`.remove()`/`.map()`/`.filter()`/`.fold()` operations,
   builtin-type parameter/return annotations, and `.push()`/`.pop()`/

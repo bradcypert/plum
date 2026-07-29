@@ -43,6 +43,41 @@ pub enum Value {
     // `ReceiverHandle`'s doc comments.
     Sender(SenderHandle),
     Receiver(ReceiverHandle),
+    // A `ref(v)` shared-mutable cell — see `RefHandle`'s doc comment.
+    Ref(RefHandle),
+}
+
+/// A `ref(v)` cell (DESIGN.md's "Mutability and cycles" section) —
+/// genuinely, visibly shared mutable state, unlike every other heap
+/// value in the language (arrays/structs/strings), which are pure
+/// values under the hood even when FBIP reuses their memory in place.
+/// `Rc<RefCell<Value>>` gives this real multi-owner shared-mutation
+/// semantics natively via Rust's own types, DELIBERATELY kept outside
+/// the toy refcounted `Heap` (`heap.rs`) entirely: that heap's
+/// `CtorReuse`/`dec_and_maybe_reuse`-style "maybe copy, maybe reuse
+/// based on refcount" logic is exactly backwards for a `Ref` cell,
+/// which must ALWAYS mutate in place and ALWAYS stay visible through
+/// every alias, unconditionally. This puts `Ref` in the same category
+/// as `Task`/`Sender`/`Receiver` — an opaque runtime handle FBIP never
+/// tracks or reuses (see `fbip.rs`'s exhaustive-match passthrough for
+/// `RefNew`/`RefGet`/`RefSet` — no `is_syntactically_heap` case was
+/// added for it, unlike `Ctor`/`Str`, on purpose).
+///
+/// NOT `Send` (a plain `Rc`, not `Arc`) — this is why `to_portable`
+/// rejects `Value::Ref` outright, same as it already rejects closures/
+/// bare function values/task handles: a `Ref` can't cross a `spawn`/
+/// `channel` boundary today. Real cross-thread shared mutation would
+/// need atomic refcounts (`Arc`) and real synchronization (`Mutex`),
+/// which DESIGN.md's own concurrency section already flags as a
+/// separate, deliberately deferred question — not something this
+/// change tries to solve.
+#[derive(Debug, Clone)]
+pub struct RefHandle(Rc<RefCell<Value>>);
+
+impl PartialEq for RefHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 /// The sending end of a `channel[T]()`. Wraps `std::sync::mpsc::
@@ -318,6 +353,13 @@ impl Interpreter {
             // `Receiver`'s doc comment.
             Value::Sender(h) => Ok(PortableValue::Sender(h.clone())),
             Value::Receiver(h) => Ok(PortableValue::Receiver(h.clone())),
+            // See `RefHandle`'s doc comment: a plain (non-atomic) `Rc`
+            // can't cross a thread boundary — real shared mutation
+            // across OS threads needs atomic refcounts/synchronization
+            // DESIGN.md defers separately.
+            Value::Ref(_) => {
+                Err("cannot send a Ref across a task boundary (not yet supported)".to_string())
+            }
         }
     }
 
@@ -1038,6 +1080,33 @@ impl Interpreter {
                 let new_addr = self.heap.alloc_str(rendered);
                 Ok(Value::HeapRef(new_addr))
             }
+            // `ref(v)` — see `RefHandle`'s doc comment for why this is
+            // a plain `Rc<RefCell<Value>>`, entirely outside the toy
+            // `Heap`.
+            Expr::RefNew { value } => {
+                let v = self.eval(value)?;
+                Ok(Value::Ref(RefHandle(Rc::new(RefCell::new(v)))))
+            }
+            // `r.get()` — a COPY of the cell's current contents (an
+            // ordinary `Value::clone()`, same as reading any other
+            // field would produce).
+            Expr::RefGet { base } => {
+                let Value::Ref(handle) = self.eval(base)? else {
+                    return Err("`.get()` requires a Ref value".to_string());
+                };
+                Ok(handle.0.borrow().clone())
+            }
+            // `r.set(v)` — UNCONDITIONALLY overwrites the cell, visible
+            // through every other handle to the same cell. Evaluates
+            // to `Unit`.
+            Expr::RefSet { base, value } => {
+                let Value::Ref(handle) = self.eval(base)? else {
+                    return Err("`.set()` requires a Ref value".to_string());
+                };
+                let v = self.eval(value)?;
+                *handle.0.borrow_mut() = v;
+                Ok(Value::Unit)
+            }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
                 // non-heap name (shouldn't happen given how fbip.rs
@@ -1251,6 +1320,13 @@ fn values_equal(a: &Value, b: &Value, heap: &heap::Heap) -> Result<bool, String>
                 _ => Err(format!("type error: cannot compare {a:?} and {b:?} for equality")),
             }
         }
+        // Identity, not contents — same convention `Task`/`Sender`/
+        // `Receiver` already use (`RefHandle`'s own `PartialEq`, via
+        // `Rc::ptr_eq`). Two DIFFERENT cells holding equal contents are
+        // NOT `==` — this is genuinely reference identity, matching
+        // what makes `Ref` useful for shared-mutable-state aliasing in
+        // the first place.
+        (Value::Ref(x), Value::Ref(y)) => Ok(x == y),
         _ => Err(format!("type error: cannot compare {a:?} and {b:?} for equality")),
     }
 }
@@ -1481,6 +1557,67 @@ mod tests {
     #[test]
     fn to_string_on_an_array_is_a_runtime_error() {
         eval_err("[1, 2].to_string()");
+    }
+
+    #[test]
+    fn ref_get_returns_the_initial_value() {
+        assert_eq!(eval("ref(5).get()"), Value::Int(5));
+    }
+
+    #[test]
+    fn ref_set_then_get_sees_the_new_value() {
+        assert_eq!(eval("{ let r = ref(5); r.set(10); r.get() }"), Value::Int(10));
+    }
+
+    #[test]
+    fn ref_aliasing_is_visible_through_every_handle() {
+        // The whole point of Ref: two names bound to the SAME cell,
+        // mutation through one visible through the other.
+        let src = "{ let a = ref(1); let b = a; b.set(99); a.get() }";
+        assert_eq!(eval(src), Value::Int(99));
+    }
+
+    #[test]
+    fn ref_get_returns_a_copy_not_a_further_alias() {
+        // `.get()` on a Ref[Array[Int]] must hand back an ordinary
+        // array VALUE — mutating the array via array ops afterward
+        // must not somehow reach back into the Ref cell (arrays are
+        // pure values; only Ref itself has reference semantics).
+        let src = "{ let r = ref([1, 2, 3]); let a = r.get(); let b = a.push(4); r.get().len() }";
+        assert_eq!(eval(src), Value::Int(3));
+    }
+
+    #[test]
+    fn ref_equality_is_identity_not_contents() {
+        assert_eq!(eval("{ let a = ref(1); let b = ref(1); a == b }"), Value::Bool(false));
+    }
+
+    #[test]
+    fn ref_equality_holds_for_the_same_cell_via_aliasing() {
+        assert_eq!(eval("{ let a = ref(1); let b = a; a == b }"), Value::Bool(true));
+    }
+
+    #[test]
+    fn get_on_a_non_ref_is_a_runtime_error() {
+        eval_err("5.get()");
+    }
+
+    #[test]
+    fn set_with_one_argument_on_a_non_ref_is_a_runtime_error() {
+        eval_err("5.set(6)");
+    }
+
+    #[test]
+    fn ref_can_hold_a_heap_shaped_value() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = { let r = ref(Point { x: 1, y: 2 }); match r.get() { Point(x, y) => x + y } }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(3));
+    }
+
+    #[test]
+    fn multiple_sets_apply_in_order_and_are_all_visible() {
+        let src = "{ let r = ref(0); r.set(1); r.set(2); r.set(3); r.get() }";
+        assert_eq!(eval(src), Value::Int(3));
     }
 
     #[test]
@@ -1903,6 +2040,17 @@ mod tests {
         let src = "struct Point { x: Int, y: Int }\n\
                     let use_it dummy = { let t = spawn { Point { x: 1, y: 2 } }; match t.join() { Point(a, b) => a + b } }";
         assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(3));
+    }
+
+    #[test]
+    fn capturing_a_ref_across_a_spawn_boundary_is_a_runtime_error() {
+        // `Rc<RefCell<Value>>` isn't `Send` — see `RefHandle`'s doc
+        // comment. A real, reported error, not a silent deep-copy
+        // (which would defeat the entire point of `Ref`'s shared-
+        // mutation semantics by silently splitting it into two cells).
+        let src = "{ let r = ref(5); spawn { r.get() }.join() }";
+        let err = eval_err(src);
+        assert!(err.contains("Ref"), "expected a Ref-boundary error, got: {err}");
     }
 
     #[test]
