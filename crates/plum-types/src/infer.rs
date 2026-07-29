@@ -2,7 +2,60 @@ use crate::subst::Subst;
 use crate::types::{Type, TypeVarId};
 use crate::unify::unify;
 use plum_syntax::ast;
+use plum_syntax::span::Span;
 use std::collections::{HashMap, HashSet};
+
+/// Which kind of declaration a generic instantiation site names — the
+/// monomorphization pass (`plum_ir::monomorphize`) needs to know this to
+/// decide whether a site is a struct/enum-tag construction (mangles a
+/// `Ctor` tag) or a generic function call (mangles a callee name).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SiteKind {
+    Struct,
+    Enum,
+    Function,
+}
+
+/// One generic instantiation site captured DURING inference, before the
+/// final substitution is known — see this module's top-level docs (or
+/// the design conversation this chunk was implemented from) for the
+/// "two-tier resolution" story `resolve_generic_sites` builds on top of
+/// this. `decl_name` is:
+/// - the struct's own name, for `SiteKind::Struct`;
+/// - the VARIANT TAG (not the owning enum's name) for `SiteKind::Enum`
+///   — this is what a `Ctor`'s `tag` field actually needs mangled, and
+///   what `TypeContext::variant_payload_for` is keyed by;
+/// - the called function's name, for `SiteKind::Function`.
+///
+/// `args` are the FRESH type variables minted for this site at the
+/// moment it was inferred (from `instantiate_generic`/
+/// `instantiate_with_bounds`'s own fresh-var mapping) — genuinely
+/// unresolved until `resolve_generic_sites` applies the whole program's
+/// final substitution to them.
+#[derive(Debug, Clone)]
+pub struct RawSite {
+    pub kind: SiteKind,
+    pub decl_name: String,
+    pub args: Vec<Type>,
+    pub enclosing_fn: Option<String>,
+}
+
+/// `RawSite`, after `resolve_generic_sites` has applied the whole
+/// program's final substitution to `args` — every entry is now either a
+/// fully concrete type, or (for a "tier 2" site nested inside another
+/// generic function's own body, where the argument depends on that
+/// OUTER function's own not-yet-instantiated generic) a
+/// `Type::Param(name)` TEMPLATE referring to `enclosing_fn`'s own
+/// declared generic parameter `name`. `plum_ir::monomorphize::plan`
+/// resolves any remaining `Param` once it knows a concrete binding for
+/// `enclosing_fn`'s own generics (from the worklist).
+#[derive(Debug, Clone)]
+pub struct ResolvedSite {
+    pub kind: SiteKind,
+    pub decl_name: String,
+    pub args: Vec<Type>,
+    pub enclosing_fn: Option<String>,
+}
 
 /// A polytype: `ty` with every variable listed in `vars` universally
 /// quantified. An empty `vars` is exactly a monomorphic type — every
@@ -228,6 +281,67 @@ pub struct Infer {
     // callback-typed extern param can't meaningfully exist without a
     // whole program's `extern` block anyway.
     top_level_fns: HashSet<String>,
+    // The name of the top-level `let`-def whose body is CURRENTLY being
+    // inferred, mirroring `in_unsafe`'s toggle-around-a-call pattern —
+    // set/cleared around each Phase-2 body's `infer_expr` call in
+    // `infer_program`, for EVERY top-level def (function or generic-or-
+    // not), never just generic ones (see `generic_sites`'s doc comment
+    // for why an ordinary function's own generic-type-touching sites
+    // still need an `enclosing_fn` recorded). `None` outside any
+    // top-level def's own body (globals, and any standalone `infer_expr`
+    // call in tests) — a site recorded with `enclosing_fn: None` is
+    // always tier-1 (never needs a template `Param`), since there's no
+    // enclosing generic function it could depend on.
+    current_fn: Option<String>,
+    // `current_fn`'s own declared generics, in SOURCE order, paired with
+    // the fresh `Var`s `infer_program`'s Phase 2 minted for them
+    // (`generic_vars`) — set/cleared in lockstep with `current_fn`.
+    // Needed SPECIFICALLY for a SELF-recursive call (`len(t)` inside
+    // `len`'s own body): `env.lookup_scheme` for such a call finds
+    // Phase 1's MONOMORPHIC placeholder (empty `vars` — the usual self-
+    // recursion trick, see `infer_program`'s Phase 1 doc comment), not
+    // `current_fn`'s eventual polymorphic scheme (which doesn't exist
+    // yet — it's still mid-inference!), so the ordinary `scheme.vars.
+    // is_empty()` check that gates recording an ordinary call site is
+    // ALWAYS true here, and would otherwise silently miss self-
+    // recursive generic calls entirely. A self-recursive call is always
+    // exactly at `current_fn`'s OWN generics (calling yourself can't
+    // change your own type parameter), so this is what the `Ident` arm
+    // falls back to recording from directly when it detects that shape.
+    current_fn_generics: Vec<(String, Type)>,
+    // Every generic struct/enum construction/pattern site and generic
+    // function call site encountered during inference, keyed by that
+    // site's own AST span — the raw material `resolve_generic_sites`
+    // turns into `ResolvedSite`s once the whole program's final
+    // substitution is known. See `RawSite`'s own doc comment. Consumed
+    // by `plum_ir::monomorphize::plan`, which is the actual reason this
+    // exists (mangled-tag/callee-name monomorphization needs to know,
+    // for every AST node that constructs/matches/calls a generic
+    // declaration, exactly which concrete type(s) it resolved to).
+    generic_sites: HashMap<Span, RawSite>,
+    // Every generic function's own declared generic parameter NAMES,
+    // paired with the fresh `TypeVarId` `infer_program`'s Phase 2 minted
+    // for each one (`generic_vars` in that loop) — in SOURCE (declared)
+    // order, which is what makes a mangled name like `identity$Int`
+    // deterministic (`Scheme.vars`'s own order comes from a `HashSet`
+    // and is NOT reproducible run to run). Populated once per generic
+    // function, right after that function's own scheme/bounds are
+    // finalized in Phase 2. A function's var id here resolves correctly
+    // against `final_subst` regardless of whether `generalize` actually
+    // ended up quantifying it (see `resolve_generic_sites`'s doc
+    // comment) — `TypeVarId`s are globally unique for the whole compile,
+    // so `final_subst.apply(Type::Var(id))` is meaningful either way.
+    fn_generics: HashMap<String, Vec<(String, TypeVarId)>>,
+    // The final, fully-composed substitution `infer_program` accumulated
+    // across its ENTIRE run (Phase 1.5 globals + Phase 2 function
+    // bodies) — see this module's/the design conversation's notes on
+    // why `acc.apply()` on any `Var` recorded ANYWHERE during the whole
+    // compile resolves correctly once `infer_program` returns `Ok`.
+    // `None` until `infer_program` finishes; `resolve_generic_sites`
+    // requires it to already be set (calling it before/without a
+    // successful `infer_program` run is a caller error, reported
+    // clearly rather than panicking).
+    final_subst: Option<Subst>,
 }
 
 impl Infer {
@@ -239,6 +353,11 @@ impl Infer {
             array_for_loops: std::collections::HashSet::new(),
             in_unsafe: false,
             top_level_fns: HashSet::new(),
+            current_fn: None,
+            current_fn_generics: Vec::new(),
+            generic_sites: HashMap::new(),
+            fn_generics: HashMap::new(),
+            final_subst: None,
         }
     }
 
@@ -254,6 +373,11 @@ impl Infer {
             array_for_loops: std::collections::HashSet::new(),
             in_unsafe: false,
             top_level_fns: HashSet::new(),
+            current_fn: None,
+            current_fn_generics: Vec::new(),
+            generic_sites: HashMap::new(),
+            fn_generics: HashMap::new(),
+            final_subst: None,
         }
     }
 
@@ -270,6 +394,83 @@ impl Infer {
     /// `array_for_loops`'s doc comment.
     pub fn array_for_loops(&self) -> &std::collections::HashSet<plum_syntax::span::Span> {
         &self.array_for_loops
+    }
+
+    /// Every generic function's own declared generic parameter names,
+    /// paired with the `TypeVarId` each one resolves through — see
+    /// `fn_generics`'s own doc comment. `plum_ir::monomorphize::plan`
+    /// needs this to know, for a given concrete instantiation's
+    /// argument list, which name each positional argument binds to.
+    pub fn fn_generics(&self) -> &HashMap<String, Vec<(String, TypeVarId)>> {
+        &self.fn_generics
+    }
+
+    /// Turns every `RawSite` captured during inference into a
+    /// `ResolvedSite`, by applying the whole program's final
+    /// substitution to each one's `args` — see `RawSite`'s and
+    /// `ResolvedSite`'s own doc comments for the two-tier resolution
+    /// this performs. Must be called AFTER `infer_program` has returned
+    /// `Ok` (an internal-error `Result`, not a panic, if called before
+    /// that or after a failed run — `final_subst` is only ever set at
+    /// the very end of a successful `infer_program`).
+    pub fn resolve_generic_sites(&self) -> Result<HashMap<Span, ResolvedSite>, String> {
+        let subst = self
+            .final_subst
+            .as_ref()
+            .ok_or_else(|| "internal error: resolve_generic_sites called before infer_program completed".to_string())?;
+        let mut out = HashMap::with_capacity(self.generic_sites.len());
+        for (span, raw) in &self.generic_sites {
+            let mut resolved_args = Vec::with_capacity(raw.args.len());
+            for arg in &raw.args {
+                let resolved = subst.apply(arg);
+                let final_arg = if matches!(resolved, Type::Var(_)) {
+                    self.resolve_as_template(&resolved, raw, subst).ok_or_else(|| {
+                        format!(
+                            "cannot determine a concrete type for {:?} at {span:?} — its type parameter is \
+                             never pinned to a concrete type anywhere it's used",
+                            raw.decl_name
+                        )
+                    })?
+                } else {
+                    resolved
+                };
+                resolved_args.push(final_arg);
+            }
+            out.insert(
+                *span,
+                ResolvedSite {
+                    kind: raw.kind,
+                    decl_name: raw.decl_name.clone(),
+                    args: resolved_args,
+                    enclosing_fn: raw.enclosing_fn.clone(),
+                },
+            );
+        }
+        Ok(out)
+    }
+
+    /// `resolved` is a still-unresolved `Type::Var` after applying the
+    /// program's final substitution — checks whether it's actually a
+    /// "tier 2" TEMPLATE: exactly the enclosing function's own declared
+    /// generic parameter, not a genuine ambiguity. Comparing
+    /// `subst.apply(&Type::Var(gid)) == resolved` (rather than a direct
+    /// id equality check on `resolved`'s own var id) is what makes this
+    /// correct regardless of which DIRECTION `unify`'s `bind_var` chose
+    /// when it originally connected this site's fresh var to the
+    /// enclosing function's own generic var — `apply` chains fully in
+    /// either direction, so both sides land on the same representative
+    /// var (or concrete type) once fully resolved. See the design
+    /// conversation this chunk was implemented from for a worked
+    /// example (`wrap[T](x: T): Box[T]`).
+    fn resolve_as_template(&self, resolved: &Type, raw: &RawSite, subst: &Subst) -> Option<Type> {
+        let fn_name = raw.enclosing_fn.as_ref()?;
+        let generics = self.fn_generics.get(fn_name)?;
+        for (name, var_id) in generics {
+            if subst.apply(&Type::Var(*var_id)) == *resolved {
+                return Some(Type::Param(name.clone()));
+            }
+        }
+        None
     }
 
     /// Generates a never-before-used type variable — used internally
@@ -297,6 +498,24 @@ impl Infer {
         self.instantiate_with_bounds(scheme).0
     }
 
+    /// Records a generic instantiation site — see `RawSite`'s doc
+    /// comment. Only called for a site whose args are actually generic
+    /// (`instantiate_generic` already returns an empty `args` for a
+    /// non-generic declaration, and the function-call sites only call
+    /// this when the callee's scheme is genuinely polymorphic), so
+    /// there's no separate "is this generic at all" check here.
+    fn record_site(&mut self, kind: SiteKind, decl_name: &str, args: &[Type], span: Span) {
+        self.generic_sites.insert(
+            span,
+            RawSite {
+                kind,
+                decl_name: decl_name.to_string(),
+                args: args.to_vec(),
+                enclosing_fn: self.current_fn.clone(),
+            },
+        );
+    }
+
     /// Same substitution `instantiate` does, but ALSO returns which of
     /// the freshly-minted vars carry a bound (`scheme.bounds`, re-keyed
     /// from the scheme's original var ids to the NEW fresh ones) —
@@ -313,14 +532,26 @@ impl Infer {
     /// the FINAL resolved argument, not the fresh var `instantiate_generic`
     /// mints. The caller is responsible for actually running the check
     /// AFTER unifying call arguments — see `infer_call_with_callee`.
-    fn instantiate_with_bounds(&mut self, scheme: &Scheme) -> (Type, Vec<(TypeVarId, Vec<String>)>) {
+    ///
+    /// ALSO returns the old-quantified-var -> fresh-type mapping this
+    /// instantiation minted — needed by a generic-function-call site to
+    /// figure out, in `fn_generics[callee]`'s DECLARED order, which
+    /// fresh type each of the callee's own generic parameters got (see
+    /// `RawSite`'s doc comment): `scheme.vars`' own order is a
+    /// `HashSet`-derived one and can't be relied on for that.
+    fn instantiate_with_bounds(
+        &mut self,
+        scheme: &Scheme,
+    ) -> (Type, Vec<(TypeVarId, Vec<String>)>, HashMap<TypeVarId, Type>) {
         if scheme.vars.is_empty() {
-            return (scheme.ty.clone(), Vec::new());
+            return (scheme.ty.clone(), Vec::new(), HashMap::new());
         }
         let mut subst = Subst::empty();
         let mut pending = Vec::new();
+        let mut mapping = HashMap::new();
         for &v in &scheme.vars {
             let fresh = self.fresh();
+            mapping.insert(v, fresh.clone());
             if let Some(bounds) = scheme.bounds.get(&v) {
                 let Type::Var(fresh_id) = &fresh else {
                     unreachable!("Infer::fresh always returns Type::Var");
@@ -329,7 +560,31 @@ impl Infer {
             }
             subst = Subst::single(v, fresh).compose(&subst);
         }
-        (subst.apply(&scheme.ty), pending)
+        (subst.apply(&scheme.ty), pending, mapping)
+    }
+
+    /// Given a generic function's callee `name` and the fresh-var
+    /// `mapping` an instantiation just minted, records a `RawSite` IF
+    /// `name` is a known generic function (see `fn_generics`) — shared
+    /// by both places a generic function's callee gets instantiated
+    /// (the plain `Ident` lookup path and the bounded-call special
+    /// case). `args` are built in `fn_generics[name]`'s DECLARED order,
+    /// falling back to the pre-instantiation `Type::Var(old_id)` itself
+    /// when `mapping` has no entry for it (meaning `generalize` didn't
+    /// end up quantifying it — see `fn_generics`'s doc comment for why
+    /// that fallback is still correct, not just defensive).
+    fn record_fn_call_site(&mut self, name: &str, mapping: &HashMap<TypeVarId, Type>, span: Span) {
+        let Some(decl_generics) = self.fn_generics.get(name).cloned() else {
+            return;
+        };
+        if decl_generics.is_empty() {
+            return;
+        }
+        let args: Vec<Type> = decl_generics
+            .iter()
+            .map(|(_, old_id)| mapping.get(old_id).cloned().unwrap_or(Type::Var(*old_id)))
+            .collect();
+        self.record_site(SiteKind::Function, name, &args, span);
     }
 
     /// Instantiates a generic struct/enum declaration named `decl_name`
@@ -700,7 +955,19 @@ impl Infer {
                     }
                 }
             }
+            // Every construction/call site inside THIS function's own
+            // body records `enclosing_fn: Some(def.name)` — see
+            // `current_fn`'s doc comment. Set for EVERY function, not
+            // just generic ones: an ordinary function's own generic-
+            // type-touching sites still need an owner recorded (they're
+            // trivially tier-1, but `plum_ir::monomorphize` still needs
+            // to know which function's body to rewrite).
+            self.current_fn = Some(def.name.clone());
+            self.current_fn_generics =
+                def.generics.iter().map(|g| (g.name.clone(), generic_vars[&g.name].clone())).collect();
             let (body_ty, s) = self.infer_expr(&def.body, &body_env)?;
+            self.current_fn = None;
+            self.current_fn_generics = Vec::new();
             acc = s.compose(&acc);
             let s = unify(&acc.apply(&body_ty), &acc.apply(&ret_var)).map_err(|e| {
                 format!("function {:?}: body type does not match its return type: {e}", def.name)
@@ -790,7 +1057,45 @@ impl Infer {
                 }
             }
             global_env = global_env.extend_scheme(def.name.clone(), scheme);
+
+            // Recorded regardless of whether `generalize` ended up
+            // in SOURCE order, which is what makes a mangled name
+            // deterministic. Recorded as `acc.apply(generic_vars[name])`
+            // — NOT the raw `generic_vars[name]` id itself — because a
+            // function whose body naturally unifies its own generic
+            // with some OTHER var (e.g. `let identity[T] (x: T): T = x`
+            // unifies `T`'s var with the RETURN var, and `generalize`'s
+            // `free_vars` scan finds whichever one survives as the
+            // representative, not necessarily the original) means the
+            // var id that ends up in `scheme.vars` — and therefore the
+            // one a later CALL site's `instantiate_with_bounds` mapping
+            // is actually keyed by — can differ from the original id
+            // `generic_vars` minted. Applying `acc` here resolves to
+            // that same representative, so `record_fn_call_site`'s
+            // `mapping.get(old_id)` lookup actually hits. A generic
+            // that resolved to something CONCRETE internally (no var
+            // left at all — e.g. a bound forces it, `T: Num` used as
+            // `x + 1`) is skipped: there's no call-site-varying
+            // instantiation to track for it anymore, since every call
+            // is forced to the same fixed type regardless of the
+            // caller's argument.
+            if !def.generics.is_empty() {
+                let ordered: Vec<(String, TypeVarId)> = def
+                    .generics
+                    .iter()
+                    .filter_map(|g| {
+                        let var = generic_vars.get(&g.name)?;
+                        match acc.apply(var) {
+                            Type::Var(id) => Some((g.name.clone(), id)),
+                            _ => None,
+                        }
+                    })
+                    .collect();
+                self.fn_generics.insert(def.name.clone(), ordered);
+            }
         }
+
+        self.final_subst = Some(acc.clone());
 
         let mut result = HashMap::new();
         for (name, (param_vars, ret_var)) in &signatures {
@@ -883,7 +1188,7 @@ impl Infer {
             // A bare capitalized name referencing a zero-arity variant
             // (`None`, not `None()`) constructs it directly — mirrors
             // lower.rs's identical `Ident` case.
-            ast::Expr::Ident(name, _) if matches!(self.ctx.variant(name), Some((_, p)) if p.is_empty()) => {
+            ast::Expr::Ident(name, span) if matches!(self.ctx.variant(name), Some((_, p)) if p.is_empty()) => {
                 let (enum_name, _) = self.ctx.variant(name).expect("just matched Some above").clone();
                 // Empty payload, but the ENUM itself may still be
                 // generic (`None` from `Option[T] { Some(T), None }`) —
@@ -891,6 +1196,9 @@ impl Infer {
                 // fresh, still-unconstrained arg, same as an unapplied
                 // polymorphic function would.
                 let (_, args) = self.instantiate_generic(&enum_name, &[]);
+                if !args.is_empty() {
+                    self.record_site(SiteKind::Enum, name, &args, *span);
+                }
                 Ok((Type::Enum(enum_name, args), Subst::empty()))
             }
             // A non-zero-arity variant referenced BARE (not called) is
@@ -899,9 +1207,12 @@ impl Infer {
             // `Circle(1.0)` would eventually produce once applied.
             // Mirrors lower.rs's identical `Ident` case, which
             // eta-expands the SAME bare reference into a real Closure.
-            ast::Expr::Ident(name, _) if matches!(self.ctx.variant(name), Some((_, p)) if !p.is_empty()) => {
+            ast::Expr::Ident(name, span) if matches!(self.ctx.variant(name), Some((_, p)) if !p.is_empty()) => {
                 let (enum_name, payload) = self.ctx.variant(name).expect("just matched Some above").clone();
                 let (payload, args) = self.instantiate_generic(&enum_name, &payload);
+                if !args.is_empty() {
+                    self.record_site(SiteKind::Enum, name, &args, *span);
+                }
                 Ok((Type::Function(payload, Box::new(Type::Enum(enum_name, args))), Subst::empty()))
             }
             ast::Expr::Ident(name, span) => {
@@ -909,7 +1220,21 @@ impl Infer {
                     .lookup_scheme(name)
                     .cloned()
                     .ok_or_else(|| format!("unbound variable: {name} at {span:?}"))?;
-                Ok((self.instantiate(&scheme), Subst::empty()))
+                let (ty, _bounds, mapping) = self.instantiate_with_bounds(&scheme);
+                if !scheme.vars.is_empty() {
+                    self.record_fn_call_site(name, &mapping, *span);
+                } else if self.current_fn.as_deref() == Some(name.as_str()) && !self.current_fn_generics.is_empty() {
+                    // A SELF-recursive reference to the generic function
+                    // currently being inferred — see `current_fn_generics`'s
+                    // doc comment for why `scheme.vars` is always empty
+                    // here (Phase 1's monomorphic self/mutual-recursion
+                    // placeholder, not `name`'s eventual real scheme) and
+                    // why this is still always exactly `name`'s own
+                    // generics, unconditionally.
+                    let args: Vec<Type> = self.current_fn_generics.iter().map(|(_, ty)| ty.clone()).collect();
+                    self.record_site(SiteKind::Function, name, &args, *span);
+                }
+                Ok((ty, Subst::empty()))
             }
             ast::Expr::Unary { op, expr, .. } => self.infer_unary(op, expr, env),
             ast::Expr::Binary {
@@ -1596,6 +1921,9 @@ impl Infer {
                             ));
                         }
                         let (payload_types, enum_args) = self.instantiate_generic(&enum_name, &payload_types);
+                        if !enum_args.is_empty() {
+                            self.record_site(SiteKind::Enum, tag, &enum_args, *span);
+                        }
                         let mut acc = Subst::empty();
                         let mut refined_env = env.clone();
                         for (arg, expected_ty) in args.iter().zip(payload_types.iter()) {
@@ -1622,11 +1950,14 @@ impl Infer {
                 // itself so the ordinary (unbounded, the overwhelming
                 // common case) call path never pays for a scheme
                 // lookup it doesn't need.
-                if let ast::Expr::Ident(name, _) = callee.as_ref() {
+                if let ast::Expr::Ident(name, ident_span) = callee.as_ref() {
                     if let Some(scheme) = env.lookup_scheme(name) {
                         if !scheme.bounds.is_empty() {
                             let scheme = scheme.clone();
-                            let (callee_ty, pending_bounds) = self.instantiate_with_bounds(&scheme);
+                            let (callee_ty, pending_bounds, mapping) = self.instantiate_with_bounds(&scheme);
+                            if !scheme.vars.is_empty() {
+                                self.record_fn_call_site(name, &mapping, *ident_span);
+                            }
                             let arg_refs: Vec<&ast::Expr> = args.iter().collect();
                             return self.infer_call_with_callee(
                                 callee_ty,
@@ -1728,6 +2059,20 @@ impl Infer {
                     param_names.into_iter().zip(struct_args.iter().cloned()).collect();
                 let field_ty = subst_params(&field_ty, &mapping);
                 self.field_owners.insert(*span, struct_name.clone());
+                // A field access on a GENERIC struct instance needs its
+                // own site recorded too, even though it constructs
+                // nothing — `lower.rs`'s field-access lowering resolves
+                // the struct name to match against purely through
+                // `field_owners` (a totally separate mechanism from the
+                // `Ctor`/pattern arms `instantiate_generic`'s other call
+                // sites feed), so without this, `plum_ir::monomorphize`
+                // would have no way to know a `p.x` access needs its
+                // generated `Match`'s tag MANGLED too, and would emit an
+                // unmangled tag that never has a matching `tag_fields`
+                // entry.
+                if !struct_args.is_empty() {
+                    self.record_site(SiteKind::Struct, struct_name, struct_args, *span);
+                }
                 Ok((acc.apply(&field_ty), acc))
             }
             other => Err(format!(
@@ -1831,6 +2176,9 @@ impl Infer {
         // second: T }` requires both fields AND the spread source to
         // agree on one `T`, not each pick their own.
         let (declared_field_types, struct_args) = self.instantiate_generic(&tag, &declared_field_types);
+        if !struct_args.is_empty() {
+            self.record_site(SiteKind::Struct, &tag, &struct_args, span);
+        }
         let declared_fields: Vec<(String, Type)> =
             declared_field_names.into_iter().zip(declared_field_types).collect();
 
@@ -1967,6 +2315,9 @@ impl Infer {
                 let (declared_field_names, declared_field_types): (Vec<String>, Vec<Type>) =
                     declared_fields.into_iter().unzip();
                 let (declared_field_types, struct_args) = self.instantiate_generic(&tag, &declared_field_types);
+                if !struct_args.is_empty() {
+                    self.record_site(SiteKind::Struct, &tag, &struct_args, *span);
+                }
                 let declared_fields: Vec<(String, Type)> =
                     declared_field_names.into_iter().zip(declared_field_types).collect();
                 let s = unify(&acc.apply(scrutinee_ty), &Type::Struct(tag.clone(), struct_args))
@@ -2006,12 +2357,18 @@ impl Infer {
                     Some((enum_name, payload_types)) => {
                         let enum_name = enum_name.clone();
                         let (payload_types, args) = self.instantiate_generic(&enum_name, &payload_types.clone());
+                        if !args.is_empty() {
+                            self.record_site(SiteKind::Enum, &tag, &args, *span);
+                        }
                         (Type::Enum(enum_name, args), payload_types)
                     }
                     None => match self.ctx.struct_fields(&tag) {
                         Some(fields) => {
                             let field_types: Vec<Type> = fields.iter().map(|(_, ty)| ty.clone()).collect();
                             let (payload_types, args) = self.instantiate_generic(&tag, &field_types);
+                            if !args.is_empty() {
+                                self.record_site(SiteKind::Struct, &tag, &args, *span);
+                            }
                             (Type::Struct(tag.clone(), args), payload_types)
                         }
                         None => return Err(format!("unknown variant {tag:?} at {span:?}")),
@@ -2727,7 +3084,7 @@ fn default_numeric(ty: &Type) -> Result<(Type, Subst), String> {
 // `TypeContext::from_items`) rather than panicking, since a stray
 // unresolved `Param` still gets caught later, as a clear internal-error
 // message, by `unify.rs`.
-fn subst_params(ty: &Type, mapping: &HashMap<String, Type>) -> Type {
+pub(crate) fn subst_params(ty: &Type, mapping: &HashMap<String, Type>) -> Type {
     match ty {
         Type::Param(name) => mapping.get(name).cloned().unwrap_or_else(|| ty.clone()),
         Type::Function(params, ret) => Type::Function(
@@ -5917,5 +6274,91 @@ mod tests {
         assert_eq!(types["a"], Type::Int);
         assert_eq!(types["b"], Type::Int);
         assert_eq!(types["double"], fn_ty(vec![Type::Int], Type::Int));
+    }
+
+    // --- generic instantiation site capture / resolve_generic_sites ---
+
+    fn infer_with(src: &str) -> Infer {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let ctx = crate::context::TypeContext::from_items(&program.items)
+            .unwrap_or_else(|e| panic!("context error for {src:?}: {e}"));
+        let mut infer = Infer::with_context(ctx);
+        infer
+            .infer_program(&program)
+            .unwrap_or_else(|e| panic!("program inference error for {src:?}: {e}"));
+        infer
+    }
+
+    #[test]
+    fn resolve_generic_sites_resolves_a_top_level_struct_construction_to_a_concrete_arg() {
+        let infer = infer_with("struct Pair[T] { first: T, second: T }\nlet go () = Pair { first: 1, second: 2 }");
+        let sites = infer.resolve_generic_sites().unwrap();
+        assert_eq!(sites.len(), 1);
+        let site = sites.values().next().unwrap();
+        assert_eq!(site.kind, SiteKind::Struct);
+        assert_eq!(site.decl_name, "Pair");
+        assert_eq!(site.args, vec![Type::Int]);
+        assert_eq!(site.enclosing_fn, Some("go".to_string()));
+    }
+
+    #[test]
+    fn resolve_generic_sites_resolves_two_different_instantiations_independently() {
+        let src = "struct Pair[T] { first: T, second: T }\n\
+                   let go_int () = Pair { first: 1, second: 2 }\n\
+                   let go_bool () = Pair { first: true, second: false }";
+        let infer = infer_with(src);
+        let sites = infer.resolve_generic_sites().unwrap();
+        assert_eq!(sites.len(), 2);
+        let mut args: Vec<Vec<Type>> = sites.values().map(|s| s.args.clone()).collect();
+        args.sort_by_key(|a| format!("{a:?}"));
+        assert_eq!(args, vec![vec![Type::Bool], vec![Type::Int]]);
+    }
+
+    #[test]
+    fn resolve_generic_sites_records_a_generic_function_call_in_declared_generic_order() {
+        let src = "let identity[T] (x: T): T = x\nlet go () = identity(5)";
+        let infer = infer_with(src);
+        let sites = infer.resolve_generic_sites().unwrap();
+        assert_eq!(sites.len(), 1);
+        let site = sites.values().next().unwrap();
+        assert_eq!(site.kind, SiteKind::Function);
+        assert_eq!(site.decl_name, "identity");
+        assert_eq!(site.args, vec![Type::Int]);
+    }
+
+    #[test]
+    fn resolve_generic_sites_marks_a_tier_two_site_as_a_param_template() {
+        // `wrap`'s own body constructs `Box[T]` from ITS OWN generic `T`
+        // — never pinned to anything concrete inside `wrap` itself, so
+        // this site must resolve to `Type::Param("T")`, a template for
+        // `monomorphize::plan` to substitute later, not an ambiguity
+        // error.
+        let src = "struct Box[T] { val: T }\n\
+                   let wrap[T] (x: T): Box[T] = Box { val: x }\n\
+                   let go () = wrap(5)";
+        let infer = infer_with(src);
+        let sites = infer.resolve_generic_sites().unwrap();
+        let box_site = sites.values().find(|s| s.kind == SiteKind::Struct).unwrap();
+        assert_eq!(box_site.enclosing_fn, Some("wrap".to_string()));
+        assert_eq!(box_site.args, vec![Type::Param("T".to_string())]);
+    }
+
+    #[test]
+    fn resolve_generic_sites_rejects_a_type_parameter_never_pinned_anywhere() {
+        // `None` alone never pins `Option`'s own `T` to anything
+        // concrete — a genuine ambiguity, not a tier-2 template (no
+        // enclosing generic function's own parameter to blame it on).
+        let infer = infer_with("enum MyOption[T] { MySome(T), MyNone }\nlet go () = MyNone");
+        let err = infer.resolve_generic_sites().expect_err("expected an ambiguous-type-parameter error");
+        assert!(err.contains("never pinned"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn fn_generics_records_declared_order_for_a_multi_param_generic_function() {
+        let infer = infer_with("let pair[A, B] (a: A) (b: B): A = a\nlet go () = pair(1, true)");
+        let names: Vec<&str> = infer.fn_generics()["pair"].iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["A", "B"]);
     }
 }

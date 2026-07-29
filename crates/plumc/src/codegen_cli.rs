@@ -51,15 +51,21 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
         PlumType::Float => Ok(CgType::Float),
         PlumType::Bool => Ok(CgType::Bool),
         PlumType::Unit => Ok(CgType::Unit),
-        // A non-generic struct/enum reference — `args` empty means the
-        // type has no type parameters of its own AND isn't a generic
-        // INSTANTIATION either (e.g. `Option[Int]` is `Enum("Option",
-        // [Int])`, non-empty, rejected here too) — see DESIGN.md:
-        // monomorphization is separate, later work, since generics are
-        // fully erased by lowering and a generic type's field types
-        // can't be resolved to one concrete LLVM representation from
-        // the erased IR alone.
-        PlumType::Struct(_, args) | PlumType::Enum(_, args) if args.is_empty() => Ok(CgType::Heap),
+        // A struct/enum reference — GENERIC instantiations (`args`
+        // non-empty, e.g. `Option[Int]`) are included too, now that
+        // `plum_ir::monomorphize` resolves each one to its own mangled,
+        // fully concrete `tag_fields` entry: at the LLVM level a heap
+        // value is opaque either way (a plain `ptr` — see `CgType::Heap`'s
+        // own doc comment in plum-codegen), so this conversion doesn't
+        // need to know or care WHICH concrete instantiation a given
+        // struct/enum-typed signature position holds. If the program
+        // never actually reaches a construction of that specific
+        // instantiation, `monomorphize::plan` simply never produces a
+        // `tag_fields` entry for it — caught, if it matters, by
+        // `plum_codegen::emit_program`'s own "unknown tag" error at the
+        // point something actually tries to construct/match it, not
+        // here.
+        PlumType::Struct(..) | PlumType::Enum(..) => Ok(CgType::Heap),
         other => Err(format!(
             "codegen only supports Int/Float/Bool/Unit or a non-generic struct/enum, found a signature \
              involving {other:?}"
@@ -122,48 +128,9 @@ fn derive_tag_fields(program: &ast::Program, type_ctx: &TypeContext) -> plum_cod
 /// temp file, shell out to `clang` to compile+link it, then run the
 /// resulting binary and capture its stdout.
 pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<String, String> {
-    let tokens = Lexer::new(src).tokenize();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().map_err(|e| format!("parse error: {e}"))?;
-    let program = with_prelude(program);
-
-    let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
-    let tag_fields = derive_tag_fields(&program, &type_ctx);
-    let mut infer = Infer::with_context(type_ctx);
-    let types = infer.infer_program(&program).map_err(|e| format!("type error: {e}"))?;
-
-    plum_ir::movecheck::check_moves(&program).map_err(|e| format!("move error: {e}"))?;
-
-    let lowering_ctx = LoweringContext::from_items(&program.items)
-        .with_field_owners(infer.field_owners().clone())
-        .with_array_for_loops(infer.array_for_loops().clone());
-    let ir_program = lower_program(&program, &lowering_ctx).map_err(|e| format!("lowering error: {e}"))?;
-    let ir_program = optimize_program(ir_program);
-
-    // Every top-level FUNCTION's signature (globals are out of v1
-    // codegen scope, filtered out here rather than left for
-    // `plum_codegen::emit_program`'s own — separate — global-rejection
-    // check to catch, since a global's `types` entry is just its
-    // value's type, not a `Type::Function`, and would otherwise
-    // produce a confusing "not Int/Float/Bool/Unit" error instead of
-    // codegen's own clearer "globals aren't supported" one).
-    let function_names: std::collections::HashSet<&str> =
-        ir_program.functions.iter().map(|f| f.name.as_str()).collect();
-    let mut signatures = HashMap::new();
-    for (name, ty) in &types {
-        if !function_names.contains(name.as_str()) {
-            continue;
-        }
-        let PlumType::Function(params, ret) = ty else {
-            return Err(format!("codegen: internal error — function {name:?} has a non-function type {ty:?}"));
-        };
-        let cg_params = params.iter().map(plum_type_to_cg_type).collect::<Result<Vec<_>, _>>()?;
-        let cg_ret = plum_type_to_cg_type(ret)?;
-        signatures.insert(name.clone(), FnSig { params: cg_params, ret: cg_ret });
-    }
-
+    let (body_ir, signatures, resolved_entry) = compile_to_ir(src, entry_fn)?;
     let sig = signatures
-        .get(entry_fn)
+        .get(&resolved_entry)
         .ok_or_else(|| format!("codegen: no such function {entry_fn:?}"))?
         .clone();
     if sig.params.len() != args.len() {
@@ -192,11 +159,126 @@ pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<St
         ));
     }
 
-    let body_ir = plum_codegen::emit_program(&ir_program, &signatures, &tag_fields)?;
-    let main_ir = emit_main(entry_fn, sig.ret, args);
+    let main_ir = emit_main(&resolved_entry, sig.ret, args);
     let full_ir = format!("{body_ir}\n{main_ir}");
 
     run_via_clang(&full_ir)
+}
+
+/// The shared front-half of `compile_and_run`: parse → prelude → type-
+/// check → monomorphize → lower → codegen, stopping just short of
+/// appending a `main` wrapper and shelling out to `clang`. Split out
+/// (rather than inlined into `compile_and_run` alone) so tests can
+/// inspect the raw generated LLVM IR TEXT directly — e.g. asserting two
+/// distinct mangled tags/function definitions both appear — without
+/// needing a real `clang` toolchain or process spawn just to check
+/// static text shape. Returns the generated IR body, every function's
+/// concrete `FnSig` (including every monomorphized instantiation, keyed
+/// by its MANGLED name), and `entry_fn`'s own resolved (possibly
+/// mangled) name.
+fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, FnSig>, String), String> {
+    let tokens = Lexer::new(src).tokenize();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().map_err(|e| format!("parse error: {e}"))?;
+    let program = with_prelude(program);
+
+    let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
+    let mut tag_fields = derive_tag_fields(&program, &type_ctx);
+    let mut infer = Infer::with_context(type_ctx);
+    let types = infer.infer_program(&program).map_err(|e| format!("type error: {e}"))?;
+    let resolved_sites = infer.resolve_generic_sites().map_err(|e| format!("type error: {e}"))?;
+
+    plum_ir::movecheck::check_moves(&program).map_err(|e| format!("move error: {e}"))?;
+
+    // `resolve_generic_sites` needs its own `TypeContext` too (the
+    // first one was moved into `infer` above — see `Infer::with_context`)
+    // — cheap to rebuild from the same, already-validated items rather
+    // than threading a second owned copy through `Infer` itself.
+    let type_ctx_for_mono = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
+    let mono_plan = plum_ir::monomorphize::plan(
+        &program,
+        &type_ctx_for_mono,
+        &resolved_sites,
+        infer.fn_generics(),
+        &types,
+        infer.field_owners(),
+        infer.array_for_loops(),
+    )
+    .map_err(|e| format!("monomorphization error: {e}"))?;
+
+    let lowering_ctx = LoweringContext::from_items(&program.items)
+        .with_field_owners(infer.field_owners().clone())
+        .with_array_for_loops(infer.array_for_loops().clone());
+    let mut ir_program = lower_program(&program, &lowering_ctx).map_err(|e| format!("lowering error: {e}"))?;
+    // `mono_plan.functions` REPLACES `lower_program`'s own function list
+    // wholesale — it already covers every function actually needed,
+    // including ordinary (never-generic) ones re-lowered with mangled
+    // tags/callee names wherever their body touches a generic
+    // instantiation (see `monomorphize::MonoPlan::functions`'s doc
+    // comment for why the plain `lower_program` output can't just be
+    // spliced alongside it: an ordinary function's PLAIN-tagged body
+    // would reference tags `tag_fields` never has an entry for).
+    // Globals/externs are untouched (generics stay out of their scope).
+    ir_program.functions = mono_plan.functions;
+    let ir_program = optimize_program(ir_program);
+
+    for (mangled, field_types) in &mono_plan.tag_fields {
+        let cg_fields = field_types.iter().map(plum_type_to_cg_type).collect::<Result<Vec<_>, _>>()?;
+        tag_fields.insert(mangled.clone(), cg_fields);
+    }
+
+    // Every top-level FUNCTION's signature (globals are out of v1
+    // codegen scope, filtered out here rather than left for
+    // `plum_codegen::emit_program`'s own — separate — global-rejection
+    // check to catch, since a global's `types` entry is just its
+    // value's type, not a `Type::Function`, and would otherwise
+    // produce a confusing "not Int/Float/Bool/Unit" error instead of
+    // codegen's own clearer "globals aren't supported" one). A GENERIC
+    // function's own (unmangled) name is never in `function_names`
+    // (only its mangled instantiations are — see `MonoPlan::functions`),
+    // so this loop naturally skips it; its mangled entries come from
+    // `mono_plan.signatures` in the loop right after instead, since
+    // `types[name]` for a generic function is a nonsensically
+    // unresolved, var-templated signature, not a concrete one.
+    let function_names: std::collections::HashSet<&str> =
+        ir_program.functions.iter().map(|f| f.name.as_str()).collect();
+    let mut signatures = HashMap::new();
+    for (name, ty) in &types {
+        if !function_names.contains(name.as_str()) {
+            continue;
+        }
+        let PlumType::Function(params, ret) = ty else {
+            return Err(format!("codegen: internal error — function {name:?} has a non-function type {ty:?}"));
+        };
+        let cg_params = params.iter().map(plum_type_to_cg_type).collect::<Result<Vec<_>, _>>()?;
+        let cg_ret = plum_type_to_cg_type(ret)?;
+        signatures.insert(name.clone(), FnSig { params: cg_params, ret: cg_ret });
+    }
+    for (mangled, (params, ret)) in &mono_plan.signatures {
+        let cg_params = params.iter().map(plum_type_to_cg_type).collect::<Result<Vec<_>, _>>()?;
+        let cg_ret = plum_type_to_cg_type(ret)?;
+        signatures.insert(mangled.clone(), FnSig { params: cg_params, ret: cg_ret });
+    }
+
+    // `entry_fn` may name a GENERIC function with more than one reachable
+    // instantiation — there's no single concrete signature to compile a
+    // `main` wrapper against in that case, so it's rejected with a clear
+    // error rather than silently picking one. A non-generic name (or a
+    // generic one instantiated exactly once) resolves straight through.
+    let resolved_entry: String = match mono_plan.entry_rename.get(entry_fn) {
+        Some(names) if names.len() == 1 => names[0].clone(),
+        Some(names) if names.len() > 1 => {
+            return Err(format!(
+                "codegen: {entry_fn:?} is ambiguous as an entry point — it has {} reachable generic \
+                 instantiation(s) ({names:?}); call it from a concrete, non-generic wrapper function instead",
+                names.len()
+            ));
+        }
+        _ => entry_fn.to_string(),
+    };
+
+    let body_ir = plum_codegen::emit_program(&ir_program, &signatures, &tag_fields)?;
+    Ok((body_ir, signatures, resolved_entry))
 }
 
 /// A hand-written LLVM `main` — not something `plum_codegen` itself
@@ -369,13 +451,16 @@ mod tests {
     }
 
     #[test]
-    fn a_function_whose_signature_is_outside_codegen_scope_is_a_clear_error() {
-        // `Option` is generic — its signature can't resolve to one
-        // concrete LLVM representation (see DESIGN.md: monomorphization
-        // is separate, later work).
+    fn a_function_returning_a_generic_heap_value_directly_at_the_entry_point_is_a_clear_error() {
+        // Monomorphization now resolves `Option[Int]`'s signature just
+        // fine (see the generics tests below) — but a heap-shaped value
+        // still isn't PRINTABLE by the compiled entry point's hand-
+        // written `main` wrapper (no `ToString`-equivalent for compiled
+        // heap values yet), so this is still a clear error, just a
+        // DIFFERENT one than "generics aren't supported at all".
         let src = "let go (): Option[Int] = Some(1)";
-        let err = compile_and_run(src, "go", &[CgValue::Unit]).expect_err("expected a signature-scope error");
-        assert!(err.contains("non-generic"), "unexpected error: {err}");
+        let err = compile_and_run(src, "go", &[CgValue::Unit]).expect_err("expected a heap-return error");
+        assert!(err.contains("heap-shaped value"), "unexpected error: {err}");
     }
 
     // --- heap values: structs, enums, refcounting, Match ---
@@ -450,5 +535,141 @@ mod tests {
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "9");
+    }
+
+    // --- generics / monomorphization ---
+
+    /// Runs the pipeline exactly through `monomorphize::plan` (the SAME
+    /// real `with_prelude` pipeline `compile_and_run` uses, not a hand-
+    /// built plum-ir-only program) and returns every mangled TAG it
+    /// produced — needed because, unlike a function name, a struct/enum
+    /// tag never appears as readable text in the generated `.ll` itself
+    /// (`plum_codegen` interns every tag to a small integer — see
+    /// `plum_codegen::intern_tags` — so there's no `.ll`-text assertion
+    /// that could prove two tags stayed distinct; this inspects
+    /// `MonoPlan::tag_fields`'s keys directly instead).
+    fn mono_tags(src: &str) -> std::collections::HashSet<String> {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let program = with_prelude(program);
+        let type_ctx = TypeContext::from_items(&program.items).unwrap_or_else(|e| panic!("context error: {e}"));
+        let mut infer = Infer::with_context(type_ctx);
+        let types = infer.infer_program(&program).unwrap_or_else(|e| panic!("type error: {e}"));
+        let resolved_sites = infer.resolve_generic_sites().unwrap_or_else(|e| panic!("resolve error: {e}"));
+        let type_ctx2 = TypeContext::from_items(&program.items).unwrap();
+        let mono_plan = plum_ir::monomorphize::plan(
+            &program,
+            &type_ctx2,
+            &resolved_sites,
+            infer.fn_generics(),
+            &types,
+            infer.field_owners(),
+            infer.array_for_loops(),
+        )
+        .unwrap_or_else(|e| panic!("monomorphization error: {e}"));
+        mono_plan.tag_fields.into_keys().collect()
+    }
+
+    #[test]
+    fn generic_struct_single_instantiation_compiles_and_runs() {
+        let src = "\
+            struct Pair[A, B] { first: A, second: B }\n\
+            let go (): Int = { let p = Pair { first: 3, second: 4 }; p.first + p.second }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "7");
+    }
+
+    #[test]
+    fn a_generic_recursive_enum_instantiated_at_two_concrete_types_produces_two_distinct_tags() {
+        // The direct mangling-collision-avoidance proof: `List[Int]`
+        // and `List[Bool]` must each get their OWN `Cons$..`/`Nil$..`
+        // tags, not share one `Cons`/`Nil` pair — see `mono_tags`'s
+        // doc comment for why this is checked via `MonoPlan::tag_fields`
+        // directly rather than `.ll` text.
+        let src = "\
+            enum List[T] { Cons(T, List[T]), Nil }\n\
+            let sum_int (lst: List[Int]): Int = match lst {\n\
+                Cons(h, t) => h + sum_int(t),\n\
+                Nil => 0,\n\
+            }\n\
+            let count_true (lst: List[Bool]): Int = match lst {\n\
+                Cons(h, t) => (if h { 1 } else { 0 }) + count_true(t),\n\
+                Nil => 0,\n\
+            }\n\
+            let go (): Int = sum_int(Cons(1, Cons(2, Nil))) + count_true(Cons(true, Cons(false, Cons(true, Nil))))\n\
+        ";
+        let tags = mono_tags(src);
+        assert!(tags.contains("Cons$Int"), "tags: {tags:?}");
+        assert!(tags.contains("Cons$Bool"), "tags: {tags:?}");
+        assert!(tags.contains("Nil$Int"), "tags: {tags:?}");
+        assert!(tags.contains("Nil$Bool"), "tags: {tags:?}");
+        assert!(!tags.contains("Cons"));
+        assert!(!tags.contains("Nil"));
+
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "5");
+    }
+
+    #[test]
+    fn a_generic_function_called_at_multiple_concrete_types_produces_two_distinct_definitions() {
+        let src = "\
+            let identity[T] (x: T): T = x\n\
+            let go (): Int = { let n = identity(5); let b = identity(true); n + (if b { 1 } else { 0 }) }\n\
+        ";
+        let (_body_ir, signatures, _entry) = compile_to_ir(src, "go").unwrap();
+        assert!(signatures.contains_key("identity$Int"), "signatures: {:?}", signatures.keys());
+        assert!(signatures.contains_key("identity$Bool"), "signatures: {:?}", signatures.keys());
+        assert!(!signatures.contains_key("identity"));
+
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "6");
+    }
+
+    #[test]
+    fn nested_generic_calling_generic_monomorphizes_correctly() {
+        // Exercises the tier-2 template/worklist propagation
+        // specifically: `wrap`'s own body constructs `Box[T]` from ITS
+        // OWN still-generic `T`, never pinned to anything concrete
+        // until `go` actually calls `wrap(5)`.
+        let src = "\
+            struct Box[T] { val: T }\n\
+            let wrap[T] (x: T): Box[T] = Box { val: x }\n\
+            let go (): Int = wrap(41).val + 1\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "42");
+    }
+
+    #[test]
+    fn a_recursive_generic_function_monomorphizes_and_terminates() {
+        // Proves self-recursive monomorphization terminates (the
+        // worklist's "already specialized" guard makes repeated calls
+        // to `len[Int]` a no-op re-lookup, not infinite re-expansion)
+        // AND is correct end to end.
+        let src = "\
+            enum List[T] { Cons(T, List[T]), Nil }\n\
+            let len[T] (lst: List[T]): Int = match lst {\n\
+                Cons(h, t) => 1 + len(t),\n\
+                Nil => 0,\n\
+            }\n\
+            let go (): Int = len(Cons(1, Cons(2, Cons(3, Nil))))\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "3");
+    }
+
+    #[test]
+    fn instantiating_a_generic_type_at_an_unsupported_concrete_type_is_a_clear_error() {
+        let src = "\
+            struct Box[T] { val: T }\n\
+            let go (): Int = { let b = Box { val: \"hi\" }; 0 }\n\
+        ";
+        let err = compile_and_run(src, "go", &[CgValue::Unit]).expect_err("expected an unsupported-instantiation error");
+        assert!(
+            err.contains("monomorphization") || err.contains("outside codegen's supported scope"),
+            "unexpected error: {err}"
+        );
     }
 }

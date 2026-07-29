@@ -11,6 +11,7 @@ use std::collections::HashMap;
 /// single expression can't know about in isolation. This is the first
 /// place lowering needs to be program-aware rather than purely
 /// per-expression.
+#[derive(Clone)]
 pub struct LoweringContext {
     struct_fields: HashMap<String, Vec<String>>,
     // Variant tag -> arity. Needed to lower a variant CONSTRUCTION
@@ -87,6 +88,29 @@ impl LoweringContext {
     /// computed during inference — see `array_for_loops`'s doc comment.
     pub fn with_array_for_loops(mut self, array_for_loops: std::collections::HashSet<plum_syntax::span::Span>) -> Self {
         self.array_for_loops = array_for_loops;
+        self
+    }
+
+    /// Adds extra variant-tag -> arity entries on top of whatever
+    /// `from_items` already collected — `plum_ir::monomorphize` uses
+    /// this to register each MANGLED variant tag it produces (`Cons` ->
+    /// `Cons$Int`) at the SAME arity as the original, unmangled tag, so
+    /// `lower_expr`/`lower_tag_pattern`'s ordinary `ctx.variants` lookup
+    /// (which only ever sees the mangled name after monomorphization's
+    /// own AST rewrite) resolves correctly without lower.rs itself
+    /// needing to know anything about mangling.
+    pub fn with_extra_variants(mut self, extra: HashMap<String, usize>) -> Self {
+        self.variants.extend(extra);
+        self
+    }
+
+    /// Same as `with_extra_variants`, for mangled STRUCT tags — see that
+    /// method's doc comment. Field NAMES (not types — lowering only
+    /// ever needs field ORDER) are identical between a struct and every
+    /// one of its monomorphized instantiations, so `monomorphize`
+    /// registers the SAME name list under each mangled tag it produces.
+    pub fn with_extra_struct_fields(mut self, extra: HashMap<String, Vec<String>>) -> Self {
+        self.struct_fields.extend(extra);
         self
     }
 
@@ -361,7 +385,7 @@ const DEFAULT_ARM_TAG: &str = "0Default";
 // destructuring to live except as a `Match` wrapped around the body,
 // reusing the exact same tag-based mechanism `Ctor`/`Match` already
 // give every other heap-shaped value.
-fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast::Pattern)>), String> {
+pub(crate) fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast::Pattern)>), String> {
     let mut names = Vec::with_capacity(params.len());
     let mut destructures = Vec::new();
     for (i, param) in params.iter().enumerate() {
@@ -400,7 +424,7 @@ fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast:
 // Variant, tuple, and struct patterns are supported, INCLUDING nested
 // ones (a struct pattern inside a tuple, etc. — see `lower_tag_pattern`
 // and `wrap_nested_destructures`).
-fn wrap_destructure(
+pub(crate) fn wrap_destructure(
     scrutinee_name: String,
     pattern: &ast::Pattern,
     ctx: &LoweringContext,

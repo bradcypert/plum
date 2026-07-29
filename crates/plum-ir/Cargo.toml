@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 plum-syntax = { path = "../plum-syntax" }
+plum-types = { path = "../plum-types" }

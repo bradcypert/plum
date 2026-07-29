@@ -81,6 +81,7 @@ name = "plum-ir"
 version = "0.1.0"
 dependencies = [
  "plum-syntax",
+ "plum-types",
 ]
 
 [[package]]

@@ -236,6 +236,52 @@ impl TypeContext {
     pub(crate) fn extern_fn(&self, name: &str) -> Option<&(Vec<Type>, Type)> {
         self.extern_fns.get(name)
     }
+
+    /// `name`'s declared fields, with every occurrence of one of its OWN
+    /// generic parameters substituted for the matching entry in
+    /// `concrete_args` (positional, same order as `generic_params`) —
+    /// the monomorphization-time counterpart to `Infer::instantiate_generic`,
+    /// minus the fresh-var-minting half: by the time
+    /// `plum_ir::monomorphize::plan` calls this, `concrete_args` are
+    /// already fully concrete (or an internal error further up already
+    /// caught the alternative), so there's nothing left to instantiate,
+    /// just to substitute. `None` if `name` isn't a declared struct, or
+    /// if `concrete_args`'s length doesn't match `name`'s own declared
+    /// arity.
+    pub fn struct_fields_for(&self, name: &str, concrete_args: &[Type]) -> Option<Vec<(String, Type)>> {
+        let declared_fields = self.struct_fields(name)?;
+        let param_names = self.generic_params(name)?;
+        if param_names.len() != concrete_args.len() {
+            return None;
+        }
+        let mapping: HashMap<String, Type> =
+            param_names.iter().cloned().zip(concrete_args.iter().cloned()).collect();
+        Some(
+            declared_fields
+                .iter()
+                .map(|(field_name, ty)| (field_name.clone(), crate::infer::subst_params(ty, &mapping)))
+                .collect(),
+        )
+    }
+
+    /// `tag`'s owning enum name and declared payload types, with every
+    /// occurrence of the OWNING ENUM's generic parameters substituted
+    /// for `concrete_args` — see `struct_fields_for`'s doc comment for
+    /// the full reasoning (same mechanism, keyed by variant tag instead
+    /// of struct name, matching `variant`'s own indexing). `None` if
+    /// `tag` isn't a declared variant, or if `concrete_args`'s length
+    /// doesn't match the owning enum's declared arity.
+    pub fn variant_payload_for(&self, tag: &str, concrete_args: &[Type]) -> Option<(String, Vec<Type>)> {
+        let (enum_name, payload) = self.variant(tag)?;
+        let param_names = self.generic_params(enum_name)?;
+        if param_names.len() != concrete_args.len() {
+            return None;
+        }
+        let mapping: HashMap<String, Type> =
+            param_names.iter().cloned().zip(concrete_args.iter().cloned()).collect();
+        let substituted = payload.iter().map(|ty| crate::infer::subst_params(ty, &mapping)).collect();
+        Some((enum_name.clone(), substituted))
+    }
 }
 
 // `Int`/`Float`/`Bool`/`CStr`, or a struct made ENTIRELY (recursively)

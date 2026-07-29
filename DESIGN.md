@@ -1503,7 +1503,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1+v2 implemented (scalars, control flow, tail calls, non-generic heap values)
+### LLVM backend — v1+v2+v3 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1520,13 +1520,16 @@ specific API shape to ever "unwind."
 `Binary` (including short-circuit `&&`/`||`, compiled as real
 branching + `phi`, not a plain `and`/`or` instruction — must match the
 interpreter's exact short-circuit semantics: the untaken side's code
-must never execute), `Let`, `If`, plain named `Call`, and — as of a
-follow-on chunk — non-generic struct/enum heap values (`Ctor`/
-`CtorReuse`/`RcAnnotated`/`Match`, refcounted via a small emitted
-runtime — see below). Everything else in `ir::Expr` (strings, arrays,
-closures, concurrency, FFI, `For`, `Assign`, `ToString`, generic
-types/monomorphization, ...) is still out of scope and produces a
-clear codegen error naming what's missing, never a panic.
+must never execute), `Let`, `If`, plain named `Call`, struct/enum heap
+values (`Ctor`/`CtorReuse`/`RcAnnotated`/`Match`, refcounted via a
+small emitted runtime — see below), and — as of a follow-on chunk —
+generic structs/enums/functions, monomorphized into concrete, mangled
+instantiations before lowering (see "Generics/monomorphization"
+below). Everything else in `ir::Expr` (strings, arrays, closures,
+concurrency, FFI, `For`, `Assign`, `ToString`, ...) is still out of
+scope and produces a clear codegen error naming what's missing, never
+a panic — including when a generic is instantiated at one of those
+still-unsupported types (e.g. `Box[Str]`).
 
 **Guaranteed tail calls**: any call in tail position (the function's
 own body; both branches of a tail-positioned `If`/arms of a tail-
@@ -1595,11 +1598,70 @@ counts whenever it emits this node, so the in-place path never needs
 a realloc. A `Match` arm's bound field gets `@plum_rc_inc`'d if
 heap-shaped — a deliberate FIX over the interpreter's own established
 (if accepted) gap, where a bound field is implicitly borrowed from its
-scrutinee with no refcount bump. **Non-generic types only**: generics
-are fully erased by lowering (no type arguments survive into the IR),
-so a generic type's field types can't be resolved to one concrete LLVM
-representation — `Option`/`Result`/any user generic type don't compile
-yet; monomorphization is separate, later design work.
+scrutinee with no refcount bump.
+
+**Generics/monomorphization**: `plum-ir`'s lowering fully ERASES type
+parameters (no type checker existed originally, and `ir::Function`/
+`ir::Ctor` still carry zero type information by design — the
+interpreter never needed this fixed, since it's uniformly
+dynamically-tagged at runtime and `List[Int]`/`List[Bool]` produce
+byte-identical heap cells). LLVM codegen can't get away with that:
+every SSA register has one static LLVM type, and — the crux fact that
+makes this a real monomorphization pass rather than just "allow
+generics through" — codegen's uniform heap-cell scheme picks a
+different STORE/LOAD bit-conversion per field depending on that
+field's concrete `CgType` (direct for `Int`, zext/trunc for `Bool`,
+bitcast for `Float`, ptrtoint/inttoptr for a nested heap pointer), so
+two different instantiations of the same generic declaration whose
+fields need different conversions (`List[Int]`'s `Cons` vs
+`List[Bool]`'s `Cons`) cannot share one tag — they need distinct,
+mangled tags/function names.
+
+A new `plum-ir/src/monomorphize.rs` pass runs before lowering, in the
+codegen-only pipeline (the interpreter's pipeline never calls it, so
+it's completely untouched). It consumes a new capability added to
+`plum_types::Infer`: every generic construction/pattern/call site
+encountered during inference is recorded (as a `RawSite`) alongside
+which top-level function's body it's nested in, if any; once whole-
+program inference finishes, `Infer::resolve_generic_sites` resolves
+each one against the final accumulated substitution into either a
+fully concrete argument list, or — for a site nested inside another
+still-generic function's own body, never pinned down by that
+function's own (generic, inferred-exactly-once) body inference — a
+`Type::Param` TEMPLATE referring to that enclosing function's own
+declared generic parameter. (A type parameter that's never pinned to
+a concrete type ANYWHERE it's used is a genuine new static check: a
+clear type error, not silently accepted.) `monomorphize::plan` then
+runs a fixpoint worklist over every reachable `(declaration, concrete
+args)` pair — seeded from every already-concrete site plus every
+ordinary non-generic function — discovering deeper instantiations as
+it rewrites each reachable generic function's body (substituting any
+template `Param` through that specific instantiation's concrete
+binding via a clone-and-rewrite pass over the AST, then handing the
+rewritten clone to `lower.rs`'s ordinary, otherwise-unmodified lowering
+functions). Termination is guaranteed: `unify.rs`'s occurs check
+already rejects any self-recursive function/type whose own use would
+require a type strictly containing itself, so the set of reachable
+instantiations is finite by construction, independent of
+monomorphization itself.
+
+Mangling: `$` is not a legal Plum identifier character, matching the
+existing precedent of synthetic tags using identifier-illegal
+characters (`tuple_tag`, `RANGE_TAG`, `DEFAULT_ARM_TAG`) — a mangled
+name (`Cons$Int`, `identity$Bool`, `Pair$Int$Bool`) can never collide
+with a real user identifier, and a non-generic name mangles to exactly
+itself, so this whole pass produces a ZERO output diff for any program
+that never uses generics at all. `plumc::codegen_cli` merges the
+resulting mangled `tag_fields`/`signatures` into its existing non-
+generic derivation (disjoint by construction) and fully REPLACES
+`lower_program`'s own function list with the monomorphization pass's
+output — an *ordinary* (never-generic) function whose body merely
+*uses* a generic type still needs its own body re-lowered with mangled
+tags, since its plain-tagged body would otherwise reference tags
+`tag_fields` has no entry for. An entry point naming a generic function
+with more than one reachable instantiation is rejected with a clear
+"ambiguous entry point" error (compile a concrete, non-generic wrapper
+function instead) rather than silently picking one.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck
