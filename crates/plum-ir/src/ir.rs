@@ -393,6 +393,56 @@ pub enum Expr {
         base: Box<Expr>,
         sep: Box<Expr>,
     },
+    // `s.to_upper()` / `s.to_lower()` — evaluate to a NEW string with
+    // every character upper/lowercased (Unicode-aware, delegating
+    // directly to Rust's own `str::to_uppercase()`/`to_lowercase()`).
+    // Same reuse-in-place relationship to their `*Reuse` counterparts
+    // that `StrTrim` has to `StrTrimReuse`.
+    StrToUpper {
+        base: Box<Expr>,
+    },
+    StrToUpperReuse {
+        reuse_of: String,
+    },
+    StrToLower {
+        base: Box<Expr>,
+    },
+    StrToLowerReuse {
+        reuse_of: String,
+    },
+    // `s.contains(needle)` / `s.starts_with(prefix)` / `s.ends_with(
+    // suffix)` — evaluate to `Bool`, delegating directly to Rust's own
+    // `str::contains`/`starts_with`/`ends_with`. No reuse-in-place
+    // counterpart at all (unlike every other Str* node above): there's
+    // no NEW string being produced here to recycle a cell into — the
+    // result is a plain `Bool`, never heap-allocated in the first
+    // place.
+    StrContains {
+        base: Box<Expr>,
+        needle: Box<Expr>,
+    },
+    StrStartsWith {
+        base: Box<Expr>,
+        prefix: Box<Expr>,
+    },
+    StrEndsWith {
+        base: Box<Expr>,
+        suffix: Box<Expr>,
+    },
+    // `s.replace(from, to)` — evaluates to a NEW string with every
+    // occurrence of `from` replaced by `to` (delegating directly to
+    // Rust's own `str::replace`). Same reuse-in-place relationship to
+    // `StrReplaceReuse` as `StrTrim` has to `StrTrimReuse`.
+    StrReplace {
+        base: Box<Expr>,
+        from: Box<Expr>,
+        to: Box<Expr>,
+    },
+    StrReplaceReuse {
+        reuse_of: String,
+        from: Box<Expr>,
+        to: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

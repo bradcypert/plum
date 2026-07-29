@@ -334,6 +334,28 @@ mod tests {
     }
 
     #[test]
+    fn string_case_conversion_and_predicates_run_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let s = \"Hello World\";\
+                    if s.to_lower().contains(\"world\") && s.starts_with(\"Hello\") && s.ends_with(\"World\") { 1 } else { 0 } }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn string_replace_runs_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = \"2026-07-28\".replace(\"-\", \"/\") == \"2026/07/28\"";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn string_replace_reused_after_a_reuse_in_place_operation_still_sees_its_original_contents() {
+        let src = "let use_it dummy = { let s = \"a-b\"; let t = s.replace(\"-\", \"_\"); s == \"a-b\" && t == \"a_b\" }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely

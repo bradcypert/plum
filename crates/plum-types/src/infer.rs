@@ -1024,6 +1024,116 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![Type::Str]), acc))
             }
+            // `s.to_upper()` / `s.to_lower()` — `s` must be `Str`;
+            // evaluate to `Str`.
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "to_upper") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.to_upper()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Str, acc))
+            }
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "to_lower") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.to_lower()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Str, acc))
+            }
+            // `s.contains(needle)` / `s.starts_with(prefix)` /
+            // `s.ends_with(suffix)` — both operands must be `Str`;
+            // evaluate to `Bool`.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "contains") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.contains()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (needle_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&needle_ty), &Type::Str)
+                    .map_err(|e| format!("`.contains()` argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Bool, acc))
+            }
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1
+                    && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "starts_with") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.starts_with()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (prefix_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&prefix_ty), &Type::Str)
+                    .map_err(|e| format!("`.starts_with()` argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Bool, acc))
+            }
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "ends_with") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.ends_with()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (suffix_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&suffix_ty), &Type::Str)
+                    .map_err(|e| format!("`.ends_with()` argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Bool, acc))
+            }
+            // `s.replace(from, to)` — `s`, `from`, `to` must all be
+            // `Str`; evaluates to `Str`.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 2 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "replace") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.replace()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (from_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&from_ty), &Type::Str)
+                    .map_err(|e| format!("`.replace()` first argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (to_ty, s) = self.infer_expr(&args[1], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&to_ty), &Type::Str)
+                    .map_err(|e| format!("`.replace()` second argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Str, acc))
+            }
             // `arr.push(v)` — `arr` must be `Array[T]`, `v` must be
             // that SAME `T`; evaluates to a (new) `Array[T]`.
             ast::Expr::Call { callee, args, span }
@@ -4078,6 +4188,77 @@ mod tests {
     #[test]
     fn split_on_a_non_string_is_an_error() {
         infer_err("5.split(\",\")");
+    }
+
+    #[test]
+    fn string_to_upper_infers_as_str() {
+        assert_eq!(infer("\"hi\".to_upper()"), Type::Str);
+    }
+
+    #[test]
+    fn to_upper_on_a_non_string_is_an_error() {
+        infer_err("5.to_upper()");
+    }
+
+    #[test]
+    fn string_to_lower_infers_as_str() {
+        assert_eq!(infer("\"HI\".to_lower()"), Type::Str);
+    }
+
+    #[test]
+    fn to_lower_on_a_non_string_is_an_error() {
+        infer_err("5.to_lower()");
+    }
+
+    #[test]
+    fn string_contains_infers_as_bool() {
+        assert_eq!(infer("\"hi\".contains(\"i\")"), Type::Bool);
+    }
+
+    #[test]
+    fn string_contains_argument_type_is_checked() {
+        infer_err("\"hi\".contains(5)");
+    }
+
+    #[test]
+    fn contains_on_a_non_string_is_an_error() {
+        infer_err("5.contains(\"i\")");
+    }
+
+    #[test]
+    fn string_starts_with_infers_as_bool() {
+        assert_eq!(infer("\"hi\".starts_with(\"h\")"), Type::Bool);
+    }
+
+    #[test]
+    fn starts_with_on_a_non_string_is_an_error() {
+        infer_err("5.starts_with(\"h\")");
+    }
+
+    #[test]
+    fn string_ends_with_infers_as_bool() {
+        assert_eq!(infer("\"hi\".ends_with(\"i\")"), Type::Bool);
+    }
+
+    #[test]
+    fn ends_with_on_a_non_string_is_an_error() {
+        infer_err("5.ends_with(\"i\")");
+    }
+
+    #[test]
+    fn string_replace_infers_as_str() {
+        assert_eq!(infer("\"hi\".replace(\"h\", \"H\")"), Type::Str);
+    }
+
+    #[test]
+    fn string_replace_argument_types_are_checked() {
+        infer_err("\"hi\".replace(5, \"H\")");
+        infer_err("\"hi\".replace(\"h\", 5)");
+    }
+
+    #[test]
+    fn replace_on_a_non_string_is_an_error() {
+        infer_err("5.replace(\"h\", \"H\")");
     }
 
     #[test]

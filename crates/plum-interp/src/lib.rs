@@ -898,6 +898,121 @@ impl Interpreter {
                 let new_addr = self.heap.alloc("0Array".to_string(), parts);
                 Ok(Value::HeapRef(new_addr))
             }
+            // `s.to_upper()` — delegates to Rust's own `str::
+            // to_uppercase()` (Unicode-aware). Same reuse-in-place
+            // relationship to `StrToUpperReuse` as `StrTrim` has to
+            // `StrTrimReuse`.
+            Expr::StrToUpper { base } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`.to_upper()` requires a String value".to_string());
+                };
+                let upper = self.heap.read_str(addr)?.to_uppercase();
+                let new_addr = self.heap.alloc_str(upper);
+                Ok(Value::HeapRef(new_addr))
+            }
+            Expr::StrToUpperReuse { reuse_of } => {
+                let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
+                    return Err(format!("reuse target {reuse_of:?} is not a heap value"));
+                };
+                let upper = self.heap.read_str(addr)?.to_uppercase();
+                let new_addr = self.heap.dec_and_maybe_reuse_str(addr, upper)?;
+                Ok(Value::HeapRef(new_addr))
+            }
+            // `s.to_lower()` — same as `.to_upper()`, delegating to
+            // `str::to_lowercase()`.
+            Expr::StrToLower { base } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`.to_lower()` requires a String value".to_string());
+                };
+                let lower = self.heap.read_str(addr)?.to_lowercase();
+                let new_addr = self.heap.alloc_str(lower);
+                Ok(Value::HeapRef(new_addr))
+            }
+            Expr::StrToLowerReuse { reuse_of } => {
+                let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
+                    return Err(format!("reuse target {reuse_of:?} is not a heap value"));
+                };
+                let lower = self.heap.read_str(addr)?.to_lowercase();
+                let new_addr = self.heap.dec_and_maybe_reuse_str(addr, lower)?;
+                Ok(Value::HeapRef(new_addr))
+            }
+            // `s.contains(needle)` / `.starts_with(prefix)` /
+            // `.ends_with(suffix)` — delegate directly to Rust's own
+            // `str` methods of the same name. Evaluate to `Bool` — no
+            // heap allocation at all, so no reuse-in-place question
+            // even arises.
+            Expr::StrContains { base, needle } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`.contains()` requires a String value".to_string());
+                };
+                let needle_addr = match self.eval(needle)? {
+                    Value::HeapRef(addr) => addr,
+                    _ => return Err("`.contains()` argument must be a String value".to_string()),
+                };
+                let contains = self.heap.read_str(addr)?.contains(self.heap.read_str(needle_addr)?);
+                Ok(Value::Bool(contains))
+            }
+            Expr::StrStartsWith { base, prefix } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`.starts_with()` requires a String value".to_string());
+                };
+                let prefix_addr = match self.eval(prefix)? {
+                    Value::HeapRef(addr) => addr,
+                    _ => return Err("`.starts_with()` argument must be a String value".to_string()),
+                };
+                let starts = self.heap.read_str(addr)?.starts_with(self.heap.read_str(prefix_addr)?);
+                Ok(Value::Bool(starts))
+            }
+            Expr::StrEndsWith { base, suffix } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`.ends_with()` requires a String value".to_string());
+                };
+                let suffix_addr = match self.eval(suffix)? {
+                    Value::HeapRef(addr) => addr,
+                    _ => return Err("`.ends_with()` argument must be a String value".to_string()),
+                };
+                let ends = self.heap.read_str(addr)?.ends_with(self.heap.read_str(suffix_addr)?);
+                Ok(Value::Bool(ends))
+            }
+            // `s.replace(from, to)` — delegates to Rust's own `str::
+            // replace()`. Same reuse-in-place relationship to
+            // `StrReplaceReuse` as `StrTrim` has to `StrTrimReuse`.
+            Expr::StrReplace { base, from, to } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`.replace()` requires a String value".to_string());
+                };
+                let from_addr = match self.eval(from)? {
+                    Value::HeapRef(addr) => addr,
+                    _ => return Err("`.replace()` first argument must be a String value".to_string()),
+                };
+                let to_addr = match self.eval(to)? {
+                    Value::HeapRef(addr) => addr,
+                    _ => return Err("`.replace()` second argument must be a String value".to_string()),
+                };
+                let from_str = self.heap.read_str(from_addr)?.to_string();
+                let to_str = self.heap.read_str(to_addr)?.to_string();
+                let replaced = self.heap.read_str(addr)?.replace(from_str.as_str(), to_str.as_str());
+                let new_addr = self.heap.alloc_str(replaced);
+                Ok(Value::HeapRef(new_addr))
+            }
+            Expr::StrReplaceReuse { reuse_of, from, to } => {
+                let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
+                    return Err(format!("reuse target {reuse_of:?} is not a heap value"));
+                };
+                let from_addr = match self.eval(from)? {
+                    Value::HeapRef(addr) => addr,
+                    _ => return Err("`.replace()` first argument must be a String value".to_string()),
+                };
+                let to_addr = match self.eval(to)? {
+                    Value::HeapRef(addr) => addr,
+                    _ => return Err("`.replace()` second argument must be a String value".to_string()),
+                };
+                let from_str = self.heap.read_str(from_addr)?.to_string();
+                let to_str = self.heap.read_str(to_addr)?.to_string();
+                let replaced = self.heap.read_str(addr)?.replace(from_str.as_str(), to_str.as_str());
+                let new_addr = self.heap.dec_and_maybe_reuse_str(addr, replaced)?;
+                Ok(Value::HeapRef(new_addr))
+            }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
                 // non-heap name (shouldn't happen given how fbip.rs
@@ -1258,6 +1373,62 @@ mod tests {
     fn string_split_on_a_string_with_no_separator_returns_one_element() {
         assert_eq!(eval("\"abc\".split(\",\").len()"), Value::Int(1));
         assert_eq!(eval("\"abc\".split(\",\")[0] == \"abc\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_to_upper_uppercases_every_character() {
+        assert_eq!(eval("\"Hello\".to_upper() == \"HELLO\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_to_upper_does_not_mutate_the_original() {
+        let src = "{ let a = \"hi\"; let b = a.to_upper(); a == \"hi\" }";
+        assert_eq!(eval(src), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_to_lower_lowercases_every_character() {
+        assert_eq!(eval("\"Hello\".to_lower() == \"hello\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_to_lower_does_not_mutate_the_original() {
+        let src = "{ let a = \"HI\"; let b = a.to_lower(); a == \"HI\" }";
+        assert_eq!(eval(src), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_contains_finds_a_substring_anywhere() {
+        assert_eq!(eval("\"hello\".contains(\"ell\")"), Value::Bool(true));
+        assert_eq!(eval("\"hello\".contains(\"xyz\")"), Value::Bool(false));
+    }
+
+    #[test]
+    fn string_starts_with_checks_the_prefix() {
+        assert_eq!(eval("\"hello\".starts_with(\"he\")"), Value::Bool(true));
+        assert_eq!(eval("\"hello\".starts_with(\"lo\")"), Value::Bool(false));
+    }
+
+    #[test]
+    fn string_ends_with_checks_the_suffix() {
+        assert_eq!(eval("\"hello\".ends_with(\"lo\")"), Value::Bool(true));
+        assert_eq!(eval("\"hello\".ends_with(\"he\")"), Value::Bool(false));
+    }
+
+    #[test]
+    fn string_replace_substitutes_every_occurrence() {
+        assert_eq!(eval("\"a-b-c\".replace(\"-\", \"_\") == \"a_b_c\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_replace_with_no_match_returns_the_original_content() {
+        assert_eq!(eval("\"abc\".replace(\"x\", \"y\") == \"abc\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn string_replace_does_not_mutate_the_original() {
+        let src = "{ let a = \"a-b\"; let c = a.replace(\"-\", \"_\"); a == \"a-b\" }";
+        assert_eq!(eval(src), Value::Bool(true));
     }
 
     #[test]
@@ -2326,6 +2497,11 @@ mod tests {
             reuse_of: reuse_of.to_string(),
         }
     }
+    fn str_to_upper_reuse(reuse_of: &str) -> Expr {
+        Expr::StrToUpperReuse {
+            reuse_of: reuse_of.to_string(),
+        }
+    }
     fn inc(name: &str, rest: Expr) -> Expr {
         Expr::RcAnnotated {
             op: RcOp::Inc,
@@ -2604,6 +2780,41 @@ mod tests {
         assert_eq!(interp.alloc_count(), 2, "the shared path must allocate a fresh cell");
         assert_eq!(interp.heap.read_str(0).unwrap(), "  hi  ");
         assert_eq!(interp.heap.read_str(new_addr).unwrap(), "hi");
+    }
+
+    #[test]
+    fn str_to_upper_reuse_recycles_the_same_address_when_uniquely_owned() {
+        let mut interp = Interpreter::new();
+        let program = let_("s", Expr::Str("hi".to_string()), str_to_upper_reuse("s"));
+        let result = interp.eval(&program).unwrap();
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_eq!(addr, 0, "should reuse address 0 — the original string's cell");
+        assert_eq!(interp.alloc_count(), 1, "reuse must not count as a second allocation");
+        assert_eq!(interp.heap.read_str(addr).unwrap(), "HI");
+    }
+
+    #[test]
+    fn str_to_upper_reuse_allocates_fresh_and_preserves_the_alias_when_shared() {
+        let mut interp = Interpreter::new();
+        let program = let_(
+            "s",
+            Expr::Str("hi".to_string()),
+            let_(
+                "saved",
+                inc("s", var("s")), // the Inc a real FBIP pass would insert here
+                str_to_upper_reuse("s"),
+            ),
+        );
+        let result = interp.eval(&program).unwrap();
+        let Value::HeapRef(new_addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_ne!(new_addr, 0, "must not reuse memory that `saved` still references");
+        assert_eq!(interp.alloc_count(), 2, "the shared path must allocate a fresh cell");
+        assert_eq!(interp.heap.read_str(0).unwrap(), "hi");
+        assert_eq!(interp.heap.read_str(new_addr).unwrap(), "HI");
     }
 
     // --- The capstone: real Plum SOURCE TEXT, through the entire

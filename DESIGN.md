@@ -728,6 +728,25 @@ ordinary `Array[Str]`, `for`/`.map()`/`.filter()`/`.fold()`/indexing
 all already work on split output for free — confirmed with a dedicated
 test summing `.len()` across `for part in "...".split(",")`.
 
+**`.to_upper()`/`.to_lower()`/`.contains()`/`.starts_with()`/
+`.ends_with()`/`.replace()` — Decided (2026-07-28).** Rounded out
+strings further the same evening, all delegating directly to Rust's
+own `str` methods of the same name (Unicode-aware case conversion via
+`to_uppercase()`/`to_lowercase()`). `.to_upper()`/`.to_lower()`/
+`.replace()` all evaluate to `Str` and follow `.trim()`'s exact
+precedent — `StrToUpper`/`StrToUpperReuse`, `StrToLower`/
+`StrToLowerReuse`, `StrReplace`/`StrReplaceReuse`, each with the full
+reuse-in-place treatment. `.contains()`/`.starts_with()`/`.ends_with()`
+are the FIRST string operations that evaluate to `Bool` rather than a
+new `Str` — `StrContains`/`StrStartsWith`/`StrEndsWith` have no
+reuse-in-place question to even ask, since nothing is heap-allocated
+for the result at all (a plain `Bool`, same as `Int`/`Float`). 9 new IR
+nodes total (6 with a `*Reuse` counterpart, 3 without), all following
+directly-established precedent — no new design decisions needed beyond
+confirming the "just call the underlying Rust method" and "Bool-
+returning ops need no reuse variant" patterns already implicit in
+`.len()` and `==`.
+
 **`.len()`'s shared-node trick.** `.len()` is shape-detected IDENTICALLY
 for arrays and strings at lowering time — lowering has no type
 information to tell `arr.len()` from `s.len()` apart, so both still
@@ -935,10 +954,11 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
   `.set()`/`.remove()`'s reuse-in-place optimization are all now
   Decided (see "Arrays" above). Strings becoming heap-backed/refcounted,
   `.len()`, `.concat()`, heap-aware `==`, byte-indexing `s[i]`,
-  `.runes()`, `.trim()`, and `.split(sep)` are likewise now Decided
-  (see "Strings" above). Still open, for strings specifically:
-  `to_upper`/`to_lower`/`contains`/`starts_with`/`ends_with`/`replace`
-  and other standard string operations, grapheme-cluster-aware
+  `.runes()`, `.trim()`, `.split(sep)`, `.to_upper()`, `.to_lower()`,
+  `.contains()`, `.starts_with()`, `.ends_with()`, and `.replace()` are
+  likewise now Decided (see "Strings" above). Still open, for strings
+  specifically: other standard string operations (e.g. `repeat`, a
+  `String.from_int`/formatting story), grapheme-cluster-aware
   operations (a "rune" is a Unicode SCALAR VALUE / codepoint, not a
   user-perceived character — a grapheme cluster like an emoji with
   modifiers can span multiple runes; `.runes()` doesn't attempt that

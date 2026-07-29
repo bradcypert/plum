@@ -236,6 +236,49 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             base: Box::new(mark_reuse(*base)),
             sep: Box::new(mark_reuse(*sep)),
         },
+        Expr::StrToUpper { base } => match base.as_ref() {
+            Expr::Var(name) => Expr::StrToUpperReuse { reuse_of: name.clone() },
+            _ => Expr::StrToUpper {
+                base: Box::new(mark_reuse(*base)),
+            },
+        },
+        Expr::StrToUpperReuse { reuse_of } => Expr::StrToUpperReuse { reuse_of },
+        Expr::StrToLower { base } => match base.as_ref() {
+            Expr::Var(name) => Expr::StrToLowerReuse { reuse_of: name.clone() },
+            _ => Expr::StrToLower {
+                base: Box::new(mark_reuse(*base)),
+            },
+        },
+        Expr::StrToLowerReuse { reuse_of } => Expr::StrToLowerReuse { reuse_of },
+        Expr::StrContains { base, needle } => Expr::StrContains {
+            base: Box::new(mark_reuse(*base)),
+            needle: Box::new(mark_reuse(*needle)),
+        },
+        Expr::StrStartsWith { base, prefix } => Expr::StrStartsWith {
+            base: Box::new(mark_reuse(*base)),
+            prefix: Box::new(mark_reuse(*prefix)),
+        },
+        Expr::StrEndsWith { base, suffix } => Expr::StrEndsWith {
+            base: Box::new(mark_reuse(*base)),
+            suffix: Box::new(mark_reuse(*suffix)),
+        },
+        Expr::StrReplace { base, from, to } => match base.as_ref() {
+            Expr::Var(name) => Expr::StrReplaceReuse {
+                reuse_of: name.clone(),
+                from: Box::new(mark_reuse(*from)),
+                to: Box::new(mark_reuse(*to)),
+            },
+            _ => Expr::StrReplace {
+                base: Box::new(mark_reuse(*base)),
+                from: Box::new(mark_reuse(*from)),
+                to: Box::new(mark_reuse(*to)),
+            },
+        },
+        Expr::StrReplaceReuse { reuse_of, from, to } => Expr::StrReplaceReuse {
+            reuse_of,
+            from: Box::new(mark_reuse(*from)),
+            to: Box::new(mark_reuse(*to)),
+        },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
             // reuse — a call result or anything else isn't something
@@ -459,6 +502,36 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             base: Box::new(transform(*base, known_heap)),
             sep: Box::new(transform(*sep, known_heap)),
         },
+        Expr::StrToUpper { base } => Expr::StrToUpper {
+            base: Box::new(transform(*base, known_heap)),
+        },
+        Expr::StrToUpperReuse { reuse_of } => Expr::StrToUpperReuse { reuse_of },
+        Expr::StrToLower { base } => Expr::StrToLower {
+            base: Box::new(transform(*base, known_heap)),
+        },
+        Expr::StrToLowerReuse { reuse_of } => Expr::StrToLowerReuse { reuse_of },
+        Expr::StrContains { base, needle } => Expr::StrContains {
+            base: Box::new(transform(*base, known_heap)),
+            needle: Box::new(transform(*needle, known_heap)),
+        },
+        Expr::StrStartsWith { base, prefix } => Expr::StrStartsWith {
+            base: Box::new(transform(*base, known_heap)),
+            prefix: Box::new(transform(*prefix, known_heap)),
+        },
+        Expr::StrEndsWith { base, suffix } => Expr::StrEndsWith {
+            base: Box::new(transform(*base, known_heap)),
+            suffix: Box::new(transform(*suffix, known_heap)),
+        },
+        Expr::StrReplace { base, from, to } => Expr::StrReplace {
+            base: Box::new(transform(*base, known_heap)),
+            from: Box::new(transform(*from, known_heap)),
+            to: Box::new(transform(*to, known_heap)),
+        },
+        Expr::StrReplaceReuse { reuse_of, from, to } => Expr::StrReplaceReuse {
+            reuse_of,
+            from: Box::new(transform(*from, known_heap)),
+            to: Box::new(transform(*to, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -559,6 +632,17 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::StrTrim { base } => expr_mentions_var(base, name),
         Expr::StrTrimReuse { .. } => false,
         Expr::StrSplit { base, sep } => expr_mentions_var(base, name) || expr_mentions_var(sep, name),
+        Expr::StrToUpper { base } => expr_mentions_var(base, name),
+        Expr::StrToUpperReuse { .. } => false,
+        Expr::StrToLower { base } => expr_mentions_var(base, name),
+        Expr::StrToLowerReuse { .. } => false,
+        Expr::StrContains { base, needle } => expr_mentions_var(base, name) || expr_mentions_var(needle, name),
+        Expr::StrStartsWith { base, prefix } => expr_mentions_var(base, name) || expr_mentions_var(prefix, name),
+        Expr::StrEndsWith { base, suffix } => expr_mentions_var(base, name) || expr_mentions_var(suffix, name),
+        Expr::StrReplace { base, from, to } => {
+            expr_mentions_var(base, name) || expr_mentions_var(from, name) || expr_mentions_var(to, name)
+        }
+        Expr::StrReplaceReuse { from, to, .. } => expr_mentions_var(from, name) || expr_mentions_var(to, name),
     }
 }
 
@@ -945,6 +1029,61 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 used_base || used_sep,
             )
         }
+        Expr::StrToUpper { base } => {
+            let (base_t, used) = mark_last_uses(*base, name, live_after);
+            (Expr::StrToUpper { base: Box::new(base_t) }, used)
+        }
+        Expr::StrToLower { base } => {
+            let (base_t, used) = mark_last_uses(*base, name, live_after);
+            (Expr::StrToLower { base: Box::new(base_t) }, used)
+        }
+        Expr::StrContains { base, needle } => {
+            let (needle_t, used_needle) = mark_last_uses(*needle, name, live_after);
+            let (base_t, used_base) = mark_last_uses(*base, name, live_after || used_needle);
+            (
+                Expr::StrContains {
+                    base: Box::new(base_t),
+                    needle: Box::new(needle_t),
+                },
+                used_base || used_needle,
+            )
+        }
+        Expr::StrStartsWith { base, prefix } => {
+            let (prefix_t, used_prefix) = mark_last_uses(*prefix, name, live_after);
+            let (base_t, used_base) = mark_last_uses(*base, name, live_after || used_prefix);
+            (
+                Expr::StrStartsWith {
+                    base: Box::new(base_t),
+                    prefix: Box::new(prefix_t),
+                },
+                used_base || used_prefix,
+            )
+        }
+        Expr::StrEndsWith { base, suffix } => {
+            let (suffix_t, used_suffix) = mark_last_uses(*suffix, name, live_after);
+            let (base_t, used_base) = mark_last_uses(*base, name, live_after || used_suffix);
+            (
+                Expr::StrEndsWith {
+                    base: Box::new(base_t),
+                    suffix: Box::new(suffix_t),
+                },
+                used_base || used_suffix,
+            )
+        }
+        // Evaluation order `base`, then `from`, then `to`.
+        Expr::StrReplace { base, from, to } => {
+            let (to_t, used_to) = mark_last_uses(*to, name, live_after);
+            let (from_t, used_from) = mark_last_uses(*from, name, live_after || used_to);
+            let (base_t, used_base) = mark_last_uses(*base, name, live_after || used_to || used_from);
+            (
+                Expr::StrReplace {
+                    base: Box::new(base_t),
+                    from: Box::new(from_t),
+                    to: Box::new(to_t),
+                },
+                used_base || used_from || used_to,
+            )
+        }
         Expr::ArrayPush { array, value } => {
             let (value_t, used_value) = mark_last_uses(*value, name, live_after);
             let (array_t, used_array) = mark_last_uses(*array, name, live_after || used_value);
@@ -1049,6 +1188,20 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
             )
         }
         Expr::StrTrimReuse { reuse_of } => (Expr::StrTrimReuse { reuse_of }, live_after),
+        Expr::StrToUpperReuse { reuse_of } => (Expr::StrToUpperReuse { reuse_of }, live_after),
+        Expr::StrToLowerReuse { reuse_of } => (Expr::StrToLowerReuse { reuse_of }, live_after),
+        Expr::StrReplaceReuse { reuse_of, from, to } => {
+            let (to_t, used_to) = mark_last_uses(*to, name, live_after);
+            let (from_t, used_from) = mark_last_uses(*from, name, live_after || used_to);
+            (
+                Expr::StrReplaceReuse {
+                    reuse_of,
+                    from: Box::new(from_t),
+                    to: Box::new(to_t),
+                },
+                used_from || used_to,
+            )
+        }
         // The reassignment TARGET (`name`) is a plain String field,
         // never an `Expr::Var` occurrence — so, unlike `Let`, there's
         // no shadowing case to special-case here even when the target
@@ -1380,6 +1533,57 @@ mod tests {
     fn str_trim_on_a_non_variable_base_is_not_a_reuse_candidate() {
         let input = Expr::StrTrim {
             base: Box::new(call(var("get_str"), vec![])),
+        };
+        assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
+    fn str_to_upper_on_a_plain_variable_marks_reuse() {
+        let input = Expr::StrToUpper { base: Box::new(var("s")) };
+        let expected = Expr::StrToUpperReuse { reuse_of: "s".to_string() };
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn str_to_lower_on_a_plain_variable_marks_reuse() {
+        let input = Expr::StrToLower { base: Box::new(var("s")) };
+        let expected = Expr::StrToLowerReuse { reuse_of: "s".to_string() };
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn str_replace_on_a_plain_variable_marks_reuse() {
+        let input = Expr::StrReplace {
+            base: Box::new(var("s")),
+            from: Box::new(Expr::Str("x".to_string())),
+            to: Box::new(Expr::Str("y".to_string())),
+        };
+        let expected = Expr::StrReplaceReuse {
+            reuse_of: "s".to_string(),
+            from: Box::new(Expr::Str("x".to_string())),
+            to: Box::new(Expr::Str("y".to_string())),
+        };
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn str_replace_on_a_non_variable_base_is_not_a_reuse_candidate() {
+        let input = Expr::StrReplace {
+            base: Box::new(call(var("get_str"), vec![])),
+            from: Box::new(Expr::Str("x".to_string())),
+            to: Box::new(Expr::Str("y".to_string())),
+        };
+        assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
+    fn str_contains_is_never_a_reuse_candidate() {
+        // Returns `Bool`, never heap-allocated — nothing to reuse into,
+        // so `mark_reuse` leaves it structurally unchanged regardless
+        // of whether `base` is a plain variable.
+        let input = Expr::StrContains {
+            base: Box::new(var("s")),
+            needle: Box::new(Expr::Str("x".to_string())),
         };
         assert_eq!(mark_reuse(input.clone()), input);
     }

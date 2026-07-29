@@ -653,6 +653,76 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                 sep: Box::new(lower_expr(&args[0], ctx)?),
             })
         }
+        // `s.to_upper()` / `s.to_lower()` — same shape-only precedent,
+        // zero args.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "to_upper") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::StrToUpper {
+                base: Box::new(lower_expr(base, ctx)?),
+            })
+        }
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "to_lower") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::StrToLower {
+                base: Box::new(lower_expr(base, ctx)?),
+            })
+        }
+        // `s.contains(needle)` / `s.starts_with(prefix)` / `s.ends_with(
+        // suffix)` — same shape-only precedent, one arg.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "contains") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::StrContains {
+                base: Box::new(lower_expr(base, ctx)?),
+                needle: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "starts_with") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::StrStartsWith {
+                base: Box::new(lower_expr(base, ctx)?),
+                prefix: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "ends_with") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::StrEndsWith {
+                base: Box::new(lower_expr(base, ctx)?),
+                suffix: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
+        // `s.replace(from, to)` — same shape-only precedent, two args.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 2 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "replace") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::StrReplace {
+                base: Box::new(lower_expr(base, ctx)?),
+                from: Box::new(lower_expr(&args[0], ctx)?),
+                to: Box::new(lower_expr(&args[1], ctx)?),
+            })
+        }
         // `arr.map(f)` — desugars into an index-based loop reusing only
         // EXISTING IR nodes (`Let`, `For`, `ArrayLen`, `Index`,
         // `ArrayPush`, `Assign`), same convention as `for x in arr`'s
@@ -2726,6 +2796,71 @@ mod tests {
             ir::Expr::StrSplit {
                 base: Box::new(ir::Expr::Var("s".to_string())),
                 sep: Box::new(ir::Expr::Str(",".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn string_to_upper_lowers_to_a_str_to_upper_node() {
+        assert_eq!(
+            lower("s.to_upper()"),
+            ir::Expr::StrToUpper {
+                base: Box::new(ir::Expr::Var("s".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn string_to_lower_lowers_to_a_str_to_lower_node() {
+        assert_eq!(
+            lower("s.to_lower()"),
+            ir::Expr::StrToLower {
+                base: Box::new(ir::Expr::Var("s".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn string_contains_lowers_to_a_str_contains_node() {
+        assert_eq!(
+            lower("s.contains(\"x\")"),
+            ir::Expr::StrContains {
+                base: Box::new(ir::Expr::Var("s".to_string())),
+                needle: Box::new(ir::Expr::Str("x".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn string_starts_with_lowers_to_a_str_starts_with_node() {
+        assert_eq!(
+            lower("s.starts_with(\"x\")"),
+            ir::Expr::StrStartsWith {
+                base: Box::new(ir::Expr::Var("s".to_string())),
+                prefix: Box::new(ir::Expr::Str("x".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn string_ends_with_lowers_to_a_str_ends_with_node() {
+        assert_eq!(
+            lower("s.ends_with(\"x\")"),
+            ir::Expr::StrEndsWith {
+                base: Box::new(ir::Expr::Var("s".to_string())),
+                suffix: Box::new(ir::Expr::Str("x".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn string_replace_lowers_to_a_str_replace_node() {
+        assert_eq!(
+            lower("s.replace(\"x\", \"y\")"),
+            ir::Expr::StrReplace {
+                base: Box::new(ir::Expr::Var("s".to_string())),
+                from: Box::new(ir::Expr::Str("x".to_string())),
+                to: Box::new(ir::Expr::Str("y".to_string())),
             }
         );
     }
