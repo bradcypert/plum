@@ -1,5 +1,7 @@
+mod codegen_cli;
 mod modules;
 mod project;
+pub use codegen_cli::{compile_and_run, CgValue};
 pub use modules::typecheck_and_run_modules;
 pub use project::typecheck_and_run_project;
 

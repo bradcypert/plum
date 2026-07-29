@@ -1501,7 +1501,69 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   not guaranteed, and mutual tail recursion routinely isn't eliminated),
   which matters because ML-style code leans on recursion as the primary
   looping construct. LLVM IR has a first-class `tail call` instruction
-  that's a portable guarantee.
+  that's a portable guarantee. **v1 implemented** — see below.
+
+### LLVM backend — v1 implemented (scalars + control flow + tail calls)
+
+`crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
+`inkwell`/`llvm-sys` Rust binding at all. This machine has no
+`llvm-config`/dev headers installed (only runtime `.so`s), and both
+crates need a system-level LLVM install matching one specific major
+version; text emission needs nothing beyond `std::fmt` and shells out
+to `clang` (already present) to compile and link. This also fits the
+self-hosting-viability policy (see the FFI section's writeup of that
+policy): a future self-hosted Plum compiler would do the exact same
+thing — generate text, shell to `clang` — so there's no Rust-crate-
+specific API shape to ever "unwind."
+
+**v1 scope**: scalars (`Int`/`Float`/`Bool`/`Unit`), `Var`, `Unary`,
+`Binary` (including short-circuit `&&`/`||`, compiled as real
+branching + `phi`, not a plain `and`/`or` instruction — must match the
+interpreter's exact short-circuit semantics: the untaken side's code
+must never execute), `Let`, `If`, and plain named `Call`. Everything
+else in `ir::Expr` (heap/`Ctor`/`Match`, strings, arrays, closures,
+concurrency, FFI, `For`, `Assign`, `ToString`, ...) is out of scope for
+now and produces a clear codegen error naming what's missing, never a
+panic — heap codegen needs its own C-ABI runtime (malloc-based cells,
+inc/dec/free, tag-to-integer interning) and is real, separate design
+work for a later chunk.
+
+**Guaranteed tail calls**: any call in tail position (the function's
+own body; both branches of a tail-positioned `If`; a `Let`'s `body`) to
+a directly-named function — self- OR mutual-recursive — compiles to
+`%r = musttail call <ty> @callee(...)` immediately followed by
+`ret <ty> %r`, the exact shape LLVM's `musttail` requires. Verified as
+a REAL, unconditional guarantee (not just an optimizer hint under
+`-O2`): a compiled 1,000,000-deep self-recursive accumulator and a
+1,000,001-deep mutual-recursion pair both run correctly at `-O0`,
+which would stack-overflow without genuine tail-call elimination.
+
+**Type handling**: `ir::Function`/`ir::Global` carry no type
+information at all (`ir::Type` is vestigial/unused). `plum-codegen`
+defines its own minimal `CgType { Int, Float, Bool, Unit }` (not
+reusing `plum_types::Type`, keeping the crate self-contained and
+testable in isolation with hand-built `ir::Program` values, matching
+every other crate's own precedent) and expects a `HashMap<String,
+FnSig>` — every top-level function's concrete param/return types —
+supplied by the caller. `plumc::compile_and_run` derives this from
+`Infer::infer_program`'s own results (the only place real type
+information exists in the pipeline), erroring clearly if any
+function's signature involves something outside the four supported
+primitives. Within a function body, codegen does its own simple
+bottom-up type-propagation walk as it emits instructions — not full
+Hindley-Milner (the program already passed real type-checking before
+reaching codegen), just "what LLVM type does this node need."
+
+**Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
+Result<String, String>` runs parse → prelude → type-check → movecheck
+→ lower → optimize (the same pipeline `run_resolved_program` uses,
+diverging exactly where DESIGN.md's own sequencing note said it
+would), emits IR via `plum_codegen::emit_program`, appends a hand-
+written LLVM `main` that calls the entry function and `printf`s its
+result, writes the `.ll` to a temp file, shells to `clang` to compile
+and link, runs the resulting native binary, and returns its captured
+stdout — proven via tests that actually compile and execute real
+binaries, not just inspect emitted IR text.
 - **Sequencing**: validate the memory model (refcount insertion + FBIP
   reuse analysis) on a simplified typed IR using a tree-walking
   interpreter *before* investing in the LLVM backend. The risky,

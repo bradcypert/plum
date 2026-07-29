@@ -60,6 +60,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "plum-codegen"
+version = "0.1.0"
+dependencies = [
+ "plum-ir",
+]
+
+[[package]]
 name = "plum-interp"
 version = "0.1.0"
 dependencies = [
@@ -91,6 +98,7 @@ dependencies = [
 name = "plumc"
 version = "0.1.0"
 dependencies = [
+ "plum-codegen",
  "plum-interp",
  "plum-ir",
  "plum-syntax",

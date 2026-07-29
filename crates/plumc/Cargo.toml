@@ -12,3 +12,4 @@ plum-syntax = { path = "../plum-syntax" }
 plum-ir = { path = "../plum-ir" }
 plum-interp = { path = "../plum-interp" }
 plum-types = { path = "../plum-types" }
+plum-codegen = { path = "../plum-codegen" }
