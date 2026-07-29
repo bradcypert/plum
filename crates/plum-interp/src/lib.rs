@@ -10,6 +10,19 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+// The sentinel `MatchArm.tag` lower.rs's `lower_match` uses for a
+// catch-all arm (`_`/bare-ident) mixed into an otherwise Ctor-tag-
+// shaped match — see lower.rs's own `DEFAULT_ARM_TAG` doc comment for
+// the full "why a sentinel string, not a new IR field" reasoning.
+// Duplicated here (not shared across the crate boundary) — same
+// established precedent as every other cross-crate shape/tag
+// convention in this codebase (e.g. `ARRAY_TAG`/`RANGE_TAG` are never
+// referenced by plum-interp either, since it treats ordinary tags as
+// opaque strings; this ONE tag is special-cased here specifically
+// because it needs different RUNTIME matching behavior, not just a
+// different construction site).
+const DEFAULT_ARM_TAG: &str = "0Default";
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
@@ -1147,22 +1160,38 @@ impl Interpreter {
                 let tag = tag.to_string();
                 let fields = fields.to_vec();
                 // Arms are tried in order: the first one whose tag
-                // matches AND whose guard (if any) evaluates truthy
-                // wins — see ir.rs's `MatchArm` doc comment for why
-                // more than one arm can share a tag.
+                // matches (or is the `DEFAULT_ARM_TAG` sentinel — see
+                // its own doc comment above) AND whose guard (if any)
+                // evaluates truthy wins — see ir.rs's `MatchArm` doc
+                // comment for why more than one arm can share a tag.
                 for arm in arms {
-                    if arm.tag != tag {
+                    let is_default = arm.tag == DEFAULT_ARM_TAG;
+                    if !is_default && arm.tag != tag {
                         continue;
                     }
-                    if arm.bindings.len() != fields.len() {
-                        return Err(format!(
-                            "arm for {tag:?} expects {} field(s), found {}",
-                            arm.bindings.len(),
-                            fields.len()
-                        ));
-                    }
-                    let bound: Vec<(String, Value)> =
-                        arm.bindings.iter().cloned().zip(fields.iter().cloned()).collect();
+                    // A default arm binds the WHOLE scrutinee (not its
+                    // fields — there's no fixed field count to bind
+                    // positionally against, unlike an ordinary tag
+                    // arm) under its one optional name; an ordinary arm
+                    // binds each field positionally as before.
+                    let bound: Vec<(String, Value)> = if is_default {
+                        if arm.bindings.len() > 1 {
+                            return Err(format!(
+                                "a `match` default arm can bind at most one name, found {}",
+                                arm.bindings.len()
+                            ));
+                        }
+                        arm.bindings.iter().cloned().map(|name| (name, Value::HeapRef(addr))).collect()
+                    } else {
+                        if arm.bindings.len() != fields.len() {
+                            return Err(format!(
+                                "arm for {tag:?} expects {} field(s), found {}",
+                                arm.bindings.len(),
+                                fields.len()
+                            ));
+                        }
+                        arm.bindings.iter().cloned().zip(fields.iter().cloned()).collect()
+                    };
                     self.env.extend(bound);
                     if let Some(guard) = &arm.guard {
                         let guard_result = self.eval(guard);
@@ -2595,6 +2624,79 @@ mod tests {
     #[test]
     fn match_single_ident_arm_binds_the_whole_scrutinee() {
         assert_eq!(eval("match [1, 2, 3] { arr => arr.len() }"), Value::Int(3));
+    }
+
+    #[test]
+    fn match_trailing_wildcard_mixed_into_a_tag_shaped_match_catches_unmatched_variants() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let classify shape = match shape { Circle(r) => r, _ => 0.0 }\n\
+                    let use_it dummy = classify(Square(9.0))";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Float(0.0));
+    }
+
+    #[test]
+    fn match_trailing_wildcard_mixed_into_a_tag_shaped_match_still_matches_a_real_arm() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let classify shape = match shape { Circle(r) => r, _ => 0.0 }\n\
+                    let use_it dummy = classify(Circle(7.0))";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Float(7.0));
+    }
+
+    #[test]
+    fn match_trailing_ident_mixed_into_a_tag_shaped_match_binds_the_whole_value() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let describe shape = match shape { Circle(r) => \"circle\", other => \"other\" }\n\
+                    let use_it dummy = describe(Square(1.0)) == \"other\"";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+    }
+
+    #[test]
+    fn match_default_arm_guard_falling_through_is_a_runtime_error() {
+        // Same "no match arm for tag" precedent ordinary guarded Ctor
+        // arms already accept as a possibility — the default arm's own
+        // guard failing, with nothing else left to try, hits the exact
+        // same error path. Needs a REAL Ctor arm alongside the guarded
+        // default arm — a SOLE guarded catch-all routes through the
+        // literal-match path instead (whose OWN, separate "no guard on
+        // the trailing arm" rule would reject it before this is ever
+        // reached — see `literal_match_with_a_guarded_trailing_arm_is_
+        // an_error` in plum-ir).
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let use_it dummy = match (Square(1.0)) { Circle(r) => r, other if false => 0.0 }";
+        let err = run_err(src, "use_it", vec![Value::Unit]);
+        assert!(err.contains("no match arm"), "expected a no-match error, got: {err}");
+    }
+
+    #[test]
+    fn match_or_pattern_matches_either_alternative() {
+        let src = "enum Shape { Circle(Float), Square(Float), Triangle(Float) }\n\
+                    let area shape = match shape { Circle(r) | Square(r) => r, Triangle(r) => 0.0 }\n\
+                    let use_it dummy = area(Circle(3.0)) + area(Square(4.0)) + area(Triangle(5.0))";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Float(7.0));
+    }
+
+    #[test]
+    fn match_or_pattern_with_three_alternatives_matches_any_of_them() {
+        let src = "enum Shape { A(Int), B(Int), C(Int), D(Int) }\n\
+                    let classify shape = match shape { A(n) | B(n) | C(n) => n, D(n) => 0 - 1 }\n\
+                    let use_it dummy = classify(A(1)) + classify(B(2)) + classify(C(3)) + classify(D(9))";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(1 + 2 + 3 - 1));
+    }
+
+    #[test]
+    fn match_or_pattern_with_a_guard_applies_to_every_alternative() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let classify shape = match shape { Circle(r) | Square(r) if r > 5.0 => 1, _ => 0 }\n\
+                    let use_it dummy = classify(Circle(10.0)) + classify(Square(1.0))";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(1));
+    }
+
+    #[test]
+    fn match_or_pattern_zero_arity_variants_work() {
+        let src = "enum Direction { North, South, East, West }\n\
+                    let is_vertical d = match d { North | South => true, East | West => false }\n\
+                    let use_it dummy = is_vertical(North) && !is_vertical(East)";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
     }
 
     #[test]

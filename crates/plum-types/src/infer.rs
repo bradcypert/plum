@@ -1850,11 +1850,80 @@ impl Infer {
                 }
                 Ok(env)
             }
+            // `Pattern::Or` is DELIBERATELY not handled here — see
+            // `infer_or_pattern`'s own doc comment for why it's only
+            // ever valid as a WHOLE top-level match arm (checked by
+            // `infer_match` before it ever calls `bind_pattern`), never
+            // nested inside a Variant/Tuple/Struct sub-pattern. Falling
+            // through to the ordinary "not yet implemented" error here
+            // is exactly right for that nested case.
             other => Err(format!(
                 "type inference not yet implemented for this pattern shape at {:?}",
                 other.span()
             )),
         }
+    }
+
+    // `A(v) | B(v) => ..` — mirrors lower.rs's `lower_match` Or-pattern
+    // handling exactly, including its scope restriction: valid ONLY as
+    // a WHOLE top-level match arm pattern, never nested inside another
+    // pattern (lowering's `classify_subpattern` has no case for `Or`
+    // at all, only `bind_pattern`'s TOP-level dispatch does — see
+    // `infer_match`, the only caller). Every alternative must bind the
+    // SAME names in the SAME order, none of them may contain a nested
+    // Variant/Tuple/Struct sub-pattern (lowering's own synthetic-
+    // placeholder destructuring mechanism doesn't compose across
+    // multiple arms sharing one body), and same-named bindings across
+    // alternatives must unify to one consistent type (e.g. `A(Int) |
+    // B(Float)` binding `v` in both is a real type error: the shared
+    // body can't be typed against two different types for the same
+    // name).
+    fn infer_or_pattern(
+        &mut self,
+        alts: &[ast::Pattern],
+        span: plum_syntax::span::Span,
+        scrutinee_ty: &Type,
+        env: &TypeEnv,
+        acc: &mut Subst,
+    ) -> Result<TypeEnv, String> {
+        if alts.is_empty() {
+            return Err(format!("or-pattern has no alternatives at {span:?}"));
+        }
+        if alts.iter().any(pattern_has_nested_tag_subpattern) {
+            return Err(format!(
+                "type inference not yet implemented for a nested pattern inside an \
+                 or-pattern alternative at {span:?}"
+            ));
+        }
+        let before_len = env.0.len();
+        let mut first_new: Option<Vec<(String, Type)>> = None;
+        let mut result_env = env.clone();
+        for alt in alts {
+            let alt_env = self.bind_pattern(alt, scrutinee_ty, env.clone(), acc)?;
+            let new_bindings: Vec<(String, Type)> =
+                alt_env.0[before_len..].iter().map(|(name, scheme)| (name.clone(), scheme.ty.clone())).collect();
+            match &first_new {
+                None => first_new = Some(new_bindings),
+                Some(first) => {
+                    let names_match = first.len() == new_bindings.len()
+                        && first.iter().zip(new_bindings.iter()).all(|((n1, _), (n2, _))| n1 == n2);
+                    if !names_match {
+                        return Err(format!(
+                            "every alternative of an or-pattern must bind the same names in \
+                             the same order at {span:?}"
+                        ));
+                    }
+                    for ((_, t1), (_, t2)) in first.iter().zip(new_bindings.iter()) {
+                        let s = unify(&acc.apply(t1), &acc.apply(t2)).map_err(|e| {
+                            format!("or-pattern alternatives bind inconsistent types at {span:?}: {e}")
+                        })?;
+                        *acc = s.compose(acc);
+                    }
+                }
+            }
+            result_env = alt_env;
+        }
+        Ok(result_env.apply_subst(acc))
     }
 
     fn infer_match(&mut self, scrutinee: &ast::Expr, arms: &[ast::MatchArm], env: &TypeEnv) -> Result<(Type, Subst), String> {
@@ -1901,7 +1970,7 @@ impl Infer {
             }
         }
 
-        for arm in arms {
+        for (i, arm) in arms.iter().enumerate() {
             // Mirrors lower.rs's `lower_match`/`classify_subpattern`
             // restriction: a guard can only see bindings introduced
             // directly by the arm's OWN pattern, not ones that only
@@ -1923,20 +1992,23 @@ impl Infer {
             }
             // `bind_pattern` accepts a bare identifier/wildcard fine —
             // correct for a NESTED sub-position, and now ALSO correct
-            // as a WHOLE top-level arm in the two shapes checked above
-            // (a lone catch-all, or the required trailing arm of a
-            // literal match) — but still wrong anywhere else: mixing a
-            // catch-all into an otherwise Ctor-tag-shaped match (e.g.
-            // `Circle(r) => .., _ => ..`) has no lowering yet (the IR's
-            // `Match` dispatches strictly by tag, no "default arm"
-            // concept — see ir.rs's scope note), so `lower_tag_pattern`
-            // would reject it. Guard here so the type checker doesn't
-            // accept more than what actually lowers.
-            if matches!(arm.pattern, ast::Pattern::Ident(..) | ast::Pattern::Wildcard(..)) && !is_single_catchall && !is_literal {
+            // as a WHOLE top-level arm in THREE shapes: a lone catch-
+            // all, the required trailing arm of a literal match, OR
+            // (mirroring lower.rs's `DEFAULT_ARM_TAG` sentinel) a
+            // catch-all in the LAST position mixed among otherwise
+            // Ctor-tag-shaped arms (e.g. `Circle(r) => .., _ => ..`) —
+            // but still wrong anywhere else (a catch-all in a non-last
+            // position has no lowering either way). Guard here so the
+            // type checker doesn't accept more than what actually
+            // lowers. `bind_pattern`'s existing `Ident`/`Wildcard` case
+            // already does exactly the right thing for this new mixed
+            // shape too — it binds the WHOLE scrutinee type under the
+            // name (or nothing, for `_`), no separate handling needed.
+            let is_last = i == arms.len() - 1;
+            if matches!(arm.pattern, ast::Pattern::Ident(..) | ast::Pattern::Wildcard(..)) && !is_single_catchall && !is_last {
                 return Err(format!(
                     "type inference not yet implemented for a bare identifier or wildcard \
-                     mixed into an otherwise tag-shaped match (no default-arm concept exists \
-                     yet) at {:?}",
+                     mixed into an otherwise tag-shaped match anywhere but the LAST arm at {:?}",
                     arm.pattern.span()
                 ));
             }
@@ -1948,8 +2020,17 @@ impl Infer {
             // shape naturally fails if arm 2's shape is incompatible,
             // and naturally succeeds (without over-constraining fresh
             // variables against each other) when it's compatible, e.g.
-            // two arms that are both some N-tuple.
-            let arm_env = self.bind_pattern(&arm.pattern, &acc.apply(&scrutinee_ty), env.clone(), &mut acc)?;
+            // two arms that are both some N-tuple. `Or` is dispatched
+            // separately, to `infer_or_pattern` — see that function's
+            // own doc comment for why it's NOT one of `bind_pattern`'s
+            // ordinary cases (it's only ever valid as a WHOLE top-level
+            // arm, never nested).
+            let arm_env = match &arm.pattern {
+                ast::Pattern::Or(alts, span) => {
+                    self.infer_or_pattern(alts, *span, &acc.apply(&scrutinee_ty), env, &mut acc)?
+                }
+                _ => self.bind_pattern(&arm.pattern, &acc.apply(&scrutinee_ty), env.clone(), &mut acc)?,
+            };
             let arm_env = arm_env.apply_subst(&acc);
 
             if let Some(guard) = &arm.guard {
@@ -3763,14 +3844,89 @@ mod tests {
     }
 
     #[test]
-    fn match_wildcard_mixed_into_a_tag_shaped_match_is_still_an_error() {
-        // Unlike the LONE-arm case above, mixing a catch-all into an
-        // otherwise Ctor-tag-shaped match still has no lowering (the
-        // IR's `Match` has no "default arm" concept) — deliberately
-        // still rejected.
+    fn match_trailing_wildcard_mixed_into_a_tag_shaped_match_now_works() {
+        // A catch-all in the LAST position, mixed among otherwise
+        // Ctor-tag-shaped arms, is now supported — see lower.rs's
+        // `DEFAULT_ARM_TAG` sentinel.
         let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Float) }"));
         let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
-        infer_expr_with_err(&mut infer, "match shape { Circle(r) => r, _ => 0.0 }", &env);
+        assert_eq!(infer_expr_with(&mut infer, "match shape { Circle(r) => r, _ => 0.0 }", &env), Type::Float);
+    }
+
+    #[test]
+    fn match_trailing_ident_mixed_into_a_tag_shaped_match_binds_the_whole_scrutinee() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match shape { Circle(r) => r, other => 0.0 }", &env),
+            Type::Float
+        );
+    }
+
+    #[test]
+    fn match_wildcard_mixed_into_a_tag_shaped_match_in_a_non_last_position_is_still_an_error() {
+        // A catch-all ANYWHERE except the last position still has no
+        // lowering — only the trailing case desugars to a `DEFAULT_
+        // ARM_TAG` sentinel arm.
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        infer_expr_with_err(&mut infer, "match shape { _ => 0.0, Circle(r) => r }", &env);
+    }
+
+    #[test]
+    fn match_or_pattern_with_consistent_bindings_infers_correctly() {
+        let mut infer = Infer::with_context(context(
+            "enum Shape { Circle(Float), Square(Float), Triangle(Int) }",
+        ));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match shape { Circle(v) | Square(v) => v, Triangle(n) => 0.0 }", &env),
+            Type::Float
+        );
+    }
+
+    #[test]
+    fn match_or_pattern_with_a_guard_infers_correctly() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        assert_eq!(
+            infer_expr_with(&mut infer, "match shape { Circle(v) | Square(v) if v > 0.0 => v, _ => 0.0 }", &env),
+            Type::Float
+        );
+    }
+
+    #[test]
+    fn match_or_pattern_with_mismatched_binding_names_is_an_error() {
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        infer_expr_with_err(&mut infer, "match shape { Circle(v) | Square(w) => v }", &env);
+    }
+
+    #[test]
+    fn match_or_pattern_with_inconsistent_binding_types_is_an_error() {
+        // `v` would need to be both `Float` (from Circle) and `Int`
+        // (from Square) — a real type error, not something silently
+        // resolved to one or the other.
+        let mut infer = Infer::with_context(context("enum Shape { Circle(Float), Square(Int) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        infer_expr_with_err(&mut infer, "match shape { Circle(v) | Square(v) => v }", &env);
+    }
+
+    #[test]
+    fn match_or_pattern_across_different_enums_is_an_error() {
+        let mut infer =
+            Infer::with_context(context("enum Shape { Circle(Float) }\nenum Color { Red(Float) }"));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        infer_expr_with_err(&mut infer, "match shape { Circle(v) | Red(v) => v }", &env);
+    }
+
+    #[test]
+    fn match_or_pattern_with_a_nested_sub_pattern_is_not_yet_supported() {
+        let mut infer = Infer::with_context(context(
+            "struct Point { x: Int, y: Int }\nenum Shape { A(Point), B(Point) }",
+        ));
+        let env = TypeEnv::new().extend("shape".to_string(), Type::Enum("Shape".to_string(), vec![]));
+        infer_expr_with_err(&mut infer, "match shape { A(Point { x, y }) | B(Point { x, y }) => x }", &env);
     }
 
     #[test]

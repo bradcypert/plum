@@ -601,11 +601,76 @@ only two values (and thus being technically enumerable) was
 considered and rejected as a special case, in favor of one simple
 rule everywhere.
 
-Deliberately still out of scope: mixing a catch-all INTO an otherwise
-Ctor-tag-shaped match (`Circle(r) => .., _ => ..`) — that needs a real
-"default arm" concept added to the IR's `Match` node itself, which
-this chunk didn't attempt; `Pattern::Or` (`1 | 2 => ..`) remains
-unimplemented too, unchanged by this chunk either way.
+**Mixing a catch-all into a Ctor-tag-shaped match — Decided
+(2026-07-28), same evening.** `match x { Circle(r) => .., _ => .. }`
+now works too — the one thing explicitly deferred just above turned
+out not to need a real IR extension after all. `lower_match` recognizes
+a catch-all (`_`/bare-ident) in the LAST position, mixed among
+otherwise Variant/Tuple/Struct-shaped arms, and gives it a sentinel
+`MatchArm.tag` (`DEFAULT_ARM_TAG = "0Default"`, same leading-digit
+unreachable-by-any-real-identifier trick as `RANGE_TAG`/`ARRAY_TAG`)
+instead of routing it through `lower_tag_pattern`. `Interpreter::eval`'s
+`Match` case recognizes that ONE sentinel specially: it matches
+UNCONDITIONALLY regardless of the scrutinee's real tag, and binds the
+WHOLE scrutinee value (not positional fields — there's no fixed field
+count to bind against) under the arm's one optional name. `ir::Expr::
+Match`'s SHAPE is completely unchanged (no new field, no new node) —
+every other pass that already walks `MatchArm.tag` as an opaque string
+(fbip.rs's traversals, for instance) needed zero changes.
+
+Unlike the pure-literal-match case just above, the trailing default arm
+here is allowed to have a guard: if it evaluates false, that falls
+through to the exact same "no match arm for tag" RUNTIME error ordinary
+guarded Ctor-tag arms already accept as a possibility (a pre-existing,
+tested precedent — `no_matching_guarded_arm_is_a_runtime_error`) — no
+NEW exhaustiveness gap is being opened here, since this path already
+relies on that same runtime fallback either way, unlike literal
+matching's deliberately stronger, purely-compile-time-checked
+guarantee. A catch-all in any position OTHER than last, mixed among
+Ctor-tag arms, remains unimplemented — only the trailing position gets
+the sentinel treatment.
+
+**`Pattern::Or` — Decided (2026-07-29), same session, immediate
+follow-up.** `A(v) | B(v) => ..` now works too — scoped to TAG-shaped
+alternatives (Variant/Tuple/Struct), matching DESIGN.md's own original
+`Shape.Square(s) | Shape.Rectangle(s, s) => ...` example above; literal
+alternatives (`1 | 2 => ..`) remain a separate, still-unimplemented
+extension. `lower_match` expands an or-pattern arm into MULTIPLE
+`MatchArm`s (one per alternative tag), all sharing the SAME `guard`/
+`body` IR (lowered once, cloned per alternative) — `ir::Expr::Match`
+needed no new concept for this at all: ordinary tag matching already
+supports several arms sharing one tag (see the pre-existing
+`two_arms_may_share_a_tag`-style precedent), and nothing stops the
+reverse — one logical arm expanding to several tags.
+
+Real, checked requirements, at BOTH the lowering and type-checking
+gates: every alternative must bind the SAME names in the SAME order
+(the shared body/guard can only be typed once, against one consistent
+binding environment — same rule Rust's own or-patterns enforce), same-
+named bindings across alternatives must unify to one consistent TYPE
+(`Circle(Float) | Square(Int)` binding the same name in both is a real
+type error, not silently resolved one way), and no alternative may
+contain a NESTED Variant/Tuple/Struct sub-pattern (lowering's synthetic-
+placeholder destructuring mechanism doesn't compose across multiple
+arms sharing one body).
+
+**A real "type-checks-but-fails-at-lowering" leak caught and fixed
+before landing, not shipped-then-patched**: the first implementation
+attempt added `Or`-handling directly inside `bind_pattern` — the shared
+helper used BOTH for whole top-level arm patterns AND recursively for
+NESTED sub-patterns inside Struct/Tuple/Variant fields. Since lowering
+ONLY supports `Or` at the whole-top-level-arm position (its
+`classify_subpattern`, used for nested positions, has no `Or` case at
+all), this would have let a nested or-pattern like `Point { x: 1 | 2, y
+} => y` type-check successfully and then fail at lowering — caught
+immediately by the full-workspace test run (a pre-existing test,
+`nested_or_pattern_is_still_not_yet_supported`, started failing).
+Fixed by moving the `Or` handling OUT of `bind_pattern` entirely into
+its own dedicated `infer_or_pattern`, called only from `infer_match`'s
+top-level per-arm dispatch — mirroring `lower_match`'s own structure
+exactly (a special check before ever reaching the shared per-pattern
+function), rather than teaching the shared, recursively-used function
+about a shape it should only ever see at the top.
 
 ### Tuples and closures — Decided
 
@@ -1141,12 +1206,13 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
   Int/Float/Bool) literal PATTERN matching in `match` is now Decided
   too (see "Pattern grammar" above) — closing what used to be listed
   here as a pre-existing gap.
-- Mixing a catch-all arm INTO an otherwise Ctor-tag-shaped `match`
-  (`Circle(r) => .., _ => ..`) and `Pattern::Or` (`1 | 2 => ..`) both
-  remain genuinely unimplemented (see "Pattern grammar" above) — the
-  former needs a real "default arm" concept added to the IR's `Match`
-  node itself, which the literal-match/single-catch-all work above
-  deliberately didn't attempt.
+- A trailing catch-all mixed into an otherwise Ctor-tag-shaped `match`
+  is now Decided too (see "Pattern grammar" above — a sentinel
+  `MatchArm.tag`, no IR shape change needed), and so is `Pattern::Or`
+  for tag-shaped alternatives (`A(v) | B(v) => ..`). Still open: a
+  catch-all in any NON-last position mixed among Ctor-tag arms, and
+  or-patterns over LITERAL alternatives (`1 | 2 => ..`) — both remain
+  genuinely unimplemented.
 - Recursive closures that capture themselves (named top-level recursive
   functions should compile to direct calls, sidestepping this; true
   anonymous self-referential closures are a deferred detail).

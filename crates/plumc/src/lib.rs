@@ -464,6 +464,42 @@ mod tests {
     }
 
     #[test]
+    fn trailing_catchall_mixed_into_a_variant_match_runs_through_the_full_gated_pipeline() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let area shape = match shape { Circle(r) => 3.14 * r * r, _ => 0.0 }\n\
+                    let use_it dummy = area(Square(5.0))";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Float(0.0)));
+    }
+
+    #[test]
+    fn non_last_catchall_mixed_into_a_variant_match_is_rejected_before_running() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let use_it dummy = match (Circle(1.0)) { _ => 0.0, Circle(r) => r }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn or_pattern_runs_through_the_full_gated_pipeline() {
+        let src = "enum Shape { Circle(Float), Square(Float), Triangle(Float) }\n\
+                    let area shape = match shape { Circle(r) | Square(r) => r, Triangle(r) => 0.0 }\n\
+                    let use_it dummy = area(Circle(3.0)) + area(Square(4.0))";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Float(7.0)));
+    }
+
+    #[test]
+    fn or_pattern_with_mismatched_bindings_is_rejected_before_running() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let use_it dummy = match (Circle(1.0)) { Circle(v) | Square(w) => v }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely

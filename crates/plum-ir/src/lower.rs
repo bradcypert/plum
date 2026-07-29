@@ -158,6 +158,21 @@ const RANGE_TAG: &str = "0Range";
 // unreachable-by-any-real-identifier trick as `RANGE_TAG`/`tuple_tag`.
 const ARRAY_TAG: &str = "0Array";
 
+// The `MatchArm.tag` used for a catch-all arm (`_`/bare-ident) MIXED
+// into an otherwise Ctor-tag-shaped match (`Circle(r) => .., _ => ..`)
+// — same leading-digit, unreachable-by-any-real-identifier trick as
+// `RANGE_TAG`/`ARRAY_TAG`/`tuple_tag`, but used differently: those are
+// all CONSTRUCTED with this tag directly; this one is instead
+// RECOGNIZED specially at runtime (`Interpreter::eval`'s `Match` case)
+// as "matches unconditionally, regardless of the scrutinee's real
+// tag" — see that eval case's own doc comment. Chosen over adding a
+// genuinely new `MatchArm` field (e.g. `is_default: bool`) or a new IR
+// node specifically to keep `ir::Expr::Match`'s shape completely
+// unchanged — every OTHER pass that already walks `MatchArm.tag` as an
+// opaque string (fbip.rs's traversals, for instance) needs zero
+// changes to keep working correctly for this new case.
+const DEFAULT_ARM_TAG: &str = "0Default";
+
 // Lowers a param list into (top-level flat param names, body-wrapping
 // destructures). A tuple-pattern param becomes a synthetic positional
 // name (`__param0`, ...) PLUS a destructure to apply around the
@@ -1139,7 +1154,96 @@ fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringCont
     }
     let ir_scrutinee = lower_expr(scrutinee, ctx)?;
     let mut ir_arms = Vec::with_capacity(arms.len());
-    for arm in arms {
+    for (i, arm) in arms.iter().enumerate() {
+        // A catch-all in the LAST position, mixed among otherwise
+        // Ctor-tag-shaped arms, gets the `DEFAULT_ARM_TAG` sentinel
+        // instead of going through `lower_tag_pattern` (which has no
+        // case for Wildcard/Ident and would reject it) — see that
+        // constant's own doc comment for the full "why a sentinel tag"
+        // reasoning. Unlike the pure-literal-match case (`is_literal_
+        // match`, handled entirely separately above), this does NOT
+        // require the trailing arm to be guard-free: a guard
+        // evaluating false here just falls through to the SAME "no
+        // match arm for tag" runtime error ordinary Ctor-tag matching
+        // already accepts as a possibility (see the existing
+        // `no_matching_guarded_arm_is_a_runtime_error` precedent in
+        // plum-interp) — there's no NEW exhaustiveness gap being
+        // opened here, unlike the literal-match case, which
+        // deliberately avoids relying on any runtime fallback at all.
+        if i == arms.len() - 1 && is_catchall_pattern(&arm.pattern) {
+            let bindings = match &arm.pattern {
+                ast::Pattern::Ident(name, _) => vec![name.clone()],
+                ast::Pattern::Wildcard(_) => vec![],
+                _ => unreachable!("just checked this is a catch-all pattern"),
+            };
+            let guard = match &arm.guard {
+                Some(g) => Some(Box::new(lower_expr(g, ctx)?)),
+                None => None,
+            };
+            let body = lower_expr(&arm.body, ctx)?;
+            ir_arms.push(ir::MatchArm {
+                tag: DEFAULT_ARM_TAG.to_string(),
+                bindings,
+                guard,
+                body,
+            });
+            continue;
+        }
+        // `A(v) | B(v) => body` — one arm covering multiple tags, all
+        // of which must bind the SAME names in the SAME order (a
+        // real, checked requirement: the shared `body` only makes
+        // sense typed once, against one consistent binding
+        // environment — same rule Rust's own or-patterns enforce).
+        // Desugars into MULTIPLE `MatchArm`s (one per alternative tag),
+        // all sharing the SAME `guard`/`body` IR (lowered once, cloned
+        // per alternative) — `ir::Expr::Match` needed no new concept
+        // for this at all, unlike the DEFAULT_ARM_TAG case above,
+        // which needed a sentinel: ordinary tag matching ALREADY
+        // supports "more than one arm sharing a tag" (see `MatchArm`'s
+        // own doc comment on `two_arms_may_share_a_tag`-style tests),
+        // and nothing stops the REVERSE — one logical arm expanding to
+        // several tags. Scoped to Variant/Tuple/Struct alternatives
+        // with NO nested sub-patterns (same restriction the guard-vs-
+        // nested check below has, for the same reason: a guard/shared
+        // body needs real, already-bound names, not synthetic
+        // placeholders that only resolve deep inside a destructure
+        // chain) — literal alternatives (`1 | 2 => ..`) are a separate,
+        // still-unimplemented extension.
+        if let ast::Pattern::Or(alts, span) = &arm.pattern {
+            let mut alt_shapes: Vec<(String, Vec<String>)> = Vec::with_capacity(alts.len());
+            for alt in alts {
+                let (alt_tag, alt_bindings, alt_nested) = lower_tag_pattern(alt, ctx)?;
+                if !alt_nested.is_empty() {
+                    return Err(format!(
+                        "lowering not yet implemented for a nested pattern inside an \
+                         or-pattern alternative at {:?}",
+                        alt.span()
+                    ));
+                }
+                alt_shapes.push((alt_tag, alt_bindings));
+            }
+            let first_bindings = alt_shapes[0].1.clone();
+            if alt_shapes[1..].iter().any(|(_, b)| *b != first_bindings) {
+                return Err(format!(
+                    "every alternative of an or-pattern must bind the same names in the \
+                     same order at {span:?}"
+                ));
+            }
+            let guard = match &arm.guard {
+                Some(g) => Some(lower_expr(g, ctx)?),
+                None => None,
+            };
+            let body = lower_expr(&arm.body, ctx)?;
+            for (alt_tag, alt_bindings) in alt_shapes {
+                ir_arms.push(ir::MatchArm {
+                    tag: alt_tag,
+                    bindings: alt_bindings,
+                    guard: guard.clone().map(Box::new),
+                    body: body.clone(),
+                });
+            }
+            continue;
+        }
         let (tag, bindings, nested) = lower_tag_pattern(&arm.pattern, ctx)?;
         // A guard is only supported on an arm whose pattern needs NO
         // nested destructuring — `nested` non-empty means some of
@@ -2357,8 +2461,128 @@ mod tests {
     }
 
     #[test]
-    fn match_or_pattern_is_not_yet_supported() {
-        lower_err("match x { A(v) | B(v) => v }");
+    fn match_or_pattern_expands_to_one_arm_per_alternative() {
+        assert_eq!(
+            lower("match x { A(v) | B(v) => v }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("x".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "A".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: None,
+                        body: ir::Expr::Var("v".to_string()),
+                    },
+                    ir::MatchArm {
+                        tag: "B".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: None,
+                        body: ir::Expr::Var("v".to_string()),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn match_or_pattern_with_three_alternatives_expands_to_three_arms() {
+        assert_eq!(
+            lower("match x { A(v) | B(v) | C(v) => v }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("x".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "A".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: None,
+                        body: ir::Expr::Var("v".to_string()),
+                    },
+                    ir::MatchArm {
+                        tag: "B".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: None,
+                        body: ir::Expr::Var("v".to_string()),
+                    },
+                    ir::MatchArm {
+                        tag: "C".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: None,
+                        body: ir::Expr::Var("v".to_string()),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn match_or_pattern_with_a_guard_applies_it_to_every_alternative() {
+        assert_eq!(
+            lower("match x { A(v) | B(v) if v > 0 => v }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("x".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "A".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: Some(Box::new(ir::Expr::Binary(
+                            ir::BinOp::Gt,
+                            Box::new(ir::Expr::Var("v".to_string())),
+                            Box::new(ir::Expr::Int(0)),
+                        ))),
+                        body: ir::Expr::Var("v".to_string()),
+                    },
+                    ir::MatchArm {
+                        tag: "B".to_string(),
+                        bindings: vec!["v".to_string()],
+                        guard: Some(Box::new(ir::Expr::Binary(
+                            ir::BinOp::Gt,
+                            Box::new(ir::Expr::Var("v".to_string())),
+                            Box::new(ir::Expr::Int(0)),
+                        ))),
+                        body: ir::Expr::Var("v".to_string()),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn match_or_pattern_zero_arity_alternatives_works() {
+        assert_eq!(
+            lower("match x { A | B => 1 }"),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("x".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "A".to_string(),
+                        bindings: vec![],
+                        guard: None,
+                        body: ir::Expr::Int(1),
+                    },
+                    ir::MatchArm {
+                        tag: "B".to_string(),
+                        bindings: vec![],
+                        guard: None,
+                        body: ir::Expr::Int(1),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn match_or_pattern_with_mismatched_bindings_is_an_error() {
+        lower_err("match x { A(v) | B(w) => v }");
+    }
+
+    #[test]
+    fn match_or_pattern_with_mismatched_arity_is_an_error() {
+        lower_err("match x { A(v) | B(v, w) => v }");
+    }
+
+    #[test]
+    fn match_or_pattern_with_a_nested_sub_pattern_is_not_yet_supported() {
+        lower_err("match x { A((v, w)) | B((v, w)) => v }");
     }
 
     #[test]
@@ -2465,6 +2689,96 @@ mod tests {
                 }),
             }
         );
+    }
+
+    #[test]
+    fn a_trailing_wildcard_mixed_into_a_tag_shaped_match_gets_the_default_arm_tag() {
+        let ctx = context_from_program("enum Shape { Circle(Float) }");
+        assert_eq!(
+            lower_with("match shape { Circle(r) => r, _ => 0.0 }", &ctx),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("shape".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "Circle".to_string(),
+                        bindings: vec!["r".to_string()],
+                        guard: None,
+                        body: ir::Expr::Var("r".to_string()),
+                    },
+                    ir::MatchArm {
+                        tag: "0Default".to_string(),
+                        bindings: vec![],
+                        guard: None,
+                        body: ir::Expr::Float(0.0),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn a_trailing_ident_mixed_into_a_tag_shaped_match_binds_via_the_default_arm() {
+        let ctx = context_from_program("enum Shape { Circle(Float) }");
+        assert_eq!(
+            lower_with("match shape { Circle(r) => r, other => 0.0 }", &ctx),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("shape".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "Circle".to_string(),
+                        bindings: vec!["r".to_string()],
+                        guard: None,
+                        body: ir::Expr::Var("r".to_string()),
+                    },
+                    ir::MatchArm {
+                        tag: "0Default".to_string(),
+                        bindings: vec!["other".to_string()],
+                        guard: None,
+                        body: ir::Expr::Float(0.0),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn a_guarded_default_arm_is_allowed_unlike_a_guarded_literal_match_catchall() {
+        // Deliberately different from `literal_match_with_a_guarded_
+        // trailing_arm_is_an_error`: the mixed-Ctor case already relies
+        // on the SAME "no match arm for tag" runtime fallback ordinary
+        // Ctor matching has always had, so a guard on the default arm
+        // doesn't open any NEW exhaustiveness gap.
+        let ctx = context_from_program("enum Shape { Circle(Float) }");
+        assert_eq!(
+            lower_with("match shape { Circle(r) => r, other if other == shape => 0.0 }", &ctx),
+            ir::Expr::Match {
+                scrutinee: Box::new(ir::Expr::Var("shape".to_string())),
+                arms: vec![
+                    ir::MatchArm {
+                        tag: "Circle".to_string(),
+                        bindings: vec!["r".to_string()],
+                        guard: None,
+                        body: ir::Expr::Var("r".to_string()),
+                    },
+                    ir::MatchArm {
+                        tag: "0Default".to_string(),
+                        bindings: vec!["other".to_string()],
+                        guard: Some(Box::new(ir::Expr::Binary(
+                            ir::BinOp::Eq,
+                            Box::new(ir::Expr::Var("other".to_string())),
+                            Box::new(ir::Expr::Var("shape".to_string())),
+                        ))),
+                        body: ir::Expr::Float(0.0),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn a_non_last_wildcard_mixed_into_a_tag_shaped_match_is_still_an_error() {
+        let ctx = context_from_program("enum Shape { Circle(Float) }");
+        lower_with_err("match shape { _ => 0.0, Circle(r) => r }", &ctx);
     }
 
     #[test]
