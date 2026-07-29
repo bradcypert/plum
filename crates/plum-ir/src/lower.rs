@@ -368,6 +368,16 @@ fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast:
         match &param.kind {
             ast::ParamKind::Ident(name) => names.push(name.clone()),
             ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), _) => names.push(name.clone()),
+            // `()` — the Unit pattern (an empty tuple pattern). There's
+            // nothing to bind (a Unit value has no fields), so this
+            // needs no destructuring `Match` at all — just a synthetic,
+            // never-referenced param name to keep arity correct
+            // positionally. `lower_tag_pattern`'s `Ctor`-based
+            // destructuring doesn't apply here anyway: `Unit` isn't a
+            // heap `Ctor` with a tag to match against.
+            ast::ParamKind::Pattern(ast::Pattern::Tuple(elems, _), _) if elems.is_empty() => {
+                names.push(format!("__unit_param{i}"));
+            }
             ast::ParamKind::Pattern(pattern @ (ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. }), _) => {
                 let synthetic = format!("__param{i}");
                 names.push(synthetic.clone());
@@ -3946,6 +3956,17 @@ mod tests {
                 ),
             }]
         );
+    }
+
+    #[test]
+    fn unit_pattern_param_needs_no_destructuring_match() {
+        // `()` binds nothing and isn't a heap `Ctor` — this should
+        // lower to a plain synthetic (never-referenced) param name,
+        // NOT a `Match` wrapping the body (there's nothing to
+        // destructure a `Unit` value INTO).
+        let program = lower_program("let go () = 5");
+        assert_eq!(program.functions[0].params, vec!["__unit_param0".to_string()]);
+        assert_eq!(program.functions[0].body, ir::Expr::Int(5));
     }
 
     #[test]

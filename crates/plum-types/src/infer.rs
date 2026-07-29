@@ -1927,13 +1927,16 @@ impl Infer {
                 *acc = s.compose(acc);
                 Ok(env)
             }
+            // `()` — the Unit pattern (an empty tuple pattern, same
+            // grammar production as a real tuple pattern with 0
+            // elements — see `Param`'s own `()` parsing). Binds no
+            // names, just unifies the scrutinee against `Unit`.
+            ast::Pattern::Tuple(elems, span) if elems.is_empty() => {
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Unit).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                *acc = s.compose(acc);
+                Ok(env)
+            }
             ast::Pattern::Tuple(elems, span) => {
-                if elems.is_empty() {
-                    return Err(format!(
-                        "type inference not yet implemented for destructuring against the \
-                         empty tuple pattern at {span:?}"
-                    ));
-                }
                 let fresh_vars: Vec<Type> = elems.iter().map(|_| self.fresh()).collect();
                 let s = unify(&acc.apply(scrutinee_ty), &Type::Tuple(fresh_vars.clone()))
                     .map_err(|e| format!("tuple pattern at {span:?}: {e}"))?;
@@ -5518,6 +5521,16 @@ mod tests {
     #[test]
     fn infer_program_call_type_mismatch_is_an_error() {
         infer_program_err("let want_bool b = !b\nlet caller x = want_bool(x + 1)");
+    }
+
+    #[test]
+    fn a_unit_pattern_function_param_type_checks() {
+        // `()` — the Unit pattern, e.g. `let main () = 5` — a
+        // genuinely different case from a zero-PARAMETER `let` (which
+        // makes it a global, not a function): this is a function
+        // taking exactly one argument, of type `Unit`, binding no name.
+        let types = infer_program("let go () = 5");
+        assert_eq!(types["go"], fn_ty(vec![Type::Unit], Type::Int));
     }
 
     #[test]

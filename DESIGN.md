@@ -1205,14 +1205,16 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 ### What's actually implemented (v1)
 
 `crates/plumc/src/modules.rs`'s `typecheck_and_run_modules(modules: &[(module_path,
-source)], fn_name, args)` — an IN-MEMORY multi-module entry point, not
-real filesystem directory-walking yet (that's a thin follow-up layer:
-turn a directory tree into this same `&[(&str, &str)]` shape, module
-path = containing directory relative to the project root). `module_path`
-is dot-joined (`""` for root, `"shapes"`, `"net.http"` for nested) —
-there's still no `mod` declaration in Plum source itself, the caller
-supplies each file's module path the same way a real directory-walker
-eventually will.
+source)], fn_name, args)` — an IN-MEMORY multi-module entry point.
+`crates/plumc/src/project.rs`'s `typecheck_and_run_project(root: &Path,
+fn_name, args)` is the real filesystem layer on top: walks a project
+directory tree, reads every `.plum` file, and turns it into that same
+`&[(&str, &str)]` shape (module path = containing directory, relative
+to the project root, dot-joined) before handing off — there's still no
+`mod` declaration anywhere in Plum source itself, a file's module path
+is purely a function of its location in the tree. `plumc <project-dir>`
+(the CLI, `main.rs`) runs a project's `main` this way, calling a
+unit-param entry point (`let main () = { ... }`).
 
 **Architecture**: a PRE-PASS over the parsed AST, not a change to
 `plum-types`/`plum-ir`/`plum-interp` — none of them learned a module

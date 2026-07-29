@@ -1,5 +1,7 @@
 mod modules;
+mod project;
 pub use modules::typecheck_and_run_modules;
+pub use project::typecheck_and_run_project;
 
 use plum_interp::{Interpreter, Value};
 use plum_ir::fbip::optimize_program;
@@ -106,6 +108,17 @@ mod tests {
         let src = "let sum n acc = if n == 0 { acc } else { sum(n - 1, acc + n) }";
         let result = typecheck_and_run(src, "sum", vec![Value::Int(5), Value::Int(0)]);
         assert_eq!(result, Ok(Value::Int(15)));
+    }
+
+    #[test]
+    fn a_unit_param_entry_point_runs_through_the_full_gated_pipeline() {
+        // `let main () = ...` — the entry-point convention `plumc`'s
+        // own CLI (main.rs) and `examples/overview.plum`'s `example()`
+        // both use; this was broken end to end (both type-checking and
+        // lowering independently rejected the empty-tuple/Unit pattern)
+        // until fixed alongside the module-system CLI work.
+        let result = typecheck_and_run("let main () = 21 + 21", "main", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(42)));
     }
 
     #[test]
