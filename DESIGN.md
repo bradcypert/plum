@@ -637,6 +637,126 @@ inventing a new one:
     contents, chained push/set/remove/pop still produce correct
     results). Workspace is now 838 tests, clean build, zero warnings.
 
+### Strings — Decided (2026-07-28)
+
+Made heap-backed and refcounted, closing a real divergence between this
+document's own stated intent (the "Core mechanism" section above has
+always listed strings among the refcounted heap types) and the actual
+implementation, which had `Value::Str(String)` as a plain unboxed
+scalar — same treatment as `Int`/`Bool`, zero FBIP involvement, and
+(as a direct consequence) no operations at all beyond construction and
+equality.
+
+**Representation.** There is no `Value::Str` variant — a string value
+IS a `Value::HeapRef`, exactly like an array value, into a dedicated
+string heap cell. Strings deliberately do NOT reuse the existing
+`Ctor`-shaped cell (`tag: String, fields: Vec<Value>`) the way arrays
+do: there's no `Value::Char` in this language, and representing a
+string as one `Ctor` field per codepoint would be wildly wasteful
+beyond toy inputs. `heap.rs` gained a `CellData` enum (`Ctor{tag,
+fields}` / `Str(String)`) so a single heap can hold both shapes; `read`
+stays `Ctor`-only (erroring on a string cell), a new `read_str`
+mirrors it for strings, and a new `read_any` (returning a `CellView`
+enum) is for the few callers — `to_portable`, `.len()`'s eval,
+heap-value equality — that need to dispatch on whichever shape a given
+`HeapRef` actually turned out to be, rather than asserting one ahead of
+time.
+
+**v1 operations:** construction (string literals, unchanged syntax),
+`.len()` (byte length, matching Rust's own `String::len()` — NOT char
+count), `.concat(other)`, `s[i]` (byte indexing — see below), `.runes()`
+(character decoding — see below), and `==`/`!=` (heap-aware now — reads
+both cells and compares content when both are string cells; two Ctor
+cells, or a Ctor and a string, still hit the same pre-existing "cannot
+compare" error general heap-value structural equality already had
+before this chunk, since that's a separate gap this didn't attempt to
+close). Deliberately NOT yet decided/implemented: `split`/`trim`/
+`to_upper` and other standard string library operations, and string
+PATTERN matching in `match` (`Pattern::Str` exists at the AST level but
+was never wired into `lower_tag_pattern` — a PRE-EXISTING gap,
+confirmed unaffected by this change either way).
+
+**Indexing — Decided (2026-07-28): byte-indexed, returns `Int`.**
+`s[i]` reads the raw BYTE value (0-255) at byte offset `i`, exactly
+matching `.len()`'s own byte semantics — `s[s.len() - 1]` always works,
+regardless of what's in the string. Explicitly NOT Unicode-character-
+aware: indexing into the middle of a multi-byte UTF-8 character (e.g.
+`"café"[3]`, landing on the first of `é`'s two encoded bytes) is
+allowed and just returns that raw byte — not an error, not a decoded
+character. This was a real, discussed three-way fork (byte-indexed
+returning `Int`; byte-indexed returning a 1-byte `Str`; codepoint-
+indexed returning a 1-character `Str`) — the codepoint-indexed option
+was rejected specifically because it would be O(n) per index (UTF-8 is
+variable-width) AND inconsistent with `.len()` already being byte
+length (`s[s.len() - 1]` would be wrong/panic for any non-ASCII
+string). Reuses the EXISTING `Index` node (no new IR node) — the same
+"lowering can't tell array from string apart, so share the node and
+dispatch at runtime" trick `.len()`/`ArrayLen` already established.
+
+**`.runes()` — Decided (2026-07-28): the character-aware complement to
+byte indexing.** Since byte-indexing can't give you actual Unicode
+characters, `.runes()` decodes a string's UTF-8 bytes ONCE, O(n), into
+an ordinary `Array[Int]` — one element per Unicode codepoint (Rust's
+own `char`, via `str::chars()`), not per byte. `"café".len()` is 5
+(bytes) but `"café".runes().len()` is 4 (characters) — the accented
+character decodes to exactly one array element. Every access into the
+resulting array is then an ordinary O(1) `Index`, and — since it's a
+completely normal array — `for x in "s".runes() { ... }`, `.map()`,
+`.filter()`, `.fold()` etc. all already work on it for free, no new
+machinery needed. This IS a genuinely new primitive node (`StrRunes`,
+no reuse-in-place counterpart — it always builds a brand-new,
+differently-shaped array, never recycling the string cell it read
+from): unlike `.len()`/`s[i]`, UTF-8 decoding needs bit manipulation
+the IR has no operators for, so it can't be expressed as a desugaring
+into existing nodes the way `.map()`/`.filter()`/`.fold()` could be.
+
+**`.len()`'s shared-node trick.** `.len()` is shape-detected IDENTICALLY
+for arrays and strings at lowering time — lowering has no type
+information to tell `arr.len()` from `s.len()` apart, so both still
+lower to the exact same `ArrayLen` node (no new IR node at all).
+Dispatch happens at RUNTIME instead, in `Interpreter::eval`, via
+`read_any`: a `Ctor` cell's field count for arrays, a string cell's
+byte length for strings. `infer.rs`'s `.len()` case checks the base's
+ALREADY-RESOLVED type against `Type::Str` directly (not a blind
+trial-unify) before falling to the existing Array-unify path — the
+same "check resolved shape, don't trial-unify" precedent `for x in
+arr` and `.len()`'s OWN Array case already established, for the same
+reason: trial-unifying against `Array[fresh]` first would trivially
+succeed for a still-unresolved type variable, wrongly ruling out Str.
+
+**`.concat(other)` and reuse-in-place.** Unlike `.len()`, `.concat()`
+has no ambiguity with any array operation, so it gets its own dedicated
+node pair — `StrConcat`/`StrConcatReuse` — built as a DIRECT structural
+mirror of `ArrayPush`/`ArrayPushReuse` (including the reuse-in-place
+optimization from the section above): `mark_reuse` rewrites
+`StrConcat{base: Var(x), ..}` into `StrConcatReuse{reuse_of: x, ..}`
+unconditionally when `base` is a plain variable, and the actual safety
+decision happens at runtime via a NEW `Heap::dec_and_maybe_reuse_str`
+— the exact string-cell counterpart to `dec_and_maybe_reuse`, same
+refcount-gated recycle-or-allocate-fresh logic.
+
+**Blast radius was small.** Before this chunk, strings had exactly
+ONE consumer outside literal construction and `==` (`Value::Str`
+appeared at only 5 call sites total, all in `plum-interp/src/lib.rs`)
+— precisely BECAUSE no other operations existed yet. `PortableValue::
+Str` (the cross-thread/channel-safe representation) was UNCHANGED: it
+already stored a plain owned `String` with no heap reference, exactly
+right for something that has to survive being read on a different
+interpreter's heap entirely — `to_portable` now resolves a string
+`HeapRef` into it via `read_any` instead of cloning an inline field,
+and `from_portable` now allocates a fresh heap cell instead of building
+an inline `Value::Str`, but the wire format itself didn't need to
+change at all.
+
+Tests added at every layer: plum-interp/heap.rs (the new `CellData`/
+`read_any`/`dec_and_maybe_reuse_str` machinery directly), plum-ir
+(lowering's shared-node behavior, `mark_reuse`'s `StrConcat` structural
+rewrite, `is_syntactically_heap` now recognizing `Expr::Str`), plum-
+types (`.len()`/`.concat()` success and error cases, the still-
+unresolved-var-defaults-to-Array regression), plumc (concat/len/
+equality/struct-field/reuse-still-correct end-to-end). Workspace is now
+865 tests, clean build, zero warnings.
+
 ### Effect/unsafe tracking — Leaning
 
 A lightweight `unsafe`/`extern` marker that propagates from FFI call
@@ -795,9 +915,16 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
   `.set()`/`.remove()`/`.map()`/`.filter()`/`.fold()` operations,
   builtin-type parameter/return annotations, and `.push()`/`.pop()`/
   `.set()`/`.remove()`'s reuse-in-place optimization are all now
-  Decided (see "Arrays" above). Still open: String's own growth
-  strategy (presumably similar to arrays', not yet worked through
-  explicitly).
+  Decided (see "Arrays" above). Strings becoming heap-backed/refcounted,
+  `.len()`, `.concat()`, heap-aware `==`, byte-indexing `s[i]`, and
+  `.runes()` are likewise now Decided (see "Strings" above). Still
+  open, for strings specifically: `split`/`trim`/`to_upper` and other
+  standard string operations, grapheme-cluster-aware operations (a
+  "rune" is a Unicode SCALAR VALUE / codepoint, not a user-perceived
+  character — a grapheme cluster like an emoji with modifiers can span
+  multiple runes; `.runes()` doesn't attempt that level), and string
+  literal PATTERN matching in `match` (a pre-existing gap, not
+  introduced by the heap-backing change).
 - Recursive closures that capture themselves (named top-level recursive
   functions should compile to direct calls, sidestepping this; true
   anonymous self-referential closures are a deferred detail).

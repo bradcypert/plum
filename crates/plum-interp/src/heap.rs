@@ -13,18 +13,39 @@ use crate::Value;
 // corruption. If FBIP's analysis is ever wrong, this heap should be
 // where that shows up, as a test failure here — not as mysteriously
 // wrong output somewhere else downstream.
+//
+// A cell holds one of two shapes — a tagged constructor (structs,
+// tuples, enum variants, arrays: all reuse the same `Ctor` shape, see
+// `lower.rs`'s synthetic-tag convention) or a raw string buffer. These
+// are DELIBERATELY kept as separate `CellData` variants rather than
+// representing a string as a `Ctor` whose fields are one-per-character
+// (which the existing `Vec<Value>` machinery could technically hold):
+// there's no `Value::Char` in this language, and a `Vec<Value::Int>`
+// per codepoint would be wildly wasteful for anything but toy strings.
+enum CellData {
+    Ctor { tag: String, fields: Vec<Value> },
+    Str(String),
+}
+
 struct HeapCell {
-    tag: String,
-    fields: Vec<Value>,
+    data: CellData,
     refcount: usize,
+}
+
+/// A borrowed, shape-tagged view of a cell's contents — see
+/// `Heap::read_any`.
+pub enum CellView<'a> {
+    Ctor(&'a str, &'a [Value]),
+    Str(&'a str),
 }
 
 pub struct Heap {
     cells: Vec<Option<HeapCell>>,
-    // Total number of times `alloc` actually allocated a NEW cell —
-    // does not count `reuse` overwriting an existing one. This is
-    // what proves reuse-in-place saved a real allocation, not just
-    // that a CtorReuse node was inserted.
+    // Total number of times `alloc`/`alloc_str` actually allocated a NEW
+    // cell — does not count `dec_and_maybe_reuse`/`dec_and_maybe_reuse_
+    // str` overwriting an existing one. This is what proves reuse-in-
+    // place saved a real allocation, not just that a `CtorReuse`/`*Reuse`
+    // node was present.
     alloc_count: usize,
 }
 
@@ -42,8 +63,19 @@ impl Heap {
 
     pub fn alloc(&mut self, tag: String, fields: Vec<Value>) -> usize {
         self.cells.push(Some(HeapCell {
-            tag,
-            fields,
+            data: CellData::Ctor { tag, fields },
+            refcount: 1,
+        }));
+        self.alloc_count += 1;
+        self.cells.len() - 1
+    }
+
+    /// Allocates a fresh string cell — see this module's doc comment
+    /// for why strings get their own `CellData` shape instead of
+    /// piggybacking on `Ctor`.
+    pub fn alloc_str(&mut self, s: String) -> usize {
+        self.cells.push(Some(HeapCell {
+            data: CellData::Str(s),
             refcount: 1,
         }));
         self.alloc_count += 1;
@@ -66,9 +98,36 @@ impl Heap {
         }
     }
 
+    /// Reads a `Ctor`-shaped cell's tag and fields. Errors (rather than
+    /// panicking) if `addr` names a string cell instead — every caller
+    /// of this method (`Match`, `Index`, `.push()`/etc.) only ever
+    /// makes sense for a tagged constructor, so a string here means the
+    /// program's own logic (or a real bug upstream) confused the two.
     pub fn read(&self, addr: usize) -> Result<(&str, &[Value]), String> {
-        let cell = self.cell(addr)?;
-        Ok((&cell.tag, &cell.fields))
+        match &self.cell(addr)?.data {
+            CellData::Ctor { tag, fields } => Ok((tag, fields)),
+            CellData::Str(_) => Err(format!("expected a constructor value, found a string at heap address {addr}")),
+        }
+    }
+
+    /// Reads a string cell's contents. Errors if `addr` names a `Ctor`
+    /// cell instead — the exact counterpart to `read`'s own check.
+    pub fn read_str(&self, addr: usize) -> Result<&str, String> {
+        match &self.cell(addr)?.data {
+            CellData::Str(s) => Ok(s),
+            CellData::Ctor { .. } => Err(format!("expected a string value, found a constructor at heap address {addr}")),
+        }
+    }
+
+    /// Reads a cell without assuming its shape ahead of time — for the
+    /// handful of callers (`to_portable`, `ArrayLen`'s eval case,
+    /// heap-value equality) that need to dispatch on whichever shape a
+    /// `Value::HeapRef` actually points to, rather than asserting one.
+    pub fn read_any(&self, addr: usize) -> Result<CellView<'_>, String> {
+        match &self.cell(addr)?.data {
+            CellData::Ctor { tag, fields } => Ok(CellView::Ctor(tag, fields)),
+            CellData::Str(s) => Ok(CellView::Str(s)),
+        }
     }
 
     pub fn refcount(&self, addr: usize) -> Result<usize, String> {
@@ -99,13 +158,29 @@ impl Heap {
         cell.refcount -= 1;
         if cell.refcount == 0 {
             self.cells[addr] = Some(HeapCell {
-                tag,
-                fields,
+                data: CellData::Ctor { tag, fields },
                 refcount: 1,
             });
             Ok(addr)
         } else {
             Ok(self.alloc(tag, fields))
+        }
+    }
+
+    /// The string counterpart to `dec_and_maybe_reuse` — same exact
+    /// refcount-gated recycle-or-allocate-fresh decision, just for a
+    /// string cell's new contents instead of a `Ctor`'s tag/fields.
+    pub fn dec_and_maybe_reuse_str(&mut self, addr: usize, new_str: String) -> Result<usize, String> {
+        let cell = self.cell_mut(addr)?;
+        cell.refcount -= 1;
+        if cell.refcount == 0 {
+            self.cells[addr] = Some(HeapCell {
+                data: CellData::Str(new_str),
+                refcount: 1,
+            });
+            Ok(addr)
+        } else {
+            Ok(self.alloc_str(new_str))
         }
     }
 }
@@ -130,9 +205,39 @@ mod tests {
     }
 
     #[test]
+    fn alloc_str_then_read_str() {
+        let mut heap = Heap::new();
+        let addr = heap.alloc_str("hello".to_string());
+        assert_eq!(heap.read_str(addr).unwrap(), "hello");
+    }
+
+    #[test]
+    fn reading_a_string_cell_as_a_ctor_is_a_detected_error() {
+        let mut heap = Heap::new();
+        let addr = heap.alloc_str("hello".to_string());
+        let err = heap.read(addr).expect_err("expected reading a string cell as a Ctor to fail");
+        assert!(err.contains("string"), "error should mention the mismatch, got: {err}");
+    }
+
+    #[test]
+    fn reading_a_ctor_cell_as_a_string_is_a_detected_error() {
+        let mut heap = Heap::new();
+        let addr = heap.alloc("Point".to_string(), vec![]);
+        let err = heap.read_str(addr).expect_err("expected reading a Ctor cell as a string to fail");
+        assert!(err.contains("constructor"), "error should mention the mismatch, got: {err}");
+    }
+
+    #[test]
     fn fresh_alloc_starts_at_refcount_one() {
         let mut heap = Heap::new();
         let addr = heap.alloc("Point".to_string(), vec![]);
+        assert_eq!(heap.refcount(addr).unwrap(), 1);
+    }
+
+    #[test]
+    fn fresh_alloc_str_starts_at_refcount_one() {
+        let mut heap = Heap::new();
+        let addr = heap.alloc_str("hi".to_string());
         assert_eq!(heap.refcount(addr).unwrap(), 1);
     }
 
@@ -222,5 +327,32 @@ mod tests {
         assert_eq!(orig_tag, "Point");
         assert_eq!(orig_fields, &[Value::Int(1), Value::Int(2)]);
         assert_eq!(heap.refcount(addr).unwrap(), 1);
+    }
+
+    #[test]
+    fn reuse_str_when_uniquely_owned_recycles_the_same_address() {
+        let mut heap = Heap::new();
+        let addr = heap.alloc_str("hello".to_string());
+        let allocs_before = heap.alloc_count();
+        let result_addr = heap.dec_and_maybe_reuse_str(addr, "hello world".to_string()).unwrap();
+        assert_eq!(result_addr, addr, "should reuse the exact same address");
+        assert_eq!(heap.alloc_count(), allocs_before, "reuse must not count as a fresh allocation");
+        assert_eq!(heap.read_str(result_addr).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn reuse_str_when_shared_allocates_fresh_and_preserves_the_original() {
+        let mut heap = Heap::new();
+        let addr = heap.alloc_str("hello".to_string());
+        heap.inc(addr).unwrap(); // now shared: refcount 2
+        let allocs_before = heap.alloc_count();
+
+        let result_addr = heap.dec_and_maybe_reuse_str(addr, "hello world".to_string()).unwrap();
+
+        assert_ne!(result_addr, addr, "must not reuse memory that's still shared");
+        assert_eq!(heap.alloc_count(), allocs_before + 1, "the shared path must allocate fresh");
+        assert_eq!(heap.read_str(addr).unwrap(), "hello");
+        assert_eq!(heap.refcount(addr).unwrap(), 1);
+        assert_eq!(heap.read_str(result_addr).unwrap(), "hello world");
     }
 }

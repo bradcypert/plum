@@ -206,6 +206,25 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             reuse_of,
             index: Box::new(mark_reuse(*index)),
         },
+        // Same plain-variable-base reuse candidacy check as the array
+        // ops above.
+        Expr::StrConcat { base, other } => match base.as_ref() {
+            Expr::Var(name) => Expr::StrConcatReuse {
+                reuse_of: name.clone(),
+                other: Box::new(mark_reuse(*other)),
+            },
+            _ => Expr::StrConcat {
+                base: Box::new(mark_reuse(*base)),
+                other: Box::new(mark_reuse(*other)),
+            },
+        },
+        Expr::StrConcatReuse { reuse_of, other } => Expr::StrConcatReuse {
+            reuse_of,
+            other: Box::new(mark_reuse(*other)),
+        },
+        Expr::StrRunes { base } => Expr::StrRunes {
+            base: Box::new(mark_reuse(*base)),
+        },
         Expr::Match { scrutinee, arms } => {
             // Only a plain variable names a specific cell we could
             // reuse — a call result or anything else isn't something
@@ -410,6 +429,17 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             reuse_of,
             index: Box::new(transform(*index, known_heap)),
         },
+        Expr::StrConcat { base, other } => Expr::StrConcat {
+            base: Box::new(transform(*base, known_heap)),
+            other: Box::new(transform(*other, known_heap)),
+        },
+        Expr::StrConcatReuse { reuse_of, other } => Expr::StrConcatReuse {
+            reuse_of,
+            other: Box::new(transform(*other, known_heap)),
+        },
+        Expr::StrRunes { base } => Expr::StrRunes {
+            base: Box::new(transform(*base, known_heap)),
+        },
         Expr::Let { name, value, body } => {
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = transform(*value, known_heap);
@@ -504,6 +534,9 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::ArrayPopReuse { .. } => false,
         Expr::ArraySetReuse { index, value, .. } => expr_mentions_var(index, name) || expr_mentions_var(value, name),
         Expr::ArrayRemoveReuse { index, .. } => expr_mentions_var(index, name),
+        Expr::StrConcat { base, other } => expr_mentions_var(base, name) || expr_mentions_var(other, name),
+        Expr::StrConcatReuse { other, .. } => expr_mentions_var(other, name),
+        Expr::StrRunes { base } => expr_mentions_var(base, name),
     }
 }
 
@@ -514,6 +547,10 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
 fn is_syntactically_heap(expr: &Expr, known_heap: &HashSet<String>) -> bool {
     match expr {
         Expr::Ctor { .. } => true,
+        // A string LITERAL is now heap-allocated too — see `ir::Expr::
+        // Str`'s doc comment. Same treatment as `Ctor` here: always
+        // heap-shaped, unconditionally.
+        Expr::Str(_) => true,
         Expr::Var(name) => known_heap.contains(name),
         _ => false,
     }
@@ -865,6 +902,10 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
             let (array_t, used) = mark_last_uses(*array, name, live_after);
             (Expr::ArrayLen { array: Box::new(array_t) }, used)
         }
+        Expr::StrRunes { base } => {
+            let (base_t, used) = mark_last_uses(*base, name, live_after);
+            (Expr::StrRunes { base: Box::new(base_t) }, used)
+        }
         Expr::ArrayPush { array, value } => {
             let (value_t, used_value) = mark_last_uses(*value, name, live_after);
             let (array_t, used_array) = mark_last_uses(*array, name, live_after || used_value);
@@ -907,6 +948,19 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 used_array || used_index,
             )
         }
+        // Evaluation order `base`, then `other` — same "receiver, then
+        // argument" convention as `ArrayPush`.
+        Expr::StrConcat { base, other } => {
+            let (other_t, used_other) = mark_last_uses(*other, name, live_after);
+            let (base_t, used_base) = mark_last_uses(*base, name, live_after || used_other);
+            (
+                Expr::StrConcat {
+                    base: Box::new(base_t),
+                    other: Box::new(other_t),
+                },
+                used_base || used_other,
+            )
+        }
         // Shouldn't normally appear as input here — same "produced BY
         // `mark_reuse`, which runs after this" precedent as
         // `CtorReuse`'s own case just above. `reuse_of` (a bare
@@ -941,6 +995,16 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 Expr::ArrayRemoveReuse {
                     reuse_of,
                     index: Box::new(index_t),
+                },
+                used,
+            )
+        }
+        Expr::StrConcatReuse { reuse_of, other } => {
+            let (other_t, used) = mark_last_uses(*other, name, live_after);
+            (
+                Expr::StrConcatReuse {
+                    reuse_of,
+                    other: Box::new(other_t),
                 },
                 used,
             )
@@ -1244,6 +1308,28 @@ mod tests {
     }
 
     #[test]
+    fn str_concat_on_a_plain_variable_marks_reuse() {
+        let input = Expr::StrConcat {
+            base: Box::new(var("s")),
+            other: Box::new(Expr::Str("x".to_string())),
+        };
+        let expected = Expr::StrConcatReuse {
+            reuse_of: "s".to_string(),
+            other: Box::new(Expr::Str("x".to_string())),
+        };
+        assert_eq!(mark_reuse(input), expected);
+    }
+
+    #[test]
+    fn str_concat_on_a_non_variable_base_is_not_a_reuse_candidate() {
+        let input = Expr::StrConcat {
+            base: Box::new(call(var("get_str"), vec![])),
+            other: Box::new(Expr::Str("x".to_string())),
+        };
+        assert_eq!(mark_reuse(input.clone()), input);
+    }
+
+    #[test]
     fn recurses_into_nested_matches() {
         let inner = match_(
             var("inner_list"),
@@ -1329,6 +1415,17 @@ mod tests {
     fn zero_uses_drops_immediately() {
         let input = let_("p", ctor("Point", vec![]), int(5));
         let expected = let_("p", ctor("Point", vec![]), dec("p", int(5)));
+        assert_eq!(insert_refcount_ops(input), expected);
+    }
+
+    #[test]
+    fn a_let_bound_string_literal_is_tracked_as_heap_shaped() {
+        // `Expr::Str` is now heap-allocated (see `ir::Expr::Str`'s doc
+        // comment) — a `let`-bound string with zero further uses gets
+        // the exact same "drops immediately" treatment a `Ctor` does,
+        // proving `is_syntactically_heap` recognizes it.
+        let input = let_("s", Expr::Str("hi".to_string()), int(5));
+        let expected = let_("s", Expr::Str("hi".to_string()), dec("s", int(5)));
         assert_eq!(insert_refcount_ops(input), expected);
     }
 

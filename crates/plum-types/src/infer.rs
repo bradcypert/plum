@@ -748,12 +748,24 @@ impl Infer {
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
             // `arr[i]` — `arr` must be `Array[T]`, `i` must be `Int`;
-            // evaluates to `T`. Out-of-bounds is a RUNTIME error (the
-            // index's actual VALUE isn't known at type-checking time),
-            // not something caught here.
+            // evaluates to `T`. `s[i]` — `s` must be `Str`, `i` must be
+            // `Int`; evaluates to `Int` (the raw BYTE value — see
+            // `Interpreter::eval`'s `Index` case). Out-of-bounds is a
+            // RUNTIME error either way (the index's actual VALUE isn't
+            // known at type-checking time), not something caught here.
+            // Same "check the resolved shape directly" precedent as
+            // `.len()`'s own Str/Array split, for the same reason.
             ast::Expr::Index { base, index, span } => {
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
+                if acc.apply(&base_ty) == Type::Str {
+                    let refined_env = env.apply_subst(&acc);
+                    let (index_ty, s) = self.infer_expr(index, &refined_env)?;
+                    acc = s.compose(&acc);
+                    let s = unify(&acc.apply(&index_ty), &Type::Int).map_err(|e| format!("string index at {span:?}: {e}"))?;
+                    acc = s.compose(&acc);
+                    return Ok((Type::Int, acc));
+                }
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
                     .map_err(|e| format!("indexing at {span:?}: {e}"))?;
@@ -917,8 +929,15 @@ impl Infer {
                     Subst::empty(),
                 ))
             }
-            // `arr.len()` — `arr` must be `Array[T]` for SOME `T`
-            // (never checked further); evaluates to `Int`.
+            // `arr.len()` / `s.len()` — `arr`/`s` must be `Array[T]` for
+            // SOME `T`, or `Str`; evaluates to `Int` either way. Same
+            // "check the ALREADY-RESOLVED shape directly before falling
+            // to the default unify" pattern `for x in arr` uses to tell
+            // Array from Range apart — checked here for the identical
+            // reason: blind trial-unifying against `Array[fresh]` first
+            // would trivially succeed for a still-unresolved type
+            // variable (e.g. an unannotated generic parameter), wrongly
+            // ruling out the Str case for it.
             ast::Expr::Call { callee, args, span }
                 if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "len") =>
             {
@@ -927,11 +946,50 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
+                if acc.apply(&base_ty) == Type::Str {
+                    return Ok((Type::Int, acc));
+                }
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty]))
                     .map_err(|e| format!("`.len()` at {span:?}: {e}"))?;
                 acc = s.compose(&acc);
                 Ok((Type::Int, acc))
+            }
+            // `s.concat(other)` — both `s` and `other` must be `Str`;
+            // evaluates to `Str`.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "concat") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.concat()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (other_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&other_ty), &Type::Str)
+                    .map_err(|e| format!("`.concat()` argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Str, acc))
+            }
+            // `s.runes()` — `s` must be `Str`; evaluates to
+            // `Array[Int]` (one Unicode codepoint per element — see
+            // `ir::Expr::StrRunes`'s doc comment for why this exists
+            // separately from byte-indexing `s[i]`).
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "runes") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.runes()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("Array".to_string(), vec![Type::Int]), acc))
             }
             // `arr.push(v)` — `arr` must be `Array[T]`, `v` must be
             // that SAME `T`; evaluates to a (new) `Array[T]`.
@@ -3945,6 +4003,26 @@ mod tests {
     }
 
     #[test]
+    fn string_index_infers_as_int() {
+        assert_eq!(infer("\"hello\"[0]"), Type::Int);
+    }
+
+    #[test]
+    fn string_index_requires_an_int_index() {
+        infer_err("\"hello\"[true]");
+    }
+
+    #[test]
+    fn string_runes_infers_as_array_of_int() {
+        assert_eq!(infer("\"hello\".runes()"), Type::Struct("Array".to_string(), vec![Type::Int]));
+    }
+
+    #[test]
+    fn runes_on_a_non_string_is_an_error() {
+        infer_err("5.runes()");
+    }
+
+    #[test]
     fn array_len_infers_as_int() {
         assert_eq!(infer("[1, 2, 3].len()"), Type::Int);
     }
@@ -3952,6 +4030,45 @@ mod tests {
     #[test]
     fn len_on_a_non_array_is_an_error() {
         infer_err("5.len()");
+    }
+
+    #[test]
+    fn string_len_infers_as_int() {
+        assert_eq!(infer("\"hello\".len()"), Type::Int);
+    }
+
+    #[test]
+    fn string_concat_infers_as_str() {
+        assert_eq!(infer("\"a\".concat(\"b\")"), Type::Str);
+    }
+
+    #[test]
+    fn string_concat_argument_type_is_checked() {
+        infer_err("\"a\".concat(5)");
+    }
+
+    #[test]
+    fn concat_on_a_non_string_is_an_error() {
+        infer_err("5.concat(\"a\")");
+    }
+
+    #[test]
+    fn a_still_generic_len_call_still_defaults_to_array() {
+        // Regression coverage for the same class of bug `for x in arr`
+        // caught: `.len()` must check the ALREADY-RESOLVED shape, not
+        // trial-unify against Array first — but for a still-unresolved
+        // var (no Str/Array info at all yet), the pre-existing
+        // Array-unify default must still apply unchanged.
+        let types = infer_program("let f arr = arr.len()");
+        let Type::Function(params, ret) = &types["f"] else {
+            panic!("expected a function type, got {:?}", types["f"]);
+        };
+        assert_eq!(*ret.as_ref(), Type::Int);
+        assert!(
+            matches!(&params[0], Type::Struct(name, args) if name == "Array" && args.len() == 1),
+            "expected an Array[_] parameter, got {:?}",
+            params[0]
+        );
     }
 
     #[test]

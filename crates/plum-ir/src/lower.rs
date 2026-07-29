@@ -598,6 +598,38 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                 index: Box::new(lower_expr(&args[0], ctx)?),
             })
         }
+        // `s.concat(other)` — same shape-only precedent, one arg. Note
+        // `.len()` (below, shared with arrays as `ArrayLen`) needs NO
+        // new case here at all: lowering can't tell an array from a
+        // string apart (no type info), so it stays the SAME node for
+        // both, and `Interpreter::eval` dispatches on the actual heap
+        // cell kind at runtime instead — see `ArrayLen`'s eval case.
+        // `.concat()` doesn't have that ambiguity (arrays have no
+        // `.concat()`), so it gets its own dedicated node.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "concat") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::StrConcat {
+                base: Box::new(lower_expr(base, ctx)?),
+                other: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
+        // `s.runes()` — same shape-only precedent, zero args. Also no
+        // ambiguity with anything array-related, so its own dedicated
+        // node too.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "runes") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::StrRunes {
+                base: Box::new(lower_expr(base, ctx)?),
+            })
+        }
         // `arr.map(f)` — desugars into an index-based loop reusing only
         // EXISTING IR nodes (`Let`, `For`, `ArrayLen`, `Index`,
         // `ArrayPush`, `Assign`), same convention as `for x in arr`'s
@@ -2598,6 +2630,58 @@ mod tests {
             ir::Expr::ArrayRemove {
                 array: Box::new(ir::Expr::Var("arr".to_string())),
                 index: Box::new(ir::Expr::Int(0)),
+            }
+        );
+    }
+
+    #[test]
+    fn string_literal_lowers_to_a_str_node() {
+        assert_eq!(lower("\"hi\""), ir::Expr::Str("hi".to_string()));
+    }
+
+    #[test]
+    fn string_len_lowers_to_the_same_array_len_node() {
+        // Deliberately shared with arrays — lowering has no type info
+        // to tell them apart; `Interpreter::eval` dispatches at
+        // runtime. See `ArrayLen`'s eval case.
+        assert_eq!(
+            lower("s.len()"),
+            ir::Expr::ArrayLen {
+                array: Box::new(ir::Expr::Var("s".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn string_concat_lowers_to_a_str_concat_node() {
+        assert_eq!(
+            lower("s.concat(\"x\")"),
+            ir::Expr::StrConcat {
+                base: Box::new(ir::Expr::Var("s".to_string())),
+                other: Box::new(ir::Expr::Str("x".to_string())),
+            }
+        );
+    }
+
+    #[test]
+    fn string_index_lowers_to_the_same_index_node_as_arrays() {
+        // Deliberately shared — see `string_len_lowers_to_the_same_
+        // array_len_node`'s comment for the identical reasoning.
+        assert_eq!(
+            lower("s[0]"),
+            ir::Expr::Index {
+                base: Box::new(ir::Expr::Var("s".to_string())),
+                index: Box::new(ir::Expr::Int(0)),
+            }
+        );
+    }
+
+    #[test]
+    fn string_runes_lowers_to_a_str_runes_node() {
+        assert_eq!(
+            lower("s.runes()"),
+            ir::Expr::StrRunes {
+                base: Box::new(ir::Expr::Var("s".to_string())),
             }
         );
     }

@@ -59,6 +59,14 @@ pub enum BinOp {
 pub enum Expr {
     Int(i64),
     Float(f64),
+    // A string LITERAL — evaluates to a heap-allocated, refcounted
+    // value (`Interpreter::eval` allocates a dedicated string heap
+    // cell, distinct from `Ctor`'s tag+fields shape, and returns a
+    // `Value::HeapRef` into it), matching DESIGN.md's "records, variant
+    // payloads, arrays, strings, closures are refcounted" — NOT an
+    // inline scalar the way `Int`/`Float`/`Bool` are. See
+    // `StrConcat`'s doc comment for the one operation v1 supports
+    // beyond construction.
     Str(String),
     Bool(bool),
     // `()`, Unit's only value — see DESIGN.md's "Tuples and closures".
@@ -327,6 +335,37 @@ pub enum Expr {
     ArrayRemoveReuse {
         reuse_of: String,
         index: Box<Expr>,
+    },
+    // `s.concat(other)` — evaluates to a NEW string with `other`
+    // appended. Same "shape-only detection, dedicated primitive node"
+    // convention as `.push()`/`ArrayPush`, and the same reuse-in-place
+    // relationship to `StrConcatReuse` that `ArrayPush` has to
+    // `ArrayPushReuse` — see `ArrayPushReuse`'s doc comment for the
+    // full safety argument, which applies identically here (same
+    // `Heap::dec_and_maybe_reuse_str` runtime refcount check).
+    StrConcat {
+        base: Box<Expr>,
+        other: Box<Expr>,
+    },
+    StrConcatReuse {
+        reuse_of: String,
+        other: Box<Expr>,
+    },
+    // `s.runes()` — decodes `s` (a UTF-8 byte buffer underneath) into
+    // an `Array[Int]` of Unicode codepoints, one element per character
+    // rather than per byte — the answer to `s[i]`'s BYTE-indexing
+    // deliberately NOT being character-aware (see `Index`'s own doc
+    // comment / DESIGN.md's "Strings" section): decode ONCE, O(n), into
+    // an ordinary array, then every subsequent access is an ordinary
+    // O(1) `Index` into IT. A genuinely new primitive node (not
+    // shape-shared with anything else, and not expressible as a
+    // desugaring into existing nodes — UTF-8 decoding needs bit
+    // manipulation the IR has no operators for at all yet). No reuse-
+    // in-place counterpart: this always builds a brand new array of a
+    // different heap shape than the string it reads from, never
+    // recycling the string cell itself.
+    StrRunes {
+        base: Box<Expr>,
     },
 }
 

@@ -14,9 +14,14 @@ use std::time::Duration;
 pub enum Value {
     Int(i64),
     Float(f64),
-    Str(String),
     Bool(bool),
     Unit,
+    // A string is represented as a `HeapRef` into a dedicated string
+    // heap cell (see `heap.rs`'s `CellData::Str`) — refcounted and
+    // FBIP-reuse-eligible, like arrays/structs/tuples, NOT an inline
+    // scalar the way `Int`/`Float`/`Bool` are. There is no separate
+    // `Value::Str` variant; a string value IS a `HeapRef`, exactly like
+    // an array value is.
     HeapRef(usize),
     // An index into `Interpreter::closures`, not a heap address — kept
     // in its own id space (not `HeapRef`) so the two can never be
@@ -289,16 +294,17 @@ impl Interpreter {
         match value {
             Value::Int(n) => Ok(PortableValue::Int(*n)),
             Value::Float(f) => Ok(PortableValue::Float(*f)),
-            Value::Str(s) => Ok(PortableValue::Str(s.clone())),
             Value::Bool(b) => Ok(PortableValue::Bool(*b)),
             Value::Unit => Ok(PortableValue::Unit),
-            Value::HeapRef(addr) => {
-                let (tag, fields) = self.heap.read(*addr)?;
-                let tag = tag.to_string();
-                let portable_fields =
-                    fields.iter().map(|f| self.to_portable(f)).collect::<Result<Vec<_>, _>>()?;
-                Ok(PortableValue::Ctor(tag, portable_fields))
-            }
+            Value::HeapRef(addr) => match self.heap.read_any(*addr)? {
+                heap::CellView::Str(s) => Ok(PortableValue::Str(s.to_string())),
+                heap::CellView::Ctor(tag, fields) => {
+                    let tag = tag.to_string();
+                    let portable_fields =
+                        fields.iter().map(|f| self.to_portable(f)).collect::<Result<Vec<_>, _>>()?;
+                    Ok(PortableValue::Ctor(tag, portable_fields))
+                }
+            },
             Value::Closure(_) => {
                 Err("cannot send a closure across a task boundary (not yet supported)".to_string())
             }
@@ -324,7 +330,7 @@ impl Interpreter {
         match value {
             PortableValue::Int(n) => Value::Int(n),
             PortableValue::Float(f) => Value::Float(f),
-            PortableValue::Str(s) => Value::Str(s),
+            PortableValue::Str(s) => Value::HeapRef(self.heap.alloc_str(s)),
             PortableValue::Bool(b) => Value::Bool(b),
             PortableValue::Unit => Value::Unit,
             PortableValue::Ctor(tag, fields) => {
@@ -360,7 +366,7 @@ impl Interpreter {
         match expr {
             Expr::Int(n) => Ok(Value::Int(*n)),
             Expr::Float(f) => Ok(Value::Float(*f)),
-            Expr::Str(s) => Ok(Value::Str(s.clone())),
+            Expr::Str(s) => Ok(Value::HeapRef(self.heap.alloc_str(s.clone()))),
             Expr::Bool(b) => Ok(Value::Bool(*b)),
             Expr::Unit => Ok(Value::Unit),
             Expr::Var(name) => self.lookup(name),
@@ -392,7 +398,7 @@ impl Interpreter {
             Expr::Binary(op, l, r) => {
                 let lv = self.eval(l)?;
                 let rv = self.eval(r)?;
-                eval_binary(op, lv, rv)
+                eval_binary(op, lv, rv, &self.heap)
             }
             Expr::Let { name, value, body } => {
                 let v = self.eval(value)?;
@@ -594,28 +600,60 @@ impl Interpreter {
                     thread::sleep(Duration::from_millis(1));
                 }
             }
+            // Shared with strings, same "no type info in lowering, so
+            // dispatch at runtime on the actual heap cell" convention
+            // as `.len()`'s `ArrayLen` node (see its own comment
+            // below). `s[i]` indexes by BYTE offset, returning the raw
+            // byte value as an `Int` (0-255) — matching `.len()`'s own
+            // byte-length semantics exactly (`s[s.len() - 1]` always
+            // works), NOT a Unicode codepoint/grapheme — deliberately:
+            // there's no `Value::Char`, and character-aware indexing
+            // is real, separate Unicode design work this doesn't try
+            // to absorb (see DESIGN.md's "Strings" section).
             Expr::Index { base, index } => {
                 let Value::HeapRef(addr) = self.eval(base)? else {
-                    return Err("indexing requires an Array value".to_string());
+                    return Err("indexing requires an Array or String value".to_string());
                 };
                 let Value::Int(i) = self.eval(index)? else {
-                    return Err("array index must be an Int".to_string());
+                    return Err("index must be an Int".to_string());
                 };
-                let (_, fields) = self.heap.read(addr)?;
-                let Ok(i) = usize::try_from(i) else {
-                    return Err(format!("array index out of bounds: {i} (len {})", fields.len()));
-                };
-                fields
-                    .get(i)
-                    .cloned()
-                    .ok_or_else(|| format!("array index out of bounds: {i} (len {})", fields.len()))
+                match self.heap.read_any(addr)? {
+                    heap::CellView::Ctor(_, fields) => {
+                        let Ok(i) = usize::try_from(i) else {
+                            return Err(format!("array index out of bounds: {i} (len {})", fields.len()));
+                        };
+                        fields
+                            .get(i)
+                            .cloned()
+                            .ok_or_else(|| format!("array index out of bounds: {i} (len {})", fields.len()))
+                    }
+                    heap::CellView::Str(s) => {
+                        let bytes = s.as_bytes();
+                        let Ok(i) = usize::try_from(i) else {
+                            return Err(format!("string index out of bounds: {i} (len {})", bytes.len()));
+                        };
+                        bytes
+                            .get(i)
+                            .map(|b| Value::Int(*b as i64))
+                            .ok_or_else(|| format!("string index out of bounds: {i} (len {})", bytes.len()))
+                    }
+                }
             }
+            // `.len()` is shape-detected identically for arrays AND
+            // strings at lowering time (no type info there to tell
+            // them apart — see `lower.rs`'s comment on this exact
+            // node), so the dispatch happens HERE instead, on the
+            // actual runtime heap cell: a `Ctor` cell's field count for
+            // arrays, a string cell's BYTE length (not char count —
+            // matching Rust's own `String::len()`) for strings.
             Expr::ArrayLen { array } => {
                 let Value::HeapRef(addr) = self.eval(array)? else {
-                    return Err("`.len()` requires an Array value".to_string());
+                    return Err("`.len()` requires an Array or String value".to_string());
                 };
-                let (_, fields) = self.heap.read(addr)?;
-                Ok(Value::Int(fields.len() as i64))
+                match self.heap.read_any(addr)? {
+                    heap::CellView::Ctor(_, fields) => Ok(Value::Int(fields.len() as i64)),
+                    heap::CellView::Str(s) => Ok(Value::Int(s.len() as i64)),
+                }
             }
             Expr::ArrayPush { array, value } => {
                 let Value::HeapRef(addr) = self.eval(array)? else {
@@ -759,6 +797,60 @@ impl Interpreter {
                 let new_addr = self.heap.dec_and_maybe_reuse(addr, tag, new_fields)?;
                 Ok(Value::HeapRef(new_addr))
             }
+            // `s.concat(other)` — always allocates a fresh string cell.
+            // See `StrConcatReuse` (below) for the reuse-in-place
+            // counterpart `mark_reuse` (fbip.rs) rewrites this into
+            // when `base` is a plain variable — same relationship
+            // `ArrayPush`/`ArrayPushReuse` already has.
+            Expr::StrConcat { base, other } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`.concat()` requires a String value".to_string());
+                };
+                let other_addr = match self.eval(other)? {
+                    Value::HeapRef(addr) => addr,
+                    _ => return Err("`.concat()` argument must be a String value".to_string()),
+                };
+                let mut new_str = self.heap.read_str(addr)?.to_string();
+                new_str.push_str(self.heap.read_str(other_addr)?);
+                let new_addr = self.heap.alloc_str(new_str);
+                Ok(Value::HeapRef(new_addr))
+            }
+            // The reuse-in-place counterpart to `StrConcat` — see
+            // `ArrayPushReuse`'s doc comment (ir.rs) for the full
+            // safety argument, which applies identically here (same
+            // `Heap::dec_and_maybe_reuse_str` runtime refcount check).
+            Expr::StrConcatReuse { reuse_of, other } => {
+                let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
+                    return Err(format!("reuse target {reuse_of:?} is not a heap value"));
+                };
+                let other_addr = match self.eval(other)? {
+                    Value::HeapRef(addr) => addr,
+                    _ => return Err("`.concat()` argument must be a String value".to_string()),
+                };
+                let mut new_str = self.heap.read_str(addr)?.to_string();
+                new_str.push_str(self.heap.read_str(other_addr)?);
+                let new_addr = self.heap.dec_and_maybe_reuse_str(addr, new_str)?;
+                Ok(Value::HeapRef(new_addr))
+            }
+            // `s.runes()` — decodes `s`'s UTF-8 bytes into one `Int`
+            // codepoint per Unicode SCALAR VALUE (Rust's own `char`,
+            // which `.chars()` already correctly splits on) and builds
+            // an ordinary array `Ctor` out of them. See `ir::Expr::
+            // StrRunes`'s doc comment for why this exists alongside
+            // (not instead of) byte-indexing `s[i]`.
+            Expr::StrRunes { base } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`.runes()` requires a String value".to_string());
+                };
+                let runes: Vec<Value> = self
+                    .heap
+                    .read_str(addr)?
+                    .chars()
+                    .map(|c| Value::Int(c as i64))
+                    .collect();
+                let new_addr = self.heap.alloc("0Array".to_string(), runes);
+                Ok(Value::HeapRef(new_addr))
+            }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
                 // non-heap name (shouldn't happen given how fbip.rs
@@ -894,12 +986,12 @@ fn eval_unary(op: &UnOp, v: Value) -> Result<Value, String> {
     }
 }
 
-fn eval_binary(op: &BinOp, lv: Value, rv: Value) -> Result<Value, String> {
+fn eval_binary(op: &BinOp, lv: Value, rv: Value, heap: &heap::Heap) -> Result<Value, String> {
     match op {
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => eval_arith(op, lv, rv),
         BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => eval_order(op, lv, rv),
-        BinOp::Eq => values_equal(&lv, &rv).map(Value::Bool),
-        BinOp::Ne => values_equal(&lv, &rv).map(|b| Value::Bool(!b)),
+        BinOp::Eq => values_equal(&lv, &rv, heap).map(Value::Bool),
+        BinOp::Ne => values_equal(&lv, &rv, heap).map(|b| Value::Bool(!b)),
         BinOp::And | BinOp::Or => {
             unreachable!("And/Or are handled with short-circuit evaluation in Interpreter::eval")
         }
@@ -953,13 +1045,25 @@ fn eval_order(op: &BinOp, lv: Value, rv: Value) -> Result<Value, String> {
     }))
 }
 
-fn values_equal(a: &Value, b: &Value) -> Result<bool, String> {
+fn values_equal(a: &Value, b: &Value, heap: &heap::Heap) -> Result<bool, String> {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => Ok(x == y),
         (Value::Float(x), Value::Float(y)) => Ok(x == y),
         (Value::Bool(x), Value::Bool(y)) => Ok(x == y),
-        (Value::Str(x), Value::Str(y)) => Ok(x == y),
         (Value::Unit, Value::Unit) => Ok(true),
+        // Only two STRING cells get a real equality comparison here —
+        // general heap-value (array/struct/tuple) structural equality
+        // is a separate, pre-existing gap this change doesn't attempt
+        // to close (there was never a `Value::HeapRef` case here before
+        // strings became heap-backed either). Two Ctor cells, or a
+        // Ctor and a Str, still fall through to the same "cannot
+        // compare" error as before.
+        (Value::HeapRef(x), Value::HeapRef(y)) => {
+            match (heap.read_any(*x)?, heap.read_any(*y)?) {
+                (heap::CellView::Str(sx), heap::CellView::Str(sy)) => Ok(sx == sy),
+                _ => Err(format!("type error: cannot compare {a:?} and {b:?} for equality")),
+            }
+        }
         _ => Err(format!("type error: cannot compare {a:?} and {b:?} for equality")),
     }
 }
@@ -1002,9 +1106,74 @@ mod tests {
     fn literals() {
         assert_eq!(eval("5"), Value::Int(5));
         assert_eq!(eval("3.14"), Value::Float(3.14));
-        assert_eq!(eval("\"hi\""), Value::Str("hi".to_string()));
         assert_eq!(eval("true"), Value::Bool(true));
         assert_eq!(eval("()"), Value::Unit);
+    }
+
+    #[test]
+    fn string_literal_is_heap_allocated() {
+        let tokens = Lexer::new("\"hi\"").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap();
+        let ir = lower_expr(&ast, &LoweringContext::new()).unwrap();
+        let mut interp = Interpreter::new();
+        let result = interp.eval(&ir).unwrap();
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result, got {result:?}")
+        };
+        assert_eq!(interp.heap.read_str(addr).unwrap(), "hi");
+    }
+
+    #[test]
+    fn string_index_returns_the_byte_value() {
+        // 'a' = 97, matching Rust's own `b'a'` — byte-indexed, not
+        // character-indexed, per `Index`'s doc comment.
+        assert_eq!(eval("\"abc\"[0]"), Value::Int(97));
+        assert_eq!(eval("\"abc\"[2]"), Value::Int(99));
+    }
+
+    #[test]
+    fn string_index_matches_len_minus_one_for_the_last_byte() {
+        assert_eq!(eval("\"abc\"[\"abc\".len() - 1]"), Value::Int(99));
+    }
+
+    #[test]
+    fn string_index_into_a_multi_byte_utf8_character_returns_a_raw_byte() {
+        // "é" is 2 UTF-8 bytes (0xC3 0xA9) — indexing mid-character is
+        // deliberately allowed and just returns that raw byte, not an
+        // error or a decoded character. See `Index`'s doc comment.
+        assert_eq!(eval("\"café\"[3]"), Value::Int(0xC3));
+        assert_eq!(eval("\"café\".len()"), Value::Int(5));
+    }
+
+    #[test]
+    fn string_index_out_of_bounds_is_a_runtime_error() {
+        eval_err("\"abc\"[5]");
+    }
+
+    #[test]
+    fn string_index_negative_is_a_runtime_error() {
+        eval_err("\"abc\"[0 - 1]");
+    }
+
+    #[test]
+    fn string_runes_decodes_one_element_per_character() {
+        assert_eq!(eval("\"abc\".runes().len()"), Value::Int(3));
+        assert_eq!(eval("\"abc\".runes()[0]"), Value::Int('a' as i64));
+    }
+
+    #[test]
+    fn string_runes_treats_a_multi_byte_character_as_one_element() {
+        // "café" is 4 CHARACTERS but 5 BYTES — `.runes()` sees 4
+        // elements (unlike `.len()`, which sees 5), and the accented
+        // character comes back as ONE codepoint, not split bytes.
+        assert_eq!(eval("\"café\".runes().len()"), Value::Int(4));
+        assert_eq!(eval("\"café\".runes()[3]"), Value::Int('é' as i64));
+    }
+
+    #[test]
+    fn string_runes_on_an_empty_string_is_empty() {
+        assert_eq!(eval("\"\".runes().len()"), Value::Int(0));
     }
 
     #[test]
@@ -2062,6 +2231,12 @@ mod tests {
             value: Box::new(value),
         }
     }
+    fn str_concat_reuse(reuse_of: &str, other: Expr) -> Expr {
+        Expr::StrConcatReuse {
+            reuse_of: reuse_of.to_string(),
+            other: Box::new(other),
+        }
+    }
     fn inc(name: &str, rest: Expr) -> Expr {
         Expr::RcAnnotated {
             op: RcOp::Inc,
@@ -2261,6 +2436,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn str_concat_reuse_recycles_the_same_address_when_uniquely_owned() {
+        let mut interp = Interpreter::new();
+        let program = let_(
+            "s",
+            Expr::Str("hello".to_string()),
+            str_concat_reuse("s", Expr::Str(" world".to_string())),
+        );
+        let result = interp.eval(&program).unwrap();
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_eq!(addr, 0, "should reuse address 0 — the original string's cell");
+        // Unlike `ArrayPushReuse`'s `int(3)` argument (not heap-shaped
+        // at all), `other` here is ITSELF a string literal — always
+        // heap-allocated now — so the baseline is 2 (`s`'s own cell
+        // plus `other`'s), and reuse only proves it doesn't cost a
+        // THIRD.
+        assert_eq!(interp.alloc_count(), 2, "reuse must not allocate a third cell for the result");
+        assert_eq!(interp.heap.read_str(addr).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn str_concat_reuse_allocates_fresh_and_preserves_the_alias_when_shared() {
+        let mut interp = Interpreter::new();
+        let program = let_(
+            "s",
+            Expr::Str("hello".to_string()),
+            let_(
+                "saved",
+                inc("s", var("s")), // the Inc a real FBIP pass would insert here
+                str_concat_reuse("s", Expr::Str(" world".to_string())),
+            ),
+        );
+        let result = interp.eval(&program).unwrap();
+        let Value::HeapRef(new_addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_ne!(new_addr, 0, "must not reuse memory that `saved` still references");
+        // Baseline 2 (`s`'s cell + `other`'s literal cell), plus a
+        // third for the shared path's forced fresh allocation.
+        assert_eq!(interp.alloc_count(), 3, "the shared path must allocate a fresh cell");
+        assert_eq!(interp.heap.read_str(0).unwrap(), "hello");
+        assert_eq!(interp.heap.read_str(new_addr).unwrap(), "hello world");
+    }
+
     // --- The capstone: real Plum SOURCE TEXT, through the entire
     // pipeline for the first time — parse -> lower (resolving a real
     // struct declaration's field order) -> FBIP optimize (refcount
@@ -2328,6 +2549,37 @@ mod tests {
         // `a` is used again (`a.len()`) after the push — reuse must NOT
         // fire, since `a` still needs to see its ORIGINAL contents.
         let src = "let use_it dummy = { let a = [1, 2]; let b = a.push(3); a.len() + b.len() }";
+        let result = run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Value::Int(5));
+    }
+
+    #[test]
+    fn end_to_end_real_source_string_concat_reuse() {
+        let src = "{ let s = \"hi\"; s.concat(\" there\") }";
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let ir = lower_expr(&ast, &LoweringContext::new()).unwrap_or_else(|e| panic!("lowering error: {e}"));
+        let optimized = plum_ir::fbip::optimize(ir);
+
+        let mut interp = Interpreter::new();
+        let result = interp.eval(&optimized).unwrap_or_else(|e| panic!("eval error: {e}"));
+
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result")
+        };
+        assert_eq!(addr, 0, "single owner, single use — reuse should recycle the original cell");
+        assert_eq!(
+            interp.alloc_count(),
+            2,
+            "concat-in-place should cost only the `\" there\"` literal's own allocation, not a second one for the result"
+        );
+        assert_eq!(interp.heap.read_str(addr).unwrap(), "hi there");
+    }
+
+    #[test]
+    fn end_to_end_real_source_string_len_and_equality() {
+        let src = "let use_it dummy = { let s = \"hello\"; if s == \"hello\" { s.len() } else { 0 } }";
         let result = run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Value::Int(5));
     }

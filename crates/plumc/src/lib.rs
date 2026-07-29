@@ -228,6 +228,80 @@ mod tests {
     }
 
     #[test]
+    fn string_concat_and_len_run_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = \"hello, \".concat(\"world\").len()";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(12)));
+    }
+
+    #[test]
+    fn string_equality_runs_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = if \"abc\" == \"abc\" { 1 } else { 0 }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(1)));
+    }
+
+    #[test]
+    fn string_concat_argument_type_mismatch_is_rejected_before_running() {
+        let src = "let use_it dummy = \"abc\".concat(5)";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn a_struct_field_can_hold_a_string_end_to_end() {
+        let src = "struct Person { name: String, age: Int }\n\
+                    let greet (p: Person) = \"hi \".concat(p.name)\n\
+                    let use_it dummy = greet(Person { name: \"Ada\", age: 30 }).len()";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(6)));
+    }
+
+    #[test]
+    fn string_reused_after_a_reuse_in_place_concat_still_sees_its_original_contents() {
+        // Same "used again later, so reuse must not fire" regression
+        // proof as arrays', now for the heap-backed string
+        // representation.
+        let src = "let use_it dummy = { let s = \"ab\"; let t = s.concat(\"cd\"); s.len() + t.len() }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(6)));
+    }
+
+    #[test]
+    fn string_indexing_and_runes_run_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = { let s = \"café\"; s.runes().len() * 10 + s[0] - 87 }";
+        // runes().len() = 4 -> 40; s[0] = 'c' = 99; 99 - 87 = 12; 40+12 = 52
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(52)));
+    }
+
+    #[test]
+    fn string_runes_can_be_iterated_with_for_over_arrays() {
+        // Combines two chunks from tonight: `.runes()` (Array[Int]) fed
+        // straight into `for x in arr` iteration.
+        let src = "let use_it dummy = { let mut sum = 0; for r in \"abc\".runes() { sum = sum + r; }; sum }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int('a' as i64 + 'b' as i64 + 'c' as i64)));
+    }
+
+    #[test]
+    fn string_index_out_of_bounds_is_a_runtime_error_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = \"abc\"[10]";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a runtime error, not a successful run");
+        assert!(err.contains("out of bounds"), "expected an out-of-bounds error, got: {err}");
+    }
+
+    #[test]
+    fn indexing_with_a_non_int_index_is_rejected_before_running() {
+        let src = "let use_it dummy = \"abc\"[true]";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected a type error, not a successful run");
+        assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
     fn a_range_for_loop_still_works_after_the_array_for_loop_side_channel_was_added() {
         // Regression coverage alongside `a_range_stored_and_passed_around_
         // runs_through_the_full_gated_pipeline` above: a genuinely
