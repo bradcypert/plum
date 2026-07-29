@@ -1138,7 +1138,7 @@ arithmetic) — extending this to cover something else, should the
 language ever grow such a thing, is unscoped future work, not implied by
 today's implementation.
 
-## Module system — Decided
+## Module system — Decided, v1 implemented
 
 Synthesized from three influences, each solving a different part of the
 problem — not a copy of any one of them:
@@ -1201,6 +1201,63 @@ let internal_helper c = c.radius * 2.0   // private, no `pub`
 use shapes;
 let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 ```
+
+### What's actually implemented (v1)
+
+`crates/plumc/src/modules.rs`'s `typecheck_and_run_modules(modules: &[(module_path,
+source)], fn_name, args)` — an IN-MEMORY multi-module entry point, not
+real filesystem directory-walking yet (that's a thin follow-up layer:
+turn a directory tree into this same `&[(&str, &str)]` shape, module
+path = containing directory relative to the project root). `module_path`
+is dot-joined (`""` for root, `"shapes"`, `"net.http"` for nested) —
+there's still no `mod` declaration in Plum source itself, the caller
+supplies each file's module path the same way a real directory-walker
+eventually will.
+
+**Architecture**: a PRE-PASS over the parsed AST, not a change to
+`plum-types`/`plum-ir`/`plum-interp` — none of them learned a module
+system exists. Every declaration gets renamed to its fully-qualified
+form (`"shapes.Circle"` as one literal string) and every reference gets
+rewritten to match, via a real (if approximate) scope-tracking AST walk
+that never touches a genuine local variable/parameter binding. The
+merged, fully-qualified `ast::Program` then runs through the EXACT SAME
+`run_resolved_program` function `typecheck_and_run` (the pre-existing
+single-file entry point) already used — `TypeContext`/`Interpreter`'s
+existing flat `HashMap<String, ..>` tables just see one more ordinary
+string key, since Plum's lexer can never produce an identifier
+containing `.`, so a qualified name can never collide with a real one.
+The ROOT module (path `""`) is never qualified, keeping
+`typecheck_and_run`'s single-file behavior byte-for-byte unchanged.
+
+**`use` semantics**: `use shapes;` brings the WHOLE module into scope
+for qualified access (`shapes.Circle`); required before `shapes.X`
+resolves at all (referencing an un-`use`d module's qualified name
+falls through unresolved, same as any genuinely undeclared name).
+`use shapes.Circle;` is the bare-import escape hatch, checked (both
+existence and `pub`) right at the `use` site rather than deferred to
+wherever `Circle` might (or might never) actually be referenced.
+Root-module declarations (and the prelude, injected into the root) are
+visible from EVERY module with no `use` needed — a deliberate rule, not
+just backward-compatibility residue, matching the prelude's own
+already-established "always available" spirit.
+
+**`pub` is enforced**: a private item accessed from a different module
+than the one that declared it is a compile error, checked at the same
+point qualified-name resolution happens. Enforced for structs, enums,
+top-level functions/globals, and extern functions — NOT for individual
+struct fields (`is_pub` exists per-field in the AST, but nothing reads
+it yet, a separate smaller gap) or for enum variant TAGS (see below).
+
+**Known v1 scope boundary, not an accidental gap**: enum variant tags
+(`Circle`, `Some`, `None`, ...) are NOT module-qualified or `pub`-
+checked at all — they stay in the SAME flat, global, look-up-by-bare-
+tag-name-alone namespace that predates the module system entirely (a
+variant tag has never been validated against its owning enum, an
+established precedent this pass doesn't touch). Two modules each
+declaring an enum with a variant of the same tag name collide — a real,
+narrow limitation, worth fixing if it becomes a practical problem,
+folded into full variant-tag qualification the same way struct/enum
+NAMES already are, but out of scope for this v1 pass.
 
 ## FFI and C interop — Decided (v1 scope)
 

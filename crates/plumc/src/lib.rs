@@ -1,3 +1,6 @@
+mod modules;
+pub use modules::typecheck_and_run_modules;
+
 use plum_interp::{Interpreter, Value};
 use plum_ir::fbip::optimize_program;
 use plum_ir::lower::{lower_program, LoweringContext};
@@ -28,7 +31,7 @@ enum Result[T, E] { Ok(T), Err(E) }
 /// name) is now a real "already declared" error, same as redeclaring
 /// any other name — see `TypeContext::from_items`'s duplicate-name
 /// check.
-fn with_prelude(program: ast::Program) -> ast::Program {
+pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
     let prelude_tokens = Lexer::new(PRELUDE_SRC).tokenize();
     let prelude_items = Parser::new(prelude_tokens)
         .parse_program()
@@ -53,7 +56,19 @@ pub fn typecheck_and_run(src: &str, fn_name: &str, args: Vec<Value>) -> Result<V
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().map_err(|e| format!("parse error: {e}"))?;
     let program = with_prelude(program);
+    run_resolved_program(program, fn_name, args)
+}
 
+/// The shared back half of both `typecheck_and_run` (single-file, no
+/// module qualification — used exactly as before) and `modules::
+/// typecheck_and_run_modules` (which hands this a single MERGED,
+/// already-fully-qualified `ast::Program` — see that module's doc
+/// comment for how cross-module names get folded into one flat
+/// program before reaching here). Everything below this point has
+/// ALWAYS operated on a single flat `ast::Program` with no module
+/// concept of its own — that stays true; module resolution is
+/// entirely a pre-pass that happens before this function ever runs.
+pub(crate) fn run_resolved_program(program: ast::Program, fn_name: &str, args: Vec<Value>) -> Result<Value, String> {
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
     let mut infer = Infer::with_context(type_ctx);
     infer.infer_program(&program).map_err(|e| format!("type error: {e}"))?;
