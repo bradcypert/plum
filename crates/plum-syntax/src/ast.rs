@@ -43,12 +43,26 @@ pub enum Type {
         args: Vec<Type>,
         span: Span,
     },
+    // `(Int, Int) -> Int` / `() -> Int` — a function-pointer TYPE
+    // annotation, currently only meaningful as an `extern "C"`
+    // parameter's declared callback signature (see plum-ir's
+    // `ExternType::Callback`). GRAMMAR.md documents this production as
+    // `TupleOrFunctionType`; there is no separate tuple-type concept
+    // (Plum has tuple VALUES but no tuple-type annotations), so only
+    // the `-> Type`-suffixed form is ever built as `Type::Function` —
+    // see `Parser::parse_type`'s own doc comment for what a bare
+    // `(Type)` with no arrow means instead.
+    Function {
+        params: Vec<Type>,
+        ret: Box<Type>,
+        span: Span,
+    },
 }
 
 impl Type {
     pub fn span(&self) -> Span {
         match self {
-            Type::Path(_, s) | Type::Generic { span: s, .. } => *s,
+            Type::Path(_, s) | Type::Generic { span: s, .. } | Type::Function { span: s, .. } => *s,
         }
     }
 }

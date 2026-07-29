@@ -1212,8 +1212,10 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
   visible.
 - A `#[repr(C)]`-equivalent for structs that cross the boundary, since
   Plum's native structs may carry a refcount header or different field
-  ordering than C expects. **Not yet implemented** — v1 has no struct
-  params/returns at the FFI boundary at all (see the type scope below).
+  ordering than C expects. **Implemented** — see below. No dedicated
+  annotation syntax exists (Plum has no attribute/annotation grammar at
+  all yet); a struct is automatically FFI-safe if every one of its
+  fields (recursively) is Int/Float/Bool or another FFI-safe struct.
 - Callbacks: C APIs often want bare function pointers. Plum closures
   that capture an environment can't be handed to C directly without a
   trampoline. Practical answer (same as Rust): only non-capturing
@@ -1231,10 +1233,50 @@ let go () = shapes.Circle { radius: 2.0 } |> shapes.area |> print
 already valid grammar (parser support predates this feature); they now
 have real lowering, type-checking, and runtime behavior:
 
-- **Type scope**: `Int`/`Float`/`Bool` only (mapping to C `long long` /
-  `double` / `int`) — no strings, pointers, or structs yet. An extern
-  signature naming any other type is rejected with a clear error at
-  `TypeContext::from_items` time, before inference even runs.
+- **Type scope**: `Int`/`Float`/`Bool`/`CStr`/a qualifying struct
+  (mapping to C `long long` / `double` / `int` / `char*` / a real C
+  struct — see below) — no raw pointers yet. An extern signature naming
+  any other type is rejected with a clear error at `TypeContext::
+  from_items` time, before inference even runs.
+- **Strings**: explicit conversion, not implicit coercion — a Plum
+  `Str` must be converted via `.as_cstr()` before it can cross an
+  extern boundary; an ordinary `Str` value is a type error against a
+  `CStr`-typed parameter. `.as_cstr()` produces `Type::CStr`, a type
+  distinct from `Str` with no operations of its own besides being
+  produced this way and consumed by a `CStr` extern parameter/return.
+  At runtime, `.as_cstr()` (lowered to its own `ir::Expr::AsCStr` node,
+  not folded into `ExternCall`) eagerly validates the string has no
+  embedded null byte — a C string ends at the first null, so an
+  embedded one would otherwise silently truncate at the actual call
+  site instead of failing loudly where the conversion happens. A
+  `CStr`-typed return value is copied into a fresh Plum heap string;
+  the original C pointer is never freed (unknown provenance — might be
+  static, might be malloc'd) — an honest, documented v1 leak-avoidance
+  tradeoff. A null return pointer is a runtime error, not silently
+  treated as an empty string.
+- **Structs**: automatic/structural eligibility, not an explicit
+  marker — a struct qualifies as an extern parameter/return type
+  whenever every field (checked recursively) is `Int`/`Float`/`Bool` or
+  another qualifying struct. `CStr` is deliberately excluded from
+  struct fields (only valid as a function's own top-level param/return)
+  — a nested `CStr` field would need a nested owning `CString` buffer
+  kept alive through marshaling, out of v1's scope. A self-referential
+  struct (`struct Node { next: Node }` — legal ordinary Plum, since
+  every field is a heap-boxed `Value`, never inline) is rejected: a C
+  by-value layout has no notion of a field pointing back to its own
+  type, only Plum's heap-indirect model does. A generic struct is
+  rejected too (FFI boundary is monomorphic-only for now). The real
+  ABI layout (field offsets, padding, alignment, total size) is
+  computed by libffi ITSELF via `ffi_get_struct_offsets` — never
+  hand-rolled — since trusting the C library that already knows the
+  target's real ABI beats reimplementing per-platform struct-layout
+  math. A struct argument is "flattened" from Plum's heap-indirect
+  `Ctor` representation into the C ABI's inline byte layout (and the
+  reverse on return) via a small recursive marshal/unmarshal pass.
+  Verified against Rust's own (C-ABI-authoritative) `#[repr(C)]` struct
+  layout, including a deliberately padding-inducing field order, and
+  against a real libc struct-returning function (`div`/`div_t`) through
+  the full real-symbol-resolution pipeline.
 - **Calling convention**: `sqrt(2.0)` where `sqrt` names a declared
   extern function is a genuinely separate IR node (`ir::Expr::
   ExternCall`), not a special shape of the ordinary `Call` node — an
@@ -1280,6 +1322,59 @@ have real lowering, type-checking, and runtime behavior:
   PyPy/LuaJIT use), not port the Rust crate — so today's crate choice
   doesn't block that path either.
 
+- **Callbacks**: the `#[repr(C)]`-equivalent-for-structs bullet above
+  already covers structs; this is the OTHER half — passing a Plum
+  function TO C as a real function pointer. **Implemented**, with hard
+  v1 restrictions:
+  - **New grammar**: `(A, B) -> R` as a TYPE annotation (`ast::Type::
+    Function`) — documented in GRAMMAR.md since early on but never
+    actually implemented until this chunk (`ast::Type` only had `Path`/
+    `Generic`). Resolves generally (any function-typed annotation, not
+    just extern callbacks — a struct field or ordinary function param
+    typed `(Int) -> Int` now type-checks too, a side benefit of closing
+    this gap properly rather than special-casing it for extern alone).
+  - **Only a bare top-level function name**, never a closure literal or
+    a local variable, may be passed where a callback is expected —
+    checked at type-checking time by name-set membership (`Infer::
+    top_level_fns`), not real free-variable/capture analysis. A
+    top-level function is non-capturing BY CONSTRUCTION (`Interpreter::
+    call` always builds a completely fresh environment from just its
+    own params), so no analysis is needed for THAT case — proving a
+    closure literal doesn't capture anything would need real analysis
+    this v1 doesn't do, so closures are rejected outright. Known,
+    narrow gap: shadowing a top-level function's name with an unrelated
+    local binding of the SAME name isn't seen through by this check.
+  - **Callback params/return scoped to Int/Float/Bool** — no CStr,
+    struct, or nested callback. A `void` callback return is spelled
+    `-> Unit`. A callback TYPE is rejected as an extern function's own
+    RETURN type (calling a C-supplied function pointer FROM Plum isn't
+    implemented — only the reverse direction).
+  - **Sound only for a C function that invokes the callback
+    SYNCHRONOUSLY, during the call** — never one that stores the
+    pointer for later (a signal handler, an event-loop registration).
+    The generated trampoline's backing state (a `libffi::middle::
+    Closure` + a `Box`-heap-allocated userdata struct holding a raw
+    `*mut Interpreter`) only lives as long as the ONE `ExternCall` that
+    created it; nothing enforces this from Rust's side, it's a hard
+    invariant callers must uphold.
+  - **Mechanism**: `libffi::middle::Closure` generates the real C
+    function pointer; its callback fires a trampoline that reborrows
+    the raw `*mut Interpreter` as `&mut Interpreter` and calls
+    `Interpreter::call(fn_name, args)` — sound only because the outer
+    `ExternCall` is BLOCKED inside the C call for the whole duration
+    (never touching `self` concurrently), the one unsafe assumption
+    this whole feature rests on. A Plum-side error OR a caught Rust
+    panic (via `catch_unwind` — a panic must never unwind through the C
+    call frame, that's undefined behavior) is recorded in the userdata
+    rather than returned directly (a C function pointer has no error
+    channel) and checked immediately after the outer call returns,
+    taking precedence over whatever value that call produced.
+  - Verified against a real reentrant round-trip (a Rust `extern "C"
+    fn` invoking a Plum `add` function as a callback and getting the
+    correct summed result back), a Bool-typed callback return, and
+    callback-side error propagation surfacing as the outer call's own
+    error.
+
 **Self-hosting-viability is now a standing dependency-choice policy**:
 before adding any new external Rust crate, ask whether it would paint a
 future self-hosted Plum compiler/tooling into a corner. If a crate is
@@ -1290,15 +1385,23 @@ the same problem differently — the crate just stops being relevant. A
 crate whose specific *API shape* leaks into `plum-ir`/`plum-types`/the
 AST is the actual risk to avoid, not "used an external crate at all."
 
-Tests added at every layer: plum-ir (lowering + FBIP passthrough for the
-new `ExternCall` node), plum-types (unsafe-gating accept/reject,
-unsupported-type rejection, extern/global name collision, void-return-
-is-Unit), plum-interp (real `sqrt`/`abs` calls through actual libffi,
-unresolvable-symbol load error, argument-count runtime error, full
-lower-and-run pipeline), plumc (full gated pipeline, both accepting
-`unsafe`-wrapped calls and rejecting unwrapped ones before the
-interpreter ever runs). Workspace is now 1084 tests, clean build, zero
-warnings.
+Tests added at every layer across the whole FFI/unsafe effort (base
+extern/unsafe support, then strings, structs, and callbacks as three
+follow-on chunks): plum-syntax (the new `(A, B) -> R` type grammar,
+including the plain-grouping and rejected-multi-type-without-arrow
+cases), plum-ir (lowering + FBIP passthrough for every new node,
+recursive struct/callback type resolution including the self-
+referential-struct and nested-callback rejection cases), plum-types
+(unsafe-gating accept/reject, every unsupported-type rejection,
+extern/global name collision, void-return-is-Unit, the callback-
+argument bare-top-level-function-only restriction), plum-interp (real
+`sqrt`/`abs`/`strlen` calls through actual libffi, a real reentrant
+callback round-trip verified against a Rust `extern "C" fn` standing in
+for a C caller, real ABI struct layout verified against Rust's own
+`#[repr(C)]` — including a deliberately padding-inducing field order —
+and against real libc `div`/`div_t`), plumc (full gated pipeline, both
+accepting and rejecting cases for every sub-feature). Workspace is now
+1139 tests, clean build, zero warnings.
 
 ## Target platforms
 

@@ -11,6 +11,7 @@ pub fn unify(a: &Type, b: &Type) -> Result<Subst, String> {
         | (Type::Float, Type::Float)
         | (Type::Bool, Type::Bool)
         | (Type::Str, Type::Str)
+        | (Type::CStr, Type::CStr)
         | (Type::Unit, Type::Unit)
         | (Type::Range, Type::Range) => Ok(Subst::empty()),
 

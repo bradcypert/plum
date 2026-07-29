@@ -130,12 +130,18 @@ GenericArgs ::= "[" Type { "," Type } "]"
 TupleOrFunctionType ::= "(" [ Type { "," Type } [ "," ] ] ")" [ "->" Type ]
 ```
 
-`TupleOrFunctionType` covers three cases by what follows the closing
-paren and what's inside: `(Int)` is just `Int` (grouping, not a tuple —
-matches the value-level rule), `(Int,)` is a one-element tuple type,
-`(Int, Float)` is a two-element tuple type, and any of those followed by
-`"->" Type` is a function type (e.g. `(Int, Int) -> Int`), used for
-explicitly annotating a parameter that itself takes a closure.
+`TupleOrFunctionType` is implemented for two of its three
+possibilities: `(Int)` is just `Int` (grouping, not a tuple — matches
+the value-level rule), and any parenthesized list followed by
+`"-> Type"` is a function type (e.g. `(Int, Int) -> Int`, `() -> Int`),
+used for explicitly annotating a parameter that itself takes a closure
+— this is what `extern "C"` callback parameters are declared with (see
+DESIGN.md's "FFI and C interop" section). A tuple TYPE annotation
+(`(Int, Float)` or `(Int,)` with no `->`) is NOT implemented — Plum has
+tuple VALUES but no tuple-type annotation syntax yet; `Parser::
+parse_type` rejects a parenthesized list of 0 or 2+ types with no
+trailing arrow as an error, rather than silently treating it as
+something it isn't.
 
 ## Expressions
 

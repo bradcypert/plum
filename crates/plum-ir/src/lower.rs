@@ -54,6 +54,14 @@ pub struct LoweringContext {
     // "shape-detected, not a real grammar production" precedent as
     // `variants`.
     extern_fns: HashMap<String, ir::ExternFn>,
+    // A struct's field types, in DECLARATION order — a separate table
+    // from `struct_fields` (which only ever needed NAMES, for literal
+    // field-order resolution). Needed ONLY for resolving a struct-typed
+    // extern parameter/return recursively (does every field resolve to
+    // an FFI-safe type?) — see `resolve_extern_type`'s doc comment. No
+    // other lowering path needs a struct's field TYPES at all, which is
+    // why this wasn't already part of `struct_fields`.
+    struct_field_types: HashMap<String, Vec<ast::Type>>,
 }
 
 impl LoweringContext {
@@ -64,6 +72,7 @@ impl LoweringContext {
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
             extern_fns: HashMap::new(),
+            struct_field_types: HashMap::new(),
         }
     }
 
@@ -83,17 +92,32 @@ impl LoweringContext {
 
     pub fn from_items(items: &[ast::Item]) -> Self {
         let mut ctx = Self::new();
+        // Pass 1: struct/enum names, fields, and field TYPES — done
+        // first and unconditionally, since Pass 2's extern-signature
+        // resolution (specifically the struct-FFI-safety check) needs
+        // every struct's field types already known, regardless of
+        // declaration order relative to the `extern` block that uses
+        // one.
         for item in items {
             match &item.kind {
                 ast::ItemKind::Struct(decl) => {
                     let fields = decl.fields.iter().map(|f| f.name.clone()).collect();
                     ctx.struct_fields.insert(decl.name.clone(), fields);
+                    let field_types = decl.fields.iter().map(|f| f.ty.clone()).collect();
+                    ctx.struct_field_types.insert(decl.name.clone(), field_types);
                 }
                 ast::ItemKind::Enum(decl) => {
                     for variant in &decl.variants {
                         ctx.variants.insert(variant.name.clone(), variant.payload.len());
                     }
                 }
+                _ => {}
+            }
+        }
+        // Pass 2: extern blocks, now that every struct's field types are
+        // known.
+        for item in items {
+            match &item.kind {
                 ast::ItemKind::Extern(block) => {
                     for f in &block.fns {
                         // Resolution errors (an unsupported param/return
@@ -103,7 +127,7 @@ impl LoweringContext {
                         // tables, it never returns `Result`, so a bad
                         // type here is silently skipped rather than
                         // reported twice.
-                        if let Ok(extern_fn) = resolve_extern_fn(f) {
+                        if let Ok(extern_fn) = resolve_extern_fn(f, &ctx) {
                             ctx.extern_fns.insert(f.name.clone(), extern_fn);
                         }
                     }
@@ -115,30 +139,122 @@ impl LoweringContext {
     }
 }
 
-// `Int`/`Float`/`Bool` only for v1 (see ir.rs's `ExternType` doc
-// comment) — anything else, including an unrecognized path or a
-// generic type, is rejected with a clear error rather than silently
-// guessed at.
-fn resolve_extern_type(ty: &ast::Type) -> Result<ir::ExternType, String> {
-    match ty {
-        ast::Type::Path(segments, span) if segments.len() == 1 => match segments[0].as_str() {
-            "Int" => Ok(ir::ExternType::Int),
-            "Float" => Ok(ir::ExternType::Float),
-            "Bool" => Ok(ir::ExternType::Bool),
-            other => Err(format!(
-                "extern functions only support Int, Float, or Bool types, found {other:?} at {span:?}"
-            )),
-        },
-        other => Err(format!(
-            "extern functions only support Int, Float, or Bool types, found {other:?} at {:?}",
-            other.span()
+// `Int`/`Float`/`Bool`/`CStr`, or a struct made ENTIRELY (recursively)
+// of those types — see ir.rs's `ExternType` doc comment. Anything else,
+// including an unrecognized path, a generic type, an enum, or a
+// self-referential struct, is rejected with a clear error rather than
+// silently guessed at. `in_progress` is the self-reference guard: a
+// struct field can never point back to a struct already being
+// resolved higher up this same recursive call chain — without this,
+// `struct Node { next: Node }` (perfectly legal ordinary Plum, since
+// every field is a heap `Value` indirection, never inline) would
+// recurse forever trying to flatten an infinitely-nested C layout.
+fn resolve_extern_type(ty: &ast::Type, ctx: &LoweringContext) -> Result<ir::ExternType, String> {
+    resolve_extern_type_inner(ty, ctx, true, true, &mut std::collections::HashSet::new())
+}
+
+// `allow_cstr` is `true` only for a function's OWN param/return type,
+// never while recursing into a struct's fields — a `CStr` field inside
+// a by-value C struct would mean keeping a nested owning `CString`
+// buffer alive for the duration of a call nested inside another
+// marshaling step, which `plum-interp`'s marshaling code doesn't
+// support (a struct field is scoped to Int/Float/Bool/nested-struct
+// only). This mirrors `plum-types::context::check_ffi_safe`'s
+// identical, independently-duplicated restriction.
+// `allow_callback` is `true` only for a function's OWN param/return
+// type, never while recursing into a struct's fields OR a callback's
+// OWN params/return — no nested callbacks (a callback param/return is
+// scoped to Int/Float/Bool only, same narrow set as a struct field, for
+// the same "keep marshaling tractable" reason).
+fn resolve_extern_type_inner(
+    ty: &ast::Type,
+    ctx: &LoweringContext,
+    allow_cstr: bool,
+    allow_callback: bool,
+    in_progress: &mut std::collections::HashSet<String>,
+) -> Result<ir::ExternType, String> {
+    if let ast::Type::Function { params, ret, span } = ty {
+        if !allow_callback {
+            return Err(format!(
+                "a callback type is only supported as a top-level extern parameter, not nested inside a \
+                 struct field or another callback, at {span:?}"
+            ));
+        }
+        let param_types = params
+            .iter()
+            .map(|p| resolve_extern_type_inner(p, ctx, false, false, in_progress))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret_type = match ret.as_ref() {
+            ast::Type::Path(segments, _) if segments.len() == 1 && segments[0] == "Unit" => None,
+            other => Some(Box::new(resolve_extern_type_inner(other, ctx, false, false, in_progress)?)),
+        };
+        return Ok(ir::ExternType::Callback {
+            params: param_types,
+            ret: ret_type,
+        });
+    }
+    let ast::Type::Path(segments, span) = ty else {
+        return Err(format!(
+            "extern functions only support Int, Float, Bool, CStr, or a struct made entirely of those \
+             types, found {ty:?} at {:?}",
+            ty.span()
+        ));
+    };
+    if segments.len() != 1 {
+        return Err(format!(
+            "extern functions only support Int, Float, Bool, CStr, or a struct made entirely of those \
+             types, found {ty:?} at {span:?}"
+        ));
+    }
+    match segments[0].as_str() {
+        "Int" => Ok(ir::ExternType::Int),
+        "Float" => Ok(ir::ExternType::Float),
+        "Bool" => Ok(ir::ExternType::Bool),
+        "CStr" if allow_cstr => Ok(ir::ExternType::Str),
+        "CStr" => Err(format!(
+            "CStr is only supported as a top-level extern parameter/return type, not inside a struct \
+             field, at {span:?}"
         )),
+        name => {
+            let Some(field_types) = ctx.struct_field_types.get(name) else {
+                return Err(format!(
+                    "extern functions only support Int, Float, Bool, CStr, or a struct made entirely of \
+                     those types, found {name:?} at {span:?}"
+                ));
+            };
+            if !in_progress.insert(name.to_string()) {
+                return Err(format!(
+                    "extern struct type {name:?} is self-referential, which isn't FFI-safe (at {span:?})"
+                ));
+            }
+            let resolved = field_types
+                .iter()
+                .map(|t| resolve_extern_type_inner(t, ctx, false, false, in_progress))
+                .collect::<Result<Vec<_>, _>>();
+            in_progress.remove(name);
+            Ok(ir::ExternType::Struct(name.to_string(), resolved?))
+        }
     }
 }
 
-fn resolve_extern_fn(f: &ast::ExternFn) -> Result<ir::ExternFn, String> {
-    let param_types = f.params.iter().map(|p| resolve_extern_type(&p.ty)).collect::<Result<_, _>>()?;
-    let ret_type = f.ret_ty.as_ref().map(resolve_extern_type).transpose()?;
+fn resolve_extern_fn(f: &ast::ExternFn, ctx: &LoweringContext) -> Result<ir::ExternFn, String> {
+    let param_types = f
+        .params
+        .iter()
+        .map(|p| resolve_extern_type(&p.ty, ctx))
+        .collect::<Result<_, _>>()?;
+    let ret_type = f.ret_ty.as_ref().map(|t| resolve_extern_type(t, ctx)).transpose()?;
+    // Calling a C-supplied function pointer FROM Plum isn't
+    // implemented — a callback type is only meaningful as a PARAMETER
+    // (Plum passing a function TO C), matching `plum-types`'
+    // independently-duplicated identical restriction.
+    if matches!(ret_type, Some(ir::ExternType::Callback { .. })) {
+        return Err(format!(
+            "extern function {:?}: a callback type is only supported as a parameter, not a return type \
+             (calling a C-supplied function pointer isn't implemented)",
+            f.name
+        ));
+    }
     Ok(ir::ExternFn {
         name: f.name.clone(),
         param_types,
@@ -170,7 +286,7 @@ pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir
     for item in &program.items {
         if let ast::ItemKind::Extern(block) = &item.kind {
             for f in &block.fns {
-                externs.push(resolve_extern_fn(f)?);
+                externs.push(resolve_extern_fn(f, ctx)?);
             }
         }
     }
@@ -751,6 +867,15 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
             Ok(ir::Expr::StrRunes {
                 base: Box::new(lower_expr(base, ctx)?),
             })
+        }
+        // `s.as_cstr()` — same shape-only precedent, zero args.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "as_cstr") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::AsCStr(Box::new(lower_expr(base, ctx)?)))
         }
         // `s.trim()` — same shape-only precedent, zero args.
         ast::Expr::Call { callee, args, .. }
@@ -4119,5 +4244,182 @@ mod tests {
         // yet, nested or not).
         let ctx = context_from_program("struct Point { x: Int, y: Int }");
         lower_with_err("match p { Point { x: 1 | 2, y } => y }", &ctx);
+    }
+
+    // --- extern "C" / .as_cstr() ---
+
+    #[test]
+    fn extern_call_lowers_to_an_extern_call_node_not_an_ordinary_call() {
+        let ctx = context_from_program("extern \"C\" { fn sqrt(x: Float) -> Float; }");
+        assert_eq!(
+            lower_with("sqrt(2.0)", &ctx),
+            ir::Expr::ExternCall {
+                name: "sqrt".to_string(),
+                args: vec![ir::Expr::Float(2.0)],
+            }
+        );
+    }
+
+    #[test]
+    fn extern_block_populates_program_externs() {
+        let program = lower_program("extern \"C\" { fn sqrt(x: Float) -> Float; fn abs(n: Int) -> Int; }");
+        assert_eq!(
+            program.externs,
+            vec![
+                ir::ExternFn {
+                    name: "sqrt".to_string(),
+                    param_types: vec![ir::ExternType::Float],
+                    ret_type: Some(ir::ExternType::Float),
+                },
+                ir::ExternFn {
+                    name: "abs".to_string(),
+                    param_types: vec![ir::ExternType::Int],
+                    ret_type: Some(ir::ExternType::Int),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn extern_fn_with_a_void_return_has_no_ret_type() {
+        let program = lower_program("extern \"C\" { fn srand(seed: Int); }");
+        assert_eq!(program.externs[0].ret_type, None);
+    }
+
+    #[test]
+    fn extern_fn_with_an_unsupported_param_type_is_a_lowering_error() {
+        let err = lower_program_err("extern \"C\" { fn foo(x: Bool2) -> Int; }");
+        assert!(err.contains("Int, Float, Bool, CStr"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn cstr_is_a_supported_extern_type() {
+        let program = lower_program("extern \"C\" { fn strlen(s: CStr) -> Int; }");
+        assert_eq!(program.externs[0].param_types, vec![ir::ExternType::Str]);
+    }
+
+    #[test]
+    fn a_struct_of_ffi_safe_fields_is_a_supported_extern_type() {
+        let program =
+            lower_program("struct Point { x: Int, y: Float } extern \"C\" { fn make_point(x: Int, y: Float) -> Point; }");
+        assert_eq!(
+            program.externs[0].ret_type,
+            Some(ir::ExternType::Struct(
+                "Point".to_string(),
+                vec![ir::ExternType::Int, ir::ExternType::Float]
+            ))
+        );
+    }
+
+    #[test]
+    fn a_nested_ffi_safe_struct_resolves_recursively() {
+        let program = lower_program(
+            "struct Inner { a: Int } struct Outer { inner: Inner, b: Int } \
+             extern \"C\" { fn foo(o: Outer) -> Int; }",
+        );
+        assert_eq!(
+            program.externs[0].param_types,
+            vec![ir::ExternType::Struct(
+                "Outer".to_string(),
+                vec![
+                    ir::ExternType::Struct("Inner".to_string(), vec![ir::ExternType::Int]),
+                    ir::ExternType::Int
+                ]
+            )]
+        );
+    }
+
+    #[test]
+    fn a_self_referential_struct_is_rejected_as_an_extern_type() {
+        let err = lower_program_err("struct Node { next: Node } extern \"C\" { fn foo(n: Node) -> Int; }");
+        assert!(err.contains("self-referential"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_struct_with_an_unsupported_field_type_is_rejected_as_an_extern_type() {
+        let err = lower_program_err(
+            "enum Color { Red } struct Shape { color: Color } extern \"C\" { fn foo(s: Shape) -> Int; }",
+        );
+        assert!(err.contains("Int, Float, Bool, CStr"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_cstr_field_inside_a_struct_is_rejected_as_an_extern_type() {
+        // Unlike `plum-types` (which rejects `struct Labeled { label:
+        // CStr }` outright, since `CStr` isn't a resolvable ordinary
+        // field annotation at all — see the matching `plum-types`
+        // test), `lower.rs`'s `LoweringContext` stores a struct's field
+        // types UNRESOLVED (raw `ast::Type`s — see `struct_field_types`'
+        // doc comment), so it only rejects `CStr`-as-a-field lazily,
+        // the moment something actually tries to resolve it as an
+        // extern type — exercised here directly, independent of
+        // `plum-types` having already caught it first.
+        let err = lower_program_err("struct Labeled { label: CStr } extern \"C\" { fn foo(l: Labeled) -> Int; }");
+        assert!(err.contains("top-level"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_callback_type_resolves_to_extern_type_callback() {
+        let program = lower_program("extern \"C\" { fn call_with_10_and_20(f: (Int, Int) -> Int) -> Int; }");
+        assert_eq!(
+            program.externs[0].param_types,
+            vec![ir::ExternType::Callback {
+                params: vec![ir::ExternType::Int, ir::ExternType::Int],
+                ret: Some(Box::new(ir::ExternType::Int)),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_void_callback_resolves_to_no_ret_type() {
+        let program = lower_program("extern \"C\" { fn foo(f: () -> Unit) -> Int; }");
+        assert_eq!(
+            program.externs[0].param_types,
+            vec![ir::ExternType::Callback { params: vec![], ret: None }]
+        );
+    }
+
+    #[test]
+    fn a_callback_return_type_is_rejected() {
+        let err = lower_program_err("extern \"C\" { fn foo() -> (Int) -> Int; }");
+        assert!(err.contains("return type"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_nested_callback_type_is_rejected() {
+        let err = lower_program_err("extern \"C\" { fn foo(f: ((Int) -> Int) -> Int) -> Int; }");
+        assert!(err.contains("nested"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extern_call_with_a_bare_function_callback_argument_lowers_correctly() {
+        let ctx = context_from_program("extern \"C\" { fn call_with_10_and_20(f: (Int, Int) -> Int) -> Int; }");
+        assert_eq!(
+            lower_with("call_with_10_and_20(add)", &ctx),
+            ir::Expr::ExternCall {
+                name: "call_with_10_and_20".to_string(),
+                args: vec![ir::Expr::Var("add".to_string())],
+            }
+        );
+    }
+
+    #[test]
+    fn as_cstr_lowers_to_its_own_node() {
+        assert_eq!(
+            lower("\"hi\".as_cstr()"),
+            ir::Expr::AsCStr(Box::new(ir::Expr::Str("hi".to_string())))
+        );
+    }
+
+    #[test]
+    fn extern_call_with_an_as_cstr_argument_lowers_correctly() {
+        let ctx = context_from_program("extern \"C\" { fn strlen(s: CStr) -> Int; }");
+        assert_eq!(
+            lower_with("strlen(\"hi\".as_cstr())", &ctx),
+            ir::Expr::ExternCall {
+                name: "strlen".to_string(),
+                args: vec![ir::Expr::AsCStr(Box::new(ir::Expr::Str("hi".to_string())))],
+            }
+        );
     }
 }

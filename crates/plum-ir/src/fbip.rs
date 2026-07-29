@@ -61,6 +61,7 @@ pub fn mark_reuse(expr: Expr) -> Expr {
     match expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) => expr,
         Expr::Unary(op, e) => Expr::Unary(op, Box::new(mark_reuse(*e))),
+        Expr::AsCStr(e) => Expr::AsCStr(Box::new(mark_reuse(*e))),
         Expr::Binary(op, l, r) => Expr::Binary(op, Box::new(mark_reuse(*l)), Box::new(mark_reuse(*r))),
         Expr::Let { name, value, body } => Expr::Let {
             name,
@@ -347,6 +348,7 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
     match expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) => expr,
         Expr::Unary(op, e) => Expr::Unary(op, Box::new(transform(*e, known_heap))),
+        Expr::AsCStr(e) => Expr::AsCStr(Box::new(transform(*e, known_heap))),
         Expr::Binary(op, l, r) => Expr::Binary(
             op,
             Box::new(transform(*l, known_heap)),
@@ -611,6 +613,7 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::Var(n) => n == name,
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit => false,
         Expr::Unary(_, e) => expr_mentions_var(e, name),
+        Expr::AsCStr(e) => expr_mentions_var(e, name),
         Expr::Binary(_, l, r) => expr_mentions_var(l, name) || expr_mentions_var(r, name),
         Expr::Let { value, body, .. } => expr_mentions_var(value, name) || expr_mentions_var(body, name),
         Expr::If {
@@ -739,6 +742,10 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
         Expr::Unary(op, e) => {
             let (e_t, used) = mark_last_uses(*e, name, live_after);
             (Expr::Unary(op, Box::new(e_t)), used)
+        }
+        Expr::AsCStr(e) => {
+            let (e_t, used) = mark_last_uses(*e, name, live_after);
+            (Expr::AsCStr(Box::new(e_t)), used)
         }
         Expr::Binary(op, l, r) => {
             // Evaluation order is l-then-r, so process backward: r

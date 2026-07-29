@@ -115,20 +115,6 @@ impl TypeContext {
                     let bounds = decl.generics.iter().map(|g| g.bound.clone()).collect();
                     ctx.generic_bounds.insert(decl.name.clone(), bounds);
                 }
-                ast::ItemKind::Extern(block) => {
-                    for f in &block.fns {
-                        let param_types = f
-                            .params
-                            .iter()
-                            .map(|p| extern_ast_type_to_type(&p.ty))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        let ret_type = match &f.ret_ty {
-                            Some(t) => extern_ast_type_to_type(t)?,
-                            None => Type::Unit,
-                        };
-                        ctx.extern_fns.insert(f.name.clone(), (param_types, ret_type));
-                    }
-                }
                 _ => {}
             }
         }
@@ -166,6 +152,40 @@ impl TypeContext {
                     ctx.enum_variant_tags.insert(decl.name.clone(), tags);
                 }
                 _ => {}
+            }
+        }
+
+        // Phase 3: extern blocks, now that every struct's field TYPES
+        // (not just names) are resolved — needed for the struct-FFI-
+        // safety check (does every field resolve to Int/Float/Bool/
+        // CStr, or another FFI-safe struct?), which Phase 1 couldn't
+        // do yet.
+        for item in items {
+            if let ast::ItemKind::Extern(block) = &item.kind {
+                for f in &block.fns {
+                    let param_types = f
+                        .params
+                        .iter()
+                        .map(|p| extern_ast_type_to_type(&p.ty, &ctx))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let ret_type = match &f.ret_ty {
+                        Some(t) => extern_ast_type_to_type(t, &ctx)?,
+                        None => Type::Unit,
+                    };
+                    // Calling a C-supplied function pointer FROM Plum
+                    // (as opposed to passing a Plum function TO C,
+                    // which the `Callback` case above supports) isn't
+                    // implemented — a callback type is only meaningful
+                    // as a PARAMETER.
+                    if matches!(ret_type, Type::Function(..)) {
+                        return Err(format!(
+                            "extern function {:?}: a callback type is only supported as a parameter, not a \
+                             return type (calling a C-supplied function pointer isn't implemented)",
+                            f.name
+                        ));
+                    }
+                    ctx.extern_fns.insert(f.name.clone(), (param_types, ret_type));
+                }
             }
         }
         Ok(ctx)
@@ -218,25 +238,92 @@ impl TypeContext {
     }
 }
 
-// `Int`/`Float`/`Bool` only for v1 (see `ir::ExternType`'s doc comment
-// in plum-ir — this mirrors that same narrow scope at the type level).
-// Deliberately NOT `ast_type_to_type` itself: that function resolves
-// struct/enum/generic references too, none of which make sense as a C
-// ABI type, so a bad extern signature gets its own clear error instead
-// of silently going through a resolution path built for something else.
-fn extern_ast_type_to_type(ty: &ast::Type) -> Result<Type, String> {
+// `Int`/`Float`/`Bool`/`CStr`, or a struct made ENTIRELY (recursively)
+// of those types (see `ir::ExternType`'s doc comment in plum-ir — this
+// mirrors that same scope at the type level, independently — same "no
+// shared representation between crates" precedent as everywhere else).
+// `CStr` is special-cased BEFORE delegating to `ast_type_to_type`: it's
+// only ever meaningful in an extern signature (produced by `.as_cstr()`
+// alone, never a real Plum type annotation elsewhere), so it isn't
+// something the general resolver knows about. Everything else —
+// including struct/enum names — DOES go through `ast_type_to_type`
+// (the same resolver struct/enum fields use), reusing its name
+// resolution rather than re-implementing it, with `check_ffi_safe`
+// afterward rejecting whatever isn't actually FFI-safe.
+fn extern_ast_type_to_type(ty: &ast::Type, ctx: &TypeContext) -> Result<Type, String> {
+    if let ast::Type::Path(segments, _) = ty {
+        if segments.len() == 1 && segments[0] == "CStr" {
+            return Ok(Type::CStr);
+        }
+    }
+    let resolved = ast_type_to_type(ty, ctx, &[])?;
+    check_ffi_safe(&resolved, ctx, true, true, &mut HashSet::new())
+        .map_err(|e| format!("{e} (at {:?})", ty.span()))?;
+    Ok(resolved)
+}
+
+// See `extern_ast_type_to_type`'s doc comment. `in_progress` guards
+// against a self-referential struct (`struct Node { next: Node }` —
+// perfectly legal ordinary Plum, since every field is a heap-boxed
+// `Value`, never inline) recursing forever trying to prove something
+// that, for a C by-value layout, can never be true: an infinite type
+// has no finite size. `allow_cstr`/`allow_callback` are `true` only at
+// the top level (a function's OWN param/return type) — never while
+// recursing into a struct's fields or a callback's OWN params/return,
+// matching `lower.rs`'s identical, independently-duplicated
+// restrictions (a nested `CStr` field would need a nested owning
+// `CString` buffer kept alive through marshaling; a nested callback
+// has no realistic C ABI use case worth the added complexity — both
+// out of `plum-interp`'s v1 scope).
+fn check_ffi_safe(
+    ty: &Type,
+    ctx: &TypeContext,
+    allow_cstr: bool,
+    allow_callback: bool,
+    in_progress: &mut HashSet<String>,
+) -> Result<(), String> {
     match ty {
-        ast::Type::Path(segments, span) if segments.len() == 1 => match segments[0].as_str() {
-            "Int" => Ok(Type::Int),
-            "Float" => Ok(Type::Float),
-            "Bool" => Ok(Type::Bool),
-            other => Err(format!(
-                "extern functions only support Int, Float, or Bool types, found {other:?} at {span:?}"
-            )),
-        },
+        Type::Int | Type::Float | Type::Bool => Ok(()),
+        Type::CStr if allow_cstr => Ok(()),
+        Type::CStr => Err("CStr is only supported as a top-level extern parameter/return type, not inside \
+             a struct field"
+            .to_string()),
+        Type::Function(params, ret) if allow_callback => {
+            for p in params {
+                check_ffi_safe(p, ctx, false, false, in_progress)
+                    .map_err(|e| format!("callback parameter: {e}"))?;
+            }
+            // `Unit` (`-> Unit`) is the callback's spelling of "void",
+            // mirroring `lower.rs`'s identical special case — not
+            // itself an FFI-safe SCALAR type, but valid specifically in
+            // a callback's own return position.
+            if matches!(ret.as_ref(), Type::Unit) {
+                return Ok(());
+            }
+            check_ffi_safe(ret, ctx, false, false, in_progress).map_err(|e| format!("callback return: {e}"))
+        }
+        Type::Function(..) => Err(
+            "a callback type is only supported as a top-level extern parameter, not nested inside a struct \
+             field or another callback"
+                .to_string(),
+        ),
+        Type::Struct(name, args) if args.is_empty() => {
+            if !in_progress.insert(name.clone()) {
+                return Err(format!("extern struct type {name:?} is self-referential, which isn't FFI-safe"));
+            }
+            let fields = ctx
+                .struct_fields(name)
+                .ok_or_else(|| format!("internal error: extern struct type {name:?} not in context"))?;
+            for (_, field_ty) in fields {
+                check_ffi_safe(field_ty, ctx, false, false, in_progress)
+                    .map_err(|e| format!("extern struct type {name:?}: {e}"))?;
+            }
+            in_progress.remove(name);
+            Ok(())
+        }
         other => Err(format!(
-            "extern functions only support Int, Float, or Bool types, found {other:?} at {:?}",
-            other.span()
+            "extern functions only support Int, Float, Bool, CStr, a callback type, or a struct made \
+             entirely of those types, found {other:?}"
         )),
     }
 }

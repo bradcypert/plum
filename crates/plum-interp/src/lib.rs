@@ -211,14 +211,264 @@ struct ExternFnHandle {
     ret_type: Option<ExternType>,
 }
 
-fn extern_type_to_ffi(ty: ExternType) -> libffi::middle::Type {
+fn extern_type_to_ffi(ty: &ExternType) -> libffi::middle::Type {
     match ty {
         // C `long long` / `double` / `int` — see `ir::ExternType`'s doc
         // comment for why v1 stops at this narrow, fixed-width set.
         ExternType::Int => libffi::middle::Type::i64(),
         ExternType::Float => libffi::middle::Type::f64(),
         ExternType::Bool => libffi::middle::Type::i32(),
+        // `char*` — see `ir::ExternType::Str`'s doc comment. The CIF
+        // only needs to know it's pointer-sized; the actual bytes are
+        // marshalled at call time (see `Expr::ExternCall`'s eval case).
+        ExternType::Str => libffi::middle::Type::pointer(),
+        // A C struct passed/returned BY VALUE — `libffi` computes its
+        // real ABI size/alignment/layout from this field-type list
+        // (recursively, for a nested struct field) the moment it's
+        // used to build a `Cif` or handed to `ffi_get_struct_offsets`
+        // (see `struct_layout`) — nothing here needs to duplicate that
+        // math.
+        ExternType::Struct(_, fields) => libffi::middle::Type::structure(fields.iter().map(extern_type_to_ffi)),
+        // A C function pointer — a plain pointer at the ABI level, same
+        // as `Str`; the actual trampoline is built at call time (see
+        // `Interpreter::make_callback_trampoline`).
+        ExternType::Callback { .. } => libffi::middle::Type::pointer(),
     }
+}
+
+// The real, ABI-authoritative byte layout of a C struct made of
+// `field_types`, computed by libffi itself (via the C library's own
+// `ffi_get_struct_offsets`) rather than hand-rolled — natural alignment
+// padding/offset rules are exactly the kind of thing worth trusting the
+// C library that already knows the target's real ABI over, rather than
+// reimplementing per-platform. Needed fresh each time (not cached on
+// `ExternFnHandle`) since `libffi::middle::Type` isn't cheaply
+// reusable across separate marshaling calls.
+struct StructLayout {
+    size: usize,
+    field_offsets: Vec<usize>,
+}
+
+fn struct_layout(field_types: &[ExternType]) -> StructLayout {
+    let ffi_type = libffi::middle::Type::structure(field_types.iter().map(extern_type_to_ffi));
+    let mut field_offsets = vec![0usize; field_types.len()];
+    let raw = ffi_type.as_raw_ptr();
+    // SAFETY: `ffi_get_struct_offsets` both lays the type out (setting
+    // its `.size`) and fills `field_offsets`, one entry per field, per
+    // libffi's own documented contract for this function.
+    unsafe {
+        libffi::raw::ffi_get_struct_offsets(libffi::low::ffi_abi_FFI_DEFAULT_ABI, raw, field_offsets.as_mut_ptr());
+    }
+    let size = unsafe { (*raw).size };
+    StructLayout { size, field_offsets }
+}
+
+// Writes `v` (expected to match `ty`) into `buf` starting at `offset` —
+// the argument-marshaling half of struct-by-value support. A nested
+// struct field is Plum's own heap-indirect `Ctor` (see `ir::ExternType::
+// Struct`'s doc comment: Plum never stores a struct field inline the
+// way a C struct does), so this recurses through `heap.read` to
+// "flatten" it into the C ABI's inline layout.
+fn write_value_into_buffer(
+    heap: &heap::Heap,
+    v: &Value,
+    ty: &ExternType,
+    buf: &mut [u8],
+    offset: usize,
+    name: &str,
+) -> Result<(), String> {
+    match (v, ty) {
+        (Value::Int(n), ExternType::Int) => {
+            buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
+            Ok(())
+        }
+        (Value::Float(f), ExternType::Float) => {
+            buf[offset..offset + 8].copy_from_slice(&f.to_ne_bytes());
+            Ok(())
+        }
+        (Value::Bool(b), ExternType::Bool) => {
+            let n: i32 = if *b { 1 } else { 0 };
+            buf[offset..offset + 4].copy_from_slice(&n.to_ne_bytes());
+            Ok(())
+        }
+        (Value::HeapRef(addr), ExternType::Struct(sname, field_types)) => {
+            let (_tag, fields) = heap.read(*addr)?;
+            if fields.len() != field_types.len() {
+                return Err(format!(
+                    "{name}: struct {sname:?} argument has {} field(s), expected {}",
+                    fields.len(),
+                    field_types.len()
+                ));
+            }
+            let fields = fields.to_vec();
+            let layout = struct_layout(field_types);
+            for (i, (field_val, field_ty)) in fields.iter().zip(field_types).enumerate() {
+                write_value_into_buffer(heap, field_val, field_ty, buf, offset + layout.field_offsets[i], name)?;
+            }
+            Ok(())
+        }
+        (other, ty) => Err(format!("{name}: argument {other:?} does not match declared type {ty:?}")),
+    }
+}
+
+// The inverse of `write_value_into_buffer` — reads a value matching
+// `ty` back out of `buf` at `offset`, allocating a fresh Plum `Ctor`
+// for a nested struct field (see `write_value_into_buffer`'s doc
+// comment on the inline-vs-heap-indirect mismatch this bridges).
+fn read_value_from_buffer(heap: &mut heap::Heap, buf: &[u8], offset: usize, ty: &ExternType) -> Value {
+    match ty {
+        ExternType::Int => Value::Int(i64::from_ne_bytes(buf[offset..offset + 8].try_into().unwrap())),
+        ExternType::Float => Value::Float(f64::from_ne_bytes(buf[offset..offset + 8].try_into().unwrap())),
+        ExternType::Bool => Value::Bool(i32::from_ne_bytes(buf[offset..offset + 4].try_into().unwrap()) != 0),
+        ExternType::Str => unreachable!("CStr is rejected as a struct field type before this point"),
+        ExternType::Callback { .. } => {
+            unreachable!("a callback type is rejected as a struct field/return type before this point")
+        }
+        ExternType::Struct(name, field_types) => {
+            let layout = struct_layout(field_types);
+            let fields: Vec<Value> = field_types
+                .iter()
+                .enumerate()
+                .map(|(i, field_ty)| read_value_from_buffer(heap, buf, offset + layout.field_offsets[i], field_ty))
+                .collect();
+            Value::HeapRef(heap.alloc(name.clone(), fields))
+        }
+    }
+}
+
+// `Cif::call<R>`'s generic `R` must be `Sized` and known at Rust-
+// compile-time — impossible for a struct return whose size is only
+// known at Plum-runtime. This drops to `libffi::raw::ffi_call`
+// directly (the same function `Cif::call`/`low::call` themselves
+// ultimately call), writing the raw return bytes into a caller-
+// supplied buffer instead of returning a typed value.
+unsafe fn raw_call_into_buffer(
+    cif: &libffi::middle::Cif,
+    code: &libffi::middle::CodePtr,
+    args: &[libffi::middle::Arg],
+    out: &mut [u8],
+) {
+    unsafe {
+        libffi::raw::ffi_call(
+            cif.as_raw_ptr(),
+            Some(*code.as_fun()),
+            out.as_mut_ptr() as *mut std::ffi::c_void,
+            args.as_ptr() as *mut *mut std::ffi::c_void,
+        );
+    }
+}
+
+// Backs one callback trampoline for the duration of a single
+// `ExternCall` — see `Interpreter::make_callback_trampoline`'s doc
+// comment for the full reentrancy story. `interp` is a raw pointer
+// (not `&mut Interpreter`) purely because libffi's closure callback
+// signature only ever hands back a SHARED `&U` — this is the one place
+// in this whole feature that relies on something the Rust type system
+// can't verify: that the C function calling this trampoline does so
+// SYNCHRONOUSLY, with nothing else touching the interpreter
+// concurrently, so reborrowing `*mut Interpreter` as `&mut Interpreter`
+// inside the trampoline never actually aliases a live reference.
+struct TrampolineUserData {
+    interp: *mut Interpreter,
+    fn_name: String,
+    params: Vec<ExternType>,
+    // A closure callback has no return channel for an ERROR — only a
+    // value of the declared return type. An error (or a caught panic —
+    // see `invoke_trampoline`) is recorded here instead, and checked by
+    // `Expr::ExternCall`'s eval case immediately after the outer C call
+    // returns, taking precedence over whatever value that call
+    // produced.
+    error: std::cell::RefCell<Option<String>>,
+}
+
+// Shared logic behind all four `trampoline_ret_*` wrappers below —
+// evaluates the Plum callback and returns whatever it produced (or
+// `Value::Unit` on error/panic, with the real failure recorded in
+// `userdata.error` instead of returned here).
+//
+// SAFETY: `args` must point to exactly `userdata.params.len()` argument
+// slots, each holding a value matching the declared type at that
+// position — guaranteed by `libffi` itself, which builds this array
+// from the SAME `Cif` `make_callback_trampoline` constructed the
+// closure with.
+unsafe fn invoke_trampoline(userdata: &TrampolineUserData, args: *const *const std::ffi::c_void) -> Value {
+    // A Plum-level error propagates as `Err`, fine to let unwind
+    // normally up to HERE — but unwinding any FURTHER would cross back
+    // through the C call frame that invoked this trampoline, which is
+    // undefined behavior. `catch_unwind` is what actually stops it: a
+    // panic inside the interpreter (e.g. a bug, or `unreachable!()`
+    // firing) is caught and converted into a recorded error instead of
+    // being allowed to unwind through C.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: see `TrampolineUserData::interp`'s doc comment.
+        let interp: &mut Interpreter = unsafe { &mut *userdata.interp };
+        let mut arg_values = Vec::with_capacity(userdata.params.len());
+        for (i, ty) in userdata.params.iter().enumerate() {
+            let ptr = unsafe { *args.add(i) };
+            let v = match ty {
+                ExternType::Int => Value::Int(unsafe { *(ptr as *const i64) }),
+                ExternType::Float => Value::Float(unsafe { *(ptr as *const f64) }),
+                ExternType::Bool => Value::Bool(unsafe { *(ptr as *const i32) } != 0),
+                _ => unreachable!("callback params are Int/Float/Bool only, enforced at type-checking time"),
+            };
+            arg_values.push(v);
+        }
+        interp.call(&userdata.fn_name, arg_values)
+    }));
+    match result {
+        Ok(Ok(v)) => v,
+        Ok(Err(e)) => {
+            *userdata.error.borrow_mut() = Some(e);
+            Value::Unit
+        }
+        Err(_) => {
+            *userdata.error.borrow_mut() = Some(format!("callback {:?} panicked", userdata.fn_name));
+            Value::Unit
+        }
+    }
+}
+
+unsafe extern "C" fn trampoline_ret_int(
+    _cif: &libffi::low::ffi_cif,
+    result: &mut i64,
+    args: *const *const std::ffi::c_void,
+    userdata: &TrampolineUserData,
+) {
+    let v = unsafe { invoke_trampoline(userdata, args) };
+    *result = if let Value::Int(n) = v { n } else { 0 };
+}
+
+unsafe extern "C" fn trampoline_ret_float(
+    _cif: &libffi::low::ffi_cif,
+    result: &mut f64,
+    args: *const *const std::ffi::c_void,
+    userdata: &TrampolineUserData,
+) {
+    let v = unsafe { invoke_trampoline(userdata, args) };
+    *result = if let Value::Float(f) = v { f } else { 0.0 };
+}
+
+unsafe extern "C" fn trampoline_ret_bool(
+    _cif: &libffi::low::ffi_cif,
+    result: &mut i32,
+    args: *const *const std::ffi::c_void,
+    userdata: &TrampolineUserData,
+) {
+    let v = unsafe { invoke_trampoline(userdata, args) };
+    *result = if let Value::Bool(b) = v {
+        if b { 1 } else { 0 }
+    } else {
+        0
+    };
+}
+
+unsafe extern "C" fn trampoline_ret_unit(
+    _cif: &libffi::low::ffi_cif,
+    _result: &mut (),
+    args: *const *const std::ffi::c_void,
+    userdata: &TrampolineUserData,
+) {
+    let _ = unsafe { invoke_trampoline(userdata, args) };
 }
 
 // Resolves `f.name` against the CURRENT PROCESS's own dynamic symbol
@@ -236,9 +486,8 @@ fn resolve_extern_fn(f: &plum_ir::ir::ExternFn) -> Result<ExternFnHandle, String
             .map_err(|e| format!("failed to resolve extern function {:?}: {e}", f.name))?
     };
     let code = libffi::middle::CodePtr(symbol.as_raw_ptr() as *mut std::ffi::c_void);
-    let arg_types: Vec<libffi::middle::Type> =
-        f.param_types.iter().map(|t| extern_type_to_ffi(*t)).collect();
-    let ret_ffi_type = match f.ret_type {
+    let arg_types: Vec<libffi::middle::Type> = f.param_types.iter().map(extern_type_to_ffi).collect();
+    let ret_ffi_type = match &f.ret_type {
         Some(t) => extern_type_to_ffi(t),
         None => libffi::middle::Type::void(),
     };
@@ -247,7 +496,7 @@ fn resolve_extern_fn(f: &plum_ir::ir::ExternFn) -> Result<ExternFnHandle, String
         cif,
         code,
         param_types: f.param_types.clone(),
-        ret_type: f.ret_type,
+        ret_type: f.ret_type.clone(),
     })
 }
 
@@ -376,6 +625,72 @@ impl Interpreter {
         let result = self.eval(&closure.body);
         self.env = caller_env;
         result
+    }
+
+    /// Builds a real C-callable function pointer wrapping `fn_name` (a
+    /// bare top-level Plum function — `plum-types` already proved this
+    /// at the call site, see `Infer`'s callback-argument check) for
+    /// passing into an extern call as a `Callback`-typed argument.
+    ///
+    /// SOUNDNESS: this is sound ONLY if the C function receiving the
+    /// resulting pointer calls it SYNCHRONOUSLY, during THIS call —
+    /// never stores it for later invocation (a signal handler, an
+    /// event-loop registration). The generated trampoline's `userdata`
+    /// embeds a raw `*mut Interpreter` pointing at `self`, valid only
+    /// for as long as `self`'s enclosing `Expr::ExternCall::eval` frame
+    /// is still on the stack; the `Closure`/`Box<TrampolineUserData>`
+    /// backing the pointer are pushed into `callback_closures`/
+    /// `callback_userdata` (owned by that SAME frame) specifically so
+    /// they stay alive exactly that long, no longer and no shorter.
+    /// There is no way to enforce the "synchronous only" half of this
+    /// contract from Rust — DESIGN.md documents it as a hard v1 limit.
+    fn make_callback_trampoline(
+        &mut self,
+        fn_name: &str,
+        cb_params: &[ExternType],
+        cb_ret: Option<&ExternType>,
+        callback_userdata: &mut Vec<Box<TrampolineUserData>>,
+        callback_closures: &mut Vec<libffi::middle::Closure<'static>>,
+    ) -> Result<*mut std::ffi::c_void, String> {
+        let cb_cif = libffi::middle::Cif::new(
+            cb_params.iter().map(extern_type_to_ffi),
+            match cb_ret {
+                Some(t) => extern_type_to_ffi(t),
+                None => libffi::middle::Type::void(),
+            },
+        );
+        let userdata = Box::new(TrampolineUserData {
+            interp: self as *mut Interpreter,
+            fn_name: fn_name.to_string(),
+            params: cb_params.to_vec(),
+            error: std::cell::RefCell::new(None),
+        });
+        callback_userdata.push(userdata);
+        // SAFETY: extending this borrow to `'static` is sound because
+        // `callback_userdata` is a `Vec<Box<..>>` — the `Box`'s heap
+        // allocation (what this reference actually points to) never
+        // moves even if the OUTER `Vec` reallocates on a later push,
+        // and nothing ever removes an entry — so the address stays
+        // valid for as long as `callback_userdata` itself isn't
+        // dropped, which `make_callback_trampoline`'s own doc comment
+        // establishes is exactly as long as this trampoline needs it.
+        let userdata_ref: &'static TrampolineUserData =
+            unsafe { std::mem::transmute(&**callback_userdata.last().expect("just pushed")) };
+        let closure = match cb_ret {
+            Some(ExternType::Int) => libffi::middle::Closure::new(cb_cif, trampoline_ret_int, userdata_ref),
+            Some(ExternType::Float) => libffi::middle::Closure::new(cb_cif, trampoline_ret_float, userdata_ref),
+            Some(ExternType::Bool) => libffi::middle::Closure::new(cb_cif, trampoline_ret_bool, userdata_ref),
+            None => libffi::middle::Closure::new(cb_cif, trampoline_ret_unit, userdata_ref),
+            Some(other) => return Err(format!("unsupported callback return type {other:?}")),
+        };
+        // The `Closure`'s generated trampoline code is allocated
+        // separately (by libffi's own closure allocator) — this raw
+        // pointer stays valid even though `closure` itself later moves
+        // into `callback_closures` (a Rust-level struct move never
+        // touches that separately-allocated memory).
+        let ptr = *closure.code_ptr() as *mut std::ffi::c_void;
+        callback_closures.push(closure);
+        Ok(ptr)
     }
 
     fn lookup(&self, name: &str) -> Result<Value, String> {
@@ -625,18 +940,70 @@ impl Interpreter {
                 }
                 let arg_values = args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>, _>>()?;
                 // Marshalled owned locals — kept alive across the call
-                // since `libffi::middle::Arg` only borrows them.
+                // since `libffi::middle::Arg` only borrows them. `CStr`
+                // stores the owning `CString` ALONGSIDE the pointer
+                // derived from it (computed once, up front) rather than
+                // recomputing `.as_ptr()` at `Arg`-building time — a
+                // freshly recomputed pointer would be a temporary with
+                // no home to borrow from; this way `Arg` borrows the
+                // `ptr` field that lives exactly as long as `marshaled`
+                // does, which is exactly as long as `_owner`'s buffer.
                 enum Marshaled {
                     Int(i64),
                     Float(f64),
                     Bool(i32),
+                    CStr {
+                        _owner: std::ffi::CString,
+                        ptr: *const std::os::raw::c_char,
+                    },
+                    // Owns the flattened C-layout bytes for a struct
+                    // argument — see `write_value_into_buffer`.
+                    Struct { buf: Vec<u8> },
+                    // The generated trampoline's code pointer — see
+                    // `TrampolineUserData`. The `Closure`/userdata that
+                    // actually BACK this pointer live separately, in
+                    // `callback_closures`/`callback_userdata` below
+                    // (their C-allocated trampoline memory doesn't move
+                    // even if THOSE Vecs reallocate, so this raw
+                    // pointer stays valid regardless).
+                    Callback { ptr: *mut std::ffi::c_void },
                 }
+                // Kept alive for the WHOLE call (declared before
+                // `marshaled` so they outlive it, though — see the
+                // `Callback` variant's doc comment — `marshaled` only
+                // ever needs the raw pointer, not these directly).
+                let mut callback_userdata: Vec<Box<TrampolineUserData>> = Vec::new();
+                let mut callback_closures: Vec<libffi::middle::Closure<'static>> = Vec::new();
                 let mut marshaled = Vec::with_capacity(arg_values.len());
                 for (v, ty) in arg_values.iter().zip(&handle.param_types) {
                     let m = match (v, ty) {
                         (Value::Int(n), ExternType::Int) => Marshaled::Int(*n),
                         (Value::Float(f), ExternType::Float) => Marshaled::Float(*f),
                         (Value::Bool(b), ExternType::Bool) => Marshaled::Bool(if *b { 1 } else { 0 }),
+                        (Value::HeapRef(addr), ExternType::Str) => {
+                            let s = self.heap.read_str(*addr)?;
+                            let owner = std::ffi::CString::new(s).map_err(|_| {
+                                format!("{name}: string argument contains an embedded null byte")
+                            })?;
+                            let ptr = owner.as_ptr();
+                            Marshaled::CStr { _owner: owner, ptr }
+                        }
+                        (Value::HeapRef(_), ExternType::Struct(_, field_types)) => {
+                            let layout = struct_layout(field_types);
+                            let mut buf = vec![0u8; layout.size];
+                            write_value_into_buffer(&self.heap, v, ty, &mut buf, 0, name)?;
+                            Marshaled::Struct { buf }
+                        }
+                        (Value::Function(fn_name), ExternType::Callback { params: cb_params, ret: cb_ret }) => {
+                            let ptr = self.make_callback_trampoline(
+                                fn_name,
+                                cb_params,
+                                cb_ret.as_deref(),
+                                &mut callback_userdata,
+                                &mut callback_closures,
+                            )?;
+                            Marshaled::Callback { ptr }
+                        }
                         (other, ty) => {
                             return Err(format!("{name}: argument {other:?} does not match declared type {ty:?}"))
                         }
@@ -649,9 +1016,12 @@ impl Interpreter {
                         Marshaled::Int(n) => libffi::middle::arg(n),
                         Marshaled::Float(f) => libffi::middle::arg(f),
                         Marshaled::Bool(b) => libffi::middle::arg(b),
+                        Marshaled::CStr { ptr, .. } => libffi::middle::arg(ptr),
+                        Marshaled::Struct { buf } => libffi::middle::arg(buf.as_slice()),
+                        Marshaled::Callback { ptr } => libffi::middle::arg(ptr),
                     })
                     .collect();
-                unsafe {
+                let result = unsafe {
                     match handle.ret_type {
                         Some(ExternType::Int) => Ok(Value::Int(handle.cif.call(handle.code, &ffi_args))),
                         Some(ExternType::Float) => Ok(Value::Float(handle.cif.call(handle.code, &ffi_args))),
@@ -659,12 +1029,76 @@ impl Interpreter {
                             let raw: i32 = handle.cif.call(handle.code, &ffi_args);
                             Ok(Value::Bool(raw != 0))
                         }
+                        // The returned `char*` is COPIED into a fresh
+                        // Plum heap string; the original C pointer is
+                        // never freed (we don't know whether it's
+                        // malloc'd, static, or something else) — an
+                        // honest v1 leak-avoidance tradeoff, not a
+                        // silent correctness bug.
+                        Some(ExternType::Str) => {
+                            let raw: *const std::os::raw::c_char = handle.cif.call(handle.code, &ffi_args);
+                            if raw.is_null() {
+                                Err(format!("{name}: returned a null string pointer"))
+                            } else {
+                                let s = std::ffi::CStr::from_ptr(raw).to_string_lossy().into_owned();
+                                Ok(Value::HeapRef(self.heap.alloc_str(s)))
+                            }
+                        }
+                        // `Cif::call<R>` needs a `Sized` Rust `R` known
+                        // at compile time — impossible for a
+                        // dynamically-sized struct return, hence the
+                        // raw-buffer bypass (see `raw_call_into_buffer`).
+                        Some(ExternType::Struct(ref sname, ref field_types)) => {
+                            let layout = struct_layout(field_types);
+                            let mut out = vec![0u8; layout.size.max(std::mem::size_of::<usize>())];
+                            raw_call_into_buffer(&handle.cif, &handle.code, &ffi_args, &mut out);
+                            let ty = ExternType::Struct(sname.clone(), field_types.clone());
+                            Ok(read_value_from_buffer(&mut self.heap, &out, 0, &ty))
+                        }
+                        // Rejected at type-checking/lowering time — see
+                        // `resolve_extern_fn`'s matching check — a
+                        // callback type is only ever meaningful as a
+                        // PARAMETER, never a return type.
+                        Some(ExternType::Callback { .. }) => {
+                            unreachable!("a callback return type is rejected before this node is ever produced")
+                        }
                         None => {
                             let (): () = handle.cif.call(handle.code, &ffi_args);
                             Ok(Value::Unit)
                         }
                     }
+                };
+                // If a callback trampoline recorded an error mid-call
+                // (the Plum callback itself errored, or panicked — see
+                // `invoke_trampoline`), that's the REAL failure, even
+                // if the outer C function "successfully" returned some
+                // value computed from garbage/partial results.
+                for userdata in &callback_userdata {
+                    if let Some(err) = userdata.error.borrow_mut().take() {
+                        return Err(err);
+                    }
                 }
+                result
+            }
+            // `s.as_cstr()` — validates `s` has no embedded null byte
+            // (a C string ends at the first null byte, so an embedded
+            // one would silently truncate the string when it crosses
+            // the FFI boundary) and hands back the SAME value
+            // unchanged — there's no separate runtime representation
+            // for "a validated CStr," only a type-level one (`plum-
+            // types::Type::CStr`). This check happening HERE, eagerly,
+            // rather than silently truncating inside `ExternCall`'s own
+            // marshaling, is the entire reason this is its own node.
+            Expr::AsCStr(inner) => {
+                let v = self.eval(inner)?;
+                let Value::HeapRef(addr) = v else {
+                    return Err(format!("`.as_cstr()` requires a String value, found {v:?}"));
+                };
+                let s = self.heap.read_str(addr)?;
+                if s.contains('\0') {
+                    return Err("`.as_cstr()`: string contains an embedded null byte".to_string());
+                }
+                Ok(v)
             }
             Expr::Closure { params, body } => {
                 let id = self.next_closure_id;
@@ -3657,6 +4091,363 @@ mod tests {
         };
         let err = Interpreter::new().load_program(&program).expect_err("expected symbol resolution to fail");
         assert!(err.contains("definitely_not_a_real_libc_symbol_xyz"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extern_call_with_a_cstr_argument_via_real_libc_strlen() {
+        let src = r#"
+            extern "C" {
+                fn strlen(s: CStr) -> Int;
+            }
+            let result = unsafe { strlen("hello".as_cstr()) }
+        "#;
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap();
+        let ctx = LoweringContext::from_items(&program.items);
+        let ir_program = lower_program(&program, &ctx).unwrap();
+
+        let mut interp = Interpreter::new();
+        interp.load_program(&ir_program).unwrap();
+        assert_eq!(interp.globals.get("result"), Some(&Value::Int(5)));
+    }
+
+    #[test]
+    fn as_cstr_rejects_a_string_with_an_embedded_null_byte() {
+        let ir_expr = Expr::AsCStr(Box::new(Expr::Str("a\0b".to_string())));
+        let err = Interpreter::new().eval(&ir_expr).expect_err("expected embedded null byte to be rejected");
+        assert!(err.contains("embedded null byte"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn as_cstr_on_a_non_string_value_is_a_runtime_error() {
+        let err = Interpreter::new()
+            .eval(&Expr::AsCStr(Box::new(Expr::Int(5))))
+            .expect_err("expected a non-string value to be rejected");
+        assert!(err.contains("String value"), "unexpected error: {err}");
+    }
+
+    // A plain Rust `extern "C" fn`, callable directly (bypassing
+    // `libloading`/symbol resolution entirely) by taking its own
+    // address — this validates `ExternCall`'s CStr ARGUMENT and RETURN
+    // marshaling against Rust's own (C-ABI-authoritative) `char*`
+    // handling, independent of any specific libc function's behavior.
+    extern "C" fn identity_cstr(s: *const std::os::raw::c_char) -> *const std::os::raw::c_char {
+        s
+    }
+
+    #[test]
+    fn extern_call_round_trips_a_cstr_argument_and_return() {
+        let cif = libffi::middle::Cif::new(vec![libffi::middle::Type::pointer()], libffi::middle::Type::pointer());
+        let code = libffi::middle::CodePtr(identity_cstr as *mut std::ffi::c_void);
+        let handle = ExternFnHandle {
+            cif,
+            code,
+            param_types: vec![ExternType::Str],
+            ret_type: Some(ExternType::Str),
+        };
+        let mut interp = Interpreter::new();
+        interp.extern_fns.insert("identity_cstr".to_string(), handle);
+
+        let result = interp
+            .eval(&Expr::ExternCall {
+                name: "identity_cstr".to_string(),
+                args: vec![Expr::AsCStr(Box::new(Expr::Str("round trip".to_string())))],
+            })
+            .expect("eval of extern call should succeed");
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result, got {result:?}")
+        };
+        assert_eq!(interp.heap.read_str(addr).unwrap(), "round trip");
+    }
+
+    // --- struct-by-value FFI ---
+    //
+    // These validate our OWN layout math (`struct_layout`, `write_
+    // value_into_buffer`, `read_value_from_buffer`) against Rust's own
+    // `#[repr(C)]` layout, which mirrors the real C ABI on this target
+    // — the authoritative source of truth, not something to trust
+    // blindly. `CMixed` deliberately puts a 4-byte field before an
+    // 8-byte one specifically to force PADDING (4 bytes of padding
+    // between them, `big` landing at byte offset 8, not 4) — a naive
+    // "just concatenate the fields" implementation would get this
+    // wrong silently; `ffi_get_struct_offsets` (what `struct_layout`
+    // actually calls) is what keeps this correct instead of relying on
+    // hand-rolled ABI math.
+
+    #[repr(C)]
+    struct CPoint {
+        x: i64,
+        y: f64,
+    }
+
+    extern "C" fn point_sum(p: CPoint) -> f64 {
+        p.x as f64 + p.y
+    }
+
+    extern "C" fn make_point(x: i64, y: f64) -> CPoint {
+        CPoint { x, y }
+    }
+
+    #[repr(C)]
+    struct CMixed {
+        flag: i32,
+        big: i64,
+    }
+
+    extern "C" fn mixed_offset(m: CMixed) -> i64 {
+        if m.flag != 0 {
+            m.big
+        } else {
+            -1
+        }
+    }
+
+    #[repr(C)]
+    struct CInner {
+        a: i64,
+        b: i64,
+    }
+
+    #[repr(C)]
+    struct COuter {
+        inner: CInner,
+        c: i64,
+    }
+
+    extern "C" fn nested_sum(o: COuter) -> i64 {
+        o.inner.a + o.inner.b + o.c
+    }
+
+    fn point_extern_type() -> ExternType {
+        ExternType::Struct("Point".to_string(), vec![ExternType::Int, ExternType::Float])
+    }
+
+    #[test]
+    fn extern_call_passes_a_struct_argument_by_value() {
+        let cif = libffi::middle::Cif::new(vec![extern_type_to_ffi(&point_extern_type())], libffi::middle::Type::f64());
+        let code = libffi::middle::CodePtr(point_sum as *mut std::ffi::c_void);
+        let handle = ExternFnHandle {
+            cif,
+            code,
+            param_types: vec![point_extern_type()],
+            ret_type: Some(ExternType::Float),
+        };
+        let mut interp = Interpreter::new();
+        interp.extern_fns.insert("point_sum".to_string(), handle);
+        let addr = interp.heap.alloc("Point".to_string(), vec![Value::Int(3), Value::Float(4.5)]);
+        interp.env.push(("p".to_string(), Value::HeapRef(addr)));
+
+        let result = interp
+            .eval(&Expr::ExternCall {
+                name: "point_sum".to_string(),
+                args: vec![Expr::Var("p".to_string())],
+            })
+            .expect("eval of extern call should succeed");
+        assert_eq!(result, Value::Float(7.5));
+    }
+
+    #[test]
+    fn extern_call_returns_a_struct_by_value() {
+        let cif = libffi::middle::Cif::new(
+            vec![libffi::middle::Type::i64(), libffi::middle::Type::f64()],
+            extern_type_to_ffi(&point_extern_type()),
+        );
+        let code = libffi::middle::CodePtr(make_point as *mut std::ffi::c_void);
+        let handle = ExternFnHandle {
+            cif,
+            code,
+            param_types: vec![ExternType::Int, ExternType::Float],
+            ret_type: Some(point_extern_type()),
+        };
+        let mut interp = Interpreter::new();
+        interp.extern_fns.insert("make_point".to_string(), handle);
+
+        let result = interp
+            .eval(&Expr::ExternCall {
+                name: "make_point".to_string(),
+                args: vec![Expr::Int(7), Expr::Float(2.5)],
+            })
+            .expect("eval of extern call should succeed");
+        let Value::HeapRef(addr) = result else {
+            panic!("expected a HeapRef result, got {result:?}")
+        };
+        let (tag, fields) = interp.heap.read(addr).unwrap();
+        assert_eq!(tag, "Point");
+        assert_eq!(fields, &[Value::Int(7), Value::Float(2.5)]);
+    }
+
+    #[test]
+    fn extern_call_struct_argument_respects_real_abi_padding() {
+        let mixed_ty = ExternType::Struct("Mixed".to_string(), vec![ExternType::Bool, ExternType::Int]);
+        let cif = libffi::middle::Cif::new(vec![extern_type_to_ffi(&mixed_ty)], libffi::middle::Type::i64());
+        let code = libffi::middle::CodePtr(mixed_offset as *mut std::ffi::c_void);
+        let handle = ExternFnHandle {
+            cif,
+            code,
+            param_types: vec![mixed_ty],
+            ret_type: Some(ExternType::Int),
+        };
+        let mut interp = Interpreter::new();
+        interp.extern_fns.insert("mixed_offset".to_string(), handle);
+        let addr = interp.heap.alloc("Mixed".to_string(), vec![Value::Bool(true), Value::Int(999)]);
+        interp.env.push(("m".to_string(), Value::HeapRef(addr)));
+
+        let result = interp
+            .eval(&Expr::ExternCall {
+                name: "mixed_offset".to_string(),
+                args: vec![Expr::Var("m".to_string())],
+            })
+            .expect("eval of extern call should succeed");
+        assert_eq!(result, Value::Int(999));
+    }
+
+    #[test]
+    fn extern_call_flattens_a_nested_struct_argument() {
+        let inner_ty = ExternType::Struct("Inner".to_string(), vec![ExternType::Int, ExternType::Int]);
+        let outer_ty = ExternType::Struct("Outer".to_string(), vec![inner_ty.clone(), ExternType::Int]);
+        let cif = libffi::middle::Cif::new(vec![extern_type_to_ffi(&outer_ty)], libffi::middle::Type::i64());
+        let code = libffi::middle::CodePtr(nested_sum as *mut std::ffi::c_void);
+        let handle = ExternFnHandle {
+            cif,
+            code,
+            param_types: vec![outer_ty],
+            ret_type: Some(ExternType::Int),
+        };
+        let mut interp = Interpreter::new();
+        interp.extern_fns.insert("nested_sum".to_string(), handle);
+        let inner_addr = interp.heap.alloc("Inner".to_string(), vec![Value::Int(10), Value::Int(20)]);
+        let outer_addr = interp
+            .heap
+            .alloc("Outer".to_string(), vec![Value::HeapRef(inner_addr), Value::Int(5)]);
+        interp.env.push(("o".to_string(), Value::HeapRef(outer_addr)));
+
+        let result = interp
+            .eval(&Expr::ExternCall {
+                name: "nested_sum".to_string(),
+                args: vec![Expr::Var("o".to_string())],
+            })
+            .expect("eval of extern call should succeed");
+        assert_eq!(result, Value::Int(35));
+    }
+
+    // --- callback trampolines ---
+
+    // A plain Rust `extern "C" fn` taking a REAL C function pointer
+    // parameter and invoking it SYNCHRONOUSLY, during the call — this
+    // is exactly the shape of a typical C callback API (a comparator,
+    // a visitor), standing in for one the same way `identity_cstr`/
+    // `point_sum` stand in for a real C library function elsewhere in
+    // this file.
+    extern "C" fn call_with_10_and_20(f: extern "C" fn(i64, i64) -> i64) -> i64 {
+        f(10, 20)
+    }
+
+    extern "C" fn call_with_true(f: extern "C" fn(i32) -> i32) -> i32 {
+        f(1)
+    }
+
+    fn add_function() -> Function {
+        Function {
+            name: "add".to_string(),
+            params: vec!["a".to_string(), "b".to_string()],
+            body: Expr::Binary(BinOp::Add, Box::new(Expr::Var("a".to_string())), Box::new(Expr::Var("b".to_string()))),
+        }
+    }
+
+    #[test]
+    fn extern_call_passes_a_plum_function_as_a_callback() {
+        let cif = libffi::middle::Cif::new(vec![libffi::middle::Type::pointer()], libffi::middle::Type::i64());
+        let code = libffi::middle::CodePtr(call_with_10_and_20 as *mut std::ffi::c_void);
+        let handle = ExternFnHandle {
+            cif,
+            code,
+            param_types: vec![ExternType::Callback {
+                params: vec![ExternType::Int, ExternType::Int],
+                ret: Some(Box::new(ExternType::Int)),
+            }],
+            ret_type: Some(ExternType::Int),
+        };
+        let mut interp = Interpreter::new();
+        interp.extern_fns.insert("call_with_10_and_20".to_string(), handle);
+        interp.functions.insert("add".to_string(), add_function());
+
+        let result = interp
+            .eval(&Expr::ExternCall {
+                name: "call_with_10_and_20".to_string(),
+                args: vec![Expr::Var("add".to_string())],
+            })
+            .expect("eval of extern call should succeed");
+        assert_eq!(result, Value::Int(30));
+    }
+
+    #[test]
+    fn extern_call_callback_returning_bool_round_trips_correctly() {
+        let cif = libffi::middle::Cif::new(vec![libffi::middle::Type::pointer()], libffi::middle::Type::i32());
+        let code = libffi::middle::CodePtr(call_with_true as *mut std::ffi::c_void);
+        let handle = ExternFnHandle {
+            cif,
+            code,
+            param_types: vec![ExternType::Callback {
+                params: vec![ExternType::Bool],
+                ret: Some(Box::new(ExternType::Bool)),
+            }],
+            ret_type: Some(ExternType::Bool),
+        };
+        let mut interp = Interpreter::new();
+        interp.extern_fns.insert("call_with_true".to_string(), handle);
+        interp.functions.insert(
+            "negate".to_string(),
+            Function {
+                name: "negate".to_string(),
+                params: vec!["x".to_string()],
+                body: Expr::Unary(UnOp::Not, Box::new(Expr::Var("x".to_string()))),
+            },
+        );
+
+        let result = interp
+            .eval(&Expr::ExternCall {
+                name: "call_with_true".to_string(),
+                args: vec![Expr::Var("negate".to_string())],
+            })
+            .expect("eval of extern call should succeed");
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[test]
+    fn extern_call_callback_error_propagates_as_the_extern_calls_own_error() {
+        let cif = libffi::middle::Cif::new(vec![libffi::middle::Type::pointer()], libffi::middle::Type::i64());
+        let code = libffi::middle::CodePtr(call_with_10_and_20 as *mut std::ffi::c_void);
+        let handle = ExternFnHandle {
+            cif,
+            code,
+            param_types: vec![ExternType::Callback {
+                params: vec![ExternType::Int, ExternType::Int],
+                ret: Some(Box::new(ExternType::Int)),
+            }],
+            ret_type: Some(ExternType::Int),
+        };
+        let mut interp = Interpreter::new();
+        interp.extern_fns.insert("call_with_10_and_20".to_string(), handle);
+        // `boom` expects 1 argument but the callback signature declares
+        // 2 — `Interpreter::call`'s own arity check fails inside the
+        // trampoline, which should surface as THIS extern call's error.
+        interp.functions.insert(
+            "boom".to_string(),
+            Function {
+                name: "boom".to_string(),
+                params: vec!["a".to_string()],
+                body: Expr::Var("a".to_string()),
+            },
+        );
+
+        let err = interp
+            .eval(&Expr::ExternCall {
+                name: "call_with_10_and_20".to_string(),
+                args: vec![Expr::Var("boom".to_string())],
+            })
+            .expect_err("expected the callback's arity error to propagate");
+        assert!(err.contains("argument"), "unexpected error: {err}");
     }
 
     #[test]

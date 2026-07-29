@@ -118,6 +118,78 @@ mod tests {
     }
 
     #[test]
+    fn extern_call_with_a_cstr_argument_runs_through_the_full_gated_pipeline() {
+        let src = r#"
+            extern "C" {
+                fn strlen(s: CStr) -> Int;
+            }
+            let go unused = unsafe { strlen("hello".as_cstr()) }
+        "#;
+        let result = typecheck_and_run(src, "go", vec![Value::Int(0)]);
+        assert_eq!(result, Ok(Value::Int(5)));
+    }
+
+    #[test]
+    fn extern_call_returning_a_struct_by_value_runs_through_the_full_gated_pipeline() {
+        // Real libc `div(int, int) -> div_t` (`div_t { int quot; int
+        // rem; }`), resolved through the REAL `Library::this()` symbol
+        // path `Interpreter::load_program` always uses (unlike plum-
+        // interp's own struct tests, which bypass resolution entirely
+        // via a direct `ExternFnHandle`, an escape hatch this crate
+        // doesn't have access to). `Bool` is used for `quot`/`rem`
+        // rather than `Int` DELIBERATELY — `div_t`'s fields are C
+        // `int` (4 bytes), matching `ExternType::Bool`'s C-ABI mapping,
+        // not `ExternType::Int` (8 bytes, C `long long`) — a real,
+        // semantically-odd-looking-but-ABI-necessary consequence of
+        // v1's fixed-width scope (see DESIGN.md's "FFI and C interop"
+        // section). This is genuinely testing our layout math against
+        // an unrelated, real, externally-verified C ABI struct, not
+        // just our own Rust mirror of one.
+        let src = r#"
+            struct DivResult { quot: Bool, rem: Bool }
+            extern "C" {
+                fn div(numer: Bool, denom: Bool) -> DivResult;
+            }
+            let go unused = unsafe { div(true, true) }
+        "#;
+        let result = typecheck_and_run(src, "go", vec![Value::Int(0)]);
+        assert!(result.is_ok(), "expected the pipeline to accept and run this program, got: {result:?}");
+    }
+
+    #[test]
+    fn passing_an_ordinary_str_where_extern_expects_cstr_is_rejected_before_it_ever_reaches_the_interpreter() {
+        let src = r#"
+            extern "C" {
+                fn strlen(s: CStr) -> Int;
+            }
+            let go unused = unsafe { strlen("hello") }
+        "#;
+        let err = typecheck_and_run(src, "go", vec![Value::Int(0)]).expect_err("expected a type error");
+        assert!(err.contains("type error"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn callback_argument_as_a_closure_literal_is_rejected_before_it_ever_reaches_the_interpreter() {
+        // Real symbol resolution can't be exercised end-to-end here the
+        // way the CStr/struct tests do (no real, already-dynamically-
+        // linked libc function takes a plain Int/Float/Bool-signature
+        // callback — every realistic C callback API deals in pointers,
+        // outside v1's scope) — but the REJECTION path needs no symbol
+        // resolution at all, since it fails at type-checking, before
+        // lowering or the interpreter ever run. The successful, real-
+        // trampoline-invocation path is covered exhaustively in
+        // plum-interp's own tests instead.
+        let src = r#"
+            extern "C" {
+                fn call_with_10_and_20(f: (Int, Int) -> Int) -> Int;
+            }
+            let go unused = unsafe { call_with_10_and_20(|a, b| a + b) }
+        "#;
+        let err = typecheck_and_run(src, "go", vec![Value::Int(0)]).expect_err("expected a type error");
+        assert!(err.contains("bare reference"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn ill_typed_program_is_rejected_before_it_ever_reaches_the_interpreter() {
         // `n` is inferred Int from `n == 0`, so passing it to `want_bool`
         // (which requires a Bool) is a real type error. Before wiring,

@@ -109,6 +109,16 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
+    // `s.as_cstr()` — validates `s` (a Plum `Str`) has no embedded null
+    // byte and marks it ready to cross the FFI boundary as a C string.
+    // Kept as its own node (not folded into an ordinary method-call
+    // shape) so the embedded-null check happens eagerly, right here,
+    // rather than silently truncating at the actual extern call site —
+    // see `plum-types::Type::CStr`'s doc comment for the type-level
+    // half of this story (an ordinary `Str` can't reach an
+    // `ExternCall`'s `CStr`-typed argument without going through this
+    // node first).
+    AsCStr(Box<Expr>),
     // A heap-allocated, tagged value with positional fields — the
     // minimal representation of "a struct or an enum variant" this IR
     // needs. E.g. `Ctor("Point", [x, y])` or `Ctor("Cons", [head, tail])`.
@@ -575,11 +585,50 @@ pub struct Global {
 // of WHICH crate/mechanism `plum-interp` uses to actually perform a
 // call stays a contained, swappable implementation detail behind this
 // boundary — see DESIGN.md's "FFI and C interop" section.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ExternType {
     Int,
     Float,
     Bool,
+    // A null-terminated C string pointer (`char*`) — only ever produced
+    // on the Plum side by `Expr::AsCStr` (surface syntax `.as_cstr()`),
+    // never an ordinary Plum string directly (see `plum-types::Type::
+    // CStr`'s doc comment for why the two are kept distinct at the type
+    // level; that distinction is what's being carried through here).
+    Str,
+    // A struct passed/returned BY VALUE at the FFI boundary — eligible
+    // automatically (no `#[repr(C)]`-equivalent annotation exists in
+    // Plum) whenever EVERY one of its fields is itself FFI-safe,
+    // checked recursively (see `plum-types::context::check_ffi_safe`
+    // and `lower.rs`'s matching, independently-duplicated check — same
+    // "no shared representation between crates" precedent as every
+    // other cross-crate shape check in this codebase). The `String` is
+    // the struct's declared name, carried through so the interpreter
+    // can allocate a correctly-tagged `Ctor` when marshaling a
+    // RETURNED struct back into a real Plum value — plain positional
+    // field types alone wouldn't be enough to reconstruct that tag.
+    // Self-referential structs (`struct Node { next: Node }` — legal
+    // in ordinary Plum, since every struct field is a heap `Value`
+    // indirection, never inline) are rejected as not FFI-safe: a C
+    // struct-by-value layout has no notion of "field pointing back to
+    // its own type," only Plum's heap-indirect model does.
+    Struct(String, Vec<ExternType>),
+    // A C function POINTER parameter (`(Int, Int) -> Int`-shaped) — the
+    // callback-trampoline half of FFI support. Scoped to `Int`/`Float`/
+    // `Bool` params/return only (no nested `CStr`, struct, or another
+    // callback) — see `plum-interp`'s trampoline machinery for the full
+    // "why": only a NON-CAPTURING Plum closure can convert to a real C
+    // function pointer at all (a capturing one has no `userdata` slot
+    // in a plain C callback signature to smuggle its captured
+    // environment through), and the callback is only sound for a C
+    // function that invokes it SYNCHRONOUSLY, during the call — never
+    // one that stores the pointer for later (a signal handler, an
+    // event-loop registration), since the trampoline's backing state
+    // only lives as long as the one `ExternCall` that created it.
+    Callback {
+        params: Vec<ExternType>,
+        ret: Option<Box<ExternType>>,
+    },
 }
 
 // `extern "C" { fn sqrt(x: Float) -> Float; }` — one declared foreign

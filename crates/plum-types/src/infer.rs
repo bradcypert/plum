@@ -75,7 +75,9 @@ fn free_vars(ty: &Type) -> HashSet<TypeVarId> {
         // never reach here in practice (every use site instantiates it
         // to a fresh `Var` first), so it contributes no free vars
         // either way.
-        Type::Int | Type::Float | Type::Bool | Type::Str | Type::Unit | Type::Range | Type::Param(_) => HashSet::new(),
+        Type::Int | Type::Float | Type::Bool | Type::Str | Type::CStr | Type::Unit | Type::Range | Type::Param(_) => {
+            HashSet::new()
+        }
     }
 }
 
@@ -215,6 +217,17 @@ pub struct Infer {
     // `TypeContext::extern_fn`) — DESIGN.md's "Effect/unsafe tracking"
     // section's whole scope, not a general Koka-style effect system.
     in_unsafe: bool,
+    // Every top-level (1+ param) function's name, populated by
+    // `infer_program`'s own Phase 1 — used ONLY to check a callback-
+    // typed extern argument is a bare reference to a genuine top-level
+    // function (see the `Call` case's callback-argument check), never
+    // consulted for ordinary type inference. Empty when inference
+    // doesn't go through `infer_program` at all (a standalone
+    // `infer_expr` test, say) — a callback-argument check in that
+    // context always fails closed (rejects), which is fine since a
+    // callback-typed extern param can't meaningfully exist without a
+    // whole program's `extern` block anyway.
+    top_level_fns: HashSet<String>,
 }
 
 impl Infer {
@@ -225,6 +238,7 @@ impl Infer {
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
             in_unsafe: false,
+            top_level_fns: HashSet::new(),
         }
     }
 
@@ -239,6 +253,7 @@ impl Infer {
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
             in_unsafe: false,
+            top_level_fns: HashSet::new(),
         }
     }
 
@@ -462,6 +477,19 @@ impl Infer {
                     ))
                 }
             }
+            // `(T) -> T`-shaped annotation — recurses through `self`
+            // (not straight to `ast_type_to_type`) so a function's OWN
+            // generic parameter can appear inside a callback-typed
+            // param/return (`fn apply(f: (T) -> T, x: T) -> T`), same
+            // reasoning as the `Path` arm just above.
+            ast::Type::Function { params, ret, .. } => {
+                let param_types = params
+                    .iter()
+                    .map(|p| self.resolve_annotation(p, generic_vars))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let ret_type = self.resolve_annotation(ret, generic_vars)?;
+                Ok(Type::Function(param_types, Box::new(ret_type)))
+            }
         }
     }
 
@@ -538,6 +566,7 @@ impl Infer {
                 let fn_ty = Type::Function(param_vars.clone(), Box::new(ret_var.clone()));
                 global_env = global_env.extend(def.name.clone(), fn_ty);
                 signatures.insert(def.name.clone(), (param_vars, ret_var));
+                self.top_level_fns.insert(def.name.clone());
                 defs.push(def);
             }
         }
@@ -1120,6 +1149,24 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![Type::Int]), acc))
             }
+            // `s.as_cstr()` — `s` must be `Str`; evaluates to `CStr`, a
+            // type an ordinary `Str` value can never unify with (see
+            // `Type::CStr`'s doc comment) — the explicit call is what
+            // makes a value usable as an extern function's `CStr`
+            // argument/return, matching DESIGN.md's "no implicit
+            // string/allocation coercion at the boundary."
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "as_cstr") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.as_cstr()` at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::CStr, acc))
+            }
             // `s.trim()` — `s` must be `Str`; evaluates to `Str`.
             ast::Expr::Call { callee, args, span }
                 if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "trim") =>
@@ -1495,10 +1542,43 @@ impl Infer {
                 // by `infer_program`'s own extern pre-declaration pass
                 // — see that function's doc comment).
                 if let ast::Expr::Ident(name, _) = callee.as_ref() {
-                    if self.ctx.extern_fn(name).is_some() && !self.in_unsafe {
-                        return Err(format!(
-                            "calling extern function {name:?} requires being inside an unsafe block, at {span:?}"
-                        ));
+                    if let Some((param_types, _)) = self.ctx.extern_fn(name).cloned() {
+                        if !self.in_unsafe {
+                            return Err(format!(
+                                "calling extern function {name:?} requires being inside an unsafe block, at {span:?}"
+                            ));
+                        }
+                        // A callback-typed argument must be a bare
+                        // reference to a genuine TOP-LEVEL function —
+                        // see `top_level_fns`'s doc comment for why
+                        // this is checked by NAME-SET membership rather
+                        // than a real capture analysis: a top-level
+                        // function's `Interpreter::call` always builds
+                        // a completely fresh environment from just its
+                        // own params, so it's non-capturing BY
+                        // CONSTRUCTION — no analysis needed, unlike a
+                        // closure literal (rejected outright, since
+                        // proving IT doesn't capture anything would
+                        // need real free-variable analysis this v1
+                        // doesn't do) or a local variable merely NAMING
+                        // a function (rejected too — shadowing a
+                        // `top_level_fns` name with an unrelated local
+                        // binding of the same name is a known, narrow
+                        // gap this check doesn't see through).
+                        for (arg, param_ty) in args.iter().zip(&param_types) {
+                            if !matches!(param_ty, Type::Function(..)) {
+                                continue;
+                            }
+                            let is_bare_top_level_fn =
+                                matches!(arg, ast::Expr::Ident(arg_name, _) if self.top_level_fns.contains(arg_name));
+                            if !is_bare_top_level_fn {
+                                return Err(format!(
+                                    "extern function {name:?}: a callback argument must be a bare reference \
+                                     to a top-level function, not a closure or other expression, at {:?}",
+                                    arg.span()
+                                ));
+                            }
+                        }
                     }
                 }
                 let variant_tag = match callee.as_ref() {
@@ -2816,6 +2896,20 @@ pub(crate) fn ast_type_to_type(
                     "type inference not yet implemented for this type annotation at {span:?}"
                 ))
             }
+        }
+        // `(A, B) -> R` — resolves directly to the SAME `Type::Function`
+        // ordinary closures/functions already carry, giving this
+        // syntax real meaning as a general annotation (function param,
+        // struct field, etc.), not just for `extern` callback
+        // signatures — see ast.rs's `Type::Function` doc comment for
+        // why this was worth implementing beyond the FFI use case.
+        ast::Type::Function { params, ret, .. } => {
+            let param_types = params
+                .iter()
+                .map(|p| ast_type_to_type(p, ctx, in_scope_params))
+                .collect::<Result<Vec<_>, _>>()?;
+            let ret_type = ast_type_to_type(ret, ctx, in_scope_params)?;
+            Ok(Type::Function(param_types, Box::new(ret_type)))
         }
     }
 }
@@ -4425,6 +4519,22 @@ mod tests {
     }
 
     #[test]
+    fn function_type_annotation_on_a_parameter_type_checks() {
+        // A real, previously-missing gap this closes as a side effect
+        // of implementing `(A, B) -> R` type-annotation syntax for
+        // extern callbacks — see ast.rs's `Type::Function` doc comment.
+        let types = infer_program(
+            "let apply (f: (Int) -> Int) (x: Int): Int = f(x)\nlet double n = n * 2\nlet result = apply(double, 5)",
+        );
+        assert_eq!(types["result"], Type::Int);
+    }
+
+    #[test]
+    fn function_type_annotation_with_wrong_argument_type_is_an_error() {
+        infer_program_err("let apply (f: (Int) -> Int) (x: Bool): Int = f(x)");
+    }
+
+    #[test]
     fn infer_program_defaults_fully_generic_arithmetic_to_int() {
         let types = infer_program("let add a b = a + b");
         assert_eq!(types["add"], fn_ty(vec![Type::Int, Type::Int], Type::Int));
@@ -5485,10 +5595,13 @@ mod tests {
 
     #[test]
     fn extern_function_with_an_unsupported_type_is_rejected() {
+        // An ordinary `String` (not `CStr`) isn't FFI-safe — it must go
+        // through `.as_cstr()` first (see DESIGN.md's "no implicit
+        // string/allocation coercion" stance).
         let tokens = Lexer::new(
             r#"
             extern "C" {
-                fn foo(x: Str) -> Int;
+                fn foo(x: String) -> Int;
             }
             "#,
         )
@@ -5497,7 +5610,261 @@ mod tests {
         let program = parser.parse_program().unwrap();
         let err = crate::context::TypeContext::from_items(&program.items)
             .expect_err("expected an unsupported extern param type to be rejected");
-        assert!(err.contains("Int, Float, or Bool"), "unexpected error: {err}");
+        assert!(err.contains("Int, Float, Bool, CStr"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extern_function_with_an_int_float_bool_struct_type_is_accepted() {
+        let types = infer_program(
+            r#"
+            struct Point { x: Int, y: Float }
+            extern "C" {
+                fn make_point(x: Int, y: Float) -> Point;
+            }
+            let result = unsafe { make_point(1, 2.0) }
+            "#,
+        );
+        assert_eq!(types["result"], Type::Struct("Point".to_string(), vec![]));
+    }
+
+    #[test]
+    fn extern_function_with_a_struct_field_that_is_itself_ffi_safe_is_accepted() {
+        let types = infer_program(
+            r#"
+            struct Inner { a: Int, b: Int }
+            struct Outer { inner: Inner, c: Int }
+            extern "C" {
+                fn nested_sum(o: Outer) -> Int;
+            }
+            let result = unsafe { nested_sum(Outer { inner: Inner { a: 1, b: 2 }, c: 3 }) }
+            "#,
+        );
+        assert_eq!(types["result"], Type::Int);
+    }
+
+    #[test]
+    fn extern_function_with_a_struct_containing_an_enum_field_is_rejected() {
+        let program = Parser::new(
+                Lexer::new(
+                    r#"
+                    enum Color { Red, Blue }
+                    struct Shape { color: Color }
+                    extern "C" {
+                        fn foo(s: Shape) -> Int;
+                    }
+                    "#,
+                )
+                .tokenize(),
+            )
+            .parse_program()
+            .unwrap();
+        let err = TypeContext::from_items(&program.items).expect_err("expected a struct with an enum field to be rejected");
+        assert!(err.contains("Int, Float, Bool, CStr"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extern_function_with_a_self_referential_struct_is_rejected() {
+        let program = Parser::new(
+                Lexer::new(
+                    r#"
+                    struct Node { next: Node }
+                    extern "C" {
+                        fn foo(n: Node) -> Int;
+                    }
+                    "#,
+                )
+                .tokenize(),
+            )
+            .parse_program()
+            .unwrap();
+        let err = TypeContext::from_items(&program.items).expect_err("expected a self-referential struct to be rejected");
+        assert!(err.contains("self-referential"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extern_function_with_a_cstr_field_inside_a_struct_is_rejected() {
+        // `CStr` isn't a resolvable ordinary type annotation at all
+        // (only `.as_cstr()` ever produces it) — so a struct can't even
+        // DECLARE a `CStr`-typed field, which already makes this
+        // rejected before `check_ffi_safe`'s own defensive "CStr is
+        // only supported as a top-level extern parameter/return type"
+        // restriction is even reached. That restriction stays in place
+        // as a second line of defense should `CStr` ever become a
+        // generally-resolvable annotation later.
+        let program = Parser::new(
+                Lexer::new(
+                    r#"
+                    struct Labeled { label: CStr }
+                    extern "C" {
+                        fn foo(l: Labeled) -> Int;
+                    }
+                    "#,
+                )
+                .tokenize(),
+            )
+            .parse_program()
+            .unwrap();
+        assert!(TypeContext::from_items(&program.items).is_err());
+    }
+
+    #[test]
+    fn extern_function_with_a_generic_struct_type_is_rejected() {
+        let program = Parser::new(
+                Lexer::new(
+                    r#"
+                    struct Box[T] { value: T }
+                    extern "C" {
+                        fn foo(b: Box[Int]) -> Int;
+                    }
+                    "#,
+                )
+                .tokenize(),
+            )
+            .parse_program()
+            .unwrap();
+        let err = TypeContext::from_items(&program.items).expect_err("expected a generic struct type to be rejected");
+        assert!(err.contains("Int, Float, Bool, CStr"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn callback_argument_naming_a_top_level_function_type_checks() {
+        let types = infer_program(
+            r#"
+            extern "C" {
+                fn call_with_10_and_20(f: (Int, Int) -> Int) -> Int;
+            }
+            let add (a: Int) (b: Int): Int = a + b
+            let result = unsafe { call_with_10_and_20(add) }
+            "#,
+        );
+        assert_eq!(types["result"], Type::Int);
+    }
+
+    #[test]
+    fn callback_argument_as_a_closure_literal_is_rejected() {
+        let err = infer_program_err(
+            r#"
+            extern "C" {
+                fn call_with_10_and_20(f: (Int, Int) -> Int) -> Int;
+            }
+            let result = unsafe { call_with_10_and_20(|a, b| a + b) }
+            "#,
+        );
+        assert!(err.contains("bare reference"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn callback_argument_as_a_local_variable_is_rejected() {
+        let err = infer_program_err(
+            r#"
+            extern "C" {
+                fn call_with_10_and_20(f: (Int, Int) -> Int) -> Int;
+            }
+            let add (a: Int) (b: Int): Int = a + b
+            let go x = { let f = add; unsafe { call_with_10_and_20(f) } }
+            "#,
+        );
+        assert!(err.contains("bare reference"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn callback_argument_with_a_mismatched_signature_is_a_type_error() {
+        let err = infer_program_err(
+            r#"
+            extern "C" {
+                fn call_with_10_and_20(f: (Int, Int) -> Int) -> Int;
+            }
+            let concat (a: Str) (b: Str): Str = a
+            let result = unsafe { call_with_10_and_20(concat) }
+            "#,
+        );
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn callback_return_type_is_rejected() {
+        let program = Parser::new(
+            Lexer::new(
+                r#"
+                extern "C" {
+                    fn foo() -> (Int) -> Int;
+                }
+                "#,
+            )
+            .tokenize(),
+        )
+        .parse_program()
+        .unwrap();
+        let err = TypeContext::from_items(&program.items).expect_err("expected a callback return type to be rejected");
+        assert!(err.contains("return type"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn nested_callback_type_is_rejected() {
+        let program = Parser::new(
+            Lexer::new(
+                r#"
+                extern "C" {
+                    fn foo(f: ((Int) -> Int) -> Int) -> Int;
+                }
+                "#,
+            )
+            .tokenize(),
+        )
+        .parse_program()
+        .unwrap();
+        assert!(TypeContext::from_items(&program.items).is_err());
+    }
+
+    #[test]
+    fn extern_function_with_an_unrecognized_type_name_is_rejected() {
+        let tokens = Lexer::new(
+            r#"
+            extern "C" {
+                fn foo(x: NotARealType) -> Int;
+            }
+            "#,
+        )
+        .tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap();
+        assert!(crate::context::TypeContext::from_items(&program.items).is_err());
+    }
+
+    #[test]
+    fn as_cstr_on_a_string_evaluates_to_cstr() {
+        assert_eq!(infer_in("\"hi\".as_cstr()", &TypeEnv::new()), Type::CStr);
+    }
+
+    #[test]
+    fn as_cstr_on_a_non_string_is_an_error() {
+        infer_err_in("5.as_cstr()", &TypeEnv::new());
+    }
+
+    #[test]
+    fn an_ordinary_str_cannot_be_passed_where_extern_expects_cstr() {
+        let err = infer_program_err(
+            r#"
+            extern "C" {
+                fn strlen(s: CStr) -> Int;
+            }
+            let result = unsafe { strlen("hi") }
+            "#,
+        );
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn as_cstr_result_passed_to_a_cstr_extern_param_type_checks() {
+        let types = infer_program(
+            r#"
+            extern "C" {
+                fn strlen(s: CStr) -> Int;
+            }
+            let result = unsafe { strlen("hi".as_cstr()) }
+            "#,
+        );
+        assert_eq!(types["result"], Type::Int);
     }
 
     #[test]

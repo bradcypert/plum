@@ -22,6 +22,15 @@ pub enum Type {
     Float,
     Bool,
     Str,
+    // The result of `s.as_cstr()` — a null-terminated C string ready to
+    // cross the FFI boundary, distinct from `Str` so an ordinary Plum
+    // string can't be passed directly to an extern function declared
+    // with a `CStr` parameter (see DESIGN.md's "FFI and C interop"
+    // section: explicit conversion, not implicit coercion, is the
+    // whole point). Otherwise a completely inert type — no operation
+    // is defined on it besides being produced by `.as_cstr()` and
+    // consumed by a `CStr`-typed extern parameter/return.
+    CStr,
     Unit,
     Var(TypeVarId),
     Function(Vec<Type>, Box<Type>),

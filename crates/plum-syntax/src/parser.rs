@@ -933,7 +933,17 @@ impl Parser {
         Ok((args, close.span))
     }
 
+    // A bare `(A)` (no `->`) is just grouping — parentheses around a
+    // single type, degenerating to that type itself, same spirit as
+    // grouping parens around an expression. `(A, B)` with no `->` (zero
+    // or 2+ elements, no arrow) has no meaning yet — Plum has tuple
+    // VALUES but no tuple-type annotation syntax — and is rejected with
+    // a clear error rather than silently guessed at. `(A, B) -> R` /
+    // `() -> R` build a real `Type::Function`.
     fn parse_type(&mut self) -> Result<Type, String> {
+        if self.check(&TokenKind::LParen) {
+            return self.parse_paren_or_function_type();
+        }
         let first = self.expect_ident("a type name")?;
         let start = first.span;
         let mut end = first.span;
@@ -953,6 +963,38 @@ impl Parser {
             });
         }
         Ok(Type::Path(segments, start.to(end)))
+    }
+
+    fn parse_paren_or_function_type(&mut self) -> Result<Type, String> {
+        let open = self.expect(TokenKind::LParen, "'('")?.span;
+        let mut params = Vec::new();
+        if !self.check(&TokenKind::RParen) {
+            params.push(self.parse_type()?);
+            while self.bump_if(&TokenKind::Comma) {
+                if self.check(&TokenKind::RParen) {
+                    break;
+                }
+                params.push(self.parse_type()?);
+            }
+        }
+        let close = self.expect(TokenKind::RParen, "')'")?.span;
+        if self.bump_if(&TokenKind::Arrow) {
+            let ret = self.parse_type()?;
+            let span = open.to(ret.span());
+            return Ok(Type::Function {
+                params,
+                ret: Box::new(ret),
+                span,
+            });
+        }
+        match params.len() {
+            1 => Ok(params.into_iter().next().expect("just checked len == 1")),
+            _ => Err(format!(
+                "expected a single parenthesized type or a function type ('(...) -> Type'), found {} at {:?}",
+                if params.is_empty() { "'()'" } else { "multiple types" },
+                open.to(close)
+            )),
+        }
     }
 
     fn parse_primary(&mut self) -> Result<Expr, String> {
@@ -1427,6 +1469,10 @@ mod tests {
                 let mut parts = vec!["gt".to_string(), base.join(".")];
                 parts.extend(args.iter().map(render_type));
                 format!("({})", parts.join(" "))
+            }
+            Type::Function { params, ret, .. } => {
+                let params_str = params.iter().map(render_type).collect::<Vec<_>>().join(" ");
+                format!("(fn ({params_str}) -> {})", render_type(ret))
             }
         }
     }
@@ -2481,6 +2527,36 @@ mod tests {
             )),
             "((extern \"C\" fn sqrt(x:Float)->Float fn abs(x:Float)->Float))"
         );
+    }
+
+    #[test]
+    fn function_type_in_extern_param() {
+        assert_eq!(
+            render_program(&parse_program("extern \"C\" { fn foo(cmp: (Int, Int) -> Int) -> Int; }")),
+            "((extern \"C\" fn foo(cmp:(fn (Int Int) -> Int))->Int))"
+        );
+    }
+
+    #[test]
+    fn zero_param_function_type() {
+        assert_eq!(
+            render_program(&parse_program("extern \"C\" { fn foo(cmp: () -> Int) -> Int; }")),
+            "((extern \"C\" fn foo(cmp:(fn () -> Int))->Int))"
+        );
+    }
+
+    #[test]
+    fn parenthesized_type_is_just_grouping() {
+        assert_eq!(
+            render_program(&parse_program("extern \"C\" { fn foo(x: (Int)) -> Int; }")),
+            "((extern \"C\" fn foo(x:Int)->Int))"
+        );
+    }
+
+    #[test]
+    fn multiple_types_in_parens_without_arrow_is_an_error() {
+        let tokens = Lexer::new("extern \"C\" { fn foo(x: (Int, Float)) -> Int; }").tokenize();
+        assert!(Parser::new(tokens).parse_program().is_err());
     }
 
     #[test]
