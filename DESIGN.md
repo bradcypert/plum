@@ -1503,7 +1503,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1+v2+v3 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization)
+### LLVM backend — v1-v4 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1525,11 +1525,19 @@ values (`Ctor`/`CtorReuse`/`RcAnnotated`/`Match`, refcounted via a
 small emitted runtime — see below), and — as of a follow-on chunk —
 generic structs/enums/functions, monomorphized into concrete, mangled
 instantiations before lowering (see "Generics/monomorphization"
-below). Everything else in `ir::Expr` (strings, arrays, closures,
-concurrency, FFI, `For`, `Assign`, `ToString`, ...) is still out of
-scope and produces a clear codegen error naming what's missing, never
-a panic — including when a generic is instantiated at one of those
-still-unsupported types (e.g. `Box[Str]`).
+below), and — as of a further follow-on chunk — arrays (literal,
+index, len, push/pop/set/remove + FBIP's reuse-in-place variants) and
+core, byte-level string operations (literal, len, byte indexing,
+concat + reuse, `.contains()`/`.starts_with()`/`.ends_with()`,
+`ToString` for `Int`/`Float`/`Bool`/`Str` — see "Arrays and core
+strings" below). Still out of scope and producing a clear codegen
+error, never a panic: Unicode-aware string operations (`.runes()`,
+`.to_upper()`, `.to_lower()`, `.trim()`, `.replace()`, `.split()`),
+general `for x in arr`/`.map()`/`.filter()`/`.fold()` array iteration
+(today's `For` IR node is range-only), closures, concurrency, FFI
+(including `CStr`), `Assign`, non-constant `Global` initializers — and
+a generic instantiated at any of these still-unsupported types (e.g.
+`Box[Array[Str]]` once `.split()` is needed, or `Box[Closure]`).
 
 **Guaranteed tail calls**: any call in tail position (the function's
 own body; both branches of a tail-positioned `If`/arms of a tail-
@@ -1662,6 +1670,114 @@ tags, since its plain-tagged body would otherwise reference tags
 with more than one reachable instantiation is rejected with a clear
 "ambiguous entry point" error (compile a concrete, non-generic wrapper
 function instead) rather than silently picking one.
+
+**Arrays and core strings**: neither fits the `{ i64 refcount, i64
+tag, i64 fields[N] }` Ctor scheme above — `N` there is required to be
+a compile-time-fixed property of the TAG, but a string's raw byte
+buffer isn't `Vec<CgType>`-shaped at all, and an array's length is
+runtime-variable. Two new, genuinely separate heap-cell layouts:
+strings are `{ i64 refcount, i64 len, i8 bytes[len] }` (one extra
+trailing `\0` always kept in sync, purely so `plumc`'s own `emit_main`
+can `printf` a `Str`-returning test result via `%s` — Plum's own
+`.len()` never counts it; not language-visible); arrays are `{ i64
+refcount, i64 len, <elemTy word> elements[len] }`, structurally
+identical in shape to a `Ctor` cell (refcount + one more `i64` + N
+words), so the existing `field_byte_offset`/`store_field_word`/
+`load_field_word` helpers are reused unchanged, just called with a
+runtime-variable index via new sibling `store_array_elem`/
+`load_array_elem` functions instead of a compile-time-bounded one.
+Two new top-level `CgType` variants, `Str` and `Array(Box<CgType>)`
+(parallel to `Heap`, not a sub-case of it — unlike a struct/enum,
+which needs `tag_ids`/`tag_fields` side tables because one `Heap`
+pointer type covers many different runtime tags, an array/string's
+`CgType` is precise and complete on its own and needs zero runtime tag
+dispatch).
+
+An array's element `CgType` is deliberately NOT resolved via the
+monomorphization worklist above — `Array[T]` is representationally a
+pseudo-generic `Type::Struct("Array", [T])` to `plum_types`, but
+`Infer::record_site` (what `resolve_generic_sites` depends on) is
+never invoked for it, since the builtin pseudo-generics (`Array`/
+`Task`/`Sender`/`Receiver`/`Ref`) are deliberately excluded from
+`TypeContext` in the first place — and arrays have no TAG to mangle
+anyway (`ARRAY_TAG` is one constant for every instantiation), so
+there's nothing for `TagFields`-style per-mangled-tag output to
+produce. Instead, element `CgType` is recovered through three narrow,
+independent paths that together cover every site codegen ever touches
+an array at: a function signature's `Array[T]` position (`plum_type_to_
+cg_type` now recurses into `Struct("Array", [elem])`, fixing a latent
+bug where it previously silently mapped to plain `CgType::Heap`); a
+non-empty literal or any op with a value operand (derived structurally
+from that operand's own already-computed `CgType` — no lookup needed);
+and reading an existing array (derived from its own already-known
+`CgType::Array(elemTy)`, threaded through `Env` like any other value).
+The one gap — an empty literal `[]` has no operand to derive `elemTy`
+from — is closed by a new IR node, `ir::Expr::EmptyArray(PrimTy)`
+(`PrimTy` a small new plum-ir-local enum, independent of both
+`plum_types::Type` and `plum_codegen::CgType`), produced by lowering
+only for an empty `ArrayLiteral`, using one new span-keyed `Infer` side
+channel (`empty_array_elem_types`) mirroring the existing `field_
+owners`/`array_for_loops` precedent exactly. (Known narrow gap: this
+side channel isn't threaded through `monomorphize.rs`, so an empty
+array literal inside a *generically monomorphized* function body still
+lowers to the old untyped shape and produces a clear codegen error —
+not yet fixed, consistent with this whole area's incremental scoping.)
+
+Array reuse-in-place (`ArrayPush/Pop/Set/RemoveReuse`, FBIP's already-
+computed decisions) leans on a declared libc `@realloc` to encapsulate
+the actual grow-or-shrink-in-place-or-move decision at the `malloc`/
+`free` layer, rather than hand-rolling it the way `CtorReuse` does —
+refcount==1 is still checked first (a shared array must never be
+`realloc`'d, since other holders would dangle), and `realloc` doesn't
+preserve refcount across the call, so it's explicitly restored to 1
+after. A real correctness gap neither the plan nor any upstream pass
+anticipated, found and fixed during implementation: every FRESH-
+allocation array op that `memcpy`s a whole buffer of elements into a
+new cell creates a SECOND, independently-owned reference to every
+heap-shaped element it copied — no upstream FBIP pass tracks this (it
+only reasons about whole heap-cell *variables* via last-use analysis,
+never individual array *slots* surviving a bulk copy) — so codegen
+increments every copied heap-shaped element itself
+(`inc_copied_array_elements`), or the shared element would eventually
+be decremented twice once both arrays are released, a real double-free
+rather than an accepted leak. The one place this needs a decrement
+instead — `ArraySetReuse`'s overwritten slot, `ArrayPopReuse`'s
+dropped tail, `ArrayRemoveReuse`'s dropped middle element on a
+PROVABLY-uniquely-owned (refcount was 1) cell — is handled by a
+parallel `dec_array_element_at`. Final release (the array analogue of
+`@plum_release_fields`) needs no runtime tag dispatch at all, unlike
+structs/enums: since an array's element `CgType` is always statically
+known at every codegen site touching it, one dedicated
+`@plum_rc_dec_array_<mangled_elemty>` is emitted per **distinct**
+element `CgType` that actually appears anywhere in the compiled
+program — a genuine simplification over the struct/enum scheme's
+runtime `icmp`-chain dispatch.
+
+`Index`/`.len()` are genuinely shape-shared IR nodes (byte-indexing a
+`Str` vs. element-indexing an `Array`, no static hint at the node
+itself) — dispatch is a simple match on the already-known `CgType` of
+the value being indexed, once `Str`/`Array` exist and are threaded
+through `codegen_value`'s return type; no new type information is
+needed beyond what codegen already tracks. `ToString` dispatches the
+same way: `Int`/`Float` via a declared libc `@snprintf` into a stack
+buffer copied into a fresh string cell, `Bool` via two static string
+constants, `Str` via a genuine fresh copy (never reuse-in-place, per
+`ir::Expr::ToString`'s own "always allocates" contract), anything else
+a clear `Err` — enforced STATICALLY here (stronger than the
+interpreter's necessarily-dynamic runtime-tag check), since a value's
+`CgType` is always known structurally at codegen time.
+
+Bounds/emptiness checks are new ground for codegen — no runtime-
+checked-failure mechanism existed before this (`Match`'s `unreachable`
+is a compile-time exhaustiveness fact, not a runtime check). One
+shared `@plum_abort(ptr %msg)` helper (`printf`s the message, `exit(1)`
+via a declared libc `@exit`) backs every `a[10]`-on-a-length-3-array-
+style check, compiling to an ordinary `icmp`+`br` to either a `fail`
+block or a `continue` block — the honest, minimal compiled-binary
+equivalent of the interpreter's own `Result<_, String>` hard-error-out
+behavior. `CStr` stays out of scope (it has no operations besides FFI
+boundary crossing, and FFI as a whole isn't in codegen's scope yet —
+adding it now would be dead machinery with zero reachable consumers).
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck

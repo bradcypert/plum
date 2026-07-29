@@ -23,6 +23,15 @@ use std::time::Duration;
 // different construction site).
 const DEFAULT_ARM_TAG: &str = "0Default";
 
+// `lower.rs`'s own `ARRAY_TAG` — duplicated here rather than shared
+// across the crate boundary, same established precedent as
+// `DEFAULT_ARM_TAG` above. Needed ONLY for `Expr::EmptyArray`'s eval
+// arm, which must produce EXACTLY what `Ctor{ARRAY_TAG, []}` already
+// does (an ordinary array cell with zero fields) — every other case
+// treats array tags as opaque strings, same as `DEFAULT_ARM_TAG`'s own
+// comment already explains.
+const ARRAY_TAG: &str = "0Array";
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
@@ -1728,6 +1737,14 @@ impl Interpreter {
             Expr::Ctor { tag, fields } => {
                 let values = fields.iter().map(|f| self.eval(f)).collect::<Result<Vec<_>, _>>()?;
                 let addr = self.heap.alloc(tag.clone(), values);
+                Ok(Value::HeapRef(addr))
+            }
+            // `[]` — the `PrimTy` payload is invisible at runtime (it
+            // only matters to codegen — see `ir::Expr::EmptyArray`'s
+            // doc comment); this produces EXACTLY what `Ctor{ARRAY_TAG,
+            // []}` already would.
+            Expr::EmptyArray(_) => {
+                let addr = self.heap.alloc(ARRAY_TAG.to_string(), vec![]);
                 Ok(Value::HeapRef(addr))
             }
             Expr::CtorReuse { reuse_of, tag, fields } => {

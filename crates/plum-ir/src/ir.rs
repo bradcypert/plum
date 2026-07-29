@@ -55,6 +55,28 @@ pub enum BinOp {
     Or,
 }
 
+// The element type of an `EmptyArray` literal — a small, closed set
+// deliberately independent from `plum_types::Type` (this crate stays
+// self-contained the same way `plum-codegen::CgType` does, and for the
+// same reason: `EmptyArray` only ever needs to name a handful of
+// concrete shapes, never a full type, generic, or type variable).
+// `Heap` covers every struct/enum-shaped element uniformly, matching
+// `CgType::Heap`'s own "opaque ptr, no static tag" treatment — an empty
+// array can never itself reveal WHICH struct/enum its (nonexistent)
+// elements would have been, and nothing downstream needs to know
+// beyond "heap-shaped or not" (see `plum-codegen`'s `RcAnnotated`/
+// release-function dispatch, which only ever branches on `CgType`
+// itself, not on a specific tag, for exactly this reason).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PrimTy {
+    Int,
+    Float,
+    Bool,
+    Str,
+    Array(Box<PrimTy>),
+    Heap,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Int(i64),
@@ -126,6 +148,22 @@ pub enum Expr {
         tag: String,
         fields: Vec<Expr>,
     },
+    // `[]` — an empty array literal. Every OTHER array literal (and
+    // every array op with a value operand, or one that reads an
+    // already-known `Array[T]`) lowers straight to `Ctor{ARRAY_TAG,
+    // ..}`/derives its element type structurally at codegen time — see
+    // `plum-codegen`'s module doc comment for the full "how array
+    // element CgType is determined" story. An empty literal is the ONE
+    // gap: there's no field to derive an element type FROM, so lowering
+    // needs `plum_types::Infer`'s own resolved type for this exact site
+    // (threaded through via `LoweringContext::empty_array_elem_types`,
+    // mirroring `field_owners`) to carry it through as this dedicated
+    // node instead. Evaluates to EXACTLY what `Ctor{ARRAY_TAG, []}`
+    // would (see `plum-interp`'s trivial `EmptyArray` eval arm) — the
+    // `PrimTy` payload is invisible at runtime, needed only so codegen
+    // knows what element-release function a LATER push/set into this
+    // array should use.
+    EmptyArray(PrimTy),
     // Deconstructs `scrutinee` by tag; the matching arm's `bindings`
     // name the fields positionally. No or-patterns yet — see this
     // file's scope note. Arms are tried in order: the first arm whose

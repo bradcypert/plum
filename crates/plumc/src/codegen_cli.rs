@@ -65,10 +65,24 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
         // `plum_codegen::emit_program`'s own "unknown tag" error at the
         // point something actually tries to construct/match it, not
         // here.
+        PlumType::Str => Ok(CgType::Str),
+        // `Array[T]` recurses into `T` — this is ALSO a genuine bug fix
+        // over the previous chunk: before this arm existed, `Array[T]`
+        // fell through to the `Struct(..)` wildcard arm just above,
+        // silently mapping to plain `CgType::Heap` (indistinguishable
+        // from any ordinary struct at the LLVM level), which would only
+        // fail LATER with a confusing "unknown tag: 0Array" error the
+        // first time codegen actually tried to construct/index one —
+        // rather than this clean, specific `Array[T]`-shaped `CgType`
+        // from the start. Every OTHER `Struct`/`Enum` reference is
+        // still handled by the wildcard arm below.
+        PlumType::Struct(name, args) if name == "Array" && args.len() == 1 => {
+            Ok(CgType::Array(Box::new(plum_type_to_cg_type(&args[0])?)))
+        }
         PlumType::Struct(..) | PlumType::Enum(..) => Ok(CgType::Heap),
         other => Err(format!(
-            "codegen only supports Int/Float/Bool/Unit or a non-generic struct/enum, found a signature \
-             involving {other:?}"
+            "codegen only supports Int/Float/Bool/Unit/Str/Array[T] or a non-generic struct/enum, found a \
+             signature involving {other:?}"
         )),
     }
 }
@@ -148,14 +162,22 @@ pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<St
             ));
         }
     }
-    // A heap-shaped entry-point RETURN isn't printable (this chunk
-    // adds no `ToString`-equivalent for compiled heap values) — real
-    // programs construct/consume heap values INTERNALLY; only the
-    // scalar entry-point signatures this whole test suite already uses
-    // are supported for the compiled `main` wrapper itself.
+    // A heap-shaped (struct/enum) OR array-shaped entry-point RETURN
+    // isn't printable (this chunk's `ToString` only covers Int/Float/
+    // Bool/Str — no positional-field/element rendering for a compiled
+    // heap or array value) — real programs construct/consume those
+    // INTERNALLY, only ever exposing a scalar or `Str` result at the
+    // entry point itself; `Str` (NEW as of this chunk) IS printable,
+    // via `emit_main`'s own `Str` case below, so it's excluded from
+    // this rejection.
     if sig.ret == CgType::Heap {
         return Err(format!(
             "codegen: {entry_fn:?} returns a heap-shaped value, which the compiled entry point can't print yet"
+        ));
+    }
+    if matches!(sig.ret, CgType::Array(_)) {
+        return Err(format!(
+            "codegen: {entry_fn:?} returns an array-shaped value, which the compiled entry point can't print yet"
         ));
     }
 
@@ -187,6 +209,7 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
     let mut infer = Infer::with_context(type_ctx);
     let types = infer.infer_program(&program).map_err(|e| format!("type error: {e}"))?;
     let resolved_sites = infer.resolve_generic_sites().map_err(|e| format!("type error: {e}"))?;
+    let empty_array_elem_types = infer.resolve_empty_array_elem_types().map_err(|e| format!("type error: {e}"))?;
 
     plum_ir::movecheck::check_moves(&program).map_err(|e| format!("move error: {e}"))?;
 
@@ -208,7 +231,8 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
 
     let lowering_ctx = LoweringContext::from_items(&program.items)
         .with_field_owners(infer.field_owners().clone())
-        .with_array_for_loops(infer.array_for_loops().clone());
+        .with_array_for_loops(infer.array_for_loops().clone())
+        .with_empty_array_elem_types(empty_array_elem_types);
     let mut ir_program = lower_program(&program, &lowering_ctx).map_err(|e| format!("lowering error: {e}"))?;
     // `mono_plan.functions` REPLACES `lower_program`'s own function list
     // wholesale — it already covers every function actually needed,
@@ -317,18 +341,39 @@ fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
                 "  %r = call i1 @{entry_fn}({args_ir})\n  %rz = zext i1 %r to i32\n  call i32 (ptr, ...) @printf(ptr @fmt, i32 %rz)\n"
             ),
         ),
-        // `compile_and_run` already rejects a `Heap`-returning entry
-        // point before ever calling this function — see its own doc
-        // comment on why. Unreachable in practice, kept as a defensive
-        // error (not a panic) rather than silently producing garbage
-        // IR if that check is ever bypassed.
-        CgType::Heap => {
-            return "; unreachable: compile_and_run rejects a Heap-returning entry point before this point"
+        // Plum strings are length-prefixed, not NUL-terminated on their
+        // own — `printf`-ing one directly via `%s` would read past the
+        // end of its actual content. Safe here ONLY because every
+        // string cell `plum-codegen` allocates keeps one extra trailing
+        // `\0` byte in sync (see `plum_codegen::emit_runtime`'s own
+        // string-runtime doc comment) purely to make THIS print path
+        // safe — an implementation detail invisible to Plum code
+        // itself; `.len()` still always reports the true byte length,
+        // never `len+1`.
+        CgType::Str => (
+            "%s\\0A\\00",
+            4,
+            format!(
+                "  %r = call ptr @{entry_fn}({args_ir})\n  \
+                 %bytes = getelementptr i8, ptr %r, i64 16\n  \
+                 call i32 (ptr, ...) @printf(ptr @fmt, ptr %bytes)\n"
+            ),
+        ),
+        // `compile_and_run` already rejects a `Heap`- or `Array`-
+        // returning entry point before ever calling this function — see
+        // its own doc comment on why. Unreachable in practice, kept as
+        // a defensive error (not a panic) rather than silently
+        // producing garbage IR if that check is ever bypassed.
+        CgType::Heap | CgType::Array(_) => {
+            return "; unreachable: compile_and_run rejects a Heap/Array-returning entry point before this point"
                 .to_string()
         }
     };
+    // `@printf` is NOT re-declared here — `plum_codegen::emit_runtime`
+    // already declares it unconditionally (needed by `@plum_abort`), and
+    // LLVM IR rejects a duplicate `declare` for the same function.
     format!(
-        "declare i32 @printf(ptr, ...)\n@fmt = constant [{fmt_len} x i8] c\"{fmt_bytes}\"\n\ndefine i32 @main() {{\nentry:\n{call_line}  ret i32 0\n}}\n"
+        "@fmt = constant [{fmt_len} x i8] c\"{fmt_bytes}\"\n\ndefine i32 @main() {{\nentry:\n{call_line}  ret i32 0\n}}\n"
     )
 }
 
@@ -439,13 +484,13 @@ mod tests {
     #[test]
     fn a_construct_outside_codegen_scope_is_a_clear_error() {
         // `go`'s own DECLARED signature is Int -> Int (fully within
-        // supported scope), but its BODY constructs a string — a real
-        // construct still outside codegen's scope (structs/enums are
-        // now supported — see the heap-value tests below) — exercising
-        // `plum_codegen`'s own per-expression rejection, not just
-        // `plumc`'s signature-conversion gate (see the next test for
-        // that one).
-        let src = "let go (n: Int): Int = { let s = \"hi\"; 5 }";
+        // supported scope), but its BODY calls `.runes()` — a
+        // genuinely Unicode-aware string op still outside codegen's
+        // scope this chunk (core, byte-level string ops ARE supported
+        // now — see the string tests below) — exercising `plum_codegen`'s
+        // own per-expression rejection, not just `plumc`'s signature-
+        // conversion gate (see the next test for that one).
+        let src = "let go (n: Int): Int = { let r = \"hi\".runes(); 5 }";
         let err = compile_and_run(src, "go", &[CgValue::Int(1)]).expect_err("expected a codegen scope error");
         assert!(err.contains("does not yet support"), "unexpected error: {err}");
     }
@@ -671,5 +716,96 @@ mod tests {
             err.contains("monomorphization") || err.contains("outside codegen's supported scope"),
             "unexpected error: {err}"
         );
+    }
+
+    // --- strings and arrays: real compile-and-run tests ---
+
+    #[test]
+    fn string_literal_concat_and_to_string_print_correctly() {
+        // Exercises a string LITERAL, `.concat()`, `Int::to_string()`,
+        // and a further `.concat()` of the result, all the way through
+        // to the compiled entry point's own `Str`-printing path
+        // (`emit_main`'s new `CgType::Str` case).
+        let src = "\
+            let go (): String = { let n = 42; \"answer: \".concat(n.to_string()) }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "answer: 42");
+    }
+
+    #[test]
+    fn array_built_via_literal_push_and_set_sums_correctly_via_recursive_indexing() {
+        // No `for` iteration yet (general array iteration is explicitly
+        // deferred — see DESIGN.md/the plan) — summed via a small
+        // TAIL-recursive direct-indexing wrapper instead, exactly the
+        // workaround the plan calls for.
+        let src = "\
+            let sum_from (a: Array[Int]) (i: Int) (acc: Int): Int = \
+                if i == a.len() { acc } else { sum_from(a, i + 1, acc + a[i]) }\n\
+            let go (): Int = { \
+                let a = [1, 2].push(3).set(0, 10); \
+                sum_from(a, 0, 0) \
+            }\n\
+        ";
+        // a = [1, 2, 3] after push, then set(0, 10) -> [10, 2, 3] -> sum 15
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "15");
+    }
+
+    #[test]
+    fn array_push_reuse_is_correct_end_to_end_on_a_real_reuse_eligible_program() {
+        // `grow`'s `a.push(v)` is exactly FBIP's reuse-in-place shape
+        // (bare-`Var` receiver, uniquely owned by the time it's called
+        // here) — `plum-codegen`'s own unit test already verifies the
+        // reuse-vs-fresh branch SHAPE structurally; this proves it
+        // actually EXECUTES correctly end to end.
+        let src = "\
+            let grow (a: Array[Int]) (v: Int): Array[Int] = a.push(v)\n\
+            let sum_from (a: Array[Int]) (i: Int) (acc: Int): Int = \
+                if i == a.len() { acc } else { sum_from(a, i + 1, acc + a[i]) }\n\
+            let go (): Int = { let a = grow([1, 2, 3], 4); sum_from(a, 0, 0) }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "10");
+    }
+
+    #[test]
+    fn nested_heap_array_elements_are_refcounted_correctly_when_popped() {
+        // `Array[List[Int]]` — proves `@plum_rc_dec_array_Heap` (the
+        // array release function for a HEAP-shaped, tag-dispatched
+        // element type) composes correctly with the existing `@plum_rc_
+        // dec`/`@plum_release_fields` machinery: popping one off leaves
+        // a SHORTER array that still needs every SURVIVING element
+        // correctly incremented (see `inc_copied_array_elements`), and
+        // the popped-off list's own refcount must still end up correct
+        // (accessed independently below, proving it wasn't
+        // double-freed/leaked into an inconsistent state).
+        let src = "\
+            enum List { Cons(Int, List), Nil }\n\
+            let sum (lst: List): Int = match lst {\n\
+                Cons(h, t) => h + sum(t),\n\
+                Nil => 0,\n\
+            }\n\
+            let go (): Int = {\n\
+                let a = [Cons(1, Nil), Cons(2, Nil), Cons(3, Nil)];\n\
+                let popped = a.pop();\n\
+                sum(popped[0]) + sum(popped[1]) + sum(a[2])\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "6");
+    }
+
+    #[test]
+    fn a_runtime_array_bounds_check_failure_exits_non_zero() {
+        // `a[10]` on a length-3 array — a RUNTIME-checked failure (see
+        // `plum_codegen::codegen`'s `emit_runtime_check`/`@plum_abort`),
+        // never a silent wraparound or a Rust-level panic. Asserted via
+        // the compiled BINARY's own non-zero exit status, not a
+        // `Result::Err` — codegen itself succeeds; it's the COMPILED
+        // PROGRAM that fails at runtime.
+        let src = "let go (): Int = { let a = [1, 2, 3]; a[10] }";
+        let err = compile_and_run(src, "go", &[CgValue::Unit]).expect_err("expected the compiled binary to exit non-zero");
+        assert!(err.contains("non-zero"), "unexpected error: {err}");
     }
 }

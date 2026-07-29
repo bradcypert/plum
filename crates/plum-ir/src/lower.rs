@@ -45,6 +45,23 @@ pub struct LoweringContext {
     // `for x in arr`) is unaffected, since the literal-range fast path
     // and the ordinary Range-Match-unwrap fallback don't consult it.
     array_for_loops: std::collections::HashSet<plum_syntax::span::Span>,
+    // `Expr::ArrayLiteral` span -> resolved element type, but ONLY for
+    // EMPTY literals (`[]`) — exactly as `plum_types::Infer` resolved it
+    // after inference completes. Every OTHER array-shaped expression
+    // (a non-empty literal, any array op with a value operand, reading
+    // an already-known array) derives its element type structurally at
+    // CODEGEN time, with no lowering-level side channel needed at all —
+    // see `plum-codegen`'s module doc comment for the full "how array
+    // element CgType is determined" story. `[]` is the one genuine gap:
+    // there's no field for codegen to derive a type FROM, so lowering
+    // needs this table (mirroring `field_owners`/`array_for_loops`
+    // exactly) to bake the resolved type into a dedicated `ir::Expr::
+    // EmptyArray(PrimTy)` node instead of an ordinary, type-erased
+    // `Ctor`. Empty by default: a lowering-only test that never
+    // populates this (and never lowers an empty array literal) is
+    // unaffected — see `lower_expr`'s `ArrayLiteral` arm for the clear
+    // error an unpopulated lookup produces instead of guessing.
+    empty_array_elem_types: HashMap<plum_syntax::span::Span, plum_types::types::Type>,
     // Declared `extern "C"` function names -> their signatures, gathered
     // from every `ItemKind::Extern` block up front (same "program-aware
     // pass before lowering expressions" reasoning as `struct_fields`).
@@ -72,6 +89,7 @@ impl LoweringContext {
             variants: HashMap::new(),
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
+            empty_array_elem_types: HashMap::new(),
             extern_fns: HashMap::new(),
             struct_field_types: HashMap::new(),
         }
@@ -88,6 +106,17 @@ impl LoweringContext {
     /// computed during inference — see `array_for_loops`'s doc comment.
     pub fn with_array_for_loops(mut self, array_for_loops: std::collections::HashSet<plum_syntax::span::Span>) -> Self {
         self.array_for_loops = array_for_loops;
+        self
+    }
+
+    /// Attaches the span -> resolved-element-type map for EMPTY array
+    /// literals `plum-types` computed during inference — see
+    /// `empty_array_elem_types`'s doc comment.
+    pub fn with_empty_array_elem_types(
+        mut self,
+        empty_array_elem_types: HashMap<plum_syntax::span::Span, plum_types::types::Type>,
+    ) -> Self {
+        self.empty_array_elem_types = empty_array_elem_types;
         self
     }
 
@@ -361,6 +390,35 @@ const RANGE_TAG: &str = "0Range";
 // An `Array[T]` literal's synthetic tag — same leading-digit,
 // unreachable-by-any-real-identifier trick as `RANGE_TAG`/`tuple_tag`.
 const ARRAY_TAG: &str = "0Array";
+
+// Converts a fully-resolved `plum_types::Type` into `ir::PrimTy` — used
+// ONLY for an empty array literal's element type (see `ir::Expr::
+// EmptyArray`'s doc comment): every other array/heap-typed site in this
+// IR stays type-erased (`Ctor`'s tag alone is enough, `plum-codegen`
+// derives everything else structurally), so this is deliberately the
+// ONE place lowering ever needs to look inside a `plum_types::Type` at
+// all. Any struct/enum instantiation (generic or not) collapses to
+// `PrimTy::Heap`, mirroring `CgType::Heap`'s own "opaque ptr" treatment
+// — an empty array can't reveal a specific tag to preserve even if this
+// tried to. A type this can't represent (a bare type variable that
+// somehow survived resolution, `Unit`, `CStr`, a function type, ...) is
+// a clear error, never a silent guess.
+fn type_to_prim_ty(ty: &plum_types::types::Type) -> Result<ir::PrimTy, String> {
+    use plum_types::types::Type;
+    match ty {
+        Type::Int => Ok(ir::PrimTy::Int),
+        Type::Float => Ok(ir::PrimTy::Float),
+        Type::Bool => Ok(ir::PrimTy::Bool),
+        Type::Str => Ok(ir::PrimTy::Str),
+        Type::Struct(name, args) if name == "Array" && args.len() == 1 => {
+            Ok(ir::PrimTy::Array(Box::new(type_to_prim_ty(&args[0])?)))
+        }
+        Type::Struct(..) | Type::Enum(..) => Ok(ir::PrimTy::Heap),
+        other => Err(format!(
+            "an empty array literal's element type resolved to {other:?}, which codegen can't represent"
+        )),
+    }
+}
 
 // The `MatchArm.tag` used for a catch-all arm (`_`/bare-ident) MIXED
 // into an otherwise Ctor-tag-shaped match (`Circle(r) => .., _ => ..`)
@@ -645,7 +703,25 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         }
         // `[e1, e2, ...]` — heap-allocated exactly like a tuple/struct,
         // via the SAME `Ctor` node, just with a synthetic tag no
-        // struct/enum declaration can ever spell (see `ARRAY_TAG`).
+        // struct/enum declaration can ever spell (see `ARRAY_TAG`). An
+        // EMPTY literal has no field to derive an element type from
+        // later (see `plum-codegen`'s "how array element CgType is
+        // determined" story), so — WHEN `plum_types::Infer` has resolved
+        // one for this exact span (see `empty_array_elem_types`'s own
+        // doc comment) — it lowers to the dedicated `EmptyArray` node
+        // instead, carrying that type through. A lowering-only caller
+        // that never ran type inference at all (this crate's own unit
+        // tests included — see this file's precedent of exercising
+        // `lower_expr` directly against a bare `LoweringContext::new()`)
+        // has no such entry; falling back to the SAME untyped
+        // `Ctor{ARRAY_TAG, []}` every other array literal produces
+        // keeps that usage working exactly as before — only codegen
+        // (which always runs after a real `plum_types::Infer` pass)
+        // actually needs the `EmptyArray` distinction at all.
+        ast::Expr::ArrayLiteral(elements, span) if elements.is_empty() && ctx.empty_array_elem_types.contains_key(span) => {
+            let ty = &ctx.empty_array_elem_types[span];
+            Ok(ir::Expr::EmptyArray(type_to_prim_ty(ty)?))
+        }
         ast::Expr::ArrayLiteral(elements, _) => {
             let fields = elements.iter().map(|e| lower_expr(e, ctx)).collect::<Result<_, _>>()?;
             Ok(ir::Expr::Ctor {

@@ -59,7 +59,7 @@ pub fn optimize_program(program: Program) -> Program {
 /// needs a type checker we don't have yet).
 pub fn mark_reuse(expr: Expr) -> Expr {
     match expr {
-        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) => expr,
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) | Expr::EmptyArray(_) => expr,
         Expr::Unary(op, e) => Expr::Unary(op, Box::new(mark_reuse(*e))),
         Expr::AsCStr(e) => Expr::AsCStr(Box::new(mark_reuse(*e))),
         Expr::Binary(op, l, r) => Expr::Binary(op, Box::new(mark_reuse(*l)), Box::new(mark_reuse(*r))),
@@ -346,7 +346,7 @@ pub fn mark_reuse(expr: Expr) -> Expr {
 /// body to insert the actual Inc/Dec ops for that one name.
 fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
     match expr {
-        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) => expr,
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) | Expr::EmptyArray(_) => expr,
         Expr::Unary(op, e) => Expr::Unary(op, Box::new(transform(*e, known_heap))),
         Expr::AsCStr(e) => Expr::AsCStr(Box::new(transform(*e, known_heap))),
         Expr::Binary(op, l, r) => Expr::Binary(
@@ -611,7 +611,7 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
 fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
     match expr {
         Expr::Var(n) => n == name,
-        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit => false,
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) => false,
         Expr::Unary(_, e) => expr_mentions_var(e, name),
         Expr::AsCStr(e) => expr_mentions_var(e, name),
         Expr::Binary(_, l, r) => expr_mentions_var(l, name) || expr_mentions_var(r, name),
@@ -700,6 +700,13 @@ fn is_syntactically_heap(expr: &Expr, known_heap: &HashSet<String>) -> bool {
         // Str`'s doc comment. Same treatment as `Ctor` here: always
         // heap-shaped, unconditionally.
         Expr::Str(_) => true,
+        // An empty array literal is heap-allocated too — see
+        // `EmptyArray`'s own doc comment. Without this arm, `let a = [];
+        // ...` would fall through to the catch-all `false` below and
+        // never get refcount-tracked at all, silently leaking (never
+        // Dec'd) rather than being unsound — but still a real
+        // correctness gap worth avoiding outright.
+        Expr::EmptyArray(_) => true,
         Expr::Var(name) => known_heap.contains(name),
         _ => false,
     }
@@ -736,7 +743,7 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 (Expr::Var(n), true)
             }
         }
-        Expr::Var(_) | Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit => {
+        Expr::Var(_) | Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) => {
             (expr, live_after)
         }
         Expr::Unary(op, e) => {

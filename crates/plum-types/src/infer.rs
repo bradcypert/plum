@@ -261,6 +261,17 @@ pub struct Infer {
     // which of the two totally different desugarings — Range-Match-
     // unwrap vs. index-based array loop — applies.
     array_for_loops: std::collections::HashSet<plum_syntax::span::Span>,
+    // `Expr::ArrayLiteral` span -> its element type's still-possibly-
+    // unresolved `Type`, recorded ONLY for EMPTY literals (`[]`) — see
+    // `resolve_empty_array_elem_types`'s doc comment for why this needs
+    // its own two-phase resolution, mirroring `generic_sites`/
+    // `resolve_generic_sites` exactly, rather than being resolvable
+    // in-place the way `field_owners`'s plain `String` payload is: at
+    // the literal's OWN inference site the element type is just a
+    // fresh, still-unconstrained `Var` (see `infer_expr`'s
+    // `ArrayLiteral` arm), and only becomes concrete (if it ever does)
+    // once the WHOLE program's final substitution is known.
+    empty_array_elem_types: HashMap<Span, Type>,
     // Whether the expression currently being inferred is lexically
     // inside an `unsafe { .. }` block — toggled true/false around
     // `ast::Expr::Unsafe`'s own handling, not a stack (nested `unsafe`
@@ -351,6 +362,7 @@ impl Infer {
             ctx: crate::context::TypeContext::new(),
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
+            empty_array_elem_types: HashMap::new(),
             in_unsafe: false,
             top_level_fns: HashSet::new(),
             current_fn: None,
@@ -371,6 +383,7 @@ impl Infer {
             ctx,
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
+            empty_array_elem_types: HashMap::new(),
             in_unsafe: false,
             top_level_fns: HashSet::new(),
             current_fn: None,
@@ -403,6 +416,37 @@ impl Infer {
     /// argument list, which name each positional argument binds to.
     pub fn fn_generics(&self) -> &HashMap<String, Vec<(String, TypeVarId)>> {
         &self.fn_generics
+    }
+
+    /// Resolves every EMPTY array literal's element type against the
+    /// whole program's final substitution — mirrors `resolve_generic_
+    /// sites` exactly (same "must be called after a successful
+    /// `infer_program`" precondition, same reason), just for the
+    /// simpler `empty_array_elem_types` side table instead of
+    /// `generic_sites`. Unlike `resolve_generic_sites`, there's no
+    /// tier-2 "template" fallback here (an empty array literal is never
+    /// itself inside a generic declaration's OWN type parameter the way
+    /// a generic function call site can be) — a still-unresolved `Var`
+    /// after the final substitution is always a genuine ambiguity
+    /// (`let x = []` with `x` never used anywhere that would pin its
+    /// element type), reported clearly rather than silently defaulted.
+    pub fn resolve_empty_array_elem_types(&self) -> Result<HashMap<Span, Type>, String> {
+        let subst = self
+            .final_subst
+            .as_ref()
+            .ok_or_else(|| "internal error: resolve_empty_array_elem_types called before infer_program completed".to_string())?;
+        let mut out = HashMap::with_capacity(self.empty_array_elem_types.len());
+        for (span, ty) in &self.empty_array_elem_types {
+            let resolved = subst.apply(ty);
+            if matches!(resolved, Type::Var(_)) {
+                return Err(format!(
+                    "cannot determine the element type of the empty array literal at {span:?} — it's never \
+                     used anywhere that would pin its element type to something concrete"
+                ));
+            }
+            out.insert(*span, resolved);
+        }
+        Ok(out)
     }
 
     /// Turns every `RawSite` captured during inference into a
@@ -1141,7 +1185,7 @@ impl Infer {
             // something else pins it" story as any other never-used
             // type variable elsewhere (an unused function parameter,
             // a bare `None`, ...).
-            ast::Expr::ArrayLiteral(elements, _) => {
+            ast::Expr::ArrayLiteral(elements, span) => {
                 let elem_ty = self.fresh();
                 let mut acc = Subst::empty();
                 let mut refined_env = env.clone();
@@ -1152,6 +1196,17 @@ impl Infer {
                     let s = unify(&acc.apply(&t), &acc.apply(&elem_ty)).map_err(|e| format!("array element: {e}"))?;
                     acc = s.compose(&acc);
                     refined_env = refined_env.apply_subst(&acc);
+                }
+                // `lower.rs` needs an EMPTY literal's element type (it
+                // has no field to derive one from structurally, unlike
+                // codegen for every other array site — see `ir::Expr::
+                // EmptyArray`'s doc comment) — recorded here as the
+                // still-possibly-unresolved `Var` itself; `resolve_
+                // empty_array_elem_types` applies the program's FINAL
+                // substitution once `infer_program` completes, exactly
+                // like `generic_sites`/`resolve_generic_sites`.
+                if elements.is_empty() {
+                    self.empty_array_elem_types.insert(*span, elem_ty.clone());
                 }
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
