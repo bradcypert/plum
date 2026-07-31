@@ -1231,6 +1231,16 @@ containing `.`, so a qualified name can never collide with a real one.
 The ROOT module (path `""`) is never qualified, keeping
 `typecheck_and_run`'s single-file behavior byte-for-byte unchanged.
 
+**Also wired to the LLVM backend**: `typecheck_and_run_modules`/
+`typecheck_and_run_project` are each split into a `resolve_*` half
+(`resolve_modules`/`resolve_project`) that stops right after producing
+the merged `ast::Program` — no interpreter run — plus the original
+`Value`-producing function as a thin wrapper calling `resolve_*` then
+`run_resolved_program`. This is what lets `plumc build` (below) reuse
+the EXACT SAME module-resolution pre-pass the interpreter CLI does,
+with zero changes to the resolver itself: module resolution never had
+any notion of which backend eventually consumes its output.
+
 **`use` semantics**: `use shapes;` brings the WHOLE module into scope
 for qualified access (`shapes.Circle`); required before `shapes.X`
 resolves at all (referencing an un-`use`d module's qualified name
@@ -2010,6 +2020,39 @@ position (a `Binary` operand, `Call` argument, `Ctor` field — e.g.
 `f({ sum = sum + 1; sum })`) still has its env effects discarded by
 `codegen_value`'s own signature, which deliberately stayed unchanged.
 No construct required by this chunk's own scope reaches this path.
+
+**`plumc build` CLI (real, persisted native binaries)**: codegen was
+reachable only from `codegen_cli.rs`'s own tests until this chunk —
+`main.rs` had zero subcommand parsing (`plumc <dir>` unconditionally
+interpreted; no flags at all). New: `plumc build <dir> [-o <output>]`
+compiles+links a real native executable via the same module-resolution
+pre-pass the interpreter CLI uses (`resolve_project`, above) — pure
+plumbing, not new compiler capability, since codegen's own pipeline
+never assumed single-file input. `compile_to_ir` split into a
+parse+prelude shim plus a new `pub fn compile_program_to_ir(program:
+&ast::Program, entry_fn)`, so a module-resolved `Program` never gets
+double-prelude-injected. The compiled binary always prints `main`'s
+return value and exits 0 — deliberately mirroring the interpreter
+CLI's own `println!("{value:?}")`, not real Unix exit-code semantics
+(a `main` returning `Heap`/`Array`/`Closure` is a clear build-time
+error via a shared `reject_unprintable_return` check, not a panic —
+printing those shapes needs a compiled `ToString`-style dispatcher
+that doesn't exist yet, real follow-up work not this chunk's job). A
+real, previously-undiscovered symbol collision was found and fixed:
+`plumc build`'s fixed entry-point name IS `"main"`, and codegen emits
+every function under its literal unmangled Plum name with no
+namespacing — so a Plum-level `main` compiles to LLVM symbol `@main`,
+colliding with the hand-written native C `@main` wrapper (`clang`:
+"invalid redefinition of function 'main'"). Fixed by textually
+renaming `@main(` → `@__plum_entry_main(` in the generated IR body
+when the resolved entry is literally `"main"` — safe since Plum's
+lexer never produces `__`-prefixed identifiers (the same precedent the
+module system's own qualified-name scheme already relies on) and
+`@name(` only ever appears at that function's own define/call sites in
+codegen's generated text. Default output path (no `-o`): the project
+directory's own basename, written to the current working directory
+(the `go build`/`cargo build --bin` convention), falling back to
+`"a.out"` if the directory has no filename component.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck

@@ -1,9 +1,11 @@
 mod codegen_cli;
 mod modules;
 mod project;
-pub use codegen_cli::{compile_and_run, CgValue};
-pub use modules::typecheck_and_run_modules;
-pub use project::typecheck_and_run_project;
+#[cfg(test)]
+mod test_util;
+pub use codegen_cli::{compile_and_run, compile_ir_to_binary, compile_program_to_ir, emit_main, reject_unprintable_return, CgValue};
+pub use modules::{resolve_modules, typecheck_and_run_modules};
+pub use project::{resolve_project, typecheck_and_run_project};
 
 use plum_interp::{Interpreter, Value};
 use plum_ir::fbip::optimize_program;

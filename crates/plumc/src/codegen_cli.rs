@@ -272,6 +272,37 @@ fn derive_tag_fields(program: &ast::Program, type_ctx: &TypeContext) -> plum_cod
     tag_fields
 }
 
+/// A heap-shaped (struct/enum) OR array-shaped OR closure-shaped entry-
+/// point RETURN isn't printable (this chunk's `ToString` only covers
+/// Int/Float/Bool/Str — no positional-field/element rendering for a
+/// compiled heap or array value) — real programs construct/consume
+/// those INTERNALLY, only ever exposing a scalar or `Str` result at the
+/// entry point itself; `Str` IS printable, via `emit_main`'s own `Str`
+/// case, so it's excluded from this rejection. Shared by both
+/// `compile_and_run`'s test harness and `plumc build`'s `run_build` —
+/// a `main` returning one of these shapes is a clear BUILD-time error,
+/// not a panic; extending printing to those shapes is real, separate
+/// follow-up work (would need a `ToString`-style dispatcher for
+/// compiled heap values, which doesn't exist anywhere yet).
+pub fn reject_unprintable_return(entry_fn: &str, ret: CgType) -> Result<(), String> {
+    if ret == CgType::Heap {
+        return Err(format!(
+            "codegen: {entry_fn:?} returns a heap-shaped value, which the compiled entry point can't print yet"
+        ));
+    }
+    if matches!(ret, CgType::Array(_)) {
+        return Err(format!(
+            "codegen: {entry_fn:?} returns an array-shaped value, which the compiled entry point can't print yet"
+        ));
+    }
+    if matches!(ret, CgType::Closure(..)) {
+        return Err(format!(
+            "codegen: {entry_fn:?} returns a closure-shaped value, which the compiled entry point can't print yet"
+        ));
+    }
+    Ok(())
+}
+
 /// Compiles `src` all the way to a native executable and runs it,
 /// calling `entry_fn` with `args` and returning captured stdout.
 ///
@@ -310,29 +341,7 @@ pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<St
             ));
         }
     }
-    // A heap-shaped (struct/enum) OR array-shaped entry-point RETURN
-    // isn't printable (this chunk's `ToString` only covers Int/Float/
-    // Bool/Str — no positional-field/element rendering for a compiled
-    // heap or array value) — real programs construct/consume those
-    // INTERNALLY, only ever exposing a scalar or `Str` result at the
-    // entry point itself; `Str` (NEW as of this chunk) IS printable,
-    // via `emit_main`'s own `Str` case below, so it's excluded from
-    // this rejection.
-    if sig.ret == CgType::Heap {
-        return Err(format!(
-            "codegen: {entry_fn:?} returns a heap-shaped value, which the compiled entry point can't print yet"
-        ));
-    }
-    if matches!(sig.ret, CgType::Array(_)) {
-        return Err(format!(
-            "codegen: {entry_fn:?} returns an array-shaped value, which the compiled entry point can't print yet"
-        ));
-    }
-    if matches!(sig.ret, CgType::Closure(..)) {
-        return Err(format!(
-            "codegen: {entry_fn:?} returns a closure-shaped value, which the compiled entry point can't print yet"
-        ));
-    }
+    reject_unprintable_return(entry_fn, sig.ret.clone())?;
 
     let main_ir = emit_main(&resolved_entry, sig.ret, args);
     let full_ir = format!("{body_ir}\n{main_ir}");
@@ -356,12 +365,25 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().map_err(|e| format!("parse error: {e}"))?;
     let program = with_prelude(program);
+    compile_program_to_ir(&program, entry_fn)
+}
 
+/// The `ast::Program`-based core of `compile_to_ir` — everything AFTER
+/// parsing and prelude injection (type-check -> movecheck -> monomorphize
+/// -> lower -> optimize -> derive signatures -> `emit_program`). Split out
+/// so callers that already HAVE a merged, prelude-injected `ast::Program`
+/// (namely `plumc build`, via `resolve_project`/`resolve_modules` in
+/// `project.rs`/`modules.rs`) can drive codegen directly, without
+/// re-parsing source text or double-injecting the prelude (`resolve_
+/// modules` already injects it once at the root module before merging —
+/// see that module's own doc comment). `compile_to_ir` above is now just
+/// a two-line parse+prelude shim in front of this.
+pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(String, HashMap<String, FnSig>, String), String> {
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
-    let mut tag_fields = derive_tag_fields(&program, &type_ctx);
-    let variant_payload_types = derive_variant_payload_types(&program, &type_ctx);
+    let mut tag_fields = derive_tag_fields(program, &type_ctx);
+    let variant_payload_types = derive_variant_payload_types(program, &type_ctx);
     let mut infer = Infer::with_context(type_ctx);
-    let types = infer.infer_program(&program).map_err(|e| format!("type error: {e}"))?;
+    let types = infer.infer_program(program).map_err(|e| format!("type error: {e}"))?;
 
     // A closure literal appearing anywhere inside a still-GENERIC
     // function's body is a clear codegen error, checked structurally
@@ -379,13 +401,13 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
     // otherwise report as a confusing "can't determine a concrete
     // type" error — this earlier, clearer, more specific rejection
     // preempts that.
-    reject_closures_in_generic_bodies(&program)?;
+    reject_closures_in_generic_bodies(program)?;
 
     let resolved_sites = infer.resolve_generic_sites().map_err(|e| format!("type error: {e}"))?;
     let empty_array_elem_types = infer.resolve_empty_array_elem_types().map_err(|e| format!("type error: {e}"))?;
     let closure_types = infer.resolve_closure_types().map_err(|e| format!("type error: {e}"))?;
 
-    plum_ir::movecheck::check_moves(&program).map_err(|e| format!("move error: {e}"))?;
+    plum_ir::movecheck::check_moves(program).map_err(|e| format!("move error: {e}"))?;
 
     // `resolve_generic_sites` needs its own `TypeContext` too (the
     // first one was moved into `infer` above — see `Infer::with_context`)
@@ -393,7 +415,7 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
     // than threading a second owned copy through `Infer` itself.
     let type_ctx_for_mono = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
     let mono_plan = plum_ir::monomorphize::plan(
-        &program,
+        program,
         &type_ctx_for_mono,
         &resolved_sites,
         infer.fn_generics(),
@@ -411,7 +433,7 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
         .with_empty_array_elem_types(empty_array_elem_types)
         .with_closure_types(closure_types)
         .with_variant_payload_types(variant_payload_types);
-    let mut ir_program = lower_program(&program, &lowering_ctx).map_err(|e| format!("lowering error: {e}"))?;
+    let mut ir_program = lower_program(program, &lowering_ctx).map_err(|e| format!("lowering error: {e}"))?;
     // `mono_plan.functions` REPLACES `lower_program`'s own function list
     // wholesale — it already covers every function actually needed,
     // including ordinary (never-generic) ones re-lowered with mangled
@@ -467,7 +489,7 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
     // `main` wrapper against in that case, so it's rejected with a clear
     // error rather than silently picking one. A non-generic name (or a
     // generic one instantiated exactly once) resolves straight through.
-    let resolved_entry: String = match mono_plan.entry_rename.get(entry_fn) {
+    let mut resolved_entry: String = match mono_plan.entry_rename.get(entry_fn) {
         Some(names) if names.len() == 1 => names[0].clone(),
         Some(names) if names.len() > 1 => {
             return Err(format!(
@@ -479,7 +501,39 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
         _ => entry_fn.to_string(),
     };
 
-    let body_ir = plum_codegen::emit_program(&ir_program, &signatures, &tag_fields)?;
+    let mut body_ir = plum_codegen::emit_program(&ir_program, &signatures, &tag_fields)?;
+
+    // A real collision, not a hypothetical one: `plumc build`'s own
+    // fixed convention (matching the interpreter CLI's — see main.rs)
+    // is that a project's entry point is literally named `main`, and
+    // `plum_codegen::emit_program` emits every function under its own
+    // unmangled Plum name with no namespacing of its own (see e.g.
+    // `emit_program`'s `define {ret} @{f.name}(...)`). Left alone, a
+    // Plum-level `main` would compile to the SAME LLVM symbol `@main`
+    // that `emit_main` below also defines for the process's real native
+    // entry point — a `clang`-level "invalid redefinition of function
+    // 'main'" — so it's renamed here to a symbol that can never
+    // collide with a real Plum identifier (Plum's own lexer never
+    // produces a name starting with `__`, mirroring the module system's
+    // qualified-name collision-avoidance precedent — see `modules.rs`'s
+    // own doc comment). A plain textual rename is safe and sufficient:
+    // `@main(` only ever appears as this one function's own `define`/
+    // `call`/`musttail call` sites in codegen's generated text, never as
+    // a substring of a longer identifier (LLVM's `@name(` syntax always
+    // has a non-identifier character — `(` — directly after the name).
+    if resolved_entry == "main" {
+        body_ir = body_ir.replace("@main(", "@__plum_entry_main(");
+        // `signatures` is keyed by the ORIGINAL (unmangled) name — every
+        // caller (`compile_and_run`, `plumc build`'s `run_build`) looks
+        // its entry point's signature up by the RETURNED `resolved_
+        // entry`, so the renamed key needs its own entry too, not just
+        // the renamed LLVM symbol in `body_ir` above.
+        if let Some(sig) = signatures.get("main").cloned() {
+            signatures.insert("__plum_entry_main".to_string(), sig);
+        }
+        resolved_entry = "__plum_entry_main".to_string();
+    }
+
     Ok((body_ir, signatures, resolved_entry))
 }
 
@@ -490,7 +544,7 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
 /// library one. Declares `printf` from libc (which `clang` links
 /// against automatically) to make the entry point's result
 /// observable via stdout.
-fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
+pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
     let args_ir = args
         .iter()
         .map(|a| match a {
@@ -555,25 +609,32 @@ fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
     )
 }
 
-fn run_via_clang(ir: &str) -> Result<String, String> {
-    // A unique directory per CALL, not just per process — test threads
-    // within the same process (`cargo test` runs them in parallel by
-    // default) would otherwise race to write/execute the SAME binary
-    // path, surfacing as a spurious "Text file busy" error, not a real
-    // correctness bug.
+/// A unique temp-directory NAME, not just per process — test threads
+/// within the same process (`cargo test` runs them in parallel by
+/// default) would otherwise race to write/execute the SAME binary path,
+/// surfacing as a spurious "Text file busy" error, not a real
+/// correctness bug. Shared by `run_via_clang` (its own scratch dir) and
+/// `compile_ir_to_binary` (a scratch dir for the intermediate `.ll`
+/// only — the final binary itself goes to the CALLER-chosen `out_path`,
+/// not here).
+fn unique_temp_dir(prefix: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("plumc-codegen-{}-{n}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp build directory: {e}"))?;
-    let ll_path = dir.join("program.ll");
-    let bin_path: PathBuf = dir.join("program");
-    std::fs::write(&ll_path, ir).map_err(|e| format!("failed to write generated IR: {e}"))?;
+    std::env::temp_dir().join(format!("{prefix}-{}-{n}", std::process::id()))
+}
 
+/// The shared "write `.ll` + invoke `clang -o <path>`" step — extracted
+/// out of `run_via_clang` so `compile_ir_to_binary` (persist a binary,
+/// don't run it) and `run_via_clang` (the existing test harness: build,
+/// run, capture stdout) share the exact same compile step rather than
+/// two independent copies drifting apart.
+fn clang_compile(ir: &str, ll_path: &std::path::Path, bin_path: &std::path::Path) -> Result<(), String> {
+    std::fs::write(ll_path, ir).map_err(|e| format!("failed to write generated IR: {e}"))?;
     let compile = Command::new("clang")
-        .arg(&ll_path)
+        .arg(ll_path)
         .arg("-o")
-        .arg(&bin_path)
+        .arg(bin_path)
         .output()
         .map_err(|e| format!("could not run `clang` (required to compile generated LLVM IR — is it on PATH?): {e}"))?;
     if !compile.status.success() {
@@ -582,6 +643,34 @@ fn run_via_clang(ir: &str) -> Result<String, String> {
             String::from_utf8_lossy(&compile.stderr)
         ));
     }
+    Ok(())
+}
+
+/// Compiles `ir` and PERSISTS the resulting binary at `out_path` —
+/// unlike `run_via_clang` (the existing test harness), this never
+/// executes it; `plumc build`'s whole point is to hand the user a real,
+/// standalone executable, not to run it on their behalf. The `.ll`
+/// intermediate is written to a scratch temp directory (not polluting
+/// wherever `out_path` lives) via the same `clang_compile` helper
+/// `run_via_clang` uses, so both paths compile identically.
+pub fn compile_ir_to_binary(ir: &str, out_path: &std::path::Path) -> Result<(), String> {
+    if let Some(parent) = out_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("failed to create output directory {parent:?}: {e}"))?;
+        }
+    }
+    let dir = unique_temp_dir("plumc-build");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp build directory: {e}"))?;
+    let ll_path = dir.join("program.ll");
+    clang_compile(ir, &ll_path, out_path)
+}
+
+fn run_via_clang(ir: &str) -> Result<String, String> {
+    let dir = unique_temp_dir("plumc-codegen");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp build directory: {e}"))?;
+    let ll_path = dir.join("program.ll");
+    let bin_path: PathBuf = dir.join("program");
+    clang_compile(ir, &ll_path, &bin_path)?;
 
     let run = Command::new(&bin_path)
         .output()
@@ -1159,5 +1248,97 @@ mod tests {
         let src = "let go () = { let mut total = 0; for i in 0..3 { for j in 0..3 { total = total + i * j; }; }; total }";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "9");
+    }
+
+    // --- `plumc build`: resolve_project -> compile_program_to_ir -> emit_main -> compile_ir_to_binary ---
+
+    /// Mirrors `run_build` in `main.rs` exactly (see that function) —
+    /// duplicated here rather than shared, since `main.rs`'s own
+    /// version also handles CLI-level concerns (arg parsing, `eprintln!`
+    /// + `exit(1)`) that don't belong in a test helper. Returns the
+    /// persisted binary's own stdout, run via `std::process::Command`
+    /// — the real end-to-end proof this pipeline actually produces a
+    /// working native executable, not just that codegen succeeds.
+    fn build_and_run_project(root: &std::path::Path, out_path: &std::path::Path) -> Result<String, String> {
+        let program = crate::project::resolve_project(root)?;
+        let (body_ir, signatures, resolved_entry) = compile_program_to_ir(&program, "main")?;
+        let sig = signatures
+            .get(&resolved_entry)
+            .ok_or_else(|| "codegen: no such function \"main\"".to_string())?
+            .clone();
+        if sig.params.len() != 1 {
+            return Err(format!(
+                "codegen: \"main\" must take exactly one Unit parameter, found {} parameter(s)",
+                sig.params.len()
+            ));
+        }
+        reject_unprintable_return("main", sig.ret.clone())?;
+        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit]);
+        let full_ir = format!("{body_ir}\n{main_ir}");
+        compile_ir_to_binary(&full_ir, out_path)?;
+
+        let run = Command::new(out_path)
+            .output()
+            .map_err(|e| format!("failed to run built binary {out_path:?}: {e}"))?;
+        if !run.status.success() {
+            return Err(format!(
+                "built program exited with a non-zero status: {:?}\nstdout: {}\nstderr: {}",
+                run.status.code(),
+                String::from_utf8_lossy(&run.stdout),
+                String::from_utf8_lossy(&run.stderr)
+            ));
+        }
+        Ok(String::from_utf8_lossy(&run.stdout).trim_end().to_string())
+    }
+
+    #[test]
+    fn plumc_build_compiles_and_runs_a_multi_module_project() {
+        // Mirrors `project.rs`'s own `a_multi_directory_project_
+        // resolves_across_modules` fixture exactly (cross-module struct
+        // + function call) — the real proof that a multi-file project
+        // resolved via `resolve_project` compiles and links through the
+        // LLVM backend, not just the interpreter path.
+        let project = crate::test_util::TempProject::new();
+        project.write("shapes/circle.plum", "pub struct Circle { radius: Float }");
+        project.write(
+            "shapes/area.plum",
+            "pub let area (c: Circle): Float = c.radius * c.radius * 3.0",
+        );
+        project.write(
+            "main.plum",
+            r#"
+            use shapes;
+            let main (): Float = shapes.area(shapes.Circle { radius: 2.0 })
+            "#,
+        );
+        let out_bin = project.path.join("built-multi-module");
+
+        let out = build_and_run_project(&project.path, &out_bin).unwrap();
+        assert_eq!(out, "12.000000");
+    }
+
+    #[test]
+    fn plumc_build_compiles_and_runs_a_single_file_project() {
+        let project = crate::test_util::TempProject::new();
+        project.write("main.plum", "let main (): Int = 20 + 22");
+        let out_bin = project.path.join("built-single-file");
+
+        let out = build_and_run_project(&project.path, &out_bin).unwrap();
+        assert_eq!(out, "42");
+    }
+
+    #[test]
+    fn plumc_build_rejects_a_main_returning_an_unsupported_type() {
+        let project = crate::test_util::TempProject::new();
+        project.write(
+            "main.plum",
+            "struct Point { x: Int, y: Int }\nlet main (): Point = Point { x: 1, y: 2 }",
+        );
+        let out_bin = project.path.join("should-not-be-built");
+
+        let err = build_and_run_project(&project.path, &out_bin)
+            .expect_err("expected a clear build-time error, not a panic or a confusing clang failure");
+        assert!(err.contains("heap-shaped value"), "unexpected error: {err}");
+        assert!(!out_bin.exists(), "no binary should have been written for a rejected build");
     }
 }

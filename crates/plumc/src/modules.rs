@@ -64,6 +64,18 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// in for multiple files in one directory — Go's rule that every file
 /// in a directory shares one namespace.
 pub fn typecheck_and_run_modules(modules: &[(&str, &str)], fn_name: &str, args: Vec<Value>) -> Result<Value, String> {
+    let program = resolve_modules(modules)?;
+    crate::run_resolved_program(program, fn_name, args)
+}
+
+/// The front half of `typecheck_and_run_modules`: parses every module,
+/// resolves every cross-module reference (enforcing `pub`), and merges
+/// everything into one flat, fully-qualified `ast::Program` — stopping
+/// short of `run_resolved_program`. Split out so `plumc build` (via
+/// `codegen_cli::compile_program_to_ir`) can drive the LLVM codegen
+/// backend directly off the SAME resolved program the interpreter path
+/// uses, without going through `Value`/`Interpreter` at all.
+pub fn resolve_modules(modules: &[(&str, &str)]) -> Result<ast::Program, String> {
     let mut modules_by_path: BTreeMap<String, Vec<ast::Item>> = BTreeMap::new();
     for (mpath, src) in modules {
         let tokens = Lexer::new(src).tokenize();
@@ -112,7 +124,7 @@ pub fn typecheck_and_run_modules(modules: &[(&str, &str)], fn_name: &str, args: 
         }
     }
 
-    crate::run_resolved_program(ast::Program { items: resolved_items }, fn_name, args)
+    Ok(ast::Program { items: resolved_items })
 }
 
 fn qualify(module_path: &str, name: &str) -> String {

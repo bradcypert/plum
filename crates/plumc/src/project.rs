@@ -10,8 +10,10 @@
 //! is no per-file declaration of which module a file belongs to, only
 //! its location in the tree.
 
+use crate::modules::resolve_modules;
 use crate::typecheck_and_run_modules;
 use plum_interp::Value;
+use plum_syntax::ast;
 use std::fs;
 use std::path::Path;
 
@@ -22,6 +24,16 @@ pub fn typecheck_and_run_project(root: &Path, fn_name: &str, args: Vec<Value>) -
     let files = collect_plum_files(root, root)?;
     let modules: Vec<(&str, &str)> = files.iter().map(|(path, src)| (path.as_str(), src.as_str())).collect();
     typecheck_and_run_modules(&modules, fn_name, args)
+}
+
+/// The front half of `typecheck_and_run_project`: directory walk +
+/// `resolve_modules`, stopping short of running anything — the
+/// `Program`-producing counterpart `plumc build` needs (see `modules::
+/// resolve_modules`'s own doc comment for why this split exists).
+pub fn resolve_project(root: &Path) -> Result<ast::Program, String> {
+    let files = collect_plum_files(root, root)?;
+    let modules: Vec<(&str, &str)> = files.iter().map(|(path, src)| (path.as_str(), src.as_str())).collect();
+    resolve_modules(&modules)
 }
 
 /// Returns `(module_path, source)` for every `.plum` file found under
@@ -62,40 +74,7 @@ fn module_path_for(root: &Path, file: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A minimal, dependency-free temp-directory helper — creates a
-    /// UNIQUE directory under `std::env::temp_dir()` (process id +
-    /// an incrementing counter, so parallel test threads never
-    /// collide) and removes it on drop, so a panicking assertion still
-    /// cleans up rather than leaking a directory per failed test run.
-    struct TempProject {
-        path: std::path::PathBuf,
-    }
-
-    impl TempProject {
-        fn new() -> Self {
-            use std::sync::atomic::{AtomicU32, Ordering};
-            static COUNTER: AtomicU32 = AtomicU32::new(0);
-            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!("plumc-test-{}-{n}", std::process::id()));
-            fs::create_dir_all(&path).expect("failed to create temp project directory");
-            TempProject { path }
-        }
-
-        fn write(&self, rel_path: &str, contents: &str) {
-            let full = self.path.join(rel_path);
-            if let Some(parent) = full.parent() {
-                fs::create_dir_all(parent).expect("failed to create parent directory");
-            }
-            fs::write(&full, contents).expect("failed to write test file");
-        }
-    }
-
-    impl Drop for TempProject {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
+    use crate::test_util::TempProject;
 
     #[test]
     fn a_single_file_project_runs() {
