@@ -828,7 +828,7 @@ fn emit_function(
     }
 
     let mut em = codegen::Emitter::new();
-    let result = codegen::codegen_expr(&f.body, &env, &mut em, &ctx, true)?;
+    let (result, _) = codegen::codegen_expr(&f.body, &env, &mut em, &ctx, true)?;
     if result.is_some() {
         return Err(format!(
             "internal codegen error: function {:?}'s body did not terminate with a `ret` in tail position",
@@ -1384,7 +1384,17 @@ mod tests {
     }
 
     #[test]
-    fn a_still_unsupported_array_for_loop_is_a_clear_error() {
+    fn a_for_loop_with_a_non_int_bound_is_a_clear_error() {
+        // `Expr::For` only ever carries Int `start`/`end` at the IR
+        // level — real `for x in arr` surface syntax is desugared into
+        // an index-based Int range loop by `lower.rs` well before
+        // codegen ever sees it (see `codegen_for`'s own doc comment), so
+        // an Array-typed `end` here is malformed IR, not a supported-vs-
+        // unsupported surface construct — this asserts codegen still
+        // reports it as a clear, specific type error rather than a
+        // panic, now that `For` has real codegen support (as of this
+        // chunk) instead of hitting the old catch-all "does not yet
+        // support this construct" error.
         let prog = program(vec![Function {
             name: "go".to_string(),
             params: vec!["a".to_string()],
@@ -1401,7 +1411,7 @@ mod tests {
             &TagFields::new(),
         )
         .expect_err("expected a clear error");
-        assert!(err.contains("does not yet support"), "unexpected error: {err}");
+        assert!(err.contains("must be Int"), "unexpected error: {err}");
     }
 
     #[test]
@@ -1622,5 +1632,259 @@ mod tests {
         .unwrap();
         assert!(ir.contains("define i64 @trampoline$double("), "{ir}");
         assert!(ir.contains("call ptr @plum_alloc_closure(i64 0)"), "{ir}");
+    }
+
+    // --- `for`/`Assign` codegen (this chunk) ---
+
+    /// Every one of this section's tests compiles a SINGLE function
+    /// named `go` and cares only about phi/instruction counts WITHIN
+    /// that function's own body — not the shared runtime preamble
+    /// `emit_runtime` unconditionally emits ahead of it (which itself
+    /// contains several `phi i64` loops, e.g. `@plum_str_starts_with`'s
+    /// own byte-compare loop). Since `go` is the only function in every
+    /// one of these programs, its `define` is textually the LAST one in
+    /// the whole emitted module (`emit_program` always places runtime +
+    /// array-release fns + closure defs BEFORE the program's own
+    /// function bodies) — slicing from the last `"\ndefine "` isolates
+    /// exactly `go`'s own body for these counts.
+    fn go_body(ir: &str) -> &str {
+        let idx = ir.rfind("\ndefine ").expect("expected at least one `define` in the emitted IR");
+        &ir[idx..]
+    }
+
+    #[test]
+    fn a_non_mutating_for_loop_only_produces_the_induction_variables_own_phi() {
+        // let go () = { for i in 0..10 { i }; 0 }
+        // No `Assign` anywhere in the body — `assigned_vars` finds
+        // nothing loop-carried, so the loop header should have exactly
+        // ONE phi (`%i` itself), not a second one for anything else.
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::Let {
+                name: "_".to_string(),
+                value: Box::new(Expr::For {
+                    var: "i".to_string(),
+                    start: Box::new(Expr::Int(0)),
+                    end: Box::new(Expr::Int(10)),
+                    body: Box::new(Expr::Var("i".to_string())),
+                }),
+                body: Box::new(Expr::Int(0)),
+            },
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new()).unwrap();
+        let body = go_body(&ir);
+        let phi_count = body.matches(" = phi i64 [").count();
+        assert_eq!(phi_count, 1, "expected exactly one phi (the induction variable), got:\n{ir}");
+        assert!(ir.contains("icmp slt i64"), "{ir}");
+    }
+
+    #[test]
+    fn an_accumulator_for_loop_produces_two_phis_and_the_accumulator_phi_traces_to_the_bodys_real_update() {
+        // let go () = { let mut sum = 0; for i in 0..10 { sum = sum + i }; sum }
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::Let {
+                name: "sum".to_string(),
+                value: Box::new(Expr::Int(0)),
+                body: Box::new(Expr::Let {
+                    name: "_".to_string(),
+                    value: Box::new(Expr::For {
+                        var: "i".to_string(),
+                        start: Box::new(Expr::Int(0)),
+                        end: Box::new(Expr::Int(10)),
+                        body: Box::new(Expr::Assign {
+                            name: "sum".to_string(),
+                            value: Box::new(Expr::Binary(
+                                BinOp::Add,
+                                Box::new(Expr::Var("sum".to_string())),
+                                Box::new(Expr::Var("i".to_string())),
+                            )),
+                            rest: Box::new(Expr::Unit),
+                        }),
+                    }),
+                    body: Box::new(Expr::Var("sum".to_string())),
+                }),
+            },
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new()).unwrap();
+        // Two header phis: the induction variable `%i` and the carried
+        // accumulator `sum`.
+        let body = go_body(&ir);
+        let phi_count = body.matches(" = phi i64 [").count();
+        assert_eq!(phi_count, 2, "expected exactly two phis (induction var + accumulator), got:\n{ir}");
+
+        // The accumulator phi's SECOND operand must be the register the
+        // `add` instruction inside the body actually produced — not a
+        // stale/placeholder one. Find the `add i64 %sumN, %iN` line
+        // (the body's real update) and confirm ITS result register is
+        // exactly what the phi's second incoming value names.
+        let add_line = ir
+            .lines()
+            .find(|l| l.trim_start().starts_with('%') && l.contains(" = add i64 ") && l.contains(", %v"))
+            .unwrap_or_else(|| panic!("expected to find the accumulator's `add` instruction in:\n{ir}"));
+        let add_reg = add_line.trim_start().split(' ').next().unwrap();
+        ir.lines()
+            .find(|l| l.contains(" = phi i64 ") && l.contains(&format!("[ {add_reg}, %")))
+            .unwrap_or_else(|| {
+                panic!("expected the accumulator phi's 2nd operand to be {add_reg:?} (the body's real update), got:\n{ir}")
+            });
+    }
+
+    #[test]
+    fn a_conditional_assign_inside_an_if_inside_a_for_loop_merges_via_merge_envs() {
+        // let go () = { let mut acc = 0; for i in 0..5 { if i > 2 { acc = acc + i } else { () } }; acc }
+        // Mirrors `.filter()`'s exact desugared shape (an `Assign`
+        // nested inside one arm of an `If`, itself inside a `for` body)
+        // — asserts `merge_envs`'s OWN phi shows up at the `If`'s own
+        // merge block, not just the loop header (three total `phi i64`
+        // sites: the induction variable, the loop-header accumulator
+        // phi, AND the `If`-merge accumulator phi).
+        let if_body = Expr::If {
+            cond: Box::new(Expr::Binary(BinOp::Gt, Box::new(Expr::Var("i".to_string())), Box::new(Expr::Int(2)))),
+            then_branch: Box::new(Expr::Assign {
+                name: "acc".to_string(),
+                value: Box::new(Expr::Binary(
+                    BinOp::Add,
+                    Box::new(Expr::Var("acc".to_string())),
+                    Box::new(Expr::Var("i".to_string())),
+                )),
+                rest: Box::new(Expr::Unit),
+            }),
+            else_branch: Box::new(Expr::Unit),
+        };
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::Let {
+                name: "acc".to_string(),
+                value: Box::new(Expr::Int(0)),
+                body: Box::new(Expr::Let {
+                    name: "_".to_string(),
+                    value: Box::new(Expr::For {
+                        var: "i".to_string(),
+                        start: Box::new(Expr::Int(0)),
+                        end: Box::new(Expr::Int(5)),
+                        body: Box::new(if_body),
+                    }),
+                    body: Box::new(Expr::Var("acc".to_string())),
+                }),
+            },
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new()).unwrap();
+        // induction var phi + loop-header accumulator phi + If-merge
+        // accumulator phi = 3.
+        let body = go_body(&ir);
+        let phi_count = body.matches(" = phi i64 [").count();
+        assert_eq!(phi_count, 3, "expected 3 phis (induction var, loop-header acc, If-merge acc), got:\n{ir}");
+        // The If-merge phi specifically must live in a `merge`-labeled
+        // block (`merge_envs`'s own contribution), not the `for_header`.
+        let merge_block_start = body.find("merge").expect("expected an If merge block");
+        let after_merge = &body[merge_block_start..];
+        assert!(after_merge.contains(" = phi i64 ["), "expected a phi inside the If's own merge block:\n{ir}");
+    }
+
+    #[test]
+    fn assign_to_a_heap_shaped_variable_emits_no_extra_dec() {
+        // let go (p: Point, q: Point): Point = { p = q; p }
+        // `fbip.rs` already documents this as an accepted leak (the OLD
+        // `p` is simply orphaned) — codegen must not invent a `Dec` here.
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["p".to_string(), "q".to_string()],
+            body: Expr::Assign {
+                name: "p".to_string(),
+                value: Box::new(Expr::Var("q".to_string())),
+                rest: Box::new(Expr::Var("p".to_string())),
+            },
+        }]);
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Heap, CgType::Heap], CgType::Heap)]),
+            &tags(&[("Point", vec![CgType::Int])]),
+        )
+        .unwrap();
+        // Scoped to `go`'s own body (not the shared runtime preamble,
+        // whose `@plum_rc_dec` FUNCTION DEFINITION itself textually
+        // contains `@plum_rc_dec(ptr %p)` as its own signature — that's
+        // not a call site) and specifically a `call`, not just any
+        // substring match.
+        assert!(!go_body(&ir).contains("call void @plum_rc_dec(ptr %p)"), "expected no Dec of the overwritten `p`:\n{ir}");
+    }
+
+    #[test]
+    fn assign_to_an_undeclared_variable_is_a_clear_error() {
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::Assign {
+                name: "nope".to_string(),
+                value: Box::new(Expr::Int(1)),
+                rest: Box::new(Expr::Unit),
+            },
+        }]);
+        let err = emit(&prog, &sigs(&[("go", vec![], CgType::Unit)]), &TagFields::new())
+            .expect_err("expected assignment to an undeclared variable to be rejected");
+        assert!(err.contains("undeclared"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn nested_for_loops_each_get_their_own_independent_accumulator_phi() {
+        // let go () = {
+        //   let mut total = 0;
+        //   for i in 0..3 { for j in 0..3 { total = total + i * j } };
+        //   total
+        // }
+        // `assigned_vars` recurses into a NESTED `for` (not a hard stop,
+        // unlike `Closure`) — so the OUTER loop's own header ALSO gets a
+        // carried phi for `total` (since it's reassigned somewhere
+        // reachable from the outer body), independent of the INNER
+        // loop's own carried phi for the same name.
+        let inner = Expr::For {
+            var: "j".to_string(),
+            start: Box::new(Expr::Int(0)),
+            end: Box::new(Expr::Int(3)),
+            body: Box::new(Expr::Assign {
+                name: "total".to_string(),
+                value: Box::new(Expr::Binary(
+                    BinOp::Add,
+                    Box::new(Expr::Var("total".to_string())),
+                    Box::new(Expr::Binary(BinOp::Mul, Box::new(Expr::Var("i".to_string())), Box::new(Expr::Var("j".to_string())))),
+                )),
+                rest: Box::new(Expr::Unit),
+            }),
+        };
+        let outer = Expr::For {
+            var: "i".to_string(),
+            start: Box::new(Expr::Int(0)),
+            end: Box::new(Expr::Int(3)),
+            body: Box::new(Expr::Let {
+                name: "_".to_string(),
+                value: Box::new(inner),
+                body: Box::new(Expr::Unit),
+            }),
+        };
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::Let {
+                name: "total".to_string(),
+                value: Box::new(Expr::Int(0)),
+                body: Box::new(Expr::Let {
+                    name: "_".to_string(),
+                    value: Box::new(outer),
+                    body: Box::new(Expr::Var("total".to_string())),
+                }),
+            },
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new()).unwrap();
+        // 2 induction-variable phis (i, j) + 2 independent `total`
+        // carried phis (one per loop level) = 4.
+        let body = go_body(&ir);
+        let phi_count = body.matches(" = phi i64 [").count();
+        assert_eq!(phi_count, 4, "expected 4 phis (2 induction vars + 2 independent `total` accumulators), got:\n{ir}");
+        let header_count = body.matches("for_header").count();
+        assert!(header_count >= 2, "expected at least two distinct `for_header` blocks:\n{ir}");
     }
 }

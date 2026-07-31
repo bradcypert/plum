@@ -271,6 +271,33 @@ impl Emitter {
     pub(crate) fn current_block(&self) -> &str {
         &self.current_block
     }
+
+    /// Reserves a line slot at the CURRENT end of `lines`, returning its
+    /// index for a later `patch_line` call — needed ONLY by `For`
+    /// codegen's loop-header phis: a phi's operand for the "coming from
+    /// the body" edge is the body's FINAL register, which isn't known
+    /// until after the body (and the header's own `icmp`/`br`, which
+    /// must textually precede the body since it's what jumps INTO it)
+    /// has already been emitted. `If`/`Match` never hit this — their
+    /// merge block is entered exactly once, strictly after both value-
+    /// producing paths are already fully emitted, so their phi operands
+    /// are always known before the phi line itself needs to be pushed.
+    /// The reserved line's TEXT is a placeholder (never emitted as-is —
+    /// `patch_line` must be called before this `Emitter`'s `lines` are
+    /// read by anything downstream) purely so the header's OWN
+    /// instructions (the `icmp`/`br` that come after it) still land at
+    /// the correct positions relative to it.
+    fn reserve_line(&mut self) -> usize {
+        let idx = self.lines.len();
+        self.lines.push(String::new());
+        idx
+    }
+
+    /// Fills in a line previously reserved by `reserve_line` — see that
+    /// method's doc comment.
+    fn patch_line(&mut self, idx: usize, line: impl Into<String>) {
+        self.lines[idx] = line.into();
+    }
 }
 
 fn format_double(f: f64) -> String {
@@ -1152,6 +1179,193 @@ fn free_vars_scoped(expr: &Expr, env: &Env, local: &HashSet<String>, out: &mut B
     }
 }
 
+/// Finds every outer-scope name a `For` loop's `body` reassigns via
+/// `Assign` — the write-target counterpart to `free_vars`/`free_vars_
+/// scoped` above (which collect READS), needed so `codegen_expr`'s
+/// `For` arm knows which names must get their own loop-header phi (see
+/// this module's `Expr::For` codegen doc comment). Uses the SAME
+/// `Let`/`For`/`Match`-introduces-shadowing rule `free_vars_scoped`
+/// already established: an `Assign` to a name that some INNER `Let`/
+/// `For`/`Match` binding already shadows refers to that inner binding,
+/// not an outer loop-carried one, so it's correctly excluded here too.
+///
+/// `Expr::Closure` is a deliberate HARD STOP — this does NOT recurse
+/// into a closure's body at all (not even to track its params as
+/// further shadowing, since nothing inside it is examined in the first
+/// place). This is a structural necessity, not a shortcut: a closure
+/// compiles to its own top-level `define` with a wholly fresh `Env`
+/// populated only from byval captures loaded at CALL time, and it can
+/// escape and be called after the loop that created it has already
+/// finished (even after the enclosing function has returned) — there is
+/// no point in program order where "write this closure's `Assign` back
+/// into the loop's phi" could have a coherent meaning. An `Assign`
+/// inside a closure body behaves exactly like it already does for any
+/// non-loop closure (an ordinary reassignment within THAT closure's own
+/// call-time `Env`) — not a new gap, just a boundary this loop-carried
+/// mechanism doesn't reach across. By contrast, nested `for` loops are
+/// NOT a stop point (recursed into normally) — this is what makes a
+/// nested-loop shared accumulator work for free: each loop level's own
+/// `For` codegen independently calls `assigned_vars` on its OWN body,
+/// so an accumulator reassigned inside a doubly-nested loop is
+/// discovered — and gets its own independent header phi — at BOTH
+/// levels.
+fn assigned_vars(expr: &Expr) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    assigned_vars_scoped(expr, &HashSet::new(), &mut out);
+    out
+}
+
+fn assigned_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<String>) {
+    match expr {
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel | Expr::Var(_) => {}
+        Expr::Unary(_, e) | Expr::AsCStr(e) => assigned_vars_scoped(e, local, out),
+        Expr::Binary(_, l, r) => {
+            assigned_vars_scoped(l, local, out);
+            assigned_vars_scoped(r, local, out);
+        }
+        Expr::Let { name, value, body } => {
+            assigned_vars_scoped(value, local, out);
+            let mut inner = local.clone();
+            inner.insert(name.clone());
+            assigned_vars_scoped(body, &inner, out);
+        }
+        Expr::If { cond, then_branch, else_branch } => {
+            assigned_vars_scoped(cond, local, out);
+            assigned_vars_scoped(then_branch, local, out);
+            assigned_vars_scoped(else_branch, local, out);
+        }
+        Expr::Call { callee, args } => {
+            assigned_vars_scoped(callee, local, out);
+            for a in args {
+                assigned_vars_scoped(a, local, out);
+            }
+        }
+        Expr::ExternCall { args, .. } => {
+            for a in args {
+                assigned_vars_scoped(a, local, out);
+            }
+        }
+        Expr::Ctor { fields, .. } => {
+            for f in fields {
+                assigned_vars_scoped(f, local, out);
+            }
+        }
+        Expr::CtorReuse { fields, .. } => {
+            for f in fields {
+                assigned_vars_scoped(f, local, out);
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            assigned_vars_scoped(scrutinee, local, out);
+            for arm in arms {
+                let mut inner = local.clone();
+                for b in &arm.bindings {
+                    inner.insert(b.clone());
+                }
+                if let Some(g) = &arm.guard {
+                    assigned_vars_scoped(g, &inner, out);
+                }
+                assigned_vars_scoped(&arm.body, &inner, out);
+            }
+        }
+        Expr::RcAnnotated { rest, .. } => assigned_vars_scoped(rest, local, out),
+        Expr::For { start, end, var, body } => {
+            assigned_vars_scoped(start, local, out);
+            assigned_vars_scoped(end, local, out);
+            let mut inner = local.clone();
+            inner.insert(var.clone());
+            assigned_vars_scoped(body, &inner, out);
+        }
+        // Hard stop — see this function's own doc comment.
+        Expr::Closure { .. } => {}
+        Expr::Assign { name, value, rest } => {
+            if !local.contains(name) {
+                out.insert(name.clone());
+            }
+            assigned_vars_scoped(value, local, out);
+            assigned_vars_scoped(rest, local, out);
+        }
+        Expr::Spawn { block } => assigned_vars_scoped(block, local, out),
+        Expr::TaskJoin { task } => assigned_vars_scoped(task, local, out),
+        Expr::ChannelSend { sender, value } => {
+            assigned_vars_scoped(sender, local, out);
+            assigned_vars_scoped(value, local, out);
+        }
+        Expr::ChannelRecv { receiver } => assigned_vars_scoped(receiver, local, out),
+        Expr::Select { arms } => {
+            for arm in arms {
+                assigned_vars_scoped(&arm.receiver, local, out);
+                assigned_vars_scoped(&arm.body, local, out);
+            }
+        }
+        Expr::Index { base, index } => {
+            assigned_vars_scoped(base, local, out);
+            assigned_vars_scoped(index, local, out);
+        }
+        Expr::ArrayLen { array } | Expr::ArrayPop { array } => assigned_vars_scoped(array, local, out),
+        Expr::ArrayPush { array, value } => {
+            assigned_vars_scoped(array, local, out);
+            assigned_vars_scoped(value, local, out);
+        }
+        Expr::ArraySet { array, index, value } => {
+            assigned_vars_scoped(array, local, out);
+            assigned_vars_scoped(index, local, out);
+            assigned_vars_scoped(value, local, out);
+        }
+        Expr::ArrayRemove { array, index } => {
+            assigned_vars_scoped(array, local, out);
+            assigned_vars_scoped(index, local, out);
+        }
+        Expr::ArrayPushReuse { value, .. } => assigned_vars_scoped(value, local, out),
+        Expr::ArrayPopReuse { .. } => {}
+        Expr::ArraySetReuse { index, value, .. } => {
+            assigned_vars_scoped(index, local, out);
+            assigned_vars_scoped(value, local, out);
+        }
+        Expr::ArrayRemoveReuse { index, .. } => assigned_vars_scoped(index, local, out),
+        Expr::StrConcat { base, other } => {
+            assigned_vars_scoped(base, local, out);
+            assigned_vars_scoped(other, local, out);
+        }
+        Expr::StrConcatReuse { other, .. } => assigned_vars_scoped(other, local, out),
+        Expr::StrRunes { base } | Expr::StrTrim { base } | Expr::StrToUpper { base } | Expr::StrToLower { base } | Expr::ToString { base } => {
+            assigned_vars_scoped(base, local, out)
+        }
+        Expr::StrTrimReuse { .. } | Expr::StrToUpperReuse { .. } | Expr::StrToLowerReuse { .. } => {}
+        Expr::StrSplit { base, sep } => {
+            assigned_vars_scoped(base, local, out);
+            assigned_vars_scoped(sep, local, out);
+        }
+        Expr::StrContains { base, needle } => {
+            assigned_vars_scoped(base, local, out);
+            assigned_vars_scoped(needle, local, out);
+        }
+        Expr::StrStartsWith { base, prefix } => {
+            assigned_vars_scoped(base, local, out);
+            assigned_vars_scoped(prefix, local, out);
+        }
+        Expr::StrEndsWith { base, suffix } => {
+            assigned_vars_scoped(base, local, out);
+            assigned_vars_scoped(suffix, local, out);
+        }
+        Expr::StrReplace { base, from, to } => {
+            assigned_vars_scoped(base, local, out);
+            assigned_vars_scoped(from, local, out);
+            assigned_vars_scoped(to, local, out);
+        }
+        Expr::StrReplaceReuse { from, to, .. } => {
+            assigned_vars_scoped(from, local, out);
+            assigned_vars_scoped(to, local, out);
+        }
+        Expr::RefNew { value } => assigned_vars_scoped(value, local, out),
+        Expr::RefGet { base } => assigned_vars_scoped(base, local, out),
+        Expr::RefSet { base, value } => {
+            assigned_vars_scoped(base, local, out);
+            assigned_vars_scoped(value, local, out);
+        }
+    }
+}
+
 /// Converts a resolved `PrimTy` (see `ir::Expr::Closure`'s doc comment)
 /// into the `CgType` codegen actually works with — the closure-typing
 /// counterpart to `prim_ty_to_cg_type`... wait, this IS `prim_ty_to_
@@ -1220,7 +1434,7 @@ fn emit_closure_body_fn(
         closure_defs: ctx.closure_defs,
         trampolines: ctx.trampolines,
     };
-    let result = codegen_expr(body, &env, &mut em, &inner_ctx, true)?;
+    let (result, _) = codegen_expr(body, &env, &mut em, &inner_ctx, true)?;
     if result.is_some() {
         return Err(format!(
             "internal codegen error: closure {fn_name:?}'s body did not terminate with a `ret` in tail position"
@@ -2256,10 +2470,24 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
                 other => Err(format!("codegen: `.to_string()` is not supported for {other:?}")),
             }
         }
+        // The resulting `Env` `codegen_expr` also returns is deliberately
+        // DISCARDED here (`.0` only) — this arm is only ever reached
+        // from an ordinary VALUE context (a `Binary`/`Unary` operand, a
+        // `Call` argument, a `Ctor` field, ...), where nothing downstream
+        // has any way to observe an env change even if one occurred (an
+        // `Assign` nested inside one of these four constructs, itself
+        // used as a plain value rather than in `codegen_expr`'s own
+        // statement-sequencing position). Every shape this chunk's own
+        // tests exercise (`for`/`.map()`/`.filter()`/`.fold()`) routes
+        // `Assign`/`For` through `codegen_expr`'s dedicated `Let`-value
+        // special case instead (see that arm's doc comment), which DOES
+        // thread the env through correctly — this discard only affects
+        // the narrower, not-yet-exercised case of an `Assign` nested
+        // inside a value-position `Let`/`If`/`Match`/`RcAnnotated`.
         Expr::Let { .. } | Expr::If { .. } | Expr::Match { .. } | Expr::RcAnnotated { .. } => {
             match codegen_expr(expr, env, em, ctx, false)? {
-                Some(v) => Ok(v),
-                None => unreachable!("codegen_expr with tail=false always returns Some"),
+                (Some(v), _) => Ok(v),
+                (None, _) => unreachable!("codegen_expr with tail=false always returns Some"),
             }
         }
         // An ordinary (non-self-referential) closure literal — the
@@ -2305,8 +2533,82 @@ fn bind_match_arm(arm: &MatchArm, scrutinee_ptr: &str, env: &Env, ctx: &Ctx) -> 
     Ok(arm_env)
 }
 
-/// See this module's doc comment for the full tail-position story.
-pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, tail: bool) -> Result<Option<(String, CgType)>, String> {
+/// Restores `env`'s entry for `name` to what it was BEFORE some inner
+/// scope (a `Let` binding, a `Match` arm's field bindings) introduced or
+/// shadowed it — `prior` is whatever `name` mapped to immediately before
+/// that inner scope started (`None` if `name` wasn't bound at all yet).
+/// Needed so a scope's OWN local binding never leaks into the `Env` it
+/// hands back to its caller: `merge_envs` (below) relies on every
+/// branch-produced `Env` sharing the exact same key set as the `Env` it
+/// was originally given, and this is what keeps that invariant true
+/// after a `Let`/`Match` arm's own local names have gone out of scope.
+fn restore_shadowed(mut env: Env, name: &str, prior: Option<(String, CgType)>) -> Env {
+    match prior {
+        Some(v) => {
+            env.insert(name.to_string(), v);
+        }
+        None => {
+            env.remove(name);
+        }
+    }
+    env
+}
+
+/// Generalizes `If`/`Match`'s existing branch-VALUE phi-merge to also
+/// phi-merge any `Env` entry whose register diverged between branches —
+/// this alone is what makes `.filter()`'s desugaring (an `Assign` nested
+/// inside one arm of an `If`) codegen correctly, with no separate
+/// detection walk needed: divergence is found by diffing the branches'
+/// own resulting envs directly, not by re-analyzing the source `Expr`.
+///
+/// Every `Env` in `branches` is assumed to share the exact same key set
+/// (see `restore_shadowed`'s doc comment for why that invariant holds:
+/// `Assign` only ever overrides an EXISTING key, never introduces one,
+/// and a branch's own `Let`/`Match`-local names are always stripped
+/// back out before reaching here) — panics via an out-of-bounds map
+/// index otherwise, which would itself indicate a real bug in one of
+/// `codegen_expr`'s OTHER arms, not a case callers need to guard against
+/// here. Must be called with `em`'s current block already being the
+/// actual merge point (`If`'s `merge_label` / `Match`'s `done_label`) —
+/// every phi this emits is pushed into whatever block is current when
+/// called, same requirement the pre-existing value-phi logic already
+/// has. A key whose register is IDENTICAL across every branch gets no
+/// phi at all (just reuses that one shared register) — avoids emitting
+/// a redundant trivial phi for the overwhelming majority of `Env`
+/// entries, which no branch ever touches.
+fn merge_envs(branches: &[(Env, String)], em: &mut Emitter) -> Env {
+    let mut merged = Env::new();
+    let Some((first_env, _)) = branches.first() else {
+        return merged;
+    };
+    for key in first_env.keys() {
+        let (first_reg, ty) = first_env[key].clone();
+        let all_same = branches.iter().all(|(e, _)| e[key].0 == first_reg);
+        if all_same {
+            merged.insert(key.clone(), (first_reg, ty));
+        } else {
+            let phi_reg = em.fresh_reg();
+            let parts: Vec<String> =
+                branches.iter().map(|(e, block)| format!("[ {}, %{block} ]", e[key].0)).collect();
+            em.push(format!("  {phi_reg} = phi {} {}", ty.llvm_type(), parts.join(", ")));
+            merged.insert(key.clone(), (phi_reg, ty));
+        }
+    }
+    merged
+}
+
+/// See this module's doc comment for the full tail-position story. As
+/// of this chunk, also returns the resulting `Env` — an ordinary,
+/// behavior-preserving addition for every arm except `Assign` (one
+/// entry overridden) and `For` (loop-carried names' post-loop
+/// registers): every OTHER arm just returns back the SAME env it was
+/// given (or, for `Let`/`Match`, that env with its own local binding(s)
+/// stripped back out via `restore_shadowed` — see that function's doc
+/// comment for why). Needed so a `for` loop body's `Assign`s (and an
+/// `Assign` anywhere else) can make their reassignment visible to
+/// whatever code follows, since `Env` itself stays a plain immutable
+/// map, threaded purely through return values, exactly as before.
+pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, tail: bool) -> Result<(Option<(String, CgType)>, Env), String> {
     match expr {
         // A closure-literal `value` is special-cased to support
         // self-referential local closures (`let fib = |n| ... fib(n-1)
@@ -2321,15 +2623,48 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                 unreachable!("guarded by the match arm's own pattern");
             };
             let bound = codegen_closure_literal(params, param_types, ret_type, cbody, env, em, ctx, Some(name))?;
+            let prior = env.get(name).cloned();
             let mut inner_env = env.clone();
             inner_env.insert(name.clone(), bound);
-            codegen_expr(body, &inner_env, em, ctx, tail)
+            let (result, result_env) = codegen_expr(body, &inner_env, em, ctx, tail)?;
+            Ok((result, restore_shadowed(result_env, name, prior)))
         }
+        // Every OTHER `Let` value is routed through `codegen_expr`
+        // itself (tail=false), NOT `codegen_value` directly — this is
+        // what makes a `for`/`Assign` reachable from `value` (directly,
+        // OR nested inside a `Let`/`If`/`Match`/`RcAnnotated` wrapper —
+        // exactly the shape `lower_for`'s `for x in arr` desugaring
+        // produces: `Let { arr_name, .., body: For { .. } }` as a
+        // WHOLE is itself the outer statement-sequencing `Let`'s
+        // `value`) correctly propagate its env changes into `body`,
+        // with zero special-casing needed for any particular VALUE
+        // shape: whichever arm `value` itself matches (`For`, `Assign`,
+        // `Let`, `If`, `Match`, `RcAnnotated`, or the ordinary catch-all
+        // that wraps a plain `codegen_value` call in `(Some(v),
+        // env.clone())`) already threads its own env correctly, so this
+        // one path handles all of them uniformly. `codegen_value`'s OWN
+        // signature stays unchanged regardless (see this module's doc
+        // comment) — this is a change to what `Let` calls, not to
+        // `codegen_value` itself; every OTHER value-context caller (a
+        // `Binary`/`Unary` operand, a `Call` argument, a `Ctor` field,
+        // ...) still calls `codegen_value` directly and still can't
+        // observe an env change from a `Let`/`If`/`Match`/`RcAnnotated`
+        // value it contains — an `Assign` reachable ONLY through one of
+        // THOSE positions (never through an enclosing `Let`'s own
+        // value) remains a known, deliberately out-of-scope gap (no
+        // construct this chunk's own tests exercise reaches it).
         Expr::Let { name, value, body } => {
-            let bound = codegen_value(value, env, em, ctx)?;
-            let mut inner_env = env.clone();
+            let (bound_opt, value_env) = codegen_expr(value, env, em, ctx, false)?;
+            let bound = bound_opt.ok_or_else(|| {
+                "codegen: internal error — a `let`'s value produced no result (codegen_expr with tail=false \
+                 should always return Some)"
+                    .to_string()
+            })?;
+            let prior = value_env.get(name).cloned();
+            let mut inner_env = value_env;
             inner_env.insert(name.clone(), bound);
-            codegen_expr(body, &inner_env, em, ctx, tail)
+            let (result, result_env) = codegen_expr(body, &inner_env, em, ctx, tail)?;
+            Ok((result, restore_shadowed(result_env, name, prior)))
         }
         // Generalized from a hardcoded `Heap`-only check to a 3-way
         // `Heap`/`Str`/`Array(elem)` dispatch — `Inc` reuses `@plum_rc_
@@ -2384,14 +2719,14 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
             em.push(format!("  br i1 {cond_reg}, label %{then_label}, label %{else_label}"));
 
             em.start_block(&then_label);
-            let then_result = codegen_expr(then_branch, env, em, ctx, tail)?;
+            let (then_result, then_env) = codegen_expr(then_branch, env, em, ctx, tail)?;
             if then_result.is_some() {
                 em.push(format!("  br label %{merge_label}"));
             }
             let then_end_block = em.current_block.clone();
 
             em.start_block(&else_label);
-            let else_result = codegen_expr(else_branch, env, em, ctx, tail)?;
+            let (else_result, else_env) = codegen_expr(else_branch, env, em, ctx, tail)?;
             if else_result.is_some() {
                 em.push(format!("  br label %{merge_label}"));
             }
@@ -2402,8 +2737,11 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                 // this `If` itself), so both always return `None`
                 // (already emitted their own terminator) or both
                 // always return `Some` (still need this `If` to merge
-                // them) — never a mix.
-                (None, None) => Ok(None),
+                // them) — never a mix. Both branches already terminated
+                // in a `ret`, so there's no "after" for an env to matter
+                // to — `env.clone()` is returned purely to satisfy the
+                // signature, never actually consumed by a caller.
+                (None, None) => Ok((None, env.clone())),
                 (Some((then_reg, then_ty)), Some((else_reg, else_ty))) => {
                     if then_ty != else_ty {
                         return Err(format!(
@@ -2416,7 +2754,9 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                         "  {phi_reg} = phi {} [ {then_reg}, %{then_end_block} ], [ {else_reg}, %{else_end_block} ]",
                         then_ty.llvm_type()
                     ));
-                    Ok(Some((phi_reg, then_ty)))
+                    let merged_env =
+                        merge_envs(&[(then_env, then_end_block), (else_env, else_end_block)], em);
+                    Ok((Some((phi_reg, then_ty)), merged_env))
                 }
                 _ => unreachable!("both `if` arms share the same tail-ness"),
             }
@@ -2432,7 +2772,7 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
             em.push(format!("  {scrutinee_tag} = load i64, ptr {tag_addr}"));
 
             let done_label = em.fresh_label("match_done");
-            let mut non_tail_results: Vec<(String, CgType, String)> = Vec::new();
+            let mut non_tail_results: Vec<(String, CgType, Env, String)> = Vec::new();
 
             for arm in arms {
                 let next_label = em.fresh_label("arm_next");
@@ -2447,6 +2787,13 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                 }
 
                 let mut arm_env = bind_match_arm(arm, &scrutinee_ptr, env, ctx)?;
+                // Captured BEFORE this arm's own field bindings are
+                // added below — restored via `restore_shadowed` once
+                // the arm's body has been codegen'd, so this arm's own
+                // local names never leak into the `Env` handed back to
+                // `merge_envs` (see that function's key-set invariant).
+                let priors: Vec<(String, Option<(String, CgType)>)> =
+                    arm.bindings.iter().map(|b| (b.clone(), env.get(b).cloned())).collect();
                 if arm.tag != DEFAULT_ARM_TAG {
                     let field_types = tag_field_types(ctx, &arm.tag)?.to_vec();
                     for (i, (name, fty)) in arm.bindings.iter().zip(&field_types).enumerate() {
@@ -2468,10 +2815,14 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                     em.start_block(&pass_label);
                 }
 
-                let body_result = codegen_expr(&arm.body, &arm_env, em, ctx, tail)?;
+                let (body_result, body_env) = codegen_expr(&arm.body, &arm_env, em, ctx, tail)?;
+                let mut restored_env = body_env;
+                for (name, prior) in priors {
+                    restored_env = restore_shadowed(restored_env, &name, prior);
+                }
                 if let Some((reg, ty)) = body_result {
                     em.push(format!("  br label %{done_label}"));
-                    non_tail_results.push((reg, ty, em.current_block.clone()));
+                    non_tail_results.push((reg, ty, restored_env, em.current_block.clone()));
                 }
                 em.start_block(&next_label);
             }
@@ -2482,20 +2833,58 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
             em.push("  unreachable");
 
             if tail {
-                Ok(None)
+                Ok((None, env.clone()))
             } else {
                 em.start_block(&done_label);
                 let ty = non_tail_results
                     .first()
-                    .map(|(_, ty, _)| ty.clone())
+                    .map(|(_, ty, _, _)| ty.clone())
                     .ok_or_else(|| "codegen: internal error — match produced no reachable result".to_string())?;
                 let phi_reg = em.fresh_reg();
                 let parts: Vec<String> =
-                    non_tail_results.iter().map(|(reg, _, block)| format!("[ {reg}, %{block} ]")).collect();
+                    non_tail_results.iter().map(|(reg, _, _, block)| format!("[ {reg}, %{block} ]")).collect();
                 em.push(format!("  {phi_reg} = phi {} {}", ty.llvm_type(), parts.join(", ")));
-                Ok(Some((phi_reg, ty)))
+                let branches: Vec<(Env, String)> =
+                    non_tail_results.into_iter().map(|(_, _, e, block)| (e, block)).collect();
+                let merged_env = merge_envs(&branches, em);
+                Ok((Some((phi_reg, ty)), merged_env))
             }
         }
+        // `name = value; rest` — structurally almost identical to
+        // `Let`'s own arm (compute the new value, override ONE existing
+        // `Env` entry, recurse into `rest` with `tail` unchanged): see
+        // ir.rs's `Assign` doc comment and `fbip.rs`'s own `Assign`
+        // handling for why this deliberately emits NO `Dec` for the
+        // value being overwritten — an accepted leak, matching the
+        // existing `reassigning_a_heap_tracked_variable_leaks_the_old_
+        // value_by_design` precedent, not a soundness gap codegen
+        // should try to independently "fix." Unlike `Let`, `Assign`
+        // never introduces a new key (only overrides an EXISTING one —
+        // an assignment to a name `env` doesn't already know about is a
+        // clear error, never a silent insert), so `rest`'s resulting env
+        // is forwarded straight through with no `restore_shadowed` step
+        // needed.
+        Expr::Assign { name, value, rest } => {
+            let (val_reg, val_ty) = codegen_value(value, env, em, ctx)?;
+            let (_, old_ty) = env
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("codegen: assignment to undeclared variable {name:?}"))?;
+            if val_ty != old_ty {
+                return Err(format!(
+                    "codegen: assignment to {name:?}: expected {old_ty:?}, found {val_ty:?}"
+                ));
+            }
+            let mut new_env = env.clone();
+            new_env.insert(name.clone(), (val_reg, val_ty));
+            codegen_expr(rest, &new_env, em, ctx, tail)
+        }
+        // See this function's own doc comment for the concrete block
+        // structure (`preheader` -> `header` -> `body` -> back to
+        // `header`, or out to `after`) and the dominance argument for
+        // why every phi register this produces is safely usable past
+        // the loop.
+        Expr::For { var, start, end, body } => codegen_for(var, start, end, body, env, em, ctx, tail),
         // `musttail` is only VALID when the caller's own prototype
         // matches the callee's (a real LLVM constraint — "cannot
         // guarantee tail call due to mismatched parameter counts" —
@@ -2511,16 +2900,157 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
         Expr::Call { callee, args } if tail => {
             let (reg, ty, _used_musttail) = codegen_call(callee, args, env, em, ctx, true)?;
             em.push(format!("  ret {} {reg}", ty.llvm_type()));
-            Ok(None)
+            Ok((None, env.clone()))
         }
         _ => {
             let (reg, ty) = codegen_value(expr, env, em, ctx)?;
             if tail {
                 em.push(format!("  ret {} {reg}", ty.llvm_type()));
-                Ok(None)
+                Ok((None, env.clone()))
             } else {
-                Ok(Some((reg, ty)))
+                Ok((Some((reg, ty)), env.clone()))
             }
         }
+    }
+}
+
+/// `for var in start..end { body }` — SSA phi-threading, not stack
+/// allocation (keeping this backend's "everything is SSA registers +
+/// heap cells, never mutable stack memory" character intact): the
+/// induction variable AND every name `body` reassigns (`assigned_vars`)
+/// each get their own header-block phi.
+///
+/// Concrete block structure:
+/// ```text
+/// preheader: compute start/end once, br to header
+/// header:    %i = phi i64 [start, preheader], [i_next, body_end]     ; RESERVED, patched after body
+///            %carriedN = phi T [preN, preheader], [finalN, body_end] ; one per assigned_vars() name, RESERVED
+///            icmp slt i64 %i, %end; br body/after
+/// body:      seed body_env with i + carried phis; codegen_expr(body, ..., tail=false) ALWAYS
+///            (body's value is always discarded each iteration, independent
+///            of this `For` node's own tail position)
+/// body_end:  i_next = add i64 %i, 1; br header
+///            (`body_end` isn't a separate block — it's simply whatever
+///            block `body`'s own codegen left `em` in, exactly like
+///            `If`/`Match`'s existing `then_end_block`/`else_end_block`
+///            capture already works)
+///            patch header's phi lines using body_end's final env
+/// after:     For evaluates to Unit; post_env = env with each carried name's
+///            register updated to its header phi
+/// ```
+///
+/// Dominance: `after` is reached ONLY via `header`'s own conditional
+/// branch (`icmp` + `br i1 .., body, after`) — no other edge into it
+/// exists anywhere in this structure — so `header` dominates `after`,
+/// which is exactly what makes every phi register defined at `header`
+/// (the induction variable AND every carried name) a valid, usable SSA
+/// value for whatever code runs after the loop (`post_env`'s whole
+/// point). The header's own phis are similarly valid at `body`'s entry
+/// for the same reason (`header` dominates `body` — its `br i1` is
+/// `body`'s only predecessor edge from outside the loop, and the
+/// `body_end -> header` back-edge is exactly what an ordinary loop-carry
+/// phi is built to accept as its second incoming value).
+#[allow(clippy::too_many_arguments)]
+fn codegen_for(
+    var: &str,
+    start: &Expr,
+    end: &Expr,
+    body: &Expr,
+    env: &Env,
+    em: &mut Emitter,
+    ctx: &Ctx,
+    tail: bool,
+) -> Result<(Option<(String, CgType)>, Env), String> {
+    let (start_reg, start_ty) = codegen_value(start, env, em, ctx)?;
+    if start_ty != CgType::Int {
+        return Err(format!("codegen: `for` loop start must be Int, found {start_ty:?}"));
+    }
+    let (end_reg, end_ty) = codegen_value(end, env, em, ctx)?;
+    if end_ty != CgType::Int {
+        return Err(format!("codegen: `for` loop end must be Int, found {end_ty:?}"));
+    }
+
+    // Every outer-scope name `body` reassigns — each needs its own
+    // loop-header phi so the reassignment is visible both to LATER
+    // iterations of `body` itself (read back via the phi at `body`'s
+    // entry) and to whatever code runs after the loop (`post_env`,
+    // below). See `assigned_vars`'s own doc comment for the full
+    // Closure-hard-stop story.
+    let carried_names = assigned_vars(body);
+    let mut carried: Vec<(String, CgType, String)> = Vec::with_capacity(carried_names.len());
+    for name in &carried_names {
+        let (pre_reg, ty) = env.get(name).cloned().ok_or_else(|| {
+            format!("codegen: `for` loop body reassigns undeclared variable {name:?}")
+        })?;
+        carried.push((name.clone(), ty, pre_reg));
+    }
+
+    let preheader_block = em.current_block().to_string();
+    let header_label = em.fresh_label("for_header");
+    let body_label = em.fresh_label("for_body");
+    let after_label = em.fresh_label("for_after");
+    em.push(format!("  br label %{header_label}"));
+
+    em.start_block(&header_label);
+    // Reserved now, patched once `body`'s final register (`i_next`) and
+    // each carried name's final register are known — see `Emitter::
+    // reserve_line`'s own doc comment for why this is needed here but
+    // never was for `If`/`Match`'s own phis.
+    let i_reg = em.fresh_reg();
+    let i_phi_idx = em.reserve_line();
+    let mut carried_phis: Vec<(String, CgType, usize, String)> = Vec::with_capacity(carried.len());
+    for (name, ty, _) in &carried {
+        let phi_reg = em.fresh_reg();
+        let idx = em.reserve_line();
+        carried_phis.push((name.clone(), ty.clone(), idx, phi_reg));
+    }
+    let cmp_reg = em.fresh_reg();
+    em.push(format!("  {cmp_reg} = icmp slt i64 {i_reg}, {end_reg}"));
+    em.push(format!("  br i1 {cmp_reg}, label %{body_label}, label %{after_label}"));
+
+    em.start_block(&body_label);
+    let mut body_env = env.clone();
+    body_env.insert(var.to_string(), (i_reg.clone(), CgType::Int));
+    for (name, ty, _, phi_reg) in &carried_phis {
+        body_env.insert(name.clone(), (phi_reg.clone(), ty.clone()));
+    }
+    // ALWAYS `tail=false`, independent of this `For` node's OWN `tail`
+    // position — see this function's doc comment: `body`'s value is
+    // discarded every iteration regardless.
+    let (_, body_result_env) = codegen_expr(body, &body_env, em, ctx, false)?;
+    let body_end_block = em.current_block().to_string();
+    let i_next = em.fresh_reg();
+    em.push(format!("  {i_next} = add i64 {i_reg}, 1"));
+    em.push(format!("  br label %{header_label}"));
+
+    em.patch_line(
+        i_phi_idx,
+        format!("  {i_reg} = phi i64 [ {start_reg}, %{preheader_block} ], [ {i_next}, %{body_end_block} ]"),
+    );
+    let mut post_env = env.clone();
+    for (name, ty, idx, phi_reg) in &carried_phis {
+        let pre_reg = carried
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, _, r)| r.clone())
+            .expect("carried_phis was built from carried, same names");
+        let (final_reg, _) = body_result_env.get(name).cloned().ok_or_else(|| {
+            format!(
+                "codegen: internal error — loop-carried variable {name:?} missing from `for` body's resulting env"
+            )
+        })?;
+        em.patch_line(
+            *idx,
+            format!("  {phi_reg} = phi {} [ {pre_reg}, %{preheader_block} ], [ {final_reg}, %{body_end_block} ]", ty.llvm_type()),
+        );
+        post_env.insert(name.clone(), (phi_reg.clone(), ty.clone()));
+    }
+
+    em.start_block(&after_label);
+    if tail {
+        em.push("  ret i1 0");
+        Ok((None, post_env))
+    } else {
+        Ok((Some(("0".to_string(), CgType::Unit)), post_env))
     }
 }

@@ -1503,7 +1503,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1-v5 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures)
+### LLVM backend — v1-v6 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1533,16 +1533,22 @@ concat + reuse, `.contains()`/`.starts_with()`/`.ends_with()`,
 strings" below), and — as of a further follow-on chunk — closures in
 non-generic functions, including self-referential local closures,
 higher-order calls through a closure-typed value, and a bare
-top-level function name used as a value (see "Closures" below). Still
-out of scope and producing a clear codegen error, never a panic:
-Unicode-aware string operations (`.runes()`, `.to_upper()`,
-`.to_lower()`, `.trim()`, `.replace()`, `.split()`), general
-`for x in arr`/`.map()`/`.filter()`/`.fold()` array iteration (today's
-`For` IR node is range-only), a closure literal inside a still-generic
-function's own body, concurrency, FFI (including `CStr`), `Assign`,
-non-constant `Global` initializers — and a generic instantiated at any
-of these still-unsupported types (e.g. `Box[Array[Str]]` once
-`.split()` is needed).
+top-level function name used as a value (see "Closures" below), and —
+as of a further follow-on chunk — `For` (range- and array-based) and
+`Assign`, and therefore `.map()`/`.filter()`/`.fold()` (which desugar
+purely into `For`+`Assign`+ordinary `Call` — see "General array
+iteration" below). Still out of scope and producing a clear codegen
+error, never a panic: Unicode-aware string operations (`.runes()`,
+`.to_upper()`, `.to_lower()`, `.trim()`, `.replace()`, `.split()`), a
+closure literal inside a still-generic function's own body, an
+`Assign` inside a closure body writing back into an enclosing loop's
+carried variable (structurally out of reach of this backend's closure
+design, not merely unimplemented), an `Assign` reachable only through
+a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value position
+(e.g. `f({ sum = sum + 1; sum })` as a `Call` argument), concurrency,
+FFI (including `CStr`), non-constant `Global` initializers — and a
+generic instantiated at any of these still-unsupported types (e.g.
+`Box[Array[Str]]` once `.split()` is needed).
 
 **Guaranteed tail calls**: any call in tail position (the function's
 own body; both branches of a tail-positioned `If`/arms of a tail-
@@ -1916,6 +1922,94 @@ original reference while an escaping closure held it; the fix only
 removes redundant, unmatched `Inc`s, in the interpreter as well as
 codegen (both share this one FBIP pass via one unparameterized call
 site).
+
+**General array iteration (`For`, `Assign`, `.map()`/`.filter()`/
+`.fold()`)**: neither `Expr::For` nor `Expr::Assign` had ANY codegen
+implementation before this chunk (not just range-only `For` as
+earlier chunks' scope notes implied — both fell to the catch-all
+error). `for x in arr { ... }` with no mutation only needed `For`
+(lowering already desugars it into an ordinary index-based range
+loop, `Let{arr, ArrayLen/Index-based body}` — no new IR primitive);
+the accumulator idiom (`sum = sum + x`) and therefore `.map()`/
+`.filter()`/`.fold()` (which desugar purely into `For`+`Assign`+
+ordinary `Call`/`ArrayPush`, confirmed NOT built via any closure-
+specific machinery — `f` is just an ordinary `Call` callee, the same
+mechanism closures already compile through) also needed `Assign`.
+
+Implemented via SSA phi-threading, deliberately NOT stack allocation
+— keeps this backend's "everything is SSA registers + heap cells,
+never mutable stack memory" character intact, and generalizes a
+pattern already in use rather than introducing a second one.
+`codegen_expr`'s return type gained a resulting-`Env` component
+(`Result<(Option<(String,CgType)>, Env), String>`) — every existing
+arm just returns the SAME env it was given (provably behavior-
+preserving); only `Assign` (one entry overridden) and `For`
+(loop-carried names' post-loop registers) produce a different one. A
+new `merge_envs` helper generalizes `If`/`Match`'s EXISTING
+branch-value phi-merge to also phi-merge any `Env` entry whose
+register diverged between branches — this alone is what makes
+`.filter()`'s `Assign`-inside-`If` shape work correctly, with no
+separate detection walk needed for `If`/`Match` themselves (divergence
+is found by diffing envs directly). A new `assigned_vars`/
+`assigned_vars_scoped` structural walk (the write-target sibling of
+the closures chunk's `free_vars`/`free_vars_scoped`) finds which
+outer-scope names a `for` body reassigns; `Closure` is a deliberate,
+structurally-necessary hard stop (a closure compiles to a wholly
+separate top-level `define` with its own fresh, byval-captured `Env`
+— there is no point in program order where "write back into the
+loop's phi" could have a coherent meaning, since the closure can
+escape and be called after the loop, even after the enclosing
+function returns); nested `for` loops are NOT a stop point, so nested
+accumulators work for free (each loop level independently phi-merges
+a shared accumulator). Two new small `Emitter` primitives,
+`reserve_line`/`patch_line`, exist because a loop header's phi needs
+an operand (the body's final register) not known until AFTER code
+that must textually precede it (the header's own `icmp`/`br`, which
+is what jumps into the body) has already been emitted — the one
+genuinely new control-flow shape this introduces; `If`/`Match` never
+needed this since their merge block is entered exactly once, after
+all operands are already known. `codegen_for`'s block structure
+(preheader/header/body/body_end/after) is built so `for_after` is
+reachable ONLY via the header's own conditional branch — no other
+edge into it — making the header provably dominate the exit path, so
+every phi register (carried vars + the induction variable) is valid
+past the loop. `Assign` codegen mirrors `Let`'s own arm structurally
+and deliberately emits NO `Dec` for the value being overwritten,
+matching `fbip.rs`'s own already-accepted-leak stance for
+reassignment (not a gap left unfixed — inventing a `Dec` here would
+be inconsistent with what FBIP already decided).
+
+A real, separate blocking bug was found and fixed as a prerequisite:
+`lower_array_map`/`lower_array_filter` built their empty output
+accumulator as `Ctor{ARRAY_TAG, []}` rather than `EmptyArray(PrimTy)`
+— hitting `codegen_array_literal`'s existing "empty fields" error.
+Fixed in `lower.rs` to emit `EmptyArray(elem_ty)`, sourcing the
+element type from the mapped/filtered closure's own resolved type via
+the `closure_types` side channel (with a `PrimTy::Heap` fallback for
+lowering-only test paths that never run `Infer` at all, preserving
+every pre-existing interpreter-only `.map()`/`.filter()` test).
+
+A real deviation from the original design, found via an actual
+failing test (`for x in arr` produced `0` instead of the correct
+sum) rather than assumed: the initial `Let`-value handling only
+special-cased a value that was DIRECTLY `For`/`Assign`, but
+`lower_for`'s own desugaring wraps the whole loop in `Let{arr_name,
+.., body: For{..}}` — a `Let` whose value contains a `For`, not a
+bare `For` itself — which the narrow guard missed, silently dropping
+the loop's env changes through `codegen_value`'s existing env-
+discarding fallback. Fixed by generalizing: every `Let` value (except
+the pre-existing `Closure` self-reference special case) now routes
+through `codegen_expr` rather than `codegen_value`, so whichever arm
+`value` itself resolves to threads its own env correctly with no
+per-shape special-casing — simpler than the original design and
+verified against the real failure, not assumed correct.
+
+**Known, deliberately out-of-scope gap**: an `Assign` reachable ONLY
+through a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary VALUE
+position (a `Binary` operand, `Call` argument, `Ctor` field — e.g.
+`f({ sum = sum + 1; sum })`) still has its env effects discarded by
+`codegen_value`'s own signature, which deliberately stayed unchanged.
+No construct required by this chunk's own scope reaches this path.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck

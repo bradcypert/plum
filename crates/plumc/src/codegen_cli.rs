@@ -1097,4 +1097,67 @@ mod tests {
             .expect_err("expected a clear pre-check error for a closure inside a generic function body");
         assert!(err.contains("closure") && err.contains("generic"), "unexpected error: {err}");
     }
+
+    // --- general array iteration (`for`, `Assign`, `.map`/`.filter`/`.fold`) ---
+
+    #[test]
+    fn a_large_non_mutating_range_for_loop_does_not_crash_or_corrupt_surrounding_state() {
+        // The loop-shape-at-scale proxy, mirroring `deep_tail_recursion_
+        // does_not_stack_overflow`'s own role for `musttail`: a million
+        // real iterations through the loop header's phi machinery, then
+        // ordinary code AFTER the loop still produces the right answer
+        // — proof the loop itself neither crashed nor corrupted
+        // anything reachable after it finished.
+        let src = "let go () = { for i in 0..1000000 { i }; 42 }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "42");
+    }
+
+    #[test]
+    fn the_canonical_sum_accumulator_for_loop_produces_the_correct_sum() {
+        let src = "let go () = { let mut sum = 0; for i in 0..10 { sum = sum + i; }; sum }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "45");
+    }
+
+    #[test]
+    fn for_x_in_arr_iterates_a_real_array_not_just_a_literal_range() {
+        let src = "let go () = { let mut sum = 0; let arr = [10, 20, 30]; for x in arr { sum = sum + x; }; sum }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "60");
+    }
+
+    #[test]
+    fn array_map_produces_the_correct_transformed_elements() {
+        let src = "let go () = [1, 2, 3].map(|x| x * 2).fold(0, |acc, x| acc + x)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "12");
+    }
+
+    #[test]
+    fn array_filter_keeps_only_the_matching_elements_with_correct_values() {
+        let src = "let go () = [1, 2, 3, 4, 5].filter(|x| x > 2).fold(0, |acc, x| acc + x)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "12");
+    }
+
+    #[test]
+    fn array_fold_produces_the_correct_accumulated_value() {
+        let src = "let go () = [1, 2, 3, 4].fold(0, |acc, x| acc + x)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "10");
+    }
+
+    #[test]
+    fn a_nested_loop_accumulator_sums_i_times_j_over_two_ranges() {
+        // Proves the nested-loop design end to end: each loop level
+        // gets its OWN independent header phi for the shared
+        // accumulator (see `codegen_for`'s doc comment) — this only
+        // produces the right VALUE if both levels' phis are wired up
+        // correctly, not just well-formed LLVM IR.
+        // sum_{i=0..3} sum_{j=0..3} i*j == (0+1+2) * (0+1+2) == 9.
+        let src = "let go () = { let mut total = 0; for i in 0..3 { for j in 0..3 { total = total + i * j; }; }; total }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "9");
+    }
 }

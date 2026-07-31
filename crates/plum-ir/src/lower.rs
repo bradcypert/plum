@@ -1730,6 +1730,75 @@ fn lower_select(arms: &[ast::SelectArm], ctx: &LoweringContext) -> Result<ir::Ex
     Ok(ir::Expr::Select { arms: ir_arms })
 }
 
+// Looks up `f`'s already-resolved closure param/return types via
+// `ctx.closure_types` (populated by `plum_types::Infer::
+// resolve_closure_types` for every closure LITERAL the real pipeline
+// saw — see that field's own doc comment) — used by `lower_array_map`/
+// `lower_array_filter` to give their EMPTY output accumulator a real
+// `PrimTy` (see `EmptyArray`'s doc comment for why `Ctor{ARRAY_TAG, []}`
+// isn't a legal empty-array representation). Only works when `f` is
+// written as a closure literal directly at the call site — `f`'s span
+// only ends up in `closure_types` when `plum_types::Infer` walked an
+// `Expr::Closure` node at exactly that span; a named-function-valued
+// `f` (`arr.map(someFn)`) isn't resolvable this way and is a clear
+// error instead of a silent guess.
+// `.map()`'s output elem type is `f`'s RETURN type; `.filter()`'s is
+// `f`'s single PARAMETER type (filter never changes element type, so
+// the kept elements are exactly `f`'s own argument type). Both go
+// through this one lookup: `Some` when `f`'s span was resolved by a
+// real `plum_types::Infer` pass (the normal, type-checked pipeline);
+// `None` in TWO different situations that need different treatment at
+// the call site — see `closure_elem_ty`'s doc comment.
+fn closure_result_types(f: &ast::Expr, ctx: &LoweringContext) -> Option<(Vec<plum_types::types::Type>, plum_types::types::Type)> {
+    ctx.closure_types.get(&f.span()).cloned()
+}
+
+/// Picks the empty-output-accumulator element `PrimTy` for `.map()`/
+/// `.filter()` (see `EmptyArray`'s doc comment for why this precision
+/// is needed at all) — `pick` extracts the relevant half of `f`'s
+/// resolved `(param_types, ret_type)` (map wants the return type,
+/// filter wants `param_types[0]`).
+///
+/// `ctx.closure_types` is EMPTY for every lowering-only caller with no
+/// real `plum_types::Infer` pass behind it at all (`plum-interp`'s own
+/// dynamically-typed evaluation path, and this crate's own hand-built
+/// lowering unit tests that construct a bare `LoweringContext::new()`)
+/// — in that case there's no resolved type to source from ANYWHERE, so
+/// this falls back to `PrimTy::Heap` (the same "we genuinely don't
+/// know, and don't need to" placeholder `type_to_prim_ty` already uses
+/// for an unresolvable struct/enum instantiation): harmless, since
+/// `plum-interp`'s own `Expr::EmptyArray` evaluation ignores its
+/// `PrimTy` payload entirely (see that match arm's doc comment) — it
+/// only matters to codegen, which is never reached from that path.
+///
+/// A NON-empty `ctx.closure_types` that still has no entry for `f`'s
+/// span, by contrast, means a REAL `Infer` pass ran but couldn't
+/// resolve `f`'s own type — either `f` wasn't written as a closure
+/// literal directly at the call site (a named function value,
+/// `arr.map(someFn)`, isn't resolvable this way — not supported yet)
+/// or a genuine internal inconsistency; either way, that's a clear
+/// error, never a silent guess.
+fn closure_elem_ty(
+    f: &ast::Expr,
+    ctx: &LoweringContext,
+    what: &str,
+    pick: impl FnOnce(Vec<plum_types::types::Type>, plum_types::types::Type) -> Option<plum_types::types::Type>,
+) -> Result<ir::PrimTy, String> {
+    match closure_result_types(f, ctx) {
+        Some((param_tys, ret_ty)) => {
+            let ty = pick(param_tys, ret_ty).ok_or_else(|| {
+                format!("codegen: `.{what}()`'s function argument must take exactly one parameter")
+            })?;
+            type_to_prim_ty(&ty)
+        }
+        None if ctx.closure_types.is_empty() => Ok(ir::PrimTy::Heap),
+        None => Err(format!(
+            "codegen: `.{what}()`'s function argument must be a closure literal written directly at the call site \
+             (its resolved type couldn't be found) — passing an already-named function value here isn't supported yet"
+        )),
+    }
+}
+
 // `arr.map(f)` — desugars to:
 //   let __map_arr = <arr> in
 //     let __map_out = [] in
@@ -1746,16 +1815,14 @@ fn lower_array_map(base: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Re
     let out_name = "__map_out".to_string();
     let idx_name = "__map_i".to_string();
     let ir_base = lower_expr(base, ctx)?;
+    let out_elem_ty = closure_elem_ty(f, ctx, "map", |_params, ret| Some(ret))?;
     let ir_f = lower_expr(f, ctx)?;
     Ok(ir::Expr::Let {
         name: arr_name.clone(),
         value: Box::new(ir_base),
         body: Box::new(ir::Expr::Let {
             name: out_name.clone(),
-            value: Box::new(ir::Expr::Ctor {
-                tag: ARRAY_TAG.to_string(),
-                fields: vec![],
-            }),
+            value: Box::new(ir::Expr::EmptyArray(out_elem_ty)),
             body: Box::new(ir::Expr::Let {
                 name: "_".to_string(),
                 value: Box::new(ir::Expr::For {
@@ -1802,16 +1869,14 @@ fn lower_array_filter(base: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) ->
     let idx_name = "__filter_i".to_string();
     let elem_name = "__filter_elem".to_string();
     let ir_base = lower_expr(base, ctx)?;
+    let out_elem_ty = closure_elem_ty(f, ctx, "filter", |mut params, _ret| if params.is_empty() { None } else { Some(params.remove(0)) })?;
     let ir_f = lower_expr(f, ctx)?;
     Ok(ir::Expr::Let {
         name: arr_name.clone(),
         value: Box::new(ir_base),
         body: Box::new(ir::Expr::Let {
             name: out_name.clone(),
-            value: Box::new(ir::Expr::Ctor {
-                tag: ARRAY_TAG.to_string(),
-                fields: vec![],
-            }),
+            value: Box::new(ir::Expr::EmptyArray(out_elem_ty)),
             body: Box::new(ir::Expr::Let {
                 name: "_".to_string(),
                 value: Box::new(ir::Expr::For {
@@ -2133,6 +2198,37 @@ mod tests {
             .parse_expr()
             .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
         lower_expr(&ast, ctx).unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"))
+    }
+
+    /// `lower`, but first stamps `ctx.closure_types` with `(param_tys,
+    /// ret_ty)` at the span of `src`'s ONE closure literal (`src` must
+    /// be shaped like `<base>.<map|filter|fold>(..., |...| ..., ...)`
+    /// with exactly one closure-literal ARGUMENT) — the hand-built
+    /// stand-in for what `plum_types::Infer::resolve_closure_types`
+    /// would have already populated by the time real lowering runs (see
+    /// `closure_result_types`'s doc comment). Needed because `.map()`/
+    /// `.filter()` now require a resolved closure type to pick their
+    /// empty-accumulator's element `PrimTy`.
+    fn lower_array_op_with_closure_types(src: &str, param_tys: Vec<plum_types::types::Type>, ret_ty: plum_types::types::Type) -> ir::Expr {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser
+            .parse_expr()
+            .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let ast::Expr::Call { args, .. } = &ast else {
+            panic!("expected a `.map`/`.filter`/`.fold` call expression, got {ast:?}");
+        };
+        let closure_span = args
+            .iter()
+            .find_map(|a| match a {
+                ast::Expr::Closure { span, .. } => Some(*span),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected a closure-literal argument in {src:?}"));
+        let mut closure_types = HashMap::new();
+        closure_types.insert(closure_span, (param_tys, ret_ty));
+        let ctx = LoweringContext::new().with_closure_types(closure_types);
+        lower_expr(&ast, &ctx).unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"))
     }
 
     fn lower_with_err(src: &str, ctx: &LoweringContext) -> String {
@@ -3969,17 +4065,30 @@ mod tests {
 
     #[test]
     fn array_map_desugars_to_an_index_based_loop_that_pushes() {
+        // `f`'s resolved type (`Int -> Int`, matching the identity
+        // closure written here) is what the empty output accumulator's
+        // `EmptyArray(PrimTy::Int)` element type now comes from — see
+        // `closure_result_types`'s doc comment; `lower_array_op_with_
+        // closure_types` stands in for the real `plum_types::Infer`
+        // pass that would have populated this in the real pipeline.
+        let closure = ir::Expr::Closure {
+            params: vec!["x".to_string()],
+            param_types: Some(vec![ir::PrimTy::Int]),
+            ret_type: Some(ir::PrimTy::Int),
+            body: Box::new(ir::Expr::Var("x".to_string())),
+        };
         assert_eq!(
-            lower("arr.map(f)"),
+            lower_array_op_with_closure_types(
+                "arr.map(|x| x)",
+                vec![plum_types::types::Type::Int],
+                plum_types::types::Type::Int,
+            ),
             ir::Expr::Let {
                 name: "__map_arr".to_string(),
                 value: Box::new(ir::Expr::Var("arr".to_string())),
                 body: Box::new(ir::Expr::Let {
                     name: "__map_out".to_string(),
-                    value: Box::new(ir::Expr::Ctor {
-                        tag: "0Array".to_string(),
-                        fields: vec![],
-                    }),
+                    value: Box::new(ir::Expr::EmptyArray(ir::PrimTy::Int)),
                     body: Box::new(ir::Expr::Let {
                         name: "_".to_string(),
                         value: Box::new(ir::Expr::For {
@@ -3993,7 +4102,7 @@ mod tests {
                                 value: Box::new(ir::Expr::ArrayPush {
                                     array: Box::new(ir::Expr::Var("__map_out".to_string())),
                                     value: Box::new(ir::Expr::Call {
-                                        callee: Box::new(ir::Expr::Var("f".to_string())),
+                                        callee: Box::new(closure),
                                         args: vec![ir::Expr::Index {
                                             base: Box::new(ir::Expr::Var("__map_arr".to_string())),
                                             index: Box::new(ir::Expr::Var("__map_i".to_string())),
@@ -4012,13 +4121,22 @@ mod tests {
 
     #[test]
     fn array_filter_desugars_to_an_index_based_loop_with_an_if() {
-        let result = lower("arr.filter(f)");
+        // `f`'s resolved param type (`Int`, matching the predicate
+        // closure written here) is what the empty output accumulator's
+        // element type now comes from (the SAME type the input array's
+        // elements have — filter never changes element type).
+        let result = lower_array_op_with_closure_types(
+            "arr.filter(|x| x > 0)",
+            vec![plum_types::types::Type::Int],
+            plum_types::types::Type::Bool,
+        );
         match result {
             ir::Expr::Let { name, body, .. } => {
                 assert_eq!(name, "__filter_arr");
                 match *body {
-                    ir::Expr::Let { name, body, .. } => {
+                    ir::Expr::Let { name, value, body } => {
                         assert_eq!(name, "__filter_out");
+                        assert_eq!(*value, ir::Expr::EmptyArray(ir::PrimTy::Int));
                         match *body {
                             ir::Expr::Let { value, body, .. } => {
                                 assert!(matches!(*value, ir::Expr::For { .. }));
