@@ -959,25 +959,32 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
             // expression entirely — returned, stored, called later, or
             // called many times. A use of an outer heap-tracked
             // variable inside it can never be treated as a last use of
-            // the OUTER binding; same forced-live-after, leak-not-
-            // unsoundness tradeoff as `For`'s body above. Unlike `For`,
-            // there's no separate start/end to analyze — a closure
-            // literal has no other subexpressions.
-            let (body_t, used) = if expr_mentions_var(&body, name) {
-                let (t, _) = mark_last_uses(*body, name, true);
-                (t, true)
-            } else {
-                (*body, false)
-            };
-            (
-                Expr::Closure {
-                    params,
-                    param_types,
-                    ret_type,
-                    body: Box::new(body_t),
-                },
-                live_after || used,
-            )
+            // the OUTER binding, so `used` still forces `live_after`
+            // outward exactly as before.
+            //
+            // But `body` itself is deliberately NOT recursed into with
+            // this per-name walk (unlike `For`, which DOES recurse its
+            // body with `live_after` forced true). A captured name's
+            // lifetime inside the closure is no longer owned by this
+            // OUTER walk at all — plum-codegen inc's each heap-shaped
+            // capture exactly once at closure-creation time and dec's
+            // it once when the closure cell's own refcount hits zero;
+            // recursing here would additionally wrap EVERY mention of
+            // `name` inside the body in its own `Inc` (since a forced-
+            // true `live_after` never lets the inner walk see a "last
+            // use"), one extra unmatched Inc per static occurrence,
+            // firing once per closure CALL, not once per capture — an
+            // unbounded leak proportional to call count. (Verified
+            // this doesn't trade a leak for a use-after-free in either
+            // backend: `RcOp::Dec` is only ever emitted by this pass's
+            // `Let` arm's "name never referenced at all" case, gated
+            // on `used == false` — a closure capturing `name` always
+            // makes `used == true`, so that branch was already
+            // unreachable for a captured name before this change, and
+            // still is. No path ever Dec's a captured name's original
+            // reference while an escaping closure holds it.)
+            let used = expr_mentions_var(&body, name);
+            (Expr::Closure { params, param_types, ret_type, body }, live_after || used)
         }
         // `block` runs on a genuinely separate thread/heap — even more
         // isolated than a `Closure`, since nothing inside it can
@@ -1932,15 +1939,31 @@ mod tests {
     }
 
     #[test]
-    fn a_heap_value_used_inside_a_closure_body_is_always_dupd_never_moved() {
+    fn a_heap_value_captured_by_a_closure_is_not_inc_d_per_mention_inside_the_body() {
         // `p` is bound before the closure literal and used inside its
-        // body. The closure might be called zero, one, or many times,
-        // at some unknown LATER point (it could be returned, stored,
-        // passed elsewhere) — same hazard as `For`'s body, so the same
-        // conservative treatment applies: always Inc, never move.
+        // body. The BODY itself is left untouched by this pass — no
+        // `Inc` planted on `p`'s mention — since `p`'s lifetime inside
+        // the closure is owned by the closure cell itself (plum-codegen
+        // inc's it once at capture time, dec's it once at release);
+        // planting an Inc here too would be an extra unmatched
+        // increment firing once per closure CALL, not once per
+        // capture. The closure literal itself still isn't `move`d/
+        // consumed as `p`'s own last use (see the next test).
         let input = let_("p", ctor("Point", vec![]), closure_(vec!["x"], var("p")));
-        let expected = let_("p", ctor("Point", vec![]), closure_(vec!["x"], inc("p", var("p"))));
-        assert_eq!(insert_refcount_ops(input), expected);
+        assert_eq!(insert_refcount_ops(input.clone()), input);
+    }
+
+    #[test]
+    fn a_heap_value_captured_and_mentioned_multiple_times_in_a_closure_body_is_never_inc_d() {
+        // The exact scenario a real leak was found in: `p` mentioned
+        // twice in one closure body used to plant TWO separate `Inc`s
+        // (one per static occurrence), each firing on every call.
+        let input = let_(
+            "p",
+            ctor("Point", vec![]),
+            closure_(vec!["x"], Expr::Binary(BinOp::Add, Box::new(var("p")), Box::new(var("p")))),
+        );
+        assert_eq!(insert_refcount_ops(input.clone()), input);
     }
 
     #[test]

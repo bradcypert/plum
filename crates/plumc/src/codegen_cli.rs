@@ -1064,6 +1064,30 @@ mod tests {
     }
 
     #[test]
+    fn a_heap_capturing_closure_called_many_times_still_produces_correct_results() {
+        // Regression guard for the fbip.rs fix that stopped planting an
+        // extra `Inc` on every static mention of a captured heap value
+        // INSIDE a closure body (which used to fire once per CALL, an
+        // unbounded leak proportional to call count). This doesn't
+        // detect the leak's absence directly (no leak-detection infra
+        // in this project — the real proof is the fbip.rs unit test
+        // asserting no Inc node is emitted at all), but confirms the
+        // fix didn't break correctness across many repeated calls to
+        // the same heap-capturing closure (direct repeated calls, since
+        // general `for`-iteration is still out of codegen's scope).
+        let src = "\
+            struct Box { val: Int }\n\
+            let go (): Int = {\n\
+                let b = Box { val: 7 };\n\
+                let f = |x| x + b.val;\n\
+                f(1) + f(2) + f(3) + f(4) + f(5) + f(6) + f(7) + f(8) + f(9) + f(10)\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "125");
+    }
+
+    #[test]
     fn a_closure_literal_inside_a_generic_function_body_is_rejected_before_monomorphization() {
         let src = "\
             let wrap[T] (x: T): T = { let f = |y| y; f(x) }\n\

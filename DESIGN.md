@@ -1894,22 +1894,28 @@ other IR node, whose types are structurally derivable) — a new
 fields on `ir::Expr::Closure` were needed just to make a closure
 literal's own signature knowable at codegen time.
 
-**Known gap, honestly disclosed, not yet fixed**: `fbip.rs`'s
-`Closure` handling predates real capture refcounting (it was written
-when the interpreter — the only backend that existed at the time —
-never refcounted captures at all) and inserts an `Inc` at every
-mention of a captured heap-shaped name INSIDE the closure body itself,
-not just once at capture time, with no matching `Dec` ever emitted for
-it. Combined with codegen's own correct capture-time inc, a
-heap-captured value used inside a REPEATEDLY-called closure
-accumulates one unmatched extra increment per call — a real,
-unbounded leak (over-retained, possibly never freed), verified via a
-diagnostic (repeated calls to the same heap-capturing closure) to be
-strictly leak-direction: no crash, no wrong value, no double-free.
-Consistent with this whole area's "leak over unsoundness" bias, but a
-real gap worth fixing later — either in `fbip.rs`'s `Closure` handling
-directly, or by having codegen recognize and suppress these specific
-pre-inserted incs.
+**Fixed gap**: `fbip.rs`'s `Closure` handling originally predated real
+capture refcounting (written when the interpreter — the only backend
+that existed at the time — never refcounted captures at all) and
+inserted an `Inc` at every mention of a captured heap-shaped name
+INSIDE the closure body itself, not just once at capture time, with no
+matching `Dec` ever emitted for it. Combined with codegen's own
+correct capture-time inc, a heap-captured value used inside a
+REPEATEDLY-called closure would accumulate one unmatched extra
+increment per call — an unbounded leak. Fixed by no longer recursing
+`mark_last_uses` into a closure's body for a captured name at all
+(only detecting whether it's mentioned, to keep forcing the OUTER
+binding's `live_after` correctly) — a captured name's lifetime inside
+the body is owned by the closure cell now, not this outer walk.
+Verified safe for BOTH backends before implementing, not assumed:
+traced that `fbip.rs` only ever emits a `Dec` from one place (`Let`'s
+"name never referenced at all" case, gated on `used == false`), which
+a closure capturing a name always makes unreachable for that name —
+so no path, before or after the fix, ever `Dec`'d a captured name's
+original reference while an escaping closure held it; the fix only
+removes redundant, unmatched `Inc`s, in the interpreter as well as
+codegen (both share this one FBIP pass via one unparameterized call
+site).
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck
