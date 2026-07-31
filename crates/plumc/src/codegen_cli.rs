@@ -80,6 +80,16 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
             Ok(CgType::Array(Box::new(plum_type_to_cg_type(&args[0])?)))
         }
         PlumType::Struct(..) | PlumType::Enum(..) => Ok(CgType::Heap),
+        // A closure/function-typed signature position (a higher-order
+        // function's parameter, most commonly) — `CgType::Closure`
+        // deliberately carries param/return types (unlike `Heap`) since
+        // an indirect CALL through a closure value needs to know them
+        // to annotate the call correctly; see `CgType::Closure`'s own
+        // doc comment.
+        PlumType::Function(params, ret) => Ok(CgType::Closure(
+            params.iter().map(plum_type_to_cg_type).collect::<Result<Vec<_>, _>>()?,
+            Box::new(plum_type_to_cg_type(ret)?),
+        )),
         other => Err(format!(
             "codegen only supports Int/Float/Bool/Unit/Str/Array[T] or a non-generic struct/enum, found a \
              signature involving {other:?}"
@@ -98,6 +108,144 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
 /// only if the program's REACHABLE code actually tries to construct or
 /// match that specific type, rather than failing the whole compile
 /// over an unrelated, unused generic declaration.
+/// Every non-generic enum variant's declared payload types, resolved
+/// via `type_ctx` — the ONLY thing `plum_ir::lower::LoweringContext::
+/// variant_payload_types` needs (see that field's own doc comment): a
+/// bare non-zero-arity variant reference used as a VALUE (`let f =
+/// Circle; f(1.0)`) eta-expands into a synthetic closure whose params
+/// need real types, just like an ordinary closure literal does. A
+/// GENERIC variant is simply omitted (same "omit rather than fail the
+/// whole derivation" precedent as `derive_tag_fields`) — a bare
+/// reference to a generic variant constructor is out of this chunk's
+/// scope (closures inside/around still-generic instantiation sites
+/// aren't threaded through `monomorphize` this chunk either).
+fn derive_variant_payload_types(program: &ast::Program, type_ctx: &TypeContext) -> HashMap<String, Vec<PlumType>> {
+    let mut out = HashMap::new();
+    for item in &program.items {
+        if let ast::ItemKind::Enum(decl) = &item.kind {
+            if !decl.generics.is_empty() {
+                continue;
+            }
+            for variant in &decl.variants {
+                if let Some((_, payload)) = type_ctx.variant(&variant.name) {
+                    out.insert(variant.name.clone(), payload.to_vec());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A closure literal inside a still-generic function's body is a clear
+/// codegen error, checked structurally here — a plain AST walk, no
+/// type information needed — BEFORE `monomorphize::plan` ever runs.
+/// Scope note: non-generic functions only, this chunk (see the plan's
+/// own scope note) — threading closure-literal mangling through
+/// `monomorphize.rs`'s worklist (so a closure literal COULD appear
+/// inside a generic function, once per concrete instantiation) is real,
+/// separate follow-up work, not attempted here. Mirrors `plum_ir::
+/// monomorphize::rewrite_expr`'s own traversal shape (see that
+/// function) so this stays in lockstep with what that pass actually
+/// walks, even though this walk never mutates anything.
+fn reject_closures_in_generic_bodies(program: &ast::Program) -> Result<(), String> {
+    for item in &program.items {
+        if let ast::ItemKind::Let(def) = &item.kind {
+            if !def.generics.is_empty() {
+                check_no_closure_expr(&def.body, &def.name)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_no_closure_expr(expr: &ast::Expr, fn_name: &str) -> Result<(), String> {
+    match expr {
+        ast::Expr::Closure { span, .. } => Err(format!(
+            "codegen does not yet support a closure literal inside generic function {fn_name:?}'s body (at \
+             {span:?}) — closures inside still-generic function bodies aren't supported yet (non-generic \
+             functions only this chunk)"
+        )),
+        ast::Expr::Int(..) | ast::Expr::Float(..) | ast::Expr::Str(..) | ast::Expr::Bool(..) | ast::Expr::Ident(..) => Ok(()),
+        ast::Expr::Tuple(elems, _) | ast::Expr::ArrayLiteral(elems, _) => {
+            elems.iter().try_for_each(|e| check_no_closure_expr(e, fn_name))
+        }
+        ast::Expr::Unary { expr, .. } => check_no_closure_expr(expr, fn_name),
+        ast::Expr::Binary { lhs, rhs, .. } => {
+            check_no_closure_expr(lhs, fn_name)?;
+            check_no_closure_expr(rhs, fn_name)
+        }
+        ast::Expr::Field { base, .. } => check_no_closure_expr(base, fn_name),
+        ast::Expr::Call { callee, args, .. } => {
+            check_no_closure_expr(callee, fn_name)?;
+            args.iter().try_for_each(|a| check_no_closure_expr(a, fn_name))
+        }
+        ast::Expr::GenericInst { callee, .. } => check_no_closure_expr(callee, fn_name),
+        ast::Expr::Index { base, index, .. } => {
+            check_no_closure_expr(base, fn_name)?;
+            check_no_closure_expr(index, fn_name)
+        }
+        ast::Expr::Block(block, _) => check_no_closure_block(block, fn_name),
+        ast::Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            check_no_closure_expr(cond, fn_name)?;
+            check_no_closure_block(then_branch, fn_name)?;
+            if let Some(e) = else_branch {
+                check_no_closure_expr(e, fn_name)?;
+            }
+            Ok(())
+        }
+        ast::Expr::Match { scrutinee, arms, .. } => {
+            check_no_closure_expr(scrutinee, fn_name)?;
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    check_no_closure_expr(g, fn_name)?;
+                }
+                check_no_closure_expr(&arm.body, fn_name)?;
+            }
+            Ok(())
+        }
+        ast::Expr::For { iter, body, .. } => {
+            check_no_closure_expr(iter, fn_name)?;
+            check_no_closure_block(body, fn_name)
+        }
+        ast::Expr::Unsafe(block, _) | ast::Expr::Spawn(block, _) => check_no_closure_block(block, fn_name),
+        ast::Expr::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                check_no_closure_expr(&f.value, fn_name)?;
+            }
+            if let Some(s) = spread {
+                check_no_closure_expr(s, fn_name)?;
+            }
+            Ok(())
+        }
+        ast::Expr::Select { arms, .. } => {
+            for arm in arms {
+                check_no_closure_expr(&arm.expr, fn_name)?;
+                check_no_closure_expr(&arm.body, fn_name)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn check_no_closure_block(block: &ast::Block, fn_name: &str) -> Result<(), String> {
+    for stmt in &block.stmts {
+        match stmt {
+            ast::Stmt::Let { value, .. } => check_no_closure_expr(value, fn_name)?,
+            ast::Stmt::Assign { value, .. } => check_no_closure_expr(value, fn_name)?,
+            ast::Stmt::Expr(e) => check_no_closure_expr(e, fn_name)?,
+        }
+    }
+    if let Some(t) = &block.tail {
+        check_no_closure_expr(t, fn_name)?;
+    }
+    Ok(())
+}
+
 fn derive_tag_fields(program: &ast::Program, type_ctx: &TypeContext) -> plum_codegen::TagFields {
     let mut tag_fields = plum_codegen::TagFields::new();
     for item in &program.items {
@@ -180,6 +328,11 @@ pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<St
             "codegen: {entry_fn:?} returns an array-shaped value, which the compiled entry point can't print yet"
         ));
     }
+    if matches!(sig.ret, CgType::Closure(..)) {
+        return Err(format!(
+            "codegen: {entry_fn:?} returns a closure-shaped value, which the compiled entry point can't print yet"
+        ));
+    }
 
     let main_ir = emit_main(&resolved_entry, sig.ret, args);
     let full_ir = format!("{body_ir}\n{main_ir}");
@@ -206,10 +359,31 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
 
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
     let mut tag_fields = derive_tag_fields(&program, &type_ctx);
+    let variant_payload_types = derive_variant_payload_types(&program, &type_ctx);
     let mut infer = Infer::with_context(type_ctx);
     let types = infer.infer_program(&program).map_err(|e| format!("type error: {e}"))?;
+
+    // A closure literal appearing anywhere inside a still-GENERIC
+    // function's body is a clear codegen error, checked structurally
+    // (no type info needed) BEFORE `monomorphize::plan` ever runs — see
+    // `reject_closures_in_generic_bodies`'s own doc comment for why
+    // this has to live here rather than inside `plum-codegen` itself
+    // (`monomorphize::plan` wholesale REPLACES `ir_program.functions`,
+    // so a still-generic function's own un-instantiated body never
+    // reaches `plum-codegen` at all — there'd be nothing left there to
+    // reject). Run BEFORE `resolve_closure_types` below deliberately: a
+    // closure literal genuinely inside a still-generic function body
+    // has a param/return type that's never pinned to anything concrete
+    // by inference at all (its own enclosing function's type parameter
+    // never gets resolved), which `resolve_closure_types` would
+    // otherwise report as a confusing "can't determine a concrete
+    // type" error — this earlier, clearer, more specific rejection
+    // preempts that.
+    reject_closures_in_generic_bodies(&program)?;
+
     let resolved_sites = infer.resolve_generic_sites().map_err(|e| format!("type error: {e}"))?;
     let empty_array_elem_types = infer.resolve_empty_array_elem_types().map_err(|e| format!("type error: {e}"))?;
+    let closure_types = infer.resolve_closure_types().map_err(|e| format!("type error: {e}"))?;
 
     plum_ir::movecheck::check_moves(&program).map_err(|e| format!("move error: {e}"))?;
 
@@ -226,13 +400,17 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
         &types,
         infer.field_owners(),
         infer.array_for_loops(),
+        &closure_types,
+        &variant_payload_types,
     )
     .map_err(|e| format!("monomorphization error: {e}"))?;
 
     let lowering_ctx = LoweringContext::from_items(&program.items)
         .with_field_owners(infer.field_owners().clone())
         .with_array_for_loops(infer.array_for_loops().clone())
-        .with_empty_array_elem_types(empty_array_elem_types);
+        .with_empty_array_elem_types(empty_array_elem_types)
+        .with_closure_types(closure_types)
+        .with_variant_payload_types(variant_payload_types);
     let mut ir_program = lower_program(&program, &lowering_ctx).map_err(|e| format!("lowering error: {e}"))?;
     // `mono_plan.functions` REPLACES `lower_program`'s own function list
     // wholesale — it already covers every function actually needed,
@@ -359,13 +537,13 @@ fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
                  call i32 (ptr, ...) @printf(ptr @fmt, ptr %bytes)\n"
             ),
         ),
-        // `compile_and_run` already rejects a `Heap`- or `Array`-
-        // returning entry point before ever calling this function — see
-        // its own doc comment on why. Unreachable in practice, kept as
-        // a defensive error (not a panic) rather than silently
-        // producing garbage IR if that check is ever bypassed.
-        CgType::Heap | CgType::Array(_) => {
-            return "; unreachable: compile_and_run rejects a Heap/Array-returning entry point before this point"
+        // `compile_and_run` already rejects a `Heap`-, `Array`-, or
+        // `Closure`-returning entry point before ever calling this
+        // function — see its own doc comment on why. Unreachable in
+        // practice, kept as a defensive error (not a panic) rather than
+        // silently producing garbage IR if that check is ever bypassed.
+        CgType::Heap | CgType::Array(_) | CgType::Closure(..) => {
+            return "; unreachable: compile_and_run rejects a Heap/Array/Closure-returning entry point before this point"
                 .to_string()
         }
     };
@@ -603,6 +781,7 @@ mod tests {
         let types = infer.infer_program(&program).unwrap_or_else(|e| panic!("type error: {e}"));
         let resolved_sites = infer.resolve_generic_sites().unwrap_or_else(|e| panic!("resolve error: {e}"));
         let type_ctx2 = TypeContext::from_items(&program.items).unwrap();
+        let closure_types = infer.resolve_closure_types().unwrap_or_else(|e| panic!("closure type error: {e}"));
         let mono_plan = plum_ir::monomorphize::plan(
             &program,
             &type_ctx2,
@@ -611,6 +790,8 @@ mod tests {
             &types,
             infer.field_owners(),
             infer.array_for_loops(),
+            &closure_types,
+            &HashMap::new(),
         )
         .unwrap_or_else(|e| panic!("monomorphization error: {e}"));
         mono_plan.tag_fields.into_keys().collect()
@@ -807,5 +988,89 @@ mod tests {
         let src = "let go (): Int = { let a = [1, 2, 3]; a[10] }";
         let err = compile_and_run(src, "go", &[CgValue::Unit]).expect_err("expected the compiled binary to exit non-zero");
         assert!(err.contains("non-zero"), "unexpected error: {err}");
+    }
+
+    // --- closures: real compile-and-run tests ---
+
+    #[test]
+    fn closure_capturing_a_scalar_called_immediately_runs_correctly() {
+        let src = "\
+            let go (): Int = {\n\
+                let n = 10;\n\
+                let f = |x| x + n;\n\
+                f(5)\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "15");
+    }
+
+    #[test]
+    fn closure_capturing_a_heap_value_passed_to_a_higher_order_function_reads_it_correctly() {
+        // The CRUX correctness test for this whole chunk: `b` (a HEAP-
+        // shaped struct) is captured by `f`, which is then passed to
+        // `apply` (a genuinely separate function, called through an
+        // INDIRECT call) and invoked there — this only produces the
+        // right answer if the captured reference is still genuinely
+        // live and correctly readable from inside the closure body at
+        // the point `apply` actually calls it, not a stale/freed/
+        // uninitialized value (a use-after-free would typically show up
+        // as garbage output or a crash, not silently wrong-but-
+        // plausible output).
+        let src = "\
+            struct Box { val: Int }\n\
+            let apply (f: (Int) -> Int) (x: Int): Int = f(x)\n\
+            let go (): Int = {\n\
+                let b = Box { val: 100 };\n\
+                let f = |x| x + b.val;\n\
+                apply(f, 1)\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "101");
+    }
+
+    #[test]
+    fn self_referential_recursive_local_closure_fib_computes_correctly() {
+        let src = "\
+            let go (): Int = {\n\
+                let fib = |n| if n < 2 { n } else { fib(n - 1) + fib(n - 2) };\n\
+                fib(10)\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "55");
+    }
+
+    #[test]
+    fn a_closure_returned_from_a_function_still_works_after_its_creating_scope_is_gone() {
+        // Genuinely exploratory (per the plan this chunk implements):
+        // this exact escape pattern — a closure created inside one
+        // function, returned, and called only AFTER that function has
+        // already returned (its own stack frame gone) — is untested
+        // anywhere else in this project, including the interpreter.
+        // Only passes if the captured `n` was copied into the closure's
+        // OWN heap cell at creation time, genuinely independent of
+        // `make_adder`'s now-defunct stack frame.
+        let src = "\
+            let make_adder (n: Int): (Int) -> Int = |x| x + n\n\
+            let go (): Int = {\n\
+                let add5 = make_adder(5);\n\
+                add5(10)\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "15");
+    }
+
+    #[test]
+    fn a_closure_literal_inside_a_generic_function_body_is_rejected_before_monomorphization() {
+        let src = "\
+            let wrap[T] (x: T): T = { let f = |y| y; f(x) }\n\
+            let go (): Int = wrap(5)\n\
+        ";
+        let err = compile_and_run(src, "go", &[CgValue::Unit])
+            .expect_err("expected a clear pre-check error for a closure inside a generic function body");
+        assert!(err.contains("closure") && err.contains("generic"), "unexpected error: {err}");
     }
 }

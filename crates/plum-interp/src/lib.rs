@@ -861,7 +861,7 @@ impl Interpreter {
                 // `infer_program` for the matching TYPE-level fix (a
                 // fresh placeholder type, unified after the fact).
                 let v = match value.as_ref() {
-                    Expr::Closure { params, body: closure_body } => {
+                    Expr::Closure { params, body: closure_body, .. } => {
                         let id = self.next_closure_id;
                         self.next_closure_id += 1;
                         let mut captured = self.env.clone();
@@ -1109,7 +1109,7 @@ impl Interpreter {
                 }
                 Ok(v)
             }
-            Expr::Closure { params, body } => {
+            Expr::Closure { params, body, .. } => {
                 let id = self.next_closure_id;
                 self.next_closure_id += 1;
                 self.closures.insert(

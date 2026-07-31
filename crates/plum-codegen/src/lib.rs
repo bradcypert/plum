@@ -28,6 +28,19 @@ use std::collections::HashMap;
 /// layouts this distinction drives. `Array` is recursive
 /// (`Array[Array[Int]]` etc.) — `Box` only exists to give the variant a
 /// finite size, same reason any other recursive Rust enum needs one.
+/// `Closure` is ALSO `ptr` at the LLVM level (see `llvm_type` below),
+/// but — unlike `Heap`/`Str`/`Array` — deliberately carries its OWN
+/// param/return `CgType`s rather than being opaque: a closure is
+/// CALLED through (an indirect `call` needs to know the exact argument/
+/// return LLVM types to annotate the call with), where `Heap` never
+/// needs to be. It deliberately does NOT carry its capture layout
+/// (which fields it closed over, and their types) — that's per-
+/// LITERAL-SITE information, not part of the closure's static TYPE (two
+/// different `if` branches can produce two closure literals with
+/// completely different captures that still both flow into the same
+/// `CgType::Closure(params, ret)`-typed value at a control-flow join) —
+/// see `codegen.rs`'s module doc comment for how release is instead
+/// resolved via a function pointer stored IN the heap cell itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CgType {
     Int,
@@ -37,6 +50,7 @@ pub enum CgType {
     Heap,
     Str,
     Array(Box<CgType>),
+    Closure(Vec<CgType>, Box<CgType>),
 }
 
 impl CgType {
@@ -45,7 +59,7 @@ impl CgType {
             CgType::Int => "i64",
             CgType::Float => "double",
             CgType::Bool | CgType::Unit => "i1",
-            CgType::Heap | CgType::Str | CgType::Array(_) => "ptr",
+            CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => "ptr",
         }
     }
 
@@ -65,6 +79,17 @@ impl CgType {
             CgType::Heap => "Heap".to_string(),
             CgType::Str => "Str".to_string(),
             CgType::Array(elem) => format!("Array_{}", elem.mangled()),
+            // Every closure shape shares ONE mangled name regardless of
+            // its actual param/return types — the only consumer of
+            // `mangled()` is array-element-release-function naming
+            // (`emit_array_release_fns`), and `@plum_rc_dec_closure`
+            // (the dec function EVERY closure shares — see `dec_fn_for`)
+            // doesn't care about param/return types either, so
+            // collapsing every `Closure(..)` to one array-release
+            // function is correct, not just convenient: decrementing an
+            // `Array[Closure]` element never needs to know what that
+            // closure's own call signature was.
+            CgType::Closure(..) => "Closure".to_string(),
         }
     }
 }
@@ -108,6 +133,12 @@ fn dec_fn_for(ty: &CgType) -> Option<String> {
         CgType::Heap => Some("@plum_rc_dec".to_string()),
         CgType::Str => Some("@plum_rc_dec_str".to_string()),
         CgType::Array(elem) => Some(format!("@plum_rc_dec_array_{}", elem.mangled())),
+        // ONE shared function for every closure shape — see `@plum_rc_
+        // dec_closure`'s own doc comment in `emit_runtime` for why a
+        // single, runtime-dispatched-via-stored-function-pointer
+        // function works here where every OTHER heap kind needs a
+        // shape-specific (or at least element-type-specific) one.
+        CgType::Closure(..) => Some("@plum_rc_dec_closure".to_string()),
     }
 }
 
@@ -494,6 +525,84 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
          }\n\n",
     );
 
+    // --- closure runtime ---
+    //
+    // Cell layout: `{ i64 refcount, i64 code_ptr, i64 release_fn_ptr,
+    // i64 captured[N] }` — a 3-WORD header, one word wider than every
+    // other heap cell in this backend (`Ctor`/array cells are 2 words:
+    // refcount + one more). This extra width is deliberate, not
+    // incidental: a closure's release logic can't be resolved purely
+    // from its static `CgType` the way an array's element-type-keyed
+    // release can, because two DIFFERENT closure literals (different
+    // capture layouts, e.g. from two branches of an `if`) can both flow
+    // into the same `CgType::Closure(params, ret)`-typed value at a
+    // control-flow join — so which fields to release has to be resolved
+    // via a function pointer stored IN the cell itself, at a FIXED
+    // offset every closure cell shares, rather than a name derivable
+    // from the type alone. `codegen.rs`'s `closure_field_byte_offset`
+    // (24 + index*8) is the captured-field counterpart to `field_byte_
+    // offset` (16 + index*8) for exactly this reason. Kept as its own
+    // dedicated allocator (rather than reusing `@plum_alloc`, which
+    // takes a tag, or `@plum_alloc_array`, whose 2-word header is too
+    // narrow) purely for readability, same precedent as `@plum_alloc_
+    // array` itself.
+    out.push_str(
+        "define ptr @plum_alloc_closure(i64 %num_captured) {\n\
+         entry:\n\
+         \x20 %captured_bytes = mul i64 %num_captured, 8\n\
+         \x20 %size = add i64 %captured_bytes, 24\n\
+         \x20 %p = call ptr @malloc(i64 %size)\n\
+         \x20 store i64 1, ptr %p\n\
+         \x20 ret ptr %p\n\
+         }\n\n",
+    );
+
+    // ONE shared dec function for EVERY closure shape — mirroring
+    // `Heap`'s own `@plum_rc_dec`, which dispatches via a runtime TAG
+    // rather than a compile-time-distinct function per struct, this
+    // dispatches via a function POINTER stored in the cell (word 2,
+    // byte offset 16) instead: at refcount zero, call it indirectly
+    // (its job is ONLY to dec whatever captured fields are heap-shaped,
+    // matching `@plum_release_fields`'s own "release fields, don't free
+    // the cell itself" contract), then free the cell. `plum-codegen`
+    // generates one such release function per closure LITERAL SITE
+    // (`@closure_release$<fn>$<K>`, see `codegen.rs`), each with a
+    // signature of `void(ptr)` so this indirect call is always legal
+    // regardless of which literal site's cell actually flows through
+    // here at runtime.
+    out.push_str(
+        "define void @plum_rc_dec_closure(ptr %p) {\n\
+         entry:\n\
+         \x20 %rc = load i64, ptr %p\n\
+         \x20 %rc2 = sub i64 %rc, 1\n\
+         \x20 store i64 %rc2, ptr %p\n\
+         \x20 %is_zero = icmp eq i64 %rc2, 0\n\
+         \x20 br i1 %is_zero, label %free_block, label %done\n\
+         free_block:\n\
+         \x20 %release_addr = getelementptr i8, ptr %p, i64 16\n\
+         \x20 %release_word = load i64, ptr %release_addr\n\
+         \x20 %release_fn = inttoptr i64 %release_word to ptr\n\
+         \x20 call void %release_fn(ptr %p)\n\
+         \x20 call void @free(ptr %p)\n\
+         \x20 br label %done\n\
+         done:\n\
+         \x20 ret void\n\
+         }\n\n",
+    );
+
+    // A shared, trivial "nothing captured, nothing to release" release
+    // function — used for every ZERO-capture closure cell (a bare
+    // top-level function reference wrapped as a value via a trampoline
+    // — see `codegen.rs`'s `codegen_bare_fn_value` — always has zero
+    // captures by construction), so codegen doesn't need to generate a
+    // separate, identically-empty release function per trampoline.
+    out.push_str(
+        "define void @plum_closure_release_noop(ptr %cell) {\n\
+         entry:\n\
+         \x20 ret void\n\
+         }\n\n",
+    );
+
     out
 }
 
@@ -636,24 +745,56 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
     // forward declaration order between top-level `define`s in the same
     // module, so this reordering is purely a Rust-side "collect
     // everything, then emit" convenience, invisible in the output.
+    // Shared, program-wide state for closure-literal-site codegen — see
+    // `codegen::Ctx::closure_counter`/`closure_defs`/`trampolines`'
+    // own doc comments. Same `RefCell`-behind-a-shared-reference shape
+    // as `needed_arrays`, for the same reason: genuinely mutated as
+    // codegen walks each function body, but threaded through as a
+    // plain `&Ctx` everywhere else.
+    let closure_counter = std::cell::RefCell::new(0usize);
+    let closure_defs = std::cell::RefCell::new(Vec::new());
+    let trampolines = std::cell::RefCell::new(HashMap::new());
+
     let mut bodies = String::new();
     for f in &program.functions {
-        bodies.push_str(&emit_function(f, signatures, &tag_ids, tag_fields, &needed_arrays)?);
+        bodies.push_str(&emit_function(
+            f,
+            signatures,
+            &tag_ids,
+            tag_fields,
+            &needed_arrays,
+            &closure_counter,
+            &closure_defs,
+            &trampolines,
+        )?);
         bodies.push('\n');
     }
 
     let mut out = emit_runtime(tag_fields, &tag_ids);
     out.push_str(&emit_array_release_fns(&needed_arrays.into_inner()));
+    // Every closure-literal-site-generated function/release function/
+    // trampoline, discovered while walking `program.functions` above —
+    // spliced in here, same "collect everything while emitting bodies,
+    // then place it before the bodies in the final text" convention
+    // `emit_array_release_fns` itself already established.
+    for def in closure_defs.into_inner() {
+        out.push_str(&def);
+        out.push('\n');
+    }
     out.push_str(&bodies);
     Ok(out)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_function(
     f: &ir::Function,
     signatures: &HashMap<String, FnSig>,
     tag_ids: &HashMap<String, i64>,
     tag_fields: &TagFields,
     needed_arrays: &std::cell::RefCell<HashMap<String, CgType>>,
+    closure_counter: &std::cell::RefCell<usize>,
+    closure_defs: &std::cell::RefCell<Vec<String>>,
+    trampolines: &std::cell::RefCell<HashMap<String, String>>,
 ) -> Result<String, String> {
     let sig = signatures
         .get(&f.name)
@@ -674,6 +815,9 @@ fn emit_function(
         tag_fields,
         fn_name: &f.name,
         needed_arrays,
+        closure_counter,
+        closure_defs,
+        trampolines,
     };
 
     let mut env = HashMap::new();
@@ -900,17 +1044,18 @@ mod tests {
 
     #[test]
     fn a_call_through_a_computed_callee_is_rejected() {
-        // codegen only supports a direct, bare function-name callee —
-        // not the result of some other expression (no first-class
-        // function values in this v1 subset).
+        // A computed callee IS now supported when it's `CgType::
+        // Closure`-typed (see this file's closure tests) — but a
+        // NON-closure-typed computed callee (an `Int`, here) is still
+        // correctly rejected: there's genuinely nothing to call through.
         let prog = program(vec![Function {
             name: "go".to_string(),
             params: vec![],
             body: Expr::Call { callee: Box::new(Expr::Int(0)), args: vec![] },
         }]);
         let err = emit(&prog, &sigs(&[("go", vec![], CgType::Unit)]), &TagFields::new())
-            .expect_err("expected a computed callee to be rejected");
-        assert!(err.contains("directly-named function"), "unexpected error: {err}");
+            .expect_err("expected a computed non-closure callee to be rejected");
+        assert!(err.contains("directly-named function") && err.contains("closure"), "unexpected error: {err}");
     }
 
     #[test]
@@ -1273,5 +1418,209 @@ mod tests {
         )
         .unwrap();
         assert!(ir.contains("call ptr @plum_alloc_array(i64 0)"), "{ir}");
+    }
+
+    // --- closures ---
+
+    #[test]
+    fn closure_literal_capturing_a_scalar_allocates_a_cell_and_a_separate_function() {
+        // let go(n: Int): Int = { let f = |x| x + n; f(5) }
+        let closure_body =
+            Expr::Binary(BinOp::Add, Box::new(Expr::Var("x".to_string())), Box::new(Expr::Var("n".to_string())));
+        let body = Expr::Let {
+            name: "f".to_string(),
+            value: Box::new(Expr::Closure {
+                params: vec!["x".to_string()],
+                param_types: Some(vec![PrimTy::Int]),
+                ret_type: Some(PrimTy::Int),
+                body: Box::new(closure_body),
+            }),
+            body: Box::new(Expr::Call {
+                callee: Box::new(Expr::Var("f".to_string())),
+                args: vec![Expr::Int(5)],
+            }),
+        };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec!["n".to_string()], body }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![CgType::Int], CgType::Int)]), &TagFields::new()).unwrap();
+        assert!(ir.contains("call ptr @plum_alloc_closure(i64 1)"), "{ir}");
+        assert!(ir.contains("define i64 @closure$go$0("), "{ir}");
+    }
+
+    #[test]
+    fn closure_capturing_a_heap_shaped_value_increments_its_refcount_on_capture() {
+        // let go(p: Heap): Heap = { let f = |x| p; f(0) }
+        let body = Expr::Let {
+            name: "f".to_string(),
+            value: Box::new(Expr::Closure {
+                params: vec!["x".to_string()],
+                param_types: Some(vec![PrimTy::Int]),
+                ret_type: Some(PrimTy::Heap),
+                body: Box::new(Expr::Var("p".to_string())),
+            }),
+            body: Box::new(Expr::Call {
+                callee: Box::new(Expr::Var("f".to_string())),
+                args: vec![Expr::Int(0)],
+            }),
+        };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec!["p".to_string()], body }]);
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Heap], CgType::Heap)]),
+            &tags(&[("Point", vec![CgType::Int, CgType::Int])]),
+        )
+        .unwrap();
+        assert!(ir.contains("call void @plum_rc_inc(ptr"), "{ir}");
+    }
+
+    #[test]
+    fn release_function_for_a_heap_capturing_closure_decs_the_capture_and_never_frees_itself() {
+        // Same program as the capture-inc test above — this asserts
+        // the GENERATED release function's own shape: it decs the
+        // captured field, but never `free`s anything itself (that's
+        // `@plum_rc_dec_closure`'s job, once the release function it
+        // calls returns — see `emit_runtime`'s own doc comment).
+        let body = Expr::Let {
+            name: "f".to_string(),
+            value: Box::new(Expr::Closure {
+                params: vec!["x".to_string()],
+                param_types: Some(vec![PrimTy::Int]),
+                ret_type: Some(PrimTy::Heap),
+                body: Box::new(Expr::Var("p".to_string())),
+            }),
+            body: Box::new(Expr::Call {
+                callee: Box::new(Expr::Var("f".to_string())),
+                args: vec![Expr::Int(0)],
+            }),
+        };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec!["p".to_string()], body }]);
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Heap], CgType::Heap)]),
+            &tags(&[("Point", vec![CgType::Int, CgType::Int])]),
+        )
+        .unwrap();
+        let release_start = ir.find("define void @closure_release$go$0(ptr %cell) {").expect(&format!("expected a generated release fn in:\n{ir}"));
+        let release_end = ir[release_start..].find("\n}\n").expect("expected the release fn to terminate") + release_start;
+        let release_text = &ir[release_start..release_end];
+        assert!(release_text.contains("call void @plum_rc_dec(ptr"), "{release_text}");
+        assert!(!release_text.contains("@free"), "{release_text}");
+        // The SHARED `@plum_rc_dec_closure` runtime function is what
+        // actually frees the cell, at refcount zero, AFTER calling the
+        // release function above.
+        assert!(ir.contains("define void @plum_rc_dec_closure(ptr %p)"), "{ir}");
+        assert!(ir.contains("call void @free(ptr %p)"), "{ir}");
+    }
+
+    #[test]
+    fn calling_through_a_closure_typed_value_is_an_indirect_call_never_musttail() {
+        // let apply(f: Closure([Int], Int), x: Int): Int = f(x)  -- a
+        // bare-Call-in-tail-position body, so this exercises the
+        // TAIL-position half of the indirect-call path specifically
+        // (the one place `musttail` might otherwise have been
+        // (wrongly) attempted).
+        let prog = program(vec![Function {
+            name: "apply".to_string(),
+            params: vec!["f".to_string(), "x".to_string()],
+            body: Expr::Call {
+                callee: Box::new(Expr::Var("f".to_string())),
+                args: vec![Expr::Var("x".to_string())],
+            },
+        }]);
+        let closure_sig = CgType::Closure(vec![CgType::Int], Box::new(CgType::Int));
+        let ir = emit(
+            &prog,
+            &sigs(&[("apply", vec![closure_sig, CgType::Int], CgType::Int)]),
+            &TagFields::new(),
+        )
+        .unwrap();
+        assert!(ir.contains("inttoptr i64"), "{ir}");
+        assert!(!ir.contains("musttail"), "{ir}");
+        // A genuine `call` (through the loaded function pointer) must
+        // still appear — the indirect path is a `call`, not a dropped
+        // instruction.
+        let apply_start = ir.find("define i64 @apply(").unwrap();
+        assert!(ir[apply_start..].contains(" = call i64 %"), "{ir}");
+    }
+
+    #[test]
+    fn self_referential_closure_allocates_the_cell_before_the_self_store_and_skips_its_own_inc() {
+        // let go(): Int = { let fib = |n| if n < 2 { n } else { fib(n-1) + fib(n-2) }; fib(5) }
+        let fib_body = Expr::If {
+            cond: Box::new(Expr::Binary(BinOp::Lt, Box::new(Expr::Var("n".to_string())), Box::new(Expr::Int(2)))),
+            then_branch: Box::new(Expr::Var("n".to_string())),
+            else_branch: Box::new(Expr::Binary(
+                BinOp::Add,
+                Box::new(Expr::Call {
+                    callee: Box::new(Expr::Var("fib".to_string())),
+                    args: vec![Expr::Binary(BinOp::Sub, Box::new(Expr::Var("n".to_string())), Box::new(Expr::Int(1)))],
+                }),
+                Box::new(Expr::Call {
+                    callee: Box::new(Expr::Var("fib".to_string())),
+                    args: vec![Expr::Binary(BinOp::Sub, Box::new(Expr::Var("n".to_string())), Box::new(Expr::Int(2)))],
+                }),
+            )),
+        };
+        let body = Expr::Let {
+            name: "fib".to_string(),
+            value: Box::new(Expr::Closure {
+                params: vec!["n".to_string()],
+                param_types: Some(vec![PrimTy::Int]),
+                ret_type: Some(PrimTy::Int),
+                body: Box::new(fib_body),
+            }),
+            body: Box::new(Expr::Call {
+                callee: Box::new(Expr::Var("fib".to_string())),
+                args: vec![Expr::Int(5)],
+            }),
+        };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec![], body }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new()).unwrap();
+        // Exactly ONE capture: `fib` itself (self-reference) — never
+        // incremented (see this function's own doc comment on the
+        // deliberate, accepted-leak-avoiding skip).
+        assert!(ir.contains("call ptr @plum_alloc_closure(i64 1)"), "{ir}");
+        // `@plum_rc_inc` is always DEFINED in the runtime preamble
+        // regardless of whether anything calls it — the real assertion
+        // is that nothing ever CALLS it here.
+        assert!(!ir.contains("call void @plum_rc_inc("), "{ir}");
+        let alloc_idx = ir.find("call ptr @plum_alloc_closure(i64 1)").unwrap();
+        // The self-capture slot is stored at `closure_field_byte_
+        // offset(0)` = 24 — its `getelementptr` must appear AFTER the
+        // alloc (the cell's address has to exist before it can be
+        // stored into its own slot).
+        let self_store_idx = ir[alloc_idx..].find("i64 24").expect("expected the self-capture slot's own offset");
+        assert!(self_store_idx > 0, "{ir}");
+    }
+
+    #[test]
+    fn bare_top_level_function_reference_used_as_a_value_generates_a_trampoline() {
+        // let double(n: Int): Int = n * 2
+        // let go(): Int = { let f = double; f(21) }
+        let double_fn = Function {
+            name: "double".to_string(),
+            params: vec!["n".to_string()],
+            body: Expr::Binary(BinOp::Mul, Box::new(Expr::Var("n".to_string())), Box::new(Expr::Int(2))),
+        };
+        let go_fn = Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::Let {
+                name: "f".to_string(),
+                value: Box::new(Expr::Var("double".to_string())),
+                body: Box::new(Expr::Call {
+                    callee: Box::new(Expr::Var("f".to_string())),
+                    args: vec![Expr::Int(21)],
+                }),
+            },
+        };
+        let prog = program(vec![double_fn, go_fn]);
+        let ir = emit(
+            &prog,
+            &sigs(&[("double", vec![CgType::Int], CgType::Int), ("go", vec![], CgType::Int)]),
+            &TagFields::new(),
+        )
+        .unwrap();
+        assert!(ir.contains("define i64 @trampoline$double("), "{ir}");
+        assert!(ir.contains("call ptr @plum_alloc_closure(i64 0)"), "{ir}");
     }
 }

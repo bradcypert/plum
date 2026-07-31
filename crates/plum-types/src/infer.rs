@@ -272,6 +272,15 @@ pub struct Infer {
     // `ArrayLiteral` arm), and only becomes concrete (if it ever does)
     // once the WHOLE program's final substitution is known.
     empty_array_elem_types: HashMap<Span, Type>,
+    // `Expr::Closure` span -> its (still-possibly-unresolved) param
+    // types and body/return type — the closure-literal counterpart to
+    // `empty_array_elem_types` immediately above, populated by
+    // `infer_closure` for the SAME reason: `plum-ir`'s lowering needs a
+    // closure's param types to generate its per-literal-site LLVM
+    // function signature (`plum-codegen`), and unlike every other IR
+    // shape, there's nothing structural in the closure literal itself
+    // to derive that from. See `resolve_closure_types`.
+    closure_types: HashMap<Span, (Vec<Type>, Type)>,
     // Whether the expression currently being inferred is lexically
     // inside an `unsafe { .. }` block — toggled true/false around
     // `ast::Expr::Unsafe`'s own handling, not a stack (nested `unsafe`
@@ -363,6 +372,7 @@ impl Infer {
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
+            closure_types: HashMap::new(),
             in_unsafe: false,
             top_level_fns: HashSet::new(),
             current_fn: None,
@@ -384,6 +394,7 @@ impl Infer {
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
+            closure_types: HashMap::new(),
             in_unsafe: false,
             top_level_fns: HashSet::new(),
             current_fn: None,
@@ -445,6 +456,33 @@ impl Infer {
                 ));
             }
             out.insert(*span, resolved);
+        }
+        Ok(out)
+    }
+
+    /// Resolves every closure LITERAL's param/return types against the
+    /// whole program's final substitution — mirrors `resolve_empty_
+    /// array_elem_types` exactly (same precondition, same "still a
+    /// `Var` after the final substitution is a genuine ambiguity, not
+    /// silently defaulted" reasoning), just for `closure_types` instead.
+    /// `plum_ir::lower::LoweringContext::with_closure_types` is where
+    /// the result gets consumed.
+    pub fn resolve_closure_types(&self) -> Result<HashMap<Span, (Vec<Type>, Type)>, String> {
+        let subst = self
+            .final_subst
+            .as_ref()
+            .ok_or_else(|| "internal error: resolve_closure_types called before infer_program completed".to_string())?;
+        let mut out = HashMap::with_capacity(self.closure_types.len());
+        for (span, (param_tys, ret_ty)) in &self.closure_types {
+            let resolved_params: Vec<Type> = param_tys.iter().map(|t| subst.apply(t)).collect();
+            let resolved_ret = subst.apply(ret_ty);
+            if resolved_params.iter().any(|t| matches!(t, Type::Var(_))) || matches!(resolved_ret, Type::Var(_)) {
+                return Err(format!(
+                    "cannot determine a concrete param/return type for the closure literal at {span:?} — it's \
+                     never used anywhere that would pin its type to something concrete"
+                ));
+            }
+            out.insert(*span, (resolved_params, resolved_ret));
         }
         Ok(out)
     }
@@ -2035,7 +2073,7 @@ impl Infer {
             } => self.infer_struct_literal(path, fields, spread, *span, env),
             ast::Expr::Match { scrutinee, arms, .. } => self.infer_match(scrutinee, arms, env),
             ast::Expr::Select { arms, span } => self.infer_select(arms, *span, env),
-            ast::Expr::Closure { params, body, .. } => self.infer_closure(params, body, env),
+            ast::Expr::Closure { params, body, span } => self.infer_closure(params, body, env, *span),
             // `unsafe` doesn't change the block's TYPE (its type is
             // whatever the block's own type is, same as a plain block)
             // — but unlike before extern functions existed, it's no
@@ -2781,7 +2819,13 @@ impl Infer {
     // see_the_caller_environment`), a closure DOES see the surrounding
     // scope — that's the actual definition of a closure. `closure_env`
     // extends the caller's `env`, not a fresh one, on purpose.
-    fn infer_closure(&mut self, params: &[ast::ClosureParam], body: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), String> {
+    fn infer_closure(
+        &mut self,
+        params: &[ast::ClosureParam],
+        body: &ast::Expr,
+        env: &TypeEnv,
+        span: Span,
+    ) -> Result<(Type, Subst), String> {
         let mut param_types = Vec::with_capacity(params.len());
         let mut closure_env = env.clone();
         for p in params {
@@ -2793,6 +2837,15 @@ impl Infer {
             param_types.push(ty);
         }
         let (body_ty, acc) = self.infer_expr(body, &closure_env)?;
+        // Recorded RAW (pre-`acc`-application) — same "the program's
+        // FINAL substitution, applied later by `resolve_closure_types`,
+        // will chase through whatever unification history this Var
+        // participates in anywhere else in the program" reasoning as
+        // `empty_array_elem_types` uses; see that field's own doc
+        // comment. Needed so `plum-ir`'s lowering can bake a concrete
+        // param/return type into the `ir::Expr::Closure` node it
+        // produces for THIS span — see `LoweringContext::closure_types`.
+        self.closure_types.insert(span, (param_types.clone(), body_ty.clone()));
         let resolved_params = param_types.iter().map(|t| acc.apply(t)).collect();
         Ok((Type::Function(resolved_params, Box::new(acc.apply(&body_ty))), acc))
     }

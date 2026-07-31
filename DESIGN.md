@@ -1503,7 +1503,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1-v4 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings)
+### LLVM backend — v1-v5 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1530,14 +1530,19 @@ index, len, push/pop/set/remove + FBIP's reuse-in-place variants) and
 core, byte-level string operations (literal, len, byte indexing,
 concat + reuse, `.contains()`/`.starts_with()`/`.ends_with()`,
 `ToString` for `Int`/`Float`/`Bool`/`Str` — see "Arrays and core
-strings" below). Still out of scope and producing a clear codegen
-error, never a panic: Unicode-aware string operations (`.runes()`,
-`.to_upper()`, `.to_lower()`, `.trim()`, `.replace()`, `.split()`),
-general `for x in arr`/`.map()`/`.filter()`/`.fold()` array iteration
-(today's `For` IR node is range-only), closures, concurrency, FFI
-(including `CStr`), `Assign`, non-constant `Global` initializers — and
-a generic instantiated at any of these still-unsupported types (e.g.
-`Box[Array[Str]]` once `.split()` is needed, or `Box[Closure]`).
+strings" below), and — as of a further follow-on chunk — closures in
+non-generic functions, including self-referential local closures,
+higher-order calls through a closure-typed value, and a bare
+top-level function name used as a value (see "Closures" below). Still
+out of scope and producing a clear codegen error, never a panic:
+Unicode-aware string operations (`.runes()`, `.to_upper()`,
+`.to_lower()`, `.trim()`, `.replace()`, `.split()`), general
+`for x in arr`/`.map()`/`.filter()`/`.fold()` array iteration (today's
+`For` IR node is range-only), a closure literal inside a still-generic
+function's own body, concurrency, FFI (including `CStr`), `Assign`,
+non-constant `Global` initializers — and a generic instantiated at any
+of these still-unsupported types (e.g. `Box[Array[Str]]` once
+`.split()` is needed).
 
 **Guaranteed tail calls**: any call in tail position (the function's
 own body; both branches of a tail-positioned `If`/arms of a tail-
@@ -1778,6 +1783,133 @@ equivalent of the interpreter's own `Result<_, String>` hard-error-out
 behavior. `CStr` stays out of scope (it has no operations besides FFI
 boundary crossing, and FFI as a whole isn't in codegen's scope yet —
 adding it now would be dead machinery with zero reachable consumers).
+
+**Closures (non-generic functions only)**: `ir::Expr::Closure` carries
+no captured/free-variable list — lowering is purely structural, and
+neither it nor FBIP compute one (FBIP's own `Closure` handling only
+ever forces the OUTER binding conservatively live, via
+`mark_last_uses`, whenever a closure body might still reference it —
+it does not compute or track a capture set for the closure itself).
+Free-variable analysis is therefore entirely new, codegen-side work: a
+full structural walk of a closure's body collecting every
+`Expr::Var` present in the enclosing `Env` (excluding the closure's
+own params and bare top-level function names, neither of which is in
+`Env`), deduplicated and sorted by name for reproducible `.ll` output
+— this order fixes the capture cell's own field-index assignment.
+
+A closure value is a heap cell with a **3-word header** — `{ i64
+refcount, i64 code_ptr, i64 release_fn_ptr, i64 captured[N] }` —
+deliberately one word WIDER than the `Ctor`/array cells' 2-word
+header (`field_byte_offset` needs a genuinely separate closure-
+specific variant, `24 + index*8`, not `16 + index*8`; an initially
+simpler-looking "just reuse Ctor's offsets" idea turned out wrong once
+worked through). The reason: unlike an array (whose release logic is
+fully determined by its element `CgType` alone), two different `if`
+branches can produce two DIFFERENT closure literals — different
+capture layouts — both flowing into the same `CgType::Closure(params,
+ret)`-typed value at a control-flow join, so release must be resolved
+via a function pointer stored IN the cell, not derived from the
+static type. `CgType::Closure(Vec<CgType>, Box<CgType>)` therefore
+carries only enough to know how to CALL through a value (the indirect
+call's signature annotation), never its capture layout. One dedicated
+allocator `@plum_alloc_closure`, and one genuinely uniform
+`@plum_rc_dec_closure(ptr)` runtime function — dec, and at zero, load
+and indirectly call whichever release function this particular cell
+stored, then `free` — the same "one shared function, runtime-dispatch
+via a pointer stored in the cell" shape `Heap`'s own `@plum_rc_dec`
+already uses (a closer analogy than array release turned out to be).
+
+Each closure LITERAL SITE gets its own generated LLVM function pair:
+`@closure$<fn>$<K>` (the body — loads captures back out of `%env` by
+index into a fresh, NOT-inherited `Env`, real lexical scoping) and
+`@closure_release$<fn>$<K>` (dec's every heap-shaped capture, then
+`free`s). **Captured heap-shaped values are properly refcounted** —
+inc'd at capture time, dec'd by the per-site release function — a
+deliberate fix over the interpreter's own accepted leak (it never
+refcounts captures at all), matching the v2 precedent of making the
+compiled backend correctness-strict where the interpreter accepts a
+gap. Proven by two tests: a heap-captured struct's field is still
+correctly readable from inside a closure body reached only through an
+INDIRECT call from a genuinely separate function (rules out
+use-after-free), and a closure created inside one function, returned,
+and called only after that function's own stack frame is gone still
+works (rules out stack-frame dependence) — this exact escape pattern
+was untested anywhere in the project, interpreter included, before
+this chunk.
+
+**Calling through a closure value**: a bare `Expr::Var(name)` routes
+through the ordinary direct-call path only when `name` names a known
+top-level function AND isn't shadowed by a local in `Env` (`Env`, not
+the signature table, is authoritative for what a bare identifier
+resolves to — a local variable sharing a top-level function's name
+must go through the indirect path). Otherwise, `codegen_value(callee)`
+must yield a `CgType::Closure`; the code pointer is loaded and called
+indirectly, with the environment pointer as an implicit first
+argument. **`musttail` is deliberately never attempted for indirect
+closure calls** — the existing mechanism compares two known, named
+`FnSig`s; an indirect target's signature is only known via
+`CgType::Closure`'s call-shape, a different and weaker check, and
+indirect `musttail` has its own unexercised LLVM legality constraints
+— always falls back to an ordinary `call`, even in tail position. A
+self-referential closure's own recursive call is therefore NOT
+guaranteed-tail-call-eliminated yet — a real, documented limitation.
+Direct calls to plain named functions are completely unaffected.
+
+**Self-referential local closures** (DESIGN.md's own decided surface
+semantics above: self-reference only, no mutual recursion, no `move`
+keyword): the cell is allocated and bound into `Env` under its own
+name BEFORE its other captures are stored — sound because the cell's
+address is an ordinary known SSA value the moment it's allocated, well
+before anything needs to write it as a captured word. The
+self-capture slot's `plum_rc_inc` is **deliberately skipped** (and,
+found and fixed during implementation, its paired dec in the
+per-site release function must be skipped too, or the true refcount
+is under-counted) — incrementing it would create a reference cycle
+the cell could never reach zero to escape: a genuine, deliberate,
+documented leak, matching the same "leak over unsoundness" precedent
+already used for `For`/`Closure`/`Spawn` captures elsewhere in
+`fbip.rs`. A bare top-level function name used as a VALUE (not
+called) — not eta-expanded upstream, confirmed by reading `lower.rs`
+directly (only non-zero-arity enum-variant constructors get that
+treatment) — is wrapped in a generated trampoline closure with zero
+captures, memoized per distinct function name so repeated references
+don't duplicate work.
+
+A closure literal inside a still-generic function's own body is
+rejected by a dedicated pre-check in `plumc` BEFORE monomorphization
+runs (a plain structural AST walk, no type info needed) — since
+`ir_program.functions` is wholesale replaced by
+`monomorphize::plan`'s output, a still-generic function's
+un-instantiated body never reaches `plum-codegen` at all regardless,
+so this guard has to live upstream. Threading closure-literal mangling
+through `monomorphize.rs` itself (so a closure inside a generic
+function's body could work per-instantiation) is deferred.
+
+Getting a closure literal to codegen at all required a real upstream
+addition beyond what was originally scoped: `ir::Expr::Closure`
+carried no param/return type information whatsoever (unlike every
+other IR node, whose types are structurally derivable) — a new
+`Infer::resolve_closure_types` span-keyed side channel (mirroring the
+`empty_array_elem_types` precedent exactly) and two new optional
+fields on `ir::Expr::Closure` were needed just to make a closure
+literal's own signature knowable at codegen time.
+
+**Known gap, honestly disclosed, not yet fixed**: `fbip.rs`'s
+`Closure` handling predates real capture refcounting (it was written
+when the interpreter — the only backend that existed at the time —
+never refcounted captures at all) and inserts an `Inc` at every
+mention of a captured heap-shaped name INSIDE the closure body itself,
+not just once at capture time, with no matching `Dec` ever emitted for
+it. Combined with codegen's own correct capture-time inc, a
+heap-captured value used inside a REPEATEDLY-called closure
+accumulates one unmatched extra increment per call — a real,
+unbounded leak (over-retained, possibly never freed), verified via a
+diagnostic (repeated calls to the same heap-capturing closure) to be
+strictly leak-direction: no crash, no wrong value, no double-free.
+Consistent with this whole area's "leak over unsoundness" bias, but a
+real gap worth fixing later — either in `fbip.rs`'s `Closure` handling
+directly, or by having codegen recognize and suppress these specific
+pre-inserted incs.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck

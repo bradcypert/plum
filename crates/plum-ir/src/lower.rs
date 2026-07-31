@@ -62,6 +62,33 @@ pub struct LoweringContext {
     // unaffected — see `lower_expr`'s `ArrayLiteral` arm for the clear
     // error an unpopulated lookup produces instead of guessing.
     empty_array_elem_types: HashMap<plum_syntax::span::Span, plum_types::types::Type>,
+    // `Expr::Closure` span -> its resolved (param types, return type),
+    // exactly as `plum_types::Infer::resolve_closure_types` computed
+    // it — the closure-literal counterpart to `empty_array_elem_types`
+    // above, needed for the SAME reason: unlike a `Ctor` or ordinary
+    // arithmetic expression, a closure's own PARAMETERS have nothing
+    // for `plum-codegen` to derive a type from structurally (a bare
+    // `|x| x + 1` never reveals `x`'s type from the AST alone), so
+    // lowering has to bake inference's answer into the IR node itself.
+    // Empty by default: a lowering-only test that never populates this
+    // (this crate's own unit tests, which construct expected `ir::Expr::
+    // Closure` values directly against a bare `LoweringContext::new()`)
+    // just gets `None` on both fields of the produced node — harmless,
+    // since `plum-interp` (which lowers WITHOUT ever needing static
+    // types) never reads them, and only `plum-codegen` requires `Some`.
+    closure_types: HashMap<plum_syntax::span::Span, (Vec<plum_types::types::Type>, plum_types::types::Type)>,
+    // Enum variant tag -> its declared payload types, resolved via
+    // `plum_types::context::TypeContext::variant` — needed ONLY for a
+    // bare non-zero-arity variant reference used as a VALUE (`let f =
+    // Circle; f(1.0)`), which `lower_expr`'s `Ident` arm eta-expands
+    // into a synthetic `Closure` (see that arm's own doc comment): that
+    // synthetic closure's params need real types too, for exactly the
+    // same reason an ordinary user-written closure literal does, but
+    // there's no `Expr::Closure` AST SPAN to key `closure_types` by
+    // (the eta-expansion happens for a bare `Ident`, not a real closure
+    // literal) — so this is keyed by variant NAME instead. Empty by
+    // default, same harmless-`None`-fallback story as `closure_types`.
+    variant_payload_types: HashMap<String, Vec<plum_types::types::Type>>,
     // Declared `extern "C"` function names -> their signatures, gathered
     // from every `ItemKind::Extern` block up front (same "program-aware
     // pass before lowering expressions" reasoning as `struct_fields`).
@@ -90,6 +117,8 @@ impl LoweringContext {
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
+            closure_types: HashMap::new(),
+            variant_payload_types: HashMap::new(),
             extern_fns: HashMap::new(),
             struct_field_types: HashMap::new(),
         }
@@ -117,6 +146,25 @@ impl LoweringContext {
         empty_array_elem_types: HashMap<plum_syntax::span::Span, plum_types::types::Type>,
     ) -> Self {
         self.empty_array_elem_types = empty_array_elem_types;
+        self
+    }
+
+    /// Attaches the span -> resolved (param types, return type) map for
+    /// closure LITERALS `plum-types` computed during inference — see
+    /// `closure_types`'s doc comment.
+    pub fn with_closure_types(
+        mut self,
+        closure_types: HashMap<plum_syntax::span::Span, (Vec<plum_types::types::Type>, plum_types::types::Type)>,
+    ) -> Self {
+        self.closure_types = closure_types;
+        self
+    }
+
+    /// Attaches the variant-tag -> payload-types map used to type a
+    /// bare variant reference's eta-expanded synthetic closure — see
+    /// `variant_payload_types`'s doc comment.
+    pub fn with_variant_payload_types(mut self, variant_payload_types: HashMap<String, Vec<plum_types::types::Type>>) -> Self {
+        self.variant_payload_types = variant_payload_types;
         self
     }
 
@@ -409,13 +457,27 @@ fn type_to_prim_ty(ty: &plum_types::types::Type) -> Result<ir::PrimTy, String> {
         Type::Int => Ok(ir::PrimTy::Int),
         Type::Float => Ok(ir::PrimTy::Float),
         Type::Bool => Ok(ir::PrimTy::Bool),
+        // `Unit` is a real, representable `PrimTy` now (added alongside
+        // this function's SECOND caller — closure literal/eta-expansion
+        // param and return types — which, unlike an empty array's
+        // element type, can legitimately be Unit).
+        Type::Unit => Ok(ir::PrimTy::Unit),
         Type::Str => Ok(ir::PrimTy::Str),
         Type::Struct(name, args) if name == "Array" && args.len() == 1 => {
             Ok(ir::PrimTy::Array(Box::new(type_to_prim_ty(&args[0])?)))
         }
         Type::Struct(..) | Type::Enum(..) => Ok(ir::PrimTy::Heap),
+        // A closure-typed param/return (`|f: (Int) -> Int| ...`) —
+        // only reachable via this function's closure-typing caller, an
+        // empty array literal can never itself hold a function value's
+        // worth of element type here in practice, but there's nothing
+        // unsound about representing it either way.
+        Type::Function(params, ret) => Ok(ir::PrimTy::Closure(
+            params.iter().map(type_to_prim_ty).collect::<Result<Vec<_>, _>>()?,
+            Box::new(type_to_prim_ty(ret)?),
+        )),
         other => Err(format!(
-            "an empty array literal's element type resolved to {other:?}, which codegen can't represent"
+            "resolved to {other:?}, which codegen can't represent as an array element / closure param or return type"
         )),
     }
 }
@@ -680,8 +742,22 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
             let arity = ctx.variants[name];
             let params: Vec<String> = (0..arity).map(|i| format!("__ctor_arg{i}")).collect();
             let fields = params.iter().cloned().map(ir::Expr::Var).collect();
+            // See `LoweringContext::variant_payload_types`'s doc
+            // comment: `None` (falls through here) only when this
+            // `LoweringContext` wasn't built from a real, type-checked
+            // pipeline (a lowering-only test, or a caller that never
+            // populated it) — harmless, since only `plum-codegen`
+            // requires `Some`.
+            let param_types = ctx
+                .variant_payload_types
+                .get(name)
+                .map(|tys| tys.iter().map(type_to_prim_ty).collect::<Result<Vec<_>, _>>())
+                .transpose()?;
+            let ret_type = param_types.is_some().then_some(ir::PrimTy::Heap);
             Ok(ir::Expr::Closure {
                 params,
+                param_types,
+                ret_type,
                 body: Box::new(ir::Expr::Ctor {
                     tag: name.clone(),
                     fields,
@@ -1211,10 +1287,22 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         // case) — no destructuring restriction to enforce here.
         // Annotations are ignored, same as everywhere else lowering
         // erases them.
-        ast::Expr::Closure { params, body, .. } => Ok(ir::Expr::Closure {
-            params: params.iter().map(|p| p.name.clone()).collect(),
-            body: Box::new(lower_expr(body, ctx)?),
-        }),
+        ast::Expr::Closure { params, body, span } => {
+            // See `LoweringContext::closure_types`'s doc comment —
+            // `None` here only for a lowering-only caller with no real
+            // `plum_types::Infer` pass behind it.
+            let resolved = ctx.closure_types.get(span);
+            let param_types = resolved
+                .map(|(ptys, _)| ptys.iter().map(type_to_prim_ty).collect::<Result<Vec<_>, _>>())
+                .transpose()?;
+            let ret_type = resolved.map(|(_, rty)| type_to_prim_ty(rty)).transpose()?;
+            Ok(ir::Expr::Closure {
+                params: params.iter().map(|p| p.name.clone()).collect(),
+                param_types,
+                ret_type,
+                body: Box::new(lower_expr(body, ctx)?),
+            })
+        }
         // `p.x` — there's no field-access IR node (see `ir.rs`'s scope
         // note), so this reuses the exact SAME construct-then-match
         // shape struct spread already established: destructure `base`
@@ -2512,6 +2600,8 @@ mod tests {
             lower_with("Circle", &ctx),
             ir::Expr::Closure {
                 params: vec!["__ctor_arg0".to_string()],
+                param_types: None,
+                ret_type: None,
                 body: Box::new(ir::Expr::Ctor {
                     tag: "Circle".to_string(),
                     fields: vec![ir::Expr::Var("__ctor_arg0".to_string())],
@@ -2527,6 +2617,8 @@ mod tests {
             lower_with("Rectangle", &ctx),
             ir::Expr::Closure {
                 params: vec!["__ctor_arg0".to_string(), "__ctor_arg1".to_string()],
+                param_types: None,
+                ret_type: None,
                 body: Box::new(ir::Expr::Ctor {
                     tag: "Rectangle".to_string(),
                     fields: vec![
@@ -3314,6 +3406,8 @@ mod tests {
             lower("|x| x + 1"),
             ir::Expr::Closure {
                 params: vec!["x".to_string()],
+                param_types: None,
+                ret_type: None,
                 body: Box::new(ir::Expr::Binary(
                     ir::BinOp::Add,
                     Box::new(ir::Expr::Var("x".to_string())),
@@ -3329,6 +3423,8 @@ mod tests {
             lower("|a, b| a + b"),
             ir::Expr::Closure {
                 params: vec!["a".to_string(), "b".to_string()],
+                param_types: None,
+                ret_type: None,
                 body: Box::new(ir::Expr::Binary(
                     ir::BinOp::Add,
                     Box::new(ir::Expr::Var("a".to_string())),
@@ -3344,6 +3440,8 @@ mod tests {
             lower("|| 5"),
             ir::Expr::Closure {
                 params: vec![],
+                param_types: None,
+                ret_type: None,
                 body: Box::new(ir::Expr::Int(5)),
             }
         );
@@ -3360,6 +3458,8 @@ mod tests {
             lower("|x| { let y = x + 1; y }"),
             ir::Expr::Closure {
                 params: vec!["x".to_string()],
+                param_types: None,
+                ret_type: None,
                 body: Box::new(ir::Expr::Let {
                     name: "y".to_string(),
                     value: Box::new(ir::Expr::Binary(

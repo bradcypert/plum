@@ -52,7 +52,7 @@
 
 use crate::{CgType, FnSig};
 use plum_ir::ir::{BinOp, Expr, MatchArm, PrimTy, RcOp, UnOp};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 type Env = HashMap<String, (String, CgType)>;
 
@@ -120,6 +120,38 @@ pub(crate) struct Ctx<'a> {
     /// emit_program`'s own doc comment on why this is the least
     /// invasive way to thread that discovery through.
     pub(crate) needed_arrays: &'a std::cell::RefCell<HashMap<String, CgType>>,
+    /// A per-PROGRAM (not per-function) monotonic counter used to name
+    /// every closure-literal-site-generated function uniquely
+    /// (`@closure$<fn_name>$<K>`) — see `codegen_closure_literal`'s doc
+    /// comment. Global rather than per-enclosing-function purely
+    /// because it's simpler to thread one shared counter than to reset
+    /// it at every `emit_function` call AND every nested closure body's
+    /// own `Ctx` (a closure literal nested inside another closure's
+    /// body still needs a globally-unique name); `fn_name` is still
+    /// folded into the generated name for human readability even though
+    /// `K` alone would already be enough for uniqueness.
+    pub(crate) closure_counter: &'a std::cell::RefCell<usize>,
+    /// Every closure-literal-site-generated function's/release
+    /// function's/trampoline's full LLVM `define { ... }` text,
+    /// collected across the WHOLE program — spliced into `emit_
+    /// program`'s output alongside `emit_array_release_fns`'s own
+    /// per-element-type functions. Parallel to how string-literal
+    /// globals are already collected per-function (`Emitter::
+    /// string_globals`) — this is the program-wide analogue, since a
+    /// closure literal's generated function is a top-level `define`,
+    /// not something that can live inside `%v<N>`-style function-body
+    /// text.
+    pub(crate) closure_defs: &'a std::cell::RefCell<Vec<String>>,
+    /// Bare-top-level-function-name -> its already-generated
+    /// `@trampoline$<name>` function's name — memoized so referencing
+    /// the same top-level function as a VALUE more than once (`let f =
+    /// someFn; let g = someFn; ...`) only ever generates ONE trampoline
+    /// definition, not one per reference (each reference still
+    /// allocates its OWN fresh closure CELL at its own use site,
+    /// exactly like any other closure literal would — only the
+    /// (stateless) trampoline FUNCTION TEXT itself is shared/memoized).
+    /// See `codegen_bare_fn_value`.
+    pub(crate) trampolines: &'a std::cell::RefCell<HashMap<String, String>>,
 }
 
 /// Registers `elem` (and any type it recursively contains) into
@@ -251,16 +283,6 @@ fn format_double(f: f64) -> String {
     format!("0x{:016X}", f.to_bits())
 }
 
-fn expect_direct_callee(callee: &Expr) -> Result<&str, String> {
-    match callee {
-        Expr::Var(name) => Ok(name),
-        other => Err(format!(
-            "codegen requires a call to a directly-named function (found {other:?}) — closures and other \
-             first-class function values aren't supported yet"
-        )),
-    }
-}
-
 fn codegen_call_args(args: &[Expr], env: &Env, em: &mut Emitter, ctx: &Ctx, sig: &FnSig, name: &str) -> Result<String, String> {
     if args.len() != sig.params.len() {
         return Err(format!("{name:?} expects {} argument(s), found {}", sig.params.len(), args.len()));
@@ -384,7 +406,7 @@ fn store_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, value: &str,
         // `Heap` — see `CgType::Str`/`Array`'s own doc comment for why
         // they're still distinct at the `CgType` level despite sharing
         // this exact store/load mechanism.
-        CgType::Heap | CgType::Str | CgType::Array(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -413,7 +435,75 @@ fn load_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, expected_ty: 
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
+            r
+        }
+    }
+}
+
+/// The closure-cell counterpart to `field_byte_offset` — a closure
+/// cell's header is 3 words (`refcount`, `code_ptr`, `release_fn_ptr`
+/// = 24 bytes), one word wider than `Ctor`/array cells (16 bytes), so
+/// captured-field slots start at byte 24, not 16 — see `emit_runtime`'s
+/// closure-cell-layout doc comment for why this extra header word is
+/// genuinely necessary (release can't be resolved from the static
+/// `CgType` alone, unlike every other heap shape). A REAL, not
+/// cosmetic, offset difference — reusing `field_byte_offset` here would
+/// silently read/write into the `release_fn_ptr` word instead of the
+/// first actual capture.
+fn closure_field_byte_offset(index: usize) -> i64 {
+    24 + (index as i64) * 8
+}
+
+/// The closure-capture counterpart to `store_field_word` — same
+/// uniform-word conversion, just at `closure_field_byte_offset`'s
+/// wider-header offset instead of `field_byte_offset`'s.
+fn store_closure_capture(em: &mut Emitter, cell_ptr: &str, index: usize, value: &str, ty: CgType) {
+    let addr = em.fresh_reg();
+    em.push(format!("  {addr} = getelementptr i8, ptr {cell_ptr}, i64 {}", closure_field_byte_offset(index)));
+    let word = match ty {
+        CgType::Int => value.to_string(),
+        CgType::Bool | CgType::Unit => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = zext i1 {value} to i64"));
+            r
+        }
+        CgType::Float => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = bitcast double {value} to i64"));
+            r
+        }
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
+            r
+        }
+    };
+    em.push(format!("  store i64 {word}, ptr {addr}"));
+}
+
+/// The closure-capture counterpart to `load_field_word` — see
+/// `store_closure_capture`'s doc comment.
+fn load_closure_capture(em: &mut Emitter, cell_ptr: &str, index: usize, expected_ty: CgType) -> String {
+    let addr = em.fresh_reg();
+    em.push(format!("  {addr} = getelementptr i8, ptr {cell_ptr}, i64 {}", closure_field_byte_offset(index)));
+    let word = em.fresh_reg();
+    em.push(format!("  {word} = load i64, ptr {addr}"));
+    match expected_ty {
+        CgType::Int => word,
+        CgType::Bool | CgType::Unit => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = trunc i64 {word} to i1"));
+            r
+        }
+        CgType::Float => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = bitcast i64 {word} to double"));
+            r
+        }
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -489,9 +579,13 @@ fn prim_ty_to_cg_type(ty: &PrimTy) -> CgType {
         PrimTy::Int => CgType::Int,
         PrimTy::Float => CgType::Float,
         PrimTy::Bool => CgType::Bool,
+        PrimTy::Unit => CgType::Unit,
         PrimTy::Str => CgType::Str,
         PrimTy::Array(inner) => CgType::Array(Box::new(prim_ty_to_cg_type(inner))),
         PrimTy::Heap => CgType::Heap,
+        PrimTy::Closure(params, ret) => {
+            CgType::Closure(params.iter().map(prim_ty_to_cg_type).collect(), Box::new(prim_ty_to_cg_type(ret)))
+        }
     }
 }
 
@@ -565,7 +659,7 @@ fn store_array_elem(em: &mut Emitter, array_ptr: &str, index_reg: &str, value: &
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -592,7 +686,7 @@ fn load_array_elem(em: &mut Emitter, array_ptr: &str, index_reg: &str, expected_
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -856,6 +950,596 @@ fn codegen_array_remove_fresh(src: &str, elem_ty: CgType, idx_reg: &str, em: &mu
     (new_cell, CgType::Array(Box::new(elem_ty)))
 }
 
+// --- closures ---
+//
+// See lib.rs's `CgType::Closure` doc comment and `emit_runtime`'s own
+// closure-cell-layout doc comment for the `{ i64 refcount, i64
+// code_ptr, i64 release_fn_ptr, i64 captured[N] }` shape these helpers
+// operate on.
+
+/// Collects every free variable of a closure literal's `body` — every
+/// `Var(name)` reachable from `env` (the closure's CREATING scope) that
+/// ISN'T shadowed by something introduced WITHIN `body` itself (the
+/// closure's own params, a nested `Let`/`Match` binding/`For` loop
+/// variable/nested closure's own params, ...). This is a purely
+/// structural walk (mirroring `fbip.rs`'s own `expr_mentions_var`'s
+/// exhaustive-`Expr`-variant shape) — deliberately conservative in the
+/// SAME direction that module already established for `For`/`Closure`
+/// bodies (treats every non-shadowed mention as a genuine capture
+/// candidate, never tries to prove a mention is dead code). Returns a
+/// `BTreeSet` (sorted by name) rather than a `HashSet` — this ORDER
+/// becomes the capture cell's field-index assignment, and needs to be
+/// reproducible across runs for deterministic `.ll` output, matching
+/// `intern_tags`'s own established "sort for reproducibility" precedent.
+fn free_vars(expr: &Expr, env: &Env, out: &mut BTreeSet<String>) {
+    free_vars_scoped(expr, env, &HashSet::new(), out);
+}
+
+fn free_vars_scoped(expr: &Expr, env: &Env, local: &HashSet<String>, out: &mut BTreeSet<String>) {
+    let candidate = |name: &str, local: &HashSet<String>, out: &mut BTreeSet<String>| {
+        if !local.contains(name) && env.contains_key(name) {
+            out.insert(name.to_string());
+        }
+    };
+    match expr {
+        Expr::Var(name) => candidate(name, local, out),
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel => {}
+        Expr::Unary(_, e) | Expr::AsCStr(e) => free_vars_scoped(e, env, local, out),
+        Expr::Binary(_, l, r) => {
+            free_vars_scoped(l, env, local, out);
+            free_vars_scoped(r, env, local, out);
+        }
+        Expr::Let { name, value, body } => {
+            free_vars_scoped(value, env, local, out);
+            let mut inner = local.clone();
+            inner.insert(name.clone());
+            free_vars_scoped(body, env, &inner, out);
+        }
+        Expr::If { cond, then_branch, else_branch } => {
+            free_vars_scoped(cond, env, local, out);
+            free_vars_scoped(then_branch, env, local, out);
+            free_vars_scoped(else_branch, env, local, out);
+        }
+        Expr::Call { callee, args } => {
+            free_vars_scoped(callee, env, local, out);
+            for a in args {
+                free_vars_scoped(a, env, local, out);
+            }
+        }
+        Expr::ExternCall { args, .. } => {
+            for a in args {
+                free_vars_scoped(a, env, local, out);
+            }
+        }
+        Expr::Ctor { fields, .. } => {
+            for f in fields {
+                free_vars_scoped(f, env, local, out);
+            }
+        }
+        Expr::CtorReuse { reuse_of, fields, .. } => {
+            candidate(reuse_of, local, out);
+            for f in fields {
+                free_vars_scoped(f, env, local, out);
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            free_vars_scoped(scrutinee, env, local, out);
+            for arm in arms {
+                let mut inner = local.clone();
+                for b in &arm.bindings {
+                    inner.insert(b.clone());
+                }
+                if let Some(g) = &arm.guard {
+                    free_vars_scoped(g, env, &inner, out);
+                }
+                free_vars_scoped(&arm.body, env, &inner, out);
+            }
+        }
+        Expr::RcAnnotated { target, rest, .. } => {
+            candidate(target, local, out);
+            free_vars_scoped(rest, env, local, out);
+        }
+        Expr::For { var, start, end, body } => {
+            free_vars_scoped(start, env, local, out);
+            free_vars_scoped(end, env, local, out);
+            let mut inner = local.clone();
+            inner.insert(var.clone());
+            free_vars_scoped(body, env, &inner, out);
+        }
+        Expr::Closure { params, body, .. } => {
+            let mut inner = local.clone();
+            for p in params {
+                inner.insert(p.clone());
+            }
+            free_vars_scoped(body, env, &inner, out);
+        }
+        Expr::Assign { name, value, rest } => {
+            candidate(name, local, out);
+            free_vars_scoped(value, env, local, out);
+            free_vars_scoped(rest, env, local, out);
+        }
+        Expr::Spawn { block } => free_vars_scoped(block, env, local, out),
+        Expr::TaskJoin { task } => free_vars_scoped(task, env, local, out),
+        Expr::ChannelSend { sender, value } => {
+            free_vars_scoped(sender, env, local, out);
+            free_vars_scoped(value, env, local, out);
+        }
+        Expr::ChannelRecv { receiver } => free_vars_scoped(receiver, env, local, out),
+        Expr::Select { arms } => {
+            for arm in arms {
+                free_vars_scoped(&arm.receiver, env, local, out);
+                free_vars_scoped(&arm.body, env, local, out);
+            }
+        }
+        Expr::Index { base, index } => {
+            free_vars_scoped(base, env, local, out);
+            free_vars_scoped(index, env, local, out);
+        }
+        Expr::ArrayLen { array } | Expr::ArrayPop { array } => free_vars_scoped(array, env, local, out),
+        Expr::ArrayPush { array, value } => {
+            free_vars_scoped(array, env, local, out);
+            free_vars_scoped(value, env, local, out);
+        }
+        Expr::ArraySet { array, index, value } => {
+            free_vars_scoped(array, env, local, out);
+            free_vars_scoped(index, env, local, out);
+            free_vars_scoped(value, env, local, out);
+        }
+        Expr::ArrayRemove { array, index } => {
+            free_vars_scoped(array, env, local, out);
+            free_vars_scoped(index, env, local, out);
+        }
+        Expr::ArrayPushReuse { reuse_of, value } => {
+            candidate(reuse_of, local, out);
+            free_vars_scoped(value, env, local, out);
+        }
+        Expr::ArrayPopReuse { reuse_of } => candidate(reuse_of, local, out),
+        Expr::ArraySetReuse { reuse_of, index, value } => {
+            candidate(reuse_of, local, out);
+            free_vars_scoped(index, env, local, out);
+            free_vars_scoped(value, env, local, out);
+        }
+        Expr::ArrayRemoveReuse { reuse_of, index } => {
+            candidate(reuse_of, local, out);
+            free_vars_scoped(index, env, local, out);
+        }
+        Expr::StrConcat { base, other } => {
+            free_vars_scoped(base, env, local, out);
+            free_vars_scoped(other, env, local, out);
+        }
+        Expr::StrConcatReuse { reuse_of, other } => {
+            candidate(reuse_of, local, out);
+            free_vars_scoped(other, env, local, out);
+        }
+        Expr::StrRunes { base } | Expr::StrTrim { base } | Expr::StrToUpper { base } | Expr::StrToLower { base } | Expr::ToString { base } => {
+            free_vars_scoped(base, env, local, out)
+        }
+        Expr::StrTrimReuse { reuse_of } | Expr::StrToUpperReuse { reuse_of } | Expr::StrToLowerReuse { reuse_of } => {
+            candidate(reuse_of, local, out)
+        }
+        Expr::StrSplit { base, sep } => {
+            free_vars_scoped(base, env, local, out);
+            free_vars_scoped(sep, env, local, out);
+        }
+        Expr::StrContains { base, needle } => {
+            free_vars_scoped(base, env, local, out);
+            free_vars_scoped(needle, env, local, out);
+        }
+        Expr::StrStartsWith { base, prefix } => {
+            free_vars_scoped(base, env, local, out);
+            free_vars_scoped(prefix, env, local, out);
+        }
+        Expr::StrEndsWith { base, suffix } => {
+            free_vars_scoped(base, env, local, out);
+            free_vars_scoped(suffix, env, local, out);
+        }
+        Expr::StrReplace { base, from, to } => {
+            free_vars_scoped(base, env, local, out);
+            free_vars_scoped(from, env, local, out);
+            free_vars_scoped(to, env, local, out);
+        }
+        Expr::StrReplaceReuse { reuse_of, from, to } => {
+            candidate(reuse_of, local, out);
+            free_vars_scoped(from, env, local, out);
+            free_vars_scoped(to, env, local, out);
+        }
+        Expr::RefNew { value } => free_vars_scoped(value, env, local, out),
+        Expr::RefGet { base } => free_vars_scoped(base, env, local, out),
+        Expr::RefSet { base, value } => {
+            free_vars_scoped(base, env, local, out);
+            free_vars_scoped(value, env, local, out);
+        }
+    }
+}
+
+/// Converts a resolved `PrimTy` (see `ir::Expr::Closure`'s doc comment)
+/// into the `CgType` codegen actually works with — the closure-typing
+/// counterpart to `prim_ty_to_cg_type`... wait, this IS `prim_ty_to_
+/// cg_type` (defined above); closure param/return types reuse it
+/// directly, no separate conversion needed since `PrimTy::Closure` was
+/// added specifically so this one function covers both empty-array and
+/// closure typing uniformly.
+fn resolve_closure_sig(
+    param_types: &Option<Vec<PrimTy>>,
+    ret_type: &Option<PrimTy>,
+    n_params: usize,
+) -> Result<(Vec<CgType>, CgType), String> {
+    let param_types = param_types.as_ref().ok_or_else(|| {
+        "codegen: internal error — a closure literal reached codegen without resolved param types (was \
+         `plum_types::Infer`/`plum_ir::lower::LoweringContext::with_closure_types` run before lowering?)"
+            .to_string()
+    })?;
+    let ret_type = ret_type.as_ref().ok_or_else(|| {
+        "codegen: internal error — a closure literal reached codegen without a resolved return type".to_string()
+    })?;
+    if param_types.len() != n_params {
+        return Err(format!(
+            "codegen: internal error — closure literal has {n_params} param(s) but {} resolved param type(s)",
+            param_types.len()
+        ));
+    }
+    Ok((param_types.iter().map(prim_ty_to_cg_type).collect(), prim_ty_to_cg_type(ret_type)))
+}
+
+/// Generates the per-closure-literal-site LLVM function `@closure$<fn>
+/// $<K>(ptr %env, params...) -> ret`: loads each capture back out of
+/// `%env` (the closure's OWN cell pointer at call time) by index into a
+/// FRESH `Env` — real lexical scoping, NOT inherited from the enclosing
+/// function, matching a genuine separate `define` — then adds the
+/// closure's own params, then codegens `body` exactly like an ordinary
+/// function (tail position, its own `ret`).
+fn emit_closure_body_fn(
+    fn_name: &str,
+    params: &[String],
+    param_types: &[CgType],
+    ret_type: &CgType,
+    captures: &[(String, CgType)],
+    body: &Expr,
+    ctx: &Ctx,
+) -> Result<String, String> {
+    let sig = FnSig { params: param_types.to_vec(), ret: ret_type.clone() };
+    let mut em = Emitter::new();
+    let mut env: Env = HashMap::new();
+    for (i, (name, ty)) in captures.iter().enumerate() {
+        let val = load_closure_capture(&mut em, "%env", i, ty.clone());
+        env.insert(name.clone(), (val, ty.clone()));
+    }
+    let mut param_decls = vec!["ptr %env".to_string()];
+    for (name, ty) in params.iter().zip(param_types) {
+        env.insert(name.clone(), (format!("%{name}"), ty.clone()));
+        param_decls.push(format!("{} %{name}", ty.llvm_type()));
+    }
+    let inner_ctx = Ctx {
+        sigs: ctx.sigs,
+        caller_sig: &sig,
+        tag_ids: ctx.tag_ids,
+        tag_fields: ctx.tag_fields,
+        fn_name,
+        needed_arrays: ctx.needed_arrays,
+        closure_counter: ctx.closure_counter,
+        closure_defs: ctx.closure_defs,
+        trampolines: ctx.trampolines,
+    };
+    let result = codegen_expr(body, &env, &mut em, &inner_ctx, true)?;
+    if result.is_some() {
+        return Err(format!(
+            "internal codegen error: closure {fn_name:?}'s body did not terminate with a `ret` in tail position"
+        ));
+    }
+    let mut out = String::new();
+    for g in &em.string_globals {
+        out.push_str(g);
+        out.push('\n');
+    }
+    out.push_str(&format!("define {} @{}({}) {{\n", ret_type.llvm_type(), fn_name, param_decls.join(", ")));
+    for line in &em.lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("}\n");
+    Ok(out)
+}
+
+/// Generates the paired `@closure_release$<fn>$<K>(ptr %cell)`: for
+/// each heap-shaped capture, load and call its type-appropriate dec
+/// function (matching `plum_release_fields`'s own "release fields,
+/// don't free the cell" contract — `@plum_rc_dec_closure`, in lib.rs,
+/// is what actually `free`s the cell afterward). Built as plain text
+/// (no `Emitter` needed — every capture slot is independent, no control
+/// flow), same style as `emit_array_release_fns`.
+///
+/// `self_slot`, if given, names the ONE capture index that's a
+/// self-reference (the closure's own cell, stored into its own capture
+/// slot — see `codegen_closure_literal`'s doc comment) — its dec is
+/// skipped here for exactly the same reason its INC was skipped at
+/// capture time: that slot was never incremented in the first place, so
+/// decrementing it here would UNDER-count the cell's true refcount by
+/// one (a real correctness bug caught by this crate's own tests, not a
+/// hypothetical one — decrementing a slot that was never incremented
+/// can, depending on timing, either free the cell too early or corrupt
+/// its refcount while OTHER references are still live).
+fn emit_closure_release_fn(fn_name: &str, captures: &[(String, CgType)], self_slot: Option<usize>, ctx: &Ctx) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("define void @{fn_name}(ptr %cell) {{\n"));
+    out.push_str("entry:\n");
+    for (i, (_, ty)) in captures.iter().enumerate() {
+        if self_slot == Some(i) {
+            continue;
+        }
+        let Some(dec_fn) = crate::dec_fn_for(ty) else {
+            continue;
+        };
+        if let CgType::Array(elem) = ty {
+            register_array_elem(ctx, elem);
+        }
+        let offset = closure_field_byte_offset(i);
+        out.push_str(&format!(
+            "  %addr{i} = getelementptr i8, ptr %cell, i64 {offset}\n  \
+             %word{i} = load i64, ptr %addr{i}\n  \
+             %ptr{i} = inttoptr i64 %word{i} to ptr\n  \
+             call void {dec_fn}(ptr %ptr{i})\n"
+        ));
+    }
+    out.push_str("  ret void\n}\n");
+    out
+}
+
+/// Codegens a closure LITERAL into `(cell_ptr, CgType::Closure(...))` —
+/// shared by both the ordinary case (`codegen_value`'s own `Closure`
+/// arm, `self_bind: None`) and the self-referential LOCAL case
+/// (`codegen_expr`'s `Let` arm, `self_bind: Some(name)`) — see
+/// DESIGN.md's "Self-referential closures" section for the surface
+/// semantics this matches (self-recursion only, no mutual recursion
+/// between separately-declared closures).
+///
+/// 1. Free-variable analysis against `env`, extended with a placeholder
+///    `(self_bind, closure_cg_type)` entry FIRST when self-referential,
+///    so a genuine self-reference is treated as an ordinary capture
+///    candidate.
+/// 2. Generates the per-literal-site function + release function (see
+///    `emit_closure_body_fn`/`emit_closure_release_fn`), appended to
+///    `ctx.closure_defs`.
+/// 3. `%cell = call ptr @plum_alloc_closure(i64 N)` — the cell's
+///    address is known immediately, BEFORE any capture is stored.
+/// 4. Stores `code_ptr`/`release_fn_ptr` (raw `ptrtoint`, bypassing
+///    `store_closure_capture`'s CgType dispatch — these aren't
+///    Plum-typed captures).
+/// 5. Stores each capture — including `self_bind` itself, if present
+///    (its value being stored IS `%cell`, which is why step 3 must
+///    precede this) — via `store_closure_capture` + `@plum_rc_inc` if
+///    heap-shaped, EXCEPT the self-capture slot's inc, which is
+///    DELIBERATELY skipped: incrementing it would create a reference
+///    cycle the cell could never reach refcount zero to escape — a
+///    genuine, deliberate, DOCUMENTED leak, matching this codebase's
+///    established "accepted leak over unsoundness" precedent (already
+///    used identically for `For`/`Closure`/`Spawn` body captures in
+///    `fbip.rs`).
+#[allow(clippy::too_many_arguments)]
+fn codegen_closure_literal(
+    params: &[String],
+    param_types: &Option<Vec<PrimTy>>,
+    ret_type: &Option<PrimTy>,
+    body: &Expr,
+    env: &Env,
+    em: &mut Emitter,
+    ctx: &Ctx,
+    self_bind: Option<&str>,
+) -> Result<(String, CgType), String> {
+    let (param_cg_types, ret_cg_type) = resolve_closure_sig(param_types, ret_type, params.len())?;
+    let closure_ty = CgType::Closure(param_cg_types.clone(), Box::new(ret_cg_type.clone()));
+
+    // Step 1: free-variable analysis.
+    let mut analysis_env = env.clone();
+    if let Some(name) = self_bind {
+        analysis_env.insert(name.to_string(), ("%__self_placeholder".to_string(), closure_ty.clone()));
+    }
+    let mut free = BTreeSet::new();
+    free_vars(body, &analysis_env, &mut free);
+    for p in params {
+        free.remove(p);
+    }
+    let captures: Vec<(String, CgType)> = free
+        .into_iter()
+        .map(|name| {
+            let ty = analysis_env[&name].1.clone();
+            (name, ty)
+        })
+        .collect();
+
+    // Step 2: generate the per-literal-site function + release fn.
+    let k = {
+        let mut c = ctx.closure_counter.borrow_mut();
+        let k = *c;
+        *c += 1;
+        k
+    };
+    let fn_name = format!("closure${}${}", ctx.fn_name, k);
+    let closure_def = emit_closure_body_fn(&fn_name, params, &param_cg_types, &ret_cg_type, &captures, body, ctx)?;
+    ctx.closure_defs.borrow_mut().push(closure_def);
+
+    let self_slot = self_bind.and_then(|name| captures.iter().position(|(n, _)| n == name));
+    let release_fn_name = if captures.is_empty() {
+        // No captures at all — the SAME shared no-op release every
+        // zero-capture trampoline closure uses; no need to generate a
+        // trivial, identical-every-time release function per site.
+        "plum_closure_release_noop".to_string()
+    } else {
+        let release_name = format!("closure_release${}${}", ctx.fn_name, k);
+        let release_def = emit_closure_release_fn(&release_name, &captures, self_slot, ctx);
+        ctx.closure_defs.borrow_mut().push(release_def);
+        release_name
+    };
+
+    // Step 3+4: allocate + populate code_ptr/release_fn_ptr.
+    let n = captures.len();
+    let cell = em.fresh_reg();
+    em.push(format!("  {cell} = call ptr @plum_alloc_closure(i64 {n})"));
+    let code_word = em.fresh_reg();
+    em.push(format!("  {code_word} = ptrtoint ptr @{fn_name} to i64"));
+    let code_addr = em.fresh_reg();
+    em.push(format!("  {code_addr} = getelementptr i8, ptr {cell}, i64 8"));
+    em.push(format!("  store i64 {code_word}, ptr {code_addr}"));
+    let release_word = em.fresh_reg();
+    em.push(format!("  {release_word} = ptrtoint ptr @{release_fn_name} to i64"));
+    let release_addr = em.fresh_reg();
+    em.push(format!("  {release_addr} = getelementptr i8, ptr {cell}, i64 16"));
+    em.push(format!("  store i64 {release_word}, ptr {release_addr}"));
+
+    // Step 5: store each capture. `self_bind`'s own slot (if present)
+    // is bound to `cell` directly — `cell`'s address is already known
+    // at this point (step 3 above), which is exactly why steps 3/4 had
+    // to happen BEFORE this loop.
+    for (i, (name, ty)) in captures.iter().enumerate() {
+        let val_reg = if self_bind == Some(name.as_str()) {
+            cell.clone()
+        } else {
+            env.get(name)
+                .cloned()
+                .ok_or_else(|| format!("codegen: unbound variable {name:?} (closure capture)"))?
+                .0
+        };
+        store_closure_capture(em, &cell, i, &val_reg, ty.clone());
+        if self_bind != Some(name.as_str()) && crate::dec_fn_for(ty).is_some() {
+            em.push(format!("  call void @plum_rc_inc(ptr {val_reg})"));
+        }
+    }
+
+    Ok((cell, closure_ty))
+}
+
+/// Synthesizes (once per distinct function name referenced this way
+/// across the whole program — see `Ctx::trampolines`) a trampoline
+/// `@trampoline$<name>(ptr %env_unused, params...) -> ret` that just
+/// calls `@<name>` directly and returns its result, then allocates a
+/// FRESH zero-capture closure cell wrapping it at THIS use site (every
+/// reference gets its own cell, matching ordinary closure-literal
+/// semantics — only the trampoline function TEXT itself is memoized).
+/// The trivial release (no captures) reuses the shared `@plum_closure_
+/// release_noop` — see `emit_runtime`'s doc comment on that function.
+fn codegen_bare_fn_value(name: &str, sig: &FnSig, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let trampoline_name = {
+        let mut memo = ctx.trampolines.borrow_mut();
+        if let Some(existing) = memo.get(name) {
+            existing.clone()
+        } else {
+            let tramp = format!("trampoline${name}");
+            let def = emit_trampoline_fn(&tramp, name, sig);
+            ctx.closure_defs.borrow_mut().push(def);
+            memo.insert(name.to_string(), tramp.clone());
+            tramp
+        }
+    };
+    let cell = em.fresh_reg();
+    em.push(format!("  {cell} = call ptr @plum_alloc_closure(i64 0)"));
+    let code_word = em.fresh_reg();
+    em.push(format!("  {code_word} = ptrtoint ptr @{trampoline_name} to i64"));
+    let code_addr = em.fresh_reg();
+    em.push(format!("  {code_addr} = getelementptr i8, ptr {cell}, i64 8"));
+    em.push(format!("  store i64 {code_word}, ptr {code_addr}"));
+    let release_word = em.fresh_reg();
+    em.push(format!("  {release_word} = ptrtoint ptr @plum_closure_release_noop to i64"));
+    let release_addr = em.fresh_reg();
+    em.push(format!("  {release_addr} = getelementptr i8, ptr {cell}, i64 16"));
+    em.push(format!("  store i64 {release_word}, ptr {release_addr}"));
+    Ok((cell, CgType::Closure(sig.params.clone(), Box::new(sig.ret.clone()))))
+}
+
+fn emit_trampoline_fn(trampoline_name: &str, target_name: &str, sig: &FnSig) -> String {
+    let mut param_decls = vec!["ptr %env".to_string()];
+    let mut call_args = Vec::new();
+    for (i, ty) in sig.params.iter().enumerate() {
+        param_decls.push(format!("{} %p{i}", ty.llvm_type()));
+        call_args.push(format!("{} %p{i}", ty.llvm_type()));
+    }
+    format!(
+        "define {} @{}({}) {{\nentry:\n  %r = call {} @{}({})\n  ret {} %r\n}}\n",
+        sig.ret.llvm_type(),
+        trampoline_name,
+        param_decls.join(", "),
+        sig.ret.llvm_type(),
+        target_name,
+        call_args.join(", "),
+        sig.ret.llvm_type(),
+    )
+}
+
+/// Shared callee-resolution + call-emission logic for BOTH `codegen_
+/// value`'s plain (non-tail) `Call` handling and `codegen_expr`'s own
+/// TAIL-position `Call` handling. Two paths:
+///
+/// - DIRECT: `callee` is a bare `Var(name)` where `name` names a known
+///   top-level function (`ctx.sigs`) AND ISN'T SHADOWED in `env` — a
+///   local variable sharing a top-level function's own name must route
+///   through the INDIRECT path instead, since `env`, not `ctx.sigs`, is
+///   authoritative for what a bare identifier resolves to. `musttail`
+///   is used here (only) when `allow_musttail` (i.e. this call is in
+///   tail position) AND the caller/callee signatures match exactly —
+///   identical to this codegen's pre-existing direct-call behavior.
+/// - INDIRECT: `codegen_value(callee)` must yield a `CgType::Closure`;
+///   loads the code-ptr word, `inttoptr`s it to a `ptr`, and emits an
+///   ORDINARY (never `musttail`) indirect `call`, passing the
+///   environment pointer (the closure cell itself) as an implicit
+///   first argument ahead of the ordinary args. `musttail` is
+///   deliberately NEVER attempted here — the existing `musttail`
+///   mechanism compares two known, NAMED `FnSig`s; an indirect call's
+///   target is only known via `CgType::Closure`'s call SHAPE, a
+///   different and weaker check, and indirect `musttail` has its own
+///   LLVM legality constraints unexercised anywhere in this codebase.
+///   This means a self-referential closure's own recursive tail call
+///   is NOT guaranteed-tail-call-eliminated — a real, documented
+///   limitation (direct calls to plain top-level functions are
+///   completely unaffected).
+///
+/// Returns `(result_reg, result_ty, used_musttail)` — neither caller's
+/// own `ret`/tail-terminator responsibility is handled here (the
+/// non-tail caller never needs one; the tail caller always appends its
+/// own `ret` regardless of `used_musttail`, matching this codegen's
+/// pre-existing musttail-call-then-ret shape).
+fn codegen_call(callee: &Expr, args: &[Expr], env: &Env, em: &mut Emitter, ctx: &Ctx, allow_musttail: bool) -> Result<(String, CgType, bool), String> {
+    if let Expr::Var(name) = callee {
+        if !env.contains_key(name) {
+            // A bare identifier, not shadowed by a local — it MUST
+            // name a known top-level function (a completely unknown
+            // name can never resolve via the indirect/closure path
+            // either, since that path's own `Var` handling in
+            // `codegen_value` falls back to exactly this same
+            // `ctx.sigs` lookup — see that function's own doc comment).
+            // Reported directly here for a clearer, more specific error
+            // than letting it fall through to `codegen_value`'s own
+            // generic "unbound variable" message.
+            let sig = ctx.sigs.get(name).cloned().ok_or_else(|| format!("codegen: unknown function {name:?}"))?;
+            let args_ir = codegen_call_args(args, env, em, ctx, &sig, name)?;
+            let reg = em.fresh_reg();
+            if allow_musttail && *ctx.caller_sig == sig {
+                em.push(format!("  {reg} = musttail call {} @{name}({args_ir})", sig.ret.llvm_type()));
+                return Ok((reg, sig.ret, true));
+            }
+            em.push(format!("  {reg} = call {} @{name}({args_ir})", sig.ret.llvm_type()));
+            return Ok((reg, sig.ret, false));
+        }
+    }
+
+    let (closure_reg, closure_ty) = codegen_value(callee, env, em, ctx)?;
+    let CgType::Closure(param_tys, ret_ty) = closure_ty else {
+        return Err(format!(
+            "codegen requires a call to a directly-named function or a closure-typed value (found {closure_ty:?}) \
+             — calling a non-closure computed value isn't supported"
+        ));
+    };
+    let sig = FnSig { params: param_tys, ret: *ret_ty };
+    let code_addr = em.fresh_reg();
+    em.push(format!("  {code_addr} = getelementptr i8, ptr {closure_reg}, i64 8"));
+    let code_word = em.fresh_reg();
+    em.push(format!("  {code_word} = load i64, ptr {code_addr}"));
+    let code_ptr = em.fresh_reg();
+    em.push(format!("  {code_ptr} = inttoptr i64 {code_word} to ptr"));
+    let args_ir = codegen_call_args(args, env, em, ctx, &sig, "<computed closure value>")?;
+    let full_args = if args_ir.is_empty() { format!("ptr {closure_reg}") } else { format!("ptr {closure_reg}, {args_ir}") };
+    let reg = em.fresh_reg();
+    em.push(format!("  {reg} = call {} {code_ptr}({full_args})", sig.ret.llvm_type()));
+    Ok((reg, sig.ret, false))
+}
+
 /// Computes an ordinary SSA value for `expr` — used for every position
 /// that is NEVER a tail position (operands, call arguments, `If`'s
 /// `cond`, a `Let`'s `value`, `Match`'s `scrutinee`/guards, an
@@ -895,10 +1579,19 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             em.push(format!("  {cell} = call ptr @plum_alloc_array(i64 0)"));
             Ok((cell, CgType::Array(Box::new(elem_ty))))
         }
-        Expr::Var(name) => env
-            .get(name)
-            .cloned()
-            .ok_or_else(|| format!("codegen: unbound variable {name:?}")),
+        Expr::Var(name) => {
+            if let Some(v) = env.get(name) {
+                return Ok(v.clone());
+            }
+            // Not a local — a bare top-level FUNCTION name used as a
+            // VALUE (not called), e.g. `let f = someFn; f(1)`: see
+            // `codegen_bare_fn_value`'s doc comment for the trampoline
+            // this synthesizes.
+            if let Some(sig) = ctx.sigs.get(name).cloned() {
+                return codegen_bare_fn_value(name, &sig, em, ctx);
+            }
+            Err(format!("codegen: unbound variable {name:?}"))
+        }
         Expr::Unary(op, inner) => {
             let (reg, ty) = codegen_value(inner, env, em, ctx)?;
             match (op, ty) {
@@ -930,12 +1623,8 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             codegen_binop(op.clone(), l_reg, r_reg, l_ty, em)
         }
         Expr::Call { callee, args } => {
-            let name = expect_direct_callee(callee)?.to_string();
-            let sig = ctx.sigs.get(&name).cloned().ok_or_else(|| format!("codegen: unknown function {name:?}"))?;
-            let args_ir = codegen_call_args(args, env, em, ctx, &sig, &name)?;
-            let reg = em.fresh_reg();
-            em.push(format!("  {reg} = call {} @{name}({args_ir})", sig.ret.llvm_type()));
-            Ok((reg, sig.ret))
+            let (reg, ty, _) = codegen_call(callee, args, env, em, ctx, false)?;
+            Ok((reg, ty))
         }
         // `tag == ARRAY_TAG` is a non-empty array literal — see this
         // module's array-literal section above — special-cased here
@@ -1573,6 +2262,14 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
                 None => unreachable!("codegen_expr with tail=false always returns Some"),
             }
         }
+        // An ordinary (non-self-referential) closure literal — the
+        // self-referential LOCAL case is special-cased in `codegen_
+        // expr`'s own `Let` arm instead, since it needs to bind the
+        // closure's OWN name into scope before this function even runs
+        // — see `codegen_closure_literal`'s doc comment.
+        Expr::Closure { params, param_types, ret_type, body } => {
+            codegen_closure_literal(params, param_types, ret_type, body, env, em, ctx, None)
+        }
         other => Err(format!("codegen does not yet support this construct: {other:?}")),
     }
 }
@@ -1611,6 +2308,23 @@ fn bind_match_arm(arm: &MatchArm, scrutinee_ptr: &str, env: &Env, ctx: &Ctx) -> 
 /// See this module's doc comment for the full tail-position story.
 pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, tail: bool) -> Result<Option<(String, CgType)>, String> {
     match expr {
+        // A closure-literal `value` is special-cased to support
+        // self-referential local closures (`let fib = |n| ... fib(n-1)
+        // ...`) — see `codegen_closure_literal`'s `self_bind` parameter
+        // doc comment for the full cell-before-self-store ordering this
+        // requires. Every OTHER `Let` (including one whose `value`
+        // happens to just be a bare reference to an EXISTING closure,
+        // `let g = f`) is unaffected — `Expr::Var`'s own codegen
+        // already handles that ordinary case.
+        Expr::Let { name, value, body } if matches!(value.as_ref(), Expr::Closure { .. }) => {
+            let Expr::Closure { params, param_types, ret_type, body: cbody } = value.as_ref() else {
+                unreachable!("guarded by the match arm's own pattern");
+            };
+            let bound = codegen_closure_literal(params, param_types, ret_type, cbody, env, em, ctx, Some(name))?;
+            let mut inner_env = env.clone();
+            inner_env.insert(name.clone(), bound);
+            codegen_expr(body, &inner_env, em, ctx, tail)
+        }
         Expr::Let { name, value, body } => {
             let bound = codegen_value(value, env, em, ctx)?;
             let mut inner_env = env.clone();
@@ -1629,7 +2343,7 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
             let (reg, ty) = env.get(target).cloned().ok_or_else(|| format!("codegen: unbound variable {target:?}"))?;
             match op {
                 RcOp::Inc => {
-                    if !matches!(ty, CgType::Heap | CgType::Str | CgType::Array(_)) {
+                    if !matches!(ty, CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..)) {
                         return Err(format!(
                             "codegen: internal error — RcAnnotated target {target:?} is not heap-shaped ({ty:?})"
                         ));
@@ -1782,37 +2496,21 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                 Ok(Some((phi_reg, ty)))
             }
         }
+        // `musttail` is only VALID when the caller's own prototype
+        // matches the callee's (a real LLVM constraint — "cannot
+        // guarantee tail call due to mismatched parameter counts" —
+        // found via an actual `clang` compile failure, not documented
+        // up front; see `Ctx::caller_sig`'s doc comment). Self-
+        // recursion always trivially qualifies; mutual recursion only
+        // does when both functions happen to share a signature. A tail
+        // call to a DIFFERENT-shaped function, OR through an INDIRECT
+        // closure-typed callee (see `codegen_call`'s own doc comment
+        // for why `musttail` is never attempted there this chunk),
+        // falls back to an ordinary `call` + `ret` — still correct,
+        // just not `musttail`-GUARANTEED to reuse the stack frame.
         Expr::Call { callee, args } if tail => {
-            let name = expect_direct_callee(callee)?.to_string();
-            let sig = ctx.sigs.get(&name).cloned().ok_or_else(|| format!("codegen: unknown function {name:?}"))?;
-            let args_ir = codegen_call_args(args, env, em, ctx, &sig, &name)?;
-            let reg = em.fresh_reg();
-            // `musttail` is only VALID when the caller's own prototype
-            // matches the callee's (a real LLVM constraint — "cannot
-            // guarantee tail call due to mismatched parameter counts"
-            // — found via an actual `clang` compile failure, not
-            // documented up front; see `Ctx::caller_sig`'s doc
-            // comment). Self-recursion always trivially qualifies;
-            // mutual recursion only does when both functions happen to
-            // share a signature. A tail call to a DIFFERENT-shaped
-            // function falls back to an ordinary `call` + `ret` —
-            // still correct, just not `musttail`-GUARANTEED to reuse
-            // the stack frame (LLVM's optimizer may still do it as a
-            // best-effort sibling call under `-O2`, just not at `-O0`
-            // the way `musttail` promises).
-            if *ctx.caller_sig == sig {
-                // The exact shape `musttail` requires: the call and
-                // the `ret` are the ONLY two instructions, with
-                // nothing in between — this is what gives LLVM's
-                // guaranteed, portable tail-call elimination (the
-                // whole reason DESIGN.md picked LLVM as the backend
-                // over compiling through C, which has no such
-                // guarantee).
-                em.push(format!("  {reg} = musttail call {} @{name}({args_ir})", sig.ret.llvm_type()));
-            } else {
-                em.push(format!("  {reg} = call {} @{name}({args_ir})", sig.ret.llvm_type()));
-            }
-            em.push(format!("  ret {} {reg}", sig.ret.llvm_type()));
+            let (reg, ty, _used_musttail) = codegen_call(callee, args, env, em, ctx, true)?;
+            em.push(format!("  ret {} {reg}", ty.llvm_type()));
             Ok(None)
         }
         _ => {

@@ -109,8 +109,10 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             end: Box::new(mark_reuse(*end)),
             body: Box::new(mark_reuse(*body)),
         },
-        Expr::Closure { params, body } => Expr::Closure {
+        Expr::Closure { params, param_types, ret_type, body } => Expr::Closure {
             params,
+            param_types,
+            ret_type,
             body: Box::new(mark_reuse(*body)),
         },
         Expr::Assign { name, value, rest } => Expr::Assign {
@@ -420,8 +422,10 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         // params never are — this pass starts fresh (`HashSet::new()`)
         // for every function body, so a param is never provably
         // heap-shaped without a type checker either way.
-        Expr::Closure { params, body } => Expr::Closure {
+        Expr::Closure { params, param_types, ret_type, body } => Expr::Closure {
             params,
+            param_types,
+            ret_type,
             body: Box::new(transform(*body, known_heap)),
         },
         // See ir.rs's `Assign` doc comment: reassigning a heap-tracked
@@ -950,7 +954,7 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 used_start || used_end || used_in_body,
             )
         }
-        Expr::Closure { params, body } => {
+        Expr::Closure { params, param_types, ret_type, body } => {
             // Even more than a loop body, a closure can ESCAPE this
             // expression entirely — returned, stored, called later, or
             // called many times. A use of an outer heap-tracked
@@ -968,6 +972,8 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
             (
                 Expr::Closure {
                     params,
+                    param_types,
+                    ret_type,
                     body: Box::new(body_t),
                 },
                 live_after || used,
@@ -1438,6 +1444,8 @@ mod tests {
     fn closure_(params: Vec<&str>, body: Expr) -> Expr {
         Expr::Closure {
             params: params.into_iter().map(|s| s.to_string()).collect(),
+            param_types: None,
+            ret_type: None,
             body: Box::new(body),
         }
     }

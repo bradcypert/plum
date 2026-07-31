@@ -209,6 +209,7 @@ fn to_keys(args: &[Type]) -> Vec<TypeKey> {
 /// doc comment), so it needs these threaded in directly rather than
 /// via a caller-supplied `LoweringContext`, the same way `plumc`'s own
 /// ordinary `lower_program` call does.
+#[allow(clippy::too_many_arguments)]
 pub fn plan(
     program: &ast::Program,
     type_ctx: &TypeContext,
@@ -217,6 +218,20 @@ pub fn plan(
     types: &HashMap<String, Type>,
     field_owners: &HashMap<Span, String>,
     array_for_loops: &std::collections::HashSet<Span>,
+    // Closure-literal span -> resolved (param types, return type), and
+    // variant-tag -> payload types — the SAME two side-channels
+    // `plumc::codegen_cli` threads into its own top-level
+    // `LoweringContext` (see `LoweringContext::closure_types`/
+    // `variant_payload_types`'s doc comments), needed HERE too because
+    // `MonoPlan::functions` re-lowers EVERY function (generic or not)
+    // through this module's OWN `base_lctx`, not the caller's — see
+    // `MonoPlan::functions`'s doc comment for why the caller's already-
+    // lowered output can't just be reused directly. Spans stay valid
+    // across this module's AST clone+rewrite (`rewrite_expr` only ever
+    // mutates NAMES in place, never spans), so the caller's `Infer`-
+    // derived maps still key correctly here.
+    closure_types: &HashMap<Span, (Vec<Type>, Type)>,
+    variant_payload_types: &HashMap<String, Vec<Type>>,
 ) -> Result<MonoPlan, String> {
     let mut struct_decls: HashMap<String, &ast::StructDecl> = HashMap::new();
     let mut variant_arity: HashMap<String, usize> = HashMap::new();
@@ -249,7 +264,10 @@ pub fn plan(
     // mangled per-specialization (see `RewriteCtx::field_owner_overrides`'s
     // doc comment), so each function's own lowering call below builds
     // its own merged copy instead.
-    let base_lctx = LoweringContext::from_items(&program.items).with_array_for_loops(array_for_loops.clone());
+    let base_lctx = LoweringContext::from_items(&program.items)
+        .with_array_for_loops(array_for_loops.clone())
+        .with_closure_types(closure_types.clone())
+        .with_variant_payload_types(variant_payload_types.clone());
 
     let mut worklist: Vec<(Task, Vec<Type>)> = Vec::new();
     // Seed with EVERY ordinary (non-generic) function unconditionally —
@@ -750,6 +768,7 @@ mod tests {
         let types = infer.infer_program(&program).unwrap_or_else(|e| panic!("type error: {e}"));
         let resolved_sites = infer.resolve_generic_sites().unwrap_or_else(|e| panic!("resolve error: {e}"));
         let type_ctx2 = TypeContext::from_items(&program.items).unwrap();
+        let closure_types = infer.resolve_closure_types().unwrap_or_else(|e| panic!("closure type error: {e}"));
         plan(
             &program,
             &type_ctx2,
@@ -758,6 +777,8 @@ mod tests {
             &types,
             infer.field_owners(),
             infer.array_for_loops(),
+            &closure_types,
+            &HashMap::new(),
         )
         .unwrap_or_else(|e| panic!("plan error: {e}"))
     }

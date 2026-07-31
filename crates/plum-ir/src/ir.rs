@@ -72,9 +72,25 @@ pub enum PrimTy {
     Int,
     Float,
     Bool,
+    // Added alongside `Closure` below: a closure's param/return types
+    // (see `Expr::Closure`'s own doc comment) can legitimately be Unit
+    // (`|_: ()| ...`, or a closure returning no meaningful value) —
+    // `EmptyArray`'s own payload could never need this (an `Array[Unit]`
+    // element is a degenerate case nothing currently constructs), which
+    // is why this variant didn't exist before this type gained a second
+    // use.
+    Unit,
     Str,
     Array(Box<PrimTy>),
     Heap,
+    // A closure VALUE's own param/return types — needed so a closure
+    // literal that itself takes/returns another closure (`|f| |x|
+    // f(x)`) can still be represented here; see `Expr::Closure`'s doc
+    // comment for why this crate needs to carry closure param/return
+    // types at all (unlike every other `Ctor`/`Match` shape, which
+    // `plum-codegen` derives structurally with zero lowering-level type
+    // information).
+    Closure(Vec<PrimTy>, Box<PrimTy>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -217,6 +233,22 @@ pub enum Expr {
     // use-after-free).
     Closure {
         params: Vec<String>,
+        // Each param's resolved type, and the body's resolved return
+        // type — `None` when this node was produced by a lowering-only
+        // path with no `plum_types::Infer` pass behind it (this crate's
+        // own hand-built lowering unit tests construct `ir::Expr::
+        // Closure` directly against a bare `LoweringContext::new()`,
+        // matching `plum-interp`, which never looks at these fields at
+        // all — values are dynamically typed there). `plum-codegen`
+        // requires `Some` on both (a closure literal it can't resolve
+        // static param/return types for is a clear error, not a
+        // guess) — see `LoweringContext::closure_types`'s doc comment
+        // for how the real (type-checked) pipeline populates this via
+        // `plum_types::Infer::resolve_closure_types`, the same
+        // span-keyed-side-channel precedent `EmptyArray`'s own payload
+        // type already established.
+        param_types: Option<Vec<PrimTy>>,
+        ret_type: Option<PrimTy>,
         body: Box<Expr>,
     },
     // `name = value; rest` — reassigns an EXISTING binding (never
