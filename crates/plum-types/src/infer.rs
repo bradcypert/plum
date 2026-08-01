@@ -3296,7 +3296,14 @@ fn pattern_has_nested_tag_subpattern(pattern: &ast::Pattern) -> bool {
 // a generic annotation on a top-level FUNCTION (`let f[T] (x: T)`) —
 // top-level function params have no annotation syntax at all yet (a
 // separate, already-known gap), so that combination can't arise here.
-pub(crate) fn ast_type_to_type(
+// `pub`, not `pub(crate)`: `plumc::codegen_cli` needs this directly to
+// resolve `channel[T]()`'s type argument to a concrete `Type` (see that
+// module's own doc comment on why `channel[T]()`'s implicit `(Sender
+// [T], Receiver[T])` tuple needs its element type resolved OUTSIDE
+// ordinary inference/unification — the type argument is given directly
+// by the syntax, never inferred). A pure, additive visibility widening
+// — no behavior change for any existing caller.
+pub fn ast_type_to_type(
     ty: &ast::Type,
     ctx: &crate::context::TypeContext,
     in_scope_params: &[String],

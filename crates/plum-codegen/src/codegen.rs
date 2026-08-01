@@ -51,7 +51,7 @@
 //! short-circuit `&&`/`||` already work.
 
 use crate::{CgType, FnSig};
-use plum_ir::ir::{BinOp, Expr, MatchArm, PrimTy, RcOp, UnOp};
+use plum_ir::ir::{BinOp, Expr, MatchArm, PrimTy, RcOp, SelectArm, UnOp};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 type Env = HashMap<String, (String, CgType)>;
@@ -160,6 +160,14 @@ pub(crate) struct Ctx<'a> {
     /// field rejection check are needed at all. Same shared-`RefCell`-
     /// behind-`&Ctx` shape as `needed_arrays`, for the same reason.
     pub(crate) needs_spawn_runtime: &'a std::cell::RefCell<bool>,
+    /// Set to `true` the first time codegen actually walks a `Channel`/
+    /// `ChannelSend`/`ChannelRecv`/`Select` node — the channel
+    /// counterpart to `needs_spawn_runtime` immediately above, gated
+    /// independently (see `lib.rs::emit_program`'s own doc comment on
+    /// why): a program using channels but no `spawn` still needs the
+    /// channel-queue runtime (and the shared deep-copy runtime) but not
+    /// `pthread_create`/`pthread_join`, and vice versa.
+    pub(crate) needs_channel_runtime: &'a std::cell::RefCell<bool>,
 }
 
 /// Registers `elem` (and any type it recursively contains) into
@@ -441,7 +449,7 @@ fn store_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, value: &str,
         // `Heap` — see `CgType::Str`/`Array`'s own doc comment for why
         // they're still distinct at the `CgType` level despite sharing
         // this exact store/load mechanism.
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -470,7 +478,7 @@ fn load_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, expected_ty: 
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -510,7 +518,7 @@ fn store_closure_capture(em: &mut Emitter, cell_ptr: &str, index: usize, value: 
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -538,7 +546,7 @@ fn load_closure_capture(em: &mut Emitter, cell_ptr: &str, index: usize, expected
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -694,7 +702,7 @@ fn store_array_elem(em: &mut Emitter, array_ptr: &str, index_reg: &str, value: &
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -721,7 +729,7 @@ fn load_array_elem(em: &mut Emitter, array_ptr: &str, index_reg: &str, expected_
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -1442,6 +1450,7 @@ fn emit_closure_body_fn(
         closure_defs: ctx.closure_defs,
         trampolines: ctx.trampolines,
         needs_spawn_runtime: ctx.needs_spawn_runtime,
+        needs_channel_runtime: ctx.needs_channel_runtime,
     };
     let (result, _) = codegen_expr(body, &env, &mut em, &inner_ctx, true)?;
     if result.is_some() {
@@ -1744,7 +1753,19 @@ fn load_spawn_arg(em: &mut Emitter, block_ptr: &str, index: usize, expected_ty: 
 /// computed via `spawn_arg_byte_offset`; the result box is a single
 /// bare word with no offset at all).
 fn store_word(em: &mut Emitter, addr: &str, value: &str, ty: CgType) {
-    let word = match ty {
+    let word = value_to_word(em, value, ty);
+    em.push(format!("  store i64 {word}, ptr {addr}"));
+}
+
+/// The bare value -> word conversion `store_word`/`store_field_word`/
+/// `store_closure_capture`/`store_array_elem` all share, factored out
+/// (rather than each computing the `store`'s own address separately) so
+/// a channel `send`'s payload word — which has no ADDRESS at all, only
+/// an i64 function ARGUMENT to `@plum_channel_send` — can reuse the
+/// exact same conversion (see `codegen_channel_send`). Never itself
+/// emits the `store` instruction.
+fn value_to_word(em: &mut Emitter, value: &str, ty: CgType) -> String {
+    match ty {
         CgType::Int => value.to_string(),
         CgType::Bool | CgType::Unit => {
             let r = em.fresh_reg();
@@ -1756,21 +1777,30 @@ fn store_word(em: &mut Emitter, addr: &str, value: &str, ty: CgType) {
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
         }
-    };
-    em.push(format!("  store i64 {word}, ptr {addr}"));
+    }
 }
 
 /// The inverse of `store_word` — see that function's doc comment.
 fn load_word(em: &mut Emitter, addr: &str, expected_ty: CgType) -> String {
     let word = em.fresh_reg();
     em.push(format!("  {word} = load i64, ptr {addr}"));
+    word_to_value(em, &word, expected_ty)
+}
+
+/// The bare word -> value conversion `load_word`/`load_field_word`/
+/// `load_closure_capture`/`load_array_elem` all share — see `value_to_
+/// word`'s doc comment for why this is factored out separately (a
+/// channel `recv`'s payload word comes back as an i64 RETURN VALUE from
+/// `@plum_channel_recv`/`@plum_channel_try_recv`, not something loaded
+/// from an address at all — see `codegen_channel_recv`/`codegen_select`).
+fn word_to_value(em: &mut Emitter, word: &str, expected_ty: CgType) -> String {
     match expected_ty {
-        CgType::Int => word,
+        CgType::Int => word.to_string(),
         CgType::Bool | CgType::Unit => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = trunc i64 {word} to i1"));
@@ -1781,7 +1811,7 @@ fn load_word(em: &mut Emitter, addr: &str, expected_ty: CgType) -> String {
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -1806,10 +1836,19 @@ fn load_word(em: &mut Emitter, addr: &str, expected_ty: CgType) -> String {
 /// exist — see `crate::deepcopy_fn_for`'s own doc comment for why that
 /// function's `Closure`/`Task` arm is allowed to be a structurally
 /// unreachable stub rather than a real implementation.
-fn crosses_spawn_boundary(ty: &CgType) -> bool {
+fn crosses_thread_boundary(ty: &CgType) -> bool {
     match ty {
         CgType::Closure(..) | CgType::Task(_) => true,
-        CgType::Array(elem) => crosses_spawn_boundary(elem),
+        CgType::Array(elem) => crosses_thread_boundary(elem),
+        // A `Sender`/`Receiver` explicitly CAN cross a thread boundary
+        // (that's the whole point of a channel) — unlike a closure's
+        // captured environment or a task handle, both of which are tied
+        // to the thread that created them, a channel handle is just a
+        // verbatim pointer to a shared, mutex-guarded queue any thread
+        // can safely operate on. See `deep_copy_capture`'s own
+        // `Sender`/`Receiver` arm for the "copy the pointer, never a
+        // deep copy" mechanism this enables.
+        CgType::Sender(_) | CgType::Receiver(_) => false,
         CgType::Int | CgType::Float | CgType::Bool | CgType::Unit | CgType::Heap | CgType::Str => false,
     }
 }
@@ -1850,10 +1889,20 @@ fn deep_copy_capture(em: &mut Emitter, ctx: &Ctx, reg: &str, ty: &CgType) -> Str
             em.push(format!("  {r} = call ptr @plum_deepcopy_array_{mangled}(ptr {reg})"));
             r
         }
-        // Guaranteed unreachable — `crosses_spawn_boundary` already
+        // Guaranteed unreachable — `crosses_thread_boundary` already
         // rejected any capture that could get here — but the match
         // still needs to be total.
         CgType::Closure(..) | CgType::Task(_) => reg.to_string(),
+        // A `Sender`/`Receiver` crosses VERBATIM — never a deep copy.
+        // Both ends must keep pointing at the SAME shared queue struct,
+        // or the channel would silently split into two mutually-
+        // invisible halves the moment one crossed a thread boundary —
+        // a real correctness bug, not just wasted work (see this
+        // module's `crosses_thread_boundary` doc comment). Reused
+        // identically by both `spawn`'s capture crossing AND `.send()`'s
+        // own value crossing (`codegen_channel_send`) — a channel sent
+        // over another channel is exactly this case.
+        CgType::Sender(_) | CgType::Receiver(_) => reg.to_string(),
         CgType::Int | CgType::Float | CgType::Bool | CgType::Unit => reg.to_string(),
     }
 }
@@ -1937,6 +1986,7 @@ fn emit_spawn_entry_fn(fn_name: &str, captures: &[(String, CgType)], block: &Exp
         closure_defs: ctx.closure_defs,
         trampolines: ctx.trampolines,
         needs_spawn_runtime: ctx.needs_spawn_runtime,
+        needs_channel_runtime: ctx.needs_channel_runtime,
     };
     let (result, _) = codegen_expr(block, &env, &mut em, &inner_ctx, false)?;
     let (reg, ty) = result.ok_or_else(|| {
@@ -1970,7 +2020,7 @@ fn emit_spawn_entry_fn(fn_name: &str, captures: &[(String, CgType)], block: &Exp
 /// way a closure capture is — see `deep_copy_capture`'s own doc comment
 /// for the exact correctness argument. A closure/task-typed (possibly
 /// nested inside an array) free variable is a clear, immediate `Err`
-/// here (`crosses_spawn_boundary`), matching the interpreter's own
+/// here (`crosses_thread_boundary`), matching the interpreter's own
 /// restriction. `pthread_create`'s out-parameter (`pthread_t *thread`)
 /// needs a real memory address to write into — `alloca i64` (this
 /// backend's existing, established precedent for a C-ABI-mandated
@@ -1986,7 +2036,7 @@ fn codegen_spawn_literal(block: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -
             .get(&name)
             .cloned()
             .ok_or_else(|| format!("codegen: unbound variable {name:?} (spawn capture)"))?;
-        if crosses_spawn_boundary(&ty) {
+        if crosses_thread_boundary(&ty) {
             return Err(format!(
                 "codegen: `spawn` cannot capture {name:?} — its type ({ty:?}) can't cross a thread boundary \
                  (a closure's captured environment and a task handle are both tied to the thread that \
@@ -2093,6 +2143,228 @@ fn codegen_task_join(task: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Res
     em.push(format!("  call void @free(ptr {task_reg})"));
 
     Ok((result, *result_ty))
+}
+
+// --- channels / select ---
+//
+// See lib.rs's `emit_channel_runtime` doc comment for the shared
+// channel-queue struct's/queue node's exact byte layout and the full
+// multi-producer correctness argument (every mutation of `head`/`tail`/
+// a node's `next` happens strictly under the SAME struct-embedded
+// mutex, in every one of `@plum_channel_send`/`@plum_channel_recv`/
+// `@plum_channel_try_recv` — a lost update is structurally impossible).
+//
+// DOCUMENTED, DELIBERATE GAP: none of `send`/`recv`/`select` ever
+// detect disconnection — `send` always succeeds (the queue has no
+// notion of "no receivers left"), and `recv`/`select` block
+// (potentially forever) if nothing is ever sent, rather than
+// replicating the interpreter's `Arc`/`Drop`-based disconnect errors
+// (`plum_interp::Interpreter`'s `SenderHandle`/`ReceiverHandle`).
+// Scope confirmed with the user for this chunk — real disconnect
+// detection would need actual refcounting on `Sender`/`Receiver`
+// (tracking how many of each are still alive), deliberately deferred
+// as explicit follow-up work, matching `Task`'s own already-accepted
+// capture-leak gap.
+
+/// `channel[T]()` — allocates the ONE shared, permanently-leaked queue
+/// struct (`@plum_channel_new`) and wraps it in an ordinary 2-field
+/// tuple cell `(Sender, Receiver)`, tag `"2Tuple"` (the same synthetic
+/// tag `lower.rs`'s `tuple_tag(2)` gives EVERY size-2 tuple — see
+/// `plumc::codegen_cli`'s own doc comment on how it registers this
+/// specific tag's `CgType` fields for a program that uses `channel[T]
+/// ()`, and the documented single-element-type-per-program limit this
+/// implies). The `Sender`/`Receiver` values are the LITERALLY SAME
+/// pointer to the queue struct — no separate allocation per end, no
+/// `Arc`-style indirection: codegen's shared `malloc` arena has no
+/// analogue to the interpreter's need for an owned, `Clone`-able
+/// handle (see `CgType::Sender`/`Receiver`'s own doc comment in
+/// lib.rs).
+fn codegen_channel_literal(em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    *ctx.needs_channel_runtime.borrow_mut() = true;
+    let q = em.fresh_reg();
+    em.push(format!("  {q} = call ptr @plum_channel_new()"));
+    let id = tag_id(ctx, "2Tuple")?;
+    let cell = em.fresh_reg();
+    em.push(format!("  {cell} = call ptr @plum_alloc(i64 {id}, i64 2)"));
+    let sender_addr = em.fresh_reg();
+    em.push(format!("  {sender_addr} = getelementptr i8, ptr {cell}, i64 16"));
+    let sender_word = em.fresh_reg();
+    em.push(format!("  {sender_word} = ptrtoint ptr {q} to i64"));
+    em.push(format!("  store i64 {sender_word}, ptr {sender_addr}"));
+    let receiver_addr = em.fresh_reg();
+    em.push(format!("  {receiver_addr} = getelementptr i8, ptr {cell}, i64 24"));
+    em.push(format!("  store i64 {sender_word}, ptr {receiver_addr}"));
+    Ok((cell, CgType::Heap))
+}
+
+/// `tx.send(v)` — deep-copies `v` (reusing `deep_copy_capture`
+/// VERBATIM, the SAME correctness argument as a `spawn` capture, if
+/// anything MORE important here: multiple concurrent senders could
+/// otherwise race on the SAME source cell's non-atomic refcount word
+/// with no synchronization at all — see `deep_copy_capture`'s own doc
+/// comment), then `@plum_channel_send`s the resulting word. A closure/
+/// task-typed (possibly array-nested) `v` is a clear, immediate `Err`
+/// here (`crosses_thread_boundary`, the SAME check `spawn` capture
+/// rejection uses), matching the interpreter's own restriction.
+/// Evaluates to `Unit`, matching `ir::Expr::ChannelSend`'s own doc
+/// comment.
+fn codegen_channel_send(sender: &Expr, value: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (sender_reg, sender_ty) = codegen_value(sender, env, em, ctx)?;
+    let CgType::Sender(inner_ty) = sender_ty else {
+        return Err(format!("codegen: `.send()` requires a Sender value, found {sender_ty:?}"));
+    };
+    let (val_reg, val_ty) = codegen_value(value, env, em, ctx)?;
+    if crosses_thread_boundary(&val_ty) {
+        return Err(format!(
+            "codegen: `.send()` cannot send {val_ty:?} — its captured environment (a closure) or task handle \
+             is tied to the thread that created it and can't cross a thread boundary, matching the \
+             interpreter's own restriction (see `plum_interp::Interpreter::to_portable`)"
+        ));
+    }
+    if val_ty != *inner_ty {
+        return Err(format!(
+            "codegen: `.send()` argument type mismatch — this channel carries {inner_ty:?}, found {val_ty:?}"
+        ));
+    }
+    *ctx.needs_channel_runtime.borrow_mut() = true;
+    let copied = deep_copy_capture(em, ctx, &val_reg, &val_ty);
+    let word = value_to_word(em, &copied, val_ty);
+    em.push(format!("  call void @plum_channel_send(ptr {sender_reg}, i64 {word})"));
+    Ok(("0".to_string(), CgType::Unit))
+}
+
+/// `rx.recv()` — a REAL blocking wait (`@plum_channel_recv`'s own
+/// `pthread_cond_wait` loop, see `emit_channel_runtime`'s doc comment),
+/// not a busy-poll: a single channel has a real condvar to block on,
+/// unlike `select`'s cross-channel poll. No second deep-copy on the way
+/// out — once a node is popped off the queue (under the mutex), only
+/// this call ever touches its payload word again, the same clean
+/// ownership-transfer argument `.join()` already established (see
+/// `codegen_task_join`'s own doc comment), now re-verified to hold
+/// per-node even with multiple concurrent senders (see this section's
+/// module doc comment).
+fn codegen_channel_recv(receiver: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (recv_reg, recv_ty) = codegen_value(receiver, env, em, ctx)?;
+    let CgType::Receiver(inner_ty) = recv_ty else {
+        return Err(format!("codegen: `.recv()` requires a Receiver value, found {recv_ty:?}"));
+    };
+    *ctx.needs_channel_runtime.borrow_mut() = true;
+    let word = em.fresh_reg();
+    em.push(format!("  {word} = call i64 @plum_channel_recv(ptr {recv_reg})"));
+    let value = word_to_value(em, &word, (*inner_ty).clone());
+    Ok((value, *inner_ty))
+}
+
+/// `select { pattern = expr => body, ... }` — busy-polls every arm's
+/// already-evaluated receiver in FIXED index order via `@plum_channel_
+/// try_recv` (non-blocking), matching the interpreter's exact
+/// `Interpreter::eval`'s `Select` algorithm: a full sweep with nothing
+/// ready sleeps 1ms (`@usleep(1000)`, matching the interpreter's own
+/// `Duration::from_millis(1)`) then retries from arm 0 — no
+/// `Disconnected` case at all, since codegen's queues never signal
+/// disconnection (see this section's module doc comment): `select`
+/// genuinely spins forever if every arm's channel is dead. Every arm's
+/// `receiver` expr is evaluated exactly ONCE, up front (matching
+/// `ir::Expr::Select`'s own doc comment), never re-evaluated on a later
+/// poll sweep. Reuses `Match`'s exact arm-binding pattern (`"__select_
+/// recv"` bound into a fresh per-arm `Env`, mirroring `bind_match_arm`)
+/// and, since `plum-types` already guarantees every arm's body shares
+/// one result type, `Match`'s exact `phi`+`merge_envs` result-merging
+/// scheme (see `Expr::Match`'s own codegen in `codegen_expr` for the
+/// direct precedent this mirrors). A hand-built ZERO-arm `Select`
+/// (already rejected by `plum_types` before codegen ever runs — see
+/// this module's own top-level doc comment) is a defensive `Err`, never
+/// a panic — there's no arm 0 to even evaluate a receiver for.
+fn codegen_select(
+    arms: &[SelectArm],
+    env: &Env,
+    em: &mut Emitter,
+    ctx: &Ctx,
+    tail: bool,
+) -> Result<(Option<(String, CgType)>, Env), String> {
+    if arms.is_empty() {
+        return Err("codegen: internal error — `select` has zero arms (already rejected by plum_types before codegen)".to_string());
+    }
+    *ctx.needs_channel_runtime.borrow_mut() = true;
+
+    // Every arm's receiver is evaluated exactly once, up front.
+    let mut handles: Vec<(String, CgType)> = Vec::with_capacity(arms.len());
+    for arm in arms {
+        let (reg, ty) = codegen_value(&arm.receiver, env, em, ctx)?;
+        let CgType::Receiver(inner_ty) = ty else {
+            return Err(format!("codegen: `select` arm requires a Receiver value, found {ty:?}"));
+        };
+        handles.push((reg, *inner_ty));
+    }
+    // One `alloca` per arm, reused across every poll sweep — `@plum_
+    // channel_try_recv`'s out-parameter needs a real memory address to
+    // write a popped word into.
+    let out_slots: Vec<String> = (0..arms.len())
+        .map(|_| {
+            let slot = em.fresh_reg();
+            em.push(format!("  {slot} = alloca i64"));
+            slot
+        })
+        .collect();
+
+    let poll_label = em.fresh_label("select_poll");
+    let sweep_done_label = em.fresh_label("select_sweep_done");
+    let done_label = em.fresh_label("select_done");
+    em.push(format!("  br label %{poll_label}"));
+    em.start_block(&poll_label);
+
+    let mut matched_labels = Vec::with_capacity(arms.len());
+    for (i, (handle_reg, _)) in handles.iter().enumerate() {
+        let matched_label = em.fresh_label("select_matched");
+        let next_label = if i + 1 < handles.len() { em.fresh_label("select_check") } else { sweep_done_label.clone() };
+        let ok = em.fresh_reg();
+        em.push(format!("  {ok} = call i1 @plum_channel_try_recv(ptr {handle_reg}, ptr {})", out_slots[i]));
+        em.push(format!("  br i1 {ok}, label %{matched_label}, label %{next_label}"));
+        matched_labels.push(matched_label.clone());
+        if i + 1 < handles.len() {
+            em.start_block(&next_label);
+        }
+    }
+
+    em.start_block(&sweep_done_label);
+    em.push("  call i32 @usleep(i32 1000)".to_string());
+    em.push(format!("  br label %{poll_label}"));
+
+    let mut non_tail_results: Vec<(String, CgType, Env, String)> = Vec::new();
+    for (i, arm) in arms.iter().enumerate() {
+        em.start_block(&matched_labels[i]);
+        let (_, inner_ty) = &handles[i];
+        let word = em.fresh_reg();
+        em.push(format!("  {word} = load i64, ptr {}", out_slots[i]));
+        let value = word_to_value(em, &word, inner_ty.clone());
+
+        let mut arm_env = env.clone();
+        let prior = arm_env.get("__select_recv").cloned();
+        arm_env.insert("__select_recv".to_string(), (value, inner_ty.clone()));
+
+        let (body_result, body_env) = codegen_expr(&arm.body, &arm_env, em, ctx, tail)?;
+        let restored_env = restore_shadowed(body_env, "__select_recv", prior);
+        if let Some((reg, ty)) = body_result {
+            em.push(format!("  br label %{done_label}"));
+            non_tail_results.push((reg, ty, restored_env, em.current_block.clone()));
+        }
+    }
+
+    if tail {
+        Ok((None, env.clone()))
+    } else {
+        em.start_block(&done_label);
+        let ty = non_tail_results
+            .first()
+            .map(|(_, ty, _, _)| ty.clone())
+            .ok_or_else(|| "codegen: internal error — select produced no reachable result".to_string())?;
+        let phi_reg = em.fresh_reg();
+        let parts: Vec<String> = non_tail_results.iter().map(|(reg, _, _, block)| format!("[ {reg}, %{block} ]")).collect();
+        em.push(format!("  {phi_reg} = phi {} {}", ty.llvm_type(), parts.join(", ")));
+        let branches: Vec<(Env, String)> = non_tail_results.into_iter().map(|(_, _, e, block)| (e, block)).collect();
+        let merged_env = merge_envs(&branches, em);
+        Ok((Some((phi_reg, ty)), merged_env))
+    }
 }
 
 /// Shared callee-resolution + call-emission logic for BOTH `codegen_
@@ -2263,6 +2535,9 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         // (duplicated-as-local-const, same as `DEFAULT_ARM_TAG` already
         // is) to route to the array-alloc path instead of the ordinary
         // tag-lookup `Ctor` path; every OTHER tag is unaffected.
+        Expr::Channel => codegen_channel_literal(em, ctx),
+        Expr::ChannelSend { sender, value } => codegen_channel_send(sender, value, env, em, ctx),
+        Expr::ChannelRecv { receiver } => codegen_channel_recv(receiver, env, em, ctx),
         Expr::Ctor { tag, fields } if tag == ARRAY_TAG => codegen_array_literal(fields, env, em, ctx),
         Expr::Ctor { tag, fields } => {
             let vals = codegen_ctor_fields(tag, fields, env, em, ctx)?;
@@ -2902,7 +3177,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         // thread the env through correctly — this discard only affects
         // the narrower, not-yet-exercised case of an `Assign` nested
         // inside a value-position `Let`/`If`/`Match`/`RcAnnotated`.
-        Expr::Let { .. } | Expr::If { .. } | Expr::Match { .. } | Expr::RcAnnotated { .. } => {
+        Expr::Let { .. } | Expr::If { .. } | Expr::Match { .. } | Expr::RcAnnotated { .. } | Expr::Select { .. } => {
             match codegen_expr(expr, env, em, ctx, false)? {
                 (Some(v), _) => Ok(v),
                 (None, _) => unreachable!("codegen_expr with tail=false always returns Some"),
@@ -3270,6 +3545,10 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                 Ok((Some((phi_reg, ty)), merged_env))
             }
         }
+        // `select { ... }` — see `codegen_select`'s own doc comment for
+        // the full busy-poll algorithm and its Match-mirroring result-
+        // merging scheme.
+        Expr::Select { arms } => codegen_select(arms, env, em, ctx, tail),
         // `name = value; rest` — structurally almost identical to
         // `Let`'s own arm (compute the new value, override ONE existing
         // `Env` entry, recurse into `rest` with `tail` unchanged): see

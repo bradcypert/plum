@@ -92,6 +92,21 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
         PlumType::Struct(name, args) if name == "Task" && args.len() == 1 => {
             Ok(CgType::Task(Box::new(plum_type_to_cg_type(&args[0])?)))
         }
+        // `Sender[T]`/`Receiver[T]` — the SAME "builtin pseudo-generic
+        // `Type::Struct`" mechanism `Task[T]` immediately above already
+        // uses, mirrored identically: without these two arms, either
+        // would fall through to the `Struct(..)` wildcard arm below and
+        // collapse to plain `CgType::Heap`, which would be actively
+        // WRONG (a `Heap` cell's first word is a refcount; a channel
+        // handle's "cell" is the shared queue struct itself, which has
+        // no refcount word anywhere in its layout at all — see
+        // `CgType::Sender`/`Receiver`'s own doc comment in plum-codegen).
+        PlumType::Struct(name, args) if name == "Sender" && args.len() == 1 => {
+            Ok(CgType::Sender(Box::new(plum_type_to_cg_type(&args[0])?)))
+        }
+        PlumType::Struct(name, args) if name == "Receiver" && args.len() == 1 => {
+            Ok(CgType::Receiver(Box::new(plum_type_to_cg_type(&args[0])?)))
+        }
         PlumType::Struct(..) | PlumType::Enum(..) => Ok(CgType::Heap),
         // A closure/function-typed signature position (a higher-order
         // function's parameter, most commonly) — `CgType::Closure`
@@ -259,6 +274,205 @@ fn check_no_closure_block(block: &ast::Block, fn_name: &str) -> Result<(), Strin
     Ok(())
 }
 
+/// Collects every `channel[T]()` call site's `T` type ARGUMENT
+/// (unresolved `ast::Type` — the caller resolves it via `plum_types::
+/// infer::ast_type_to_type`), via a structural AST walk mirroring the
+/// exact "GenericInst callee named `channel`, one type arg, zero value
+/// args" shape check `plum_types::infer`/`plum_ir::lower` both already
+/// use to recognize this call shape.
+///
+/// # The `channel[T]()` tuple-tagging resolution (read before touching this)
+///
+/// `channel[T]()` evaluates to a `(Sender[T], Receiver[T])` — an
+/// ORDINARY tuple as far as `plum_types`/lowering are concerned, tagged
+/// `"2Tuple"` by `lower.rs`'s own `tuple_tag(2)`, the exact SAME
+/// synthetic tag literally every other 2-element tuple in the whole
+/// language gets (confirmed by reading `lower.rs`'s tuple-pattern
+/// lowering AND `plum_ir::monomorphize`'s `rewrite_expr`/`rewrite_
+/// pattern` `Tuple` arms directly: neither ever renames/mangles a
+/// tuple's tag per its element types — unlike a generic struct/enum,
+/// which DOES get a distinct mangled tag per instantiation via
+/// `monomorphize::mangle` — so "2Tuple" is genuinely one flat,
+/// program-wide tag, not type-specialized at all). Plain (non-channel)
+/// tuples aren't wired into codegen's `tag_fields` derivation ANYWHERE
+/// else yet either (`plum_type_to_cg_type` has no `Type::Tuple` arm at
+/// all — a tuple only ever reaches codegen as a fully-destructured
+/// LOCAL value, never through a signature), so there is, today,
+/// genuinely no OTHER 2-tuple shape in this whole backend that could
+/// collide with a channel's.
+///
+/// The one LIVE collision risk this DOES leave open: two `channel[T]()`
+/// calls with two DIFFERENT `T`s in the SAME program would both need
+/// tag `"2Tuple"` to carry a DIFFERENT pair of field `CgType`s
+/// simultaneously — `tag_fields` is a flat `HashMap<String, _>`, so
+/// that's not representable. Giving each element type its OWN mangled
+/// tag would need `channel[T]()`'s destructuring `Match` to also use a
+/// T-specific tag at the IR level — but `ir::Expr::Channel` carries NO
+/// type at all, by deliberate design (see its own doc comment), and the
+/// tag lowering literally happens at the SAME fixed `tuple_tag(2)` call
+/// site every other 2-tuple pattern uses, with zero visibility into
+/// "this particular tuple came from `channel[T]()`". Resolving that
+/// properly would mean threading a NEW span-keyed side channel through
+/// `plum_types::Infer` and a matching special case into `lower.rs`'s
+/// tuple-pattern lowering (mirroring `resolve_empty_array_elem_types`/
+/// `EmptyArray`'s own precedent) — real, cross-crate work well beyond
+/// this chunk's own file list. Rather than silently mis-tag a second
+/// element type (a genuine memory-safety bug: `.recv()`'s `word_to_
+/// value` conversion depends entirely on the Receiver's declared inner
+/// `CgType` being correct), this is a documented, loudly-REJECTED
+/// limitation instead — see `resolve_channel_elem_cg_type`'s own doc
+/// comment for the actual guard.
+fn find_channel_type_args(program: &ast::Program) -> Vec<ast::Type> {
+    let mut out = Vec::new();
+    for item in &program.items {
+        if let ast::ItemKind::Let(def) = &item.kind {
+            find_channel_type_args_expr(&def.body, &mut out);
+        }
+    }
+    out
+}
+
+fn find_channel_type_args_expr(expr: &ast::Expr, out: &mut Vec<ast::Type>) {
+    // The exact shape check `plum_types::infer`'s own `channel[T]()`
+    // inference arm and `plum_ir::lower`'s own `Expr::Channel` lowering
+    // arm both already use — kept in lockstep with those two
+    // deliberately, not re-derived independently.
+    if let ast::Expr::Call { callee, args, .. } = expr {
+        if args.is_empty() {
+            if let ast::Expr::GenericInst { callee: inner_callee, args: type_args, .. } = callee.as_ref() {
+                if type_args.len() == 1 && matches!(inner_callee.as_ref(), ast::Expr::Ident(name, _) if name == "channel") {
+                    out.push(type_args[0].clone());
+                }
+            }
+        }
+    }
+    walk_channel_sub_exprs(expr, out);
+}
+
+/// A plain structural recursion into every sub-expression — mirrors
+/// `check_no_closure_expr`'s own exhaustive-`ast::Expr`-variant walk
+/// shape (this file's established precedent for "find every occurrence
+/// of X anywhere in the AST" without needing type information).
+fn walk_channel_sub_exprs(expr: &ast::Expr, out: &mut Vec<ast::Type>) {
+    match expr {
+        ast::Expr::Int(..) | ast::Expr::Float(..) | ast::Expr::Str(..) | ast::Expr::Bool(..) | ast::Expr::Ident(..) => {}
+        ast::Expr::Tuple(elems, _) | ast::Expr::ArrayLiteral(elems, _) => {
+            elems.iter().for_each(|e| find_channel_type_args_expr(e, out))
+        }
+        ast::Expr::Unary { expr, .. } => find_channel_type_args_expr(expr, out),
+        ast::Expr::Binary { lhs, rhs, .. } => {
+            find_channel_type_args_expr(lhs, out);
+            find_channel_type_args_expr(rhs, out);
+        }
+        ast::Expr::Field { base, .. } => find_channel_type_args_expr(base, out),
+        ast::Expr::Call { callee, args, .. } => {
+            find_channel_type_args_expr(callee, out);
+            args.iter().for_each(|a| find_channel_type_args_expr(a, out));
+        }
+        ast::Expr::GenericInst { callee, .. } => find_channel_type_args_expr(callee, out),
+        ast::Expr::Index { base, index, .. } => {
+            find_channel_type_args_expr(base, out);
+            find_channel_type_args_expr(index, out);
+        }
+        ast::Expr::Block(block, _) => walk_channel_block(block, out),
+        ast::Expr::If {
+            cond,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            find_channel_type_args_expr(cond, out);
+            walk_channel_block(then_branch, out);
+            if let Some(e) = else_branch {
+                find_channel_type_args_expr(e, out);
+            }
+        }
+        ast::Expr::Match { scrutinee, arms, .. } => {
+            find_channel_type_args_expr(scrutinee, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    find_channel_type_args_expr(g, out);
+                }
+                find_channel_type_args_expr(&arm.body, out);
+            }
+        }
+        ast::Expr::For { iter, body, .. } => {
+            find_channel_type_args_expr(iter, out);
+            walk_channel_block(body, out);
+        }
+        ast::Expr::Closure { body, .. } => find_channel_type_args_expr(body, out),
+        ast::Expr::Unsafe(block, _) | ast::Expr::Spawn(block, _) => walk_channel_block(block, out),
+        ast::Expr::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                find_channel_type_args_expr(&f.value, out);
+            }
+            if let Some(s) = spread {
+                find_channel_type_args_expr(s, out);
+            }
+        }
+        ast::Expr::Select { arms, .. } => {
+            for arm in arms {
+                find_channel_type_args_expr(&arm.expr, out);
+                find_channel_type_args_expr(&arm.body, out);
+            }
+        }
+    }
+}
+
+fn walk_channel_block(block: &ast::Block, out: &mut Vec<ast::Type>) {
+    for stmt in &block.stmts {
+        match stmt {
+            ast::Stmt::Let { value, .. } => find_channel_type_args_expr(value, out),
+            ast::Stmt::Assign { value, .. } => find_channel_type_args_expr(value, out),
+            ast::Stmt::Expr(e) => find_channel_type_args_expr(e, out),
+        }
+    }
+    if let Some(t) = &block.tail {
+        find_channel_type_args_expr(t, out);
+    }
+}
+
+/// Resolves every `channel[T]()` call site's `T` and registers
+/// `tag_fields["2Tuple"]` for it — see `find_channel_type_args`'s own
+/// doc comment for the full tuple-tagging story this implements
+/// (single global element type per program, loudly rejected otherwise,
+/// rather than silently mis-tagging a second one). A no-op (empty
+/// `Ok(())`, `tag_fields` untouched) for a program that never uses
+/// `channel[T]()` at all.
+fn register_channel_tag(
+    program: &ast::Program,
+    type_ctx: &TypeContext,
+    tag_fields: &mut plum_codegen::TagFields,
+) -> Result<(), String> {
+    let type_args = find_channel_type_args(program);
+    if type_args.is_empty() {
+        return Ok(());
+    }
+    let mut distinct: Vec<PlumType> = Vec::new();
+    for t in &type_args {
+        let resolved = plum_types::infer::ast_type_to_type(t, type_ctx, &[])
+            .map_err(|e| format!("`channel[..]` type argument: {e}"))?;
+        if !distinct.contains(&resolved) {
+            distinct.push(resolved);
+        }
+    }
+    if distinct.len() > 1 {
+        return Err(format!(
+            "codegen does not yet support more than one distinct `channel[T]()` element type in the same \
+             program (found {distinct:?}) — tuple tagging isn't type-specialized per element type yet (every \
+             2-element tuple, channels included, currently shares one flat \"2Tuple\" tag_fields entry; see \
+             `find_channel_type_args`'s own doc comment in codegen_cli.rs for the full story and what real \
+             follow-up work would need)"
+        ));
+    }
+    let elem_cg = plum_type_to_cg_type(&distinct[0])?;
+    tag_fields.insert(
+        "2Tuple".to_string(),
+        vec![CgType::Sender(Box::new(elem_cg.clone())), CgType::Receiver(Box::new(elem_cg))],
+    );
+    Ok(())
+}
+
 fn derive_tag_fields(program: &ast::Program, type_ctx: &TypeContext) -> plum_codegen::TagFields {
     let mut tag_fields = plum_codegen::TagFields::new();
     for item in &program.items {
@@ -317,6 +531,11 @@ pub fn reject_unprintable_return(entry_fn: &str, ret: CgType) -> Result<(), Stri
         return Err(format!(
             "codegen: {entry_fn:?} returns a task-shaped value, which the compiled entry point can't print yet \
              (call `.join()` on it inside the entry function itself instead)"
+        ));
+    }
+    if matches!(ret, CgType::Sender(_) | CgType::Receiver(_)) {
+        return Err(format!(
+            "codegen: {entry_fn:?} returns a channel handle, which the compiled entry point can't print yet"
         ));
     }
     Ok(())
@@ -433,6 +652,7 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
     // — cheap to rebuild from the same, already-validated items rather
     // than threading a second owned copy through `Infer` itself.
     let type_ctx_for_mono = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
+    register_channel_tag(program, &type_ctx_for_mono, &mut tag_fields)?;
     let mono_plan = plum_ir::monomorphize::plan(
         program,
         &type_ctx_for_mono,
@@ -615,8 +835,9 @@ pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
         // function — see its own doc comment on why. Unreachable in
         // practice, kept as a defensive error (not a panic) rather than
         // silently producing garbage IR if that check is ever bypassed.
-        CgType::Heap | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
-            return "; unreachable: compile_and_run rejects a Heap/Array/Closure/Task-returning entry point before this point"
+        CgType::Heap | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
+            return "; unreachable: compile_and_run rejects a Heap/Array/Closure/Task/Sender/Receiver-returning \
+                     entry point before this point"
                 .to_string()
         }
     };
@@ -1505,5 +1726,289 @@ mod tests {
             .expect_err("expected a clear build-time error, not a panic or a confusing clang failure");
         assert!(err.contains("heap-shaped value"), "unexpected error: {err}");
         assert!(!out_bin.exists(), "no binary should have been written for a rejected build");
+    }
+
+    // --- channels / select (this chunk) ---
+
+    #[test]
+    fn channel_scalar_send_recv_round_trips_single_threaded() {
+        let src = "let go (): Int = { let (tx, rx) = channel[Int](); tx.send(42); rx.recv() }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "42");
+    }
+
+    #[test]
+    fn channel_heap_values_at_scale_single_threaded() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Int = {\n\
+              let (tx, rx) = channel[Point]();\n\
+              for i in 0..1000 { tx.send(Point { x: i, y: i * 2 }); };\n\
+              let mut acc = 0;\n\
+              for i in 0..1000 { acc = acc + (match rx.recv() { Point(a, b) => a + b }); };\n\
+              acc\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        let expected: i64 = (0..1000i64).map(|i| i + i * 2).sum();
+        assert_eq!(out, expected.to_string());
+    }
+
+    #[test]
+    fn channel_heap_values_at_scale_across_a_real_spawned_thread() {
+        // Unlike the single-threaded variant above, the sender runs on
+        // a REAL spawned OS thread while the main thread receives — the
+        // shape the plan flags as needing the highest scrutiny (a
+        // shared, mutex-guarded queue genuinely touched from two
+        // different threads, not just exercised for its own text
+        // shape).
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Int = {\n\
+              let (tx, rx) = channel[Point]();\n\
+              let t = spawn { for i in 0..1000 { tx.send(Point { x: i, y: i * 2 }); }; 0 };\n\
+              let mut acc = 0;\n\
+              for i in 0..1000 { acc = acc + (match rx.recv() { Point(a, b) => a + b }); };\n\
+              t.join();\n\
+              acc\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        let expected: i64 = (0..1000i64).map(|i| i + i * 2).sum();
+        assert_eq!(out, expected.to_string());
+    }
+
+    #[test]
+    fn channel_spawn_and_join_combined_mirrors_the_interpreters_own_point_test() {
+        // The exact same shape as `plum_interp`'s own `a_heap_shaped_
+        // value_crosses_a_real_thread_boundary_via_a_channel` test —
+        // `tx` crosses INTO a spawned thread (the SAME captured-
+        // environment mechanism `spawn` already uses), the spawned task
+        // sends a heap value on it, and the ORIGINAL thread receives.
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Int = {\n\
+              let (tx, rx) = channel[Point]();\n\
+              let t = spawn { tx.send(Point { x: 5, y: 6 }) };\n\
+              let p = rx.recv();\n\
+              t.join();\n\
+              match p { Point(a, b) => a + b }\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "11");
+    }
+
+    #[test]
+    fn select_picks_arm_0_when_it_is_the_one_ready() {
+        let src = "\
+            let go (): Int = {\n\
+              let (tx1, rx1) = channel[Int]();\n\
+              let (tx2, rx2) = channel[Int]();\n\
+              tx1.send(7);\n\
+              select { v = rx1.recv() => v, w = rx2.recv() => w }\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "7");
+    }
+
+    #[test]
+    fn select_picks_arm_1_when_it_is_the_one_ready() {
+        // The direct proxy that the poll loop doesn't just always
+        // return arm 0's result — here only arm 1's channel ever gets
+        // a value.
+        let src = "\
+            let go (): Int = {\n\
+              let (tx1, rx1) = channel[Int]();\n\
+              let (tx2, rx2) = channel[Int]();\n\
+              tx2.send(99);\n\
+              select { v = rx1.recv() => v, w = rx2.recv() => w }\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "99");
+    }
+
+    #[test]
+    fn select_combined_with_spawn_and_join() {
+        // `select` genuinely BLOCKS (busy-polls) until the spawned
+        // thread's send lands — arm 1's channel never gets anything.
+        let src = "\
+            let go (): Int = {\n\
+              let (tx1, rx1) = channel[Int]();\n\
+              let (tx2, rx2) = channel[Int]();\n\
+              let t = spawn { tx1.send(55) };\n\
+              let result = select { v = rx1.recv() => v, w = rx2.recv() => w };\n\
+              t.join();\n\
+              result\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "55");
+    }
+
+    /// The single highest-risk test in this whole chunk: FOUR real OS
+    /// threads concurrently `.send()`ing onto ONE shared channel queue
+    /// — the exact multi-writer shape a lost update to `tail` (an
+    /// unsynchronized race between concurrent senders) would corrupt.
+    /// Each producer's value RANGE is disjoint (`0..100`, `1000..1100`,
+    /// `2000..2100`, `3000..3100`) specifically so a corrupted/lost
+    /// node would show up as a wrong SUM, not just a coincidentally-
+    /// still-plausible one.
+    fn many_producer_src() -> String {
+        "\
+            let go (): Int = {\n\
+              let (tx, rx) = channel[Int]();\n\
+              let t0 = spawn { for i in 0..100 { tx.send(i); }; 0 };\n\
+              let t1 = spawn { for i in 0..100 { tx.send(1000 + i); }; 0 };\n\
+              let t2 = spawn { for i in 0..100 { tx.send(2000 + i); }; 0 };\n\
+              let t3 = spawn { for i in 0..100 { tx.send(3000 + i); }; 0 };\n\
+              let mut acc = 0;\n\
+              for i in 0..400 { acc = acc + rx.recv(); };\n\
+              t0.join();\n\
+              t1.join();\n\
+              t2.join();\n\
+              t3.join();\n\
+              acc\n\
+            }\n\
+        "
+            .to_string()
+    }
+
+    fn many_producer_expected() -> i64 {
+        [0i64, 1000, 2000, 3000]
+            .iter()
+            .map(|base| (0..100i64).map(|i| base + i).sum::<i64>())
+            .sum()
+    }
+
+    #[test]
+    fn many_producers_concurrently_sending_to_one_channel_sums_correctly() {
+        let out = compile_and_run(&many_producer_src(), "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, many_producer_expected().to_string());
+    }
+
+    /// The ASan variant of the many-producer test — same program,
+    /// compiled with `-fsanitize=address` and RUN (not just compiled),
+    /// same rationale as `spawn_many_tasks_..._under_asan` above: ASan
+    /// instruments every heap access at the machine-code level, so a
+    /// lost/corrupted queue node (a stray write into freed memory, a
+    /// double-free of a node popped by two racing `recv`s, ...) would
+    /// abort loudly with a diagnostic here even if the SUM happened to
+    /// still come out right by coincidence.
+    #[test]
+    fn many_producers_concurrently_sending_to_one_channel_under_asan() {
+        run_under_sanitizer("-fsanitize=address", "plumc-channel-asan", &many_producer_expected().to_string());
+    }
+
+    /// The ThreadSanitizer variant — unlike ASan (heap corruption),
+    /// TSan specifically instruments every memory access to detect
+    /// DATA RACES directly: two threads touching the same memory
+    /// without a happens-before edge between them, exactly the hazard
+    /// class a mutex-guarded multi-producer queue is vulnerable to if
+    /// the mutex ever failed to actually serialize `head`/`tail`
+    /// mutation. Explicitly requested by the plan as a SEPARATE run
+    /// from ASan, not a substitute for it.
+    #[test]
+    fn many_producers_concurrently_sending_to_one_channel_under_tsan() {
+        run_under_sanitizer("-fsanitize=thread", "plumc-channel-tsan", &many_producer_expected().to_string());
+    }
+
+    /// The ASan variant of the cross-thread heap-values-at-scale test —
+    /// same rationale as the many-producer sanitizer tests above, for
+    /// the single-producer/single-consumer shape.
+    #[test]
+    fn channel_heap_values_at_scale_across_a_spawned_thread_under_asan() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Int = {\n\
+              let (tx, rx) = channel[Point]();\n\
+              let t = spawn { for i in 0..1000 { tx.send(Point { x: i, y: i * 2 }); }; 0 };\n\
+              let mut acc = 0;\n\
+              for i in 0..1000 { acc = acc + (match rx.recv() { Point(a, b) => a + b }); };\n\
+              t.join();\n\
+              acc\n\
+            }\n\
+        ";
+        let expected: i64 = (0..1000i64).map(|i| i + i * 2).sum();
+        run_under_sanitizer_with_src(src, "-fsanitize=address", "plumc-channel-heap-asan", &expected.to_string());
+    }
+
+    /// The TSan variant of the same cross-thread heap-values-at-scale
+    /// test.
+    #[test]
+    fn channel_heap_values_at_scale_across_a_spawned_thread_under_tsan() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Int = {\n\
+              let (tx, rx) = channel[Point]();\n\
+              let t = spawn { for i in 0..1000 { tx.send(Point { x: i, y: i * 2 }); }; 0 };\n\
+              let mut acc = 0;\n\
+              for i in 0..1000 { acc = acc + (match rx.recv() { Point(a, b) => a + b }); };\n\
+              t.join();\n\
+              acc\n\
+            }\n\
+        ";
+        let expected: i64 = (0..1000i64).map(|i| i + i * 2).sum();
+        run_under_sanitizer_with_src(src, "-fsanitize=thread", "plumc-channel-heap-tsan", &expected.to_string());
+    }
+
+    /// Shared "compile with `-fsanitize=<kind>`, run, assert clean exit
+    /// + expected stdout" helper — factored out of the hand-rolled ASan
+    /// block `spawn_many_tasks_..._under_asan` above (which predates
+    /// this chunk) so the many-producer/heap-at-scale sanitizer tests
+    /// don't each duplicate the same compile-and-run boilerplate.
+    /// `detect_leaks=0` (ASan only — irrelevant/unrecognized by TSan,
+    /// harmless to still set) isolates genuine memory CORRUPTION from
+    /// plain leaks: this backend's channel queue struct/nodes are a
+    /// documented, deliberate permanent leak (see `emit_channel_
+    /// runtime`'s own doc comment), not a soundness gap — a leak-
+    /// detector failure here is EXPECTED, not a signal of anything new.
+    fn run_under_sanitizer(sanitizer_flag: &str, dir_prefix: &str, expected_stdout: &str) {
+        run_under_sanitizer_with_src(&many_producer_src(), sanitizer_flag, dir_prefix, expected_stdout);
+    }
+
+    fn run_under_sanitizer_with_src(src: &str, sanitizer_flag: &str, dir_prefix: &str, expected_stdout: &str) {
+        let (body_ir, signatures, resolved_entry) = compile_to_ir(src, "go").unwrap();
+        let sig = signatures.get(&resolved_entry).unwrap().clone();
+        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit]);
+        let full_ir = format!("{body_ir}\n{main_ir}");
+
+        let dir = unique_temp_dir(dir_prefix);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ll_path = dir.join("program.ll");
+        let bin_path = dir.join("program-sanitized");
+        std::fs::write(&ll_path, &full_ir).unwrap();
+
+        let compile = Command::new("clang")
+            .arg(sanitizer_flag)
+            .arg("-pthread")
+            .arg(&ll_path)
+            .arg("-o")
+            .arg(&bin_path)
+            .output()
+            .unwrap_or_else(|e| panic!("could not run clang with {sanitizer_flag}: {e}"));
+        if !compile.status.success() {
+            panic!(
+                "clang {sanitizer_flag} failed to compile the generated IR:\n{}",
+                String::from_utf8_lossy(&compile.stderr)
+            );
+        }
+
+        let run = Command::new(&bin_path)
+            .env("ASAN_OPTIONS", "detect_leaks=0")
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run the {sanitizer_flag}-instrumented binary: {e}"));
+        let stdout = String::from_utf8_lossy(&run.stdout).trim_end().to_string();
+        let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+        assert!(
+            run.status.success(),
+            "{sanitizer_flag}-instrumented binary reported a failure (a real bug, not a hang or timeout):\n\
+             stdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(!stderr.contains("ERROR: AddressSanitizer"), "ASan flagged an error:\n{stderr}");
+        assert!(!stderr.contains("WARNING: ThreadSanitizer"), "TSan flagged a data race:\n{stderr}");
+        assert_eq!(stdout, expected_stdout);
     }
 }

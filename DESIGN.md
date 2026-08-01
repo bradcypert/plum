@@ -1513,7 +1513,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1-v7 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join)
+### LLVM backend — v1-v8 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join, channels/select)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1547,21 +1547,25 @@ top-level function name used as a value (see "Closures" below), and —
 as of a further follow-on chunk — `For` (range- and array-based) and
 `Assign`, and therefore `.map()`/`.filter()`/`.fold()` (which desugar
 purely into `For`+`Assign`+ordinary `Call` — see "General array
-iteration" below), and — as of a further follow-on chunk — `spawn { block }`/
-`.join()` (real OS-thread concurrency; `Channel`/`ChannelSend`/
-`ChannelRecv`/`Select` remain deferred — see "Concurrency: spawn/join"
-below). Still out of scope and producing a clear codegen error, never
-a panic: Unicode-aware string operations (`.runes()`, `.to_upper()`,
-`.to_lower()`, `.trim()`, `.replace()`, `.split()`), a closure literal
-inside a still-generic function's own body, an `Assign` inside a
-closure body writing back into an enclosing loop's carried variable
-(structurally out of reach of this backend's closure design, not
-merely unimplemented), an `Assign` reachable only through a `Let`/
-`If`/`Match`/`RcAnnotated` used in an ordinary value position (e.g.
-`f({ sum = sum + 1; sum })` as a `Call` argument), channels/`select`,
-FFI (including `CStr`), non-constant `Global` initializers — and a
-generic instantiated at any of these still-unsupported types (e.g.
-`Box[Array[Str]]` once `.split()` is needed).
+iteration" below), `spawn { block }`/`.join()` (real OS-thread
+concurrency), and — as of a further follow-on chunk — `channel[T]()`/
+`.send()`/`.recv()`/`select` (see "Concurrency: channels/select"
+below; disconnect detection is explicitly NOT part of this, and at
+most one distinct `channel[T]()` element type `T` is supported per
+program — see that section). Still out of scope and producing a clear
+codegen error, never a panic: Unicode-aware string operations
+(`.runes()`, `.to_upper()`, `.to_lower()`, `.trim()`, `.replace()`,
+`.split()`), a closure literal inside a still-generic function's own
+body, an `Assign` inside a closure body writing back into an enclosing
+loop's carried variable (structurally out of reach of this backend's
+closure design, not merely unimplemented), an `Assign` reachable only
+through a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value
+position (e.g. `f({ sum = sum + 1; sum })` as a `Call` argument),
+disconnect detection on channels, more than one distinct `channel[T]()`
+element type per program, FFI (including `CStr`), non-constant
+`Global` initializers — and a generic instantiated at any of these
+still-unsupported types (e.g. `Box[Array[Str]]` once `.split()` is
+needed).
 
 **Guaranteed tail calls**: any call in tail position (the function's
 own body; both branches of a tail-positioned `If`/arms of a tail-
@@ -2155,6 +2159,115 @@ unconditional release would free the very cell about to be returned, a
 real use-after-free) — matches this codebase's repeatedly-established
 "accepted leak over unsoundness" precedent, deferred rather than
 attempted under this chunk's stated correctness priority.
+
+**Concurrency: channels/`select`** (disconnect detection explicitly
+NOT part of this — `send()` always succeeds, `.recv()`/`select` block,
+potentially forever, if nothing is ever sent, rather than replicating
+the interpreter's Arc/Drop-based disconnect errors; the underlying
+queue/mutex/condvar is a permanent, accepted leak, same precedent as
+`spawn`'s own captures). Builds directly on `spawn`/`.join()`'s
+toolkit: `CgType::Sender(Box<CgType>)`/`CgType::Receiver(Box<CgType>)`,
+neither refcounted (`dec_fn_for → None` — there is no refcount word
+anywhere in the shared queue struct's layout; treating one as
+refcounted would corrupt the mutex sitting at offset 0) nor deep-copied
+when crossing a thread boundary (`deepcopy_fn_for → None` for a THIRD,
+different reason than `Closure`/`Task`: a `Sender`/`Receiver`
+legitimately crosses — unlike those two — but as a VERBATIM POINTER
+COPY, since both ends must keep pointing at the SAME shared queue or
+the channel silently splits into two mutually-invisible halves).
+`crosses_spawn_boundary` was renamed `crosses_thread_boundary` and
+reused (not duplicated) at the new channel-send call site.
+
+One `malloc`'d, permanently-leaked 104-byte queue struct per
+`channel[T]()`: `{ [40 x i8] mutex, [48 x i8] cond, ptr head, ptr
+tail }` (`pthread_mutex_t`/`pthread_cond_t` confirmed fixed-size opaque
+buffers on this platform, same precedent as `pthread_t`'s plain-`i64`
+treatment). Both the `Sender` and `Receiver` values `channel[T]()`
+produces are literally the SAME pointer to this one struct — no
+`Arc`-style indirection needed, unlike the interpreter (codegen's
+shared `malloc` arena has no analogous need for an owned, `Clone`-able
+handle). Queue node: `{ i64 value_word, ptr next }` (16 bytes,
+`malloc`'d per `send`, `free`'d by whichever `recv`/`select` poll pops
+it), using the same uniform single-word representation every other box
+in this backend already uses.
+
+**The central correctness property — a genuinely NEW hazard class
+beyond `spawn`/`.join()`**: unlike spawn/join (zero shared mutable
+state by design), a channel is a real, concurrently-accessed structure
+— multiple senders are a supported, intentional case (matching the
+interpreter's own `mpsc::Sender` being `Clone`). EVERY read or write of
+`head`/`tail`/a node's `next` pointer happens strictly between the
+SAME struct-embedded mutex's lock/unlock, in every one of
+`@plum_channel_send`/`recv`/`try_recv` — so any two concurrent callers
+strictly serialize: whichever thread's lock returns first performs its
+entire append/pop (including `tail`'s read-modify-write) before any
+other caller's lock can return. A lost update to `tail` (the classic
+multi-producer race this queue shape is vulnerable to if
+unsynchronized) is therefore structurally impossible. `send`'s own
+node `malloc`+word-store happens BEFORE the lock — safe, since each
+caller mallocs its own independent node; nothing shared is touched
+until the lock is held. `pthread_cond_wait` is only ever called with
+the mutex already held (POSIX guarantees atomic unlock-and-wait, then
+re-lock before returning), so it never races a concurrent `send`'s own
+critical section either. `send` deep-copies the value being sent
+(reusing `deep_copy_capture` verbatim, never `plum_rc_inc` — the same
+argument as spawn captures, if anything more load-bearing here since
+multiple concurrent senders could otherwise race on the SAME source
+cell's non-atomic refcount word with no synchronization at all).
+`.recv()` needs NO second deep-copy on the way out — once a node is
+off the queue, only the popping call ever touches its payload word
+again, the same clean ownership-transfer argument `.join()` already
+established, now verified to hold per-node even with multiple
+concurrent senders. Verified via actual `-fsanitize=address` AND
+`-fsanitize=thread` runs (not just `address` alone, unlike the
+spawn/join chunk) on a many-producer test — both passed cleanly.
+
+`.recv()` uses a REAL blocking `pthread_cond_wait` loop, not a
+busy-poll — a single channel has a genuine primitive for this, unlike
+`select`. `select` uses a busy-poll matching the interpreter's own
+algorithm exactly: every arm's receiver expr evaluated once up front,
+then a fixed-index-order, non-blocking poll of each arm's queue every
+sweep (lock, check `head`, pop-and-done if non-empty else unlock and
+continue), `usleep(1000)` (matching the interpreter's 1ms sleep) and
+retry from arm 0 if nothing was ready — deliberately no `Disconnected`
+case, since these queues never signal disconnection at all (the same
+documented gap applies: `select` genuinely spins forever if every arm's
+channel is dead). Reuses `Match`'s exact arm-binding pattern
+(`"__select_recv"` bound into a fresh per-arm `Env`) and, since
+`plum-types` already guarantees every arm's body shares one result
+type, `Match`'s exact `phi`+`merge_envs` result-merging scheme
+verbatim — no new merging machinery needed.
+
+`check_no_closure_or_task_fields`'s gating was extended from "only if
+`spawn` is used" to "if `spawn` OR channels are used" — a channel send
+can smuggle a closure/task three levels deep into an opaque `Heap`
+pointer exactly as easily as a spawn capture can. Confirmed this does
+NOT need extending to also cover nested `Sender`/`Receiver` fields:
+those already get `deepcopy_fn_for → None`, and `@plum_deepcopy_heap`'s
+existing "`None` means copy the raw word as-is" fallback is EXACTLY
+correct for a nested channel handle (copy the shared queue pointer
+verbatim) — unlike `Closure`/`Task`, where that same fallback would be
+silently wrong, which is precisely why only those two need the
+separate whole-program check.
+
+**A real, narrower-than-planned scope limitation, found and handled
+safely rather than silently**: `ir::Expr::Channel` carries no type
+information at all (`T` is fully erased at the IR layer, by design),
+and — confirmed by reading `lower.rs`'s tuple-lowering directly — every
+2-tuple in the whole language, generic or not, shares one flat
+`"2Tuple"` `tag_fields` entry; there is no existing per-content-type
+tuple-tagging mechanism to hook into (unlike generic structs/enums,
+which DO get `monomorphize`-based distinct mangled tags). Building real
+T-specific tagging for channels would need a new span-keyed `Infer`
+side channel plus a matching `lower.rs` special case (mirroring
+`EmptyArray`/`empty_array_elem_types`'s own precedent) — real,
+cross-crate follow-up work. Rather than risk silently mis-tagging a
+second element type (a genuine memory-safety bug, since `.recv()`'s
+word-to-value conversion depends entirely on the `Receiver`'s declared
+inner `CgType` being correct), **at most one distinct `channel[T]()`
+element type is supported per program** — a second, differently-typed
+`channel[..]` call anywhere in the same program is a loud, clear
+compile-time `Err`, never a silent miscompile.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck

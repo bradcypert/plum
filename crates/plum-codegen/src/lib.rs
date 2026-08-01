@@ -66,6 +66,27 @@ pub enum CgType {
     Array(Box<CgType>),
     Closure(Vec<CgType>, Box<CgType>),
     Task(Box<CgType>),
+    /// The sending end of a `channel[T]()` — `ptr` at the LLVM level,
+    /// like `Task`, but for a THIRD, distinct reason (see this module's
+    /// own doc comment intro): a `Sender`/`Receiver` legitimately
+    /// crosses a thread boundary (unlike `Closure`/`Task`), but ONLY as
+    /// a verbatim pointer copy to the ONE shared, permanently-leaked
+    /// mutex-guarded queue struct `channel[T]()` allocates — never
+    /// refcounted (there's no refcount word anywhere in that struct's
+    /// layout; see `dec_fn_for`'s own doc comment for why treating it
+    /// as one would corrupt the mutex sitting at offset 0) and never
+    /// deep-copied (`deepcopy_fn_for` — a deep copy would silently
+    /// split one channel into two mutually-invisible halves). Carries
+    /// its own element `CgType` purely so `.recv()`/`select` know how
+    /// to convert the raw word popped off the queue back into a real
+    /// value (mirroring why `Task` carries its own result `CgType`).
+    Sender(Box<CgType>),
+    /// The receiving end of a `channel[T]()` — see `Sender`'s own doc
+    /// comment; kept as a DISTINCT variant (not one `Channel` type with
+    /// a "which end" flag) so `.send()`/`.recv()` on the wrong end is
+    /// an ordinary compile-time type mismatch, mirroring why `Sender`
+    /// and `Receiver` are separate variants rather than one shared one.
+    Receiver(Box<CgType>),
 }
 
 impl CgType {
@@ -74,7 +95,13 @@ impl CgType {
             CgType::Int => "i64",
             CgType::Float => "double",
             CgType::Bool | CgType::Unit => "i1",
-            CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => "ptr",
+            CgType::Heap
+            | CgType::Str
+            | CgType::Array(_)
+            | CgType::Closure(..)
+            | CgType::Task(_)
+            | CgType::Sender(_)
+            | CgType::Receiver(_) => "ptr",
         }
     }
 
@@ -116,6 +143,14 @@ impl CgType {
             // per inner type so two different `Array[Task[T]]` shapes
             // don't collide.
             CgType::Task(inner) => format!("Task_{}", inner.mangled()),
+            // Never actually reached by any LIVE deep-copy/release call
+            // either — a `Sender`/`Receiver` is never deep-copied (see
+            // `deepcopy_fn_for`) and never refcounted (see `dec_fn_for`)
+            // — but still needs a well-formed, distinct name per inner
+            // type for the same `emit_array_release_fns`/`emit_deepcopy_
+            // array_fns` totality reason `Task`'s own arm documents.
+            CgType::Sender(inner) => format!("Sender_{}", inner.mangled()),
+            CgType::Receiver(inner) => format!("Receiver_{}", inner.mangled()),
         }
     }
 }
@@ -173,6 +208,15 @@ fn dec_fn_for(ty: &CgType) -> Option<String> {
         // `None` is exactly what keeps that word forever untouched by
         // anything except `.join()`'s own explicit check.
         CgType::Task(_) => None,
+        // Deliberately `None`, for a THIRD reason distinct from both
+        // `Task`'s and every scalar's: there's no refcount word ANYWHERE
+        // in the shared channel-queue struct's layout at all (`{ [40 x
+        // i8] mutex, [48 x i8] cond, ptr head, ptr tail }`, see
+        // `codegen.rs`'s channel-runtime doc comment) — treating a
+        // `Sender`/`Receiver` as refcounted would corrupt the mutex
+        // sitting at byte offset 0, not just silently no-op the way
+        // `Task`'s `None` does.
+        CgType::Sender(_) | CgType::Receiver(_) => None,
     }
 }
 
@@ -736,12 +780,23 @@ fn deepcopy_fn_for(ty: &CgType) -> Option<String> {
         CgType::Str => Some("@plum_deepcopy_str".to_string()),
         CgType::Array(elem) => Some(format!("@plum_deepcopy_array_{}", elem.mangled())),
         CgType::Closure(..) | CgType::Task(_) => None,
+        // A `Sender`/`Receiver` crosses a thread boundary as a VERBATIM
+        // pointer copy, never a deep copy — see `codegen.rs`'s
+        // `deep_copy_capture` `Sender`/`Receiver` arm for the exact
+        // mechanism. `None` here is exactly what makes `@plum_deepcopy_
+        // heap`'s generic per-field fallback ("no copy function for
+        // this field type — just copy the raw word") correct for a
+        // NESTED `Sender`/`Receiver` struct field too: copying the
+        // shared queue pointer verbatim is exactly right, unlike
+        // `Closure`/`Task` (where the same fallback would be silently
+        // WRONG — see `check_no_closure_or_task_fields`'s own doc
+        // comment for why only those two need a separate whole-program
+        // check).
+        CgType::Sender(_) | CgType::Receiver(_) => None,
     }
 }
 
-/// `pthread_create`/`pthread_join`'s C declarations, plus the deep-copy
-/// runtime `spawn` needs to snapshot a captured free variable into the
-/// spawned thread's own, wholly separate allocation — emitted ONLY when
+/// `pthread_create`/`pthread_join`'s C declarations — emitted ONLY when
 /// `Ctx::needs_spawn_runtime` (`codegen.rs`) observed at least one real
 /// `Spawn`/`TaskJoin` node during body codegen (see `emit_program`'s own
 /// call site). `pthread_t` is confirmed a plain 8-byte scalar
@@ -750,18 +805,35 @@ fn deepcopy_fn_for(ty: &CgType) -> Option<String> {
 /// local platform/ABI by shelling out to `clang` (see DESIGN.md's
 /// "Implementation plan"), same precedent as every other libc-behavior
 /// dependency accepted elsewhere, so declaring it as a plain `i64`
-/// rather than an opaque struct is safe here. `@plum_deepcopy_heap`
-/// mirrors `@plum_release_fields`'s exact runtime-tag-dispatch shape —
-/// same `icmp`-chain over the SAME `tag_ids`, just allocating a fresh
-/// cell and recursively deep-copying each heap-shaped field (via
-/// `deepcopy_fn_for`) instead of decrementing it. `@plum_deepcopy_str`
-/// allocates fresh + `memcpy`s bytes — strings have no nested heap
-/// fields, so (unlike `@plum_deepcopy_heap`) this needs no recursion at
-/// all, mirroring `@plum_rc_dec_str`'s own equally-simple shape.
-fn emit_spawn_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> String {
+/// rather than an opaque struct is safe here.
+fn emit_spawn_pthread_decls() -> String {
+    "declare i32 @pthread_create(ptr, ptr, ptr, ptr)\ndeclare i32 @pthread_join(i64, ptr)\n\n".to_string()
+}
+
+/// The deep-copy runtime BOTH `spawn` (a captured free variable) and
+/// channels (`.send()`'s value — see `codegen.rs`'s `codegen_channel_
+/// send`) need to snapshot a value into a form the OTHER thread can
+/// safely own outright — emitted whenever EITHER `Ctx::needs_spawn_
+/// runtime` OR `Ctx::needs_channel_runtime` observed a real crossing
+/// node during body codegen (see `emit_program`'s own call site): a
+/// channel used with no `spawn` anywhere still needs this (e.g. a
+/// heap-shaped value sent on a channel and received back on the SAME
+/// thread still deep-copies on the way in, matching `.send()`'s own
+/// doc comment), and a `spawn` capture needs it independent of whether
+/// the program ever touches a channel. Split out from the combined
+/// `pthread_create`/`pthread_join` declarations above specifically so
+/// a channel-only program (no `spawn` at all) still gets this without
+/// also pulling in `pthread_create`/`pthread_join`, which it never
+/// calls. `@plum_deepcopy_heap` mirrors `@plum_release_fields`'s exact
+/// runtime-tag-dispatch shape — same `icmp`-chain over the SAME
+/// `tag_ids`, just allocating a fresh cell and recursively deep-copying
+/// each heap-shaped field (via `deepcopy_fn_for`) instead of
+/// decrementing it. `@plum_deepcopy_str` allocates fresh + `memcpy`s
+/// bytes — strings have no nested heap fields, so (unlike `@plum_
+/// deepcopy_heap`) this needs no recursion at all, mirroring `@plum_rc_
+/// dec_str`'s own equally-simple shape.
+fn emit_deepcopy_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> String {
     let mut out = String::new();
-    out.push_str("declare i32 @pthread_create(ptr, ptr, ptr, ptr)\n");
-    out.push_str("declare i32 @pthread_join(i64, ptr)\n\n");
 
     out.push_str(
         "define ptr @plum_deepcopy_str(ptr %p) {\n\
@@ -842,6 +914,201 @@ fn emit_spawn_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) ->
         out.push_str("no_match:\n  unreachable\n");
         out.push_str(&format!("done:\n  %result = phi ptr {}\n  ret ptr %result\n}}\n\n", phi_parts.join(", ")));
     }
+
+    out
+}
+
+/// `pthread_mutex_*`/`pthread_cond_*`/`usleep`'s C declarations, plus
+/// the small, fixed channel-queue runtime every `channel[T]()` needs —
+/// emitted ONLY when `Ctx::needs_channel_runtime` (`codegen.rs`)
+/// observed a real `Channel`/`ChannelSend`/`ChannelRecv`/`Select` node
+/// during body codegen. Deliberately does NOT declare `pthread_mutex_
+/// destroy`/`pthread_cond_destroy`/`pthread_cond_broadcast` — dead code
+/// given this backend's permanent-leak decision (a channel's queue
+/// struct is never destroyed, and nothing ever needs to wake more than
+/// one waiter at a time — `send` always enqueues exactly one node, so
+/// `pthread_cond_signal` alone is always correct).
+///
+/// Queue struct layout (one per `channel[T]()`, `malloc`'d and
+/// permanently leaked — matching this backend's own established
+/// "leak over unsoundness" precedent, e.g. `Task`'s own captures):
+/// `{ [40 x i8] mutex, [48 x i8] cond, ptr head, ptr tail }` — 104
+/// bytes total (mutex at offset 0, cond at offset 40, `head` at offset
+/// 88, `tail` at offset 96); `pthread_mutex_t`/`pthread_cond_t`
+/// confirmed fixed-size opaque buffers on this platform (same
+/// "verified directly, not assumed" precedent as `pthread_t`'s own
+/// plain-`i64` treatment — see `emit_spawn_pthread_decls`'s doc
+/// comment). Queue NODE layout (one per enqueued value, `malloc`'d by
+/// `send`, `free`'d by whichever `recv`/`try_recv` call pops it):
+/// `{ i64 value_word, ptr next }` — 16 bytes, using the SAME uniform
+/// word representation every other single-word "box" in this backend
+/// already uses (`codegen.rs`'s `value_to_word`/`word_to_value`).
+///
+/// `@plum_channel_send`/`@plum_channel_recv`/`@plum_channel_try_recv`
+/// are small, hand-rolled runtime FUNCTIONS (not inlined at every call
+/// site) purely to keep the mutex/cond dance — and its correctness —
+/// written exactly ONCE, matching this whole file's "small, fixed
+/// runtime, called from codegen.rs" convention every other heap
+/// operation already follows (`@plum_alloc`/`@plum_rc_inc`/...).
+///
+/// # The central correctness property: no lost update under concurrent senders
+///
+/// EVERY read or write of `head`/`tail`/a node's `next` pointer happens
+/// strictly between this same struct's own `pthread_mutex_lock`/
+/// `pthread_mutex_unlock` pair, in EVERY one of `@plum_channel_send`/
+/// `@plum_channel_recv`/`@plum_channel_try_recv` — the mutex is the
+/// SAME one embedded in the queue struct itself (`%q`, byte offset 0),
+/// so any two concurrent callers (regardless of which of these three
+/// functions, or how many distinct OS threads) strictly serialize
+/// their access to those three pointers: whichever thread's
+/// `pthread_mutex_lock` returns first performs its ENTIRE append/pop
+/// (including the read-modify-write of `tail`) before any other
+/// caller's lock call can return. `@plum_channel_send`'s own node
+/// `malloc`/`store i64 %word, ptr %node` happen BEFORE the lock, safe
+/// because each caller mallocs its OWN independent node — nothing
+/// shared is touched until the lock is held. A lost update to `tail`
+/// (the classic multi-producer race this queue shape is vulnerable to
+/// if unsynchronized) is therefore structurally impossible: there is
+/// no window where two threads can both read `tail`'s old value and
+/// both write a new one without the mutex serializing between them.
+/// `pthread_cond_wait` is called ONLY while the mutex is already held
+/// (`@plum_channel_recv`'s `wait` block) — POSIX guarantees it
+/// atomically unlocks-and-waits, then re-locks before returning, so
+/// this never races against `send`'s own critical section either.
+fn emit_channel_runtime() -> String {
+    let mut out = String::new();
+    out.push_str("declare i32 @pthread_mutex_init(ptr, ptr)\n");
+    out.push_str("declare i32 @pthread_mutex_lock(ptr)\n");
+    out.push_str("declare i32 @pthread_mutex_unlock(ptr)\n");
+    out.push_str("declare i32 @pthread_cond_init(ptr, ptr)\n");
+    out.push_str("declare i32 @pthread_cond_wait(ptr, ptr)\n");
+    out.push_str("declare i32 @pthread_cond_signal(ptr)\n");
+    out.push_str("declare i32 @usleep(i32)\n\n");
+
+    out.push_str(
+        "define ptr @plum_channel_new() {\n\
+         entry:\n\
+         \x20 %q = call ptr @malloc(i64 104)\n\
+         \x20 %mutex_init_r = call i32 @pthread_mutex_init(ptr %q, ptr null)\n\
+         \x20 %cond = getelementptr i8, ptr %q, i64 40\n\
+         \x20 %cond_init_r = call i32 @pthread_cond_init(ptr %cond, ptr null)\n\
+         \x20 %head_addr = getelementptr i8, ptr %q, i64 88\n\
+         \x20 store ptr null, ptr %head_addr\n\
+         \x20 %tail_addr = getelementptr i8, ptr %q, i64 96\n\
+         \x20 store ptr null, ptr %tail_addr\n\
+         \x20 ret ptr %q\n\
+         }\n\n",
+    );
+
+    out.push_str(
+        "define void @plum_channel_send(ptr %q, i64 %word) {\n\
+         entry:\n\
+         \x20 %node = call ptr @malloc(i64 16)\n\
+         \x20 store i64 %word, ptr %node\n\
+         \x20 %node_next_addr = getelementptr i8, ptr %node, i64 8\n\
+         \x20 store ptr null, ptr %node_next_addr\n\
+         \x20 %lock_r = call i32 @pthread_mutex_lock(ptr %q)\n\
+         \x20 %tail_addr = getelementptr i8, ptr %q, i64 96\n\
+         \x20 %tail = load ptr, ptr %tail_addr\n\
+         \x20 %tail_is_null = icmp eq ptr %tail, null\n\
+         \x20 br i1 %tail_is_null, label %empty, label %nonempty\n\
+         empty:\n\
+         \x20 %head_addr = getelementptr i8, ptr %q, i64 88\n\
+         \x20 store ptr %node, ptr %head_addr\n\
+         \x20 store ptr %node, ptr %tail_addr\n\
+         \x20 br label %signal\n\
+         nonempty:\n\
+         \x20 %tail_next_addr = getelementptr i8, ptr %tail, i64 8\n\
+         \x20 store ptr %node, ptr %tail_next_addr\n\
+         \x20 store ptr %node, ptr %tail_addr\n\
+         \x20 br label %signal\n\
+         signal:\n\
+         \x20 %cond = getelementptr i8, ptr %q, i64 40\n\
+         \x20 %signal_r = call i32 @pthread_cond_signal(ptr %cond)\n\
+         \x20 %unlock_r = call i32 @pthread_mutex_unlock(ptr %q)\n\
+         \x20 ret void\n\
+         }\n\n",
+    );
+
+    // A REAL blocking wait (`pthread_cond_wait`), not a busy-poll —
+    // unlike `select` (which has no single-primitive way to block on
+    // MULTIPLE channels at once with plain pthread primitives), a
+    // single channel's `recv` has a real condvar to wait on, so it
+    // uses it. No second deep-copy on the way out: once a node is off
+    // the queue (popped under the mutex, in `pop` below), only THIS
+    // call ever touches its payload word again — see this function's
+    // own doc comment for the full happens-before argument.
+    out.push_str(
+        "define i64 @plum_channel_recv(ptr %q) {\n\
+         entry:\n\
+         \x20 %lock_r = call i32 @pthread_mutex_lock(ptr %q)\n\
+         \x20 br label %wait_check\n\
+         wait_check:\n\
+         \x20 %head_addr = getelementptr i8, ptr %q, i64 88\n\
+         \x20 %head = load ptr, ptr %head_addr\n\
+         \x20 %is_null = icmp eq ptr %head, null\n\
+         \x20 br i1 %is_null, label %wait, label %pop\n\
+         wait:\n\
+         \x20 %cond = getelementptr i8, ptr %q, i64 40\n\
+         \x20 %wait_r = call i32 @pthread_cond_wait(ptr %cond, ptr %q)\n\
+         \x20 br label %wait_check\n\
+         pop:\n\
+         \x20 %word = load i64, ptr %head\n\
+         \x20 %next_addr = getelementptr i8, ptr %head, i64 8\n\
+         \x20 %next = load ptr, ptr %next_addr\n\
+         \x20 store ptr %next, ptr %head_addr\n\
+         \x20 %next_is_null = icmp eq ptr %next, null\n\
+         \x20 br i1 %next_is_null, label %clear_tail, label %skip_clear\n\
+         clear_tail:\n\
+         \x20 %tail_addr = getelementptr i8, ptr %q, i64 96\n\
+         \x20 store ptr null, ptr %tail_addr\n\
+         \x20 br label %skip_clear\n\
+         skip_clear:\n\
+         \x20 %unlock_r = call i32 @pthread_mutex_unlock(ptr %q)\n\
+         \x20 call void @free(ptr %head)\n\
+         \x20 ret i64 %word\n\
+         }\n\n",
+    );
+
+    // The non-blocking counterpart `select` polls with — a plain `try_
+    // lock`-free lock/check/unlock (this backend has no `pthread_mutex_
+    // trylock` precedent to reach for, and an ordinary blocking lock
+    // held only briefly is simplest and still correct: `select`'s OWN
+    // blocking behavior comes from its outer `usleep`-and-retry loop in
+    // codegen.rs, not from this function ever blocking). Returns `i1`
+    // (`1` = a value was popped into `%out`, `0` = the queue was empty
+    // at the moment of the check) rather than any richer result —
+    // there's no `Disconnected` case (see this module's own "documented
+    // behavioral gap" note in codegen.rs's `codegen_select`).
+    out.push_str(
+        "define i1 @plum_channel_try_recv(ptr %q, ptr %out) {\n\
+         entry:\n\
+         \x20 %lock_r = call i32 @pthread_mutex_lock(ptr %q)\n\
+         \x20 %head_addr = getelementptr i8, ptr %q, i64 88\n\
+         \x20 %head = load ptr, ptr %head_addr\n\
+         \x20 %is_null = icmp eq ptr %head, null\n\
+         \x20 br i1 %is_null, label %empty, label %pop\n\
+         empty:\n\
+         \x20 %unlock_empty_r = call i32 @pthread_mutex_unlock(ptr %q)\n\
+         \x20 ret i1 0\n\
+         pop:\n\
+         \x20 %word = load i64, ptr %head\n\
+         \x20 %next_addr = getelementptr i8, ptr %head, i64 8\n\
+         \x20 %next = load ptr, ptr %next_addr\n\
+         \x20 store ptr %next, ptr %head_addr\n\
+         \x20 %next_is_null = icmp eq ptr %next, null\n\
+         \x20 br i1 %next_is_null, label %clear_tail, label %skip_clear\n\
+         clear_tail:\n\
+         \x20 %tail_addr = getelementptr i8, ptr %q, i64 96\n\
+         \x20 store ptr null, ptr %tail_addr\n\
+         \x20 br label %skip_clear\n\
+         skip_clear:\n\
+         \x20 %unlock_r = call i32 @pthread_mutex_unlock(ptr %q)\n\
+         \x20 store i64 %word, ptr %out\n\
+         \x20 call void @free(ptr %head)\n\
+         \x20 ret i1 1\n\
+         }\n\n",
+    );
 
     out
 }
@@ -1030,6 +1297,17 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
     // anything pays zero cost (no extra declarations, no rejected
     // struct/enum shapes it never even touches through `spawn`).
     let needs_spawn_runtime = std::cell::RefCell::new(false);
+    // Set to `true` the first time codegen actually walks a `Channel`/
+    // `ChannelSend`/`ChannelRecv`/`Select` node (`codegen.rs`'s
+    // `codegen_channel_literal`/`codegen_channel_send`/`codegen_channel_
+    // recv`/`codegen_select`) — same "collect while emitting bodies,
+    // finalize after" shape as `needs_spawn_runtime`, gating the channel
+    // runtime (`emit_channel_runtime`) independently: a program that
+    // uses channels but never `spawn` still needs the channel-queue
+    // runtime (and the shared deep-copy runtime — see `emit_deepcopy_
+    // runtime`'s own doc comment) but NOT `pthread_create`/`pthread_
+    // join`, and vice versa.
+    let needs_channel_runtime = std::cell::RefCell::new(false);
 
     let mut bodies = String::new();
     for f in &program.functions {
@@ -1043,20 +1321,32 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
             &closure_defs,
             &trampolines,
             &needs_spawn_runtime,
+            &needs_channel_runtime,
         )?);
         bodies.push('\n');
     }
 
-    if *needs_spawn_runtime.borrow() {
+    // The whole-program closure/task-field rejection fires whenever
+    // EITHER spawn OR channels are used — a channel send can smuggle a
+    // closure/task three levels deep into an opaque `Heap` pointer
+    // exactly as easily as a spawn capture can (see `check_no_closure_
+    // or_task_fields`'s own doc comment).
+    if *needs_spawn_runtime.borrow() || *needs_channel_runtime.borrow() {
         check_no_closure_or_task_fields(tag_fields)?;
     }
 
     let needed_arrays = needed_arrays.into_inner();
     let mut out = emit_runtime(tag_fields, &tag_ids);
     out.push_str(&emit_array_release_fns(&needed_arrays));
-    if *needs_spawn_runtime.borrow() {
-        out.push_str(&emit_spawn_runtime(tag_fields, &tag_ids));
+    if *needs_spawn_runtime.borrow() || *needs_channel_runtime.borrow() {
+        out.push_str(&emit_deepcopy_runtime(tag_fields, &tag_ids));
         out.push_str(&emit_deepcopy_array_fns(&needed_arrays));
+    }
+    if *needs_spawn_runtime.borrow() {
+        out.push_str(&emit_spawn_pthread_decls());
+    }
+    if *needs_channel_runtime.borrow() {
+        out.push_str(&emit_channel_runtime());
     }
     // Every closure-literal-site-generated function/release function/
     // trampoline/spawn-entry-function, discovered while walking
@@ -1083,6 +1373,7 @@ fn emit_function(
     closure_defs: &std::cell::RefCell<Vec<String>>,
     trampolines: &std::cell::RefCell<HashMap<String, String>>,
     needs_spawn_runtime: &std::cell::RefCell<bool>,
+    needs_channel_runtime: &std::cell::RefCell<bool>,
 ) -> Result<String, String> {
     let sig = signatures
         .get(&f.name)
@@ -1107,6 +1398,7 @@ fn emit_function(
         closure_defs,
         trampolines,
         needs_spawn_runtime,
+        needs_channel_runtime,
     };
 
     let mut env = HashMap::new();
@@ -1147,7 +1439,7 @@ fn emit_function(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plum_ir::ir::{BinOp, Expr, Function, MatchArm, PrimTy, Program, RcOp, UnOp};
+    use plum_ir::ir::{BinOp, Expr, Function, MatchArm, PrimTy, Program, RcOp, SelectArm, UnOp};
 
     fn sigs(entries: &[(&str, Vec<CgType>, CgType)]) -> HashMap<String, FnSig> {
         entries
@@ -2352,5 +2644,256 @@ mod tests {
         let err = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new())
             .expect_err("expected a non-Task `.join()` target to be rejected");
         assert!(err.contains("Task"), "unexpected error: {err}");
+    }
+
+    // --- channels / select (this chunk) ---
+
+    /// `let (tx, rx) = channel[Int]()` — the exact shape `wrap_destructure`
+    /// lowers a channel destructure into: a `Let` binding a synthetic
+    /// name to `Expr::Channel`, whose `body` is a `Match` with a single
+    /// `"2Tuple"`-tagged arm binding `tx`/`rx` positionally.
+    fn channel_destructure_body(tail: Expr) -> Expr {
+        Expr::Let {
+            name: "__nested0".to_string(),
+            value: Box::new(Expr::Channel),
+            body: Box::new(Expr::Match {
+                scrutinee: Box::new(Expr::Var("__nested0".to_string())),
+                arms: vec![MatchArm {
+                    tag: "2Tuple".to_string(),
+                    bindings: vec!["tx".to_string(), "rx".to_string()],
+                    guard: None,
+                    body: tail,
+                }],
+            }),
+        }
+    }
+
+    fn int_channel_tags() -> TagFields {
+        tags(&[("2Tuple", vec![CgType::Sender(Box::new(CgType::Int)), CgType::Receiver(Box::new(CgType::Int))])])
+    }
+
+    #[test]
+    fn channel_creation_emits_mutex_and_cond_init_shape() {
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: channel_destructure_body(Expr::Int(0)),
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &int_channel_tags()).unwrap();
+        assert!(ir.contains("call ptr @plum_channel_new()"), "{ir}");
+        assert!(ir.contains("declare i32 @pthread_mutex_init(ptr, ptr)"), "{ir}");
+        assert!(ir.contains("declare i32 @pthread_cond_init(ptr, ptr)"), "{ir}");
+        // The queue struct's own init calls: mutex at offset 0 (the
+        // struct pointer itself), cond at offset 40.
+        assert!(ir.contains("call i32 @pthread_mutex_init(ptr %q, ptr null)"), "{ir}");
+        assert!(ir.contains("%cond = getelementptr i8, ptr %q, i64 40"), "{ir}");
+        assert!(ir.contains("call i32 @pthread_cond_init(ptr %cond, ptr null)"), "{ir}");
+    }
+
+    #[test]
+    fn send_of_a_heap_value_deep_copies_and_never_incs() {
+        // let go(p: Point): Int = { let (tx, rx) = channel[Point](); tx.send(p); 0 }
+        let body = Expr::Let {
+            name: "__nested0".to_string(),
+            value: Box::new(Expr::Channel),
+            body: Box::new(Expr::Match {
+                scrutinee: Box::new(Expr::Var("__nested0".to_string())),
+                arms: vec![MatchArm {
+                    tag: "2Tuple".to_string(),
+                    bindings: vec!["tx".to_string(), "rx".to_string()],
+                    guard: None,
+                    body: Expr::Let {
+                        name: "_s".to_string(),
+                        value: Box::new(Expr::ChannelSend {
+                            sender: Box::new(Expr::Var("tx".to_string())),
+                            value: Box::new(Expr::Var("p".to_string())),
+                        }),
+                        body: Box::new(Expr::Int(0)),
+                    },
+                }],
+            }),
+        };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec!["p".to_string()], body }]);
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Heap], CgType::Int)]),
+            &tags(&[
+                ("Point", vec![CgType::Int, CgType::Int]),
+                ("2Tuple", vec![CgType::Sender(Box::new(CgType::Heap)), CgType::Receiver(Box::new(CgType::Heap))]),
+            ]),
+        )
+        .unwrap();
+        assert!(ir.contains("call ptr @plum_deepcopy_heap(ptr %p)"), "{ir}");
+        assert!(!ir.contains("call void @plum_rc_inc(ptr %p)"), "{ir}");
+        assert!(ir.contains("call void @plum_channel_send("), "{ir}");
+    }
+
+    #[test]
+    fn sending_a_sender_over_another_channel_copies_the_pointer_verbatim() {
+        // A channel sent over another channel: `.send()`'s value is
+        // itself `Sender`-typed — must be the SAME verbatim pointer
+        // copy `deep_copy_capture` gives `spawn` captures, never a
+        // deep-copy call (there's nothing to `@plum_deepcopy_*` a
+        // channel handle THROUGH).
+        let body = Expr::Let {
+            name: "_s".to_string(),
+            value: Box::new(Expr::ChannelSend {
+                sender: Box::new(Expr::Var("outer_tx".to_string())),
+                value: Box::new(Expr::Var("inner_tx".to_string())),
+            }),
+            body: Box::new(Expr::Int(0)),
+        };
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["outer_tx".to_string(), "inner_tx".to_string()],
+            body,
+        }]);
+        let ir = emit(
+            &prog,
+            &sigs(&[(
+                "go",
+                vec![
+                    CgType::Sender(Box::new(CgType::Sender(Box::new(CgType::Int)))),
+                    CgType::Sender(Box::new(CgType::Int)),
+                ],
+                CgType::Int,
+            )]),
+            &TagFields::new(),
+        )
+        .unwrap();
+        assert!(ir.contains("call void @plum_channel_send(ptr %outer_tx, i64"), "{ir}");
+        assert!(!ir.contains("call ptr @plum_deepcopy_heap("), "{ir}");
+        assert!(!ir.contains("call ptr @plum_deepcopy_str("), "{ir}");
+        // The word sent is `%inner_tx` itself (`ptrtoint`), not the
+        // result of any copy function.
+        assert!(ir.contains("ptrtoint ptr %inner_tx to i64"), "{ir}");
+    }
+
+    #[test]
+    fn recv_emits_a_real_cond_wait_loop_with_no_second_deep_copy() {
+        // let go(rx: Receiver[Point]): Point = rx.recv()
+        let body = Expr::ChannelRecv { receiver: Box::new(Expr::Var("rx".to_string())) };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec!["rx".to_string()], body }]);
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Receiver(Box::new(CgType::Heap))], CgType::Heap)]),
+            &tags(&[("Point", vec![CgType::Int, CgType::Int])]),
+        )
+        .unwrap();
+        assert!(ir.contains("call i64 @plum_channel_recv(ptr %rx)"), "{ir}");
+        assert!(ir.contains("call i32 @pthread_cond_wait(ptr %cond, ptr %q)"), "{ir}");
+        // No deep-copy CALL anywhere in the whole program — `.recv()`
+        // adopts the popped word directly (see `codegen_channel_recv`'s
+        // own doc comment for the happens-before argument). The `@plum_
+        // deepcopy_heap` FUNCTION DEFINITION is still unconditionally
+        // emitted (same "small fixed runtime, always defined once
+        // needed" precedent `scalar_only_spawn_and_join_emits_pthread_
+        // calls_and_no_deepcopy_calls` already established for spawn) —
+        // only its absence as a CALL site is asserted here.
+        let go_start = ir.find("define ptr @go(").unwrap();
+        let go_body = &ir[go_start..];
+        assert!(!go_body.contains("call ptr @plum_deepcopy_heap("), "{go_body}");
+    }
+
+    #[test]
+    fn select_polls_arms_in_fixed_index_order_and_never_blocks() {
+        // select { rx0.recv() => 0, rx1.recv() => 1, rx2.recv() => 2 }
+        let arm = |rx: &str, n: i64| SelectArm { receiver: Expr::Var(rx.to_string()), body: Expr::Int(n) };
+        let body = Expr::Select { arms: vec![arm("rx0", 0), arm("rx1", 1), arm("rx2", 2)] };
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["rx0".to_string(), "rx1".to_string(), "rx2".to_string()],
+            body,
+        }]);
+        let recv_ty = CgType::Receiver(Box::new(CgType::Int));
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![recv_ty.clone(), recv_ty.clone(), recv_ty], CgType::Int)]),
+            &TagFields::new(),
+        )
+        .unwrap();
+        // Fixed index order: %rx0's try_recv call textually precedes
+        // %rx1's, which precedes %rx2's.
+        let i0 = ir.find("@plum_channel_try_recv(ptr %rx0").unwrap();
+        let i1 = ir.find("@plum_channel_try_recv(ptr %rx1").unwrap();
+        let i2 = ir.find("@plum_channel_try_recv(ptr %rx2").unwrap();
+        assert!(i0 < i1 && i1 < i2, "expected fixed arm-0/1/2 poll order:\n{ir}");
+        // A genuine busy-poll (usleep-and-retry) — never a blocking
+        // `pthread_cond_wait`, unlike `.recv()`. `@plum_channel_recv`
+        // (unused here) still gets DEFINED unconditionally as part of
+        // the small, fixed channel runtime — so this checks `go`'s OWN
+        // body never CALLS `pthread_cond_wait`, not that the substring
+        // never appears anywhere in the whole program's text.
+        assert!(ir.contains("call i32 @usleep(i32 1000)"), "{ir}");
+        let go_start = ir.find("define i64 @go(").unwrap();
+        let go_body = &ir[go_start..];
+        assert!(!go_body.contains("pthread_cond_wait"), "{go_body}");
+    }
+
+    #[test]
+    fn select_arm_1_being_the_ready_one_does_not_require_arm_0_specific_codegen() {
+        // Structural proxy for "the loop doesn't just always pick arm
+        // 0" (the actual RUNTIME proof is `plumc`'s own compile-and-run
+        // test) — asserts each arm's own body is reachable via its OWN
+        // matched block, not hardcoded to arm 0's.
+        let arm = |rx: &str, n: i64| SelectArm { receiver: Expr::Var(rx.to_string()), body: Expr::Int(n) };
+        let body = Expr::Select { arms: vec![arm("rx0", 10), arm("rx1", 20)] };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec!["rx0".to_string(), "rx1".to_string()], body }]);
+        let recv_ty = CgType::Receiver(Box::new(CgType::Int));
+        let ir = emit(&prog, &sigs(&[("go", vec![recv_ty.clone(), recv_ty], CgType::Int)]), &TagFields::new()).unwrap();
+        assert!(ir.contains("ret i64 10"), "{ir}");
+        assert!(ir.contains("ret i64 20"), "{ir}");
+    }
+
+    #[test]
+    fn sending_a_closure_on_a_channel_is_a_clear_error() {
+        // `f` (a Closure-typed param) is sent directly.
+        let body = Expr::Let {
+            name: "_s".to_string(),
+            value: Box::new(Expr::ChannelSend {
+                sender: Box::new(Expr::Var("tx".to_string())),
+                value: Box::new(Expr::Var("f".to_string())),
+            }),
+            body: Box::new(Expr::Int(0)),
+        };
+        let closure_ty = CgType::Closure(vec![], Box::new(CgType::Int));
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["tx".to_string(), "f".to_string()],
+            body,
+        }]);
+        let err = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Sender(Box::new(closure_ty.clone())), closure_ty], CgType::Int)]),
+            &TagFields::new(),
+        )
+        .expect_err("expected a closure-typed channel send to be rejected");
+        assert!(err.contains("send") && err.contains("thread boundary"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_struct_with_a_closure_field_is_rejected_when_only_channel_is_used_no_spawn() {
+        // Proves the OR-gating: `check_no_closure_or_task_fields` fires
+        // from the CHANNEL side even with no `spawn` anywhere in the
+        // program at all.
+        let body = Expr::ChannelRecv { receiver: Box::new(Expr::Var("rx".to_string())) };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec!["rx".to_string()], body }]);
+        let closure_ty = CgType::Closure(vec![], Box::new(CgType::Int));
+        let err = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Receiver(Box::new(CgType::Int))], CgType::Int)]),
+            &tags(&[("Holder", vec![closure_ty])]),
+        )
+        .expect_err("expected the whole program to be rejected even though only `channel` (no `spawn`) is used");
+        assert!(err.contains("Holder"), "unexpected error: {err}");
+        assert!(err.contains("closure") || err.contains("task"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_hand_built_zero_arm_select_is_a_defensive_error_never_a_panic() {
+        let prog = program(vec![Function { name: "go".to_string(), params: vec![], body: Expr::Select { arms: vec![] } }]);
+        let err = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new())
+            .expect_err("expected a zero-arm select to be a clear error, not a panic");
+        assert!(err.contains("zero arms"), "unexpected error: {err}");
     }
 }
