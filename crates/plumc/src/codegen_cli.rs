@@ -79,6 +79,19 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
         PlumType::Struct(name, args) if name == "Array" && args.len() == 1 => {
             Ok(CgType::Array(Box::new(plum_type_to_cg_type(&args[0])?)))
         }
+        // `Task[T]` — the SAME "builtin pseudo-generic `Type::Struct`"
+        // mechanism `Array[T]` already uses (see `plum_types::infer`'s
+        // own doc comments on `Type::Struct("Task", ..)`), mirrored
+        // here identically: without this arm, `Task[T]` would fall
+        // through to the `Struct(..)` wildcard arm below and collapse
+        // to plain `CgType::Heap` — indistinguishable from an ordinary
+        // struct at the LLVM level, which would be actively WRONG for
+        // a task handle (a `Heap` cell's first word is a refcount;
+        // `CgType::Task`'s cell's first word is a `joined` FLAG — see
+        // `CgType::Task`'s own doc comment in plum-codegen's lib.rs).
+        PlumType::Struct(name, args) if name == "Task" && args.len() == 1 => {
+            Ok(CgType::Task(Box::new(plum_type_to_cg_type(&args[0])?)))
+        }
         PlumType::Struct(..) | PlumType::Enum(..) => Ok(CgType::Heap),
         // A closure/function-typed signature position (a higher-order
         // function's parameter, most commonly) — `CgType::Closure`
@@ -91,7 +104,7 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
             Box::new(plum_type_to_cg_type(ret)?),
         )),
         other => Err(format!(
-            "codegen only supports Int/Float/Bool/Unit/Str/Array[T] or a non-generic struct/enum, found a \
+            "codegen only supports Int/Float/Bool/Unit/Str/Array[T]/Task[T] or a non-generic struct/enum, found a \
              signature involving {other:?}"
         )),
     }
@@ -298,6 +311,12 @@ pub fn reject_unprintable_return(entry_fn: &str, ret: CgType) -> Result<(), Stri
     if matches!(ret, CgType::Closure(..)) {
         return Err(format!(
             "codegen: {entry_fn:?} returns a closure-shaped value, which the compiled entry point can't print yet"
+        ));
+    }
+    if matches!(ret, CgType::Task(_)) {
+        return Err(format!(
+            "codegen: {entry_fn:?} returns a task-shaped value, which the compiled entry point can't print yet \
+             (call `.join()` on it inside the entry function itself instead)"
         ));
     }
     Ok(())
@@ -596,8 +615,8 @@ pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
         // function — see its own doc comment on why. Unreachable in
         // practice, kept as a defensive error (not a panic) rather than
         // silently producing garbage IR if that check is ever bypassed.
-        CgType::Heap | CgType::Array(_) | CgType::Closure(..) => {
-            return "; unreachable: compile_and_run rejects a Heap/Array/Closure-returning entry point before this point"
+        CgType::Heap | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+            return "; unreachable: compile_and_run rejects a Heap/Array/Closure/Task-returning entry point before this point"
                 .to_string()
         }
     };
@@ -694,6 +713,152 @@ mod tests {
     fn plain_arithmetic_compiles_and_runs() {
         let out = compile_and_run("let go () = 2 + 3 * 4", "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "14");
+    }
+
+    #[test]
+    fn simple_scalar_spawn_and_join_compiles_and_runs() {
+        let src = "let go (): Int = spawn { 1 + 41 }.join()";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "42");
+    }
+
+    #[test]
+    fn spawn_rejects_capturing_a_closure_across_the_thread_boundary() {
+        // A closure's captured environment is tied to the thread that
+        // created it — mirrors the interpreter's own `to_portable`
+        // rejection (`plum_interp::Interpreter::to_portable`'s `Value::
+        // Closure` arm). `add_one` is captured (used inside `block`),
+        // and its resolved type is `Closure`.
+        let src = "\
+            let go (): Int = {\n\
+              let add_one = |x: Int| x + 1;\n\
+              spawn { add_one(1) }.join()\n\
+            }\n\
+        ";
+        let err = compile_and_run(src, "go", &[CgValue::Unit])
+            .expect_err("expected a closure-typed spawn capture to be rejected at compile time");
+        assert!(err.contains("spawn") && err.contains("thread boundary"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn spawn_can_capture_one_heap_value_and_return_a_different_one_independently() {
+        // Proves capture-IN and return-OUT are handled completely
+        // independently: `p`'s deep copy crosses INTO the spawned
+        // thread, and a FRESH, unrelated `Point` (never touching the
+        // captured `p` at all) crosses back OUT via `.join()` — the
+        // task's own boxed result adoption (`codegen_task_join`) must
+        // not confuse or entangle the two directions.
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Int = {\n\
+              let p = Point { x: 10, y: 20 };\n\
+              let t = spawn { let _unused = p.x + p.y; Point { x: 100, y: 200 } };\n\
+              match t.join() { Point(a, b) => a + b }\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "300");
+    }
+
+    /// The crux correctness test's `-fsanitize=address` variant — same
+    /// program `spawn_many_tasks_each_capturing_a_distinct_heap_value_
+    /// sums_correctly_at_scale` below compiles, but linked against
+    /// ASan instead of plain `clang`, and RUN rather than just
+    /// compiled: ASan instruments every heap access at the machine-code
+    /// level, so if `spawn`'s deep-copy ever let two threads alias the
+    /// SAME allocation (a race on a non-atomic refcount word being
+    /// exactly the failure mode this whole feature exists to prevent —
+    /// see `deep_copy_capture`'s own doc comment in codegen.rs), or if
+    /// `.join()`'s cell/box frees ever double-freed or leaked past
+    /// what ASan tolerates, this would abort loudly with a diagnostic
+    /// and a non-zero exit rather than silently passing. `-fsanitize=
+    /// thread` (a true race detector) was also considered but doesn't
+    /// mix with `pthread_create`'s bare function-pointer ABI cleanly
+    /// without more TSan-specific runtime support than this backend
+    /// has any other precedent for pulling in — ASan's heap/use-after-
+    /// free/double-free detection is still a real, independent signal
+    /// beyond eyeballing the generated IR text, and was the one
+    /// explicitly suggested in the implementation plan.
+    #[test]
+    fn spawn_many_tasks_each_capturing_a_distinct_heap_value_sums_correctly_at_scale_under_asan() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let sum_one (n: Int): Int = { let p = Point { x: n, y: n * 2 }; let t = spawn { p.x + p.y }; t.join() }\n\
+            let go (): Int = { let mut acc = 0; for i in 0..1000 { acc = acc + sum_one(i); }; acc }\n\
+        ";
+        let (body_ir, signatures, resolved_entry) = compile_to_ir(src, "go").unwrap();
+        let sig = signatures.get(&resolved_entry).unwrap().clone();
+        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit]);
+        let full_ir = format!("{body_ir}\n{main_ir}");
+
+        let dir = unique_temp_dir("plumc-asan");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ll_path = dir.join("program.ll");
+        let bin_path = dir.join("program-asan");
+        std::fs::write(&ll_path, &full_ir).unwrap();
+
+        let compile = Command::new("clang")
+            .arg("-fsanitize=address")
+            .arg(&ll_path)
+            .arg("-o")
+            .arg(&bin_path)
+            .output()
+            .expect("could not run clang with -fsanitize=address");
+        if !compile.status.success() {
+            panic!(
+                "clang -fsanitize=address failed to compile the generated IR:\n{}",
+                String::from_utf8_lossy(&compile.stderr)
+            );
+        }
+
+        // `detect_leaks=0`: deliberately isolates genuine memory
+        // CORRUPTION (double-free, use-after-free, heap-buffer-overflow
+        // — real UB, exactly this test's actual purpose) from plain
+        // LEAKS. A `spawn` capture's deep copy is INTENTIONALLY never
+        // released once the entry function finishes with it — matching
+        // this codebase's own established "accepted leak, not a
+        // soundness gap" precedent already documented for `Assign`/
+        // `For`/closure-body captures elsewhere in `fbip.rs`/
+        // `codegen.rs` — so a leak-detection failure here would be
+        // EXPECTED, not a signal of anything new or unsound; see
+        // `emit_spawn_entry_fn`'s own doc comment for exactly why doing
+        // better would need real (currently absent) last-use analysis
+        // INSIDE a spawned block.
+        let run = Command::new(&bin_path)
+            .env("ASAN_OPTIONS", "detect_leaks=0")
+            .output()
+            .expect("failed to run the ASan-instrumented binary");
+        let stdout = String::from_utf8_lossy(&run.stdout).trim_end().to_string();
+        let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+        assert!(
+            run.status.success(),
+            "ASan-instrumented binary reported a failure (a real memory-safety bug, not a hang or timeout):\n\
+             stdout: {stdout}\nstderr: {stderr}"
+        );
+        assert!(!stderr.contains("ERROR: AddressSanitizer"), "ASan flagged an error:\n{stderr}");
+        let expected: i64 = (0..1000i64).map(|i| i + i * 2).sum();
+        assert_eq!(stdout, expected.to_string());
+    }
+
+    #[test]
+    fn spawn_many_tasks_each_capturing_a_distinct_heap_value_sums_correctly_at_scale() {
+        // The crux correctness test: 1000 tasks, each capturing its OWN
+        // distinct `Point` (a direct struct LITERAL — see `sum_one`'s
+        // own doc comment on why this matters for FBIP tracking) and
+        // returning a value DERIVED from it (not the captured value
+        // itself), joined and summed. If `spawn`'s deep-copy were ever
+        // wrong (e.g. sharing the original pointer instead of copying
+        // it), this would be exactly the shape to expose it: 1000
+        // concurrently-running threads all touching DIFFERENT `Point`
+        // cells that must never alias one another.
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let sum_one (n: Int): Int = { let p = Point { x: n, y: n * 2 }; let t = spawn { p.x + p.y }; t.join() }\n\
+            let go (): Int = { let mut acc = 0; for i in 0..1000 { acc = acc + sum_one(i); }; acc }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        let expected: i64 = (0..1000i64).map(|i| i + i * 2).sum();
+        assert_eq!(out, expected.to_string());
     }
 
     #[test]

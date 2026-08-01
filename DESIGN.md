@@ -1513,7 +1513,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1-v6 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration)
+### LLVM backend — v1-v7 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1547,15 +1547,18 @@ top-level function name used as a value (see "Closures" below), and —
 as of a further follow-on chunk — `For` (range- and array-based) and
 `Assign`, and therefore `.map()`/`.filter()`/`.fold()` (which desugar
 purely into `For`+`Assign`+ordinary `Call` — see "General array
-iteration" below). Still out of scope and producing a clear codegen
-error, never a panic: Unicode-aware string operations (`.runes()`,
-`.to_upper()`, `.to_lower()`, `.trim()`, `.replace()`, `.split()`), a
-closure literal inside a still-generic function's own body, an
-`Assign` inside a closure body writing back into an enclosing loop's
-carried variable (structurally out of reach of this backend's closure
-design, not merely unimplemented), an `Assign` reachable only through
-a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value position
-(e.g. `f({ sum = sum + 1; sum })` as a `Call` argument), concurrency,
+iteration" below), and — as of a further follow-on chunk — `spawn { block }`/
+`.join()` (real OS-thread concurrency; `Channel`/`ChannelSend`/
+`ChannelRecv`/`Select` remain deferred — see "Concurrency: spawn/join"
+below). Still out of scope and producing a clear codegen error, never
+a panic: Unicode-aware string operations (`.runes()`, `.to_upper()`,
+`.to_lower()`, `.trim()`, `.replace()`, `.split()`), a closure literal
+inside a still-generic function's own body, an `Assign` inside a
+closure body writing back into an enclosing loop's carried variable
+(structurally out of reach of this backend's closure design, not
+merely unimplemented), an `Assign` reachable only through a `Let`/
+`If`/`Match`/`RcAnnotated` used in an ordinary value position (e.g.
+`f({ sum = sum + 1; sum })` as a `Call` argument), channels/`select`,
 FFI (including `CStr`), non-constant `Global` initializers — and a
 generic instantiated at any of these still-unsupported types (e.g.
 `Box[Array[Str]]` once `.split()` is needed).
@@ -2053,6 +2056,105 @@ codegen's generated text. Default output path (no `-o`): the project
 directory's own basename, written to the current working directory
 (the `go build`/`cargo build --bin` convention), falling back to
 `"a.out"` if the directory has no filename component.
+
+**Concurrency: `spawn`/`.join()`** (channels/`select` deferred to a
+separate chunk). Real OS threads (`pthread_create`/`pthread_join` via
+libc declarations), matching the interpreter's own `std::thread`-based
+implementation and DESIGN.md's own "Scheduler — Open, deliberately
+sequenced last" decision (ship on plain OS threads first; a real
+green-thread scheduler is later performance work, not a v1
+requirement). Unlike most gaps documented elsewhere in this backend,
+a bug here would be a genuine data race/UB on a non-atomic refcount
+word, not merely an accepted leak — DESIGN.md's own "Implementation
+blocker: heap ownership across tasks" section decided a spawned task's
+captures cross via DEEP COPY specifically so no two threads ever touch
+the same non-atomic `i64 refcount` field; codegen preserves this
+exactly. A genuine simplification over the interpreter, confirmed
+directly rather than assumed: plum-interp needs a `PortableValue`
+serialization format because its own hand-rolled `Heap` (a
+`Vec<Option<HeapCell>>`) isn't thread-safe and each task needs a wholly
+separate one; plum-codegen has no such structure to begin with — every
+heap cell is an ordinary `malloc`'d pointer, and glibc's `malloc`/
+`free` are already thread-safe for concurrent allocation, so "deep
+copy" is simply: recursively allocate fresh cells via the same
+`@plum_alloc`/`@plum_alloc_str`/`@plum_alloc_array` functions already
+used everywhere else and copy data into them — no marshaling format
+needed at all.
+
+`CgType::Task(Box<CgType>)` is deliberately NEVER refcounted — FBIP's
+`is_syntactically_heap` never treats a `Task`-bound name as heap-
+tracked, so codegen matching that (`dec_fn_for` returns `None` for it)
+is required, not optional, or the two passes' assumptions would
+diverge into a real bug. The task cell is a plain, unrefcounted
+16-byte block (`{ i64 joined, i64 pthread_id }`), allocated via bare
+`@malloc`, not `@plum_alloc` — `pthread_t` is confirmed a plain 8-byte
+scalar on this platform (`unsigned long`), storing directly as an
+`i64` with no opaque-struct handling needed (this backend already ties
+itself to the local platform/ABI by shelling out to `clang`).
+
+Deep-copy runtime functions mirror `@plum_release_fields`'s existing
+runtime-tag-dispatch shape exactly (`@plum_deepcopy_heap`, emitted
+once per program, only if `spawn` is used anywhere) rather than
+inventing new dispatch — `CgType::Heap` is already opaque everywhere
+else in this backend, so deep-copying it already needs the same
+runtime tag chain. `@plum_deepcopy_str` allocates fresh + `memcpy`s
+(no recursion, strings have no nested heap fields); one
+`@plum_deepcopy_array_<mangled>` per distinct array element `CgType`
+actually captured, extending the existing `needed_arrays` discovery
+machinery already used for array release functions.
+
+A captured free variable whose `CgType` is `Closure(..)`/`Task(..)` —
+including nested inside an `Array` — is a clear compile-time `Err`,
+matching the interpreter's own restriction (`to_portable` rejects
+closures, bare function values, and other task handles as non-
+portable). `Ref[T]` needs no check: confirmed it has zero codegen
+representation today, so a `Ref`-typed value can never reach a live
+`Env` entry to begin with. A SEPARATE, deliberately conservative
+whole-program check rejects any program using `spawn` at all if ANY
+declared struct/enum anywhere has a closure/task-shaped field, even if
+that exact tag is never the one actually captured — necessary because
+`CgType::Heap` is opaque at the capture site (nothing there can see
+"which" struct a captured value actually is), so the only sound place
+to catch a deeply-nested closure/task field is a structural scan over
+every declared tag's fields, once, whenever `spawn` is used.
+
+One generated thread-entry function per `spawn` literal site
+(`@spawn$<fn>$<K>`, mirroring the closures chunk's per-literal-site
+precedent), with the exact `pthread_create` C ABI. `.join()` needs NO
+second deep-copy on the way out — a real simplification over the
+interpreter, justified by an explicit happens-before argument: the
+child's boxed result is exclusively owned by the child at return time
+(ordinary FBIP-correct return-value semantics), the child terminates
+immediately after, and `pthread_join` is a POSIX-guaranteed
+synchronization point — there is no window where two threads could
+concurrently touch the result box. The joiner simply adopts the
+returned pointer directly. A second `.join()` on the same handle is
+caught via the cell's own `joined` flag + a runtime abort (confirmed
+NOT statically enforced by `movecheck.rs` — codegen needs its own
+check).
+
+Verified via an actual `-fsanitize=address` run on a 1000-task scale
+test (not just inspected by eye) — this genuinely caught a real bug
+during implementation (a leaked spawn-args block, ~1000 leaked
+allocations, one per task) before it was fixed; after the fix, the
+same ASan run passes cleanly with leak detection specifically disabled
+to isolate corruption/UAF/double-free detection from plain leaks.
+
+**Known, deliberate, accepted leak** (not a soundness gap): a spawn
+capture's deep copy is never explicitly released once the entry
+function is done with it — `fbip.rs`'s `mark_last_uses` forces
+`live_after=true` for the whole walk into a `Spawn`'s block (mirroring
+`Closure`'s identical treatment), so no `Dec` is ever emitted for a
+captured name's uses inside it, and unlike a closure cell (whose
+release function eventually decrements its captures), a spawn's deep
+copies live only in the entry function's own registers with nothing to
+trigger their release. Fixing this needs real last-use analysis inside
+a spawned block (to distinguish "used, then releasable" from "returned
+directly as the block's own result" — e.g. `spawn { p }`, where an
+unconditional release would free the very cell about to be returned, a
+real use-after-free) — matches this codebase's repeatedly-established
+"accepted leak over unsoundness" precedent, deferred rather than
+attempted under this chunk's stated correctness priority.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck

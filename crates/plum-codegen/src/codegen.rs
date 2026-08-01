@@ -152,6 +152,14 @@ pub(crate) struct Ctx<'a> {
     /// (stateless) trampoline FUNCTION TEXT itself is shared/memoized).
     /// See `codegen_bare_fn_value`.
     pub(crate) trampolines: &'a std::cell::RefCell<HashMap<String, String>>,
+    /// Set to `true` the first time codegen actually walks a `Spawn`/
+    /// `TaskJoin` node — read by `lib.rs::emit_program` AFTER every
+    /// function body has been emitted to decide whether the spawn
+    /// runtime (`pthread_create`/`pthread_join` declarations, the
+    /// `@plum_deepcopy_*` functions) and the whole-program closure/task-
+    /// field rejection check are needed at all. Same shared-`RefCell`-
+    /// behind-`&Ctx` shape as `needed_arrays`, for the same reason.
+    pub(crate) needs_spawn_runtime: &'a std::cell::RefCell<bool>,
 }
 
 /// Registers `elem` (and any type it recursively contains) into
@@ -433,7 +441,7 @@ fn store_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, value: &str,
         // `Heap` — see `CgType::Str`/`Array`'s own doc comment for why
         // they're still distinct at the `CgType` level despite sharing
         // this exact store/load mechanism.
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -462,7 +470,7 @@ fn load_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, expected_ty: 
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -502,7 +510,7 @@ fn store_closure_capture(em: &mut Emitter, cell_ptr: &str, index: usize, value: 
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -530,7 +538,7 @@ fn load_closure_capture(em: &mut Emitter, cell_ptr: &str, index: usize, expected
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -686,7 +694,7 @@ fn store_array_elem(em: &mut Emitter, array_ptr: &str, index_reg: &str, value: &
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -713,7 +721,7 @@ fn load_array_elem(em: &mut Emitter, array_ptr: &str, index_reg: &str, expected_
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -1433,6 +1441,7 @@ fn emit_closure_body_fn(
         closure_counter: ctx.closure_counter,
         closure_defs: ctx.closure_defs,
         trampolines: ctx.trampolines,
+        needs_spawn_runtime: ctx.needs_spawn_runtime,
     };
     let (result, _) = codegen_expr(body, &env, &mut em, &inner_ctx, true)?;
     if result.is_some() {
@@ -1675,6 +1684,415 @@ fn emit_trampoline_fn(trampoline_name: &str, target_name: &str, sig: &FnSig) -> 
         call_args.join(", "),
         sig.ret.llvm_type(),
     )
+}
+
+// --- spawn / join ---
+//
+// Task cell layout: `{ i64 joined, i64 pthread_id }` — a plain, bare
+// 16-byte `@malloc`'d block, deliberately NOT allocated via `@plum_
+// alloc` and NOT refcounted at all (see `CgType::Task`'s own doc
+// comment in lib.rs — `dec_fn_for` returns `None` for it, matching
+// `plum_ir::fbip`'s `is_syntactically_heap` never treating a `spawn`-
+// bound name as heap-tracked). Byte offset 0 holds a `joined` flag
+// (`.join()`'s own double-join guard), byte offset 8 the raw
+// `pthread_t` value returned by `pthread_create` — see `emit_spawn_
+// runtime`'s (lib.rs) doc comment for why `pthread_t` is stored
+// directly as an `i64` rather than through any indirection.
+//
+// A spawned block's free variables are deep-copied (never `plum_rc_
+// inc`'d — see `deep_copy_capture`'s own doc comment for the exact
+// happens-before argument) into a plain, HEADER-FREE "spawn-args"
+// block (`spawn_arg_byte_offset`/`store_spawn_arg`/`load_spawn_arg`,
+// the `spawn` counterpart to `closure_field_byte_offset`/`store_
+// closure_capture`/`load_closure_capture` — header-free here since,
+// unlike a closure cell, nothing ever refcounts or releases a spawn-
+// args block: the ENTRY function that reads it back out is the sole
+// owner, and it's `free`'d once that function returns).
+
+/// The spawn-args-block counterpart to `field_byte_offset`/`closure_
+/// field_byte_offset` — no header at all (see this section's own doc
+/// comment), so capture slot `index` starts directly at byte `index*8`.
+fn spawn_arg_byte_offset(index: usize) -> i64 {
+    (index as i64) * 8
+}
+
+/// The spawn-args counterpart to `store_field_word`/`store_closure_
+/// capture` — same uniform-word conversion, at `spawn_arg_byte_
+/// offset`'s header-free offset.
+fn store_spawn_arg(em: &mut Emitter, block_ptr: &str, index: usize, value: &str, ty: CgType) {
+    let addr = em.fresh_reg();
+    em.push(format!("  {addr} = getelementptr i8, ptr {block_ptr}, i64 {}", spawn_arg_byte_offset(index)));
+    store_word(em, &addr, value, ty);
+}
+
+/// The spawn-args counterpart to `load_field_word`/`load_closure_
+/// capture` — see `store_spawn_arg`'s doc comment.
+fn load_spawn_arg(em: &mut Emitter, block_ptr: &str, index: usize, expected_ty: CgType) -> String {
+    let addr = em.fresh_reg();
+    em.push(format!("  {addr} = getelementptr i8, ptr {block_ptr}, i64 {}", spawn_arg_byte_offset(index)));
+    load_word(em, &addr, expected_ty)
+}
+
+/// Writes `value` into the single 64-bit word AT `addr` directly (no
+/// per-field offset computation — the caller already has the exact
+/// address), converting it to the same uniform word representation
+/// `store_field_word` uses. Factored out from `store_field_word`
+/// purely so `store_spawn_arg` and the spawn entry function's own
+/// result-boxing (`emit_spawn_entry_fn`) can share the conversion logic
+/// without going through a per-index offset computation that doesn't
+/// apply to either of them (a spawn-args slot's address is already
+/// computed via `spawn_arg_byte_offset`; the result box is a single
+/// bare word with no offset at all).
+fn store_word(em: &mut Emitter, addr: &str, value: &str, ty: CgType) {
+    let word = match ty {
+        CgType::Int => value.to_string(),
+        CgType::Bool | CgType::Unit => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = zext i1 {value} to i64"));
+            r
+        }
+        CgType::Float => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = bitcast double {value} to i64"));
+            r
+        }
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
+            r
+        }
+    };
+    em.push(format!("  store i64 {word}, ptr {addr}"));
+}
+
+/// The inverse of `store_word` — see that function's doc comment.
+fn load_word(em: &mut Emitter, addr: &str, expected_ty: CgType) -> String {
+    let word = em.fresh_reg();
+    em.push(format!("  {word} = load i64, ptr {addr}"));
+    match expected_ty {
+        CgType::Int => word,
+        CgType::Bool | CgType::Unit => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = trunc i64 {word} to i1"));
+            r
+        }
+        CgType::Float => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = bitcast i64 {word} to double"));
+            r
+        }
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
+            r
+        }
+    }
+}
+
+/// Whether a value of `ty` can ever legally cross a `spawn` boundary —
+/// `false` for a `Closure` or `Task` ANYWHERE inside `ty` (including
+/// nested inside an `Array`), matching the interpreter's own `to_
+/// portable` restriction exactly (`plum_interp::Interpreter::to_
+/// portable`'s `Value::Closure`/`Value::Function`/`Value::Task` arms).
+/// Checked recursively through `Array` — NOT through `Heap` (a struct/
+/// enum pointer is opaque at a capture site; that case is instead
+/// caught conservatively, whole-program, by `check_no_closure_or_task_
+/// fields` in lib.rs) — because an array's element type IS statically
+/// known here (unlike a struct's fields), so a `spawn` capturing an
+/// `Array[Closure]`-typed free variable is just as real a bug as
+/// capturing a bare closure directly: `deep_copy_capture` would
+/// otherwise emit a call to a per-element deep-copy function for a
+/// `Closure`/`Task` element that doesn't (and can't) meaningfully
+/// exist — see `crate::deepcopy_fn_for`'s own doc comment for why that
+/// function's `Closure`/`Task` arm is allowed to be a structurally
+/// unreachable stub rather than a real implementation.
+fn crosses_spawn_boundary(ty: &CgType) -> bool {
+    match ty {
+        CgType::Closure(..) | CgType::Task(_) => true,
+        CgType::Array(elem) => crosses_spawn_boundary(elem),
+        CgType::Int | CgType::Float | CgType::Bool | CgType::Unit | CgType::Heap | CgType::Str => false,
+    }
+}
+
+/// Deep-copies a captured free variable's value (already computed, in
+/// `reg`) into a form the spawned thread can safely own outright — a
+/// pure, READ-ONLY snapshot of `reg`'s cell (`@plum_deepcopy_heap`/
+/// `@plum_deepcopy_str`/`@plum_deepcopy_array_<mangled>`, all emitted
+/// once per program by `lib.rs::emit_spawn_runtime`/`emit_deepcopy_
+/// array_fns`), never a `plum_rc_inc` on the original. This is the
+/// crux correctness point of this whole feature: the SOURCE thread may
+/// still hold and use its own live reference to `reg` after this
+/// `spawn` returns (`plum_ir::fbip` forces `live_after=true` for
+/// exactly this reason — see `Expr::Spawn`'s own handling in fbip.rs).
+/// If the original pointer crossed unchanged, both threads could end up
+/// concurrently `plum_rc_inc`/`plum_rc_dec`-ing the SAME cell's non-
+/// atomic refcount word — genuine undefined behavior, exactly what
+/// DESIGN.md's "Implementation blocker: heap ownership across tasks"
+/// deep-copy decision exists to prevent. A scalar (`Int`/`Float`/
+/// `Bool`/`Unit`) needs no copy at all — its "word" already IS the
+/// whole value, nothing aliased between threads either way.
+fn deep_copy_capture(em: &mut Emitter, ctx: &Ctx, reg: &str, ty: &CgType) -> String {
+    match ty {
+        CgType::Heap => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call ptr @plum_deepcopy_heap(ptr {reg})"));
+            r
+        }
+        CgType::Str => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call ptr @plum_deepcopy_str(ptr {reg})"));
+            r
+        }
+        CgType::Array(elem) => {
+            register_array_elem(ctx, elem);
+            let mangled = elem.mangled();
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call ptr @plum_deepcopy_array_{mangled}(ptr {reg})"));
+            r
+        }
+        // Guaranteed unreachable — `crosses_spawn_boundary` already
+        // rejected any capture that could get here — but the match
+        // still needs to be total.
+        CgType::Closure(..) | CgType::Task(_) => reg.to_string(),
+        CgType::Int | CgType::Float | CgType::Bool | CgType::Unit => reg.to_string(),
+    }
+}
+
+/// Generates the per-`spawn`-literal-site thread-entry function
+/// `@spawn$<fn>$<K>(ptr %args) -> ptr` — the exact `pthread_create` C
+/// ABI (`void *(*)(void *)`, no wrapping needed since a spawned block
+/// takes no surface parameters of its own; `%args` is the header-free
+/// spawn-args block `codegen_spawn_literal` builds). Loads each capture
+/// back out by index (mirroring `emit_closure_body_fn`'s capture-
+/// loading loop, just against `load_spawn_arg`'s header-free offset
+/// instead of `load_closure_capture`'s), codegens `block` with
+/// `tail=false` (deliberately — its result needs to be BOXED, not
+/// directly `ret`'d, so there is no `ret <ty> %v` this could otherwise
+/// share with an ordinary function body), then boxes the result in a
+/// tiny separate `malloc`'d one-word cell and returns its pointer — the
+/// exact `void*` `pthread_join` hands back to the joiner. Returns the
+/// generated function TEXT alongside the block's own discovered
+/// `CgType` (there's no separate return-type annotation on `ir::Expr::
+/// Spawn` — unlike a closure literal, which carries `ret_type: Option
+/// <PrimTy>` — so the result type is simply whatever `codegen_expr`
+/// itself determines while generating this function's body, exactly
+/// like an ordinary top-level function's untyped `ir::Function` body).
+///
+/// KNOWN, DELIBERATE, ACCEPTED LEAK: a heap-shaped capture's deep copy
+/// is never explicitly released once `block` is done with it — `plum_
+/// ir::fbip`'s `mark_last_uses` forces `live_after=true` for the whole
+/// recursive walk into a `Spawn`'s `block` (see that function's own
+/// `Expr::Spawn` arm), so NO `RcAnnotated::Dec` is ever emitted for a
+/// captured name's uses inside `block` at all — the exact same
+/// suppression `Closure` bodies already get (matching THEIR own
+/// already-accepted "a captured heap value's precise last-use inside a
+/// closure body isn't tracked either" gap). Unlike a closure, there's
+/// no cell-level release mechanism to eventually catch it either (a
+/// closure's captures get released when the closure CELL itself hits
+/// refcount zero; a spawn's deep-copied captures live only in this
+/// entry function's own registers, which simply vanish when it
+/// returns). Correctly fixing this would need real last-use analysis
+/// INSIDE a spawned block (distinguishing "captured value used, then
+/// genuinely done with it" from "captured value returned/aliased into
+/// the result," e.g. `spawn { p }` — where releasing `p` unconditionally
+/// after computing the block's result would free the very cell about
+/// to be boxed and returned, a real use-after-free) — real, currently-
+/// absent work, not attempted here. Matches this codebase's own
+/// established "accepted leak over unsoundness" precedent (`Assign`/
+/// `For`/closure-body captures already documented the same way
+/// elsewhere) — a leak, never a double-free/use-after-free/data race.
+fn emit_spawn_entry_fn(fn_name: &str, captures: &[(String, CgType)], block: &Expr, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let mut em = Emitter::new();
+    let mut env: Env = HashMap::new();
+    for (i, (name, ty)) in captures.iter().enumerate() {
+        let val = load_spawn_arg(&mut em, "%args", i, ty.clone());
+        env.insert(name.clone(), (val, ty.clone()));
+    }
+    // The spawn-args block itself (see this section's module doc
+    // comment) is `free`d here, immediately after every capture has
+    // been loaded out of it — safe because every loaded value is
+    // already its own independent word/pointer in a register by this
+    // point (freeing the BLOCK that used to hold a pointer's bytes
+    // never affects whatever that pointer itself still points to).
+    // Never allocated at all when there were zero captures, so nothing
+    // to free in that case either (see `codegen_spawn_literal`).
+    if !captures.is_empty() {
+        em.push("  call void @free(ptr %args)".to_string());
+    }
+    // `caller_sig` only matters for deciding `musttail` eligibility on a
+    // tail-position `Call` (see `Ctx::caller_sig`'s own doc comment) —
+    // irrelevant here since `block` is always codegen'd with
+    // `tail=false` below, so its own tail-position `Call`s (if any)
+    // never reach `codegen_expr`'s `tail=true` arm at all. A throwaway
+    // placeholder signature is therefore always safe.
+    let dummy_sig = FnSig { params: vec![], ret: CgType::Unit };
+    let inner_ctx = Ctx {
+        sigs: ctx.sigs,
+        caller_sig: &dummy_sig,
+        tag_ids: ctx.tag_ids,
+        tag_fields: ctx.tag_fields,
+        fn_name,
+        needed_arrays: ctx.needed_arrays,
+        closure_counter: ctx.closure_counter,
+        closure_defs: ctx.closure_defs,
+        trampolines: ctx.trampolines,
+        needs_spawn_runtime: ctx.needs_spawn_runtime,
+    };
+    let (result, _) = codegen_expr(block, &env, &mut em, &inner_ctx, false)?;
+    let (reg, ty) = result.ok_or_else(|| {
+        "internal codegen error: codegen_expr with tail=false should always return Some (spawn block)".to_string()
+    })?;
+
+    let box_ptr = em.fresh_reg();
+    em.push(format!("  {box_ptr} = call ptr @malloc(i64 8)"));
+    store_word(&mut em, &box_ptr, &reg, ty.clone());
+    em.push(format!("  ret ptr {box_ptr}"));
+
+    let mut out = String::new();
+    for g in &em.string_globals {
+        out.push_str(g);
+        out.push('\n');
+    }
+    out.push_str(&format!("define ptr @{fn_name}(ptr %args) {{\n"));
+    for line in &em.lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("}\n");
+    Ok((out, ty))
+}
+
+/// Codegens a `spawn { block }` literal into `(task_cell_ptr, CgType::
+/// Task(result_ty))`. Free-variable analysis mirrors `codegen_closure_
+/// literal`'s (`free_vars` against the current `env`), but every
+/// capture is DEEP-COPIED (`deep_copy_capture`) into a plain, header-
+/// free "spawn-args" block rather than stored with a `plum_rc_inc` the
+/// way a closure capture is — see `deep_copy_capture`'s own doc comment
+/// for the exact correctness argument. A closure/task-typed (possibly
+/// nested inside an array) free variable is a clear, immediate `Err`
+/// here (`crosses_spawn_boundary`), matching the interpreter's own
+/// restriction. `pthread_create`'s out-parameter (`pthread_t *thread`)
+/// needs a real memory address to write into — `alloca i64` (this
+/// backend's existing, established precedent for a C-ABI-mandated
+/// scratch slot, see e.g. `.to_string()`'s `snprintf` buffer).
+fn codegen_spawn_literal(block: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    *ctx.needs_spawn_runtime.borrow_mut() = true;
+
+    let mut free = BTreeSet::new();
+    free_vars(block, env, &mut free);
+    let mut captures: Vec<(String, CgType, String)> = Vec::with_capacity(free.len());
+    for name in free {
+        let (reg, ty) = env
+            .get(&name)
+            .cloned()
+            .ok_or_else(|| format!("codegen: unbound variable {name:?} (spawn capture)"))?;
+        if crosses_spawn_boundary(&ty) {
+            return Err(format!(
+                "codegen: `spawn` cannot capture {name:?} — its type ({ty:?}) can't cross a thread boundary \
+                 (a closure's captured environment and a task handle are both tied to the thread that \
+                 created them, so there's nothing meaningful to deep-copy), matching the interpreter's own \
+                 restriction (see `plum_interp::Interpreter::to_portable`)"
+            ));
+        }
+        captures.push((name, ty, reg));
+    }
+
+    let k = {
+        let mut c = ctx.closure_counter.borrow_mut();
+        let k = *c;
+        *c += 1;
+        k
+    };
+    let fn_name = format!("spawn${}${}", ctx.fn_name, k);
+    let capture_tys: Vec<(String, CgType)> = captures.iter().map(|(n, t, _)| (n.clone(), t.clone())).collect();
+    let (entry_def, result_ty) = emit_spawn_entry_fn(&fn_name, &capture_tys, block, ctx)?;
+    ctx.closure_defs.borrow_mut().push(entry_def);
+
+    let args_ptr = if captures.is_empty() {
+        "null".to_string()
+    } else {
+        let ab = em.fresh_reg();
+        em.push(format!("  {ab} = call ptr @malloc(i64 {})", captures.len() * 8));
+        for (i, (_, ty, reg)) in captures.iter().enumerate() {
+            let copied = deep_copy_capture(em, ctx, reg, ty);
+            store_spawn_arg(em, &ab, i, &copied, ty.clone());
+        }
+        ab
+    };
+
+    // `pthread_create`'s own `i32` return value is deliberately not
+    // checked (an out-of-threads/out-of-memory failure) — matching
+    // this backend's existing precedent of never checking `@malloc`'s
+    // return either (see e.g. `@plum_alloc`'s own body in lib.rs);
+    // both are treated as "the process is already in real trouble,"
+    // not a recoverable Plum-level condition.
+    let tid_slot = em.fresh_reg();
+    em.push(format!("  {tid_slot} = alloca i64"));
+    let created = em.fresh_reg();
+    em.push(format!("  {created} = call i32 @pthread_create(ptr {tid_slot}, ptr null, ptr @{fn_name}, ptr {args_ptr})"));
+    let tid = em.fresh_reg();
+    em.push(format!("  {tid} = load i64, ptr {tid_slot}"));
+
+    let cell = em.fresh_reg();
+    em.push(format!("  {cell} = call ptr @malloc(i64 16)"));
+    em.push(format!("  store i64 0, ptr {cell}"));
+    let tid_addr = em.fresh_reg();
+    em.push(format!("  {tid_addr} = getelementptr i8, ptr {cell}, i64 8"));
+    em.push(format!("  store i64 {tid}, ptr {tid_addr}"));
+
+    Ok((cell, CgType::Task(Box::new(result_ty))))
+}
+
+/// Codegens `task.join()` — see this section's own doc comment for the
+/// task cell layout. The double-join guard (`emit_runtime_check`, the
+/// SAME abort-on-failure mechanism array/string bounds checks already
+/// use) reads then immediately overwrites the `joined` flag; ordering
+/// between the check and the mark doesn't matter for THREAD safety
+/// (task handles are never `Send`-able to begin with — see `crosses_
+/// spawn_boundary` — so only ONE thread ever holds a given handle,
+/// exactly like the interpreter's `TaskHandle`). `pthread_join` is a
+/// POSIX-guaranteed happens-before synchronization point: everything
+/// the child thread did (including its own `emit_spawn_entry_fn`-
+/// generated final `store` into the result box) is guaranteed visible
+/// to this thread once `pthread_join` returns, and the child has
+/// already TERMINATED by then — so there is no window where the two
+/// threads could concurrently touch the result box or anything it
+/// points to. This is exactly why `.join()` needs NO second deep-copy
+/// on the way out (unlike the interpreter, which is forced into one
+/// purely by its own separate-heap-per-task structure — codegen's
+/// shared, thread-safe `malloc` arena has no such constraint): the
+/// result is simply adopted directly.
+fn codegen_task_join(task: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (task_reg, task_ty) = codegen_value(task, env, em, ctx)?;
+    let CgType::Task(result_ty) = task_ty else {
+        return Err(format!("codegen: `.join()` requires a Task value, found {task_ty:?}"));
+    };
+    *ctx.needs_spawn_runtime.borrow_mut() = true;
+
+    let joined = em.fresh_reg();
+    em.push(format!("  {joined} = load i64, ptr {task_reg}"));
+    let not_joined = em.fresh_reg();
+    em.push(format!("  {not_joined} = icmp eq i64 {joined}, 0"));
+    emit_runtime_check(em, ctx, &not_joined, "task already joined");
+    em.push(format!("  store i64 1, ptr {task_reg}"));
+
+    let tid_addr = em.fresh_reg();
+    em.push(format!("  {tid_addr} = getelementptr i8, ptr {task_reg}, i64 8"));
+    let tid = em.fresh_reg();
+    em.push(format!("  {tid} = load i64, ptr {tid_addr}"));
+
+    let retval_slot = em.fresh_reg();
+    em.push(format!("  {retval_slot} = alloca ptr"));
+    let jr = em.fresh_reg();
+    em.push(format!("  {jr} = call i32 @pthread_join(i64 {tid}, ptr {retval_slot})"));
+    let box_ptr = em.fresh_reg();
+    em.push(format!("  {box_ptr} = load ptr, ptr {retval_slot}"));
+
+    let result = load_word(em, &box_ptr, (*result_ty).clone());
+    em.push(format!("  call void @free(ptr {box_ptr})"));
+    em.push(format!("  call void @free(ptr {task_reg})"));
+
+    Ok((result, *result_ty))
 }
 
 /// Shared callee-resolution + call-emission logic for BOTH `codegen_
@@ -2498,6 +2916,8 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         Expr::Closure { params, param_types, ret_type, body } => {
             codegen_closure_literal(params, param_types, ret_type, body, env, em, ctx, None)
         }
+        Expr::Spawn { block } => codegen_spawn_literal(block, env, em, ctx),
+        Expr::TaskJoin { task } => codegen_task_join(task, env, em, ctx),
         other => Err(format!("codegen does not yet support this construct: {other:?}")),
     }
 }

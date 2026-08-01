@@ -41,6 +41,20 @@ use std::collections::HashMap;
 /// `CgType::Closure(params, ret)`-typed value at a control-flow join) —
 /// see `codegen.rs`'s module doc comment for how release is instead
 /// resolved via a function pointer stored IN the heap cell itself.
+/// `Task` (added for `spawn`/`.join()`) is ALSO `ptr` at the LLVM
+/// level, but — unlike every other variant here — is DELIBERATELY
+/// NEVER refcounted: `plum_ir::fbip`'s `is_syntactically_heap` never
+/// treats a `spawn`-bound name as heap-tracked (a `spawn` block's
+/// result crosses via a fresh deep copy, never a shared pointer two
+/// threads could race an `Inc`/`Dec` on — see DESIGN.md's Concurrency
+/// section), so `dec_fn_for` below returns `None` for it, matching
+/// FBIP's own assumption exactly. Carries the block's own result
+/// `CgType` (like `Closure` carries its param/return types) purely so
+/// `.join()`'s codegen knows how to unbox the single-word result it
+/// gets back from the joined thread — the task CELL itself stays
+/// completely opaque about it at the LLVM level (a plain 16-byte
+/// `{ i64 joined, i64 pthread_id }` block, see `codegen.rs`'s
+/// `codegen_spawn_literal`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CgType {
     Int,
@@ -51,6 +65,7 @@ pub enum CgType {
     Str,
     Array(Box<CgType>),
     Closure(Vec<CgType>, Box<CgType>),
+    Task(Box<CgType>),
 }
 
 impl CgType {
@@ -59,7 +74,7 @@ impl CgType {
             CgType::Int => "i64",
             CgType::Float => "double",
             CgType::Bool | CgType::Unit => "i1",
-            CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) => "ptr",
+            CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) => "ptr",
         }
     }
 
@@ -90,6 +105,17 @@ impl CgType {
             // `Array[Closure]` element never needs to know what that
             // closure's own call signature was.
             CgType::Closure(..) => "Closure".to_string(),
+            // Never actually reached by any LIVE deep-copy/release call
+            // (a `Task` can never cross a `spawn` boundary at all — see
+            // `CgType::Task`'s own doc comment — so an
+            // `Array[Task[_]]` element's mangled name is only ever
+            // needed to keep `emit_array_release_fns`/`emit_deepcopy_
+            // array_fns` TOTAL over whatever `needed_arrays` happens to
+            // contain program-wide, never because a real call site
+            // targets it), but still needs a well-formed, distinct name
+            // per inner type so two different `Array[Task[T]]` shapes
+            // don't collide.
+            CgType::Task(inner) => format!("Task_{}", inner.mangled()),
         }
     }
 }
@@ -139,6 +165,14 @@ fn dec_fn_for(ty: &CgType) -> Option<String> {
         // function works here where every OTHER heap kind needs a
         // shape-specific (or at least element-type-specific) one.
         CgType::Closure(..) => Some("@plum_rc_dec_closure".to_string()),
+        // Deliberately `None`, matching `is_syntactically_heap` in
+        // `plum_ir::fbip` — see `CgType::Task`'s own doc comment. If
+        // this ever returned `Some(..)`, `RcAnnotated`'s `Inc`/`Dec`
+        // codegen (`codegen.rs`) would corrupt a task cell's `joined`
+        // word (byte offset 0) by treating it as a refcount — this
+        // `None` is exactly what keeps that word forever untouched by
+        // anything except `.join()`'s own explicit check.
+        CgType::Task(_) => None,
     }
 }
 
@@ -675,6 +709,237 @@ fn emit_array_release_fns(needed: &HashMap<String, CgType>) -> String {
     out
 }
 
+/// The deep-copy counterpart to `dec_fn_for` — which runtime function
+/// (if any) recursively snapshots a value of `ty` into a FRESH cell,
+/// rather than decrementing an existing one. `None` means "just copy
+/// the raw word as-is" (correct for a scalar, where the word already
+/// IS the whole value — no separate cell to copy at all). `Closure`/
+/// `Task` map to `None` too, but for a completely different reason:
+/// they can NEVER actually be captured across a `spawn` boundary in a
+/// well-typed program (rejected at the capture site by `codegen.rs`'s
+/// `crosses_spawn_boundary`, and — for a nested struct/enum field —
+/// by `check_no_closure_or_task_fields` below, run before this
+/// function's callers ever emit a single deep-copy call). This arm
+/// only exists so `deepcopy_fn_for` stays TOTAL over `CgType` at all
+/// (`needed_arrays`, which `emit_deepcopy_array_fns` iterates, is a
+/// whole-PROGRAM set — it can perfectly well contain an `Array
+/// [Closure]` entry for a reason that has nothing to do with `spawn`
+/// at all, e.g. an ordinary higher-order-function signature elsewhere
+/// in the same program) — the resulting "deep-copy" function for such
+/// an element type is never actually CALLED by any real capture site,
+/// so its (incorrect, shallow) behavior is permanently dead code, not
+/// a live correctness gap.
+fn deepcopy_fn_for(ty: &CgType) -> Option<String> {
+    match ty {
+        CgType::Int | CgType::Float | CgType::Bool | CgType::Unit => None,
+        CgType::Heap => Some("@plum_deepcopy_heap".to_string()),
+        CgType::Str => Some("@plum_deepcopy_str".to_string()),
+        CgType::Array(elem) => Some(format!("@plum_deepcopy_array_{}", elem.mangled())),
+        CgType::Closure(..) | CgType::Task(_) => None,
+    }
+}
+
+/// `pthread_create`/`pthread_join`'s C declarations, plus the deep-copy
+/// runtime `spawn` needs to snapshot a captured free variable into the
+/// spawned thread's own, wholly separate allocation — emitted ONLY when
+/// `Ctx::needs_spawn_runtime` (`codegen.rs`) observed at least one real
+/// `Spawn`/`TaskJoin` node during body codegen (see `emit_program`'s own
+/// call site). `pthread_t` is confirmed a plain 8-byte scalar
+/// (`unsigned long`) on this platform (verified directly via `sizeof
+/// (pthread_t)`, not assumed) — this backend already ties itself to the
+/// local platform/ABI by shelling out to `clang` (see DESIGN.md's
+/// "Implementation plan"), same precedent as every other libc-behavior
+/// dependency accepted elsewhere, so declaring it as a plain `i64`
+/// rather than an opaque struct is safe here. `@plum_deepcopy_heap`
+/// mirrors `@plum_release_fields`'s exact runtime-tag-dispatch shape —
+/// same `icmp`-chain over the SAME `tag_ids`, just allocating a fresh
+/// cell and recursively deep-copying each heap-shaped field (via
+/// `deepcopy_fn_for`) instead of decrementing it. `@plum_deepcopy_str`
+/// allocates fresh + `memcpy`s bytes — strings have no nested heap
+/// fields, so (unlike `@plum_deepcopy_heap`) this needs no recursion at
+/// all, mirroring `@plum_rc_dec_str`'s own equally-simple shape.
+fn emit_spawn_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> String {
+    let mut out = String::new();
+    out.push_str("declare i32 @pthread_create(ptr, ptr, ptr, ptr)\n");
+    out.push_str("declare i32 @pthread_join(i64, ptr)\n\n");
+
+    out.push_str(
+        "define ptr @plum_deepcopy_str(ptr %p) {\n\
+         entry:\n\
+         \x20 %len_addr = getelementptr i8, ptr %p, i64 8\n\
+         \x20 %len = load i64, ptr %len_addr\n\
+         \x20 %new = call ptr @plum_alloc_str(i64 %len)\n\
+         \x20 %dst = getelementptr i8, ptr %new, i64 16\n\
+         \x20 %src = getelementptr i8, ptr %p, i64 16\n\
+         \x20 call ptr @memcpy(ptr %dst, ptr %src, i64 %len)\n\
+         \x20 ret ptr %new\n\
+         }\n\n",
+    );
+
+    // Same sequential `icmp`+`br` tag-dispatch chain as `plum_release_
+    // fields` (see that function's own doc comment for why: `Match`-
+    // style, not an LLVM `switch`) — but each matched block ALLOCATES a
+    // fresh cell (`@plum_alloc`, same allocator every OTHER `Ctor`
+    // construction in this backend uses) and copies/recursively-deep-
+    // copies each field into it, rather than decrementing. The `done`
+    // block `phi`-merges whichever tag's block actually ran; if
+    // `tag_fields` is empty (no struct/enum declared at all — this
+    // function would then never actually be CALLED, since there'd be
+    // no `Heap`-typed value in the whole program to capture), `done` is
+    // genuinely unreachable, so it's `unreachable` rather than a bogus
+    // `ret` with nothing to return.
+    out.push_str("define ptr @plum_deepcopy_heap(ptr %p) {\nentry:\n  %tag_addr = getelementptr i8, ptr %p, i64 8\n  %tag = load i64, ptr %tag_addr\n  br label %check0\n");
+    let mut names: Vec<&String> = tag_fields.keys().collect();
+    names.sort();
+    let mut phi_parts = Vec::new();
+    for (i, name) in names.iter().enumerate() {
+        let id = tag_ids[*name];
+        let field_types = &tag_fields[*name];
+        let check_label = format!("check{i}");
+        let body_label = format!("copy{i}");
+        // Unlike `plum_release_fields` (a `void` function, where the
+        // last check's "no match" edge can harmlessly fall straight
+        // into `done`), `done` HERE needs an actual `ptr` value on
+        // EVERY incoming edge for its `phi` to be well-formed — so the
+        // last check's failure edge goes to a dedicated `no_match`
+        // block instead (`unreachable`, since a well-typed program's
+        // runtime tag always matches ONE of these known tags), not
+        // `done` directly.
+        let next_label = if i + 1 < names.len() { format!("check{}", i + 1) } else { "no_match".to_string() };
+        out.push_str(&format!(
+            "{check_label}:\n  %m{i} = icmp eq i64 %tag, {id}\n  br i1 %m{i}, label %{body_label}, label %{next_label}\n"
+        ));
+        out.push_str(&format!("{body_label}:\n  %new{i} = call ptr @plum_alloc(i64 {id}, i64 {})\n", field_types.len()));
+        for (field_idx, field_ty) in field_types.iter().enumerate() {
+            let offset = 16 + field_idx as i64 * 8;
+            out.push_str(&format!(
+                "  %f{i}_{field_idx}_addr = getelementptr i8, ptr %p, i64 {offset}\n  \
+                 %f{i}_{field_idx}_word = load i64, ptr %f{i}_{field_idx}_addr\n"
+            ));
+            let new_word = match deepcopy_fn_for(field_ty) {
+                None => format!("%f{i}_{field_idx}_word"),
+                Some(copy_fn) => {
+                    out.push_str(&format!(
+                        "  %f{i}_{field_idx}_ptr = inttoptr i64 %f{i}_{field_idx}_word to ptr\n  \
+                         %f{i}_{field_idx}_copy = call ptr {copy_fn}(ptr %f{i}_{field_idx}_ptr)\n  \
+                         %f{i}_{field_idx}_copyword = ptrtoint ptr %f{i}_{field_idx}_copy to i64\n"
+                    ));
+                    format!("%f{i}_{field_idx}_copyword")
+                }
+            };
+            let new_addr = format!("%new{i}_{field_idx}_addr");
+            out.push_str(&format!(
+                "  {new_addr} = getelementptr i8, ptr %new{i}, i64 {offset}\n  \
+                 store i64 {new_word}, ptr {new_addr}\n"
+            ));
+        }
+        out.push_str(&format!("  br label %done\n"));
+        phi_parts.push(format!("[ %new{i}, %{body_label} ]"));
+    }
+    if names.is_empty() {
+        out.push_str("check0:\n  unreachable\ndone:\n  unreachable\n}\n\n");
+    } else {
+        out.push_str("no_match:\n  unreachable\n");
+        out.push_str(&format!("done:\n  %result = phi ptr {}\n  ret ptr %result\n}}\n\n", phi_parts.join(", ")));
+    }
+
+    out
+}
+
+/// One `@plum_deepcopy_array_<mangled>` deep-copy function per DISTINCT
+/// array element `CgType` in `needed` — the deep-copy counterpart to
+/// `emit_array_release_fns`, reusing the SAME `needed_arrays` discovery
+/// set (see that function's own doc comment for why one function per
+/// element type, not a single runtime-dispatched one, is both possible
+/// and simplest here). A scalar element type needs only a flat
+/// `memcpy` of the whole element region (correct: a scalar's "deep
+/// copy" IS just copying its bytes, no separate cell to recurse into —
+/// same reasoning `deepcopy_fn_for`'s `None` case documents). A heap-
+/// shaped element type needs a counted loop deep-copying each element
+/// individually via the appropriate `@plum_deepcopy_*` function, mirror-
+/// ing `emit_array_release_fns`'s own release loop exactly, just
+/// allocating+copying instead of decrementing.
+fn emit_deepcopy_array_fns(needed: &HashMap<String, CgType>) -> String {
+    let mut out = String::new();
+    let mut names: Vec<&String> = needed.keys().collect();
+    names.sort();
+    for mangled in names {
+        let elem = &needed[mangled];
+        let name = format!("plum_deepcopy_array_{mangled}");
+        out.push_str(&format!("define ptr @{name}(ptr %p) {{\n"));
+        out.push_str("entry:\n");
+        out.push_str("  %len_addr = getelementptr i8, ptr %p, i64 8\n");
+        out.push_str("  %len = load i64, ptr %len_addr\n");
+        out.push_str("  %new = call ptr @plum_alloc_array(i64 %len)\n");
+        match deepcopy_fn_for(elem) {
+            Some(elem_copy_fn) => {
+                out.push_str("  br label %loop_check\n");
+                out.push_str("loop_check:\n");
+                out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_body ]\n");
+                out.push_str("  %continue = icmp slt i64 %i, %len\n");
+                out.push_str("  br i1 %continue, label %loop_body, label %after_loop\n");
+                out.push_str("loop_body:\n");
+                out.push_str("  %word_off = mul i64 %i, 8\n");
+                out.push_str("  %byte_off = add i64 %word_off, 16\n");
+                out.push_str("  %elem_addr = getelementptr i8, ptr %p, i64 %byte_off\n");
+                out.push_str("  %elem_word = load i64, ptr %elem_addr\n");
+                out.push_str("  %elem_ptr = inttoptr i64 %elem_word to ptr\n");
+                out.push_str(&format!("  %elem_copy = call ptr {elem_copy_fn}(ptr %elem_ptr)\n"));
+                out.push_str("  %elem_copyword = ptrtoint ptr %elem_copy to i64\n");
+                out.push_str("  %new_elem_addr = getelementptr i8, ptr %new, i64 %byte_off\n");
+                out.push_str("  store i64 %elem_copyword, ptr %new_elem_addr\n");
+                out.push_str("  %i_next = add i64 %i, 1\n");
+                out.push_str("  br label %loop_check\n");
+                out.push_str("after_loop:\n");
+                out.push_str("  ret ptr %new\n");
+            }
+            None => {
+                out.push_str("  %bytes = mul i64 %len, 8\n");
+                out.push_str("  %src = getelementptr i8, ptr %p, i64 16\n");
+                out.push_str("  %dst = getelementptr i8, ptr %new, i64 16\n");
+                out.push_str("  call ptr @memcpy(ptr %dst, ptr %src, i64 %bytes)\n");
+                out.push_str("  ret ptr %new\n");
+            }
+        }
+        out.push_str("}\n\n");
+    }
+    out
+}
+
+/// The conservative, whole-PROGRAM structural check backing `spawn`'s
+/// deep-copy correctness: if the program uses `spawn` ANYWHERE, no
+/// declared struct/enum may have a closure- or task-typed field
+/// ANYWHERE, even in one never actually captured by any `spawn` site.
+/// Needed because `Heap` is opaque at a `spawn` capture site (`codegen.
+/// rs`'s `crosses_spawn_boundary` can reject a DIRECTLY closure/task-
+/// typed capture, but has no way to see three levels into an opaque
+/// `Heap` pointer to notice a closure hiding in one of its fields) —
+/// this is deliberately simple and structural over exactly precise
+/// (matching this backend's established precedent, e.g. `needed_arrays`
+/// registering more than strictly necessary), cheap (one linear pass
+/// over `tag_fields`), and correct in the safe direction: a program that
+/// never actually spawns anything is completely unaffected, no matter
+/// what its struct/enum fields look like.
+fn check_no_closure_or_task_fields(tag_fields: &TagFields) -> Result<(), String> {
+    let mut names: Vec<&String> = tag_fields.keys().collect();
+    names.sort();
+    for tag in names {
+        for (i, field_ty) in tag_fields[tag].iter().enumerate() {
+            if matches!(field_ty, CgType::Closure(..) | CgType::Task(_)) {
+                return Err(format!(
+                    "codegen: struct/enum {tag:?}'s field {i} is closure/task-shaped ({field_ty:?}) — a \
+                     program that uses `spawn` anywhere cannot declare a struct/enum with a closure- or \
+                     task-typed field anywhere else either, since such a value could reach a `spawn` \
+                     capture through an opaque heap pointer and neither a closure's captured environment \
+                     nor a task handle can cross a thread boundary (matching the interpreter's own \
+                     restriction — see `plum_interp::Interpreter::to_portable`)"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Emits an entire program as LLVM IR TEXT (the `.ll` format) — no
 /// LLVM Rust binding involved at all (see DESIGN.md's "Implementation
 /// plan" section for why: this machine has no `llvm-config`/dev
@@ -754,6 +1019,17 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
     let closure_counter = std::cell::RefCell::new(0usize);
     let closure_defs = std::cell::RefCell::new(Vec::new());
     let trampolines = std::cell::RefCell::new(HashMap::new());
+    // Set to `true` the first time codegen actually walks a `Spawn`/
+    // `TaskJoin` node (`codegen.rs`'s `codegen_spawn_literal`/`codegen_
+    // task_join`) — read AFTER every function body has been emitted
+    // (same "collect everything while emitting bodies, then finalize"
+    // convention `needed_arrays` itself already established) to decide
+    // whether the spawn runtime (`emit_spawn_runtime`/`emit_deepcopy_
+    // array_fns`) and the whole-program `check_no_closure_or_task_
+    // fields` check are needed at all — a program that never spawns
+    // anything pays zero cost (no extra declarations, no rejected
+    // struct/enum shapes it never even touches through `spawn`).
+    let needs_spawn_runtime = std::cell::RefCell::new(false);
 
     let mut bodies = String::new();
     for f in &program.functions {
@@ -766,17 +1042,28 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
             &closure_counter,
             &closure_defs,
             &trampolines,
+            &needs_spawn_runtime,
         )?);
         bodies.push('\n');
     }
 
+    if *needs_spawn_runtime.borrow() {
+        check_no_closure_or_task_fields(tag_fields)?;
+    }
+
+    let needed_arrays = needed_arrays.into_inner();
     let mut out = emit_runtime(tag_fields, &tag_ids);
-    out.push_str(&emit_array_release_fns(&needed_arrays.into_inner()));
+    out.push_str(&emit_array_release_fns(&needed_arrays));
+    if *needs_spawn_runtime.borrow() {
+        out.push_str(&emit_spawn_runtime(tag_fields, &tag_ids));
+        out.push_str(&emit_deepcopy_array_fns(&needed_arrays));
+    }
     // Every closure-literal-site-generated function/release function/
-    // trampoline, discovered while walking `program.functions` above —
-    // spliced in here, same "collect everything while emitting bodies,
-    // then place it before the bodies in the final text" convention
-    // `emit_array_release_fns` itself already established.
+    // trampoline/spawn-entry-function, discovered while walking
+    // `program.functions` above — spliced in here, same "collect
+    // everything while emitting bodies, then place it before the
+    // bodies in the final text" convention `emit_array_release_fns`
+    // itself already established.
     for def in closure_defs.into_inner() {
         out.push_str(&def);
         out.push('\n');
@@ -795,6 +1082,7 @@ fn emit_function(
     closure_counter: &std::cell::RefCell<usize>,
     closure_defs: &std::cell::RefCell<Vec<String>>,
     trampolines: &std::cell::RefCell<HashMap<String, String>>,
+    needs_spawn_runtime: &std::cell::RefCell<bool>,
 ) -> Result<String, String> {
     let sig = signatures
         .get(&f.name)
@@ -818,6 +1106,7 @@ fn emit_function(
         closure_counter,
         closure_defs,
         trampolines,
+        needs_spawn_runtime,
     };
 
     let mut env = HashMap::new();
@@ -1886,5 +2175,182 @@ mod tests {
         assert_eq!(phi_count, 4, "expected 4 phis (2 induction vars + 2 independent `total` accumulators), got:\n{ir}");
         let header_count = body.matches("for_header").count();
         assert!(header_count >= 2, "expected at least two distinct `for_header` blocks:\n{ir}");
+    }
+
+    // --- spawn / join (this chunk) ---
+
+    #[test]
+    fn scalar_only_spawn_and_join_emits_pthread_calls_and_no_deepcopy_calls() {
+        // let go(): Int = spawn { 1 + 2 }.join()
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::TaskJoin {
+                task: Box::new(Expr::Spawn {
+                    block: Box::new(Expr::Binary(BinOp::Add, Box::new(Expr::Int(1)), Box::new(Expr::Int(2)))),
+                }),
+            },
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new()).unwrap();
+        assert!(ir.contains("declare i32 @pthread_create("), "{ir}");
+        assert!(ir.contains("declare i32 @pthread_join("), "{ir}");
+        assert!(ir.contains("call i32 @pthread_create("), "{ir}");
+        assert!(ir.contains("call i32 @pthread_join("), "{ir}");
+        // A scalar-only capture set (in this case: NO captures at all)
+        // never calls a deep-copy function — `@plum_deepcopy_heap`/
+        // `@plum_deepcopy_str` are still DEFINED unconditionally
+        // whenever spawn is used anywhere (same "small fixed runtime,
+        // emitted once" precedent as every other runtime function), but
+        // nothing here actually CALLS one.
+        assert!(!ir.contains("call ptr @plum_deepcopy_heap("), "{ir}");
+        assert!(!ir.contains("call ptr @plum_deepcopy_str("), "{ir}");
+        // The spawn-args block is entirely skipped (zero captures) —
+        // `null` is passed directly as `pthread_create`'s `arg`.
+        assert!(ir.contains("@pthread_create(ptr %v"), "{ir}");
+    }
+
+    #[test]
+    fn spawn_capturing_a_heap_shaped_value_deep_copies_it_and_never_incs_the_original() {
+        // let go(p: Point): Point = { let t = spawn { p }; t.join() }
+        let body = Expr::Let {
+            name: "t".to_string(),
+            value: Box::new(Expr::Spawn { block: Box::new(Expr::Var("p".to_string())) }),
+            body: Box::new(Expr::TaskJoin { task: Box::new(Expr::Var("t".to_string())) }),
+        };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec!["p".to_string()], body }]);
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Heap], CgType::Heap)]),
+            &tags(&[("Point", vec![CgType::Int, CgType::Int])]),
+        )
+        .unwrap();
+        // The captured original (`%p`, the function's own parameter
+        // register) is deep-copied via `@plum_deepcopy_heap` — the key
+        // structural proxy that this is a real, independent snapshot,
+        // not a shared pointer a closure capture would instead
+        // `plum_rc_inc`.
+        assert!(ir.contains("call ptr @plum_deepcopy_heap(ptr %p)"), "{ir}");
+        // And critically: nothing anywhere in the whole program ever
+        // `plum_rc_inc`s `%p` — if it did, both this thread and the
+        // spawned one could end up racing a non-atomic refcount word on
+        // the SAME original cell, exactly the bug deep-copy exists to
+        // prevent (see `deep_copy_capture`'s own doc comment in
+        // codegen.rs).
+        assert!(!ir.contains("call void @plum_rc_inc(ptr %p)"), "{ir}");
+    }
+
+    #[test]
+    fn spawn_capturing_a_closure_typed_value_is_a_clear_error() {
+        // let go(f: Closure([Int], Int)): Int = { spawn { f(1) }; 0 }
+        let body = Expr::Let {
+            name: "_t".to_string(),
+            value: Box::new(Expr::Spawn {
+                block: Box::new(Expr::Call { callee: Box::new(Expr::Var("f".to_string())), args: vec![Expr::Int(1)] }),
+            }),
+            body: Box::new(Expr::Int(0)),
+        };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec!["f".to_string()], body }]);
+        let closure_sig = CgType::Closure(vec![CgType::Int], Box::new(CgType::Int));
+        let err = emit(&prog, &sigs(&[("go", vec![closure_sig], CgType::Int)]), &TagFields::new())
+            .expect_err("expected a closure-typed spawn capture to be rejected");
+        assert!(err.contains("spawn") && err.contains("cross a thread boundary"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn spawn_using_program_rejects_any_struct_with_a_closure_field_even_if_never_actually_captured() {
+        // The program's ONLY spawn never touches `Holder` at all — this
+        // proves the whole-program, structurally-conservative rejection
+        // (`check_no_closure_or_task_fields`) fires regardless, since
+        // `Heap` is opaque at a real capture site and can't otherwise be
+        // inspected for a closure hiding three fields deep.
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::TaskJoin { task: Box::new(Expr::Spawn { block: Box::new(Expr::Int(1)) }) },
+        }]);
+        let closure_ty = CgType::Closure(vec![], Box::new(CgType::Int));
+        let err = emit(
+            &prog,
+            &sigs(&[("go", vec![], CgType::Int)]),
+            &tags(&[("Holder", vec![closure_ty])]),
+        )
+        .expect_err("expected the whole program to be rejected");
+        assert!(err.contains("Holder"), "unexpected error: {err}");
+        assert!(err.contains("closure") || err.contains("task"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn spawn_using_program_rejects_any_struct_with_a_task_field_even_if_never_actually_captured() {
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::TaskJoin { task: Box::new(Expr::Spawn { block: Box::new(Expr::Int(1)) }) },
+        }]);
+        let task_ty = CgType::Task(Box::new(CgType::Int));
+        let err = emit(
+            &prog,
+            &sigs(&[("go", vec![], CgType::Int)]),
+            &tags(&[("Holder", vec![task_ty])]),
+        )
+        .expect_err("expected the whole program to be rejected");
+        assert!(err.contains("Holder"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_program_with_a_closure_field_but_no_spawn_anywhere_is_unaffected() {
+        // The SAME `Holder` shape as the rejection test above — but
+        // with no `spawn` anywhere in the program at all, this must
+        // compile cleanly: `check_no_closure_or_task_fields` only ever
+        // runs when `needs_spawn_runtime` is true.
+        let prog = program(vec![Function { name: "go".to_string(), params: vec![], body: Expr::Int(1) }]);
+        let closure_ty = CgType::Closure(vec![], Box::new(CgType::Int));
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![], CgType::Int)]),
+            &tags(&[("Holder", vec![closure_ty])]),
+        )
+        .unwrap();
+        assert!(!ir.contains("declare i32 @pthread_create"), "{ir}");
+    }
+
+    #[test]
+    fn task_join_checks_the_joined_flag_and_aborts_on_a_second_join() {
+        // let go(): Int = { let t = spawn { 1 }; t.join() }
+        let body = Expr::Let {
+            name: "t".to_string(),
+            value: Box::new(Expr::Spawn { block: Box::new(Expr::Int(1)) }),
+            body: Box::new(Expr::TaskJoin { task: Box::new(Expr::Var("t".to_string())) }),
+        };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec![], body }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new()).unwrap();
+        // The joined-flag load (byte offset 0) + comparison against 0.
+        assert!(ir.contains("icmp eq i64"), "{ir}");
+        // The runtime-checked-failure mechanism (`emit_runtime_check`,
+        // the SAME one array/string bounds checks use) — aborts via
+        // `@plum_abort` rather than continuing if the task was already
+        // joined.
+        assert!(ir.contains("call void @plum_abort("), "{ir}");
+        assert!(ir.contains("unreachable"), "{ir}");
+        // The flag is then marked joined (`store i64 1, ...`) before
+        // the real `pthread_join` proceeds.
+        assert!(ir.contains("store i64 1, ptr"), "{ir}");
+        assert!(ir.contains("call i32 @pthread_join("), "{ir}");
+        // Both the tiny result box AND the task cell itself are `free`d
+        // exactly once — the cell is consumed, not reusable.
+        let go_start = ir.find("define i64 @go(").unwrap();
+        let go_body = &ir[go_start..];
+        assert_eq!(go_body.matches("call void @free(").count(), 2, "{go_body}");
+    }
+
+    #[test]
+    fn join_on_a_non_task_value_is_a_clear_error() {
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::TaskJoin { task: Box::new(Expr::Int(1)) },
+        }]);
+        let err = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new())
+            .expect_err("expected a non-Task `.join()` target to be rejected");
+        assert!(err.contains("Task"), "unexpected error: {err}");
     }
 }
