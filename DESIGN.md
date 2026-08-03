@@ -1015,7 +1015,17 @@ test summing `.len()` across `for part in "...".split(",")`.
 `.ends_with()`/`.replace()` — Decided (2026-07-28).** Rounded out
 strings further the same evening, all delegating directly to Rust's
 own `str` methods of the same name (Unicode-aware case conversion via
-`to_uppercase()`/`to_lowercase()`). `.to_upper()`/`.to_lower()`/
+`to_uppercase()`/`to_lowercase()`). **Codegen-specific caveat**: the
+compiled backend implements `.to_upper()`/`.to_lower()` as ASCII-only
+(`a-z`/`A-Z` only; every other byte, including multi-byte UTF-8
+sequences, passes through unchanged) — a deliberate, bounded scope cut
+from this section's own full-Unicode intent, since full Unicode case
+mapping needs large generated data tables (thousands of codepoints,
+multi-codepoint expansions like German `ß`→`"SS"`) this backend
+doesn't hand-roll. The interpreter's own behavior is unaffected — see
+"Unicode-aware string operations" in the LLVM backend section below
+for the full rationale and the tests proving both directions of the
+divergence. `.to_upper()`/`.to_lower()`/
 `.replace()` all evaluate to `Str` and follow `.trim()`'s exact
 precedent — `StrToUpper`/`StrToUpperReuse`, `StrToLower`/
 `StrToLowerReuse`, `StrReplace`/`StrReplaceReuse`, each with the full
@@ -1513,7 +1523,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1-v10 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join, channels/select, full FFI including struct-by-value)
+### LLVM backend — v1-v11 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join, channels/select, full FFI including struct-by-value, Unicode-aware string ops)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1556,11 +1566,15 @@ program — see that section), and — as of a further follow-on chunk —
 `extern "C"` calls, `CStr`, and C callbacks (see "FFI: scalar extern
 calls, CStr, callbacks" below), and — as of a further follow-on chunk
 — struct-by-value FFI marshaling (see "FFI: struct-by-value marshaling"
-below), closing out FFI entirely. Still out of scope and producing a
-clear codegen error, never a panic: Unicode-aware string operations
-(`.runes()`, `.to_upper()`, `.to_lower()`, `.trim()`, `.replace()`,
-`.split()`), a closure literal inside a still-generic function's own
-body, an `Assign` inside a closure body writing back into an enclosing
+below), closing out FFI entirely, and — as of a further follow-on
+chunk — `.runes()`, `.trim()`, `.replace()`, `.split()` (full Unicode
+correctness) and `.to_upper()`/`.to_lower()` (ASCII-only — see
+"Unicode-aware string operations" below for the deliberate,
+documented scope cut). Still out of scope and producing a clear
+codegen error, never a panic: full Unicode case mapping (multi-
+codepoint expansions, e.g. German `ß`→`"SS"`), a closure literal
+inside a still-generic function's own body, an `Assign` inside a
+closure body writing back into an enclosing
 loop's carried variable (structurally out of reach of this backend's
 closure design, not merely unimplemented), an `Assign` reachable only
 through a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value
@@ -2444,6 +2458,82 @@ precisely why LLVM's own backend is trusted for it, not this crate).
 Also verified against the real system libc `div`/`div_t`, asserting
 actual computed quotient/remainder values, not just call success —
 going further than the existing interpreter-path test.
+
+**Unicode-aware string operations** (`.runes()`, `.trim()`,
+`.replace()`, `.split()` full Unicode correctness; `.to_upper()`/
+`.to_lower()` ASCII-only — a deliberate, documented scope cut, see
+below). The largest remaining language-feature gap closed. Confirmed
+during scoping that only case mapping genuinely needs large data
+tables (thousands of codepoints, multi-codepoint expansions like
+German `ß`→`"SS"`) that this backend deliberately does not hand-roll —
+everything else in this group is tractable without one: `.runes()`
+needs a bounded UTF-8 DECODER (byte-pattern classification logic, no
+table), `.trim()` needs the Unicode `White_Space` property, a small,
+fixed 25-codepoint list, and `.split()`/`.replace()` are purely
+byte-level substring operations needing no Unicode awareness at all.
+
+A shared `@plum_utf8_decode`/`@plum_utf8_len_at` runtime primitive
+(sequential `icmp`+`br` leading-byte classification, no LLVM `switch`,
+matching this backend's established style) decodes/measures one
+codepoint at a byte position — assume-valid-by-construction, no
+defensive malformed-UTF-8 handling, matching this backend's existing
+trust of `@memcpy`/`@strlen` (Plum strings can only ever originate
+from valid UTF-8 source text or byte-preserving transforms). `.runes()`
+is two-pass (count codepoints, allocate once, decode-and-fill) — the
+same two-pass shape used wherever a result's final length isn't
+knowable without a scan (`.split()`, and `.replace()`'s pass computing
+a grow/shrink-aware final length). `.trim()` uses the standard UTF-8
+"scan backwards past continuation bytes to find a character start"
+trick for its trailing boundary, checking Unicode whitespace
+membership via a shared `@plum_is_unicode_whitespace` helper (25
+`icmp` range/equality checks, no loop, no table — cheap and exact,
+matching Rust's own `char::is_whitespace` bit-for-bit, the ground
+truth the interpreter's own `.trim()` already delegates to).
+
+`.to_upper()`/`.to_lower()` are pure BYTE-level loops that deliberately
+never decode UTF-8 at all — correct without decoding because ASCII
+bytes are never continuation bytes nor multi-byte leading bytes, so a
+byte scan leaves every multi-byte sequence untouched without needing
+to know character boundaries. Fixed output length == input length
+(exactly why ASCII-only can stay a simple fixed-length transform while
+full Unicode case mapping's multi-codepoint expansions could not).
+**The scope cut is a real, deliberate divergence from this section's
+own "Unicode-aware case conversion" language**: the compiled backend
+only converts `a-z`/`A-Z`; every other byte (including any byte that's
+part of a multi-byte UTF-8 sequence) passes through completely
+unchanged, unlike the interpreter's full `str::to_uppercase()`/
+`to_lowercase()`. Proven explicitly in both directions by a real
+compile-and-run test: an ASCII string case-converts correctly AND a
+string containing a non-ASCII letter passes through unchanged by both
+operations.
+
+`.replace()`/`.split()` share a `@plum_str_count_matches` helper
+(extending the existing `@plum_str_contains` double-loop precedent to
+count ALL non-overlapping matches, not just detect one) for their
+respective two-pass length/piece-count computations. Both correctly
+handle the empty-separator/empty-`from` edge case via the same
+UTF-8-char-boundary logic `.runes()` already builds — confirmed
+EMPIRICALLY during design (a real `rustc` scratch-program run, not
+assumed) that `str::replace("", to)` uses the exact same char-boundary
+insertion semantics as `str::split("")` (inserting/splitting at every
+character boundary, N+1 times for an N-character string) — an initial
+design-draft guess that this might be byte-boundary instead was wrong
+and caught before implementation began.
+
+**A real memory-corruption hazard found and correctly avoided during
+implementation**: `StrReplaceReuse`'s reuse branch was originally
+planned to `@realloc` and rewrite in place. Hand-tracing a concrete
+case (`"aa".replace("a","bbb")`, growing) revealed a naive forward
+in-place copy can overwrite source bytes the read cursor hasn't
+reached yet — a real correctness bug, not a hypothetical one. A fully
+correct in-place version exists (right-to-left copy, per-gap
+`@memmove`, since `@memmove` already handles arbitrary overlap
+correctly) but was judged real, new, unverified algorithm surface not
+worth shipping under this chunk's own scope — instead, the reuse
+branch calls the same fresh-allocating path (always safe, including
+growth) and frees the old cell directly, correct in every case, just
+without a genuine buffer-reuse win for this one specific op. A
+dedicated test locks in and documents this deliberate simplification.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck

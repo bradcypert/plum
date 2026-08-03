@@ -1266,13 +1266,15 @@ mod tests {
     #[test]
     fn a_construct_outside_codegen_scope_is_a_clear_error() {
         // `go`'s own DECLARED signature is Int -> Int (fully within
-        // supported scope), but its BODY calls `.runes()` — a
-        // genuinely Unicode-aware string op still outside codegen's
-        // scope this chunk (core, byte-level string ops ARE supported
-        // now — see the string tests below) — exercising `plum_codegen`'s
-        // own per-expression rejection, not just `plumc`'s signature-
-        // conversion gate (see the next test for that one).
-        let src = "let go (n: Int): Int = { let r = \"hi\".runes(); 5 }";
+        // supported scope), but its BODY calls `ref(v)` — `Ref`'s whole
+        // shared-mutable-cell runtime has no codegen at all yet (a
+        // genuinely separate, still-unimplemented feature; ALL SIX
+        // Unicode-aware string ops, including `.runes()`, are supported
+        // as of this chunk — see the string tests below) — exercising
+        // `plum_codegen`'s own per-expression rejection, not just
+        // `plumc`'s signature-conversion gate (see the next test for
+        // that one).
+        let src = "let go (n: Int): Int = { let r = ref(1); 5 }";
         let err = compile_and_run(src, "go", &[CgValue::Int(1)]).expect_err("expected a codegen scope error");
         assert!(err.contains("does not yet support"), "unexpected error: {err}");
     }
@@ -1516,6 +1518,213 @@ mod tests {
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "answer: 42");
+    }
+
+    // --- Unicode string ops: real compile-and-run tests ---
+    //
+    // These are exactly the category of correctness property IR
+    // inspection can't verify (real UTF-8 decoding, trim boundaries,
+    // split piece-counts) — see `plum_codegen`'s own mechanical shape
+    // tests for the IR-text-only half of this chunk's test coverage.
+
+    #[test]
+    fn runes_correctly_decodes_multi_byte_utf8_cafe() {
+        // "café" is 4 CHARACTERS but 5 BYTES (the "é" is a 2-byte UTF-8
+        // sequence) — `.runes()` must see 4, `.len()` must still see 5.
+        let src = "let go (): Int = { let s = \"café\"; s.runes().len() * 100 + s.len() }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "405");
+    }
+
+    #[test]
+    fn runes_decodes_each_codepoint_correctly_not_just_the_count() {
+        // Proves the DECODED VALUES, not just the piece count — sums
+        // each rune's own codepoint value via tail-recursive indexing
+        // (no general array iteration yet — see the array tests below
+        // for why this indexing workaround is this codebase's existing
+        // precedent). 'c'=99, 'a'=97, 'f'=102, 'é'=233 (U+00E9); sum=531.
+        let src = "\
+            let sum_from (a: Array[Int]) (i: Int) (acc: Int): Int = \
+                if i == a.len() { acc } else { sum_from(a, i + 1, acc + a[i]) }\n\
+            let go (): Int = sum_from(\"café\".runes(), 0, 0)\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "531");
+    }
+
+    #[test]
+    fn trim_strips_genuinely_non_ascii_unicode_whitespace() {
+        // U+00A0 (NO-BREAK SPACE) and U+3000 (IDEOGRAPHIC SPACE) — real
+        // Unicode `White_Space` codepoints, neither of them ASCII, on
+        // EACH side, proving `@plum_is_unicode_whitespace` (not just an
+        // ASCII `' '`/`'\t'`/`'\n'` check) drives both the forward and
+        // backward scan.
+        let src = "let go (): String = \"\u{00A0}hi\u{3000}\".trim()";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "hi");
+    }
+
+    #[test]
+    fn trim_reuse_path_also_strips_non_ascii_whitespace() {
+        // `s.trim()` on a bare `Var` parameter lowers to `StrTrimReuse`
+        // (see `fbip::mark_reuse`) — proves the REUSE branch (`@plum_
+        // str_trim_inplace`'s `@memmove`-then-shrink) is exactly as
+        // correct as the fresh branch, not just structurally present.
+        let src = "\
+            let go (): String = { let s = \"\u{3000}hi\u{00A0}\"; s.trim() }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "hi");
+    }
+
+    #[test]
+    fn to_upper_converts_ascii_and_leaves_non_ascii_completely_untouched() {
+        // Direction 1: ASCII converts. `é`'s two UTF-8 bytes (0xC3 0xA9)
+        // are both >= 0x80 — outside the `[0x61, 0x7A]` byte range this
+        // backend's ASCII-only `.to_upper()` checks — so they pass
+        // through byte-for-byte unchanged; a FULL-Unicode `.to_upper()`
+        // (the interpreter's own behavior) would instead produce "CAFÉ".
+        let src = "let go (): String = \"Hello café\".to_upper()";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "HELLO CAFé");
+    }
+
+    #[test]
+    fn to_lower_converts_ascii_and_leaves_non_ascii_completely_untouched() {
+        // Direction 2: an UPPERCASE non-ASCII letter also passes through
+        // unchanged (not just "non-ASCII in general") — `É`'s bytes
+        // (0xC3 0x89) are likewise both outside `[0x41, 0x5A]`.
+        let src = "let go (): String = \"HELLO CAFÉ\".to_lower()";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "hello cafÉ");
+    }
+
+    #[test]
+    fn to_upper_reuse_path_is_also_ascii_only() {
+        // `s.to_upper()` on a bare `Var` lowers to `StrToUpperReuse` —
+        // proves the in-place byte-transform reuse branch (`@plum_str_
+        // to_upper_inplace`) matches the fresh branch's ASCII-only
+        // scope cut exactly, not just its general shape.
+        let src = "let go (): String = { let s = \"abc é\"; s.to_upper() }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "ABC é");
+    }
+
+    /// Shared by every `.split()` test below — flattens the resulting
+    /// `Array[Str]` back down to a single, directly-assertable `Str` (no
+    /// general array iteration yet, same recursive-indexing workaround
+    /// `array_built_via_literal_push_and_set_sums_correctly_via_
+    /// recursive_indexing` already establishes) by joining every piece
+    /// with a trailing `|`, so an EMPTY piece is still visibly present
+    /// in the output (as two adjacent `|`s, or a leading/trailing `|`)
+    /// rather than silently disappearing the way a bare space-join
+    /// would hide it.
+    const JOIN_FROM_HELPER: &str = "\
+        let join_from (parts: Array[String]) (i: Int) (acc: String): String = \
+            if i == parts.len() { acc } else { join_from(parts, i + 1, acc.concat(parts[i]).concat(\"|\")) }\n\
+    ";
+
+    #[test]
+    fn split_on_an_ascii_separator() {
+        let src = format!(
+            "{}let go (): String = join_from(\"a,b,c\".split(\",\"), 0, \"\")\n",
+            JOIN_FROM_HELPER
+        );
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "a|b|c|");
+    }
+
+    #[test]
+    fn split_on_a_multi_byte_separator() {
+        // Separator itself (`"é"`) is a 2-byte UTF-8 sequence — proves
+        // `@plum_str_count_matches`/`@plum_str_split`'s byte-level match
+        // loop advances past a FULL multi-byte match, not just one byte.
+        let src = format!("{}let go (): String = join_from(\"aébéc\".split(\"é\"), 0, \"\")\n", JOIN_FROM_HELPER);
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "a|b|c|");
+    }
+
+    #[test]
+    fn split_with_consecutive_separators_yields_an_empty_piece() {
+        let src = format!("{}let go (): String = join_from(\"a,,b\".split(\",\"), 0, \"\")\n", JOIN_FROM_HELPER);
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "a||b|");
+    }
+
+    #[test]
+    fn split_with_no_match_yields_the_whole_string_as_one_piece() {
+        let src = format!("{}let go (): String = join_from(\"abc\".split(\",\"), 0, \"\")\n", JOIN_FROM_HELPER);
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "abc|");
+    }
+
+    #[test]
+    fn split_with_separator_at_start_and_end_yields_leading_and_trailing_empty_pieces() {
+        let src = format!("{}let go (): String = join_from(\",a,\".split(\",\"), 0, \"\")\n", JOIN_FROM_HELPER);
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "|a||");
+    }
+
+    #[test]
+    fn split_with_empty_separator_on_a_multi_byte_string_splits_at_every_char_boundary() {
+        // Confirmed via a real `rustc` run during design (not assumed):
+        // `"café".split("") == ["", "c", "a", "f", "é", ""]` — an empty
+        // leading AND trailing piece, one piece per CHARACTER (not per
+        // byte — "é" stays one piece, not two).
+        let src = format!("{}let go (): String = join_from(\"café\".split(\"\"), 0, \"\")\n", JOIN_FROM_HELPER);
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "|c|a|f|é||");
+    }
+
+    #[test]
+    fn replace_ascii_from_and_to() {
+        let src = "let go (): String = \"hello world\".replace(\"world\", \"there\")";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "hello there");
+    }
+
+    #[test]
+    fn replace_multi_byte_from_shrinking_the_result() {
+        // `to` shorter than `from` (`"é"`, 2 bytes -> `"e"`, 1 byte) —
+        // proves the two-pass length computation in the SHRINK
+        // direction.
+        let src = "let go (): String = \"café au lait\".replace(\"é\", \"e\")";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "cafe au lait");
+    }
+
+    #[test]
+    fn replace_growing_the_result_when_to_is_longer_than_from() {
+        // `to` longer than `from` — proves the two-pass length
+        // computation in the GROW direction (and, since `"ab"` is a bare
+        // string LITERAL rather than a `Var`, exercises the FRESH path,
+        // not `StrReplaceReuse`).
+        let src = "let go (): String = \"ab\".replace(\"a\", \"XYZ\")";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "XYZb");
+    }
+
+    #[test]
+    fn replace_reuse_path_also_grows_correctly() {
+        // `s.replace(..)` on a bare `Var` lowers to `StrReplaceReuse` —
+        // proves the documented "still fresh-allocates, but frees the
+        // old cell directly" reuse path (see `codegen.rs`'s
+        // `StrReplaceReuse` arm) produces the SAME correct, grown result
+        // as the ordinary fresh path.
+        let src = "let go (): String = { let s = \"ab\"; s.replace(\"a\", \"XYZ\") }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "XYZb");
+    }
+
+    #[test]
+    fn replace_with_an_empty_from_inserts_at_every_char_boundary() {
+        // Confirmed via a real `rustc` run during design (not assumed):
+        // `"abc".replace("", "-") == "-a-b-c-"` — `to` inserted at EVERY
+        // character boundary, N+1 times for an N-character string, the
+        // SAME char-boundary logic `.split("")` uses.
+        let src = "let go (): String = \"abc\".replace(\"\", \"-\")";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "-a-b-c-");
     }
 
     #[test]

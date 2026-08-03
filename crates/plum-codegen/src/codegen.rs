@@ -3635,6 +3635,295 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             em.push(format!("  {r} = call i1 @plum_str_ends_with(ptr {b}, ptr {s})"));
             Ok((r, CgType::Bool))
         }
+        // `s.runes()` — a thin call into `@plum_str_runes` (`lib.rs`'s
+        // `emit_runtime`), which does the actual two-pass UTF-8 decode.
+        // No `*Reuse` variant exists in the IR (see `ir::Expr::StrRunes`'s
+        // own doc comment: this always builds a brand new `Array[Int]`,
+        // a differently-shaped heap value than the `Str` it reads from).
+        Expr::StrRunes { base } => {
+            let (b, bty) = codegen_value(base, env, em, ctx)?;
+            if bty != CgType::Str {
+                return Err(format!("codegen: `.runes()` requires a Str value, found {bty:?}"));
+            }
+            register_array_elem(ctx, &CgType::Int);
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call ptr @plum_str_runes(ptr {b})"));
+            Ok((r, CgType::Array(Box::new(CgType::Int))))
+        }
+        // `.trim()` — fresh path: a plain call into `@plum_str_trim`. See
+        // `StrTrimReuse` for the reuse-in-place half.
+        Expr::StrTrim { base } => {
+            let (b, bty) = codegen_value(base, env, em, ctx)?;
+            if bty != CgType::Str {
+                return Err(format!("codegen: `.trim()` requires a Str value, found {bty:?}"));
+            }
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call ptr @plum_str_trim(ptr {b})"));
+            Ok((r, CgType::Str))
+        }
+        // The reuse-in-place half of `.trim()` — same refcount-check-
+        // then-branch shape every other `*Reuse` string op uses. Unlike
+        // `.concat()`'s reuse path, trimming only ever SHRINKS, so the
+        // reuse branch needs no `@realloc` at all — `@plum_str_trim_
+        // inplace` just `@memmove`s the trimmed range down to offset 16
+        // and updates `len` in place.
+        Expr::StrTrimReuse { reuse_of } => {
+            let (old_ptr, old_ty) = env
+                .get(reuse_of)
+                .cloned()
+                .ok_or_else(|| format!("codegen: unbound variable {reuse_of:?}"))?;
+            if old_ty != CgType::Str {
+                return Err(format!("codegen: internal error — StrTrimReuse target {reuse_of:?} is not a Str"));
+            }
+
+            let rc = em.fresh_reg();
+            em.push(format!("  {rc} = load i64, ptr {old_ptr}"));
+            let rc2 = em.fresh_reg();
+            em.push(format!("  {rc2} = sub i64 {rc}, 1"));
+            em.push(format!("  store i64 {rc2}, ptr {old_ptr}"));
+            let is_zero = em.fresh_reg();
+            em.push(format!("  {is_zero} = icmp eq i64 {rc2}, 0"));
+
+            let reuse_label = em.fresh_label("str_trim_reuse");
+            let alloc_label = em.fresh_label("str_trim_fresh");
+            let merge_label = em.fresh_label("str_trim_merge");
+            em.push(format!("  br i1 {is_zero}, label %{reuse_label}, label %{alloc_label}"));
+
+            em.start_block(&reuse_label);
+            em.push(format!("  call void @plum_str_trim_inplace(ptr {old_ptr})"));
+            em.push(format!("  store i64 1, ptr {old_ptr}"));
+            em.push(format!("  br label %{merge_label}"));
+
+            em.start_block(&alloc_label);
+            let fresh = em.fresh_reg();
+            em.push(format!("  {fresh} = call ptr @plum_str_trim(ptr {old_ptr})"));
+            em.push(format!("  br label %{merge_label}"));
+
+            em.start_block(&merge_label);
+            let result = em.fresh_reg();
+            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            Ok((result, CgType::Str))
+        }
+        // `.to_upper()` — fresh path: a plain call into `@plum_str_to_
+        // upper`, ASCII-only by deliberate codegen-specific scope cut
+        // (only `a`-`z`/`A`-`Z` bytes convert; every other byte —
+        // including every byte of a multi-byte UTF-8 sequence — passes
+        // through unchanged), diverging from the interpreter's full
+        // Unicode `str::to_uppercase()` (which can even expand one
+        // codepoint into several, e.g. German `ß` -> `"SS"`, needing
+        // large data tables this backend won't hand-roll). See
+        // DESIGN.md's "Strings" section for the language-level caveat.
+        Expr::StrToUpper { base } => {
+            let (b, bty) = codegen_value(base, env, em, ctx)?;
+            if bty != CgType::Str {
+                return Err(format!("codegen: `.to_upper()` requires a Str value, found {bty:?}"));
+            }
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call ptr @plum_str_to_upper(ptr {b})"));
+            Ok((r, CgType::Str))
+        }
+        // The reuse-in-place half of `.to_upper()` — same refcount-
+        // check-then-branch shape as `StrTrimReuse`; since `.to_upper()`
+        // never changes a string's BYTE length (ASCII-only case mapping
+        // is a fixed one-byte-for-one-byte transform), the reuse branch
+        // needs no `@realloc` either — just an in-place per-byte
+        // transform loop (`@plum_str_to_upper_inplace`) over the
+        // existing cell's own bytes.
+        Expr::StrToUpperReuse { reuse_of } => {
+            let (old_ptr, old_ty) = env
+                .get(reuse_of)
+                .cloned()
+                .ok_or_else(|| format!("codegen: unbound variable {reuse_of:?}"))?;
+            if old_ty != CgType::Str {
+                return Err(format!("codegen: internal error — StrToUpperReuse target {reuse_of:?} is not a Str"));
+            }
+
+            let rc = em.fresh_reg();
+            em.push(format!("  {rc} = load i64, ptr {old_ptr}"));
+            let rc2 = em.fresh_reg();
+            em.push(format!("  {rc2} = sub i64 {rc}, 1"));
+            em.push(format!("  store i64 {rc2}, ptr {old_ptr}"));
+            let is_zero = em.fresh_reg();
+            em.push(format!("  {is_zero} = icmp eq i64 {rc2}, 0"));
+
+            let reuse_label = em.fresh_label("str_to_upper_reuse");
+            let alloc_label = em.fresh_label("str_to_upper_fresh");
+            let merge_label = em.fresh_label("str_to_upper_merge");
+            em.push(format!("  br i1 {is_zero}, label %{reuse_label}, label %{alloc_label}"));
+
+            em.start_block(&reuse_label);
+            em.push(format!("  call void @plum_str_to_upper_inplace(ptr {old_ptr})"));
+            em.push(format!("  store i64 1, ptr {old_ptr}"));
+            em.push(format!("  br label %{merge_label}"));
+
+            em.start_block(&alloc_label);
+            let fresh = em.fresh_reg();
+            em.push(format!("  {fresh} = call ptr @plum_str_to_upper(ptr {old_ptr})"));
+            em.push(format!("  br label %{merge_label}"));
+
+            em.start_block(&merge_label);
+            let result = em.fresh_reg();
+            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            Ok((result, CgType::Str))
+        }
+        // `.to_lower()` — same ASCII-only scope cut and shape as
+        // `.to_upper()`, delegating to `@plum_str_to_lower`.
+        Expr::StrToLower { base } => {
+            let (b, bty) = codegen_value(base, env, em, ctx)?;
+            if bty != CgType::Str {
+                return Err(format!("codegen: `.to_lower()` requires a Str value, found {bty:?}"));
+            }
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call ptr @plum_str_to_lower(ptr {b})"));
+            Ok((r, CgType::Str))
+        }
+        Expr::StrToLowerReuse { reuse_of } => {
+            let (old_ptr, old_ty) = env
+                .get(reuse_of)
+                .cloned()
+                .ok_or_else(|| format!("codegen: unbound variable {reuse_of:?}"))?;
+            if old_ty != CgType::Str {
+                return Err(format!("codegen: internal error — StrToLowerReuse target {reuse_of:?} is not a Str"));
+            }
+
+            let rc = em.fresh_reg();
+            em.push(format!("  {rc} = load i64, ptr {old_ptr}"));
+            let rc2 = em.fresh_reg();
+            em.push(format!("  {rc2} = sub i64 {rc}, 1"));
+            em.push(format!("  store i64 {rc2}, ptr {old_ptr}"));
+            let is_zero = em.fresh_reg();
+            em.push(format!("  {is_zero} = icmp eq i64 {rc2}, 0"));
+
+            let reuse_label = em.fresh_label("str_to_lower_reuse");
+            let alloc_label = em.fresh_label("str_to_lower_fresh");
+            let merge_label = em.fresh_label("str_to_lower_merge");
+            em.push(format!("  br i1 {is_zero}, label %{reuse_label}, label %{alloc_label}"));
+
+            em.start_block(&reuse_label);
+            em.push(format!("  call void @plum_str_to_lower_inplace(ptr {old_ptr})"));
+            em.push(format!("  store i64 1, ptr {old_ptr}"));
+            em.push(format!("  br label %{merge_label}"));
+
+            em.start_block(&alloc_label);
+            let fresh = em.fresh_reg();
+            em.push(format!("  {fresh} = call ptr @plum_str_to_lower(ptr {old_ptr})"));
+            em.push(format!("  br label %{merge_label}"));
+
+            em.start_block(&merge_label);
+            let result = em.fresh_reg();
+            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            Ok((result, CgType::Str))
+        }
+        // `s.split(sep)` — a thin call into `@plum_str_split`, which does
+        // the actual (runtime-branching on empty-vs-non-empty `sep`)
+        // two-pass piece-cutting. No `*Reuse` variant, same reasoning as
+        // `.runes()`.
+        Expr::StrSplit { base, sep } => {
+            let (b, bty) = codegen_value(base, env, em, ctx)?;
+            if bty != CgType::Str {
+                return Err(format!("codegen: `.split()` requires a Str value, found {bty:?}"));
+            }
+            let (s, sty) = codegen_value(sep, env, em, ctx)?;
+            if sty != CgType::Str {
+                return Err(format!("codegen: `.split()` argument must be Str, found {sty:?}"));
+            }
+            register_array_elem(ctx, &CgType::Str);
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call ptr @plum_str_split(ptr {b}, ptr {s})"));
+            Ok((r, CgType::Array(Box::new(CgType::Str))))
+        }
+        // `.replace(from, to)` — fresh path: a plain call into
+        // `@plum_str_replace`. See `StrReplaceReuse` for the reuse
+        // half.
+        Expr::StrReplace { base, from, to } => {
+            let (b, bty) = codegen_value(base, env, em, ctx)?;
+            if bty != CgType::Str {
+                return Err(format!("codegen: `.replace()` requires a Str value, found {bty:?}"));
+            }
+            let (f, fty) = codegen_value(from, env, em, ctx)?;
+            if fty != CgType::Str {
+                return Err(format!("codegen: `.replace()` first argument must be Str, found {fty:?}"));
+            }
+            let (t, tty) = codegen_value(to, env, em, ctx)?;
+            if tty != CgType::Str {
+                return Err(format!("codegen: `.replace()` second argument must be Str, found {tty:?}"));
+            }
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call ptr @plum_str_replace(ptr {b}, ptr {f}, ptr {t})"));
+            Ok((r, CgType::Str))
+        }
+        // The reuse-in-place half of `.replace()` — same refcount-check-
+        // then-branch shape as every other `*Reuse` string op, but with
+        // a DELIBERATE, DOCUMENTED deviation from this chunk's own
+        // design notes: those notes called for the reuse branch to
+        // `@realloc` the OLD cell to the newly-computed final size and
+        // fill it in place. That's unsound for the GROWING case
+        // (`to`'s bytes longer than `from`'s): a naive forward copy
+        // reading `%s` while simultaneously writing an EXPANDED result
+        // into the SAME buffer can overwrite source bytes the read
+        // cursor hasn't reached yet the moment the write cursor drifts
+        // ahead of it (verified by hand-tracing `"aa".replace("a",
+        // "bbb")` byte-by-byte — the second `'a'` gets clobbered before
+        // it's ever read). A fully correct in-place version exists (a
+        // right-to-left, `@memmove`-per-gap walk, since `@memmove`
+        // itself already handles arbitrary single-range overlap
+        // correctly) but is real, non-trivial new algorithm surface
+        // this chunk defers rather than risk shipping unverified. So:
+        // once uniquely owned, this still calls the SAME fresh-
+        // allocating `@plum_str_replace` (always memory-safe — it never
+        // aliases source and destination), then frees the OLD cell
+        // directly (skipping `@plum_rc_dec_str`'s own redundant second
+        // refcount round-trip, since this arm already established the
+        // count reached zero) rather than leaving it to a caller-side
+        // `Dec`. This still exercises the refcount-gated reuse-vs-fresh
+        // distinction meaningfully (freeing without a second decrement),
+        // just without a genuine buffer-reuse performance win.
+        Expr::StrReplaceReuse { reuse_of, from, to } => {
+            let (old_ptr, old_ty) = env
+                .get(reuse_of)
+                .cloned()
+                .ok_or_else(|| format!("codegen: unbound variable {reuse_of:?}"))?;
+            if old_ty != CgType::Str {
+                return Err(format!("codegen: internal error — StrReplaceReuse target {reuse_of:?} is not a Str"));
+            }
+            let (f, fty) = codegen_value(from, env, em, ctx)?;
+            if fty != CgType::Str {
+                return Err(format!("codegen: `.replace()` first argument must be Str, found {fty:?}"));
+            }
+            let (t, tty) = codegen_value(to, env, em, ctx)?;
+            if tty != CgType::Str {
+                return Err(format!("codegen: `.replace()` second argument must be Str, found {tty:?}"));
+            }
+
+            let rc = em.fresh_reg();
+            em.push(format!("  {rc} = load i64, ptr {old_ptr}"));
+            let rc2 = em.fresh_reg();
+            em.push(format!("  {rc2} = sub i64 {rc}, 1"));
+            em.push(format!("  store i64 {rc2}, ptr {old_ptr}"));
+            let is_zero = em.fresh_reg();
+            em.push(format!("  {is_zero} = icmp eq i64 {rc2}, 0"));
+
+            let reuse_label = em.fresh_label("str_replace_reuse");
+            let alloc_label = em.fresh_label("str_replace_fresh");
+            let merge_label = em.fresh_label("str_replace_merge");
+            em.push(format!("  br i1 {is_zero}, label %{reuse_label}, label %{alloc_label}"));
+
+            em.start_block(&reuse_label);
+            let reused = em.fresh_reg();
+            em.push(format!("  {reused} = call ptr @plum_str_replace(ptr {old_ptr}, ptr {f}, ptr {t})"));
+            em.push(format!("  call void @free(ptr {old_ptr})"));
+            em.push(format!("  br label %{merge_label}"));
+
+            em.start_block(&alloc_label);
+            let fresh = em.fresh_reg();
+            em.push(format!("  {fresh} = call ptr @plum_str_replace(ptr {old_ptr}, ptr {f}, ptr {t})"));
+            em.push(format!("  br label %{merge_label}"));
+
+            em.start_block(&merge_label);
+            let result = em.fresh_reg();
+            em.push(format!("  {result} = phi ptr [ {reused}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            Ok((result, CgType::Str))
+        }
         // `x.to_string()` — dispatch on `base`'s STATIC `CgType` (a
         // stronger, compile-time version of the interpreter's
         // necessarily-dynamic runtime-value dispatch — see `ir::Expr::

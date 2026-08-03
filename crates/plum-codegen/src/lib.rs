@@ -633,6 +633,804 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
          }\n\n",
     );
 
+    // --- Unicode string ops (`.runes()`/`.trim()`/`.split()`/
+    // `.to_upper()`/`.to_lower()`/`.replace()`) ---
+    //
+    // A shared UTF-8 decoder pair, a small Unicode-whitespace classifier,
+    // and one runtime function per op (built ON TOP of those, plus the
+    // string primitives above) — see this crate's own design notes (the
+    // implementing chunk's plan) for the full reasoning. Built with
+    // plain `push_str` calls per instruction line (not one big escaped
+    // literal like the functions above) purely for THIS author's own
+    // review-ability while hand-assembling the more intricate control
+    // flow below — functionally no different.
+    //
+    // ASCII-only case mapping is a DELIBERATE, DOCUMENTED divergence
+    // from the interpreter's full Unicode `str::to_uppercase()`/
+    // `to_lowercase()` (which can even expand one codepoint into several,
+    // e.g. German `ß` -> `"SS"`, needing large data tables this backend
+    // won't hand-roll): `.to_upper()`/`.to_lower()` here only ever touch
+    // plain ASCII `a-z`/`A-Z` bytes; any other byte (including every byte
+    // of a multi-byte UTF-8 sequence, none of which ever falls in the
+    // ASCII range) passes through completely unchanged. See DESIGN.md's
+    // "Strings" section for the language-level caveat this drives.
+    out.push_str(
+        "; --- Unicode string runtime ---\n\
+         ; `@plum_utf8_len_at`/`@plum_utf8_decode` are the shared UTF-8\n\
+         ; decode primitives every op below (`.runes()`, `.trim()`,\n\
+         ; `.split(\"\")`, `.replace(\"\", to)`) walks the buffer with.\n\
+         ; ASSUME-VALID-BY-CONSTRUCTION: no defensive malformed-UTF-8\n\
+         ; handling anywhere here — a Plum `Str` can only ever originate\n\
+         ; from valid UTF-8 source text or byte-preserving transforms of\n\
+         ; one, matching this backend's existing trust of `@memcpy`/\n\
+         ; `@strlen` without extra validation. Revisit this assumption if\n\
+         ; a future feature ever lets raw arbitrary bytes become a `Str`.\n",
+    );
+
+    // `@plum_utf8_len_at` — classify ONLY (no continuation-byte decode),
+    // for callers that only need to advance a byte cursor one character
+    // (`.trim()`'s backward scan doesn't use this one — see its own
+    // "find character start scanning backwards" comment below — but
+    // `.runes()`'s/`.split("")`'s/`.replace("", to)`'s counting passes
+    // do). A sequential `icmp`+`br` classification chain, matching
+    // `@plum_release_fields`'s established "no `switch`" style.
+    out.push_str("define i64 @plum_utf8_len_at(ptr %base, i64 %pos) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %addr = getelementptr i8, ptr %base, i64 %pos\n");
+    out.push_str("  %b0_i8 = load i8, ptr %addr\n");
+    out.push_str("  %b0 = zext i8 %b0_i8 to i64\n");
+    out.push_str("  %and80 = and i64 %b0, 128\n");
+    out.push_str("  %is1 = icmp eq i64 %and80, 0\n");
+    out.push_str("  br i1 %is1, label %len1, label %check2\n");
+    out.push_str("len1:\n");
+    out.push_str("  ret i64 1\n");
+    out.push_str("check2:\n");
+    out.push_str("  %andE0 = and i64 %b0, 224\n");
+    out.push_str("  %is2 = icmp eq i64 %andE0, 192\n");
+    out.push_str("  br i1 %is2, label %len2, label %check3\n");
+    out.push_str("len2:\n");
+    out.push_str("  ret i64 2\n");
+    out.push_str("check3:\n");
+    out.push_str("  %andF0 = and i64 %b0, 240\n");
+    out.push_str("  %is3 = icmp eq i64 %andF0, 224\n");
+    out.push_str("  br i1 %is3, label %len3, label %len4\n");
+    out.push_str("len3:\n");
+    out.push_str("  ret i64 3\n");
+    out.push_str("len4:\n");
+    out.push_str("  ret i64 4\n");
+    out.push_str("}\n\n");
+
+    // `@plum_utf8_decode` — classify AND decode: extracts/combines the
+    // continuation bytes' low 6 bits via `shl`+`or` into the actual
+    // Unicode scalar value, writing the character's byte length to
+    // `%out_nbytes` as an out-parameter (this backend's established
+    // "simple ptr/i64/i1 signatures" style, not an LLVM multi-return
+    // struct, which has no precedent here) so callers needing BOTH the
+    // codepoint and the advance amount (every fill/decode pass below)
+    // don't need a second call.
+    out.push_str("define i64 @plum_utf8_decode(ptr %base, i64 %pos, ptr %out_nbytes) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %addr = getelementptr i8, ptr %base, i64 %pos\n");
+    out.push_str("  %b0_i8 = load i8, ptr %addr\n");
+    out.push_str("  %b0 = zext i8 %b0_i8 to i64\n");
+    out.push_str("  %and80 = and i64 %b0, 128\n");
+    out.push_str("  %is1 = icmp eq i64 %and80, 0\n");
+    out.push_str("  br i1 %is1, label %len1, label %check2\n");
+    out.push_str("len1:\n");
+    out.push_str("  store i64 1, ptr %out_nbytes\n");
+    out.push_str("  ret i64 %b0\n");
+    out.push_str("check2:\n");
+    out.push_str("  %andE0 = and i64 %b0, 224\n");
+    out.push_str("  %is2 = icmp eq i64 %andE0, 192\n");
+    out.push_str("  br i1 %is2, label %len2, label %check3\n");
+    out.push_str("len2:\n");
+    out.push_str("  %pos1_2 = add i64 %pos, 1\n");
+    out.push_str("  %addr1_2 = getelementptr i8, ptr %base, i64 %pos1_2\n");
+    out.push_str("  %b1_2_i8 = load i8, ptr %addr1_2\n");
+    out.push_str("  %b1_2 = zext i8 %b1_2_i8 to i64\n");
+    out.push_str("  %b1_2low = and i64 %b1_2, 63\n");
+    out.push_str("  %lead5 = and i64 %b0, 31\n");
+    out.push_str("  %lead5sh = shl i64 %lead5, 6\n");
+    out.push_str("  %cp2 = or i64 %lead5sh, %b1_2low\n");
+    out.push_str("  store i64 2, ptr %out_nbytes\n");
+    out.push_str("  ret i64 %cp2\n");
+    out.push_str("check3:\n");
+    out.push_str("  %andF0 = and i64 %b0, 240\n");
+    out.push_str("  %is3 = icmp eq i64 %andF0, 224\n");
+    out.push_str("  br i1 %is3, label %len3, label %len4\n");
+    out.push_str("len3:\n");
+    out.push_str("  %pos1_3 = add i64 %pos, 1\n");
+    out.push_str("  %addr1_3 = getelementptr i8, ptr %base, i64 %pos1_3\n");
+    out.push_str("  %b1_3_i8 = load i8, ptr %addr1_3\n");
+    out.push_str("  %b1_3 = zext i8 %b1_3_i8 to i64\n");
+    out.push_str("  %b1_3low = and i64 %b1_3, 63\n");
+    out.push_str("  %pos2_3 = add i64 %pos, 2\n");
+    out.push_str("  %addr2_3 = getelementptr i8, ptr %base, i64 %pos2_3\n");
+    out.push_str("  %b2_3_i8 = load i8, ptr %addr2_3\n");
+    out.push_str("  %b2_3 = zext i8 %b2_3_i8 to i64\n");
+    out.push_str("  %b2_3low = and i64 %b2_3, 63\n");
+    out.push_str("  %lead4 = and i64 %b0, 15\n");
+    out.push_str("  %lead4sh = shl i64 %lead4, 12\n");
+    out.push_str("  %b1_3sh = shl i64 %b1_3low, 6\n");
+    out.push_str("  %tmp3 = or i64 %lead4sh, %b1_3sh\n");
+    out.push_str("  %cp3 = or i64 %tmp3, %b2_3low\n");
+    out.push_str("  store i64 3, ptr %out_nbytes\n");
+    out.push_str("  ret i64 %cp3\n");
+    out.push_str("len4:\n");
+    out.push_str("  %pos1_4 = add i64 %pos, 1\n");
+    out.push_str("  %addr1_4 = getelementptr i8, ptr %base, i64 %pos1_4\n");
+    out.push_str("  %b1_4_i8 = load i8, ptr %addr1_4\n");
+    out.push_str("  %b1_4 = zext i8 %b1_4_i8 to i64\n");
+    out.push_str("  %b1_4low = and i64 %b1_4, 63\n");
+    out.push_str("  %pos2_4 = add i64 %pos, 2\n");
+    out.push_str("  %addr2_4 = getelementptr i8, ptr %base, i64 %pos2_4\n");
+    out.push_str("  %b2_4_i8 = load i8, ptr %addr2_4\n");
+    out.push_str("  %b2_4 = zext i8 %b2_4_i8 to i64\n");
+    out.push_str("  %b2_4low = and i64 %b2_4, 63\n");
+    out.push_str("  %pos3_4 = add i64 %pos, 3\n");
+    out.push_str("  %addr3_4 = getelementptr i8, ptr %base, i64 %pos3_4\n");
+    out.push_str("  %b3_4_i8 = load i8, ptr %addr3_4\n");
+    out.push_str("  %b3_4 = zext i8 %b3_4_i8 to i64\n");
+    out.push_str("  %b3_4low = and i64 %b3_4, 63\n");
+    out.push_str("  %lead3 = and i64 %b0, 7\n");
+    out.push_str("  %lead3sh = shl i64 %lead3, 18\n");
+    out.push_str("  %b1_4sh = shl i64 %b1_4low, 12\n");
+    out.push_str("  %b2_4sh = shl i64 %b2_4low, 6\n");
+    out.push_str("  %tmp4a = or i64 %lead3sh, %b1_4sh\n");
+    out.push_str("  %tmp4b = or i64 %tmp4a, %b2_4sh\n");
+    out.push_str("  %cp4 = or i64 %tmp4b, %b3_4low\n");
+    out.push_str("  store i64 4, ptr %out_nbytes\n");
+    out.push_str("  ret i64 %cp4\n");
+    out.push_str("}\n\n");
+
+    // `@plum_is_unicode_whitespace` — the Unicode `White_Space` property,
+    // as a fixed 25-codepoint list (matching Rust's own `char::
+    // is_whitespace` exactly, the ground truth `plum-interp`'s `.trim()`
+    // already delegates to): U+0009-000D, U+0020, U+0085, U+00A0,
+    // U+1680, U+2000-200A, U+2028, U+2029, U+202F, U+205F, U+3000.
+    // Implemented as a fixed sequence of `icmp` range/equality checks
+    // combined with `or i1` — no loop, no table, cheap and exact.
+    out.push_str("define i1 @plum_is_unicode_whitespace(i64 %cp) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %r1a = icmp sge i64 %cp, 9\n");
+    out.push_str("  %r1b = icmp sle i64 %cp, 13\n");
+    out.push_str("  %r1 = and i1 %r1a, %r1b\n");
+    out.push_str("  %r2 = icmp eq i64 %cp, 32\n");
+    out.push_str("  %r3 = icmp eq i64 %cp, 133\n");
+    out.push_str("  %r4 = icmp eq i64 %cp, 160\n");
+    out.push_str("  %r5 = icmp eq i64 %cp, 5760\n");
+    out.push_str("  %r6a = icmp sge i64 %cp, 8192\n");
+    out.push_str("  %r6b = icmp sle i64 %cp, 8202\n");
+    out.push_str("  %r6 = and i1 %r6a, %r6b\n");
+    out.push_str("  %r7 = icmp eq i64 %cp, 8232\n");
+    out.push_str("  %r8 = icmp eq i64 %cp, 8233\n");
+    out.push_str("  %r9 = icmp eq i64 %cp, 8239\n");
+    out.push_str("  %r10 = icmp eq i64 %cp, 8287\n");
+    out.push_str("  %r11 = icmp eq i64 %cp, 12288\n");
+    out.push_str("  %o1 = or i1 %r1, %r2\n");
+    out.push_str("  %o2 = or i1 %o1, %r3\n");
+    out.push_str("  %o3 = or i1 %o2, %r4\n");
+    out.push_str("  %o4 = or i1 %o3, %r5\n");
+    out.push_str("  %o5 = or i1 %o4, %r6\n");
+    out.push_str("  %o6 = or i1 %o5, %r7\n");
+    out.push_str("  %o7 = or i1 %o6, %r8\n");
+    out.push_str("  %o8 = or i1 %o7, %r9\n");
+    out.push_str("  %o9 = or i1 %o8, %r10\n");
+    out.push_str("  %o10 = or i1 %o9, %r11\n");
+    out.push_str("  ret i1 %o10\n");
+    out.push_str("}\n\n");
+
+    // `@plum_str_trim_bounds` — finds the `[start, end)` byte range of
+    // `%s` with leading/trailing Unicode whitespace stripped, without
+    // allocating anything itself (shared by both `.trim()`'s fresh path,
+    // `@plum_str_trim`, and its reuse-in-place path, `@plum_str_trim_
+    // inplace`, below). Forward scan: decode from position 0, advancing
+    // by each codepoint's own byte length while it's whitespace.
+    // Backward scan: the standard UTF-8 "find character start scanning
+    // backwards" trick — continuation bytes are all `10xxxxxx`, so scan
+    // backwards from `len-1` until a NON-continuation byte (a character
+    // START) is found, decode forward once from there to check
+    // whitespace, and repeat character-by-character from the end.
+    out.push_str("define void @plum_str_trim_bounds(ptr %s, ptr %out_start, ptr %out_end) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %len_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %len = load i64, ptr %len_addr\n");
+    out.push_str("  %base = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  br label %fwd_check\n");
+    out.push_str("fwd_check:\n");
+    out.push_str("  %pos = phi i64 [ 0, %entry ], [ %pos_next, %fwd_advance ]\n");
+    out.push_str("  %fwd_cont = icmp slt i64 %pos, %len\n");
+    out.push_str("  br i1 %fwd_cont, label %fwd_body, label %fwd_done\n");
+    out.push_str("fwd_body:\n");
+    out.push_str("  %fwd_nbytes_slot = alloca i64\n");
+    out.push_str("  %fwd_cp = call i64 @plum_utf8_decode(ptr %base, i64 %pos, ptr %fwd_nbytes_slot)\n");
+    out.push_str("  %fwd_is_ws = call i1 @plum_is_unicode_whitespace(i64 %fwd_cp)\n");
+    out.push_str("  br i1 %fwd_is_ws, label %fwd_advance, label %fwd_done\n");
+    out.push_str("fwd_advance:\n");
+    out.push_str("  %fwd_nbytes = load i64, ptr %fwd_nbytes_slot\n");
+    out.push_str("  %pos_next = add i64 %pos, %fwd_nbytes\n");
+    out.push_str("  br label %fwd_check\n");
+    out.push_str("fwd_done:\n");
+    out.push_str("  %start = phi i64 [ %pos, %fwd_check ], [ %pos, %fwd_body ]\n");
+    out.push_str("  store i64 %start, ptr %out_start\n");
+    out.push_str("  br label %bwd_check\n");
+    out.push_str("bwd_check:\n");
+    out.push_str("  %end = phi i64 [ %len, %fwd_done ], [ %end_next, %bwd_advance ]\n");
+    out.push_str("  %bwd_cont = icmp sgt i64 %end, %start\n");
+    out.push_str("  br i1 %bwd_cont, label %bwd_scan_start, label %bwd_done\n");
+    out.push_str("bwd_scan_start:\n");
+    out.push_str("  %last = sub i64 %end, 1\n");
+    out.push_str("  br label %bwd_scan\n");
+    out.push_str("bwd_scan:\n");
+    out.push_str("  %scan_pos = phi i64 [ %last, %bwd_scan_start ], [ %scan_pos_next, %bwd_scan_cont ]\n");
+    out.push_str("  %scan_addr = getelementptr i8, ptr %base, i64 %scan_pos\n");
+    out.push_str("  %scan_byte_i8 = load i8, ptr %scan_addr\n");
+    out.push_str("  %scan_byte = zext i8 %scan_byte_i8 to i64\n");
+    out.push_str("  %scan_and = and i64 %scan_byte, 192\n");
+    out.push_str("  %is_cont = icmp eq i64 %scan_and, 128\n");
+    out.push_str("  br i1 %is_cont, label %bwd_scan_cont, label %bwd_char_start\n");
+    out.push_str("bwd_scan_cont:\n");
+    out.push_str("  %scan_pos_next = sub i64 %scan_pos, 1\n");
+    out.push_str("  br label %bwd_scan\n");
+    out.push_str("bwd_char_start:\n");
+    out.push_str("  %bwd_nbytes_slot = alloca i64\n");
+    out.push_str("  %bwd_cp = call i64 @plum_utf8_decode(ptr %base, i64 %scan_pos, ptr %bwd_nbytes_slot)\n");
+    out.push_str("  %bwd_is_ws = call i1 @plum_is_unicode_whitespace(i64 %bwd_cp)\n");
+    out.push_str("  br i1 %bwd_is_ws, label %bwd_advance, label %bwd_done\n");
+    out.push_str("bwd_advance:\n");
+    out.push_str("  %end_next = phi i64 [ %scan_pos, %bwd_char_start ]\n");
+    out.push_str("  br label %bwd_check\n");
+    out.push_str("bwd_done:\n");
+    out.push_str("  %final_end = phi i64 [ %end, %bwd_check ], [ %end, %bwd_char_start ]\n");
+    out.push_str("  store i64 %final_end, ptr %out_end\n");
+    out.push_str("  ret void\n");
+    out.push_str("}\n\n");
+
+    // `@plum_str_trim` — the FRESH-allocation half of `.trim()`: fresh
+    // `@plum_alloc_str` + `@memcpy` of just `[start, end)`, matching the
+    // FFI chunk's established "fresh allocation, never alias into
+    // another cell" pattern (the original cell can still be
+    // independently released/mutated afterward). See `@plum_str_trim_
+    // inplace` for `.trim()`'s reuse-in-place half.
+    out.push_str("define ptr @plum_str_trim(ptr %s) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %start_slot = alloca i64\n");
+    out.push_str("  %end_slot = alloca i64\n");
+    out.push_str("  call void @plum_str_trim_bounds(ptr %s, ptr %start_slot, ptr %end_slot)\n");
+    out.push_str("  %start = load i64, ptr %start_slot\n");
+    out.push_str("  %end = load i64, ptr %end_slot\n");
+    out.push_str("  %newlen = sub i64 %end, %start\n");
+    out.push_str("  %cell = call ptr @plum_alloc_str(i64 %newlen)\n");
+    out.push_str("  %sbase = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  %src = getelementptr i8, ptr %sbase, i64 %start\n");
+    out.push_str("  %dst = getelementptr i8, ptr %cell, i64 16\n");
+    out.push_str("  call ptr @memcpy(ptr %dst, ptr %src, i64 %newlen)\n");
+    out.push_str("  ret ptr %cell\n");
+    out.push_str("}\n\n");
+
+    // `@plum_str_trim_inplace` — the reuse-in-place half of `.trim()`,
+    // called ONLY once the caller (`codegen.rs`'s `StrTrimReuse` arm) has
+    // already confirmed unique ownership via the standard refcount-
+    // check-then-branch shape every other `*Reuse` string op uses.
+    // Trimming only ever SHRINKS, so — unlike `.concat()`'s reuse path —
+    // this needs no `@realloc` at all: just `@memmove` the trimmed range
+    // down to offset 16 (overlap-safe, since `[start, end)` can overlap
+    // `[0, newlen)` when `start > 0`) and update `len` + the trailing
+    // NUL (see the string-cell-layout comment above `@plum_alloc_str`).
+    out.push_str("define void @plum_str_trim_inplace(ptr %s) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %start_slot = alloca i64\n");
+    out.push_str("  %end_slot = alloca i64\n");
+    out.push_str("  call void @plum_str_trim_bounds(ptr %s, ptr %start_slot, ptr %end_slot)\n");
+    out.push_str("  %start = load i64, ptr %start_slot\n");
+    out.push_str("  %end = load i64, ptr %end_slot\n");
+    out.push_str("  %newlen = sub i64 %end, %start\n");
+    out.push_str("  %base = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  %src = getelementptr i8, ptr %base, i64 %start\n");
+    out.push_str("  call ptr @memmove(ptr %base, ptr %src, i64 %newlen)\n");
+    out.push_str("  %len_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  store i64 %newlen, ptr %len_addr\n");
+    out.push_str("  %nul_addr = getelementptr i8, ptr %base, i64 %newlen\n");
+    out.push_str("  store i8 0, ptr %nul_addr\n");
+    out.push_str("  ret void\n");
+    out.push_str("}\n\n");
+
+    // `@plum_str_to_upper`/`@plum_str_to_lower` (fresh) and their
+    // `_inplace` counterparts (reuse) — a per-BYTE loop, NOT per-
+    // codepoint decode, deliberately: ASCII bytes are never continuation
+    // bytes nor multi-byte leading bytes, so a byte scan correctly
+    // leaves every multi-byte sequence untouched without ever needing to
+    // know character boundaries at all. Fixed output length == input
+    // length (exactly why ASCII-only can stay a simple fixed-length
+    // transform while full Unicode case mapping, with its multi-
+    // codepoint expansions, could not) — see this section's own
+    // module-level comment for the full ASCII-only scope-cut rationale.
+    // Byte boundary immediates: ASCII `'a'`=97 (0x61), `'z'`=122 (0x7A),
+    // `'A'`=65 (0x41), `'Z'`=90 (0x5A) — written here as plain decimal
+    // (LLVM IR integer constants have no hex-literal syntax; `0x..` is
+    // reserved for floating-point bit patterns, confirmed via a real
+    // `clang` parse failure, not assumed).
+    out.push_str("define ptr @plum_str_to_upper(ptr %s) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %len_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %len = load i64, ptr %len_addr\n");
+    out.push_str("  %cell = call ptr @plum_alloc_str(i64 %len)\n");
+    out.push_str("  %src = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  %dst = getelementptr i8, ptr %cell, i64 16\n");
+    out.push_str("  br label %loop_check\n");
+    out.push_str("loop_check:\n");
+    out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_body ]\n");
+    out.push_str("  %cont = icmp slt i64 %i, %len\n");
+    out.push_str("  br i1 %cont, label %loop_body, label %done\n");
+    out.push_str("loop_body:\n");
+    out.push_str("  %saddr = getelementptr i8, ptr %src, i64 %i\n");
+    out.push_str("  %b = load i8, ptr %saddr\n");
+    out.push_str("  %ge = icmp uge i8 %b, 97\n");
+    out.push_str("  %le = icmp ule i8 %b, 122\n");
+    out.push_str("  %in_range = and i1 %ge, %le\n");
+    out.push_str("  %subbed = sub i8 %b, 32\n");
+    out.push_str("  %outb = select i1 %in_range, i8 %subbed, i8 %b\n");
+    out.push_str("  %daddr = getelementptr i8, ptr %dst, i64 %i\n");
+    out.push_str("  store i8 %outb, ptr %daddr\n");
+    out.push_str("  %i_next = add i64 %i, 1\n");
+    out.push_str("  br label %loop_check\n");
+    out.push_str("done:\n");
+    out.push_str("  ret ptr %cell\n");
+    out.push_str("}\n\n");
+
+    out.push_str("define void @plum_str_to_upper_inplace(ptr %s) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %len_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %len = load i64, ptr %len_addr\n");
+    out.push_str("  %buf = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  br label %loop_check\n");
+    out.push_str("loop_check:\n");
+    out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_body ]\n");
+    out.push_str("  %cont = icmp slt i64 %i, %len\n");
+    out.push_str("  br i1 %cont, label %loop_body, label %done\n");
+    out.push_str("loop_body:\n");
+    out.push_str("  %addr = getelementptr i8, ptr %buf, i64 %i\n");
+    out.push_str("  %b = load i8, ptr %addr\n");
+    out.push_str("  %ge = icmp uge i8 %b, 97\n");
+    out.push_str("  %le = icmp ule i8 %b, 122\n");
+    out.push_str("  %in_range = and i1 %ge, %le\n");
+    out.push_str("  %subbed = sub i8 %b, 32\n");
+    out.push_str("  %outb = select i1 %in_range, i8 %subbed, i8 %b\n");
+    out.push_str("  store i8 %outb, ptr %addr\n");
+    out.push_str("  %i_next = add i64 %i, 1\n");
+    out.push_str("  br label %loop_check\n");
+    out.push_str("done:\n");
+    out.push_str("  ret void\n");
+    out.push_str("}\n\n");
+
+    out.push_str("define ptr @plum_str_to_lower(ptr %s) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %len_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %len = load i64, ptr %len_addr\n");
+    out.push_str("  %cell = call ptr @plum_alloc_str(i64 %len)\n");
+    out.push_str("  %src = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  %dst = getelementptr i8, ptr %cell, i64 16\n");
+    out.push_str("  br label %loop_check\n");
+    out.push_str("loop_check:\n");
+    out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_body ]\n");
+    out.push_str("  %cont = icmp slt i64 %i, %len\n");
+    out.push_str("  br i1 %cont, label %loop_body, label %done\n");
+    out.push_str("loop_body:\n");
+    out.push_str("  %saddr = getelementptr i8, ptr %src, i64 %i\n");
+    out.push_str("  %b = load i8, ptr %saddr\n");
+    out.push_str("  %ge = icmp uge i8 %b, 65\n");
+    out.push_str("  %le = icmp ule i8 %b, 90\n");
+    out.push_str("  %in_range = and i1 %ge, %le\n");
+    out.push_str("  %added = add i8 %b, 32\n");
+    out.push_str("  %outb = select i1 %in_range, i8 %added, i8 %b\n");
+    out.push_str("  %daddr = getelementptr i8, ptr %dst, i64 %i\n");
+    out.push_str("  store i8 %outb, ptr %daddr\n");
+    out.push_str("  %i_next = add i64 %i, 1\n");
+    out.push_str("  br label %loop_check\n");
+    out.push_str("done:\n");
+    out.push_str("  ret ptr %cell\n");
+    out.push_str("}\n\n");
+
+    out.push_str("define void @plum_str_to_lower_inplace(ptr %s) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %len_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %len = load i64, ptr %len_addr\n");
+    out.push_str("  %buf = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  br label %loop_check\n");
+    out.push_str("loop_check:\n");
+    out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_body ]\n");
+    out.push_str("  %cont = icmp slt i64 %i, %len\n");
+    out.push_str("  br i1 %cont, label %loop_body, label %done\n");
+    out.push_str("loop_body:\n");
+    out.push_str("  %addr = getelementptr i8, ptr %buf, i64 %i\n");
+    out.push_str("  %b = load i8, ptr %addr\n");
+    out.push_str("  %ge = icmp uge i8 %b, 65\n");
+    out.push_str("  %le = icmp ule i8 %b, 90\n");
+    out.push_str("  %in_range = and i1 %ge, %le\n");
+    out.push_str("  %added = add i8 %b, 32\n");
+    out.push_str("  %outb = select i1 %in_range, i8 %added, i8 %b\n");
+    out.push_str("  store i8 %outb, ptr %addr\n");
+    out.push_str("  %i_next = add i64 %i, 1\n");
+    out.push_str("  br label %loop_check\n");
+    out.push_str("done:\n");
+    out.push_str("  ret void\n");
+    out.push_str("}\n\n");
+
+    // `@plum_str_count_matches` — extends `@plum_str_contains`'s
+    // existing double-loop precedent, advancing PAST a full match
+    // (`%start + %nlen`) rather than stopping at the first one, so it
+    // counts non-overlapping matches. Shared by `.replace()`'s
+    // non-empty-`from` length computation and `.split()`'s non-empty-
+    // `sep` piece-count computation (`piece_count = match_count + 1`).
+    // An empty `%needle` returns 0 unconditionally — never actually
+    // reached by either of this function's two current callers (both
+    // guard the empty case themselves before calling in), but kept for
+    // this function to stay correct on its own for ANY input, not just
+    // today's call sites.
+    out.push_str("define i64 @plum_str_count_matches(ptr %s, ptr %needle) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %slen_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %slen = load i64, ptr %slen_addr\n");
+    out.push_str("  %nlen_addr = getelementptr i8, ptr %needle, i64 8\n");
+    out.push_str("  %nlen = load i64, ptr %nlen_addr\n");
+    out.push_str("  %is_empty_needle = icmp eq i64 %nlen, 0\n");
+    out.push_str("  br i1 %is_empty_needle, label %zero_result, label %check_fits\n");
+    out.push_str("zero_result:\n");
+    out.push_str("  ret i64 0\n");
+    out.push_str("check_fits:\n");
+    out.push_str("  %fits = icmp sge i64 %slen, %nlen\n");
+    out.push_str("  br i1 %fits, label %outer_init, label %no_match_return\n");
+    out.push_str("no_match_return:\n");
+    out.push_str("  ret i64 0\n");
+    out.push_str("outer_init:\n");
+    out.push_str("  %max_start = sub i64 %slen, %nlen\n");
+    out.push_str("  br label %outer\n");
+    out.push_str("outer:\n");
+    out.push_str("  %start = phi i64 [ 0, %outer_init ], [ %start_next_m, %match_advance ], [ %start_next_x, %mismatch_advance ]\n");
+    out.push_str("  %count = phi i64 [ 0, %outer_init ], [ %count_next, %match_advance ], [ %count, %mismatch_advance ]\n");
+    out.push_str("  %outer_done = icmp sgt i64 %start, %max_start\n");
+    out.push_str("  br i1 %outer_done, label %finished, label %inner_init\n");
+    out.push_str("inner_init:\n");
+    out.push_str("  br label %inner\n");
+    out.push_str("inner:\n");
+    out.push_str("  %j = phi i64 [ 0, %inner_init ], [ %j_next, %inner_cont ]\n");
+    out.push_str("  %inner_done = icmp eq i64 %j, %nlen\n");
+    out.push_str("  br i1 %inner_done, label %found, label %inner_check\n");
+    out.push_str("inner_check:\n");
+    out.push_str("  %s_idx = add i64 %start, %j\n");
+    out.push_str("  %s_base = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  %s_addr = getelementptr i8, ptr %s_base, i64 %s_idx\n");
+    out.push_str("  %s_byte = load i8, ptr %s_addr\n");
+    out.push_str("  %n_base = getelementptr i8, ptr %needle, i64 16\n");
+    out.push_str("  %n_addr = getelementptr i8, ptr %n_base, i64 %j\n");
+    out.push_str("  %n_byte = load i8, ptr %n_addr\n");
+    out.push_str("  %beq = icmp eq i8 %s_byte, %n_byte\n");
+    out.push_str("  br i1 %beq, label %inner_cont, label %mismatch_advance\n");
+    out.push_str("inner_cont:\n");
+    out.push_str("  %j_next = add i64 %j, 1\n");
+    out.push_str("  br label %inner\n");
+    out.push_str("found:\n");
+    out.push_str("  br label %match_advance\n");
+    out.push_str("match_advance:\n");
+    out.push_str("  %count_next = add i64 %count, 1\n");
+    out.push_str("  %start_next_m = add i64 %start, %nlen\n");
+    out.push_str("  br label %outer\n");
+    out.push_str("mismatch_advance:\n");
+    out.push_str("  %start_next_x = add i64 %start, 1\n");
+    out.push_str("  br label %outer\n");
+    out.push_str("finished:\n");
+    out.push_str("  ret i64 %count\n");
+    out.push_str("}\n\n");
+
+    // `@plum_str_replace` — the FRESH-allocation whole of `.replace()`
+    // (both the ordinary and `Reuse` IR nodes call this one function;
+    // see `codegen.rs`'s `StrReplaceReuse` arm doc comment for why the
+    // reuse path does NOT attempt a true realloc-in-place transform).
+    // Two-pass for non-empty `%from` (byte lengths of `from`/`to` can
+    // differ arbitrarily — count matches first via `@plum_str_count_
+    // matches`, size the one allocation exactly, then a SINGLE re-walk
+    // copying either one literal byte or all of `to`'s bytes at each
+    // position). Empty `%from`: confirmed empirically (a real `rustc`
+    // scratch run during design, not assumed) to use the SAME char-
+    // boundary insertion logic as `.split("")` — `to` gets inserted at
+    // EVERY character boundary, N+1 times for an N-character string.
+    out.push_str("define ptr @plum_str_replace(ptr %s, ptr %from, ptr %to) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %fromlen_addr = getelementptr i8, ptr %from, i64 8\n");
+    out.push_str("  %fromlen = load i64, ptr %fromlen_addr\n");
+    out.push_str("  %tolen_addr = getelementptr i8, ptr %to, i64 8\n");
+    out.push_str("  %tolen = load i64, ptr %tolen_addr\n");
+    out.push_str("  %slen_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %slen = load i64, ptr %slen_addr\n");
+    out.push_str("  %sbase = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  %tobase = getelementptr i8, ptr %to, i64 16\n");
+    out.push_str("  %is_empty_from = icmp eq i64 %fromlen, 0\n");
+    out.push_str("  br i1 %is_empty_from, label %empty_from_path, label %nonempty_from_path\n");
+    // --- non-empty `from`: count matches, size exactly, single re-walk ---
+    out.push_str("nonempty_from_path:\n");
+    out.push_str("  %frombase = getelementptr i8, ptr %from, i64 16\n");
+    out.push_str("  %match_count = call i64 @plum_str_count_matches(ptr %s, ptr %from)\n");
+    out.push_str("  %delta = sub i64 %tolen, %fromlen\n");
+    out.push_str("  %grow = mul i64 %match_count, %delta\n");
+    out.push_str("  %newlen = add i64 %slen, %grow\n");
+    out.push_str("  %cell = call ptr @plum_alloc_str(i64 %newlen)\n");
+    out.push_str("  %dbase = getelementptr i8, ptr %cell, i64 16\n");
+    out.push_str("  br label %scan_check\n");
+    out.push_str("scan_check:\n");
+    out.push_str("  %spos = phi i64 [ 0, %nonempty_from_path ], [ %spos_next, %after_copy ]\n");
+    out.push_str("  %dpos = phi i64 [ 0, %nonempty_from_path ], [ %dpos_next, %after_copy ]\n");
+    out.push_str("  %scan_cont = icmp slt i64 %spos, %slen\n");
+    out.push_str("  br i1 %scan_cont, label %try_match, label %scan_done\n");
+    out.push_str("try_match:\n");
+    out.push_str("  %remaining = sub i64 %slen, %spos\n");
+    out.push_str("  %fits = icmp sge i64 %remaining, %fromlen\n");
+    out.push_str("  br i1 %fits, label %match_check_loop_init, label %copy_one_byte\n");
+    out.push_str("match_check_loop_init:\n");
+    out.push_str("  br label %match_check_loop\n");
+    out.push_str("match_check_loop:\n");
+    out.push_str("  %j = phi i64 [ 0, %match_check_loop_init ], [ %j_next, %match_check_cont ]\n");
+    out.push_str("  %j_done = icmp eq i64 %j, %fromlen\n");
+    out.push_str("  br i1 %j_done, label %is_match, label %match_check_body\n");
+    out.push_str("match_check_body:\n");
+    out.push_str("  %s_idx = add i64 %spos, %j\n");
+    out.push_str("  %s_addr = getelementptr i8, ptr %sbase, i64 %s_idx\n");
+    out.push_str("  %s_byte = load i8, ptr %s_addr\n");
+    out.push_str("  %f_addr = getelementptr i8, ptr %frombase, i64 %j\n");
+    out.push_str("  %f_byte = load i8, ptr %f_addr\n");
+    out.push_str("  %beq = icmp eq i8 %s_byte, %f_byte\n");
+    out.push_str("  br i1 %beq, label %match_check_cont, label %copy_one_byte\n");
+    out.push_str("match_check_cont:\n");
+    out.push_str("  %j_next = add i64 %j, 1\n");
+    out.push_str("  br label %match_check_loop\n");
+    out.push_str("is_match:\n");
+    out.push_str("  %ddst_m = getelementptr i8, ptr %dbase, i64 %dpos\n");
+    out.push_str("  call ptr @memcpy(ptr %ddst_m, ptr %tobase, i64 %tolen)\n");
+    out.push_str("  %spos_next_m = add i64 %spos, %fromlen\n");
+    out.push_str("  %dpos_next_m = add i64 %dpos, %tolen\n");
+    out.push_str("  br label %after_copy\n");
+    out.push_str("copy_one_byte:\n");
+    out.push_str("  %s1addr = getelementptr i8, ptr %sbase, i64 %spos\n");
+    out.push_str("  %s1byte = load i8, ptr %s1addr\n");
+    out.push_str("  %d1addr = getelementptr i8, ptr %dbase, i64 %dpos\n");
+    out.push_str("  store i8 %s1byte, ptr %d1addr\n");
+    out.push_str("  %spos_next_b = add i64 %spos, 1\n");
+    out.push_str("  %dpos_next_b = add i64 %dpos, 1\n");
+    out.push_str("  br label %after_copy\n");
+    out.push_str("after_copy:\n");
+    out.push_str("  %spos_next = phi i64 [ %spos_next_m, %is_match ], [ %spos_next_b, %copy_one_byte ]\n");
+    out.push_str("  %dpos_next = phi i64 [ %dpos_next_m, %is_match ], [ %dpos_next_b, %copy_one_byte ]\n");
+    out.push_str("  br label %scan_check\n");
+    out.push_str("scan_done:\n");
+    out.push_str("  ret ptr %cell\n");
+    // --- empty `from`: char-boundary insertion, N+1 times ---
+    out.push_str("empty_from_path:\n");
+    out.push_str("  br label %ecount_check\n");
+    out.push_str("ecount_check:\n");
+    out.push_str("  %epos = phi i64 [ 0, %empty_from_path ], [ %epos_next, %ecount_body ]\n");
+    out.push_str("  %echars = phi i64 [ 0, %empty_from_path ], [ %echars_next, %ecount_body ]\n");
+    out.push_str("  %econt = icmp slt i64 %epos, %slen\n");
+    out.push_str("  br i1 %econt, label %ecount_body, label %ecount_done\n");
+    out.push_str("ecount_body:\n");
+    out.push_str("  %eclen = call i64 @plum_utf8_len_at(ptr %sbase, i64 %epos)\n");
+    out.push_str("  %epos_next = add i64 %epos, %eclen\n");
+    out.push_str("  %echars_next = add i64 %echars, 1\n");
+    out.push_str("  br label %ecount_check\n");
+    out.push_str("ecount_done:\n");
+    out.push_str("  %pieces = add i64 %echars, 1\n");
+    out.push_str("  %insert_bytes = mul i64 %pieces, %tolen\n");
+    out.push_str("  %newlen2 = add i64 %slen, %insert_bytes\n");
+    out.push_str("  %cell2 = call ptr @plum_alloc_str(i64 %newlen2)\n");
+    out.push_str("  %dbase2 = getelementptr i8, ptr %cell2, i64 16\n");
+    out.push_str("  br label %efill_check\n");
+    out.push_str("efill_check:\n");
+    out.push_str("  %fpos = phi i64 [ 0, %ecount_done ], [ %fpos_next, %efill_body ]\n");
+    out.push_str("  %fdst = phi i64 [ 0, %ecount_done ], [ %fdst_next, %efill_body ]\n");
+    out.push_str("  %ins_dst = getelementptr i8, ptr %dbase2, i64 %fdst\n");
+    out.push_str("  call ptr @memcpy(ptr %ins_dst, ptr %tobase, i64 %tolen)\n");
+    out.push_str("  %fdst_ins = add i64 %fdst, %tolen\n");
+    out.push_str("  %fcont = icmp slt i64 %fpos, %slen\n");
+    out.push_str("  br i1 %fcont, label %efill_body, label %efill_done\n");
+    out.push_str("efill_body:\n");
+    out.push_str("  %flen = call i64 @plum_utf8_len_at(ptr %sbase, i64 %fpos)\n");
+    out.push_str("  %csrc = getelementptr i8, ptr %sbase, i64 %fpos\n");
+    out.push_str("  %cdst = getelementptr i8, ptr %dbase2, i64 %fdst_ins\n");
+    out.push_str("  call ptr @memcpy(ptr %cdst, ptr %csrc, i64 %flen)\n");
+    out.push_str("  %fpos_next = add i64 %fpos, %flen\n");
+    out.push_str("  %fdst_next = add i64 %fdst_ins, %flen\n");
+    out.push_str("  br label %efill_check\n");
+    out.push_str("efill_done:\n");
+    out.push_str("  ret ptr %cell2\n");
+    out.push_str("}\n\n");
+
+    // `@plum_str_runes` — decodes `%s`'s UTF-8 bytes into one `Int`
+    // codepoint per Unicode scalar value, building an `Array[Int]` cell
+    // directly (element words are plain `i64` codepoints, no `CgType`-
+    // aware conversion needed — see `store_array_elem`'s own doc comment
+    // for why `Int` needs none). Two-pass, matching every other new op
+    // here that can't know its own final size without a scan: pass 1
+    // counts codepoints via `@plum_utf8_len_at` (cheaper than a full
+    // decode — the codepoint VALUE isn't needed yet); pass 2 re-walks
+    // via the full `@plum_utf8_decode`, storing each codepoint directly.
+    out.push_str("define ptr @plum_str_runes(ptr %s) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %slen_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %slen = load i64, ptr %slen_addr\n");
+    out.push_str("  %sbase = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  br label %count_check\n");
+    out.push_str("count_check:\n");
+    out.push_str("  %pos1 = phi i64 [ 0, %entry ], [ %pos1_next, %count_body ]\n");
+    out.push_str("  %count = phi i64 [ 0, %entry ], [ %count_next, %count_body ]\n");
+    out.push_str("  %cont1 = icmp slt i64 %pos1, %slen\n");
+    out.push_str("  br i1 %cont1, label %count_body, label %count_done\n");
+    out.push_str("count_body:\n");
+    out.push_str("  %clen = call i64 @plum_utf8_len_at(ptr %sbase, i64 %pos1)\n");
+    out.push_str("  %pos1_next = add i64 %pos1, %clen\n");
+    out.push_str("  %count_next = add i64 %count, 1\n");
+    out.push_str("  br label %count_check\n");
+    out.push_str("count_done:\n");
+    out.push_str("  %arr = call ptr @plum_alloc_array(i64 %count)\n");
+    out.push_str("  br label %fill_check\n");
+    out.push_str("fill_check:\n");
+    out.push_str("  %pos2 = phi i64 [ 0, %count_done ], [ %pos2_next, %fill_body ]\n");
+    out.push_str("  %idx = phi i64 [ 0, %count_done ], [ %idx_next, %fill_body ]\n");
+    out.push_str("  %cont2 = icmp slt i64 %pos2, %slen\n");
+    out.push_str("  br i1 %cont2, label %fill_body, label %fill_done\n");
+    out.push_str("fill_body:\n");
+    out.push_str("  %nbytes_slot = alloca i64\n");
+    out.push_str("  %cp = call i64 @plum_utf8_decode(ptr %sbase, i64 %pos2, ptr %nbytes_slot)\n");
+    out.push_str("  %off = mul i64 %idx, 8\n");
+    out.push_str("  %byteoff = add i64 %off, 16\n");
+    out.push_str("  %eaddr = getelementptr i8, ptr %arr, i64 %byteoff\n");
+    out.push_str("  store i64 %cp, ptr %eaddr\n");
+    out.push_str("  %nbytes = load i64, ptr %nbytes_slot\n");
+    out.push_str("  %pos2_next = add i64 %pos2, %nbytes\n");
+    out.push_str("  %idx_next = add i64 %idx, 1\n");
+    out.push_str("  br label %fill_check\n");
+    out.push_str("fill_done:\n");
+    out.push_str("  ret ptr %arr\n");
+    out.push_str("}\n\n");
+
+    // `@plum_str_split` — builds `Array[Str]`, two-pass for the SAME
+    // "final piece count unknowable without a scan" reason `.runes()`
+    // is two-pass; deliberately not a growable-array design (see this
+    // chunk's own design notes for why fabricating a generic "grow an
+    // array of `Str` pointers by one, refcount-safely" primitive for
+    // this single caller would be more machinery than two-pass). Runtime
+    // branch on `%seplen == 0` (since `%sep` is an arbitrary expression,
+    // not necessarily a literal) selects between two genuinely different
+    // algorithms:
+    //  - non-empty `%sep`: pass 1 reuses `@plum_str_count_matches`
+    //    (`piece_count = match_count + 1`); pass 2 walks `%s`, cutting a
+    //    fresh `@plum_alloc_str`+`@memcpy` piece at each match and once
+    //    more for the tail after the last match.
+    //  - empty `%sep`: a char-boundary walk reusing `@plum_utf8_len_at`
+    //    (`.runes()`'s own counting loop) — `piece_count = char_count +
+    //    2` (empty leading and trailing pieces), confirmed via a real
+    //    `rustc` run during design: `"café".split("") ==
+    //    ["", "c", "a", "f", "é", ""]`.
+    out.push_str("define ptr @plum_str_split(ptr %s, ptr %sep) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %slen_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %slen = load i64, ptr %slen_addr\n");
+    out.push_str("  %seplen_addr = getelementptr i8, ptr %sep, i64 8\n");
+    out.push_str("  %seplen = load i64, ptr %seplen_addr\n");
+    out.push_str("  %sbase = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  %is_empty_sep = icmp eq i64 %seplen, 0\n");
+    out.push_str("  br i1 %is_empty_sep, label %empty_sep_path, label %nonempty_sep_path\n");
+    // --- non-empty sep ---
+    out.push_str("nonempty_sep_path:\n");
+    out.push_str("  %sepbase = getelementptr i8, ptr %sep, i64 16\n");
+    out.push_str("  %match_count = call i64 @plum_str_count_matches(ptr %s, ptr %sep)\n");
+    out.push_str("  %piece_count = add i64 %match_count, 1\n");
+    out.push_str("  %arr = call ptr @plum_alloc_array(i64 %piece_count)\n");
+    out.push_str("  %max_start = sub i64 %slen, %seplen\n");
+    out.push_str("  br label %cut_outer\n");
+    out.push_str("cut_outer:\n");
+    out.push_str("  %cursor = phi i64 [ 0, %nonempty_sep_path ], [ %cursor_next, %found_piece ]\n");
+    out.push_str("  %idx = phi i64 [ 0, %nonempty_sep_path ], [ %idx_next, %found_piece ]\n");
+    out.push_str("  br label %find_loop\n");
+    out.push_str("find_loop:\n");
+    out.push_str("  %fstart = phi i64 [ %cursor, %cut_outer ], [ %fstart_next, %mismatch_advance ]\n");
+    out.push_str("  %search_ok = icmp sle i64 %fstart, %max_start\n");
+    out.push_str("  br i1 %search_ok, label %try_pos, label %last_piece\n");
+    out.push_str("try_pos:\n");
+    out.push_str("  br label %pos_check_loop\n");
+    out.push_str("pos_check_loop:\n");
+    out.push_str("  %pj = phi i64 [ 0, %try_pos ], [ %pj_next, %pos_check_cont ]\n");
+    out.push_str("  %pj_done = icmp eq i64 %pj, %seplen\n");
+    out.push_str("  br i1 %pj_done, label %found_at_pos, label %pos_check_body\n");
+    out.push_str("pos_check_body:\n");
+    out.push_str("  %ps_idx = add i64 %fstart, %pj\n");
+    out.push_str("  %ps_addr = getelementptr i8, ptr %sbase, i64 %ps_idx\n");
+    out.push_str("  %ps_byte = load i8, ptr %ps_addr\n");
+    out.push_str("  %pn_addr = getelementptr i8, ptr %sepbase, i64 %pj\n");
+    out.push_str("  %pn_byte = load i8, ptr %pn_addr\n");
+    out.push_str("  %peq = icmp eq i8 %ps_byte, %pn_byte\n");
+    out.push_str("  br i1 %peq, label %pos_check_cont, label %mismatch_advance\n");
+    out.push_str("pos_check_cont:\n");
+    out.push_str("  %pj_next = add i64 %pj, 1\n");
+    out.push_str("  br label %pos_check_loop\n");
+    out.push_str("found_at_pos:\n");
+    out.push_str("  %piecelen = sub i64 %fstart, %cursor\n");
+    out.push_str("  %piece_cell = call ptr @plum_alloc_str(i64 %piecelen)\n");
+    out.push_str("  %piece_src = getelementptr i8, ptr %sbase, i64 %cursor\n");
+    out.push_str("  %piece_dst = getelementptr i8, ptr %piece_cell, i64 16\n");
+    out.push_str("  call ptr @memcpy(ptr %piece_dst, ptr %piece_src, i64 %piecelen)\n");
+    out.push_str("  %pword = ptrtoint ptr %piece_cell to i64\n");
+    out.push_str("  %poff = mul i64 %idx, 8\n");
+    out.push_str("  %pbyteoff = add i64 %poff, 16\n");
+    out.push_str("  %paddr = getelementptr i8, ptr %arr, i64 %pbyteoff\n");
+    out.push_str("  store i64 %pword, ptr %paddr\n");
+    out.push_str("  br label %found_piece\n");
+    out.push_str("found_piece:\n");
+    out.push_str("  %cursor_next = add i64 %fstart, %seplen\n");
+    out.push_str("  %idx_next = add i64 %idx, 1\n");
+    out.push_str("  br label %cut_outer\n");
+    out.push_str("mismatch_advance:\n");
+    out.push_str("  %fstart_next = add i64 %fstart, 1\n");
+    out.push_str("  br label %find_loop\n");
+    out.push_str("last_piece:\n");
+    out.push_str("  %lastlen = sub i64 %slen, %cursor\n");
+    out.push_str("  %last_cell = call ptr @plum_alloc_str(i64 %lastlen)\n");
+    out.push_str("  %last_src = getelementptr i8, ptr %sbase, i64 %cursor\n");
+    out.push_str("  %last_dst = getelementptr i8, ptr %last_cell, i64 16\n");
+    out.push_str("  call ptr @memcpy(ptr %last_dst, ptr %last_src, i64 %lastlen)\n");
+    out.push_str("  %lword = ptrtoint ptr %last_cell to i64\n");
+    out.push_str("  %loff = mul i64 %idx, 8\n");
+    out.push_str("  %lbyteoff = add i64 %loff, 16\n");
+    out.push_str("  %laddr = getelementptr i8, ptr %arr, i64 %lbyteoff\n");
+    out.push_str("  store i64 %lword, ptr %laddr\n");
+    out.push_str("  ret ptr %arr\n");
+    // --- empty sep: char-boundary split, N+2 pieces ---
+    out.push_str("empty_sep_path:\n");
+    out.push_str("  %empty0 = call ptr @plum_alloc_str(i64 0)\n");
+    out.push_str("  br label %ecount_check2\n");
+    out.push_str("ecount_check2:\n");
+    out.push_str("  %epos2 = phi i64 [ 0, %empty_sep_path ], [ %epos2_next, %ecount_body2 ]\n");
+    out.push_str("  %echars2 = phi i64 [ 0, %empty_sep_path ], [ %echars2_next, %ecount_body2 ]\n");
+    out.push_str("  %econt2 = icmp slt i64 %epos2, %slen\n");
+    out.push_str("  br i1 %econt2, label %ecount_body2, label %ecount_done2\n");
+    out.push_str("ecount_body2:\n");
+    out.push_str("  %eclen2 = call i64 @plum_utf8_len_at(ptr %sbase, i64 %epos2)\n");
+    out.push_str("  %epos2_next = add i64 %epos2, %eclen2\n");
+    out.push_str("  %echars2_next = add i64 %echars2, 1\n");
+    out.push_str("  br label %ecount_check2\n");
+    out.push_str("ecount_done2:\n");
+    out.push_str("  %piece_count2 = add i64 %echars2, 2\n");
+    out.push_str("  %arr2 = call ptr @plum_alloc_array(i64 %piece_count2)\n");
+    out.push_str("  %word0 = ptrtoint ptr %empty0 to i64\n");
+    out.push_str("  %addr0 = getelementptr i8, ptr %arr2, i64 16\n");
+    out.push_str("  store i64 %word0, ptr %addr0\n");
+    out.push_str("  br label %esplit_check\n");
+    out.push_str("esplit_check:\n");
+    out.push_str("  %epos3 = phi i64 [ 0, %ecount_done2 ], [ %epos3_next, %esplit_body ]\n");
+    out.push_str("  %eidx3 = phi i64 [ 1, %ecount_done2 ], [ %eidx3_next, %esplit_body ]\n");
+    out.push_str("  %econt3 = icmp slt i64 %epos3, %slen\n");
+    out.push_str("  br i1 %econt3, label %esplit_body, label %esplit_tail\n");
+    out.push_str("esplit_body:\n");
+    out.push_str("  %eclen3 = call i64 @plum_utf8_len_at(ptr %sbase, i64 %epos3)\n");
+    out.push_str("  %echar_cell = call ptr @plum_alloc_str(i64 %eclen3)\n");
+    out.push_str("  %echar_src = getelementptr i8, ptr %sbase, i64 %epos3\n");
+    out.push_str("  %echar_dst = getelementptr i8, ptr %echar_cell, i64 16\n");
+    out.push_str("  call ptr @memcpy(ptr %echar_dst, ptr %echar_src, i64 %eclen3)\n");
+    out.push_str("  %eword3 = ptrtoint ptr %echar_cell to i64\n");
+    out.push_str("  %eoff3 = mul i64 %eidx3, 8\n");
+    out.push_str("  %ebyteoff3 = add i64 %eoff3, 16\n");
+    out.push_str("  %eaddr3 = getelementptr i8, ptr %arr2, i64 %ebyteoff3\n");
+    out.push_str("  store i64 %eword3, ptr %eaddr3\n");
+    out.push_str("  %epos3_next = add i64 %epos3, %eclen3\n");
+    out.push_str("  %eidx3_next = add i64 %eidx3, 1\n");
+    out.push_str("  br label %esplit_check\n");
+    out.push_str("esplit_tail:\n");
+    out.push_str("  %empty_tail = call ptr @plum_alloc_str(i64 0)\n");
+    out.push_str("  %tword3 = ptrtoint ptr %empty_tail to i64\n");
+    out.push_str("  %toff3 = mul i64 %eidx3, 8\n");
+    out.push_str("  %tbyteoff3 = add i64 %toff3, 16\n");
+    out.push_str("  %taddr3 = getelementptr i8, ptr %arr2, i64 %tbyteoff3\n");
+    out.push_str("  store i64 %tword3, ptr %taddr3\n");
+    out.push_str("  ret ptr %arr2\n");
+    out.push_str("}\n\n");
+
     // --- array runtime ---
     //
     // Cell layout: `{ i64 refcount, i64 len, <elemTy word> elements[len] }`
@@ -1988,19 +2786,30 @@ mod tests {
         let ir = emit(&prog, &sigs(&[("go", vec![CgType::Bool, CgType::Bool], CgType::Bool)]), &TagFields::new()).unwrap();
         assert!(ir.contains("br i1 %a"), "{ir}");
         assert!(ir.contains(" = phi i1 "), "{ir}");
-        assert!(!ir.contains(" and i1 "), "{ir}");
+        // Scoped to `@go`'s OWN body, not the whole emitted program —
+        // as of this chunk's Unicode string runtime, `emit_runtime`
+        // itself legitimately uses plain `and i1` elsewhere (e.g.
+        // `@plum_is_unicode_whitespace`'s range checks), so a whole-
+        // program substring check would be a false positive unrelated
+        // to whether `@go`'s OWN `&&` short-circuits.
+        let go_start = ir.find("define i1 @go(").expect("`@go` should be emitted");
+        let go_body = &ir[go_start..];
+        assert!(!go_body.contains(" and i1 "), "{go_body}");
     }
 
     #[test]
     fn unsupported_construct_is_a_clear_error_not_a_panic() {
-        // `Str` literals are supported as of this chunk (see the
-        // string-literal tests below) — `StrRunes` (Unicode-aware,
-        // explicitly deferred per this chunk's scope) is still a clear,
-        // unsupported-construct error instead.
+        // All six Unicode-aware string ops (`.runes()`/`.trim()`/
+        // `.split()`/`.to_upper()`/`.to_lower()`/`.replace()`) are
+        // supported as of this chunk (see the dedicated tests for each
+        // below) — `RefNew` (a genuinely separate, still-unimplemented
+        // feature: `ref(v)`'s shared-mutable-cell runtime has no
+        // codegen at all yet) is still a clear, unsupported-construct
+        // error instead.
         let prog = program(vec![Function {
             name: "go".to_string(),
             params: vec![],
-            body: Expr::StrRunes { base: Box::new(Expr::Str("x".to_string())) },
+            body: Expr::RefNew { value: Box::new(Expr::Int(1)) },
         }]);
         let err = emit(&prog, &sigs(&[("go", vec![], CgType::Unit)]), &TagFields::new()).expect_err("expected a clear error");
         assert!(err.contains("does not yet support"), "unexpected error: {err}");
@@ -2347,13 +3156,18 @@ mod tests {
     }
 
     #[test]
-    fn a_still_unsupported_string_op_is_a_clear_error() {
+    fn a_still_unsupported_construct_is_a_clear_error() {
+        // `RefGet`/`RefSet` are the other two thirds of the still-
+        // wholly-unimplemented `ref`/`.get()`/`.set()` feature (see
+        // `unsupported_construct_is_a_clear_error_not_a_panic`'s own
+        // updated doc comment for why `RefNew` moved here from a
+        // now-supported string op).
         let prog = program(vec![Function {
             name: "go".to_string(),
             params: vec!["s".to_string()],
-            body: Expr::StrToUpper { base: Box::new(Expr::Var("s".to_string())) },
+            body: Expr::RefGet { base: Box::new(Expr::Var("s".to_string())) },
         }]);
-        let err = emit(&prog, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new())
+        let err = emit(&prog, &sigs(&[("go", vec![CgType::Heap], CgType::Int)]), &TagFields::new())
             .expect_err("expected a clear error");
         assert!(err.contains("does not yet support"), "unexpected error: {err}");
     }
@@ -3639,5 +4453,197 @@ mod tests {
             .expect_err("expected a CStr-shaped struct field to be rejected once `spawn` is used");
         assert!(err.contains("Holder"), "unexpected error: {err}");
         assert!(err.contains("CStr"), "unexpected error: {err}");
+    }
+
+    // --- Unicode string ops: mechanical shape tests ---
+    //
+    // IR-text shape only, not correctness (real UTF-8 decoding/
+    // boundary/piece-count correctness is proven by `plumc`'s own
+    // compile-and-run tests instead — IR inspection can't tell a
+    // correct decoder from a subtly wrong one, only its overall SHAPE).
+
+    #[test]
+    fn str_runes_emits_a_count_loop_then_a_fill_loop_sized_by_a_register() {
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string()],
+            body: Expr::StrRunes { base: Box::new(Expr::Var("s".to_string())) },
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str], CgType::Array(Box::new(CgType::Int)))]), &TagFields::new()).unwrap();
+        assert!(ir.contains("define ptr @plum_str_runes(ptr %s)"), "{ir}");
+        // Count pass uses the cheap classify-only primitive; fill pass
+        // uses the full decode.
+        assert!(ir.contains("call i64 @plum_utf8_len_at("), "{ir}");
+        assert!(ir.contains("call i64 @plum_utf8_decode("), "{ir}");
+        // The array is allocated at a COUNTED size (a register from the
+        // count loop), never a literal immediate.
+        assert!(ir.contains("%arr = call ptr @plum_alloc_array(i64 %count)"), "{ir}");
+    }
+
+    #[test]
+    fn to_upper_and_to_lower_use_the_exact_ascii_boundary_immediates() {
+        // `'a'`=97, `'z'`=122, `'A'`=65, `'Z'`=90 — an off-by-one here is
+        // a real bug class IR inspection genuinely can catch cheaply
+        // (LLVM IR has no hex integer literal syntax, confirmed via a
+        // real `clang` parse failure during design — see `emit_runtime`'s
+        // own comment above `@plum_str_to_upper` — so these are asserted
+        // as the plain decimal equivalents of 0x61/0x7A/0x41/0x5A).
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string()],
+            body: Expr::StrToUpper { base: Box::new(Expr::Var("s".to_string())) },
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
+        assert!(ir.contains("%ge = icmp uge i8 %b, 97"), "{ir}");
+        assert!(ir.contains("%le = icmp ule i8 %b, 122"), "{ir}");
+        assert!(ir.contains("%subbed = sub i8 %b, 32"), "{ir}");
+
+        let prog2 = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string()],
+            body: Expr::StrToLower { base: Box::new(Expr::Var("s".to_string())) },
+        }]);
+        let ir2 = emit(&prog2, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
+        assert!(ir2.contains("%ge = icmp uge i8 %b, 65"), "{ir2}");
+        assert!(ir2.contains("%le = icmp ule i8 %b, 90"), "{ir2}");
+        assert!(ir2.contains("%added = add i8 %b, 32"), "{ir2}");
+    }
+
+    #[test]
+    fn to_upper_reuse_and_to_lower_reuse_call_no_realloc_at_all() {
+        // Fixed-length transform (ASCII case mapping never changes byte
+        // length) — the reuse branch mutates in place via `_inplace`,
+        // never `@realloc`s.
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string()],
+            body: Expr::StrToUpperReuse { reuse_of: "s".to_string() },
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
+        assert!(ir.contains("call void @plum_str_to_upper_inplace(ptr %s)"), "{ir}");
+        // Scoped to `@go`'s own body — `@realloc` is always DECLARED
+        // program-wide (`declare ptr @realloc(...)`, needed by other
+        // ops entirely), so a whole-program substring check would be a
+        // false positive; what matters is `@go`'s body never CALLS it.
+        let go_body = &ir[ir.find("define ptr @go(").unwrap()..];
+        assert!(!go_body.contains("call ptr @realloc"), "{go_body}");
+
+        let prog2 = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string()],
+            body: Expr::StrToLowerReuse { reuse_of: "s".to_string() },
+        }]);
+        let ir2 = emit(&prog2, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
+        assert!(ir2.contains("call void @plum_str_to_lower_inplace(ptr %s)"), "{ir2}");
+        let go_body2 = &ir2[ir2.find("define ptr @go(").unwrap()..];
+        assert!(!go_body2.contains("call ptr @realloc"), "{go_body2}");
+    }
+
+    #[test]
+    fn str_trim_reuse_calls_no_realloc_either_only_memmove() {
+        // Trimming only ever SHRINKS — same "no @realloc needed" shape
+        // as case-mapping's reuse branch, just via `@memmove` (the
+        // trimmed range can overlap `[0, newlen)`) instead of a byte
+        // loop.
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string()],
+            body: Expr::StrTrimReuse { reuse_of: "s".to_string() },
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
+        assert!(ir.contains("call void @plum_str_trim_inplace(ptr %s)"), "{ir}");
+        let go_body = &ir[ir.find("define ptr @go(").unwrap()..];
+        assert!(!go_body.contains("call ptr @realloc"), "{go_body}");
+    }
+
+    #[test]
+    fn str_replace_reuse_deliberately_does_not_realloc_in_place() {
+        // Documented deviation from this chunk's original design notes
+        // (see the `StrReplaceReuse` codegen arm's own doc comment for
+        // the full aliasing-hazard reasoning): the reuse branch calls
+        // the SAME fresh-allocating `@plum_str_replace` — safe in every
+        // case, including growth — then frees the OLD cell directly,
+        // rather than attempting an unsound in-place forward copy.
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string(), "from".to_string(), "to".to_string()],
+            body: Expr::StrReplaceReuse {
+                reuse_of: "s".to_string(),
+                from: Box::new(Expr::Var("from".to_string())),
+                to: Box::new(Expr::Var("to".to_string())),
+            },
+        }]);
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Str, CgType::Str, CgType::Str], CgType::Str)]),
+            &TagFields::new(),
+        )
+        .unwrap();
+        // Both branches call the same fresh-building runtime function...
+        let call_count = ir.matches("call ptr @plum_str_replace(ptr %s, ptr %from, ptr %to)").count();
+        assert_eq!(call_count, 2, "{ir}");
+        // ...and the reuse branch additionally frees the old cell.
+        assert!(ir.contains("call void @free(ptr %s)"), "{ir}");
+    }
+
+    #[test]
+    fn str_trim_split_and_replace_call_their_own_new_runtime_functions() {
+        let trim_prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string()],
+            body: Expr::StrTrim { base: Box::new(Expr::Var("s".to_string())) },
+        }]);
+        let trim_ir = emit(&trim_prog, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
+        assert!(trim_ir.contains("call ptr @plum_str_trim(ptr %s)"), "{trim_ir}");
+
+        let split_prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string(), "sep".to_string()],
+            body: Expr::StrSplit { base: Box::new(Expr::Var("s".to_string())), sep: Box::new(Expr::Var("sep".to_string())) },
+        }]);
+        let split_ir = emit(
+            &split_prog,
+            &sigs(&[("go", vec![CgType::Str, CgType::Str], CgType::Array(Box::new(CgType::Str)))]),
+            &TagFields::new(),
+        )
+        .unwrap();
+        assert!(split_ir.contains("call ptr @plum_str_split(ptr %s, ptr %sep)"), "{split_ir}");
+
+        let replace_prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string(), "from".to_string(), "to".to_string()],
+            body: Expr::StrReplace {
+                base: Box::new(Expr::Var("s".to_string())),
+                from: Box::new(Expr::Var("from".to_string())),
+                to: Box::new(Expr::Var("to".to_string())),
+            },
+        }]);
+        let replace_ir = emit(
+            &replace_prog,
+            &sigs(&[("go", vec![CgType::Str, CgType::Str, CgType::Str], CgType::Str)]),
+            &TagFields::new(),
+        )
+        .unwrap();
+        assert!(replace_ir.contains("call ptr @plum_str_replace(ptr %s, ptr %from, ptr %to)"), "{replace_ir}");
+    }
+
+    #[test]
+    fn str_split_registers_array_of_str_release_function() {
+        // `.split()` builds `Array[Str]` — its element-release function
+        // must be registered (`needed_arrays`) even though no struct
+        // field or function signature anywhere else in this tiny program
+        // mentions `Array[Str]`.
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string(), "sep".to_string()],
+            body: Expr::StrSplit { base: Box::new(Expr::Var("s".to_string())), sep: Box::new(Expr::Var("sep".to_string())) },
+        }]);
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Str, CgType::Str], CgType::Array(Box::new(CgType::Str)))]),
+            &TagFields::new(),
+        )
+        .unwrap();
+        assert!(ir.contains("define void @plum_rc_dec_array_Str(ptr %p)"), "{ir}");
     }
 }
