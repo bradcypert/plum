@@ -51,6 +51,7 @@
 //! short-circuit `&&`/`||` already work.
 
 use crate::{CgType, FnSig};
+use plum_ir::ir;
 use plum_ir::ir::{BinOp, Expr, MatchArm, PrimTy, RcOp, SelectArm, UnOp};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -168,6 +169,31 @@ pub(crate) struct Ctx<'a> {
     /// channel-queue runtime (and the shared deep-copy runtime) but not
     /// `pthread_create`/`pthread_join`, and vice versa.
     pub(crate) needs_channel_runtime: &'a std::cell::RefCell<bool>,
+    /// Every declared `extern "C"` function, keyed by name — built ONCE
+    /// in `lib.rs::emit_program` from `program.externs` (already the
+    /// complete, explicit list — no reactive discovery needed, unlike
+    /// `needed_arrays`/`trampolines`/etc.) and threaded through
+    /// unchanged, matching `sigs`/`tag_fields`'s own "built once,
+    /// referenced read-only everywhere" shape. Looked up by
+    /// `codegen_extern_call` to recover an `ExternCall` node's full
+    /// declared signature (`ir::Expr::ExternCall` itself only carries
+    /// the callee NAME and argument expressions, not its types).
+    pub(crate) externs: &'a HashMap<String, ir::ExternFn>,
+    /// Bare-top-level-function-name -> its already-generated
+    /// `@c_trampoline$<name>` function's name — the C-callback
+    /// counterpart to `trampolines`, kept in a SEPARATE table rather
+    /// than reusing it: an ordinary closure trampoline always has a
+    /// leading `ptr %env` parameter (part of every Plum closure's own
+    /// calling convention), while a C-callback trampoline has NONE at
+    /// all — a real C API has no way to supply one. The same target
+    /// function referenced BOTH as an ordinary higher-order Plum value
+    /// AND as a callback argument in the same program needs two
+    /// DIFFERENT generated functions; conflating the two tables under
+    /// one key would risk silently reusing the wrong shape for one of
+    /// the two call sites — a genuine calling-convention bug, not just
+    /// a naming collision. See `codegen_callback_arg`/`emit_c_callback_
+    /// trampoline_fn`.
+    pub(crate) c_callback_trampolines: &'a std::cell::RefCell<HashMap<String, String>>,
 }
 
 /// Registers `elem` (and any type it recursively contains) into
@@ -449,7 +475,7 @@ fn store_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, value: &str,
         // `Heap` — see `CgType::Str`/`Array`'s own doc comment for why
         // they're still distinct at the `CgType` level despite sharing
         // this exact store/load mechanism.
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -478,7 +504,7 @@ fn load_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, expected_ty: 
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -518,7 +544,7 @@ fn store_closure_capture(em: &mut Emitter, cell_ptr: &str, index: usize, value: 
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -546,7 +572,7 @@ fn load_closure_capture(em: &mut Emitter, cell_ptr: &str, index: usize, expected
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -702,7 +728,7 @@ fn store_array_elem(em: &mut Emitter, array_ptr: &str, index_reg: &str, value: &
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -729,7 +755,7 @@ fn load_array_elem(em: &mut Emitter, array_ptr: &str, index_reg: &str, expected_
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -1451,6 +1477,8 @@ fn emit_closure_body_fn(
         trampolines: ctx.trampolines,
         needs_spawn_runtime: ctx.needs_spawn_runtime,
         needs_channel_runtime: ctx.needs_channel_runtime,
+        externs: ctx.externs,
+        c_callback_trampolines: ctx.c_callback_trampolines,
     };
     let (result, _) = codegen_expr(body, &env, &mut em, &inner_ctx, true)?;
     if result.is_some() {
@@ -1695,6 +1723,346 @@ fn emit_trampoline_fn(trampoline_name: &str, target_name: &str, sig: &FnSig) -> 
     )
 }
 
+// --- FFI: extern calls, CStr, C callbacks ---
+//
+// Scope: scalar (`Int`/`Float`/`Bool`) + `CStr` + C-callback parameters/
+// returns — struct-by-value marshaling (the real System V ABI) is
+// separate, deferred follow-up work (`crate::extern_type_to_llvm`'s own
+// doc comment). Unlike the interpreter (`plum-interp`, which needs
+// `libffi` because a call frame's signature is only known at Plum
+// RUNTIME), an `ExternFn`'s signature is fully known at codegen time —
+// an `ExternCall` compiles to an ordinary, statically-typed LLVM `call`
+// instruction to a `declare`d symbol, exactly like this backend already
+// calls `malloc`/`pthread_create`/`memcpy`. The one genuinely subtle
+// piece is `Bool` marshaling: C's `int` is `i32`-wide (this backend's
+// own `CgType::Bool` is `i1`), so every crossing needs an EXPLICIT
+// conversion, never a bitcast/truncation pretending the two are the
+// same width.
+
+/// Converts an already-computed Plum value (`reg`, `ty`) into the
+/// operand text (`"<llvmty> <reg>"`) an `ExternCall`'s argument list
+/// needs for `param_ty`. `Bool` is the one case that isn't a direct
+/// pass-through: `zext i1 to i32` — going INTO a C call, Plum's `i1`
+/// must be widened to C's `int` representation. `CStr`/`Str` are
+/// deliberately DISTINCT `CgType`s that both happen to already be `ptr`
+/// at the LLVM level — an extern `CStr` parameter only ever accepts a
+/// `CgType::CStr` value (produced by `.as_cstr()`), never a raw
+/// `CgType::Str` directly, matching `plum-types`' own "no implicit
+/// `Str`->`CStr` coercion" restriction (see `ir::ExternType::Str`'s own
+/// doc comment) — re-verified here structurally, the same "trust but
+/// verify against what's actually reachable from this IR" stance every
+/// other codegen arm in this module takes.
+fn marshal_arg_to_c(reg: &str, ty: &CgType, param_ty: &ir::ExternType, em: &mut Emitter) -> Result<String, String> {
+    match (param_ty, ty) {
+        (ir::ExternType::Int, CgType::Int) => Ok(format!("i64 {reg}")),
+        (ir::ExternType::Float, CgType::Float) => Ok(format!("double {reg}")),
+        (ir::ExternType::Bool, CgType::Bool) => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = zext i1 {reg} to i32"));
+            Ok(format!("i32 {r}"))
+        }
+        (ir::ExternType::Str, CgType::CStr) => Ok(format!("ptr {reg}")),
+        (expected, found) => {
+            Err(format!("codegen: extern call argument type mismatch — expected {expected:?}, found {found:?}"))
+        }
+    }
+}
+
+/// `sqrt(2.0)` (inside `unsafe { .. }`) — a call to a DECLARED `extern
+/// "C"` function, resolved once here against `ctx.externs` (`ir::Expr::
+/// ExternCall` itself only carries the callee name and argument
+/// expressions, not its declared types). Each argument is marshaled per
+/// its declared `ExternType` (`marshal_arg_to_c` for a scalar/`CStr`;
+/// `codegen_callback_arg` — special-cased BEFORE `codegen_value` ever
+/// runs on it — for a `Callback`-typed slot, see that function's own
+/// doc comment for why). Return marshaling: a `Bool` return uses `icmp
+/// ne i32 .., 0` — NOT `trunc` — deliberately: C's "any nonzero value is
+/// true" convention differs from a naive "truncate to the low bit"
+/// reading, which would silently misread e.g. a `2` as `false`. A `Str`
+/// (`CStr` on the Plum side) return is NULL-checked via the same
+/// `@plum_abort` runtime-check mechanism `emit_runtime_check` already
+/// uses for array bounds checks, then `strlen`'d and copied into a
+/// FRESH `@plum_alloc_str` cell — the original C pointer is
+/// intentionally never freed (unknown provenance: might be `malloc`'d,
+/// might be static, might be something else entirely), matching the
+/// interpreter's own documented v1 leak-avoidance tradeoff exactly (see
+/// `plum_interp::Interpreter::eval`'s matching `ExternCall` case).
+fn codegen_extern_call(name: &str, args: &[Expr], env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let extern_fn = ctx
+        .externs
+        .get(name)
+        .cloned()
+        .ok_or_else(|| format!("codegen: unknown extern function {name:?}"))?;
+    if extern_fn.param_types.len() != args.len() {
+        return Err(format!(
+            "codegen: extern function {name:?} expects {} argument(s), found {}",
+            extern_fn.param_types.len(),
+            args.len()
+        ));
+    }
+    let mut call_arg_parts = Vec::with_capacity(args.len());
+    for (arg_expr, param_ty) in args.iter().zip(&extern_fn.param_types) {
+        let part = match param_ty {
+            ir::ExternType::Callback { params: cb_params, ret: cb_ret } => {
+                codegen_callback_arg(arg_expr, cb_params, cb_ret.as_deref(), ctx)?
+            }
+            ir::ExternType::Int | ir::ExternType::Float | ir::ExternType::Bool | ir::ExternType::Str => {
+                let (reg, ty) = codegen_value(arg_expr, env, em, ctx)?;
+                marshal_arg_to_c(&reg, &ty, param_ty, em)?
+            }
+            ir::ExternType::Struct(sname, _) => {
+                return Err(format!(
+                    "codegen does not yet support struct-by-value FFI marshaling (struct {sname:?} argument to \
+                     extern function {name:?}) — scalars/CStr/callbacks only this chunk"
+                ));
+            }
+        };
+        call_arg_parts.push(part);
+    }
+    let call_args_str = call_arg_parts.join(", ");
+    match &extern_fn.ret_type {
+        None => {
+            em.push(format!("  call void @{name}({call_args_str})"));
+            Ok(("0".to_string(), CgType::Unit))
+        }
+        Some(ir::ExternType::Int) => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call i64 @{name}({call_args_str})"));
+            Ok((r, CgType::Int))
+        }
+        Some(ir::ExternType::Float) => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = call double @{name}({call_args_str})"));
+            Ok((r, CgType::Float))
+        }
+        // C's "any nonzero is true" convention — `icmp ne i32 .., 0`,
+        // NOT `trunc i32 .. to i1` (which would only look at the LOW
+        // bit, silently misreading e.g. a `2` as `false`). This is the
+        // return-direction counterpart to `marshal_arg_to_c`'s `zext`.
+        Some(ir::ExternType::Bool) => {
+            let raw = em.fresh_reg();
+            em.push(format!("  {raw} = call i32 @{name}({call_args_str})"));
+            let b = em.fresh_reg();
+            em.push(format!("  {b} = icmp ne i32 {raw}, 0"));
+            Ok((b, CgType::Bool))
+        }
+        Some(ir::ExternType::Str) => {
+            let raw = em.fresh_reg();
+            em.push(format!("  {raw} = call ptr @{name}({call_args_str})"));
+            let is_null = em.fresh_reg();
+            em.push(format!("  {is_null} = icmp eq ptr {raw}, null"));
+            let not_null = em.fresh_reg();
+            em.push(format!("  {not_null} = xor i1 {is_null}, 1"));
+            emit_runtime_check(em, ctx, &not_null, &format!("extern function {name:?} returned a null string pointer"));
+            let len = em.fresh_reg();
+            em.push(format!("  {len} = call i64 @strlen(ptr {raw})"));
+            let cell = em.fresh_reg();
+            em.push(format!("  {cell} = call ptr @plum_alloc_str(i64 {len})"));
+            let dst = em.fresh_reg();
+            em.push(format!("  {dst} = getelementptr i8, ptr {cell}, i64 16"));
+            let memcpy_r = em.fresh_reg();
+            em.push(format!("  {memcpy_r} = call ptr @memcpy(ptr {dst}, ptr {raw}, i64 {len})"));
+            Ok((cell, CgType::Str))
+        }
+        // Rejected before this node is ever produced — see `plum_types::
+        // context::check_ffi_safe`'s matching restriction (a callback
+        // type is only ever meaningful as a PARAMETER, never a return
+        // type) — mirrors `plum_interp::Interpreter::eval`'s identical
+        // `unreachable!` on this exact case.
+        Some(ir::ExternType::Callback { .. }) => {
+            unreachable!("a callback return type is rejected at type-checking time, before this node is produced")
+        }
+        Some(ir::ExternType::Struct(sname, _)) => Err(format!(
+            "codegen does not yet support struct-by-value FFI marshaling (struct {sname:?} returned from extern \
+             function {name:?}) — scalars/CStr/callbacks only this chunk"
+        )),
+    }
+}
+
+/// `s.as_cstr()` — validates `s` (a `CgType::Str`) has no embedded NUL
+/// byte (via a declared libc `@memchr`, the SAME "reach for a real libc
+/// primitive over a hand-rolled loop" precedent `@strlen` above already
+/// follows), then produces a FRESH, independently-owned `CgType::CStr`
+/// value: `malloc`s a `len+1`-byte buffer, `memcpy`s the string's bytes
+/// into it, and manually stores a trailing NUL.
+///
+/// # Why a fresh allocation is REQUIRED, not an optimization left on the table
+///
+/// `@plum_alloc_str` already reserves one trailing NUL byte past every
+/// string cell's own `len` (see `lib.rs::emit_runtime`'s string-runtime
+/// doc comment) — so it's tempting to just alias a pointer into `str_cell
+/// + 16` instead of copying at all. That shortcut would be UNSOUND, not
+/// merely a missed optimization: `plum_ir::fbip`'s `mark_last_uses`
+/// treats `AsCStr`'s inner expression as an ORDINARY heap-consuming
+/// occurrence (see `fbip.rs`'s own `Expr::AsCStr` arm) — meaning THIS
+/// function is the ONLY place that ever discharges the incoming `Str`'s
+/// refcount ownership; no separate `Dec` is emitted anywhere else for a
+/// `Str` wrapped in `.as_cstr()`. That means this function MUST call
+/// `@plum_rc_dec_str` on the original cell after copying — and the
+/// moment it does, an ALIASED pointer into that same cell would dangle
+/// the instant the dec drops the refcount to zero and frees it (the
+/// common case whenever this was the `Str`'s last use). A fresh
+/// `malloc`+`memcpy`, entirely independent of the original cell's
+/// lifetime, is the only sound design given `fbip`'s existing ownership
+/// contract.
+fn codegen_as_cstr(inner: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (str_reg, str_ty) = codegen_value(inner, env, em, ctx)?;
+    if str_ty != CgType::Str {
+        return Err(format!("codegen: `.as_cstr()` requires a Str value, found {str_ty:?}"));
+    }
+    let len = load_array_len(em, &str_reg);
+    let bytes_ptr = em.fresh_reg();
+    em.push(format!("  {bytes_ptr} = getelementptr i8, ptr {str_reg}, i64 16"));
+
+    // Embedded-NUL validation: a C string ends at the first NUL byte, so
+    // an embedded one would silently truncate the string once it
+    // crosses the FFI boundary — checked eagerly, right here, matching
+    // the interpreter's own `.as_cstr()` semantics exactly.
+    let memchr_r = em.fresh_reg();
+    em.push(format!("  {memchr_r} = call ptr @memchr(ptr {bytes_ptr}, i32 0, i64 {len})"));
+    let no_embedded_nul = em.fresh_reg();
+    em.push(format!("  {no_embedded_nul} = icmp eq ptr {memchr_r}, null"));
+    emit_runtime_check(em, ctx, &no_embedded_nul, "`.as_cstr()`: string contains an embedded null byte");
+
+    let alloc_size = em.fresh_reg();
+    em.push(format!("  {alloc_size} = add i64 {len}, 1"));
+    let buf = em.fresh_reg();
+    em.push(format!("  {buf} = call ptr @malloc(i64 {alloc_size})"));
+    let memcpy_r = em.fresh_reg();
+    em.push(format!("  {memcpy_r} = call ptr @memcpy(ptr {buf}, ptr {bytes_ptr}, i64 {len})"));
+    let nul_addr = em.fresh_reg();
+    em.push(format!("  {nul_addr} = getelementptr i8, ptr {buf}, i64 {len}"));
+    em.push(format!("  store i8 0, ptr {nul_addr}"));
+
+    // The mandatory ownership discharge — see this function's own doc
+    // comment. MUST reference `str_reg`, the ORIGINAL cell — never
+    // `buf`, the fresh unrefcounted `CStr` buffer, which carries no
+    // refcount at all to discharge.
+    em.push(format!("  call void @plum_rc_dec_str(ptr {str_reg})"));
+
+    Ok((buf, CgType::CStr))
+}
+
+/// A `Callback`-typed `ExternCall` ARGUMENT — special-cased in
+/// `codegen_extern_call`'s own arg loop, matched against the raw
+/// argument EXPRESSION (never routed through `codegen_value` at all):
+/// `plum_types::Infer`'s own callback-argument check (shared by both the
+/// interpreter and codegen pipelines — see this module's own top-of-
+/// section doc comment) has already proven, before this ever runs, that
+/// a `Callback`-typed argument is a bare top-level function name, never
+/// a closure literal or local variable — so this doesn't need to
+/// re-derive that itself, only look the name up.
+///
+/// Generates (once per distinct target name, memoized in `Ctx::
+/// c_callback_trampolines` — see that field's own doc comment for why
+/// it's a SEPARATE table from `Ctx::trampolines`) an env-free trampoline
+/// `@c_trampoline$<name>(cParams...) -> cRet` and references its symbol
+/// DIRECTLY as the call argument — no `ptrtoint`/`inttoptr` round-trip
+/// needed at all (simpler than the ordinary closure-value case in
+/// `codegen_bare_fn_value`, which genuinely needs to store a code
+/// address as a WORD inside a heap cell; here there's no intermediate
+/// storage step — a bare LLVM function symbol reference is already a
+/// valid `ptr`-typed call argument on its own).
+fn codegen_callback_arg(
+    arg_expr: &Expr,
+    cb_params: &[ir::ExternType],
+    cb_ret: Option<&ir::ExternType>,
+    ctx: &Ctx,
+) -> Result<String, String> {
+    let Expr::Var(name) = arg_expr else {
+        return Err(format!(
+            "codegen: a callback argument must be a bare top-level function name, found {arg_expr:?} — matching \
+             `plum_types::Infer`'s own restriction (only a bare function name, never a closure literal or local \
+             variable, may be passed where a callback is expected)"
+        ));
+    };
+    let sig = ctx
+        .sigs
+        .get(name)
+        .cloned()
+        .ok_or_else(|| format!("codegen: unknown function {name:?} (callback argument)"))?;
+    let trampoline_name = {
+        let mut memo = ctx.c_callback_trampolines.borrow_mut();
+        if let Some(existing) = memo.get(name) {
+            existing.clone()
+        } else {
+            let tramp = format!("c_trampoline${name}");
+            let def = emit_c_callback_trampoline_fn(&tramp, name, &sig, cb_params, cb_ret)?;
+            ctx.closure_defs.borrow_mut().push(def);
+            memo.insert(name.to_string(), tramp.clone());
+            tramp
+        }
+    };
+    Ok(format!("ptr @{trampoline_name}"))
+}
+
+/// The C-callback counterpart to `emit_trampoline_fn` — generates
+/// `@c_trampoline$<name>(cParams...) -> cRet` with NO leading `ptr %env`
+/// parameter at all (the defining structural difference from an
+/// ordinary closure trampoline — see `Ctx::c_callback_trampolines`'s own
+/// doc comment for why a real C API has no way to supply one). Converts
+/// each incoming C-ABI parameter to its Plum representation (a `Bool`
+/// parameter: `icmp ne i32 %pN, 0`, the SAME "any nonzero is true"
+/// widening `codegen_extern_call`'s own `Bool`-return handling uses, not
+/// a `trunc`), calls the target Plum function directly, then converts
+/// the result back to the C-ABI shape (a `Bool` return: `zext i1 %r to
+/// i32`) before `ret`.
+fn emit_c_callback_trampoline_fn(
+    trampoline_name: &str,
+    target_name: &str,
+    sig: &FnSig,
+    cb_params: &[ir::ExternType],
+    cb_ret: Option<&ir::ExternType>,
+) -> Result<String, String> {
+    if cb_params.len() != sig.params.len() {
+        return Err(format!(
+            "codegen: callback target {target_name:?} has {} parameter(s), but the extern callback signature \
+             expects {}",
+            sig.params.len(),
+            cb_params.len()
+        ));
+    }
+    let mut param_decls = Vec::with_capacity(cb_params.len());
+    let mut call_args = Vec::with_capacity(cb_params.len());
+    let mut body = String::new();
+    for (i, (cb_ty, plum_ty)) in cb_params.iter().zip(&sig.params).enumerate() {
+        let c_llvm = crate::extern_type_to_llvm(cb_ty)?;
+        let pname = format!("%p{i}");
+        param_decls.push(format!("{c_llvm} {pname}"));
+        match (cb_ty, plum_ty) {
+            (ir::ExternType::Bool, CgType::Bool) => {
+                body.push_str(&format!("  %conv{i} = icmp ne i32 {pname}, 0\n"));
+                call_args.push(format!("i1 %conv{i}"));
+            }
+            (ir::ExternType::Int, CgType::Int) => call_args.push(format!("i64 {pname}")),
+            (ir::ExternType::Float, CgType::Float) => call_args.push(format!("double {pname}")),
+            (found, expected) => {
+                return Err(format!(
+                    "codegen: callback {target_name:?} parameter {i} type mismatch — extern callback declares \
+                     {found:?}, function {target_name:?} has {expected:?}"
+                ))
+            }
+        }
+    }
+    let (c_ret_llvm, tail): (&str, String) = match (cb_ret, &sig.ret) {
+        (None, CgType::Unit) => ("void", "  ret void\n".to_string()),
+        (Some(ir::ExternType::Int), CgType::Int) => ("i64", "  ret i64 %r\n".to_string()),
+        (Some(ir::ExternType::Float), CgType::Float) => ("double", "  ret double %r\n".to_string()),
+        (Some(ir::ExternType::Bool), CgType::Bool) => {
+            ("i32", "  %rz = zext i1 %r to i32\n  ret i32 %rz\n".to_string())
+        }
+        (found, expected) => {
+            return Err(format!(
+                "codegen: callback {target_name:?} return type mismatch — extern callback declares {found:?}, \
+                 function {target_name:?} returns {expected:?}"
+            ))
+        }
+    };
+    body.push_str(&format!("  %r = call {} @{target_name}({})\n", sig.ret.llvm_type(), call_args.join(", ")));
+    body.push_str(&tail);
+    Ok(format!("define {c_ret_llvm} @{trampoline_name}({}) {{\nentry:\n{body}}}\n", param_decls.join(", ")))
+}
+
 // --- spawn / join ---
 //
 // Task cell layout: `{ i64 joined, i64 pthread_id }` — a plain, bare
@@ -1777,7 +2145,7 @@ fn value_to_word(em: &mut Emitter, value: &str, ty: CgType) -> String {
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -1811,7 +2179,7 @@ fn word_to_value(em: &mut Emitter, word: &str, expected_ty: CgType) -> String {
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -1838,7 +2206,13 @@ fn word_to_value(em: &mut Emitter, word: &str, expected_ty: CgType) -> String {
 /// unreachable stub rather than a real implementation.
 fn crosses_thread_boundary(ty: &CgType) -> bool {
     match ty {
-        CgType::Closure(..) | CgType::Task(_) => true,
+        // `CStr` joins `Closure`/`Task` here for the same reason it
+        // joins them in `crate::check_no_closure_or_task_fields` (see
+        // that function's own doc comment): a raw, unowned,
+        // unsynchronized C pointer aliased across two threads is
+        // strictly worse than either of those, not merely equally bad —
+        // there's no shared-ownership protocol backing it at all.
+        CgType::Closure(..) | CgType::Task(_) | CgType::CStr => true,
         CgType::Array(elem) => crosses_thread_boundary(elem),
         // A `Sender`/`Receiver` explicitly CAN cross a thread boundary
         // (that's the whole point of a channel) — unlike a closure's
@@ -1892,7 +2266,7 @@ fn deep_copy_capture(em: &mut Emitter, ctx: &Ctx, reg: &str, ty: &CgType) -> Str
         // Guaranteed unreachable — `crosses_thread_boundary` already
         // rejected any capture that could get here — but the match
         // still needs to be total.
-        CgType::Closure(..) | CgType::Task(_) => reg.to_string(),
+        CgType::Closure(..) | CgType::Task(_) | CgType::CStr => reg.to_string(),
         // A `Sender`/`Receiver` crosses VERBATIM — never a deep copy.
         // Both ends must keep pointing at the SAME shared queue struct,
         // or the channel would silently split into two mutually-
@@ -1987,6 +2361,8 @@ fn emit_spawn_entry_fn(fn_name: &str, captures: &[(String, CgType)], block: &Exp
         trampolines: ctx.trampolines,
         needs_spawn_runtime: ctx.needs_spawn_runtime,
         needs_channel_runtime: ctx.needs_channel_runtime,
+        externs: ctx.externs,
+        c_callback_trampolines: ctx.c_callback_trampolines,
     };
     let (result, _) = codegen_expr(block, &env, &mut em, &inner_ctx, false)?;
     let (reg, ty) = result.ok_or_else(|| {
@@ -3193,6 +3569,8 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         }
         Expr::Spawn { block } => codegen_spawn_literal(block, env, em, ctx),
         Expr::TaskJoin { task } => codegen_task_join(task, env, em, ctx),
+        Expr::ExternCall { name, args } => codegen_extern_call(name, args, env, em, ctx),
+        Expr::AsCStr(inner) => codegen_as_cstr(inner, env, em, ctx),
         other => Err(format!("codegen does not yet support this construct: {other:?}")),
     }
 }

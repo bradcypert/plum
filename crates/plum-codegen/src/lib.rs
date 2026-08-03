@@ -87,6 +87,30 @@ pub enum CgType {
     /// an ordinary compile-time type mismatch, mirroring why `Sender`
     /// and `Receiver` are separate variants rather than one shared one.
     Receiver(Box<CgType>),
+    /// A bare, NUL-terminated C string pointer (`char*`) produced ONLY
+    /// by `Expr::AsCStr` (surface syntax `.as_cstr()`) — `ptr` at the
+    /// LLVM level, like `Str`, but a genuinely DIFFERENT representation,
+    /// not merely a relabeling: `Str` is Plum's own length-prefixed,
+    /// REFCOUNTED heap cell (`{ i64 refcount, i64 len, bytes... }`,
+    /// allocated via `@plum_alloc_str`); `CStr` has no header, no
+    /// refcount, and no length prefix at all — just a raw pointer to
+    /// NUL-terminated bytes, exactly the shape a C API expects. Because
+    /// there's no refcount word, `dec_fn_for`/`deepcopy_fn_for` both
+    /// return `None` for it (mirroring `Sender`/`Receiver`'s "no
+    /// refcount word anywhere in the layout" reasoning, not `Task`'s
+    /// "deliberately untracked" one) — but UNLIKE `Sender`/`Receiver`
+    /// (which legitimately cross a thread boundary as a verbatim
+    /// pointer copy), a `CStr` is REJECTED from crossing a spawn/channel
+    /// boundary entirely (see `check_no_closure_or_task_fields`'s own
+    /// doc comment): an unowned, unsynchronized raw pointer aliased
+    /// across two threads with no shared-ownership protocol at all is
+    /// strictly worse than a `Task`/`Closure` capture, which at least
+    /// has defined single-owner or Plum-managed semantics. See
+    /// `codegen.rs`'s `codegen_as_cstr` for why producing one requires a
+    /// FRESH allocation (never a pointer aliased into an existing `Str`
+    /// cell) — a genuine soundness requirement, not a missed
+    /// optimization.
+    CStr,
 }
 
 impl CgType {
@@ -101,7 +125,8 @@ impl CgType {
             | CgType::Closure(..)
             | CgType::Task(_)
             | CgType::Sender(_)
-            | CgType::Receiver(_) => "ptr",
+            | CgType::Receiver(_)
+            | CgType::CStr => "ptr",
         }
     }
 
@@ -151,6 +176,7 @@ impl CgType {
             // array_fns` totality reason `Task`'s own arm documents.
             CgType::Sender(inner) => format!("Sender_{}", inner.mangled()),
             CgType::Receiver(inner) => format!("Receiver_{}", inner.mangled()),
+            CgType::CStr => "CStr".to_string(),
         }
     }
 }
@@ -217,6 +243,16 @@ fn dec_fn_for(ty: &CgType) -> Option<String> {
         // sitting at byte offset 0, not just silently no-op the way
         // `Task`'s `None` does.
         CgType::Sender(_) | CgType::Receiver(_) => None,
+        // No refcount word anywhere — a `CStr` is a bare, header-free
+        // `malloc`'d buffer (see `CgType::CStr`'s own doc comment), not
+        // a Plum-managed heap cell at all. Unlike `Str`'s `@plum_rc_dec_
+        // str`, there is no analogous "dec a CStr" runtime function:
+        // nothing in this backend ever owns a `CStr` value long enough
+        // to need one — it's produced fresh by `AsCStr` and consumed
+        // immediately as an extern-call argument (see `codegen.rs`'s
+        // `codegen_as_cstr`), never bound into a heap cell's field or
+        // otherwise kept alive past its one use site.
+        CgType::CStr => None,
     }
 }
 
@@ -275,7 +311,27 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
     out.push_str("declare ptr @realloc(ptr, i64)\n");
     out.push_str("declare void @exit(i32)\n");
     out.push_str("declare i32 @printf(ptr, ...)\n");
-    out.push_str("declare i32 @snprintf(ptr, i64, ptr, ...)\n\n");
+    out.push_str("declare i32 @snprintf(ptr, i64, ptr, ...)\n");
+    // `@strlen`/`@memchr` — reached for over hand-rolled loops for the
+    // SAME reason `@memcpy`/`@memmove` above are: a real libc primitive
+    // already exists and is trusted elsewhere in this backend, matching
+    // its established "reach for a real libc declare over hand-rolled
+    // codegen" precedent. `@strlen` measures a `CStr`-typed extern
+    // return's length before copying it into a fresh Plum `Str` cell
+    // (`codegen.rs`'s `codegen_extern_call`); `@memchr` validates
+    // `.as_cstr()`'s embedded-NUL check (`codegen_as_cstr`). Declared
+    // here UNCONDITIONALLY, alongside this function's other always-
+    // present libc declares, rather than reactively gated the way the
+    // spawn/channel runtime is — both are used only internally by
+    // codegen's own FFI machinery, never left undeclared-but-referenced,
+    // so the (tiny, fixed) cost of always declaring them is simpler than
+    // adding a third reactive-gating flag alongside `needs_spawn_
+    // runtime`/`needs_channel_runtime` for what's a rare, narrow-scope
+    // feature. Also why both names are reserved against user `extern`
+    // declarations (see `is_reserved_extern_name`) — a user declaring
+    // their own `strlen`/`memchr` would otherwise collide with these.
+    out.push_str("declare i64 @strlen(ptr)\n");
+    out.push_str("declare ptr @memchr(ptr, i32, i64)\n\n");
 
     // Shared by every runtime-checked failure (bounds/emptiness checks
     // — see `codegen.rs`'s `emit_bounds_check` — there's no compile-
@@ -793,6 +849,13 @@ fn deepcopy_fn_for(ty: &CgType) -> Option<String> {
         // comment for why only those two need a separate whole-program
         // check).
         CgType::Sender(_) | CgType::Receiver(_) => None,
+        // A `CStr` is never deep-copied for the SAME reason it's
+        // rejected from crossing a spawn/channel boundary at all (see
+        // `check_no_closure_or_task_fields`'s doc comment) — this arm
+        // only exists to keep `deepcopy_fn_for` TOTAL, matching
+        // `Closure`/`Task`'s own "never actually reached by any live
+        // call" precedent immediately above.
+        CgType::CStr => None,
     }
 }
 
@@ -1192,19 +1255,224 @@ fn check_no_closure_or_task_fields(tag_fields: &TagFields) -> Result<(), String>
     names.sort();
     for tag in names {
         for (i, field_ty) in tag_fields[tag].iter().enumerate() {
-            if matches!(field_ty, CgType::Closure(..) | CgType::Task(_)) {
+            // `CStr` joins `Closure`/`Task` here for a related but
+            // distinct reason: a raw, unowned, unsynchronized C pointer
+            // aliased across two threads with no shared-ownership
+            // protocol at all is strictly WORSE than a `Task`/`Closure`
+            // capture (see `CgType::CStr`'s own doc comment) — so it's
+            // rejected the same way. In practice this arm is currently
+            // unreachable via the ordinary frontend (`plum-types`
+            // resolves an ordinary struct field's type annotation
+            // through `ast_type_to_type`, which never produces
+            // `Type::CStr` at all — only `.as_cstr()`'s own special-
+            // cased extern-signature resolution does — so `CStr` can
+            // never actually appear in a declared struct/enum field's
+            // type), but kept here anyway as defense-in-depth, matching
+            // `Task`/`Sender`/`Receiver`'s own established "total over
+            // `CgType`, even where a live call is impossible" precedent
+            // elsewhere in this module (see e.g. `CgType::mangled`'s
+            // `Task`/`Sender` arms).
+            if matches!(field_ty, CgType::Closure(..) | CgType::Task(_) | CgType::CStr) {
                 return Err(format!(
-                    "codegen: struct/enum {tag:?}'s field {i} is closure/task-shaped ({field_ty:?}) — a \
-                     program that uses `spawn` anywhere cannot declare a struct/enum with a closure- or \
-                     task-typed field anywhere else either, since such a value could reach a `spawn` \
-                     capture through an opaque heap pointer and neither a closure's captured environment \
-                     nor a task handle can cross a thread boundary (matching the interpreter's own \
-                     restriction — see `plum_interp::Interpreter::to_portable`)"
+                    "codegen: struct/enum {tag:?}'s field {i} is closure/task/CStr-shaped ({field_ty:?}) — a \
+                     program that uses `spawn` anywhere cannot declare a struct/enum with a closure-, task-, or \
+                     CStr-typed field anywhere else either, since such a value could reach a `spawn` \
+                     capture through an opaque heap pointer and none of a closure's captured environment, a \
+                     task handle, or a raw C string pointer can cross a thread boundary safely (matching the \
+                     interpreter's own closure/task restriction — see `plum_interp::Interpreter::to_portable` \
+                     — and extending it to `CStr` for the same reason)"
                 ));
             }
         }
     }
     Ok(())
+}
+
+/// Maps an `ir::ExternType` to the LLVM type used AT THE C ABI BOUNDARY
+/// for it — deliberately NOT the same as `CgType::llvm_type()` for
+/// `Bool`: C's own `int` is `i32`-wide, while this backend's OWN
+/// `CgType::Bool` is `i1` — a real, load-bearing width mismatch that
+/// must be bridged via an explicit `zext`/`icmp ne` conversion at every
+/// marshaling site (`codegen.rs`'s `ExternCall`/callback-trampoline
+/// codegen), never treated as if the two representations were
+/// interchangeable. `Struct(..)` is a defensive `Err`, not a panic:
+/// `plum-types` may already accept an FFI-safe struct at the type level
+/// (see `plum_types::context::check_ffi_safe`) even though this chunk's
+/// codegen doesn't implement the real System V struct-by-value
+/// marshaling needed to actually pass one — that's separate, deferred
+/// follow-up work (see this crate's `emit_program` doc comment).
+fn extern_type_to_llvm(ty: &ir::ExternType) -> Result<&'static str, String> {
+    match ty {
+        ir::ExternType::Int => Ok("i64"),
+        ir::ExternType::Float => Ok("double"),
+        ir::ExternType::Bool => Ok("i32"),
+        // A validated C string (`Str` here means `ir::ExternType::Str`,
+        // i.e. `CStr` on the Plum side — see that variant's own doc
+        // comment) and a callback are both bare pointers at the C ABI
+        // boundary.
+        ir::ExternType::Str | ir::ExternType::Callback { .. } => Ok("ptr"),
+        ir::ExternType::Struct(name, _) => Err(format!(
+            "codegen does not yet support struct-by-value FFI marshaling (struct {name:?}) — this chunk's scope \
+             is scalars (Int/Float/Bool) + CStr + C callbacks only; the real System V struct-by-value ABI is \
+             separate, deferred follow-up work"
+        )),
+    }
+}
+
+/// The C ABI return-type counterpart to `extern_type_to_llvm` — `None`
+/// (a genuinely `void`-returning C function, e.g. `extern "C" { fn
+/// puts(s: CStr); }` with no `-> Type` written) maps to LLVM `void`,
+/// deliberately NOT defaulted to `Unit`'s `i1` the way an ordinary Plum
+/// function always has SOME return value — a real `void` C function has
+/// nothing to hand back at all.
+fn extern_ret_type_to_llvm(ret: &Option<ir::ExternType>) -> Result<&'static str, String> {
+    match ret {
+        None => Ok("void"),
+        Some(ty) => extern_type_to_llvm(ty),
+    }
+}
+
+/// The small, fixed set of names this backend's OWN generated code
+/// already claims (every libc function it declares directly —
+/// `emit_runtime`/`emit_spawn_pthread_decls`/`emit_channel_runtime` —
+/// plus every `plum_*`-prefixed runtime function it defines itself, via
+/// a prefix check rather than an exhaustive list, since new `plum_*`
+/// runtime functions are added over time and a prefix check can never
+/// silently go stale the way a hand-maintained exhaustive list could).
+/// `main` is reserved too, even though this list is otherwise about
+/// codegen's OWN declares: `plumc`'s `emit_main` always defines a real
+/// `@main` as the compiled binary's native entry point (see
+/// `plumc::codegen_cli::emit_main`), so an extern named `main` would
+/// collide with that just as surely as one named `malloc` would collide
+/// with this crate's own declare.
+fn is_reserved_extern_name(name: &str) -> bool {
+    if name.starts_with("plum_") {
+        return true;
+    }
+    const RESERVED: &[&str] = &[
+        "malloc",
+        "free",
+        "memcpy",
+        "memmove",
+        "realloc",
+        "exit",
+        "printf",
+        "snprintf",
+        "strlen",
+        "memchr",
+        "pthread_create",
+        "pthread_join",
+        "pthread_mutex_init",
+        "pthread_mutex_lock",
+        "pthread_mutex_unlock",
+        "pthread_cond_init",
+        "pthread_cond_wait",
+        "pthread_cond_signal",
+        "usleep",
+        "main",
+    ];
+    RESERVED.contains(&name)
+}
+
+/// Emits one `declare` per `extern "C"` function the program declares —
+/// see this crate's module-level `emit_program` doc comment for the
+/// supported `ExternType` scope. Unlike the spawn/channel runtime
+/// (`needs_spawn_runtime`/`needs_channel_runtime`, gated reactively
+/// because those helpers are only implicitly discoverable by walking
+/// expression trees), NO such gating is needed here: `program.externs`
+/// is already the complete, explicit, small list of every extern
+/// function the program declares, so this can just iterate it directly.
+/// Every name is checked against `is_reserved_extern_name` AND against
+/// `signatures` (every declared Plum top-level function) — either
+/// collision would otherwise silently produce a `declare`/`define`
+/// clash for the SAME LLVM symbol name, a real `clang`-level error, not
+/// just a style nit — surfaced here instead as a clear, specific
+/// "reserved name" error before that ever happens.
+/// The exact `(ret, params)` LLVM shape of every reserved runtime name
+/// that ALSO happens to have a signature genuinely expressible through
+/// `ExternType` (a real user-facing extern win — e.g. `strlen`, a common
+/// libc function a Plum program might legitimately want to declare and
+/// call directly, matching this crate's own internal `declare i64
+/// @strlen(ptr)` byte-for-byte). Used ONLY to let a user's OWN extern
+/// declaration for one of these names PASS instead of being rejected —
+/// LLVM IR rejects a truly duplicate `declare` line for the same symbol
+/// (confirmed directly via a real `clang` compile, not assumed), so
+/// `emit_extern_declares` SKIPS re-emitting a second `declare` for one
+/// of these once it's confirmed to match exactly, relying on `emit_
+/// runtime`'s own unconditional declare to cover it. Deliberately NOT
+/// exhaustive over every reserved name — `printf`/`snprintf` are
+/// variadic (no `ExternType` shape can ever express that), and `malloc`/
+/// `free`/`memcpy`/`memmove`/`realloc`/`pthread_create`/the mutex/cond
+/// functions/`main` have signatures no REALISTIC user extern
+/// declaration would ever legitimately reproduce — those simply keep
+/// falling through to the plain "collides" rejection below, which is
+/// the correct, safe default for a name this table doesn't cover.
+fn reserved_extern_signature(name: &str) -> Option<(&'static str, &'static [&'static str])> {
+    match name {
+        "malloc" => Some(("ptr", &["i64"])),
+        "free" => Some(("void", &["ptr"])),
+        "memcpy" => Some(("ptr", &["ptr", "ptr", "i64"])),
+        "memmove" => Some(("ptr", &["ptr", "ptr", "i64"])),
+        "realloc" => Some(("ptr", &["ptr", "i64"])),
+        "exit" => Some(("void", &["i32"])),
+        "strlen" => Some(("i64", &["ptr"])),
+        "memchr" => Some(("ptr", &["ptr", "i32", "i64"])),
+        "usleep" => Some(("i32", &["i32"])),
+        _ => None,
+    }
+}
+
+fn emit_extern_declares(externs: &[ir::ExternFn], signatures: &HashMap<String, FnSig>) -> Result<String, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = String::new();
+    for f in externs {
+        let params = f
+            .param_types
+            .iter()
+            .map(extern_type_to_llvm)
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret = extern_ret_type_to_llvm(&f.ret_type)?;
+        if is_reserved_extern_name(&f.name) {
+            // Still a genuine collision UNLESS this is one of the small
+            // set of reserved names whose C ABI shape is ALSO exactly
+            // reproducible through `ExternType` (see `reserved_extern_
+            // signature`'s own doc comment) — in that one case, the
+            // user's declaration is accepted, but no SECOND `declare`
+            // line is emitted for it (this crate's own unconditional one
+            // in `emit_runtime` already covers the exact same symbol).
+            match reserved_extern_signature(&f.name) {
+                Some((expected_ret, expected_params)) if expected_ret == ret && expected_params == params.as_slice() => {
+                    if !seen.insert(f.name.clone()) {
+                        return Err(format!("codegen: extern function {:?} is declared more than once", f.name));
+                    }
+                    continue;
+                }
+                _ => {
+                    return Err(format!(
+                        "codegen: extern function {:?} collides with a name this backend's own generated runtime \
+                         already uses (a libc function it declares itself, one of its own `plum_*` runtime \
+                         functions, or the native `main` entry point) — rename it",
+                        f.name
+                    ));
+                }
+            }
+        }
+        if signatures.contains_key(&f.name) {
+            return Err(format!(
+                "codegen: extern function {:?} has the same name as a declared Plum function — this would \
+                 collide with that function's own `@{}` symbol in the generated LLVM IR",
+                f.name, f.name
+            ));
+        }
+        if !seen.insert(f.name.clone()) {
+            return Err(format!("codegen: extern function {:?} is declared more than once", f.name));
+        }
+        out.push_str(&format!("declare {ret} @{}({})\n", f.name, params.join(", ")));
+    }
+    if !externs.is_empty() {
+        out.push('\n');
+    }
+    Ok(out)
 }
 
 /// Emits an entire program as LLVM IR TEXT (the `.ll` format) — no
@@ -1226,18 +1494,23 @@ fn check_no_closure_or_task_fields(tag_fields: &TagFields) -> Result<(), String>
 /// non-generic-struct/enum heap values (`Ctor`/`CtorReuse`/
 /// `RcAnnotated`/`Match`, refcounted via four small runtime functions
 /// emitted alongside the program itself — see `emit_runtime`).
-/// `program.globals`/`program.externs` and every other `ir::Expr`
-/// variant (strings, arrays, closures, concurrency, FFI, generics,
-/// ...) are out of scope for now and produce a clear error naming
-/// what's missing, never a panic — see this crate's tests for the
-/// exact error shapes.
+/// `program.globals` and every other `ir::Expr` variant not otherwise
+/// mentioned above (closures inside generics, more concurrency shapes,
+/// ...) are out of scope for now and produce a clear error naming what's
+/// missing, never a panic — see this crate's tests for the exact error
+/// shapes. `program.externs` (`extern "C"` FFI) IS supported, scoped to
+/// scalar (`Int`/`Float`/`Bool`) + `CStr` + C-callback parameters/
+/// returns — struct-by-value marshaling (the real System V ABI, via
+/// actual LLVM aggregate struct types) is separate, deferred follow-up
+/// work; an extern signature naming one produces a clear error (see
+/// `extern_type_to_llvm`), not a panic.
 pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, tag_fields: &TagFields) -> Result<String, String> {
     if !program.globals.is_empty() {
         return Err("codegen does not yet support top-level globals (v1 scope is functions only)".to_string());
     }
-    if !program.externs.is_empty() {
-        return Err("codegen does not yet support extern \"C\" functions (v1 scope has no FFI)".to_string());
-    }
+    let extern_declares = emit_extern_declares(&program.externs, signatures)?;
+    let externs: HashMap<String, ir::ExternFn> =
+        program.externs.iter().map(|f| (f.name.clone(), f.clone())).collect();
     let tag_ids = intern_tags(tag_fields);
 
     // Every array element `CgType` that needs its own `@plum_rc_dec_
@@ -1308,6 +1581,20 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
     // runtime`'s own doc comment) but NOT `pthread_create`/`pthread_
     // join`, and vice versa.
     let needs_channel_runtime = std::cell::RefCell::new(false);
+    // The C-callback-trampoline counterpart to `trampolines` — kept in
+    // its OWN table, not merged into `trampolines`, because the two
+    // memoize genuinely DIFFERENT function shapes for the same target
+    // function name: an ordinary closure trampoline always takes a
+    // leading `ptr %env` (part of every Plum-level closure's own
+    // calling convention, unused or not), while a C-callback trampoline
+    // (`codegen::emit_c_callback_trampoline_fn`) has NO env parameter at
+    // all — a real C API has no way to supply one. Conflating the two
+    // tables would risk a genuine calling-convention bug: the same
+    // target function referenced BOTH as an ordinary higher-order Plum
+    // value AND as a C callback argument in the same program must get
+    // two DIFFERENT generated trampoline functions, not one reused for
+    // both shapes.
+    let c_callback_trampolines = std::cell::RefCell::new(HashMap::new());
 
     let mut bodies = String::new();
     for f in &program.functions {
@@ -1322,6 +1609,8 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
             &trampolines,
             &needs_spawn_runtime,
             &needs_channel_runtime,
+            &externs,
+            &c_callback_trampolines,
         )?);
         bodies.push('\n');
     }
@@ -1337,6 +1626,7 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
 
     let needed_arrays = needed_arrays.into_inner();
     let mut out = emit_runtime(tag_fields, &tag_ids);
+    out.push_str(&extern_declares);
     out.push_str(&emit_array_release_fns(&needed_arrays));
     if *needs_spawn_runtime.borrow() || *needs_channel_runtime.borrow() {
         out.push_str(&emit_deepcopy_runtime(tag_fields, &tag_ids));
@@ -1374,6 +1664,8 @@ fn emit_function(
     trampolines: &std::cell::RefCell<HashMap<String, String>>,
     needs_spawn_runtime: &std::cell::RefCell<bool>,
     needs_channel_runtime: &std::cell::RefCell<bool>,
+    externs: &HashMap<String, ir::ExternFn>,
+    c_callback_trampolines: &std::cell::RefCell<HashMap<String, String>>,
 ) -> Result<String, String> {
     let sig = signatures
         .get(&f.name)
@@ -1399,6 +1691,8 @@ fn emit_function(
         trampolines,
         needs_spawn_runtime,
         needs_channel_runtime,
+        externs,
+        c_callback_trampolines,
     };
 
     let mut env = HashMap::new();
@@ -1439,7 +1733,7 @@ fn emit_function(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use plum_ir::ir::{BinOp, Expr, Function, MatchArm, PrimTy, Program, RcOp, SelectArm, UnOp};
+    use plum_ir::ir::{BinOp, Expr, ExternFn, ExternType, Function, MatchArm, PrimTy, Program, RcOp, SelectArm, UnOp};
 
     fn sigs(entries: &[(&str, Vec<CgType>, CgType)]) -> HashMap<String, FnSig> {
         entries
@@ -1454,6 +1748,10 @@ mod tests {
 
     fn program(functions: Vec<Function>) -> Program {
         Program { functions, globals: vec![], externs: vec![] }
+    }
+
+    fn program_with_externs(functions: Vec<Function>, externs: Vec<ExternFn>) -> Program {
+        Program { functions, globals: vec![], externs }
     }
 
     fn emit(prog: &Program, s: &HashMap<String, FnSig>, t: &TagFields) -> Result<String, String> {
@@ -2895,5 +3193,238 @@ mod tests {
         let err = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new())
             .expect_err("expected a zero-arm select to be a clear error, not a panic");
         assert!(err.contains("zero arms"), "unexpected error: {err}");
+    }
+
+    // --- FFI: extern declares, ExternCall, AsCStr, C callbacks ---
+
+    #[test]
+    fn extern_declare_uses_i32_for_bool_never_i1() {
+        // `extern "C" { fn is_ready(x: Bool) -> Bool; }` — a real, load-
+        // bearing width mismatch against this backend's OWN `CgType::
+        // Bool` (`i1`): C's `int` is `i32`-wide, so the `declare` itself
+        // must say `i32`, not `i1`, on BOTH the parameter and the return.
+        let prog = program_with_externs(
+            vec![],
+            vec![ExternFn { name: "is_ready".to_string(), param_types: vec![ExternType::Bool], ret_type: Some(ExternType::Bool) }],
+        );
+        let ir = emit(&prog, &sigs(&[]), &TagFields::new()).unwrap();
+        assert!(ir.contains("declare i32 @is_ready(i32)"), "{ir}");
+        assert!(!ir.contains("declare i1 @is_ready"), "{ir}");
+    }
+
+    #[test]
+    fn extern_declare_maps_int_float_str_and_callback_correctly() {
+        let prog = program_with_externs(
+            vec![],
+            vec![ExternFn {
+                name: "mixed".to_string(),
+                param_types: vec![
+                    ExternType::Int,
+                    ExternType::Float,
+                    ExternType::Str,
+                    ExternType::Callback { params: vec![ExternType::Int], ret: Some(Box::new(ExternType::Int)) },
+                ],
+                ret_type: None,
+            }],
+        );
+        let ir = emit(&prog, &sigs(&[]), &TagFields::new()).unwrap();
+        assert!(ir.contains("declare void @mixed(i64, double, ptr, ptr)"), "{ir}");
+    }
+
+    #[test]
+    fn declaring_an_extern_with_a_reserved_runtime_name_is_a_clear_error() {
+        let prog = program_with_externs(
+            vec![],
+            vec![ExternFn { name: "malloc".to_string(), param_types: vec![ExternType::Int], ret_type: None }],
+        );
+        let err = emit(&prog, &sigs(&[]), &TagFields::new())
+            .expect_err("expected a reserved-name collision to be rejected, not silently double-declared");
+        assert!(err.contains("malloc") && err.contains("collides"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn extern_call_zexts_a_bool_argument_and_uses_icmp_ne_not_trunc_on_the_bool_return() {
+        // let go (b: Bool) -> Bool = unsafe { check(b) }
+        let prog = program_with_externs(
+            vec![Function {
+                name: "go".to_string(),
+                params: vec!["b".to_string()],
+                body: Expr::ExternCall { name: "check".to_string(), args: vec![Expr::Var("b".to_string())] },
+            }],
+            vec![ExternFn { name: "check".to_string(), param_types: vec![ExternType::Bool], ret_type: Some(ExternType::Bool) }],
+        );
+        let ir = emit(&prog, &sigs(&[("go", vec![CgType::Bool], CgType::Bool)]), &TagFields::new()).unwrap();
+        // Argument direction: `i1 -> i32` via `zext`, never a bitcast/
+        // truncation pretending the two widths are interchangeable.
+        assert!(ir.contains("zext i1 %b to i32"), "{ir}");
+        // Return direction: `icmp ne i32 .., 0` — matching C's "any
+        // nonzero is true" convention — NEVER `trunc`, which would only
+        // look at the low bit.
+        let call_idx = ir.find("call i32 @check(").expect("expected a direct i32 call to @check");
+        let after_call = &ir[call_idx..];
+        assert!(after_call.contains("icmp ne i32"), "{after_call}");
+        assert!(!ir.contains("trunc i32"), "extern Bool-return marshaling must never use trunc: {ir}");
+    }
+
+    #[test]
+    fn extern_call_with_a_null_str_return_aborts_via_the_runtime_check_mechanism() {
+        // let go () -> Str = unsafe { get_message() }
+        let prog = program_with_externs(
+            vec![Function {
+                name: "go".to_string(),
+                params: vec![],
+                body: Expr::ExternCall { name: "get_message".to_string(), args: vec![] },
+            }],
+            vec![ExternFn { name: "get_message".to_string(), param_types: vec![], ret_type: Some(ExternType::Str) }],
+        );
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Str)]), &TagFields::new()).unwrap();
+        assert!(ir.contains("call ptr @get_message()"), "{ir}");
+        assert!(ir.contains("icmp eq ptr"), "{ir}");
+        assert!(ir.contains("call void @plum_abort("), "{ir}");
+        assert!(ir.contains("call i64 @strlen("), "{ir}");
+        assert!(ir.contains("call ptr @plum_alloc_str("), "{ir}");
+    }
+
+    #[test]
+    fn as_cstr_validates_copies_and_decs_the_original_str_register() {
+        // let go (s: Str) -> CStr = s.as_cstr()
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["s".to_string()],
+            body: Expr::AsCStr(Box::new(Expr::Var("s".to_string()))),
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str], CgType::CStr)]), &TagFields::new()).unwrap();
+        // Embedded-NUL validation via a real libc `memchr`, matching the
+        // `strlen` precedent, never a hand-rolled scan loop.
+        assert!(ir.contains("call ptr @memchr(ptr"), "{ir}");
+        assert!(ir.contains("call void @plum_abort("), "{ir}");
+        // A FRESH allocation — `malloc` + `memcpy` + a manually stored
+        // trailing NUL — never a pointer aliased into the existing `Str`
+        // cell (see `codegen::codegen_as_cstr`'s doc comment for why
+        // that shortcut would be unsound).
+        assert!(ir.contains("call ptr @malloc("), "{ir}");
+        assert!(ir.contains("call ptr @memcpy("), "{ir}");
+        assert!(ir.contains("store i8 0, ptr"), "{ir}");
+        // The mandatory ownership-discharge dec MUST reference the
+        // ORIGINAL Str cell's own register — a function parameter named
+        // `s` is bound directly to `%s` (see `emit_function`'s param
+        // binding), so this is exactly `%s`, never the fresh `CStr`
+        // buffer register.
+        assert!(ir.contains("call void @plum_rc_dec_str(ptr %s)"), "{ir}");
+    }
+
+    #[test]
+    fn as_cstr_on_a_non_str_value_is_a_clear_codegen_error() {
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["n".to_string()],
+            body: Expr::AsCStr(Box::new(Expr::Var("n".to_string()))),
+        }]);
+        let err = emit(&prog, &sigs(&[("go", vec![CgType::Int], CgType::CStr)]), &TagFields::new())
+            .expect_err("expected `.as_cstr()` on a non-Str value to be rejected");
+        assert!(err.contains("as_cstr") && err.contains("Str"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_c_callback_trampoline_has_no_env_parameter_unlike_an_ordinary_closure_trampoline() {
+        // let add(a, b) = a + b
+        // let go () -> Int = unsafe { call_with_10_and_20(add) }
+        let add_fn = Function {
+            name: "add".to_string(),
+            params: vec!["a".to_string(), "b".to_string()],
+            body: Expr::Binary(BinOp::Add, Box::new(Expr::Var("a".to_string())), Box::new(Expr::Var("b".to_string()))),
+        };
+        let go_fn = Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::ExternCall { name: "call_with_10_and_20".to_string(), args: vec![Expr::Var("add".to_string())] },
+        };
+        let prog = program_with_externs(
+            vec![add_fn, go_fn],
+            vec![ExternFn {
+                name: "call_with_10_and_20".to_string(),
+                param_types: vec![ExternType::Callback {
+                    params: vec![ExternType::Int, ExternType::Int],
+                    ret: Some(Box::new(ExternType::Int)),
+                }],
+                ret_type: Some(ExternType::Int),
+            }],
+        );
+        let ir = emit(
+            &prog,
+            &sigs(&[
+                ("add", vec![CgType::Int, CgType::Int], CgType::Int),
+                ("go", vec![], CgType::Int),
+            ]),
+            &TagFields::new(),
+        )
+        .unwrap();
+        // The trampoline symbol is referenced DIRECTLY as the call
+        // argument — no `ptrtoint`/`inttoptr` round-trip, unlike an
+        // ordinary closure-value's cell-and-code-pointer dance.
+        assert!(ir.contains("ptr @c_trampoline$add"), "{ir}");
+        let def_start = ir.find("define i64 @c_trampoline$add(").expect("expected a generated c_trampoline$add definition");
+        let def_end = ir[def_start..].find("\n}\n").map(|i| def_start + i).unwrap_or(ir.len());
+        let def_text = &ir[def_start..def_end];
+        // The defining structural difference from `emit_trampoline_fn`'s
+        // ordinary closure trampoline: NO leading `ptr %env` parameter
+        // at all — a real C API has no way to supply one.
+        assert!(!def_text.contains("%env"), "C callback trampoline must never take an env parameter: {def_text}");
+        assert!(def_text.contains("i64 %p0"), "{def_text}");
+        assert!(def_text.contains("i64 %p1"), "{def_text}");
+        assert!(def_text.contains("call i64 @add(i64 %p0, i64 %p1)"), "{def_text}");
+    }
+
+    #[test]
+    fn a_callback_argument_that_is_not_a_bare_function_name_is_a_clear_codegen_error() {
+        let prog = program_with_externs(
+            vec![Function {
+                name: "go".to_string(),
+                params: vec![],
+                // `5` isn't a bare top-level function name.
+                body: Expr::ExternCall { name: "call_it".to_string(), args: vec![Expr::Int(5)] },
+            }],
+            vec![ExternFn {
+                name: "call_it".to_string(),
+                param_types: vec![ExternType::Callback { params: vec![], ret: None }],
+                ret_type: None,
+            }],
+        );
+        let err = emit(&prog, &sigs(&[("go", vec![], CgType::Unit)]), &TagFields::new())
+            .expect_err("expected a non-Var callback argument to be rejected");
+        assert!(err.contains("callback"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn struct_by_value_extern_param_is_a_defensive_error_not_a_panic() {
+        let prog = program_with_externs(
+            vec![],
+            vec![ExternFn {
+                name: "takes_point".to_string(),
+                param_types: vec![ExternType::Struct("Point".to_string(), vec![ExternType::Int, ExternType::Int])],
+                ret_type: None,
+            }],
+        );
+        let err = emit(&prog, &sigs(&[]), &TagFields::new())
+            .expect_err("expected struct-by-value FFI marshaling to be a clear, deferred-scope error");
+        assert!(err.contains("Point") && err.contains("struct"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_cstr_typed_field_would_be_rejected_when_a_program_uses_spawn() {
+        // Defense-in-depth: `check_no_closure_or_task_fields` also
+        // rejects a `CStr`-shaped struct/enum field once `spawn`/
+        // channels are used anywhere in the program — see that
+        // function's own doc comment for why this is currently
+        // unreachable via the ordinary frontend (an ordinary struct
+        // field's type annotation can never resolve to `CStr`) but kept
+        // as a hand-built-`TagFields` defensive check regardless,
+        // mirroring `Closure`/`Task`'s own established precedent.
+        let body = Expr::Spawn { block: Box::new(Expr::Int(0)) };
+        let prog = program(vec![Function { name: "go".to_string(), params: vec![], body }]);
+        let err = emit(&prog, &sigs(&[("go", vec![], CgType::Task(Box::new(CgType::Int)))]), &tags(&[("Holder", vec![CgType::CStr])]))
+            .expect_err("expected a CStr-shaped struct field to be rejected once `spawn` is used");
+        assert!(err.contains("Holder"), "unexpected error: {err}");
+        assert!(err.contains("CStr"), "unexpected error: {err}");
     }
 }

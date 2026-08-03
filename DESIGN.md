@@ -1513,7 +1513,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1-v8 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join, channels/select)
+### LLVM backend — v1-v9 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join, channels/select, scalar FFI)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1552,17 +1552,20 @@ concurrency), and — as of a further follow-on chunk — `channel[T]()`/
 `.send()`/`.recv()`/`select` (see "Concurrency: channels/select"
 below; disconnect detection is explicitly NOT part of this, and at
 most one distinct `channel[T]()` element type `T` is supported per
-program — see that section). Still out of scope and producing a clear
-codegen error, never a panic: Unicode-aware string operations
-(`.runes()`, `.to_upper()`, `.to_lower()`, `.trim()`, `.replace()`,
-`.split()`), a closure literal inside a still-generic function's own
-body, an `Assign` inside a closure body writing back into an enclosing
-loop's carried variable (structurally out of reach of this backend's
-closure design, not merely unimplemented), an `Assign` reachable only
-through a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value
-position (e.g. `f({ sum = sum + 1; sum })` as a `Call` argument),
-disconnect detection on channels, more than one distinct `channel[T]()`
-element type per program, FFI (including `CStr`), non-constant
+program — see that section), and — as of a further follow-on chunk —
+scalar `extern "C"` calls, `CStr`, and C callbacks (see "FFI: scalar
+extern calls, CStr, callbacks" below; struct-by-value marshaling
+remains deferred). Still out of scope and producing a clear codegen
+error, never a panic: Unicode-aware string operations (`.runes()`,
+`.to_upper()`, `.to_lower()`, `.trim()`, `.replace()`, `.split()`), a
+closure literal inside a still-generic function's own body, an
+`Assign` inside a closure body writing back into an enclosing loop's
+carried variable (structurally out of reach of this backend's closure
+design, not merely unimplemented), an `Assign` reachable only through
+a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value position
+(e.g. `f({ sum = sum + 1; sum })` as a `Call` argument), disconnect
+detection on channels, more than one distinct `channel[T]()` element
+type per program, struct-by-value FFI marshaling, non-constant
 `Global` initializers — and a generic instantiated at any of these
 still-unsupported types (e.g. `Box[Array[Str]]` once `.split()` is
 needed).
@@ -2268,6 +2271,101 @@ inner `CgType` being correct), **at most one distinct `channel[T]()`
 element type is supported per program** — a second, differently-typed
 `channel[..]` call anywhere in the same program is a loud, clear
 compile-time `Err`, never a silent miscompile.
+
+**FFI: scalar extern calls, CStr, callbacks** (struct-by-value
+marshaling deferred). Confirmed directly (not assumed) that FFI is far
+simpler in codegen than in the interpreter: `libffi`/`libloading` exist
+there solely because a call frame's signature is only known at
+Plum-RUNTIME and the target symbol must be resolved dynamically —
+neither problem exists in codegen, where an `ExternFn`'s signature is
+fully known at codegen time and `clang`/the linker already resolve
+real C symbols natively, exactly the way this backend already declares
+and calls `malloc`/`pthread_create`/`memcpy`. DESIGN.md's own FFI
+section anticipated this ("an LLVM/native backend won't need a
+dynamic-signature calling mechanism at all"). `unsafe`-gating and the
+"Callback argument must be a bare function name, never a closure
+literal" restriction are enforced by the single `plum_types::Infer::
+infer_program` call shared by both pipelines — codegen needs zero
+duplicate enforcement of either.
+
+`ExternType` → LLVM mapping: `Int`→`i64`, `Float`→`double`, `Bool`→
+`i32` (C's `int`, NOT `i1` — this backend's own `CgType::Bool` is
+`i1`, a real width mismatch), `Str`/`Callback`→`ptr`, `None` return→
+`void`. `declare` emission needs no reactive "only if used" gating the
+way spawn/channel runtime helpers do — `program.externs` is already
+the complete, explicit list, so one `declare` per entry is emitted
+directly, with a defensive reserved-name collision check (a user
+declaring `extern "C" { fn malloc(...) }` gets a clear error, not a
+broken duplicate `declare`) — with one added wrinkle found during
+implementation: LLVM rejects even a BYTE-IDENTICAL duplicate `declare`
+line, so a user's own extern block re-declaring a name this backend
+already declares for its own runtime (e.g. `strlen`) needs to be
+recognized and skipped rather than re-emitted, not just rejected as a
+collision.
+
+**`Bool` marshaling, both directions, is the one place a subtly wrong
+answer would silently corrupt an ABI-level detail rather than
+obviously fail**: an argument going IN gets `zext i1 to i32`; a return
+coming OUT uses `icmp ne i32 .., 0` — deliberately NOT `trunc i32 to
+i1`, since C's "any nonzero value is true" convention differs from a
+naive "read the low bit" truncation, which would silently misread e.g.
+a `2` as `false`. Verified both directions not just via inspected IR
+text but through a real compile-and-run test executing actual native
+code (a tiny custom-compiled C helper, since no real libc function has
+a narrow enough Int/Float/Bool-only signature to exercise either
+direction).
+
+`CgType::CStr` is a genuinely NEW, distinct representation from
+`CgType::Str` — a bare, non-refcounted, NUL-terminated `char*` with no
+header at all (not Plum's own length-prefixed, refcounted string
+cell). Never refcounted, never deep-copied, and REJECTED from crossing
+a spawn/channel boundary entirely (extending the existing `Closure`/
+`Task` rejection) — a raw unowned C pointer aliased across two threads
+with zero synchronization is strictly worse than either of those,
+which at least have defined single-owner or Plum-managed semantics.
+
+`.as_cstr()` codegen validates no embedded NUL (via a declared libc
+`@memchr`, matching the `@strlen` precedent of reaching for a real
+libc primitive over a hand-rolled loop) then **must** `malloc` a fresh
+buffer rather than aliasing a pointer into the existing Str cell's own
+NUL-padded byte region (which `@plum_alloc_str` already reserves) —
+this is a real, non-obvious SOUNDNESS requirement, not a missed
+optimization, discovered by reading `fbip.rs` directly: `.as_cstr()`'s
+inner expression is treated as an ORDINARY heap-consuming occurrence,
+meaning `.as_cstr()`'s own codegen is the ONLY place that ever
+discharges the incoming `Str`'s refcount ownership (no separate `Dec`
+is emitted anywhere else for a `Str` wrapped in `.as_cstr()`). Since
+this mandatory `@plum_rc_dec_str` call is therefore required, an
+aliased pointer into that same cell would dangle the instant the dec
+drops the refcount to zero and frees it — the common case whenever the
+`Str` was at its last use. A fresh, independently-owned allocation is
+the only sound design given `fbip`'s existing ownership contract.
+
+C callbacks reuse `CgType::Closure` — no new `CgType` variant — since
+a bare top-level function name passed where a `Callback`-typed extern
+parameter is expected already codegens through the EXISTING closures-
+chunk `codegen_bare_fn_value` machinery built for ordinary Plum-level
+higher-order use. What's genuinely new is a SECOND, env-free trampoline
+generator invoked specifically at the extern-call argument-marshaling
+site: a real C API has no way to supply the `ptr %env` argument an
+ordinary closure trampoline's signature requires, so the callback
+trampoline is a structurally simpler, separate function shape with no
+env parameter at all, memoized in its own table (kept separate from
+the ordinary closure-trampoline table specifically because conflating
+the two risks returning the wrong calling-convention shape under what
+could otherwise collide as the same lookup key). The extern-call arg
+loop special-cases a `Callback`-typed parameter slot, matching the raw
+argument expression for a bare function name BEFORE ever calling
+`codegen_value` on it (never materializing an unnecessary closure
+cell), and references the generated trampoline's function symbol
+directly as the call argument — no `ptrtoint`/`inttoptr` round-trip
+needed at all, simpler than the closure-cell case, since there's no
+intermediate storage step here. Verified via a real compile-and-run
+test invoking a genuine C-to-Plum callback round trip through a tiny
+custom C helper — proving something the interpreter's own test suite
+explicitly could not (no real libc function has a narrow enough
+signature to exercise the successful-invocation path, only the
+argument-rejection path).
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck

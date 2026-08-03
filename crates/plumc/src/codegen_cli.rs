@@ -66,6 +66,18 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
         // point something actually tries to construct/match it, not
         // here.
         PlumType::Str => Ok(CgType::Str),
+        // `.as_cstr()`'s own result type — see `CgType::CStr`'s doc
+        // comment for why it's a genuinely distinct representation from
+        // `Str`. `plum_types::context::extern_ast_type_to_type`'s own
+        // doc comment confirms `Type::CStr` is ONLY ever produced by
+        // `.as_cstr()` or an extern signature's own `CStr` annotation —
+        // never an ordinary struct/enum field or ordinary function
+        // parameter's declared type (`ast_type_to_type`, the resolver
+        // EVERY other type-annotation position uses, never produces it)
+        // — so this arm is reachable only for a LOCAL variable/function
+        // return whose type happens to be `CStr` (e.g. `let f(s) =
+        // s.as_cstr()`), never for `tag_fields`.
+        PlumType::CStr => Ok(CgType::CStr),
         // `Array[T]` recurses into `T` — this is ALSO a genuine bug fix
         // over the previous chunk: before this arm existed, `Array[T]`
         // fell through to the `Struct(..)` wildcard arm just above,
@@ -538,6 +550,19 @@ pub fn reject_unprintable_return(entry_fn: &str, ret: CgType) -> Result<(), Stri
             "codegen: {entry_fn:?} returns a channel handle, which the compiled entry point can't print yet"
         ));
     }
+    // A bare `CStr` return isn't printable via the SAME `emit_main` path
+    // as `Str` — deliberately not just aliased onto `Str`'s own `%s`
+    // print case: a `CStr` is a genuinely unowned pointer of unknown
+    // provenance/lifetime (see `plum_codegen::CgType::CStr`'s own doc
+    // comment), and a Plum entry point returning one directly (rather
+    // than the far more realistic `.as_cstr()`-consuming extern-call
+    // shape this chunk's real tests exercise) is out of scope — no
+    // test in this codebase's own FFI story needs it.
+    if matches!(ret, CgType::CStr) {
+        return Err(format!(
+            "codegen: {entry_fn:?} returns a bare CStr value, which the compiled entry point can't print yet"
+        ));
+    }
     Ok(())
 }
 
@@ -835,8 +860,14 @@ pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
         // function — see its own doc comment on why. Unreachable in
         // practice, kept as a defensive error (not a panic) rather than
         // silently producing garbage IR if that check is ever bypassed.
-        CgType::Heap | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) => {
-            return "; unreachable: compile_and_run rejects a Heap/Array/Closure/Task/Sender/Receiver-returning \
+        CgType::Heap
+        | CgType::Array(_)
+        | CgType::Closure(..)
+        | CgType::Task(_)
+        | CgType::Sender(_)
+        | CgType::Receiver(_)
+        | CgType::CStr => {
+            return "; unreachable: compile_and_run rejects a Heap/Array/Closure/Task/Sender/Receiver/CStr-returning \
                      entry point before this point"
                 .to_string()
         }
@@ -873,6 +904,17 @@ fn clang_compile(ir: &str, ll_path: &std::path::Path, bin_path: &std::path::Path
     std::fs::write(ll_path, ir).map_err(|e| format!("failed to write generated IR: {e}"))?;
     let compile = Command::new("clang")
         .arg(ll_path)
+        // `-lm` — a Plum program can now `extern "C"` a real libm
+        // function (`sqrt`, ...) via `plum_codegen::emit_program`'s new
+        // FFI support; unlike `plum-interp` (which resolves against the
+        // CURRENT PROCESS's own dynamic symbol table, so its own
+        // `build.rs` links `libm` into the interpreter binary itself —
+        // see DESIGN.md's "Symbol resolution" note), a compiled Plum
+        // program is its OWN separate binary, so ITS link step needs the
+        // same `-lm` explicitly. Harmless to pass unconditionally even
+        // for a program that never calls a libm function — `clang`/`ld`
+        // only pull in the specific object code actually referenced.
+        .arg("-lm")
         .arg("-o")
         .arg(bin_path)
         .output()
@@ -903,6 +945,93 @@ pub fn compile_ir_to_binary(ir: &str, out_path: &std::path::Path) -> Result<(), 
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp build directory: {e}"))?;
     let ll_path = dir.join("program.ll");
     clang_compile(ir, &ll_path, out_path)
+}
+
+/// The compile-and-run test harness's C-fixture VARIANT — links an
+/// extra, small, hand-written `.c` helper file ALONGSIDE the generated
+/// `.ll`, via the SAME `clang` invocation (`clang program.ll helper.c
+/// -o program`), not a separate build system. Needed for exactly two
+/// tests (`bool_width_round_trips_through_a_real_c_abi_boundary`,
+/// `a_real_c_callback_invocation_round_trips_through_native_code`)
+/// where no existing REAL libc function has a narrow enough Int/Float/
+/// Bool-only signature to prove either the `Bool`-width ABI conversion
+/// or a genuine callback invocation end-to-end — the exact same wall
+/// `plum-interp`'s own test suite hit (see that crate's
+/// `call_with_10_and_20`/`call_with_true`/`identity_cstr` Rust-level
+/// stand-ins), except codegen's tests compile to a REAL native binary,
+/// so a Rust `extern "C" fn`'s address can't be borrowed in-process the
+/// way the interpreter's tests do — an actual, separately compiled `.c`
+/// translation unit is required instead.
+#[cfg(test)]
+fn run_via_clang_with_c_helper(ir: &str, c_source: &str) -> Result<String, String> {
+    let dir = unique_temp_dir("plumc-codegen-cfixture");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp build directory: {e}"))?;
+    let ll_path = dir.join("program.ll");
+    let c_path = dir.join("helper.c");
+    let bin_path: PathBuf = dir.join("program");
+    std::fs::write(&ll_path, ir).map_err(|e| format!("failed to write generated IR: {e}"))?;
+    std::fs::write(&c_path, c_source).map_err(|e| format!("failed to write C helper source: {e}"))?;
+    let compile = Command::new("clang")
+        .arg(&ll_path)
+        .arg(&c_path)
+        .arg("-lm")
+        .arg("-o")
+        .arg(&bin_path)
+        .output()
+        .map_err(|e| {
+            format!("could not run `clang` (required to compile the generated LLVM IR together with the C helper — is it on PATH?): {e}")
+        })?;
+    if !compile.status.success() {
+        return Err(format!(
+            "clang failed to compile the generated IR together with the C helper:\n{}",
+            String::from_utf8_lossy(&compile.stderr)
+        ));
+    }
+
+    let run = Command::new(&bin_path)
+        .output()
+        .map_err(|e| format!("failed to run compiled binary {bin_path:?}: {e}"))?;
+    if !run.status.success() {
+        return Err(format!(
+            "compiled program exited with a non-zero status: {:?}\nstdout: {}\nstderr: {}",
+            run.status.code(),
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        ));
+    }
+    Ok(String::from_utf8_lossy(&run.stdout).trim_end().to_string())
+}
+
+/// The C-fixture counterpart to `compile_and_run` — see `run_via_clang_
+/// with_c_helper`'s own doc comment for why this variant exists at all.
+#[cfg(test)]
+fn compile_and_run_with_c_helper(src: &str, entry_fn: &str, args: &[CgValue], c_source: &str) -> Result<String, String> {
+    let (body_ir, signatures, resolved_entry) = compile_to_ir(src, entry_fn)?;
+    let sig = signatures
+        .get(&resolved_entry)
+        .ok_or_else(|| format!("codegen: no such function {entry_fn:?}"))?
+        .clone();
+    if sig.params.len() != args.len() {
+        return Err(format!(
+            "codegen: {entry_fn:?} expects {} argument(s), found {}",
+            sig.params.len(),
+            args.len()
+        ));
+    }
+    for (arg, expected) in args.iter().zip(&sig.params) {
+        if arg.cg_type() != *expected {
+            return Err(format!(
+                "codegen: argument type mismatch calling {entry_fn:?} — expected {expected:?}, found {:?}",
+                arg.cg_type()
+            ));
+        }
+    }
+    reject_unprintable_return(entry_fn, sig.ret.clone())?;
+
+    let main_ir = emit_main(&resolved_entry, sig.ret, args);
+    let full_ir = format!("{body_ir}\n{main_ir}");
+
+    run_via_clang_with_c_helper(&full_ir, c_source)
 }
 
 fn run_via_clang(ir: &str) -> Result<String, String> {
@@ -2010,5 +2139,181 @@ mod tests {
         assert!(!stderr.contains("ERROR: AddressSanitizer"), "ASan flagged an error:\n{stderr}");
         assert!(!stderr.contains("WARNING: ThreadSanitizer"), "TSan flagged a data race:\n{stderr}");
         assert_eq!(stdout, expected_stdout);
+    }
+
+    // --- FFI: real compile-and-run tests ---
+
+    #[test]
+    fn a_real_sqrt_extern_call_compiles_and_runs() {
+        let src = r#"
+            extern "C" {
+                fn sqrt(x: Float) -> Float;
+            }
+            let go (): Float = unsafe { sqrt(144.0) }
+        "#;
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "12.000000");
+    }
+
+    #[test]
+    fn a_real_strlen_based_cstr_round_trip_compiles_and_runs() {
+        // `.as_cstr()` validates + copies "hello world" into a fresh,
+        // unrefcounted `CStr` buffer; the real libc `strlen` measures it
+        // across the actual FFI boundary — proving `AsCStr`'s codegen
+        // (embedded-NUL check, fresh malloc+memcpy+NUL-store, and the
+        // ownership-discharge dec on the original `Str` cell) all
+        // produce a buffer real C code can correctly walk.
+        let src = r#"
+            extern "C" {
+                fn strlen(s: CStr) -> Int;
+            }
+            let go (): Int = unsafe { strlen("hello world".as_cstr()) }
+        "#;
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "11");
+    }
+
+    // NOTE: no real-compile-and-run test exercises `.as_cstr()`'s
+    // embedded-NUL abort here — `plum-syntax`'s lexer has no string-
+    // literal escape that produces a real embedded NUL byte (`\0` lexes
+    // to the literal character `'0'`, not `'\0'`; see `lex_string`), so
+    // there's no way to express one in actual Plum SOURCE TEXT for this
+    // source-driven test harness to compile. The check itself IS
+    // exercised directly: `plum_codegen`'s own unit test (`as_cstr_
+    // validates_copies_and_decs_the_original_str_register`, which
+    // asserts the `@memchr`/`@plum_abort` shape) and, at the interpreter
+    // parity level, `plum_interp::as_cstr_rejects_a_string_with_an_
+    // embedded_null_byte` (built directly via `ir::Expr::Str("a\0b")`,
+    // bypassing the lexer entirely, exactly because Rust source CAN
+    // embed a real NUL where Plum source can't).
+
+    #[test]
+    fn a_real_extern_call_returning_a_null_string_pointer_aborts_at_runtime() {
+        // `getenv` on a variable that (almost certainly) isn't set
+        // returns a real NULL `char*` — proving the NULL-return
+        // `@plum_abort` runtime check fires against an ACTUAL libc call,
+        // not just a hand-built IR assertion. `getenv`'s own extern
+        // signature is declared `-> CStr` (the only surface spelling
+        // `plum-types` accepts for an extern return at all — see
+        // DESIGN.md's "Type scope" note); the returned value is
+        // discarded immediately (`let _ = ..`) since `Type::CStr` has no
+        // further operations of its own and `go`'s own return stays
+        // `Int` so `reject_unprintable_return` doesn't reject the ENTRY
+        // POINT itself before the real abort ever gets a chance to fire.
+        let src = r#"
+            extern "C" {
+                fn getenv(name: CStr) -> CStr;
+            }
+            let go (): Int = unsafe {
+                let ignored = getenv("PLUM_CODEGEN_FFI_TEST_VAR_DEFINITELY_UNSET_XYZ".as_cstr());
+                0
+            }
+        "#;
+        let err = compile_and_run(src, "go", &[CgValue::Unit])
+            .expect_err("expected a null string return from a real extern call to abort at runtime");
+        assert!(err.contains("null string pointer") || err.contains("non-zero status"), "unexpected error: {err}");
+    }
+
+    /// A tiny, self-contained C helper proving the `Bool` ABI conversion
+    /// is correct in BOTH directions via REAL native code, not just
+    /// inspected IR text: `ffitest_bool_widen_check` proves the
+    /// ARGUMENT direction (`zext i1 to i32` produces EXACTLY C's `1`,
+    /// never some garbage-upper-bits pattern a naive width mismatch
+    /// could produce); `ffitest_bool_return_nonzero` deliberately
+    /// returns `2`, not `1` — proving the RETURN direction reads C's
+    /// "any nonzero value is true" convention correctly (`icmp ne i32 ..,
+    /// 0`), since a buggy `trunc i32 .. to i1` implementation would read
+    /// `2`'s low bit (`0`) as `false` and silently produce the WRONG
+    /// answer.
+    const BOOL_WIDTH_C_HELPER: &str = r#"
+        int ffitest_bool_widen_check(int x) {
+            return x == 1 ? 1 : 0;
+        }
+        int ffitest_bool_return_nonzero(void) {
+            return 2;
+        }
+    "#;
+
+    #[test]
+    fn bool_width_round_trips_through_a_real_c_abi_boundary() {
+        let src = r#"
+            extern "C" {
+                fn ffitest_bool_widen_check(x: Bool) -> Bool;
+                fn ffitest_bool_return_nonzero() -> Bool;
+            }
+            let go (): Bool = unsafe {
+                if ffitest_bool_widen_check(true) {
+                    ffitest_bool_return_nonzero()
+                } else {
+                    false
+                }
+            }
+        "#;
+        let out = compile_and_run_with_c_helper(src, "go", &[CgValue::Unit], BOOL_WIDTH_C_HELPER).unwrap();
+        // `emit_main`'s Bool case prints via `zext i1 to i32` + `%d` —
+        // `"1"` here is only reachable if BOTH the argument-direction
+        // `zext` and the return-direction `icmp ne` are correct: a
+        // `trunc`-based return bug would make `plum_test_bool_return_
+        // nonzero`'s real `2` read as `false`, taking the `else` branch
+        // and printing `"0"` instead.
+        assert_eq!(out, "1");
+    }
+
+    /// A tiny C helper invoking a Plum-supplied function pointer
+    /// SYNCHRONOUSLY, during the call — exactly the shape of a typical C
+    /// callback API (a comparator, a visitor). No real libc function has
+    /// a narrow enough `(Int, Int) -> Int`-shaped signature to prove
+    /// this end-to-end (the same wall `plum-interp`'s own test suite
+    /// hit — see `call_with_10_and_20` there), so this stands in for one.
+    const CALLBACK_C_HELPER: &str = r#"
+        long long ffitest_apply(long long (*f)(long long, long long), long long a, long long b) {
+            return f(a, b);
+        }
+    "#;
+
+    #[test]
+    fn a_real_c_callback_invocation_round_trips_through_native_code() {
+        // Proves something no existing test in this codebase (the
+        // interpreter included) has ever proven: a REAL C function,
+        // compiled and linked as a genuinely separate native translation
+        // unit, calling BACK into compiled Plum code through a real
+        // function-pointer value — not just a structural "the trampoline
+        // has the right shape" assertion, an actual successful round
+        // trip through native machine code.
+        let src = r#"
+            extern "C" {
+                fn ffitest_apply(f: (Int, Int) -> Int, a: Int, b: Int) -> Int;
+            }
+            let add (a: Int) (b: Int): Int = a + b
+            let go (): Int = unsafe { ffitest_apply(add, 10, 32) }
+        "#;
+        let out = compile_and_run_with_c_helper(src, "go", &[CgValue::Unit], CALLBACK_C_HELPER).unwrap();
+        assert_eq!(out, "42");
+    }
+
+    #[test]
+    fn a_c_callback_that_receives_and_returns_bool_round_trips_correctly() {
+        // The callback-trampoline counterpart to `bool_width_round_
+        // trips_through_a_real_c_abi_boundary`: proves the TRAMPOLINE's
+        // OWN `icmp ne i32 %p, 0` (converting an incoming C `Bool`
+        // parameter to Plum's `i1`) and `zext i1 %r to i32` (converting
+        // the Plum function's `i1` result back to C's `Bool`) are BOTH
+        // correct, via a real native call through a real C function
+        // pointer — not just the argument/return marshaling at the
+        // OUTER `ExternCall` site (already covered above).
+        let c_helper = r#"
+            int ffitest_apply_bool(int (*f)(int), int x) {
+                return f(x);
+            }
+        "#;
+        let src = r#"
+            extern "C" {
+                fn ffitest_apply_bool(f: (Bool) -> Bool, x: Bool) -> Bool;
+            }
+            let negate (x: Bool): Bool = !x
+            let go (): Bool = unsafe { ffitest_apply_bool(negate, true) }
+        "#;
+        let out = compile_and_run_with_c_helper(src, "go", &[CgValue::Unit], c_helper).unwrap();
+        assert_eq!(out, "0");
     }
 }
