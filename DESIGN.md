@@ -1525,7 +1525,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1-v13 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures (including inside generic functions), general array iteration, spawn/join, channels/select, full FFI including struct-by-value, Unicode-aware string ops, non-constant globals)
+### LLVM backend — v1-v14 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures (including inside generic functions), general array iteration, spawn/join, channels/select, full FFI including struct-by-value, Unicode-aware string ops, non-constant globals including ones calling a still-generic function)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1573,26 +1573,25 @@ chunk — `.runes()`, `.trim()`, `.replace()`, `.split()` (full Unicode
 correctness) and `.to_upper()`/`.to_lower()` (full Unicode SIMPLE case
 mapping via libc `towupper`/`towlower` — see "Unicode-aware string
 operations" below for the mechanism and its one remaining, narrowly-
-scoped gap), non-constant top-level `Global` initializers
-(see "Non-constant Global initializers" below), and — as of a further
-follow-on chunk — closure literals inside a still-generic function's
-own body, working correctly and independently per concrete
-instantiation (see "Closures inside generic functions" below). Still
-out of scope, but NOT a codegen error — a silent, documented pass-
-through instead (see "Unicode-aware string operations" below):
-multi-codepoint Unicode case expansions (e.g. German `ß`→`"SS"`) leave
-the input unchanged, since `towupper`/`towlower`'s 1-in-1-out C
-signature cannot produce them. Still out of scope and producing a
-clear codegen error, never a panic: an `Assign` inside a closure body
-writing back into an enclosing loop's carried variable (structurally
-out of reach of this backend's closure design, not merely
-unimplemented), an `Assign` reachable only through a `Let`/`If`/
-`Match`/`RcAnnotated` used in an ordinary value position (e.g.
-`f({ sum = sum + 1; sum })` as a `Call` argument), disconnect detection
-on channels, more than one distinct `channel[T]()` element type per
-program, a `Global` initializer that calls a still-generic function —
-and a generic instantiated at any of these still-unsupported types
-(e.g. `Box[Array[Str]]` once `.split()` is
+scoped gap), non-constant top-level `Global` initializers, including
+one that calls a still-generic function (see "Non-constant Global
+initializers" below for both), and — as of a further follow-on chunk —
+closure literals inside a still-generic function's own body, working
+correctly and independently per concrete instantiation (see "Closures
+inside generic functions" below). Still out of scope, but NOT a
+codegen error — a silent, documented pass-through instead (see
+"Unicode-aware string operations" below): multi-codepoint Unicode case
+expansions (e.g. German `ß`→`"SS"`) leave the input unchanged, since
+`towupper`/`towlower`'s 1-in-1-out C signature cannot produce them.
+Still out of scope and producing a clear codegen error, never a panic:
+an `Assign` inside a closure body writing back into an enclosing
+loop's carried variable (structurally out of reach of this backend's
+closure design, not merely unimplemented), an `Assign` reachable only
+through a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value
+position (e.g. `f({ sum = sum + 1; sum })` as a `Call` argument),
+disconnect detection on channels, more than one distinct `channel[T]()`
+element type per program — and a generic instantiated at any of these
+still-unsupported types (e.g. `Box[Array[Str]]` once `.split()` is
 needed).
 
 **Guaranteed tail calls**: any call in tail position (the function's
@@ -2618,13 +2617,107 @@ test (`fib(10) == 55`).
 Mutual recursion between globals is structurally impossible to
 construct in a well-typed program (globals aren't pre-declared as a
 batch the way functions are); forward references are already rejected
-upstream by `plum-types`; neither needs a codegen-side check. A
-`Global` initializer that calls a still-generic function is a known,
-narrow, explicitly out-of-scope follow-up (monomorphization's mangled
-output wholesale-replaces `ir_program.functions`, but `ir_program.
-globals` is left untouched) — surfaces today as a plain "unknown
-function" error, not a crash or garbage, good enough for this chunk
-without being a fully polished message.
+upstream by `plum-types`; neither needs a codegen-side check.
+
+**`Global` initializers calling a still-generic function.** Closes the
+gap noted above — required a genuine, two-layer fix, not just a
+codegen change, because the real root cause turned out to be a
+type-soundness bug, not a monomorphization/rewrite gap.
+
+The shallow half was as expected: `monomorphize::plan`'s worklist
+already discovered and monomorphized any generic function a global's
+initializer called (its seeding loop walks every `resolved_sites`
+entry unconditionally, regardless of which item — function or global —
+a site belongs to), but `MonoPlan` never rewrote a GLOBAL's own body to
+reference the mangled instantiation, and `plumc::codegen_cli` pulled
+`ir_program.globals` straight from an unrewritten `lower_program` pass.
+Fixed by giving `MonoPlan` a `globals: Vec<ir::Global>` field, folding
+globals into the SAME worklist mechanism functions/structs/enums
+already use (a new `Task::Global(String)` variant — needed because a
+call site inside a global's own rewrite pass re-requests an
+instantiation via `resolve_site`'s `new_tasks` EVERY time it matches,
+regardless of whether that instantiation was already fully processed
+elsewhere; the existing `done_fns` dedup at the top of each task's own
+processing makes re-requesting it a harmless no-op, but only if it goes
+through the real worklist, not a hand-rolled "no new tasks expected"
+assumption — which does NOT hold and was caught by a failing test, not
+guessed), then reassembling `globals` in original source declaration
+order (not worklist/discovery order) in one final pass once the
+worklist drains, since `@plum_init_globals` depends on that order.
+
+The deep half, found while grounding the shallow fix against the
+actual type-checker (not assumed): `plum_types::Infer::infer_program`
+inferred every global's REAL initializer in a "Phase 1.5" that ran
+BEFORE any function body was checked. A generic function's parameter
+and return types are only linked together — and its signature only
+generalized into a real, callable-at-many-types `Scheme` — once ITS
+OWN body has been checked ("Phase 2"). So a global calling a generic
+function was structurally stuck unifying against that function's raw,
+un-linked Phase-1 placeholder, which could PERMANENTLY pin the
+function's type variable to whatever the global happened to use it at
+— breaking every OTHER call to the same generic function elsewhere in
+the program at a different type. Verified empirically before touching
+any code: `identity[T](x:T):T=x; let g=identity(5); let h()=identity(true)`
+failed with `type mismatch: expected Int, found Bool` on this exact
+codebase before this fix — a genuine, pre-existing soundness gap, not
+a narrow codegen limitation, and unrelated to the shallow half above.
+Surfaced to the user via `AskUserQuestion` (fix the real ordering bug /
+narrow-scope-and-reject the unsound case / park it) rather than
+shipping a fix that only works when the generic function has exactly
+one caller in the whole program — the user chose to fix the real bug.
+
+Fixed by splitting global inference into three phases: (1) a NEW early
+pass, positioned where "Phase 1.5" used to run (before functions),
+infers every global's REAL initializer using a throwaway, DISCARDED
+substitution — giving Phase 2 (function bodies) each global's real,
+concrete early-computed type for ordinary visibility (including struct
+FIELD ACCESS, which needs a resolved `Type::Struct` immediately and
+can't defer the way plain unification can — confirmed by trying a
+placeholder-based design FIRST, which broke `struct Box{val:Int}\nlet
+g=Box{val:1}\nlet go()=g.val`, a case with no generics involved at
+all), without letting any premature generic-call unification leak into
+the REAL substitution Phase 2 depends on for generalization (since it
+never composes into it); (2) Phase 2 (functions) runs exactly as
+before, now merging each global's early type into `body_env` FRESH on
+every iteration (not a one-time snapshot — an early design mistake
+that silently broke ordinary function-to-function calls between two
+Phase-2 siblings with NO globals involved at all, caught by a failing
+test) and re-applying the LIVE substitution on top of each stored early
+type (not just cloning it — a second, related mistake: a global that
+merely ALIASES a function's still-unresolved signature, `let f =
+square`, needs that alias to track `square`'s type as Phase 2 actually
+resolves it, exactly the same staleness bug an existing regression
+test, `a_global_aliasing_a_function_declared_earlier_resolves_calls_
+through_it_fully`, was already written to guard against); (3) the REAL
+"Phase 3" (moved to run AFTER Phase 2, the exact position "Phase 1.5"
+used to occupy) re-infers every global's body a SECOND time, now
+against the real, fully-generalized environment, becoming the
+authoritative source for `global_types`/`resolved_sites`/
+`final_subst`. The early pass's own failures are caught and treated as
+non-fatal per global (not propagated with `?`) — a global whose shape
+depends, even transitively, on a generic function's not-yet-linked
+Phase-1 placeholder can genuinely fail to resolve early even in a
+perfectly well-typed program (a generic function's param/return aren't
+linked until Phase 2 checks its own body), so an early failure just
+means that global (and anything referencing it BY NAME during the same
+early pass) gets no early visibility — Phase 3 remains authoritative
+regardless.
+
+This reorder has one genuine, narrow, remaining structural limit,
+found and documented rather than hidden: a FUNCTION cannot do field
+access (or any other structural, immediately-concrete-requiring
+operation) on a global whose value came from calling a still-generic
+function, because that global's real shape isn't knowable until Phase
+2 (or Phase 3) has actually run — the early pass can at best learn a
+generic call's ARGUMENT type, never its un-linked RETURN type. A LATER
+GLOBAL doing the same field access works fine (Phase 3 threads
+`global_env` sequentially in file order with fully-resolved types), but
+a function referencing even that later global then hits the same wall
+transitively. Locked in by dedicated tests on both sides of the
+boundary, in both `plum-types` and a real compiled-and-run `plumc`
+test proving the actual soundness fix end-to-end (the same generic
+function instantiated from a global at one type AND from a function at
+a different type in the same compiled program).
 
 **Closures inside generic functions**. Lifts a pre-check that
 previously rejected any closure literal inside a still-generic

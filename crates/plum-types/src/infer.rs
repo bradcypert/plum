@@ -314,11 +314,16 @@ pub struct Infer {
     // `infer_program`, for EVERY top-level def (function or generic-or-
     // not), never just generic ones (see `generic_sites`'s doc comment
     // for why an ordinary function's own generic-type-touching sites
-    // still need an `enclosing_fn` recorded). `None` outside any
-    // top-level def's own body (globals, and any standalone `infer_expr`
-    // call in tests) — a site recorded with `enclosing_fn: None` is
-    // always tier-1 (never needs a template `Param`), since there's no
-    // enclosing generic function it could depend on.
+    // still need an `enclosing_fn` recorded). ALSO set/cleared around
+    // each Phase 1.5 global's own initializer (mirroring Phase 2's
+    // shape exactly), so a global's initializer gets `enclosing_fn:
+    // Some(global_name)` too — needed for `plum_ir::monomorphize` to
+    // rewrite a global's body when it calls a still-generic function.
+    // `None` outside any top-level def's or global's own body (any
+    // standalone `infer_expr` call in tests) — a site recorded with
+    // `enclosing_fn: None` is always tier-1 (never needs a template
+    // `Param`), since there's no enclosing generic function it could
+    // depend on.
     current_fn: Option<String>,
     // `current_fn`'s own declared generics, in SOURCE order, paired with
     // the fresh `Var`s `infer_program`'s Phase 2 minted for them
@@ -959,67 +964,129 @@ impl Infer {
 
         let mut acc = Subst::empty();
 
-        // Phase 1.5: globals, in file order, BEFORE any function body
-        // is inferred — a global stays monomorphic (never generalized,
-        // same as a block-level `let`), and each one's initializer sees
-        // every function (Phase 1 above pre-declared every signature
-        // regardless of order) plus every EARLIER global (this loop
-        // extends `global_env` immediately after each one, so a LATER
-        // global or a function body can see it — see ir.rs's `Global`
-        // doc comment for why the reverse, a global seeing a LATER
-        // global, isn't meaningful and isn't supported).
-        let mut global_types: HashMap<String, Type> = HashMap::new();
+        // Phase 1.5-early: infer every global's body EAGERLY, in file
+        // order, exactly mirroring what used to be the ONLY "Phase 1.5"
+        // pass (self-referential-closure special case included) — but
+        // using a LOCAL, throwaway substitution (`acc_local`, cloned
+        // from `acc` at each step, never composed back into the REAL
+        // `acc` Phase 2 depends on) rather than the shared one. This is
+        // purely so Phase 2 (function bodies, below) sees each global's
+        // REAL, CONCRETE type — not just an unresolved placeholder —
+        // preserving every existing capability that depends on a
+        // concrete type being available immediately (struct FIELD
+        // ACCESS on a global's value being the sharpest example:
+        // `Expr::Field`'s inference requires `base`'s type to already be
+        // a resolved `Type::Struct`, and cannot defer that the way
+        // ordinary unification-based operations can — confirmed
+        // empirically: a placeholder-based design, tried first, broke
+        // `struct Box{val:Int}\nlet g = Box{val:1}\nlet go() = g.val`
+        // even with NO generics involved at all).
+        //
+        // The tradeoff: any generic-function call inside a global's body
+        // gets a WRONG, premature resolution here too (unified against
+        // that function's still-monomorphic Phase-1 placeholder, same
+        // failure mode as before this whole reorder) — but since this
+        // pass's `acc_local` is thrown away and never touched the real
+        // `acc`/`signatures` Phase 2 generalizes against, that wrongness
+        // stays fully contained here and can never corrupt a DIFFERENT
+        // caller of the same generic function elsewhere in the program.
+        // Phase 3 (below, after Phase 2, the REAL/authoritative pass)
+        // re-infers every global's body a SECOND time against the real,
+        // fully-generalized `acc`/`global_env`, overwriting whatever
+        // this early pass got wrong — including any site this pass
+        // recorded via `record_site`/`record_fn_call_site` (keyed by
+        // AST span, so Phase 3 re-visiting the exact same span simply
+        // overwrites it with the correct resolution).
+        // Kept as a plain map (not a whole `TypeEnv` snapshot) — a
+        // one-time snapshot of `global_env` taken here would go STALE
+        // the moment Phase 2 (below) starts updating the REAL
+        // `global_env` with each function's own post-generalization
+        // scheme (`global_env = global_env.extend_scheme(...)`, further
+        // down): a snapshot would never see those live updates, silently
+        // breaking ordinary function-to-function calls between two
+        // Phase-2 siblings (confirmed by hitting this exact regression
+        // empirically before landing on this fix). Keeping just the
+        // globals' own early types in a separate, small map lets Phase 2
+        // merge them FRESH on top of the LIVE `global_env` every
+        // iteration instead.
+        // Failures during THIS pass are expected and non-fatal — e.g. a
+        // generic function's Phase-1 placeholder doesn't yet link its
+        // param and return together (that linkage only happens once
+        // Phase 2 checks the function's OWN body), so a global whose
+        // shape depends on that link (transitively, through another
+        // global referencing it) can genuinely fail to resolve here even
+        // though the REAL program is perfectly well-typed. Caught PER
+        // GLOBAL rather than propagated with `?`: on failure, this
+        // global simply gets no `global_types_early`/`global_env_early`
+        // entry (so anything referencing it BY NAME during this same
+        // early pass sees a plain "unbound variable" and gracefully
+        // fails the same way, cascading rather than hard-erroring the
+        // whole pass) — Phase 3 (below, after Phase 2, authoritative)
+        // still re-infers every global's body from scratch regardless,
+        // so a genuinely ill-typed program still gets a real, correctly-
+        // reported error from THAT pass; this one's only job is
+        // opportunistic extra precision for Phase 2, never a source of
+        // truth.
+        let mut global_types_early: HashMap<String, Type> = HashMap::new();
+        let mut global_env_early = global_env.clone();
+        let mut acc_local = acc.clone();
         for def in &global_defs {
-            // Self-referential closures (`let fib = |n| .. fib(n-1) ..`)
-            // need `def.name` visible to `def.body`'s OWN inference
-            // when `def.body` is itself a closure literal — pre-bind it
-            // to a fresh placeholder type first, same "fresh var now,
-            // unify with the real type after" trick Phase 1 above
-            // already uses for top-level FUNCTION self/mutual
-            // recursion. Deliberately SELF-recursion only, not mutual
-            // recursion between two closure-valued globals: unlike
-            // functions, globals are never pre-declared as a whole
-            // batch (see this loop's own doc comment on why a global
-            // seeing a LATER global isn't supported), so only a
-            // global's OWN name is ever added early, never a
-            // still-to-come sibling's. The interpreter needs NO
-            // matching fix for this case (unlike the local-block-let
-            // case below) — `Interpreter::load_program` evaluates every
-            // global's initializer before any closure is ever actually
-            // CALLED, and closures resolve free names through `self.
-            // globals` at call time regardless of what was captured at
-            // creation time, so a recursive call into a global name
-            // already just works once `self.globals` is fully
-            // populated.
             let is_closure_literal = matches!(def.body, ast::Expr::Closure { .. });
-            let (ty, s) = if is_closure_literal {
+            self.current_fn = Some(def.name.clone());
+            let outcome: Result<(Type, Subst), String> = if is_closure_literal {
                 let placeholder = self.fresh();
-                let rec_env = global_env.extend(def.name.clone(), placeholder.clone());
-                let (body_ty, s) = self.infer_expr(&def.body, &rec_env)?;
-                let mut acc2 = s;
-                let s2 = unify(&acc2.apply(&placeholder), &acc2.apply(&body_ty))
-                    .map_err(|e| format!("recursive closure {:?}: {e}", def.name))?;
-                acc2 = s2.compose(&acc2);
-                (acc2.apply(&body_ty), acc2)
+                let rec_env = global_env_early.extend(def.name.clone(), placeholder.clone());
+                self.infer_expr(&def.body, &rec_env).and_then(|(body_ty, s)| {
+                    let mut acc2 = s;
+                    let s2 = unify(&acc2.apply(&placeholder), &acc2.apply(&body_ty))
+                        .map_err(|e| format!("recursive closure {:?}: {e}", def.name))?;
+                    acc2 = s2.compose(&acc2);
+                    Ok((acc2.apply(&body_ty), acc2))
+                })
             } else {
-                self.infer_expr(&def.body, &global_env)?
+                self.infer_expr(&def.body, &global_env_early)
             };
-            acc = s.compose(&acc);
-            let resolved = acc.apply(&ty);
-            global_env = global_env.extend(def.name.clone(), resolved.clone());
-            global_env = global_env.apply_subst(&acc);
-            global_types.insert(def.name.clone(), resolved);
+            self.current_fn = None;
+            let Ok((ty, s)) = outcome else {
+                continue;
+            };
+            acc_local = s.compose(&acc_local);
+            let resolved = acc_local.apply(&ty);
+            global_env_early = global_env_early.extend(def.name.clone(), resolved.clone());
+            global_env_early = global_env_early.apply_subst(&acc_local);
+            global_types_early.insert(def.name.clone(), resolved);
         }
 
         // Phase 2: infer each function body against the SHARED global
         // env (so it can call itself, any sibling function, OR any
-        // global), threading the SAME substitution accumulator — a
-        // call from function A into function B's still-fresh signature
-        // has to be able to constrain B before B's own body gets
-        // processed.
+        // global — via `global_types_early`, merged in fresh below),
+        // threading the SAME substitution accumulator — a call from
+        // function A into function B's still-fresh signature has to be
+        // able to constrain B before B's own body gets processed.
         for def in &defs {
             let (param_vars, ret_var) = signatures.get(&def.name).cloned().expect("just inserted above");
             let mut body_env = global_env.apply_subst(&acc);
+            // Merge in every global's EARLY-computed concrete type —
+            // MUST be re-merged fresh on top of the LIVE `global_env`
+            // every iteration (not baked into a stale snapshot), since
+            // `global_env` itself keeps growing as Phase 2 processes
+            // each function (see `global_types_early`'s own comment
+            // above for the regression this fixes).
+            // Re-apply the LIVE `acc` on top of each stored early type —
+            // NOT just `.clone()` — for the exact same reason `global_env`
+            // itself gets `.apply_subst(&acc)` above, not a bare clone
+            // (see `a_global_aliasing_a_function_declared_earlier_
+            // resolves_calls_through_it_fully`'s own regression-test
+            // comment): a global that merely ALIASES a function's still-
+            // unresolved Phase-1 placeholder (`let f = square`, no call)
+            // has that placeholder baked into `global_types_early["f"]`
+            // verbatim at early-pass time — `acc` (unlike `acc_local`,
+            // which the early pass used and discarded) keeps growing as
+            // Phase 2 resolves `square` for real, so re-applying it here
+            // picks up that later resolution instead of staying stale.
+            for (gname, gty) in &global_types_early {
+                body_env = body_env.extend(gname.clone(), acc.apply(gty));
+            }
             // One fresh `Var` per THIS function's own declared generic
             // name (`let pair[T] (a: T) (b: T): T = a` mints ONE var for
             // `T`, shared across every annotation that mentions it) —
@@ -1151,6 +1218,14 @@ impl Infer {
                 let fn_ty = Type::Function(p_vars.iter().map(|t| acc.apply(t)).collect(), Box::new(acc.apply(r_var)));
                 outer_env = outer_env.extend(name.clone(), fn_ty);
             }
+            // (A global referenced from `def`'s body is NOT a
+            // generalization-exclusion risk here the way a sibling
+            // function's still-pending signature is: `body_env` above is
+            // built from `global_env_early`, which holds each global's
+            // REAL, already-CONCRETE early-inferred type — never a bare
+            // free `Var` — so `generalize`'s free-variable scan can never
+            // mistake a global's type for one of `def`'s own generic
+            // parameters in the first place.)
             let mut scheme = generalize(&resolved_fn_ty, &outer_env);
             // Attach THIS function's own declared generic bounds to the
             // scheme, keyed by whichever var id each generic name
@@ -1224,6 +1299,79 @@ impl Infer {
                     .collect();
                 self.fn_generics.insert(def.name.clone(), ordered);
             }
+        }
+
+        // Phase 3: globals' REAL initializers, in file order, AFTER
+        // every function body has been checked and generalized (Phase 2,
+        // just above) — moved here (was "Phase 1.5", running BEFORE
+        // Phase 2) specifically so a global calling a generic function
+        // sees that function's real, fully polymorphic `Scheme` instead
+        // of its raw, monomorphic Phase-1 placeholder (the latter
+        // permanently and wrongly pins the function's type variable to
+        // whatever the global happened to use it at — a genuine
+        // soundness bug this reorder fixes; see this chunk's own design
+        // notes). A global stays monomorphic (never generalized, same as
+        // a block-level `let`); each one's initializer sees every
+        // function (fully resolved by now) plus every EARLIER global
+        // (this loop extends `global_env` immediately after each one —
+        // built fresh here, starting again from `extern`s + Phase 2's
+        // fully-generalized functions, deliberately NOT continuing from
+        // `global_env_early` above — so a LATER global can see it, but
+        // NOT a still-to-come one; see ir.rs's `Global` doc comment for
+        // why that's a deliberate, preserved restriction).
+        let mut global_types: HashMap<String, Type> = HashMap::new();
+        for def in &global_defs {
+            // Self-referential closures (`let fib = |n| .. fib(n-1) ..`)
+            // need `def.name` visible to `def.body`'s OWN inference
+            // when `def.body` is itself a closure literal — pre-bind it
+            // to a fresh placeholder type first, same "fresh var now,
+            // unify with the real type after" trick Phase 1 above
+            // already uses for top-level FUNCTION self/mutual
+            // recursion. Deliberately SELF-recursion only, not mutual
+            // recursion between two closure-valued globals: unlike
+            // functions, globals are never pre-declared as a whole
+            // batch (see this loop's own doc comment on why a global
+            // seeing a LATER global isn't supported), so only a
+            // global's OWN name is ever added early, never a
+            // still-to-come sibling's. The interpreter needs NO
+            // matching fix for this case (unlike the local-block-let
+            // case below) — `Interpreter::load_program` evaluates every
+            // global's initializer before any closure is ever actually
+            // CALLED, and closures resolve free names through `self.
+            // globals` at call time regardless of what was captured at
+            // creation time, so a recursive call into a global name
+            // already just works once `self.globals` is fully
+            // populated.
+            let is_closure_literal = matches!(def.body, ast::Expr::Closure { .. });
+            // Every construction/call site inside THIS global's own
+            // initializer records `enclosing_fn: Some(def.name)`, exactly
+            // like a Phase-2 function body does (see the matching
+            // set/reset below at the `current_fn = Some(def.name.clone())`
+            // call there, and `current_fn`'s own doc comment) — necessary
+            // so `plum_ir::monomorphize` can find and rewrite these sites
+            // when a global's initializer calls a still-generic function.
+            // `current_fn_generics` is deliberately left untouched (empty):
+            // a global never has declared generics of its own, so the
+            // self-recursion check gated on it stays inert here regardless.
+            self.current_fn = Some(def.name.clone());
+            let (ty, s) = if is_closure_literal {
+                let placeholder = self.fresh();
+                let rec_env = global_env.extend(def.name.clone(), placeholder.clone());
+                let (body_ty, s) = self.infer_expr(&def.body, &rec_env)?;
+                let mut acc2 = s;
+                let s2 = unify(&acc2.apply(&placeholder), &acc2.apply(&body_ty))
+                    .map_err(|e| format!("recursive closure {:?}: {e}", def.name))?;
+                acc2 = s2.compose(&acc2);
+                (acc2.apply(&body_ty), acc2)
+            } else {
+                self.infer_expr(&def.body, &global_env)?
+            };
+            self.current_fn = None;
+            acc = s.compose(&acc);
+            let resolved = acc.apply(&ty);
+            global_env = global_env.extend(def.name.clone(), resolved.clone());
+            global_env = global_env.apply_subst(&acc);
+            global_types.insert(def.name.clone(), resolved);
         }
 
         self.final_subst = Some(acc.clone());
@@ -6491,6 +6639,121 @@ mod tests {
         assert_eq!(site.kind, SiteKind::Function);
         assert_eq!(site.decl_name, "identity");
         assert_eq!(site.args, vec![Type::Int]);
+    }
+
+    #[test]
+    fn resolve_generic_sites_records_a_generic_call_inside_a_global_initializer() {
+        let src = "let identity[T] (x: T): T = x\nlet g = identity(5)";
+        let infer = infer_with(src);
+        let sites = infer.resolve_generic_sites().unwrap();
+        assert_eq!(sites.len(), 1);
+        let site = sites.values().next().unwrap();
+        assert_eq!(site.kind, SiteKind::Function);
+        assert_eq!(site.decl_name, "identity");
+        assert_eq!(site.args, vec![Type::Int]);
+        assert_eq!(site.enclosing_fn, Some("g".to_string()));
+    }
+
+    // --- global/function phase-ordering reorder ---
+
+    #[test]
+    fn a_generic_function_called_from_a_global_and_from_a_function_at_different_types_both_work() {
+        let src = "let identity[T] (x: T): T = x\nlet g = identity(5)\nlet h () = identity(true)";
+        let types = infer_program(src);
+        assert_eq!(types["g"], Type::Int);
+        assert_eq!(types["h"], fn_ty(vec![Type::Unit], Type::Bool));
+    }
+
+    #[test]
+    fn a_plain_generic_function_called_from_two_sibling_functions_at_different_types_both_work() {
+        // A regression this reorder's implementation genuinely hit and
+        // fixed along the way: an early design merged a ONE-TIME
+        // snapshot of `global_env` into Phase 2's `body_env`, which
+        // silently went stale the moment Phase 2 itself started
+        // extending the REAL `global_env` with each function's own
+        // post-generalization scheme — breaking ordinary function-to-
+        // function calls between two Phase-2 siblings, with NO globals
+        // involved at all. Fixed by merging globals' early types fresh
+        // on top of the LIVE `global_env` every iteration instead.
+        let src = "let identity[T] (x: T): T = x\nlet go_int (): Int = identity(5)\nlet go_bool (): Bool = identity(true)";
+        let types = infer_program(src);
+        assert_eq!(types["go_int"], fn_ty(vec![Type::Unit], Type::Int));
+        assert_eq!(types["go_bool"], fn_ty(vec![Type::Unit], Type::Bool));
+    }
+
+    #[test]
+    fn a_later_global_can_do_field_access_on_an_earlier_global_that_called_a_generic_function() {
+        // A genuine, narrower structural limit surfaced while building
+        // this reorder (documented, not silently papered over): a
+        // generic function's Phase-1 placeholder doesn't link its param
+        // and return together until its OWN body is checked (Phase 2),
+        // so a global whose shape depends on that link — even
+        // transitively, through a LATER global doing field access on it
+        // — can't resolve early enough for a FUNCTION to reference it
+        // during Phase 2 either (confirmed: even a trivial pass-through
+        // `let go() = result` hits "unbound variable", not just field
+        // access specifically — the early pass gracefully gives up on
+        // BOTH `g` and `result` here, rather than producing a wrong
+        // answer for either). Phase 3 (globals' real, authoritative
+        // pass, after Phase 2) still resolves everything correctly
+        // regardless — proven here via the final `types` map alone,
+        // without routing through any function.
+        let src = "\
+            struct Box { val: Int }\n\
+            let make[T] (x: T): T = x\n\
+            let g = make(Box { val: 42 })\n\
+            let result = g.val\
+        ";
+        let types = infer_program(src);
+        assert_eq!(types["result"], Type::Int);
+    }
+
+    #[test]
+    fn a_function_can_do_field_access_on_a_struct_typed_global() {
+        // The regression the FIRST design attempt (globals visible to
+        // functions only via a still-unresolved placeholder `Var`) hit:
+        // `Expr::Field`'s inference requires `base`'s type to already be
+        // a resolved `Type::Struct` — it can't defer the way ordinary
+        // unification-based operations can. Fixed by giving Phase 2
+        // functions each global's REAL, early-inferred concrete type
+        // instead of a placeholder.
+        let src = "struct Box { val: Int }\nlet g = Box { val: 1 }\nlet go () = g.val";
+        let types = infer_program(src);
+        assert_eq!(types["go"], fn_ty(vec![Type::Unit], Type::Int));
+    }
+
+    #[test]
+    fn a_function_can_reference_a_global_declared_later_in_the_file() {
+        let types = infer_program("let area r = pi_ish * r * r\nlet pi_ish = 3");
+        assert_eq!(types["area"], fn_ty(vec![Type::Int], Type::Int));
+        assert_eq!(types["pi_ish"], Type::Int);
+    }
+
+    #[test]
+    fn a_global_referencing_a_later_global_is_still_rejected() {
+        let err = std::panic::catch_unwind(|| infer_program("let a = b\nlet b = 1"));
+        assert!(err.is_err(), "expected inference to reject a forward reference between globals");
+    }
+
+    #[test]
+    fn a_function_that_only_passes_a_global_through_stays_monomorphic() {
+        // If `f`'s body were wrongly GENERALIZED over `pi_ish`'s still-
+        // free placeholder (the invariant-(d) risk this reorder
+        // introduces), `f` would look polymorphic to EVERY call site —
+        // each one minting its own fresh, mutually-DECOUPLED
+        // instantiation, so `use_as_bool` here would wrongly type-check
+        // (its own call to `f()` would get its own fresh var, unified
+        // locally against `Bool`, with no constraint tying it back to
+        // `pi_ish`'s real `Int` type at all). A global must stay
+        // monomorphic, so this must be a real type error.
+        let src = "let pi_ish = 3\nlet f () = pi_ish\nlet use_as_bool () = if f() { 1 } else { 0 }";
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let ctx = crate::context::TypeContext::from_items(&program.items).unwrap_or_else(|e| panic!("context error: {e}"));
+        let mut infer = Infer::with_context(ctx);
+        let result = infer.infer_program(&program);
+        assert!(result.is_err(), "expected a type error (f's return type must stay Int, not wrongly polymorphic), got {result:?}");
     }
 
     #[test]

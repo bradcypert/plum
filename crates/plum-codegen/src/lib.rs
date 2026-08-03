@@ -2527,13 +2527,13 @@ fn emit_extern_declares(externs: &[ir::ExternFn], signatures: &HashMap<String, F
 /// above (closures inside generics, more concurrency shapes, ...) is
 /// still out of scope for now and produces a clear error naming what's
 /// missing, never a panic — see this crate's tests for the exact error
-/// shapes. A global whose initializer calls a still-GENERIC function is
-/// a known, narrower gap than that: `signatures`/`tag_fields` only ever
-/// contain monomorphized (mangled) entries, so a global referencing an
-/// unmangled generic name surfaces as an "unknown function" error rather
-/// than a dedicated, clearer rejection — deferred, since resolving it
-/// needs `plum_ir::monomorphize`'s own plan threaded through globals
-/// too, not something this crate can fix on its own. `program.externs`
+/// shapes. A global whose initializer calls a still-generic function is
+/// fully supported: `plumc::codegen_cli` threads `plum_ir::monomorphize`'s
+/// own plan through globals too, rewriting each global's initializer to
+/// reference the concrete, mangled instantiation before this crate ever
+/// sees it — so by the time `program.globals` reaches here, every callee
+/// name is already one `signatures` has an entry for, same as an
+/// ordinary function body. `program.externs`
 /// (`extern "C"` FFI) IS supported, scoped to scalar (`Int`/`Float`/
 /// `Bool`) + `CStr` + C-callback parameters/returns + struct-by-value
 /// (real named LLVM aggregate types, letting LLVM's own backend handle

@@ -578,8 +578,15 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
     // comment for why the plain `lower_program` output can't just be
     // spliced alongside it: an ordinary function's PLAIN-tagged body
     // would reference tags `tag_fields` never has an entry for).
-    // Globals/externs are untouched (generics stay out of their scope).
+    // `mono_plan.globals` REPLACES `lower_program`'s own globals list the
+    // same way, and for the same reason — a global's initializer can
+    // call a still-generic function, and needs that call site rewritten
+    // to reference the concrete, mangled instantiation `mono_plan`
+    // already built (see `monomorphize::MonoPlan::globals`'s doc
+    // comment). `ir_program.externs` stays untouched — an `extern`
+    // declaration has no body, so generics can't reach into it.
     ir_program.functions = mono_plan.functions;
+    ir_program.globals = mono_plan.globals;
     let ir_program = optimize_program(ir_program);
 
     for (mangled, field_types) in &mono_plan.tag_fields {
@@ -623,25 +630,14 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
     // Every top-level GLOBAL's own concrete `CgType`, mirroring exactly
     // how function signatures are derived just above: a global's own
     // `types[name]` entry IS its value's type directly (no `Type::
-    // Function` destructuring needed, unlike a function's entry).
-    // `ir_program.globals` (unlike `.functions`) is never touched by
-    // `mono_plan` (monomorphization stays fully out of globals' scope —
-    // see `MonoPlan::functions`'s own doc comment/the comment just above
-    // `ir_program.functions = mono_plan.functions` earlier in this
-    // function), so every global's name here is always its plain,
-    // unmangled surface name.
-    //
-    // KNOWN, DEFERRED GAP: a global whose initializer calls a GENERIC
-    // function would still type-check fine here (`types[name]` is a
-    // perfectly concrete type either way), but `signatures`/`tag_fields`
-    // only ever contain MANGLED, monomorphized entries for a generic
-    // function — `plum_codegen::emit_program`'s own generated
-    // `@plum_init_globals` would then reference the function's plain,
-    // unmangled name and fail with a "no signature known"/"unbound
-    // variable" style error rather than a clearer, dedicated rejection.
-    // Calling an ORDINARY, non-generic function from a global (the
-    // required case for this chunk) is unaffected. See `plum_codegen::
-    // emit_program`'s own doc comment for the matching note on that side.
+    // Function` destructuring needed, unlike a function's entry). A
+    // global whose initializer calls a still-generic function is fully
+    // handled by this point: `mono_plan.globals` (swapped into
+    // `ir_program.globals` above) already has that call site rewritten
+    // to reference the concrete, mangled instantiation, and that
+    // instantiation's own signature is already in `signatures` via the
+    // `mono_plan.signatures` loop just above — so no special-casing is
+    // needed here, only the plain, unmangled surface name lookup below.
     let mut global_types: HashMap<String, CgType> = HashMap::new();
     for g in &ir_program.globals {
         let ty = types
@@ -2009,6 +2005,60 @@ mod tests {
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "47");
+    }
+
+    // --- a `Global` initializer calling a still-generic function ---
+
+    #[test]
+    fn a_global_initializer_calling_a_generic_function_works() {
+        let src = "\
+            let make[T] (x: T): T = x\n\
+            let g = make(5)\n\
+            let go (): Int = g\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "5");
+    }
+
+    #[test]
+    fn a_global_initializer_calling_a_generic_function_works_alongside_a_heap_shaped_instantiation() {
+        // Proves both the scalar-global case AND heap-shaped refcounting
+        // soundness in one compiled program, WITHOUT combining them the
+        // one specific way that hits a genuine, narrower, documented
+        // structural limit found while building this chunk: a function
+        // can't do FIELD ACCESS on a global whose value came from
+        // calling a still-generic function (that global's concrete
+        // shape isn't knowable during Phase 2 — see `plum-types`'s own
+        // regression test, `a_later_global_can_do_field_access_on_an_
+        // earlier_global_that_called_a_generic_function`). Field access
+        // on the heap-shaped instantiation happens on a plain LOCAL
+        // (`b`, built by calling `make` directly inside `go`), not on a
+        // global, so it's unaffected.
+        let src = "\
+            struct Box { val: Int }\n\
+            let make[T] (x: T): T = x\n\
+            let g = make(5)\n\
+            let go (): Int = { let b = make(Box { val: 42 }); g + b.val }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "47");
+    }
+
+    #[test]
+    fn a_generic_function_called_from_a_global_and_from_a_function_at_different_types_both_work_when_compiled_and_run() {
+        // The actual soundness bug this chunk fixes, proven end-to-end:
+        // `identity` is instantiated at Int (from the global `g`) AND at
+        // Bool (from `go`'s own body) in the SAME compiled program —
+        // before the `plum-types` phase-ordering fix, the global's call
+        // permanently pinned `identity`'s type variable to Int, making
+        // the Bool call a type error that should never have been one.
+        let src = "\
+            let identity[T] (x: T): T = x\n\
+            let g = identity(5)\n\
+            let go (): Int = if identity(true) { g } else { 0 }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "5");
     }
 
     // --- general array iteration (`for`, `Assign`, `.map`/`.filter`/`.fold`) ---

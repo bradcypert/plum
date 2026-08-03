@@ -74,6 +74,18 @@ pub struct MonoPlan {
     /// since a compiled program needs exactly one concrete `main`-callable
     /// signature for whichever name the caller asked to run.
     pub entry_rename: HashMap<String, Vec<String>>,
+    /// Every zero-param top-level `let` (i.e. `plumc::codegen_cli`'s own
+    /// notion of a `Global`), REWRITTEN so any still-generic function it
+    /// calls is renamed to that call's concrete mangled instantiation —
+    /// see `plan`'s doc comment for why this fully REPLACES
+    /// `lower_program`'s own `globals` list rather than being spliced
+    /// alongside it, mirroring `functions` above exactly. In ORIGINAL
+    /// SOURCE declaration order (NOT worklist/discovery order — later
+    /// globals, and `@plum_init_globals`, depend on earlier globals
+    /// having already run, see DESIGN.md's "Non-constant Global
+    /// initializers" section), unlike `functions`, which has no such
+    /// ordering requirement.
+    pub globals: Vec<ir::Global>,
 }
 
 /// `$` is not a legal Plum identifier character (the lexer only allows
@@ -182,6 +194,20 @@ enum Task {
     Function(String, Vec<TypeKey>),
     Struct(String, Vec<TypeKey>),
     Enum(String, Vec<TypeKey>),
+    /// A zero-param top-level `let` (a `Global`, in `plumc::codegen_cli`'s
+    /// terminology) — never itself generic, so no `Vec<TypeKey>` (always
+    /// exactly one instantiation). Processed through the SAME worklist
+    /// as `Function`/`Struct`/`Enum`, deliberately, rather than as a
+    /// separate post-pass: a global's own initializer can call a
+    /// generic function, and `resolve_site` pushes a `new_tasks` entry
+    /// EVERY time it rewrites a matching call site — regardless of
+    /// whether that exact instantiation was already discovered and
+    /// processed elsewhere (dedup happens once, at the top of THIS
+    /// task's own processing, via `done_fns`, same as every other
+    /// variant) — so a global's rewrite needs the real worklist
+    /// machinery to safely drain whatever it (redundantly but
+    /// harmlessly) re-requests, not a hand-rolled defensive check.
+    Global(String),
 }
 
 // `Type` doesn't derive `Hash`/`Eq` (it holds no need for them anywhere
@@ -237,6 +263,12 @@ pub fn plan(
     let mut variant_arity: HashMap<String, usize> = HashMap::new();
     let mut enum_variant_tags: HashMap<String, Vec<String>> = HashMap::new();
     let mut let_defs: HashMap<String, &ast::LetDef> = HashMap::new();
+    // The exact complement of `let_defs` above — every zero-param
+    // top-level `let` (a `Global`, in `plumc::codegen_cli`'s own
+    // terminology), collected here so its body can be rewritten in a
+    // final deterministic pass AFTER the worklist below drains (see
+    // `MonoPlan::globals`'s doc comment).
+    let mut global_defs: HashMap<String, &ast::LetDef> = HashMap::new();
     for item in &program.items {
         match &item.kind {
             ast::ItemKind::Struct(d) => {
@@ -253,6 +285,8 @@ pub fn plan(
             ast::ItemKind::Let(def) => {
                 if !def.params.is_empty() {
                     let_defs.insert(def.name.clone(), def);
+                } else {
+                    global_defs.insert(def.name.clone(), def);
                 }
             }
             _ => {}
@@ -280,6 +314,12 @@ pub fn plan(
         if def.generics.is_empty() {
             worklist.push((Task::Function(name.clone(), vec![]), vec![]));
         }
+    }
+    // Seed with EVERY global too, unconditionally — a global is never
+    // itself generic, so every one is always reachable, mirroring the
+    // ordinary-function seeding just above.
+    for name in global_defs.keys() {
+        worklist.push((Task::Global(name.clone()), vec![]));
     }
     for site in resolved_sites.values() {
         if site.args.iter().any(|a| matches!(a, Type::Param(_))) {
@@ -313,6 +353,12 @@ pub fn plan(
     let mut signatures: HashMap<String, (Vec<Type>, Type)> = HashMap::new();
     let mut tag_fields: HashMap<String, Vec<Type>> = HashMap::new();
     let mut entry_rename: HashMap<String, Vec<String>> = HashMap::new();
+    // Unordered — the worklist's processing order is LIFO/discovery-
+    // order, not source-declaration order, which `@plum_init_globals`
+    // depends on for correctness. Reordered into `MonoPlan::globals`
+    // (source order) in one final pass once the loop below drains — see
+    // that pass's own comment just after the loop.
+    let mut globals_by_name: HashMap<String, ir::Global> = HashMap::new();
 
     while let Some((task, args)) = worklist.pop() {
         match task {
@@ -423,6 +469,60 @@ pub fn plan(
                 entry_rename.entry(name.clone()).or_default().push(mangled);
             }
 
+            // A global is never itself generic — no `mangle`d name, no
+            // `signatures`/`entry_rename` entry, and (unlike a struct's
+            // field types or a function's own body) its rewrite can
+            // never discover a DIFFERENT concrete instantiation for
+            // ITSELF, only for whatever generic callees its body
+            // touches (handled the normal way, via `rc.new_tasks` below,
+            // same as `Task::Function`'s own body-rewrite).
+            Task::Global(name) => {
+                let dedup_task = Task::Global(name.clone());
+                if !done_fns.insert(dedup_task) {
+                    continue;
+                }
+                let def = global_defs
+                    .get(&name)
+                    .ok_or_else(|| format!("internal error: monomorphize: unknown global {name:?}"))?;
+                let mut body_clone = def.body.clone();
+                let mut rc = RewriteCtx {
+                    resolved_sites,
+                    enclosing_fn: &name,
+                    binding: &HashMap::new(),
+                    variant_arity: &variant_arity,
+                    struct_decls: &struct_decls,
+                    new_tasks: Vec::new(),
+                    extra_variants: HashMap::new(),
+                    extra_struct_fields: HashMap::new(),
+                    field_owner_overrides: HashMap::new(),
+                    closure_types,
+                    extra_closure_types: HashMap::new(),
+                };
+                rewrite_expr(&mut body_clone, &mut rc)?;
+                let RewriteCtx {
+                    new_tasks,
+                    extra_variants,
+                    extra_struct_fields,
+                    field_owner_overrides,
+                    extra_closure_types,
+                    ..
+                } = rc;
+                worklist.extend(new_tasks);
+
+                let mut merged_field_owners = field_owners.clone();
+                merged_field_owners.extend(field_owner_overrides);
+                let mut merged_closure_types = closure_types.clone();
+                merged_closure_types.extend(extra_closure_types);
+                let lctx = base_lctx
+                    .clone()
+                    .with_field_owners(merged_field_owners)
+                    .with_extra_variants(extra_variants)
+                    .with_extra_struct_fields(extra_struct_fields)
+                    .with_closure_types(merged_closure_types);
+                let body = lower_expr(&body_clone, &lctx)?;
+                globals_by_name.insert(name.clone(), ir::Global { name, value: body });
+            }
+
             Task::Struct(name, keys) => {
                 let dedup_task = Task::Struct(name.clone(), keys);
                 if !done_types.insert(dedup_task) {
@@ -460,11 +560,32 @@ pub fn plan(
         }
     }
 
+    // Reorder `globals_by_name` (built by the `Task::Global` arm above,
+    // in worklist/discovery order — LIFO, not meaningful) into ORIGINAL
+    // SOURCE declaration order, which `@plum_init_globals` depends on
+    // for correctness (a later global's own initializer, or the runtime
+    // init function itself, can reference an earlier global — see
+    // ir.rs's `Global` doc comment). Every zero-param `Let` was
+    // unconditionally seeded as its own `Task::Global` above, so every
+    // lookup here is expected to hit.
+    let mut globals: Vec<ir::Global> = Vec::new();
+    for item in &program.items {
+        let ast::ItemKind::Let(def) = &item.kind else { continue };
+        if !def.params.is_empty() {
+            continue;
+        }
+        let global = globals_by_name
+            .remove(&def.name)
+            .ok_or_else(|| format!("internal error: monomorphize: global {:?} was never processed", def.name))?;
+        globals.push(global);
+    }
+
     Ok(MonoPlan {
         functions,
         signatures,
         tag_fields,
         entry_rename,
+        globals,
     })
 }
 
@@ -826,6 +947,39 @@ mod tests {
             &HashMap::new(),
         )
         .unwrap_or_else(|e| panic!("plan error: {e}"))
+    }
+
+    /// Finds the callee name of the first `ir::Expr::Call` reachable
+    /// from `expr`, walking through `Let`'s value/body — just enough to
+    /// find `g`'s own single top-level call in these tests, not a
+    /// general-purpose IR walker.
+    fn find_call_callee(expr: &ir::Expr) -> Option<&str> {
+        match expr {
+            ir::Expr::Call { callee, .. } => match callee.as_ref() {
+                ir::Expr::Var(name) => Some(name.as_str()),
+                _ => None,
+            },
+            ir::Expr::Let { value, body, .. } => find_call_callee(value).or_else(|| find_call_callee(body)),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_global_calling_a_generic_function_is_rewritten_to_the_mangled_instantiation() {
+        let src = "let make[T] (x: T): T = x\nlet g = make(5)";
+        let plan = plan_for(src);
+        assert_eq!(plan.globals.len(), 1);
+        assert_eq!(plan.globals[0].name, "g");
+        assert_eq!(find_call_callee(&plan.globals[0].value), Some("make$Int"));
+        assert!(plan.functions.iter().any(|f| f.name == "make$Int"), "functions: {:?}", plan.functions.iter().map(|f| &f.name).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn globals_are_emitted_in_original_source_declaration_order() {
+        let src = "let a = 1\nlet b = a + 1\nlet c = b + 1";
+        let plan = plan_for(src);
+        let names: Vec<&str> = plan.globals.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
     }
 
     #[test]
