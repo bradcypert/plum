@@ -990,6 +990,44 @@ mod tests {
         assert_eq!(out, "14");
     }
 
+    // --- standard library: `println` (see `plumc::STDLIB_IO_SRC`) ---
+
+    #[test]
+    fn println_works_for_every_primitive_type_and_prints_before_the_entrys_own_return_value() {
+        // `println` is ordinary Plum source merged in via `with_prelude`
+        // (no `use` needed, like `Option`/`Result`) — this proves it,
+        // end to end, for every type `.to_string()` supports
+        // (Int/Float/Bool/Str), via REAL compiled-and-executed native
+        // code, not just a type-check. `run_via_clang` captures the
+        // whole process's stdout, so this also proves each `puts()`
+        // call happens in the right order relative to `emit_main`'s own
+        // final `printf` of the entry function's return value.
+        let src = "let go (): Int = { println(42); println(3.5); println(true); println(\"hi\"); 0 }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "42\n3.500000\ntrue\nhi\n0");
+    }
+
+    #[test]
+    fn to_string_on_a_still_generic_type_parameter_works_in_native_codegen() {
+        // The one genuinely unverified claim `println`'s whole design
+        // rests on, isolated and proven directly (not just incidentally
+        // exercised by a larger test): monomorphization fully
+        // specializes a generic function's body per concrete
+        // instantiation before codegen ever runs, so `.to_string()`
+        // inside a still-generic function's own body sees a concrete,
+        // resolved `CgType` by the time codegen visits it. Called at
+        // TWO different concrete types in the same compiled program,
+        // mirroring this project's established "prove independent
+        // instantiations, not just one" pattern for generics.
+        let src = "\
+            let stringify[T] (x: T) = x.to_string()\n\
+            let go () = stringify(5).concat(stringify(true))\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "5true");
+    }
+
+
     // --- Non-constant global initializers ---
     //
     // Mirrors `plum-interp`'s own precedent for each shape one-to-one

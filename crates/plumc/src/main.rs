@@ -5,6 +5,31 @@ use plumc::{
 };
 use std::path::{Path, PathBuf};
 
+// Raw libc FFI, not a new crate dependency (matching this codebase's
+// established preference — see the FFI section of DESIGN.md — for
+// declaring exactly the one function needed over pulling in a whole
+// binding crate, especially somewhere a future self-hosted Plum
+// compiler's own driver would need the identical raw call regardless
+// of implementation language). `fflush(NULL)` flushes every open C
+// stdio stream. Needed because a Plum program's own `println` (see
+// `plumc::STDLIB_IO_SRC`) writes through libc's `puts`, which — unlike
+// Rust's own `println!` — is fully block-buffered whenever stdout
+// isn't a TTY (e.g. running under a test harness or piped output), so
+// its writes only reach the OS at actual process exit unless flushed
+// explicitly. Without this, the interpreter CLI's own final `println!`
+// of the entry function's return value (Rust-buffered, flushes on its
+// own newline) could reach the terminal/pipe BEFORE a Plum program's
+// own EARLIER `println` calls — confirmed by hand: exactly this
+// reordering happened before this fix was added. The native/`build`
+// path doesn't need this: `emit_main`'s own hand-written `main()` and
+// every `puts()` call it makes both run inside the SAME single
+// process, and process exit itself flushes every open C stream in the
+// correct, true program order — there's no separate Rust host process
+// printing something else afterward.
+unsafe extern "C" {
+    fn fflush(stream: *mut std::ffi::c_void) -> i32;
+}
+
 /// `plumc <project-dir>` runs `<project-dir>`'s `main` function (a
 /// unit-param entry point — `let main () = { ... }`, the same
 /// convention `examples/overview.plum`'s own `example()` already
@@ -26,7 +51,10 @@ fn main() {
         Some(project_dir) => {
             let root = Path::new(&project_dir);
             match typecheck_and_run_project(root, "main", vec![Value::Unit]) {
-                Ok(value) => println!("{value:?}"),
+                Ok(value) => {
+                    unsafe { fflush(std::ptr::null_mut()) };
+                    println!("{value:?}");
+                }
                 Err(e) => {
                     eprintln!("{e}");
                     std::process::exit(1);
@@ -36,7 +64,10 @@ fn main() {
         None => {
             let source = "let sum n acc = if n == 0 { acc } else { sum(n - 1, acc + n) }";
             match typecheck_and_run(source, "sum", vec![Value::Int(5), Value::Int(0)]) {
-                Ok(value) => println!("sum(5, 0) = {value:?}"),
+                Ok(value) => {
+                    unsafe { fflush(std::ptr::null_mut()) };
+                    println!("sum(5, 0) = {value:?}");
+                }
                 Err(e) => eprintln!("{e}"),
             }
         }

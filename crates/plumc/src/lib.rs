@@ -29,21 +29,64 @@ enum Option[T] { Some(T), None }
 enum Result[T, E] { Ok(T), Err(E) }
 ";
 
-/// Parses the prelude once and prepends its items to `program`'s own —
-/// items earlier in the list are declared FIRST, but `TypeContext`'s
-/// two-phase construction (see its doc comment) already makes
-/// declaration order not matter for name resolution. A user program
-/// declaring its OWN `Option`/`Result` (or anything else with the SAME
-/// name) is now a real "already declared" error, same as redeclaring
-/// any other name — see `TypeContext::from_items`'s duplicate-name
-/// check.
+/// The very first stdlib piece — see DESIGN.md's "Standard library"
+/// section. `println` is deliberately ORDINARY Plum source, not a new
+/// compiler/backend builtin: `.to_string()` already dispatches
+/// correctly on a still-unresolved generic type parameter (proven
+/// empirically in both backends before writing this — monomorphization
+/// fully specializes a generic function's body before either backend
+/// ever sees it, so by the time codegen/the interpreter evaluates
+/// `x.to_string()` here, `T` is always a concrete, resolved type), and
+/// `unsafe { extern-call }` inside a still-generic function body works
+/// with zero special-casing (the `in_unsafe` gate and monomorphization's
+/// own per-instantiation rewrite are both orthogonal to genericity).
+/// `puts` is declared with NO return type — infers as `Unit`, matching
+/// `plum_codegen::emit_program`'s own doc comment, which already uses
+/// `puts` BY NAME as its literal void-extern example — so `println`
+/// itself is genuinely `Unit`-returning with no extern-return-value-
+/// discarding question to sidestep. Scoped to `println` (auto-appends
+/// a newline, exactly matching libc `puts`) only for now — a `print`
+/// (no trailing newline) variant needs `fputs`/a `stdout` `FILE*`
+/// handle or C-variadic support, neither of which this codebase's
+/// extern mechanism has any precedent for yet; left for a later,
+/// separate, well-scoped follow-up rather than guessed at here.
+///
+/// Merged into `with_prelude` (not a real `use`-based module) for now,
+/// deliberately: the existing `compile_and_run` test harness (used by
+/// nearly this whole workspace's codegen test suite) goes through
+/// `with_prelude` alone, never `modules.rs`/`project.rs` — a real
+/// module would need that harness extended to drive a temp project
+/// through `resolve_project` first, a bigger, separate piece of work.
+/// Kept as its OWN constant (not folded into `PRELUDE_SRC` itself) so
+/// it can be deleted/moved wholesale into a real `io` module later
+/// without having tangled its source into the `Option`/`Result`
+/// sugar-type story.
+const STDLIB_IO_SRC: &str = "\
+extern \"C\" {
+    fn puts(s: CStr);
+}
+
+let println[T] (x: T): Unit = unsafe { puts(x.to_string().as_cstr()) }
+";
+
+/// Parses the prelude + stdlib sources once and prepends their items
+/// to `program`'s own — items earlier in the list are declared FIRST,
+/// but `TypeContext`'s two-phase construction (see its doc comment)
+/// already makes declaration order not matter for name resolution. A
+/// user program declaring its OWN `Option`/`Result`/`println` (or
+/// anything else with the SAME name) is now a real "already declared"
+/// error, same as redeclaring any other name — see `TypeContext::
+/// from_items`'s duplicate-name check.
 pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
-    let prelude_tokens = Lexer::new(PRELUDE_SRC).tokenize();
-    let prelude_items = Parser::new(prelude_tokens)
-        .parse_program()
-        .expect("PRELUDE_SRC is fixed, valid Plum source")
-        .items;
-    let mut items = prelude_items;
+    let mut items = Vec::new();
+    for src in [PRELUDE_SRC, STDLIB_IO_SRC] {
+        let tokens = Lexer::new(src).tokenize();
+        let parsed_items = Parser::new(tokens)
+            .parse_program()
+            .unwrap_or_else(|e| panic!("prelude/stdlib source is fixed, valid Plum: {e}"))
+            .items;
+        items.extend(parsed_items);
+    }
     items.extend(program.items);
     ast::Program { items }
 }
@@ -106,6 +149,25 @@ pub(crate) fn run_resolved_program(program: ast::Program, fn_name: &str, args: V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn println_is_available_with_no_declaration_of_its_own_through_the_interpreter() {
+        // Mirrors the existing `the_prelude_option_type_is_available_
+        // with_no_declaration_of_its_own`-style tests for `println`:
+        // proves it's reachable via `with_prelude` with no `use`/
+        // declaration, and that calling it for every `.to_string()`-
+        // supported type actually succeeds end to end through the real
+        // interpreter (extern call via `libffi`, not just type-
+        // checking). Real `puts()` output goes to the OS's actual
+        // stdout, not something a Rust-level assertion can capture here
+        // (confirmed no existing interpreter-path extern test tries to
+        // — they all assert successful execution/return values, same
+        // as this one does) — visually confirmed by hand during design
+        // that real `42`/`hi` lines do appear on stdout when run.
+        let src = "let go (): Int = { println(42); println(3.5); println(true); println(\"hi\"); 0 }";
+        let result = typecheck_and_run(src, "go", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(0)));
+    }
 
     #[test]
     fn well_typed_recursive_program_runs_through_the_full_gated_pipeline() {

@@ -1183,7 +1183,10 @@ newcomers. A bare/aliased import of one specific name (`use shapes.Circle;`)
 is available as an escape hatch for names used constantly in a file, but
 it's the exception, not the everyday habit. Core types (`Option`,
 `Result`, `Some`, `None`, `Ok`, `Err`) live in an always-available
-prelude needing no `use` at all, same as Rust's prelude.
+prelude needing no `use` at all, same as Rust's prelude — as of the
+first standard-library chunk, `println` lives there too (see "Standard
+library" below for why, and why that's a deliberate, revisitable v1
+trade rather than the long-term home for stdlib functions in general).
 
 No first-class modules-as-values, matching the no-functors decision —
 deferred, revisit only if a concrete need surfaces.
@@ -1483,6 +1486,119 @@ for a C caller, real ABI struct layout verified against Rust's own
 and against real libc `div`/`div_t`), plumc (full gated pipeline, both
 accepting and rejecting cases for every sub-feature). Workspace is now
 1139 tests, clean build, zero warnings.
+
+## Standard library — v1 started (basic output)
+
+With `plum-codegen`'s LLVM backend covering essentially the entire core
+language, concurrency, and FFI (see "Implementation plan" below), work
+moved to the previously-open "Standard library scope" question. Started
+by surveying the current codebase (not assuming): there is no `impl`/
+method-block syntax anywhere (`ast::ItemKind` has exactly `Let`/
+`Struct`/`Enum`/`Extern`/`Use` — no fifth variant), and every existing
+dot-method (`.map()`, `.split()`, `.to_string()`, ...) is a hardcoded
+AST-shape match in `lower.rs`, not user-extensible dispatch. So a Plum
+standard library is necessarily a library of **plain, importable
+functions** — `println(x)`, not `x.println()` — unless/until the
+language grows real method syntax, which is its own, separate, larger
+design question, not assumed as part of this work.
+
+The survey also found a genuinely foundational gap: **there was no way
+for a running Plum program to produce output at all.** The only output
+mechanism was the host process printing the entry function's final
+return value after the WHOLE program had already finished
+(`printf`-with-format-string in `emit_main`; `println!("{value:?}")` in
+the interpreter CLI). This blocked writing or testing almost anything
+else standard-library-shaped, so it became the first piece.
+
+**`println` needs no new compiler/backend builtin at all** — it's
+ordinary Plum source:
+```
+extern "C" {
+    fn puts(s: CStr);
+}
+
+let println[T] (x: T): Unit = unsafe { puts(x.to_string().as_cstr()) }
+```
+This works because two combinations, unverified by any existing test
+before this chunk, both turned out to hold — confirmed empirically
+(compiled and run for real) before committing to the design, not
+assumed:
+- `.to_string()` on a still-unresolved generic type parameter `T`
+  works in BOTH backends. The interpreter already had a test proving
+  this; the native/LLVM backend didn't, but the architecture predicted
+  it should (monomorphization fully specializes a generic function's
+  body — including any `.to_string()` call inside it — into a concrete
+  instantiation before codegen ever runs), and a dedicated test now
+  proves it directly, at two different concrete types in one compiled
+  program.
+- `unsafe { extern-call }` inside a still-generic function's body works
+  with zero special-casing — the `in_unsafe` gate and monomorphization's
+  own per-instantiation rewrite are both orthogonal to genericity.
+
+`puts` is declared with **no return type** — infers as `Unit`
+(`extern_function_with_no_return_type_is_unit` is a real, pre-existing
+test for this), matching `plum_codegen::emit_program`'s own doc comment,
+which already used `puts` BY NAME as its literal void-extern precedent
+example. This makes `println` itself genuinely `Unit`-returning with no
+"discard a non-Unit extern return value" question to answer. Scoped to
+`println` alone for v1 (auto-appends a newline, exactly matching libc
+`puts`) — a no-newline `print` needs `fputs`/a `stdout` `FILE*` handle
+or C-variadic support, neither of which this codebase's extern
+mechanism has any precedent for yet; left as a small, separate,
+well-scoped follow-up rather than guessed at now.
+
+**How it's exposed — a real, deliberate scope trade for v1**: merged
+into `with_prelude` (`plumc/src/lib.rs`) as a new `STDLIB_IO_SRC`
+constant, alongside the existing `PRELUDE_SRC` (`Option`/`Result`) —
+`println` needs no `use` at all, exactly like `Option`/`Result` today.
+This was a genuine fork, resolved with Brad rather than assumed: the
+project's real module system (`use io;`, directory-as-module,
+multi-file — see "Module system" above) already exists and works, and
+would be the more properly "library-shaped" home for `println`. But the
+EXISTING `compile_and_run` test harness — used by nearly this entire
+workspace's codegen test suite — goes through `with_prelude` alone and
+never touches the module system at all; routing `println` through a
+real `use io;` module would have meant extending that harness to drive
+a full temp project through `resolve_project` first, a bigger, separate
+piece of work. Decided to unblock output NOW via the prelude mechanism,
+and revisit "real, `use`-based stdlib modules" as its own later chunk
+once there's more than one stdlib piece to justify the investment. Kept
+as its own constant (not folded directly into `PRELUDE_SRC`'s string)
+specifically so it can be deleted/moved wholesale into a real `io`
+module later without having tangled its source into the `Option`/
+`Result` sugar-type story.
+
+**A real, separate bug found and fixed along the way, unrelated to
+`println`'s own correctness**: the interpreter CLI (`plumc <project-dir>`,
+no `build`) showed Plum-level `println` output AFTER the CLI's own
+final `println!("{value:?}")` of the entry function's return value —
+backwards from true program order. Root cause: libc's `puts` (called
+via `libffi` from inside the interpreter) writes through C's OWN stdio
+buffering, which is fully block-buffered whenever stdout isn't a TTY
+(piped output, a test harness, etc.) — its writes only reach the OS at
+actual process exit unless flushed explicitly. Rust's own `println!`
+flushes on every newline via its own, separate buffering, so it reached
+the terminal/pipe FIRST even though it executes SECOND in true program
+order. Fixed with a single `fflush(NULL)` call (flushes every open C
+stream) right before the CLI's own final `println!`, declared as a raw
+`unsafe extern "C"` FFI import directly in `main.rs` — no new Rust
+crate dependency, and the identical shape a future self-hosted Plum
+compiler's own CLI driver would need regardless of implementation
+language (matching this whole project's standing self-hosting-
+dependency-avoidance policy). The native/`build` path never had this
+problem: `emit_main`'s hand-written `main()` and every `puts()` call it
+makes both run inside the SAME single process, and real process exit
+already flushes every open C stream in true program order — there's no
+separate Rust host process printing something else afterward.
+
+Tests: 2 new native-codegen compile-and-run tests (`println` for every
+`.to_string()`-supported type, asserting captured stdout is in the
+correct order relative to the entry function's own final printed
+return value; `.to_string()` on a still-generic type parameter in
+isolation, at two concrete types in one compiled program) and 1 new
+interpreter-path test (mirroring the existing "prelude type needs no
+declaration" test style). Workspace now 1369 tests, clean build, zero
+warnings.
 
 ## Target platforms
 
@@ -2852,7 +2968,13 @@ summed), not just inspect emitted IR text.
   -declared closure-valued globals (as opposed to two named top-level
   FUNCTIONS, which already support mutual recursion) remains genuinely
   unsupported — a real, separate gap, not just an oversight.
-- Standard library scope.
+- Standard library scope — started (see "Standard library" above:
+  basic output/`println` is the first piece). Still wide open: what
+  comes next (collections beyond the built-ins, file I/O, JSON, HTTP,
+  ...), and whether/when `println` migrates from the prelude into a
+  real `use`-based `io` module once there's enough stdlib surface to
+  justify extending the `compile_and_run` test harness to drive a real
+  temp project through `resolve_project`.
 - Whether/when to build the scoped incremental cycle collector for
   `Shared` values (see Memory model above — deliberately deferred until
   real Plum code shows the pain is real).
