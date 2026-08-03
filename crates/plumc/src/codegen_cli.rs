@@ -990,6 +990,7 @@ mod tests {
         assert_eq!(out, "14");
     }
 
+
     // --- standard library: `println` (see `plumc::STDLIB_IO_SRC`) ---
 
     #[test]
@@ -1027,6 +1028,175 @@ mod tests {
         assert_eq!(out, "5true");
     }
 
+    // --- standard library: Str equality (LLVM-backend fix) ---
+    //
+    // Before `@plum_str_eq` existed, `Str` had NO arm at all in
+    // `codegen_binop` — `"a" == "b"` didn't even compile natively. These
+    // prove the fix through the real, compiled-and-executed path (not
+    // just the IR-shape unit tests in `plum_codegen::lib::tests`).
+
+    #[test]
+    fn str_equality_is_true_for_equal_strings_in_native_codegen() {
+        // `emit_main`'s `Bool` case prints via `%d` (0/1), not "true"/
+        // "false" text — matching this file's own existing Bool-return
+        // convention elsewhere (see `emit_main`'s `CgType::Bool` arm).
+        let out = compile_and_run("let go (): Bool = \"abc\" == \"abc\"", "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
+    #[test]
+    fn str_equality_is_false_for_different_strings_in_native_codegen() {
+        let out = compile_and_run("let go (): Bool = \"abc\" == \"abd\"", "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "0");
+    }
+
+    #[test]
+    fn str_inequality_works_in_native_codegen() {
+        let out = compile_and_run("let go (): Bool = \"abc\" != \"abd\"", "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
+    // --- standard library: Map[K,V]/Set[T] (see `plumc::STDLIB_COLLECTIONS_SRC`) ---
+    //
+    // Association-list-backed recursive generic enums, mirroring the
+    // `List[T]` pattern proven elsewhere in this file. `map_new()`/
+    // `set_new()` are curried, single-Unit-typed-parameter functions
+    // (`(): Map[K, V]`) — so call sites need an EXPLICIT unit argument,
+    // `map_new(())`/`set_new(())`, not `map_new()`. This was found
+    // empirically while writing these tests: a bare `f()` call site
+    // parses to zero arguments (`Expr::Call { args: vec![] }`), which
+    // doesn't match a declared single Unit parameter — the same
+    // curried-parameter convention that makes every OTHER function in
+    // this stdlib take `(a: T) (b: T)`, not `(a: T, b: T)`, also means
+    // a declared-with-`()` function is a genuine one-parameter function,
+    // not a zero-parameter one. `STDLIB_COLLECTIONS_SRC` itself never
+    // calls `map_new`/`set_new` (it only DEFINES them), so this doesn't
+    // require any change there — it only affects how callers write
+    // call sites, same as any other curried function.
+
+    #[test]
+    fn map_insert_get_contains_remove_work_for_int_keys() {
+        let src = "\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_new(()), 1, 100), 2, 200);\n\
+                let got = match map_get(m, 1) { Some(v) => v, None => -1 };\n\
+                let has2 = map_contains(m, 2);\n\
+                let has3 = map_contains(m, 3);\n\
+                let m2 = map_remove(m, 1);\n\
+                let has1_after = map_contains(m2, 1);\n\
+                got + (if has2 { 10 } else { 0 }) + (if has3 { 100 } else { 0 }) + (if has1_after { 1000 } else { 0 })\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "110");
+    }
+
+    #[test]
+    fn map_insert_get_contains_remove_work_for_str_keys() {
+        let src = "\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_new(()), \"a\", 1), \"b\", 2);\n\
+                let got_a = match map_get(m, \"a\") { Some(v) => v, None => -1 };\n\
+                let got_b = match map_get(m, \"b\") { Some(v) => v, None => -1 };\n\
+                let has_c = map_contains(m, \"c\");\n\
+                let m2 = map_remove(m, \"a\");\n\
+                let has_a_after = map_contains(m2, \"a\");\n\
+                got_a + got_b * 10 + (if has_c { 100 } else { 0 }) + (if has_a_after { 1000 } else { 0 })\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "21");
+    }
+
+    #[test]
+    fn map_get_returns_the_most_recently_inserted_value_for_a_repeated_key() {
+        // Documented v1 semantics: `map_insert` always PREPENDS, and
+        // `map_get` scans from the head, so the LAST insert for a given
+        // key wins — proven here by inserting key 1 twice with
+        // different values and checking the second one is what comes
+        // back, not the first.
+        let src = "\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_new(()), 1, 100), 1, 200);\n\
+                match map_get(m, 1) { Some(v) => v, None => -1 }\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "200");
+    }
+
+    #[test]
+    fn map_remove_uncovers_the_older_value_when_a_key_was_inserted_twice() {
+        // Documented v1 semantics: `map_remove` deletes only the FIRST
+        // (most recent) matching node — removing once after a key was
+        // inserted twice uncovers the OLDER value rather than erasing
+        // all trace of the key.
+        let src = "\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_new(()), 1, 100), 1, 200);\n\
+                let m2 = map_remove(m, 1);\n\
+                match map_get(m2, 1) { Some(v) => v, None => -1 }\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "100");
+    }
+
+    #[test]
+    fn map_len_counts_nodes_not_unique_keys() {
+        let src = "\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_insert(map_new(()), 1, 1), 1, 2), 2, 3);\n\
+                map_len(m)\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "3");
+    }
+
+    #[test]
+    fn set_insert_dedupes_and_len_contains_remove_work() {
+        let src = "\
+            let go (): Int = {\n\
+                let s = set_insert(set_insert(set_insert(set_new(()), 1), 1), 2);\n\
+                let n_before = set_len(s);\n\
+                let has1 = set_contains(s, 1);\n\
+                let has3 = set_contains(s, 3);\n\
+                let s2 = set_remove(s, 1);\n\
+                let has1_after = set_contains(s2, 1);\n\
+                let n_after = set_len(s2);\n\
+                n_before * 1000 + (if has1 { 100 } else { 0 }) + (if has3 { 10 } else { 0 }) + (if has1_after { 1 } else { 0 }) + n_after\n\
+            }\n\
+        ";
+        // n_before = 2 (dedup: {1, 2}), has1 = true (100), has3 = false
+        // (0), after removing 1: has1_after = false (0), n_after = 1.
+        // Total: 2*1000 + 100 + 0 + 0 + 1 = 2101.
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "2101");
+    }
+
+    #[test]
+    fn map_and_set_instantiated_at_two_different_concrete_types_in_the_same_program() {
+        // Mirrors this project's established "prove independent
+        // instantiations, not just one" pattern for generics (see
+        // `a_generic_recursive_enum_instantiated_at_two_concrete_types_
+        // produces_two_distinct_tags` above): `Map[Int, Str]` and
+        // `Map[Str, Int]` both used in the SAME compiled program.
+        let src = "\
+            let go (): Int = {\n\
+                let m1 = map_insert(map_new(()), 1, \"one\");\n\
+                let m2 = map_insert(map_new(()), \"two\", 2);\n\
+                let s1 = set_insert(set_new(()), 1);\n\
+                let s2 = set_insert(set_new(()), \"x\");\n\
+                let v1 = match map_get(m1, 1) { Some(v) => v, None => \"?\" };\n\
+                let v2 = match map_get(m2, \"two\") { Some(v) => v, None => -1 };\n\
+                v1.len() + v2 + set_len(s1) + set_len(s2)\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        // v1 = "one" (len 3), v2 = 2, set_len(s1) = 1, set_len(s2) = 1
+        assert_eq!(out, "7");
+    }
 
     // --- Non-constant global initializers ---
     //
@@ -1591,9 +1761,19 @@ mod tests {
 
     #[test]
     fn instantiating_a_generic_type_at_an_unsupported_concrete_type_is_a_clear_error() {
+        // `Str` USED to be the example here — it was, until the
+        // `Map`/`Set` stdlib chunk, genuinely unsupported as a generic
+        // struct/enum field type in `plum_ir::monomorphize::
+        // validate_field_type` (a stale mismatch against
+        // `plum_type_to_cg_type`'s own non-generic path, which has
+        // ALWAYS supported a `Str` field fine — see that function's own
+        // updated doc comment). That gap is now fixed (needed for a
+        // Str-keyed `Map`/`Set`), so this test now uses a genuinely
+        // still-unsupported field type instead: a closure/function
+        // type, which `validate_field_type` has no arm for at all.
         let src = "\
             struct Box[T] { val: T }\n\
-            let go (): Int = { let b = Box { val: \"hi\" }; 0 }\n\
+            let go (): Int = { let f = || 1; let b = Box { val: f }; 0 }\n\
         ";
         let err = compile_and_run(src, "go", &[CgValue::Unit]).expect_err("expected an unsupported-instantiation error");
         assert!(

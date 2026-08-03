@@ -69,6 +69,89 @@ extern \"C\" {
 let println[T] (x: T): Unit = unsafe { puts(x.to_string().as_cstr()) }
 ";
 
+/// `Map[K,V]`/`Set[T]` — chunk 2 of the standard library. Built as
+/// ORDINARY recursive generic enums (association lists), the same
+/// proven-safe shape as `List[T]` elsewhere in this codebase's own test
+/// suite — NOT `Array[Tuple[K,V]]`, which isn't safe today
+/// (`plum_type_to_cg_type` has no real `Type::Tuple` arm; every tuple
+/// collapses to one flat synthetic tag once reached through a type
+/// signature rather than always fully destructured locally). Depends on
+/// the `Str`-equality LLVM-backend fix landed alongside this chunk —
+/// before that fix, `==`/`!=` on `Str` didn't even compile natively, so
+/// no Str-keyed `Map`/`Set` could have worked in the native backend at
+/// all.
+///
+/// Deliberate, DOCUMENTED v1 simplifications (not bugs — see DESIGN.md):
+/// - `map_insert` always PREPENDS (O(1), no scan-to-replace). `map_get`/
+///   `map_contains` scan from the head, so the MOST RECENTLY inserted
+///   entry for a key wins. `map_remove` removes only the FIRST (most
+///   recent) matching node — removing a twice-inserted key once
+///   uncovers the OLDER value rather than erasing all trace of the key.
+///   `map_len` counts NODES, not unique keys.
+/// - `set_insert` DOES dedupe (checks `set_contains` first) — a set has
+///   no duplicates by definition, unlike a map's multi-node-per-key
+///   allowance.
+/// - Linear (`O(n)`) lookup/insert/contains/remove throughout — no
+///   hashing. A hash-table-backed version is a natural, separate future
+///   chunk if/when it matters.
+/// - Keys/elements are only really safe at `Int`/`Float`/`Bool`/`Str` in
+///   practice — the `[K: Eq]` bound doesn't actually ENFORCE this at the
+///   type-checker level (a pre-existing `satisfies_bound` gap, not fixed
+///   here): a struct/array/tuple key will still type-check but then
+///   fail at codegen/runtime.
+/// - No `println`/`.to_string()` support for `Map`/`Set` values — still
+///   scoped to `Int`/`Float`/`Bool`/`Str` per chunk 1.
+const STDLIB_COLLECTIONS_SRC: &str = "\
+enum Map[K, V] { MapNode(K, V, Map[K, V]), MapEnd }
+
+let map_new[K, V] (): Map[K, V] = MapEnd
+
+let map_insert[K: Eq, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] =
+    MapNode(k, v, m)
+
+let map_get[K: Eq, V] (m: Map[K, V]) (k: K): Option[V] = match m {
+    MapNode(k2, v, rest) => if k == k2 { Some(v) } else { map_get(rest, k) },
+    MapEnd => None,
+}
+
+let map_contains[K: Eq, V] (m: Map[K, V]) (k: K): Bool = match m {
+    MapNode(k2, _, rest) => if k == k2 { true } else { map_contains(rest, k) },
+    MapEnd => false,
+}
+
+let map_remove[K: Eq, V] (m: Map[K, V]) (k: K): Map[K, V] = match m {
+    MapNode(k2, v, rest) => if k == k2 { rest } else { MapNode(k2, v, map_remove(rest, k)) },
+    MapEnd => MapEnd,
+}
+
+let map_len[K, V] (m: Map[K, V]): Int = match m {
+    MapNode(_, _, rest) => 1 + map_len(rest),
+    MapEnd => 0,
+}
+
+enum Set[T] { SetNode(T, Set[T]), SetEnd }
+
+let set_new[T] (): Set[T] = SetEnd
+
+let set_contains[T: Eq] (s: Set[T]) (x: T): Bool = match s {
+    SetNode(y, rest) => if x == y { true } else { set_contains(rest, x) },
+    SetEnd => false,
+}
+
+let set_insert[T: Eq] (s: Set[T]) (x: T): Set[T] =
+    if set_contains(s, x) { s } else { SetNode(x, s) }
+
+let set_remove[T: Eq] (s: Set[T]) (x: T): Set[T] = match s {
+    SetNode(y, rest) => if x == y { rest } else { SetNode(y, set_remove(rest, x)) },
+    SetEnd => SetEnd,
+}
+
+let set_len[T] (s: Set[T]): Int = match s {
+    SetNode(_, rest) => 1 + set_len(rest),
+    SetEnd => 0,
+}
+";
+
 /// Parses the prelude + stdlib sources once and prepends their items
 /// to `program`'s own — items earlier in the list are declared FIRST,
 /// but `TypeContext`'s two-phase construction (see its doc comment)
@@ -79,7 +162,7 @@ let println[T] (x: T): Unit = unsafe { puts(x.to_string().as_cstr()) }
 /// from_items`'s duplicate-name check.
 pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
     let mut items = Vec::new();
-    for src in [PRELUDE_SRC, STDLIB_IO_SRC] {
+    for src in [PRELUDE_SRC, STDLIB_IO_SRC, STDLIB_COLLECTIONS_SRC] {
         let tokens = Lexer::new(src).tokenize();
         let parsed_items = Parser::new(tokens)
             .parse_program()
@@ -167,6 +250,56 @@ mod tests {
         let src = "let go (): Int = { println(42); println(3.5); println(true); println(\"hi\"); 0 }";
         let result = typecheck_and_run(src, "go", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Int(0)));
+    }
+
+    // --- standard library: Str equality / Map / Set, interpreter path ---
+    //
+    // Mirrors chunk 1's "prove both backends independently" pattern:
+    // the interpreter's own `values_equal` already handled `Str`
+    // correctly before this chunk (only the LLVM backend needed a real
+    // fix), but these still prove the FULL `with_prelude`-injected
+    // `Map`/`Set` stdlib source works end to end through the
+    // interpreter, independently of the native-backend proof in
+    // `codegen_cli::tests`.
+
+    #[test]
+    fn str_equality_and_inequality_work_through_the_interpreter() {
+        let src = "let go (): Bool = \"abc\" == \"abc\" && \"abc\" != \"abd\"";
+        let result = typecheck_and_run(src, "go", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn map_basic_insert_get_contains_remove_work_through_the_interpreter() {
+        let src = "\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_new(()), 1, 100), 2, 200);\n\
+                let got = match map_get(m, 2) { Some(v) => v, None => -1 };\n\
+                let has1 = map_contains(m, 1);\n\
+                let m2 = map_remove(m, 2);\n\
+                let has2_after = map_contains(m2, 2);\n\
+                got + (if has1 { 10 } else { 0 }) + (if has2_after { 1000 } else { 0 })\n\
+            }\n\
+        ";
+        let result = typecheck_and_run(src, "go", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(210)));
+    }
+
+    #[test]
+    fn set_basic_insert_dedupe_contains_remove_len_work_through_the_interpreter() {
+        let src = "\
+            let go (): Int = {\n\
+                let s = set_insert(set_insert(set_insert(set_new(()), \"x\"), \"x\"), \"y\");\n\
+                let n = set_len(s);\n\
+                let has_x = set_contains(s, \"x\");\n\
+                let s2 = set_remove(s, \"x\");\n\
+                let has_x_after = set_contains(s2, \"x\");\n\
+                n * 100 + (if has_x { 10 } else { 0 }) + (if has_x_after { 1 } else { 0 })\n\
+            }\n\
+        ";
+        let result = typecheck_and_run(src, "go", vec![Value::Unit]);
+        // n = 2 (dedup), has_x = true, has_x_after = false.
+        assert_eq!(result, Ok(Value::Int(210)));
     }
 
     #[test]

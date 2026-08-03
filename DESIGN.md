@@ -1487,7 +1487,7 @@ and against real libc `div`/`div_t`), plumc (full gated pipeline, both
 accepting and rejecting cases for every sub-feature). Workspace is now
 1139 tests, clean build, zero warnings.
 
-## Standard library — v1 started (basic output)
+## Standard library — v1 started (basic output, `Map`/`Set` collections)
 
 With `plum-codegen`'s LLVM backend covering essentially the entire core
 language, concurrency, and FFI (see "Implementation plan" below), work
@@ -1599,6 +1599,121 @@ isolation, at two concrete types in one compiled program) and 1 new
 interpreter-path test (mirroring the existing "prelude type needs no
 declaration" test style). Workspace now 1369 tests, clean build, zero
 warnings.
+
+### Chunk 2: `Map[K,V]`/`Set[T]` collections
+
+`Array[T]` already covers growable-list semantics as a core-language
+builtin, so the obviously-missing next piece was a key-based `Map`/
+`Set`. A research pass found a real, blocking prerequisite FIRST:
+structural equality (`==`/`!=`) was broken for non-scalar types in
+both backends, and `Str` equality was missing ENTIRELY from the native/
+LLVM backend — `codegen_binop` (`plum-codegen/src/codegen.rs`) only had
+arms for `Int`/`Bool`/`Float`; `"a" == "b"` didn't even compile
+natively. Presented the scope tradeoff to Brad (fix Str equality + keys
+scoped to `Int`/`Float`/`Bool`/`Str` / also build full structural
+equality now / narrower Int+Str-only slice) rather than picking
+silently — he chose the first: fix Str equality as a real prerequisite,
+scope `Map`/`Set` keys to the four types with working equality, leave
+struct/array/tuple keys as an explicit, documented, separate future
+gap (the `Eq` bound in `plum-types` doesn't actually enforce this at
+the type-checker level today — a pre-existing checker/backend mismatch,
+not tightened as part of this chunk).
+
+**Str equality fix**: a new `@plum_str_eq(ptr, ptr) -> i1` runtime
+primitive (fast length-reject via the existing string-cell-layout
+offsets `@plum_str_contains` already establishes, then `@memcmp` the
+byte range — `declare i32 @memcmp(ptr, ptr, i64)` added alongside the
+existing libc declares) plus a `Str`-specific branch in `codegen_binop`
+for `Eq`/`Ne`, handled before the generic instruction-shaped match
+since a runtime call doesn't fit that match's single-binary-op tuple
+shape. The interpreter needed no change — `values_equal` already
+compared `Str` content correctly.
+
+**`Map[K,V]`/`Set[T]` as recursive generic enums (association
+lists)**, NOT `Array[Tuple[K,V]]`: confirmed `plum_type_to_cg_type` has
+no `Type::Tuple` arm at all — every tuple lowers to one flat, non-
+type-specialized synthetic tag, unsafe/unrepresentable once reached
+through a type signature (e.g. an array element) rather than always
+fully destructured locally. The safe, already-proven foundation is the
+`List[T] { Cons(T, List[T]), Nil }` shape already exercised by real
+compiled-and-run tests at two concrete types — `Map`/`Set` are the same
+pattern with more payload fields per node:
+```
+enum Map[K, V] { MapNode(K, V, Map[K, V]), MapEnd }
+let map_new[K, V] (): Map[K, V] = MapEnd
+let map_insert[K: Eq, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = MapNode(k, v, m)
+let map_get[K: Eq, V] (m: Map[K, V]) (k: K): Option[V] = match m {
+    MapNode(k2, v, rest) => if k == k2 { Some(v) } else { map_get(rest, k) },
+    MapEnd => None,
+}
+-- map_contains/map_remove/map_len follow the same shape; Set[T] mirrors
+-- it with SetNode(T, Set[T])/SetEnd, deduping on insert via set_contains.
+```
+Deliberately simple v1 semantics, documented rather than accidental:
+`map_insert` always PREPENDS (O(1), no scan-to-replace) — `map_get`/
+`map_contains` scan from the head, so the most recently inserted entry
+for a key naturally wins; `map_remove` removes only the first (most
+recent) matching node, uncovering an older value if a key was inserted
+twice; `map_len` counts nodes, not unique keys. `set_insert`, unlike
+`map_insert`, DOES dedupe (calls `set_contains` first) since a set has
+no duplicates by definition. Linear (`O(n)`) everything — no hashing;
+a hash-table-backed version is a natural, separate future chunk if/when
+real Plum code shows the pain (mirroring this project's own stated
+policy for the GC/cycle-collector question). No `println`/`.to_string()`
+support for `Map`/`Set` values themselves (still `Int`/`Float`/`Bool`/
+`Str` only) — printing one directly is out of scope; a program prints
+values it EXTRACTS from a `Map`/`Set` instead (proven this way in
+manual end-to-end testing).
+
+Merged into `with_prelude` as a new `STDLIB_COLLECTIONS_SRC` constant,
+alongside `PRELUDE_SRC`/`STDLIB_IO_SRC` — same "no `use` needed yet, a
+real `use`-based module is a later chunk" reasoning as `println`.
+
+**Two real, unplanned monomorphization bugs found and fixed while
+implementing this** (not silently absorbed — both are narrow, targeted
+fixes restoring clearly-intended-but-gapped behavior, not new
+semantics):
+1. `resolve_site`'s `SiteKind::Enum` branch (`plum-ir/src/
+   monomorphize.rs`) never pushed a follow-up `Task::Enum` — only
+   `SiteKind::Function`/`Struct` did. This is invisible for an ordinary
+   generic function, since some OTHER site (a struct field, a sibling
+   call) usually also discovers the same enum — but `let map_new[K, V]
+   (): Map[K, V] = MapEnd` has NO other struct/enum-typed site anywhere
+   in its body; its entire reachable enum usage is one bare `Ctor`
+   call. Without the fix, that instantiation's tag never got registered
+   and codegen failed with "unknown tag" for a tag that was real but
+   simply never enqueued. Fixed by tracking variant→owning-enum name
+   and pushing `Task::Enum` from this branch too, mirroring what the
+   top-level seeding loop already does for a non-generic caller.
+2. `validate_field_type` (generic struct/enum field-type validation)
+   had no arm for `Type::Str`, even though `Str` is a fully ordinary,
+   always-supported `CgType` everywhere else — a stale mismatch against
+   its own non-generic counterpart, `plum_type_to_cg_type`, which has
+   always mapped `Str` fine. Presumably no earlier generic-struct/enum
+   test happened to use a `Str` field. Blocked any `Str`-keyed/valued
+   `Map`/`Set` until fixed (needed one pre-existing test —
+   `instantiating_a_generic_type_at_an_unsupported_concrete_type_is_a_
+   clear_error` — to swap its example from `Str` to a genuinely still-
+   unsupported closure field, since `Str` is no longer an example of
+   the thing that test is proving).
+
+Tests: 3 `plum-codegen` IR-shape unit tests (`@plum_str_eq`/`@memcmp`
+present; `==` on `Str` actually calls `@plum_str_eq`); 10 native
+compile-and-run tests (`Str` equality both directions; `Map` most-
+recent-wins and remove-uncovers-older semantics precisely, not just
+"doesn't crash"; `Set` dedupe; `Map[Int,Str]` and `Map[Str,Int]` both
+instantiated in the same compiled program); 3 interpreter-path tests.
+Workspace now 1385 tests (up from 1369 — net +16), clean build, zero
+warnings. Verified independently — forced a rebuild before trusting
+diagnostics (per this project's established stale-diagnostics
+pattern), re-ran the full suite, read both monomorphization fixes and
+the `Str`-equality codegen diff directly rather than trusting the
+implementing agent's summary alone, and built+ran a real throwaway
+Plum project through BOTH the native `build` and interpreter CLI paths
+by hand — output identical and correct through both (`map_get`'s
+most-recent-wins behavior, `map_len`'s node-count semantics, and
+`set_len`'s dedupe were all visually confirmed, not just asserted in a
+test).
 
 ## Target platforms
 
@@ -2969,12 +3084,18 @@ summed), not just inspect emitted IR text.
   FUNCTIONS, which already support mutual recursion) remains genuinely
   unsupported — a real, separate gap, not just an oversight.
 - Standard library scope — started (see "Standard library" above:
-  basic output/`println` is the first piece). Still wide open: what
-  comes next (collections beyond the built-ins, file I/O, JSON, HTTP,
-  ...), and whether/when `println` migrates from the prelude into a
-  real `use`-based `io` module once there's enough stdlib surface to
-  justify extending the `compile_and_run` test harness to drive a real
-  temp project through `resolve_project`.
+  basic output/`println`, then `Map`/`Set` collections). Still wide
+  open: what comes next (file I/O, JSON, HTTP, string utils beyond
+  what's already a core-language builtin, ...), whether/when `println`/
+  `Map`/`Set` migrate from the prelude into real `use`-based modules
+  once there's enough stdlib surface to justify extending the
+  `compile_and_run` test harness to drive a real temp project through
+  `resolve_project`, and whether/when to (a) tighten the `Eq` bound in
+  `plum-types` to actually enforce Int/Float/Bool/Str-only (it doesn't
+  today — a struct/array/tuple key type-checks but fails at codegen/
+  runtime) and (b) build real structural/deep equality for structs/
+  enums/arrays/tuples in both backends, which would lift that
+  restriction properly instead of just gating it earlier.
 - Whether/when to build the scoped incremental cycle collector for
   `Shared` values (see Memory model above — deliberately deferred until
   real Plum code shows the pain is real).

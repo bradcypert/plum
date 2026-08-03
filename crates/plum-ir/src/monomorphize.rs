@@ -262,6 +262,19 @@ pub fn plan(
     let mut struct_decls: HashMap<String, &ast::StructDecl> = HashMap::new();
     let mut variant_arity: HashMap<String, usize> = HashMap::new();
     let mut enum_variant_tags: HashMap<String, Vec<String>> = HashMap::new();
+    // Variant tag -> its OWNING enum's name (e.g. `"MapNode"` ->
+    // `"Map"`) — needed by `resolve_site`'s `SiteKind::Enum` branch (see
+    // its own doc comment) to push a `Task::Enum` for a Ctor call
+    // discovered INSIDE a generic function's body, mirroring exactly
+    // what the seeding loop below already does for a Ctor call reached
+    // directly from a non-generic function's body (`type_ctx.variant`,
+    // a few lines down) — without this, a generic function whose ENTIRE
+    // reachable enum usage is a bare Ctor call (no other struct/enum-
+    // typed site in the same body) never gets its enum's `Task::Enum`
+    // enqueued at all, and codegen fails with "unknown tag" for a tag
+    // that's real but was simply never registered. Found empirically:
+    // `let map_new[K, V] (): Map[K, V] = MapEnd` is exactly this shape.
+    let mut variant_owner: HashMap<String, String> = HashMap::new();
     let mut let_defs: HashMap<String, &ast::LetDef> = HashMap::new();
     // The exact complement of `let_defs` above — every zero-param
     // top-level `let` (a `Global`, in `plumc::codegen_cli`'s own
@@ -278,6 +291,7 @@ pub fn plan(
                 let mut tags = Vec::with_capacity(d.variants.len());
                 for v in &d.variants {
                     variant_arity.insert(v.name.clone(), v.payload.len());
+                    variant_owner.insert(v.name.clone(), d.name.clone());
                     tags.push(v.name.clone());
                 }
                 enum_variant_tags.insert(d.name.clone(), tags);
@@ -395,6 +409,7 @@ pub fn plan(
                     enclosing_fn: &name,
                     binding: &binding,
                     variant_arity: &variant_arity,
+                    variant_owner: &variant_owner,
                     struct_decls: &struct_decls,
                     new_tasks: Vec::new(),
                     extra_variants: HashMap::new(),
@@ -490,6 +505,7 @@ pub fn plan(
                     enclosing_fn: &name,
                     binding: &HashMap::new(),
                     variant_arity: &variant_arity,
+                    variant_owner: &variant_owner,
                     struct_decls: &struct_decls,
                     new_tasks: Vec::new(),
                     extra_variants: HashMap::new(),
@@ -591,20 +607,31 @@ pub fn plan(
 
 /// A struct field's/variant payload's concrete type, once resolved via
 /// `struct_fields_for`/`variant_payload_for`, must itself be codegen-
-/// supported — Int/Float/Bool/Unit (a scalar `CgType`), or ANOTHER
-/// struct/enum reference (pushed onto the worklist as its own
+/// supported — Int/Float/Bool/Unit/Str (every scalar `CgType`), or
+/// ANOTHER struct/enum reference (pushed onto the worklist as its own
 /// dependency, whether or not it's itself generic — a non-generic
 /// nested struct is harmlessly re-discovered here too, since `mangle`
 /// on empty args is the identity and `plumc`'s own `derive_tag_fields`
 /// already covers it, so any duplicate `tag_fields` entry this produces
-/// is identical, not conflicting). Anything else (`Str`, a closure, a
-/// tuple, a still-unresolved `Var`/`Param`) is outside codegen's
-/// supported scope — reported as a clear `Err`, never a panic, exactly
-/// like `plumc::codegen_cli::plum_type_to_cg_type`'s own equivalent
-/// check for the non-generic case.
+/// is identical, not conflicting). Anything else (a closure, a tuple, a
+/// still-unresolved `Var`/`Param`) is outside codegen's supported
+/// scope — reported as a clear `Err`, never a panic, exactly like
+/// `plumc::codegen_cli::plum_type_to_cg_type`'s own equivalent check
+/// for the non-generic case.
+///
+/// `Str` was ORIGINALLY excluded here (this doc comment used to list it
+/// alongside the genuinely-unsupported cases) — found, while building
+/// `Map`/`Set`, to be a stale mismatch: `plum_type_to_cg_type` (this
+/// function's own non-generic counterpart) has ALWAYS mapped
+/// `PlumType::Str -> CgType::Str` unconditionally, so a Str-typed field
+/// on a NON-generic struct/enum already worked fine — only the generic
+/// path here had never grown a matching arm, presumably because no
+/// earlier generic-struct/enum test happened to use a Str field. A
+/// Str-keyed `Map`/`Set` needs exactly this (`MapNode(Str, V, ...)` at
+/// `V = Str`, etc.), which is what surfaced it.
 fn validate_field_type(ty: &Type, owner_tag: &str, args: &[Type], worklist: &mut Vec<(Task, Vec<Type>)>) -> Result<Type, String> {
     match ty {
-        Type::Int | Type::Float | Type::Bool | Type::Unit => Ok(ty.clone()),
+        Type::Int | Type::Float | Type::Bool | Type::Unit | Type::Str => Ok(ty.clone()),
         Type::Struct(n, a) => {
             worklist.push((Task::Struct(n.clone(), to_keys(a)), a.clone()));
             Ok(ty.clone())
@@ -635,6 +662,11 @@ struct RewriteCtx<'a> {
     // `Type::Param` needing this in the first place).
     binding: &'a HashMap<String, Type>,
     variant_arity: &'a HashMap<String, usize>,
+    // See its own doc comment where it's built, in `plan` — needed here
+    // so `resolve_site`'s `SiteKind::Enum` branch can push a
+    // `Task::Enum` for the OWNING enum of a Ctor call reached only
+    // through a generic function's body.
+    variant_owner: &'a HashMap<String, String>,
     struct_decls: &'a HashMap<String, &'a ast::StructDecl>,
     new_tasks: Vec<(Task, Vec<Type>)>,
     extra_variants: HashMap<String, usize>,
@@ -700,14 +732,25 @@ fn resolve_site(rc: &mut RewriteCtx, span: Span) -> Result<Option<String>, Strin
         }
         SiteKind::Enum => {
             // `site.decl_name` is the VARIANT tag for an enum-kind site
-            // (see `RawSite`'s own doc comment in plum-types) — the
-            // owning enum's Task is discovered separately, either from
-            // this same function's OTHER sites or via a field-type
-            // dependency once the enum's Task itself is processed;
-            // nothing further to push here beyond registering this one
-            // variant tag's arity for lowering.
+            // (see `RawSite`'s own doc comment in plum-types). The
+            // owning enum's own `Task::Enum` is pushed HERE, explicitly
+            // — it is NOT always discovered some other way: if a
+            // generic function's ENTIRE reachable use of an enum is a
+            // bare Ctor call (e.g. `let map_new[K, V] (): Map[K, V] =
+            // MapEnd`, with no other struct/enum-typed site anywhere in
+            // its body), there is no other site that would ever enqueue
+            // `Task::Enum` for it, and `tag_fields` silently never gets
+            // an entry for that instantiation — codegen then fails with
+            // "unknown tag", for a tag that's real but was simply never
+            // registered. Found empirically while building `Map`/`Set`.
+            // Mirrors the identical `Task::Enum` push the seeding loop
+            // above already does for a Ctor call reached directly from
+            // a NON-generic function's body.
             if let Some(&arity) = rc.variant_arity.get(site.decl_name.as_str()) {
                 rc.extra_variants.entry(mangled.clone()).or_insert(arity);
+            }
+            if let Some(owning) = rc.variant_owner.get(site.decl_name.as_str()) {
+                rc.new_tasks.push((Task::Enum(owning.clone(), to_keys(&concrete)), concrete.clone()));
             }
         }
     }

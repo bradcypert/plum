@@ -331,7 +331,11 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
     // declarations (see `is_reserved_extern_name`) — a user declaring
     // their own `strlen`/`memchr` would otherwise collide with these.
     out.push_str("declare i64 @strlen(ptr)\n");
-    out.push_str("declare ptr @memchr(ptr, i32, i64)\n\n");
+    out.push_str("declare ptr @memchr(ptr, i32, i64)\n");
+    // `@memcmp` — backs `@plum_str_eq` below (Str `==`/`!=`), the same
+    // "reach for a real libc declare" precedent as `@memcpy`/`@strlen`/
+    // `@memchr` above.
+    out.push_str("declare i32 @memcmp(ptr, ptr, i64)\n\n");
 
     // `@towupper`/`@towlower`/`@setlocale` — the real Unicode-aware case
     // mapping primitives `.to_upper()`/`.to_lower()` are built on (see
@@ -657,6 +661,32 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
          found:\n\
          \x20 ret i1 1\n\
          not_found:\n\
+         \x20 ret i1 0\n\
+         }\n\n",
+    );
+
+    // `@plum_str_eq` — backs Str `==`/`!=` in `codegen_binop` (previously
+    // entirely unsupported in this backend: `Str` fell through to a hard
+    // `Err` there). Fast-reject on length mismatch (same `len` offset,
+    // 8, `@plum_str_contains` above reads), otherwise `@memcmp` the byte
+    // ranges (data starts at offset 16, same layout as everywhere else
+    // in this runtime) and check for exact equality.
+    out.push_str(
+        "define i1 @plum_str_eq(ptr %a, ptr %b) {\n\
+         entry:\n\
+         \x20 %alen_addr = getelementptr i8, ptr %a, i64 8\n\
+         \x20 %alen = load i64, ptr %alen_addr\n\
+         \x20 %blen_addr = getelementptr i8, ptr %b, i64 8\n\
+         \x20 %blen = load i64, ptr %blen_addr\n\
+         \x20 %same_len = icmp eq i64 %alen, %blen\n\
+         \x20 br i1 %same_len, label %cmp_bytes, label %not_equal\n\
+         cmp_bytes:\n\
+         \x20 %adata = getelementptr i8, ptr %a, i64 16\n\
+         \x20 %bdata = getelementptr i8, ptr %b, i64 16\n\
+         \x20 %cmp = call i32 @memcmp(ptr %adata, ptr %bdata, i64 %alen)\n\
+         \x20 %eq = icmp eq i32 %cmp, 0\n\
+         \x20 ret i1 %eq\n\
+         not_equal:\n\
          \x20 ret i1 0\n\
          }\n\n",
     );
@@ -2955,6 +2985,52 @@ mod tests {
         assert!(ir.contains("define i64 @double(i64 %n) {"), "{ir}");
         assert!(ir.contains("mul i64 %n, 2"), "{ir}");
         assert!(ir.contains("ret i64"), "{ir}");
+    }
+
+    #[test]
+    fn plum_str_eq_and_memcmp_are_always_declared_in_the_runtime() {
+        // `@plum_str_eq`/`@memcmp` are emitted unconditionally by
+        // `emit_runtime`, the same "always present" style as `@memcpy`/
+        // `@strlen` — this just confirms both actually show up in real
+        // output, regardless of whether the program itself uses Str
+        // equality.
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec![],
+            body: Expr::Int(0),
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new()).unwrap();
+        assert!(ir.contains("declare i32 @memcmp(ptr, ptr, i64)"), "{ir}");
+        assert!(ir.contains("define i1 @plum_str_eq(ptr %a, ptr %b)"), "{ir}");
+        assert!(ir.contains("call i32 @memcmp"), "{ir}");
+    }
+
+    #[test]
+    fn str_equality_emits_a_call_to_plum_str_eq() {
+        // `"a" == "b"`-shaped source: previously `Str` fell through to a
+        // hard `Err` in `codegen_binop` (no arm existed for it at all).
+        // This proves the new Str-specific branch fires and emits a
+        // `call`-shaped instruction to `@plum_str_eq`, not a bare `icmp`.
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["a".to_string(), "b".to_string()],
+            body: Expr::Binary(BinOp::Eq, Box::new(Expr::Var("a".to_string())), Box::new(Expr::Var("b".to_string()))),
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str, CgType::Str], CgType::Bool)]), &TagFields::new()).unwrap();
+        assert!(ir.contains("call i1 @plum_str_eq(ptr %a, ptr %b)"), "{ir}");
+    }
+
+    #[test]
+    fn str_inequality_emits_a_call_to_plum_str_eq_then_negates_it() {
+        let prog = program(vec![Function {
+            name: "go".to_string(),
+            params: vec!["a".to_string(), "b".to_string()],
+            body: Expr::Binary(BinOp::Ne, Box::new(Expr::Var("a".to_string())), Box::new(Expr::Var("b".to_string()))),
+        }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str, CgType::Str], CgType::Bool)]), &TagFields::new()).unwrap();
+        assert!(ir.contains("call i1 @plum_str_eq(ptr %a, ptr %b)"), "{ir}");
+        let call_idx = ir.find("call i1 @plum_str_eq").unwrap();
+        assert!(ir[call_idx..].contains("xor i1"), "{ir}");
     }
 
     #[test]

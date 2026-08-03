@@ -385,6 +385,23 @@ fn codegen_call_args(args: &[Expr], env: &Env, em: &mut Emitter, ctx: &Ctx, sig:
 }
 
 fn codegen_binop(op: BinOp, l: String, r: String, ty: CgType, em: &mut Emitter) -> Result<(String, CgType), String> {
+    // `Str` `==`/`!=` — handled BEFORE the generic `(op, ty)` match below
+    // because it needs a `call`-shaped instruction (`@plum_str_eq`), not
+    // a single binary op, so it doesn't fit that match's tuple-returning
+    // arms. Any other `BinOp` on `CgType::Str` (ordering comparisons,
+    // `+`, etc.) falls through to the generic match's `Err` fallback,
+    // unchanged — Str only ever supported `Eq`/`Ne` at the type-checker
+    // level in the first place.
+    if ty == CgType::Str && (op == BinOp::Eq || op == BinOp::Ne) {
+        let reg = em.fresh_reg();
+        em.push(format!("  {reg} = call i1 @plum_str_eq(ptr {l}, ptr {r})"));
+        if op == BinOp::Ne {
+            let negated = em.fresh_reg();
+            em.push(format!("  {negated} = xor i1 {reg}, 1"));
+            return Ok((negated, CgType::Bool));
+        }
+        return Ok((reg, CgType::Bool));
+    }
     let (instr, result_ty) = match (op, ty) {
         (BinOp::Add, CgType::Int) => ("add i64", CgType::Int),
         (BinOp::Sub, CgType::Int) => ("sub i64", CgType::Int),
