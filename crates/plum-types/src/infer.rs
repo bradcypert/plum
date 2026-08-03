@@ -279,8 +279,15 @@ pub struct Infer {
     // closure's param types to generate its per-literal-site LLVM
     // function signature (`plum-codegen`), and unlike every other IR
     // shape, there's nothing structural in the closure literal itself
-    // to derive that from. See `resolve_closure_types`.
-    closure_types: HashMap<Span, (Vec<Type>, Type)>,
+    // to derive that from. See `resolve_closure_types`. The trailing
+    // `Option<String>` is the SAME `enclosing_fn` `current_fn` snapshot
+    // `record_site` takes for a `RawSite` (see that field's own doc
+    // comment) — needed so `resolve_closure_types` can apply the exact
+    // same tier-2 template fallback `resolve_generic_sites` already
+    // does via `resolve_as_template`, for a closure literal whose type
+    // is pinned only to ITS enclosing generic function's own
+    // still-unresolved generic, not to anything concrete.
+    closure_types: HashMap<Span, (Vec<Type>, Type, Option<String>)>,
     // Whether the expression currently being inferred is lexically
     // inside an `unsafe { .. }` block — toggled true/false around
     // `ast::Expr::Unsafe`'s own handling, not a stack (nested `unsafe`
@@ -462,29 +469,71 @@ impl Infer {
 
     /// Resolves every closure LITERAL's param/return types against the
     /// whole program's final substitution — mirrors `resolve_empty_
-    /// array_elem_types` exactly (same precondition, same "still a
-    /// `Var` after the final substitution is a genuine ambiguity, not
-    /// silently defaulted" reasoning), just for `closure_types` instead.
-    /// `plum_ir::lower::LoweringContext::with_closure_types` is where
-    /// the result gets consumed.
+    /// array_elem_types` for the base case, but ALSO mirrors
+    /// `resolve_generic_sites`'s tier-2 template fallback
+    /// (`resolve_as_template`): a closure declared inside a still-generic
+    /// function's own body (e.g. `let f = |y| y` inside `wrap[T](x: T) =
+    /// ...`) has its param/return types pinned only to `wrap`'s OWN
+    /// unresolved generic var, never to anything concrete anywhere — that
+    /// var resolves to a `Type::Param(name)` TEMPLATE here, exactly like
+    /// an ordinary generic call/construction site nested the same way,
+    /// rather than being rejected as an ambiguity. Any OTHER still-
+    /// unresolved `Var` (one that isn't the enclosing function's own
+    /// generic) remains a genuine error — the closure's type really is
+    /// never pinned to anything concrete anywhere.
+    /// `plum_ir::lower::LoweringContext::with_closure_types` and
+    /// `plum_ir::monomorphize::plan` are where the result gets consumed —
+    /// the latter resolves any remaining `Param` once it knows a
+    /// concrete binding for the enclosing function's own generics,
+    /// mirroring `ResolvedSite`'s own template case exactly.
     pub fn resolve_closure_types(&self) -> Result<HashMap<Span, (Vec<Type>, Type)>, String> {
         let subst = self
             .final_subst
             .as_ref()
             .ok_or_else(|| "internal error: resolve_closure_types called before infer_program completed".to_string())?;
         let mut out = HashMap::with_capacity(self.closure_types.len());
-        for (span, (param_tys, ret_ty)) in &self.closure_types {
-            let resolved_params: Vec<Type> = param_tys.iter().map(|t| subst.apply(t)).collect();
-            let resolved_ret = subst.apply(ret_ty);
-            if resolved_params.iter().any(|t| matches!(t, Type::Var(_))) || matches!(resolved_ret, Type::Var(_)) {
-                return Err(format!(
-                    "cannot determine a concrete param/return type for the closure literal at {span:?} — it's \
-                     never used anywhere that would pin its type to something concrete"
-                ));
+        for (span, (param_tys, ret_ty, enclosing_fn)) in &self.closure_types {
+            let mut resolved_params = Vec::with_capacity(param_tys.len());
+            for t in param_tys {
+                resolved_params.push(self.resolve_closure_component(t, enclosing_fn, subst, *span)?);
             }
+            let resolved_ret = self.resolve_closure_component(ret_ty, enclosing_fn, subst, *span)?;
             out.insert(*span, (resolved_params, resolved_ret));
         }
         Ok(out)
+    }
+
+    /// One param or return type's worth of `resolve_closure_types`'s own
+    /// logic — factored out since both need identical treatment.
+    fn resolve_closure_component(
+        &self,
+        ty: &Type,
+        enclosing_fn: &Option<String>,
+        subst: &Subst,
+        span: Span,
+    ) -> Result<Type, String> {
+        let resolved = subst.apply(ty);
+        if !matches!(resolved, Type::Var(_)) {
+            return Ok(resolved);
+        }
+        // Mirrors `resolve_as_template` exactly, just keyed off this
+        // closure's own recorded `enclosing_fn` rather than a
+        // `RawSite`'s — see that function's doc comment for why
+        // comparing `subst.apply(&Type::Var(gid))` (rather than a
+        // direct id check on `resolved`) is what makes this correct.
+        if let Some(fn_name) = enclosing_fn {
+            if let Some(generics) = self.fn_generics.get(fn_name) {
+                for (name, var_id) in generics {
+                    if subst.apply(&Type::Var(*var_id)) == resolved {
+                        return Ok(Type::Param(name.clone()));
+                    }
+                }
+            }
+        }
+        Err(format!(
+            "cannot determine a concrete param/return type for the closure literal at {span:?} — it's \
+             never used anywhere that would pin its type to something concrete"
+        ))
     }
 
     /// Turns every `RawSite` captured during inference into a
@@ -2845,7 +2894,8 @@ impl Infer {
         // comment. Needed so `plum-ir`'s lowering can bake a concrete
         // param/return type into the `ir::Expr::Closure` node it
         // produces for THIS span — see `LoweringContext::closure_types`.
-        self.closure_types.insert(span, (param_types.clone(), body_ty.clone()));
+        self.closure_types
+            .insert(span, (param_types.clone(), body_ty.clone(), self.current_fn.clone()));
         let resolved_params = param_types.iter().map(|t| acc.apply(t)).collect();
         Ok((Type::Function(resolved_params, Box::new(acc.apply(&body_ty))), acc))
     }
@@ -6468,6 +6518,25 @@ mod tests {
         let infer = infer_with("enum MyOption[T] { MySome(T), MyNone }\nlet go () = MyNone");
         let err = infer.resolve_generic_sites().expect_err("expected an ambiguous-type-parameter error");
         assert!(err.contains("never pinned"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn resolve_closure_types_marks_a_closure_inside_a_generic_body_as_a_param_template() {
+        // `wrap`'s own body defines `f`, a closure whose param/return
+        // type is pinned only to `wrap`'s OWN still-unresolved generic
+        // `T` — never anything concrete inside `wrap` itself — so this
+        // must resolve to `Type::Param("T")`, the SAME tier-2 template
+        // treatment `resolve_generic_sites` already gives an ordinary
+        // generic construction/call site nested the same way, not an
+        // ambiguity error.
+        let src = "let wrap[T] (x: T): T = { let f = |y| y; f(x) }\n\
+                   let go () = wrap(5)";
+        let infer = infer_with(src);
+        let closure_types = infer.resolve_closure_types().unwrap();
+        assert_eq!(closure_types.len(), 1);
+        let (params, ret) = closure_types.values().next().unwrap();
+        assert_eq!(params, &vec![Type::Param("T".to_string())]);
+        assert_eq!(ret, &Type::Param("T".to_string()));
     }
 
     #[test]

@@ -354,6 +354,8 @@ pub fn plan(
                     extra_variants: HashMap::new(),
                     extra_struct_fields: HashMap::new(),
                     field_owner_overrides: HashMap::new(),
+                    closure_types,
+                    extra_closure_types: HashMap::new(),
                 };
                 for p in &mut def_clone.params {
                     if let ast::ParamKind::Pattern(pat, _) = &mut p.kind {
@@ -366,6 +368,7 @@ pub fn plan(
                     extra_variants,
                     extra_struct_fields,
                     field_owner_overrides,
+                    extra_closure_types,
                     ..
                 } = rc;
                 worklist.extend(new_tasks);
@@ -380,11 +383,18 @@ pub fn plan(
                 // resolves normally.
                 let mut merged_field_owners = field_owners.clone();
                 merged_field_owners.extend(field_owner_overrides);
+                // Same merge-OVER-the-base-map pattern as
+                // `merged_field_owners` immediately above, just for a
+                // closure literal's own concrete per-instantiation type
+                // (see `RewriteCtx::extra_closure_types`'s doc comment).
+                let mut merged_closure_types = closure_types.clone();
+                merged_closure_types.extend(extra_closure_types);
                 let lctx = base_lctx
                     .clone()
                     .with_field_owners(merged_field_owners)
                     .with_extra_variants(extra_variants)
-                    .with_extra_struct_fields(extra_struct_fields);
+                    .with_extra_struct_fields(extra_struct_fields)
+                    .with_closure_types(merged_closure_types);
                 let (params, destructures) = lower_params(&def_clone.params)?;
                 let mut body = lower_expr(&def_clone.body, &lctx)?;
                 for (synthetic, pattern) in destructures.into_iter().rev() {
@@ -521,6 +531,23 @@ struct RewriteCtx<'a> {
     // lowering this one specialization, so the `Match` this produces
     // targets the correct, mangled tag.
     field_owner_overrides: HashMap<Span, String>,
+    // The BASE (possibly template-containing) closure-type map computed
+    // by `plum_types::Infer::resolve_closure_types` — a closure literal
+    // nested inside `rc.enclosing_fn`'s own body may have its param/
+    // return types recorded there as `Type::Param` TEMPLATES (see that
+    // function's own doc comment), exactly like `resolved_sites` can
+    // hold a `Type::Param` for a nested generic call/construction site.
+    closure_types: &'a HashMap<Span, (Vec<Type>, Type)>,
+    // This SPECIALIZATION's own concrete resolution of every closure
+    // literal directly inside `enclosing_fn`'s body, keyed by span —
+    // collected the SAME way `field_owner_overrides`/`extra_variants`/
+    // `extra_struct_fields` are (see their own doc comments), by
+    // applying `rc.binding` to whatever `closure_types` recorded for
+    // that span. Merged OVER the plain `closure_types` base map before
+    // lowering this one specialization, so `lower.rs`'s unmodified
+    // `Expr::Closure` arm picks up a fully concrete type for this
+    // instantiation instead of the shared template.
+    extra_closure_types: HashMap<Span, (Vec<Type>, Type)>,
 }
 
 /// If `span` names a generic instantiation site belonging to
@@ -659,7 +686,25 @@ fn rewrite_expr(expr: &mut ast::Expr, rc: &mut RewriteCtx) -> Result<(), String>
             rewrite_expr(iter, rc)?;
             rewrite_block(body, rc)
         }
-        ast::Expr::Closure { body, .. } => rewrite_expr(body, rc),
+        ast::Expr::Closure { body, span, .. } => {
+            // If this closure literal's type was recorded (possibly as
+            // a `Type::Param` template — see `RewriteCtx::closure_types`'s
+            // doc comment), resolve it CONCRETELY for this specific
+            // instantiation via this specialization's own `binding`,
+            // the same way `resolve_site` resolves a nested generic
+            // call/construction site's args. A closure with no entry at
+            // all (declared inside a NON-generic function, or one whose
+            // type was already fully concrete with nothing to
+            // substitute) needs nothing further here — the base
+            // `closure_types` map already has its correct entry.
+            if let Some((param_tys, ret_ty)) = rc.closure_types.get(span) {
+                let concrete_params: Vec<Type> =
+                    param_tys.iter().map(|t| apply_binding(t, rc.binding)).collect::<Result<_, _>>()?;
+                let concrete_ret = apply_binding(ret_ty, rc.binding)?;
+                rc.extra_closure_types.insert(*span, (concrete_params, concrete_ret));
+            }
+            rewrite_expr(body, rc)
+        }
         ast::Expr::Unsafe(block, _) | ast::Expr::Spawn(block, _) => rewrite_block(block, rc),
         ast::Expr::StructLiteral { path, fields, spread, span } => {
             if let Some(mangled) = resolve_site(rc, *span)? {
@@ -796,6 +841,57 @@ mod tests {
         assert!(!plan.tag_fields.contains_key("Pair"));
         assert_eq!(plan.tag_fields["Pair$Int"], vec![Type::Int, Type::Int]);
         assert_eq!(plan.tag_fields["Pair$Bool"], vec![Type::Bool, Type::Bool]);
+    }
+
+    /// Finds the first `ir::Expr::Closure` node reachable from `expr`,
+    /// walking through the handful of shapes `wrap`'s own body (`{ let
+    /// f = |y| y; f(x) }`) actually lowers to — just enough for this
+    /// test, not a general-purpose IR walker.
+    fn find_closure(expr: &ir::Expr) -> Option<&ir::Expr> {
+        match expr {
+            ir::Expr::Closure { .. } => Some(expr),
+            ir::Expr::Let { value, body, .. } => find_closure(value).or_else(|| find_closure(body)),
+            ir::Expr::Call { callee, args, .. } => {
+                find_closure(callee).or_else(|| args.iter().find_map(find_closure))
+            }
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_closure_inside_a_generic_function_instantiated_at_two_types_produces_two_independently_typed_specializations() {
+        // Mirrors `a_generic_struct_instantiated_at_two_types_produces_
+        // two_distinct_mangled_tags_and_no_plain_one`'s own precedent
+        // (two distinct mangled outputs from one generic source), just
+        // for a closure LITERAL nested inside a generic function's own
+        // body instead of a generic struct — the exact case this
+        // chunk's two upstream fixes (the `resolve_closure_types`
+        // template fallback, and `monomorphize.rs`'s own per-
+        // instantiation substitution) exist for.
+        let src = "\
+            let wrap[T] (x: T): T = { let f = |y| y; f(x) }\n\
+            let go_int (): Int = wrap(5)\n\
+            let go_bool (): Bool = wrap(true)\n\
+        ";
+        let plan = plan_for(src);
+        let names: Vec<&str> = plan.functions.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"wrap$Int"), "functions: {names:?}");
+        assert!(names.contains(&"wrap$Bool"), "functions: {names:?}");
+
+        let int_fn = plan.functions.iter().find(|f| f.name == "wrap$Int").unwrap();
+        let bool_fn = plan.functions.iter().find(|f| f.name == "wrap$Bool").unwrap();
+        let int_closure = find_closure(&int_fn.body).expect("wrap$Int body should contain a Closure node");
+        let bool_closure = find_closure(&bool_fn.body).expect("wrap$Bool body should contain a Closure node");
+        let ir::Expr::Closure { param_types: int_params, ret_type: int_ret, .. } = int_closure else {
+            unreachable!()
+        };
+        let ir::Expr::Closure { param_types: bool_params, ret_type: bool_ret, .. } = bool_closure else {
+            unreachable!()
+        };
+        assert_eq!(int_params, &Some(vec![ir::PrimTy::Int]));
+        assert_eq!(int_ret, &Some(ir::PrimTy::Int));
+        assert_eq!(bool_params, &Some(vec![ir::PrimTy::Bool]));
+        assert_eq!(bool_ret, &Some(ir::PrimTy::Bool));
     }
 
     #[test]

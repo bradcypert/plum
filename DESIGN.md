@@ -1523,7 +1523,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1-v12 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join, channels/select, full FFI including struct-by-value, Unicode-aware string ops, non-constant globals)
+### LLVM backend — v1-v13 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures (including inside generic functions), general array iteration, spawn/join, channels/select, full FFI including struct-by-value, Unicode-aware string ops, non-constant globals)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1570,13 +1570,15 @@ below), closing out FFI entirely, and — as of a further follow-on
 chunk — `.runes()`, `.trim()`, `.replace()`, `.split()` (full Unicode
 correctness) and `.to_upper()`/`.to_lower()` (ASCII-only — see
 "Unicode-aware string operations" below for the deliberate,
-documented scope cut), and — as of a further follow-on chunk —
-non-constant top-level `Global` initializers (see "Non-constant Global
-initializers" below). Still out of scope and producing a clear codegen
-error, never a panic: full Unicode case mapping (multi-codepoint
-expansions, e.g. German `ß`→`"SS"`), a closure literal inside a
-still-generic function's own body, an `Assign` inside a closure body
-writing back into an enclosing loop's carried variable (structurally
+documented scope cut), non-constant top-level `Global` initializers
+(see "Non-constant Global initializers" below), and — as of a further
+follow-on chunk — closure literals inside a still-generic function's
+own body, working correctly and independently per concrete
+instantiation (see "Closures inside generic functions" below). Still
+out of scope and producing a clear codegen error, never a panic: full
+Unicode case mapping (multi-codepoint expansions, e.g. German
+`ß`→`"SS"`), an `Assign` inside a closure body writing back into an
+enclosing loop's carried variable (structurally
 out of reach of this backend's closure design, not merely
 unimplemented), an `Assign` reachable only through a `Let`/`If`/
 `Match`/`RcAnnotated` used in an ordinary value position (e.g.
@@ -1918,15 +1920,10 @@ treatment) — is wrapped in a generated trampoline closure with zero
 captures, memoized per distinct function name so repeated references
 don't duplicate work.
 
-A closure literal inside a still-generic function's own body is
-rejected by a dedicated pre-check in `plumc` BEFORE monomorphization
-runs (a plain structural AST walk, no type info needed) — since
-`ir_program.functions` is wholesale replaced by
-`monomorphize::plan`'s output, a still-generic function's
-un-instantiated body never reaches `plum-codegen` at all regardless,
-so this guard has to live upstream. Threading closure-literal mangling
-through `monomorphize.rs` itself (so a closure inside a generic
-function's body could work per-instantiation) is deferred.
+A closure literal inside a still-generic function's own body now works
+correctly, per-instantiation (see "Closures inside generic functions"
+below) — the pre-check that originally rejected this outright has
+been removed.
 
 Getting a closure literal to codegen at all required a real upstream
 addition beyond what was originally scoped: `ir::Expr::Closure`
@@ -2599,6 +2596,49 @@ output wholesale-replaces `ir_program.functions`, but `ir_program.
 globals` is left untouched) — surfaces today as a plain "unknown
 function" error, not a crash or garbage, good enough for this chunk
 without being a fully polished message.
+
+**Closures inside generic functions**. Lifts a pre-check that
+previously rejected any closure literal inside a still-generic
+function's own body outright. Precisely traced (not guessed) what was
+actually missing before touching anything: `plum-codegen`'s existing
+closure machinery already handled per-instantiation differences
+correctly with zero changes needed — a capture's `CgType` is
+determined purely from the enclosing function's own already-concrete
+`env` by the time codegen ever sees an `ir::Function` (codegen only
+runs on monomorphization's output), and the per-closure-literal-site
+naming counter is a single, never-reset, whole-compile `RefCell`, so
+two instantiations' closures always land under provably distinct
+generated names for free. Confirmed by `git diff`: this chunk touched
+zero lines in `plum-codegen` itself.
+
+The genuine gap was entirely upstream, in two precisely-traced places:
+`plum_types::Infer::resolve_closure_types` had no template-resolution
+fallback the way `resolve_generic_sites` already did — a closure
+inside a generic function's body has its type pinned only to the
+enclosing function's own still-unresolved type variable, the exact
+same "tier 2 template" situation `resolve_generic_sites` already
+solves for ordinary generic construction/call sites, just never
+extended to closure literals; and `monomorphize.rs`'s `rewrite_expr`
+recursed into a closure's body but did nothing to resolve/specialize
+the closure's OWN recorded type per instantiation, needing the same
+per-instantiation substitution treatment `field_owner_overrides`/
+`extra_variants`/`extra_struct_fields` already get. Both fixed by
+mirroring the existing pattern exactly rather than inventing a new
+mechanism.
+
+One additional, unanticipated fix was needed once the pre-check was
+removed: `plumc`'s pipeline eagerly lowers the ORIGINAL, un-instantiated
+AST once (solely to pick up globals/externs) before `monomorphize::plan`
+ever runs — with the pre-check gone, this eager pass now hits a
+closure literal whose recorded type is still a `Type::Param` template,
+which `lower.rs`'s existing type-conversion helper correctly rejects
+as unrepresentable. Fixed by having that one lowering arm treat a
+template-containing type the same as "no info available," which is
+exactly correct here since this particular lowering pass's own
+function output is always discarded and fully replaced by
+`monomorphize::plan`'s per-instantiation output — a real, necessary
+gap-fill exposed by removing the pre-check, not a sign the original
+design was wrong.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck

@@ -451,6 +451,21 @@ const ARRAY_TAG: &str = "0Array";
 // tried to. A type this can't represent (a bare type variable that
 // somehow survived resolution, `Unit`, `CStr`, a function type, ...) is
 // a clear error, never a silent guess.
+/// Whether `ty` still contains a `Type::Param` TEMPLATE anywhere inside
+/// it — see this function's one call site (the `Closure` arm below) for
+/// why that needs different handling than every other still-unresolved
+/// shape `type_to_prim_ty` already rejects outright.
+fn type_contains_param(ty: &plum_types::types::Type) -> bool {
+    use plum_types::types::Type;
+    match ty {
+        Type::Param(_) => true,
+        Type::Function(params, ret) => params.iter().any(type_contains_param) || type_contains_param(ret),
+        Type::Tuple(elems) => elems.iter().any(type_contains_param),
+        Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_contains_param),
+        _ => false,
+    }
+}
+
 fn type_to_prim_ty(ty: &plum_types::types::Type) -> Result<ir::PrimTy, String> {
     use plum_types::types::Type;
     match ty {
@@ -1290,8 +1305,24 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         ast::Expr::Closure { params, body, span } => {
             // See `LoweringContext::closure_types`'s doc comment —
             // `None` here only for a lowering-only caller with no real
-            // `plum_types::Infer` pass behind it.
-            let resolved = ctx.closure_types.get(span);
+            // `plum_types::Infer` pass behind it. A resolved entry that
+            // still contains a `Type::Param` TEMPLATE (a closure nested
+            // inside a still-generic function's own body — see
+            // `plum_types::Infer::resolve_closure_types`'s doc comment)
+            // is treated the SAME as "no info available": this happens
+            // whenever a still-generic function's own body gets lowered
+            // directly, UN-instantiated — `plumc::codegen_cli`'s eager
+            // `lower_program` call before `monomorphize::plan` runs
+            // (whose output for exactly this function gets discarded
+            // and replaced wholesale, per-instantiation, with a fully
+            // concrete substitution — see `monomorphize::plan`'s own
+            // doc comment) and `plum-interp`'s lowering (which never
+            // needs static closure types at all — dynamically typed)
+            // both hit this path harmlessly.
+            let resolved = ctx
+                .closure_types
+                .get(span)
+                .filter(|(ptys, rty)| !ptys.iter().any(type_contains_param) && !type_contains_param(rty));
             let param_types = resolved
                 .map(|(ptys, _)| ptys.iter().map(type_to_prim_ty).collect::<Result<Vec<_>, _>>())
                 .transpose()?;
