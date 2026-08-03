@@ -30,26 +30,99 @@ enum Result[T, E] { Ok(T), Err(E) }
 ";
 
 /// The very first stdlib piece — see DESIGN.md's "Standard library"
-/// section. `println` is deliberately ORDINARY Plum source, not a new
-/// compiler/backend builtin: `.to_string()` already dispatches
-/// correctly on a still-unresolved generic type parameter (proven
-/// empirically in both backends before writing this — monomorphization
-/// fully specializes a generic function's body before either backend
-/// ever sees it, so by the time codegen/the interpreter evaluates
-/// `x.to_string()` here, `T` is always a concrete, resolved type), and
-/// `unsafe { extern-call }` inside a still-generic function body works
-/// with zero special-casing (the `in_unsafe` gate and monomorphization's
-/// own per-instantiation rewrite are both orthogonal to genericity).
-/// `puts` is declared with NO return type — infers as `Unit`, matching
-/// `plum_codegen::emit_program`'s own doc comment, which already uses
-/// `puts` BY NAME as its literal void-extern example — so `println`
-/// itself is genuinely `Unit`-returning with no extern-return-value-
-/// discarding question to sidestep. Scoped to `println` (auto-appends
-/// a newline, exactly matching libc `puts`) only for now — a `print`
-/// (no trailing newline) variant needs `fputs`/a `stdout` `FILE*`
-/// handle or C-variadic support, neither of which this codebase's
-/// extern mechanism has any precedent for yet; left for a later,
-/// separate, well-scoped follow-up rather than guessed at here.
+/// section. `println` and `print` are deliberately ORDINARY Plum
+/// source, not new compiler/backend builtins: `.to_string()` already
+/// dispatches correctly on a still-unresolved generic type parameter
+/// (proven empirically in both backends before writing this —
+/// monomorphization fully specializes a generic function's body before
+/// either backend ever sees it, so by the time codegen/the interpreter
+/// evaluates `x.to_string()` here, `T` is always a concrete, resolved
+/// type), and `unsafe { extern-call }` inside a still-generic function
+/// body works with zero special-casing (the `in_unsafe` gate and
+/// monomorphization's own per-instantiation rewrite are both orthogonal
+/// to genericity).
+///
+/// **BOTH `print`/`println` are built on the raw POSIX `write(2)`
+/// syscall** (`write(fd: Int, buf: CStr, count: Int) -> Int` — every
+/// parameter/return type already Int/CStr, both already fully
+/// supported, no new type-system work needed) — DELIBERATELY not
+/// libc's `puts`/`fputs`/`printf`, and this was a real, two-step design
+/// correction, not the original plan:
+/// - `println` FIRST used `puts` (which conveniently always appends a
+///   newline on its own). But adding `print` (no newline) alongside it
+///   surfaced a genuine cross-function bug once both were tested
+///   together, not predicted in advance: `puts` goes through C's
+///   block-buffered stdio, while `write` is unbuffered and reaches the
+///   OS immediately — mixing the two in one program (`print("a");
+///   println("b"); print("c")`) produced OUT-OF-ORDER output
+///   (`"acb\n"` instead of `"ab\nc"`), since `write`'s calls could
+///   reach the terminal/pipe before an EARLIER, still-buffered `puts`
+///   call's output flushed. This is the exact same class of problem
+///   `println`'s own `fflush` fix (see below) already solved ONCE, for
+///   the interpreter CLI specifically — but that fix only covers the
+///   CLI's own final print, not two DIFFERENT buffering strategies
+///   fighting each other WITHIN a single running Plum program. Fixed
+///   properly by putting `println`/`print` on the exact SAME
+///   mechanism (`write`) instead of patching around the mismatch —
+///   `println` builds its newline into the string itself
+///   (`.concat("\n")`, a core-language builtin) before one `write`
+///   call, rather than a second syscall or a different C function.
+/// - `fputs(s, stdout)`/variadic `printf("%s", s)` were considered
+///   first and rejected as real dead ends for THIS codebase
+///   specifically (confirmed by reading the actual extern-type
+///   machinery, not assumed): `fputs` needs a `FILE*` parameter, and
+///   this codebase's extern type system is a CLOSED list (`Int`/
+///   `Float`/`Bool`/`CStr`/callback/struct-of-those — see `plum-types/
+///   src/context.rs`'s `check_ffi_safe`) with no raw-pointer/opaque
+///   type and no extern-GLOBAL-variable grammar at all (only `fn`s can
+///   be declared in an `extern` block) — `stdout` itself isn't even
+///   referenceable. `printf` needs C-variadic call support, which
+///   doesn't exist anywhere in this codebase for USER-declared externs
+///   (the LLVM backend emits a few HARDCODED internal variadic calls of
+///   its own, e.g. for `Float.to_string()`, but nothing threads that
+///   through to Plum-source-declared externs, and `plum-interp`'s
+///   `libffi`-based extern-call path has no variadic-CIF support at
+///   all). Both would need genuine new type-system/backend work in at
+///   least one backend, non-trivial in the interpreter's case.
+///
+/// The byte count for `write` comes from `.len()` on the `Str` BEFORE
+/// converting to `CStr` (a core-language builtin, not a new extern) —
+/// DELIBERATELY not a separate `strlen` extern call: an earlier draft
+/// used one, but `strlen` is common enough that more than one EXISTING
+/// test in this codebase already declares its own extern `strlen` for
+/// unrelated reasons, and prelude-merged source shares the SAME flat
+/// top-level namespace as ordinary declarations (real "already
+/// declared" collisions resulted, caught by the existing test suite
+/// immediately) — `.len()` sidesteps the collision risk entirely AND
+/// avoids an extra FFI round-trip. `write` itself was checked against
+/// every existing extern declaration in this codebase first; no
+/// collision. Verified empirically in BOTH backends (real, throwaway
+/// compiled-and-run probes) that discarding a non-`Unit` extern return
+/// value (`write` returns `Int`) works fine inside a block ending in
+/// `()`.
+///
+/// **A real use-after-free found by testing, not caught by the type
+/// checker** (it's a memory-ownership bug, not a type error): an
+/// earlier draft called `write(1, s.as_cstr(), s.len())` directly.
+/// `.as_cstr()` CONSUMES its `Str` (its own lowering calls `@plum_rc_
+/// dec_str` on the original cell — confirmed by reading the actual
+/// generated LLVM IR, not assumed), and arguments evaluate left to
+/// right, so `s.len()` — evaluated THIRD, after `.as_cstr()` already
+/// ran — read `s`'s length field after it may already have been freed.
+/// Silent, not a crash: `write` just wrote zero (or garbage) bytes,
+/// which is why the very first real compile-and-run test caught it
+/// immediately (`print`'s output was simply MISSING from captured
+/// stdout, not obviously "wrong"). Fixed by binding the length to a
+/// local (`let n = s.len()`) BEFORE calling `.as_cstr()`, so the read
+/// happens while `s` is still guaranteed alive. The SAME ordering
+/// applies to `println`'s `.concat("\n")` result.
+///
+/// The interpreter CLI's own `fflush(NULL)` fix (in `main.rs`, from
+/// when `println` still used `puts`) is KEPT regardless of this
+/// switch to `write` — it's still good, general defensive practice for
+/// any OTHER extern call a user's own program might make through
+/// buffered C stdio (`printf`, `fputs`, ...), even though `println`/
+/// `print` themselves no longer need it.
 ///
 /// Merged into `with_prelude` (not a real `use`-based module) for now,
 /// deliberately: the existing `compile_and_run` test harness (used by
@@ -63,10 +136,22 @@ enum Result[T, E] { Ok(T), Err(E) }
 /// sugar-type story.
 const STDLIB_IO_SRC: &str = "\
 extern \"C\" {
-    fn puts(s: CStr);
+    fn write(fd: Int, buf: CStr, count: Int) -> Int;
 }
 
-let println[T] (x: T): Unit = unsafe { puts(x.to_string().as_cstr()) }
+let print[T] (x: T): Unit = unsafe {
+    let s = x.to_string();
+    let n = s.len();
+    write(1, s.as_cstr(), n);
+    ()
+}
+
+let println[T] (x: T): Unit = unsafe {
+    let s = x.to_string().concat(\"\\n\");
+    let n = s.len();
+    write(1, s.as_cstr(), n);
+    ()
+}
 ";
 
 /// `Map[K,V]`/`Set[T]` — chunk 2 of the standard library. Built as
@@ -248,6 +333,18 @@ mod tests {
         // as this one does) — visually confirmed by hand during design
         // that real `42`/`hi` lines do appear on stdout when run.
         let src = "let go (): Int = { println(42); println(3.5); println(true); println(\"hi\"); 0 }";
+        let result = typecheck_and_run(src, "go", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(0)));
+    }
+
+    #[test]
+    fn print_is_available_with_no_declaration_of_its_own_through_the_interpreter() {
+        // Same shape as `println`'s own interpreter-path test above —
+        // `print` uses a real `write(2)` syscall via `libffi`, not
+        // `puts`; proves successful execution end to end (same
+        // limitation on capturing real stdout applies here too — see
+        // that test's own comment).
+        let src = "let go (): Int = { print(\"hi\"); print(\" there\"); 0 }";
         let result = typecheck_and_run(src, "go", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Int(0)));
     }

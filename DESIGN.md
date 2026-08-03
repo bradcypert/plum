@@ -1510,14 +1510,28 @@ return value after the WHOLE program had already finished
 the interpreter CLI). This blocked writing or testing almost anything
 else standard-library-shaped, so it became the first piece.
 
-**`println` needs no new compiler/backend builtin at all** — it's
-ordinary Plum source:
+**`println`/`print` need no new compiler/backend builtin at all** —
+they're ordinary Plum source (final form — see "Chunk 3" below for how
+this evolved from an initial `puts`-based `println` once `print` was
+added and a real cross-function bug surfaced):
 ```
 extern "C" {
-    fn puts(s: CStr);
+    fn write(fd: Int, buf: CStr, count: Int) -> Int;
 }
 
-let println[T] (x: T): Unit = unsafe { puts(x.to_string().as_cstr()) }
+let print[T] (x: T): Unit = unsafe {
+    let s = x.to_string();
+    let n = s.len();
+    write(1, s.as_cstr(), n);
+    ()
+}
+
+let println[T] (x: T): Unit = unsafe {
+    let s = x.to_string().concat("\n");
+    let n = s.len();
+    write(1, s.as_cstr(), n);
+    ()
+}
 ```
 This works because two combinations, unverified by any existing test
 before this chunk, both turned out to hold — confirmed empirically
@@ -1535,17 +1549,9 @@ assumed:
   with zero special-casing — the `in_unsafe` gate and monomorphization's
   own per-instantiation rewrite are both orthogonal to genericity.
 
-`puts` is declared with **no return type** — infers as `Unit`
-(`extern_function_with_no_return_type_is_unit` is a real, pre-existing
-test for this), matching `plum_codegen::emit_program`'s own doc comment,
-which already used `puts` BY NAME as its literal void-extern precedent
-example. This makes `println` itself genuinely `Unit`-returning with no
-"discard a non-Unit extern return value" question to answer. Scoped to
-`println` alone for v1 (auto-appends a newline, exactly matching libc
-`puts`) — a no-newline `print` needs `fputs`/a `stdout` `FILE*` handle
-or C-variadic support, neither of which this codebase's extern
-mechanism has any precedent for yet; left as a small, separate,
-well-scoped follow-up rather than guessed at now.
+Discarding `write`'s non-`Unit` (`Int`) return value inside a block
+ending in `()` was ALSO verified empirically rather than assumed —
+confirmed working in both backends before committing to the design.
 
 **How it's exposed — a real, deliberate scope trade for v1**: merged
 into `with_prelude` (`plumc/src/lib.rs`) as a new `STDLIB_IO_SRC`
@@ -1714,6 +1720,93 @@ by hand — output identical and correct through both (`map_get`'s
 most-recent-wins behavior, `map_len`'s node-count semantics, and
 `set_len`'s dedupe were all visually confirmed, not just asserted in a
 test).
+
+### Chunk 3: `print` (no trailing newline) — and a redesign of `println` along with it
+
+Closes the one deliberately-deferred piece from chunk 1. `println`
+used libc's `puts`, which conveniently always appends a newline on its
+own — `print` needs the same underlying write WITHOUT that newline.
+`fputs(s, stdout)` and variadic `printf("%s", s)` were both considered
+and rejected as genuine dead ends for this codebase specifically
+(confirmed by reading the actual extern-type machinery, not assumed):
+this codebase's extern type system is a CLOSED list (`Int`/`Float`/
+`Bool`/`CStr`/callback/struct-of-those) with no raw-pointer/opaque type
+and no extern-GLOBAL-variable grammar at all, so `FILE* stdout` isn't
+expressible or even referenceable; C-variadic call support doesn't
+exist for USER-declared externs in either backend (the LLVM backend
+emits a couple of HARDCODED internal variadic calls of its own, e.g.
+for `Float.to_string()`, but nothing threads that through to Plum-
+source-declared externs, and `plum-interp`'s `libffi`-based extern-call
+path has no variadic-CIF support at all) — both would need genuine new
+type-system/backend work.
+
+The mechanism that IS expressible today with zero new type-system
+work: the raw POSIX `write(2)` syscall — `write(fd: Int, buf: CStr,
+count: Int) -> Int`, every type already in the existing closed list.
+The byte count comes from `.len()` on the `Str` before converting to
+`CStr` (a core-language builtin) rather than a separate `strlen`
+extern call — deliberately: an earlier draft used `strlen`, but more
+than one EXISTING test in this codebase already declares its own
+extern `strlen` for unrelated reasons, and prelude-merged source
+shares the SAME flat top-level namespace as ordinary declarations —
+real "already declared" collisions resulted immediately. `.len()`
+sidesteps the collision risk entirely and avoids an extra FFI round
+trip; `write` itself was checked against every existing extern
+declaration first, no collision.
+
+**Two real, distinct bugs found by testing, neither caught by the type
+checker (both are correctness/ordering bugs, not type errors) — and a
+genuine redesign that resulted, not a patch:**
+1. **A real use-after-free.** An early draft called `write(1,
+   s.as_cstr(), s.len())` directly. `.as_cstr()` CONSUMES its `Str`
+   (its own lowering calls `@plum_rc_dec_str` on the original cell —
+   confirmed by reading the actual generated LLVM IR, not assumed), and
+   call arguments evaluate left to right, so `s.len()` — evaluated
+   THIRD, after `.as_cstr()` already ran — read `s`'s length field
+   after it may already have been freed. Silent, not a crash: `write`
+   simply wrote zero (or garbage) bytes, which is why the very first
+   real compile-and-run test caught it immediately (`print`'s output
+   was simply MISSING from captured stdout, not obviously "wrong").
+   Fixed by binding the length to a local (`let n = s.len()`) BEFORE
+   calling `.as_cstr()`, so the read happens while `s` is still
+   guaranteed alive.
+2. **A real cross-function output-ordering bug**, found only once
+   `print` and `println` were tested TOGETHER in the same program
+   (`print("a"); println("b"); print("c")` produced `"acb\n"` instead
+   of `"ab\nc"`): `println` (still `puts`-based at this point) goes
+   through C's block-buffered stdio, while `print`'s `write` is
+   unbuffered and reaches the OS immediately — an EARLIER `puts` call's
+   still-buffered output could be overtaken by a LATER `write` call's
+   immediate one. The exact same class of problem chunk 1's own
+   `fflush` fix already solved ONCE (see below), but that fix only
+   covers the interpreter CLI's own single final print — it does
+   nothing for two DIFFERENT buffering strategies fighting each other
+   WITHIN one running Plum program. Fixed properly, not patched around:
+   put `println` on the exact SAME mechanism as `print` (`write`)
+   instead of leaving two different I/O primitives to interleave
+   unpredictably — `println` now builds its newline into the string
+   itself (`.concat("\n")`) before one `write` call, rather than a
+   second syscall or a different C function. This is the final,
+   already-shown `println`/`print` source above.
+
+Chunk 1's `fflush(NULL)` fix in the interpreter CLI (`main.rs`) is KEPT
+even though `println`/`print` no longer need it (both now use the
+unbuffered `write` syscall) — it remains good, general defensive
+practice for any OTHER extern call a user's own program might make
+through buffered C stdio (`printf`, `fputs`, ...).
+
+Tests: 2 new native compile-and-run tests (`print` produces no
+newline; `print`/`println` mixed in one program, proving the fixed
+ordering precisely — this is the test that originally caught bug 2)
+and 1 new interpreter-path test. Workspace now 1388 tests (up from
+1385 — net +3), clean build, zero warnings. Verified independently: a
+temporary diagnostic test dumping the actual generated LLVM IR is what
+found bug 1 precisely (reading `@plum_rc_dec_str` being called before
+the length load, not guessing from the symptom alone); the full suite
+was re-run after each fix, not just at the end; and a real throwaway
+Plum project mixing `print`/`println` was built and run through BOTH
+the native `build` and interpreter CLI paths by hand, output identical
+and correctly ordered through both.
 
 ## Target platforms
 
@@ -3084,7 +3177,7 @@ summed), not just inspect emitted IR text.
   FUNCTIONS, which already support mutual recursion) remains genuinely
   unsupported — a real, separate gap, not just an oversight.
 - Standard library scope — started (see "Standard library" above:
-  basic output/`println`, then `Map`/`Set` collections). Still wide
+  basic output/`println`/`print`, then `Map`/`Set` collections). Still wide
   open: what comes next (file I/O, JSON, HTTP, string utils beyond
   what's already a core-language builtin, ...), whether/when `println`/
   `Map`/`Set` migrate from the prelude into real `use`-based modules

@@ -990,7 +990,6 @@ mod tests {
         assert_eq!(out, "14");
     }
 
-
     // --- standard library: `println` (see `plumc::STDLIB_IO_SRC`) ---
 
     #[test]
@@ -1006,6 +1005,27 @@ mod tests {
         let src = "let go (): Int = { println(42); println(3.5); println(true); println(\"hi\"); 0 }";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "42\n3.500000\ntrue\nhi\n0");
+    }
+
+    // --- standard library: `print` (see `plumc::STDLIB_IO_SRC`) ---
+
+    #[test]
+    fn print_does_not_append_a_newline_unlike_println() {
+        // `print` uses the raw `write(2)` syscall (see `STDLIB_IO_SRC`'s
+        // own doc comment for why `fputs`/variadic `printf` were both
+        // real dead ends), so back-to-back `print` calls — and the
+        // entry's own final printed return value — all run together
+        // with NO separating newline at all, unlike `println`.
+        let src = "let go (): Int = { print(\"hi\"); print(\" there\"); 0 }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "hi there0");
+    }
+
+    #[test]
+    fn print_and_println_can_be_mixed_in_the_same_program() {
+        let src = "let go (): Int = { print(\"a\"); println(\"b\"); print(\"c\"); 0 }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "ab\nc0");
     }
 
     #[test]
