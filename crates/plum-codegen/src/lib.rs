@@ -1,7 +1,7 @@
 mod codegen;
 
 use plum_ir::ir;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// LLVM IR type a Plum value maps to. Deliberately NOT `plum_types::
 /// Type` — that would pull a `plum-types` dependency in for a handful
@@ -1295,27 +1295,28 @@ fn check_no_closure_or_task_fields(tag_fields: &TagFields) -> Result<(), String>
 /// must be bridged via an explicit `zext`/`icmp ne` conversion at every
 /// marshaling site (`codegen.rs`'s `ExternCall`/callback-trampoline
 /// codegen), never treated as if the two representations were
-/// interchangeable. `Struct(..)` is a defensive `Err`, not a panic:
-/// `plum-types` may already accept an FFI-safe struct at the type level
-/// (see `plum_types::context::check_ffi_safe`) even though this chunk's
-/// codegen doesn't implement the real System V struct-by-value
-/// marshaling needed to actually pass one — that's separate, deferred
-/// follow-up work (see this crate's `emit_program` doc comment).
-fn extern_type_to_llvm(ty: &ir::ExternType) -> Result<&'static str, String> {
+/// interchangeable. `Struct(name, _)` maps to a bare reference to the
+/// named LLVM aggregate type (`%struct.<name>`) — see `collect_extern_
+/// struct_types`/`emit_extern_struct_types` for where that type's own
+/// `type { ... }` definition gets emitted; named LLVM struct types
+/// resolve by name at module scope, so this reference is valid
+/// regardless of whether its own `type` line has been emitted yet in
+/// the final text (verified directly against a real `clang` compile
+/// during planning, not assumed). Returns an owned `String` (not
+/// `&'static str`, unlike every other arm) purely because `%struct.
+/// <name>` is only known at the call site, not a fixed compile-time
+/// constant the way `"i64"`/`"double"`/`"ptr"` are.
+fn extern_type_to_llvm(ty: &ir::ExternType) -> Result<String, String> {
     match ty {
-        ir::ExternType::Int => Ok("i64"),
-        ir::ExternType::Float => Ok("double"),
-        ir::ExternType::Bool => Ok("i32"),
+        ir::ExternType::Int => Ok("i64".to_string()),
+        ir::ExternType::Float => Ok("double".to_string()),
+        ir::ExternType::Bool => Ok("i32".to_string()),
         // A validated C string (`Str` here means `ir::ExternType::Str`,
         // i.e. `CStr` on the Plum side — see that variant's own doc
         // comment) and a callback are both bare pointers at the C ABI
         // boundary.
-        ir::ExternType::Str | ir::ExternType::Callback { .. } => Ok("ptr"),
-        ir::ExternType::Struct(name, _) => Err(format!(
-            "codegen does not yet support struct-by-value FFI marshaling (struct {name:?}) — this chunk's scope \
-             is scalars (Int/Float/Bool) + CStr + C callbacks only; the real System V struct-by-value ABI is \
-             separate, deferred follow-up work"
-        )),
+        ir::ExternType::Str | ir::ExternType::Callback { .. } => Ok("ptr".to_string()),
+        ir::ExternType::Struct(name, _) => Ok(format!("%struct.{name}")),
     }
 }
 
@@ -1325,11 +1326,95 @@ fn extern_type_to_llvm(ty: &ir::ExternType) -> Result<&'static str, String> {
 /// deliberately NOT defaulted to `Unit`'s `i1` the way an ordinary Plum
 /// function always has SOME return value — a real `void` C function has
 /// nothing to hand back at all.
-fn extern_ret_type_to_llvm(ret: &Option<ir::ExternType>) -> Result<&'static str, String> {
+fn extern_ret_type_to_llvm(ret: &Option<ir::ExternType>) -> Result<String, String> {
     match ret {
-        None => Ok("void"),
+        None => Ok("void".to_string()),
         Some(ty) => extern_type_to_llvm(ty),
     }
+}
+
+/// Walks every extern's param/return types once, collecting every
+/// distinct `ExternType::Struct` shape (recursing into each struct's own
+/// fields, so a nested struct — e.g. `Outer { inner: Inner, .. }` — gets
+/// its own entry too) into a name -> declared-field-types map. A
+/// `BTreeMap`, not a `HashMap`: iteration order feeds directly into
+/// `emit_extern_struct_types`'s emitted `type` line order, and sorted-
+/// by-name output is reproducible across runs, matching `intern_tags`'
+/// own "sort purely for reproducible `.ll` output" precedent. Dedup is
+/// free (a struct used as both an argument and a return type across
+/// different externs, or reachable via two different nesting paths,
+/// only ever gets ONE entry) — `check_ffi_safe` already guarantees a
+/// struct name always resolves to the same field-type shape everywhere
+/// it appears, so silently keeping the first-seen entry for an
+/// already-known name is safe, not just convenient. Mirrors scalar
+/// FFI's own non-reactive `emit_extern_declares`: `program.externs` is
+/// already the complete, explicit list, so no reactive discovery (like
+/// `needed_arrays`) is needed here either.
+fn collect_extern_struct_types(externs: &[ir::ExternFn]) -> BTreeMap<String, Vec<ir::ExternType>> {
+    fn walk(ty: &ir::ExternType, out: &mut BTreeMap<String, Vec<ir::ExternType>>) {
+        match ty {
+            ir::ExternType::Struct(name, field_types) => {
+                if out.contains_key(name) {
+                    return;
+                }
+                out.insert(name.clone(), field_types.clone());
+                for f in field_types {
+                    walk(f, out);
+                }
+            }
+            // A callback's own params/return can never legitimately be
+            // struct-shaped (`plum_ir::lower::resolve_extern_type_inner`
+            // only ever recurses into a struct name lookup that itself
+            // requires a real declared struct — a callback's OWN scope
+            // is narrower, Int/Float/Bool only, per that function's own
+            // doc comment) — walked anyway, defensively, purely so this
+            // function stays correct even if that restriction ever
+            // loosens, at zero cost for every program reachable today.
+            ir::ExternType::Callback { params, ret } => {
+                for p in params {
+                    walk(p, out);
+                }
+                if let Some(r) = ret {
+                    walk(r, out);
+                }
+            }
+            ir::ExternType::Int | ir::ExternType::Float | ir::ExternType::Bool | ir::ExternType::Str => {}
+        }
+    }
+    let mut out = BTreeMap::new();
+    for f in externs {
+        for p in &f.param_types {
+            walk(p, &mut out);
+        }
+        if let Some(r) = &f.ret_type {
+            walk(r, &mut out);
+        }
+    }
+    out
+}
+
+/// Emits one `%struct.<name> = type { <field llvm types> }` per entry in
+/// `structs` (see `collect_extern_struct_types`) — the LLVM-aggregate-
+/// type declaration half of struct-by-value FFI support. Each field's
+/// LLVM type reuses `extern_type_to_llvm`'s own C-ABI width mapping
+/// (`Int`->`i64`, `Float`->`double`, `Bool`->`i32`), so a nested struct
+/// field naturally becomes a bare `%struct.<nested_name>` reference —
+/// exactly the "named types resolve by name, order doesn't matter"
+/// mechanism this whole feature leans on (see `extern_type_to_llvm`'s
+/// own doc comment).
+fn emit_extern_struct_types(structs: &BTreeMap<String, Vec<ir::ExternType>>) -> Result<String, String> {
+    let mut out = String::new();
+    for (name, field_types) in structs {
+        let fields = field_types
+            .iter()
+            .map(extern_type_to_llvm)
+            .collect::<Result<Vec<_>, _>>()?;
+        out.push_str(&format!("%struct.{name} = type {{ {} }}\n", fields.join(", ")));
+    }
+    if !structs.is_empty() {
+        out.push('\n');
+    }
+    Ok(out)
 }
 
 /// The small, fixed set of names this backend's OWN generated code
@@ -1440,8 +1525,15 @@ fn emit_extern_declares(externs: &[ir::ExternFn], signatures: &HashMap<String, F
             // user's declaration is accepted, but no SECOND `declare`
             // line is emitted for it (this crate's own unconditional one
             // in `emit_runtime` already covers the exact same symbol).
+            // `params_str`: a `&str`-borrowed view of `params` (now
+            // `Vec<String>` since `extern_type_to_llvm` widened to
+            // support `%struct.<name>` — see that function's own doc
+            // comment) purely so this can compare against `expected_
+            // params`'s `&'static [&'static str]` without an owned-vs-
+            // borrowed slice type mismatch.
+            let params_str: Vec<&str> = params.iter().map(String::as_str).collect();
             match reserved_extern_signature(&f.name) {
-                Some((expected_ret, expected_params)) if expected_ret == ret && expected_params == params.as_slice() => {
+                Some((expected_ret, expected_params)) if expected_ret == ret && expected_params == params_str.as_slice() => {
                     if !seen.insert(f.name.clone()) {
                         return Err(format!("codegen: extern function {:?} is declared more than once", f.name));
                     }
@@ -1500,14 +1592,17 @@ fn emit_extern_declares(externs: &[ir::ExternFn], signatures: &HashMap<String, F
 /// missing, never a panic — see this crate's tests for the exact error
 /// shapes. `program.externs` (`extern "C"` FFI) IS supported, scoped to
 /// scalar (`Int`/`Float`/`Bool`) + `CStr` + C-callback parameters/
-/// returns — struct-by-value marshaling (the real System V ABI, via
-/// actual LLVM aggregate struct types) is separate, deferred follow-up
-/// work; an extern signature naming one produces a clear error (see
-/// `extern_type_to_llvm`), not a panic.
+/// returns + struct-by-value (real named LLVM aggregate types, letting
+/// LLVM's own backend handle System V ABI classification — see
+/// `collect_extern_struct_types`/`codegen::build_c_struct_value`/
+/// `codegen::build_ctor_from_c_struct`) — the last deferred FFI piece,
+/// now closed.
 pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, tag_fields: &TagFields) -> Result<String, String> {
     if !program.globals.is_empty() {
         return Err("codegen does not yet support top-level globals (v1 scope is functions only)".to_string());
     }
+    let extern_struct_types = collect_extern_struct_types(&program.externs);
+    let extern_struct_type_decls = emit_extern_struct_types(&extern_struct_types)?;
     let extern_declares = emit_extern_declares(&program.externs, signatures)?;
     let externs: HashMap<String, ir::ExternFn> =
         program.externs.iter().map(|f| (f.name.clone(), f.clone())).collect();
@@ -1626,6 +1721,7 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
 
     let needed_arrays = needed_arrays.into_inner();
     let mut out = emit_runtime(tag_fields, &tag_ids);
+    out.push_str(&extern_struct_type_decls);
     out.push_str(&extern_declares);
     out.push_str(&emit_array_release_fns(&needed_arrays));
     if *needs_spawn_runtime.borrow() || *needs_channel_runtime.borrow() {
@@ -3396,18 +3492,135 @@ mod tests {
     }
 
     #[test]
-    fn struct_by_value_extern_param_is_a_defensive_error_not_a_panic() {
+    fn struct_by_value_extern_param_emits_a_named_struct_type_and_insertvalue_sequence() {
+        // let go (p: Point) -> Unit = unsafe { takes_point(p) }
+        // (`Point` is a 2-field Int struct — the simplest by-value shape.)
         let prog = program_with_externs(
-            vec![],
+            vec![Function {
+                name: "go".to_string(),
+                params: vec!["p".to_string()],
+                body: Expr::ExternCall { name: "takes_point".to_string(), args: vec![Expr::Var("p".to_string())] },
+            }],
             vec![ExternFn {
                 name: "takes_point".to_string(),
                 param_types: vec![ExternType::Struct("Point".to_string(), vec![ExternType::Int, ExternType::Int])],
                 ret_type: None,
             }],
         );
-        let err = emit(&prog, &sigs(&[]), &TagFields::new())
-            .expect_err("expected struct-by-value FFI marshaling to be a clear, deferred-scope error");
-        assert!(err.contains("Point") && err.contains("struct"), "unexpected error: {err}");
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Heap], CgType::Unit)]),
+            &tags(&[("Point", vec![CgType::Int, CgType::Int])]),
+        )
+        .unwrap();
+        // The named LLVM aggregate type declaration.
+        assert!(ir.contains("%struct.Point = type { i64, i64 }"), "{ir}");
+        // Two `insertvalue`s, building the aggregate up from `undef`,
+        // one per field — reading each field's word out of the Ctor cell
+        // first via `load_field_word`'s own `getelementptr`+`load` shape.
+        assert!(ir.contains("insertvalue %struct.Point undef, i64"), "{ir}");
+        assert!(ir.matches("insertvalue %struct.Point").count() == 2, "{ir}");
+        // The call itself passes the aggregate BY VALUE, never a pointer.
+        assert!(ir.contains("call void @takes_point(%struct.Point"), "{ir}");
+    }
+
+    #[test]
+    fn struct_by_value_extern_return_extracts_fields_into_a_fresh_ctor_cell() {
+        // let go () -> Point = unsafe { make_point() }
+        let prog = program_with_externs(
+            vec![Function {
+                name: "go".to_string(),
+                params: vec![],
+                body: Expr::ExternCall { name: "make_point".to_string(), args: vec![] },
+            }],
+            vec![ExternFn {
+                name: "make_point".to_string(),
+                param_types: vec![],
+                ret_type: Some(ExternType::Struct("Point".to_string(), vec![ExternType::Int, ExternType::Int])),
+            }],
+        );
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![], CgType::Heap)]),
+            &tags(&[("Point", vec![CgType::Int, CgType::Int])]),
+        )
+        .unwrap();
+        assert!(ir.contains("%struct.Point = type { i64, i64 }"), "{ir}");
+        // The call returns the aggregate BY VALUE.
+        assert!(ir.contains("call %struct.Point @make_point()"), "{ir}");
+        // Two `extractvalue`s pull the fields back out of the aggregate...
+        assert!(ir.matches("extractvalue %struct.Point").count() == 2, "{ir}");
+        // ...stored into a FRESH cell allocated via the same `@plum_alloc`
+        // every ordinary `Ctor` construction uses (reusing the tag's
+        // already-interned id), never mutating anything the C call
+        // itself produced.
+        assert!(ir.contains("call ptr @plum_alloc(i64"), "{ir}");
+    }
+
+    #[test]
+    fn mixed_bool_int_struct_field_shape_and_order_is_correct() {
+        // The deliberately-padding-inducing shape: `Mixed { flag: Bool,
+        // big: Int }` — `Bool` maps to `i32` (4 bytes) at the C ABI
+        // boundary, `Int` to `i64` (8 bytes), so a real `clang`/System V
+        // classification of this exact shape induces 4 bytes of padding
+        // between the two fields. This test asserts ONLY the emitted
+        // type's field order/widths (`i32` then `i64`, matching the
+        // struct's OWN declared field order) — never byte offsets/
+        // padding, which a named LLVM aggregate type carries no explicit
+        // text for at all; that's precisely why LLVM's own backend (not
+        // this codegen) is trusted to get the real padding right — see
+        // `plumc::codegen_cli`'s compile-and-run test of this exact
+        // shape for the actual correctness proof.
+        let prog = program_with_externs(
+            vec![],
+            vec![ExternFn {
+                name: "takes_mixed".to_string(),
+                param_types: vec![ExternType::Struct("Mixed".to_string(), vec![ExternType::Bool, ExternType::Int])],
+                ret_type: None,
+            }],
+        );
+        let ir = emit(&prog, &sigs(&[]), &tags(&[("Mixed", vec![CgType::Bool, CgType::Int])])).unwrap();
+        assert!(ir.contains("%struct.Mixed = type { i32, i64 }"), "{ir}");
+    }
+
+    #[test]
+    fn nested_struct_argument_emits_both_types_and_a_nested_insertvalue() {
+        // struct Inner { a: Int }
+        // struct Outer { inner: Inner, b: Int }
+        // let go (o: Outer) -> Unit = unsafe { takes_outer(o) }
+        let prog = program_with_externs(
+            vec![Function {
+                name: "go".to_string(),
+                params: vec!["o".to_string()],
+                body: Expr::ExternCall { name: "takes_outer".to_string(), args: vec![Expr::Var("o".to_string())] },
+            }],
+            vec![ExternFn {
+                name: "takes_outer".to_string(),
+                param_types: vec![ExternType::Struct(
+                    "Outer".to_string(),
+                    vec![ExternType::Struct("Inner".to_string(), vec![ExternType::Int]), ExternType::Int],
+                )],
+                ret_type: None,
+            }],
+        );
+        let ir = emit(
+            &prog,
+            &sigs(&[("go", vec![CgType::Heap], CgType::Unit)]),
+            &tags(&[("Outer", vec![CgType::Heap, CgType::Int]), ("Inner", vec![CgType::Int])]),
+        )
+        .unwrap();
+        // Both named struct types are emitted — the nested one referenced
+        // by name from the outer one's own field list, regardless of
+        // which `type` line appears first in the text (named LLVM struct
+        // types resolve by name at module scope).
+        assert!(ir.contains("%struct.Inner = type { i64 }"), "{ir}");
+        assert!(ir.contains("%struct.Outer = type { %struct.Inner, i64 }"), "{ir}");
+        // The nested aggregate is built up (one `insertvalue` into
+        // `%struct.Inner`), then ITSELF `insertvalue`d into the outer
+        // aggregate as a genuine sub-aggregate value — never passed as a
+        // pointer at the C boundary.
+        assert!(ir.contains("insertvalue %struct.Inner undef, i64"), "{ir}");
+        assert!(ir.contains("insertvalue %struct.Outer undef, %struct.Inner"), "{ir}");
     }
 
     #[test]

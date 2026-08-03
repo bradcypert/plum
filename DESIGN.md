@@ -1513,7 +1513,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1-v9 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join, channels/select, scalar FFI)
+### LLVM backend — v1-v10 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join, channels/select, full FFI including struct-by-value)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1553,21 +1553,22 @@ concurrency), and — as of a further follow-on chunk — `channel[T]()`/
 below; disconnect detection is explicitly NOT part of this, and at
 most one distinct `channel[T]()` element type `T` is supported per
 program — see that section), and — as of a further follow-on chunk —
-scalar `extern "C"` calls, `CStr`, and C callbacks (see "FFI: scalar
-extern calls, CStr, callbacks" below; struct-by-value marshaling
-remains deferred). Still out of scope and producing a clear codegen
-error, never a panic: Unicode-aware string operations (`.runes()`,
-`.to_upper()`, `.to_lower()`, `.trim()`, `.replace()`, `.split()`), a
-closure literal inside a still-generic function's own body, an
-`Assign` inside a closure body writing back into an enclosing loop's
-carried variable (structurally out of reach of this backend's closure
-design, not merely unimplemented), an `Assign` reachable only through
-a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value position
-(e.g. `f({ sum = sum + 1; sum })` as a `Call` argument), disconnect
-detection on channels, more than one distinct `channel[T]()` element
-type per program, struct-by-value FFI marshaling, non-constant
-`Global` initializers — and a generic instantiated at any of these
-still-unsupported types (e.g. `Box[Array[Str]]` once `.split()` is
+`extern "C"` calls, `CStr`, and C callbacks (see "FFI: scalar extern
+calls, CStr, callbacks" below), and — as of a further follow-on chunk
+— struct-by-value FFI marshaling (see "FFI: struct-by-value marshaling"
+below), closing out FFI entirely. Still out of scope and producing a
+clear codegen error, never a panic: Unicode-aware string operations
+(`.runes()`, `.to_upper()`, `.to_lower()`, `.trim()`, `.replace()`,
+`.split()`), a closure literal inside a still-generic function's own
+body, an `Assign` inside a closure body writing back into an enclosing
+loop's carried variable (structurally out of reach of this backend's
+closure design, not merely unimplemented), an `Assign` reachable only
+through a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value
+position (e.g. `f({ sum = sum + 1; sum })` as a `Call` argument),
+disconnect detection on channels, more than one distinct `channel[T]()`
+element type per program, non-constant `Global` initializers — and a
+generic instantiated at any of these still-unsupported types (e.g.
+`Box[Array[Str]]` once `.split()` is
 needed).
 
 **Guaranteed tail calls**: any call in tail position (the function's
@@ -2366,6 +2367,83 @@ custom C helper — proving something the interpreter's own test suite
 explicitly could not (no real libc function has a narrow enough
 signature to exercise the successful-invocation path, only the
 argument-rejection path).
+
+**FFI: struct-by-value marshaling** — closes out FFI entirely. LLVM's
+own backend performs real System V AMD64 ABI classification (register
+vs. stack, `byval`/`sret`, eightbyte merging/padding) automatically
+once codegen emits a correctly-shaped, genuinely-named LLVM aggregate
+struct type and uses it as a real by-value parameter/return type —
+exactly what `clang` itself does for real C struct-by-value code.
+plum-codegen therefore does NOT hand-implement ABI classification the
+way the interpreter's `libffi`-based approach needs to (libffi exists
+there only because call frames are built at Plum-runtime with no
+compiler involved — codegen has a real compiler, `clang`, in the
+loop). Verified empirically during planning, not just reasoned about:
+a real `clang` compile of a deliberately-padding-inducing struct
+(`{int flag; long big;}`) using a genuine named LLVM aggregate type as
+a real by-value parameter/return, `extractvalue`/`insertvalue` to
+flatten/rebuild it, round-tripped correctly through real native code.
+Also verified: named LLVM struct types resolve by name at module
+scope — textual definition order doesn't matter, so a nested struct
+type can be referenced before its own `type` line appears in the
+output.
+
+`plum_types::context::check_ffi_safe` (shared, already running) already
+guarantees every FFI-safe struct is non-generic, non-self-referential,
+and made entirely of Int/Float/Bool/other-FFI-safe-struct fields —
+codegen needed zero additional eligibility re-checking; every
+corresponding codegen-side rejection case (CStr/Callback nested in a
+struct field, self-reference, generics) is dead-code-by-construction
+in a well-typed program, matching this backend's existing precedent
+for similar shared-check-already-ran cases.
+
+One non-reactive pass over `program.externs` collects every distinct
+`ExternType::Struct` shape (recursing into nested fields, deduped by
+name) and emits `%struct.<name> = type { <field llvm types> }` per
+entry, reusing the scalar C-ABI width mapping already established for
+scalar FFI. Argument marshaling (`build_c_struct_value`) reads each
+field out of the Plum Ctor cell via the EXISTING `load_field_word`,
+narrows to real C width via the EXACT SAME conversion scalar-FFI
+arguments already use (`Bool`: `zext i1 to i32` — genuine reuse, not
+reinvention), and `insertvalue`s into a growing aggregate. A nested
+struct field's Ctor-cell slot holds a pointer to another heap cell
+(Plum structs are always heap-boxed) — recursed into its own aggregate
+value, never passed as a pointer at the C boundary. No refcount/
+ownership discharge happens here (confirmed against the interpreter's
+own struct-argument behavior, which never touches the heap's refcount
+either) — the cell's lifecycle stays governed by ordinary FBIP
+last-use analysis, same as any other `Heap`-typed extern-call argument.
+
+Return marshaling (`build_ctor_from_c_struct`) is the mirror:
+`extractvalue` each field, widen back to Plum's uniform word
+representation, and `store_field_word` into a fresh cell allocated via
+`@plum_alloc` (reusing the struct's already-interned tag id, the same
+lookup ordinary `Ctor` construction already uses). **The one genuinely
+nontrivial design call, worked through explicitly rather than
+assumed**: a returned `Bool`-mapped struct field gets the SAME
+`icmp ne i32 .., 0` "any nonzero is true" normalization as an ordinary
+scalar `Bool` return — NOT a bare `zext i32 to i64` — because
+`store_field_word`'s `Bool` arm demands a genuinely-normalized `i1`
+operand (there is no alternate wider Plum-side `Bool` representation
+anywhere in this backend a struct field could legitimately target
+instead), and a raw truncation would silently misread a real
+nonzero-but-not-1 C `int` (e.g. `2`) as `false` — exactly the bug the
+scalar case's own `icmp ne` already exists to avoid, for the identical
+underlying reason. Proven with a real, not just theoretical, exposure
+test: a C helper deliberately returns `Mixed{flag: 2, big: 777}` (a
+genuine padding-inducing shape, `int` then `long long`), and the Plum
+program only returns `big` if `flag` reads as true — the test asserts
+`"777"`, which is reachable ONLY if both the Bool normalization
+correctly reads `2` as true AND `big` was read from the correct,
+padding-adjusted byte offset LLVM's own ABI classification computed —
+a single test proving both correctness properties LLVM handles for
+free, matching the plan's own explicit design intent that IR-text
+inspection alone cannot verify padding/alignment (a named LLVM
+aggregate type carries no explicit offset text at all — that's
+precisely why LLVM's own backend is trusted for it, not this crate).
+Also verified against the real system libc `div`/`div_t`, asserting
+actual computed quotient/remainder values, not just call success —
+going further than the existing interpreter-path test.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck

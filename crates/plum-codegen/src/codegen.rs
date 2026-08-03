@@ -1752,20 +1752,208 @@ fn emit_trampoline_fn(trampoline_name: &str, target_name: &str, sig: &FnSig) -> 
 /// doc comment) — re-verified here structurally, the same "trust but
 /// verify against what's actually reachable from this IR" stance every
 /// other codegen arm in this module takes.
-fn marshal_arg_to_c(reg: &str, ty: &CgType, param_ty: &ir::ExternType, em: &mut Emitter) -> Result<String, String> {
+/// The pieces `marshal_arg_to_c` combines into one operand string — split
+/// out so `build_c_struct_value` (a struct-by-value argument's scalar
+/// LEAF fields) can reuse the exact same conversion logic while still
+/// needing the LLVM type and value SEPARATELY (an `insertvalue`'s second
+/// operand is `<ty2> <val2>`, not a pre-joined string the way an
+/// ordinary call's argument list is) — genuine reuse, not a parallel
+/// reimplementation of the one load-bearing case here (`Bool`'s `zext i1
+/// to i32`).
+fn marshal_scalar_to_c_parts(reg: &str, ty: &CgType, param_ty: &ir::ExternType, em: &mut Emitter) -> Result<(String, String), String> {
     match (param_ty, ty) {
-        (ir::ExternType::Int, CgType::Int) => Ok(format!("i64 {reg}")),
-        (ir::ExternType::Float, CgType::Float) => Ok(format!("double {reg}")),
+        (ir::ExternType::Int, CgType::Int) => Ok(("i64".to_string(), reg.to_string())),
+        (ir::ExternType::Float, CgType::Float) => Ok(("double".to_string(), reg.to_string())),
         (ir::ExternType::Bool, CgType::Bool) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = zext i1 {reg} to i32"));
-            Ok(format!("i32 {r}"))
+            Ok(("i32".to_string(), r))
         }
-        (ir::ExternType::Str, CgType::CStr) => Ok(format!("ptr {reg}")),
+        (ir::ExternType::Str, CgType::CStr) => Ok(("ptr".to_string(), reg.to_string())),
         (expected, found) => {
             Err(format!("codegen: extern call argument type mismatch — expected {expected:?}, found {found:?}"))
         }
     }
+}
+
+fn marshal_arg_to_c(reg: &str, ty: &CgType, param_ty: &ir::ExternType, em: &mut Emitter) -> Result<String, String> {
+    let (llvm_ty, val) = marshal_scalar_to_c_parts(reg, ty, param_ty, em)?;
+    Ok(format!("{llvm_ty} {val}"))
+}
+
+/// Ctor cell -> LLVM aggregate value — the argument-marshaling direction
+/// of struct-by-value FFI (the sibling to `codegen_ctor_alloc`, which
+/// builds an ordinary heap `Ctor` cell rather than a C-ABI aggregate).
+/// `cell_ptr` is an already-computed `Heap`-typed SSA register (the
+/// struct's own Ctor cell, or — for a recursive call — a NESTED struct
+/// field's cell pointer, since Plum structs are always heap-boxed, never
+/// stored inline even as a field of another struct). `tag`/`field_types`
+/// come straight from the `ir::ExternType::Struct(tag, field_types)`
+/// node driving this call; `field_types`' declared order is trusted to
+/// match `ctx.tag_fields[tag]`'s own order without re-verifying it
+/// structurally (both derive from the SAME struct declaration — see
+/// `plum_ir::lower::resolve_extern_type_inner`'s struct-name lookup —
+/// so this can only diverge on an internal-error-shaped bug, checked via
+/// a length comparison below rather than trusted blindly).
+///
+/// Builds the aggregate up field-by-field from `undef` via `insertvalue`
+/// — a scalar (`Int`/`Float`/`Bool`) leaf field is read out of the cell
+/// via `load_field_word` (Plum's native `i64`/`double`/`i1`
+/// representation) then narrowed to its real C width via `marshal_
+/// scalar_to_c_parts` (the exact same `Bool` `zext i1 to i32` scalar-
+/// argument conversion `marshal_arg_to_c` itself uses, genuine reuse —
+/// see that function's own doc comment). A nested struct field's slot
+/// holds a pointer to ANOTHER heap cell (never an inline sub-struct on
+/// the Plum side) — recursed into via this same function, and the
+/// resulting sub-aggregate `insertvalue`d into the parent as a real
+/// value, never passed as a pointer at the C boundary. No refcount/
+/// ownership discharge is emitted here — confirmed against the
+/// interpreter's own `write_value_into_buffer` (`plum-interp/src/
+/// lib.rs`), which never touches the heap's refcount for a struct
+/// argument either; the cell's lifecycle stays governed by FBIP's
+/// ordinary last-use analysis, same as any other `Heap`-typed extern-
+/// call argument.
+///
+/// Returns `(llvm_type_string, value_register)` — e.g. `("%struct.
+/// Point", "%v7")` — matching `marshal_scalar_to_c_parts`'s own
+/// `(llvm_ty, val)` order (NOT `codegen_value`'s `(reg, ty)` order),
+/// since both feed the exact same "type value" operand-formatting need
+/// (an `insertvalue`'s second operand, or a call's argument list) and a
+/// caller destructuring the result of whichever ONE of the two actually
+/// ran for a given field (see the `match` in this function's own body,
+/// where a nested-struct field's recursive call and a scalar field's
+/// `marshal_scalar_to_c_parts` call must be interchangeable) must not
+/// have to remember which shape it's holding.
+fn build_c_struct_value(
+    cell_ptr: &str,
+    tag: &str,
+    field_types: &[ir::ExternType],
+    em: &mut Emitter,
+    ctx: &Ctx,
+) -> Result<(String, String), String> {
+    let plum_field_types = tag_field_types(ctx, tag)?.to_vec();
+    if plum_field_types.len() != field_types.len() {
+        return Err(format!(
+            "codegen: internal error — extern struct {tag:?} declares {} field(s) at the FFI boundary but \
+             {} in its Plum struct declaration; these must always agree (both are derived from the same \
+             struct declaration)",
+            field_types.len(),
+            plum_field_types.len()
+        ));
+    }
+    let struct_llvm_ty = format!("%struct.{tag}");
+    let mut agg = "undef".to_string();
+    for (i, (plum_ty, c_ty)) in plum_field_types.iter().zip(field_types).enumerate() {
+        let (field_llvm_ty, field_val) = match c_ty {
+            ir::ExternType::Struct(nested_tag, nested_field_types) => {
+                let nested_ptr = load_field_word(em, cell_ptr, i, CgType::Heap);
+                build_c_struct_value(&nested_ptr, nested_tag, nested_field_types, em, ctx)?
+            }
+            ir::ExternType::Int | ir::ExternType::Float | ir::ExternType::Bool => {
+                let plum_val = load_field_word(em, cell_ptr, i, plum_ty.clone());
+                marshal_scalar_to_c_parts(&plum_val, plum_ty, c_ty, em)?
+            }
+            // Rejected before this node is ever produced — see
+            // `plum_types::context::check_ffi_safe`'s "extern struct
+            // type ...: CStr is only supported as a top-level extern
+            // parameter/return type, not inside a struct field" /
+            // "...not nested inside a struct field..." restrictions
+            // (independently duplicated in `plum_ir::lower::resolve_
+            // extern_type_inner`, the check that actually runs before
+            // codegen ever sees this IR) — a struct field's `ExternType`
+            // can only ever be `Int`/`Float`/`Bool`/`Struct` by the time
+            // it reaches here.
+            ir::ExternType::Str | ir::ExternType::Callback { .. } => unreachable!(
+                "a CStr/Callback-typed struct field is rejected by plum_types::context::check_ffi_safe \
+                 (and plum_ir::lower::resolve_extern_type_inner) before codegen ever runs"
+            ),
+        };
+        let next = em.fresh_reg();
+        em.push(format!("  {next} = insertvalue {struct_llvm_ty} {agg}, {field_llvm_ty} {field_val}, {i}"));
+        agg = next;
+    }
+    Ok((struct_llvm_ty, agg))
+}
+
+/// LLVM aggregate value -> Ctor cell — the return-marshaling direction
+/// of struct-by-value FFI (the sibling to `build_c_struct_value`).
+/// `agg` is an already-computed SSA register holding the C-ABI
+/// aggregate value (e.g. straight off a `call %struct.Point @fn(...)`
+/// or — for a recursive call — an `extractvalue`d nested sub-aggregate).
+/// Allocates a FRESH cell via `@plum_alloc` (the same allocator, and the
+/// same already-interned tag id lookup, every ordinary `Ctor`
+/// construction uses — see `codegen_ctor_alloc`), then `extractvalue`s
+/// each field back out and `store_field_word`s it in.
+///
+/// **The one genuinely nontrivial design call**: a `Bool`-mapped field
+/// gets `icmp ne i32 .., 0` (C's "any nonzero is true" convention) —
+/// NOT a bare `zext i32 to i64` — before being handed to `store_field_
+/// word`. `store_field_word`'s own `Bool` arm demands a genuinely
+/// normalized `i1` operand (it does `zext i1 .. to i64` internally); a
+/// raw `zext i32 to i64` would instead silently preserve a real C `int`
+/// value like `2` as the WORD `2` — which, if that word is later
+/// re-interpreted as an `i1` anywhere (e.g. `load_field_word` reading
+/// this same field back with `trunc i64 .. to i1`), truncates to its low
+/// bit and reads `2` (`0b10`) as `false`. This is exactly the same bug
+/// `codegen_extern_call`'s own ordinary scalar `Bool`-return handling
+/// already avoids via `icmp ne`, for the identical underlying reason —
+/// see that function's own doc comment.
+///
+/// A nested struct field's `extractvalue`d result is itself a nested
+/// AGGREGATE (still inline inside the parent — never a pointer, since a
+/// C-ABI by-value struct never contains a pointer to itself), so this
+/// recurses to build a fresh Ctor cell for it FIRST, then stores a
+/// pointer to that fresh cell into the parent's own slot (mirroring how
+/// every other nested-heap-value field is stored, via `store_field_
+/// word`'s `Heap` arm).
+fn build_ctor_from_c_struct(agg: &str, tag: &str, field_types: &[ir::ExternType], em: &mut Emitter, ctx: &Ctx) -> Result<String, String> {
+    let plum_field_types = tag_field_types(ctx, tag)?.to_vec();
+    if plum_field_types.len() != field_types.len() {
+        return Err(format!(
+            "codegen: internal error — extern struct {tag:?} declares {} field(s) at the FFI boundary but \
+             {} in its Plum struct declaration; these must always agree (both are derived from the same \
+             struct declaration)",
+            field_types.len(),
+            plum_field_types.len()
+        ));
+    }
+    let struct_llvm_ty = format!("%struct.{tag}");
+    let id = tag_id(ctx, tag)?;
+    let cell = em.fresh_reg();
+    em.push(format!("  {cell} = call ptr @plum_alloc(i64 {id}, i64 {})", plum_field_types.len()));
+    for (i, (plum_ty, c_ty)) in plum_field_types.iter().zip(field_types).enumerate() {
+        match c_ty {
+            ir::ExternType::Struct(nested_tag, nested_field_types) => {
+                let extracted = em.fresh_reg();
+                em.push(format!("  {extracted} = extractvalue {struct_llvm_ty} {agg}, {i}"));
+                let nested_cell = build_ctor_from_c_struct(&extracted, nested_tag, nested_field_types, em, ctx)?;
+                store_field_word(em, &cell, i, &nested_cell, plum_ty.clone());
+            }
+            ir::ExternType::Bool => {
+                let raw = em.fresh_reg();
+                em.push(format!("  {raw} = extractvalue {struct_llvm_ty} {agg}, {i}"));
+                // C's "any nonzero is true" convention — see this
+                // function's own doc comment for why this MUST be
+                // `icmp ne`, not a bare `zext`.
+                let b = em.fresh_reg();
+                em.push(format!("  {b} = icmp ne i32 {raw}, 0"));
+                store_field_word(em, &cell, i, &b, plum_ty.clone());
+            }
+            ir::ExternType::Int | ir::ExternType::Float => {
+                let extracted = em.fresh_reg();
+                em.push(format!("  {extracted} = extractvalue {struct_llvm_ty} {agg}, {i}"));
+                store_field_word(em, &cell, i, &extracted, plum_ty.clone());
+            }
+            // See `build_c_struct_value`'s matching arm's doc comment —
+            // same shared upstream check, same dead-code-by-construction
+            // reasoning.
+            ir::ExternType::Str | ir::ExternType::Callback { .. } => unreachable!(
+                "a CStr/Callback-typed struct field is rejected by plum_types::context::check_ffi_safe \
+                 (and plum_ir::lower::resolve_extern_type_inner) before codegen ever runs"
+            ),
+        }
+    }
+    Ok(cell)
 }
 
 /// `sqrt(2.0)` (inside `unsafe { .. }`) — a call to a DECLARED `extern
@@ -1810,11 +1998,16 @@ fn codegen_extern_call(name: &str, args: &[Expr], env: &Env, em: &mut Emitter, c
                 let (reg, ty) = codegen_value(arg_expr, env, em, ctx)?;
                 marshal_arg_to_c(&reg, &ty, param_ty, em)?
             }
-            ir::ExternType::Struct(sname, _) => {
-                return Err(format!(
-                    "codegen does not yet support struct-by-value FFI marshaling (struct {sname:?} argument to \
-                     extern function {name:?}) — scalars/CStr/callbacks only this chunk"
-                ));
+            ir::ExternType::Struct(sname, field_types) => {
+                let (reg, ty) = codegen_value(arg_expr, env, em, ctx)?;
+                if ty != CgType::Heap {
+                    return Err(format!(
+                        "codegen: extern function {name:?}: struct argument {sname:?} expected a Heap-typed \
+                         Ctor value, found {ty:?}"
+                    ));
+                }
+                let (llvm_ty, val) = build_c_struct_value(&reg, sname, field_types, em, ctx)?;
+                format!("{llvm_ty} {val}")
             }
         };
         call_arg_parts.push(part);
@@ -1872,10 +2065,17 @@ fn codegen_extern_call(name: &str, args: &[Expr], env: &Env, em: &mut Emitter, c
         Some(ir::ExternType::Callback { .. }) => {
             unreachable!("a callback return type is rejected at type-checking time, before this node is produced")
         }
-        Some(ir::ExternType::Struct(sname, _)) => Err(format!(
-            "codegen does not yet support struct-by-value FFI marshaling (struct {sname:?} returned from extern \
-             function {name:?}) — scalars/CStr/callbacks only this chunk"
-        )),
+        // A by-value struct return needs no NULL/runtime check the way
+        // `Str`'s does — an aggregate return isn't a nullable pointer,
+        // there's nothing to check — so this goes straight from the raw
+        // C call to `build_ctor_from_c_struct`'s extract-and-rebuild.
+        Some(ir::ExternType::Struct(sname, field_types)) => {
+            let struct_llvm_ty = format!("%struct.{sname}");
+            let raw = em.fresh_reg();
+            em.push(format!("  {raw} = call {struct_llvm_ty} @{name}({call_args_str})"));
+            let cell = build_ctor_from_c_struct(&raw, sname, field_types, em, ctx)?;
+            Ok((cell, CgType::Heap))
+        }
     }
 }
 

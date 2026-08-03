@@ -2316,4 +2316,165 @@ mod tests {
         let out = compile_and_run_with_c_helper(src, "go", &[CgValue::Unit], c_helper).unwrap();
         assert_eq!(out, "0");
     }
+
+    // --- FFI: struct-by-value, real compile-and-run tests ---
+    //
+    // These are the crux correctness tests for struct-by-value FFI: a
+    // real `clang`-compiled, LLVM-classified native ABI round trip, the
+    // only thing actually capable of catching a codegen bug that "looks
+    // right" in inspected IR text but is byte-misaligned once compiled
+    // (a named LLVM aggregate type carries no explicit offset text at
+    // all — see `plum_codegen::collect_extern_struct_types`'s own doc
+    // comment) — mirroring how earlier FFI chunks used a real ASan run
+    // as their own crux proof.
+
+    /// A `Point{Int, Float}` C helper — the simplest two-DIFFERENT-
+    /// scalar-width struct shape, proving both the argument direction
+    /// (Plum `Ctor` -> LLVM aggregate -> real C struct) and the return
+    /// direction (real C struct -> LLVM aggregate -> fresh Plum `Ctor`)
+    /// round-trip correctly through actual native code.
+    const POINT_C_HELPER: &str = r#"
+        typedef struct { long long x; double y; } Point;
+        Point ffitest_make_point(long long x, double y) {
+            Point p;
+            p.x = x;
+            p.y = y;
+            return p;
+        }
+        long long ffitest_point_sum(Point p) {
+            return p.x + (long long)p.y;
+        }
+    "#;
+
+    #[test]
+    fn point_struct_argument_and_return_round_trip_through_a_real_c_abi_boundary() {
+        let src = r#"
+            struct Point { x: Int, y: Float }
+            extern "C" {
+                fn ffitest_make_point(x: Int, y: Float) -> Point;
+                fn ffitest_point_sum(p: Point) -> Int;
+            }
+            let go (): Int = unsafe {
+                let p = ffitest_make_point(3, 4.5);
+                ffitest_point_sum(p)
+            }
+        "#;
+        let out = compile_and_run_with_c_helper(src, "go", &[CgValue::Unit], POINT_C_HELPER).unwrap();
+        // 3 + (long long)4.5 == 3 + 4 == 7 — only reachable if BOTH the
+        // `Int`->`i64` and `Float`->`double` fields round-tripped through
+        // the real C struct at their correct offsets in both directions.
+        assert_eq!(out, "7");
+    }
+
+    /// The deliberately-padding-inducing `Mixed{Bool, Int}` C helper —
+    /// `int flag` (4 bytes) followed by `long long big` (8 bytes) forces
+    /// 4 bytes of real System V padding between the two fields, exactly
+    /// the shape verified empirically (via a real `clang` compile)
+    /// during this feature's planning. `ffitest_make_mixed_nonzero`
+    /// deliberately returns `flag = 2`, not `1` — proving the RETURN-
+    /// direction struct-field `Bool` normalization is `icmp ne i32 ..,
+    /// 0` (C's "any nonzero is true" convention), NOT a bare truncating
+    /// `zext`/`trunc`: a buggy bare-truncation implementation would read
+    /// `2`'s low bit (`0`) as `false`, take the `else` branch below, and
+    /// print `-1` instead of `777` — the same class of bug `plum_codegen::
+    /// codegen::codegen_extern_call`'s own ordinary scalar `Bool`-return
+    /// handling already avoids, now proven for a STRUCT field too.
+    const MIXED_C_HELPER: &str = r#"
+        typedef struct { int flag; long long big; } Mixed;
+        Mixed ffitest_make_mixed_nonzero(void) {
+            Mixed m;
+            m.flag = 2;
+            m.big = 777;
+            return m;
+        }
+    "#;
+
+    #[test]
+    fn mixed_bool_int_struct_padding_and_bool_normalization_round_trip_correctly() {
+        let src = r#"
+            struct Mixed { flag: Bool, big: Int }
+            extern "C" {
+                fn ffitest_make_mixed_nonzero() -> Mixed;
+            }
+            let go (): Int = unsafe {
+                match ffitest_make_mixed_nonzero() {
+                    Mixed(flag, big) => if flag { big } else { -1 }
+                }
+            }
+        "#;
+        let out = compile_and_run_with_c_helper(src, "go", &[CgValue::Unit], MIXED_C_HELPER).unwrap();
+        // `777`, not `-1` — proves BOTH the `icmp ne` Bool normalization
+        // (`flag` reads as `true`) AND that `big` was read from the
+        // CORRECT, padding-adjusted byte offset (a wrong offset would
+        // read garbage, not necessarily `777`, but never reliably this
+        // exact value across a real run).
+        assert_eq!(out, "777");
+    }
+
+    /// A nested-struct C helper (`Outer { inner: Inner, b: Int }`, `Inner
+    /// { a: Int }`) — proves the recursive `insertvalue`/`extractvalue`
+    /// case in both `build_c_struct_value`/`build_ctor_from_c_struct`:
+    /// the inner struct is built/read as a genuine SUB-AGGREGATE nested
+    /// inside the outer one, never passed as a pointer at the C boundary.
+    const NESTED_C_HELPER: &str = r#"
+        typedef struct { long long a; } Inner;
+        typedef struct { Inner inner; long long b; } Outer;
+        Outer ffitest_make_outer(long long a, long long b) {
+            Outer o;
+            o.inner.a = a;
+            o.b = b;
+            return o;
+        }
+        long long ffitest_outer_sum(Outer o) {
+            return o.inner.a + o.b;
+        }
+    "#;
+
+    #[test]
+    fn nested_struct_argument_and_return_round_trip_through_a_real_c_abi_boundary() {
+        let src = r#"
+            struct Inner { a: Int }
+            struct Outer { inner: Inner, b: Int }
+            extern "C" {
+                fn ffitest_make_outer(a: Int, b: Int) -> Outer;
+                fn ffitest_outer_sum(o: Outer) -> Int;
+            }
+            let go (): Int = unsafe {
+                let o = ffitest_make_outer(3, 4);
+                ffitest_outer_sum(o)
+            }
+        "#;
+        let out = compile_and_run_with_c_helper(src, "go", &[CgValue::Unit], NESTED_C_HELPER).unwrap();
+        assert_eq!(out, "7");
+    }
+
+    #[test]
+    fn a_real_libc_div_computes_the_correct_quotient_and_remainder() {
+        // Mirrors `plumc::lib`'s existing interpreter-path pipeline test
+        // (`extern_call_returning_a_struct_by_value_runs_through_the_
+        // full_gated_pipeline`) EXACTLY — same `DivResult { quot: Bool,
+        // rem: Bool }` shape, matching real libc `div_t`'s `int`-width
+        // fields via `ExternType::Bool`'s C-ABI mapping (see that test's
+        // own doc comment for why `Bool`, not `Int`, is required here) —
+        // but run through the REAL `compile_and_run` codegen pipeline
+        // against genuine system `div()`, and going further than that
+        // existing test by asserting the ACTUAL computed quotient/
+        // remainder values, not just that the call succeeds. No custom
+        // C helper needed — `div` is an ordinary libc function, already
+        // linked into every compiled Plum binary.
+        let src = r#"
+            struct DivResult { quot: Bool, rem: Bool }
+            extern "C" {
+                fn div(numer: Bool, denom: Bool) -> DivResult;
+            }
+            let go (): Int = unsafe {
+                match div(true, true) {
+                    DivResult(quot, rem) => (if quot { 1 } else { 0 }) * 10 + (if rem { 1 } else { 0 })
+                }
+            }
+        "#;
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        // `div(1, 1)` => `quot = 1` (true), `rem = 0` (false) => `10`.
+        assert_eq!(out, "10");
+    }
 }
