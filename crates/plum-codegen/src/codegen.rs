@@ -3747,14 +3747,15 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             Ok((result, CgType::Str))
         }
         // `.to_upper()` — fresh path: a plain call into `@plum_str_to_
-        // upper`, ASCII-only by deliberate codegen-specific scope cut
-        // (only `a`-`z`/`A`-`Z` bytes convert; every other byte —
-        // including every byte of a multi-byte UTF-8 sequence — passes
-        // through unchanged), diverging from the interpreter's full
-        // Unicode `str::to_uppercase()` (which can even expand one
-        // codepoint into several, e.g. German `ß` -> `"SS"`, needing
-        // large data tables this backend won't hand-roll). See
-        // DESIGN.md's "Strings" section for the language-level caveat.
+        // upper`, which does real Unicode SIMPLE case mapping via libc's
+        // `towupper` (locale-aware, one-codepoint-in-one-codepoint-out —
+        // see `lib.rs`'s `emit_runtime` for the full mechanism and
+        // `@plum_locale_init`). Remaining, precisely-scoped divergence
+        // from the interpreter's full Unicode `str::to_uppercase()`:
+        // multi-codepoint expansions (e.g. German `ß` -> `"SS"`)
+        // structurally can't happen through `towupper`'s 1-in-1-out C
+        // signature, so `ß` stays `ß`. See DESIGN.md's "Strings" section
+        // for the language-level caveat.
         Expr::StrToUpper { base } => {
             let (b, bty) = codegen_value(base, env, em, ctx)?;
             if bty != CgType::Str {
@@ -3765,12 +3766,17 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             Ok((r, CgType::Str))
         }
         // The reuse-in-place half of `.to_upper()` — same refcount-
-        // check-then-branch shape as `StrTrimReuse`; since `.to_upper()`
-        // never changes a string's BYTE length (ASCII-only case mapping
-        // is a fixed one-byte-for-one-byte transform), the reuse branch
-        // needs no `@realloc` either — just an in-place per-byte
-        // transform loop (`@plum_str_to_upper_inplace`) over the
-        // existing cell's own bytes.
+        // check-then-branch shape as every other `*Reuse` string op,
+        // but with the SAME documented deviation `StrReplaceReuse`
+        // already established (see that arm's own doc comment below):
+        // now that case mapping goes through full Unicode `towupper`,
+        // it can change a string's total BYTE length (a mapped
+        // codepoint's UTF-8 length can differ from its source's), the
+        // exact soundness hazard that made true in-place mutation
+        // unsound for `StrReplaceReuse`'s growing case. So once
+        // uniquely owned, this calls the SAME fresh-allocating
+        // `@plum_str_to_upper` (always memory-safe) and then frees the
+        // OLD cell directly, rather than reusing its buffer in place.
         Expr::StrToUpperReuse { reuse_of } => {
             let (old_ptr, old_ty) = env
                 .get(reuse_of)
@@ -3794,8 +3800,9 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             em.push(format!("  br i1 {is_zero}, label %{reuse_label}, label %{alloc_label}"));
 
             em.start_block(&reuse_label);
-            em.push(format!("  call void @plum_str_to_upper_inplace(ptr {old_ptr})"));
-            em.push(format!("  store i64 1, ptr {old_ptr}"));
+            let reused = em.fresh_reg();
+            em.push(format!("  {reused} = call ptr @plum_str_to_upper(ptr {old_ptr})"));
+            em.push(format!("  call void @free(ptr {old_ptr})"));
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
@@ -3805,11 +3812,11 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {reused}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
             Ok((result, CgType::Str))
         }
-        // `.to_lower()` — same ASCII-only scope cut and shape as
-        // `.to_upper()`, delegating to `@plum_str_to_lower`.
+        // `.to_lower()` — same mechanism and shape as `.to_upper()`,
+        // delegating to `@plum_str_to_lower`/libc's `towlower`.
         Expr::StrToLower { base } => {
             let (b, bty) = codegen_value(base, env, em, ctx)?;
             if bty != CgType::Str {
@@ -3819,6 +3826,12 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             em.push(format!("  {r} = call ptr @plum_str_to_lower(ptr {b})"));
             Ok((r, CgType::Str))
         }
+        // The reuse-in-place half of `.to_lower()` — same documented
+        // deviation as `StrToUpperReuse` above (and `StrReplaceReuse`
+        // before it): full Unicode `towlower` case mapping can change a
+        // string's total byte length, so once uniquely owned this calls
+        // the fresh-allocating `@plum_str_to_lower` and frees the OLD
+        // cell directly rather than mutating in place.
         Expr::StrToLowerReuse { reuse_of } => {
             let (old_ptr, old_ty) = env
                 .get(reuse_of)
@@ -3842,8 +3855,9 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             em.push(format!("  br i1 {is_zero}, label %{reuse_label}, label %{alloc_label}"));
 
             em.start_block(&reuse_label);
-            em.push(format!("  call void @plum_str_to_lower_inplace(ptr {old_ptr})"));
-            em.push(format!("  store i64 1, ptr {old_ptr}"));
+            let reused = em.fresh_reg();
+            em.push(format!("  {reused} = call ptr @plum_str_to_lower(ptr {old_ptr})"));
+            em.push(format!("  call void @free(ptr {old_ptr})"));
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
@@ -3853,7 +3867,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {reused}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
             Ok((result, CgType::Str))
         }
         // `s.split(sep)` — a thin call into `@plum_str_split`, which does

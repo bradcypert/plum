@@ -333,6 +333,34 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
     out.push_str("declare i64 @strlen(ptr)\n");
     out.push_str("declare ptr @memchr(ptr, i32, i64)\n\n");
 
+    // `@towupper`/`@towlower`/`@setlocale` — the real Unicode-aware case
+    // mapping primitives `.to_upper()`/`.to_lower()` are built on (see
+    // `@plum_str_to_upper`/`@plum_str_to_lower` below), matching this
+    // backend's "reach for a real libc declare over hand-rolled codegen"
+    // philosophy already established by `@memcpy`/`@strlen`/`@memchr`
+    // above. `@plum_locale_init` calls `@setlocale(LC_ALL, "C.utf8")`
+    // exactly once — confirmed empirically (real scratch-C-program
+    // testing against this platform's glibc) that WITHOUT this call,
+    // `towupper`/`towlower` default to the ASCII-only "C" locale, silently
+    // reproducing the very ASCII-only behavior this chunk replaces.
+    // `C.utf8` (built into glibc since 2.35, confirmed via `locale -a`,
+    // no locale generation needed) is used over e.g. `en_US.UTF-8` for
+    // portability — it doesn't depend on a specific locale being
+    // installed. `LC_ALL = 6` is this platform's real value, confirmed
+    // via a `setlocale`/`limits.h` scratch program, not assumed from
+    // documentation (glibc's `LC_ALL` numbering isn't standardized by
+    // POSIX). Declared/emitted unconditionally, matching every other
+    // primitive in this function.
+    out.push_str("declare i32 @towupper(i32)\n");
+    out.push_str("declare i32 @towlower(i32)\n");
+    out.push_str("declare ptr @setlocale(i32, ptr)\n");
+    out.push_str("@plum_locale_str = private constant [7 x i8] c\"C.utf8\\00\"\n");
+    out.push_str("define void @plum_locale_init() {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %r = call ptr @setlocale(i32 6, ptr @plum_locale_str)\n");
+    out.push_str("  ret void\n");
+    out.push_str("}\n\n");
+
     // Shared by every runtime-checked failure (bounds/emptiness checks
     // — see `codegen.rs`'s `emit_bounds_check` — there's no compile-
     // time-provable-exhaustive case like `Match`'s `unreachable` for
@@ -645,15 +673,15 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
     // review-ability while hand-assembling the more intricate control
     // flow below — functionally no different.
     //
-    // ASCII-only case mapping is a DELIBERATE, DOCUMENTED divergence
-    // from the interpreter's full Unicode `str::to_uppercase()`/
-    // `to_lowercase()` (which can even expand one codepoint into several,
-    // e.g. German `ß` -> `"SS"`, needing large data tables this backend
-    // won't hand-roll): `.to_upper()`/`.to_lower()` here only ever touch
-    // plain ASCII `a-z`/`A-Z` bytes; any other byte (including every byte
-    // of a multi-byte UTF-8 sequence, none of which ever falls in the
-    // ASCII range) passes through completely unchanged. See DESIGN.md's
-    // "Strings" section for the language-level caveat this drives.
+    // `.to_upper()`/`.to_lower()` use real Unicode SIMPLE case mapping
+    // via libc's `towupper`/`towlower` (see `@plum_str_to_upper`/
+    // `@plum_str_to_lower` below and `@plum_locale_init` above). The
+    // one remaining, precisely-scoped divergence from the interpreter's
+    // full Unicode `str::to_uppercase()`/`to_lowercase()`: multi-
+    // codepoint expansions (e.g. German `ß` -> `"SS"`) structurally
+    // cannot happen through `towupper`/`towlower`'s 1-in-1-out C
+    // signature, so `ß` stays `ß`. See DESIGN.md's "Strings" section
+    // for the language-level caveat this drives.
     out.push_str(
         "; --- Unicode string runtime ---\n\
          ; `@plum_utf8_len_at`/`@plum_utf8_decode` are the shared UTF-8\n\
@@ -781,6 +809,111 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
     out.push_str("  %cp4 = or i64 %tmp4b, %b3_4low\n");
     out.push_str("  store i64 4, ptr %out_nbytes\n");
     out.push_str("  ret i64 %cp4\n");
+    out.push_str("}\n\n");
+
+    // `@plum_utf8_encoded_len` — pure length classification of an
+    // ALREADY-KNOWN codepoint VALUE (unlike `@plum_utf8_len_at`, which
+    // classifies from a leading BYTE it hasn't decoded yet): `cp < 0x80`
+    // -> 1, `cp < 0x800` -> 2, `cp < 0x10000` -> 3, else -> 4. Used by
+    // `@plum_str_to_upper`/`@plum_str_to_lower`'s counting pass, where a
+    // codepoint has already been mapped via `towupper`/`towlower` and its
+    // resulting UTF-8 byte length (which can differ from its SOURCE
+    // codepoint's length) needs classifying. Same sequential-`icmp`+`br`
+    // style as `@plum_utf8_len_at`, no loop/table.
+    out.push_str("define i64 @plum_utf8_encoded_len(i64 %cp) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %is1 = icmp ult i64 %cp, 128\n");
+    out.push_str("  br i1 %is1, label %len1, label %check2\n");
+    out.push_str("len1:\n");
+    out.push_str("  ret i64 1\n");
+    out.push_str("check2:\n");
+    out.push_str("  %is2 = icmp ult i64 %cp, 2048\n");
+    out.push_str("  br i1 %is2, label %len2, label %check3\n");
+    out.push_str("len2:\n");
+    out.push_str("  ret i64 2\n");
+    out.push_str("check3:\n");
+    out.push_str("  %is3 = icmp ult i64 %cp, 65536\n");
+    out.push_str("  br i1 %is3, label %len3, label %len4\n");
+    out.push_str("len3:\n");
+    out.push_str("  ret i64 3\n");
+    out.push_str("len4:\n");
+    out.push_str("  ret i64 4\n");
+    out.push_str("}\n\n");
+
+    // `@plum_utf8_encode` — the inverse of `@plum_utf8_decode`: encodes
+    // codepoint `%cp` as UTF-8 bytes into `%dst`, returning the number of
+    // bytes written (== `@plum_utf8_encoded_len(%cp)`, computed here as a
+    // side effect of the same branching rather than calling that function
+    // again). Mirrors `@plum_utf8_decode`'s four-way length-classification
+    // structure but WRITES/shifts-out bytes instead of reading/combining
+    // them. Standard UTF-8 encoding: 1 byte plain 7-bit; 2 bytes
+    // `110xxxxx 10xxxxxx`; 3 bytes `1110xxxx 10xxxxxx 10xxxxxx`; 4 bytes
+    // `11110xxx 10xxxxxx 10xxxxxx 10xxxxxx`.
+    out.push_str("define i64 @plum_utf8_encode(ptr %dst, i64 %cp) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %is1 = icmp ult i64 %cp, 128\n");
+    out.push_str("  br i1 %is1, label %len1, label %check2\n");
+    out.push_str("len1:\n");
+    out.push_str("  %b0_1 = trunc i64 %cp to i8\n");
+    out.push_str("  store i8 %b0_1, ptr %dst\n");
+    out.push_str("  ret i64 1\n");
+    out.push_str("check2:\n");
+    out.push_str("  %is2 = icmp ult i64 %cp, 2048\n");
+    out.push_str("  br i1 %is2, label %len2, label %check3\n");
+    out.push_str("len2:\n");
+    out.push_str("  %hi_2 = lshr i64 %cp, 6\n");
+    out.push_str("  %hi_2m = or i64 %hi_2, 192\n");
+    out.push_str("  %b0_2 = trunc i64 %hi_2m to i8\n");
+    out.push_str("  store i8 %b0_2, ptr %dst\n");
+    out.push_str("  %lo_2 = and i64 %cp, 63\n");
+    out.push_str("  %lo_2m = or i64 %lo_2, 128\n");
+    out.push_str("  %b1_2 = trunc i64 %lo_2m to i8\n");
+    out.push_str("  %addr1_2 = getelementptr i8, ptr %dst, i64 1\n");
+    out.push_str("  store i8 %b1_2, ptr %addr1_2\n");
+    out.push_str("  ret i64 2\n");
+    out.push_str("check3:\n");
+    out.push_str("  %is3 = icmp ult i64 %cp, 65536\n");
+    out.push_str("  br i1 %is3, label %len3, label %len4\n");
+    out.push_str("len3:\n");
+    out.push_str("  %hi_3 = lshr i64 %cp, 12\n");
+    out.push_str("  %hi_3m = or i64 %hi_3, 224\n");
+    out.push_str("  %b0_3 = trunc i64 %hi_3m to i8\n");
+    out.push_str("  store i8 %b0_3, ptr %dst\n");
+    out.push_str("  %mid_3 = lshr i64 %cp, 6\n");
+    out.push_str("  %mid_3a = and i64 %mid_3, 63\n");
+    out.push_str("  %mid_3m = or i64 %mid_3a, 128\n");
+    out.push_str("  %b1_3 = trunc i64 %mid_3m to i8\n");
+    out.push_str("  %addr1_3 = getelementptr i8, ptr %dst, i64 1\n");
+    out.push_str("  store i8 %b1_3, ptr %addr1_3\n");
+    out.push_str("  %lo_3 = and i64 %cp, 63\n");
+    out.push_str("  %lo_3m = or i64 %lo_3, 128\n");
+    out.push_str("  %b2_3 = trunc i64 %lo_3m to i8\n");
+    out.push_str("  %addr2_3 = getelementptr i8, ptr %dst, i64 2\n");
+    out.push_str("  store i8 %b2_3, ptr %addr2_3\n");
+    out.push_str("  ret i64 3\n");
+    out.push_str("len4:\n");
+    out.push_str("  %hi_4 = lshr i64 %cp, 18\n");
+    out.push_str("  %hi_4m = or i64 %hi_4, 240\n");
+    out.push_str("  %b0_4 = trunc i64 %hi_4m to i8\n");
+    out.push_str("  store i8 %b0_4, ptr %dst\n");
+    out.push_str("  %mid1_4 = lshr i64 %cp, 12\n");
+    out.push_str("  %mid1_4a = and i64 %mid1_4, 63\n");
+    out.push_str("  %mid1_4m = or i64 %mid1_4a, 128\n");
+    out.push_str("  %b1_4 = trunc i64 %mid1_4m to i8\n");
+    out.push_str("  %addr1_4 = getelementptr i8, ptr %dst, i64 1\n");
+    out.push_str("  store i8 %b1_4, ptr %addr1_4\n");
+    out.push_str("  %mid2_4 = lshr i64 %cp, 6\n");
+    out.push_str("  %mid2_4a = and i64 %mid2_4, 63\n");
+    out.push_str("  %mid2_4m = or i64 %mid2_4a, 128\n");
+    out.push_str("  %b2_4 = trunc i64 %mid2_4m to i8\n");
+    out.push_str("  %addr2_4 = getelementptr i8, ptr %dst, i64 2\n");
+    out.push_str("  store i8 %b2_4, ptr %addr2_4\n");
+    out.push_str("  %lo_4 = and i64 %cp, 63\n");
+    out.push_str("  %lo_4m = or i64 %lo_4, 128\n");
+    out.push_str("  %b3_4 = trunc i64 %lo_4m to i8\n");
+    out.push_str("  %addr3_4 = getelementptr i8, ptr %dst, i64 3\n");
+    out.push_str("  store i8 %b3_4, ptr %addr3_4\n");
+    out.push_str("  ret i64 4\n");
     out.push_str("}\n\n");
 
     // `@plum_is_unicode_whitespace` — the Unicode `White_Space` property,
@@ -935,125 +1068,124 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
     out.push_str("  ret void\n");
     out.push_str("}\n\n");
 
-    // `@plum_str_to_upper`/`@plum_str_to_lower` (fresh) and their
-    // `_inplace` counterparts (reuse) — a per-BYTE loop, NOT per-
-    // codepoint decode, deliberately: ASCII bytes are never continuation
-    // bytes nor multi-byte leading bytes, so a byte scan correctly
-    // leaves every multi-byte sequence untouched without ever needing to
-    // know character boundaries at all. Fixed output length == input
-    // length (exactly why ASCII-only can stay a simple fixed-length
-    // transform while full Unicode case mapping, with its multi-
-    // codepoint expansions, could not) — see this section's own
-    // module-level comment for the full ASCII-only scope-cut rationale.
-    // Byte boundary immediates: ASCII `'a'`=97 (0x61), `'z'`=122 (0x7A),
-    // `'A'`=65 (0x41), `'Z'`=90 (0x5A) — written here as plain decimal
-    // (LLVM IR integer constants have no hex-literal syntax; `0x..` is
-    // reserved for floating-point bit patterns, confirmed via a real
-    // `clang` parse failure, not assumed).
+    // `@plum_str_to_upper`/`@plum_str_to_lower` — real Unicode SIMPLE
+    // case mapping via libc's `towupper`/`towlower` (locale-aware,
+    // one-codepoint-in-one-codepoint-out — see `@plum_locale_init`
+    // above for why `setlocale(LC_ALL, "C.utf8")` must run first, or
+    // these silently degrade to ASCII-only "C" locale behavior).
+    // Two-pass, matching `@plum_str_runes`'s established "count then
+    // fill, re-decoding/re-mapping in both passes rather than caching"
+    // shape exactly (cheap; avoids a scratch buffer): pass 1 walks `%s`
+    // via `@plum_utf8_decode`, maps each codepoint through `towupper`/
+    // `towlower`, and accumulates `@plum_utf8_encoded_len` of the
+    // MAPPED codepoint (not the source one — case mapping can change a
+    // character's UTF-8 byte length, e.g. ASCII `i`(1 byte) has no
+    // Turkish-dotted mapping here but plenty of Latin-1 pairs cross the
+    // 1-vs-2-byte boundary) into a running total; pass 2 re-walks and
+    // re-maps identically, writing each mapped codepoint via
+    // `@plum_utf8_encode` into the freshly `@plum_alloc_str`-ed
+    // destination. Remaining, precisely-scoped gap: multi-codepoint
+    // expansions (German `ß` -> `"SS"`) structurally cannot happen
+    // through `towupper`/`towlower`'s 1-in-1-out C signature, so `ß`
+    // stays `ß` — see DESIGN.md's "Strings" section for the language-
+    // level caveat this drives. No `_inplace` reuse variants: case
+    // mapping can change total byte length, the same soundness hazard
+    // `StrReplaceReuse` already found and rejected for its own reuse
+    // path (see `codegen.rs`'s doc comment on that arm) — `codegen.rs`'s
+    // `StrToUpperReuse`/`StrToLowerReuse` arms instead call these fresh
+    // functions and free the old cell directly.
     out.push_str("define ptr @plum_str_to_upper(ptr %s) {\n");
     out.push_str("entry:\n");
-    out.push_str("  %len_addr = getelementptr i8, ptr %s, i64 8\n");
-    out.push_str("  %len = load i64, ptr %len_addr\n");
-    out.push_str("  %cell = call ptr @plum_alloc_str(i64 %len)\n");
-    out.push_str("  %src = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  %slen_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %slen = load i64, ptr %slen_addr\n");
+    out.push_str("  %sbase = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  br label %count_check\n");
+    out.push_str("count_check:\n");
+    out.push_str("  %pos1 = phi i64 [ 0, %entry ], [ %pos1_next, %count_body ]\n");
+    out.push_str("  %total = phi i64 [ 0, %entry ], [ %total_next, %count_body ]\n");
+    out.push_str("  %cont1 = icmp slt i64 %pos1, %slen\n");
+    out.push_str("  br i1 %cont1, label %count_body, label %count_done\n");
+    out.push_str("count_body:\n");
+    out.push_str("  %cnbytes_slot = alloca i64\n");
+    out.push_str("  %ccp = call i64 @plum_utf8_decode(ptr %sbase, i64 %pos1, ptr %cnbytes_slot)\n");
+    out.push_str("  %ccp32 = trunc i64 %ccp to i32\n");
+    out.push_str("  %cmapped32 = call i32 @towupper(i32 %ccp32)\n");
+    out.push_str("  %cmapped = zext i32 %cmapped32 to i64\n");
+    out.push_str("  %cmlen = call i64 @plum_utf8_encoded_len(i64 %cmapped)\n");
+    out.push_str("  %total_next = add i64 %total, %cmlen\n");
+    out.push_str("  %cnbytes = load i64, ptr %cnbytes_slot\n");
+    out.push_str("  %pos1_next = add i64 %pos1, %cnbytes\n");
+    out.push_str("  br label %count_check\n");
+    out.push_str("count_done:\n");
+    out.push_str("  %cell = call ptr @plum_alloc_str(i64 %total)\n");
     out.push_str("  %dst = getelementptr i8, ptr %cell, i64 16\n");
-    out.push_str("  br label %loop_check\n");
-    out.push_str("loop_check:\n");
-    out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_body ]\n");
-    out.push_str("  %cont = icmp slt i64 %i, %len\n");
-    out.push_str("  br i1 %cont, label %loop_body, label %done\n");
-    out.push_str("loop_body:\n");
-    out.push_str("  %saddr = getelementptr i8, ptr %src, i64 %i\n");
-    out.push_str("  %b = load i8, ptr %saddr\n");
-    out.push_str("  %ge = icmp uge i8 %b, 97\n");
-    out.push_str("  %le = icmp ule i8 %b, 122\n");
-    out.push_str("  %in_range = and i1 %ge, %le\n");
-    out.push_str("  %subbed = sub i8 %b, 32\n");
-    out.push_str("  %outb = select i1 %in_range, i8 %subbed, i8 %b\n");
-    out.push_str("  %daddr = getelementptr i8, ptr %dst, i64 %i\n");
-    out.push_str("  store i8 %outb, ptr %daddr\n");
-    out.push_str("  %i_next = add i64 %i, 1\n");
-    out.push_str("  br label %loop_check\n");
-    out.push_str("done:\n");
+    out.push_str("  br label %fill_check\n");
+    out.push_str("fill_check:\n");
+    out.push_str("  %pos2 = phi i64 [ 0, %count_done ], [ %pos2_next, %fill_body ]\n");
+    out.push_str("  %dcur = phi i64 [ 0, %count_done ], [ %dcur_next, %fill_body ]\n");
+    out.push_str("  %cont2 = icmp slt i64 %pos2, %slen\n");
+    out.push_str("  br i1 %cont2, label %fill_body, label %fill_done\n");
+    out.push_str("fill_body:\n");
+    out.push_str("  %fnbytes_slot = alloca i64\n");
+    out.push_str("  %fcp = call i64 @plum_utf8_decode(ptr %sbase, i64 %pos2, ptr %fnbytes_slot)\n");
+    out.push_str("  %fcp32 = trunc i64 %fcp to i32\n");
+    out.push_str("  %fmapped32 = call i32 @towupper(i32 %fcp32)\n");
+    out.push_str("  %fmapped = zext i32 %fmapped32 to i64\n");
+    out.push_str("  %fdaddr = getelementptr i8, ptr %dst, i64 %dcur\n");
+    out.push_str("  %fwritten = call i64 @plum_utf8_encode(ptr %fdaddr, i64 %fmapped)\n");
+    out.push_str("  %dcur_next = add i64 %dcur, %fwritten\n");
+    out.push_str("  %fnbytes = load i64, ptr %fnbytes_slot\n");
+    out.push_str("  %pos2_next = add i64 %pos2, %fnbytes\n");
+    out.push_str("  br label %fill_check\n");
+    out.push_str("fill_done:\n");
     out.push_str("  ret ptr %cell\n");
-    out.push_str("}\n\n");
-
-    out.push_str("define void @plum_str_to_upper_inplace(ptr %s) {\n");
-    out.push_str("entry:\n");
-    out.push_str("  %len_addr = getelementptr i8, ptr %s, i64 8\n");
-    out.push_str("  %len = load i64, ptr %len_addr\n");
-    out.push_str("  %buf = getelementptr i8, ptr %s, i64 16\n");
-    out.push_str("  br label %loop_check\n");
-    out.push_str("loop_check:\n");
-    out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_body ]\n");
-    out.push_str("  %cont = icmp slt i64 %i, %len\n");
-    out.push_str("  br i1 %cont, label %loop_body, label %done\n");
-    out.push_str("loop_body:\n");
-    out.push_str("  %addr = getelementptr i8, ptr %buf, i64 %i\n");
-    out.push_str("  %b = load i8, ptr %addr\n");
-    out.push_str("  %ge = icmp uge i8 %b, 97\n");
-    out.push_str("  %le = icmp ule i8 %b, 122\n");
-    out.push_str("  %in_range = and i1 %ge, %le\n");
-    out.push_str("  %subbed = sub i8 %b, 32\n");
-    out.push_str("  %outb = select i1 %in_range, i8 %subbed, i8 %b\n");
-    out.push_str("  store i8 %outb, ptr %addr\n");
-    out.push_str("  %i_next = add i64 %i, 1\n");
-    out.push_str("  br label %loop_check\n");
-    out.push_str("done:\n");
-    out.push_str("  ret void\n");
     out.push_str("}\n\n");
 
     out.push_str("define ptr @plum_str_to_lower(ptr %s) {\n");
     out.push_str("entry:\n");
-    out.push_str("  %len_addr = getelementptr i8, ptr %s, i64 8\n");
-    out.push_str("  %len = load i64, ptr %len_addr\n");
-    out.push_str("  %cell = call ptr @plum_alloc_str(i64 %len)\n");
-    out.push_str("  %src = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  %slen_addr = getelementptr i8, ptr %s, i64 8\n");
+    out.push_str("  %slen = load i64, ptr %slen_addr\n");
+    out.push_str("  %sbase = getelementptr i8, ptr %s, i64 16\n");
+    out.push_str("  br label %count_check\n");
+    out.push_str("count_check:\n");
+    out.push_str("  %pos1 = phi i64 [ 0, %entry ], [ %pos1_next, %count_body ]\n");
+    out.push_str("  %total = phi i64 [ 0, %entry ], [ %total_next, %count_body ]\n");
+    out.push_str("  %cont1 = icmp slt i64 %pos1, %slen\n");
+    out.push_str("  br i1 %cont1, label %count_body, label %count_done\n");
+    out.push_str("count_body:\n");
+    out.push_str("  %cnbytes_slot = alloca i64\n");
+    out.push_str("  %ccp = call i64 @plum_utf8_decode(ptr %sbase, i64 %pos1, ptr %cnbytes_slot)\n");
+    out.push_str("  %ccp32 = trunc i64 %ccp to i32\n");
+    out.push_str("  %cmapped32 = call i32 @towlower(i32 %ccp32)\n");
+    out.push_str("  %cmapped = zext i32 %cmapped32 to i64\n");
+    out.push_str("  %cmlen = call i64 @plum_utf8_encoded_len(i64 %cmapped)\n");
+    out.push_str("  %total_next = add i64 %total, %cmlen\n");
+    out.push_str("  %cnbytes = load i64, ptr %cnbytes_slot\n");
+    out.push_str("  %pos1_next = add i64 %pos1, %cnbytes\n");
+    out.push_str("  br label %count_check\n");
+    out.push_str("count_done:\n");
+    out.push_str("  %cell = call ptr @plum_alloc_str(i64 %total)\n");
     out.push_str("  %dst = getelementptr i8, ptr %cell, i64 16\n");
-    out.push_str("  br label %loop_check\n");
-    out.push_str("loop_check:\n");
-    out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_body ]\n");
-    out.push_str("  %cont = icmp slt i64 %i, %len\n");
-    out.push_str("  br i1 %cont, label %loop_body, label %done\n");
-    out.push_str("loop_body:\n");
-    out.push_str("  %saddr = getelementptr i8, ptr %src, i64 %i\n");
-    out.push_str("  %b = load i8, ptr %saddr\n");
-    out.push_str("  %ge = icmp uge i8 %b, 65\n");
-    out.push_str("  %le = icmp ule i8 %b, 90\n");
-    out.push_str("  %in_range = and i1 %ge, %le\n");
-    out.push_str("  %added = add i8 %b, 32\n");
-    out.push_str("  %outb = select i1 %in_range, i8 %added, i8 %b\n");
-    out.push_str("  %daddr = getelementptr i8, ptr %dst, i64 %i\n");
-    out.push_str("  store i8 %outb, ptr %daddr\n");
-    out.push_str("  %i_next = add i64 %i, 1\n");
-    out.push_str("  br label %loop_check\n");
-    out.push_str("done:\n");
+    out.push_str("  br label %fill_check\n");
+    out.push_str("fill_check:\n");
+    out.push_str("  %pos2 = phi i64 [ 0, %count_done ], [ %pos2_next, %fill_body ]\n");
+    out.push_str("  %dcur = phi i64 [ 0, %count_done ], [ %dcur_next, %fill_body ]\n");
+    out.push_str("  %cont2 = icmp slt i64 %pos2, %slen\n");
+    out.push_str("  br i1 %cont2, label %fill_body, label %fill_done\n");
+    out.push_str("fill_body:\n");
+    out.push_str("  %fnbytes_slot = alloca i64\n");
+    out.push_str("  %fcp = call i64 @plum_utf8_decode(ptr %sbase, i64 %pos2, ptr %fnbytes_slot)\n");
+    out.push_str("  %fcp32 = trunc i64 %fcp to i32\n");
+    out.push_str("  %fmapped32 = call i32 @towlower(i32 %fcp32)\n");
+    out.push_str("  %fmapped = zext i32 %fmapped32 to i64\n");
+    out.push_str("  %fdaddr = getelementptr i8, ptr %dst, i64 %dcur\n");
+    out.push_str("  %fwritten = call i64 @plum_utf8_encode(ptr %fdaddr, i64 %fmapped)\n");
+    out.push_str("  %dcur_next = add i64 %dcur, %fwritten\n");
+    out.push_str("  %fnbytes = load i64, ptr %fnbytes_slot\n");
+    out.push_str("  %pos2_next = add i64 %pos2, %fnbytes\n");
+    out.push_str("  br label %fill_check\n");
+    out.push_str("fill_done:\n");
     out.push_str("  ret ptr %cell\n");
-    out.push_str("}\n\n");
-
-    out.push_str("define void @plum_str_to_lower_inplace(ptr %s) {\n");
-    out.push_str("entry:\n");
-    out.push_str("  %len_addr = getelementptr i8, ptr %s, i64 8\n");
-    out.push_str("  %len = load i64, ptr %len_addr\n");
-    out.push_str("  %buf = getelementptr i8, ptr %s, i64 16\n");
-    out.push_str("  br label %loop_check\n");
-    out.push_str("loop_check:\n");
-    out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_body ]\n");
-    out.push_str("  %cont = icmp slt i64 %i, %len\n");
-    out.push_str("  br i1 %cont, label %loop_body, label %done\n");
-    out.push_str("loop_body:\n");
-    out.push_str("  %addr = getelementptr i8, ptr %buf, i64 %i\n");
-    out.push_str("  %b = load i8, ptr %addr\n");
-    out.push_str("  %ge = icmp uge i8 %b, 65\n");
-    out.push_str("  %le = icmp ule i8 %b, 90\n");
-    out.push_str("  %in_range = and i1 %ge, %le\n");
-    out.push_str("  %added = add i8 %b, 32\n");
-    out.push_str("  %outb = select i1 %in_range, i8 %added, i8 %b\n");
-    out.push_str("  store i8 %outb, ptr %addr\n");
-    out.push_str("  %i_next = add i64 %i, 1\n");
-    out.push_str("  br label %loop_check\n");
-    out.push_str("done:\n");
-    out.push_str("  ret void\n");
     out.push_str("}\n\n");
 
     // `@plum_str_count_matches` — extends `@plum_str_contains`'s
@@ -4720,22 +4852,28 @@ mod tests {
     }
 
     #[test]
-    fn to_upper_and_to_lower_use_the_exact_ascii_boundary_immediates() {
-        // `'a'`=97, `'z'`=122, `'A'`=65, `'Z'`=90 — an off-by-one here is
-        // a real bug class IR inspection genuinely can catch cheaply
-        // (LLVM IR has no hex integer literal syntax, confirmed via a
-        // real `clang` parse failure during design — see `emit_runtime`'s
-        // own comment above `@plum_str_to_upper` — so these are asserted
-        // as the plain decimal equivalents of 0x61/0x7A/0x41/0x5A).
+    fn to_upper_and_to_lower_call_libc_case_mapping_not_the_old_ascii_loop() {
+        // Proves the rewrite: `@plum_str_to_upper`/`@plum_str_to_lower`
+        // now call real libc `towupper`/`towlower` and use the two-pass
+        // count-then-fill shape (`@plum_utf8_decode`/`@plum_utf8_encode`/
+        // `@plum_utf8_encoded_len`), NOT the old fixed-length, per-BYTE
+        // ASCII-range `select` loop (`icmp uge i8 %b, 97`, etc. — no
+        // longer present anywhere in emitted IR).
         let prog = program(vec![Function {
             name: "go".to_string(),
             params: vec!["s".to_string()],
             body: Expr::StrToUpper { base: Box::new(Expr::Var("s".to_string())) },
         }]);
         let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
-        assert!(ir.contains("%ge = icmp uge i8 %b, 97"), "{ir}");
-        assert!(ir.contains("%le = icmp ule i8 %b, 122"), "{ir}");
-        assert!(ir.contains("%subbed = sub i8 %b, 32"), "{ir}");
+        assert!(ir.contains("declare i32 @towupper(i32)"), "{ir}");
+        assert!(ir.contains("declare i32 @towlower(i32)"), "{ir}");
+        assert!(ir.contains("declare ptr @setlocale(i32, ptr)"), "{ir}");
+        assert!(ir.contains("define void @plum_locale_init()"), "{ir}");
+        assert!(ir.contains("define i64 @plum_utf8_encoded_len(i64 %cp)"), "{ir}");
+        assert!(ir.contains("define i64 @plum_utf8_encode(ptr %dst, i64 %cp)"), "{ir}");
+        assert!(ir.contains("call i32 @towupper(i32"), "{ir}");
+        assert!(!ir.contains("icmp uge i8 %b, 97"), "{ir}");
+        assert!(!ir.contains("icmp ule i8 %b, 122"), "{ir}");
 
         let prog2 = program(vec![Function {
             name: "go".to_string(),
@@ -4743,29 +4881,29 @@ mod tests {
             body: Expr::StrToLower { base: Box::new(Expr::Var("s".to_string())) },
         }]);
         let ir2 = emit(&prog2, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
-        assert!(ir2.contains("%ge = icmp uge i8 %b, 65"), "{ir2}");
-        assert!(ir2.contains("%le = icmp ule i8 %b, 90"), "{ir2}");
-        assert!(ir2.contains("%added = add i8 %b, 32"), "{ir2}");
+        assert!(ir2.contains("call i32 @towlower(i32"), "{ir2}");
+        assert!(!ir2.contains("icmp uge i8 %b, 65"), "{ir2}");
+        assert!(!ir2.contains("icmp ule i8 %b, 90"), "{ir2}");
     }
 
     #[test]
-    fn to_upper_reuse_and_to_lower_reuse_call_no_realloc_at_all() {
-        // Fixed-length transform (ASCII case mapping never changes byte
-        // length) — the reuse branch mutates in place via `_inplace`,
-        // never `@realloc`s.
+    fn to_upper_reuse_and_to_lower_reuse_free_and_call_fresh_not_inplace() {
+        // Case mapping can now change a string's byte length (real
+        // Unicode `towupper`/`towlower`, not a fixed one-byte-for-one-
+        // byte ASCII transform) — the `_inplace` variants are gone
+        // entirely, and the reuse branch instead calls the fresh
+        // function then `@free`s the old cell (mirroring
+        // `StrReplaceReuse`'s own reuse branch).
         let prog = program(vec![Function {
             name: "go".to_string(),
             params: vec!["s".to_string()],
             body: Expr::StrToUpperReuse { reuse_of: "s".to_string() },
         }]);
         let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
-        assert!(ir.contains("call void @plum_str_to_upper_inplace(ptr %s)"), "{ir}");
-        // Scoped to `@go`'s own body — `@realloc` is always DECLARED
-        // program-wide (`declare ptr @realloc(...)`, needed by other
-        // ops entirely), so a whole-program substring check would be a
-        // false positive; what matters is `@go`'s body never CALLS it.
+        assert!(!ir.contains("plum_str_to_upper_inplace"), "{ir}");
         let go_body = &ir[ir.find("define ptr @go(").unwrap()..];
-        assert!(!go_body.contains("call ptr @realloc"), "{go_body}");
+        assert!(go_body.contains("call ptr @plum_str_to_upper(ptr %s)"), "{go_body}");
+        assert!(go_body.contains("call void @free(ptr %s)"), "{go_body}");
 
         let prog2 = program(vec![Function {
             name: "go".to_string(),
@@ -4773,9 +4911,10 @@ mod tests {
             body: Expr::StrToLowerReuse { reuse_of: "s".to_string() },
         }]);
         let ir2 = emit(&prog2, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
-        assert!(ir2.contains("call void @plum_str_to_lower_inplace(ptr %s)"), "{ir2}");
+        assert!(!ir2.contains("plum_str_to_lower_inplace"), "{ir2}");
         let go_body2 = &ir2[ir2.find("define ptr @go(").unwrap()..];
-        assert!(!go_body2.contains("call ptr @realloc"), "{go_body2}");
+        assert!(go_body2.contains("call ptr @plum_str_to_lower(ptr %s)"), "{go_body2}");
+        assert!(go_body2.contains("call void @free(ptr %s)"), "{go_body2}");
     }
 
     #[test]

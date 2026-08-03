@@ -1012,20 +1012,22 @@ all already work on split output for free — confirmed with a dedicated
 test summing `.len()` across `for part in "...".split(",")`.
 
 **`.to_upper()`/`.to_lower()`/`.contains()`/`.starts_with()`/
-`.ends_with()`/`.replace()` — Decided (2026-07-28).** Rounded out
-strings further the same evening, all delegating directly to Rust's
-own `str` methods of the same name (Unicode-aware case conversion via
-`to_uppercase()`/`to_lowercase()`). **Codegen-specific caveat**: the
-compiled backend implements `.to_upper()`/`.to_lower()` as ASCII-only
-(`a-z`/`A-Z` only; every other byte, including multi-byte UTF-8
-sequences, passes through unchanged) — a deliberate, bounded scope cut
-from this section's own full-Unicode intent, since full Unicode case
-mapping needs large generated data tables (thousands of codepoints,
-multi-codepoint expansions like German `ß`→`"SS"`) this backend
-doesn't hand-roll. The interpreter's own behavior is unaffected — see
-"Unicode-aware string operations" in the LLVM backend section below
-for the full rationale and the tests proving both directions of the
-divergence. `.to_upper()`/`.to_lower()`/
+`.ends_with()`/`.replace()` — Decided (2026-07-28, case mapping revised
+2026-08-03).** Rounded out strings further the same evening, all
+delegating directly to Rust's own `str` methods of the same name
+(Unicode-aware case conversion via `to_uppercase()`/`to_lowercase()`).
+**Codegen-specific caveat**: the compiled backend implements
+`.to_upper()`/`.to_lower()` via libc's `towupper`/`towlower`
+(locale-aware, one-codepoint-in-one-codepoint-out — real Unicode SIMPLE
+case mapping across the vast majority of scripts, not an ASCII-only cut
+as originally shipped). The one remaining, narrowly-scoped divergence
+from this section's full-Unicode intent: multi-codepoint expansions
+(German `ß`→`"SS"`) can't happen through `towupper`/`towlower`'s
+1-in-1-out C signature, so `ß` stays `ß`. The interpreter's own
+behavior is unaffected — see "Unicode-aware string operations" in the
+LLVM backend section below for the full mechanism and the tests
+proving both real-Unicode mapping and the narrower gap. `.to_upper()`/
+`.to_lower()`/
 `.replace()` all evaluate to `Str` and follow `.trim()`'s exact
 precedent — `StrToUpper`/`StrToUpperReuse`, `StrToLower`/
 `StrToLowerReuse`, `StrReplace`/`StrReplaceReuse`, each with the full
@@ -1568,17 +1570,21 @@ calls, CStr, callbacks" below), and — as of a further follow-on chunk
 — struct-by-value FFI marshaling (see "FFI: struct-by-value marshaling"
 below), closing out FFI entirely, and — as of a further follow-on
 chunk — `.runes()`, `.trim()`, `.replace()`, `.split()` (full Unicode
-correctness) and `.to_upper()`/`.to_lower()` (ASCII-only — see
-"Unicode-aware string operations" below for the deliberate,
-documented scope cut), non-constant top-level `Global` initializers
+correctness) and `.to_upper()`/`.to_lower()` (full Unicode SIMPLE case
+mapping via libc `towupper`/`towlower` — see "Unicode-aware string
+operations" below for the mechanism and its one remaining, narrowly-
+scoped gap), non-constant top-level `Global` initializers
 (see "Non-constant Global initializers" below), and — as of a further
 follow-on chunk — closure literals inside a still-generic function's
 own body, working correctly and independently per concrete
 instantiation (see "Closures inside generic functions" below). Still
-out of scope and producing a clear codegen error, never a panic: full
-Unicode case mapping (multi-codepoint expansions, e.g. German
-`ß`→`"SS"`), an `Assign` inside a closure body writing back into an
-enclosing loop's carried variable (structurally
+out of scope, but NOT a codegen error — a silent, documented pass-
+through instead (see "Unicode-aware string operations" below):
+multi-codepoint Unicode case expansions (e.g. German `ß`→`"SS"`) leave
+the input unchanged, since `towupper`/`towlower`'s 1-in-1-out C
+signature cannot produce them. Still out of scope and producing a
+clear codegen error, never a panic: an `Assign` inside a closure body
+writing back into an enclosing loop's carried variable (structurally
 out of reach of this backend's closure design, not merely
 unimplemented), an `Assign` reachable only through a `Let`/`If`/
 `Match`/`RcAnnotated` used in an ordinary value position (e.g.
@@ -2460,16 +2466,19 @@ going further than the existing interpreter-path test.
 
 **Unicode-aware string operations** (`.runes()`, `.trim()`,
 `.replace()`, `.split()` full Unicode correctness; `.to_upper()`/
-`.to_lower()` ASCII-only — a deliberate, documented scope cut, see
-below). The largest remaining language-feature gap closed. Confirmed
-during scoping that only case mapping genuinely needs large data
-tables (thousands of codepoints, multi-codepoint expansions like
-German `ß`→`"SS"`) that this backend deliberately does not hand-roll —
-everything else in this group is tractable without one: `.runes()`
-needs a bounded UTF-8 DECODER (byte-pattern classification logic, no
-table), `.trim()` needs the Unicode `White_Space` property, a small,
-fixed 25-codepoint list, and `.split()`/`.replace()` are purely
-byte-level substring operations needing no Unicode awareness at all.
+`.to_lower()` full Unicode SIMPLE case mapping via libc, as of a
+2026-08-03 revision — see below). The largest remaining language-
+feature gap closed. Confirmed during scoping that `.runes()` needs a
+bounded UTF-8 DECODER (byte-pattern classification logic, no table),
+`.trim()` needs the Unicode `White_Space` property, a small, fixed
+25-codepoint list, and `.split()`/`.replace()` are purely byte-level
+substring operations needing no Unicode awareness at all. Case mapping
+was initially scoped ASCII-only in the belief that full Unicode case
+mapping needed large hand-rolled data tables; a later chunk (2026-08-03)
+revisited this by reaching for libc's own `towupper`/`towlower`
+instead (see below), the same "declare a real libc function, don't
+hand-roll" philosophy already used for `malloc`/`strlen`/`memchr`/
+`pthread_*` elsewhere in this backend.
 
 A shared `@plum_utf8_decode`/`@plum_utf8_len_at` runtime primitive
 (sequential `icmp`+`br` leading-byte classification, no LLVM `switch`,
@@ -2489,22 +2498,42 @@ membership via a shared `@plum_is_unicode_whitespace` helper (25
 matching Rust's own `char::is_whitespace` bit-for-bit, the ground
 truth the interpreter's own `.trim()` already delegates to).
 
-`.to_upper()`/`.to_lower()` are pure BYTE-level loops that deliberately
-never decode UTF-8 at all — correct without decoding because ASCII
-bytes are never continuation bytes nor multi-byte leading bytes, so a
-byte scan leaves every multi-byte sequence untouched without needing
-to know character boundaries. Fixed output length == input length
-(exactly why ASCII-only can stay a simple fixed-length transform while
-full Unicode case mapping's multi-codepoint expansions could not).
-**The scope cut is a real, deliberate divergence from this section's
-own "Unicode-aware case conversion" language**: the compiled backend
-only converts `a-z`/`A-Z`; every other byte (including any byte that's
-part of a multi-byte UTF-8 sequence) passes through completely
-unchanged, unlike the interpreter's full `str::to_uppercase()`/
-`to_lowercase()`. Proven explicitly in both directions by a real
-compile-and-run test: an ASCII string case-converts correctly AND a
-string containing a non-ASCII letter passes through unchanged by both
-operations.
+`.to_upper()`/`.to_lower()` (revised 2026-08-03) call libc's
+`towupper`/`towlower` — locale-aware, one-codepoint-in-one-codepoint-
+out functions confirmed via real scratch-C-program testing against
+this platform's glibc to give genuine Unicode-aware SIMPLE case
+mapping across the vast majority of scripts (e.g. `é`(U+00E9) ->
+`É`(U+00C9) under `C.utf8`). A one-time `@plum_locale_init()` (called
+unconditionally from `plumc`'s generated `@main`, before
+`@plum_init_globals()`) sets the process locale to `C.utf8` — glibc
+otherwise defaults to the ASCII-only "C" locale, in which
+`towupper`/`towlower` silently reproduce the exact ASCII-only behavior
+this revision replaces. `C.utf8` (built into glibc since 2.35) is used
+over e.g. `en_US.UTF-8` for portability, since it needs no locale to be
+installed on the target system. Two new small runtime primitives
+support this: `@plum_utf8_encoded_len` (classify an already-known
+codepoint's UTF-8 byte length) and `@plum_utf8_encode` (the inverse of
+`@plum_utf8_decode` — write a codepoint back out as UTF-8 bytes).
+`@plum_str_to_upper`/`@plum_str_to_lower` are two-pass, mirroring
+`@plum_str_runes`'s "count then fill, re-decoding/re-mapping in both
+passes rather than caching" shape: pass 1 maps each codepoint via
+`towupper`/`towlower` and sums the MAPPED codepoints' encoded lengths
+(case mapping can change a character's UTF-8 byte length); pass 2
+re-maps identically and encodes into the freshly allocated destination.
+**The one remaining, precisely-scoped divergence from this section's
+"Unicode-aware case conversion" language**: multi-codepoint expansions
+(German `ß`→`"SS"`) structurally cannot happen through `towupper`/
+`towlower`'s 1-in-1-out C signature, so `ß` stays `ß` — proven by a
+dedicated compile-and-run test alongside tests proving real non-ASCII
+mapping in both directions (`é`↔`É`) and that plain ASCII still
+converts correctly. Because case mapping can now change total byte
+length, the `_inplace` reuse variants that existed under the old
+fixed-length ASCII scheme are gone — `StrToUpperReuse`/
+`StrToLowerReuse` instead follow `StrReplaceReuse`'s own precedent
+(see the memory-corruption hazard paragraph below, on `.replace()`'s
+own reuse branch): once uniquely owned, call the same fresh-allocating
+function and `@free` the old cell directly, rather than mutate in
+place.
 
 `.replace()`/`.split()` share a `@plum_str_count_matches` helper
 (extending the existing `@plum_str_contains` double-loop precedent to

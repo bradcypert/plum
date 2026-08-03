@@ -795,8 +795,17 @@ pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue], has_globals: 
     // that case — calling it unconditionally would be an undefined-
     // symbol link error.
     let init_globals_call = if has_globals { "  call void @plum_init_globals()\n" } else { "" };
+    // `@plum_locale_init()` — sets the process-wide locale to `C.utf8`
+    // once, unconditionally (matching `plum_codegen::emit_runtime`'s own
+    // "always emit every runtime helper" precedent, rather than gating
+    // this one call behind a flag), so `towupper`/`towlower` (which
+    // `.to_upper()`/`.to_lower()` compile down to — see `plum-codegen`'s
+    // `emit_runtime`) do real Unicode case mapping instead of silently
+    // degrading to the ASCII-only "C" locale glibc otherwise defaults
+    // to. Placed BEFORE `@plum_init_globals()` in case a global
+    // initializer itself calls `.to_upper()`/`.to_lower()`.
     format!(
-        "@fmt = constant [{fmt_len} x i8] c\"{fmt_bytes}\"\n\ndefine i32 @main() {{\nentry:\n{init_globals_call}{call_line}  ret i32 0\n}}\n"
+        "@fmt = constant [{fmt_len} x i8] c\"{fmt_bytes}\"\n\ndefine i32 @main() {{\nentry:\n  call void @plum_locale_init()\n{init_globals_call}{call_line}  ret i32 0\n}}\n"
     )
 }
 
@@ -1632,36 +1641,59 @@ mod tests {
     }
 
     #[test]
-    fn to_upper_converts_ascii_and_leaves_non_ascii_completely_untouched() {
-        // Direction 1: ASCII converts. `é`'s two UTF-8 bytes (0xC3 0xA9)
-        // are both >= 0x80 — outside the `[0x61, 0x7A]` byte range this
-        // backend's ASCII-only `.to_upper()` checks — so they pass
-        // through byte-for-byte unchanged; a FULL-Unicode `.to_upper()`
-        // (the interpreter's own behavior) would instead produce "CAFÉ".
+    fn to_upper_maps_real_unicode_non_ascii_letters() {
+        // `é`(U+00E9) -> `É`(U+00C9) via real libc `towupper` under the
+        // `C.utf8` locale `@plum_locale_init` sets — proves genuine
+        // non-ASCII Unicode case mapping in actually-executed native
+        // code, not just ASCII bytes.
         let src = "let go (): String = \"Hello café\".to_upper()";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
-        assert_eq!(out, "HELLO CAFé");
+        assert_eq!(out, "HELLO CAFÉ");
     }
 
     #[test]
-    fn to_lower_converts_ascii_and_leaves_non_ascii_completely_untouched() {
-        // Direction 2: an UPPERCASE non-ASCII letter also passes through
-        // unchanged (not just "non-ASCII in general") — `É`'s bytes
-        // (0xC3 0x89) are likewise both outside `[0x41, 0x5A]`.
+    fn to_lower_maps_real_unicode_non_ascii_letters() {
+        // The reverse direction: `É`(U+00C9) -> `é`(U+00E9) via `towlower`.
         let src = "let go (): String = \"HELLO CAFÉ\".to_lower()";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
-        assert_eq!(out, "hello cafÉ");
+        assert_eq!(out, "hello café");
     }
 
     #[test]
-    fn to_upper_reuse_path_is_also_ascii_only() {
+    fn to_upper_still_converts_plain_ascii() {
+        let src = "let go (): String = \"abc\".to_upper()";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "ABC");
+    }
+
+    #[test]
+    fn to_upper_leaves_sharp_s_unchanged_documenting_the_remaining_gap() {
+        // The one remaining, precisely-scoped divergence from the
+        // interpreter's full Unicode `str::to_uppercase()`: German `ß`
+        // expands to TWO codepoints (`"SS"`), which cannot happen
+        // through `towupper`'s one-codepoint-in-one-codepoint-out C
+        // signature, so `ß` passes through unchanged.
+        let src = "let go (): String = \"ß\".to_upper()";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "ß");
+    }
+
+    #[test]
+    fn to_upper_reuse_path_also_maps_real_unicode() {
         // `s.to_upper()` on a bare `Var` lowers to `StrToUpperReuse` —
-        // proves the in-place byte-transform reuse branch (`@plum_str_
-        // to_upper_inplace`) matches the fresh branch's ASCII-only
-        // scope cut exactly, not just its general shape.
+        // proves the free-then-fresh-call reuse branch produces the
+        // exact same mapped result as the fresh branch, not just the
+        // same general shape.
         let src = "let go (): String = { let s = \"abc é\"; s.to_upper() }";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
-        assert_eq!(out, "ABC é");
+        assert_eq!(out, "ABC É");
+    }
+
+    #[test]
+    fn to_lower_reuse_path_also_maps_real_unicode() {
+        let src = "let go (): String = { let s = \"ABC É\"; s.to_lower() }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "abc é");
     }
 
     /// Shared by every `.split()` test below — flattens the resulting
