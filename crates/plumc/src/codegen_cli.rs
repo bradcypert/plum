@@ -584,7 +584,7 @@ pub fn reject_unprintable_return(entry_fn: &str, ret: CgType) -> Result<(), Stri
 /// temp file, shell out to `clang` to compile+link it, then run the
 /// resulting binary and capture its stdout.
 pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<String, String> {
-    let (body_ir, signatures, resolved_entry) = compile_to_ir(src, entry_fn)?;
+    let (body_ir, signatures, resolved_entry, has_globals) = compile_to_ir(src, entry_fn)?;
     let sig = signatures
         .get(&resolved_entry)
         .ok_or_else(|| format!("codegen: no such function {entry_fn:?}"))?
@@ -606,7 +606,7 @@ pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<St
     }
     reject_unprintable_return(entry_fn, sig.ret.clone())?;
 
-    let main_ir = emit_main(&resolved_entry, sig.ret, args);
+    let main_ir = emit_main(&resolved_entry, sig.ret, args, has_globals);
     let full_ir = format!("{body_ir}\n{main_ir}");
 
     run_via_clang(&full_ir)
@@ -623,7 +623,7 @@ pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<St
 /// concrete `FnSig` (including every monomorphized instantiation, keyed
 /// by its MANGLED name), and `entry_fn`'s own resolved (possibly
 /// mangled) name.
-fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, FnSig>, String), String> {
+fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, FnSig>, String, bool), String> {
     let tokens = Lexer::new(src).tokenize();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().map_err(|e| format!("parse error: {e}"))?;
@@ -641,7 +641,7 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
 /// modules` already injects it once at the root module before merging —
 /// see that module's own doc comment). `compile_to_ir` above is now just
 /// a two-line parse+prelude shim in front of this.
-pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(String, HashMap<String, FnSig>, String), String> {
+pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(String, HashMap<String, FnSig>, String, bool), String> {
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
     let mut tag_fields = derive_tag_fields(program, &type_ctx);
     let variant_payload_types = derive_variant_payload_types(program, &type_ctx);
@@ -715,13 +715,13 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
         tag_fields.insert(mangled.clone(), cg_fields);
     }
 
-    // Every top-level FUNCTION's signature (globals are out of v1
-    // codegen scope, filtered out here rather than left for
-    // `plum_codegen::emit_program`'s own — separate — global-rejection
-    // check to catch, since a global's `types` entry is just its
-    // value's type, not a `Type::Function`, and would otherwise
-    // produce a confusing "not Int/Float/Bool/Unit" error instead of
-    // codegen's own clearer "globals aren't supported" one). A GENERIC
+    // Every top-level FUNCTION's signature — a global's `types` entry is
+    // filtered out here (rather than accidentally treated as a
+    // function's) because it's just its VALUE's type directly, not a
+    // `Type::Function` — the `let PlumType::Function(..) = ty else {
+    // ... }` below would otherwise report a confusing internal-error
+    // panic-shaped message for every ordinary global. See the dedicated
+    // global-type derivation loop just below this one instead. A GENERIC
     // function's own (unmangled) name is never in `function_names`
     // (only its mangled instantiations are — see `MonoPlan::functions`),
     // so this loop naturally skips it; its mangled entries come from
@@ -748,6 +748,36 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
         signatures.insert(mangled.clone(), FnSig { params: cg_params, ret: cg_ret });
     }
 
+    // Every top-level GLOBAL's own concrete `CgType`, mirroring exactly
+    // how function signatures are derived just above: a global's own
+    // `types[name]` entry IS its value's type directly (no `Type::
+    // Function` destructuring needed, unlike a function's entry).
+    // `ir_program.globals` (unlike `.functions`) is never touched by
+    // `mono_plan` (monomorphization stays fully out of globals' scope —
+    // see `MonoPlan::functions`'s own doc comment/the comment just above
+    // `ir_program.functions = mono_plan.functions` earlier in this
+    // function), so every global's name here is always its plain,
+    // unmangled surface name.
+    //
+    // KNOWN, DEFERRED GAP: a global whose initializer calls a GENERIC
+    // function would still type-check fine here (`types[name]` is a
+    // perfectly concrete type either way), but `signatures`/`tag_fields`
+    // only ever contain MANGLED, monomorphized entries for a generic
+    // function — `plum_codegen::emit_program`'s own generated
+    // `@plum_init_globals` would then reference the function's plain,
+    // unmangled name and fail with a "no signature known"/"unbound
+    // variable" style error rather than a clearer, dedicated rejection.
+    // Calling an ORDINARY, non-generic function from a global (the
+    // required case for this chunk) is unaffected. See `plum_codegen::
+    // emit_program`'s own doc comment for the matching note on that side.
+    let mut global_types: HashMap<String, CgType> = HashMap::new();
+    for g in &ir_program.globals {
+        let ty = types
+            .get(&g.name)
+            .ok_or_else(|| format!("codegen: internal error — no type known for global {:?}", g.name))?;
+        global_types.insert(g.name.clone(), plum_type_to_cg_type(ty)?);
+    }
+
     // `entry_fn` may name a GENERIC function with more than one reachable
     // instantiation — there's no single concrete signature to compile a
     // `main` wrapper against in that case, so it's rejected with a clear
@@ -765,7 +795,14 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
         _ => entry_fn.to_string(),
     };
 
-    let mut body_ir = plum_codegen::emit_program(&ir_program, &signatures, &tag_fields)?;
+    // `has_globals` is read from `ir_program.globals` BEFORE the `main`-
+    // collision rename below (that rename only ever touches `body_ir`'s
+    // text/`signatures`' keys, never `ir_program` itself) — mirroring
+    // the interpreter's own `load_program` ordering invariant: every
+    // global must be fully materialized before `emit_main`'s generated
+    // native `main()` calls the resolved entry function.
+    let has_globals = !ir_program.globals.is_empty();
+    let mut body_ir = plum_codegen::emit_program(&ir_program, &signatures, &tag_fields, &global_types)?;
 
     // A real collision, not a hypothetical one: `plumc build`'s own
     // fixed convention (matching the interpreter CLI's — see main.rs)
@@ -798,7 +835,7 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
         resolved_entry = "__plum_entry_main".to_string();
     }
 
-    Ok((body_ir, signatures, resolved_entry))
+    Ok((body_ir, signatures, resolved_entry, has_globals))
 }
 
 /// A hand-written LLVM `main` — not something `plum_codegen` itself
@@ -808,7 +845,7 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
 /// library one. Declares `printf` from libc (which `clang` links
 /// against automatically) to make the entry point's result
 /// observable via stdout.
-pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
+pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue], has_globals: bool) -> String {
     let args_ir = args
         .iter()
         .map(|a| match a {
@@ -875,8 +912,19 @@ pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue]) -> String {
     // `@printf` is NOT re-declared here — `plum_codegen::emit_runtime`
     // already declares it unconditionally (needed by `@plum_abort`), and
     // LLVM IR rejects a duplicate `declare` for the same function.
+    //
+    // `has_globals` prepends a call to `plum_codegen::emit_program`'s
+    // generated `@plum_init_globals()` — BEFORE `call_line`'s own call
+    // to `entry_fn` — matching the interpreter's own `load_program`
+    // ordering invariant (every global fully materialized before any
+    // user code runs). Omitted entirely (not even an empty no-op call)
+    // when the compiled program has no globals at all, since `plum_
+    // codegen::emit_program` itself never emits `@plum_init_globals` in
+    // that case — calling it unconditionally would be an undefined-
+    // symbol link error.
+    let init_globals_call = if has_globals { "  call void @plum_init_globals()\n" } else { "" };
     format!(
-        "@fmt = constant [{fmt_len} x i8] c\"{fmt_bytes}\"\n\ndefine i32 @main() {{\nentry:\n{call_line}  ret i32 0\n}}\n"
+        "@fmt = constant [{fmt_len} x i8] c\"{fmt_bytes}\"\n\ndefine i32 @main() {{\nentry:\n{init_globals_call}{call_line}  ret i32 0\n}}\n"
     )
 }
 
@@ -1006,7 +1054,7 @@ fn run_via_clang_with_c_helper(ir: &str, c_source: &str) -> Result<String, Strin
 /// with_c_helper`'s own doc comment for why this variant exists at all.
 #[cfg(test)]
 fn compile_and_run_with_c_helper(src: &str, entry_fn: &str, args: &[CgValue], c_source: &str) -> Result<String, String> {
-    let (body_ir, signatures, resolved_entry) = compile_to_ir(src, entry_fn)?;
+    let (body_ir, signatures, resolved_entry, has_globals) = compile_to_ir(src, entry_fn)?;
     let sig = signatures
         .get(&resolved_entry)
         .ok_or_else(|| format!("codegen: no such function {entry_fn:?}"))?
@@ -1028,7 +1076,7 @@ fn compile_and_run_with_c_helper(src: &str, entry_fn: &str, args: &[CgValue], c_
     }
     reject_unprintable_return(entry_fn, sig.ret.clone())?;
 
-    let main_ir = emit_main(&resolved_entry, sig.ret, args);
+    let main_ir = emit_main(&resolved_entry, sig.ret, args, has_globals);
     let full_ir = format!("{body_ir}\n{main_ir}");
 
     run_via_clang_with_c_helper(&full_ir, c_source)
@@ -1063,6 +1111,140 @@ mod tests {
     fn plain_arithmetic_compiles_and_runs() {
         let out = compile_and_run("let go () = 2 + 3 * 4", "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "14");
+    }
+
+    // --- Non-constant global initializers ---
+    //
+    // Mirrors `plum-interp`'s own precedent for each shape one-to-one
+    // (see that crate's "Zero-parameter top-level `let` (globals)"
+    // section) — proving the exact same source programs the interpreter
+    // already runs correctly ALSO compile and run correctly through the
+    // LLVM backend now that `plum_codegen::emit_program` supports
+    // globals at all.
+
+    #[test]
+    fn a_simple_constant_global_compiles_and_runs() {
+        let out = compile_and_run("let x = 5\nlet go (): Int = x + 1", "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "6");
+    }
+
+    #[test]
+    fn a_global_can_reference_an_earlier_global() {
+        let src = "let a = 1\nlet b = a + 1\nlet go (): Int = b + 1";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "3");
+    }
+
+    #[test]
+    fn a_global_can_call_a_function_declared_after_it_in_source() {
+        // The genuinely non-constant case this whole chunk exists for:
+        // `double` is declared AFTER `x` textually, which only works
+        // because EVERY function is registered (its `FnSig` known to
+        // codegen) before `@plum_init_globals()` ever runs any
+        // initializer — matching the interpreter's own `load_program`
+        // "functions first and unconditionally" ordering invariant.
+        let src = "let x = double(5)\nlet double (n: Int): Int = n * 2\nlet go (): Int = x";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "10");
+    }
+
+    #[test]
+    fn a_function_can_reference_a_global_declared_earlier() {
+        let src = "let pi_ish = 3\nlet area (r: Int): Int = pi_ish * r * r\nlet go (): Int = area(2)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "12");
+    }
+
+    #[test]
+    fn a_self_referential_global_closure_can_call_itself() {
+        // The global-scope counterpart to `plum-interp`'s own local
+        // `a_self_referential_local_closure_can_call_itself` test (`{
+        // let fib = |n| if n < 2 { n } else { fib(n-1) + fib(n-2) };
+        // fib(10) }`) — except `fib` is now a top-level GLOBAL, not a
+        // local `let`, proving the plan's "self-referential global
+        // closures need no special-casing" claim holds for REAL
+        // generated code, not just in the design reasoning: `fib`'s own
+        // body is a separate top-level `define`, only ever `call`ed
+        // AFTER `@plum_init_globals()` has already fully run and stored
+        // the closure cell into `@global.fib`, so its own internal
+        // `Var("fib")` reference resolves through the ordinary third
+        // `Var`-resolution tier (a `load`) and finds a fully-
+        // materialized value every time.
+        let src = "let fib = |n: Int| if n < 2 { n } else { fib(n - 1) + fib(n - 2) }\nlet go (): Int = fib(10)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "55");
+    }
+
+    #[test]
+    fn a_heap_allocating_global_is_referenced_from_multiple_functions_without_double_alloc_or_crash() {
+        // `origin` is allocated exactly ONCE by `@plum_init_globals`
+        // and never released for the rest of the program's life — both
+        // `sum_x`/`sum_y` read its fields through the SAME slot's
+        // `load`, never through a second, independent allocation.
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let origin = Point { x: 3, y: 4 }\n\
+            let sum_x (dummy: Int): Int = match origin { Point(x, y) => x + dummy }\n\
+            let sum_y (dummy: Int): Int = match origin { Point(x, y) => y + dummy }\n\
+            let go (): Int = sum_x(0) + sum_y(0)\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "7");
+    }
+
+    /// A tiny C helper with a static call counter — the observable proof
+    /// that a global's initializer runs EXACTLY once, not once per
+    /// reference: if `@plum_init_globals` ever re-evaluated `counter`'s
+    /// own initializer (rather than every later reference correctly
+    /// LOADING the already-stored slot), `ffitest_bump_and_get`'s own
+    /// static counter would be greater than 1 by the time `go` reads it.
+    const CALL_COUNTER_C_HELPER: &str = r#"
+        static long long ffitest_call_count = 0;
+        long long ffitest_bump_and_get(void) {
+            ffitest_call_count += 1;
+            return ffitest_call_count;
+        }
+        long long ffitest_get_call_count(void) {
+            return ffitest_call_count;
+        }
+    "#;
+
+    #[test]
+    fn a_global_initializer_is_evaluated_exactly_once() {
+        let src = r#"
+            extern "C" {
+                fn ffitest_bump_and_get() -> Int;
+                fn ffitest_get_call_count() -> Int;
+            }
+            let counter = unsafe { ffitest_bump_and_get() }
+            let use_it (dummy: Int): Int = counter + counter + dummy
+            let go (): Int = {
+                let _a = use_it(0);
+                let _b = use_it(1);
+                let _c = counter;
+                unsafe { ffitest_get_call_count() }
+            }
+        "#;
+        let out = compile_and_run_with_c_helper(src, "go", &[CgValue::Unit], CALL_COUNTER_C_HELPER).unwrap();
+        assert_eq!(out, "1", "the global's C-calling initializer must run exactly once, not once per reference");
+    }
+
+    #[test]
+    fn a_failing_global_initializer_crashes_the_process_cleanly() {
+        // No new failure mode — `@plum_init_globals()` runs as ordinary
+        // generated code with the same crash semantics any other Plum
+        // expression already has in this backend (an integer division
+        // by zero aborts via `@plum_abort`, see `emit_runtime`'s own
+        // doc comment), not a distinct "the whole program fails to
+        // load" concept the way the interpreter's `load_program`
+        // returning `Err` is.
+        let src = "let x = 1 / 0\nlet go (): Int = x";
+        let err = compile_and_run(src, "go", &[CgValue::Unit])
+            .expect_err("a failing global initializer must crash the compiled process, not silently produce a wrong answer");
+        assert!(
+            err.contains("non-zero status"),
+            "expected a clean non-zero-exit crash, got: {err}"
+        );
     }
 
     #[test]
@@ -1136,9 +1318,9 @@ mod tests {
             let sum_one (n: Int): Int = { let p = Point { x: n, y: n * 2 }; let t = spawn { p.x + p.y }; t.join() }\n\
             let go (): Int = { let mut acc = 0; for i in 0..1000 { acc = acc + sum_one(i); }; acc }\n\
         ";
-        let (body_ir, signatures, resolved_entry) = compile_to_ir(src, "go").unwrap();
+        let (body_ir, signatures, resolved_entry, has_globals) = compile_to_ir(src, "go").unwrap();
         let sig = signatures.get(&resolved_entry).unwrap().clone();
-        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit]);
+        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit], has_globals);
         let full_ir = format!("{body_ir}\n{main_ir}");
 
         let dir = unique_temp_dir("plumc-asan");
@@ -1450,7 +1632,7 @@ mod tests {
             let identity[T] (x: T): T = x\n\
             let go (): Int = { let n = identity(5); let b = identity(true); n + (if b { 1 } else { 0 }) }\n\
         ";
-        let (_body_ir, signatures, _entry) = compile_to_ir(src, "go").unwrap();
+        let (_body_ir, signatures, _entry, _has_globals) = compile_to_ir(src, "go").unwrap();
         assert!(signatures.contains_key("identity$Int"), "signatures: {:?}", signatures.keys());
         assert!(signatures.contains_key("identity$Bool"), "signatures: {:?}", signatures.keys());
         assert!(!signatures.contains_key("identity"));
@@ -1985,7 +2167,7 @@ mod tests {
     /// working native executable, not just that codegen succeeds.
     fn build_and_run_project(root: &std::path::Path, out_path: &std::path::Path) -> Result<String, String> {
         let program = crate::project::resolve_project(root)?;
-        let (body_ir, signatures, resolved_entry) = compile_program_to_ir(&program, "main")?;
+        let (body_ir, signatures, resolved_entry, has_globals) = compile_program_to_ir(&program, "main")?;
         let sig = signatures
             .get(&resolved_entry)
             .ok_or_else(|| "codegen: no such function \"main\"".to_string())?
@@ -1997,7 +2179,7 @@ mod tests {
             ));
         }
         reject_unprintable_return("main", sig.ret.clone())?;
-        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit]);
+        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit], has_globals);
         let full_ir = format!("{body_ir}\n{main_ir}");
         compile_ir_to_binary(&full_ir, out_path)?;
 
@@ -2308,9 +2490,9 @@ mod tests {
     }
 
     fn run_under_sanitizer_with_src(src: &str, sanitizer_flag: &str, dir_prefix: &str, expected_stdout: &str) {
-        let (body_ir, signatures, resolved_entry) = compile_to_ir(src, "go").unwrap();
+        let (body_ir, signatures, resolved_entry, has_globals) = compile_to_ir(src, "go").unwrap();
         let sig = signatures.get(&resolved_entry).unwrap().clone();
-        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit]);
+        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit], has_globals);
         let full_ir = format!("{body_ir}\n{main_ir}");
 
         let dir = unique_temp_dir(dir_prefix);

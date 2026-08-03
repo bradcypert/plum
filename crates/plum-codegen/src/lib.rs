@@ -2384,21 +2384,36 @@ fn emit_extern_declares(externs: &[ir::ExternFn], signatures: &HashMap<String, F
 /// non-generic-struct/enum heap values (`Ctor`/`CtorReuse`/
 /// `RcAnnotated`/`Match`, refcounted via four small runtime functions
 /// emitted alongside the program itself — see `emit_runtime`).
-/// `program.globals` and every other `ir::Expr` variant not otherwise
-/// mentioned above (closures inside generics, more concurrency shapes,
-/// ...) are out of scope for now and produce a clear error naming what's
+/// `program.globals` (top-level, non-function `let`s) IS supported —
+/// each gets its own LLVM global slot (`@global.<name>`, see below) plus
+/// a generated `@plum_init_globals()` function that codegens every
+/// initializer, in declaration order, using this exact same machinery
+/// (`codegen_expr`) any function body already uses; `global_types` must
+/// contain an entry for every `program.globals` entry, mirroring
+/// `signatures`'s own "must contain an entry for every function called"
+/// contract. Every other `ir::Expr` variant not otherwise mentioned
+/// above (closures inside generics, more concurrency shapes, ...) is
+/// still out of scope for now and produces a clear error naming what's
 /// missing, never a panic — see this crate's tests for the exact error
-/// shapes. `program.externs` (`extern "C"` FFI) IS supported, scoped to
-/// scalar (`Int`/`Float`/`Bool`) + `CStr` + C-callback parameters/
-/// returns + struct-by-value (real named LLVM aggregate types, letting
-/// LLVM's own backend handle System V ABI classification — see
-/// `collect_extern_struct_types`/`codegen::build_c_struct_value`/
-/// `codegen::build_ctor_from_c_struct`) — the last deferred FFI piece,
-/// now closed.
-pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, tag_fields: &TagFields) -> Result<String, String> {
-    if !program.globals.is_empty() {
-        return Err("codegen does not yet support top-level globals (v1 scope is functions only)".to_string());
-    }
+/// shapes. A global whose initializer calls a still-GENERIC function is
+/// a known, narrower gap than that: `signatures`/`tag_fields` only ever
+/// contain monomorphized (mangled) entries, so a global referencing an
+/// unmangled generic name surfaces as an "unknown function" error rather
+/// than a dedicated, clearer rejection — deferred, since resolving it
+/// needs `plum_ir::monomorphize`'s own plan threaded through globals
+/// too, not something this crate can fix on its own. `program.externs`
+/// (`extern "C"` FFI) IS supported, scoped to scalar (`Int`/`Float`/
+/// `Bool`) + `CStr` + C-callback parameters/returns + struct-by-value
+/// (real named LLVM aggregate types, letting LLVM's own backend handle
+/// System V ABI classification — see `collect_extern_struct_types`/
+/// `codegen::build_c_struct_value`/`codegen::build_ctor_from_c_struct`)
+/// — the last deferred FFI piece, now closed.
+pub fn emit_program(
+    program: &ir::Program,
+    signatures: &HashMap<String, FnSig>,
+    tag_fields: &TagFields,
+    global_types: &HashMap<String, CgType>,
+) -> Result<String, String> {
     let extern_struct_types = collect_extern_struct_types(&program.externs);
     let extern_struct_type_decls = emit_extern_struct_types(&extern_struct_types)?;
     let extern_declares = emit_extern_declares(&program.externs, signatures)?;
@@ -2434,6 +2449,13 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
             register_array_elem_type(&mut needed_arrays.borrow_mut(), p);
         }
         register_array_elem_type(&mut needed_arrays.borrow_mut(), &sig.ret);
+    }
+    // Same reasoning as the two loops above, applied to globals: an
+    // Array-typed global needs its own element-release function even if
+    // no function signature/struct field happens to mention that exact
+    // element type either.
+    for ty in global_types.values() {
+        register_array_elem_type(&mut needed_arrays.borrow_mut(), ty);
     }
 
     // Function bodies are emitted BEFORE the runtime preamble text is
@@ -2504,9 +2526,27 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
             &needs_channel_runtime,
             &externs,
             &c_callback_trampolines,
+            global_types,
         )?);
         bodies.push('\n');
     }
+
+    // `@plum_init_globals()` — codegens every `program.globals`
+    // initializer, in declaration order, into ONE generated function
+    // using the exact same `codegen_expr` machinery any ordinary
+    // function body already uses, storing each result into its own
+    // slot (`@global.<name>`, declared alongside). Built and walked
+    // HERE, alongside the ordinary function bodies above (not after —
+    // same "collect everything while emitting bodies, then finalize"
+    // convention `needed_arrays`/`needs_spawn_runtime`/etc. themselves
+    // already established), so a global initializer that itself spawns/
+    // channels/uses an array is correctly reflected in all those shared
+    // tables before the whole-program checks and runtime-emission
+    // decisions right below run. Only built at all when `program.
+    // globals` is non-empty, matching the "pay only for what's used"
+    // convention already established for the spawn/channel runtime.
+    let (global_slots, init_globals_fn) =
+        emit_init_globals(&program.globals, global_types, signatures, &tag_ids, tag_fields, &needed_arrays, &closure_counter, &closure_defs, &trampolines, &needs_spawn_runtime, &needs_channel_runtime, &externs, &c_callback_trampolines)?;
 
     // The whole-program closure/task-field rejection fires whenever
     // EITHER spawn OR channels are used — a channel send can smuggle a
@@ -2532,6 +2572,11 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
     if *needs_channel_runtime.borrow() {
         out.push_str(&emit_channel_runtime());
     }
+    // `@global.<name>` slot declarations — placed here, before every
+    // `define`, purely for human-readability of the generated `.ll`
+    // (LLVM IR itself doesn't require a global's declaration to
+    // textually precede whatever references it).
+    out.push_str(&global_slots);
     // Every closure-literal-site-generated function/release function/
     // trampoline/spawn-entry-function, discovered while walking
     // `program.functions` above — spliced in here, same "collect
@@ -2542,6 +2587,11 @@ pub fn emit_program(program: &ir::Program, signatures: &HashMap<String, FnSig>, 
         out.push_str(&def);
         out.push('\n');
     }
+    // `@plum_init_globals()` itself — placed just before the ordinary
+    // function bodies, matching `emit_main`'s own call-site ordering
+    // requirement (`plumc::codegen_cli::emit_main`'s `has_globals`
+    // parameter calls this BEFORE the resolved entry function).
+    out.push_str(&init_globals_fn);
     out.push_str(&bodies);
     Ok(out)
 }
@@ -2560,6 +2610,7 @@ fn emit_function(
     needs_channel_runtime: &std::cell::RefCell<bool>,
     externs: &HashMap<String, ir::ExternFn>,
     c_callback_trampolines: &std::cell::RefCell<HashMap<String, String>>,
+    global_types: &HashMap<String, CgType>,
 ) -> Result<String, String> {
     let sig = signatures
         .get(&f.name)
@@ -2587,6 +2638,7 @@ fn emit_function(
         needs_channel_runtime,
         externs,
         c_callback_trampolines,
+        globals: global_types,
     };
 
     let mut env = HashMap::new();
@@ -2624,6 +2676,105 @@ fn emit_function(
     Ok(out)
 }
 
+/// Builds `@plum_init_globals()` (plus its `@global.<name>` slot
+/// declarations) — the direct structural counterpart to `emit_function`
+/// above, adapted for a whole PROGRAM's worth of independent top-level
+/// initializer expressions instead of one function's single body:
+/// each `globals` entry is codegen'd with a FRESH, empty `Env` (a
+/// global initializer never sees any OTHER global as a local binding —
+/// only through `Ctx::globals`'s own third `Var`-resolution tier, which
+/// is exactly what makes a later global's reference to an earlier one a
+/// `load`, never a re-evaluation) via `codegen_expr` (not
+/// `codegen_value` directly — a global initializer can legally contain
+/// the full statement grammar, e.g. a `Let`/`If`, that `codegen_value`
+/// alone doesn't handle), then the result is `store`d into its own
+/// slot. Returns `(String::new(), String::new())` for an empty
+/// `globals` slice — the caller (`emit_program`) still always calls
+/// this (rather than gating the call itself) so the "collect shared
+/// side-table state before finalizing" ordering stays uniform, but
+/// pays zero output cost for a program with no globals at all.
+#[allow(clippy::too_many_arguments)]
+fn emit_init_globals(
+    globals: &[ir::Global],
+    global_types: &HashMap<String, CgType>,
+    signatures: &HashMap<String, FnSig>,
+    tag_ids: &HashMap<String, i64>,
+    tag_fields: &TagFields,
+    needed_arrays: &std::cell::RefCell<HashMap<String, CgType>>,
+    closure_counter: &std::cell::RefCell<usize>,
+    closure_defs: &std::cell::RefCell<Vec<String>>,
+    trampolines: &std::cell::RefCell<HashMap<String, String>>,
+    needs_spawn_runtime: &std::cell::RefCell<bool>,
+    needs_channel_runtime: &std::cell::RefCell<bool>,
+    externs: &HashMap<String, ir::ExternFn>,
+    c_callback_trampolines: &std::cell::RefCell<HashMap<String, String>>,
+) -> Result<(String, String), String> {
+    if globals.is_empty() {
+        return Ok((String::new(), String::new()));
+    }
+
+    let mut slot_decls = String::new();
+    for g in globals {
+        let ty = global_types
+            .get(&g.name)
+            .ok_or_else(|| format!("codegen: no type known for global {:?}", g.name))?;
+        slot_decls.push_str(&format!("@global.{} = global {} zeroinitializer\n", g.name, ty.llvm_type()));
+    }
+    slot_decls.push('\n');
+
+    // `caller_sig` only matters for deciding `musttail` eligibility on a
+    // tail-position `Call` (see `Ctx::caller_sig`'s own doc comment) —
+    // irrelevant here since every global initializer is codegen'd with
+    // `tail=false` below, so a throwaway placeholder signature is always
+    // safe, matching `codegen_spawn_literal`'s own `dummy_sig` precedent.
+    let dummy_sig = FnSig { params: vec![], ret: CgType::Unit };
+    let ctx = codegen::Ctx {
+        sigs: signatures,
+        caller_sig: &dummy_sig,
+        tag_ids,
+        tag_fields,
+        fn_name: "plum_init_globals",
+        needed_arrays,
+        closure_counter,
+        closure_defs,
+        trampolines,
+        needs_spawn_runtime,
+        needs_channel_runtime,
+        externs,
+        c_callback_trampolines,
+        globals: global_types,
+    };
+
+    let mut em = codegen::Emitter::new();
+    let empty_env: HashMap<String, (String, CgType)> = HashMap::new();
+    for g in globals {
+        let (result, _) = codegen::codegen_expr(&g.value, &empty_env, &mut em, &ctx, false)?;
+        let (reg, ty) = result.ok_or_else(|| {
+            format!(
+                "internal codegen error: global {:?}'s initializer produced no result (codegen_expr with \
+                 tail=false should always return Some)",
+                g.name
+            )
+        })?;
+        em.lines.push(format!("  store {} {}, ptr @global.{}", ty.llvm_type(), reg, g.name));
+    }
+    em.lines.push("  ret void".to_string());
+
+    let mut out = String::new();
+    for sg in &em.string_globals {
+        out.push_str(sg);
+        out.push('\n');
+    }
+    out.push_str("define void @plum_init_globals() {\n");
+    for line in &em.lines {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("}\n");
+
+    Ok((slot_decls, out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2649,7 +2800,16 @@ mod tests {
     }
 
     fn emit(prog: &Program, s: &HashMap<String, FnSig>, t: &TagFields) -> Result<String, String> {
-        emit_program(prog, s, t)
+        emit_program(prog, s, t, &HashMap::new())
+    }
+
+    fn emit_with_globals(
+        prog: &Program,
+        s: &HashMap<String, FnSig>,
+        t: &TagFields,
+        g: &HashMap<String, CgType>,
+    ) -> Result<String, String> {
+        emit_program(prog, s, t, g)
     }
 
     #[test]
@@ -2815,15 +2975,94 @@ mod tests {
         assert!(err.contains("does not yet support"), "unexpected error: {err}");
     }
 
+    // --- Non-constant global initializers ---
+
+    /// The now-stale full-rejection test, rewritten into a real
+    /// success-path assertion: a single `Int` global gets its own
+    /// `@global.x` slot (zero-initialized) plus a `@plum_init_globals()`
+    /// that stores `1` into it.
     #[test]
-    fn a_global_is_rejected_with_a_clear_error() {
+    fn a_single_global_gets_a_slot_and_an_init_function_store() {
         let prog = Program {
             functions: vec![],
             globals: vec![plum_ir::ir::Global { name: "x".to_string(), value: Expr::Int(1) }],
             externs: vec![],
         };
-        let err = emit(&prog, &HashMap::new(), &TagFields::new()).expect_err("expected globals to be rejected");
-        assert!(err.contains("globals"), "unexpected error: {err}");
+        let ir = emit_with_globals(&prog, &HashMap::new(), &TagFields::new(), &HashMap::from([("x".to_string(), CgType::Int)]))
+            .unwrap_or_else(|e| panic!("expected globals to be supported: {e}"));
+        assert!(ir.contains("@global.x = global i64 zeroinitializer"), "{ir}");
+        assert!(ir.contains("define void @plum_init_globals() {"), "{ir}");
+        // The init function's own body must store `1` into `@global.x`
+        // — extract just its body text so this assertion can't be
+        // satisfied by some unrelated `store` elsewhere in the output.
+        let init_start = ir.find("define void @plum_init_globals() {").unwrap();
+        let init_body = &ir[init_start..];
+        assert!(init_body.contains("store i64 1, ptr @global.x"), "{init_body}");
+    }
+
+    /// A second global that references the first must LOAD the
+    /// already-stored slot, not re-evaluate the first global's own
+    /// initializer expression — proven by asserting the generated text
+    /// contains a `load` from `@global.a`, not a second `store` of `1`
+    /// into it.
+    #[test]
+    fn a_second_global_loads_rather_than_reevaluates_the_first() {
+        let prog = Program {
+            functions: vec![],
+            globals: vec![
+                plum_ir::ir::Global { name: "a".to_string(), value: Expr::Int(1) },
+                plum_ir::ir::Global {
+                    name: "b".to_string(),
+                    value: Expr::Binary(BinOp::Add, Box::new(Expr::Var("a".to_string())), Box::new(Expr::Int(1))),
+                },
+            ],
+            externs: vec![],
+        };
+        let global_types = HashMap::from([("a".to_string(), CgType::Int), ("b".to_string(), CgType::Int)]);
+        let ir = emit_with_globals(&prog, &HashMap::new(), &TagFields::new(), &global_types).unwrap();
+        let init_start = ir.find("define void @plum_init_globals() {").unwrap();
+        let init_body = &ir[init_start..];
+        assert!(init_body.contains("load i64, ptr @global.a"), "{init_body}");
+        assert!(init_body.contains("store i64 1, ptr @global.a"), "{init_body}");
+        // Exactly ONE store into `@global.a` — the only way `b`'s
+        // reference to `a` could "re-evaluate" it would be a SECOND
+        // store into the same slot (re-running `Expr::Int(1)`'s own
+        // codegen a second time).
+        let store_a_count = init_body.lines().filter(|l| l.contains("store") && l.contains("@global.a")).count();
+        assert_eq!(store_a_count, 1, "{init_body}");
+    }
+
+    /// A zero-globals program (the overwhelmingly common case) must
+    /// emit NEITHER `@plum_init_globals` nor any `@global.*` slot —
+    /// regression guard against the new code paying any cost at all
+    /// when unused.
+    #[test]
+    fn zero_globals_emits_no_init_function_or_slots() {
+        let prog = program(vec![Function { name: "go".to_string(), params: vec![], body: Expr::Int(1) }]);
+        let ir = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new()).unwrap();
+        assert!(!ir.contains("@plum_init_globals"), "{ir}");
+        assert!(!ir.contains("@global."), "{ir}");
+    }
+
+    /// A function referencing a global must ALSO go through the third
+    /// `Var`-resolution tier (a `load`), proving the new tier serves
+    /// both `@plum_init_globals` itself and ordinary function bodies.
+    #[test]
+    fn a_function_loads_a_global_through_the_third_var_resolution_tier() {
+        let prog = Program {
+            functions: vec![Function {
+                name: "use_it".to_string(),
+                params: vec![],
+                body: Expr::Var("x".to_string()),
+            }],
+            globals: vec![plum_ir::ir::Global { name: "x".to_string(), value: Expr::Int(5) }],
+            externs: vec![],
+        };
+        let global_types = HashMap::from([("x".to_string(), CgType::Int)]);
+        let ir = emit_with_globals(&prog, &sigs(&[("use_it", vec![], CgType::Int)]), &TagFields::new(), &global_types).unwrap();
+        let fn_start = ir.find("define i64 @use_it(").unwrap();
+        let fn_body = &ir[fn_start..];
+        assert!(fn_body.contains("load i64, ptr @global.x"), "{fn_body}");
     }
 
     #[test]

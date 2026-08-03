@@ -128,7 +128,7 @@ fn run_build(args: &[String]) {
 fn build(project_dir: &str, out_path: &Path) -> Result<(), String> {
     let root = Path::new(project_dir);
     let program = resolve_project(root)?;
-    let (body_ir, signatures, resolved_entry) = compile_program_to_ir(&program, "main")?;
+    let (body_ir, signatures, resolved_entry, has_globals) = compile_program_to_ir(&program, "main")?;
     let sig = signatures
         .get(&resolved_entry)
         .ok_or_else(|| "codegen: no such function \"main\" — every buildable project needs a `main` entry point".to_string())?
@@ -145,7 +145,7 @@ fn build(project_dir: &str, out_path: &Path) -> Result<(), String> {
         ));
     }
     reject_unprintable_return("main", sig.ret.clone())?;
-    let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit]);
+    let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit], has_globals);
     let full_ir = format!("{body_ir}\n{main_ir}");
     compile_ir_to_binary(&full_ir, out_path)
 }

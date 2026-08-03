@@ -194,6 +194,23 @@ pub(crate) struct Ctx<'a> {
     /// a naming collision. See `codegen_callback_arg`/`emit_c_callback_
     /// trampoline_fn`.
     pub(crate) c_callback_trampolines: &'a std::cell::RefCell<HashMap<String, String>>,
+    /// Every top-level `Global`'s name -> its concrete `CgType` — built
+    /// ONCE in `lib.rs::emit_program` (mirroring `sigs`'s own "built
+    /// once, referenced read-only everywhere" shape) from the caller's
+    /// (`plumc`'s) own parallel derivation off `Infer::infer_program`'s
+    /// `types` map. This is the THIRD, and last, tier of `Expr::Var`
+    /// resolution (`env` -> `sigs` -> `globals` -> error) — see
+    /// `codegen_value`'s `Expr::Var` arm. Deliberately NEVER consulted
+    /// by anything that populates an `Env`: a global is always resolved
+    /// through THIS table, never inserted as an `env` entry anywhere,
+    /// which is exactly what makes `free_vars_scoped` need zero changes
+    /// to correctly exclude a global from a closure's capture set (see
+    /// that function's own `Expr::Var` arm — a name only becomes a
+    /// capture candidate if `env.contains_key(name)`) — a global has a
+    /// fixed, whole-program-lifetime address and needs no capture/
+    /// snapshot at all, exactly like a bare function reference already
+    /// doesn't.
+    pub(crate) globals: &'a HashMap<String, CgType>,
 }
 
 /// Registers `elem` (and any type it recursively contains) into
@@ -1479,6 +1496,7 @@ fn emit_closure_body_fn(
         needs_channel_runtime: ctx.needs_channel_runtime,
         externs: ctx.externs,
         c_callback_trampolines: ctx.c_callback_trampolines,
+        globals: ctx.globals,
     };
     let (result, _) = codegen_expr(body, &env, &mut em, &inner_ctx, true)?;
     if result.is_some() {
@@ -2563,6 +2581,7 @@ fn emit_spawn_entry_fn(fn_name: &str, captures: &[(String, CgType)], block: &Exp
         needs_channel_runtime: ctx.needs_channel_runtime,
         externs: ctx.externs,
         c_callback_trampolines: ctx.c_callback_trampolines,
+        globals: ctx.globals,
     };
     let (result, _) = codegen_expr(block, &env, &mut em, &inner_ctx, false)?;
     let (reg, ty) = result.ok_or_else(|| {
@@ -2978,24 +2997,34 @@ fn codegen_select(
 fn codegen_call(callee: &Expr, args: &[Expr], env: &Env, em: &mut Emitter, ctx: &Ctx, allow_musttail: bool) -> Result<(String, CgType, bool), String> {
     if let Expr::Var(name) = callee {
         if !env.contains_key(name) {
-            // A bare identifier, not shadowed by a local — it MUST
-            // name a known top-level function (a completely unknown
-            // name can never resolve via the indirect/closure path
-            // either, since that path's own `Var` handling in
-            // `codegen_value` falls back to exactly this same
-            // `ctx.sigs` lookup — see that function's own doc comment).
-            // Reported directly here for a clearer, more specific error
-            // than letting it fall through to `codegen_value`'s own
-            // generic "unbound variable" message.
-            let sig = ctx.sigs.get(name).cloned().ok_or_else(|| format!("codegen: unknown function {name:?}"))?;
-            let args_ir = codegen_call_args(args, env, em, ctx, &sig, name)?;
-            let reg = em.fresh_reg();
-            if allow_musttail && *ctx.caller_sig == sig {
-                em.push(format!("  {reg} = musttail call {} @{name}({args_ir})", sig.ret.llvm_type()));
-                return Ok((reg, sig.ret, true));
+            if let Some(sig) = ctx.sigs.get(name).cloned() {
+                // A bare identifier, not shadowed by a local, naming a
+                // known top-level FUNCTION — the DIRECT path.
+                let args_ir = codegen_call_args(args, env, em, ctx, &sig, name)?;
+                let reg = em.fresh_reg();
+                if allow_musttail && *ctx.caller_sig == sig {
+                    em.push(format!("  {reg} = musttail call {} @{name}({args_ir})", sig.ret.llvm_type()));
+                    return Ok((reg, sig.ret, true));
+                }
+                em.push(format!("  {reg} = call {} @{name}({args_ir})", sig.ret.llvm_type()));
+                return Ok((reg, sig.ret, false));
             }
-            em.push(format!("  {reg} = call {} @{name}({args_ir})", sig.ret.llvm_type()));
-            return Ok((reg, sig.ret, false));
+            // Not a known top-level FUNCTION — but it might still be a
+            // closure-typed GLOBAL (e.g. a self-referential global
+            // closure calling itself by bare name, `fib(n-1)`), which
+            // must fall through to the INDIRECT path below rather than
+            // erroring out here: `ctx.globals` is `codegen_value`'s own
+            // `Var` arm's third resolution tier, reached only via that
+            // INDIRECT path's `codegen_value(callee, ..)` call just
+            // past this `if`. Only report the clearer, more specific
+            // "unknown function" error when the name is unknown
+            // EVERYWHERE (env/sigs/globals) — otherwise `codegen_value`
+            // would instead report its own generic "unbound variable"
+            // message for a name that's actually a perfectly valid
+            // (non-function) global.
+            if !ctx.globals.contains_key(name) {
+                return Err(format!("codegen: unknown function {name:?}"));
+            }
         }
     }
 
@@ -3069,6 +3098,19 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             // this synthesizes.
             if let Some(sig) = ctx.sigs.get(name).cloned() {
                 return codegen_bare_fn_value(name, &sig, em, ctx);
+            }
+            // Third, and last, resolution tier: a top-level `Global` —
+            // see `Ctx::globals`'s own doc comment. Always a `load` of
+            // the already-materialized slot, never a re-evaluation of
+            // the initializer — `@plum_init_globals` (lib.rs) itself
+            // reaches this exact same arm for a later global's
+            // reference to an earlier one, which is what makes that
+            // property correct BY CONSTRUCTION rather than by
+            // convention.
+            if let Some(ty) = ctx.globals.get(name).cloned() {
+                let r = em.fresh_reg();
+                em.push(format!("  {r} = load {}, ptr @global.{name}", ty.llvm_type()));
+                return Ok((r, ty));
             }
             Err(format!("codegen: unbound variable {name:?}"))
         }

@@ -1523,7 +1523,7 @@ accepting and rejecting cases for every sub-feature). Workspace is now
   looping construct. LLVM IR has a first-class `tail call` instruction
   that's a portable guarantee. **v1 implemented** — see below.
 
-### LLVM backend — v1-v11 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join, channels/select, full FFI including struct-by-value, Unicode-aware string ops)
+### LLVM backend — v1-v12 implemented (scalars, control flow, tail calls, heap values, generics/monomorphization, arrays, core strings, closures, general array iteration, spawn/join, channels/select, full FFI including struct-by-value, Unicode-aware string ops, non-constant globals)
 
 `crates/plum-codegen` emits LLVM IR as TEXT (the `.ll` format) — no
 `inkwell`/`llvm-sys` Rust binding at all. This machine has no
@@ -1570,19 +1570,21 @@ below), closing out FFI entirely, and — as of a further follow-on
 chunk — `.runes()`, `.trim()`, `.replace()`, `.split()` (full Unicode
 correctness) and `.to_upper()`/`.to_lower()` (ASCII-only — see
 "Unicode-aware string operations" below for the deliberate,
-documented scope cut). Still out of scope and producing a clear
-codegen error, never a panic: full Unicode case mapping (multi-
-codepoint expansions, e.g. German `ß`→`"SS"`), a closure literal
-inside a still-generic function's own body, an `Assign` inside a
-closure body writing back into an enclosing
-loop's carried variable (structurally out of reach of this backend's
-closure design, not merely unimplemented), an `Assign` reachable only
-through a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value
-position (e.g. `f({ sum = sum + 1; sum })` as a `Call` argument),
-disconnect detection on channels, more than one distinct `channel[T]()`
-element type per program, non-constant `Global` initializers — and a
-generic instantiated at any of these still-unsupported types (e.g.
-`Box[Array[Str]]` once `.split()` is
+documented scope cut), and — as of a further follow-on chunk —
+non-constant top-level `Global` initializers (see "Non-constant Global
+initializers" below). Still out of scope and producing a clear codegen
+error, never a panic: full Unicode case mapping (multi-codepoint
+expansions, e.g. German `ß`→`"SS"`), a closure literal inside a
+still-generic function's own body, an `Assign` inside a closure body
+writing back into an enclosing loop's carried variable (structurally
+out of reach of this backend's closure design, not merely
+unimplemented), an `Assign` reachable only through a `Let`/`If`/
+`Match`/`RcAnnotated` used in an ordinary value position (e.g.
+`f({ sum = sum + 1; sum })` as a `Call` argument), disconnect detection
+on channels, more than one distinct `channel[T]()` element type per
+program, a `Global` initializer that calls a still-generic function —
+and a generic instantiated at any of these still-unsupported types
+(e.g. `Box[Array[Str]]` once `.split()` is
 needed).
 
 **Guaranteed tail calls**: any call in tail position (the function's
@@ -2534,6 +2536,69 @@ branch calls the same fresh-allocating path (always safe, including
 growth) and frees the old cell directly, correct in every case, just
 without a genuine buffer-reuse win for this one specific op. A
 dedicated test locks in and documents this deliberate simplification.
+
+**Non-constant Global initializers**. Previously a hard, unconditional
+rejection — even the most trivial constant (`let x = 1`) was rejected,
+since `ir::Global`'s initializer is an arbitrary `Expr` with no
+"constant" tag anywhere upstream and this was entirely a codegen-
+imposed restriction. LLVM's own `@g = global <ty> <initializer>` needs
+a compile-time constant in the `.ll` text itself, so a placeholder
+LLVM global slot (`@global.<name> = global <llvmtype>
+zeroinitializer`) is paired with a new `@plum_init_globals()` function
+that codegens each initializer — using the exact same `codegen_expr`
+machinery any function body already uses — in declaration order and
+stores each result into its own slot, called from the hand-written
+`main()`'s entry block BEFORE the resolved entry function runs,
+preserving the interpreter's own "every global fully materialized
+before any user code executes" invariant. This backend doesn't need
+`@llvm.global_ctors` (built for independently-ordered constructors
+across many separately-compiled translation units) — it already writes
+its own single `main()` and has only one Plum program's globals to
+initialize in one deterministic order.
+
+`Var(name)` resolution gained one new, purely additive third fallback
+tier (`env` → top-level function name → NEW: a known global → error),
+serving both an ordinary function referencing an earlier global and
+`@plum_init_globals()` itself referencing an earlier global from a
+later one's own initializer — both resolve through the identical code
+path, making "a later global's reference to an earlier one is always a
+load of the already-initialized slot, never a re-evaluation" correct
+by construction. Verified directly, not assumed, that free-variable
+analysis needs zero changes: a name only becomes a closure-capture
+candidate if it's present in the enclosing scope's `env`, and globals
+(like bare top-level function names before them) are never inserted
+into any `env` — a global referenced inside a closure body is
+automatically excluded from the capture set, correctly, since a global
+has a fixed whole-program-lifetime address needing no capture/snapshot
+at all.
+
+**A real gap found by testing, not merely assumed away**: the
+`Var`-resolution tier alone wasn't sufficient for a self-referential
+global closure calling itself by bare name (`let fib = |n| .. fib(n-1)
+..`) — that call goes through a SEPARATE direct-call fast path
+(`codegen_call`), which only checked local scope and known top-level
+functions and errored out before ever reaching the tier that consults
+known globals. Fixed by having that direct path fall through to the
+indirect (closure) path when a bare name isn't a known function but
+IS a known global, rather than special-casing anything about
+self-reference specifically — `fib`'s own generated body is a separate
+top-level `define`, only ever called after `@plum_init_globals()` has
+already fully run and stored the closure cell into its slot, so its
+own internal self-reference resolves through the ordinary `Var`
+tier and finds a fully-materialized value every time. Proven with a
+direct global-scope port of the existing self-referential-closure
+test (`fib(10) == 55`).
+
+Mutual recursion between globals is structurally impossible to
+construct in a well-typed program (globals aren't pre-declared as a
+batch the way functions are); forward references are already rejected
+upstream by `plum-types`; neither needs a codegen-side check. A
+`Global` initializer that calls a still-generic function is a known,
+narrow, explicitly out-of-scope follow-up (monomorphization's mangled
+output wholesale-replaces `ir_program.functions`, but `ir_program.
+globals` is left untouched) — surfaces today as a plain "unknown
+function" error, not a crash or garbage, good enough for this chunk
+without being a fully polished message.
 
 **Deliverable**: `plumc::compile_and_run(src, entry_fn, args) ->
 Result<String, String>` runs parse → prelude → type-check → movecheck
