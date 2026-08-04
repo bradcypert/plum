@@ -1120,7 +1120,13 @@ mod tests {
             let go (): Int = [1, 2, 3].map(|x| add_one(x))[0]\n\
         ";
         let (body_ir, ..) = compile_to_ir(src, "go").unwrap();
-        assert!(!body_ir.contains("musttail call") && body_ir.contains("@add_one"), "{body_ir}");
+        // Scoped to the specific `@add_one` call site (not "no `musttail`
+        // anywhere in the whole compiled program") — the prelude itself
+        // legitimately contains OTHER, unrelated tail-recursive
+        // functions (e.g. JSON's own `skip_ws`), so a whole-program
+        // check would be invalidated by prelude growth having nothing
+        // to do with this closure-body mechanism.
+        assert!(!body_ir.contains("musttail call i64 @add_one") && body_ir.contains("@add_one"), "{body_ir}");
         assert!(body_ir.contains("call i64 @add_one"), "{body_ir}");
     }
 
@@ -1185,6 +1191,67 @@ mod tests {
     fn write_file_to_an_invalid_path_returns_err_in_native_codegen() {
         let src = "let go (): Bool = match write_file(\"/plum_test_nonexistent_dir_xyz/f.txt\", \"x\") { \
                     Ok(_) => false, Err(_) => true }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
+    // --- standard library: JSON (see `plumc::STDLIB_JSON_SRC`) ---
+    //
+    // The native-codegen counterpart to `plumc::lib.rs`'s own
+    // interpreter-path JSON tests — a REAL compiled binary running the
+    // whole recursive-descent parser/serializer through `musttail`-
+    // backed native tail calls, not the interpreter's own unbounded-
+    // native-stack-growth `eval`. Unlike the interpreter-path tests,
+    // this needs no special big-stack-thread handling (see `plumc::
+    // lib.rs`'s own `run_json_test` doc comment for why the
+    // interpreter side does).
+
+    #[test]
+    fn json_parse_handles_every_value_kind_in_native_codegen() {
+        let src = "let go (): Bool = match json_parse(\"{\\\"a\\\": 1, \\\"b\\\": [true, null, \\\"s\\\"]}\") { \
+                    Ok(JsonObject(entries)) => entries.len() == 2, Err(_) => false }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
+    #[test]
+    fn json_parse_numbers_in_native_codegen() {
+        let src = "let go (): Bool = { \
+            let a = match json_parse(\"42\") { Ok(JsonNumber(n)) => n == 42.0, Err(_) => false }; \
+            let b = match json_parse(\"-3.5\") { Ok(JsonNumber(n)) => n == -3.5, Err(_) => false }; \
+            let c = match json_parse(\"2e-2\") { Ok(JsonNumber(n)) => n == 0.02, Err(_) => false }; \
+            a && b && c \
+        }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
+    #[test]
+    fn json_parse_error_cases_in_native_codegen() {
+        let src = "let go (): Bool = { \
+            let a = match json_parse(\"\") { Err(_) => true, Ok(_) => false }; \
+            let b = match json_parse(\"[1, 2,]\") { Err(_) => true, Ok(_) => false }; \
+            let c = match json_parse(\"{\\\"a\\\" 1}\") { Err(_) => true, Ok(_) => false }; \
+            let d = match json_parse(\"42 extra\") { Err(_) => true, Ok(_) => false }; \
+            let e = match json_parse(\"\\\"unterminated\") { Err(_) => true, Ok(_) => false }; \
+            a && b && c && d && e \
+        }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
+    #[test]
+    fn json_stringify_and_round_trip_in_native_codegen() {
+        let src = "let go (): Bool = { \
+            let n = json_stringify(JsonNull) == \"null\"; \
+            let arr = json_stringify(JsonArray([JsonNumber(1.0), JsonNumber(2.0)])) == \"[1,2]\"; \
+            let a = json_parse(\"{\\\"x\\\": 1, \\\"y\\\": [true, null, \\\"s\\\"]}\"); \
+            let roundtrip = match a { \
+                Ok(v) => match json_parse(json_stringify(v)) { Ok(v2) => v == v2, Err(_) => false }, \
+                Err(_) => false \
+            }; \
+            n && arr && roundtrip \
+        }";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "1");
     }
@@ -3575,4 +3642,3 @@ mod tests {
         assert_eq!(out, "10");
     }
 }
-

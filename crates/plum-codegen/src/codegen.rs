@@ -3435,15 +3435,17 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
                 store_field_word(em, &old_ptr, i, reg, ty.clone());
             }
             em.push(format!("  store i64 1, ptr {old_ptr}"));
+            let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
             let fresh = codegen_ctor_alloc(tag, &field_vals, em, ctx)?;
+            let alloc_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Heap))
         }
         // `arr[i]`/`s[i]` — genuinely shape-shared at the IR level (see
@@ -3585,15 +3587,17 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             em.push(format!("  {len_addr} = getelementptr i8, ptr {grown}, i64 8"));
             em.push(format!("  store i64 {new_len}, ptr {len_addr}"));
             store_array_elem(em, &grown, &old_len, &val_reg, (*elem_ty).clone());
+            let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
             let (fresh, _) = codegen_array_push_fresh(&old_ptr, (*elem_ty).clone(), &val_reg, em, ctx);
+            let alloc_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Array(elem_ty)))
         }
         Expr::ArrayPopReuse { reuse_of } => {
@@ -3642,15 +3646,17 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             let len_addr = em.fresh_reg();
             em.push(format!("  {len_addr} = getelementptr i8, ptr {grown}, i64 8"));
             em.push(format!("  store i64 {new_len}, ptr {len_addr}"));
+            let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
             let (fresh, _) = codegen_array_pop_fresh(&old_ptr, (*elem_ty).clone(), em, ctx);
+            let alloc_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Array(elem_ty)))
         }
         Expr::ArraySetReuse { reuse_of, index, value } => {
@@ -3696,15 +3702,17 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             dec_array_element_at(em, ctx, &old_ptr, &idx_reg, &elem_ty);
             store_array_elem(em, &old_ptr, &idx_reg, &val_reg, (*elem_ty).clone());
             em.push(format!("  store i64 1, ptr {old_ptr}"));
+            let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
             let (fresh, _) = codegen_array_set_fresh(&old_ptr, (*elem_ty).clone(), &idx_reg, &val_reg, em, ctx);
+            let alloc_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Array(elem_ty)))
         }
         Expr::ArrayRemoveReuse { reuse_of, index } => {
@@ -3778,15 +3786,17 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             let len_addr = em.fresh_reg();
             em.push(format!("  {len_addr} = getelementptr i8, ptr {grown}, i64 8"));
             em.push(format!("  store i64 {new_len}, ptr {len_addr}"));
+            let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
             let (fresh, _) = codegen_array_remove_fresh(&old_ptr, (*elem_ty).clone(), &idx_reg, em, ctx);
+            let alloc_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Array(elem_ty)))
         }
         // `.concat()` — fresh path: a plain runtime-function call. See
@@ -3862,16 +3872,18 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             let nul_dst = em.fresh_reg();
             em.push(format!("  {nul_dst} = getelementptr i8, ptr {grown}, i64 {nul_off}"));
             em.push(format!("  store i8 0, ptr {nul_dst}"));
+            let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
             let fresh = em.fresh_reg();
             em.push(format!("  {fresh} = call ptr @plum_str_concat(ptr {old_ptr}, ptr {o_reg})"));
+            let alloc_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Str))
         }
         Expr::StrContains { base, needle } => {
@@ -3970,16 +3982,18 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             em.start_block(&reuse_label);
             em.push(format!("  call void @plum_str_trim_inplace(ptr {old_ptr})"));
             em.push(format!("  store i64 1, ptr {old_ptr}"));
+            let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
             let fresh = em.fresh_reg();
             em.push(format!("  {fresh} = call ptr @plum_str_trim(ptr {old_ptr})"));
+            let alloc_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Str))
         }
         // `.to_upper()` — fresh path: a plain call into `@plum_str_to_
@@ -4039,16 +4053,18 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             let reused = em.fresh_reg();
             em.push(format!("  {reused} = call ptr @plum_str_to_upper(ptr {old_ptr})"));
             em.push(format!("  call void @free(ptr {old_ptr})"));
+            let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
             let fresh = em.fresh_reg();
             em.push(format!("  {fresh} = call ptr @plum_str_to_upper(ptr {old_ptr})"));
+            let alloc_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {reused}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {reused}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Str))
         }
         // `.to_lower()` — same mechanism and shape as `.to_upper()`,
@@ -4094,16 +4110,18 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             let reused = em.fresh_reg();
             em.push(format!("  {reused} = call ptr @plum_str_to_lower(ptr {old_ptr})"));
             em.push(format!("  call void @free(ptr {old_ptr})"));
+            let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
             let fresh = em.fresh_reg();
             em.push(format!("  {fresh} = call ptr @plum_str_to_lower(ptr {old_ptr})"));
+            let alloc_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {reused}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {reused}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Str))
         }
         // `s.split(sep)` — a thin call into `@plum_str_split`, which does
@@ -4204,16 +4222,18 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             let reused = em.fresh_reg();
             em.push(format!("  {reused} = call ptr @plum_str_replace(ptr {old_ptr}, ptr {f}, ptr {t})"));
             em.push(format!("  call void @free(ptr {old_ptr})"));
+            let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
             let fresh = em.fresh_reg();
             em.push(format!("  {fresh} = call ptr @plum_str_replace(ptr {old_ptr}, ptr {f}, ptr {t})"));
+            let alloc_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {reused}, %{reuse_label} ], [ {fresh}, %{alloc_label} ]"));
+            em.push(format!("  {result} = phi ptr [ {reused}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Str))
         }
         // `x.to_string()` — dispatch on `base`'s STATIC `CgType` (a

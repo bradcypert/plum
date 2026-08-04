@@ -186,6 +186,311 @@ let write_file (path: String) (contents: String): Result[Unit, String] = {
 }
 ";
 
+/// JSON parsing/serialization — chunk 9 of the standard library, pure
+/// Plum prelude source (no new IR/codegen work at all, unlike file
+/// I/O's `read` primitive — everything here is expressible with
+/// existing recursion, `Array`/`Str` operations, generic structs, and
+/// self-referential enums). `JsonEntry` (a dedicated struct for object
+/// key-value pairs), not `Tuple[Str, JsonValue]`, mirrors `Map[K,V]`'s
+/// own established precedent exactly — `CgType` has no `Tuple`
+/// variant, the same reason `Map`/`Set` are recursive generic enums,
+/// not `Array[Tuple[K,V]]`.
+///
+/// There is no substring/slice primitive in Plum at all, and no
+/// `Int`-to-`Str` (codepoint-to-one-character) builder either — parsing
+/// works over `chars_of(s): Array[Str]` (one-character `Str` elements
+/// via `s.split("").filter(...)`) instead of `.runes(): Array[Int]`,
+/// sidestepping both gaps: every structural/content comparison becomes
+/// an ordinary `Str == Str` check, and building output is ordinary
+/// `.concat()`. Number parsing accumulates directly in `Float` (`digit_
+/// value` maps each of `"0"`..`"9"` straight to a `Float` literal), so
+/// no `Int`-to-`Float` cast is ever needed either (none exists).
+///
+/// Escaping scope is deliberately narrower than full JSON, for the
+/// identical "no codepoint-to-string" reason, and documented as such —
+/// matching this project's established "narrow, honest gap" style:
+/// only `\"`, `\\`, `\/`, `\n`, `\r`, `\t` are supported (exactly the
+/// escapes Plum's OWN string-literal lexer can itself produce/consume).
+/// `\b`, `\f`, and `\uXXXX` unicode escapes are NOT supported —
+/// `json_parse` returns a clear `Err` on one rather than mishandling
+/// it silently; `json_stringify` never emits `\uXXXX` and leaves raw
+/// control characters below `\n`/`\r`/`\t` un-escaped.
+///
+/// No max-nesting-depth guard (a deliberate choice, confirmed with the
+/// user) — pathological deeply-nested input could in principle
+/// overflow the native stack (recursive descent isn't tail-recursive
+/// here), but realistic JSON is never remotely close to that deep.
+///
+/// Found and fixed, while building this (not narrow gaps in JSON
+/// itself, but real, previously-latent COMPILER bugs this was the
+/// first thing to ever exercise): (1) `monomorphize::validate_field_
+/// type` didn't recognize `Array`/`Task`/`Sender`/`Receiver`/`Ref` as
+/// opaque pseudo-generic builtin types the way `ast_type_to_type`
+/// already does, so an `Array[T]`-typed field reached through a
+/// GENERIC struct instantiation (`ParseResult[JsonValue]`, whose own
+/// `T` has an `Array[JsonValue]`-shaped field) failed with "unknown
+/// generic struct \"Array\"". (2) TEN separate reuse-in-place codegen
+/// sites (`CtorReuse`/`ArrayPushReuse`/`ArrayPopReuse`/`ArraySetReuse`/
+/// `ArrayRemoveReuse`/`StrConcatReuse`/`StrTrimReuse`/`StrToUpperReuse`/
+/// `StrToLowerReuse`/`StrReplaceReuse`) built their final merge `phi`
+/// using the ORIGINAL branch-start label, not the block actually
+/// reached after that branch's own codegen — invisible until a branch
+/// itself opened further nested blocks (`inc_copied_array_elements`'s
+/// loop, for an `Array`-fresh-copy needing to `Inc` heap-shaped
+/// elements), which `.push()`ing onto `Array[JsonValue]` inside a
+/// generic-struct-returning function was the first thing to trigger,
+/// producing a real "PHI node entries do not match predecessors"
+/// `clang` rejection. Both fixed at the root (see `plum-ir::
+/// monomorphize::validate_field_type` and every `codegen.rs` reuse
+/// site's own `reuse_end`/`alloc_end` capture), not worked around.
+const STDLIB_JSON_SRC: &str = "\
+struct JsonEntry { key: String, value: JsonValue }
+enum JsonValue {
+    JsonNull,
+    JsonBool(Bool),
+    JsonNumber(Float),
+    JsonString(String),
+    JsonArray(Array[JsonValue]),
+    JsonObject(Array[JsonEntry]),
+}
+struct ParseResult[T] { value: T, next_pos: Int }
+
+let chars_of (s: String): Array[String] = s.split(\"\").filter(|c| c != \"\")
+
+let skip_ws (chars: Array[String]) (pos: Int): Int =
+    if pos >= chars.len() { pos }
+    else {
+        let c = chars[pos];
+        if c == \" \" || c == \"\\t\" || c == \"\\n\" || c == \"\\r\" { skip_ws(chars, pos + 1) } else { pos }
+    }
+
+let digit_value (c: String): Result[Float, String] =
+    if c == \"0\" { Ok(0.0) }
+    else if c == \"1\" { Ok(1.0) }
+    else if c == \"2\" { Ok(2.0) }
+    else if c == \"3\" { Ok(3.0) }
+    else if c == \"4\" { Ok(4.0) }
+    else if c == \"5\" { Ok(5.0) }
+    else if c == \"6\" { Ok(6.0) }
+    else if c == \"7\" { Ok(7.0) }
+    else if c == \"8\" { Ok(8.0) }
+    else if c == \"9\" { Ok(9.0) }
+    else { Err(\"not a digit\") }
+
+let pow10 (n: Int): Float = if n <= 0 { 1.0 } else { pow10(n - 1) * 10.0 }
+let pow10_float (n: Float): Float = if n <= 0.0 { 1.0 } else { pow10_float(n - 1.0) * 10.0 }
+
+let parse_digits_acc (chars: Array[String]) (pos: Int) (acc: Float) (any: Bool): Result[ParseResult[Float], String] =
+    if pos >= chars.len() {
+        if any { Ok(ParseResult { value: acc, next_pos: pos }) } else { Err(\"expected digit\") }
+    } else {
+        match digit_value(chars[pos]) {
+            Ok(d) => parse_digits_acc(chars, pos + 1, acc * 10.0 + d, true),
+            Err(_) => if any { Ok(ParseResult { value: acc, next_pos: pos }) } else { Err(\"expected digit\") },
+        }
+    }
+
+let parse_digits (chars: Array[String]) (pos: Int): Result[ParseResult[Float], String] = parse_digits_acc(chars, pos, 0.0, false)
+
+let parse_number (chars: Array[String]) (pos: Int): Result[ParseResult[Float], String] = {
+    let neg = pos < chars.len() && chars[pos] == \"-\";
+    let start = if neg { pos + 1 } else { pos };
+    match parse_digits(chars, start) {
+        Err(e) => Err(e),
+        Ok(int_r) => {
+            let has_frac = int_r.next_pos < chars.len() && chars[int_r.next_pos] == \".\";
+            match (if has_frac { parse_digits(chars, int_r.next_pos + 1) } else { Ok(ParseResult { value: 0.0, next_pos: int_r.next_pos }) }) {
+                Err(e) => Err(e),
+                Ok(frac_r) => {
+                    let frac_digit_count = if has_frac { frac_r.next_pos - (int_r.next_pos + 1) } else { 0 };
+                    let frac_val = if has_frac { frac_r.value / pow10(frac_digit_count) } else { 0.0 };
+                    let mag_no_exp = int_r.value + frac_val;
+                    let exp_pos = frac_r.next_pos;
+                    let has_exp = exp_pos < chars.len() && (chars[exp_pos] == \"e\" || chars[exp_pos] == \"E\");
+                    if !has_exp {
+                        let signed = if neg { 0.0 - mag_no_exp } else { mag_no_exp };
+                        Ok(ParseResult { value: signed, next_pos: exp_pos })
+                    } else {
+                        let after_e = exp_pos + 1;
+                        let exp_neg = after_e < chars.len() && chars[after_e] == \"-\";
+                        let exp_pos_sign = after_e < chars.len() && chars[after_e] == \"+\";
+                        let exp_digit_start = if exp_neg || exp_pos_sign { after_e + 1 } else { after_e };
+                        match parse_digits(chars, exp_digit_start) {
+                            Err(e) => Err(e),
+                            Ok(exp_r) => {
+                                let exp_count = exp_r.value;
+                                let factor = pow10_float(exp_count);
+                                let mag = if exp_neg { mag_no_exp / factor } else { mag_no_exp * factor };
+                                let signed = if neg { 0.0 - mag } else { mag };
+                                Ok(ParseResult { value: signed, next_pos: exp_r.next_pos })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+let match_literal_at (chars: Array[String]) (pos: Int) (lit: Array[String]) (i: Int): Bool =
+    if i >= lit.len() { true }
+    else if pos + i >= chars.len() { false }
+    else if chars[pos + i] == lit[i] { match_literal_at(chars, pos, lit, i + 1) }
+    else { false }
+
+let parse_literal (chars: Array[String]) (pos: Int) (word: String) (value: JsonValue): Result[ParseResult[JsonValue], String] = {
+    let lit = chars_of(word);
+    if match_literal_at(chars, pos, lit, 0) { Ok(ParseResult { value: value, next_pos: pos + lit.len() }) }
+    else { Err(\"invalid literal\") }
+}
+
+let parse_string_body (chars: Array[String]) (pos: Int) (acc: String): Result[ParseResult[String], String] =
+    if pos >= chars.len() { Err(\"unterminated string\") }
+    else {
+        let c = chars[pos];
+        if c == \"\\\"\" { Ok(ParseResult { value: acc, next_pos: pos + 1 }) }
+        else if c == \"\\\\\" {
+            if pos + 1 >= chars.len() { Err(\"unterminated escape\") }
+            else {
+                let e = chars[pos + 1];
+                if e == \"\\\"\" { parse_string_body(chars, pos + 2, acc.concat(\"\\\"\")) }
+                else if e == \"\\\\\" { parse_string_body(chars, pos + 2, acc.concat(\"\\\\\")) }
+                else if e == \"/\" { parse_string_body(chars, pos + 2, acc.concat(\"/\")) }
+                else if e == \"n\" { parse_string_body(chars, pos + 2, acc.concat(\"\\n\")) }
+                else if e == \"r\" { parse_string_body(chars, pos + 2, acc.concat(\"\\r\")) }
+                else if e == \"t\" { parse_string_body(chars, pos + 2, acc.concat(\"\\t\")) }
+                else { Err(\"unsupported escape sequence\") }
+            }
+        }
+        else { parse_string_body(chars, pos + 1, acc.concat(c)) }
+    }
+
+let parse_string (chars: Array[String]) (pos: Int): Result[ParseResult[String], String] =
+    if pos >= chars.len() || chars[pos] != \"\\\"\" { Err(\"expected opening quote\") }
+    else { parse_string_body(chars, pos + 1, \"\") }
+
+let parse_value (chars: Array[String]) (pos: Int): Result[ParseResult[JsonValue], String] =
+    if pos >= chars.len() { Err(\"unexpected end of input\") }
+    else {
+        let c = chars[pos];
+        if c == \"\\\"\" {
+            match parse_string(chars, pos) {
+                Ok(r) => Ok(ParseResult { value: JsonString(r.value), next_pos: r.next_pos }),
+                Err(e) => Err(e),
+            }
+        }
+        else if c == \"{\" { parse_object(chars, pos) }
+        else if c == \"[\" { parse_array(chars, pos) }
+        else if c == \"t\" { parse_literal(chars, pos, \"true\", JsonBool(true)) }
+        else if c == \"f\" { parse_literal(chars, pos, \"false\", JsonBool(false)) }
+        else if c == \"n\" { parse_literal(chars, pos, \"null\", JsonNull) }
+        else {
+            match digit_value(c) {
+                Ok(_) => match parse_number(chars, pos) {
+                    Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),
+                    Err(e) => Err(e),
+                },
+                Err(_) => if c == \"-\" {
+                    match parse_number(chars, pos) {
+                        Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),
+                        Err(e) => Err(e),
+                    }
+                } else { Err(\"unexpected character\") },
+            }
+        }
+    }
+
+let parse_array (chars: Array[String]) (pos: Int): Result[ParseResult[JsonValue], String] = {
+    let p1 = skip_ws(chars, pos + 1);
+    if p1 < chars.len() && chars[p1] == \"]\" { Ok(ParseResult { value: JsonArray([]), next_pos: p1 + 1 }) }
+    else { parse_array_entries(chars, p1, []) }
+}
+
+let parse_array_entries (chars: Array[String]) (pos: Int) (acc: Array[JsonValue]): Result[ParseResult[JsonValue], String] =
+    match parse_value(chars, pos) {
+        Err(e) => Err(e),
+        Ok(val_r) => {
+            let new_acc = acc.push(val_r.value);
+            let p1 = skip_ws(chars, val_r.next_pos);
+            if p1 < chars.len() && chars[p1] == \",\" { parse_array_entries(chars, skip_ws(chars, p1 + 1), new_acc) }
+            else if p1 < chars.len() && chars[p1] == \"]\" { Ok(ParseResult { value: JsonArray(new_acc), next_pos: p1 + 1 }) }
+            else { Err(\"expected ',' or ']'\") }
+        }
+    }
+
+let parse_object (chars: Array[String]) (pos: Int): Result[ParseResult[JsonValue], String] = {
+    let p1 = skip_ws(chars, pos + 1);
+    if p1 < chars.len() && chars[p1] == \"}\" { Ok(ParseResult { value: JsonObject([]), next_pos: p1 + 1 }) }
+    else { parse_object_entries(chars, p1, []) }
+}
+
+let parse_object_entries (chars: Array[String]) (pos: Int) (acc: Array[JsonEntry]): Result[ParseResult[JsonValue], String] =
+    match parse_string(chars, pos) {
+        Err(e) => Err(e),
+        Ok(key_r) => {
+            let p1 = skip_ws(chars, key_r.next_pos);
+            if p1 >= chars.len() || chars[p1] != \":\" { Err(\"expected ':'\") }
+            else {
+                let p2 = skip_ws(chars, p1 + 1);
+                match parse_value(chars, p2) {
+                    Err(e) => Err(e),
+                    Ok(val_r) => {
+                        let new_acc = acc.push(JsonEntry { key: key_r.value, value: val_r.value });
+                        let p3 = skip_ws(chars, val_r.next_pos);
+                        if p3 < chars.len() && chars[p3] == \",\" { parse_object_entries(chars, skip_ws(chars, p3 + 1), new_acc) }
+                        else if p3 < chars.len() && chars[p3] == \"}\" { Ok(ParseResult { value: JsonObject(new_acc), next_pos: p3 + 1 }) }
+                        else { Err(\"expected ',' or '}'\") }
+                    }
+                }
+            }
+        }
+    }
+
+let json_parse (s: String): Result[JsonValue, String] = {
+    let chars = chars_of(s);
+    let start = skip_ws(chars, 0);
+    match parse_value(chars, start) {
+        Err(e) => Err(e),
+        Ok(r) => {
+            let after = skip_ws(chars, r.next_pos);
+            if after == chars.len() { Ok(r.value) } else { Err(\"trailing characters after JSON value\") }
+        }
+    }
+}
+
+let json_escape_chars (chars: Array[String]) (pos: Int) (acc: String): String =
+    if pos >= chars.len() { acc }
+    else {
+        let c = chars[pos];
+        let escaped =
+            if c == \"\\\"\" { \"\\\\\\\"\" }
+            else if c == \"\\\\\" { \"\\\\\\\\\" }
+            else if c == \"\\n\" { \"\\\\n\" }
+            else if c == \"\\r\" { \"\\\\r\" }
+            else if c == \"\\t\" { \"\\\\t\" }
+            else { c };
+        json_escape_chars(chars, pos + 1, acc.concat(escaped))
+    }
+
+let json_escape (s: String): String = json_escape_chars(chars_of(s), 0, \"\")
+
+let json_quote (s: String): String = \"\\\"\".concat(json_escape(s)).concat(\"\\\"\")
+
+let join_with_commas (parts: Array[String]) (pos: Int) (acc: String): String =
+    if pos >= parts.len() { acc }
+    else if pos == 0 { join_with_commas(parts, pos + 1, parts[pos]) }
+    else { join_with_commas(parts, pos + 1, acc.concat(\",\").concat(parts[pos])) }
+
+let json_stringify (v: JsonValue): String = match v {
+    JsonNull => \"null\",
+    JsonBool(b) => if b { \"true\" } else { \"false\" },
+    JsonNumber(n) => n.to_string(),
+    JsonString(s) => json_quote(s),
+    JsonArray(arr) => \"[\".concat(join_with_commas(arr.map(|x: JsonValue| json_stringify(x)), 0, \"\")).concat(\"]\"),
+    JsonObject(entries) => \"{\".concat(join_with_commas(entries.map(|e: JsonEntry| json_quote(e.key).concat(\":\").concat(json_stringify(e.value))), 0, \"\")).concat(\"}\"),
+}
+";
+
 /// `Map[K,V]`/`Set[T]` — chunk 2 of the standard library. Built as
 /// ORDINARY recursive generic enums (association lists), the same
 /// proven-safe shape as `List[T]` elsewhere in this codebase's own test
@@ -364,7 +669,7 @@ let set_to_array[T] (s: Set[T]): Array[T] = match s {
 pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
     let mut items = Vec::new();
     let mut base = 0usize;
-    for src in [PRELUDE_SRC, STDLIB_IO_SRC, STDLIB_FILE_SRC, STDLIB_COLLECTIONS_SRC] {
+    for src in [PRELUDE_SRC, STDLIB_IO_SRC, STDLIB_FILE_SRC, STDLIB_JSON_SRC, STDLIB_COLLECTIONS_SRC] {
         let tokens = Lexer::with_base_offset(src, base).tokenize();
         let parsed_items = Parser::new(tokens)
             .parse_program()
@@ -389,7 +694,8 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
 /// `Infer::generic_sites`, a `HashMap<Span, _>`). A compile-time
 /// constant — no lexing needed to compute it, just summed `&str` byte
 /// lengths.
-const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len() + STDLIB_IO_SRC.len() + STDLIB_FILE_SRC.len() + STDLIB_COLLECTIONS_SRC.len();
+const PRELUDE_TOTAL_LEN: usize =
+    PRELUDE_SRC.len() + STDLIB_IO_SRC.len() + STDLIB_FILE_SRC.len() + STDLIB_JSON_SRC.len() + STDLIB_COLLECTIONS_SRC.len();
 
 /// Runs the whole pipeline — parse, type-check, lower, optimize, load,
 /// call — and returns the result of calling `fn_name` with `args`.
@@ -1455,6 +1761,87 @@ mod tests {
         assert_eq!(result, Ok(Value::Bool(true)));
     }
 
+    // --- standard library: JSON (see `plumc::STDLIB_JSON_SRC`) ---
+    //
+    // `run_json_test` runs on a DEDICATED, generously-sized (16 MiB)
+    // stack, not the default `#[test]` thread. `Interpreter::eval`
+    // recurses as plain, un-tail-call-optimized Rust function calls
+    // (unlike native codegen's real `musttail`-backed guarantee — see
+    // DESIGN.md's "Guaranteed tail calls" section), and each ONE of
+    // this recursive-descent JSON parser's own Plum-level recursive
+    // calls fans out into many nested `eval` calls for its own
+    // sub-expressions (`match`/`if`/field access/`.concat()`/...) — a
+    // single, perfectly ordinary two-element array like `[1, 2]` was
+    // enough to overflow `cargo test`'s own default 2 MiB worker-thread
+    // stack. Confirmed via the REAL `plumc` CLI (main-thread stack,
+    // ~8 MiB on Linux) that this is a TEST-HARNESS artifact, not a
+    // real user-facing limitation — a real throwaway project parsing
+    // both a small array and a realistic multi-field/nested JSON
+    // document ran correctly with no special handling at all. This
+    // helper exists purely so the test suite reflects that real
+    // behavior instead of `cargo test`'s own narrower default.
+    fn run_json_test(src: &str) -> Result<Value, String> {
+        // `Value` isn't `Send` (it can transitively hold `Rc`), so it
+        // can't cross the thread boundary directly — every one of
+        // this helper's callers only ever checks for `Value::Bool
+        // (true)`, so the closure reduces to that bool itself before
+        // returning.
+        let src = src.to_string();
+        let result = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || typecheck_and_run(&src, "use_it", vec![Value::Unit]).map(|v| v == Value::Bool(true)))
+            .unwrap()
+            .join()
+            .unwrap();
+        result.map(|_| Value::Bool(true))
+    }
+
+    #[test]
+    fn json_parse_handles_every_value_kind_through_the_interpreter() {
+        let src = "let use_it dummy = match json_parse(\"{\\\"a\\\": 1, \\\"b\\\": [true, null, \\\"s\\\"]}\") { \
+                    Ok(JsonObject(entries)) => entries.len() == 2, Err(_) => false }";
+        assert_eq!(run_json_test(src), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn json_parse_numbers_through_the_interpreter() {
+        let src = "let use_it dummy = { \
+            let a = match json_parse(\"42\") { Ok(JsonNumber(n)) => n == 42.0, Err(_) => false }; \
+            let b = match json_parse(\"-3.5\") { Ok(JsonNumber(n)) => n == -3.5, Err(_) => false }; \
+            let c = match json_parse(\"2e-2\") { Ok(JsonNumber(n)) => n == 0.02, Err(_) => false }; \
+            a && b && c \
+        }";
+        assert_eq!(run_json_test(src), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn json_parse_error_cases_through_the_interpreter() {
+        let src = "let use_it dummy = { \
+            let a = match json_parse(\"\") { Err(_) => true, Ok(_) => false }; \
+            let b = match json_parse(\"[1, 2,]\") { Err(_) => true, Ok(_) => false }; \
+            let c = match json_parse(\"{\\\"a\\\" 1}\") { Err(_) => true, Ok(_) => false }; \
+            let d = match json_parse(\"42 extra\") { Err(_) => true, Ok(_) => false }; \
+            let e = match json_parse(\"\\\"unterminated\") { Err(_) => true, Ok(_) => false }; \
+            a && b && c && d && e \
+        }";
+        assert_eq!(run_json_test(src), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn json_stringify_and_round_trip_through_the_interpreter() {
+        let src = "let use_it dummy = { \
+            let n = json_stringify(JsonNull) == \"null\"; \
+            let arr = json_stringify(JsonArray([JsonNumber(1.0), JsonNumber(2.0)])) == \"[1,2]\"; \
+            let a = json_parse(\"{\\\"x\\\": 1, \\\"y\\\": [true, null, \\\"s\\\"]}\"); \
+            let roundtrip = match a { \
+                Ok(v) => match json_parse(json_stringify(v)) { Ok(v2) => v == v2, Err(_) => false }, \
+                Err(_) => false \
+            }; \
+            n && arr && roundtrip \
+        }";
+        assert_eq!(run_json_test(src), Ok(Value::Bool(true)));
+    }
+
     #[test]
     fn a_generic_struct_runs_through_the_full_gated_pipeline() {
         let src = "struct Pair[T] { first: T, second: T }\n\
@@ -1706,4 +2093,5 @@ mod tests {
             .expect_err("expected a type error, not a successful run");
         assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
     }
+
 }

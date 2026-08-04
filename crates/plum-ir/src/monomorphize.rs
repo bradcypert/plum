@@ -669,6 +669,33 @@ pub fn plan(
 fn validate_field_type(ty: &Type, owner_tag: &str, args: &[Type], worklist: &mut Vec<(Task, Vec<Type>)>) -> Result<Type, String> {
     match ty {
         Type::Int | Type::Float | Type::Bool | Type::Unit | Type::Str => Ok(ty.clone()),
+        // `Array`/`Task`/`Sender`/`Receiver`/`Ref` are OPAQUE PSEUDO-
+        // GENERIC BUILTIN types — represented as `Type::Struct` with
+        // one of these five reserved names, but (see `plum_types::
+        // infer::ast_type_to_type`'s own identical special-casing)
+        // DELIBERATELY never registered as a real struct declaration
+        // anywhere. Pushing a `Task::Struct` for the wrapper name
+        // itself (the general `Type::Struct` arm below) fails with
+        // "unknown generic struct" — found empirically while adding a
+        // JSON value tree: `ParseResult[JsonValue]` (a real generic
+        // struct) instantiated at `JsonValue`, which itself has an
+        // `Array[JsonValue]` variant field, is the first time this
+        // codebase has ever nested an `Array`-typed field inside a
+        // type reached through generic-struct monomorphization — every
+        // earlier generic struct/enum test happened to avoid it (same
+        // class of previously-unexercised-combination bug as the
+        // `Str`-field gap this function's own doc comment above
+        // already documents). Only the type ARGUMENT(s) might still
+        // need their own registration (`Array[JsonValue]` needs
+        // `JsonValue`'s own `Task::Enum`, not `Array`'s) — recursed
+        // into for exactly that, discarding just the wrapper's own
+        // (correctly skipped) task push.
+        Type::Struct(n, a) if matches!(n.as_str(), "Array" | "Task" | "Sender" | "Receiver" | "Ref") => {
+            for inner in a {
+                validate_field_type(inner, owner_tag, args, worklist)?;
+            }
+            Ok(ty.clone())
+        }
         Type::Struct(n, a) => {
             worklist.push((Task::Struct(n.clone(), to_keys(a)), a.clone()));
             Ok(ty.clone())

@@ -2379,6 +2379,132 @@ trip, read of a nonexistent path, write to an invalid (nonexistent
 parent directory) path — each backend independently. Workspace now
 1442 tests (up from 1436 — net +6), clean build, zero warnings.
 
+### Chunk 9: JSON — `json_parse`/`json_stringify`, pure Plum prelude source, plus two real compiler bugs found and fixed
+
+Next stdlib area after file I/O, explicitly named by the user as the
+intended direct follow-on. Two scope questions were resolved with the
+user via `AskUserQuestion` before design: (1) API surface is **parse +
+stringify only** (`json_parse(s: String): Result[JsonValue, String]` /
+`json_stringify(v: JsonValue): String`) — no separate accessor helpers;
+`JsonValue` is a plain enum, so callers use ordinary `match`/`Array`
+operations directly; (2) **no max-nesting-depth guard** — pathological
+deeply-nested input could in principle exhaust the native stack (no
+depth guard, no tail-call shape for recursive descent), but realistic
+JSON is never remotely close to that deep, so this was left unguarded
+like a typical hand-rolled recursive-descent parser.
+
+**Unlike file I/O, this needed ZERO new IR/codegen work** — everything
+JSON parsing/serialization needs was already expressible in pure Plum:
+recursion, `Array`'s `.push()`/`.map()`/`.filter()`, `String`'s
+`.split()`/`.concat()`/`==`/`.len()`, `Float`'s `.to_string()` (chunk
+7), generic structs (`ParseResult[T]`, mirroring `Map[K,V]`), and
+self-referential enums including through `Array` (`JsonArray(Array
+[JsonValue])` — the first time this codebase nested a self-referential
+array field inside a type reached through generic-struct
+monomorphization; confirmed structurally sound and verified with an
+early, dedicated smoke test before deeper investment, per the plan).
+The whole implementation is one new prelude source constant,
+`STDLIB_JSON_SRC`, merged into `with_prelude` exactly like `STDLIB_
+FILE_SRC`/`STDLIB_COLLECTIONS_SRC` — no new `Expr` variant, no
+type-checker/lowering/codegen change anywhere.
+
+**Two real language gaps were sidestepped by design, not fixed**: no
+substring/codepoint-to-string primitive exists at all (`s[i]` returns a
+raw byte, `.runes()` returns codepoints, no `Int → String` builder in
+either direction) — worked around by parsing over `chars_of(s):
+Array[String] = s.split("").filter(|c| c != "")` (Rust's own
+`str::split("")` semantics give one-character `String` elements
+directly, sidestepping the gap entirely for both comparison and
+`.concat()`-based accumulation). No `Int`-to-`Float` cast exists —
+worked around via `digit_value(c: String): Result[Float, String]`, a
+10-way `if`/`else` chain mapping each digit character straight to its
+`Float` literal, so number parsing accumulates in `Float` from the
+first digit, no cast ever needed. Object entries use a dedicated
+`JsonEntry { key: String, value: JsonValue }` struct, not a tuple —
+the same reason `Map`/`Set` use recursive generic enums instead of
+`Array[Tuple[K,V]]` (no `CgType::Tuple`; a flat `"2Tuple"` tag can't
+distinguish different concrete tuple instantiations). Escaping support
+is deliberately narrower than full JSON: only the six escapes Plum's
+own string-literal lexer can itself produce (`\"`, `\\`, `\/`, `\n`,
+`\r`, `\t`) round-trip; `\b`, `\f`, and `\uXXXX` are rejected with a
+clear `Err` on parse (no way to construct a literal backspace/form-feed
+/arbitrary-codepoint `String` without an `Int`-to-`String` primitive
+that doesn't exist) and never emitted on stringify — a real, honest,
+narrower-than-strict-JSON scope boundary, matching this project's
+established style for documenting such gaps rather than hiding them.
+
+**Two real, previously-undiscovered compiler bugs were found and
+root-caused while building this, not worked around:**
+
+1. `monomorphize::validate_field_type` didn't recognize `Array`/`Task`/
+   `Sender`/`Receiver`/`Ref` as the opaque pseudo-generic builtin types
+   they are (already special-cased identically in `plum_types::infer::
+   ast_type_to_type`, but that special-casing was never mirrored here).
+   `ParseResult[JsonValue]` — a real generic struct instantiated at
+   `JsonValue`, itself having an `Array[JsonValue]` variant field — is
+   the first time this codebase ever nested an `Array`-typed field
+   inside a type reached through generic-struct monomorphization; every
+   earlier generic struct/enum test happened to avoid that combination.
+   Fixed by recursing into the wrapper's own type arguments (registering
+   `JsonValue`'s `Task::Enum`, not a nonexistent `Array` struct
+   declaration) instead of pushing a doomed `Task::Struct("Array", ...)`.
+2. Ten separate reuse-in-place codegen sites (`CtorReuse`, the four
+   `Array*Reuse` variants, `StrConcatReuse`/`StrTrimReuse`, str-upper/
+   str-lower, `StrReplaceReuse`) all built their final merge `phi` using
+   the branch's ENTRY label rather than its actual exit block — a
+   documented `Emitter::start_block` footgun, silently violated at every
+   one of these ten sites until now, invisible until a branch's own
+   codegen (e.g. `codegen_array_push_fresh` calling `inc_copied_array_
+   elements`, which opens its own nested nested blocks for heap-shaped
+   element types) changed the current block before reaching its final
+   `br`. Surfaced as `clang` rejecting the generated IR outright ("PHI
+   node entries do not match predecessors") the first time this project
+   ever combined array-of-heap-values push with a value threaded through
+   a reuse-in-place branch — JSON's own `Array[JsonValue].push(...)`
+   accumulator pattern, used throughout `parse_array_entries`/`parse_
+   object_entries`. Fixed identically at all ten sites: capture `em.
+   current_block()` right before each branch's own final `br`, and phi
+   against THAT captured label instead of the original branch-entry one.
+
+Both bugs were found via careful IR-level bisection (isolating a
+minimal `ParseResult[JsonValue]`-only repro for the first; a direct
+`.ll` dump comparing the phi's claimed predecessor against the actual
+generated block structure for the second), fixed at the root cause, and
+verified to cause zero regressions across the full workspace suite.
+
+**A third, narrower issue** surfaced as an expected consequence of
+prelude growth, not a regression: an existing native-codegen test
+asserting NO `musttail call` appeared anywhere in a whole compiled
+program broke once the JSON prelude's own legitimately tail-recursive
+`skip_ws` became part of every compiled program. Scoped the assertion
+to the specific call site it was actually testing (`@add_one`) instead
+of the whole program.
+
+**A fourth issue, confirmed as a test-harness artifact, not a product
+bug**: the interpreter's `Interpreter::eval` has no tail-call
+optimization at all (a native-codegen-only guarantee, via `musttail`),
+so each one of this recursive-descent parser's Plum-level calls fans
+out into many nested, unbounded-native-stack-growth `eval` calls for
+its own sub-expressions. Even a two-element array (`[1, 2]`) was enough
+to overflow `cargo test`'s own default ~2 MiB worker-thread stack.
+Confirmed via the real `plumc` CLI (whose main thread gets the OS
+default ~8 MiB) that ordinary and even fairly large real JSON documents
+parse/stringify correctly with no special handling at all — this is
+purely about `cargo test`'s own narrower default, not a real user-
+facing limitation. Fixed on the test side only: the interpreter-path
+JSON tests now run on a dedicated 16 MiB-stack spawned thread (a small
+`run_json_test` helper in `plumc::lib.rs`'s test module).
+
+**Direct, concrete payoff**: verified through both backends (8 new
+tests: 4 interpreter-path via `run_json_test`, 4 native-codegen-path
+via `compile_and_run`), plus a real throwaway Plum project — parse a
+real multi-field JSON document (nested object/array/bool/null/string/
+number), inspect a field, re-serialize it, re-parse the result, and
+check structural equality against the original — built and run through
+BOTH `plumc build` (native) and the plain interpreter CLI, identical
+correct output through both. Workspace now 1450 tests (up from 1442 —
+net +8), clean build, zero warnings.
+
 ## Target platforms
 
 - **Hosted (Linux/macOS/Windows), web APIs**: primary target, no special
