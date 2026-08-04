@@ -256,6 +256,28 @@ fn dec_fn_for(ty: &CgType) -> Option<String> {
     }
 }
 
+/// The runtime equality function to call for a value of `ty`, or `None`
+/// for a type that either needs no call at all (a scalar, compared
+/// inline via `icmp`/`fcmp` at the call site) or isn't equality-
+/// comparable in the first place (`Closure`/`Task`/`Sender`/`Receiver`/
+/// `CStr` — none of these are reachable through `satisfies_bound`'s
+/// `Eq` bound at the top level; a caller hitting one of these while
+/// comparing a NESTED field is a pre-existing, narrower gap — see
+/// `emit_runtime`'s `@plum_struct_eq` and `emit_array_eq_fns`, which
+/// both skip such fields/elements rather than crash codegen). A direct
+/// sibling of `dec_fn_for`, sharing its exact "one generic runtime
+/// function per heap-cell shape" precedent (`@plum_release_fields`),
+/// not per-concrete-type.
+fn eq_fn_for(ty: &CgType) -> Option<String> {
+    match ty {
+        CgType::Int | CgType::Float | CgType::Bool | CgType::Unit => None,
+        CgType::Heap => Some("@plum_struct_eq".to_string()),
+        CgType::Str => Some("@plum_str_eq".to_string()),
+        CgType::Array(elem) => Some(format!("@plum_array_eq_{}", elem.mangled())),
+        CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => None,
+    }
+}
+
 fn intern_tags(tag_fields: &TagFields) -> HashMap<String, i64> {
     // Order doesn't matter for correctness (any bijection to distinct
     // integers works) — sorted purely so the same program always gets
@@ -468,6 +490,75 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
         out.push_str("check0:\n  br label %done\n");
     }
     out.push_str("done:\n  ret void\n}\n\n");
+
+    // Recursive structural equality for every struct/enum shape, ONE
+    // generic runtime-tag-dispatched function (mirroring `@plum_
+    // release_fields` above exactly, not one function per concrete
+    // tag): mismatched tags (`Some(1)` vs `None`, or two different
+    // struct types — never actually reachable for the latter, since
+    // the type checker already requires both operands of `==` to share
+    // one static type, but cheap to handle uniformly here anyway) are
+    // never equal, short-circuited before any field is even read.
+    // Given a shared tag, each field is compared in declared order —
+    // a scalar field inline (`icmp`/`fcmp`, matching `codegen_binop`'s
+    // own scalar comparisons), a heap-shaped field via `eq_fn_for`'s
+    // function — with an early exit to `%not_equal` on the first
+    // mismatch. Safe from infinite recursion for the exact same reason
+    // `values_equal` is in the interpreter (`plum-interp/src/lib.rs`):
+    // genuine reference cycles are only reachable through the separate
+    // `Ref[T]` heap-cell kind, which never appears as an ordinary
+    // struct/enum field.
+    out.push_str("define i1 @plum_struct_eq(ptr %a, ptr %b) {\nentry:\n  %a_tag_addr = getelementptr i8, ptr %a, i64 8\n  %a_tag = load i64, ptr %a_tag_addr\n  %b_tag_addr = getelementptr i8, ptr %b, i64 8\n  %b_tag = load i64, ptr %b_tag_addr\n  %tag_eq = icmp eq i64 %a_tag, %b_tag\n  br i1 %tag_eq, label %tagcheck0, label %not_equal\n");
+    for (i, name) in names.iter().enumerate() {
+        let id = tag_ids[*name];
+        let field_types = &tag_fields[*name];
+        let check_label = format!("tagcheck{i}");
+        let next_check = if i + 1 < names.len() { format!("tagcheck{}", i + 1) } else { "not_equal".to_string() };
+        let first_field_label = if field_types.is_empty() { "equal".to_string() } else { format!("tag{i}_f0") };
+        out.push_str(&format!(
+            "{check_label}:\n  %tm{i} = icmp eq i64 %a_tag, {id}\n  br i1 %tm{i}, label %{first_field_label}, label %{next_check}\n"
+        ));
+        for (j, field_ty) in field_types.iter().enumerate() {
+            let label = format!("tag{i}_f{j}");
+            let next_label = if j + 1 < field_types.len() { format!("tag{i}_f{}", j + 1) } else { "equal".to_string() };
+            let offset = 16 + j as i64 * 8;
+            out.push_str(&format!("{label}:\n"));
+            out.push_str(&format!(
+                "  %a{i}_{j}_addr = getelementptr i8, ptr %a, i64 {offset}\n  %a{i}_{j}_word = load i64, ptr %a{i}_{j}_addr\n  %b{i}_{j}_addr = getelementptr i8, ptr %b, i64 {offset}\n  %b{i}_{j}_word = load i64, ptr %b{i}_{j}_addr\n"
+            ));
+            match field_ty {
+                CgType::Int | CgType::Bool | CgType::Unit => {
+                    out.push_str(&format!(
+                        "  %eq{i}_{j} = icmp eq i64 %a{i}_{j}_word, %b{i}_{j}_word\n  br i1 %eq{i}_{j}, label %{next_label}, label %not_equal\n"
+                    ));
+                }
+                CgType::Float => {
+                    out.push_str(&format!(
+                        "  %a{i}_{j}_f = bitcast i64 %a{i}_{j}_word to double\n  %b{i}_{j}_f = bitcast i64 %b{i}_{j}_word to double\n  %eq{i}_{j} = fcmp oeq double %a{i}_{j}_f, %b{i}_{j}_f\n  br i1 %eq{i}_{j}, label %{next_label}, label %not_equal\n"
+                    ));
+                }
+                _ => match eq_fn_for(field_ty) {
+                    Some(eq_fn) => {
+                        out.push_str(&format!(
+                            "  %a{i}_{j}_ptr = inttoptr i64 %a{i}_{j}_word to ptr\n  %b{i}_{j}_ptr = inttoptr i64 %b{i}_{j}_word to ptr\n  %eq{i}_{j} = call i1 {eq_fn}(ptr %a{i}_{j}_ptr, ptr %b{i}_{j}_ptr)\n  br i1 %eq{i}_{j}, label %{next_label}, label %not_equal\n"
+                        ));
+                    }
+                    // Not equality-comparable at all (a Closure/Task/
+                    // Sender/Receiver/CStr field) — see `eq_fn_for`'s
+                    // own doc comment on this pre-existing, narrower
+                    // gap. Skip rather than abort codegen; this field
+                    // never actually participates in the comparison.
+                    None => {
+                        out.push_str(&format!("  br label %{next_label}\n"));
+                    }
+                },
+            }
+        }
+    }
+    if names.is_empty() {
+        out.push_str("tagcheck0:\n  br label %not_equal\n");
+    }
+    out.push_str("equal:\n  ret i1 1\nnot_equal:\n  ret i1 0\n}\n\n");
 
     // --- string runtime ---
     //
@@ -1769,6 +1860,78 @@ fn emit_array_release_fns(needed: &HashMap<String, CgType>) -> String {
     out
 }
 
+/// Structural equality for arrays — one `@plum_array_eq_<mangled>`
+/// function per distinct element `CgType` actually used in the program
+/// (mirroring `emit_array_release_fns`'s exact "per-element-type, not
+/// generic dispatcher" shape, since — unlike struct/enum tags — array
+/// element type isn't a RUNTIME-visible tag word to dispatch on, it's
+/// pinned at compile time by `CgType::Array(elem)` itself). Length
+/// mismatch short-circuits to unequal before any element is read;
+/// otherwise a counted loop compares elements pairwise, exiting early
+/// on the first mismatch.
+fn emit_array_eq_fns(needed: &HashMap<String, CgType>) -> String {
+    let mut out = String::new();
+    let mut names: Vec<&String> = needed.keys().collect();
+    names.sort();
+    for mangled in names {
+        let elem = &needed[mangled];
+        let name = format!("plum_array_eq_{mangled}");
+        out.push_str(&format!("define i1 @{name}(ptr %a, ptr %b) {{\n"));
+        out.push_str("entry:\n");
+        out.push_str("  %alen_addr = getelementptr i8, ptr %a, i64 8\n");
+        out.push_str("  %alen = load i64, ptr %alen_addr\n");
+        out.push_str("  %blen_addr = getelementptr i8, ptr %b, i64 8\n");
+        out.push_str("  %blen = load i64, ptr %blen_addr\n");
+        out.push_str("  %len_eq = icmp eq i64 %alen, %blen\n");
+        out.push_str("  br i1 %len_eq, label %loop_check, label %not_equal\n");
+        out.push_str("loop_check:\n");
+        out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_next ]\n");
+        out.push_str("  %continue = icmp slt i64 %i, %alen\n");
+        out.push_str("  br i1 %continue, label %loop_body, label %equal\n");
+        out.push_str("loop_body:\n");
+        out.push_str("  %word_off = mul i64 %i, 8\n");
+        out.push_str("  %byte_off = add i64 %word_off, 16\n");
+        out.push_str("  %a_elem_addr = getelementptr i8, ptr %a, i64 %byte_off\n");
+        out.push_str("  %a_elem_word = load i64, ptr %a_elem_addr\n");
+        out.push_str("  %b_elem_addr = getelementptr i8, ptr %b, i64 %byte_off\n");
+        out.push_str("  %b_elem_word = load i64, ptr %b_elem_addr\n");
+        match elem {
+            CgType::Int | CgType::Bool | CgType::Unit => {
+                out.push_str("  %elem_eq = icmp eq i64 %a_elem_word, %b_elem_word\n");
+                out.push_str("  br i1 %elem_eq, label %loop_next, label %not_equal\n");
+            }
+            CgType::Float => {
+                out.push_str("  %a_elem_f = bitcast i64 %a_elem_word to double\n");
+                out.push_str("  %b_elem_f = bitcast i64 %b_elem_word to double\n");
+                out.push_str("  %elem_eq = fcmp oeq double %a_elem_f, %b_elem_f\n");
+                out.push_str("  br i1 %elem_eq, label %loop_next, label %not_equal\n");
+            }
+            _ => match eq_fn_for(elem) {
+                Some(eq_fn) => {
+                    out.push_str("  %a_elem_ptr = inttoptr i64 %a_elem_word to ptr\n");
+                    out.push_str("  %b_elem_ptr = inttoptr i64 %b_elem_word to ptr\n");
+                    out.push_str(&format!("  %elem_eq = call i1 {eq_fn}(ptr %a_elem_ptr, ptr %b_elem_ptr)\n"));
+                    out.push_str("  br i1 %elem_eq, label %loop_next, label %not_equal\n");
+                }
+                // Not equality-comparable at all — see `eq_fn_for`'s own
+                // doc comment on this pre-existing, narrower gap. Skip
+                // rather than abort codegen; every element trivially
+                // "matches" at this element index.
+                None => {
+                    out.push_str("  br label %loop_next\n");
+                }
+            },
+        }
+        out.push_str("loop_next:\n");
+        out.push_str("  %i_next = add i64 %i, 1\n");
+        out.push_str("  br label %loop_check\n");
+        out.push_str("equal:\n  ret i1 1\n");
+        out.push_str("not_equal:\n  ret i1 0\n");
+        out.push_str("}\n\n");
+    }
+    out
+}
+
 /// The deep-copy counterpart to `dec_fn_for` — which runtime function
 /// (if any) recursively snapshots a value of `ty` into a FRESH cell,
 /// rather than decrementing an existing one. `None` means "just copy
@@ -2724,6 +2887,7 @@ pub fn emit_program(
     out.push_str(&extern_struct_type_decls);
     out.push_str(&extern_declares);
     out.push_str(&emit_array_release_fns(&needed_arrays));
+    out.push_str(&emit_array_eq_fns(&needed_arrays));
     if *needs_spawn_runtime.borrow() || *needs_channel_runtime.borrow() {
         out.push_str(&emit_deepcopy_runtime(tag_fields, &tag_ids));
         out.push_str(&emit_deepcopy_array_fns(&needed_arrays));

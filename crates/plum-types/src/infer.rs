@@ -3447,7 +3447,24 @@ fn satisfies_bound(ty: &Type, bound: &str) -> bool {
         matches!(ty, Type::Struct(n, _) if n == "Task" || n == "Sender" || n == "Receiver" || n == "Ref");
     match bound {
         "Num" => matches!(ty, Type::Int | Type::Float),
-        "Eq" | "Show" => !matches!(ty, Type::Function(..)) && !is_opaque_runtime_handle,
+        // `Eq` now actually reflects backend support: struct/enum/array
+        // structural equality is real in both the interpreter and the
+        // LLVM backend (see `plum-interp::values_equal`'s `Ctor==Ctor`
+        // case and `plum-codegen`'s `@plum_struct_eq`/`@plum_array_eq_
+        // <mangled>`), so those stay permitted. `Tuple` is excluded
+        // here specifically — codegen has no `Type::Tuple` -> `CgType`
+        // mapping at all (see `plumc::plum_type_to_cg_type`'s own doc
+        // comment: two differently-typed tuples of the same arity would
+        // collide in `tag_fields`, the same class of problem that made
+        // `Map`/`Set` use recursive generic enums instead of
+        // `Array[Tuple[K,V]]`), so without this exclusion a tuple `==`
+        // would type-check fine and only fail later, at codegen time,
+        // with a much less clear error. `Show`'s own bound stays
+        // unchanged — its runtime/codegen support is a separate,
+        // already-narrower (`Int`/`Float`/`Bool`/`Str` only) gap this
+        // change doesn't touch.
+        "Eq" => !matches!(ty, Type::Function(..) | Type::Tuple(..)) && !is_opaque_runtime_handle,
+        "Show" => !matches!(ty, Type::Function(..)) && !is_opaque_runtime_handle,
         // An unrecognized bound name isn't rejected here — DESIGN.md's
         // closed trait set is a small, fixed list, but a genuinely
         // unknown trait name is a separate, not-yet-implemented gap

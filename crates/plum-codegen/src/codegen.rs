@@ -420,6 +420,30 @@ fn codegen_binop(op: BinOp, l: String, r: String, ty: CgType, em: &mut Emitter) 
         }
         return Ok((reg, CgType::Bool));
     }
+    // Struct/enum (`Heap`) and array `==`/`!=` — the exact same "call-
+    // shaped instruction, not a bare `icmp`" precedent as `Str` above,
+    // dispatching to `@plum_struct_eq` (one generic function for every
+    // struct/enum shape) or `@plum_array_eq_<mangled>` (one per
+    // distinct element type, see `crate::eq_fn_for`/`emit_array_eq_
+    // fns`). Tuples are NOT handled here — `crate::eq_fn_for` has no
+    // `Tuple` case because `CgType` itself has no `Tuple` variant (see
+    // `plumc::plum_type_to_cg_type`'s own doc comment) — so a tuple
+    // `==` still falls through to this function's generic `Err`
+    // fallback below, unchanged; `satisfies_bound` now rejects it
+    // earlier, at type-checking time, so that fallback should never
+    // actually be reached in a well-typed program.
+    if matches!(ty, CgType::Heap | CgType::Array(_)) && (op == BinOp::Eq || op == BinOp::Ne) {
+        if let Some(eq_fn) = crate::eq_fn_for(&ty) {
+            let reg = em.fresh_reg();
+            em.push(format!("  {reg} = call i1 {eq_fn}(ptr {l}, ptr {r})"));
+            if op == BinOp::Ne {
+                let negated = em.fresh_reg();
+                em.push(format!("  {negated} = xor i1 {reg}, 1"));
+                return Ok((negated, CgType::Bool));
+            }
+            return Ok((reg, CgType::Bool));
+        }
+    }
     let (instr, result_ty) = match (op, ty) {
         (BinOp::Add, CgType::Int) => ("add i64", CgType::Int),
         (BinOp::Sub, CgType::Int) => ("sub i64", CgType::Int),

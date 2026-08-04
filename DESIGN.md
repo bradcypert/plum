@@ -2016,6 +2016,95 @@ and built/ran a real throwaway Plum project through BOTH the native
 `build` and interpreter CLI paths by hand for the final, complete
 fix — output identical and correct through both.
 
+### Chunk 6: real structural equality for structs, enums, and arrays (both backends) — closes an "Open questions" item
+
+Chunk 4 deliberately deferred this ("more operations vs. building real
+structural equality for non-scalar keys" — the user picked the smaller
+option then). Asked directly for it now: `Map`/`Set` keys were
+restricted IN PRACTICE to `Int`/`Float`/`Bool`/`Str`, since the `Eq`
+bound didn't actually enforce backend support — a struct/array key
+type-checked fine and only failed later, at codegen/runtime.
+
+**Interpreter** (`plum-interp::values_equal`): a small fix, closing a
+documented gap. Structs, enum variants, arrays, AND tuples all already
+shared one dynamically-typed runtime representation (`heap::CellData::
+Ctor { tag, fields }`), so one recursive tag-then-fields comparison
+covers all of them uniformly — no per-shape special-casing needed,
+mirroring the existing `to_portable` (spawn/channel deep-copy) walk.
+Provably safe from infinite recursion without any cycle-detection
+logic: genuine reference cycles are only reachable through the
+separate `Ref[T]` heap-cell kind (see "Mutability and cycles" above),
+which already does identity-only comparison and never recurses into
+its `RefCell` contents.
+
+**LLVM codegen**: bigger, needed new runtime primitives, but followed
+an existing architectural precedent exactly rather than inventing a
+new shape. Structs/enums both compile to ONE erased `CgType::Heap`
+variant, so `@plum_struct_eq` is a single, generic, runtime-tag-
+dispatched function — a direct structural sibling of `@plum_release_
+fields` (same sequential `icmp`/`br` dispatch chain over every known
+tag, not an LLVM `switch`), emitted once per program regardless of how
+many struct/enum types it declares. Arrays are NOT part of that
+tag-dispatch system at the LLVM level (a dedicated `{refcount, len,
+elems}` layout, no tag word at all), so they get their own function
+family instead — `@plum_array_eq_<mangled>`, one per distinct element
+`CgType` actually used in the program, discovered via the existing
+`Ctx::needed_arrays` machinery and emitted alongside `emit_array_
+release_fns`. Both dispatch recursively into nested heap-shaped fields/
+elements via a new `eq_fn_for` table (a direct sibling of `dec_fn_for`/
+`deepcopy_fn_for`), and both short-circuit to "not equal" as soon as
+any mismatch is found (a length mismatch for arrays; a tag mismatch,
+or any field mismatch in declared order, for structs/enums) rather
+than always visiting every field/element. Wired into `codegen_binop`
+via the same "call-shaped instruction, not a bare `icmp`" branch the
+existing `Str` `==`/`!=` support already established.
+
+**Tuples are a genuine, structural gap in codegen specifically — left
+explicitly out of scope, not silently unsupported.** `CgType` has no
+`Tuple` variant at all (`plum_type_to_cg_type`'s own doc comment: a
+tuple only ever reaches codegen as a fully-destructured LOCAL value,
+never through a signature); the flat, non-type-specialized tuple tags
+(`"2Tuple"`, etc.) can't safely distinguish two different concrete
+tuple instantiations sharing the same arity — the same class of
+problem that already forced `Map`/`Set` to use recursive generic enums
+instead of `Array[Tuple[K,V]]`. Real tuple equality in codegen needs
+per-shape (monomorphized) tuple codegen types first, a separate future
+chunk. The interpreter has NO such limitation (tuples share the fully
+dynamically-typed `Ctor` shape, no static collision risk), so this is
+a genuine, deliberate asymmetry between the two backends: tuple `==`
+now works completely in the interpreter, but stays unsupported in
+native codegen.
+
+`satisfies_bound`'s `Eq` case (`plum-types::infer`) is now tightened to
+match: `Tuple` is explicitly excluded (`Show`'s own bound is untouched
+— its narrower, `Int`/`Float`/`Bool`/`Str`-only support is a separate,
+pre-existing gap this chunk doesn't touch). This only affects a
+GENERIC `[T: Eq]` bound being instantiated at `T = Tuple` (e.g.
+`Set[Tuple]`'s `set_insert`) — a direct, concrete `(1,2) == (1,2)`
+isn't gated by `satisfies_bound` at all (only generic bound
+instantiation goes through it), so it still type-checks and runs fine
+in the interpreter, and would only fail in native codegen's already-
+existing generic `Err` fallback if ever reached that way.
+
+**Direct, concrete payoff**: a `Map`/`Set` keyed by a STRUCT now
+genuinely works end to end, not just type-checks — verified through
+both backends, including a real throwaway Plum project built and run
+via the actual `plumc` CLI (`build`, native, AND plain interpreter
+invocation — output identical and correct through both).
+
+Tests: struct equality (matching/mismatched fields), enum-variant
+mismatch (`Circle(1.0) == Square(1.0)` → false), nested struct-
+containing-struct equality, array-of-structs equality, a deep
+recursive-enum (`List`) equality check proving recursion actually
+terminates correctly rather than just working for one flat struct, a
+struct-keyed `Map` test (the direct payoff), and a negative test
+confirming a tuple element in a `Set` is now rejected at type-checking
+time by the tightened bound. Each backend independently (interpreter
+tests in `plum-interp`; native compile-and-run tests plus two direct
+emitted-IR assertions — `call i1 @plum_struct_eq` and `call i1
+@plum_array_eq_Int` actually appear — in `plumc`). Workspace now 1414
+tests (up from 1399 — net +15), clean build, zero warnings.
+
 ## Target platforms
 
 - **Hosted (Linux/macOS/Windows), web APIs**: primary target, no special
@@ -3388,21 +3477,23 @@ summed), not just inspect emitted IR text.
   basic output/`println`/`print`, then `Map`/`Set` collections plus
   `Set` algebra). Still wide open: what comes next (file I/O, JSON,
   HTTP, string utils beyond what's already a core-language builtin,
-  ...), whether/when `println`/`print`/`Map`/`Set` migrate from the
+  ...), and whether/when `println`/`print`/`Map`/`Set` migrate from the
   prelude into real `use`-based modules once there's enough stdlib
   surface to justify extending the `compile_and_run` test harness to
-  drive a real temp project through `resolve_project`, and whether/when
-  to (a) tighten the `Eq` bound in `plum-types` to actually enforce
-  Int/Float/Bool/Str-only (it doesn't today — a struct/array/tuple key
-  type-checks but fails at codegen/runtime) and (b) build real
-  structural/deep equality for structs/enums/arrays/tuples in both
-  backends, which would lift that restriction properly instead of just
-  gating it earlier. The two real compiler bugs found in chunk 4 (an
-  empty array literal unable to cross a generic-function-call boundary;
-  a closure passed to `.fold()` calling a curried function producing
-  invalid LLVM IR) are both FIXED as of chunk 5 — see that section
-  above for the full writeup; `map_keys`/`map_values`/`set_to_array`
-  are now implemented as the direct payoff.
+  drive a real temp project through `resolve_project`. The two real
+  compiler bugs found in chunk 4 (an empty array literal unable to
+  cross a generic-function-call boundary; a closure passed to
+  `.fold()` calling a curried function producing invalid LLVM IR) are
+  both FIXED as of chunk 5; `map_keys`/`map_values`/`set_to_array` are
+  implemented as the direct payoff. The `Eq`-bound/structural-equality
+  gap flagged here previously is now CLOSED as of chunk 6 — real
+  structural equality for structs/enums/arrays in both backends, and a
+  tightened `Eq` bound that actually reflects it, with a struct-keyed
+  `Map` as the direct payoff. One deliberate, documented asymmetry
+  remains, not treated as unfinished: tuple equality works fully in
+  the interpreter but stays unsupported in native codegen (`CgType`
+  has no `Tuple` variant at all — real per-shape/monomorphized tuple
+  codegen types would be needed first, a separate future chunk).
 - Whether/when to build the scoped incremental cycle collector for
   `Shared` values (see Memory model above — deliberately deferred until
   real Plum code shows the pain is real).

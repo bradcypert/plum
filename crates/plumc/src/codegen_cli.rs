@@ -1197,6 +1197,155 @@ mod tests {
         assert_eq!(out, "1");
     }
 
+    // --- structural equality for structs/enums/arrays (`@plum_struct_
+    // eq`/`@plum_array_eq_<mangled>`) ---
+
+    #[test]
+    fn struct_equality_compares_fields_structurally_in_native_codegen() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Bool = Point { x: 1, y: 2 } == Point { x: 1, y: 2 }\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+
+        let src2 = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Bool = Point { x: 1, y: 2 } == Point { x: 1, y: 3 }\n\
+        ";
+        assert_eq!(compile_and_run(src2, "go", &[CgValue::Unit]).unwrap(), "0");
+    }
+
+    #[test]
+    fn enum_variant_equality_distinguishes_different_variants_in_native_codegen() {
+        let src = "\
+            enum Shape { Circle(Float), Square(Float) }\n\
+            let go (): Bool = Circle(1.0) == Square(1.0)\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "0");
+
+        let src2 = "\
+            enum Shape { Circle(Float), Square(Float) }\n\
+            let go (): Bool = Circle(1.0) == Circle(1.0)\n\
+        ";
+        assert_eq!(compile_and_run(src2, "go", &[CgValue::Unit]).unwrap(), "1");
+
+        let src3 = "\
+            enum Shape { Circle(Float), Square(Float) }\n\
+            let go (): Bool = Circle(1.0) == Circle(2.0)\n\
+        ";
+        assert_eq!(compile_and_run(src3, "go", &[CgValue::Unit]).unwrap(), "0");
+    }
+
+    #[test]
+    fn nested_struct_equality_recurses_into_heap_shaped_fields_in_native_codegen() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            struct Line { a: Point, b: Point }\n\
+            let go (): Bool = Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } } == \
+                              Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } }\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+
+        let src2 = "\
+            struct Point { x: Int, y: Int }\n\
+            struct Line { a: Point, b: Point }\n\
+            let go (): Bool = Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } } == \
+                              Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 9 } }\n\
+        ";
+        assert_eq!(compile_and_run(src2, "go", &[CgValue::Unit]).unwrap(), "0");
+    }
+
+    #[test]
+    fn array_of_structs_equality_compares_elements_pairwise_in_native_codegen() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Bool = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }] == \
+                              [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+
+        let src2 = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Bool = [Point { x: 1, y: 2 }] == \
+                              [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]\n\
+        ";
+        assert_eq!(compile_and_run(src2, "go", &[CgValue::Unit]).unwrap(), "0");
+    }
+
+    #[test]
+    fn deep_recursive_list_equality_terminates_correctly_in_native_codegen() {
+        let src = "\
+            enum List { Cons(Int, List), Nil }\n\
+            let go (): Bool = Cons(1, Cons(2, Cons(3, Nil))) == Cons(1, Cons(2, Cons(3, Nil)))\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+
+        let src2 = "\
+            enum List { Cons(Int, List), Nil }\n\
+            let go (): Bool = Cons(1, Cons(2, Cons(3, Nil))) == Cons(1, Cons(2, Cons(4, Nil)))\n\
+        ";
+        assert_eq!(compile_and_run(src2, "go", &[CgValue::Unit]).unwrap(), "0");
+
+        let src3 = "\
+            enum List { Cons(Int, List), Nil }\n\
+            let go (): Bool = Cons(1, Cons(2, Nil)) == Cons(1, Cons(2, Cons(3, Nil)))\n\
+        ";
+        assert_eq!(compile_and_run(src3, "go", &[CgValue::Unit]).unwrap(), "0");
+    }
+
+    #[test]
+    fn map_insert_get_contains_work_for_struct_keys_in_native_codegen() {
+        // The direct payoff of real structural equality: a `Map` keyed
+        // by a struct now genuinely works, not just type-checks — see
+        // `plum-types::infer::satisfies_bound`'s tightened `Eq` bound
+        // and `@plum_struct_eq`.
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_new(()), Point { x: 1, y: 1 }, 100), Point { x: 2, y: 2 }, 200);\n\
+                let got = match map_get(m, Point { x: 1, y: 1 }) { Some(v) => v, None => -1 };\n\
+                let has = map_contains(m, Point { x: 2, y: 2 });\n\
+                let missing = map_contains(m, Point { x: 9, y: 9 });\n\
+                got + (if has { 10 } else { 0 }) + (if missing { 100 } else { 0 })\n\
+            }\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "110");
+    }
+
+    #[test]
+    fn struct_equality_emits_a_call_to_plum_struct_eq() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Bool = Point { x: 1, y: 2 } == Point { x: 1, y: 2 }\n\
+        ";
+        let (body_ir, ..) = compile_to_ir(src, "go").unwrap();
+        assert!(body_ir.contains("call i1 @plum_struct_eq"), "{body_ir}");
+    }
+
+    #[test]
+    fn array_equality_emits_a_call_to_a_mangled_plum_array_eq_function() {
+        let src = "let go (): Bool = [1, 2, 3] == [1, 2, 3]\n";
+        let (body_ir, ..) = compile_to_ir(src, "go").unwrap();
+        assert!(body_ir.contains("call i1 @plum_array_eq_Int"), "{body_ir}");
+    }
+
+    #[test]
+    fn tuple_element_in_a_set_is_rejected_at_type_checking_time_by_the_tightened_eq_bound() {
+        // Direct concrete `(1, 2) == (1, 2)` isn't gated by
+        // `satisfies_bound` at all (that check only fires for a
+        // GENERIC `[T: Eq]` bound being instantiated, not a plain
+        // operator use on two already-concrete operand types) — so the
+        // tightened bound's effect shows up here instead: `set_insert`
+        // is declared `[T: Eq]`, and a `Set` of tuples now gets a
+        // clear type-checking-time rejection instead of type-checking
+        // fine and only failing later, inside codegen, with a much
+        // less clear error (`CgType` has no `Tuple` variant at all —
+        // see `plum_type_to_cg_type`'s own doc comment).
+        let src = "let go (): Bool = { let s = set_insert(set_new(()), (1, 2)); set_contains(s, (1, 2)) }\n";
+        let err = crate::typecheck_and_run(src, "go", vec![plum_interp::Value::Unit]).expect_err("expected a type error");
+        assert!(err.contains("Eq"), "unexpected error: {err}");
+    }
+
     // --- standard library: Map[K,V]/Set[T] (see `plumc::STDLIB_COLLECTIONS_SRC`) ---
     //
     // Association-list-backed recursive generic enums, mirroring the

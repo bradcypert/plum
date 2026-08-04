@@ -1945,16 +1945,28 @@ fn values_equal(a: &Value, b: &Value, heap: &heap::Heap) -> Result<bool, String>
         (Value::Float(x), Value::Float(y)) => Ok(x == y),
         (Value::Bool(x), Value::Bool(y)) => Ok(x == y),
         (Value::Unit, Value::Unit) => Ok(true),
-        // Only two STRING cells get a real equality comparison here —
-        // general heap-value (array/struct/tuple) structural equality
-        // is a separate, pre-existing gap this change doesn't attempt
-        // to close (there was never a `Value::HeapRef` case here before
-        // strings became heap-backed either). Two Ctor cells, or a
-        // Ctor and a Str, still fall through to the same "cannot
-        // compare" error as before.
+        // Structs, enum variants, arrays, and tuples all share the same
+        // `Ctor { tag, fields }` cell shape (see `heap.rs`'s module
+        // doc), so one recursive tag+fields comparison covers all of
+        // them uniformly — no per-shape special-casing needed. This is
+        // provably safe from infinite recursion: genuine reference
+        // cycles are only reachable through `Ref[T]` (see DESIGN.md's
+        // "Mutability and cycles"), and `Ref == Ref` below is identity
+        // comparison that never recurses into the `RefCell` contents.
         (Value::HeapRef(x), Value::HeapRef(y)) => {
             match (heap.read_any(*x)?, heap.read_any(*y)?) {
                 (heap::CellView::Str(sx), heap::CellView::Str(sy)) => Ok(sx == sy),
+                (heap::CellView::Ctor(tag_x, fields_x), heap::CellView::Ctor(tag_y, fields_y)) => {
+                    if tag_x != tag_y || fields_x.len() != fields_y.len() {
+                        return Ok(false);
+                    }
+                    for (fx, fy) in fields_x.iter().zip(fields_y) {
+                        if !values_equal(fx, fy, heap)? {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                }
                 _ => Err(format!("type error: cannot compare {a:?} and {b:?} for equality")),
             }
         }
@@ -3008,6 +3020,87 @@ mod tests {
                     let use_it dummy = { let arr = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }];\
                     match arr[1] { Point(a, b) => a + b } }";
         assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(7));
+    }
+
+    #[test]
+    fn struct_equality_compares_fields_structurally() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = Point { x: 1, y: 2 } == Point { x: 1, y: 2 }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+
+        let src2 = "struct Point { x: Int, y: Int }\n\
+                     let use_it dummy = Point { x: 1, y: 2 } == Point { x: 1, y: 3 }";
+        assert_eq!(run(src2, "use_it", vec![Value::Unit]), Value::Bool(false));
+    }
+
+    #[test]
+    fn enum_variant_equality_distinguishes_different_variants() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let use_it dummy = Circle(1.0) == Square(1.0)";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(false));
+
+        let src2 = "enum Shape { Circle(Float), Square(Float) }\n\
+                     let use_it dummy = Circle(1.0) == Circle(1.0)";
+        assert_eq!(run(src2, "use_it", vec![Value::Unit]), Value::Bool(true));
+
+        let src3 = "enum Shape { Circle(Float), Square(Float) }\n\
+                     let use_it dummy = Circle(1.0) == Circle(2.0)";
+        assert_eq!(run(src3, "use_it", vec![Value::Unit]), Value::Bool(false));
+    }
+
+    #[test]
+    fn nested_struct_equality_recurses_into_heap_shaped_fields() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    struct Line { a: Point, b: Point }\n\
+                    let use_it dummy = Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } } == \
+                                        Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } }";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+
+        let src2 = "struct Point { x: Int, y: Int }\n\
+                     struct Line { a: Point, b: Point }\n\
+                     let use_it dummy = Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } } == \
+                                         Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 9 } }";
+        assert_eq!(run(src2, "use_it", vec![Value::Unit]), Value::Bool(false));
+    }
+
+    #[test]
+    fn array_of_structs_equality_compares_elements_pairwise() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }] == \
+                                        [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+
+        let src2 = "struct Point { x: Int, y: Int }\n\
+                     let use_it dummy = [Point { x: 1, y: 2 }] == \
+                                         [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]";
+        assert_eq!(run(src2, "use_it", vec![Value::Unit]), Value::Bool(false));
+    }
+
+    #[test]
+    fn deep_recursive_list_equality_terminates_correctly() {
+        let src = "enum List { Cons(Int, List), Nil }\n\
+                    let use_it dummy = Cons(1, Cons(2, Cons(3, Nil))) == Cons(1, Cons(2, Cons(3, Nil)))";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+
+        let src2 = "enum List { Cons(Int, List), Nil }\n\
+                     let use_it dummy = Cons(1, Cons(2, Cons(3, Nil))) == Cons(1, Cons(2, Cons(4, Nil)))";
+        assert_eq!(run(src2, "use_it", vec![Value::Unit]), Value::Bool(false));
+
+        let src3 = "enum List { Cons(Int, List), Nil }\n\
+                     let use_it dummy = Cons(1, Cons(2, Nil)) == Cons(1, Cons(2, Cons(3, Nil)))";
+        assert_eq!(run(src3, "use_it", vec![Value::Unit]), Value::Bool(false));
+    }
+
+    #[test]
+    fn tuple_equality_still_works_in_the_interpreter_unlike_native_codegen() {
+        // Tuples aren't a blocker here (unlike LLVM codegen — see
+        // `plumc::codegen_cli`'s `tuple_equality_is_rejected_at_type_
+        // checking_time_not_codegen_time`): the interpreter's `Ctor`
+        // cells are fully dynamically typed, so no static tag-collision
+        // risk exists. This is a real, documented asymmetry between the
+        // two backends' equality support.
+        let src = "let use_it dummy = (1, 2) == (1, 2)";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
     }
 
     #[test]
