@@ -2789,6 +2789,7 @@ fn emit_function(
     let ctx = codegen::Ctx {
         sigs: signatures,
         caller_sig: &sig,
+        is_closure_body: false,
         tag_ids,
         tag_fields,
         fn_name: &f.name,
@@ -2893,6 +2894,7 @@ fn emit_init_globals(
     let ctx = codegen::Ctx {
         sigs: signatures,
         caller_sig: &dummy_sig,
+        is_closure_body: false,
         tag_ids,
         tag_fields,
         fn_name: "plum_init_globals",

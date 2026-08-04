@@ -1877,6 +1877,145 @@ and ran a real throwaway Plum project exercising every new function
 through BOTH the native `build` and interpreter CLI paths by hand,
 output identical and correct through both.
 
+### Chunk 5: fixing the two chunk-4 compiler bugs
+
+Asked to fix both deferred bugs. Researched both in parallel via
+background `Explore` agents BEFORE any design was written, each citing
+exact file:line locations — this section summarizes the fix; see the
+chunk-4 writeup above for each bug's own original discovery/reproducer.
+
+**Bug 1 (`musttail` from a closure body): fixed.** Root cause, traced
+precisely: `codegen_call`'s direct-callee path
+(`plum-codegen/src/codegen.rs`) emits `musttail call` when `allow_
+musttail && *ctx.caller_sig == sig` — an implicit assumption that `ctx.
+caller_sig` is the CURRENT function's real LLVM prototype. True for an
+ordinary top-level function (`emit_function`'s `param_decls`/`caller_
+sig` are both built from the exact same `sig.params`) but FALSE for a
+closure body: `emit_closure_body_fn` builds `caller_sig` from only the
+closure's own DECLARED params, while its real `define` always prepends
+an implicit `ptr %env` that `caller_sig` never counts. When a closure's
+declared shape happens to structurally match a top-level function's
+`FnSig` exactly (genuinely common — a fold/map callback is often
+deliberately shaped to match the function it wraps, e.g. `|acc, x|
+set_insert(acc, x)` vs. `set_insert(s: Set[T]) (x: T): Set[T]`), the
+`caller_sig == sig` check spuriously passes, and `musttail` gets
+emitted with one fewer real argument than the closure body function
+actually has — `clang`/LLVM correctly rejects the resulting IR.
+
+Confirmed the callee side was never the problem: `ctx.sigs` only ever
+names real top-level functions (their `FnSig` always matches their real
+prototype exactly), and Plum's curried `let f (a) (b) = ...` syntax is
+a pure PARSING convenience — `parse_let_def` flattens every param group
+into ONE flat arity; there's no partial-application/currying machinery
+to miscalculate. So the fix targets the CALLER side specifically: a new
+`Ctx::is_closure_body: bool` field, `true` only when `emit_closure_
+body_fn` constructs its own `Ctx` (every other `Ctx` construction site
+— ordinary functions, `@plum_init_globals`, the spawn-entry dummy
+context — sets it `false`, confirmed via direct grep: exactly 4
+construction sites exist in the whole codebase, no others). `codegen_
+call`'s `musttail` check now additionally requires `!ctx.is_closure_
+body` — a closure body simply never gets `musttail`-optimized calls to
+bare-named top-level functions, regardless of signature match; still
+falls back to an ordinary `call` + `ret`, correct, just not `musttail`-
+guaranteed (a real but narrow, acceptable performance-only regression
+for what both the original report and this research confirm is a rare
+shape). Existing `self_recursive_tail_call_becomes_musttail`/`mutual_
+tail_call_becomes_musttail` tests confirm ordinary (non-closure)
+`musttail` optimization is completely untouched by this fix — both
+pass unmodified.
+
+Tests: the original `.fold()`+curried-closure reproducer, now compiling
+and running correctly (`set_from_array`-shaped code); a dedicated IR-
+shape test proving the mechanism directly (asserts an ORDINARY `call`,
+not `musttail`, for a closure body's own tail call to a same-shaped
+top-level function) rather than relying on the end-to-end symptom
+alone.
+
+**Bug 2 (empty array literal across a generic boundary): fixed, both
+gaps, per Brad's explicit choice** (presented as a real fork via
+`AskUserQuestion` — Gap A alone vs. both — rather than assumed; Brad
+chose both, mirroring how "closures inside generic functions" was
+fixed with the same two-part shape).
+
+**Gap A** (the exact originally-reported failure): `plum_ir::
+monomorphize::plan` never threaded `empty_array_elem_types` at all —
+not a rewrite bug, a total omission. Since `MonoPlan::functions`/
+`.globals` wholesale-replace `lower_program`'s own output, EVERY
+function/global `plumc` actually emits — generic or not — got re-
+lowered through `plan`'s own always-empty map, so ANY empty array
+literal anywhere fell through to the untyped `Ctor{ARRAY_TAG, []}`
+lowering arm, which codegen's own empty-fields guard explicitly
+rejects. Fixed by threading `empty_array_elem_types` through `plan()`
+as a new parameter and baking it into `base_lctx`, mirroring exactly
+how `closure_types` was already threaded — small and mechanical,
+already proven safe by that precedent.
+
+**Gap B** (`let f[T](): Array[T] = []` — an empty array literal pinned
+only via the ENCLOSING generic function's own type parameter): `Infer::
+empty_array_elem_types` had no way to record which function's generics
+an unresolved var might belong to, and `resolve_empty_array_elem_types`
+had NO tier-2 template fallback at all — a still-unresolved `Var` was
+ALWAYS a hard ambiguity error, even when it was genuinely resolvable
+once monomorphization instantiated the function. Fixed by mirroring
+`resolve_closure_types`'s existing tier-2 mechanism — literally reusing
+`resolve_closure_component` directly (a clean, general helper it turned
+out to already be shaped correctly for, rather than duplicating its
+logic) — plus a new `extra_empty_array_elem_types` per-instantiation
+side-channel in `monomorphize.rs`'s `RewriteCtx`, mirroring `extra_
+closure_types` exactly.
+
+**A third, related issue found only once both gaps were wired up and
+actually tested end-to-end**, not predicted by the original research:
+`plumc`'s pipeline eagerly lowers the ORIGINAL, un-instantiated AST
+once (for globals/externs, its function output always discarded and
+replaced by `monomorphize::plan`'s own — the same structural quirk
+that needed a `type_contains_param` fix for closures in an earlier
+chunk). With Gap B's tier-2 fallback in place, this eager pass started
+hitting an empty array literal whose recorded type was still a `Type::
+Param` TEMPLATE, which `lower.rs`'s existing `ArrayLiteral` lowering
+arm rejected outright (`type_to_prim_ty` has no `Type::Param` case).
+Fixed by giving the `ArrayLiteral` (empty-case) lowering arm the EXACT
+SAME treatment the `Closure` arm already has: filter out a template-
+containing resolved type via the existing `type_contains_param` helper,
+falling back to the untyped `Ctor{ARRAY_TAG, []}` form (treating it as
+"no info available," same as a lowering-only caller with no `Infer`
+pass behind it at all) rather than erroring.
+
+**Direct, concrete payoff**: `map_keys`/`map_values`/`set_to_array`
+(`Map`/`Set` → fresh `Array` conversions) — exactly the shape both bugs
+used to block — are now implemented in the stdlib, using precisely the
+`[]`/`match`/generic-function pattern that was broken before.
+
+Tests: the exact original `map_keys_into`-shaped reproducer (Gap A),
+now compiling and running correctly; `let map_keys[K,V](m): Array[K] =
+match m { ... MapEnd => [] ... }`-shaped code (Gap B) instantiated at
+TWO different concrete types in the same compiled program; a `plum-
+types` unit test for the new tier-2 template fallback directly,
+mirroring the existing closure-template test; real compile-and-run
+tests for `map_keys`/`map_values`/`set_to_array` themselves, plus an
+interpreter-path test (confirmed, not assumed: the interpreter was
+NEVER affected by either gap — `run_resolved_program` never calls
+`resolve_empty_array_elem_types`/`monomorphize::plan` at all — so this
+test proves the new FUNCTIONS work there, not a fix to anything that
+was broken). Workspace now 1399 tests (up from 1394 — net +5),
+clean build, zero warnings.
+
+Implementation note: a background agent doing the Gap A/B plumbing
+stalled mid-edit (a real, infrastructure-level failure, not a design
+problem) partway through — the `Task::Global` branch's `RewriteCtx`
+construction was left incomplete, and every caller of `monomorphize::
+plan` still needed the new parameter threaded through. Took over and
+completed it directly rather than re-delegating, since the exact
+mechanism (mirroring `extra_closure_types`) was already fully
+understood from the research and the `Task::Function` branch the agent
+DID finish provided a complete, correct template to mirror exactly.
+Verified independently at every stage — forced rebuilds before
+trusting diagnostics, re-ran the full suite after each fix, read the
+actual diffs directly (not just trusted a "looks done" impression),
+and built/ran a real throwaway Plum project through BOTH the native
+`build` and interpreter CLI paths by hand for the final, complete
+fix — output identical and correct through both.
+
 ## Target platforms
 
 - **Hosted (Linux/macOS/Windows), web APIs**: primary target, no special
@@ -3258,13 +3397,12 @@ summed), not just inspect emitted IR text.
   type-checks but fails at codegen/runtime) and (b) build real
   structural/deep equality for structs/enums/arrays/tuples in both
   backends, which would lift that restriction properly instead of just
-  gating it earlier. Two real, NEWLY-FOUND compiler bugs from chunk 4,
-  not yet fixed: an empty array literal (`[]`) can't cross a generic-
-  function-call boundary (blocks `map_keys`/`map_values`/`set_to_array`
-  — converting a `Map`/`Set` into a fresh `Array`), and a closure
-  passed to `.fold()` that calls a curried function produces invalid
-  LLVM IR (a `musttail`/parameter-count mismatch `clang` rejects
-  outright).
+  gating it earlier. The two real compiler bugs found in chunk 4 (an
+  empty array literal unable to cross a generic-function-call boundary;
+  a closure passed to `.fold()` calling a curried function producing
+  invalid LLVM IR) are both FIXED as of chunk 5 — see that section
+  above for the full writeup; `map_keys`/`map_values`/`set_to_array`
+  are now implemented as the direct payoff.
 - Whether/when to build the scoped incremental cycle collector for
   `Shared` values (see Memory model above — deliberately deferred until
   real Plum code shows the pain is real).

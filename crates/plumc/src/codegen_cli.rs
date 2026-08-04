@@ -559,6 +559,7 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
         infer.field_owners(),
         infer.array_for_loops(),
         &closure_types,
+        &empty_array_elem_types,
         &variant_payload_types,
     )
     .map_err(|e| format!("monomorphization error: {e}"))?;
@@ -988,6 +989,125 @@ mod tests {
     fn plain_arithmetic_compiles_and_runs() {
         let out = compile_and_run("let go () = 2 + 3 * 4", "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "14");
+    }
+
+    // --- Bug 2: empty array literal crossing a generic-function boundary ---
+
+    #[test]
+    fn gap_a_an_empty_array_literal_from_a_non_generic_context_can_be_passed_into_a_generic_function() {
+        // The EXACT original reproducer that blocked `map_keys`/`map_
+        // values`/`set_to_array` in the "Set algebra" chunk: `[]`,
+        // concretely typed via an explicit annotation in a NON-generic
+        // caller (`go`), passed as an argument into a generic function
+        // (`map_keys_into[K, V]`). Root cause: `monomorphize::plan`
+        // never threaded `empty_array_elem_types` through AT ALL (every
+        // function/global plumc emits gets re-lowered through `plan`'s
+        // own `base_lctx`, which had no such map) — fixed by threading
+        // it exactly like `closure_types` already was.
+        let src = "\
+            let map_keys_into[K, V] (m: Map[K, V]) (acc: Array[K]): Array[K] = match m {\n\
+                MapNode(k, _, rest) => map_keys_into(rest, acc.push(k)),\n\
+                MapEnd => acc,\n\
+            }\n\
+            \n\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_new(()), 1, 100), 2, 200);\n\
+                let ks: Array[Int] = [];\n\
+                let ks2 = map_keys_into(m, ks);\n\
+                ks2[0] + ks2[1]\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "3");
+    }
+
+    #[test]
+    fn gap_b_an_empty_array_literal_pinned_only_by_its_enclosing_generic_functions_own_param_works() {
+        // `let map_keys[K, V] (m: Map[K, V]): Array[K] = match m { ...
+        // MapEnd => [] ... }` — the empty literal's element type is
+        // pinned ONLY to `map_keys`'s OWN generic `K`, never to
+        // anything concrete anywhere in its own declaration. Root
+        // cause: `Infer::empty_array_elem_types` had no tier-2 template
+        // fallback at all (unlike `closure_types`) — a still-
+        // unresolved `Var` was ALWAYS a hard ambiguity error, even
+        // though it's genuinely resolvable once monomorphization
+        // instantiates the function. Fixed by mirroring `resolve_
+        // closure_types`'s existing tier-2 mechanism exactly (reusing
+        // `resolve_closure_component` directly) plus a matching
+        // `extra_empty_array_elem_types` per-instantiation side-channel
+        // in `monomorphize.rs`. Instantiated at TWO different concrete
+        // types (`Map[Int, Int]` and `Map[Str, Bool]`) in the SAME
+        // compiled program, mirroring this project's established
+        // "prove independent instantiations, not just one" pattern.
+        // Uses the REAL stdlib `map_keys` directly (this bug fix is
+        // exactly what makes `map_keys`/`map_values`/`set_to_array`
+        // possible at all — see `STDLIB_COLLECTIONS_SRC`'s own updated
+        // doc comment) rather than a local, hand-rolled redeclaration.
+        let src = "\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_new(()), 1, 100), 2, 200);\n\
+                let ks = map_keys(m);\n\
+                let sm = map_insert(map_new(()), \"a\", true);\n\
+                let sks = map_keys(sm);\n\
+                ks[0] + ks[1] + ks.len() * 100 + sks.len() * 1000\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1203");
+    }
+
+    #[test]
+    fn map_values_and_set_to_array_work_now_that_both_bugs_are_fixed() {
+        let src = "\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_new(()), 1, 10), 2, 20);\n\
+                let vs = map_values(m);\n\
+                let s = set_from_array([1, 2, 3]);\n\
+                let arr = set_to_array(s);\n\
+                vs[0] + vs[1] + arr.len() * 100\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "330");
+    }
+
+    #[test]
+    fn a_closure_passed_to_fold_can_tail_call_a_same_shaped_curried_function() {
+        // The exact original reproducer for a real compiler bug: a
+        // closure body's own `caller_sig` never accounted for its
+        // implicit leading `ptr %env` parameter, so a closure whose
+        // declared shape happened to match `set_insert`'s exactly
+        // spuriously passed the `musttail` eligibility check — `clang`
+        // rejected the resulting IR outright (`cannot guarantee tail
+        // call due to mismatched parameter counts`). Fixed via `Ctx::
+        // is_closure_body`, unconditionally disallowing `musttail` from
+        // a closure body. See the next test for direct proof of the
+        // mechanism (an ordinary `call`, not `musttail`), not just this
+        // end-to-end symptom.
+        let src = "\
+            let go (): Int = {\n\
+                let s = [1, 2, 2, 3].fold(set_new(()), |acc, x| set_insert(acc, x));\n\
+                set_len(s)\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "3");
+    }
+
+    #[test]
+    fn a_closure_body_tail_call_to_a_same_shaped_function_is_an_ordinary_call_not_musttail() {
+        // Direct proof of the mechanism `Ctx::is_closure_body` fixes —
+        // not just the end-to-end symptom above. `add_one`'s own
+        // declared shape (`Int -> Int`) exactly matches the closure's,
+        // which is exactly the condition that used to spuriously pass
+        // the (incomplete) `musttail` eligibility check.
+        let src = "\
+            let add_one (n: Int): Int = n + 1\n\
+            let go (): Int = [1, 2, 3].map(|x| add_one(x))[0]\n\
+        ";
+        let (body_ir, ..) = compile_to_ir(src, "go").unwrap();
+        assert!(!body_ir.contains("musttail call") && body_ir.contains("@add_one"), "{body_ir}");
+        assert!(body_ir.contains("call i64 @add_one"), "{body_ir}");
     }
 
 
@@ -1736,6 +1856,7 @@ mod tests {
             infer.field_owners(),
             infer.array_for_loops(),
             &closure_types,
+            &HashMap::new(),
             &HashMap::new(),
         )
         .unwrap_or_else(|e| panic!("monomorphization error: {e}"));

@@ -96,6 +96,24 @@ pub(crate) struct Ctx<'a> {
     /// function) falls back to an ordinary `call` + `ret` instead —
     /// still correct, just not a `musttail`-GUARANTEED elimination.
     pub(crate) caller_sig: &'a FnSig,
+    /// Whether the function CURRENTLY being emitted is a closure
+    /// body's own generated function (`emit_closure_body_fn`), rather
+    /// than an ordinary top-level function/`@plum_init_globals`/spawn
+    /// entry. A closure body's REAL LLVM prototype always has an
+    /// implicit leading `ptr %env` parameter that `caller_sig` above
+    /// does NOT count (`caller_sig` only ever records the closure's
+    /// own DECLARED params) — so `caller_sig == callee_sig` can be
+    /// TRUE even though the real parameter counts differ by one,
+    /// letting an invalid `musttail call` through that `clang`/LLVM
+    /// then rejects (a real bug, found via an actual compile failure:
+    /// `cannot guarantee tail call due to mismatched parameter
+    /// counts`, from a closure passed to `.fold()` whose body tail-
+    /// called a top-level function with the same declared shape).
+    /// `musttail` is unconditionally disallowed from a closure body —
+    /// see `codegen_call`'s own use of this field — falling back to an
+    /// ordinary `call` + `ret`, still correct, just not `musttail`-
+    /// guaranteed.
+    pub(crate) is_closure_body: bool,
     /// Every known tag (struct name or enum variant name) -> its
     /// compile-time-interned small integer — see `crate::intern_tags`.
     pub(crate) tag_ids: &'a HashMap<String, i64>,
@@ -1502,6 +1520,7 @@ fn emit_closure_body_fn(
     let inner_ctx = Ctx {
         sigs: ctx.sigs,
         caller_sig: &sig,
+        is_closure_body: true,
         tag_ids: ctx.tag_ids,
         tag_fields: ctx.tag_fields,
         fn_name,
@@ -2587,6 +2606,7 @@ fn emit_spawn_entry_fn(fn_name: &str, captures: &[(String, CgType)], block: &Exp
     let inner_ctx = Ctx {
         sigs: ctx.sigs,
         caller_sig: &dummy_sig,
+        is_closure_body: false,
         tag_ids: ctx.tag_ids,
         tag_fields: ctx.tag_fields,
         fn_name,
@@ -3019,7 +3039,21 @@ fn codegen_call(callee: &Expr, args: &[Expr], env: &Env, em: &mut Emitter, ctx: 
                 // known top-level FUNCTION — the DIRECT path.
                 let args_ir = codegen_call_args(args, env, em, ctx, &sig, name)?;
                 let reg = em.fresh_reg();
-                if allow_musttail && *ctx.caller_sig == sig {
+                // `!ctx.is_closure_body` is a REQUIRED third condition,
+                // not just `allow_musttail && caller_sig == sig` — see
+                // `Ctx::is_closure_body`'s own doc comment. A closure
+                // body's `caller_sig` only ever records its OWN
+                // declared params, never the implicit leading `ptr
+                // %env` its real LLVM prototype always has, so a
+                // closure whose declared shape happens to match a
+                // top-level function's `FnSig` exactly (a realistic,
+                // not contrived, case — e.g. a `.fold()` callback
+                // deliberately shaped to match the function it wraps)
+                // would otherwise pass this check while actually
+                // having one MORE real parameter than the callee,
+                // producing a `musttail call` `clang`/LLVM correctly
+                // rejects as malformed IR.
+                if allow_musttail && !ctx.is_closure_body && *ctx.caller_sig == sig {
                     em.push(format!("  {reg} = musttail call {} @{name}({args_ir})", sig.ret.llvm_type()));
                     return Ok((reg, sig.ret, true));
                 }

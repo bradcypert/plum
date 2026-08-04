@@ -271,7 +271,7 @@ pub struct Infer {
     // fresh, still-unconstrained `Var` (see `infer_expr`'s
     // `ArrayLiteral` arm), and only becomes concrete (if it ever does)
     // once the WHOLE program's final substitution is known.
-    empty_array_elem_types: HashMap<Span, Type>,
+    empty_array_elem_types: HashMap<Span, (Type, Option<String>)>,
     // `Expr::Closure` span -> its (still-possibly-unresolved) param
     // types and body/return type — the closure-literal counterpart to
     // `empty_array_elem_types` immediately above, populated by
@@ -446,27 +446,29 @@ impl Infer {
     /// sites` exactly (same "must be called after a successful
     /// `infer_program`" precondition, same reason), just for the
     /// simpler `empty_array_elem_types` side table instead of
-    /// `generic_sites`. Unlike `resolve_generic_sites`, there's no
-    /// tier-2 "template" fallback here (an empty array literal is never
-    /// itself inside a generic declaration's OWN type parameter the way
-    /// a generic function call site can be) — a still-unresolved `Var`
-    /// after the final substitution is always a genuine ambiguity
-    /// (`let x = []` with `x` never used anywhere that would pin its
-    /// element type), reported clearly rather than silently defaulted.
+    /// `generic_sites`. Also mirrors `resolve_closure_types`'s tier-2
+    /// template fallback: an empty array literal declared inside a
+    /// still-generic function's own body (e.g. `let f[T](): Array[T] =
+    /// []`) has its element type pinned only to that function's OWN
+    /// unresolved generic var, never to anything concrete anywhere —
+    /// that var resolves to a `Type::Param(name)` TEMPLATE here, exactly
+    /// like a closure literal in the same position, rather than being
+    /// rejected as an ambiguity. Any OTHER still-unresolved `Var`
+    /// remains a genuine error — the element type really is never
+    /// pinned to anything concrete anywhere.
     pub fn resolve_empty_array_elem_types(&self) -> Result<HashMap<Span, Type>, String> {
         let subst = self
             .final_subst
             .as_ref()
             .ok_or_else(|| "internal error: resolve_empty_array_elem_types called before infer_program completed".to_string())?;
         let mut out = HashMap::with_capacity(self.empty_array_elem_types.len());
-        for (span, ty) in &self.empty_array_elem_types {
-            let resolved = subst.apply(ty);
-            if matches!(resolved, Type::Var(_)) {
-                return Err(format!(
+        for (span, (ty, enclosing_fn)) in &self.empty_array_elem_types {
+            let resolved = self.resolve_closure_component(ty, enclosing_fn, subst, *span).map_err(|_| {
+                format!(
                     "cannot determine the element type of the empty array literal at {span:?} — it's never \
                      used anywhere that would pin its element type to something concrete"
-                ));
-            }
+                )
+            })?;
             out.insert(*span, resolved);
         }
         Ok(out)
@@ -1441,7 +1443,7 @@ impl Infer {
                 // substitution once `infer_program` completes, exactly
                 // like `generic_sites`/`resolve_generic_sites`.
                 if elements.is_empty() {
-                    self.empty_array_elem_types.insert(*span, elem_ty.clone());
+                    self.empty_array_elem_types.insert(*span, (elem_ty.clone(), self.current_fn.clone()));
                 }
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
@@ -6800,6 +6802,26 @@ mod tests {
         let (params, ret) = closure_types.values().next().unwrap();
         assert_eq!(params, &vec![Type::Param("T".to_string())]);
         assert_eq!(ret, &Type::Param("T".to_string()));
+    }
+
+    #[test]
+    fn resolve_empty_array_elem_types_marks_an_empty_array_inside_a_generic_body_as_a_param_template() {
+        // `wrap`'s own body directly returns `[]` — an empty array
+        // literal whose element type is pinned only to `wrap`'s OWN
+        // still-unresolved generic `T`, never anything concrete inside
+        // `wrap` itself. Mirrors `resolve_closure_types_marks_a_
+        // closure_inside_a_generic_body_as_a_param_template` exactly —
+        // same tier-2 template treatment, now also supported for empty
+        // array literals (previously: always a hard "cannot determine
+        // the element type" ambiguity error, even for this genuinely
+        // resolvable-once-instantiated case).
+        let src = "let wrap[T] (): Array[T] = []\n\
+                   let go () = wrap(())";
+        let infer = infer_with(src);
+        let empty_array_elem_types = infer.resolve_empty_array_elem_types().unwrap();
+        assert_eq!(empty_array_elem_types.len(), 1);
+        let ty = empty_array_elem_types.values().next().unwrap();
+        assert_eq!(ty, &Type::Param("T".to_string()));
     }
 
     #[test]

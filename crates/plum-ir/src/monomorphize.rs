@@ -257,6 +257,13 @@ pub fn plan(
     // mutates NAMES in place, never spans), so the caller's `Infer`-
     // derived maps still key correctly here.
     closure_types: &HashMap<Span, (Vec<Type>, Type)>,
+    // Empty-array-literal span -> resolved (possibly template)
+    // element type — the empty-array counterpart to `closure_types`
+    // immediately above, needed HERE for the same reason (see this
+    // module's own doc comment and `closure_types`'s doc comment):
+    // `MonoPlan::functions` re-lowers EVERY function through this
+    // module's OWN `base_lctx`, not the caller's already-lowered one.
+    empty_array_elem_types: &HashMap<Span, Type>,
     variant_payload_types: &HashMap<String, Vec<Type>>,
 ) -> Result<MonoPlan, String> {
     let mut struct_decls: HashMap<String, &ast::StructDecl> = HashMap::new();
@@ -315,6 +322,7 @@ pub fn plan(
     let base_lctx = LoweringContext::from_items(&program.items)
         .with_array_for_loops(array_for_loops.clone())
         .with_closure_types(closure_types.clone())
+        .with_empty_array_elem_types(empty_array_elem_types.clone())
         .with_variant_payload_types(variant_payload_types.clone());
 
     let mut worklist: Vec<(Task, Vec<Type>)> = Vec::new();
@@ -417,6 +425,8 @@ pub fn plan(
                     field_owner_overrides: HashMap::new(),
                     closure_types,
                     extra_closure_types: HashMap::new(),
+                    empty_array_elem_types,
+                    extra_empty_array_elem_types: HashMap::new(),
                 };
                 for p in &mut def_clone.params {
                     if let ast::ParamKind::Pattern(pat, _) = &mut p.kind {
@@ -430,6 +440,7 @@ pub fn plan(
                     extra_struct_fields,
                     field_owner_overrides,
                     extra_closure_types,
+                    extra_empty_array_elem_types,
                     ..
                 } = rc;
                 worklist.extend(new_tasks);
@@ -450,12 +461,19 @@ pub fn plan(
                 // (see `RewriteCtx::extra_closure_types`'s doc comment).
                 let mut merged_closure_types = closure_types.clone();
                 merged_closure_types.extend(extra_closure_types);
+                // Same merge-OVER-the-base-map pattern again, for an
+                // empty array literal's own concrete per-instantiation
+                // element type (see `RewriteCtx::extra_empty_array_elem_
+                // types`'s doc comment).
+                let mut merged_empty_array_elem_types = empty_array_elem_types.clone();
+                merged_empty_array_elem_types.extend(extra_empty_array_elem_types);
                 let lctx = base_lctx
                     .clone()
                     .with_field_owners(merged_field_owners)
                     .with_extra_variants(extra_variants)
                     .with_extra_struct_fields(extra_struct_fields)
-                    .with_closure_types(merged_closure_types);
+                    .with_closure_types(merged_closure_types)
+                    .with_empty_array_elem_types(merged_empty_array_elem_types);
                 let (params, destructures) = lower_params(&def_clone.params)?;
                 let mut body = lower_expr(&def_clone.body, &lctx)?;
                 for (synthetic, pattern) in destructures.into_iter().rev() {
@@ -513,6 +531,8 @@ pub fn plan(
                     field_owner_overrides: HashMap::new(),
                     closure_types,
                     extra_closure_types: HashMap::new(),
+                    empty_array_elem_types,
+                    extra_empty_array_elem_types: HashMap::new(),
                 };
                 rewrite_expr(&mut body_clone, &mut rc)?;
                 let RewriteCtx {
@@ -521,6 +541,7 @@ pub fn plan(
                     extra_struct_fields,
                     field_owner_overrides,
                     extra_closure_types,
+                    extra_empty_array_elem_types,
                     ..
                 } = rc;
                 worklist.extend(new_tasks);
@@ -529,12 +550,15 @@ pub fn plan(
                 merged_field_owners.extend(field_owner_overrides);
                 let mut merged_closure_types = closure_types.clone();
                 merged_closure_types.extend(extra_closure_types);
+                let mut merged_empty_array_elem_types = empty_array_elem_types.clone();
+                merged_empty_array_elem_types.extend(extra_empty_array_elem_types);
                 let lctx = base_lctx
                     .clone()
                     .with_field_owners(merged_field_owners)
                     .with_extra_variants(extra_variants)
                     .with_extra_struct_fields(extra_struct_fields)
-                    .with_closure_types(merged_closure_types);
+                    .with_closure_types(merged_closure_types)
+                    .with_empty_array_elem_types(merged_empty_array_elem_types);
                 let body = lower_expr(&body_clone, &lctx)?;
                 globals_by_name.insert(name.clone(), ir::Global { name, value: body });
             }
@@ -701,6 +725,23 @@ struct RewriteCtx<'a> {
     // `Expr::Closure` arm picks up a fully concrete type for this
     // instantiation instead of the shared template.
     extra_closure_types: HashMap<Span, (Vec<Type>, Type)>,
+    // The BASE (possibly template-containing) empty-array-element-type
+    // map computed by `plum_types::Infer::resolve_empty_array_elem_
+    // types` — an empty array literal (`[]`) nested inside `rc.
+    // enclosing_fn`'s own body may have its element type recorded there
+    // as a `Type::Param` TEMPLATE (see that function's own doc comment),
+    // exactly like `closure_types` immediately above.
+    empty_array_elem_types: &'a HashMap<Span, Type>,
+    // This SPECIALIZATION's own concrete resolution of every empty array
+    // literal directly inside `enclosing_fn`'s body, keyed by span —
+    // collected the SAME way `extra_closure_types` is (see its own doc
+    // comment), by applying `rc.binding` to whatever `empty_array_elem_
+    // types` recorded for that span. Merged OVER the plain `empty_array_
+    // elem_types` base map before lowering this one specialization, so
+    // `lower.rs`'s unmodified `Expr::ArrayLiteral` arm picks up a fully
+    // concrete element type for this instantiation instead of the
+    // shared template.
+    extra_empty_array_elem_types: HashMap<Span, Type>,
 }
 
 /// If `span` names a generic instantiation site belonging to
@@ -763,6 +804,17 @@ fn rewrite_expr(expr: &mut ast::Expr, rc: &mut RewriteCtx) -> Result<(), String>
         ast::Expr::Ident(name, span) => {
             if let Some(mangled) = resolve_site(rc, *span)? {
                 *name = mangled;
+            }
+            Ok(())
+        }
+        ast::Expr::ArrayLiteral(elems, span) if elems.is_empty() => {
+            // Mirrors the `Closure` arm below exactly — see `RewriteCtx::
+            // empty_array_elem_types`/`extra_empty_array_elem_types`'s
+            // own doc comments. An empty literal has no elements to
+            // recurse into, so this is the whole arm.
+            if let Some(elem_ty) = rc.empty_array_elem_types.get(span) {
+                let concrete = apply_binding(elem_ty, rc.binding)?;
+                rc.extra_empty_array_elem_types.insert(*span, concrete);
             }
             Ok(())
         }
@@ -978,6 +1030,8 @@ mod tests {
         let resolved_sites = infer.resolve_generic_sites().unwrap_or_else(|e| panic!("resolve error: {e}"));
         let type_ctx2 = TypeContext::from_items(&program.items).unwrap();
         let closure_types = infer.resolve_closure_types().unwrap_or_else(|e| panic!("closure type error: {e}"));
+        let empty_array_elem_types =
+            infer.resolve_empty_array_elem_types().unwrap_or_else(|e| panic!("empty array elem type error: {e}"));
         plan(
             &program,
             &type_ctx2,
@@ -987,6 +1041,7 @@ mod tests {
             infer.field_owners(),
             infer.array_for_loops(),
             &closure_types,
+            &empty_array_elem_types,
             &HashMap::new(),
         )
         .unwrap_or_else(|e| panic!("plan error: {e}"))

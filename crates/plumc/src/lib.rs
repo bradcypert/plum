@@ -192,29 +192,43 @@ let println[T] (x: T): Unit = unsafe {
 /// from the existing primitives above, no new backend work. Two real,
 /// previously-unknown compiler bugs were found and explicitly NOT
 /// worked around while building this — deferred to their own future
-/// chunk, not silently patched or hidden:
+/// chunk (now fixed — see "Chunk 5" below), not silently patched or
+/// hidden:
 /// 1. An empty array literal (`[]`) passed as an argument INTO a
-///    generic function hits an internal codegen error ("an empty array
+///    generic function hit an internal codegen error ("an empty array
 ///    literal reached the non-empty array-literal codegen path") —
 ///    even with an explicit type annotation forcing it concrete
-///    beforehand. Monomorphization already carries a closure's own
-///    concrete type across a generic-instantiation boundary (see
-///    "Closures inside generic functions" above) but never grew the
-///    same per-instantiation substitution for an empty array literal's
-///    element type. This blocks any `Map`/`Set` -> FRESH `Array`
+///    beforehand. This blocked any `Map`/`Set` -> FRESH `Array`
 ///    conversion (`map_keys`/`map_values`/`set_to_array`) that would
-///    need to start from `[]` inside a generic function — not attempted
-///    in this chunk.
+///    need to start from `[]` inside a generic function.
 /// 2. A closure passed to `.fold()` that calls a CURRIED (multi-param)
-///    function produces invalid LLVM IR — `clang` rejects it outright
+///    function produced invalid LLVM IR — `clang` rejected it outright
 ///    (`cannot guarantee tail call due to mismatched parameter
-///    counts`). Confirmed by isolating it: replacing `arr.fold(seed,
-///    |acc, x| set_insert(acc, x))` with a plain hand-written index-
-///    based recursive loop (no closure at all) works correctly. Used
-///    the index-based form for `set_from_array`/`map_from_arrays`
-///    below specifically to route around this, not to hide it — it's
-///    still a real bug for ANY future stdlib code wanting to use
-///    `.fold()` with a curried callee.
+///    counts`). `set_from_array`/`map_from_arrays` below use a plain
+///    index-based recursive loop (no closure) specifically to route
+///    around this — kept even after the fix landed, since it's still
+///    simple, correct, and was already proven working; not worth
+///    churning back to a `.fold()`-based form with no functional
+///    benefit.
+///
+/// **Chunk 5: both bugs fixed.** Bug 1 (`musttail` from inside a
+/// closure body): `Ctx::is_closure_body`, a new field disallowing
+/// `musttail` unconditionally from a closure body's own tail calls —
+/// see `plum-codegen/src/codegen.rs`'s own doc comment on that field
+/// for the full root-cause writeup. Bug 2 (empty array literal across
+/// a generic boundary) needed TWO distinct fixes, both landed: (a)
+/// `monomorphize::plan` now threads `empty_array_elem_types` through
+/// exactly like `closure_types` already was (the plumbing gap that
+/// caused the ORIGINAL reported failure); (b) `Infer::empty_array_
+/// elem_types`/`resolve_empty_array_elem_types` gained a genuine tier-2
+/// template fallback mirroring `resolve_closure_types`'s existing one
+/// (reusing `resolve_closure_component` directly), plus a matching
+/// `extra_empty_array_elem_types` per-instantiation side-channel in
+/// `monomorphize.rs`, so `let f[T](): Array[T] = []` — an empty array
+/// literal pinned only to ITS OWN enclosing generic function's type
+/// param — now resolves correctly instead of a hard ambiguity error.
+/// `map_keys`/`map_values`/`set_to_array` below are the direct,
+/// concrete payoff: exactly the shape both bugs used to block.
 const STDLIB_COLLECTIONS_SRC: &str = "\
 enum Map[K, V] { MapNode(K, V, Map[K, V]), MapEnd }
 
@@ -290,6 +304,21 @@ let map_from_arrays_acc[K: Eq, V] (keys: Array[K]) (values: Array[V]) (i: Int) (
     if i >= keys.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, map_insert(acc, keys[i], values[i])) }
 let map_from_arrays[K: Eq, V] (keys: Array[K]) (values: Array[V]): Map[K, V] =
     map_from_arrays_acc(keys, values, 0, map_new(()))
+
+let map_keys[K, V] (m: Map[K, V]): Array[K] = match m {
+    MapNode(k, _, rest) => map_keys(rest).push(k),
+    MapEnd => [],
+}
+
+let map_values[K, V] (m: Map[K, V]): Array[V] = match m {
+    MapNode(_, v, rest) => map_values(rest).push(v),
+    MapEnd => [],
+}
+
+let set_to_array[T] (s: Set[T]): Array[T] = match s {
+    SetNode(x, rest) => set_to_array(rest).push(x),
+    SetEnd => [],
+}
 ";
 
 /// Parses the prelude + stdlib sources once and prepends their items
@@ -469,6 +498,33 @@ mod tests {
         // Total: 4*100 + 2*10 + 1 + 20 = 441.
         let result = typecheck_and_run(src, "go", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Int(441)));
+    }
+
+    #[test]
+    fn map_keys_map_values_and_set_to_array_work_through_the_interpreter() {
+        // The interpreter was never affected by either chunk-5 bug
+        // (neither `monomorphize.rs`'s missing plumbing nor `Infer`'s
+        // missing tier-2 template fallback are ever reached from this
+        // path — `run_resolved_program` never calls `resolve_empty_
+        // array_elem_types`/`monomorphize::plan` at all), but this
+        // still proves the new stdlib functions themselves work
+        // end-to-end here too, independently of the native-backend
+        // proof in `codegen_cli::tests`.
+        let src = "\
+            let go (): Int = {\n\
+                let m = map_insert(map_insert(map_new(()), 1, 10), 2, 20);\n\
+                let ks = map_keys(m);\n\
+                let vs = map_values(m);\n\
+                let s = set_to_array(set_from_array([1, 2, 3]));\n\
+                ks[0] + ks[1] + vs[0] + vs[1] + s.len() * 100\n\
+            }\n\
+        ";
+        let result = typecheck_and_run(src, "go", vec![Value::Unit]);
+        // ks = [1, 2], vs = [10, 20] (map_keys/map_values recurse to
+        // the tail first, so the OLDEST-inserted key/value ends up
+        // FIRST in the resulting array), s.len() = 3.
+        // Total: 1 + 2 + 10 + 20 + 300 = 333.
+        assert_eq!(result, Ok(Value::Int(333)));
     }
 
     #[test]

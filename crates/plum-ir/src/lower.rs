@@ -809,9 +809,28 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         // keeps that usage working exactly as before — only codegen
         // (which always runs after a real `plum_types::Infer` pass)
         // actually needs the `EmptyArray` distinction at all.
-        ast::Expr::ArrayLiteral(elements, span) if elements.is_empty() && ctx.empty_array_elem_types.contains_key(span) => {
-            let ty = &ctx.empty_array_elem_types[span];
-            Ok(ir::Expr::EmptyArray(type_to_prim_ty(ty)?))
+        ast::Expr::ArrayLiteral(elements, span) if elements.is_empty() => {
+            // See the `Closure` arm's identical treatment (`resolved =
+            // ... .filter(|ty| !type_contains_param(ty))`) for why a
+            // resolved entry that still contains a `Type::Param`
+            // TEMPLATE is treated the SAME as "no info available" here
+            // too: `plumc::codegen_cli`'s eager, discarded `lower_
+            // program` call (before `monomorphize::plan` runs, which
+            // fully replaces this function's own output with a
+            // per-instantiation-concrete substitution) hits an empty
+            // array literal inside a still-generic function's own body
+            // with exactly this still-templated type — falling back to
+            // the untyped `Ctor{ARRAY_TAG, []}` (below) here too keeps
+            // that eager pass from erroring on a type it was never
+            // going to use anyway.
+            let resolved = ctx.empty_array_elem_types.get(span).filter(|ty| !type_contains_param(ty));
+            match resolved {
+                Some(ty) => Ok(ir::Expr::EmptyArray(type_to_prim_ty(ty)?)),
+                None => Ok(ir::Expr::Ctor {
+                    tag: ARRAY_TAG.to_string(),
+                    fields: vec![],
+                }),
+            }
         }
         ast::Expr::ArrayLiteral(elements, _) => {
             let fields = elements.iter().map(|e| lower_expr(e, ctx)).collect::<Result<_, _>>()?;
