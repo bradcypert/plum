@@ -1808,6 +1808,75 @@ Plum project mixing `print`/`println` was built and run through BOTH
 the native `build` and interpreter CLI paths by hand, output identical
 and correctly ordered through both.
 
+### Chunk 4: `Set` algebra, `set_from_array`, `map_from_arrays` — and two real compiler bugs found and explicitly deferred, not worked around
+
+Asked to extend collections further; scoped, deliberately, to the
+smaller/safer of two options (more operations vs. building real
+structural equality for non-scalar keys — see "Open questions").
+Presented as a real fork via `AskUserQuestion` rather than picked
+silently; the user chose the smaller option.
+
+Adds `set_union`/`set_intersection`/`set_difference` (all built from
+the existing `set_contains`/`set_insert` primitives, no new backend
+work), `set_from_array`, and `map_from_arrays(keys, values)` (zips two
+parallel arrays by index — deliberately NOT `map_from_array(Array
+[Tuple[K,V]])`: tuples still aren't safely codegen'd through a type
+signature, the same reason `Map`/`Set` themselves are recursive enums
+rather than `Array[Tuple[K,V]]` in the first place — see chunk 2).
+
+**Two real, previously-unknown compiler bugs were found while probing
+what looked like an even smaller, safer scope (`map_keys`/`map_values`/
+`set_to_array` — converting a `Map`/`Set` INTO a fresh `Array`) —
+neither was worked around; both are explicitly deferred to their own
+future chunk:**
+1. **An empty array literal (`[]`) can't cross a generic-function-call
+   boundary.** `write(1, s.as_cstr(), n)`-style code (chunk 3) already
+   proved ordinary values flow through `unsafe`/generic bodies fine —
+   but passing `[]` itself AS AN ARGUMENT into a generic function
+   (e.g. `map_keys_into(m, [])`, even with an explicit `Array[Int]`
+   type annotation forcing it concrete beforehand) hits a hard internal
+   codegen error: `an empty array literal reached the non-empty
+   array-literal codegen path`. Monomorphization already threads a
+   closure's own concrete per-instantiation type across this exact kind
+   of boundary (`extra_closure_types`, see "Closures inside generic
+   functions" above) — it never grew the equivalent mechanism for an
+   empty array literal's element type. This blocks any `Map`/`Set` ->
+   fresh-`Array` conversion that needs to build up from `[]` inside a
+   generic function.
+2. **A closure passed to `.fold()` that calls a CURRIED (multi-param)
+   function produces invalid LLVM IR.** `arr.fold(seed, |acc, x|
+   set_insert(acc, x))` (`set_insert` is curried, `(s: Set[T]) (x: T)`)
+   — `clang` rejects the emitted IR outright: `cannot guarantee tail
+   call due to mismatched parameter counts` on a `musttail call` to the
+   curried callee. Isolated by direct A/B testing: replacing the
+   `.fold()`+closure with a plain hand-written index-based recursive
+   loop (no closure at all) compiles and runs correctly. `set_from_array`/
+   `map_from_arrays` below both use the index-based form specifically
+   to route AROUND this bug, not to hide that it exists — it would
+   still bite any future stdlib code (or user code) wanting to use
+   `.fold()` with a curried callee.
+
+Both bugs were found via real, direct probing (a throwaway test added
+and run, then deleted, matching this whole project's established
+practice) BEFORE committing to a final design — not discovered after
+shipping something broken. Given the depth of both (real compiler-
+internals work, not stdlib-source changes), presented the finding back
+to the user via `AskUserQuestion` (ship what works now and defer the
+bugs / fix the empty-array bug first / park the whole chunk) rather
+than pushing through solo — user chose to ship what works now.
+
+Tests: 3 new native compile-and-run tests (union/intersection/
+difference/`set_from_array` together; `map_from_arrays` zip-by-index
+and lookup; the same combination instantiated at a `Str`-keyed type,
+mirroring this project's established "prove independent instantiations"
+pattern) and 1 new interpreter-path test. Workspace now 1392 tests (up
+from 1388 — net +4), clean build, zero warnings. Verified
+independently: re-ran the full suite after landing on the final,
+working scope (not after the earlier, still-broken attempts); built
+and ran a real throwaway Plum project exercising every new function
+through BOTH the native `build` and interpreter CLI paths by hand,
+output identical and correct through both.
+
 ## Target platforms
 
 - **Hosted (Linux/macOS/Windows), web APIs**: primary target, no special
@@ -3177,18 +3246,25 @@ summed), not just inspect emitted IR text.
   FUNCTIONS, which already support mutual recursion) remains genuinely
   unsupported — a real, separate gap, not just an oversight.
 - Standard library scope — started (see "Standard library" above:
-  basic output/`println`/`print`, then `Map`/`Set` collections). Still wide
-  open: what comes next (file I/O, JSON, HTTP, string utils beyond
-  what's already a core-language builtin, ...), whether/when `println`/
-  `Map`/`Set` migrate from the prelude into real `use`-based modules
-  once there's enough stdlib surface to justify extending the
-  `compile_and_run` test harness to drive a real temp project through
-  `resolve_project`, and whether/when to (a) tighten the `Eq` bound in
-  `plum-types` to actually enforce Int/Float/Bool/Str-only (it doesn't
-  today — a struct/array/tuple key type-checks but fails at codegen/
-  runtime) and (b) build real structural/deep equality for structs/
-  enums/arrays/tuples in both backends, which would lift that
-  restriction properly instead of just gating it earlier.
+  basic output/`println`/`print`, then `Map`/`Set` collections plus
+  `Set` algebra). Still wide open: what comes next (file I/O, JSON,
+  HTTP, string utils beyond what's already a core-language builtin,
+  ...), whether/when `println`/`print`/`Map`/`Set` migrate from the
+  prelude into real `use`-based modules once there's enough stdlib
+  surface to justify extending the `compile_and_run` test harness to
+  drive a real temp project through `resolve_project`, and whether/when
+  to (a) tighten the `Eq` bound in `plum-types` to actually enforce
+  Int/Float/Bool/Str-only (it doesn't today — a struct/array/tuple key
+  type-checks but fails at codegen/runtime) and (b) build real
+  structural/deep equality for structs/enums/arrays/tuples in both
+  backends, which would lift that restriction properly instead of just
+  gating it earlier. Two real, NEWLY-FOUND compiler bugs from chunk 4,
+  not yet fixed: an empty array literal (`[]`) can't cross a generic-
+  function-call boundary (blocks `map_keys`/`map_values`/`set_to_array`
+  — converting a `Map`/`Set` into a fresh `Array`), and a closure
+  passed to `.fold()` that calls a curried function produces invalid
+  LLVM IR (a `musttail`/parameter-count mismatch `clang` rejects
+  outright).
 - Whether/when to build the scoped incremental cycle collector for
   `Shared` values (see Memory model above — deliberately deferred until
   real Plum code shows the pain is real).

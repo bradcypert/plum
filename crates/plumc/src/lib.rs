@@ -186,6 +186,35 @@ let println[T] (x: T): Unit = unsafe {
 ///   fail at codegen/runtime.
 /// - No `println`/`.to_string()` support for `Map`/`Set` values — still
 ///   scoped to `Int`/`Float`/`Bool`/`Str` per chunk 1.
+///
+/// **Chunk 4 addition: `Set` algebra (`set_union`/`set_intersection`/
+/// `set_difference`), `set_from_array`, `map_from_arrays`.** All built
+/// from the existing primitives above, no new backend work. Two real,
+/// previously-unknown compiler bugs were found and explicitly NOT
+/// worked around while building this — deferred to their own future
+/// chunk, not silently patched or hidden:
+/// 1. An empty array literal (`[]`) passed as an argument INTO a
+///    generic function hits an internal codegen error ("an empty array
+///    literal reached the non-empty array-literal codegen path") —
+///    even with an explicit type annotation forcing it concrete
+///    beforehand. Monomorphization already carries a closure's own
+///    concrete type across a generic-instantiation boundary (see
+///    "Closures inside generic functions" above) but never grew the
+///    same per-instantiation substitution for an empty array literal's
+///    element type. This blocks any `Map`/`Set` -> FRESH `Array`
+///    conversion (`map_keys`/`map_values`/`set_to_array`) that would
+///    need to start from `[]` inside a generic function — not attempted
+///    in this chunk.
+/// 2. A closure passed to `.fold()` that calls a CURRIED (multi-param)
+///    function produces invalid LLVM IR — `clang` rejects it outright
+///    (`cannot guarantee tail call due to mismatched parameter
+///    counts`). Confirmed by isolating it: replacing `arr.fold(seed,
+///    |acc, x| set_insert(acc, x))` with a plain hand-written index-
+///    based recursive loop (no closure at all) works correctly. Used
+///    the index-based form for `set_from_array`/`map_from_arrays`
+///    below specifically to route around this, not to hide it — it's
+///    still a real bug for ANY future stdlib code wanting to use
+///    `.fold()` with a curried callee.
 const STDLIB_COLLECTIONS_SRC: &str = "\
 enum Map[K, V] { MapNode(K, V, Map[K, V]), MapEnd }
 
@@ -235,6 +264,32 @@ let set_len[T] (s: Set[T]): Int = match s {
     SetNode(_, rest) => 1 + set_len(rest),
     SetEnd => 0,
 }
+
+let set_union[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = match a {
+    SetNode(x, rest) => set_union(rest, set_insert(b, x)),
+    SetEnd => b,
+}
+
+let set_intersection_acc[T: Eq] (a: Set[T]) (b: Set[T]) (acc: Set[T]): Set[T] = match a {
+    SetNode(x, rest) => if set_contains(b, x) { set_intersection_acc(rest, b, set_insert(acc, x)) } else { set_intersection_acc(rest, b, acc) },
+    SetEnd => acc,
+}
+let set_intersection[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = set_intersection_acc(a, b, set_new(()))
+
+let set_difference_acc[T: Eq] (a: Set[T]) (b: Set[T]) (acc: Set[T]): Set[T] = match a {
+    SetNode(x, rest) => if set_contains(b, x) { set_difference_acc(rest, b, acc) } else { set_difference_acc(rest, b, set_insert(acc, x)) },
+    SetEnd => acc,
+}
+let set_difference[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = set_difference_acc(a, b, set_new(()))
+
+let set_from_array_acc[T: Eq] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =
+    if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, set_insert(acc, arr[i])) }
+let set_from_array[T: Eq] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, set_new(()))
+
+let map_from_arrays_acc[K: Eq, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =
+    if i >= keys.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, map_insert(acc, keys[i], values[i])) }
+let map_from_arrays[K: Eq, V] (keys: Array[K]) (values: Array[V]): Map[K, V] =
+    map_from_arrays_acc(keys, values, 0, map_new(()))
 ";
 
 /// Parses the prelude + stdlib sources once and prepends their items
@@ -397,6 +452,23 @@ mod tests {
         let result = typecheck_and_run(src, "go", vec![Value::Unit]);
         // n = 2 (dedup), has_x = true, has_x_after = false.
         assert_eq!(result, Ok(Value::Int(210)));
+    }
+
+    #[test]
+    fn set_algebra_and_map_from_arrays_work_through_the_interpreter() {
+        let src = "\
+            let go (): Int = {\n\
+                let a = set_from_array([1, 2, 2, 3]);\n\
+                let b = set_from_array([2, 3, 4]);\n\
+                let m = map_from_arrays([1, 2], [10, 20]);\n\
+                let got = match map_get(m, 2) { Some(v) => v, None => -1 };\n\
+                set_len(set_union(a, b)) * 100 + set_len(set_intersection(a, b)) * 10 + set_len(set_difference(a, b)) + got\n\
+            }\n\
+        ";
+        // union len 4, intersection len 2, difference len 1, got = 20.
+        // Total: 4*100 + 2*10 + 1 + 20 = 441.
+        let result = typecheck_and_run(src, "go", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(441)));
     }
 
     #[test]

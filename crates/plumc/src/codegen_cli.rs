@@ -990,6 +990,7 @@ mod tests {
         assert_eq!(out, "14");
     }
 
+
     // --- standard library: `println` (see `plumc::STDLIB_IO_SRC`) ---
 
     #[test]
@@ -1216,6 +1217,57 @@ mod tests {
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         // v1 = "one" (len 3), v2 = 2, set_len(s1) = 1, set_len(s2) = 1
         assert_eq!(out, "7");
+    }
+
+    #[test]
+    fn set_union_intersection_difference_and_from_array_all_work() {
+        let src = "\
+            let go (): Int = {\n\
+                let a = set_from_array([1, 2, 2, 3]);\n\
+                let b = set_from_array([2, 3, 4]);\n\
+                let u = set_union(a, b);\n\
+                let i = set_intersection(a, b);\n\
+                let d = set_difference(a, b);\n\
+                set_len(a) + set_len(u) * 10 + set_len(i) * 100 + set_len(d) * 1000\n\
+            }\n\
+        ";
+        // a = {1,2,3} (len 3), b = {2,3,4}, union = {1,2,3,4} (len 4),
+        // intersection = {2,3} (len 2), difference (a - b) = {1} (len 1).
+        // Total: 3 + 4*10 + 2*100 + 1*1000 = 1243.
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1243");
+    }
+
+    #[test]
+    fn map_from_arrays_zips_keys_and_values_by_index() {
+        let src = "\
+            let go (): Int = {\n\
+                let m = map_from_arrays([1, 2, 3], [10, 20, 30]);\n\
+                let v = match map_get(m, 2) { Some(v) => v, None => -1 };\n\
+                map_len(m) * 100 + v\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "320");
+    }
+
+    #[test]
+    fn set_algebra_and_map_from_arrays_work_at_a_str_keyed_instantiation_too() {
+        // Mirrors this project's established "prove independent
+        // instantiations, not just one" pattern for generics.
+        let src = "\
+            let go (): Int = {\n\
+                let a = set_from_array([\"x\", \"y\"]);\n\
+                let b = set_from_array([\"y\", \"z\"]);\n\
+                let u = set_union(a, b);\n\
+                let m = map_from_arrays([\"a\", \"b\"], [1, 2]);\n\
+                let v = match map_get(m, \"b\") { Some(v) => v, None => -1 };\n\
+                set_len(u) * 10 + v\n\
+            }\n\
+        ";
+        // union({x,y}, {y,z}) = {x,y,z} (len 3), v = 2. Total: 3*10+2=32.
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "32");
     }
 
     // --- Non-constant global initializers ---
