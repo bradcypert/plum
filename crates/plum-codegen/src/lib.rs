@@ -208,6 +208,23 @@ pub struct FnSig {
 /// — see `codegen.rs`'s module doc comment).
 pub type TagFields = HashMap<String, Vec<CgType>>;
 
+/// Every STRUCT tag (never an enum variant — see below) known in the
+/// program, mapped to its fields' NAMES, in the SAME declared order as
+/// `TagFields`'s own `Vec<CgType>` for that tag — used only by `.to_
+/// string()`'s named-field rendering (`@plum_struct_to_string`).
+/// Deliberately has NO entries for enum variant tags: Plum enum
+/// variant payloads are already positional at the language level
+/// (`Circle(Float)`, never `Circle { r: Float }`), so a tag absent
+/// here renders positionally (or bare, if it has zero fields) — the
+/// correct, idiomatic form for a variant, not a fallback for missing
+/// data. The caller (`plumc`) derives this from `plum_types::
+/// TypeContext::struct_fields`/`struct_fields_for`, mirroring exactly
+/// how `TagFields` itself is derived (`derive_tag_fields` for
+/// non-generic structs, `monomorphize::Plan::struct_field_names` for
+/// generic ones) — both of those already had the names available and
+/// were simply discarding them before this chunk.
+pub type StructFieldNames = HashMap<String, Vec<String>>;
+
 /// The runtime decrement function to call for a value of `ty`, or
 /// `None` for a scalar `ty` that carries no refcount at all — shared by
 /// `plum_release_fields` (struct/enum field release), `codegen.rs`'s
@@ -278,6 +295,28 @@ fn eq_fn_for(ty: &CgType) -> Option<String> {
     }
 }
 
+/// The runtime `.to_string()` function to call for a value of `ty`
+/// when it's being rendered NESTED (a struct field, array element) —
+/// `None` for a scalar (rendered inline via `snprintf`, matching
+/// `Expr::ToString`'s own top-level codegen) or a type that isn't
+/// stringifiable at all. A direct sibling of `eq_fn_for`/`dec_fn_for`,
+/// with one deliberate difference: `CgType::Str` maps to `@plum_str_
+/// quote` here (QUOTED and escaped), not a bare copy — a `Str` nested
+/// inside a struct/array must round-trip unambiguously (`Point { name:
+/// "a" }`, not the unparseable `Point { name: a }`); only a BARE
+/// top-level `.to_string()` on a `Str` stays raw/unquoted, handled by
+/// `Expr::ToString`'s own separate `CgType::Str` arm in `codegen.rs`,
+/// never through this function.
+fn to_string_fn_for(ty: &CgType) -> Option<String> {
+    match ty {
+        CgType::Int | CgType::Float | CgType::Bool | CgType::Unit => None,
+        CgType::Heap => Some("@plum_struct_to_string".to_string()),
+        CgType::Str => Some("@plum_str_quote".to_string()),
+        CgType::Array(elem) => Some(format!("@plum_array_to_string_{}", elem.mangled())),
+        CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => None,
+    }
+}
+
 fn intern_tags(tag_fields: &TagFields) -> HashMap<String, i64> {
     // Order doesn't matter for correctness (any bijection to distinct
     // integers works) — sorted purely so the same program always gets
@@ -321,7 +360,344 @@ fn register_array_elem_type(needed: &mut HashMap<String, CgType>, ty: &CgType) {
 /// written runtime file at all, matching this whole backend's "no LLVM
 /// binding, emit text" style and the project's self-hosting-viability
 /// policy).
-fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> String {
+/// Emits a private global constant holding a Str CELL — the SAME
+/// `{ i64 refcount, i64 len, bytes }` layout `@plum_alloc_str` produces
+/// at runtime, but built entirely at compile time (an LLVM constant
+/// struct literal), so a piece of STATIC skeleton text (`"Point { x: "`,
+/// `", "`, `" }"`, a bare enum tag name, ...) needs no runtime
+/// allocation at all — it's simply passed by its `@name` directly
+/// wherever a `ptr` to a Str cell is expected (`@plum_str_concat`,
+/// `to_string_fn_for`'s functions). The declared LLVM type doesn't
+/// need to match callers' expectations exactly, since every access
+/// anywhere in this backend reads a cell through raw `getelementptr
+/// i8` byte offsets, never a typed struct GEP. The refcount field's
+/// actual value is irrelevant — this cell is never `@plum_rc_dec`'d
+/// (it's never stored into a Plum variable or `Ctor` field, only ever
+/// read as an operand), so it can never reach zero and free itself; a
+/// high sentinel just documents that it's not a REAL, single-owner
+/// count. Returns the fresh global's `@name`, appending its
+/// declaration to `lit_globals` (kept separate from the enclosing
+/// function's own body text, since a global constant can't be
+/// declared inside a `define ... { ... }` block).
+fn tostr_lit_cell(lit_globals: &mut String, lit_id: &mut usize, prefix: &str, bytes: &[u8]) -> String {
+    let id = *lit_id;
+    *lit_id += 1;
+    let name = format!("@plum_tostr_lit_{prefix}_{id}");
+    let len = bytes.len();
+    let mut escaped = String::with_capacity(len * 4);
+    for b in bytes {
+        escaped.push_str(&format!("\\{b:02X}"));
+    }
+    lit_globals.push_str(&format!(
+        "{name} = private constant {{ i64, i64, [{len} x i8] }} {{ i64 999999999, i64 {len}, [{len} x i8] c\"{escaped}\" }}\n"
+    ));
+    name
+}
+
+/// Renders a single struct field / array element, given the raw i64
+/// WORD already loaded from its slot (matching `@plum_release_fields`/
+/// `@plum_struct_eq`'s own "load the word, then decide what it means
+/// from the STATIC `CgType`" convention) — shared by `emit_struct_to_
+/// string` and `emit_array_to_string_fns`, the one place both need
+/// identical scalar/heap-shaped rendering logic. `Int`/`Float`/`Bool`
+/// render inline via `snprintf`/branching, mirroring `codegen.rs`'s
+/// own top-level `Expr::ToString` codegen exactly (just emitted as raw
+/// text here instead of through the `Emitter` API). Anything non-
+/// scalar goes through `to_string_fn_for` after `inttoptr`; a type
+/// that isn't stringifiable at all (a Closure/Task/Sender/Receiver/
+/// CStr field — reachable only through the same pre-existing, shallow-
+/// bound-checking gap `eq_fn_for`'s own doc comment already flags,
+/// never through a well-typed TOP-level `.to_string()` call) renders as
+/// an empty string rather than aborting codegen.
+fn next_reg(next_id: &mut usize) -> String {
+    let v = *next_id;
+    *next_id += 1;
+    format!("%v{v}")
+}
+
+fn render_word_as_string(out: &mut String, next_id: &mut usize, word_reg: &str, ty: &CgType) -> String {
+    match ty {
+        CgType::Int => {
+            let buf = next_reg(next_id);
+            out.push_str(&format!("  {buf} = alloca [32 x i8]\n"));
+            let n = next_reg(next_id);
+            out.push_str(&format!(
+                "  {n} = call i32 (ptr, i64, ptr, ...) @snprintf(ptr {buf}, i64 32, ptr @plum_tostr_fmt_int, i64 {word_reg})\n"
+            ));
+            let len = next_reg(next_id);
+            out.push_str(&format!("  {len} = sext i32 {n} to i64\n"));
+            let cell = next_reg(next_id);
+            out.push_str(&format!("  {cell} = call ptr @plum_alloc_str(i64 {len})\n"));
+            let dst = next_reg(next_id);
+            out.push_str(&format!("  {dst} = getelementptr i8, ptr {cell}, i64 16\n"));
+            let copy = next_reg(next_id);
+            out.push_str(&format!("  {copy} = call ptr @memcpy(ptr {dst}, ptr {buf}, i64 {len})\n"));
+            cell
+        }
+        CgType::Float => {
+            let dbl = next_reg(next_id);
+            out.push_str(&format!("  {dbl} = bitcast i64 {word_reg} to double\n"));
+            let buf = next_reg(next_id);
+            out.push_str(&format!("  {buf} = alloca [64 x i8]\n"));
+            let n = next_reg(next_id);
+            out.push_str(&format!(
+                "  {n} = call i32 (ptr, i64, ptr, ...) @snprintf(ptr {buf}, i64 64, ptr @plum_tostr_fmt_float, double {dbl})\n"
+            ));
+            let len = next_reg(next_id);
+            out.push_str(&format!("  {len} = sext i32 {n} to i64\n"));
+            let cell = next_reg(next_id);
+            out.push_str(&format!("  {cell} = call ptr @plum_alloc_str(i64 {len})\n"));
+            let dst = next_reg(next_id);
+            out.push_str(&format!("  {dst} = getelementptr i8, ptr {cell}, i64 16\n"));
+            let copy = next_reg(next_id);
+            out.push_str(&format!("  {copy} = call ptr @memcpy(ptr {dst}, ptr {buf}, i64 {len})\n"));
+            cell
+        }
+        CgType::Bool | CgType::Unit => {
+            let is_true = next_reg(next_id);
+            out.push_str(&format!("  {is_true} = icmp ne i64 {word_reg}, 0\n"));
+            // Plain numeric label suffixes (`next_id` shared with
+            // `next_reg`, so these can't collide with any register
+            // name either) — a `%v<N>`-prefixed SSA REGISTER name is
+            // the wrong namespace for a basic-block LABEL (`label %bl
+            // %v5` is malformed IR).
+            let tl = *next_id;
+            *next_id += 1;
+            let fl = *next_id;
+            *next_id += 1;
+            let ml = *next_id;
+            *next_id += 1;
+            out.push_str(&format!("  br i1 {is_true}, label %bl{tl}, label %bl{fl}\n"));
+            out.push_str(&format!("bl{tl}:\n"));
+            let true_cell = next_reg(next_id);
+            out.push_str(&format!("  {true_cell} = call ptr @plum_alloc_str(i64 4)\n"));
+            let true_dst = next_reg(next_id);
+            out.push_str(&format!("  {true_dst} = getelementptr i8, ptr {true_cell}, i64 16\n"));
+            let true_copy = next_reg(next_id);
+            out.push_str(&format!(
+                "  {true_copy} = call ptr @memcpy(ptr {true_dst}, ptr @plum_tostr_true, i64 4)\n"
+            ));
+            out.push_str(&format!("  br label %bl{ml}\n"));
+            out.push_str(&format!("bl{fl}:\n"));
+            let false_cell = next_reg(next_id);
+            out.push_str(&format!("  {false_cell} = call ptr @plum_alloc_str(i64 5)\n"));
+            let false_dst = next_reg(next_id);
+            out.push_str(&format!("  {false_dst} = getelementptr i8, ptr {false_cell}, i64 16\n"));
+            let false_copy = next_reg(next_id);
+            out.push_str(&format!(
+                "  {false_copy} = call ptr @memcpy(ptr {false_dst}, ptr @plum_tostr_false, i64 5)\n"
+            ));
+            out.push_str(&format!("  br label %bl{ml}\n"));
+            out.push_str(&format!("bl{ml}:\n"));
+            let result = next_reg(next_id);
+            out.push_str(&format!(
+                "  {result} = phi ptr [ {true_cell}, %bl{tl} ], [ {false_cell}, %bl{fl} ]\n"
+            ));
+            result
+        }
+        _ => {
+            let ptr_reg = next_reg(next_id);
+            out.push_str(&format!("  {ptr_reg} = inttoptr i64 {word_reg} to ptr\n"));
+            match to_string_fn_for(ty) {
+                Some(f) => {
+                    let result = next_reg(next_id);
+                    out.push_str(&format!("  {result} = call ptr {f}(ptr {ptr_reg})\n"));
+                    result
+                }
+                None => {
+                    let cell = next_reg(next_id);
+                    out.push_str(&format!("  {cell} = call ptr @plum_alloc_str(i64 0)\n"));
+                    cell
+                }
+            }
+        }
+    }
+}
+
+/// `@plum_tostr_true`/`@plum_tostr_false` (raw byte buffers, matching
+/// the SAME `@memcpy`-from-a-declared-constant pattern `codegen.rs`'s
+/// own top-level `Expr::ToString`/`CgType::Bool` codegen already uses —
+/// deliberately NOT the `tostr_lit_cell` "pre-built cell" shape, since
+/// `render_word_as_string`'s `Bool` case builds its OWN fresh cell via
+/// `@plum_alloc_str`+`@memcpy`, exactly mirroring that existing
+/// top-level codegen instead of introducing a second convention) and
+/// `@plum_str_quote` — escapes `"`/`\` and wraps a `Str` cell in
+/// quotes, for a `Str` value rendered NESTED inside a struct/enum/
+/// array (never for a bare top-level `.to_string()` on a `Str`, which
+/// stays raw — see `codegen.rs`'s own `CgType::Str` arm, untouched by
+/// this chunk). Two passes over the source bytes, both plain counted
+/// `phi`-loops matching `emit_array_release_fns`'s established loop
+/// shape: the first counts how many bytes need an extra escape
+/// backslash (to size the fresh allocation exactly once, no
+/// reallocation/growth), the second copies byte-by-byte, escaping as
+/// it goes.
+const STR_QUOTE_RUNTIME: &str = "\
+@plum_tostr_true = private constant [4 x i8] c\"true\"\n\
+@plum_tostr_false = private constant [5 x i8] c\"false\"\n\n\
+define ptr @plum_str_quote(ptr %s) {\n\
+entry:\n\
+  %len_addr = getelementptr i8, ptr %s, i64 8\n\
+  %len = load i64, ptr %len_addr\n\
+  br label %count_loop\n\
+count_loop:\n\
+  %ci = phi i64 [ 0, %entry ], [ %ci_next, %count_body ]\n\
+  %extra = phi i64 [ 0, %entry ], [ %extra_next, %count_body ]\n\
+  %ccontinue = icmp slt i64 %ci, %len\n\
+  br i1 %ccontinue, label %count_body, label %count_done\n\
+count_body:\n\
+  %cbyte_base = getelementptr i8, ptr %s, i64 16\n\
+  %cbyte_addr = getelementptr i8, ptr %cbyte_base, i64 %ci\n\
+  %cbyte = load i8, ptr %cbyte_addr\n\
+  %cis_quote = icmp eq i8 %cbyte, 34\n\
+  %cis_backslash = icmp eq i8 %cbyte, 92\n\
+  %cneeds_escape = or i1 %cis_quote, %cis_backslash\n\
+  %cextra_inc = select i1 %cneeds_escape, i64 1, i64 0\n\
+  %extra_next = add i64 %extra, %cextra_inc\n\
+  %ci_next = add i64 %ci, 1\n\
+  br label %count_loop\n\
+count_done:\n\
+  %out_len_inner = add i64 %len, %extra\n\
+  %out_len = add i64 %out_len_inner, 2\n\
+  %cell = call ptr @plum_alloc_str(i64 %out_len)\n\
+  %dst0 = getelementptr i8, ptr %cell, i64 16\n\
+  store i8 34, ptr %dst0\n\
+  %dst1 = getelementptr i8, ptr %dst0, i64 1\n\
+  br label %write_loop\n\
+write_loop:\n\
+  %wj = phi i64 [ 0, %count_done ], [ %wj_next, %write_merge ]\n\
+  %wptr = phi ptr [ %dst1, %count_done ], [ %wptr_next, %write_merge ]\n\
+  %wcontinue = icmp slt i64 %wj, %len\n\
+  br i1 %wcontinue, label %write_body, label %write_done\n\
+write_body:\n\
+  %sbyte_base = getelementptr i8, ptr %s, i64 16\n\
+  %sbyte_addr = getelementptr i8, ptr %sbyte_base, i64 %wj\n\
+  %sbyte = load i8, ptr %sbyte_addr\n\
+  %wis_quote = icmp eq i8 %sbyte, 34\n\
+  %wis_backslash = icmp eq i8 %sbyte, 92\n\
+  %wneeds_escape = or i1 %wis_quote, %wis_backslash\n\
+  br i1 %wneeds_escape, label %write_escaped, label %write_plain\n\
+write_escaped:\n\
+  store i8 92, ptr %wptr\n\
+  %wptr_esc = getelementptr i8, ptr %wptr, i64 1\n\
+  store i8 %sbyte, ptr %wptr_esc\n\
+  %wptr_next_esc = getelementptr i8, ptr %wptr_esc, i64 1\n\
+  br label %write_merge\n\
+write_plain:\n\
+  store i8 %sbyte, ptr %wptr\n\
+  %wptr_next_plain = getelementptr i8, ptr %wptr, i64 1\n\
+  br label %write_merge\n\
+write_merge:\n\
+  %wptr_next = phi ptr [ %wptr_next_esc, %write_escaped ], [ %wptr_next_plain, %write_plain ]\n\
+  %wj_next = add i64 %wj, 1\n\
+  br label %write_loop\n\
+write_done:\n\
+  store i8 34, ptr %wptr\n\
+  ret ptr %cell\n\
+}\n\n\
+";
+
+fn concat_str(out: &mut String, next_id: &mut usize, a: &str, b: &str) -> String {
+    let v = *next_id;
+    *next_id += 1;
+    let r = format!("%v{v}");
+    out.push_str(&format!("  {r} = call ptr @plum_str_concat(ptr {a}, ptr {b})\n"));
+    r
+}
+
+/// `@plum_struct_to_string` — ONE generic, runtime-tag-dispatched
+/// function for EVERY struct/enum shape, mirroring `@plum_struct_eq`'s
+/// tag-dispatch-chain shape exactly (sequential `icmp`/`br` over
+/// `tag_ids`, one block per tag). Unlike equality, each tag's block
+/// here builds and returns a freshly-assembled `Str` cell: static
+/// skeleton text (the tag's display name, punctuation, field-name
+/// labels) comes from compile-time `tostr_lit_cell` globals — zero
+/// runtime cost — spliced together with each field's recursively-
+/// rendered value via `@plum_str_concat`. Whether `tag` has an entry in
+/// `struct_field_names` decides named-field (`Point { x: 1, y: 2 }`)
+/// vs positional-or-bare (`Circle(5.0)`, `Nil`) rendering — see
+/// `StructFieldNames`'s own doc comment for why enum variant tags are
+/// deliberately absent from that table.
+fn emit_struct_to_string(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_field_names: &StructFieldNames) -> String {
+    let mut out = String::new();
+    let mut lit_globals = String::new();
+    let mut lit_id: usize = 0;
+    let mut next_id: usize = 0;
+
+    out.push_str(
+        "define ptr @plum_struct_to_string(ptr %p) {\nentry:\n  \
+         %tag_addr = getelementptr i8, ptr %p, i64 8\n  %tag = load i64, ptr %tag_addr\n  br label %check0\n",
+    );
+    let mut names: Vec<&String> = tag_fields.keys().collect();
+    names.sort();
+    for (i, name) in names.iter().enumerate() {
+        let id = tag_ids[*name];
+        let field_types = &tag_fields[*name];
+        let check_label = format!("check{i}");
+        let body_label = format!("render{i}");
+        let next_label = if i + 1 < names.len() { format!("check{}", i + 1) } else { "unreachable_tag".to_string() };
+        out.push_str(&format!(
+            "{check_label}:\n  %m{i} = icmp eq i64 %tag, {id}\n  br i1 %m{i}, label %{body_label}, label %{next_label}\n"
+        ));
+        out.push_str(&format!("{body_label}:\n"));
+
+        let display_name = name.split('$').next().unwrap_or(name);
+        let field_names = struct_field_names.get(*name);
+        let arity = field_types.len();
+
+        if arity == 0 {
+            let bare = if field_names.is_some() { format!("{display_name} {{}}") } else { display_name.to_string() };
+            let cell = tostr_lit_cell(&mut lit_globals, &mut lit_id, "struct", bare.as_bytes());
+            out.push_str(&format!("  ret ptr {cell}\n"));
+            continue;
+        }
+
+        // Load every field's raw word up front (same offsets `@plum_
+        // release_fields`/`@plum_struct_eq` already use).
+        let mut words = Vec::with_capacity(arity);
+        for j in 0..arity {
+            let addr = { let v = next_id; next_id += 1; format!("%v{v}") };
+            out.push_str(&format!("  {addr} = getelementptr i8, ptr %p, i64 {}\n", 16 + j as i64 * 8));
+            let word = { let v = next_id; next_id += 1; format!("%v{v}") };
+            out.push_str(&format!("  {word} = load i64, ptr {addr}\n"));
+            words.push(word);
+        }
+
+        let prefix_bytes = if let Some(names) = field_names {
+            format!("{display_name} {{ {}: ", names[0])
+        } else {
+            format!("{display_name}(")
+        };
+        let mut acc = tostr_lit_cell(&mut lit_globals, &mut lit_id, "struct", prefix_bytes.as_bytes());
+        let v0 = render_word_as_string(&mut out, &mut next_id, &words[0], &field_types[0]);
+        acc = concat_str(&mut out, &mut next_id, &acc, &v0);
+        for j in 1..arity {
+            let infix_bytes = if let Some(names) = field_names { format!(", {}: ", names[j]) } else { ", ".to_string() };
+            let infix = tostr_lit_cell(&mut lit_globals, &mut lit_id, "struct", infix_bytes.as_bytes());
+            acc = concat_str(&mut out, &mut next_id, &acc, &infix);
+            let vj = render_word_as_string(&mut out, &mut next_id, &words[j], &field_types[j]);
+            acc = concat_str(&mut out, &mut next_id, &acc, &vj);
+        }
+        let suffix_bytes: &[u8] = if field_names.is_some() { b" }" } else { b")" };
+        let suffix = tostr_lit_cell(&mut lit_globals, &mut lit_id, "struct", suffix_bytes);
+        acc = concat_str(&mut out, &mut next_id, &acc, &suffix);
+        out.push_str(&format!("  ret ptr {acc}\n"));
+    }
+    if names.is_empty() {
+        out.push_str("check0:\n  br label %unreachable_tag\n");
+    }
+    // A tag matching none of the known tags can't happen at runtime for
+    // a well-formed program (every `Ctor` cell's tag comes from this
+    // same, exhaustive `tag_ids` table) — `unreachable`, not a fallback
+    // return, matching this function's `i1`-returning sibling `@plum_
+    // struct_eq`'s own analogous "shouldn't happen" convention (there:
+    // routed to `not_equal`, since that function always has a sensible
+    // `i1` to fall back to; here, there's no sensible `ptr` to invent).
+    out.push_str("unreachable_tag:\n  unreachable\n}\n\n");
+
+    lit_globals + &out
+}
+
+fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_field_names: &StructFieldNames) -> String {
     let mut out = String::new();
     out.push_str("declare ptr @malloc(i64)\n");
     out.push_str("declare void @free(ptr)\n");
@@ -559,6 +935,20 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>) -> Strin
         out.push_str("tagcheck0:\n  br label %not_equal\n");
     }
     out.push_str("equal:\n  ret i1 1\nnot_equal:\n  ret i1 0\n}\n\n");
+
+    // Shared `snprintf` format-string constants for `.to_string()`'s
+    // scalar rendering when it happens INSIDE `@plum_struct_to_string`/
+    // `emit_array_to_string_fns` (as opposed to `codegen.rs`'s own
+    // top-level `Expr::ToString` codegen, which mints a fresh global
+    // per call site via `em.fresh_string_global` — these are shared
+    // instead since every struct/array-to-string call site needs the
+    // exact same two formats). `%.15g`, not `%f` — see `codegen.rs`'s
+    // own `Expr::ToString`/`CgType::Float` doc comment for why.
+    out.push_str("@plum_tostr_fmt_int = private constant [5 x i8] c\"%lld\\00\"\n");
+    out.push_str("@plum_tostr_fmt_float = private constant [6 x i8] c\"%.15g\\00\"\n\n");
+
+    out.push_str(&emit_struct_to_string(tag_fields, tag_ids, struct_field_names));
+    out.push_str(STR_QUOTE_RUNTIME);
 
     // --- string runtime ---
     //
@@ -1932,6 +2322,64 @@ fn emit_array_eq_fns(needed: &HashMap<String, CgType>) -> String {
     out
 }
 
+/// `.to_string()` for arrays — one `@plum_array_to_string_<mangled>`
+/// function per distinct element `CgType` actually used in the
+/// program, mirroring `emit_array_eq_fns`'s exact per-element-type
+/// discovery/emission shape (arrays aren't part of the struct/enum
+/// tag-dispatch system at the LLVM level at all — see `emit_array_eq_
+/// fns`'s own doc comment). Builds `"[e0, e1, ...]"` via a counted
+/// loop, splicing in `", "` between elements (never before the first)
+/// and reusing `render_word_as_string` for each element — the same
+/// helper `emit_struct_to_string` uses for fields, so scalar/heap-
+/// shaped rendering behaves identically in both contexts.
+fn emit_array_to_string_fns(needed: &HashMap<String, CgType>) -> String {
+    let mut out = String::new();
+    let mut lit_globals = String::new();
+    let mut lit_id: usize = 0;
+    let lbracket = tostr_lit_cell(&mut lit_globals, &mut lit_id, "array", b"[");
+    let rbracket = tostr_lit_cell(&mut lit_globals, &mut lit_id, "array", b"]");
+    let comma_sp = tostr_lit_cell(&mut lit_globals, &mut lit_id, "array", b", ");
+
+    let mut names: Vec<&String> = needed.keys().collect();
+    names.sort();
+    for mangled in names {
+        let elem = &needed[mangled];
+        let name = format!("plum_array_to_string_{mangled}");
+        let mut next_id: usize = 0;
+        out.push_str(&format!("define ptr @{name}(ptr %p) {{\n"));
+        out.push_str("entry:\n");
+        out.push_str("  %len_addr = getelementptr i8, ptr %p, i64 8\n");
+        out.push_str("  %len = load i64, ptr %len_addr\n");
+        out.push_str("  br label %loop_check\n");
+        out.push_str("loop_check:\n");
+        out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %render_elem ]\n");
+        out.push_str(&format!("  %acc = phi ptr [ {lbracket}, %entry ], [ %acc_next, %render_elem ]\n"));
+        out.push_str("  %continue = icmp slt i64 %i, %len\n");
+        out.push_str("  br i1 %continue, label %loop_body, label %after_loop\n");
+        out.push_str("loop_body:\n");
+        out.push_str("  %is_first = icmp eq i64 %i, 0\n");
+        out.push_str("  br i1 %is_first, label %render_elem, label %add_sep\n");
+        out.push_str("add_sep:\n");
+        let acc_with_sep = concat_str(&mut out, &mut next_id, "%acc", &comma_sp);
+        out.push_str("  br label %render_elem\n");
+        out.push_str("render_elem:\n");
+        out.push_str(&format!("  %acc_before_elem = phi ptr [ %acc, %loop_body ], [ {acc_with_sep}, %add_sep ]\n"));
+        out.push_str("  %word_off = mul i64 %i, 8\n");
+        out.push_str("  %byte_off = add i64 %word_off, 16\n");
+        out.push_str("  %elem_addr = getelementptr i8, ptr %p, i64 %byte_off\n");
+        out.push_str("  %elem_word = load i64, ptr %elem_addr\n");
+        let elem_str = render_word_as_string(&mut out, &mut next_id, "%elem_word", elem);
+        out.push_str(&format!("  %acc_next = call ptr @plum_str_concat(ptr %acc_before_elem, ptr {elem_str})\n"));
+        out.push_str("  %i_next = add i64 %i, 1\n");
+        out.push_str("  br label %loop_check\n");
+        out.push_str("after_loop:\n");
+        let final_str = concat_str(&mut out, &mut next_id, "%acc", &rbracket);
+        out.push_str(&format!("  ret ptr {final_str}\n"));
+        out.push_str("}\n\n");
+    }
+    lit_globals + &out
+}
+
 /// The deep-copy counterpart to `dec_fn_for` — which runtime function
 /// (if any) recursively snapshots a value of `ty` into a FRESH cell,
 /// rather than decrementing an existing one. `None` means "just copy
@@ -2738,6 +3186,7 @@ pub fn emit_program(
     signatures: &HashMap<String, FnSig>,
     tag_fields: &TagFields,
     global_types: &HashMap<String, CgType>,
+    struct_field_names: &StructFieldNames,
 ) -> Result<String, String> {
     let extern_struct_types = collect_extern_struct_types(&program.externs);
     let extern_struct_type_decls = emit_extern_struct_types(&extern_struct_types)?;
@@ -2883,11 +3332,12 @@ pub fn emit_program(
     }
 
     let needed_arrays = needed_arrays.into_inner();
-    let mut out = emit_runtime(tag_fields, &tag_ids);
+    let mut out = emit_runtime(tag_fields, &tag_ids, struct_field_names);
     out.push_str(&extern_struct_type_decls);
     out.push_str(&extern_declares);
     out.push_str(&emit_array_release_fns(&needed_arrays));
     out.push_str(&emit_array_eq_fns(&needed_arrays));
+    out.push_str(&emit_array_to_string_fns(&needed_arrays));
     if *needs_spawn_runtime.borrow() || *needs_channel_runtime.borrow() {
         out.push_str(&emit_deepcopy_runtime(tag_fields, &tag_ids));
         out.push_str(&emit_deepcopy_array_fns(&needed_arrays));
@@ -3128,7 +3578,7 @@ mod tests {
     }
 
     fn emit(prog: &Program, s: &HashMap<String, FnSig>, t: &TagFields) -> Result<String, String> {
-        emit_program(prog, s, t, &HashMap::new())
+        emit_program(prog, s, t, &HashMap::new(), &StructFieldNames::new())
     }
 
     fn emit_with_globals(
@@ -3137,7 +3587,7 @@ mod tests {
         t: &TagFields,
         g: &HashMap<String, CgType>,
     ) -> Result<String, String> {
-        emit_program(prog, s, t, g)
+        emit_program(prog, s, t, g, &StructFieldNames::new())
     }
 
     #[test]

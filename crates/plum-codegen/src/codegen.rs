@@ -4086,7 +4086,18 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
                     Ok((cell, CgType::Str))
                 }
                 CgType::Float => {
-                    let fmt = em.fresh_string_global(ctx.fn_name, b"%f\0");
+                    // `%.15g`, not `%f`: `%f` always prints exactly 6
+                    // decimal places (`3.0` -> `"3.000000"`), which
+                    // diverges badly from the interpreter's Rust-
+                    // `Display`-based rendering (`3.0` -> `"3"`). `%g`
+                    // already omits trailing zero decimals for whole
+                    // numbers, and 15 significant digits matches `f64`'s
+                    // own precision — closely matches the interpreter
+                    // for ordinary program values, though not
+                    // byte-perfect at the extremes (e.g. `%g`'s `1e+20`
+                    // vs Rust's `1e20`), a documented, honest caveat,
+                    // not a silent gap.
+                    let fmt = em.fresh_string_global(ctx.fn_name, b"%.15g\0");
                     let buf = em.fresh_reg();
                     em.push(format!("  {buf} = alloca [64 x i8]"));
                     let n = em.fresh_reg();
@@ -4155,6 +4166,30 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
                     let copy_r = em.fresh_reg();
                     em.push(format!("  {copy_r} = call ptr @memcpy(ptr {dst}, ptr {src}, i64 {len})"));
                     Ok((cell, CgType::Str))
+                }
+                // Struct/enum (`Heap`) and array `.to_string()` —
+                // dispatches to the generic `@plum_struct_to_string`
+                // (one function for every struct/enum shape) or the
+                // per-element-type `@plum_array_to_string_<mangled>`,
+                // mirroring the equality chunk's `Heap`/`Array(_)`
+                // `codegen_binop` wiring exactly (a call-shaped
+                // instruction, not something that fits an inline
+                // pattern). `Tuple` is unreachable here — rejected
+                // earlier, at type-checking time (`plum-types::infer`'s
+                // `.to_string()` gate excludes it, since `CgType` has
+                // no `Tuple` variant at all).
+                CgType::Heap => {
+                    let result = em.fresh_reg();
+                    em.push(format!("  {result} = call ptr @plum_struct_to_string(ptr {reg})"));
+                    Ok((result, CgType::Str))
+                }
+                CgType::Array(_) => {
+                    let Some(to_string_fn) = crate::to_string_fn_for(&ty) else {
+                        return Err(format!("codegen: `.to_string()` is not supported for {ty:?}"));
+                    };
+                    let result = em.fresh_reg();
+                    em.push(format!("  {result} = call ptr {to_string_fn}(ptr {reg})"));
+                    Ok((result, CgType::Str))
                 }
                 other => Err(format!("codegen: `.to_string()` is not supported for {other:?}")),
             }

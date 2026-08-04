@@ -2105,6 +2105,160 @@ emitted-IR assertions — `call i1 @plum_struct_eq` and `call i1
 @plum_array_eq_Int` actually appear — in `plumc`). Workspace now 1414
 tests (up from 1399 — net +15), clean build, zero warnings.
 
+### Chunk 7: real `.to_string()`/`println` support for structs, enums, and arrays (both backends), plus a float-formatting fix
+
+Direct follow-on to chunk 6: `.to_string()`/`println` were still scoped
+to `Int`/`Float`/`Bool`/`Str` only. Three scope questions were resolved
+with the user via `AskUserQuestion` before design started: (1) structs
+render with NAMED fields (`Point { x: 1, y: 2 }`), not positionally —
+enum variants stay positional (`Circle(5.0)`), since that already
+matches their own construction syntax, Plum variants have no named-
+field form at all; (2) fix, in this same chunk, a real pre-existing
+divergence this work makes newly visible: the interpreter rendered
+`Float` via Rust's `Display` (`3.0` → `"3"`), native codegen via
+`printf`'s `%f` (always `"3.000000"`); (3) `Map`/`Set` get NO bespoke
+pretty-printing — they're plain recursive generic enums under the
+hood, so generic enum rendering gives `MapNode(1, 100, MapNode(2, 200,
+MapEnd))` for free, shipped as-is.
+
+**The actual gate for `.to_string()` was never `satisfies_bound`** (that
+only fires for a GENERIC `[T: Show]` bound instantiation, and was
+already permissive) — it's a separate, narrower, DEDICATED inline check
+at the `.to_string()` call site itself (`plum-types::infer`), previously
+hard-coded to `Int | Float | Bool | Str | Var(_)` only. Widened to also
+permit `Struct`/`Enum`/`Array`, still excluding `Function`, the opaque
+runtime handles, and `Tuple` — `CgType` still has no `Tuple` variant
+(same structural blocker as `Eq`). Unlike `Eq`, this ONE check governs
+`.to_string()` everywhere (not just generic-bound instantiation), so
+excluding `Tuple` here blocks it uniformly across both backends with
+one clear message — a cleaner outcome than `Eq`'s more accidental
+backend asymmetry, though a curiosity survives: `.to_string()` called
+INDIRECTLY through an already-generic function body (where the
+parameter's concrete type is only known at a later call site, not at
+the check site) still isn't re-verified per instantiation — this is a
+pre-existing, narrower gap in how generic type-checking here works at
+all, not something this chunk introduces or fixes; found and pinned
+down via a test that had to be redesigned around it (see below).
+
+**Struct field NAMES were available all along, just discarded at the
+same place `Eq`'s deep-dive found tag/type info being discarded.**
+`plum_ir::lower::LoweringContext` already builds a `struct_fields:
+HashMap<String, Vec<String>>` table (field names in DECLARED order) —
+purely to order a struct literal's fields into positional `Ctor` slots
+— and simply never exposed it. A one-line accessor was enough to give
+the interpreter everything it needed. Codegen's own `TagFields`/
+`monomorphize::Plan::tag_fields` derivation sites (`derive_tag_fields`,
+`monomorphize::plan`'s `Task::Struct` arm) were ALSO already iterating
+`(name, type)` pairs and discarding the name half (`(_, ty)`) — kept
+this time into a new parallel `StructFieldNames` table, threaded
+through `emit_program` exactly like `tag_fields` itself. Enum variant
+tags deliberately get NO entries in that table — Plum enum variants are
+already positional at the language level, so a tag absent from
+`StructFieldNames` renders positionally (or bare, if zero-field) as the
+CORRECT form, not a fallback for missing data.
+
+**Interpreter**: `Interpreter` gained a `struct_field_names` field and
+`set_struct_field_names` setter (a setter, not a `load_program`
+parameter — that method has ~13 call sites across this crate's own test
+suite, almost all unrelated to this feature; an unset/empty table just
+renders every struct positionally too, same as an enum variant, never a
+crash). `Expr::ToString` now recurses through a new `render_value`
+helper mirroring `values_equal`'s own recursive `Ctor` walk — same
+cycle-safety argument (real cycles only reachable through `Ref[T]`,
+never ordinary struct/enum/array nesting). A nested `Str` value renders
+QUOTED and escaped (new `escape_str_for_display`, `\`/`"` only); a bare
+TOP-LEVEL `.to_string()` on a `Str` is unchanged — still raw/unquoted.
+
+**LLVM codegen**: the float fix is small and separate — `Expr::ToString`'s
+`Float` arm now formats via `%.15g` instead of `%f` (`%g` already omits
+trailing zero decimals for whole numbers; 15 significant digits matches
+`f64`'s own precision) — closely, not byte-perfectly, matching the
+interpreter (extreme-value exponent formatting can still differ,
+`1e+20` vs Rust's `1e20` — a documented, honest caveat). Struct/enum/
+array stringification needed genuinely NEW runtime primitives — unlike
+equality, which only needed to combine booleans, this needs to BUILD
+strings, interleaving literal skeleton text with recursively-rendered
+values. `@plum_struct_to_string` mirrors `@plum_struct_eq`'s tag-
+dispatch-chain shape exactly (one block per tag, sequential `icmp`/
+`br`), but each tag's block assembles a fresh `Str` cell via repeated
+`@plum_str_concat` calls. Static skeleton text (`"Point { x: "`, `",
+"`, `" }"`, a bare enum tag, punctuation) costs ZERO runtime allocation
+at all — each piece is a compile-time LLVM constant struct literal
+built directly in the `{ i64 refcount, i64 len, bytes }` Str-cell
+layout (`tostr_lit_cell`), passed by its `@name` wherever a `ptr` to a
+Str cell is expected, exactly like any real allocated cell (every
+access anywhere in this backend already reads cells through raw
+`getelementptr i8` byte offsets, never a typed struct GEP, so the
+declared LLVM type doesn't need to match runtime-allocated cells'
+shape). A new `@plum_str_quote` (two `phi`-loop passes, mirroring
+`emit_array_release_fns`'s established loop shape: count how many bytes
+need an escape first, to size ONE allocation exactly, then copy-and-
+escape) handles nested `Str` values. Arrays get their own per-element-
+type function family, `emit_array_to_string_fns`, mirroring
+`emit_array_eq_fns`'s per-distinct-element-`CgType` discovery/emission
+shape exactly. A new `render_word_as_string`/`to_string_fn_for` pair
+(direct siblings of `eq_fn_for`/`dec_fn_for`) is shared by both the
+struct and array runtime functions for scalar-vs-heap-shaped dispatch.
+
+Two real bugs were found and fixed only once actual `clang`-compiled
+IR was tried, not caught by `cargo build` alone (LLVM textual IR is
+only checked by LLVM itself, never by the Rust compiler): (1) the two
+hand-counted shared format-string byte-array globals (`@plum_tostr_
+fmt_int`/`@plum_tostr_fmt_float`) were declared one byte short/long —
+`clang` caught the exact mismatch immediately, a "constant expression
+type mismatch" error; (2) `@plum_struct_to_string`/`emit_array_to_
+string_fns` each independently start numbering their compile-time
+literal globals from 0, so BOTH produced a colliding `@plum_tostr_
+lit_0` the first time a real program (rather than an isolated unit
+test) needed both in the SAME compiled module — fixed by giving each
+its own name prefix, since — unlike a shared Rust-side counter, which
+would need threading across two otherwise-independent call sites —
+distinct prefixes need no shared state at all. A third, Rust-level-
+only bug (caught by the Rust compiler itself, not `clang`): the Bool/
+Unit rendering branch's basic-block LABELS were built from the SAME
+`%v<N>`-prefixed helper used for SSA REGISTER names, producing
+malformed `label %bl%v5`-shaped IR text — fixed by using a separate,
+plain-numeric label-id source sharing the same counter (so it still
+can't collide with any register name) but without the `%v` prefix.
+
+Two pre-existing tests needed updating, both because the FIX genuinely
+changed previously-broken behavior, not because anything regressed:
+`println` output for a whole-number float (now `3.5`... `3` not
+`3.500000`), and a test that used to prove "an unsupported type reached
+only through a generic parameter is caught at runtime" using
+`Array[Int]` as its example — now genuinely supported, so retargeted at
+a `Closure` (which is excluded by the `.to_string()` gate outright AND
+genuinely unsupported by the interpreter's own rendering, so it still
+demonstrates the same runtime-catches-what-compile-time-permissively-
+let-through behavior the original test existed to prove). Also found,
+independently, while writing new tests: the Plum SOURCE keyword for the
+string type is `String`, not `Str` (`Str` is only `Type::Str`'s
+internal Rust name; `plum_types::infer::ast_type_to_type` — the
+resolver EVERY struct/enum field and return-type ANNOTATION goes
+through — only recognizes `"String"`) — a few new test sources
+initially used the wrong keyword and were fixed, not a real bug.
+
+**Direct, concrete payoff**: `println`/`.to_string()` now work for real,
+nested, mixed-type program values — verified through both backends,
+including a real throwaway Plum project (a struct, an array of structs,
+an enum variant, whole-number and fractional floats, and a `Map`) built
+and run via the actual `plumc` CLI (`build`, native, AND plain
+interpreter invocation — output identical and correct through both).
+
+Tests: named-field struct rendering, nested struct-in-struct, enum
+variant rendering (bare zero-field and positional-with-payload), array
+rendering, array-of-structs, a `Str` field's quoting/escaping (including
+an embedded `"`/`\`, round-tripped through both a Plum-source literal
+and its expected escaped rendering — written as raw Rust strings to
+keep the double layer of escaping legible), a bare top-level `Str`
+staying unquoted (regression guard), `Map` generic-form rendering (and
+the `map_insert`-prepends-so-most-recent-is-outermost ordering that
+briefly looked like a real bug and wasn't), the float-format fix itself,
+and direct emitted-IR assertions that `@plum_struct_to_string`/
+`@plum_array_to_string_<mangled>` actually appear. Each backend
+independently. Workspace now 1436 tests (up from 1414 — net +22), clean
+build, zero warnings.
+
 ## Target platforms
 
 - **Hosted (Linux/macOS/Windows), web APIs**: primary target, no special
@@ -3434,10 +3588,14 @@ summed), not just inspect emitted IR text.
   `.runes()`, `.trim()`, `.split(sep)`, `.to_upper()`, `.to_lower()`,
   `.contains()`, `.starts_with()`, `.ends_with()`, `.replace()`, and
   `.to_string()` (scoped to Int/Float/Bool/Str) are likewise now
-  Decided (see "Strings" above). Still open, for strings specifically:
-  `.to_string()` for structs/enums/arrays/tuples (needs real design —
-  the IR carries no field names to render with), other standard string
-  operations (e.g. `repeat`), and grapheme-cluster-aware operations (a
+  Decided (see "Strings" above). `.to_string()` for structs/enums/
+  arrays (named-field structs, positional enum variants, bracketed
+  arrays, `Map`/`Set` rendering generically as their underlying enum) is
+  now ALSO Decided, in both backends — see "Standard library, chunk 7"
+  above. `Tuple` is the one remaining exclusion (same structural
+  blocker as `Eq` — `CgType` has no `Tuple` variant). Still open, for
+  strings specifically: other standard string operations (e.g.
+  `repeat`), and grapheme-cluster-aware operations (a
   "rune" is a Unicode SCALAR VALUE / codepoint, not a user-perceived
   character — a grapheme cluster like an emoji with modifiers can span
   multiple runes; `.runes()` doesn't attempt that level). String (and

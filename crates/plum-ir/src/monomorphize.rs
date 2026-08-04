@@ -67,6 +67,14 @@ pub struct MonoPlan {
     /// generic-instantiation counterpart to `plumc`'s own
     /// `derive_tag_fields`, which only covers non-generic declarations.
     pub tag_fields: HashMap<String, Vec<Type>>,
+    /// Mangled STRUCT tag -> its field NAMES, in the SAME declared
+    /// order as `tag_fields`'s own `Vec<Type>` for that tag — the
+    /// generic-instantiation counterpart to `plumc`'s own `derive_tag_
+    /// fields`'s second return value. Has NO entries for enum variant
+    /// tags, for the same reason `plum_codegen::StructFieldNames`
+    /// itself doesn't: Plum enum variant payloads are already
+    /// positional at the language level.
+    pub struct_field_names: HashMap<String, Vec<String>>,
     /// Original top-level name -> every mangled instantiation reachable
     /// for it, in discovery order — a non-generic name always maps to
     /// exactly `[name.clone()]` (identity). `plumc`'s entry-point lookup
@@ -374,6 +382,7 @@ pub fn plan(
     let mut functions: Vec<ir::Function> = Vec::new();
     let mut signatures: HashMap<String, (Vec<Type>, Type)> = HashMap::new();
     let mut tag_fields: HashMap<String, Vec<Type>> = HashMap::new();
+    let mut struct_field_names: HashMap<String, Vec<String>> = HashMap::new();
     let mut entry_rename: HashMap<String, Vec<String>> = HashMap::new();
     // Unordered — the worklist's processing order is LIFO/discovery-
     // order, not source-declaration order, which `@plum_init_globals`
@@ -573,10 +582,13 @@ pub fn plan(
                     .struct_fields_for(&name, &args)
                     .ok_or_else(|| format!("internal error: monomorphize: unknown generic struct {name:?}"))?;
                 let mut field_types = Vec::with_capacity(fields.len());
-                for (_, fty) in &fields {
+                let mut field_names = Vec::with_capacity(fields.len());
+                for (fname, fty) in &fields {
                     field_types.push(validate_field_type(fty, &name, &args, &mut worklist)?);
+                    field_names.push(fname.clone());
                 }
-                tag_fields.insert(mangled, field_types);
+                tag_fields.insert(mangled.clone(), field_types);
+                struct_field_names.insert(mangled, field_names);
             }
 
             Task::Enum(name, keys) => {
@@ -624,6 +636,7 @@ pub fn plan(
         functions,
         signatures,
         tag_fields,
+        struct_field_names,
         entry_rename,
         globals,
     })

@@ -375,14 +375,23 @@ fn register_channel_tag(
     Ok(())
 }
 
-fn derive_tag_fields(program: &ast::Program, type_ctx: &TypeContext) -> plum_codegen::TagFields {
+/// Also returns each STRUCT tag's field NAMES (in the same declared
+/// order as the returned `TagFields`'s own `Vec<CgType>`) — enum
+/// variants contribute nothing to that second map, since Plum variant
+/// payloads are already positional at the language level (see
+/// `plum_codegen::StructFieldNames`'s own doc comment). `type_ctx.
+/// struct_fields` already returns `(String, Type)` pairs; earlier this
+/// only kept the type half.
+fn derive_tag_fields(program: &ast::Program, type_ctx: &TypeContext) -> (plum_codegen::TagFields, plum_codegen::StructFieldNames) {
     let mut tag_fields = plum_codegen::TagFields::new();
+    let mut struct_field_names = plum_codegen::StructFieldNames::new();
     for item in &program.items {
         match &item.kind {
             ast::ItemKind::Struct(decl) if decl.generics.is_empty() => {
                 if let Some(fields) = type_ctx.struct_fields(&decl.name) {
                     if let Ok(cg_fields) = fields.iter().map(|(_, ty)| plum_type_to_cg_type(ty)).collect::<Result<Vec<_>, _>>() {
                         tag_fields.insert(decl.name.clone(), cg_fields);
+                        struct_field_names.insert(decl.name.clone(), fields.iter().map(|(n, _)| n.clone()).collect());
                     }
                 }
             }
@@ -398,7 +407,7 @@ fn derive_tag_fields(program: &ast::Program, type_ctx: &TypeContext) -> plum_cod
             _ => {}
         }
     }
-    tag_fields
+    (tag_fields, struct_field_names)
 }
 
 /// A heap-shaped (struct/enum) OR array-shaped OR closure-shaped entry-
@@ -533,7 +542,7 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
 /// a two-line parse+prelude shim in front of this.
 pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(String, HashMap<String, FnSig>, String, bool), String> {
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
-    let mut tag_fields = derive_tag_fields(program, &type_ctx);
+    let (mut tag_fields, mut struct_field_names) = derive_tag_fields(program, &type_ctx);
     let variant_payload_types = derive_variant_payload_types(program, &type_ctx);
     let mut infer = Infer::with_context(type_ctx);
     let types = infer.infer_program(program).map_err(|e| format!("type error: {e}"))?;
@@ -593,6 +602,9 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
     for (mangled, field_types) in &mono_plan.tag_fields {
         let cg_fields = field_types.iter().map(plum_type_to_cg_type).collect::<Result<Vec<_>, _>>()?;
         tag_fields.insert(mangled.clone(), cg_fields);
+    }
+    for (mangled, names) in &mono_plan.struct_field_names {
+        struct_field_names.insert(mangled.clone(), names.clone());
     }
 
     // Every top-level FUNCTION's signature — a global's `types` entry is
@@ -671,7 +683,7 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
     // global must be fully materialized before `emit_main`'s generated
     // native `main()` calls the resolved entry function.
     let has_globals = !ir_program.globals.is_empty();
-    let mut body_ir = plum_codegen::emit_program(&ir_program, &signatures, &tag_fields, &global_types)?;
+    let mut body_ir = plum_codegen::emit_program(&ir_program, &signatures, &tag_fields, &global_types, &struct_field_names)?;
 
     // A real collision, not a hypothetical one: `plumc build`'s own
     // fixed convention (matching the interpreter CLI's — see main.rs)
@@ -1125,7 +1137,10 @@ mod tests {
         // final `printf` of the entry function's return value.
         let src = "let go (): Int = { println(42); println(3.5); println(true); println(\"hi\"); 0 }";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
-        assert_eq!(out, "42\n3.500000\ntrue\nhi\n0");
+        // `3.5`, not `3.500000` — `Expr::ToString`'s `Float` codegen
+        // now renders via `%.15g` (matching the interpreter's Rust-
+        // `Display`-style output), not the old always-6-decimals `%f`.
+        assert_eq!(out, "42\n3.5\ntrue\nhi\n0");
     }
 
     // --- standard library: `print` (see `plumc::STDLIB_IO_SRC`) ---
@@ -1344,6 +1359,123 @@ mod tests {
         let src = "let go (): Bool = { let s = set_insert(set_new(()), (1, 2)); set_contains(s, (1, 2)) }\n";
         let err = crate::typecheck_and_run(src, "go", vec![plum_interp::Value::Unit]).expect_err("expected a type error");
         assert!(err.contains("Eq"), "unexpected error: {err}");
+    }
+
+    // --- `.to_string()`/`println` for structs/enums/arrays (`@plum_
+    // struct_to_string`/`@plum_array_to_string_<mangled>`) ---
+
+    #[test]
+    fn struct_to_string_renders_named_fields_in_native_codegen() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Bool = Point { x: 1, y: 2 }.to_string() == \"Point { x: 1, y: 2 }\"\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn nested_struct_to_string_recurses_in_native_codegen() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            struct Line { a: Point, b: Point }\n\
+            let go (): Bool = Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } }.to_string() == \
+                              \"Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } }\"\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn enum_variant_to_string_renders_positionally_in_native_codegen() {
+        let src = "\
+            enum Shape { Circle(Float), Square(Float) }\n\
+            let go (): Bool = Circle(5.0).to_string() == \"Circle(5)\"\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn bare_zero_field_variant_to_string_renders_just_the_tag_in_native_codegen() {
+        let src = "\
+            enum List { Cons(Int, List), Nil }\n\
+            let go (): Bool = Nil.to_string() == \"Nil\"\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn array_to_string_renders_bracketed_elements_in_native_codegen() {
+        let src = "let go (): Bool = [1, 2, 3].to_string() == \"[1, 2, 3]\"\n";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn array_of_structs_to_string_recurses_into_each_element_in_native_codegen() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Bool = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }].to_string() == \
+                              \"[Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]\"\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn struct_with_a_str_field_to_string_quotes_and_escapes_it_in_native_codegen() {
+        let src = r#"struct Named { label: String }
+            let go (): Bool = Named { label: "a\"b\\c" }.to_string() == "Named { label: \"a\\\"b\\\\c\" }""#;
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn bare_top_level_str_to_string_is_still_unquoted_in_native_codegen() {
+        let src = "let go (): Bool = \"hi\".to_string() == \"hi\"\n";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn map_to_string_renders_the_underlying_recursive_enum_generically_in_native_codegen() {
+        // `map_insert` PREPENDS (see `plumc::STDLIB_COLLECTIONS_SRC`'s
+        // own doc comment) — the most-recently-inserted key ends up
+        // OUTERMOST, so `(2, 200)` (inserted last) wraps `(1, 100)`.
+        let src = "\
+            let go (): Bool = { \
+                let m = map_insert(map_insert(map_new(()), 1, 100), 2, 200); \
+                m.to_string() == \"MapNode(2, 200, MapNode(1, 100, MapEnd))\" \
+            }\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn float_to_string_uses_shortest_form_not_always_six_decimals_in_native_codegen() {
+        // The float-format fix: `%.15g`, not `%f` — `3.0` now renders
+        // as `"3"`, matching the interpreter's Rust-`Display`-style
+        // output, not `printf`'s old always-6-decimal-places `"3.000000"`.
+        assert_eq!(compile_and_run("let go (): Bool = 3.0.to_string() == \"3\"", "go", &[CgValue::Unit]).unwrap(), "1");
+        assert_eq!(compile_and_run("let go (): Bool = 3.5.to_string() == \"3.5\"", "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn struct_to_string_emits_a_call_to_plum_struct_to_string() {
+        // The Plum SOURCE keyword for the string type is `String`
+        // (`Str` is only `Type::Str`'s internal Rust name, never a
+        // valid annotation — `ast_type_to_type` only recognizes
+        // `"String"`) — wrapped in a `Bool` comparison anyway, matching
+        // this file's own established convention for every other
+        // IR-shape assertion, rather than fighting an unrelated return-
+        // type-annotation edge case.
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Bool = Point { x: 1, y: 2 }.to_string() == \"Point { x: 1, y: 2 }\"\n\
+        ";
+        let (body_ir, ..) = compile_to_ir(src, "go").unwrap();
+        assert!(body_ir.contains("call ptr @plum_struct_to_string"), "{body_ir}");
+    }
+
+    #[test]
+    fn array_to_string_emits_a_call_to_a_mangled_plum_array_to_string_function() {
+        let src = "let go (): Bool = [1, 2, 3].to_string() == \"[1, 2, 3]\"\n";
+        let (body_ir, ..) = compile_to_ir(src, "go").unwrap();
+        assert!(body_ir.contains("call ptr @plum_array_to_string_Int"), "{body_ir}");
     }
 
     // --- standard library: Map[K,V]/Set[T] (see `plumc::STDLIB_COLLECTIONS_SRC`) ---

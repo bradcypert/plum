@@ -394,6 +394,7 @@ pub(crate) fn run_resolved_program(program: ast::Program, fn_name: &str, args: V
     let ir_program = optimize_program(ir_program);
 
     let mut interp = Interpreter::new();
+    interp.set_struct_field_names(lowering_ctx.struct_fields().clone());
     interp.load_program(&ir_program).map_err(|e| format!("load error: {e}"))?;
     interp.call(fn_name, args)
 }
@@ -926,12 +927,21 @@ mod tests {
     #[test]
     fn to_string_on_an_unsupported_type_reached_only_through_a_generic_parameter_is_a_runtime_error() {
         // The other half of the permissive-at-compile-time tradeoff:
-        // if a generic `.to_string()` call's parameter type turns out
-        // to be something unsupported (here, `Array[Int]`) ONLY
-        // discoverable at the call site rather than the definition,
-        // the interpreter's own runtime check is what catches it.
+        // `stringify`'s own body type-checks `x.to_string()` once,
+        // while `x`'s type is still an unresolved `Var` (permissively
+        // allowed — this check is never re-run per call-site
+        // instantiation, since this isn't full parametric
+        // generalization). Struct/enum/array/`Tuple` are all still
+        // caught the SAME permissive way but now actually WORK at
+        // runtime (the whole point of this chunk, `Tuple` included —
+        // the interpreter itself has no tuple limitation, only
+        // codegen does). A `Closure`, though, is excluded by the
+        // `.to_string()` gate outright and genuinely unsupported by
+        // the interpreter's own rendering — this is what still
+        // demonstrates the runtime check catching what the
+        // permissive compile-time path let through.
         let src = "let stringify x = x.to_string()\n\
-                    let use_it dummy = stringify([1, 2])";
+                    let use_it dummy = stringify(|y| y)";
         let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
             .expect_err("expected a runtime error, not a successful run");
         assert!(err.contains("not yet supported"), "expected a not-yet-supported error, got: {err}");

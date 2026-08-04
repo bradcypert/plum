@@ -1928,11 +1928,20 @@ impl Infer {
                 Ok((Type::Str, acc))
             }
             // `x.to_string()` — `x` should resolve to `Int`, `Float`,
-            // `Bool`, or `Str` (checked directly against the
-            // ALREADY-RESOLVED type, not via `unify`, since there's no
-            // single target type to unify against — see `ir::Expr::
-            // ToString`'s doc comment for why this is scoped to just
-            // these four types for now). Evaluates to `Str`.
+            // `Bool`, `Str`, a struct, an enum, or an array (checked
+            // directly against the ALREADY-RESOLVED type, not via
+            // `unify`, since there's no single target type to unify
+            // against). Evaluates to `Str`. Excludes `Function`, the
+            // opaque runtime handles (`Task`/`Sender`/`Receiver`/`Ref`
+            // — same exclusion `satisfies_bound`'s `Show` case already
+            // uses), and `Tuple` — `CgType` has no `Tuple` variant at
+            // all (see `plumc::plum_type_to_cg_type`'s own doc
+            // comment), the same structural blocker that keeps `Eq`
+            // off tuples. Unlike `Eq`, THIS is the only gate for `.to_
+            // string()` at all (not just generic-bound instantiation),
+            // so excluding `Tuple` here blocks it uniformly across
+            // both backends with one clear message, rather than
+            // leaving it to fail asymmetrically deep in codegen.
             //
             // Deliberately PERMISSIVE when `base`'s type is STILL an
             // unresolved `Var` at this point (e.g. a closure parameter
@@ -1956,13 +1965,15 @@ impl Infer {
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let acc = s;
                 let resolved = acc.apply(&base_ty);
-                let is_concrete_and_unsupported = !matches!(
-                    resolved,
-                    Type::Int | Type::Float | Type::Bool | Type::Str | Type::Var(_)
+                let is_opaque_runtime_handle = matches!(
+                    &resolved,
+                    Type::Struct(n, _) if n == "Task" || n == "Sender" || n == "Receiver" || n == "Ref"
                 );
+                let is_concrete_and_unsupported = matches!(resolved, Type::Function(..) | Type::Tuple(..))
+                    || is_opaque_runtime_handle;
                 if is_concrete_and_unsupported {
                     return Err(format!(
-                        "`.to_string()` at {span:?}: not yet supported for {resolved:?} (only Int/Float/Bool/Str)"
+                        "`.to_string()` at {span:?}: not yet supported for {resolved:?}"
                     ));
                 }
                 Ok((Type::Str, acc))
@@ -5775,8 +5786,22 @@ mod tests {
     }
 
     #[test]
-    fn to_string_on_an_array_is_not_yet_supported() {
-        infer_err("[1, 2].to_string()");
+    fn to_string_on_an_array_is_now_supported() {
+        assert_eq!(infer("[1, 2].to_string()"), Type::Str);
+    }
+
+    #[test]
+    fn to_string_on_a_struct_is_now_supported() {
+        let types = infer_program("struct Point { x: Int, y: Int }\nlet f dummy = Point { x: 1, y: 2 }.to_string()");
+        let Type::Function(_, ret) = &types["f"] else {
+            panic!("expected a function type, got {:?}", types["f"]);
+        };
+        assert_eq!(**ret, Type::Str);
+    }
+
+    #[test]
+    fn to_string_on_a_tuple_is_still_not_supported() {
+        infer_err("(1, 2).to_string()");
     }
 
     #[test]

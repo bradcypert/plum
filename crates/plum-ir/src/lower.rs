@@ -191,6 +191,16 @@ impl LoweringContext {
         self
     }
 
+    /// Every struct tag's field names, in DECLARED order — the same
+    /// table `lower_struct_literal` already uses to put a literal's
+    /// fields into positional `Ctor` order, exposed read-only for
+    /// callers (`plum-interp`'s `.to_string()` rendering) that need
+    /// struct field NAMES at runtime, which the lowered `ir::Program`
+    /// itself never carries (see `ir.rs`'s `ToString` doc comment).
+    pub fn struct_fields(&self) -> &HashMap<String, Vec<String>> {
+        &self.struct_fields
+    }
+
     pub fn from_items(items: &[ast::Item]) -> Self {
         let mut ctx = Self::new();
         // Pass 1: struct/enum names, fields, and field TYPES — done

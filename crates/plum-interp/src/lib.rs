@@ -540,6 +540,15 @@ pub struct Interpreter {
     // an honest v1 gap — an extern call inside a spawned block fails
     // with "unknown extern function" rather than silently working.
     extern_fns: HashMap<String, ExternFnHandle>,
+    // Struct tag -> field names, in DECLARED order — needed ONLY for
+    // `.to_string()`'s named-field rendering (`Point { x: 1, y: 2 }`).
+    // Empty unless a caller opts in via `set_struct_field_names` (see
+    // that method's own doc comment for why this is a setter rather
+    // than a `load_program` parameter). A tag with no entry here still
+    // renders — just positionally/bare, the same way an enum variant
+    // tag (which never HAS field names, by language design) already
+    // does, never a crash or a missing-data error.
+    struct_field_names: HashMap<String, Vec<String>>,
 }
 
 impl Interpreter {
@@ -552,7 +561,23 @@ impl Interpreter {
             next_closure_id: 0,
             globals: HashMap::new(),
             extern_fns: HashMap::new(),
+            struct_field_names: HashMap::new(),
         }
+    }
+
+    /// Opts this interpreter into named-field `.to_string()` rendering
+    /// for structs — a setter rather than a `load_program` parameter
+    /// so the ~13 existing `load_program` call sites across this
+    /// crate's own test suite (almost all unrelated to `.to_string()`)
+    /// don't all need updating; only callers that actually care about
+    /// struct rendering (`run`/`run_err` here, and `plumc::typecheck_
+    /// and_run`/`typecheck_and_run_project`) call this, before `load_
+    /// program`. `names` comes from `plum_ir::lower::LoweringContext::
+    /// struct_fields()` — the SAME table `lower_struct_literal` already
+    /// builds and uses to order a struct literal's fields into `Ctor`
+    /// position, just exposed for a second purpose here.
+    pub fn set_struct_field_names(&mut self, names: HashMap<String, Vec<String>>) {
+        self.struct_field_names = names;
     }
 
     /// Registers every function, then evaluates every global's
@@ -803,6 +828,60 @@ impl Interpreter {
         match value {
             Value::HeapRef(addr) => self.heap.refcount(*addr),
             other => Err(format!("{other:?} is not a heap value")),
+        }
+    }
+
+    /// `.to_string()`'s actual rendering logic, factored out so it can
+    /// recurse into struct/enum fields and array elements (each nested
+    /// value re-enters this same function). `quote_str` distinguishes
+    /// the two contexts a `Str` can be rendered in: a BARE top-level
+    /// `"hi".to_string()` stays raw/unquoted (unchanged, existing
+    /// behavior), but a `Str` NESTED inside a struct/enum/array is
+    /// quoted and escaped (`escape_str_for_display`) so the overall
+    /// rendering round-trips unambiguously — e.g. `Point { name: "a" }`
+    /// rather than the unparseable `Point { name: a }`.
+    fn render_value(&self, v: &Value, quote_str: bool) -> Result<String, String> {
+        match v {
+            Value::Int(n) => Ok(n.to_string()),
+            Value::Float(f) => Ok(f.to_string()),
+            Value::Bool(b) => Ok(b.to_string()),
+            Value::HeapRef(addr) => match self.heap.read_any(*addr)? {
+                heap::CellView::Str(s) => {
+                    if quote_str {
+                        Ok(format!("\"{}\"", escape_str_for_display(s)))
+                    } else {
+                        Ok(s.to_string())
+                    }
+                }
+                // Arrays share the same `Ctor` shape as structs/enums
+                // (see `heap.rs`'s module doc comment), distinguished
+                // only by the synthetic `ARRAY_TAG` every array literal
+                // is built with — never a real declared struct/enum
+                // name, so this check can't collide with one.
+                heap::CellView::Ctor(tag, fields) if tag == ARRAY_TAG => {
+                    let rendered = fields
+                        .iter()
+                        .map(|f| self.render_value(f, true))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(format!("[{}]", rendered.join(", ")))
+                }
+                heap::CellView::Ctor(tag, fields) => {
+                    let rendered = fields
+                        .iter()
+                        .map(|f| self.render_value(f, true))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    if let Some(names) = self.struct_field_names.get(tag) {
+                        let parts: Vec<String> =
+                            names.iter().zip(rendered.iter()).map(|(n, r)| format!("{n}: {r}")).collect();
+                        Ok(format!("{tag} {{ {} }}", parts.join(", ")))
+                    } else if rendered.is_empty() {
+                        Ok(tag.to_string())
+                    } else {
+                        Ok(format!("{tag}({})", rendered.join(", ")))
+                    }
+                }
+            },
+            other => Err(format!("`.to_string()` is not yet supported for {other:?}")),
         }
     }
 
@@ -1672,25 +1751,19 @@ impl Interpreter {
             // `x.to_string()` — dispatches on the actual `Value`
             // variant `base` evaluates to (see `ir::Expr::ToString`'s
             // doc comment for why lowering couldn't pick a
-            // type-specific node itself). Scoped to Int/Float/Bool/Str
-            // — anything else (a struct/array/tuple `HeapRef`,
-            // closure, etc.) is a clear, reported error, not a silent
-            // best-effort rendering.
+            // type-specific node itself), via the recursive `render_
+            // value` helper (structs/enums/arrays recurse into their
+            // fields/elements the same way `values_equal` already
+            // recurses for `==` — same cycle-safety argument: real
+            // cycles are only reachable through `Ref[T]`, which isn't
+            // reachable from here at all). Anything still unsupported
+            // (a closure, `Task`/`Sender`/`Receiver`, a tuple — see
+            // `plum-types::infer`'s widened but still-Tuple-excluding
+            // `.to_string()` gate) is a clear, reported error, not a
+            // silent best-effort rendering.
             Expr::ToString { base } => {
                 let v = self.eval(base)?;
-                let rendered = match v {
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::HeapRef(addr) if self.heap.read_str(addr).is_ok() => {
-                        self.heap.read_str(addr)?.to_string()
-                    }
-                    other => {
-                        return Err(format!(
-                            "`.to_string()` is not yet supported for {other:?} (only Int/Float/Bool/Str)"
-                        ));
-                    }
-                };
+                let rendered = self.render_value(&v, false)?;
                 let new_addr = self.heap.alloc_str(rendered);
                 Ok(Value::HeapRef(new_addr))
             }
@@ -1937,6 +2010,24 @@ fn eval_order(op: &BinOp, lv: Value, rv: Value) -> Result<Value, String> {
         BinOp::Ge => ord.is_ge(),
         _ => unreachable!(),
     }))
+}
+
+/// Escapes `\` and `"` for a `Str` value rendered NESTED inside a
+/// struct/enum/array's `.to_string()` output — the minimal scheme
+/// needed to round-trip unambiguously (matching `@plum_str_quote`'s
+/// codegen counterpart exactly). Nothing fancier (`\n`/`\t`, Unicode
+/// escapes) — a bare top-level `.to_string()` on a `Str` never goes
+/// through this at all (see `render_value`'s `quote_str` parameter).
+fn escape_str_for_display(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 fn values_equal(a: &Value, b: &Value, heap: &heap::Heap) -> Result<bool, String> {
@@ -2205,8 +2296,76 @@ mod tests {
     }
 
     #[test]
-    fn to_string_on_an_array_is_a_runtime_error() {
-        eval_err("[1, 2].to_string()");
+    fn to_string_on_an_array_renders_bracketed_elements() {
+        assert_eq!(eval("[1, 2, 3].to_string() == \"[1, 2, 3]\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn to_string_on_a_struct_renders_named_fields() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = Point { x: 1, y: 2 }.to_string() == \"Point { x: 1, y: 2 }\"";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+    }
+
+    #[test]
+    fn to_string_on_a_nested_struct_recurses() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    struct Line { a: Point, b: Point }\n\
+                    let use_it dummy = Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } }.to_string() == \
+                                        \"Line { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } }\"";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+    }
+
+    #[test]
+    fn to_string_on_an_enum_variant_renders_positionally() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let use_it dummy = Circle(5.0).to_string() == \"Circle(5)\"";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+    }
+
+    #[test]
+    fn to_string_on_a_bare_zero_field_variant_renders_just_the_tag() {
+        let src = "enum List { Cons(Int, List), Nil }\n\
+                    let use_it dummy = Nil.to_string() == \"Nil\"";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+    }
+
+    #[test]
+    fn to_string_on_an_array_of_structs_recurses_into_each_element() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }].to_string() == \
+                                        \"[Point { x: 1, y: 2 }, Point { x: 3, y: 4 }]\"";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+    }
+
+    #[test]
+    fn to_string_on_a_struct_with_a_str_field_quotes_and_escapes_it() {
+        // Raw string throughout: the Plum SOURCE text itself needs a
+        // `\"`/`\\`-escaped string literal (`"a\"b\\c"`, holding the
+        // 5-character value `a"b\c`), and the expected rendered output
+        // needs a SECOND layer of the same escaping (since the render
+        // re-quotes/escapes that value) — a raw string keeps both
+        // layers legible instead of drowning in backslash-doubling.
+        let src = r#"struct Named { label: String }
+            let use_it dummy = Named { label: "a\"b\\c" }.to_string() == "Named { label: \"a\\\"b\\\\c\" }""#;
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
+    }
+
+    #[test]
+    fn bare_top_level_str_to_string_is_still_unquoted() {
+        // Regression guard: nested `Str` rendering is quoted/escaped
+        // (see the struct-with-a-Str-field test above), but a BARE
+        // top-level `.to_string()` on a `Str` must stay exactly as it
+        // was before this chunk — raw content, no quotes added.
+        assert_eq!(eval("\"hi\".to_string() == \"hi\""), Value::Bool(true));
+    }
+
+    #[test]
+    fn to_string_on_a_map_renders_the_underlying_recursive_enum_generically() {
+        let src = "enum Map[K, V] { MapNode(K, V, Map[K, V]), MapEnd }\n\
+                    let use_it dummy = MapNode(1, 100, MapNode(2, 200, MapEnd)).to_string() == \
+                                        \"MapNode(1, 100, MapNode(2, 200, MapEnd))\"";
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Bool(true));
     }
 
     #[test]
@@ -4022,6 +4181,7 @@ mod tests {
         let ctx = LoweringContext::from_items(&program.items);
         let ir_program = lower_program(&program, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
         let mut interp = Interpreter::new();
+        interp.set_struct_field_names(ctx.struct_fields().clone());
         interp.load_program(&ir_program).unwrap_or_else(|e| panic!("load error: {e}"));
         interp
             .call(fn_name, args)
@@ -4035,6 +4195,7 @@ mod tests {
         let ctx = LoweringContext::from_items(&program.items);
         let ir_program = lower_program(&program, &ctx).unwrap_or_else(|e| panic!("lowering error: {e}"));
         let mut interp = Interpreter::new();
+        interp.set_struct_field_names(ctx.struct_fields().clone());
         interp.load_program(&ir_program).unwrap_or_else(|e| panic!("load error: {e}"));
         interp.call(fn_name, args).expect_err("expected call to fail")
     }
