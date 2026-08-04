@@ -980,6 +980,23 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
                 value: Box::new(lower_expr(&args[0], ctx)?),
             })
         }
+        // `read_file_raw(path)`/`write_file_raw(path, contents)` — same
+        // shape-only precedent as `ref(v)` immediately above.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "read_file_raw") =>
+        {
+            Ok(ir::Expr::ReadFileRaw {
+                path: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 2 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "write_file_raw") =>
+        {
+            Ok(ir::Expr::WriteFileRaw {
+                path: Box::new(lower_expr(&args[0], ctx)?),
+                contents: Box::new(lower_expr(&args[1], ctx)?),
+            })
+        }
         // `r.get()` — same shape-only precedent, zero args.
         ast::Expr::Call { callee, args, .. }
             if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "get") =>

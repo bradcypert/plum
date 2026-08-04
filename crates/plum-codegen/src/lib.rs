@@ -2609,6 +2609,40 @@ fn emit_deepcopy_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>)
 /// (`@plum_channel_recv`'s `wait` block) — POSIX guarantees it
 /// atomically unlocks-and-waits, then re-locks before returning, so
 /// this never races against `send`'s own critical section either.
+/// Libc declares + the two fixed file-open-mode string constants
+/// `read_file_raw`/`write_file_raw` (`codegen.rs`'s `codegen_read_
+/// file_raw`/`codegen_write_file_raw`) need — emitted only when `Ctx::
+/// needs_file_io_runtime` observed at least one real use, same "pay
+/// only for what's used" convention as `emit_channel_runtime`/
+/// `emit_spawn_pthread_decls`. Plain `fopen`/`fread`/`fwrite`/`fclose`/
+/// `fseek`/`ftell`/`rewind` stdio (not the raw `open`/`read`/`write`/
+/// `close` syscalls `println`/`print`'s own `extern "C" { fn write
+/// ... }` prelude declaration uses) — chosen here specifically because
+/// `fseek`/`ftell` give a simple, portable way to size a file before
+/// allocating its Plum `Str` cell in one shot, with no growable-buffer
+/// machinery needed. `@__errno_location`/`@strerror` back the OS error
+/// message half of `__FileIoResult`'s `payload` field on any failure —
+/// `@__errno_location` is glibc-specific (this dev/CI platform is
+/// Linux, matching this backend's existing Linux-first precedent, e.g.
+/// the `LC_ALL=6` locale chunk's own confirmed-on-this-platform
+/// approach) — a real, documented, narrower-than-ideal portability
+/// scope, not a silent gap.
+fn emit_file_io_runtime() -> String {
+    let mut out = String::new();
+    out.push_str("declare ptr @fopen(ptr, ptr)\n");
+    out.push_str("declare i64 @fread(ptr, i64, i64, ptr)\n");
+    out.push_str("declare i64 @fwrite(ptr, i64, i64, ptr)\n");
+    out.push_str("declare i32 @fclose(ptr)\n");
+    out.push_str("declare i32 @fseek(ptr, i64, i32)\n");
+    out.push_str("declare i64 @ftell(ptr)\n");
+    out.push_str("declare void @rewind(ptr)\n");
+    out.push_str("declare ptr @strerror(i32)\n");
+    out.push_str("declare ptr @__errno_location()\n");
+    out.push_str("@plum_file_mode_rb = private constant [3 x i8] c\"rb\\00\"\n");
+    out.push_str("@plum_file_mode_wb = private constant [3 x i8] c\"wb\\00\"\n\n");
+    out
+}
+
 fn emit_channel_runtime() -> String {
     let mut out = String::new();
     out.push_str("declare i32 @pthread_mutex_init(ptr, ptr)\n");
@@ -3270,6 +3304,11 @@ pub fn emit_program(
     // runtime`'s own doc comment) but NOT `pthread_create`/`pthread_
     // join`, and vice versa.
     let needs_channel_runtime = std::cell::RefCell::new(false);
+    // File-I/O counterpart to `needs_spawn_runtime`/`needs_channel_
+    // runtime` immediately above, gated independently for the same
+    // reason: a program that never calls `read_file_raw`/`write_
+    // file_raw` pays zero cost.
+    let needs_file_io_runtime = std::cell::RefCell::new(false);
     // The C-callback-trampoline counterpart to `trampolines` — kept in
     // its OWN table, not merged into `trampolines`, because the two
     // memoize genuinely DIFFERENT function shapes for the same target
@@ -3298,6 +3337,7 @@ pub fn emit_program(
             &trampolines,
             &needs_spawn_runtime,
             &needs_channel_runtime,
+            &needs_file_io_runtime,
             &externs,
             &c_callback_trampolines,
             global_types,
@@ -3320,7 +3360,7 @@ pub fn emit_program(
     // globals` is non-empty, matching the "pay only for what's used"
     // convention already established for the spawn/channel runtime.
     let (global_slots, init_globals_fn) =
-        emit_init_globals(&program.globals, global_types, signatures, &tag_ids, tag_fields, &needed_arrays, &closure_counter, &closure_defs, &trampolines, &needs_spawn_runtime, &needs_channel_runtime, &externs, &c_callback_trampolines)?;
+        emit_init_globals(&program.globals, global_types, signatures, &tag_ids, tag_fields, &needed_arrays, &closure_counter, &closure_defs, &trampolines, &needs_spawn_runtime, &needs_channel_runtime, &needs_file_io_runtime, &externs, &c_callback_trampolines)?;
 
     // The whole-program closure/task-field rejection fires whenever
     // EITHER spawn OR channels are used — a channel send can smuggle a
@@ -3347,6 +3387,9 @@ pub fn emit_program(
     }
     if *needs_channel_runtime.borrow() {
         out.push_str(&emit_channel_runtime());
+    }
+    if *needs_file_io_runtime.borrow() {
+        out.push_str(&emit_file_io_runtime());
     }
     // `@global.<name>` slot declarations — placed here, before every
     // `define`, purely for human-readability of the generated `.ll`
@@ -3384,6 +3427,7 @@ fn emit_function(
     trampolines: &std::cell::RefCell<HashMap<String, String>>,
     needs_spawn_runtime: &std::cell::RefCell<bool>,
     needs_channel_runtime: &std::cell::RefCell<bool>,
+    needs_file_io_runtime: &std::cell::RefCell<bool>,
     externs: &HashMap<String, ir::ExternFn>,
     c_callback_trampolines: &std::cell::RefCell<HashMap<String, String>>,
     global_types: &HashMap<String, CgType>,
@@ -3413,6 +3457,7 @@ fn emit_function(
         trampolines,
         needs_spawn_runtime,
         needs_channel_runtime,
+        needs_file_io_runtime,
         externs,
         c_callback_trampolines,
         globals: global_types,
@@ -3483,6 +3528,7 @@ fn emit_init_globals(
     trampolines: &std::cell::RefCell<HashMap<String, String>>,
     needs_spawn_runtime: &std::cell::RefCell<bool>,
     needs_channel_runtime: &std::cell::RefCell<bool>,
+    needs_file_io_runtime: &std::cell::RefCell<bool>,
     externs: &HashMap<String, ir::ExternFn>,
     c_callback_trampolines: &std::cell::RefCell<HashMap<String, String>>,
 ) -> Result<(String, String), String> {
@@ -3518,6 +3564,7 @@ fn emit_init_globals(
         trampolines,
         needs_spawn_runtime,
         needs_channel_runtime,
+        needs_file_io_runtime,
         externs,
         c_callback_trampolines,
         globals: global_types,

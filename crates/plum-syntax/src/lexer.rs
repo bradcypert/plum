@@ -77,6 +77,20 @@ pub struct Token {
 pub struct Lexer<'a> {
     source: &'a str,
     pos: usize,
+    /// Added to every emitted `Span`'s byte offsets — always `0` for a
+    /// plain `Lexer::new`. Exists so a caller merging SEVERAL
+    /// independently-lexed source fragments into one `ast::Program`
+    /// (see `plumc::with_prelude`/`resolve_modules`) can give each
+    /// fragment its own non-overlapping span range, keeping every
+    /// `Span` unique across the WHOLE merged program — without this, a
+    /// `Span` is only unique WITHIN one `Lexer`'s own source, and two
+    /// coincidentally-same-byte-offset call sites in two DIFFERENT
+    /// fragments silently collide in any `HashMap<Span, _>` keyed
+    /// purely by `Span` (found empirically: `plum_types::infer::Infer::
+    /// generic_sites` is exactly such a map, and two unrelated prelude
+    /// fragments' call sites collided there once a THIRD fragment's
+    /// own length happened to shift one exactly onto the other).
+    base: usize,
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -89,14 +103,20 @@ fn is_ident_continue(c: char) -> bool {
 
 impl<'a> Lexer<'a> {
     pub fn new(source: &'a str) -> Self {
-        Lexer { source, pos: 0 }
+        Lexer { source, pos: 0, base: 0 }
+    }
+
+    /// Same as `new`, but every emitted `Span` is offset by `base` —
+    /// see `Lexer::base`'s own doc comment for why this exists.
+    pub fn with_base_offset(source: &'a str, base: usize) -> Self {
+        Lexer { source, pos: 0, base }
     }
 
     pub fn tokenize(&mut self) -> Vec<Token> {
         let mut tokens = Vec::new();
         loop {
             self.skip_whitespace_and_comments();
-            let start = self.pos as u32;
+            let start = (self.pos + self.base) as u32;
 
             let Some(c) = self.peek_char() else {
                 tokens.push(Token {
@@ -116,7 +136,7 @@ impl<'a> Lexer<'a> {
                 self.lex_operator()
             };
 
-            let end = self.pos as u32;
+            let end = (self.pos + self.base) as u32;
             tokens.push(Token {
                 kind,
                 span: Span::new(start, end),

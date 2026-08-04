@@ -2259,6 +2259,126 @@ and direct emitted-IR assertions that `@plum_struct_to_string`/
 independently. Workspace now 1436 tests (up from 1414 — net +22), clean
 build, zero warnings.
 
+### Chunk 8: basic file I/O — `read_file`/`write_file`, `Result[T, Str]`-returning, and a real previously-latent `Span` collision bug found and fixed
+
+Next stdlib area after equality/`.to_string()`, with JSON planned as a
+direct follow-on. Two scope questions were resolved with the user via
+`AskUserQuestion` before design: (1) whole-file convenience functions
+(`read_file(path): Result[Str, Str]` / `write_file(path, contents):
+Result[Unit, Str]`), not a stateful file handle — no `open`/`read`/
+`write`/`close` sequence, no new resource-lifetime story; (2) failures
+surface as `Result[T, Str]`, not a runtime abort — the first stdlib
+function to ever return `Result` (it already existed in the prelude as
+a plain generic enum, but nothing constructed one until now).
+
+**Read genuinely needs new core-language primitives — write doesn't.**
+The extern FFI type system is a closed list (`Int`/`Float`/`Bool`/
+`CStr`/callback/struct-of-those) with no raw-pointer/buffer type at
+all, so `write` (what `println`/`print` already use) fits as an
+ordinary `extern "C"` prelude declaration, but `read` fundamentally
+needs a mutable out-buffer nothing in the FFI surface can express.
+Two low-level IR primitives were added, `ReadFileRaw`/`WriteFileRaw`
+(recognized via the SAME bare-`Ident`-named-call shape `ref(v)` already
+established, not a new AST/grammar addition), each evaluating to one
+new, ordinary, NON-generic prelude struct — `struct __FileIoResult {
+ok: Bool, payload: Str }` (`payload` is dual-purpose: file contents on
+a successful read, the OS error message on any failure). Being
+non-generic, `__FileIoResult` needs zero new tag-registration
+machinery. `read_file`/`write_file` themselves are then just ordinary
+PRELUDE PLUM SOURCE (like `println`), translating the raw result to
+`Ok`/`Err` via a plain `if` — meaning `Result` construction goes
+through the exact same path any user program's `Result` usage would.
+Two design traps were found and avoided during research: a
+tuple-returning primitive was rejected (`2Tuple` is one flat tag
+shared by every 2-element tuple program-wide — a compiler-internal
+usage could silently collide with an unrelated user tuple); a
+hand-registered generic-tag-forcing approach (mirroring
+`register_channel_tag`) was rejected as more machinery than needed
+once the plain-struct design was found.
+
+**Codegen is a direct sibling of `codegen_as_cstr`, not a hand-rolled
+shared runtime function** — unlike equality/`.to_string()` (needing
+ONE function dispatched by runtime tag across every shape),
+`read_file_raw`/`write_file_raw` are a single fixed operation, ordinary
+per-call-site `Emitter`-API codegen. Every `Str` cell already carries a
+guaranteed trailing NUL byte, so a path/contents `Str`'s bytes pass
+directly to `@fopen` with no `.as_cstr()` copy/RC-dec dance needed.
+`@fopen`/`@fread`/`@fwrite`/`@fclose`/`@fseek`/`@ftell`/`@rewind`/
+`@strerror`/`@__errno_location` are declared only when actually used
+(a new `Ctx::needs_file_io_runtime` flag, mirroring `needs_spawn_
+runtime`/`needs_channel_runtime` exactly). `@fseek`+`@ftell`+`@rewind`
+size the file before allocating its `Str` cell in one shot, so `@fread`
+writes straight into the final cell — no separate copy. The final
+`__FileIoResult` value is built via the existing, directly reusable
+`codegen_ctor_alloc` helper — the same one ordinary `Ctor` construction
+already uses. Interpreter side is a few lines of ordinary Rust
+(`std::fs::read_to_string`/`std::fs::write`) — no new architecture.
+Neither `read_file` nor `write_file` needs `unsafe {}` — like `.to_
+string()`/`ref(v)`, these are core-language builtins, not extern calls.
+
+**A real, previously-latent bug was found and root-caused, not worked
+around: `Span`-keyed lookup tables silently collide across
+independently-lexed source fragments.** `with_prelude` parses each of
+its four fixed source strings (plus, separately, the user's own
+program) with its OWN fresh `Lexer`, each restarting byte-offset
+counting at 0 — meaning `Span`s are only unique WITHIN one fragment,
+never across the merged whole. `plum_types::infer::Infer::generic_
+sites` is a `HashMap<Span, RawSite>`; adding `STDLIB_FILE_SRC` shifted
+byte offsets just enough that `write_file`'s own `Ok(())` construction
+site landed at the EXACT SAME numeric span as `map_get`'s unrelated
+`MapEnd` construction in the entirely separate `STDLIB_COLLECTIONS_
+SRC` string, silently clobbering it in the hashmap — `write_file`'s
+`Ok` was never renamed to its mangled tag, and codegen failed with
+"unknown tag \"Ok\"" for EVERY compiled program (`write_file` is a
+non-generic prelude function, always present, always processed,
+regardless of whether the test's own entry point ever calls it). Found
+via a binary-search-style sequence of isolated repro programs (each
+successive simplification worked fine — curried functions, `if`/`else`,
+`Unit` payloads, struct field access — until the exact real prelude
+source was reproduced verbatim, pinning the collision to `with_
+prelude`'s span-merging itself, not any single new node's logic).
+Root-cause fix, not a narrow workaround: `Lexer` gained a `with_base_
+offset(source, base)` constructor (an opt-in sibling of `new`, zero
+behavior change for any existing caller) that offsets every emitted
+`Span`'s byte range by `base`; `with_prelude`'s own loop now threads a
+running cumulative base across its four fragments, and a new `plumc::
+PRELUDE_TOTAL_LEN` compile-time constant (just summed `&str` lengths,
+no lexing needed) lets every OTHER entry point that lexes a user's own
+top-level source (`typecheck_and_run`, `compile_to_ir`, `resolve_
+modules`'s per-file loop, a test helper) start its own `Lexer` safely
+PAST every prelude fragment's range. `resolve_modules`'s per-file loop
+needed the same treatment for a second reason: multiple module files in
+one project had the identical latent collision risk against EACH OTHER,
+not just against the prelude — previously unexercised since no existing
+multi-module test's span ranges happened to collide, but the SAME class
+of bug, fixed by the same mechanism.
+
+Also found, independently, while writing new tests: the Plum SOURCE
+keyword for the string type is `String`, not `Str` (`Str` is only
+`Type::Str`'s internal Rust name; `ast_type_to_type` — the resolver
+every struct/enum field and return-type annotation goes through — only
+recognizes `"String"`) — not a new discovery (chunk 7 hit the exact
+same thing), but confirmed again while writing `__FileIoResult`'s own
+declaration.
+
+**Direct, concrete payoff**: verified through both backends, including
+a real throwaway Plum project — write a file, read it back, attempt a
+read of a nonexistent path — built and run via the actual `plumc` CLI
+(`build`, native, AND plain interpreter invocation), a REAL file on
+disk in both cases, output equivalent through both (error message
+WORDING legitimately differs — the interpreter's is `std::io::Error`'s
+own Rust-standard-library text, codegen's is glibc's `strerror(errno)`
+— both correctly convey the same real OS error, a documented, honest
+difference, not a bug).
+
+Tests: this is the FIRST chunk where any Plum program touches a real
+file on disk (no `tempfile`/`NamedTempFile` precedent existed before)
+— `std::env::temp_dir()` + a unique per-test filename, mirroring
+`unique_temp_dir`'s own existing convention. Write-then-read round
+trip, read of a nonexistent path, write to an invalid (nonexistent
+parent directory) path — each backend independently. Workspace now
+1442 tests (up from 1436 — net +6), clean build, zero warnings.
+
 ## Target platforms
 
 - **Hosted (Linux/macOS/Windows), web APIs**: primary target, no special
@@ -3633,9 +3753,12 @@ summed), not just inspect emitted IR text.
   unsupported — a real, separate gap, not just an oversight.
 - Standard library scope — started (see "Standard library" above:
   basic output/`println`/`print`, then `Map`/`Set` collections plus
-  `Set` algebra). Still wide open: what comes next (file I/O, JSON,
-  HTTP, string utils beyond what's already a core-language builtin,
-  ...), and whether/when `println`/`print`/`Map`/`Set` migrate from the
+  `Set` algebra, then basic file I/O as of chunk 8 — `read_file`/
+  `write_file`, `Result[T, Str]`-returning). Still wide open: what
+  comes next (JSON — explicitly the stated next step — then HTTP,
+  string utils beyond what's already a core-language builtin, ...), and
+  whether/when `println`/`print`/`Map`/`Set`/`read_file`/`write_file`
+  migrate from the
   prelude into real `use`-based modules once there's enough stdlib
   surface to justify extending the `compile_and_run` test harness to
   drive a real temp project through `resolve_project`. The two real

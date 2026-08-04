@@ -154,6 +154,38 @@ let println[T] (x: T): Unit = unsafe {
 }
 ";
 
+/// Basic file I/O — chunk 8 of the standard library. `read_file_raw`/
+/// `write_file_raw` are low-level core-language builtins (see `ir::
+/// Expr::ReadFileRaw`'s own doc comment for the full design), NOT
+/// `extern "C"` declarations — unlike `write` above, `read` needs a
+/// mutable out-buffer, which the closed extern FFI type system (`Int`/
+/// `Float`/`Bool`/`CStr`/callback/struct-of-those, see `plum-types::
+/// context::check_ffi_safe`) has no way to express at all. Both
+/// evaluate to `__FileIoResult { ok: Bool, payload: String }` directly
+/// — `read_file`/`write_file` below are ORDINARY Plum source (like
+/// `print`/`println` above), translating that into `Result[T, String]`
+/// via a plain `if`, so `Ok`/`Err` construction goes through the exact
+/// same monomorphization-discovery path any user program's `Result`
+/// usage already would; no special-cased tag registration needed.
+/// `write_file` always truncates + creates (matches the interpreter's
+/// own `std::fs::write`, which does the same — both backends agree by
+/// construction, not extra coordination). No `unsafe {}` needed for
+/// either wrapper — like `.to_string()`/`ref(v)`, these are genuinely
+/// new core-language builtins, not extern calls.
+const STDLIB_FILE_SRC: &str = "\
+struct __FileIoResult { ok: Bool, payload: String }
+
+let read_file (path: String): Result[String, String] = {
+    let r = read_file_raw(path);
+    if r.ok { Ok(r.payload) } else { Err(r.payload) }
+}
+
+let write_file (path: String) (contents: String): Result[Unit, String] = {
+    let r = write_file_raw(path, contents);
+    if r.ok { Ok(()) } else { Err(r.payload) }
+}
+";
+
 /// `Map[K,V]`/`Set[T]` — chunk 2 of the standard library. Built as
 /// ORDINARY recursive generic enums (association lists), the same
 /// proven-safe shape as `List[T]` elsewhere in this codebase's own test
@@ -331,17 +363,33 @@ let set_to_array[T] (s: Set[T]): Array[T] = match s {
 /// from_items`'s duplicate-name check.
 pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
     let mut items = Vec::new();
-    for src in [PRELUDE_SRC, STDLIB_IO_SRC, STDLIB_COLLECTIONS_SRC] {
-        let tokens = Lexer::new(src).tokenize();
+    let mut base = 0usize;
+    for src in [PRELUDE_SRC, STDLIB_IO_SRC, STDLIB_FILE_SRC, STDLIB_COLLECTIONS_SRC] {
+        let tokens = Lexer::with_base_offset(src, base).tokenize();
         let parsed_items = Parser::new(tokens)
             .parse_program()
             .unwrap_or_else(|e| panic!("prelude/stdlib source is fixed, valid Plum: {e}"))
             .items;
         items.extend(parsed_items);
+        base += src.len();
     }
     items.extend(program.items);
     ast::Program { items }
 }
+
+/// The combined byte length of every prelude/stdlib source fragment
+/// `with_prelude` merges in, in the SAME order — every entry point that
+/// lexes a user's OWN top-level Plum source (as opposed to a fragment
+/// `with_prelude` itself already offsets) must start ITS OWN `Lexer` at
+/// this base offset, so its `Span`s can never collide with a prelude
+/// fragment's — see `Lexer::base`'s own doc comment for why this
+/// matters at all (a real, previously-latent bug found while adding
+/// `STDLIB_FILE_SRC`: two UNRELATED prelude fragments' call sites
+/// coincidentally landed at the same byte offset, silently colliding in
+/// `Infer::generic_sites`, a `HashMap<Span, _>`). A compile-time
+/// constant — no lexing needed to compute it, just summed `&str` byte
+/// lengths.
+const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len() + STDLIB_IO_SRC.len() + STDLIB_FILE_SRC.len() + STDLIB_COLLECTIONS_SRC.len();
 
 /// Runs the whole pipeline — parse, type-check, lower, optimize, load,
 /// call — and returns the result of calling `fn_name` with `args`.
@@ -353,7 +401,9 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
 /// (like adding a `Bool` to an `Int`) only ever surfaced as a confusing
 /// runtime error deep in `Interpreter::eval`, if it surfaced at all.
 pub fn typecheck_and_run(src: &str, fn_name: &str, args: Vec<Value>) -> Result<Value, String> {
-    let tokens = Lexer::new(src).tokenize();
+    // Base-offset the user's own source PAST every prelude fragment's
+    // span range — see `PRELUDE_TOTAL_LEN`'s own doc comment for why.
+    let tokens = Lexer::with_base_offset(src, PRELUDE_TOTAL_LEN).tokenize();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().map_err(|e| format!("parse error: {e}"))?;
     let program = with_prelude(program);
@@ -1360,6 +1410,49 @@ mod tests {
         let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
             .expect_err("expected a type error, not a successful run");
         assert!(err.contains("already declared"), "expected an already-declared error, got: {err}");
+    }
+
+    // --- standard library: basic file I/O (see `plumc::STDLIB_FILE_SRC`) ---
+    //
+    // The FIRST chunk where any Plum program touches a real file on
+    // disk — `std::env::temp_dir()` + a unique per-test filename,
+    // mirroring `codegen_cli::unique_temp_dir`'s own naming convention.
+
+    #[test]
+    fn write_file_then_read_file_round_trips_through_the_interpreter() {
+        let path = std::env::temp_dir().join(format!("plum-file-io-{}-a.txt", std::process::id()));
+        let path_str = path.to_str().unwrap();
+        let src = format!(
+            "let use_it dummy = {{ \
+                let w = write_file(\"{path_str}\", \"hello file io\"); \
+                match w {{ \
+                    Ok(_) => match read_file(\"{path_str}\") {{ Ok(s) => s == \"hello file io\", Err(_) => false }}, \
+                    Err(_) => false \
+                }} \
+            }}"
+        );
+        let result = typecheck_and_run(&src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_file_on_a_nonexistent_path_returns_err_through_the_interpreter() {
+        let path = std::env::temp_dir().join(format!("plum-file-io-{}-missing.txt", std::process::id()));
+        let src = format!(
+            "let use_it dummy = match read_file(\"{}\") {{ Ok(_) => false, Err(_) => true }}",
+            path.to_str().unwrap()
+        );
+        let result = typecheck_and_run(&src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn write_file_to_an_invalid_path_returns_err_through_the_interpreter() {
+        let src = "let use_it dummy = match write_file(\"/plum_test_nonexistent_dir_xyz/f.txt\", \"x\") { \
+                    Ok(_) => false, Err(_) => true }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
     }
 
     #[test]

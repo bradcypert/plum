@@ -523,7 +523,9 @@ pub fn compile_and_run(src: &str, entry_fn: &str, args: &[CgValue]) -> Result<St
 /// by its MANGLED name), and `entry_fn`'s own resolved (possibly
 /// mangled) name.
 fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, FnSig>, String, bool), String> {
-    let tokens = Lexer::new(src).tokenize();
+    // Base-offset PAST every prelude fragment's span range — see
+    // `crate::PRELUDE_TOTAL_LEN`'s own doc comment for why.
+    let tokens = Lexer::with_base_offset(src, crate::PRELUDE_TOTAL_LEN).tokenize();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().map_err(|e| format!("parse error: {e}"))?;
     let program = with_prelude(program);
@@ -1141,6 +1143,50 @@ mod tests {
         // now renders via `%.15g` (matching the interpreter's Rust-
         // `Display`-style output), not the old always-6-decimals `%f`.
         assert_eq!(out, "42\n3.5\ntrue\nhi\n0");
+    }
+
+    // --- standard library: basic file I/O (see `plumc::STDLIB_FILE_SRC`) ---
+    //
+    // The native-codegen counterpart to `plumc::lib.rs`'s own interpreter-
+    // path file I/O tests — a REAL compiled binary actually opening/
+    // reading/writing a real file via `clang`-compiled `fopen`/`fread`/
+    // `fwrite`, not just a type-check.
+
+    #[test]
+    fn write_file_then_read_file_round_trips_in_native_codegen() {
+        let path = unique_temp_dir("plum-codegen-file-io").with_extension("txt");
+        let path_str = path.to_str().unwrap();
+        let src = format!(
+            "let go (): Bool = {{ \
+                let w = write_file(\"{path_str}\", \"hello file io\"); \
+                match w {{ \
+                    Ok(_) => match read_file(\"{path_str}\") {{ Ok(s) => s == \"hello file io\", Err(_) => false }}, \
+                    Err(_) => false \
+                }} \
+            }}"
+        );
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_file_on_a_nonexistent_path_returns_err_in_native_codegen() {
+        let path = unique_temp_dir("plum-codegen-file-io-missing").with_extension("txt");
+        let src = format!(
+            "let go (): Bool = match read_file(\"{}\") {{ Ok(_) => false, Err(_) => true }}",
+            path.to_str().unwrap()
+        );
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
+    #[test]
+    fn write_file_to_an_invalid_path_returns_err_in_native_codegen() {
+        let src = "let go (): Bool = match write_file(\"/plum_test_nonexistent_dir_xyz/f.txt\", \"x\") { \
+                    Ok(_) => false, Err(_) => true }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
     }
 
     // --- standard library: `print` (see `plumc::STDLIB_IO_SRC`) ---
@@ -2118,7 +2164,7 @@ mod tests {
     /// that could prove two tags stayed distinct; this inspects
     /// `MonoPlan::tag_fields`'s keys directly instead).
     fn mono_tags(src: &str) -> std::collections::HashSet<String> {
-        let tokens = Lexer::new(src).tokenize();
+        let tokens = Lexer::with_base_offset(src, crate::PRELUDE_TOTAL_LEN).tokenize();
         let mut parser = Parser::new(tokens);
         let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
         let program = with_prelude(program);
@@ -3529,3 +3575,4 @@ mod tests {
         assert_eq!(out, "10");
     }
 }
+

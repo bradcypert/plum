@@ -187,6 +187,13 @@ pub(crate) struct Ctx<'a> {
     /// channel-queue runtime (and the shared deep-copy runtime) but not
     /// `pthread_create`/`pthread_join`, and vice versa.
     pub(crate) needs_channel_runtime: &'a std::cell::RefCell<bool>,
+    /// Set to `true` the first time codegen actually walks a `Read
+    /// FileRaw`/`WriteFileRaw` node — the file-I/O counterpart to
+    /// `needs_spawn_runtime`/`needs_channel_runtime`, gated
+    /// independently for the same reason: a program that never
+    /// touches a file pays zero cost (no `@fopen`/`@fread`/etc.
+    /// declares at all).
+    pub(crate) needs_file_io_runtime: &'a std::cell::RefCell<bool>,
     /// Every declared `extern "C"` function, keyed by name — built ONCE
     /// in `lib.rs::emit_program` from `program.externs` (already the
     /// complete, explicit list — no reactive discovery needed, unlike
@@ -1294,6 +1301,11 @@ fn free_vars_scoped(expr: &Expr, env: &Env, local: &HashSet<String>, out: &mut B
             free_vars_scoped(base, env, local, out);
             free_vars_scoped(value, env, local, out);
         }
+        Expr::ReadFileRaw { path } => free_vars_scoped(path, env, local, out),
+        Expr::WriteFileRaw { path, contents } => {
+            free_vars_scoped(path, env, local, out);
+            free_vars_scoped(contents, env, local, out);
+        }
     }
 }
 
@@ -1481,6 +1493,11 @@ fn assigned_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet
             assigned_vars_scoped(base, local, out);
             assigned_vars_scoped(value, local, out);
         }
+        Expr::ReadFileRaw { path } => assigned_vars_scoped(path, local, out),
+        Expr::WriteFileRaw { path, contents } => {
+            assigned_vars_scoped(path, local, out);
+            assigned_vars_scoped(contents, local, out);
+        }
     }
 }
 
@@ -1554,6 +1571,7 @@ fn emit_closure_body_fn(
         trampolines: ctx.trampolines,
         needs_spawn_runtime: ctx.needs_spawn_runtime,
         needs_channel_runtime: ctx.needs_channel_runtime,
+        needs_file_io_runtime: ctx.needs_file_io_runtime,
         externs: ctx.externs,
         c_callback_trampolines: ctx.c_callback_trampolines,
         globals: ctx.globals,
@@ -2221,6 +2239,148 @@ fn codegen_as_cstr(inner: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Resu
     Ok((buf, CgType::CStr))
 }
 
+/// `strerror(errno)`, copied into a fresh Plum `Str` cell — the OS
+/// error message half of `__FileIoResult`'s `payload` field on any
+/// `read_file_raw`/`write_file_raw` failure. The exact same "raw C
+/// string ptr -> fresh Plum `Str`" sequence extern `CStr`-return
+/// codegen already performs (`codegen_extern_call`'s `Some(ir::
+/// ExternType::Str)` arm), just without that arm's null-check-then-
+/// abort half — a `Result` needs to keep going on failure, not abort.
+fn codegen_errno_string(em: &mut Emitter) -> (String, CgType) {
+    let errno_ptr = em.fresh_reg();
+    em.push(format!("  {errno_ptr} = call ptr @__errno_location()"));
+    let errno_val = em.fresh_reg();
+    em.push(format!("  {errno_val} = load i32, ptr {errno_ptr}"));
+    let msg = em.fresh_reg();
+    em.push(format!("  {msg} = call ptr @strerror(i32 {errno_val})"));
+    let len = em.fresh_reg();
+    em.push(format!("  {len} = call i64 @strlen(ptr {msg})"));
+    let cell = em.fresh_reg();
+    em.push(format!("  {cell} = call ptr @plum_alloc_str(i64 {len})"));
+    let dst = em.fresh_reg();
+    em.push(format!("  {dst} = getelementptr i8, ptr {cell}, i64 16"));
+    let copy_r = em.fresh_reg();
+    em.push(format!("  {copy_r} = call ptr @memcpy(ptr {dst}, ptr {msg}, i64 {len})"));
+    (cell, CgType::Str)
+}
+
+/// `read_file_raw(path)` — see `ir::Expr::ReadFileRaw`'s own doc
+/// comment for the overall design (why this builds a `__FileIoResult`
+/// struct directly rather than a `Result`/`Ok`/`Err` value itself).
+/// Every Plum `Str` cell already carries a guaranteed trailing NUL byte
+/// (`@plum_alloc_str`'s own unconditional behavior — see `lib.rs`'s
+/// "Cell layout" doc comment), so `path`'s bytes are passed DIRECTLY to
+/// `@fopen` as a C string — no `.as_cstr()` copy/RC-dec dance needed
+/// here (that dance protects ordinary Plum-level values from a fresh-
+/// copy/consume mismatch; not needed for an internal, same-function-
+/// scope read of an already-live value). `@fseek`+`@ftell`+`@rewind`
+/// size the file before allocating its `Str` cell in one shot, so
+/// `@fread` writes directly into the final cell's own byte region —
+/// no separate copy.
+fn codegen_read_file_raw(path: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (path_reg, path_ty) = codegen_value(path, env, em, ctx)?;
+    if path_ty != CgType::Str {
+        return Err(format!("codegen: `read_file_raw` requires a Str path, found {path_ty:?}"));
+    }
+    *ctx.needs_file_io_runtime.borrow_mut() = true;
+
+    let path_cstr = em.fresh_reg();
+    em.push(format!("  {path_cstr} = getelementptr i8, ptr {path_reg}, i64 16"));
+    let fp = em.fresh_reg();
+    em.push(format!("  {fp} = call ptr @fopen(ptr {path_cstr}, ptr @plum_file_mode_rb)"));
+    let is_null = em.fresh_reg();
+    em.push(format!("  {is_null} = icmp eq ptr {fp}, null"));
+
+    let fail_label = em.fresh_label("read_file_fail");
+    let ok_label = em.fresh_label("read_file_ok");
+    let merge_label = em.fresh_label("read_file_merge");
+    em.push(format!("  br i1 {is_null}, label %{fail_label}, label %{ok_label}"));
+
+    em.start_block(&fail_label);
+    let (err_reg, _) = codegen_errno_string(em);
+    let fail_result = codegen_ctor_alloc("__FileIoResult", &[("0".to_string(), CgType::Bool), (err_reg, CgType::Str)], em, ctx)?;
+    let fail_block = em.current_block().to_string();
+    em.push(format!("  br label %{merge_label}"));
+
+    em.start_block(&ok_label);
+    let seek_r = em.fresh_reg();
+    em.push(format!("  {seek_r} = call i32 @fseek(ptr {fp}, i64 0, i32 2)"));
+    let size = em.fresh_reg();
+    em.push(format!("  {size} = call i64 @ftell(ptr {fp})"));
+    em.push(format!("  call void @rewind(ptr {fp})"));
+    let cell = em.fresh_reg();
+    em.push(format!("  {cell} = call ptr @plum_alloc_str(i64 {size})"));
+    let dst = em.fresh_reg();
+    em.push(format!("  {dst} = getelementptr i8, ptr {cell}, i64 16"));
+    let nread = em.fresh_reg();
+    em.push(format!("  {nread} = call i64 @fread(ptr {dst}, i64 1, i64 {size}, ptr {fp})"));
+    let close_r = em.fresh_reg();
+    em.push(format!("  {close_r} = call i32 @fclose(ptr {fp})"));
+    let ok_result = codegen_ctor_alloc("__FileIoResult", &[("1".to_string(), CgType::Bool), (cell, CgType::Str)], em, ctx)?;
+    let ok_block = em.current_block().to_string();
+    em.push(format!("  br label %{merge_label}"));
+
+    em.start_block(&merge_label);
+    let result = em.fresh_reg();
+    em.push(format!("  {result} = phi ptr [ {fail_result}, %{fail_block} ], [ {ok_result}, %{ok_block} ]"));
+    Ok((result, CgType::Heap))
+}
+
+/// `write_file_raw(path, contents)` — the write-side sibling of
+/// `codegen_read_file_raw`; always truncates + creates (`fopen(path,
+/// "wb")`, matching `std::fs::write`'s own behavior on the interpreter
+/// side). `contents`'s bytes are read DIRECTLY from its existing `Str`
+/// cell (offset 16, same guaranteed-NUL-terminated layout `path` uses)
+/// — no copy needed for `@fwrite` either.
+fn codegen_write_file_raw(path: &Expr, contents: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (path_reg, path_ty) = codegen_value(path, env, em, ctx)?;
+    if path_ty != CgType::Str {
+        return Err(format!("codegen: `write_file_raw` requires a Str path, found {path_ty:?}"));
+    }
+    let (contents_reg, contents_ty) = codegen_value(contents, env, em, ctx)?;
+    if contents_ty != CgType::Str {
+        return Err(format!("codegen: `write_file_raw` requires Str contents, found {contents_ty:?}"));
+    }
+    *ctx.needs_file_io_runtime.borrow_mut() = true;
+
+    let path_cstr = em.fresh_reg();
+    em.push(format!("  {path_cstr} = getelementptr i8, ptr {path_reg}, i64 16"));
+    let fp = em.fresh_reg();
+    em.push(format!("  {fp} = call ptr @fopen(ptr {path_cstr}, ptr @plum_file_mode_wb)"));
+    let is_null = em.fresh_reg();
+    em.push(format!("  {is_null} = icmp eq ptr {fp}, null"));
+
+    let fail_label = em.fresh_label("write_file_fail");
+    let ok_label = em.fresh_label("write_file_ok");
+    let merge_label = em.fresh_label("write_file_merge");
+    em.push(format!("  br i1 {is_null}, label %{fail_label}, label %{ok_label}"));
+
+    em.start_block(&fail_label);
+    let (err_reg, _) = codegen_errno_string(em);
+    let fail_result = codegen_ctor_alloc("__FileIoResult", &[("0".to_string(), CgType::Bool), (err_reg, CgType::Str)], em, ctx)?;
+    let fail_block = em.current_block().to_string();
+    em.push(format!("  br label %{merge_label}"));
+
+    em.start_block(&ok_label);
+    let len = load_array_len(em, &contents_reg);
+    let src = em.fresh_reg();
+    em.push(format!("  {src} = getelementptr i8, ptr {contents_reg}, i64 16"));
+    let nwritten = em.fresh_reg();
+    em.push(format!("  {nwritten} = call i64 @fwrite(ptr {src}, i64 1, i64 {len}, ptr {fp})"));
+    let close_r = em.fresh_reg();
+    em.push(format!("  {close_r} = call i32 @fclose(ptr {fp})"));
+    let empty_cell = em.fresh_reg();
+    em.push(format!("  {empty_cell} = call ptr @plum_alloc_str(i64 0)"));
+    let ok_result = codegen_ctor_alloc("__FileIoResult", &[("1".to_string(), CgType::Bool), (empty_cell, CgType::Str)], em, ctx)?;
+    let ok_block = em.current_block().to_string();
+    em.push(format!("  br label %{merge_label}"));
+
+    em.start_block(&merge_label);
+    let result = em.fresh_reg();
+    em.push(format!("  {result} = phi ptr [ {fail_result}, %{fail_block} ], [ {ok_result}, %{ok_block} ]"));
+    Ok((result, CgType::Heap))
+}
+
 /// A `Callback`-typed `ExternCall` ARGUMENT — special-cased in
 /// `codegen_extern_call`'s own arg loop, matched against the raw
 /// argument EXPRESSION (never routed through `codegen_value` at all):
@@ -2640,6 +2800,7 @@ fn emit_spawn_entry_fn(fn_name: &str, captures: &[(String, CgType)], block: &Exp
         trampolines: ctx.trampolines,
         needs_spawn_runtime: ctx.needs_spawn_runtime,
         needs_channel_runtime: ctx.needs_channel_runtime,
+        needs_file_io_runtime: ctx.needs_file_io_runtime,
         externs: ctx.externs,
         c_callback_trampolines: ctx.c_callback_trampolines,
         globals: ctx.globals,
@@ -4226,6 +4387,8 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         Expr::TaskJoin { task } => codegen_task_join(task, env, em, ctx),
         Expr::ExternCall { name, args } => codegen_extern_call(name, args, env, em, ctx),
         Expr::AsCStr(inner) => codegen_as_cstr(inner, env, em, ctx),
+        Expr::ReadFileRaw { path } => codegen_read_file_raw(path, env, em, ctx),
+        Expr::WriteFileRaw { path, contents } => codegen_write_file_raw(path, contents, env, em, ctx),
         other => Err(format!("codegen does not yet support this construct: {other:?}")),
     }
 }

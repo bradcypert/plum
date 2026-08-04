@@ -1663,6 +1663,42 @@ impl Infer {
                 let (value_ty, acc) = self.infer_expr(&args[0], env)?;
                 Ok((Type::Struct("Ref".to_string(), vec![value_ty]), acc))
             }
+            // `read_file_raw(path)` — same bare-`Ident`-named-call
+            // precedent as `ref(v)` immediately above (mirrors lower.
+            // rs's identical shape check). Low-level primitive behind
+            // the PRELUDE's own `read_file` (ordinary Plum source,
+            // translating to `Result[Str, Str]` via a plain `if`) — see
+            // `ir::Expr::ReadFileRaw`'s own doc comment for the full
+            // design. Evaluates to the prelude's `__FileIoResult`
+            // struct directly, not `Result` itself.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "read_file_raw") =>
+            {
+                let (path_ty, s) = self.infer_expr(&args[0], env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&path_ty), &Type::Str)
+                    .map_err(|e| format!("`read_file_raw` argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("__FileIoResult".to_string(), vec![]), acc))
+            }
+            // `write_file_raw(path, contents)` — the write-side sibling
+            // of `read_file_raw`, same shape precedent.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 2 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "write_file_raw") =>
+            {
+                let (path_ty, s) = self.infer_expr(&args[0], env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&path_ty), &Type::Str)
+                    .map_err(|e| format!("`write_file_raw` first argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                let refined_env = env.apply_subst(&acc);
+                let (contents_ty, s) = self.infer_expr(&args[1], &refined_env)?;
+                acc = s.compose(&acc);
+                let s = unify(&acc.apply(&contents_ty), &Type::Str)
+                    .map_err(|e| format!("`write_file_raw` second argument at {span:?}: {e}"))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("__FileIoResult".to_string(), vec![]), acc))
+            }
             // `r.get()` — `r` must be `Ref[T]` for some `T`; evaluates
             // to `T`.
             ast::Expr::Call { callee, args, span }

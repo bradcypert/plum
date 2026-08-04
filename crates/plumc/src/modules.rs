@@ -77,13 +77,23 @@ pub fn typecheck_and_run_modules(modules: &[(&str, &str)], fn_name: &str, args: 
 /// uses, without going through `Value`/`Interpreter` at all.
 pub fn resolve_modules(modules: &[(&str, &str)]) -> Result<ast::Program, String> {
     let mut modules_by_path: BTreeMap<String, Vec<ast::Item>> = BTreeMap::new();
+    // Each module file gets its OWN non-overlapping `Span` range,
+    // starting PAST every prelude fragment's own range (see `crate::
+    // PRELUDE_TOTAL_LEN`'s own doc comment) and increasing by each
+    // file's own byte length in turn — without this, two DIFFERENT
+    // module files (or a module file and the prelude) could
+    // coincidentally share byte offsets and silently collide in any
+    // `HashMap<Span, _>` keyed purely by `Span` (e.g. `Infer::
+    // generic_sites`).
+    let mut base = crate::PRELUDE_TOTAL_LEN;
     for (mpath, src) in modules {
-        let tokens = Lexer::new(src).tokenize();
+        let tokens = Lexer::with_base_offset(src, base).tokenize();
         let mut parser = Parser::new(tokens);
         let program = parser
             .parse_program()
             .map_err(|e| format!("parse error in module {mpath:?}: {e}"))?;
         modules_by_path.entry(mpath.to_string()).or_default().extend(program.items);
+        base += src.len();
     }
 
     // The prelude belongs to the root module — prepended so `Option`/

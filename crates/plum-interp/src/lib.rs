@@ -1794,6 +1794,50 @@ impl Interpreter {
                 *handle.0.borrow_mut() = v;
                 Ok(Value::Unit)
             }
+            // `read_file_raw(path)` — low-level file-read primitive
+            // (see `ir::Expr::ReadFileRaw`'s own doc comment for why
+            // this builds a `__FileIoResult` struct directly rather
+            // than a `Result`/`Ok`/`Err` value itself — that
+            // translation happens in the PRELUDE's own `read_file`
+            // Plum source, not here). `payload` holds the file's
+            // contents on success, the OS error message on failure —
+            // exactly mirroring `std::fs::read_to_string`'s own
+            // `Result<String, io::Error>`.
+            Expr::ReadFileRaw { path } => {
+                let Value::HeapRef(path_addr) = self.eval(path)? else {
+                    return Err("`read_file_raw` requires a String path".to_string());
+                };
+                let path_str = self.heap.read_str(path_addr)?.to_string();
+                let (ok, payload) = match std::fs::read_to_string(&path_str) {
+                    Ok(contents) => (true, contents),
+                    Err(e) => (false, e.to_string()),
+                };
+                let payload_addr = self.heap.alloc_str(payload);
+                let addr = self.heap.alloc("__FileIoResult".to_string(), vec![Value::Bool(ok), Value::HeapRef(payload_addr)]);
+                Ok(Value::HeapRef(addr))
+            }
+            // `write_file_raw(path, contents)` — the write-side sibling
+            // of `ReadFileRaw`; always truncates + creates (matches
+            // `std::fs::write`'s own behavior, which this directly
+            // calls). `payload` is empty on success, the OS error
+            // message on failure.
+            Expr::WriteFileRaw { path, contents } => {
+                let Value::HeapRef(path_addr) = self.eval(path)? else {
+                    return Err("`write_file_raw` requires a String path".to_string());
+                };
+                let path_str = self.heap.read_str(path_addr)?.to_string();
+                let Value::HeapRef(contents_addr) = self.eval(contents)? else {
+                    return Err("`write_file_raw` requires String contents".to_string());
+                };
+                let contents_str = self.heap.read_str(contents_addr)?.to_string();
+                let (ok, payload) = match std::fs::write(&path_str, contents_str) {
+                    Ok(()) => (true, String::new()),
+                    Err(e) => (false, e.to_string()),
+                };
+                let payload_addr = self.heap.alloc_str(payload);
+                let addr = self.heap.alloc("__FileIoResult".to_string(), vec![Value::Bool(ok), Value::HeapRef(payload_addr)]);
+                Ok(Value::HeapRef(addr))
+            }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
                 // non-heap name (shouldn't happen given how fbip.rs

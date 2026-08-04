@@ -592,6 +592,32 @@ pub enum Expr {
         base: Box<Expr>,
         value: Box<Expr>,
     },
+    // `read_file_raw(path)` — low-level file-read primitive, recognized
+    // by the SAME bare-`Ident`-named-call shape check as `RefNew`'s own
+    // `ref(v)` (see `plum-types::infer`/`lower.rs`'s matching arms).
+    // Evaluates to the prelude's own `__FileIoResult { ok: Bool,
+    // payload: Str }` struct — `payload` is dual-purpose: the file's
+    // contents on a successful read, the OS error message on failure.
+    // Never itself constructs `Result`/`Ok`/`Err` — the PRELUDE'S
+    // `read_file` function (ordinary Plum source, not part of this IR
+    // node) does that translation via a plain `if`, so `Ok`/`Err`
+    // construction goes through the SAME ordinary monomorphization-
+    // discovery path any user program's `Result` usage would, no
+    // special-cased tag registration needed here.
+    ReadFileRaw {
+        path: Box<Expr>,
+    },
+    // `write_file_raw(path, contents)` — the write-side sibling of
+    // `ReadFileRaw`, same `__FileIoResult` result shape (`payload` is
+    // empty on a successful write, the OS error message on failure).
+    // Always truncates + creates (matches both backends' own "write
+    // whole file" primitive: `fopen(path, "wb")` in codegen, `std::fs::
+    // write` in the interpreter — the two backends match by
+    // construction, not extra coordination).
+    WriteFileRaw {
+        path: Box<Expr>,
+        contents: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -144,6 +144,13 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             base: Box::new(mark_reuse(*base)),
             value: Box::new(mark_reuse(*value)),
         },
+        Expr::ReadFileRaw { path } => Expr::ReadFileRaw {
+            path: Box::new(mark_reuse(*path)),
+        },
+        Expr::WriteFileRaw { path, contents } => Expr::WriteFileRaw {
+            path: Box::new(mark_reuse(*path)),
+            contents: Box::new(mark_reuse(*contents)),
+        },
         Expr::Select { arms } => Expr::Select {
             arms: arms
                 .into_iter()
@@ -467,6 +474,13 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             base: Box::new(transform(*base, known_heap)),
             value: Box::new(transform(*value, known_heap)),
         },
+        Expr::ReadFileRaw { path } => Expr::ReadFileRaw {
+            path: Box::new(transform(*path, known_heap)),
+        },
+        Expr::WriteFileRaw { path, contents } => Expr::WriteFileRaw {
+            path: Box::new(transform(*path, known_heap)),
+            contents: Box::new(transform(*contents, known_heap)),
+        },
         // Arm bindings (whatever a `Let`/`Match` node WITHIN `body`
         // introduces for the received value — see ir.rs's `Select` doc
         // comment) aren't added to `known_heap` here either, same
@@ -654,6 +668,8 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::RefNew { value } => expr_mentions_var(value, name),
         Expr::RefGet { base } => expr_mentions_var(base, name),
         Expr::RefSet { base, value } => expr_mentions_var(base, name) || expr_mentions_var(value, name),
+        Expr::ReadFileRaw { path } => expr_mentions_var(path, name),
+        Expr::WriteFileRaw { path, contents } => expr_mentions_var(path, name) || expr_mentions_var(contents, name),
         Expr::Select { arms } => arms
             .iter()
             .any(|arm| expr_mentions_var(&arm.receiver, name) || expr_mentions_var(&arm.body, name)),
@@ -1050,6 +1066,21 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                     value: Box::new(value_t),
                 },
                 used_base || used_value,
+            )
+        }
+        Expr::ReadFileRaw { path } => {
+            let (path_t, used) = mark_last_uses(*path, name, live_after);
+            (Expr::ReadFileRaw { path: Box::new(path_t) }, used)
+        }
+        Expr::WriteFileRaw { path, contents } => {
+            let (contents_t, used_contents) = mark_last_uses(*contents, name, live_after);
+            let (path_t, used_path) = mark_last_uses(*path, name, live_after || used_contents);
+            (
+                Expr::WriteFileRaw {
+                    path: Box::new(path_t),
+                    contents: Box::new(contents_t),
+                },
+                used_path || used_contents,
             )
         }
         // Bodies are ALTERNATIVES — only ONE arm's `body` actually
