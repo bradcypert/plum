@@ -64,8 +64,22 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// in for multiple files in one directory — Go's rule that every file
 /// in a directory shares one namespace.
 pub fn typecheck_and_run_modules(modules: &[(&str, &str)], fn_name: &str, args: Vec<Value>) -> Result<Value, String> {
-    let program = resolve_modules(modules)?;
-    crate::run_resolved_program(program, fn_name, args)
+    typecheck_and_run_modules_diag(modules, fn_name, args).map_err(|e| e.to_string())
+}
+
+/// The `CompileError`-preserving sibling of `typecheck_and_run_modules`
+/// — used only by the CLI (via `project::typecheck_and_run_project_
+/// diag`), which needs the real `Span` to render a `file:line:col` +
+/// snippet. `typecheck_and_run_modules` itself flattens this via
+/// `Display` at its own boundary, so its own (many, pre-existing)
+/// callers/tests need no changes at all.
+pub(crate) fn typecheck_and_run_modules_diag(
+    modules: &[(&str, &str)],
+    fn_name: &str,
+    args: Vec<Value>,
+) -> Result<Value, plum_syntax::error::CompileError> {
+    let program = resolve_modules_diag(modules)?;
+    crate::run_resolved_program_diag(program, fn_name, args)
 }
 
 /// The front half of `typecheck_and_run_modules`: parses every module,
@@ -76,6 +90,14 @@ pub fn typecheck_and_run_modules(modules: &[(&str, &str)], fn_name: &str, args: 
 /// backend directly off the SAME resolved program the interpreter path
 /// uses, without going through `Value`/`Interpreter` at all.
 pub fn resolve_modules(modules: &[(&str, &str)]) -> Result<ast::Program, String> {
+    resolve_modules_diag(modules).map_err(|e| e.to_string())
+}
+
+/// The `CompileError`-preserving sibling of `resolve_modules` — see
+/// `typecheck_and_run_modules_diag`'s doc comment for why this split
+/// exists. Used by `project::resolve_project_diag` (`plum build`'s own
+/// front half) and `typecheck_and_run_modules_diag` above.
+pub(crate) fn resolve_modules_diag(modules: &[(&str, &str)]) -> Result<ast::Program, plum_syntax::error::CompileError> {
     let mut modules_by_path: BTreeMap<String, Vec<ast::Item>> = BTreeMap::new();
     // Each module file gets its OWN non-overlapping `Span` range,
     // starting PAST every prelude fragment's own range (see `crate::
@@ -84,14 +106,15 @@ pub fn resolve_modules(modules: &[(&str, &str)]) -> Result<ast::Program, String>
     // module files (or a module file and the prelude) could
     // coincidentally share byte offsets and silently collide in any
     // `HashMap<Span, _>` keyed purely by `Span` (e.g. `Infer::
-    // generic_sites`).
+    // generic_sites`). `ModuleSources::new` (see below) rebuilds this
+    // EXACT SAME cumulative-base scheme independently, purely from
+    // `modules` itself, to translate a resulting `CompileError`'s span
+    // back into a real file — the two must stay in lockstep.
     let mut base = crate::PRELUDE_TOTAL_LEN;
     for (mpath, src) in modules {
         let tokens = Lexer::with_base_offset(src, base).tokenize();
         let mut parser = Parser::new(tokens);
-        let program = parser
-            .parse_program()
-            .map_err(|e| format!("parse error in module {mpath:?}: {e}"))?;
+        let program = parser.parse_program().map_err(|e: plum_syntax::error::CompileError| e.context(format!("parse error in module {mpath:?}")))?;
         modules_by_path.entry(mpath.to_string()).or_default().extend(program.items);
         base += src.len();
     }
@@ -177,7 +200,7 @@ fn collect_use_info(
     items: &[ast::Item],
     module_paths: &HashSet<String>,
     all_declared: &HashMap<String, bool>,
-) -> Result<ModuleUseInfo, String> {
+) -> Result<ModuleUseInfo, plum_syntax::error::CompileError> {
     let mut used_modules = HashSet::new();
     let mut bare_imports = HashMap::new();
     for item in items {
@@ -197,24 +220,24 @@ fn collect_use_info(
                 match all_declared.get(&qualified) {
                     Some(&is_pub) => {
                         if prefix != module_path && !is_pub {
-                            return Err(format!(
-                                "use {joined:?}: {qualified:?} is private to module {prefix:?}, at {:?}",
-                                decl.span
+                            return Err(plum_syntax::error::CompileError::new(
+                                decl.span,
+                                format!("use {joined:?}: {qualified:?} is private to module {prefix:?}"),
                             ));
                         }
                         bare_imports.insert(name.clone(), qualified);
                         continue;
                     }
                     None => {
-                        return Err(format!(
-                            "use {joined:?}: module {prefix:?} has no item named {name:?}, at {:?}",
-                            decl.span
+                        return Err(plum_syntax::error::CompileError::new(
+                            decl.span,
+                            format!("use {joined:?}: module {prefix:?} has no item named {name:?}"),
                         ));
                     }
                 }
             }
         }
-        return Err(format!("use {joined:?}: no such module, at {:?}", decl.span));
+        return Err(plum_syntax::error::CompileError::new(decl.span, format!("use {joined:?}: no such module")));
     }
     Ok(ModuleUseInfo { used_modules, bare_imports })
 }
@@ -241,7 +264,7 @@ impl Resolver<'_> {
     /// only raised when the reference UNAMBIGUOUSLY names a used
     /// module (so silently falling through would produce a confusing
     /// generic error instead of a clear one).
-    fn resolve_segments(&self, segments: &[String], locals: &HashSet<String>, span: Span) -> Result<Option<String>, String> {
+    fn resolve_segments(&self, segments: &[String], locals: &HashSet<String>, span: Span) -> Result<Option<String>, plum_syntax::error::CompileError> {
         if segments.len() == 1 {
             let name = &segments[0];
             if locals.contains(name) {
@@ -269,18 +292,18 @@ impl Resolver<'_> {
             return match self.all_declared.get(&candidate) {
                 Some(&is_pub) => {
                     if prefix != self.module_path && !is_pub {
-                        Err(format!("{candidate:?} is private to module {prefix:?}, at {span:?}"))
+                        Err(plum_syntax::error::CompileError::new(span, format!("{candidate:?} is private to module {prefix:?}")))
                     } else {
                         Ok(Some(candidate))
                     }
                 }
-                None => Err(format!("module {prefix:?} has no item named {item_name:?}, at {span:?}")),
+                None => Err(plum_syntax::error::CompileError::new(span, format!("module {prefix:?} has no item named {item_name:?}"))),
             };
         }
         Ok(None)
     }
 
-    fn resolve_type(&self, ty: &mut ast::Type, locals: &HashSet<String>) -> Result<(), String> {
+    fn resolve_type(&self, ty: &mut ast::Type, locals: &HashSet<String>) -> Result<(), plum_syntax::error::CompileError> {
         match ty {
             ast::Type::Path(segments, span) => {
                 if let Some(q) = self.resolve_segments(segments, locals, *span)? {
@@ -306,7 +329,7 @@ impl Resolver<'_> {
         }
     }
 
-    fn resolve_pattern(&self, pattern: &mut ast::Pattern, locals: &HashSet<String>) -> Result<(), String> {
+    fn resolve_pattern(&self, pattern: &mut ast::Pattern, locals: &HashSet<String>) -> Result<(), plum_syntax::error::CompileError> {
         match pattern {
             ast::Pattern::Variant { path, args, span } => {
                 if let Some(q) = self.resolve_segments(path, locals, *span)? {
@@ -341,7 +364,7 @@ impl Resolver<'_> {
         }
     }
 
-    fn resolve_expr(&self, expr: &mut ast::Expr, locals: &mut HashSet<String>) -> Result<(), String> {
+    fn resolve_expr(&self, expr: &mut ast::Expr, locals: &mut HashSet<String>) -> Result<(), plum_syntax::error::CompileError> {
         // A `Field`/`Ident` node is checked for a WHOLE dotted-path
         // shape FIRST, before any structural recursion — `shapes.
         // Circle` must be resolved as ONE reference, not `shapes`
@@ -464,7 +487,7 @@ impl Resolver<'_> {
         }
     }
 
-    fn resolve_block(&self, block: &mut ast::Block, locals: &mut HashSet<String>) -> Result<(), String> {
+    fn resolve_block(&self, block: &mut ast::Block, locals: &mut HashSet<String>) -> Result<(), plum_syntax::error::CompileError> {
         for stmt in block.stmts.iter_mut() {
             match stmt {
                 ast::Stmt::Let { pattern, ty, value, .. } => {
@@ -498,7 +521,7 @@ impl Resolver<'_> {
     /// items (`module_path` empty) keep their bare name — `qualify`
     /// is a no-op there, preserving `typecheck_and_run`-identical
     /// behavior for single-file programs.
-    fn resolve_item(&self, item: &mut ast::Item) -> Result<(), String> {
+    fn resolve_item(&self, item: &mut ast::Item) -> Result<(), plum_syntax::error::CompileError> {
         match &mut item.kind {
             ast::ItemKind::Let(def) => {
                 def.name = qualify(self.module_path, &def.name);

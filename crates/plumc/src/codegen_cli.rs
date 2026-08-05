@@ -543,23 +543,42 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
 /// see that module's own doc comment). `compile_to_ir` above is now just
 /// a two-line parse+prelude shim in front of this.
 pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(String, HashMap<String, FnSig>, String, bool), String> {
-    let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
+    compile_program_to_ir_diag(program, entry_fn).map_err(|e| e.to_string())
+}
+
+/// The `CompileError`-preserving sibling of `compile_program_to_ir` —
+/// used only by `plum build`'s own error path in `main.rs`, which needs
+/// the real `Span` (via `ModuleSources::render`) for a `file:line:col` +
+/// snippet. `compile_program_to_ir` itself flattens this via `Display`
+/// at its own boundary, so its own (many, pre-existing) test callers
+/// need no changes at all. Codegen-specific helpers further down this
+/// function (`plum_type_to_cg_type`, `register_channel_tag`, `plum_ir::
+/// monomorphize::plan`) stay plain `String`-returning — confirmed
+/// genuinely spanless (`plum-codegen`/`monomorphize` don't carry `Span`
+/// at all) — their `?` sites convert for free via `CompileError`'s
+/// blanket `From<String>`.
+pub fn compile_program_to_ir_diag(
+    program: &ast::Program,
+    entry_fn: &str,
+) -> Result<(String, HashMap<String, FnSig>, String, bool), plum_syntax::error::CompileError> {
+    let type_ctx = TypeContext::from_items(&program.items).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
     let (mut tag_fields, mut struct_field_names) = derive_tag_fields(program, &type_ctx);
     let variant_payload_types = derive_variant_payload_types(program, &type_ctx);
     let mut infer = Infer::with_context(type_ctx);
-    let types = infer.infer_program(program).map_err(|e| format!("type error: {e}"))?;
+    let types = infer.infer_program(program).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
 
-    let resolved_sites = infer.resolve_generic_sites().map_err(|e| format!("type error: {e}"))?;
-    let empty_array_elem_types = infer.resolve_empty_array_elem_types().map_err(|e| format!("type error: {e}"))?;
-    let closure_types = infer.resolve_closure_types().map_err(|e| format!("type error: {e}"))?;
+    let resolved_sites = infer.resolve_generic_sites().map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
+    let empty_array_elem_types = infer.resolve_empty_array_elem_types().map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
+    let closure_types = infer.resolve_closure_types().map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
 
-    plum_ir::movecheck::check_moves(program).map_err(|e| format!("move error: {e}"))?;
+    plum_ir::movecheck::check_moves(program).map_err(|e: plum_syntax::error::CompileError| e.context("move error"))?;
 
     // `resolve_generic_sites` needs its own `TypeContext` too (the
     // first one was moved into `infer` above — see `Infer::with_context`)
     // — cheap to rebuild from the same, already-validated items rather
     // than threading a second owned copy through `Infer` itself.
-    let type_ctx_for_mono = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
+    let type_ctx_for_mono =
+        TypeContext::from_items(&program.items).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
     register_channel_tag(program, &type_ctx_for_mono, &mut tag_fields)?;
     let mono_plan = plum_ir::monomorphize::plan(
         program,
@@ -581,7 +600,7 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
         .with_empty_array_elem_types(empty_array_elem_types)
         .with_closure_types(closure_types)
         .with_variant_payload_types(variant_payload_types);
-    let mut ir_program = lower_program(program, &lowering_ctx).map_err(|e| format!("lowering error: {e}"))?;
+    let mut ir_program = lower_program(program, &lowering_ctx).map_err(|e: plum_syntax::error::CompileError| e.context("lowering error"))?;
     // `mono_plan.functions` REPLACES `lower_program`'s own function list
     // wholesale — it already covers every function actually needed,
     // including ordinary (never-generic) ones re-lowered with mangled
@@ -630,7 +649,9 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
             continue;
         }
         let PlumType::Function(params, ret) = ty else {
-            return Err(format!("codegen: internal error — function {name:?} has a non-function type {ty:?}"));
+            return Err(plum_syntax::error::CompileError::spanless(format!(
+                "codegen: internal error — function {name:?} has a non-function type {ty:?}"
+            )));
         };
         let cg_params = params.iter().map(plum_type_to_cg_type).collect::<Result<Vec<_>, _>>()?;
         let cg_ret = plum_type_to_cg_type(ret)?;
@@ -669,11 +690,11 @@ pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(
     let mut resolved_entry: String = match mono_plan.entry_rename.get(entry_fn) {
         Some(names) if names.len() == 1 => names[0].clone(),
         Some(names) if names.len() > 1 => {
-            return Err(format!(
+            return Err(plum_syntax::error::CompileError::spanless(format!(
                 "codegen: {entry_fn:?} is ambiguous as an entry point — it has {} reachable generic \
                  instantiation(s) ({names:?}); call it from a concrete, non-generic wrapper function instead",
                 names.len()
-            ));
+            )));
         }
         _ => entry_fn.to_string(),
     };

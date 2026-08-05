@@ -1,11 +1,17 @@
 mod codegen_cli;
+mod diagnostics;
 mod modules;
 mod project;
 #[cfg(test)]
 mod test_util;
-pub use codegen_cli::{compile_and_run, compile_ir_to_binary, compile_program_to_ir, emit_main, reject_unprintable_return, CgValue};
+pub use codegen_cli::{
+    compile_and_run, compile_ir_to_binary, compile_program_to_ir, compile_program_to_ir_diag, emit_main, reject_unprintable_return, CgValue,
+};
+pub use diagnostics::ModuleSources;
 pub use modules::{resolve_modules, typecheck_and_run_modules};
-pub use project::{resolve_project, typecheck_and_run_project};
+pub use project::{
+    collect_project_files, resolve_project, resolve_project_diag, typecheck_and_run_project, typecheck_and_run_project_diag,
+};
 
 use plum_interp::{Interpreter, Value};
 use plum_ir::fbip::optimize_program;
@@ -726,9 +732,27 @@ pub fn typecheck_and_run(src: &str, fn_name: &str, args: Vec<Value>) -> Result<V
 /// concept of its own — that stays true; module resolution is
 /// entirely a pre-pass that happens before this function ever runs.
 pub(crate) fn run_resolved_program(program: ast::Program, fn_name: &str, args: Vec<Value>) -> Result<Value, String> {
-    let type_ctx = TypeContext::from_items(&program.items).map_err(|e| format!("type error: {e}"))?;
+    run_resolved_program_diag(program, fn_name, args).map_err(|e| e.to_string())
+}
+
+/// The `CompileError`-preserving sibling of `run_resolved_program` —
+/// used by the CLI-facing `_diag` call chain (`modules::typecheck_and_
+/// run_modules_diag` → `project::typecheck_and_run_project_diag`),
+/// which needs the real `Span` to render a `file:line:col` + snippet.
+/// `run_resolved_program` itself flattens this via `Display` at its own
+/// boundary, so its own (many, pre-existing) callers/tests need no
+/// changes at all. `Interpreter::load_program`/`call`'s own errors stay
+/// plain `String` (interpreter runtime errors are genuinely spanless —
+/// `ir::Expr` carries no `Span` at all, by design) — `?` auto-converts
+/// them via `CompileError`'s blanket `From<String>`.
+pub(crate) fn run_resolved_program_diag(
+    program: ast::Program,
+    fn_name: &str,
+    args: Vec<Value>,
+) -> Result<Value, plum_syntax::error::CompileError> {
+    let type_ctx = TypeContext::from_items(&program.items).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
     let mut infer = Infer::with_context(type_ctx);
-    infer.infer_program(&program).map_err(|e| format!("type error: {e}"))?;
+    infer.infer_program(&program).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
 
     // A second, independent static gate — DESIGN.md's "channel send is
     // a move": reusing a value after `tx.send(v)` is a compile error.
@@ -736,7 +760,7 @@ pub(crate) fn run_resolved_program(program: ast::Program, fn_name: &str, args: V
     // it doesn't need to wait for lowering; placed after type-checking
     // simply to keep the "cheapest/most-fundamental check first" order,
     // not because either gate depends on the other.
-    plum_ir::movecheck::check_moves(&program).map_err(|e| format!("move error: {e}"))?;
+    plum_ir::movecheck::check_moves(&program).map_err(|e: plum_syntax::error::CompileError| e.context("move error"))?;
 
     // `p.x` needs to know WHICH struct `p` is to lower correctly —
     // lowering has no type information of its own, so this carries
@@ -746,13 +770,13 @@ pub(crate) fn run_resolved_program(program: ast::Program, fn_name: &str, args: V
     let lowering_ctx = LoweringContext::from_items(&program.items)
         .with_field_owners(infer.field_owners().clone())
         .with_array_for_loops(infer.array_for_loops().clone());
-    let ir_program = lower_program(&program, &lowering_ctx).map_err(|e| format!("lowering error: {e}"))?;
+    let ir_program = lower_program(&program, &lowering_ctx).map_err(|e: plum_syntax::error::CompileError| e.context("lowering error"))?;
     let ir_program = optimize_program(ir_program);
 
     let mut interp = Interpreter::new();
     interp.set_struct_field_names(lowering_ctx.struct_fields().clone());
-    interp.load_program(&ir_program).map_err(|e| format!("load error: {e}"))?;
-    interp.call(fn_name, args)
+    interp.load_program(&ir_program).map_err(|e| plum_syntax::error::CompileError::spanless(format!("load error: {e}")))?;
+    interp.call(fn_name, args).map_err(Into::into)
 }
 
 #[cfg(test)]

@@ -10,7 +10,7 @@
 //! is no per-file declaration of which module a file belongs to, only
 //! its location in the tree.
 
-use crate::modules::resolve_modules;
+use crate::modules::{resolve_modules, resolve_modules_diag, typecheck_and_run_modules_diag};
 use crate::typecheck_and_run_modules;
 use plum_interp::Value;
 use plum_syntax::ast;
@@ -26,6 +26,19 @@ pub fn typecheck_and_run_project(root: &Path, fn_name: &str, args: Vec<Value>) -
     typecheck_and_run_modules(&modules, fn_name, args)
 }
 
+/// The `CompileError`-preserving sibling of `typecheck_and_run_project`
+/// — used only by the CLI (`plum <project>`'s interpreter path in
+/// `main.rs`), which needs the real `Span` (via `ModuleSources::
+/// render`) to print a `file:line:col` + snippet instead of a bare
+/// message. `typecheck_and_run_project` itself flattens this via
+/// `Display` at its own boundary, so its own (pre-existing) tests need
+/// no changes at all.
+pub fn typecheck_and_run_project_diag(root: &Path, fn_name: &str, args: Vec<Value>) -> Result<Value, plum_syntax::error::CompileError> {
+    let files = collect_plum_files(root, root).map_err(plum_syntax::error::CompileError::spanless)?;
+    let modules: Vec<(&str, &str)> = files.iter().map(|(path, src)| (path.as_str(), src.as_str())).collect();
+    typecheck_and_run_modules_diag(&modules, fn_name, args)
+}
+
 /// The front half of `typecheck_and_run_project`: directory walk +
 /// `resolve_modules`, stopping short of running anything — the
 /// `Program`-producing counterpart `plumc build` needs (see `modules::
@@ -34,6 +47,24 @@ pub fn resolve_project(root: &Path) -> Result<ast::Program, String> {
     let files = collect_plum_files(root, root)?;
     let modules: Vec<(&str, &str)> = files.iter().map(|(path, src)| (path.as_str(), src.as_str())).collect();
     resolve_modules(&modules)
+}
+
+/// The `CompileError`-preserving sibling of `resolve_project` — used
+/// only by `plum build`'s own error path in `main.rs`. See
+/// `typecheck_and_run_project_diag`'s doc comment for why this split
+/// exists.
+pub fn resolve_project_diag(root: &Path) -> Result<ast::Program, plum_syntax::error::CompileError> {
+    let files = collect_plum_files(root, root).map_err(plum_syntax::error::CompileError::spanless)?;
+    let modules: Vec<(&str, &str)> = files.iter().map(|(path, src)| (path.as_str(), src.as_str())).collect();
+    resolve_modules_diag(&modules)
+}
+
+/// Public wrapper around `collect_plum_files`, for `main.rs` to build a
+/// `ModuleSources` from the SAME file list `typecheck_and_run_project_
+/// diag`/`resolve_project_diag` resolve against — needed since neither
+/// of those functions returns the file table on its own error path.
+pub fn collect_project_files(root: &Path) -> Result<Vec<(String, String)>, String> {
+    collect_plum_files(root, root)
 }
 
 /// Returns `(module_path, source)` for every `.plum` file found under
