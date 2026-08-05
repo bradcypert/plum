@@ -1842,6 +1842,41 @@ mod tests {
         assert_eq!(run_json_test(src), Ok(Value::Bool(true)));
     }
 
+    // --- integration: chunk 8's file I/O composed with chunk 9's JSON ---
+    //
+    // Not new stdlib surface — a real end-to-end check that `write_
+    // file`/`read_file` and `json_parse`/`json_stringify` compose
+    // cleanly through the SAME `Result[T, String]` chaining a real
+    // caller would write by hand (each one's own `Err` propagates
+    // through the next step via ordinary `match`, no glue code needed
+    // on either side). Runs on `run_json_test`'s big-stack thread since
+    // it exercises the same recursive-descent parser.
+
+    #[test]
+    fn write_json_to_a_file_then_read_and_parse_it_back_through_the_interpreter() {
+        let path = std::env::temp_dir().join(format!("plum-json-file-io-{}.json", std::process::id()));
+        let path_str = path.to_str().unwrap();
+        let src = format!(
+            "let use_it dummy = {{ \
+                let doc = JsonObject([JsonEntry {{ key: \"name\", value: JsonString(\"plum\") }}, \
+                                       JsonEntry {{ key: \"tags\", value: JsonArray([JsonString(\"lang\"), JsonString(\"llvm\")]) }}]); \
+                let w = write_file(\"{path_str}\", json_stringify(doc)); \
+                match w {{ \
+                    Ok(_) => match read_file(\"{path_str}\") {{ \
+                        Ok(contents) => match json_parse(contents) {{ \
+                            Ok(parsed) => parsed == doc, \
+                            Err(_) => false \
+                        }}, \
+                        Err(_) => false \
+                    }}, \
+                    Err(_) => false \
+                }} \
+            }}"
+        );
+        assert_eq!(run_json_test(&src), Ok(Value::Bool(true)));
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn a_generic_struct_runs_through_the_full_gated_pipeline() {
         let src = "struct Pair[T] { first: T, second: T }\n\

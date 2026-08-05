@@ -1256,6 +1256,40 @@ mod tests {
         assert_eq!(out, "1");
     }
 
+    // --- integration: chunk 8's file I/O composed with chunk 9's JSON ---
+    //
+    // The native-codegen counterpart to `plumc::lib.rs`'s own
+    // interpreter-path integration test — a REAL compiled binary
+    // writing a real JSON document to disk via `write_file`, reading
+    // it back via `read_file`, and parsing/comparing it via `json_
+    // parse`, all through ordinary `Result[T, String]` chaining.
+
+    #[test]
+    fn write_json_to_a_file_then_read_and_parse_it_back_in_native_codegen() {
+        let path = unique_temp_dir("plum-codegen-json-file-io").with_extension("json");
+        let path_str = path.to_str().unwrap();
+        let src = format!(
+            "let go (): Bool = {{ \
+                let doc = JsonObject([JsonEntry {{ key: \"name\", value: JsonString(\"plum\") }}, \
+                                       JsonEntry {{ key: \"tags\", value: JsonArray([JsonString(\"lang\"), JsonString(\"llvm\")]) }}]); \
+                let w = write_file(\"{path_str}\", json_stringify(doc)); \
+                match w {{ \
+                    Ok(_) => match read_file(\"{path_str}\") {{ \
+                        Ok(contents) => match json_parse(contents) {{ \
+                            Ok(parsed) => parsed == doc, \
+                            Err(_) => false \
+                        }}, \
+                        Err(_) => false \
+                    }}, \
+                    Err(_) => false \
+                }} \
+            }}"
+        );
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+        let _ = std::fs::remove_file(&path);
+    }
+
     // --- standard library: `print` (see `plumc::STDLIB_IO_SRC`) ---
 
     #[test]

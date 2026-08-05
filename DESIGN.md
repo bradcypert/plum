@@ -2505,6 +2505,17 @@ BOTH `plumc build` (native) and the plain interpreter CLI, identical
 correct output through both. Workspace now 1450 tests (up from 1442 —
 net +8), clean build, zero warnings.
 
+**Follow-on**: a dedicated integration test (both backends) composing
+chunk 8's `write_file`/`read_file` with chunk 9's `json_parse`/`json_
+stringify` end to end — build a `JsonValue`, `json_stringify` it,
+`write_file` the result to a real temp file, `read_file` it back, `json
+_parse` the contents, and check structural equality (`==`) against the
+original value — all chained through ordinary `match`-based `Result[T,
+String]` propagation with no glue code needed on either library's part.
+Confirms the two chunks compose the way a real caller would use them
+together, not just independently. Workspace now 1452 tests (net +2),
+clean build, zero warnings.
+
 ## Target platforms
 
 - **Hosted (Linux/macOS/Windows), web APIs**: primary target, no special
