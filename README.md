@@ -245,6 +245,15 @@ takes exactly one (possibly curried) argument — a `()` parameter list
 in a declaration is shorthand for one `Unit`-typed parameter, not zero
 parameters, so calling it explicitly passes the unit value `()`.
 
+For the common cases, combinators avoid writing the `match` out by
+hand — see the [Standard library](#standard-library) section below for
+the full list:
+
+```
+let doubled = option_map(Some(21), |x| x * 2);          // Some(42)
+let total = result_unwrap_or(read_file("a.txt"), "");    // "" if the file is missing
+```
+
 ### Arrays
 
 ```
@@ -361,7 +370,14 @@ Currently available with no `use` needed (all merged into every
 program's prelude):
 
 - **`Option[T]`/`Result[T, E]`** and their constructors (`Some`/`None`/
-  `Ok`/`Err`).
+  `Ok`/`Err`), plus combinators — prefixed `option_`/`result_` rather
+  than bare names, since there's no dot-method overloading by receiver
+  type (`option_map`/`result_map` would otherwise collide as two
+  top-level functions both named `map`): `option_map`, `option_and_then`,
+  `option_unwrap_or`, `option_unwrap_or_else`, `option_is_some`,
+  `option_is_none`, `option_ok_or`; `result_map`, `result_map_err`,
+  `result_and_then`, `result_unwrap_or`, `result_unwrap_or_else`,
+  `result_is_ok`, `result_is_err`.
 - **`println(x)`/`print(x)`** — print any value's `.to_string()`
   (`print` with no trailing newline, `println` with one).
 - **`read_file(path): Result[String, String]`** / **`write_file(path,

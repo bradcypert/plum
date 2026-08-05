@@ -1268,6 +1268,37 @@ mod tests {
         assert_eq!(out, "1");
     }
 
+    // --- standard library: Option/Result combinators (see `plumc::STDLIB_OPTION_RESULT_SRC`) ---
+    //
+    // The native-codegen counterpart to `plumc::lib.rs`'s own
+    // interpreter-path tests for the same functions — proves each
+    // combinator actually monomorphizes/codegens correctly (closures
+    // passed as ordinary `(T) -> U`-typed values, `Option`/`Result`
+    // constructed and matched) through a REAL compiled binary, not just
+    // the interpreter.
+
+    #[test]
+    fn option_map_and_unwrap_or_run_through_native_codegen() {
+        let src = "let go (): Int = option_unwrap_or(option_map(Some(1), |x| x + 1), -1)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "2");
+        let src = "let go (): Int = option_unwrap_or(option_map(None, |x: Int| x + 1), -1)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "-1");
+    }
+
+    #[test]
+    fn result_and_then_and_unwrap_or_else_run_through_native_codegen() {
+        let src = "let half x = if x % 2 == 0 { Ok(x / 2) } else { Err(\"odd\") }\n\
+                    let go (): Int = result_unwrap_or_else(result_and_then(Ok(4), half), |e: String| -1)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "2");
+        let src = "let half x = if x % 2 == 0 { Ok(x / 2) } else { Err(\"odd\") }\n\
+                    let go (): Int = result_unwrap_or_else(result_and_then(Ok(3), half), |e: String| -1)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "-1");
+    }
+
     // --- standard library: JSON (see `plumc::STDLIB_JSON_SRC`) ---
     //
     // The native-codegen counterpart to `plumc::lib.rs`'s own

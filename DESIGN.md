@@ -2516,6 +2516,81 @@ Confirms the two chunks compose the way a real caller would use them
 together, not just independently. Workspace now 1452 tests (net +2),
 clean build, zero warnings.
 
+### Chunk 10: `Option`/`Result` combinators — pure Plum prelude source, one real inference-poisoning bug found and fixed
+
+After the testing framework closed out the docs/testing-framework/
+toolchain pivot, the user asked what the stdlib should have next.
+Auditing `crates/plumc/src/lib.rs` directly (not guessing) turned up
+the single biggest, most surprising gap: `Option[T]`/`Result[T, E]`
+had **zero** combinator methods — one of this file's own tests already
+hand-rolled `unwrap_or` from a bare `match` because there was nowhere
+to get one. Given a menu of candidates (Option/Result combinators,
+number/array/string utilities, HTTP client, env/time), the user picked
+Option/Result combinators first — pure Plum, no new primitives, and
+the highest-leverage gap since every fallible stdlib function already
+returns `Result`.
+
+**Named `option_*`/`result_*`, not bare `map`/`unwrap_or`/`and_then`.**
+There is no dot-method overloading by receiver type in this language —
+confirmed by how `map_get`/`set_insert` are always called as plain
+`map_get(m, k)`, never `m.map_get(k)`; the `.name(...)` call shape is
+reserved for a fixed set of compiler-recognized builtins matched
+directly in `infer.rs`/`lower.rs` (`.map`/`.filter`/`.fold` on `Array`,
+etc.). Two top-level `let map` — one for `Option[T]`, one for
+`Result[T, E]` — would just be a duplicate-name error, since ordinary
+function names never overload on argument type. So: `option_map`,
+`option_and_then`, `option_unwrap_or`, `option_unwrap_or_else`,
+`option_is_some`, `option_is_none`, `option_ok_or`; `result_map`,
+`result_map_err`, `result_and_then`, `result_unwrap_or`,
+`result_unwrap_or_else`, `result_is_ok`, `result_is_err`.
+
+**Zero new IR/codegen work** — one new prelude constant,
+`STDLIB_OPTION_RESULT_SRC`, merged into `with_prelude` exactly like
+every prior stdlib chunk. Higher-order parameters (`f: (T) -> U`)
+needed no new type-system work either — ordinary function-typed
+parameters were already fully supported (confirmed via an existing
+`extern "C"` callback test using the identical `(Int, Int) -> Int`
+syntax).
+
+**One real bug found and fixed, not by construction**: `option_
+unwrap_or_else`/`result_unwrap_or_else` take a **zero-argument**
+closure (`f: () -> T`, matching `() -> R`'s real zero-param function-
+type syntax — confirmed via `parser.rs`'s own comment on that
+production), but the first draft's body called it as `f(())` — a
+one-argument call, arity-mismatched against the zero-param type it was
+declared with. Because the ENTIRE prelude (including this one bad
+function) is type-checked as a single unit prepended to every user
+program, this single arity bug inside one never-yet-called prelude
+function poisoned type-checking for literally every test in the
+workspace — 298 of ~337 `plumc` tests failed with an unrelated-looking
+`function arity mismatch` error the moment the broken source was
+merged in, before a single one of the new combinators was ever
+exercised directly. Root-caused by isolating which of the two new
+`unwrap_or_else` variants used `f(())` instead of `f()`, fixed by
+correcting the call to match the declared arity. This is the same
+class of `PRELUDE_TOTAL_LEN`-style lesson as chunk 8's span-collision
+bug: prelude source is not sandboxed per-fragment during type-checking,
+so a mistake anywhere in it can look like a mistake anywhere else.
+
+A related, pre-existing inference-order gotcha was hit (not fixed —
+out of scope) while writing a test: `.len()`'s builtin dispatch
+(`infer.rs`) checks whether the receiver's resolved type is `Str`, and
+falls back to unifying it against `Array` if not — but when the
+receiver is still an *unresolved* generic type variable (e.g. a
+closure parameter whose type isn't pinned down until the closure is
+actually applied), that fallback fires prematurely and forces the
+variable to `Array`, contradicting a later `Str` use elsewhere. Worked
+around in the test (used `.concat()` instead, which unifies against
+`Str` unconditionally) rather than touched — a real, narrow, pre-
+existing gap in `.len()`'s dispatch order, not something this chunk's
+functions caused.
+
+Verified end-to-end both backends (interpreter tests in `lib.rs`,
+native-codegen counterparts in `codegen_cli.rs` compiling and running
+real binaries), plus a real throwaway project run via `plum run`
+confirming `option_map`/`result_unwrap_or` produce the documented
+values. Workspace now 1503 tests (net +14), clean build, zero warnings.
+
 ## Toolchain and diagnostics
 
 After JSON, the user redirected from stdlib growth toward user-facing
