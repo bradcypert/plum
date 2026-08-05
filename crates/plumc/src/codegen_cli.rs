@@ -1238,6 +1238,36 @@ mod tests {
         assert_eq!(out, "1");
     }
 
+    // --- testing framework: `assert`/`assert_eq`/`assert_ne` (see `plumc::STDLIB_ASSERT_SRC`) ---
+
+    #[test]
+    fn assert_passes_silently_on_a_true_condition_in_native_codegen() {
+        let src = "let go (): Bool = { assert(true); true }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
+    #[test]
+    fn assert_fails_with_a_clear_message_on_a_false_condition_in_native_codegen() {
+        let src = "let go (): Unit = assert(false)";
+        let err = compile_and_run(src, "go", &[CgValue::Unit]).expect_err("expected assert(false) to abort");
+        assert!(err.contains("assertion failed"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn assert_eq_fails_with_left_and_right_values_in_native_codegen() {
+        let src = "let go (): Unit = assert_eq(1, 2)";
+        let err = compile_and_run(src, "go", &[CgValue::Unit]).expect_err("expected assert_eq(1, 2) to abort");
+        assert!(err.contains("left != right"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn assert_ne_passes_on_different_values_in_native_codegen() {
+        let src = "let go (): Bool = { assert_ne(1, 2); true }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
     // --- standard library: JSON (see `plumc::STDLIB_JSON_SRC`) ---
     //
     // The native-codegen counterpart to `plumc::lib.rs`'s own

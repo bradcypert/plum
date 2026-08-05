@@ -664,6 +664,35 @@ let set_to_array[T] (s: Set[T]): Array[T] = match s {
 }
 ";
 
+/// The testing framework's own assertions — pure Plum prelude source
+/// (no new IR/codegen work at all here; the one genuinely new piece,
+/// the low-level `panic_raw` primitive these build on, is a core-
+/// language builtin implemented directly in `plum-ir`/`plum-interp`/
+/// `plum-codegen`, not part of this string — see `ir::Expr::PanicRaw`'s
+/// own doc comment).
+///
+/// `assert_eq`/`assert_ne` are bounded `[T: Eq + Show]` — both bounds
+/// were ALREADY real, enforced trait bounds before this (`plum_types::
+/// infer::satisfies_bound`), and multi-bound syntax (`[T: A + B]`)
+/// already parsed — so no new type-system work was needed to write
+/// these, only to USE what already existed. `Show` is what makes
+/// `.to_string()` callable on `a`/`b` for the failure message; `Eq` is
+/// what makes `==`/`!=` callable at all.
+const STDLIB_ASSERT_SRC: &str = "\
+let assert (cond: Bool): Unit =
+    if cond { () } else { panic_raw(\"assertion failed\") }
+
+let assert_eq[T: Eq + Show] (a: T) (b: T): Unit =
+    if a == b { () } else {
+        panic_raw(\"assertion failed: left != right\\n  left:  \".concat(a.to_string()).concat(\"\\n  right: \").concat(b.to_string()))
+    }
+
+let assert_ne[T: Eq + Show] (a: T) (b: T): Unit =
+    if a != b { () } else {
+        panic_raw(\"assertion failed: left == right\\n  left:  \".concat(a.to_string()).concat(\"\\n  right: \").concat(b.to_string()))
+    }
+";
+
 /// Parses the prelude + stdlib sources once and prepends their items
 /// to `program`'s own — items earlier in the list are declared FIRST,
 /// but `TypeContext`'s two-phase construction (see its doc comment)
@@ -675,7 +704,14 @@ let set_to_array[T] (s: Set[T]): Array[T] = match s {
 pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
     let mut items = Vec::new();
     let mut base = 0usize;
-    for src in [PRELUDE_SRC, STDLIB_IO_SRC, STDLIB_FILE_SRC, STDLIB_JSON_SRC, STDLIB_COLLECTIONS_SRC] {
+    for src in [
+        PRELUDE_SRC,
+        STDLIB_IO_SRC,
+        STDLIB_FILE_SRC,
+        STDLIB_JSON_SRC,
+        STDLIB_COLLECTIONS_SRC,
+        STDLIB_ASSERT_SRC,
+    ] {
         let tokens = Lexer::with_base_offset(src, base).tokenize();
         let parsed_items = Parser::new(tokens)
             .parse_program()
@@ -700,8 +736,12 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
 /// `Infer::generic_sites`, a `HashMap<Span, _>`). A compile-time
 /// constant — no lexing needed to compute it, just summed `&str` byte
 /// lengths.
-const PRELUDE_TOTAL_LEN: usize =
-    PRELUDE_SRC.len() + STDLIB_IO_SRC.len() + STDLIB_FILE_SRC.len() + STDLIB_JSON_SRC.len() + STDLIB_COLLECTIONS_SRC.len();
+const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len()
+    + STDLIB_IO_SRC.len()
+    + STDLIB_FILE_SRC.len()
+    + STDLIB_JSON_SRC.len()
+    + STDLIB_COLLECTIONS_SRC.len()
+    + STDLIB_ASSERT_SRC.len();
 
 /// Runs the whole pipeline — parse, type-check, lower, optimize, load,
 /// call — and returns the result of calling `fn_name` with `args`.
@@ -1803,6 +1843,59 @@ mod tests {
         let src = "let use_it dummy = if true { () } else { panic_raw(\"should not run\") }";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Unit));
+    }
+
+    // --- testing framework: `assert`/`assert_eq`/`assert_ne` (see `plumc::STDLIB_ASSERT_SRC`) ---
+
+    #[test]
+    fn assert_passes_silently_on_a_true_condition_through_the_interpreter() {
+        let src = "let use_it dummy = assert(true)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Unit));
+    }
+
+    #[test]
+    fn assert_fails_with_a_clear_message_on_a_false_condition_through_the_interpreter() {
+        let src = "let use_it dummy = assert(false)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Err("assertion failed".to_string()));
+    }
+
+    #[test]
+    fn assert_eq_passes_on_equal_primitives_through_the_interpreter() {
+        let src = "let use_it dummy = assert_eq(1, 1)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Unit));
+    }
+
+    #[test]
+    fn assert_eq_fails_with_left_and_right_values_through_the_interpreter() {
+        let src = "let use_it dummy = assert_eq(1, 2)";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit]).expect_err("expected assert_eq(1, 2) to fail");
+        assert!(err.contains("left != right"), "unexpected error: {err}");
+        assert!(err.contains('1') && err.contains('2'), "expected both values in the message, got: {err}");
+    }
+
+    #[test]
+    fn assert_eq_on_structs_renders_their_to_string_in_the_failure_message() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = assert_eq(Point { x: 1, y: 2 }, Point { x: 1, y: 3 })";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit]).expect_err("expected the Points to differ");
+        assert!(err.contains("Point"), "expected the struct's own .to_string() rendering in the message, got: {err}");
+    }
+
+    #[test]
+    fn assert_ne_passes_on_different_values_through_the_interpreter() {
+        let src = "let use_it dummy = assert_ne(1, 2)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Unit));
+    }
+
+    #[test]
+    fn assert_ne_fails_with_a_clear_message_on_equal_values_through_the_interpreter() {
+        let src = "let use_it dummy = assert_ne(1, 1)";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit]).expect_err("expected assert_ne(1, 1) to fail");
+        assert!(err.contains("left == right"), "unexpected error: {err}");
     }
 
     // --- standard library: JSON (see `plumc::STDLIB_JSON_SRC`) ---

@@ -285,6 +285,21 @@ impl Resolver<'_> {
             }
             return Ok(None);
         }
+        // A LOCAL shadows a module name for a multi-segment path's own
+        // FIRST segment, exactly like the single-segment case above
+        // already does — otherwise an ordinary field-access chain off
+        // an unluckily-named local (e.g. a function parameter `a`
+        // inside a module that also happens to `use a;`) gets
+        // misinterpreted as a qualified reference into module `a`
+        // instead of a plain field access on the local. A real,
+        // previously-latent bug, found via the prelude's own new
+        // `assert_eq[T: Eq + Show] (a: T) (b: T)` body (`a.to_string()`)
+        // combined with an EXISTING test that also declares modules
+        // named `a`/`b` — `a`/`b` are ordinary, unremarkable parameter
+        // names, not something the prelude should have had to avoid.
+        if locals.contains(&segments[0]) {
+            return Ok(None);
+        }
         let prefix = segments[..segments.len() - 1].join(".");
         let item_name = &segments[segments.len() - 1];
         if self.used_modules.contains(&prefix) || prefix == self.module_path {
@@ -792,6 +807,27 @@ mod tests {
         "#;
         let result = typecheck_and_run_modules(&[("a", a), ("b", b), ("", root)], "go", vec![Value::Int(0)]);
         assert_eq!(result, Ok(Value::Int(3)));
+    }
+
+    #[test]
+    fn a_multi_segment_field_access_off_a_local_shadowing_a_used_module_name_is_ordinary_field_access() {
+        // Found via the prelude's own `assert_eq[T: Eq + Show] (a: T)
+        // (b: T)`, whose body calls `a.to_string()` — a real, previously-
+        // latent bug: `resolve_segments`'s multi-segment branch checked
+        // `used_modules`/`all_declared` but never `locals`, so an
+        // ordinary field access chained off a local parameter named `a`
+        // was misinterpreted as a qualified reference into a module ALSO
+        // named `a`, purely because the ENCLOSING file happens to `use
+        // a;` for something unrelated.
+        let a_mod = "pub struct Widget { value: Int }";
+        let root = r#"
+            use a;
+            struct Pair { first: Int, second: Int }
+            let use_pair (a: Pair): Int = a.first + a.second
+            let go unused = use_pair(Pair { first: 1, second: 2 }) + a.Widget { value: 10 }.value
+        "#;
+        let result = typecheck_and_run_modules(&[("a", a_mod), ("", root)], "go", vec![Value::Int(0)]);
+        assert_eq!(result, Ok(Value::Int(13)));
     }
 
     #[test]
