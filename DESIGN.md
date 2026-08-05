@@ -2516,6 +2516,139 @@ Confirms the two chunks compose the way a real caller would use them
 together, not just independently. Workspace now 1452 tests (net +2),
 clean build, zero warnings.
 
+## Toolchain and diagnostics
+
+After JSON, the user redirected from stdlib growth toward user-facing
+polish: a README (added — practical usage docs, separate from this
+design log), renaming the CLI binary from `plumc` to `plum` (a one-line
+`[[bin]]` name change; the crate/package itself stays `plumc`), and —
+the largest piece — human-readable compile errors.
+
+### Human-readable errors: `CompileError{span, message}` — Decided, v1 implemented
+
+Every error in this compiler used to print a `Span`'s raw `Debug`
+output baked directly into the message text (`format!("... at {span:?}")`,
+e.g. `type error: field access \`.radius\` at Span { start: 15677, end:
+15685 } requires...`) — actively hostile to read, and the single worst
+usability problem surfaced while writing the README's own code samples.
+Asked how invasive to fix it, the user chose "restructure the error
+types properly" over a regex-based post-processing hack on the existing
+Debug text.
+
+**Scope, confirmed by direct research before touching anything**: only
+the FRONT END carries `Span` at all — the lexer/parser, `plum-types`
+inference, and `plum-ir` lowering/move-checking. `ir::Expr` (the
+lowered IR) is *deliberately* span-free by its own pre-existing doc
+comment — `plum-codegen` and `plum-interp`'s runtime therefore have
+**zero** span info today, and getting either one any would need a real
+IR redesign. Those errors — and most of `plum-ir::monomorphize`'s —
+stay message-only, exactly as before this work; an honest, documented
+scope boundary, not a silent gap. No test anywhere pinned exact error
+text (`assert_eq!` against an `Err(...)` value), which is what made the
+"zero existing test edits" design below achievable at all.
+
+**`CompileError { span: Option<Span>, message: String }`**, added to
+`plum-syntax` (the lowest crate that already owns `Span`) — `Display`
+prints just `self.message` (no span embedded), and a blanket `impl
+From<String> for CompileError` (spanless) is the load-bearing piece:
+it lets ANY function whose return type changes to `Result<_,
+CompileError>` keep `?`-propagating an untouched `Result<_, String>`
+call with zero edits at that call site (Rust's `?` invokes `From`
+automatically) — so only the ~170 sites that actually CONSTRUCT a
+span-bearing error (`Err(format!("... at {span:?}"))` and friends)
+needed touching, not every function in the call chain. Also added:
+`CompileError::context(prefix)` (prefixes a message while preserving
+whatever span the error already had — for a caller adding context to
+an inner error without discarding its location), `.or_span(span)`
+(backfills a fallback span onto an otherwise-spanless error — used at
+call sites like `infer_binary`/`infer_unary`/`infer_if`/`infer_pipe`,
+whose own inner `unify()` calls have no span of their own at all, but
+whose CALLER has the enclosing expression's span as a reasonable
+fallback location), and `.contains(&str)` (a passthrough to `self.
+message.contains(..)`, letting the many pre-existing `err.contains(
+"...")` test assertions across the workspace — written back when every
+error was a plain `String` — keep working against a `CompileError`
+directly with no call-site changes).
+
+**Two-tier public API — the actual "zero test-file edits" mechanism**:
+every function's INTERNAL signature (parser, `infer.rs`'s ~25 span-
+touching functions, `context.rs`, `lower.rs`'s ~23, `movecheck.rs`,
+`modules.rs`'s `Resolver`) changed to `Result<_, CompileError>`, but
+every EXISTING PUBLIC `plumc` function (`typecheck_and_run`, `compile_
+and_run`, `resolve_modules`, `resolve_project`, `compile_program_to_
+ir`, ...) kept its exact `Result<_, String>` signature, by flattening
+`CompileError` via `.map_err(|e| e.to_string())` at its own return —
+`CompileError::to_string()` returns exactly `self.message`, the same
+text these ~1200 pre-existing tests (many with `.expect_err()`/`.
+contains(...)` checks) already expected. New `_diag`-suffixed sibling
+functions (`resolve_project_diag`, `typecheck_and_run_project_diag`,
+`compile_program_to_ir_diag`, plus `pub(crate)` internal ones like
+`resolve_modules_diag`/`run_resolved_program_diag`) expose the real
+`CompileError` all the way up to `main.rs`, used ONLY by the CLI. This
+mirrors this codebase's own pre-existing `typecheck_and_run` vs. `run_
+resolved_program` / `compile_and_run` vs. `compile_to_ir` split-for-
+reuse pattern, just one layer further. Verified concretely: after
+converting the ENTIRE front end (`plum-syntax`, `plum-types`, `plum-
+ir`), the whole workspace rebuilt and re-tested with the EXACT SAME
+pass counts as before, at every single intermediate step — the
+downstream crates didn't even need recompiling most of the time, since
+every existing `.map_err(|e| format!("...: {e}"))`-style wrap already
+went through `Display` (`{e}`), which works identically regardless of
+whether `e` is a `String` or a `CompileError`.
+
+**`ModuleSources`** (new, `plumc::diagnostics`) rebuilds the SAME
+cumulative-base-offset scheme `resolve_modules_diag` already used
+internally (per-module `Span` ranges, starting past `PRELUDE_TOTAL_LEN`
+— see chunk 8's own `Span`-collision writeup for why that scheme exists
+at all) independently, purely from the `&[(module_path, source)]` list
+project.rs's directory walk produces, to translate a `CompileError`'s
+`span.start` back into `(module, 1-based line, 1-based column)` and
+render `error: {msg}\n  --> {module}:{line}:{col}\n   |\n {line} |
+{source line}\n   | {caret}`. Column counted in CHARACTERS not bytes
+(matters for non-ASCII source). A span whose end lands on a different
+LINE than its start (rare — an unterminated construct) gets a single-
+character caret at just the start position rather than a multi-line
+snippet — a deliberate v1 simplification. A span landing inside the
+PRELUDE itself, or otherwise unlocatable, falls back to message-only
+rendering rather than panicking. **Scope note, deliberate**: locations
+report by MODULE PATH (`"shapes"`, `"<root>"`), not exact source FILE
+— `resolve_modules`'s public `&[(&str, &str)]` shape is used directly,
+with hand-written module-name strings, by many pre-existing tests, so
+threading real per-file paths through it would mean changing that
+widely-used signature. In the common case (one file per module/
+directory — true of every example in this codebase), this is already
+exact file-level precision.
+
+`main.rs` wires both CLI paths (`plum <project>` and `plum build`) to
+their `_diag` counterparts, building a `ModuleSources` via a shared
+`module_sources(root)` helper (a second, independent directory walk —
+an accepted, deliberate inefficiency for a CLI invoked once per run,
+not a hot path) and rendering any `Err` through it instead of printing
+the raw message.
+
+**Direct, concrete payoff** — a real error today:
+```
+error: type error: operator: type mismatch: expected Str, found Int
+  --> <root>:3:15
+  |
+3 |     let bad = "hello" + 1;
+  |               ^^^^^^^^^^^
+```
+Verified end to end with a real throwaway multi-file project containing
+a parse error, a type error in the ROOT module, and a type error in a
+NON-root module file (proving file/module attribution, not just line:
+col within one file) — run through BOTH `plum <project>` and `plum
+build <project>`, identical rendering through both. A genuinely
+spanless error (a real tuple-equality codegen gap) confirmed to still
+print cleanly, message-only, no crash. Workspace now 1459 tests (net
++7 — 4 new `diagnostics.rs` tests, 3 new `CompileError` tests in `plum-
+syntax`), clean build, zero warnings, and — the headline result — ZERO
+edits to any pre-existing test across the whole ~1200-test suite.
+
+**Not done in this pass** (flagged as quick, independent follow-ups,
+not started): `plum run <project>` as an explicit alias alongside
+`plum build`, and `plum new <name>` project scaffolding.
+
 ## Target platforms
 
 - **Hosted (Linux/macOS/Windows), web APIs**: primary target, no special
