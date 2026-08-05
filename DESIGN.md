@@ -2673,6 +2673,135 @@ scaffolded source is real, valid Plum by actually running it, not just
 checking a file got written; `new_project_refuses_to_overwrite_an_
 existing_path`), zero warnings.
 
+### Testing framework: `panic_raw`, `assert`/`assert_eq`/`assert_ne`, `plum test` — Decided, v1 implemented
+
+The last item from the docs/testing-framework/toolchain pivot. Scoped
+via `AskUserQuestion` before implementation, matching this project's
+own established discipline for anything with real design forks: (1)
+test discovery is a naming convention (`test_*`), not a directory
+convention or an annotation; (2) real `assert`/`assert_eq` builtins,
+not just `Bool`-returning test functions — worth the extra compiler
+work for genuinely useful "expected X, found Y" failure output; (3)
+native-codegen tests run as one subprocess per test.
+
+**The load-bearing constraint, confirmed by direct research before
+designing anything**: a native-compiled program's existing runtime
+checks (array-index-OOB etc.) call `@plum_abort` (`printf` the
+message, `exit(1)`, `unreachable`) — a HARD process termination, no
+unwinding, no recoverable `Result`. The interpreter, by contrast,
+already propagates every runtime error as an ordinary `Result<Value,
+String>` all the way up through `Interpreter::call` (division-by-zero/
+array-OOB are plain `return Err(...)` inside `eval`'s own `match`).
+This single fact is why native tests need process-level isolation to
+get a real per-test pass/fail at all, while the interpreter gets it for
+free by just calling every test in one loaded process.
+
+**`panic_raw(msg: String): Unit`** — a new low-level core-language
+primitive, added the SAME way as chunk 8's `read_file_raw`/
+`write_file_raw`: a bare-`Ident`-named call shape recognized in `lower.
+rs`/`infer.rs` (not a new grammar/AST node), evaluating to a new `ir::
+Expr::PanicRaw { message }`. Simpler than the file-I/O primitives:
+`PanicRaw` never constructs a value on any live path, so it needs no
+monomorphization/struct-tag-discovery hookup at all — just a
+mechanical arm added at `fbip.rs`'s ~5 existing `ReadFileRaw`-shaped
+spots, plus:
+- **Interpreter**: evaluates `message`, `return Err(msg)` DIRECTLY —
+  the exact same propagation shape an ordinary runtime error already
+  uses, so `Interpreter::call`'s own `Result` needs zero special
+  handling anywhere it's consumed.
+- **Codegen**: a genuine, deliberate departure from `emit_runtime_
+  check`'s own precedent, found while designing this (not by trial and
+  error): `emit_runtime_check`'s fail branch ends in `unreachable`,
+  which is fine for a plain conditional check with a separate "ok"
+  continuation reached only via a branch instruction — but `PanicRaw`
+  is an ORDINARY expression, reachable as (for instance) an `if`/
+  `else` branch's own tail value, which needs to `phi`-merge with the
+  OTHER branch. Ending in `unreachable` would make that impossible (no
+  way to `br label %merge` from a block that already terminated). Since
+  `@plum_abort` isn't marked `noreturn`, nothing requires treating this
+  as truly diverging at the LLVM level at all: `codegen_panic_raw`
+  just calls `@plum_abort` as an ordinary instruction and returns a
+  placeholder `Unit` value (`"0"`, exactly matching `Expr::Unit`'s own
+  codegen) — dead code in practice, but ordinary, well-formed IR
+  requiring ZERO special-casing in `If`/`Match`'s own merge machinery.
+
+**`assert`/`assert_eq`/`assert_ne`** — pure Plum prelude source
+(`STDLIB_ASSERT_SRC`), built on `panic_raw`, needing no further IR/
+codegen work at all (mirrors chunk 9's JSON pattern: one new low-level
+primitive, everything else ordinary Plum). `assert_eq`/`assert_ne` are
+bounded `[T: Eq + Show]` — both bounds, and the `[T: A + B]` multi-
+bound syntax itself, were ALREADY real and enforced before this
+(`plum_types::infer::satisfies_bound`, `parser.rs`'s `parse_generic_
+param`) — no new type-system work, only using what already existed.
+
+**A real, previously-latent module-resolver bug, found by the
+prelude's own new source** (not a hypothetical, an actual test
+failure): `assert_eq[T: Eq + Show] (a: T) (b: T)`'s body calls `a.to_
+string()`. An EXISTING test (`two_modules_can_declare_a_struct_with_
+the_same_name_without_colliding`) declares real modules named `a` and
+`b`. `modules.rs`'s `Resolver::resolve_segments`, for a MULTI-segment
+path (`a.to_string`), checked `used_modules`/`all_declared` but never
+`locals` — so `a` (an utterly ordinary function PARAMETER name,
+shadowing nothing) got misinterpreted as a qualified reference into
+module `a` purely because the enclosing test file also happened to
+`use a;` for something unrelated. Root-caused, not worked around: the
+multi-segment branch now checks `locals.contains(&segments[0])` first,
+exactly mirroring the single-segment case's own existing local-shadows-
+module check just above it.
+
+**A second real bug, found during manual end-to-end verification**
+(not by the test suite — this specific interaction had no test until
+after it was found): `run_tests_native` initially compiled the shared
+IR body once with an arbitrary placeholder `entry_fn` (assumed
+irrelevant to `body_ir`'s own contents, since `plum_ir::monomorphize::
+plan`'s own doc comment confirms it re-lowers EVERY top-level function
+regardless of entry point — true, but incomplete reasoning). A real
+throwaway project with its own ordinary `let main (): Unit = ...`
+alongside its tests hit `clang failed to compile the generated IR:
+invalid redefinition of function 'main'` for EVERY test: `compile_
+program_to_ir_diag`'s existing Plum-`main`-vs-native-`main` collision
+rename (renaming a Plum-level `main` to `@__plum_entry_main` so it
+never clashes with `emit_main`'s own hand-written native `@main()`)
+only fires when the entry_fn IT was called with resolves to literally
+`"main"` — the placeholder name never did, so the project's real `main`
+stayed compiled into the shared `body_ir` under its own unrenamed
+`@main`, colliding with every per-test `emit_main` wrapper appended
+afterward. Fixed by passing `"main"` itself as `entry_fn` (always
+safe, even for a project with no `main` at all — entry resolution
+doesn't require the name to exist, only errors on an AMBIGUOUS generic
+entry), reusing the EXISTING collision-avoidance mechanism `plum
+build` already established rather than inventing a new one.
+
+**`plumc::testing`** (`discover_tests`/`run_tests_interpreted`/`run_
+tests_native`) + **`plum test [--native] <project-dir>`**
+(`main.rs`): discovery scans the resolved, fully-qualified `ast::
+Program` for top-level `let`s whose LAST dot-segment starts with
+`test_` — no `pub` requirement, since the CLI calls a test by its
+qualified name directly, the same way `main` itself already is
+(confirmed via `modules.rs`'s own existing `root_module_declarations_
+are_visible_from_any_module_without_use` test). `run_tests_
+interpreted` type-checks/lowers/optimizes ONCE (the same front half
+`run_resolved_program_diag` runs), then calls each test in the same
+loaded interpreter. `run_tests_native` compiles the shared IR body
+once, then for each test appends its own `emit_main` wrapper (identical
+to what `plum build` does for `"main"` specifically, just looped) and
+runs the result as its own subprocess, cleaning up after each. A
+resolve-time project error (a real syntax/type error, not a test
+failure) renders through `ModuleSources` exactly like every other
+command.
+
+**Direct, concrete payoff**: a real throwaway project (a non-root
+`shapes` module with two tests, a root module with four, deliberately
+mixing passing/failing/struct-`assert_eq` cases) run through both `plum
+test` and `plum test --native` — identical 3-passed/3-failed verdicts,
+identical failure messages (including the struct case's `.to_string()`
+rendering), correct qualified-name attribution for the non-root-module
+tests (`shapes.test_area_is_wrong_on_purpose`), and a real project-
+level compile error rendering through `ModuleSources` on both paths
+identically to every other command. Workspace now 1489 tests (net +28
+across `plum-ir`/`plum-types`/`plum-interp`/`plum-codegen`/`plumc`),
+clean build, zero warnings.
+
 ## Target platforms
 
 - **Hosted (Linux/macOS/Windows), web APIs**: primary target, no special

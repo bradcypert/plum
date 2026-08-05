@@ -87,6 +87,68 @@ error: type error: operator: type mismatch: expected Str, found Int
   |               ^^^^^^^^^^^
 ```
 
+## Testing
+
+Any top-level function whose name starts with `test_` is a test — no
+attribute, no registration, no `pub` required:
+
+```
+// myapp/main.plum
+let main (): Unit = println("hello, plum")
+
+let test_addition (): Unit = assert_eq(2 + 2, 4)
+let test_something_is_true (): Unit = assert(1 < 2)
+```
+
+```sh
+plum test myapp
+```
+
+```
+running 2 tests
+test test_addition ... ok
+test test_something_is_true ... ok
+
+test result: ok. 2 passed; 0 failed
+```
+
+`assert(cond)` fails with `"assertion failed"` if `cond` is `false`.
+`assert_eq(a, b)`/`assert_ne(a, b)` require `a`/`b` to be the same
+`Eq`-comparable, `Show`-able type, and print both values on failure
+(via `.to_string()`, so a struct/enum failure is readable, not just
+"not equal"):
+
+```
+test test_area_is_wrong ... FAILED
+
+failures:
+
+---- test_area_is_wrong ----
+assertion failed: left != right
+  left:  12.56636
+  right: 12
+
+test result: FAILED. 0 passed; 1 failed
+```
+
+A failing test is just an ordinary runtime error under the hood — any
+other error (an array-index-out-of-bounds, a division by zero, ...)
+inside a test function fails it the same way, not only a failed
+`assert`. Tests in a non-root module are reported under their
+qualified name (`shapes.test_area`, ...), same as anywhere else a
+qualified name is used.
+
+`plum test` runs every discovered test through the interpreter by
+default — fast, one process for the whole run. `plum test --native`
+compiles and runs each test as its own native subprocess instead:
+slower, but exercises the real LLVM backend, and — unlike the
+interpreter, where one test's runtime error is just an ordinary,
+catchable `Result` — a native runtime failure is a hard process abort
+with no way to recover and keep going in the same process, so each
+test genuinely needs its own process to get an isolated pass/fail
+result at all. Both should always agree on the same project; if they
+ever don't, that's a real bug worth reporting.
+
 ## Language tour
 
 ### Functions, inference, recursion

@@ -122,10 +122,22 @@ pub fn run_tests_interpreted(program: ast::Program, names: &[String]) -> Result<
 /// interpreted`'s own graceful handling of an arity mismatch (an
 /// ordinary `Interpreter::call` error, caught per-test there for free).
 pub fn run_tests_native(program: &ast::Program, names: &[String]) -> Result<Vec<TestOutcome>, CompileError> {
-    // An arbitrary, guaranteed-not-a-real-test name — see this
-    // function's own doc comment for why the actual value passed here
-    // never affects the shared IR body's own contents.
-    let (body_ir, signatures, _resolved_entry, has_globals) = crate::compile_program_to_ir_diag(program, "__plum_test_ir_body_probe")?;
+    // MUST be `"main"`, not an arbitrary probe name — found via a real
+    // `clang` "invalid redefinition of function 'main'" failure on a
+    // throwaway project that (entirely reasonably) has its OWN real
+    // `let main (): Unit = ...` alongside its tests: `compile_program_
+    // to_ir_diag`'s own collision-avoidance rename (renaming a Plum-
+    // level `main` to `@__plum_entry_main` so it never clashes with
+    // `emit_main`'s hand-written native `@main()`) only fires when the
+    // entry_fn IT WAS CALLED WITH resolves to `"main"` — passing
+    // anything else left the project's real `main` compiled into the
+    // shared `body_ir` under its own unrenamed `@main` symbol, which
+    // then collided with EVERY per-test `emit_main` wrapper appended
+    // below. Passing `"main"` here is always safe even when the
+    // project has no `main` at all (confirmed: `compile_program_to_ir_
+    // diag`'s own entry resolution doesn't require the name to exist,
+    // only errors on an AMBIGUOUS generic entry).
+    let (body_ir, signatures, _resolved_entry, has_globals) = crate::compile_program_to_ir_diag(program, "main")?;
 
     let mut outcomes = Vec::with_capacity(names.len());
     for name in names {
@@ -270,5 +282,27 @@ mod tests {
         assert!(find(&interp_outcomes, "test_struct_eq_ok").is_ok());
         assert!(find(&native_outcomes, "test_struct_eq_fail").unwrap_err().contains("Point"));
         assert!(find(&interp_outcomes, "test_struct_eq_fail").unwrap_err().contains("Point"));
+    }
+
+    #[test]
+    fn run_tests_native_works_on_a_project_that_also_has_its_own_real_main() {
+        // Found via real end-to-end verification, not a hypothetical:
+        // a project's own `let main (): Unit = ...` (a real, ordinary
+        // thing for a project under test to have) was compiled into
+        // the shared `body_ir` under its own unrenamed `@main` symbol,
+        // colliding with every per-test `emit_main` wrapper — `clang`
+        // rejected every single test with "invalid redefinition of
+        // function 'main'". Fixed by passing `"main"` (not an arbitrary
+        // probe name) as `compile_program_to_ir_diag`'s own `entry_fn`,
+        // triggering its EXISTING Plum-`main`-vs-native-`main` rename
+        // unconditionally.
+        let program = crate::with_prelude(parse(
+            "let main (): Unit = ()\n\
+             let test_pass (): Unit = assert(true)",
+        ));
+        let names = discover_tests(&program);
+        let outcomes = run_tests_native(&program, &names).unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes[0].result.is_ok(), "{:?}", outcomes[0].result);
     }
 }
