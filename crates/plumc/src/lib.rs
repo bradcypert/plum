@@ -830,52 +830,37 @@ let float_sqrt (x: Float): Float = unsafe { sqrt(x) }
 /// already real), no new IR/codegen work. `array_*`-prefixed, matching
 /// every other stdlib chunk's own convention.
 ///
-/// **This is a deliberately NARROWED chunk — `array_sort_by`, `array_
-/// zip`, and `array_sum_int`/`array_sum_float` are ALL cut from v1,**
-/// not forgotten. Building them surfaced THREE distinct-looking, but
-/// likely related, previously-latent type-inference bugs, each
-/// confirmed via a minimal standalone repro, none caused by anything
-/// unusual in the Plum source itself:
-/// - A self-recursive generic function with TWO SEPARATE call sites to
-///   itself in one body (an early `array_drop_acc` draft: `if ... {
-///   rec(...) } else { rec(...) }`, one call per branch) sent `Subst::
-///   apply` into apparent infinite recursion (100,000+ stack frames
-///   before aborting) — traced far enough to see it happening inside
-///   `Infer::infer_if`'s branch-unification `compose` call, but not
-///   past that. WORKED AROUND for `array_drop_acc` alone by rewriting
-///   it to a single call site (`rec(..., if cond { a } else { b })`) —
-///   this is a legitimate, equally-idiomatic rewrite, not a hack, but
-///   the underlying `Subst`/unification bug it dodges is real and
-///   still there for the next function shaped this way.
-/// - A function calling three OTHER generic recursive helpers together
-///   in one branch, alongside its own single self-recursive call in
-///   the other (`array_sort_by`/`array_sort_insert`'s `array_concat(
-///   array_take(...).push(x), array_drop(...))` combination) hits the
-///   SAME infinite-`Subst::apply`-recursion symptom — no single-call-
-///   site rewrite available here (the whole point is combining three
-///   independent array operations), so this couldn't be worked around
-///   the same way; cut instead of forced through.
-/// - Two ordinary, otherwise-unrelated top-level functions each calling
-///   `.fold()` with a two-argument closure and DIFFERENT concrete
-///   accumulator types (`array_sum_int`'s `0` vs `array_sum_float`'s
-///   `0.0`) made an entirely UNRELATED third function's own `.fold()`
-///   call fail type-checking with a bogus \"expected Int, found Float\"
-///   — confirmed via a minimal repro with no recursion involved at all,
-///   so this is a SEPARATE bug from the two above, not the same one
-///   wearing a different hat.
-///
-/// None of these were forced through with a workaround beyond the one
-/// explicitly noted above (`array_drop_acc`'s single-call-site
-/// rewrite) — flagged to the user instead of silently patched around
-/// or chased indefinitely inside what was scoped as a stdlib-additions
-/// chunk. A dedicated follow-up session should root-cause `plum-types::
-/// subst::Subst`'s composition/generalization directly (strong
-/// suspicion: `compose` can produce a self-referential `id -> Var(id)`
-/// binding when merging two substitutions whose keys interact just
-/// right, which `Subst::apply` then recurses on forever — `compose`
-/// itself never occurs-checks its own merged output, only individual
-/// `bind_var` calls do) before `array_sort_by`/`array_zip`/`array_sum_
-/// *` (or anything shaped like them) are attempted again.
+/// **Originally shipped NARROWER than this** — `array_sort_by`,
+/// `array_zip`, `array_sum_int`/`array_sum_float` were all cut from the
+/// first pass after surfacing two real, previously-latent `plum-types`
+/// bugs, both now root-caused and fixed (see DESIGN.md's \"Standard
+/// library\" chunk 12/13 for the full story):
+/// - `Subst::compose` could produce a self-referential `id -> Var(id)`
+///   binding when merging two substitutions that were each individually
+///   acyclic but cross-referenced each other through exactly one key —
+///   `Subst::apply` would then recurse on that binding forever (a real
+///   `gdb` backtrace showed 100,000+ frames before the process
+///   aborted). Hit by `array_drop_acc`'s original two-recursive-call-
+///   site shape and by `array_sort_by`/`array_sort_insert`'s three-
+///   helper-combination shape. Fixed in `subst.rs`: `compose` now
+///   drops (rather than inserts) any merged binding that resolves back
+///   to `Var(k)` for its own key `k` — see `Subst::compose`'s own doc
+///   comment for the full correctness argument.
+/// - `default_numeric` (the \"an unconstrained numeric type defaults to
+///   `Int`\" rule, needed for e.g. `let x = 1 + 2`) fired too early
+///   inside an unannotated closure passed DIRECTLY to `.fold()`/`.map()`
+///   /`.filter()`: the closure's own params started as brand-new fresh
+///   variables, completely disconnected from what the call site already
+///   knew about them (`.fold()`'s `init`/the array's element type) —
+///   only connected by a LATER `unify` call, AFTER the closure body was
+///   already fully inferred. A body combining two still-fresh params
+///   arithmetically with no literal to pin either side (fold's own
+///   `|acc, x| acc + x` idiom) got BOTH defaulted to `Int` right then,
+///   permanently — breaking a same-shaped `Float` accumulator later.
+///   Fixed via `Infer::infer_expr_as_callback`: `.map`/`.filter`/
+///   `.fold`'s own builtin-call arms now seed a closure-literal
+///   argument's params from the ALREADY-KNOWN expected types before
+///   inferring its body, instead of leaving them independently fresh.
 const STDLIB_ARRAY_SRC: &str = "\
 let array_is_empty[T] (arr: Array[T]): Bool = arr.len() == 0
 
@@ -920,6 +905,29 @@ let array_index_of_acc[T: Eq] (arr: Array[T]) (x: T) (i: Int): Option[Int] =
 let array_index_of[T: Eq] (arr: Array[T]) (x: T): Option[Int] = array_index_of_acc(arr, x, 0)
 
 let array_contains[T: Eq] (arr: Array[T]) (x: T): Bool = option_is_some(array_index_of(arr, x))
+
+let array_sum_int (arr: Array[Int]): Int = arr.fold(0, |acc, x| acc + x)
+
+let array_sum_float (arr: Array[Float]): Float = arr.fold(0.0, |acc, x| acc + x)
+
+let array_sort_insert_acc[T] (sorted: Array[T]) (x: T) (le: (T, T) -> Bool) (i: Int): Array[T] =
+    if i >= sorted.len() { sorted.push(x) }
+    else if le(x, sorted[i]) { array_concat(array_take(sorted, i).push(x), array_drop(sorted, i)) }
+    else { array_sort_insert_acc(sorted, x, le, i + 1) }
+
+let array_sort_insert[T] (sorted: Array[T]) (x: T) (le: (T, T) -> Bool): Array[T] = array_sort_insert_acc(sorted, x, le, 0)
+
+let array_sort_by_acc[T] (arr: Array[T]) (le: (T, T) -> Bool) (i: Int) (acc: Array[T]): Array[T] =
+    if i >= arr.len() { acc } else { array_sort_by_acc(arr, le, i + 1, array_sort_insert(acc, arr[i], le)) }
+
+let array_sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] = array_sort_by_acc(arr, le, 0, [])
+
+struct Zipped[A, B] { first: A, second: B }
+
+let array_zip_acc[T, U] (a: Array[T]) (b: Array[U]) (i: Int) (acc: Array[Zipped[T, U]]): Array[Zipped[T, U]] =
+    if i >= a.len() || i >= b.len() { acc } else { array_zip_acc(a, b, i + 1, acc.push(Zipped { first: a[i], second: b[i] })) }
+
+let array_zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = array_zip_acc(a, b, 0, [])
 ";
 
 /// Parses the prelude + stdlib sources once and prepends their items
@@ -2296,6 +2304,57 @@ mod tests {
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
         let src = "let use_it dummy = array_contains([10, 20, 30], 99)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
+    }
+
+    #[test]
+    fn array_sum_int_and_array_sum_float_both_work_in_the_same_program() {
+        // The regression test for the real `default_numeric`-fires-too-
+        // early-inside-an-unannotated-closure bug (see `STDLIB_ARRAY_
+        // SRC`'s own doc comment): `array_sum_int`'s `arr.fold(0, |acc,
+        // x| acc + x)` and `array_sum_float`'s `arr.fold(0.0, |acc, x|
+        // acc + x)` sit right next to each other in the SAME prelude —
+        // before the fix, merely having BOTH declared (regardless of
+        // which was actually called) made this fail with a bogus
+        // "expected Int, found Float".
+        let src = "let use_it dummy = array_sum_int([1, 2, 3])";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(6)));
+        let src = "let use_it dummy = array_sum_float([1.5, 2.5, 3.0])";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Float(7.0)));
+    }
+
+    #[test]
+    fn array_sort_by_sorts_using_the_given_comparator() {
+        // The regression test for the real `Subst::compose` cyclic-
+        // binding bug (see `STDLIB_ARRAY_SRC`'s own doc comment):
+        // `array_sort_by`/`array_sort_insert`'s combination of THREE
+        // other generic recursive helpers (`array_concat`/`array_take`/
+        // `array_drop`) in one branch, alongside its own single self-
+        // recursive call in the other, used to send `Subst::apply` into
+        // genuine unbounded recursion before this was fixed.
+        let src = "let use_it dummy = { \
+                        let sorted = array_sort_by([3, 1, 2], |a, b| a <= b); \
+                        sorted[0] * 100 + sorted[1] * 10 + sorted[2] \
+                    }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(123)));
+        let src = "let use_it dummy = { \
+                        let sorted = array_sort_by([3, 1, 2], |a, b| a >= b); \
+                        sorted[0] * 100 + sorted[1] * 10 + sorted[2] \
+                    }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(321)));
+    }
+
+    #[test]
+    fn array_zip_pairs_elements_positionally_and_stops_at_the_shorter_array() {
+        let src = "let use_it dummy = { \
+                        let zipped = array_zip([1, 2, 3], [\"a\", \"b\"]); \
+                        zipped.len() \
+                    }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(2)));
+        let src = "let use_it dummy = { \
+                        let zipped = array_zip([1, 2], [\"a\", \"b\"]); \
+                        match zipped[1] { Zipped { first, second } => first } \
+                    }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(2)));
     }
 
     // --- standard library: number utilities (see `plumc::STDLIB_NUMBER_SRC`) ---

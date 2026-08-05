@@ -1288,6 +1288,34 @@ mod tests {
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "0");
     }
 
+    #[test]
+    fn array_sum_int_and_array_sum_float_both_run_through_native_codegen() {
+        // Native-codegen counterpart to `plumc::lib.rs`'s own
+        // `default_numeric`-fires-too-early regression test — proves
+        // the fix holds through a REAL compiled binary, not just the
+        // interpreter.
+        let src = "let go (): Int = array_sum_int([1, 2, 3])";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "6");
+        let src = "let go (): Float = array_sum_float([1.5, 2.5, 3.0])";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "7.000000");
+    }
+
+    #[test]
+    fn array_sort_by_and_array_zip_run_through_native_codegen() {
+        // Native-codegen counterpart to `plumc::lib.rs`'s own `Subst::
+        // compose` cyclic-binding regression test.
+        let src = "let go (): Int = { \
+                        let sorted = array_sort_by([3, 1, 2], |a, b| a <= b); \
+                        sorted[0] * 100 + sorted[1] * 10 + sorted[2] \
+                    }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "123");
+        let src = "let go (): Int = { \
+                        let zipped = array_zip([1, 2], [\"a\", \"b\"]); \
+                        match zipped[1] { Zipped { first, second } => first } \
+                    }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "2");
+    }
+
     // --- standard library: number utilities (see `plumc::STDLIB_NUMBER_SRC`) ---
 
     #[test]

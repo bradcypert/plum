@@ -2747,6 +2747,96 @@ shipped function) plus a real throwaway project run through both
 `plum run` and a compiled `plum build` binary. Workspace now 1516
 tests (net +7), zero warnings.
 
+### Chunk 13: root-causing and fixing both `plum-types` bugs chunk 12 deferred — `array_sort_by`/`array_zip`/`array_sum_int`/`array_sum_float` now shipped
+
+Chunk 12 shipped a deliberately narrowed `Array[T]` stdlib and flagged
+two real, previously-latent `plum-types` bugs to the user instead of
+working around them further. Asked how to proceed, the user chose to
+pause new stdlib growth and dedicate this chunk to root-causing them
+properly before resuming.
+
+**Bug 1: `Subst::compose` could produce a self-referential cycle.**
+Confirmed by reading `subst.rs` directly (not just the `gdb` backtrace):
+`bind_var` occurs-checks every individual binding it produces, and
+`Type::Var(a) unify Type::Var(a)` short-circuits to `Subst::empty()`
+before ever reaching `bind_var` — so NEITHER input to a `compose` call
+can, on its own, already contain a `k -> Var(k)` self-loop or any other
+cycle. But `compose`'s merge step never re-checks its OWN combined
+output. Concretely: `self = {2: Var(1)}`, `other = {1: Var(2)}` — each
+individually fine (`self.apply(Var(2))` is `Var(2)` unchanged, `other.
+apply(Var(1))` is `Var(2)`, both terminate) — but naive merging computes
+`self.apply(other[1] = Var(2))`, which chases `self`'s own `2 -> Var(1)`
+entry and lands on `Var(1)` — a genuine `1 -> Var(1)` self-loop in the
+RESULT, which `Subst::apply` then recurses on forever the next time
+anything looks up `Var(1)`. A short proof (in `subst.rs`'s own new doc
+comment on `compose`) shows this is the ONLY new cycle shape that can
+arise from merging two already-acyclic substitutions — a same-key
+result can only come from `self`/`other` cross-referencing through
+exactly that key, never a longer, still-hidden multi-variable cycle
+(that would require one of the two inputs to already be individually
+cyclic, which the invariant rules out). **Fix**: `compose` now drops
+(never inserts) any merged binding that resolves back to `Var(k)` for
+its own key `k` — semantically exact, not an approximation (`T_k = T_k`
+after substitution is a tautology, identical in meaning to `k` having
+no entry at all), and — by the same inductive argument — sufficient to
+keep the "no `Subst` this codebase ever produces can loop under
+`apply`" invariant intact through arbitrarily many chained `compose`
+calls, not just the one call that happens to trigger it. A new
+regression test (`composing_two_individually_acyclic_substitutions_
+that_cross_reference_each_other_does_not_produce_a_self_loop`)
+encodes the exact minimal repro directly in `subst.rs`.
+
+**Bug 2: `default_numeric` fired too early inside closures passed
+directly to `.map`/`.filter`/`.fold`.** A genuinely SEPARATE bug from
+Bug 1 — confirmed by first assuming it was cross-function contamination
+(two unrelated functions calling `.fold()` at different concrete types)
+and then, via direct `eprintln` instrumentation of the `.fold()`
+inference arm, discovering `array_sum_float`'s closure argument was
+ALREADY typed `Function([Int, Int], Int)` at the moment it was
+inferred — wrong regardless of whether any other function existed in
+the program at all (confirmed by re-running the repro with `array_sum_
+float` as the ONLY function in the source). Root cause: `.map`/
+`.filter`/`.fold`'s builtin-call inference arms unify a callback
+argument's inferred type against the array's ALREADY-known element
+type only AFTER fully inferring the callback — but when the callback
+is an unannotated closure literal, `infer_closure` mints its params as
+brand-new, totally independent fresh variables, with no connection yet
+to what the call site already knows. If the closure body combines TWO
+still-fresh params arithmetically with no literal anywhere to pin
+either side (fold's own `|acc, x| acc + x` idiom — `map`/`filter`'s
+single-param callbacks were never actually affected in practice,
+since their bodies almost always touch a literal, which pins the
+`Var` to a concrete type via ordinary unification before `default_
+numeric` is ever consulted), `default_numeric` greedily and
+PERMANENTLY defaults both to `Int` right then, before the real
+(possibly `Float`) constraint from the call site ever arrives. **Fix**:
+`Infer::infer_closure` gained an `expected_param_types: Option<&[Type]>`
+parameter — when `Some` and a param has no explicit annotation, it
+seeds that param's type directly from the caller's already-known
+expected type instead of minting an unconstrained fresh var. A new
+`Infer::infer_expr_as_callback` helper (used by all three builtin
+arms in place of a bare `infer_expr`) recognizes a callback argument
+that's literally a closure literal and passes the array's already-
+resolved element type (plus, for `.fold()`, the accumulator's type)
+through as the expectation; anything else (a named function reference,
+etc.) falls through to the ordinary path, unchanged.
+
+Both fixes verified independently (new tests exercise the two ORIGINAL
+repro shapes — the two-recursive-call-site pattern and the three-
+helper-combination pattern — directly, before restoring the stdlib
+functions built on them) and then together: `array_sort_by`, `array_
+zip` (returning `Array[Zipped[A, B]]`, a plain struct — no tuples,
+per chunk 12's own tuple-codegen-gap note), and `array_sum_int`/
+`array_sum_float` are now all shipped in `STDLIB_ARRAY_SRC`, matching
+chunk 12's original full design. Verified end-to-end: both backends
+(dedicated interpreter + native-codegen regression tests for each
+fix, plus tests for every previously-deferred function) and a real
+throwaway project run through both `plum run` and a compiled `plum
+build` binary, confirming identical output on both paths. Workspace
+now 1522 tests (net +6 from chunk 12's 1516 — 3 interpreter array
+tests, 2 native-codegen array tests, 1 `subst.rs` regression test),
+zero warnings, zero regressions to the ~1500 pre-existing tests.
+
 ## Toolchain and diagnostics
 
 After JSON, the user redirected from stdlib growth toward user-facing
@@ -4342,26 +4432,22 @@ summed), not just inspect emitted IR text.
 
 ## Open questions (not yet decided, flagged so we don't forget them)
 
-- **KNOWN BUG, not a design question — needs its own dedicated
-  session**: `plum-types::subst::Subst`'s composition/generalization
-  has a real, previously-latent correctness bug, found while building
-  chunk 12's array utilities (see "Standard library" chunk 12 above for
-  full detail/repro shapes). At least two distinct symptoms: (1)
-  certain self-recursive-generic-function shapes (two separate call
-  sites to the same function within one body; three OTHER generic
-  helpers called together alongside one self-recursive call) send
-  `Subst::apply` into genuine unbounded recursion (100,000+ stack
-  frames, confirmed via `gdb`) — leading suspect is `Subst::compose`
-  never occurs-checking its own MERGED output, only individual
-  `bind_var` calls do, so composing two individually-acyclic
-  substitutions can still produce a self-referential `id -> Var(id)`
-  binding. (2) Two unrelated top-level functions each calling `.fold()`
-  with a two-argument closure at DIFFERENT concrete types made a THIRD,
-  unrelated function's own `.fold()` call fail type-checking — not yet
-  confirmed to share root cause with (1). Blocks `array_sort_by`/
-  `array_zip`/`array_sum_int`/`array_sum_float` (deferred, not shipped)
-  and likely blocks similarly-shaped functions in the still-pending
-  string-utilities chunk too — root-cause this BEFORE attempting either.
+- ~~KNOWN BUG — `plum-types::subst::Subst`'s composition~~ **RESOLVED
+  in chunk 13.** Was two genuinely separate bugs, not one: (1)
+  `Subst::compose` could merge two individually-acyclic substitutions
+  into a self-referential `id -> Var(id)` cycle, which `Subst::apply`
+  then recursed on forever — fixed by having `compose` drop (not
+  insert) any merged binding that resolves back to its own key. (2)
+  `default_numeric` defaulted an unconstrained numeric type too early
+  inside a closure literal passed directly to `.map`/`.filter`/`.fold`,
+  before the callback's params were ever connected to what the call
+  site already knew about them — fixed by seeding a closure-literal
+  callback's params from the array's already-known element/accumulator
+  type before inferring its body, via a new `Infer::infer_expr_as_
+  callback` used by all three builtins. See "Standard library" chunk
+  13 above for the full root-cause writeup and fix detail.
+  `array_sort_by`/`array_zip`/`array_sum_int`/`array_sum_float` are
+  now shipped, unblocked by both fixes.
 - `Ref[T]`'s naming, construction (`ref(v)`), `.get()`/`.set()`,
   representation (`Rc<RefCell<Value>>`, outside the toy heap/FBIP
   entirely), pattern-matching interaction (none — not directly

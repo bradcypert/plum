@@ -388,10 +388,12 @@ program's prelude):
 - **`Array[T]`** — `array_is_empty`, `array_first`/`array_last:
   Option[T]`, `array_reverse`, `array_concat`, `array_take`/`array_drop`,
   `array_slice`, `array_find: Option[T]`, `array_any`/`array_all`,
-  `array_index_of: Option[Int]`, `array_contains` (both `Eq`-bounded).
-  `array_sort_by`/`array_zip`/array-sum are NOT here yet — a real,
-  previously-latent type-inference bug (see DESIGN.md) currently blocks
-  them specifically.
+  `array_index_of: Option[Int]`, `array_contains` (both `Eq`-bounded),
+  `array_sort_by(arr, |a, b| ...)` (takes an explicit "is `a`
+  less-or-equal `b`" comparator — no generic `Ord` bound exists),
+  `array_zip: Array[Zipped[A, B]]` (`Zipped { first, second }`, a plain
+  struct — no tuple codegen support yet), `array_sum_int`/`array_sum_
+  float`.
 - **`println(x)`/`print(x)`** — print any value's `.to_string()`
   (`print` with no trailing newline, `println` with one).
 - **`read_file(path): Result[String, String]`** / **`write_file(path,

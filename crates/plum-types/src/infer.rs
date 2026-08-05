@@ -2152,7 +2152,7 @@ impl Infer {
                     .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.map()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
-                let (f_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                let (f_ty, s) = self.infer_expr_as_callback(&args[0], &refined_env, &[acc.apply(&elem_ty)])?;
                 acc = s.compose(&acc);
                 let out_ty = self.fresh();
                 let s = unify(
@@ -2179,7 +2179,7 @@ impl Infer {
                     .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.filter()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
-                let (f_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                let (f_ty, s) = self.infer_expr_as_callback(&args[0], &refined_env, &[acc.apply(&elem_ty)])?;
                 acc = s.compose(&acc);
                 let s = unify(
                     &acc.apply(&f_ty),
@@ -2208,7 +2208,7 @@ impl Infer {
                 let (init_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
-                let (f_ty, s) = self.infer_expr(&args[1], &refined_env)?;
+                let (f_ty, s) = self.infer_expr_as_callback(&args[1], &refined_env, &[acc.apply(&init_ty), acc.apply(&elem_ty)])?;
                 acc = s.compose(&acc);
                 let s = unify(
                     &acc.apply(&f_ty),
@@ -2354,7 +2354,7 @@ impl Infer {
             } => self.infer_struct_literal(path, fields, spread, *span, env),
             ast::Expr::Match { scrutinee, arms, .. } => self.infer_match(scrutinee, arms, env),
             ast::Expr::Select { arms, span } => self.infer_select(arms, *span, env),
-            ast::Expr::Closure { params, body, span } => self.infer_closure(params, body, env, *span),
+            ast::Expr::Closure { params, body, span } => self.infer_closure(params, body, env, *span, None),
             // `unsafe` doesn't change the block's TYPE (its type is
             // whatever the block's own type is, same as a plain block)
             // — but unlike before extern functions existed, it's no
@@ -3107,19 +3107,46 @@ impl Infer {
     // see_the_caller_environment`), a closure DOES see the surrounding
     // scope — that's the actual definition of a closure. `closure_env`
     // extends the caller's `env`, not a fresh one, on purpose.
+    //
+    // `expected_param_types`, when `Some`, seeds each UNANNOTATED
+    // param's type directly from the caller's already-known expected
+    // signature instead of a brand new `self.fresh()` — this is what
+    // `infer_expr_as_callback` (the `.map`/`.filter`/`.fold` builtins'
+    // own entry point) passes, and it closes a real, previously-latent
+    // bug: without it, a closure's own params start out COMPLETELY
+    // disconnected from what the call site already knows about them,
+    // and only get connected by a LATER `unify` call, AFTER the body
+    // has already been fully inferred. If the body does arithmetic
+    // combining TWO still-fresh params directly (fold's own idiom:
+    // `|acc, x| acc + x`, no literal anywhere to pin either side),
+    // `default_numeric` greedily defaults BOTH to `Int` right then —
+    // permanently, via the running `Subst` — before the outer `unify`
+    // ever gets a chance to connect them to the REAL (possibly `Float`)
+    // expected type, producing a spurious "expected Int, found Float"
+    // even for an entirely correctly-typed program (confirmed via a
+    // minimal repro: `arr.fold(0.0, |acc, x| acc + x)` over an
+    // `Array[Float]`, `arr`'s own element type ALREADY known to be
+    // `Float` at the call site, still failed this way before this fix
+    // — see DESIGN.md's "Standard library" chunk 12 for the full story
+    // of how this was found). An explicit param annotation still wins
+    // over the expected type either way, unchanged from before.
     fn infer_closure(
         &mut self,
         params: &[ast::ClosureParam],
         body: &ast::Expr,
         env: &TypeEnv,
         span: Span,
+        expected_param_types: Option<&[Type]>,
     ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let mut param_types = Vec::with_capacity(params.len());
         let mut closure_env = env.clone();
-        for p in params {
+        for (i, p) in params.iter().enumerate() {
             let ty = match &p.ty {
                 Some(annotation) => ast_type_to_type(annotation, &self.ctx, &[])?,
-                None => self.fresh(),
+                None => match expected_param_types.and_then(|tys| tys.get(i)) {
+                    Some(expected) => expected.clone(),
+                    None => self.fresh(),
+                },
             };
             closure_env = closure_env.extend(p.name.clone(), ty.clone());
             param_types.push(ty);
@@ -3137,6 +3164,31 @@ impl Infer {
             .insert(span, (param_types.clone(), body_ty.clone(), self.current_fn.clone()));
         let resolved_params = param_types.iter().map(|t| acc.apply(t)).collect();
         Ok((Type::Function(resolved_params, Box::new(acc.apply(&body_ty))), acc))
+    }
+
+    /// Used by `.map`/`.filter`/`.fold`'s own builtin-call inference
+    /// arms in place of a bare `self.infer_expr(arg, env)` — a callback
+    /// argument that's LITERALLY a closure literal at this call site
+    /// (the overwhelmingly common case: `arr.fold(0, |acc, x| ...)`,
+    /// not `arr.fold(0, some_named_fn)`) gets its params seeded from
+    /// `expected_param_types` (see `infer_closure`'s own doc comment
+    /// for why this matters, not just why it's convenient). A callback
+    /// that ISN'T a bare closure literal (a named function reference, a
+    /// parenthesized expression, ...) falls through to the ordinary
+    /// `infer_expr` path unchanged — nothing about ordinary function-
+    /// typed values needs or benefits from pre-seeding.
+    fn infer_expr_as_callback(
+        &mut self,
+        expr: &ast::Expr,
+        env: &TypeEnv,
+        expected_param_types: &[Type],
+    ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
+        match expr {
+            ast::Expr::Closure { params, body, span } => {
+                self.infer_closure(params, body, env, *span, Some(expected_param_types))
+            }
+            _ => self.infer_expr(expr, env),
+        }
     }
 
     // `for pattern in iter { body }` — mirrors lower.rs's `lower_for`

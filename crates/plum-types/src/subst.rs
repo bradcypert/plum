@@ -52,8 +52,57 @@ impl Subst {
         // in case that target itself contains a variable `self`
         // resolves further. Then `self`'s own bindings carry through
         // for any key `other` didn't already have an opinion about.
-        let mut result: HashMap<TypeVarId, Type> =
-            other.0.iter().map(|(k, v)| (*k, self.apply(v))).collect();
+        //
+        // A binding `k -> self.apply(other[k])` that comes back out as
+        // literally `Var(k)` itself is dropped, not inserted — this is
+        // NOT an approximation, it's exactly correct: `T_k = T_k` is a
+        // tautology, zero new information, identical in meaning to `k`
+        // having no entry at all. Dropping it also happens to be load-
+        // bearing for correctness, not just tidiness: `self` and
+        // `other` are each individually guaranteed acyclic (every
+        // `bind_var` call occurs-checks before ever producing a
+        // `Subst`, and `Type::Var(a) unify Type::Var(a)` short-circuits
+        // to `Subst::empty()` before reaching `bind_var` at all — see
+        // unify.rs — so NEITHER input can already contain a `k ->
+        // Var(k)` self-loop, or any cycle, on its own), but composing
+        // two ACYCLIC substitutions can still produce a NEW cycle where
+        // none existed in either input alone — e.g. `self = {2:
+        // Var(1)}`, `other = {1: Var(2)}`: neither loops by itself
+        // (`self.apply(Var(2))` = `Var(2)` unchanged, `other.apply(
+        // Var(1))` = `Var(2)`, both terminate), but naively merging
+        // them produces `{1: Var(1), 2: Var(1)}` — a genuine `id ->
+        // Var(id)` self-loop at key 1, which `Subst::apply` would then
+        // recurse on FOREVER the next time anything looks up `Var(1)`.
+        // This was a real, previously-latent bug (see DESIGN.md's
+        // "Standard library" chunk 12 and the matching "Open questions"
+        // entry) — confirmed via `gdb` to genuinely recurse unbounded
+        // (100,000+ frames before the process aborted), not just
+        // "deep." Filtering the trivial-self-loop case out here is
+        // sufficient to prevent it, not merely a patch: `self.apply`
+        // only ever returns `Var(id)` for a variable `self` has NO
+        // entry for (an entry always causes further recursion instead —
+        // see `apply`'s own `Type::Var` arm), so a same-key result can
+        // ONLY arise from `self`/`other` cross-referencing each other
+        // through exactly this key — never from a longer, still-hidden
+        // cycle among three or more variables (that would require one
+        // of `self`/`other` to already be individually cyclic, which
+        // the invariant above rules out) — so this one check, applied
+        // at every `compose` call, keeps the "no `Subst` this codebase
+        // ever produces can loop under `apply`" invariant intact
+        // through arbitrarily many chained `compose` calls, not just
+        // this one.
+        let mut result: HashMap<TypeVarId, Type> = other
+            .0
+            .iter()
+            .filter_map(|(k, v)| {
+                let resolved = self.apply(v);
+                if resolved == Type::Var(*k) {
+                    None
+                } else {
+                    Some((*k, resolved))
+                }
+            })
+            .collect();
         for (k, v) in self.0.iter() {
             result.entry(*k).or_insert_with(|| v.clone());
         }
@@ -121,5 +170,25 @@ mod tests {
         let composed = s1.compose(&s2);
         assert_eq!(composed.apply(&Type::Var(0)), Type::Int);
         assert_eq!(composed.apply(&Type::Var(1)), Type::Int);
+    }
+
+    #[test]
+    fn composing_two_individually_acyclic_substitutions_that_cross_reference_each_other_does_not_produce_a_self_loop() {
+        // `self` (T2 -> T1) and `other` (T1 -> T2) neither loop on its
+        // own — `self.apply(Var(1))` is `Var(1)` unchanged (self has no
+        // entry for 1), `other.apply(Var(2))` is `Var(2)` unchanged
+        // (other has no entry for 2) — but naively merging them used to
+        // produce a genuine `1 -> Var(1)` self-loop, which `apply` would
+        // recurse on forever. This is the real, previously-latent bug
+        // documented in DESIGN.md's "Standard library" chunk 12 / "Open
+        // questions" — found via `gdb` showing `Subst::apply` 100,000+
+        // frames deep before the process aborted.
+        let self_s = Subst::single(2, Type::Var(1));
+        let other_s = Subst::single(1, Type::Var(2));
+        let composed = self_s.compose(&other_s);
+        // Both must terminate and resolve to themselves — no residual
+        // information was actually learned by either variable.
+        assert_eq!(composed.apply(&Type::Var(1)), Type::Var(1));
+        assert_eq!(composed.apply(&Type::Var(2)), Type::Var(1));
     }
 }
