@@ -1,7 +1,8 @@
 use plum_interp::Value;
 use plumc::{
-    collect_project_files, compile_ir_to_binary, compile_program_to_ir_diag, emit_main, reject_unprintable_return, resolve_project_diag,
-    typecheck_and_run, typecheck_and_run_project_diag, CgValue, ModuleSources,
+    collect_project_files, compile_ir_to_binary, compile_program_to_ir_diag, discover_tests, emit_main, reject_unprintable_return,
+    resolve_project_diag, run_tests_interpreted, run_tests_native, typecheck_and_run, typecheck_and_run_project_diag, CgValue,
+    ModuleSources, TestOutcome,
 };
 use std::path::{Path, PathBuf};
 
@@ -46,6 +47,9 @@ unsafe extern "C" {
 ///
 /// `plum new <name>` scaffolds a minimal starter project — see
 /// `run_new`'s own doc comment.
+///
+/// `plum test [--native] <project-dir>` discovers and runs every
+/// `test_*` function — see `run_test_cmd`'s own doc comment.
 fn main() {
     let mut cli_args = std::env::args().skip(1);
     match cli_args.next() {
@@ -60,6 +64,10 @@ fn main() {
         Some(first) if first == "new" => {
             let rest: Vec<String> = cli_args.collect();
             run_new(&rest);
+        }
+        Some(first) if first == "test" => {
+            let rest: Vec<String> = cli_args.collect();
+            run_test_cmd(&rest);
         }
         Some(project_dir) => run_interpreter(&[project_dir]),
         None => {
@@ -267,6 +275,106 @@ fn new_project(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Parsed `plum test` arguments — a single positional project
+/// directory plus an optional `--native` flag, same hand-parsed style
+/// as `parse_build_args`.
+#[derive(Debug, PartialEq, Eq)]
+struct TestArgs {
+    project_dir: String,
+    native: bool,
+}
+
+fn parse_test_args(args: &[String]) -> Result<TestArgs, String> {
+    let mut project_dir = None;
+    let mut native = false;
+    for arg in args {
+        if arg == "--native" {
+            native = true;
+        } else if project_dir.is_none() {
+            project_dir = Some(arg.clone());
+        } else {
+            return Err(format!("unexpected argument: {arg:?}"));
+        }
+    }
+    let project_dir = project_dir.ok_or_else(|| "usage: plum test [--native] <project-dir>".to_string())?;
+    Ok(TestArgs { project_dir, native })
+}
+
+/// `plum test [--native] <project-dir>`: resolves the project (same
+/// `resolve_project_diag` `plum build` uses — a real syntax/type error
+/// in a test file gets the SAME `file:line:col` + snippet treatment
+/// every other command already has), discovers every top-level
+/// `test_*` function (`plumc::discover_tests`), then runs them either
+/// through one loaded interpreter (default — `run_tests_interpreted`,
+/// cheap, single process) or as isolated native subprocesses (`--
+/// native` — `run_tests_native`, needed because a native runtime
+/// failure aborts the whole process with no way to catch and continue
+/// — see that function's own doc comment). Exit code 0 only if every
+/// test passed, matching `cargo test`'s own convention.
+fn run_test_cmd(args: &[String]) {
+    let parsed = match parse_test_args(args) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    let root = Path::new(&parsed.project_dir);
+    let sources = match module_sources(root) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    let program = match resolve_project_diag(root) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{}", sources.render(&e));
+            std::process::exit(1);
+        }
+    };
+    let names = discover_tests(&program);
+    let outcomes = if parsed.native {
+        run_tests_native(&program, &names)
+    } else {
+        run_tests_interpreted(program, &names)
+    };
+    let outcomes = match outcomes {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("{}", sources.render(&e));
+            std::process::exit(1);
+        }
+    };
+    let failed = print_test_report(&outcomes);
+    if failed > 0 {
+        std::process::exit(1);
+    }
+}
+
+/// Prints a `cargo test`-style report and returns the failure count.
+fn print_test_report(outcomes: &[TestOutcome]) -> usize {
+    println!("running {} test{}", outcomes.len(), if outcomes.len() == 1 { "" } else { "s" });
+    for outcome in outcomes {
+        match &outcome.result {
+            Ok(()) => println!("test {} ... ok", outcome.name),
+            Err(_) => println!("test {} ... FAILED", outcome.name),
+        }
+    }
+    let failures: Vec<&TestOutcome> = outcomes.iter().filter(|o| o.result.is_err()).collect();
+    if !failures.is_empty() {
+        println!("\nfailures:");
+        for f in &failures {
+            println!("\n---- {} ----\n{}", f.name, f.result.as_ref().unwrap_err());
+        }
+    }
+    let passed = outcomes.len() - failures.len();
+    let verdict = if failures.is_empty() { "ok" } else { "FAILED" };
+    println!("\ntest result: {verdict}. {passed} passed; {} failed", failures.len());
+    failures.len()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,6 +486,68 @@ mod tests {
         // valid Plum, not just plausible-looking text.
         let result = typecheck_and_run_project(&dir, "main", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Unit));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bare_project_directory_parses_for_test_args() {
+        let args: Vec<String> = vec!["myproj".to_string()];
+        let parsed = parse_test_args(&args).unwrap();
+        assert_eq!(parsed, TestArgs { project_dir: "myproj".to_string(), native: false });
+    }
+
+    #[test]
+    fn the_native_flag_is_parsed_regardless_of_position() {
+        let args: Vec<String> = vec!["--native".to_string(), "myproj".to_string()];
+        let parsed = parse_test_args(&args).unwrap();
+        assert_eq!(parsed, TestArgs { project_dir: "myproj".to_string(), native: true });
+
+        let args: Vec<String> = vec!["myproj".to_string(), "--native".to_string()];
+        let parsed = parse_test_args(&args).unwrap();
+        assert_eq!(parsed, TestArgs { project_dir: "myproj".to_string(), native: true });
+    }
+
+    #[test]
+    fn missing_project_directory_is_a_clear_error_for_test_args() {
+        let args: Vec<String> = vec!["--native".to_string()];
+        let err = parse_test_args(&args).expect_err("expected a usage error");
+        assert!(err.contains("usage"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn print_test_report_returns_the_failure_count() {
+        let outcomes = vec![
+            TestOutcome { name: "test_a".to_string(), result: Ok(()) },
+            TestOutcome { name: "test_b".to_string(), result: Err("assertion failed".to_string()) },
+        ];
+        assert_eq!(print_test_report(&outcomes), 1);
+    }
+
+    #[test]
+    fn run_test_cmd_end_to_end_through_the_interpreter() {
+        // Mirrors `build_end_to_end_compiles_and_runs_via_the_persisted_
+        // binary`'s own real-project-on-disk shape — proves `plum test`
+        // wires `resolve_project_diag` -> `discover_tests` -> `run_
+        // tests_interpreted` -> the report together correctly, not just
+        // that each piece works in isolation.
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("plumc-test-cmd-test-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("main.plum"),
+            "let test_pass (): Unit = assert(true)\nlet test_fail (): Unit = assert(false)\n",
+        )
+        .unwrap();
+
+        let root = &dir;
+        let program = resolve_project_diag(root).unwrap();
+        let names = discover_tests(&program);
+        let outcomes = run_tests_interpreted(program, &names).unwrap();
+        let failed = print_test_report(&outcomes);
+        assert_eq!(failed, 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
