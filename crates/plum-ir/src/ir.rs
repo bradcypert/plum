@@ -618,6 +618,21 @@ pub enum Expr {
         path: Box<Expr>,
         contents: Box<Expr>,
     },
+    // `panic_raw(msg)` — the testing framework's own low-level
+    // primitive, same bare-`Ident`-named-call recognition as `ReadFileRaw`/
+    // `WriteFileRaw` above. Unlike those two, this never constructs a
+    // value on any live path: the interpreter's own arm evaluates
+    // `message` and returns `Err(msg)` directly (the exact same
+    // propagation shape an ordinary runtime error like division-by-zero
+    // already uses), and codegen's arm calls `@plum_abort` followed by
+    // `unreachable` — no monomorphization/struct-tag-discovery hookup
+    // needed, unlike `ReadFileRaw`/`WriteFileRaw`'s `__FileIoResult`
+    // construction. The prelude's `assert`/`assert_eq`/`assert_ne`
+    // (ordinary Plum source, not part of this IR node) are the only
+    // intended callers.
+    PanicRaw {
+        message: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

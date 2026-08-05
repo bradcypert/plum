@@ -1001,6 +1001,14 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
                 contents: Box::new(lower_expr(&args[1], ctx)?),
             })
         }
+        // `panic_raw(msg)` — same shape-only precedent again.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "panic_raw") =>
+        {
+            Ok(ir::Expr::PanicRaw {
+                message: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
         // `r.get()` — same shape-only precedent, zero args.
         ast::Expr::Call { callee, args, .. }
             if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "get") =>

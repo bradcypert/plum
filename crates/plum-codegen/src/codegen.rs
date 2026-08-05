@@ -1306,6 +1306,7 @@ fn free_vars_scoped(expr: &Expr, env: &Env, local: &HashSet<String>, out: &mut B
             free_vars_scoped(path, env, local, out);
             free_vars_scoped(contents, env, local, out);
         }
+        Expr::PanicRaw { message } => free_vars_scoped(message, env, local, out),
     }
 }
 
@@ -1498,6 +1499,7 @@ fn assigned_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet
             assigned_vars_scoped(path, local, out);
             assigned_vars_scoped(contents, local, out);
         }
+        Expr::PanicRaw { message } => assigned_vars_scoped(message, local, out),
     }
 }
 
@@ -2379,6 +2381,33 @@ fn codegen_write_file_raw(path: &Expr, contents: &Expr, env: &Env, em: &mut Emit
     let result = em.fresh_reg();
     em.push(format!("  {result} = phi ptr [ {fail_result}, %{fail_block} ], [ {ok_result}, %{ok_block} ]"));
     Ok((result, CgType::Heap))
+}
+
+/// `panic_raw(msg)` — see `ir::Expr::PanicRaw`'s own doc comment.
+/// DELIBERATELY does NOT emit `unreachable`, unlike `emit_runtime_
+/// check`'s own fail branch: that helper is used as a plain statement
+/// with a SEPARATE "ok" continuation block reached only via a
+/// conditional branch, never itself required to produce an SSA value.
+/// `PanicRaw` is an ordinary expression, reachable through `codegen_
+/// value` (e.g. as an `if`/`else` branch's tail value, merged via a
+/// `phi` with the OTHER branch) — ending its own block in `unreachable`
+/// would make it impossible to `br label %merge` into that phi at all,
+/// and `@plum_abort` isn't marked `noreturn`, so nothing requires it.
+/// Instead this just calls `@plum_abort` as an ordinary (non-
+/// terminator) instruction and returns a placeholder `Unit` value
+/// (`"0"`, exactly matching `Expr::Unit`'s own codegen) — dead code in
+/// practice (`@plum_abort` itself calls `exit(1)`), but ordinary, well-
+/// formed LLVM IR requiring zero special-casing in `If`/`Match`
+/// codegen's own merge-point machinery.
+fn codegen_panic_raw(message: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (msg_reg, msg_ty) = codegen_value(message, env, em, ctx)?;
+    if msg_ty != CgType::Str {
+        return Err(format!("codegen: `panic_raw` requires a Str message, found {msg_ty:?}"));
+    }
+    let msg_cstr = em.fresh_reg();
+    em.push(format!("  {msg_cstr} = getelementptr i8, ptr {msg_reg}, i64 16"));
+    em.push(format!("  call void @plum_abort(ptr {msg_cstr})"));
+    Ok(("0".to_string(), CgType::Unit))
 }
 
 /// A `Callback`-typed `ExternCall` ARGUMENT — special-cased in
@@ -4409,6 +4438,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         Expr::AsCStr(inner) => codegen_as_cstr(inner, env, em, ctx),
         Expr::ReadFileRaw { path } => codegen_read_file_raw(path, env, em, ctx),
         Expr::WriteFileRaw { path, contents } => codegen_write_file_raw(path, contents, env, em, ctx),
+        Expr::PanicRaw { message } => codegen_panic_raw(message, env, em, ctx),
         other => Err(format!("codegen does not yet support this construct: {other:?}")),
     }
 }

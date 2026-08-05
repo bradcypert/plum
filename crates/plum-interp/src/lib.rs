@@ -1838,6 +1838,25 @@ impl Interpreter {
                 let addr = self.heap.alloc("__FileIoResult".to_string(), vec![Value::Bool(ok), Value::HeapRef(payload_addr)]);
                 Ok(Value::HeapRef(addr))
             }
+            // `panic_raw(msg)` — the testing framework's own primitive
+            // (see `ir::Expr::PanicRaw`'s own doc comment). Evaluates
+            // `message` then returns `Err` DIRECTLY — the exact same
+            // propagation shape an ordinary runtime error (division-by-
+            // zero, array-index-out-of-bounds, ...) already uses, so
+            // it needs zero special handling anywhere `Interpreter::
+            // call`'s own `Result` is consumed (confirmed: `plumc::
+            // run_resolved_program_diag` already treats every runtime
+            // `Err` identically, regardless of which check produced
+            // it). Never itself constructs `Result`/`Ok`/`Err` — the
+            // PRELUDE's `assert`/`assert_eq`/`assert_ne` (ordinary Plum
+            // source) are the only intended callers.
+            Expr::PanicRaw { message } => {
+                let Value::HeapRef(msg_addr) = self.eval(message)? else {
+                    return Err("`panic_raw` requires a String message".to_string());
+                };
+                let msg = self.heap.read_str(msg_addr)?.to_string();
+                Err(msg)
+            }
             Expr::RcAnnotated { op, target, rest } => {
                 // Only heap values are affected — a stray Inc/Dec on a
                 // non-heap name (shouldn't happen given how fbip.rs

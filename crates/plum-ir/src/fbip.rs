@@ -151,6 +151,9 @@ pub fn mark_reuse(expr: Expr) -> Expr {
             path: Box::new(mark_reuse(*path)),
             contents: Box::new(mark_reuse(*contents)),
         },
+        Expr::PanicRaw { message } => Expr::PanicRaw {
+            message: Box::new(mark_reuse(*message)),
+        },
         Expr::Select { arms } => Expr::Select {
             arms: arms
                 .into_iter()
@@ -481,6 +484,9 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             path: Box::new(transform(*path, known_heap)),
             contents: Box::new(transform(*contents, known_heap)),
         },
+        Expr::PanicRaw { message } => Expr::PanicRaw {
+            message: Box::new(transform(*message, known_heap)),
+        },
         // Arm bindings (whatever a `Let`/`Match` node WITHIN `body`
         // introduces for the received value — see ir.rs's `Select` doc
         // comment) aren't added to `known_heap` here either, same
@@ -670,6 +676,7 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::RefSet { base, value } => expr_mentions_var(base, name) || expr_mentions_var(value, name),
         Expr::ReadFileRaw { path } => expr_mentions_var(path, name),
         Expr::WriteFileRaw { path, contents } => expr_mentions_var(path, name) || expr_mentions_var(contents, name),
+        Expr::PanicRaw { message } => expr_mentions_var(message, name),
         Expr::Select { arms } => arms
             .iter()
             .any(|arm| expr_mentions_var(&arm.receiver, name) || expr_mentions_var(&arm.body, name)),
@@ -1082,6 +1089,10 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 },
                 used_path || used_contents,
             )
+        }
+        Expr::PanicRaw { message } => {
+            let (message_t, used) = mark_last_uses(*message, name, live_after);
+            (Expr::PanicRaw { message: Box::new(message_t) }, used)
         }
         // Bodies are ALTERNATIVES — only ONE arm's `body` actually
         // runs at runtime (whichever channel becomes ready first) —

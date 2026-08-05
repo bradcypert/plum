@@ -1216,6 +1216,28 @@ mod tests {
         assert_eq!(out, "1");
     }
 
+    // --- testing framework: `panic_raw` (see `ir::Expr::PanicRaw`) ---
+
+    #[test]
+    fn panic_raw_aborts_the_compiled_process_with_its_message_on_stdout() {
+        // Unlike the interpreter (an ordinary catchable `Err`), a
+        // native-compiled `panic_raw` is a hard process abort (`@plum_
+        // abort`: `printf` + `exit(1)`) — `compile_and_run`/`run_via_
+        // clang` surface that as an `Err` whose text embeds the
+        // compiled binary's own captured stdout, which is where `@plum_
+        // abort`'s message actually landed.
+        let src = "let go (): Unit = panic_raw(\"boom\")";
+        let err = compile_and_run(src, "go", &[CgValue::Unit]).expect_err("expected panic_raw to abort the process");
+        assert!(err.contains("boom"), "expected the abort message in the error, got: {err}");
+    }
+
+    #[test]
+    fn panic_raw_inside_an_if_else_is_not_reached_when_the_condition_holds_in_native_codegen() {
+        let src = "let go (): Bool = { if true { () } else { panic_raw(\"should not run\") }; true }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
     // --- standard library: JSON (see `plumc::STDLIB_JSON_SRC`) ---
     //
     // The native-codegen counterpart to `plumc::lib.rs`'s own

@@ -1785,6 +1785,26 @@ mod tests {
         assert_eq!(result, Ok(Value::Bool(true)));
     }
 
+    // --- testing framework: `panic_raw` (see `ir::Expr::PanicRaw`) ---
+
+    #[test]
+    fn panic_raw_surfaces_as_a_runtime_error_through_the_interpreter() {
+        let src = "let use_it dummy = panic_raw(\"boom\")";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Err("boom".to_string()));
+    }
+
+    #[test]
+    fn panic_raw_inside_an_if_else_is_not_reached_when_the_condition_holds() {
+        // Mirrors exactly how `assert`/`assert_eq` use `panic_raw` —
+        // both branches of the `if` are `Unit`, so `panic_raw`'s own
+        // fixed `Unit` result type unifies cleanly with the `then`
+        // branch's `()`.
+        let src = "let use_it dummy = if true { () } else { panic_raw(\"should not run\") }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Unit));
+    }
+
     // --- standard library: JSON (see `plumc::STDLIB_JSON_SRC`) ---
     //
     // `run_json_test` runs on a DEDICATED, generously-sized (16 MiB)

@@ -1716,6 +1716,21 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((Type::Struct("__FileIoResult".to_string(), vec![]), acc))
             }
+            // `panic_raw(msg)` — same shape precedent again; evaluates
+            // to `Unit` (never actually reached on the failure path,
+            // but a real, checkable type is still needed for the
+            // prelude's `assert`/`assert_eq`/`assert_ne` call sites,
+            // whose `if`-branches must both agree on one type).
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "panic_raw") =>
+            {
+                let (msg_ty, s) = self.infer_expr(&args[0], env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&msg_ty), &Type::Str)
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`panic_raw` argument: {e}")))?;
+                acc = s.compose(&acc);
+                Ok((Type::Unit, acc))
+            }
             // `r.get()` — `r` must be `Ref[T]` for some `T`; evaluates
             // to `T`.
             ast::Expr::Call { callee, args, span }
