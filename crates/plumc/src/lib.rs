@@ -825,6 +825,103 @@ let float_pow (base: Float) (exp: Float): Float = unsafe { pow(base, exp) }
 let float_sqrt (x: Float): Float = unsafe { sqrt(x) }
 ";
 
+/// `Array[T]` utilities — pure Plum, built entirely on the existing
+/// builtin surface (`.len()`/`arr[i]` indexing/`.push()`/`.fold()`, all
+/// already real), no new IR/codegen work. `array_*`-prefixed, matching
+/// every other stdlib chunk's own convention.
+///
+/// **This is a deliberately NARROWED chunk — `array_sort_by`, `array_
+/// zip`, and `array_sum_int`/`array_sum_float` are ALL cut from v1,**
+/// not forgotten. Building them surfaced THREE distinct-looking, but
+/// likely related, previously-latent type-inference bugs, each
+/// confirmed via a minimal standalone repro, none caused by anything
+/// unusual in the Plum source itself:
+/// - A self-recursive generic function with TWO SEPARATE call sites to
+///   itself in one body (an early `array_drop_acc` draft: `if ... {
+///   rec(...) } else { rec(...) }`, one call per branch) sent `Subst::
+///   apply` into apparent infinite recursion (100,000+ stack frames
+///   before aborting) — traced far enough to see it happening inside
+///   `Infer::infer_if`'s branch-unification `compose` call, but not
+///   past that. WORKED AROUND for `array_drop_acc` alone by rewriting
+///   it to a single call site (`rec(..., if cond { a } else { b })`) —
+///   this is a legitimate, equally-idiomatic rewrite, not a hack, but
+///   the underlying `Subst`/unification bug it dodges is real and
+///   still there for the next function shaped this way.
+/// - A function calling three OTHER generic recursive helpers together
+///   in one branch, alongside its own single self-recursive call in
+///   the other (`array_sort_by`/`array_sort_insert`'s `array_concat(
+///   array_take(...).push(x), array_drop(...))` combination) hits the
+///   SAME infinite-`Subst::apply`-recursion symptom — no single-call-
+///   site rewrite available here (the whole point is combining three
+///   independent array operations), so this couldn't be worked around
+///   the same way; cut instead of forced through.
+/// - Two ordinary, otherwise-unrelated top-level functions each calling
+///   `.fold()` with a two-argument closure and DIFFERENT concrete
+///   accumulator types (`array_sum_int`'s `0` vs `array_sum_float`'s
+///   `0.0`) made an entirely UNRELATED third function's own `.fold()`
+///   call fail type-checking with a bogus \"expected Int, found Float\"
+///   — confirmed via a minimal repro with no recursion involved at all,
+///   so this is a SEPARATE bug from the two above, not the same one
+///   wearing a different hat.
+///
+/// None of these were forced through with a workaround beyond the one
+/// explicitly noted above (`array_drop_acc`'s single-call-site
+/// rewrite) — flagged to the user instead of silently patched around
+/// or chased indefinitely inside what was scoped as a stdlib-additions
+/// chunk. A dedicated follow-up session should root-cause `plum-types::
+/// subst::Subst`'s composition/generalization directly (strong
+/// suspicion: `compose` can produce a self-referential `id -> Var(id)`
+/// binding when merging two substitutions whose keys interact just
+/// right, which `Subst::apply` then recurses on forever — `compose`
+/// itself never occurs-checks its own merged output, only individual
+/// `bind_var` calls do) before `array_sort_by`/`array_zip`/`array_sum_
+/// *` (or anything shaped like them) are attempted again.
+const STDLIB_ARRAY_SRC: &str = "\
+let array_is_empty[T] (arr: Array[T]): Bool = arr.len() == 0
+
+let array_first[T] (arr: Array[T]): Option[T] = if array_is_empty(arr) { None } else { Some(arr[0]) }
+
+let array_last[T] (arr: Array[T]): Option[T] = if array_is_empty(arr) { None } else { Some(arr[arr.len() - 1]) }
+
+let array_reverse_acc[T] (arr: Array[T]) (i: Int) (acc: Array[T]): Array[T] =
+    if i < 0 { acc } else { array_reverse_acc(arr, i - 1, acc.push(arr[i])) }
+
+let array_reverse[T] (arr: Array[T]): Array[T] = array_reverse_acc(arr, arr.len() - 1, [])
+
+let array_concat_acc[T] (a: Array[T]) (b: Array[T]) (i: Int): Array[T] =
+    if i >= b.len() { a } else { array_concat_acc(a.push(b[i]), b, i + 1) }
+
+let array_concat[T] (a: Array[T]) (b: Array[T]): Array[T] = array_concat_acc(a, b, 0)
+
+let array_take_acc[T] (arr: Array[T]) (n: Int) (i: Int) (acc: Array[T]): Array[T] =
+    if i >= n { acc } else if i >= arr.len() { acc } else { array_take_acc(arr, n, i + 1, acc.push(arr[i])) }
+
+let array_take[T] (arr: Array[T]) (n: Int): Array[T] = array_take_acc(arr, n, 0, [])
+
+let array_drop_acc[T] (arr: Array[T]) (n: Int) (i: Int) (acc: Array[T]): Array[T] =
+    if i >= arr.len() { acc } else { array_drop_acc(arr, n, i + 1, if i < n { acc } else { acc.push(arr[i]) }) }
+
+let array_drop[T] (arr: Array[T]) (n: Int): Array[T] = array_drop_acc(arr, n, 0, [])
+
+let array_slice[T] (arr: Array[T]) (start: Int) (end: Int): Array[T] = array_take(array_drop(arr, start), end - start)
+
+let array_find_acc[T] (arr: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =
+    if i >= arr.len() { None } else if f(arr[i]) { Some(arr[i]) } else { array_find_acc(arr, f, i + 1) }
+
+let array_find[T] (arr: Array[T]) (f: (T) -> Bool): Option[T] = array_find_acc(arr, f, 0)
+
+let array_any[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(false, |acc, x| acc || f(x))
+
+let array_all[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(true, |acc, x| acc && f(x))
+
+let array_index_of_acc[T: Eq] (arr: Array[T]) (x: T) (i: Int): Option[Int] =
+    if i >= arr.len() { None } else if arr[i] == x { Some(i) } else { array_index_of_acc(arr, x, i + 1) }
+
+let array_index_of[T: Eq] (arr: Array[T]) (x: T): Option[Int] = array_index_of_acc(arr, x, 0)
+
+let array_contains[T: Eq] (arr: Array[T]) (x: T): Bool = option_is_some(array_index_of(arr, x))
+";
+
 /// Parses the prelude + stdlib sources once and prepends their items
 /// to `program`'s own — items earlier in the list are declared FIRST,
 /// but `TypeContext`'s two-phase construction (see its doc comment)
@@ -845,6 +942,7 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
         STDLIB_ASSERT_SRC,
         STDLIB_OPTION_RESULT_SRC,
         STDLIB_NUMBER_SRC,
+        STDLIB_ARRAY_SRC,
     ] {
         let tokens = Lexer::with_base_offset(src, base).tokenize();
         let parsed_items = Parser::new(tokens)
@@ -877,7 +975,8 @@ const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len()
     + STDLIB_COLLECTIONS_SRC.len()
     + STDLIB_ASSERT_SRC.len()
     + STDLIB_OPTION_RESULT_SRC.len()
-    + STDLIB_NUMBER_SRC.len();
+    + STDLIB_NUMBER_SRC.len()
+    + STDLIB_ARRAY_SRC.len();
 
 /// Runs the whole pipeline — parse, type-check, lower, optimize, load,
 /// call — and returns the result of calling `fn_name` with `args`.
@@ -2146,6 +2245,57 @@ mod tests {
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
         let src = "let use_it dummy = result_is_err(Err(\"boom\"))";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
+    }
+
+    // --- standard library: array utilities (see `plumc::STDLIB_ARRAY_SRC`) ---
+
+    #[test]
+    fn array_is_empty_and_reverse_behave_as_expected() {
+        assert_eq!(typecheck_and_run("let use_it dummy = array_is_empty([1, 2])", "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
+        let src = "let use_it dummy = { let arr: Array[Int] = []; array_is_empty(arr) }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
+        let src = "let use_it dummy = match array_reverse([1, 2, 3]) { arr => arr[0] * 100 + arr[1] * 10 + arr[2] }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(321)));
+    }
+
+    #[test]
+    fn array_first_and_last_return_none_on_empty() {
+        let src = "let use_it dummy = match array_first([1, 2, 3]) { Some(x) => x, None => -1 }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
+        let src = "let use_it dummy = match array_last([1, 2, 3]) { Some(x) => x, None => -1 }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(3)));
+        let src = "let use_it dummy = { let arr: Array[Int] = []; match array_first(arr) { Some(x) => x, None => -1 } }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(-1)));
+    }
+
+    #[test]
+    fn array_concat_take_and_drop_slice_correctly() {
+        let src = "let use_it dummy = { let arr = array_concat([1, 2], [3, 4]); arr[0] * 1000 + arr[1] * 100 + arr[2] * 10 + arr[3] }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1234)));
+        let src = "let use_it dummy = { let arr = array_take([1, 2, 3, 4], 2); arr[0] * 10 + arr[1] }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(12)));
+        let src = "let use_it dummy = { let arr = array_drop([1, 2, 3, 4], 2); arr[0] * 10 + arr[1] }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(34)));
+        let src = "let use_it dummy = { let arr = array_slice([1, 2, 3, 4, 5], 1, 4); arr[0] * 100 + arr[1] * 10 + arr[2] }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(234)));
+    }
+
+    #[test]
+    fn array_find_any_all_locate_and_test_elements() {
+        let src = "let use_it dummy = match array_find([1, 2, 3, 4], |x| x % 2 == 0) { Some(x) => x, None => -1 }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(2)));
+        let src = "let use_it dummy = array_any([1, 3, 5], |x| x % 2 == 0)";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
+        let src = "let use_it dummy = array_all([2, 4, 6], |x| x % 2 == 0)";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn array_index_of_and_contains_use_the_eq_bound() {
+        let src = "let use_it dummy = match array_index_of([10, 20, 30], 20) { Some(i) => i, None => -1 }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
+        let src = "let use_it dummy = array_contains([10, 20, 30], 99)";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
     }
 
     // --- standard library: number utilities (see `plumc::STDLIB_NUMBER_SRC`) ---

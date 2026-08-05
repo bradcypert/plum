@@ -1268,6 +1268,26 @@ mod tests {
         assert_eq!(out, "1");
     }
 
+    // --- standard library: array utilities (see `plumc::STDLIB_ARRAY_SRC`) ---
+
+    #[test]
+    fn array_reverse_take_drop_and_slice_run_through_native_codegen() {
+        let src = "let go (): Int = { let arr = array_reverse([1, 2, 3]); arr[0] * 100 + arr[1] * 10 + arr[2] }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "321");
+        let src = "let go (): Int = { let arr = array_slice(array_concat([1, 2], [3, 4, 5]), 1, 4); arr[0] * 100 + arr[1] * 10 + arr[2] }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "234");
+    }
+
+    #[test]
+    fn array_find_any_all_index_of_and_contains_run_through_native_codegen() {
+        let src = "let go (): Int = match array_find([1, 2, 3, 4], |x| x % 2 == 0) { Some(x) => x, None => -1 }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "2");
+        let src = "let go (): Bool = array_all([2, 4, 6], |x| x % 2 == 0)";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+        let src = "let go (): Bool = array_contains([10, 20, 30], 99)";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "0");
+    }
+
     // --- standard library: number utilities (see `plumc::STDLIB_NUMBER_SRC`) ---
 
     #[test]

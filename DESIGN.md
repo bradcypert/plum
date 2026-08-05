@@ -2667,6 +2667,86 @@ BOTH `plum run` (interpreter) and a real compiled `plum build` binary,
 confirming identical numeric output on both paths. Workspace now 1509
 tests (net +6 — 4 interpreter + 2 native), zero warnings.
 
+### Chunk 12: `Array[T]` utilities — narrowed scope after finding a real, previously-latent type-inference bug (`Subst`/generalization, not fixed here)
+
+Third item off the user's stated order (number, then array, then
+string). Shipped: `array_is_empty`, `array_first`/`array_last:
+Option[T]`, `array_reverse`, `array_concat`, `array_take`/`array_drop`,
+`array_slice`, `array_find: Option[T]`, `array_any`/`array_all`,
+`array_index_of: Option[Int]`/`array_contains` (`Eq`-bounded) — all
+pure Plum, built entirely on the pre-existing `.len()`/`arr[i]`/
+`.push()`/`.fold()` surface, zero new IR/codegen work.
+
+**Deliberately NOT shipped: `array_sort_by`, `array_zip`,
+`array_sum_int`/`array_sum_float`.** Building them surfaced a real,
+previously-latent, and apparently non-trivial type-inference bug in
+`plum-types`, hit via three distinct-looking (but likely related)
+symptoms, none caused by anything unusual about the Plum source itself:
+
+1. A self-recursive generic function with TWO SEPARATE call sites to
+   itself in one body (an early `array_drop_acc` draft: one recursive
+   call in each `if`/`else` branch) sent `Subst::apply` into what a
+   `gdb` backtrace confirmed was genuine unbounded recursion — 100,000+
+   stack frames deep before aborting, traced as far as `Infer::
+   infer_if`'s own branch-unification `compose` call, not further.
+   WORKED AROUND for this one function by rewriting it to a single
+   call site (`rec(..., if cond { a } else { b })` — pushing the
+   branch into a value-level `if` passed as an argument, instead of
+   branching the call itself) — a legitimate, equally-idiomatic
+   rewrite on its own terms, not a hack, but it dodges rather than
+   fixes the underlying bug.
+2. `array_sort_by`/`array_sort_insert`, which calls THREE other
+   generic recursive helpers together in one branch (`array_concat(
+   array_take(...).push(x), array_drop(...))`) alongside its own single
+   self-recursive call in the other branch, hits the exact same
+   infinite-`Subst::apply`-recursion symptom. No single-call-site
+   rewrite is available here — the whole point of the function is
+   combining three independent array operations — so this couldn't be
+   worked around the same way. Cut instead of forced through.
+3. Two ordinary, otherwise-UNRELATED top-level functions each calling
+   `.fold()` with a two-argument closure and different CONCRETE
+   accumulator types (`array_sum_int`'s `0` vs `array_sum_float`'s
+   `0.0`) made a completely separate THIRD function's own `.fold()`
+   call fail type-checking with a bogus "expected Int, found Float" —
+   confirmed via a minimal standalone repro with no recursion involved
+   at all. This is a genuinely separate-looking bug from (1)/(2), not
+   the same one wearing a different hat.
+
+**Root cause not fully traced, but the leading suspect (from reading
+`plum-types/src/subst.rs` directly, not just the backtrace) is `Subst::
+compose`**: individual `bind_var` calls in `unify.rs` DO occurs-check
+(rejecting a variable bound to a type that contains itself), but
+`Subst::compose`'s merge of two ALREADY-occurs-checked substitutions
+never re-checks the MERGED result — and it's easy to construct, on
+paper, two individually-acyclic substitutions (`self` has `id2 ->
+Var(id1)`, `other` has `id1 -> Var(id2)`) whose `compose`d result
+contains a genuine self-reference (`id1 -> Var(id1)`), which `Subst::
+apply` would then recurse on forever the next time it's applied. This
+would explain symptom 1 (two independently-instantiated recursive calls
+to the same self-recursive generic function, each with its own fresh
+type variables, threaded through sequential `if`/`else` branch
+unification) but hasn't been confirmed to also explain symptom 2 or 3 —
+genuinely unclear yet whether all three share one root cause or there
+are two separate bugs here.
+
+None of these three were forced through with any workaround beyond the
+one explicitly noted (`array_drop_acc`'s single-call-site rewrite,
+itself legitimate Plum, not a compiler-bug-shaped hack) — flagged to
+the user directly rather than silently patched around or chased
+indefinitely inside what was scoped as a stdlib-additions chunk,
+per this project's own established discipline (root-cause real bugs,
+don't work around them — and when a bug is too deep to safely fix
+inline, defer it explicitly and say so, the same as chunks 4/5's own
+precedent). A dedicated follow-up session should root-cause `Subst`'s
+composition/generalization directly before `array_sort_by`/`array_zip`/
+`array_sum_*` (or anything shaped like them, including in a FUTURE
+string-utilities chunk) are attempted again.
+
+Verified both backends (interpreter + native-codegen tests for every
+shipped function) plus a real throwaway project run through both
+`plum run` and a compiled `plum build` binary. Workspace now 1516
+tests (net +7), zero warnings.
+
 ## Toolchain and diagnostics
 
 After JSON, the user redirected from stdlib growth toward user-facing
@@ -4262,6 +4342,26 @@ summed), not just inspect emitted IR text.
 
 ## Open questions (not yet decided, flagged so we don't forget them)
 
+- **KNOWN BUG, not a design question — needs its own dedicated
+  session**: `plum-types::subst::Subst`'s composition/generalization
+  has a real, previously-latent correctness bug, found while building
+  chunk 12's array utilities (see "Standard library" chunk 12 above for
+  full detail/repro shapes). At least two distinct symptoms: (1)
+  certain self-recursive-generic-function shapes (two separate call
+  sites to the same function within one body; three OTHER generic
+  helpers called together alongside one self-recursive call) send
+  `Subst::apply` into genuine unbounded recursion (100,000+ stack
+  frames, confirmed via `gdb`) — leading suspect is `Subst::compose`
+  never occurs-checking its own MERGED output, only individual
+  `bind_var` calls do, so composing two individually-acyclic
+  substitutions can still produce a self-referential `id -> Var(id)`
+  binding. (2) Two unrelated top-level functions each calling `.fold()`
+  with a two-argument closure at DIFFERENT concrete types made a THIRD,
+  unrelated function's own `.fold()` call fail type-checking — not yet
+  confirmed to share root cause with (1). Blocks `array_sort_by`/
+  `array_zip`/`array_sum_int`/`array_sum_float` (deferred, not shipped)
+  and likely blocks similarly-shaped functions in the still-pending
+  string-utilities chunk too — root-cause this BEFORE attempting either.
 - `Ref[T]`'s naming, construction (`ref(v)`), `.get()`/`.set()`,
   representation (`Rc<RefCell<Value>>`, outside the toy heap/FBIP
   entirely), pattern-matching interaction (none — not directly

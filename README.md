@@ -385,6 +385,13 @@ program's prelude):
   `float_min`, `float_max`, `float_abs`, `float_clamp`, `float_floor`,
   `float_ceil`, `float_round`, `float_pow`, `float_sqrt` (the last five
   wrap real libm functions via `extern "C"`).
+- **`Array[T]`** — `array_is_empty`, `array_first`/`array_last:
+  Option[T]`, `array_reverse`, `array_concat`, `array_take`/`array_drop`,
+  `array_slice`, `array_find: Option[T]`, `array_any`/`array_all`,
+  `array_index_of: Option[Int]`, `array_contains` (both `Eq`-bounded).
+  `array_sort_by`/`array_zip`/array-sum are NOT here yet — a real,
+  previously-latent type-inference bug (see DESIGN.md) currently blocks
+  them specifically.
 - **`println(x)`/`print(x)`** — print any value's `.to_string()`
   (`print` with no trailing newline, `println` with one).
 - **`read_file(path): Result[String, String]`** / **`write_file(path,
