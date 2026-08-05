@@ -260,7 +260,7 @@ impl LoweringContext {
 // `struct Node { next: Node }` (perfectly legal ordinary Plum, since
 // every field is a heap `Value` indirection, never inline) would
 // recurse forever trying to flatten an infinitely-nested C layout.
-fn resolve_extern_type(ty: &ast::Type, ctx: &LoweringContext) -> Result<ir::ExternType, String> {
+fn resolve_extern_type(ty: &ast::Type, ctx: &LoweringContext) -> Result<ir::ExternType, plum_syntax::error::CompileError> {
     resolve_extern_type_inner(ty, ctx, true, true, &mut std::collections::HashSet::new())
 }
 
@@ -283,12 +283,13 @@ fn resolve_extern_type_inner(
     allow_cstr: bool,
     allow_callback: bool,
     in_progress: &mut std::collections::HashSet<String>,
-) -> Result<ir::ExternType, String> {
+) -> Result<ir::ExternType, plum_syntax::error::CompileError> {
     if let ast::Type::Function { params, ret, span } = ty {
         if !allow_callback {
-            return Err(format!(
+            return Err(plum_syntax::error::CompileError::new(
+                *span,
                 "a callback type is only supported as a top-level extern parameter, not nested inside a \
-                 struct field or another callback, at {span:?}"
+                 struct field or another callback",
             ));
         }
         let param_types = params
@@ -305,16 +306,15 @@ fn resolve_extern_type_inner(
         });
     }
     let ast::Type::Path(segments, span) = ty else {
-        return Err(format!(
-            "extern functions only support Int, Float, Bool, CStr, or a struct made entirely of those \
-             types, found {ty:?} at {:?}",
-            ty.span()
+        return Err(plum_syntax::error::CompileError::new(
+            ty.span(),
+            format!("extern functions only support Int, Float, Bool, CStr, or a struct made entirely of those types, found {ty:?}"),
         ));
     };
     if segments.len() != 1 {
-        return Err(format!(
-            "extern functions only support Int, Float, Bool, CStr, or a struct made entirely of those \
-             types, found {ty:?} at {span:?}"
+        return Err(plum_syntax::error::CompileError::new(
+            *span,
+            format!("extern functions only support Int, Float, Bool, CStr, or a struct made entirely of those types, found {ty:?}"),
         ));
     }
     match segments[0].as_str() {
@@ -322,20 +322,21 @@ fn resolve_extern_type_inner(
         "Float" => Ok(ir::ExternType::Float),
         "Bool" => Ok(ir::ExternType::Bool),
         "CStr" if allow_cstr => Ok(ir::ExternType::Str),
-        "CStr" => Err(format!(
-            "CStr is only supported as a top-level extern parameter/return type, not inside a struct \
-             field, at {span:?}"
+        "CStr" => Err(plum_syntax::error::CompileError::new(
+            *span,
+            "CStr is only supported as a top-level extern parameter/return type, not inside a struct field",
         )),
         name => {
             let Some(field_types) = ctx.struct_field_types.get(name) else {
-                return Err(format!(
-                    "extern functions only support Int, Float, Bool, CStr, or a struct made entirely of \
-                     those types, found {name:?} at {span:?}"
+                return Err(plum_syntax::error::CompileError::new(
+                    *span,
+                    format!("extern functions only support Int, Float, Bool, CStr, or a struct made entirely of those types, found {name:?}"),
                 ));
             };
             if !in_progress.insert(name.to_string()) {
-                return Err(format!(
-                    "extern struct type {name:?} is self-referential, which isn't FFI-safe (at {span:?})"
+                return Err(plum_syntax::error::CompileError::new(
+                    *span,
+                    format!("extern struct type {name:?} is self-referential, which isn't FFI-safe"),
                 ));
             }
             let resolved = field_types
@@ -348,7 +349,7 @@ fn resolve_extern_type_inner(
     }
 }
 
-fn resolve_extern_fn(f: &ast::ExternFn, ctx: &LoweringContext) -> Result<ir::ExternFn, String> {
+fn resolve_extern_fn(f: &ast::ExternFn, ctx: &LoweringContext) -> Result<ir::ExternFn, plum_syntax::error::CompileError> {
     let param_types = f
         .params
         .iter()
@@ -360,10 +361,13 @@ fn resolve_extern_fn(f: &ast::ExternFn, ctx: &LoweringContext) -> Result<ir::Ext
     // (Plum passing a function TO C), matching `plum-types`'
     // independently-duplicated identical restriction.
     if matches!(ret_type, Some(ir::ExternType::Callback { .. })) {
-        return Err(format!(
-            "extern function {:?}: a callback type is only supported as a parameter, not a return type \
-             (calling a C-supplied function pointer isn't implemented)",
-            f.name
+        return Err(plum_syntax::error::CompileError::new(
+            f.span,
+            format!(
+                "extern function {:?}: a callback type is only supported as a parameter, not a return type \
+                 (calling a C-supplied function pointer isn't implemented)",
+                f.name
+            ),
         ));
     }
     Ok(ir::ExternFn {
@@ -390,7 +394,7 @@ impl Default for LoweringContext {
 /// are simply IGNORED, not rejected — see ir.rs's `Function` doc
 /// comment: a type parameter has no runtime effect without a type
 /// checker, so this is deliberate erasure.
-pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir::Program, String> {
+pub fn lower_program(program: &ast::Program, ctx: &LoweringContext) -> Result<ir::Program, plum_syntax::error::CompileError> {
     let mut functions = Vec::new();
     let mut globals = Vec::new();
     let mut externs = Vec::new();
@@ -476,7 +480,7 @@ fn type_contains_param(ty: &plum_types::types::Type) -> bool {
     }
 }
 
-fn type_to_prim_ty(ty: &plum_types::types::Type) -> Result<ir::PrimTy, String> {
+fn type_to_prim_ty(ty: &plum_types::types::Type) -> Result<ir::PrimTy, plum_syntax::error::CompileError> {
     use plum_types::types::Type;
     match ty {
         Type::Int => Ok(ir::PrimTy::Int),
@@ -501,9 +505,9 @@ fn type_to_prim_ty(ty: &plum_types::types::Type) -> Result<ir::PrimTy, String> {
             params.iter().map(type_to_prim_ty).collect::<Result<Vec<_>, _>>()?,
             Box::new(type_to_prim_ty(ret)?),
         )),
-        other => Err(format!(
+        other => Err(plum_syntax::error::CompileError::spanless(format!(
             "resolved to {other:?}, which codegen can't represent as an array element / closure param or return type"
-        )),
+        ))),
     }
 }
 
@@ -530,7 +534,7 @@ const DEFAULT_ARM_TAG: &str = "0Default";
 // destructuring to live except as a `Match` wrapped around the body,
 // reusing the exact same tag-based mechanism `Ctor`/`Match` already
 // give every other heap-shaped value.
-pub(crate) fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast::Pattern)>), String> {
+pub(crate) fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(String, ast::Pattern)>), plum_syntax::error::CompileError> {
     let mut names = Vec::with_capacity(params.len());
     let mut destructures = Vec::new();
     for (i, param) in params.iter().enumerate() {
@@ -553,10 +557,10 @@ pub(crate) fn lower_params(params: &[ast::Param]) -> Result<(Vec<String>, Vec<(S
                 destructures.push((synthetic, pattern.clone()));
             }
             _ => {
-                return Err(format!(
+                return Err(plum_syntax::error::CompileError::new(
+                    param.span,
                     "lowering not yet implemented for destructuring function parameters of \
-                     this shape (only tuples, structs, and plain identifiers so far) at {:?}",
-                    param.span
+                     this shape (only tuples, structs, and plain identifiers so far)",
                 ));
             }
         }
@@ -574,7 +578,7 @@ pub(crate) fn wrap_destructure(
     pattern: &ast::Pattern,
     ctx: &LoweringContext,
     rest: ir::Expr,
-) -> Result<ir::Expr, String> {
+) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let (tag, bindings, nested) = lower_tag_pattern(pattern, ctx)?;
     let body = wrap_nested_destructures(nested, ctx, rest)?;
     Ok(ir::Expr::Match {
@@ -596,7 +600,7 @@ fn wrap_nested_destructures(
     nested: Vec<(String, ast::Pattern)>,
     ctx: &LoweringContext,
     body: ir::Expr,
-) -> Result<ir::Expr, String> {
+) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let mut result = body;
     for (name, pattern) in nested.into_iter().rev() {
         let (tag, bindings, more_nested) = lower_tag_pattern(&pattern, ctx)?;
@@ -626,7 +630,7 @@ fn classify_subpattern(
     next_synthetic: &mut usize,
     bindings: &mut Vec<String>,
     nested: &mut Vec<(String, ast::Pattern)>,
-) -> Result<(), String> {
+) -> Result<(), plum_syntax::error::CompileError> {
     match pattern {
         ast::Pattern::Ident(name, _) => bindings.push(name.clone()),
         // `_` can never collide with a real user binding — the lexer
@@ -640,10 +644,9 @@ fn classify_subpattern(
             nested.push((synthetic, p.clone()));
         }
         other => {
-            return Err(format!(
-                "lowering not yet implemented for this pattern shape nested inside \
-                 another pattern at {:?}",
-                other.span()
+            return Err(plum_syntax::error::CompileError::new(
+                other.span(),
+                "lowering not yet implemented for this pattern shape nested inside another pattern",
             ));
         }
     }
@@ -660,7 +663,7 @@ fn classify_subpattern(
 fn lower_tag_pattern(
     pattern: &ast::Pattern,
     ctx: &LoweringContext,
-) -> Result<(String, Vec<String>, Vec<(String, ast::Pattern)>), String> {
+) -> Result<(String, Vec<String>, Vec<(String, ast::Pattern)>), plum_syntax::error::CompileError> {
     let mut next_synthetic = 0;
     match pattern {
         ast::Pattern::Variant { path, args, .. } => {
@@ -674,9 +677,10 @@ fn lower_tag_pattern(
         }
         ast::Pattern::Tuple(elems, span) => {
             if elems.is_empty() {
-                return Err(format!(
+                return Err(plum_syntax::error::CompileError::new(
+                    *span,
                     "lowering not yet implemented for destructuring against the empty tuple \
-                     pattern at {span:?} (there's nothing to bind — match against `()` instead)"
+                     pattern (there's nothing to bind — match against `()` instead)",
                 ));
             }
             let mut bindings = Vec::with_capacity(elems.len());
@@ -704,15 +708,15 @@ fn lower_tag_pattern(
         } => {
             let tag = path.last().cloned().expect("a path always has at least one segment");
             let Some(declared_fields) = ctx.struct_fields.get(&tag) else {
-                return Err(format!(
-                    "unknown struct type {tag:?} at {span:?} (no declaration found in this \
-                     lowering context)"
+                return Err(plum_syntax::error::CompileError::new(
+                    *span,
+                    format!("unknown struct type {tag:?} (no declaration found in this lowering context)"),
                 ));
             };
             let mut by_name: HashMap<&str, &ast::Pattern> = HashMap::new();
             for f in fields {
                 if by_name.insert(f.name.as_str(), &f.pattern).is_some() {
-                    return Err(format!("field {:?} specified more than once at {:?}", f.name, f.span));
+                    return Err(plum_syntax::error::CompileError::new(f.span, format!("field {:?} specified more than once", f.name)));
                 }
             }
             let mut bindings = Vec::with_capacity(declared_fields.len());
@@ -724,26 +728,26 @@ fn lower_tag_pattern(
                     }
                     None if *has_rest => bindings.push("_".to_string()),
                     None => {
-                        return Err(format!(
-                            "missing field {declared_name:?} for struct {tag:?} pattern at {span:?} \
-                             (add `..` to ignore it)"
+                        return Err(plum_syntax::error::CompileError::new(
+                            *span,
+                            format!("missing field {declared_name:?} for struct {tag:?} pattern (add `..` to ignore it)"),
                         ));
                     }
                 }
             }
             if let Some((extra_name, _)) = by_name.into_iter().next() {
-                return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+                return Err(plum_syntax::error::CompileError::new(*span, format!("struct {tag:?} has no field named {extra_name:?}")));
             }
             Ok((tag, bindings, nested))
         }
-        other => Err(format!(
-            "lowering not yet implemented for this pattern shape as a destructure at {:?}",
-            other.span()
+        other => Err(plum_syntax::error::CompileError::new(
+            other.span(),
+            "lowering not yet implemented for this pattern shape as a destructure",
         )),
     }
 }
 
-pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     match expr {
         ast::Expr::Int(n, _) => Ok(ir::Expr::Int(*n)),
         ast::Expr::Float(f, _) => Ok(ir::Expr::Float(*f)),
@@ -1285,9 +1289,9 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
             if let Some(tag) = variant_tag {
                 if let Some(&arity) = ctx.variants.get(tag) {
                     if args.len() != arity {
-                        return Err(format!(
-                            "variant {tag:?} expects {arity} field(s), found {} at {span:?}",
-                            args.len()
+                        return Err(plum_syntax::error::CompileError::new(
+                            *span,
+                            format!("variant {tag:?} expects {arity} field(s), found {}", args.len()),
                         ));
                     }
                     let fields = args.iter().map(|a| lower_expr(a, ctx)).collect::<Result<_, _>>()?;
@@ -1390,20 +1394,21 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         // struct `base` is, since the bare syntax alone doesn't.
         ast::Expr::Field { base, name, span } => {
             let Some(struct_name) = ctx.field_owners.get(span) else {
-                return Err(format!(
+                return Err(plum_syntax::error::CompileError::new(
+                    *span,
                     "lowering not yet implemented for field access without a resolved owner \
                      (internal: type inference must run before lowering to populate \
-                     `LoweringContext::field_owners`) at {span:?}"
+                     `LoweringContext::field_owners`)",
                 ));
             };
             let Some(declared_fields) = ctx.struct_fields.get(struct_name) else {
-                return Err(format!(
-                    "unknown struct type {struct_name:?} at {span:?} (no declaration found in \
-                     this lowering context)"
+                return Err(plum_syntax::error::CompileError::new(
+                    *span,
+                    format!("unknown struct type {struct_name:?} (no declaration found in this lowering context)"),
                 ));
             };
             if !declared_fields.iter().any(|f| f == name) {
-                return Err(format!("struct {struct_name:?} has no field named {name:?} (at {span:?})"));
+                return Err(plum_syntax::error::CompileError::new(*span, format!("struct {struct_name:?} has no field named {name:?}")));
             }
             let result_name = "__field_result".to_string();
             let bindings = declared_fields
@@ -1422,9 +1427,9 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, S
         }
         // Generic instantiation and indexing are still deferred — not
         // needed to validate struct/match lowering.
-        other => Err(format!(
-            "lowering not yet implemented for this expression form at {:?}",
-            other.span()
+        other => Err(plum_syntax::error::CompileError::new(
+            other.span(),
+            "lowering not yet implemented for this expression form",
         )),
     }
 }
@@ -1435,18 +1440,19 @@ fn lower_struct_literal(
     spread: &Option<Box<ast::Expr>>,
     span: plum_syntax::span::Span,
     ctx: &LoweringContext,
-) -> Result<ir::Expr, String> {
+) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let tag = path.last().cloned().expect("a path always has at least one segment");
     let Some(declared_fields) = ctx.struct_fields.get(&tag) else {
-        return Err(format!(
-            "unknown struct type {tag:?} at {span:?} (no declaration found in this lowering context)"
+        return Err(plum_syntax::error::CompileError::new(
+            span,
+            format!("unknown struct type {tag:?} (no declaration found in this lowering context)"),
         ));
     };
 
     let mut by_name: HashMap<&str, &ast::Expr> = HashMap::new();
     for f in fields {
         if by_name.insert(f.name.as_str(), &f.value).is_some() {
-            return Err(format!("field {:?} specified more than once at {:?}", f.name, f.span));
+            return Err(plum_syntax::error::CompileError::new(f.span, format!("field {:?} specified more than once", f.name)));
         }
     }
 
@@ -1455,12 +1461,12 @@ fn lower_struct_literal(
         let mut ir_fields = Vec::with_capacity(declared_fields.len());
         for declared_name in declared_fields {
             let Some(value_expr) = by_name.remove(declared_name.as_str()) else {
-                return Err(format!("missing field {declared_name:?} for struct {tag:?} at {span:?}"));
+                return Err(plum_syntax::error::CompileError::new(span, format!("missing field {declared_name:?} for struct {tag:?}")));
             };
             ir_fields.push(lower_expr(value_expr, ctx)?);
         }
         if let Some((extra_name, _)) = by_name.into_iter().next() {
-            return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+            return Err(plum_syntax::error::CompileError::new(span, format!("struct {tag:?} has no field named {extra_name:?}")));
         }
         return Ok(ir::Expr::Ctor { tag, fields: ir_fields });
     };
@@ -1486,7 +1492,7 @@ fn lower_struct_literal(
         bindings.push(synthetic);
     }
     if let Some((extra_name, _)) = by_name.into_iter().next() {
-        return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+        return Err(plum_syntax::error::CompileError::new(span, format!("struct {tag:?} has no field named {extra_name:?}")));
     }
 
     Ok(ir::Expr::Match {
@@ -1533,7 +1539,7 @@ fn is_literal_match(arms: &[ast::MatchArm]) -> bool {
 // exhaustiveness gap this whole match-literals feature was designed to
 // close at compile time instead — see `lower_literal_match`'s
 // identical restriction on its own trailing arm.
-fn lower_catchall_only_match(scrutinee: &ast::Expr, arm: &ast::MatchArm, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+fn lower_catchall_only_match(scrutinee: &ast::Expr, arm: &ast::MatchArm, ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let ir_scrutinee = lower_expr(scrutinee, ctx)?;
     let body = lower_expr(&arm.body, ctx)?;
     let name = match &arm.pattern {
@@ -1569,13 +1575,13 @@ fn lower_catchall_only_match(scrutinee: &ast::Expr, arm: &ast::MatchArm, ctx: &L
 // evaluates false would reopen exactly the gap the trailing arm exists
 // to close, and there is deliberately no new "runtime match failure"
 // IR node to fall back to here).
-fn lower_literal_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringContext) -> Result<ir::Expr, String> {
+fn lower_literal_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let (last, rest) = arms.split_last().expect("is_literal_match already checked arms is non-empty");
     if last.guard.is_some() {
-        return Err(format!(
+        return Err(plum_syntax::error::CompileError::new(
+            last.span,
             "the trailing wildcard/identifier arm of a literal `match` cannot have a guard \
-             (it must be able to unconditionally catch anything earlier arms didn't) at {:?}",
-            last.span
+             (it must be able to unconditionally catch anything earlier arms didn't)",
         ));
     }
 
@@ -1625,7 +1631,7 @@ fn lower_literal_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &Lowe
     })
 }
 
-fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringContext) -> Result<ir::Expr, String> {
+fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     if arms.len() == 1 && is_catchall_pattern(&arms[0].pattern) && arms[0].guard.is_none() {
         return lower_catchall_only_match(scrutinee, &arms[0], ctx);
     }
@@ -1694,19 +1700,19 @@ fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringCont
             for alt in alts {
                 let (alt_tag, alt_bindings, alt_nested) = lower_tag_pattern(alt, ctx)?;
                 if !alt_nested.is_empty() {
-                    return Err(format!(
+                    return Err(plum_syntax::error::CompileError::new(
+                        alt.span(),
                         "lowering not yet implemented for a nested pattern inside an \
-                         or-pattern alternative at {:?}",
-                        alt.span()
+                         or-pattern alternative",
                     ));
                 }
                 alt_shapes.push((alt_tag, alt_bindings));
             }
             let first_bindings = alt_shapes[0].1.clone();
             if alt_shapes[1..].iter().any(|(_, b)| *b != first_bindings) {
-                return Err(format!(
-                    "every alternative of an or-pattern must bind the same names in the \
-                     same order at {span:?}"
+                return Err(plum_syntax::error::CompileError::new(
+                    *span,
+                    "every alternative of an or-pattern must bind the same names in the same order",
                 ));
             }
             let guard = match &arm.guard {
@@ -1736,10 +1742,9 @@ fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringCont
         // is real, separate follow-up work.
         let guard = match &arm.guard {
             Some(g) if !nested.is_empty() => {
-                return Err(format!(
-                    "lowering not yet implemented for a match guard combined with a nested \
-                     pattern at {:?}",
-                    arm.span
+                return Err(plum_syntax::error::CompileError::new(
+                    arm.span,
+                    "lowering not yet implemented for a match guard combined with a nested pattern",
                 ));
             }
             Some(g) => Some(Box::new(lower_expr(g, ctx)?)),
@@ -1763,7 +1768,7 @@ fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringCont
 // `"__select_recv"` is the FIXED synthetic name `Interpreter::eval`'s
 // `Select` case binds to the actually-received value before
 // evaluating this wrapped body — see ir.rs's `Select` doc comment.
-fn wrap_select_arm_pattern(pattern: &ast::Pattern, ctx: &LoweringContext, body: ir::Expr) -> Result<ir::Expr, String> {
+fn wrap_select_arm_pattern(pattern: &ast::Pattern, ctx: &LoweringContext, body: ir::Expr) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     match pattern {
         ast::Pattern::Ident(name, _) => Ok(ir::Expr::Let {
             name: name.clone(),
@@ -1774,9 +1779,9 @@ fn wrap_select_arm_pattern(pattern: &ast::Pattern, ctx: &LoweringContext, body: 
         ast::Pattern::Variant { .. } | ast::Pattern::Tuple(..) | ast::Pattern::Struct { .. } => {
             wrap_destructure("__select_recv".to_string(), pattern, ctx, body)
         }
-        other => Err(format!(
-            "lowering not yet implemented for this pattern shape in a `select` arm at {:?}",
-            other.span()
+        other => Err(plum_syntax::error::CompileError::new(
+            other.span(),
+            "lowering not yet implemented for this pattern shape in a `select` arm",
         )),
     }
 }
@@ -1784,20 +1789,17 @@ fn wrap_select_arm_pattern(pattern: &ast::Pattern, ctx: &LoweringContext, body: 
 // `select { pattern = expr => body, ... }` — `expr` is required to be
 // an `X.recv()` call SHAPE (checked here, not by the parser — see
 // ast.rs's `Select` doc comment); `X` becomes the arm's `receiver`.
-fn lower_select(arms: &[ast::SelectArm], ctx: &LoweringContext) -> Result<ir::Expr, String> {
+fn lower_select(arms: &[ast::SelectArm], ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let mut ir_arms = Vec::with_capacity(arms.len());
     for arm in arms {
         let ast::Expr::Call { callee, args, span } = &arm.expr else {
-            return Err(format!(
-                "`select` arm requires an `expr.recv()` call at {:?}",
-                arm.expr.span()
-            ));
+            return Err(plum_syntax::error::CompileError::new(arm.expr.span(), "`select` arm requires an `expr.recv()` call"));
         };
         let ast::Expr::Field { base, name, .. } = callee.as_ref() else {
-            return Err(format!("`select` arm requires an `expr.recv()` call at {span:?}"));
+            return Err(plum_syntax::error::CompileError::new(*span, "`select` arm requires an `expr.recv()` call"));
         };
         if name != "recv" || !args.is_empty() {
-            return Err(format!("`select` arm requires an `expr.recv()` call at {span:?}"));
+            return Err(plum_syntax::error::CompileError::new(*span, "`select` arm requires an `expr.recv()` call"));
         }
         let receiver = lower_expr(base, ctx)?;
         let arm_body = lower_expr(&arm.body, ctx)?;
@@ -1860,18 +1862,21 @@ fn closure_elem_ty(
     ctx: &LoweringContext,
     what: &str,
     pick: impl FnOnce(Vec<plum_types::types::Type>, plum_types::types::Type) -> Option<plum_types::types::Type>,
-) -> Result<ir::PrimTy, String> {
+) -> Result<ir::PrimTy, plum_syntax::error::CompileError> {
     match closure_result_types(f, ctx) {
         Some((param_tys, ret_ty)) => {
             let ty = pick(param_tys, ret_ty).ok_or_else(|| {
-                format!("codegen: `.{what}()`'s function argument must take exactly one parameter")
+                plum_syntax::error::CompileError::new(f.span(), format!("codegen: `.{what}()`'s function argument must take exactly one parameter"))
             })?;
             type_to_prim_ty(&ty)
         }
         None if ctx.closure_types.is_empty() => Ok(ir::PrimTy::Heap),
-        None => Err(format!(
-            "codegen: `.{what}()`'s function argument must be a closure literal written directly at the call site \
-             (its resolved type couldn't be found) — passing an already-named function value here isn't supported yet"
+        None => Err(plum_syntax::error::CompileError::new(
+            f.span(),
+            format!(
+                "codegen: `.{what}()`'s function argument must be a closure literal written directly at the call site \
+                 (its resolved type couldn't be found) — passing an already-named function value here isn't supported yet"
+            ),
         )),
     }
 }
@@ -1887,7 +1892,7 @@ fn closure_elem_ty(
 // synthesized AST) — the same approach `lower_for`'s own array-loop
 // desugaring below already takes, since there's no surface syntax this
 // shape corresponds to.
-fn lower_array_map(base: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+fn lower_array_map(base: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let arr_name = "__map_arr".to_string();
     let out_name = "__map_out".to_string();
     let idx_name = "__map_i".to_string();
@@ -1940,7 +1945,7 @@ fn lower_array_map(base: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Re
 //           } else { () }
 //       } in
 //       __filter_out
-fn lower_array_filter(base: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+fn lower_array_filter(base: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let arr_name = "__filter_arr".to_string();
     let out_name = "__filter_out".to_string();
     let idx_name = "__filter_i".to_string();
@@ -1999,7 +2004,7 @@ fn lower_array_filter(base: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) ->
 //         __fold_acc = f(__fold_acc, __fold_arr[__fold_i]);
 //       } in
 //       __fold_acc
-fn lower_array_fold(base: &ast::Expr, init: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+fn lower_array_fold(base: &ast::Expr, init: &ast::Expr, f: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let arr_name = "__fold_arr".to_string();
     let acc_name = "__fold_acc".to_string();
     let idx_name = "__fold_i".to_string();
@@ -2057,13 +2062,13 @@ fn lower_for(
     body: &ast::Block,
     span: plum_syntax::span::Span,
     ctx: &LoweringContext,
-) -> Result<ir::Expr, String> {
+) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let var = match pattern {
         ast::Pattern::Ident(name, _) => name.clone(),
         other => {
-            return Err(format!(
-                "lowering not yet implemented for destructuring `for` patterns at {:?}",
-                other.span()
+            return Err(plum_syntax::error::CompileError::new(
+                other.span(),
+                "lowering not yet implemented for destructuring `for` patterns",
             ));
         }
     };
@@ -2146,7 +2151,7 @@ fn lower_for(
 // zero-argument call before insertion. This is DESIGN.md's pipe
 // desugaring rule, and it's a compile-time rewrite, not a runtime
 // capability — it doesn't need currying to work, see DESIGN.md.
-fn lower_pipe(lhs: &ast::Expr, rhs: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+fn lower_pipe(lhs: &ast::Expr, rhs: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let ir_lhs = lower_expr(lhs, ctx)?;
     match rhs {
         ast::Expr::Call { callee, args, .. } => {
@@ -2189,7 +2194,7 @@ fn lower_binop(op: &ast::BinaryOp) -> ir::BinOp {
 // Folds a block's statement list into nested `let`s, right to left — a
 // discarded expression-statement becomes `let _ = expr in rest`, the
 // standard way to represent sequencing without a dedicated IR node.
-fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, String> {
+fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
     let mut result = match &block.tail {
         Some(t) => lower_expr(t, ctx)?,
         None => ir::Expr::Unit,
@@ -2229,10 +2234,10 @@ fn lower_block(block: &ast::Block, ctx: &LoweringContext) -> Result<ir::Expr, St
                 }
             }
             ast::Stmt::Let { pattern, .. } => {
-                return Err(format!(
+                return Err(plum_syntax::error::CompileError::new(
+                    pattern.span(),
                     "lowering not yet implemented for destructuring let-bindings of this \
-                     shape (only tuples, structs, and plain identifiers so far) at {:?}",
-                    pattern.span()
+                     shape (only tuples, structs, and plain identifiers so far)",
                 ));
             }
             ast::Stmt::Expr(e) => ir::Expr::Let {
@@ -2314,7 +2319,7 @@ mod tests {
         let ast = parser
             .parse_expr()
             .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
-        lower_expr(&ast, ctx).expect_err(&format!("expected lowering of {src:?} to fail"))
+        lower_expr(&ast, ctx).expect_err(&format!("expected lowering of {src:?} to fail")).to_string()
     }
 
     fn context_from_program(src: &str) -> LoweringContext {
@@ -4333,7 +4338,7 @@ mod tests {
             .parse_program()
             .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
         let ctx = LoweringContext::from_items(&program.items);
-        super::lower_program(&program, &ctx).expect_err(&format!("expected lowering of {src:?} to fail"))
+        super::lower_program(&program, &ctx).expect_err(&format!("expected lowering of {src:?} to fail")).to_string()
     }
 
     #[test]

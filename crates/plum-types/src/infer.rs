@@ -456,7 +456,7 @@ impl Infer {
     /// rejected as an ambiguity. Any OTHER still-unresolved `Var`
     /// remains a genuine error — the element type really is never
     /// pinned to anything concrete anywhere.
-    pub fn resolve_empty_array_elem_types(&self) -> Result<HashMap<Span, Type>, String> {
+    pub fn resolve_empty_array_elem_types(&self) -> Result<HashMap<Span, Type>, plum_syntax::error::CompileError> {
         let subst = self
             .final_subst
             .as_ref()
@@ -464,9 +464,10 @@ impl Infer {
         let mut out = HashMap::with_capacity(self.empty_array_elem_types.len());
         for (span, (ty, enclosing_fn)) in &self.empty_array_elem_types {
             let resolved = self.resolve_closure_component(ty, enclosing_fn, subst, *span).map_err(|_| {
-                format!(
-                    "cannot determine the element type of the empty array literal at {span:?} — it's never \
-                     used anywhere that would pin its element type to something concrete"
+                plum_syntax::error::CompileError::new(
+                    *span,
+                    "cannot determine the element type of the empty array literal — it's never \
+                     used anywhere that would pin its element type to something concrete",
                 )
             })?;
             out.insert(*span, resolved);
@@ -493,7 +494,7 @@ impl Infer {
     /// the latter resolves any remaining `Param` once it knows a
     /// concrete binding for the enclosing function's own generics,
     /// mirroring `ResolvedSite`'s own template case exactly.
-    pub fn resolve_closure_types(&self) -> Result<HashMap<Span, (Vec<Type>, Type)>, String> {
+    pub fn resolve_closure_types(&self) -> Result<HashMap<Span, (Vec<Type>, Type)>, plum_syntax::error::CompileError> {
         let subst = self
             .final_subst
             .as_ref()
@@ -518,7 +519,7 @@ impl Infer {
         enclosing_fn: &Option<String>,
         subst: &Subst,
         span: Span,
-    ) -> Result<Type, String> {
+    ) -> Result<Type, plum_syntax::error::CompileError> {
         let resolved = subst.apply(ty);
         if !matches!(resolved, Type::Var(_)) {
             return Ok(resolved);
@@ -537,9 +538,10 @@ impl Infer {
                 }
             }
         }
-        Err(format!(
-            "cannot determine a concrete param/return type for the closure literal at {span:?} — it's \
-             never used anywhere that would pin its type to something concrete"
+        Err(plum_syntax::error::CompileError::new(
+            span,
+            "cannot determine a concrete param/return type for the closure literal — it's \
+             never used anywhere that would pin its type to something concrete",
         ))
     }
 
@@ -551,7 +553,7 @@ impl Infer {
     /// `Ok` (an internal-error `Result`, not a panic, if called before
     /// that or after a failed run — `final_subst` is only ever set at
     /// the very end of a successful `infer_program`).
-    pub fn resolve_generic_sites(&self) -> Result<HashMap<Span, ResolvedSite>, String> {
+    pub fn resolve_generic_sites(&self) -> Result<HashMap<Span, ResolvedSite>, plum_syntax::error::CompileError> {
         let subst = self
             .final_subst
             .as_ref()
@@ -563,10 +565,13 @@ impl Infer {
                 let resolved = subst.apply(arg);
                 let final_arg = if matches!(resolved, Type::Var(_)) {
                     self.resolve_as_template(&resolved, raw, subst).ok_or_else(|| {
-                        format!(
-                            "cannot determine a concrete type for {:?} at {span:?} — its type parameter is \
-                             never pinned to a concrete type anywhere it's used",
-                            raw.decl_name
+                        plum_syntax::error::CompileError::new(
+                            *span,
+                            format!(
+                                "cannot determine a concrete type for {:?} — its type parameter is \
+                                 never pinned to a concrete type anywhere it's used",
+                                raw.decl_name
+                            ),
                         )
                     })?
                 } else {
@@ -760,7 +765,7 @@ impl Infer {
     /// concrete type yet — e.g. a bare `None` from `Option[T: Num]`)
     /// is skipped rather than rejected: there's nothing concrete yet
     /// to check a bound against.
-    fn check_generic_bounds(&self, decl_name: &str, resolved_args: &[Type], span: plum_syntax::span::Span) -> Result<(), String> {
+    fn check_generic_bounds(&self, decl_name: &str, resolved_args: &[Type], span: plum_syntax::span::Span) -> Result<(), plum_syntax::error::CompileError> {
         let Some(bounds) = self.ctx.generic_bounds(decl_name) else {
             return Ok(());
         };
@@ -770,9 +775,9 @@ impl Infer {
             }
             for bound in param_bounds {
                 if !satisfies_bound(arg_ty, bound) {
-                    return Err(format!(
-                        "{decl_name:?} requires its type argument to satisfy `{bound}`, but {arg_ty:?} does not \
-                         (at {span:?})"
+                    return Err(plum_syntax::error::CompileError::new(
+                        span,
+                        format!("{decl_name:?} requires its type argument to satisfy `{bound}`, but {arg_ty:?} does not"),
                     ));
                 }
             }
@@ -813,7 +818,7 @@ impl Infer {
     /// `Var` could bind it back onto something `acc` already resolved
     /// FROM it, creating a self-referential `Subst` entry that
     /// `Subst::apply`'s chain-following recurses on forever.
-    fn resolve_annotation(&self, ty: &ast::Type, generic_vars: &HashMap<String, Type>) -> Result<Type, String> {
+    fn resolve_annotation(&self, ty: &ast::Type, generic_vars: &HashMap<String, Type>) -> Result<Type, plum_syntax::error::CompileError> {
         match ty {
             ast::Type::Path(segments, _) => match segments.last() {
                 Some(name) if generic_vars.contains_key(name) => Ok(generic_vars[name].clone()),
@@ -821,7 +826,7 @@ impl Infer {
             },
             ast::Type::Generic { base, args, span } => {
                 let name = base.last().cloned().ok_or_else(|| {
-                    format!("type inference not yet implemented for this type annotation at {span:?}")
+                    plum_syntax::error::CompileError::new(*span, "type inference not yet implemented for this type annotation")
                 })?;
                 // The opaque pseudo-generic builtin types (`Array[T]`,
                 // `Task[T]`, `Sender[T]`, `Receiver[T]`, `Ref[T]`) are
@@ -836,24 +841,24 @@ impl Infer {
                 // path below.
                 if matches!(name.as_str(), "Array" | "Task" | "Sender" | "Receiver" | "Ref") {
                     if args.len() != 1 {
-                        return Err(format!(
-                            "{name:?} expects 1 generic argument, found {} at {span:?}",
-                            args.len()
+                        return Err(plum_syntax::error::CompileError::new(
+                            *span,
+                            format!("{name:?} expects 1 generic argument, found {}", args.len()),
                         ));
                     }
                     let resolved_arg = self.resolve_annotation(&args[0], generic_vars)?;
                     return Ok(Type::Struct(name, vec![resolved_arg]));
                 }
                 let Some(declared_params) = self.ctx.generic_params(&name) else {
-                    return Err(format!(
-                        "type inference not yet implemented for this type annotation at {span:?}"
+                    return Err(plum_syntax::error::CompileError::new(
+                        *span,
+                        "type inference not yet implemented for this type annotation",
                     ));
                 };
                 if args.len() != declared_params.len() {
-                    return Err(format!(
-                        "{name:?} expects {} generic argument(s), found {} at {span:?}",
-                        declared_params.len(),
-                        args.len()
+                    return Err(plum_syntax::error::CompileError::new(
+                        *span,
+                        format!("{name:?} expects {} generic argument(s), found {}", declared_params.len(), args.len()),
                     ));
                 }
                 let resolved_args = args
@@ -865,8 +870,9 @@ impl Infer {
                 } else if self.ctx.is_enum(&name) {
                     Ok(Type::Enum(name, resolved_args))
                 } else {
-                    Err(format!(
-                        "type inference not yet implemented for this type annotation at {span:?}"
+                    Err(plum_syntax::error::CompileError::new(
+                        *span,
+                        "type inference not yet implemented for this type annotation",
                     ))
                 }
             }
@@ -890,7 +896,7 @@ impl Infer {
     /// See this method's implementation comment for the two-phase
     /// approach (pre-declare signatures, then infer bodies) that makes
     /// self- and mutual recursion work.
-    pub fn infer_program(&mut self, program: &ast::Program) -> Result<HashMap<String, Type>, String> {
+    pub fn infer_program(&mut self, program: &ast::Program) -> Result<HashMap<String, Type>, plum_syntax::error::CompileError> {
         // Phase 1: pre-declare EVERY function's signature with fresh
         // type variables before inferring any body — this is what
         // makes self- and mutual recursion type-check. A recursive (or
@@ -932,13 +938,13 @@ impl Infer {
             if let ast::ItemKind::Extern(block) = &item.kind {
                 for f in &block.fns {
                     if !declared_names.insert(f.name.clone()) {
-                        return Err(format!("{:?} is already declared (at {:?})", f.name, f.span));
+                        return Err(plum_syntax::error::CompileError::new(f.span, format!("{:?} is already declared", f.name)));
                     }
                     let (param_types, ret_type) = self
                         .ctx
                         .extern_fn(&f.name)
                         .cloned()
-                        .ok_or_else(|| format!("internal error: extern function {:?} not in context", f.name))?;
+                        .ok_or_else(|| plum_syntax::error::CompileError::spanless(format!("internal error: extern function {:?} not in context", f.name)))?;
                     let fn_ty = Type::Function(param_types, Box::new(ret_type));
                     global_env = global_env.extend(f.name.clone(), fn_ty);
                 }
@@ -948,7 +954,7 @@ impl Infer {
         for item in &program.items {
             if let ast::ItemKind::Let(def) = &item.kind {
                 if !declared_names.insert(def.name.clone()) {
-                    return Err(format!("{:?} is already declared (at {:?})", def.name, def.span));
+                    return Err(plum_syntax::error::CompileError::new(def.span, format!("{:?} is already declared", def.name)));
                 }
                 if def.params.is_empty() {
                     global_defs.push(def);
@@ -1035,7 +1041,7 @@ impl Infer {
         for def in &global_defs {
             let is_closure_literal = matches!(def.body, ast::Expr::Closure { .. });
             self.current_fn = Some(def.name.clone());
-            let outcome: Result<(Type, Subst), String> = if is_closure_literal {
+            let outcome: Result<(Type, Subst), plum_syntax::error::CompileError> = if is_closure_literal {
                 let placeholder = self.fresh();
                 let rec_env = global_env_early.extend(def.name.clone(), placeholder.clone());
                 self.infer_expr(&def.body, &rec_env).and_then(|(body_ty, s)| {
@@ -1139,18 +1145,18 @@ impl Infer {
                         if let Some(ty) = annotation {
                             let annotated_ty = self.resolve_annotation(ty, &generic_vars)?;
                             let s = unify(&acc.apply(param_ty), &acc.apply(&annotated_ty))
-                                .map_err(|e| format!("function {:?} parameter: {e}", def.name))?;
+                                .map_err(|e| plum_syntax::error::CompileError::spanless(format!("function {:?} parameter: {e}", def.name)))?;
                             acc = s.compose(&acc);
                         }
                         body_env = self
                             .bind_pattern(pattern, &acc.apply(param_ty), body_env, &mut acc)
-                            .map_err(|e| format!("function {:?} parameter: {e}", def.name))?;
+                            .map_err(|e: plum_syntax::error::CompileError| e.context(format!("function {:?} parameter", def.name)))?;
                     }
                     _ => {
-                        return Err(format!(
+                        return Err(plum_syntax::error::CompileError::new(
+                            param.span,
                             "type inference not yet implemented for destructuring function \
-                             parameters of this shape at {:?}",
-                            param.span
+                             parameters of this shape",
                         ));
                     }
                 }
@@ -1255,9 +1261,12 @@ impl Infer {
                     resolved => {
                         for bound in &g.bound {
                             if !satisfies_bound(&resolved, bound) {
-                                return Err(format!(
-                                    "function {:?}: generic parameter {:?} requires `{bound}`, but {resolved:?} does not satisfy it",
-                                    def.name, g.name
+                                return Err(plum_syntax::error::CompileError::new(
+                                    def.span,
+                                    format!(
+                                        "function {:?}: generic parameter {:?} requires `{bound}`, but {resolved:?} does not satisfy it",
+                                        def.name, g.name
+                                    ),
                                 ));
                             }
                         }
@@ -1396,7 +1405,7 @@ impl Infer {
         Ok(result)
     }
 
-    pub fn infer_expr(&mut self, expr: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), String> {
+    pub fn infer_expr(&mut self, expr: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         match expr {
             ast::Expr::Int(_, _) => Ok((Type::Int, Subst::empty())),
             ast::Expr::Float(_, _) => Ok((Type::Float, Subst::empty())),
@@ -1430,7 +1439,7 @@ impl Infer {
                     let (t, s) = self.infer_expr(e, &refined_env)?;
                     acc = s.compose(&acc);
                     refined_env = refined_env.apply_subst(&acc);
-                    let s = unify(&acc.apply(&t), &acc.apply(&elem_ty)).map_err(|e| format!("array element: {e}"))?;
+                    let s = unify(&acc.apply(&t), &acc.apply(&elem_ty)).map_err(|e| plum_syntax::error::CompileError::spanless(format!("array element: {e}")))?;
                     acc = s.compose(&acc);
                     refined_env = refined_env.apply_subst(&acc);
                 }
@@ -1462,18 +1471,18 @@ impl Infer {
                     let refined_env = env.apply_subst(&acc);
                     let (index_ty, s) = self.infer_expr(index, &refined_env)?;
                     acc = s.compose(&acc);
-                    let s = unify(&acc.apply(&index_ty), &Type::Int).map_err(|e| format!("string index at {span:?}: {e}"))?;
+                    let s = unify(&acc.apply(&index_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("string index: {e}")))?;
                     acc = s.compose(&acc);
                     return Ok((Type::Int, acc));
                 }
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("indexing at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("indexing: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (index_ty, s) = self.infer_expr(index, &refined_env)?;
                 acc = s.compose(&acc);
-                let s = unify(&acc.apply(&index_ty), &Type::Int).map_err(|e| format!("array index at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&index_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("array index: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((acc.apply(&elem_ty), acc))
             }
@@ -1511,7 +1520,7 @@ impl Infer {
                 let scheme = env
                     .lookup_scheme(name)
                     .cloned()
-                    .ok_or_else(|| format!("unbound variable: {name} at {span:?}"))?;
+                    .ok_or_else(|| plum_syntax::error::CompileError::new(*span, format!("unbound variable: {name}")))?;
                 let (ty, _bounds, mapping) = self.instantiate_with_bounds(&scheme);
                 if !scheme.vars.is_empty() {
                     self.record_fn_call_site(name, &mapping, *span);
@@ -1543,11 +1552,11 @@ impl Infer {
             } => {
                 let (lhs_ty, s) = self.infer_expr(lhs, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&lhs_ty), &Type::Int).map_err(|e| format!("range start: {e}"))?;
+                let s = unify(&acc.apply(&lhs_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::spanless(format!("range start: {e}")))?;
                 acc = s.compose(&acc);
                 let (rhs_ty, s) = self.infer_expr(rhs, env)?;
                 acc = s.compose(&acc);
-                let s = unify(&acc.apply(&rhs_ty), &Type::Int).map_err(|e| format!("range end: {e}"))?;
+                let s = unify(&acc.apply(&rhs_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::spanless(format!("range end: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Range, acc))
             }
@@ -1581,7 +1590,7 @@ impl Infer {
                 let mut acc = s;
                 let result_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Task".to_string(), vec![result_ty.clone()]))
-                    .map_err(|e| format!("`.join()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.join()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((acc.apply(&result_ty), acc))
             }
@@ -1598,13 +1607,13 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Sender".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.send()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.send()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (val_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&val_ty), &acc.apply(&elem_ty))
-                    .map_err(|e| format!("`.send()` argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.send()` argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Unit, acc))
             }
@@ -1620,7 +1629,7 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Receiver".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.recv()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.recv()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((acc.apply(&elem_ty), acc))
             }
@@ -1640,7 +1649,7 @@ impl Infer {
                     unreachable!("just matched this shape above");
                 };
                 let elem_ty = ast_type_to_type(&type_args[0], &self.ctx, &[])
-                    .map_err(|e| format!("`channel[..]` type argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`channel[..]` type argument: {e}")))?;
                 Ok((
                     Type::Tuple(vec![
                         Type::Struct("Sender".to_string(), vec![elem_ty.clone()]),
@@ -1677,7 +1686,7 @@ impl Infer {
                 let (path_ty, s) = self.infer_expr(&args[0], env)?;
                 let mut acc = s;
                 let s = unify(&acc.apply(&path_ty), &Type::Str)
-                    .map_err(|e| format!("`read_file_raw` argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`read_file_raw` argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("__FileIoResult".to_string(), vec![]), acc))
             }
@@ -1689,13 +1698,13 @@ impl Infer {
                 let (path_ty, s) = self.infer_expr(&args[0], env)?;
                 let mut acc = s;
                 let s = unify(&acc.apply(&path_ty), &Type::Str)
-                    .map_err(|e| format!("`write_file_raw` first argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`write_file_raw` first argument: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (contents_ty, s) = self.infer_expr(&args[1], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&contents_ty), &Type::Str)
-                    .map_err(|e| format!("`write_file_raw` second argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`write_file_raw` second argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("__FileIoResult".to_string(), vec![]), acc))
             }
@@ -1711,7 +1720,7 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Ref".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.get()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.get()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((acc.apply(&elem_ty), acc))
             }
@@ -1730,13 +1739,13 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Ref".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.set()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.set()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (value_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&value_ty), &acc.apply(&elem_ty))
-                    .map_err(|e| format!("`.set()` argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.set()` argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Unit, acc))
             }
@@ -1762,7 +1771,7 @@ impl Infer {
                 }
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty]))
-                    .map_err(|e| format!("`.len()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.len()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Int, acc))
             }
@@ -1776,13 +1785,13 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.concat()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.concat()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (other_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&other_ty), &Type::Str)
-                    .map_err(|e| format!("`.concat()` argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.concat()` argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Str, acc))
             }
@@ -1798,7 +1807,7 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.runes()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.runes()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![Type::Int]), acc))
             }
@@ -1816,7 +1825,7 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.as_cstr()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.as_cstr()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::CStr, acc))
             }
@@ -1829,7 +1838,7 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.trim()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.trim()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Str, acc))
             }
@@ -1843,13 +1852,13 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.split()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.split()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (sep_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&sep_ty), &Type::Str)
-                    .map_err(|e| format!("`.split()` argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.split()` argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![Type::Str]), acc))
             }
@@ -1863,7 +1872,7 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.to_upper()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.to_upper()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Str, acc))
             }
@@ -1875,7 +1884,7 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.to_lower()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.to_lower()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Str, acc))
             }
@@ -1890,13 +1899,13 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.contains()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.contains()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (needle_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&needle_ty), &Type::Str)
-                    .map_err(|e| format!("`.contains()` argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.contains()` argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Bool, acc))
             }
@@ -1909,13 +1918,13 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.starts_with()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.starts_with()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (prefix_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&prefix_ty), &Type::Str)
-                    .map_err(|e| format!("`.starts_with()` argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.starts_with()` argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Bool, acc))
             }
@@ -1927,13 +1936,13 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.ends_with()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.ends_with()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (suffix_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&suffix_ty), &Type::Str)
-                    .map_err(|e| format!("`.ends_with()` argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.ends_with()` argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Bool, acc))
             }
@@ -1947,19 +1956,19 @@ impl Infer {
                 };
                 let (base_ty, s) = self.infer_expr(base, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| format!("`.replace()` at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.replace()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (from_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&from_ty), &Type::Str)
-                    .map_err(|e| format!("`.replace()` first argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.replace()` first argument: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (to_ty, s) = self.infer_expr(&args[1], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&to_ty), &Type::Str)
-                    .map_err(|e| format!("`.replace()` second argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.replace()` second argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Str, acc))
             }
@@ -2008,8 +2017,9 @@ impl Infer {
                 let is_concrete_and_unsupported = matches!(resolved, Type::Function(..) | Type::Tuple(..))
                     || is_opaque_runtime_handle;
                 if is_concrete_and_unsupported {
-                    return Err(format!(
-                        "`.to_string()` at {span:?}: not yet supported for {resolved:?}"
+                    return Err(plum_syntax::error::CompileError::new(
+                        *span,
+                        format!("`.to_string()` not yet supported for {resolved:?}"),
                     ));
                 }
                 Ok((Type::Str, acc))
@@ -2026,13 +2036,13 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.push()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.push()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (val_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&val_ty), &acc.apply(&elem_ty))
-                    .map_err(|e| format!("`.push()` argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.push()` argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
@@ -2050,7 +2060,7 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.pop()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.pop()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
@@ -2067,18 +2077,18 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.set()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.set()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (idx_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
-                let s = unify(&acc.apply(&idx_ty), &Type::Int).map_err(|e| format!("`.set()` index at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&idx_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.set()` index: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (val_ty, s) = self.infer_expr(&args[1], &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&val_ty), &acc.apply(&elem_ty))
-                    .map_err(|e| format!("`.set()` argument at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.set()` argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
@@ -2094,12 +2104,12 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.remove()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.remove()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (idx_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
-                let s = unify(&acc.apply(&idx_ty), &Type::Int).map_err(|e| format!("`.remove()` index at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(&idx_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.remove()` index: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
@@ -2116,7 +2126,7 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.map()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.map()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (f_ty, s) = self.infer_expr(&args[0], &refined_env)?;
@@ -2126,7 +2136,7 @@ impl Infer {
                     &acc.apply(&f_ty),
                     &Type::Function(vec![acc.apply(&elem_ty)], Box::new(out_ty.clone())),
                 )
-                .map_err(|e| format!("`.map()` function argument at {span:?}: {e}"))?;
+                .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.map()` function argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&out_ty)]), acc))
             }
@@ -2143,7 +2153,7 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.filter()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.filter()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (f_ty, s) = self.infer_expr(&args[0], &refined_env)?;
@@ -2152,7 +2162,7 @@ impl Infer {
                     &acc.apply(&f_ty),
                     &Type::Function(vec![acc.apply(&elem_ty)], Box::new(Type::Bool)),
                 )
-                .map_err(|e| format!("`.filter()` function argument at {span:?}: {e}"))?;
+                .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.filter()` function argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
@@ -2169,7 +2179,7 @@ impl Infer {
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| format!("`.fold()` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.fold()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
                 let (init_ty, s) = self.infer_expr(&args[0], &refined_env)?;
@@ -2184,7 +2194,7 @@ impl Infer {
                         Box::new(acc.apply(&init_ty)),
                     ),
                 )
-                .map_err(|e| format!("`.fold()` function argument at {span:?}: {e}"))?;
+                .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.fold()` function argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((acc.apply(&init_ty), acc))
             }
@@ -2208,8 +2218,9 @@ impl Infer {
                 if let ast::Expr::Ident(name, _) = callee.as_ref() {
                     if let Some((param_types, _)) = self.ctx.extern_fn(name).cloned() {
                         if !self.in_unsafe {
-                            return Err(format!(
-                                "calling extern function {name:?} requires being inside an unsafe block, at {span:?}"
+                            return Err(plum_syntax::error::CompileError::new(
+                                *span,
+                                format!("calling extern function {name:?} requires being inside an unsafe block"),
                             ));
                         }
                         // A callback-typed argument must be a bare
@@ -2236,10 +2247,12 @@ impl Infer {
                             let is_bare_top_level_fn =
                                 matches!(arg, ast::Expr::Ident(arg_name, _) if self.top_level_fns.contains(arg_name));
                             if !is_bare_top_level_fn {
-                                return Err(format!(
-                                    "extern function {name:?}: a callback argument must be a bare reference \
-                                     to a top-level function, not a closure or other expression, at {:?}",
-                                    arg.span()
+                                return Err(plum_syntax::error::CompileError::new(
+                                    arg.span(),
+                                    format!(
+                                        "extern function {name:?}: a callback argument must be a bare reference \
+                                         to a top-level function, not a closure or other expression"
+                                    ),
                                 ));
                             }
                         }
@@ -2253,10 +2266,9 @@ impl Infer {
                 if let Some(tag) = variant_tag {
                     if let Some((enum_name, payload_types)) = self.ctx.variant(tag).cloned() {
                         if args.len() != payload_types.len() {
-                            return Err(format!(
-                                "variant {tag:?} expects {} field(s), found {} at {span:?}",
-                                payload_types.len(),
-                                args.len()
+                            return Err(plum_syntax::error::CompileError::new(
+                                *span,
+                                format!("variant {tag:?} expects {} field(s), found {}", payload_types.len(), args.len()),
                             ));
                         }
                         let (payload_types, enum_args) = self.instantiate_generic(&enum_name, &payload_types);
@@ -2270,7 +2282,7 @@ impl Infer {
                             acc = s.compose(&acc);
                             refined_env = refined_env.apply_subst(&acc);
                             let s = unify(&acc.apply(&t), &acc.apply(expected_ty))
-                                .map_err(|e| format!("variant {tag:?} argument: {e}"))?;
+                                .map_err(|e| plum_syntax::error::CompileError::spanless(format!("variant {tag:?} argument: {e}")))?;
                             acc = s.compose(&acc);
                             refined_env = refined_env.apply_subst(&acc);
                         }
@@ -2372,20 +2384,23 @@ impl Infer {
                 let acc = s;
                 let resolved_base_ty = acc.apply(&base_ty);
                 let Type::Struct(struct_name, struct_args) = &resolved_base_ty else {
-                    return Err(format!(
-                        "field access `.{name}` at {span:?} requires a struct value with a \
-                         statically known type, found {resolved_base_ty:?}"
+                    return Err(plum_syntax::error::CompileError::new(
+                        *span,
+                        format!(
+                            "field access `.{name}` requires a struct value with a \
+                             statically known type, found {resolved_base_ty:?}"
+                        ),
                     ));
                 };
                 let declared_fields = self
                     .ctx
                     .struct_fields(struct_name)
-                    .ok_or_else(|| format!("unknown struct type {struct_name:?} at {span:?}"))?;
+                    .ok_or_else(|| plum_syntax::error::CompileError::new(*span, format!("unknown struct type {struct_name:?}")))?;
                 let field_ty = declared_fields
                     .iter()
                     .find(|(field_name, _)| field_name == name)
                     .map(|(_, ty)| ty.clone())
-                    .ok_or_else(|| format!("struct {struct_name:?} has no field named {name:?} (at {span:?})"))?;
+                    .ok_or_else(|| plum_syntax::error::CompileError::new(*span, format!("struct {struct_name:?} has no field named {name:?}")))?;
                 // The declared field type may mention the struct's OWN
                 // generic parameters (`Type::Param`) — `base`'s type
                 // already carries the CONCRETE argument for each one
@@ -2414,9 +2429,9 @@ impl Infer {
                 }
                 Ok((acc.apply(&field_ty), acc))
             }
-            other => Err(format!(
-                "type inference not yet implemented for this expression form at {:?}",
-                other.span()
+            other => Err(plum_syntax::error::CompileError::new(
+                other.span(),
+                "type inference not yet implemented for this expression form",
             )),
         }
     }
@@ -2427,7 +2442,7 @@ impl Infer {
     // piped value appended as the LAST argument. Kept as its own
     // function so the two shapes share `infer_call` rather than
     // duplicating its unification logic.
-    fn infer_pipe(&mut self, lhs: &ast::Expr, rhs: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), String> {
+    fn infer_pipe(&mut self, lhs: &ast::Expr, rhs: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         match rhs {
             ast::Expr::Call { callee, args, .. } => {
                 let mut all_args: Vec<&ast::Expr> = args.iter().collect();
@@ -2438,7 +2453,7 @@ impl Infer {
         }
     }
 
-    fn infer_call(&mut self, callee: &ast::Expr, args: &[&ast::Expr], env: &TypeEnv) -> Result<(Type, Subst), String> {
+    fn infer_call(&mut self, callee: &ast::Expr, args: &[&ast::Expr], env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let (callee_ty, s) = self.infer_expr(callee, env)?;
         self.infer_call_with_callee(callee_ty, s, args, env, Vec::new())
     }
@@ -2459,7 +2474,7 @@ impl Infer {
         args: &[&ast::Expr],
         env: &TypeEnv,
         pending_bounds: Vec<(TypeVarId, Vec<String>)>,
-    ) -> Result<(Type, Subst), String> {
+    ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let mut acc = callee_subst;
         let mut refined_env = env.apply_subst(&acc);
         let mut arg_types = Vec::with_capacity(args.len());
@@ -2471,7 +2486,7 @@ impl Infer {
         }
         let ret_var = self.fresh();
         let expected_fn_ty = Type::Function(arg_types, Box::new(ret_var.clone()));
-        let s = unify(&acc.apply(&callee_ty), &expected_fn_ty).map_err(|e| format!("call: {e}"))?;
+        let s = unify(&acc.apply(&callee_ty), &expected_fn_ty).map_err(|e| plum_syntax::error::CompileError::spanless(format!("call: {e}")))?;
         acc = s.compose(&acc);
         for (var_id, bounds) in pending_bounds {
             let resolved = acc.apply(&Type::Var(var_id));
@@ -2484,9 +2499,9 @@ impl Infer {
             }
             for bound in &bounds {
                 if !satisfies_bound(&resolved, bound) {
-                    return Err(format!(
+                    return Err(plum_syntax::error::CompileError::spanless(format!(
                         "generic parameter requires `{bound}`, but {resolved:?} does not satisfy it"
-                    ));
+                    )));
                 }
             }
         }
@@ -2500,12 +2515,12 @@ impl Infer {
         spread: &Option<Box<ast::Expr>>,
         span: plum_syntax::span::Span,
         env: &TypeEnv,
-    ) -> Result<(Type, Subst), String> {
+    ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let tag = path.last().cloned().expect("a path always has at least one segment");
         let declared_fields = self
             .ctx
             .struct_fields(&tag)
-            .ok_or_else(|| format!("unknown struct type {tag:?} at {span:?}"))?
+            .ok_or_else(|| plum_syntax::error::CompileError::new(span, format!("unknown struct type {tag:?}")))?
             .to_vec();
         let (declared_field_names, declared_field_types): (Vec<String>, Vec<Type>) =
             declared_fields.into_iter().unzip();
@@ -2524,7 +2539,7 @@ impl Infer {
         let mut by_name: HashMap<&str, &ast::Expr> = HashMap::new();
         for f in fields {
             if by_name.insert(f.name.as_str(), &f.value).is_some() {
-                return Err(format!("field {:?} specified more than once at {:?}", f.name, f.span));
+                return Err(plum_syntax::error::CompileError::new(f.span, format!("field {:?} specified more than once", f.name)));
             }
         }
 
@@ -2538,7 +2553,7 @@ impl Infer {
             let (spread_ty, s) = self.infer_expr(spread_expr, env)?;
             acc = s.compose(&acc);
             let s = unify(&acc.apply(&spread_ty), &Type::Struct(tag.clone(), struct_args.clone()))
-                .map_err(|e| format!("struct update `..` for {tag:?}: {e}"))?;
+                .map_err(|e| plum_syntax::error::CompileError::spanless(format!("struct update `..` for {tag:?}: {e}")))?;
             acc = s.compose(&acc);
         }
 
@@ -2547,16 +2562,16 @@ impl Infer {
                 if spread.is_some() {
                     continue;
                 }
-                return Err(format!("missing field {declared_name:?} for struct {tag:?} at {span:?}"));
+                return Err(plum_syntax::error::CompileError::new(span, format!("missing field {declared_name:?} for struct {tag:?}")));
             };
             let (val_ty, s) = self.infer_expr(value_expr, env)?;
             acc = s.compose(&acc);
             let s = unify(&acc.apply(&val_ty), &acc.apply(declared_ty))
-                .map_err(|e| format!("field {declared_name:?} of struct {tag:?}: {e}"))?;
+                .map_err(|e| plum_syntax::error::CompileError::spanless(format!("field {declared_name:?} of struct {tag:?}: {e}")))?;
             acc = s.compose(&acc);
         }
         if let Some((extra_name, _)) = by_name.into_iter().next() {
-            return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+            return Err(plum_syntax::error::CompileError::new(span, format!("struct {tag:?} has no field named {extra_name:?}")));
         }
 
         let struct_args: Vec<Type> = struct_args.iter().map(|a| acc.apply(a)).collect();
@@ -2585,7 +2600,7 @@ impl Infer {
         scrutinee_ty: &Type,
         env: TypeEnv,
         acc: &mut Subst,
-    ) -> Result<TypeEnv, String> {
+    ) -> Result<TypeEnv, plum_syntax::error::CompileError> {
         match pattern {
             ast::Pattern::Ident(name, _) => Ok(env.extend(name.clone(), acc.apply(scrutinee_ty))),
             ast::Pattern::Wildcard(_) => Ok(env),
@@ -2595,22 +2610,22 @@ impl Infer {
             // for why these can only appear as non-last arms of a
             // match that ends with a required catch-all.
             ast::Pattern::Int(_, span) => {
-                let s = unify(&acc.apply(scrutinee_ty), &Type::Int).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("pattern: {e}")))?;
                 *acc = s.compose(acc);
                 Ok(env)
             }
             ast::Pattern::Float(_, span) => {
-                let s = unify(&acc.apply(scrutinee_ty), &Type::Float).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Float).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("pattern: {e}")))?;
                 *acc = s.compose(acc);
                 Ok(env)
             }
             ast::Pattern::Bool(_, span) => {
-                let s = unify(&acc.apply(scrutinee_ty), &Type::Bool).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Bool).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("pattern: {e}")))?;
                 *acc = s.compose(acc);
                 Ok(env)
             }
             ast::Pattern::Str(_, span) => {
-                let s = unify(&acc.apply(scrutinee_ty), &Type::Str).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("pattern: {e}")))?;
                 *acc = s.compose(acc);
                 Ok(env)
             }
@@ -2619,14 +2634,14 @@ impl Infer {
             // elements — see `Param`'s own `()` parsing). Binds no
             // names, just unifies the scrutinee against `Unit`.
             ast::Pattern::Tuple(elems, span) if elems.is_empty() => {
-                let s = unify(&acc.apply(scrutinee_ty), &Type::Unit).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(scrutinee_ty), &Type::Unit).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("pattern: {e}")))?;
                 *acc = s.compose(acc);
                 Ok(env)
             }
             ast::Pattern::Tuple(elems, span) => {
                 let fresh_vars: Vec<Type> = elems.iter().map(|_| self.fresh()).collect();
                 let s = unify(&acc.apply(scrutinee_ty), &Type::Tuple(fresh_vars.clone()))
-                    .map_err(|e| format!("tuple pattern at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("tuple pattern: {e}")))?;
                 *acc = s.compose(acc);
                 let mut env = env;
                 for (elem_pat, var_ty) in elems.iter().zip(fresh_vars.iter()) {
@@ -2649,7 +2664,7 @@ impl Infer {
                 let declared_fields = self
                     .ctx
                     .struct_fields(&tag)
-                    .ok_or_else(|| format!("unknown struct type {tag:?} at {span:?}"))?
+                    .ok_or_else(|| plum_syntax::error::CompileError::new(*span, format!("unknown struct type {tag:?}")))?
                     .to_vec();
                 let (declared_field_names, declared_field_types): (Vec<String>, Vec<Type>) =
                     declared_fields.into_iter().unzip();
@@ -2660,13 +2675,13 @@ impl Infer {
                 let declared_fields: Vec<(String, Type)> =
                     declared_field_names.into_iter().zip(declared_field_types).collect();
                 let s = unify(&acc.apply(scrutinee_ty), &Type::Struct(tag.clone(), struct_args))
-                    .map_err(|e| format!("struct pattern at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("struct pattern: {e}")))?;
                 *acc = s.compose(acc);
 
                 let mut by_name: HashMap<&str, &ast::Pattern> = HashMap::new();
                 for f in fields {
                     if by_name.insert(f.name.as_str(), &f.pattern).is_some() {
-                        return Err(format!("field {:?} specified more than once at {:?}", f.name, f.span));
+                        return Err(plum_syntax::error::CompileError::new(f.span, format!("field {:?} specified more than once", f.name)));
                     }
                 }
                 let mut env = env;
@@ -2678,15 +2693,15 @@ impl Infer {
                         }
                         None if *has_rest => {}
                         None => {
-                            return Err(format!(
-                                "missing field {declared_name:?} for struct {tag:?} pattern \
-                                 at {span:?} (add `..` to ignore it)"
+                            return Err(plum_syntax::error::CompileError::new(
+                                *span,
+                                format!("missing field {declared_name:?} for struct {tag:?} pattern (add `..` to ignore it)"),
                             ));
                         }
                     }
                 }
                 if let Some((extra_name, _)) = by_name.into_iter().next() {
-                    return Err(format!("struct {tag:?} has no field named {extra_name:?} (at {span:?})"));
+                    return Err(plum_syntax::error::CompileError::new(*span, format!("struct {tag:?} has no field named {extra_name:?}")));
                 }
                 Ok(env)
             }
@@ -2710,16 +2725,15 @@ impl Infer {
                             }
                             (Type::Struct(tag.clone(), args), payload_types)
                         }
-                        None => return Err(format!("unknown variant {tag:?} at {span:?}")),
+                        None => return Err(plum_syntax::error::CompileError::new(*span, format!("unknown variant {tag:?}"))),
                     },
                 };
-                let s = unify(&acc.apply(scrutinee_ty), &owning_ty).map_err(|e| format!("pattern at {span:?}: {e}"))?;
+                let s = unify(&acc.apply(scrutinee_ty), &owning_ty).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("pattern: {e}")))?;
                 *acc = s.compose(acc);
                 if args.len() != payload_types.len() {
-                    return Err(format!(
-                        "pattern at {span:?} expects {} field(s), found {} binding(s)",
-                        payload_types.len(),
-                        args.len()
+                    return Err(plum_syntax::error::CompileError::new(
+                        *span,
+                        format!("pattern expects {} field(s), found {} binding(s)", payload_types.len(), args.len()),
                     ));
                 }
                 let mut env = env;
@@ -2736,9 +2750,9 @@ impl Infer {
             // nested inside a Variant/Tuple/Struct sub-pattern. Falling
             // through to the ordinary "not yet implemented" error here
             // is exactly right for that nested case.
-            other => Err(format!(
-                "type inference not yet implemented for this pattern shape at {:?}",
-                other.span()
+            other => Err(plum_syntax::error::CompileError::new(
+                other.span(),
+                "type inference not yet implemented for this pattern shape",
             )),
         }
     }
@@ -2764,14 +2778,15 @@ impl Infer {
         scrutinee_ty: &Type,
         env: &TypeEnv,
         acc: &mut Subst,
-    ) -> Result<TypeEnv, String> {
+    ) -> Result<TypeEnv, plum_syntax::error::CompileError> {
         if alts.is_empty() {
-            return Err(format!("or-pattern has no alternatives at {span:?}"));
+            return Err(plum_syntax::error::CompileError::new(span, format!("or-pattern has no alternatives")));
         }
         if alts.iter().any(pattern_has_nested_tag_subpattern) {
-            return Err(format!(
+            return Err(plum_syntax::error::CompileError::new(
+                span,
                 "type inference not yet implemented for a nested pattern inside an \
-                 or-pattern alternative at {span:?}"
+                 or-pattern alternative",
             ));
         }
         let before_len = env.0.len();
@@ -2787,14 +2802,15 @@ impl Infer {
                     let names_match = first.len() == new_bindings.len()
                         && first.iter().zip(new_bindings.iter()).all(|((n1, _), (n2, _))| n1 == n2);
                     if !names_match {
-                        return Err(format!(
+                        return Err(plum_syntax::error::CompileError::new(
+                            span,
                             "every alternative of an or-pattern must bind the same names in \
-                             the same order at {span:?}"
+                             the same order",
                         ));
                     }
                     for ((_, t1), (_, t2)) in first.iter().zip(new_bindings.iter()) {
                         let s = unify(&acc.apply(t1), &acc.apply(t2)).map_err(|e| {
-                            format!("or-pattern alternatives bind inconsistent types at {span:?}: {e}")
+                            plum_syntax::error::CompileError::new(span, format!("or-pattern alternatives bind inconsistent types: {e}"))
                         })?;
                         *acc = s.compose(acc);
                     }
@@ -2805,7 +2821,7 @@ impl Infer {
         Ok(result_env.apply_subst(acc))
     }
 
-    fn infer_match(&mut self, scrutinee: &ast::Expr, arms: &[ast::MatchArm], env: &TypeEnv) -> Result<(Type, Subst), String> {
+    fn infer_match(&mut self, scrutinee: &ast::Expr, arms: &[ast::MatchArm], env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let (scrutinee_ty, s) = self.infer_expr(scrutinee, env)?;
         let mut acc = s;
         let mut result_ty: Option<Type> = None;
@@ -2831,20 +2847,20 @@ impl Infer {
             .iter()
             .any(|arm| matches!(arm.pattern, ast::Pattern::Int(..) | ast::Pattern::Float(..) | ast::Pattern::Bool(..) | ast::Pattern::Str(..)));
         if has_literal_arm && !is_literal {
-            return Err(format!(
+            return Err(plum_syntax::error::CompileError::new(
+                arms.last().expect("has_literal_arm implies at least one arm").span,
                 "a `match` over literal patterns must end with a wildcard (`_`) or \
-                 bare-identifier arm at {:?}",
-                arms.last().expect("has_literal_arm implies at least one arm").span
+                 bare-identifier arm",
             ));
         }
         if is_literal {
             let last = arms.last().expect("is_literal_match already checked arms is non-empty");
             if last.guard.is_some() {
-                return Err(format!(
+                return Err(plum_syntax::error::CompileError::new(
+                    last.span,
                     "the trailing wildcard/identifier arm of a literal `match` cannot have a \
                      guard (it must be able to unconditionally catch anything earlier arms \
-                     didn't) at {:?}",
-                    last.span
+                     didn't)",
                 ));
             }
         }
@@ -2863,10 +2879,10 @@ impl Infer {
             // in sync with lowering avoids code that type-checks but
             // then fails at the lowering gate right after.
             if arm.guard.is_some() && pattern_has_nested_tag_subpattern(&arm.pattern) {
-                return Err(format!(
+                return Err(plum_syntax::error::CompileError::new(
+                    arm.span,
                     "type inference not yet implemented for a match guard combined with a \
-                     nested pattern at {:?}",
-                    arm.span
+                     nested pattern",
                 ));
             }
             // `bind_pattern` accepts a bare identifier/wildcard fine —
@@ -2885,10 +2901,10 @@ impl Infer {
             // name (or nothing, for `_`), no separate handling needed.
             let is_last = i == arms.len() - 1;
             if matches!(arm.pattern, ast::Pattern::Ident(..) | ast::Pattern::Wildcard(..)) && !is_single_catchall && !is_last {
-                return Err(format!(
+                return Err(plum_syntax::error::CompileError::new(
+                    arm.pattern.span(),
                     "type inference not yet implemented for a bare identifier or wildcard \
-                     mixed into an otherwise tag-shaped match anywhere but the LAST arm at {:?}",
-                    arm.pattern.span()
+                     mixed into an otherwise tag-shaped match anywhere but the LAST arm",
                 ));
             }
             // Every arm unifies its OWN pattern shape against the SAME
@@ -2915,7 +2931,7 @@ impl Infer {
             if let Some(guard) = &arm.guard {
                 let (guard_ty, s) = self.infer_expr(guard, &arm_env)?;
                 acc = s.compose(&acc);
-                let s = unify(&acc.apply(&guard_ty), &Type::Bool).map_err(|e| format!("match guard: {e}"))?;
+                let s = unify(&acc.apply(&guard_ty), &Type::Bool).map_err(|e| plum_syntax::error::CompileError::spanless(format!("match guard: {e}")))?;
                 acc = s.compose(&acc);
             }
 
@@ -2926,7 +2942,7 @@ impl Infer {
                 None => result_ty = Some(acc.apply(&body_ty)),
                 Some(prev) => {
                     let s = unify(&acc.apply(prev), &acc.apply(&body_ty))
-                        .map_err(|e| format!("match arms must produce the same type: {e}"))?;
+                        .map_err(|e| plum_syntax::error::CompileError::spanless(format!("match arms must produce the same type: {e}")))?;
                     acc = s.compose(&acc);
                     result_ty = Some(acc.apply(prev));
                 }
@@ -2987,9 +3003,9 @@ impl Infer {
                     let missing: Vec<&str> =
                         all_tags.iter().map(String::as_str).filter(|t| !covered.contains(t)).collect();
                     if !missing.is_empty() {
-                        return Err(format!(
-                            "match is not exhaustive — missing variant(s): {}",
-                            missing.join(", ")
+                        return Err(plum_syntax::error::CompileError::new(
+                            scrutinee.span(),
+                            format!("match is not exhaustive — missing variant(s): {}", missing.join(", ")),
                         ));
                     }
                 }
@@ -3011,7 +3027,7 @@ impl Infer {
     // `X.recv()` call shape — checked here the same way lower.rs's
     // `lower_select` checks it, so a program that type-checks never
     // fails at the lowering gate right after for a DIFFERENT reason.
-    fn infer_select(&mut self, arms: &[ast::SelectArm], span: plum_syntax::span::Span, env: &TypeEnv) -> Result<(Type, Subst), String> {
+    fn infer_select(&mut self, arms: &[ast::SelectArm], span: plum_syntax::span::Span, env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let mut acc = Subst::empty();
         let mut result_ty: Option<Type> = None;
 
@@ -3022,20 +3038,23 @@ impl Infer {
                 span: call_span,
             } = &arm.expr
             else {
-                return Err(format!("`select` arm requires an `expr.recv()` call at {:?}", arm.expr.span()));
+                return Err(plum_syntax::error::CompileError::new(
+                    arm.expr.span(),
+                    "`select` arm requires an `expr.recv()` call",
+                ));
             };
             let ast::Expr::Field { base, name, .. } = callee.as_ref() else {
-                return Err(format!("`select` arm requires an `expr.recv()` call at {call_span:?}"));
+                return Err(plum_syntax::error::CompileError::new(*call_span, "`select` arm requires an `expr.recv()` call"));
             };
             if name != "recv" || !args.is_empty() {
-                return Err(format!("`select` arm requires an `expr.recv()` call at {call_span:?}"));
+                return Err(plum_syntax::error::CompileError::new(*call_span, "`select` arm requires an `expr.recv()` call"));
             }
 
             let (base_ty, s) = self.infer_expr(base, env)?;
             acc = s.compose(&acc);
             let elem_ty = self.fresh();
             let s = unify(&acc.apply(&base_ty), &Type::Struct("Receiver".to_string(), vec![elem_ty.clone()]))
-                .map_err(|e| format!("`select` arm at {call_span:?}: {e}"))?;
+                .map_err(|e| plum_syntax::error::CompileError::new(*call_span, format!("`select` arm: {e}")))?;
             acc = s.compose(&acc);
 
             let refined_env = env.apply_subst(&acc);
@@ -3049,14 +3068,14 @@ impl Infer {
                 None => result_ty = Some(acc.apply(&body_ty)),
                 Some(prev) => {
                     let s = unify(&acc.apply(prev), &acc.apply(&body_ty))
-                        .map_err(|e| format!("select arms must produce the same type: {e}"))?;
+                        .map_err(|e| plum_syntax::error::CompileError::spanless(format!("select arms must produce the same type: {e}")))?;
                     acc = s.compose(&acc);
                     result_ty = Some(acc.apply(prev));
                 }
             }
         }
 
-        let final_ty = result_ty.ok_or_else(|| format!("select with no arms has no result type at {span:?}"))?;
+        let final_ty = result_ty.ok_or_else(|| plum_syntax::error::CompileError::new(span, format!("select with no arms has no result type")))?;
         Ok((acc.apply(&final_ty), acc))
     }
 
@@ -3071,7 +3090,7 @@ impl Infer {
         body: &ast::Expr,
         env: &TypeEnv,
         span: Span,
-    ) -> Result<(Type, Subst), String> {
+    ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let mut param_types = Vec::with_capacity(params.len());
         let mut closure_env = env.clone();
         for p in params {
@@ -3113,13 +3132,13 @@ impl Infer {
         body: &ast::Block,
         span: plum_syntax::span::Span,
         env: &TypeEnv,
-    ) -> Result<(Type, Subst), String> {
+    ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let var = match pattern {
             ast::Pattern::Ident(name, _) => name.clone(),
             other => {
-                return Err(format!(
-                    "type inference not yet implemented for destructuring `for` patterns at {:?}",
-                    other.span()
+                return Err(plum_syntax::error::CompileError::new(
+                    other.span(),
+                    "type inference not yet implemented for destructuring `for` patterns",
                 ));
             }
         };
@@ -3138,13 +3157,13 @@ impl Infer {
             } => {
                 let (start_ty, s) = self.infer_expr(lhs, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&start_ty), &Type::Int).map_err(|e| format!("`for` range start: {e}"))?;
+                let s = unify(&acc.apply(&start_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::spanless(format!("`for` range start: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
 
                 let (end_ty, s) = self.infer_expr(rhs, &refined_env)?;
                 acc = s.compose(&acc);
-                let s = unify(&acc.apply(&end_ty), &Type::Int).map_err(|e| format!("`for` range end: {e}"))?;
+                let s = unify(&acc.apply(&end_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::spanless(format!("`for` range end: {e}")))?;
                 s.compose(&acc)
             }
             _ => {
@@ -3177,7 +3196,7 @@ impl Infer {
                     }
                 }
                 let s = unify(&resolved_iter_ty, &Type::Range)
-                    .map_err(|e| format!("`for` at {span:?}: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(span, format!("`for`: {e}")))?;
                 acc = s.compose(&acc);
                 acc
             }
@@ -3190,7 +3209,7 @@ impl Infer {
         Ok((Type::Unit, acc))
     }
 
-    fn infer_unary(&mut self, op: &ast::UnaryOp, expr: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), String> {
+    fn infer_unary(&mut self, op: &ast::UnaryOp, expr: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let (operand_ty, mut acc) = self.infer_expr(expr, env)?;
         match op {
             ast::UnaryOp::Neg => {
@@ -3200,7 +3219,7 @@ impl Infer {
                 Ok((final_ty, acc))
             }
             ast::UnaryOp::Not => {
-                let s = unify(&acc.apply(&operand_ty), &Type::Bool).map_err(|e| format!("`!`: {e}"))?;
+                let s = unify(&acc.apply(&operand_ty), &Type::Bool).map_err(|e| plum_syntax::error::CompileError::spanless(format!("`!`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Bool, acc))
             }
@@ -3213,18 +3232,18 @@ impl Infer {
         lhs: &ast::Expr,
         rhs: &ast::Expr,
         env: &TypeEnv,
-    ) -> Result<(Type, Subst), String> {
+    ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         use ast::BinaryOp::*;
 
         // `&&`/`||`: each operand independently must unify with Bool.
         if matches!(op, And | Or) {
             let (lty, s) = self.infer_expr(lhs, env)?;
             let mut acc = s;
-            let s = unify(&acc.apply(&lty), &Type::Bool).map_err(|e| format!("logical operator: {e}"))?;
+            let s = unify(&acc.apply(&lty), &Type::Bool).map_err(|e| plum_syntax::error::CompileError::spanless(format!("logical operator: {e}")))?;
             acc = s.compose(&acc);
             let (rty, s) = self.infer_expr(rhs, &env.apply_subst(&acc))?;
             acc = s.compose(&acc);
-            let s = unify(&acc.apply(&rty), &Type::Bool).map_err(|e| format!("logical operator: {e}"))?;
+            let s = unify(&acc.apply(&rty), &Type::Bool).map_err(|e| plum_syntax::error::CompileError::spanless(format!("logical operator: {e}")))?;
             acc = s.compose(&acc);
             return Ok((Type::Bool, acc));
         }
@@ -3235,7 +3254,7 @@ impl Infer {
         let mut acc = s;
         let (rty, s) = self.infer_expr(rhs, &env.apply_subst(&acc))?;
         acc = s.compose(&acc);
-        let s = unify(&acc.apply(&lty), &acc.apply(&rty)).map_err(|e| format!("operator: {e}"))?;
+        let s = unify(&acc.apply(&lty), &acc.apply(&rty)).map_err(|e| plum_syntax::error::CompileError::spanless(format!("operator: {e}")))?;
         acc = s.compose(&acc);
         let operand_ty = acc.apply(&lty);
 
@@ -3261,10 +3280,10 @@ impl Infer {
         then_branch: &ast::Block,
         else_branch: &Option<Box<ast::Expr>>,
         env: &TypeEnv,
-    ) -> Result<(Type, Subst), String> {
+    ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let (cond_ty, s) = self.infer_expr(cond, env)?;
         let mut acc = s;
-        let s = unify(&acc.apply(&cond_ty), &Type::Bool).map_err(|e| format!("`if` condition: {e}"))?;
+        let s = unify(&acc.apply(&cond_ty), &Type::Bool).map_err(|e| plum_syntax::error::CompileError::spanless(format!("`if` condition: {e}")))?;
         acc = s.compose(&acc);
         let mut refined_env = env.apply_subst(&acc);
 
@@ -3277,20 +3296,20 @@ impl Infer {
                 let (else_ty, s) = self.infer_expr(else_expr, &refined_env)?;
                 acc = s.compose(&acc);
                 let s = unify(&acc.apply(&then_ty), &acc.apply(&else_ty))
-                    .map_err(|e| format!("`if`/`else` branches must match: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::spanless(format!("`if`/`else` branches must match: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((acc.apply(&then_ty), acc))
             }
             None => {
                 let s = unify(&acc.apply(&then_ty), &Type::Unit)
-                    .map_err(|e| format!("`if` without `else` must produce Unit: {e}"))?;
+                    .map_err(|e| plum_syntax::error::CompileError::spanless(format!("`if` without `else` must produce Unit: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Unit, acc))
             }
         }
     }
 
-    fn infer_block(&mut self, block: &ast::Block, env: &TypeEnv) -> Result<(Type, Subst), String> {
+    fn infer_block(&mut self, block: &ast::Block, env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let mut acc = Subst::empty();
         let mut cur_env = env.clone();
         for stmt in &block.stmts {
@@ -3319,7 +3338,7 @@ impl Infer {
                         let (body_ty, s) = self.infer_expr(value, &rec_env)?;
                         let mut acc2 = s;
                         let s2 = unify(&acc2.apply(&placeholder), &acc2.apply(&body_ty))
-                            .map_err(|e| format!("recursive closure {name:?}: {e}"))?;
+                            .map_err(|e| plum_syntax::error::CompileError::spanless(format!("recursive closure {name:?}: {e}")))?;
                         acc2 = s2.compose(&acc2);
                         (acc2.apply(&body_ty), acc2)
                     } else {
@@ -3330,7 +3349,7 @@ impl Infer {
                     if let Some(annotation) = ty {
                         let ann_ty = ast_type_to_type(annotation, &self.ctx, &[])?;
                         let s = unify(&resolved, &ann_ty)
-                            .map_err(|e| format!("`let` annotation for {name:?}: {e}"))?;
+                            .map_err(|e| plum_syntax::error::CompileError::spanless(format!("`let` annotation for {name:?}: {e}")))?;
                         acc = s.compose(&acc);
                         resolved = acc.apply(&resolved);
                     }
@@ -3353,10 +3372,10 @@ impl Infer {
                     ..
                 } => {
                     if ty.is_some() {
-                        return Err(format!(
+                        return Err(plum_syntax::error::CompileError::new(
+                            pattern.span(),
                             "type inference not yet implemented for type annotations on \
-                             destructuring `let` at {:?}",
-                            pattern.span()
+                             destructuring `let`",
                         ));
                     }
                     let (val_ty, s) = self.infer_expr(value, &cur_env)?;
@@ -3366,10 +3385,10 @@ impl Infer {
                     cur_env = cur_env.apply_subst(&acc);
                 }
                 ast::Stmt::Let { pattern, .. } => {
-                    return Err(format!(
+                    return Err(plum_syntax::error::CompileError::new(
+                        pattern.span(),
                         "type inference not yet implemented for destructuring let-bindings \
-                         of this shape at {:?}",
-                        pattern.span()
+                         of this shape",
                     ));
                 }
                 ast::Stmt::Expr(e) => {
@@ -3389,12 +3408,12 @@ impl Infer {
                     let existing = cur_env
                         .lookup_scheme(name)
                         .cloned()
-                        .ok_or_else(|| format!("assignment to undefined variable {name:?} at {span:?}"))?;
+                        .ok_or_else(|| plum_syntax::error::CompileError::new(*span, format!("assignment to undefined variable {name:?}")))?;
                     let existing_ty = self.instantiate(&existing);
                     let (val_ty, s) = self.infer_expr(value, &cur_env)?;
                     acc = s.compose(&acc);
                     let s = unify(&acc.apply(&existing_ty), &acc.apply(&val_ty))
-                        .map_err(|e| format!("assignment to {name:?}: {e}"))?;
+                        .map_err(|e| plum_syntax::error::CompileError::spanless(format!("assignment to {name:?}: {e}")))?;
                     acc = s.compose(&acc);
                     cur_env = cur_env.apply_subst(&acc);
                 }
@@ -3422,11 +3441,11 @@ impl Infer {
 /// the resolved type AND the substitution recording the default, if
 /// one was applied — the caller must compose it into their own
 /// accumulator, same as any other substitution.
-fn default_numeric(ty: &Type) -> Result<(Type, Subst), String> {
+fn default_numeric(ty: &Type) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
     match ty {
         Type::Int | Type::Float => Ok((ty.clone(), Subst::empty())),
         Type::Var(id) => Ok((Type::Int, Subst::single(*id, Type::Int))),
-        other => Err(format!("expected a numeric type (Int or Float), found {other:?}")),
+        other => Err(plum_syntax::error::CompileError::spanless(format!("expected a numeric type (Int or Float), found {other:?}"))),
     }
 }
 
@@ -3571,7 +3590,7 @@ pub fn ast_type_to_type(
     ty: &ast::Type,
     ctx: &crate::context::TypeContext,
     in_scope_params: &[String],
-) -> Result<Type, String> {
+) -> Result<Type, plum_syntax::error::CompileError> {
     match ty {
         ast::Type::Path(segments, span) => match segments.last().map(String::as_str) {
             Some("Int") => Ok(Type::Int),
@@ -3582,9 +3601,7 @@ pub fn ast_type_to_type(
             Some(name) if in_scope_params.iter().any(|p| p == name) => Ok(Type::Param(name.to_string())),
             Some(name) if ctx.is_struct(name) => Ok(Type::Struct(name.to_string(), Vec::new())),
             Some(name) if ctx.is_enum(name) => Ok(Type::Enum(name.to_string(), Vec::new())),
-            _ => Err(format!(
-                "type inference not yet implemented for this type annotation at {span:?}"
-            )),
+            _ => Err(plum_syntax::error::CompileError::new(*span, "type inference not yet implemented for this type annotation")),
         },
         // `Thing[Arg, ...]` — `base` names a generic struct/enum,
         // `args` are its type arguments at THIS use (each resolved
@@ -3593,7 +3610,7 @@ pub fn ast_type_to_type(
         // count.
         ast::Type::Generic { base, args, span } => {
             let name = base.last().map(String::as_str).ok_or_else(|| {
-                format!("type inference not yet implemented for this type annotation at {span:?}")
+                plum_syntax::error::CompileError::new(*span, "type inference not yet implemented for this type annotation")
             })?;
             // Same opaque-pseudo-generic-builtin-types gap `resolve_
             // annotation` already had to check for, in exactly the
@@ -3605,21 +3622,21 @@ pub fn ast_type_to_type(
             // `struct Counter { value: Ref[Int] }`.
             if matches!(name, "Array" | "Task" | "Sender" | "Receiver" | "Ref") {
                 if args.len() != 1 {
-                    return Err(format!("{name:?} expects 1 generic argument, found {} at {span:?}", args.len()));
+                    return Err(plum_syntax::error::CompileError::new(
+                        *span,
+                        format!("{name:?} expects 1 generic argument, found {}", args.len()),
+                    ));
                 }
                 let resolved_arg = ast_type_to_type(&args[0], ctx, in_scope_params)?;
                 return Ok(Type::Struct(name.to_string(), vec![resolved_arg]));
             }
             let Some(declared_params) = ctx.generic_params(name) else {
-                return Err(format!(
-                    "type inference not yet implemented for this type annotation at {span:?}"
-                ));
+                return Err(plum_syntax::error::CompileError::new(*span, "type inference not yet implemented for this type annotation"));
             };
             if args.len() != declared_params.len() {
-                return Err(format!(
-                    "{name:?} expects {} generic argument(s), found {} at {span:?}",
-                    declared_params.len(),
-                    args.len()
+                return Err(plum_syntax::error::CompileError::new(
+                    *span,
+                    format!("{name:?} expects {} generic argument(s), found {}", declared_params.len(), args.len()),
                 ));
             }
             let resolved_args = args
@@ -3631,9 +3648,7 @@ pub fn ast_type_to_type(
             } else if ctx.is_enum(name) {
                 Ok(Type::Enum(name.to_string(), resolved_args))
             } else {
-                Err(format!(
-                    "type inference not yet implemented for this type annotation at {span:?}"
-                ))
+                Err(plum_syntax::error::CompileError::new(*span, "type inference not yet implemented for this type annotation"))
             }
         }
         // `(A, B) -> R` — resolves directly to the SAME `Type::Function`
@@ -3729,6 +3744,7 @@ mod tests {
         infer
             .infer_expr(&ast, env)
             .expect_err(&format!("expected inference of {src:?} to fail"))
+            .to_string()
     }
 
     #[test]
@@ -4281,6 +4297,7 @@ mod tests {
         infer
             .infer_expr(&ast, env)
             .expect_err(&format!("expected inference of {src:?} to fail"))
+            .to_string()
     }
 
     // --- Variant construction ---
@@ -5245,6 +5262,7 @@ mod tests {
         infer
             .infer_program(&program)
             .expect_err(&format!("expected inference of {src:?} to fail"))
+            .to_string()
     }
 
     fn fn_ty(params: Vec<Type>, ret: Type) -> Type {

@@ -81,7 +81,7 @@ impl TypeContext {
         }
     }
 
-    pub fn from_items(items: &[ast::Item]) -> Result<Self, String> {
+    pub fn from_items(items: &[ast::Item]) -> Result<Self, plum_syntax::error::CompileError> {
         let mut ctx = Self::new();
 
         // Phase 1: collect every declared name AND generic-parameter
@@ -97,7 +97,10 @@ impl TypeContext {
             match &item.kind {
                 ast::ItemKind::Struct(decl) => {
                     if ctx.struct_names.contains(&decl.name) || ctx.enum_names.contains(&decl.name) {
-                        return Err(format!("{:?} is already declared (at {:?})", decl.name, decl.span));
+                        return Err(plum_syntax::error::CompileError::new(
+                            decl.span,
+                            format!("{:?} is already declared", decl.name),
+                        ));
                     }
                     ctx.struct_names.insert(decl.name.clone());
                     let params = decl.generics.iter().map(|g| g.name.clone()).collect();
@@ -107,7 +110,10 @@ impl TypeContext {
                 }
                 ast::ItemKind::Enum(decl) => {
                     if ctx.struct_names.contains(&decl.name) || ctx.enum_names.contains(&decl.name) {
-                        return Err(format!("{:?} is already declared (at {:?})", decl.name, decl.span));
+                        return Err(plum_syntax::error::CompileError::new(
+                            decl.span,
+                            format!("{:?} is already declared", decl.name),
+                        ));
                     }
                     ctx.enum_names.insert(decl.name.clone());
                     let params = decl.generics.iter().map(|g| g.name.clone()).collect();
@@ -178,10 +184,13 @@ impl TypeContext {
                     // implemented — a callback type is only meaningful
                     // as a PARAMETER.
                     if matches!(ret_type, Type::Function(..)) {
-                        return Err(format!(
-                            "extern function {:?}: a callback type is only supported as a parameter, not a \
-                             return type (calling a C-supplied function pointer isn't implemented)",
-                            f.name
+                        return Err(plum_syntax::error::CompileError::new(
+                            f.span,
+                            format!(
+                                "extern function {:?}: a callback type is only supported as a parameter, not a \
+                                 return type (calling a C-supplied function pointer isn't implemented)",
+                                f.name
+                            ),
                         ));
                     }
                     ctx.extern_fns.insert(f.name.clone(), (param_types, ret_type));
@@ -296,7 +305,7 @@ impl TypeContext {
 // (the same resolver struct/enum fields use), reusing its name
 // resolution rather than re-implementing it, with `check_ffi_safe`
 // afterward rejecting whatever isn't actually FFI-safe.
-fn extern_ast_type_to_type(ty: &ast::Type, ctx: &TypeContext) -> Result<Type, String> {
+fn extern_ast_type_to_type(ty: &ast::Type, ctx: &TypeContext) -> Result<Type, plum_syntax::error::CompileError> {
     if let ast::Type::Path(segments, _) = ty {
         if segments.len() == 1 && segments[0] == "CStr" {
             return Ok(Type::CStr);
@@ -304,7 +313,7 @@ fn extern_ast_type_to_type(ty: &ast::Type, ctx: &TypeContext) -> Result<Type, St
     }
     let resolved = ast_type_to_type(ty, ctx, &[])?;
     check_ffi_safe(&resolved, ctx, true, true, &mut HashSet::new())
-        .map_err(|e| format!("{e} (at {:?})", ty.span()))?;
+        .map_err(|e| plum_syntax::error::CompileError::new(ty.span(), e))?;
     Ok(resolved)
 }
 
@@ -397,7 +406,9 @@ mod tests {
         let tokens = Lexer::new(src).tokenize();
         let mut parser = Parser::new(tokens);
         let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
-        TypeContext::from_items(&program.items).expect_err(&format!("expected context building for {src:?} to fail"))
+        TypeContext::from_items(&program.items)
+            .expect_err(&format!("expected context building for {src:?} to fail"))
+            .to_string()
     }
 
     #[test]

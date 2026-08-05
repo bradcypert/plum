@@ -37,7 +37,7 @@ impl Parser {
     // directory is a module (see DESIGN.md's "Module system"), so this
     // is enough to parse one whole `.plum` file. ---
 
-    pub fn parse_program(&mut self) -> Result<Program, String> {
+    pub fn parse_program(&mut self) -> Result<Program, crate::error::CompileError> {
         let mut items = Vec::new();
         while !self.is_at_eof() {
             items.push(self.parse_item()?);
@@ -45,7 +45,7 @@ impl Parser {
         Ok(Program { items })
     }
 
-    fn parse_item(&mut self) -> Result<Item, String> {
+    fn parse_item(&mut self) -> Result<Item, crate::error::CompileError> {
         let pub_tok = if self.check(&TokenKind::Pub) {
             Some(self.advance())
         } else {
@@ -60,9 +60,9 @@ impl Parser {
             TokenKind::Extern => ItemKind::Extern(self.parse_extern_block()?),
             TokenKind::Use => ItemKind::Use(self.parse_use_decl()?),
             other => {
-                return Err(format!(
-                    "expected an item (let/struct/enum/extern/use), found {other:?} at {:?}",
-                    self.peek().span
+                return Err(crate::error::CompileError::new(
+                    self.peek().span,
+                    format!("expected an item (let/struct/enum/extern/use), found {other:?}"),
                 ));
             }
         };
@@ -81,7 +81,7 @@ impl Parser {
         })
     }
 
-    fn parse_generic_params(&mut self) -> Result<Vec<GenericParam>, String> {
+    fn parse_generic_params(&mut self) -> Result<Vec<GenericParam>, crate::error::CompileError> {
         self.expect(TokenKind::LBracket, "'['")?;
         let mut params = Vec::new();
         if !self.check(&TokenKind::RBracket) {
@@ -97,7 +97,7 @@ impl Parser {
         Ok(params)
     }
 
-    fn parse_generic_param(&mut self) -> Result<GenericParam, String> {
+    fn parse_generic_param(&mut self) -> Result<GenericParam, crate::error::CompileError> {
         let name_tok = self.expect_ident("a generic parameter")?;
         let name = Self::ident_text(&name_tok);
         let mut end = name_tok.span;
@@ -119,7 +119,7 @@ impl Parser {
         })
     }
 
-    fn parse_let_def(&mut self) -> Result<LetDef, String> {
+    fn parse_let_def(&mut self) -> Result<LetDef, crate::error::CompileError> {
         let start = self.expect(TokenKind::Let, "'let'")?.span;
         let name_tok = self.expect_ident("a name")?;
         let name = Self::ident_text(&name_tok);
@@ -150,7 +150,7 @@ impl Parser {
         })
     }
 
-    fn parse_param(&mut self) -> Result<Param, String> {
+    fn parse_param(&mut self) -> Result<Param, crate::error::CompileError> {
         let tok = self.peek().clone();
         match &tok.kind {
             TokenKind::Ident(name) => {
@@ -209,11 +209,11 @@ impl Parser {
                     span: open.span.to(close.span),
                 })
             }
-            other => Err(format!("expected a parameter, found {other:?} at {:?}", tok.span)),
+            other => Err(crate::error::CompileError::new(tok.span, format!("expected a parameter, found {other:?}"))),
         }
     }
 
-    fn parse_struct_decl(&mut self) -> Result<StructDecl, String> {
+    fn parse_struct_decl(&mut self) -> Result<StructDecl, crate::error::CompileError> {
         let start = self.expect(TokenKind::Struct, "'struct'")?.span;
         let name_tok = self.expect_ident("a struct name")?;
         let name = Self::ident_text(&name_tok);
@@ -242,7 +242,7 @@ impl Parser {
         })
     }
 
-    fn parse_struct_field(&mut self) -> Result<StructField, String> {
+    fn parse_struct_field(&mut self) -> Result<StructField, crate::error::CompileError> {
         let is_pub = self.bump_if(&TokenKind::Pub);
         let name_tok = self.expect_ident("a field name")?;
         let name = Self::ident_text(&name_tok);
@@ -252,7 +252,7 @@ impl Parser {
         Ok(StructField { is_pub, name, ty, span })
     }
 
-    fn parse_enum_decl(&mut self) -> Result<EnumDecl, String> {
+    fn parse_enum_decl(&mut self) -> Result<EnumDecl, crate::error::CompileError> {
         let start = self.expect(TokenKind::Enum, "'enum'")?.span;
         let name_tok = self.expect_ident("an enum name")?;
         let name = Self::ident_text(&name_tok);
@@ -281,7 +281,7 @@ impl Parser {
         })
     }
 
-    fn parse_enum_variant(&mut self) -> Result<EnumVariant, String> {
+    fn parse_enum_variant(&mut self) -> Result<EnumVariant, crate::error::CompileError> {
         let name_tok = self.expect_ident("a variant name")?;
         let name = Self::ident_text(&name_tok);
         let mut end = name_tok.span;
@@ -306,7 +306,7 @@ impl Parser {
         })
     }
 
-    fn parse_extern_block(&mut self) -> Result<ExternBlock, String> {
+    fn parse_extern_block(&mut self) -> Result<ExternBlock, crate::error::CompileError> {
         let start = self.expect(TokenKind::Extern, "'extern'")?.span;
         let abi_tok = self.expect_str("a string literal (the ABI, e.g. \"C\")")?;
         let abi = Self::str_text(&abi_tok);
@@ -323,7 +323,7 @@ impl Parser {
         })
     }
 
-    fn parse_extern_fn(&mut self) -> Result<ExternFn, String> {
+    fn parse_extern_fn(&mut self) -> Result<ExternFn, crate::error::CompileError> {
         let start = self.expect(TokenKind::Fn, "'fn'")?.span;
         let name_tok = self.expect_ident("a function name")?;
         let name = Self::ident_text(&name_tok);
@@ -353,7 +353,7 @@ impl Parser {
         })
     }
 
-    fn parse_extern_param(&mut self) -> Result<ExternParam, String> {
+    fn parse_extern_param(&mut self) -> Result<ExternParam, crate::error::CompileError> {
         let name_tok = self.expect_ident("a parameter name")?;
         let name = Self::ident_text(&name_tok);
         self.expect(TokenKind::Colon, "':'")?;
@@ -362,7 +362,7 @@ impl Parser {
         Ok(ExternParam { name, ty, span })
     }
 
-    fn parse_use_decl(&mut self) -> Result<UseDecl, String> {
+    fn parse_use_decl(&mut self) -> Result<UseDecl, crate::error::CompileError> {
         let start = self.expect(TokenKind::Use, "'use'")?.span;
         let segments = self.parse_expr_path()?;
         let path: Vec<String> = segments.iter().map(|(name, _)| name.clone()).collect();
@@ -375,7 +375,7 @@ impl Parser {
 
     // --- pattern grammar, matching GRAMMAR.md's "Patterns" section ---
 
-    pub fn parse_pattern(&mut self) -> Result<Pattern, String> {
+    pub fn parse_pattern(&mut self) -> Result<Pattern, crate::error::CompileError> {
         let first = self.parse_primary_pattern()?;
         if !self.check(&TokenKind::Pipe) {
             return Ok(first);
@@ -388,7 +388,7 @@ impl Parser {
         Ok(Pattern::Or(alts, span))
     }
 
-    fn parse_primary_pattern(&mut self) -> Result<Pattern, String> {
+    fn parse_primary_pattern(&mut self) -> Result<Pattern, crate::error::CompileError> {
         let tok = self.peek().clone();
         match &tok.kind {
             TokenKind::Int(n) => {
@@ -427,11 +427,11 @@ impl Parser {
                 }
             }
             TokenKind::LParen => self.parse_tuple_pattern(),
-            other => Err(format!("expected a pattern, found {other:?} at {:?}", tok.span)),
+            other => Err(crate::error::CompileError::new(tok.span, format!("expected a pattern, found {other:?}"))),
         }
     }
 
-    fn parse_pattern_path(&mut self) -> Result<(Vec<String>, Span), String> {
+    fn parse_pattern_path(&mut self) -> Result<(Vec<String>, Span), crate::error::CompileError> {
         let first = self.expect_ident("a pattern path segment")?;
         let start = first.span;
         let mut end = first.span;
@@ -445,7 +445,7 @@ impl Parser {
         Ok((segments, start.to(end)))
     }
 
-    fn parse_path_shaped_pattern(&mut self) -> Result<Pattern, String> {
+    fn parse_path_shaped_pattern(&mut self) -> Result<Pattern, crate::error::CompileError> {
         let (path, path_span) = self.parse_pattern_path()?;
         match self.peek_kind() {
             TokenKind::LParen => {
@@ -476,7 +476,7 @@ impl Parser {
         }
     }
 
-    fn parse_struct_pattern(&mut self, path: Vec<String>, path_span: Span) -> Result<Pattern, String> {
+    fn parse_struct_pattern(&mut self, path: Vec<String>, path_span: Span) -> Result<Pattern, crate::error::CompileError> {
         self.expect(TokenKind::LBrace, "'{'")?;
         let mut fields = Vec::new();
         let mut has_rest = false;
@@ -504,7 +504,7 @@ impl Parser {
         })
     }
 
-    fn parse_field_pattern(&mut self) -> Result<FieldPattern, String> {
+    fn parse_field_pattern(&mut self) -> Result<FieldPattern, crate::error::CompileError> {
         let name_tok = self.expect_ident("a field name")?;
         let name = Self::ident_text(&name_tok);
         if self.bump_if(&TokenKind::Colon) {
@@ -520,7 +520,7 @@ impl Parser {
         }
     }
 
-    fn parse_tuple_pattern(&mut self) -> Result<Pattern, String> {
+    fn parse_tuple_pattern(&mut self) -> Result<Pattern, crate::error::CompileError> {
         let open = self.expect(TokenKind::LParen, "'('")?;
         if self.check(&TokenKind::RParen) {
             let close = self.advance();
@@ -549,11 +549,11 @@ impl Parser {
         Ok(Pattern::Tuple(elems, open.span.to(close.span)))
     }
 
-    pub fn parse_expr(&mut self) -> Result<Expr, String> {
+    pub fn parse_expr(&mut self) -> Result<Expr, crate::error::CompileError> {
         self.parse_pipe()
     }
 
-    fn parse_expr_no_struct_literal(&mut self) -> Result<Expr, String> {
+    fn parse_expr_no_struct_literal(&mut self) -> Result<Expr, crate::error::CompileError> {
         let saved = self.no_struct_literal;
         self.no_struct_literal = true;
         let result = self.parse_expr();
@@ -561,7 +561,7 @@ impl Parser {
         result
     }
 
-    fn parse_expr_allowing_struct_literal(&mut self) -> Result<Expr, String> {
+    fn parse_expr_allowing_struct_literal(&mut self) -> Result<Expr, crate::error::CompileError> {
         let saved = self.no_struct_literal;
         self.no_struct_literal = false;
         let result = self.parse_expr();
@@ -600,26 +600,24 @@ impl Parser {
         }
     }
 
-    fn expect(&mut self, kind: TokenKind, what: &str) -> Result<Token, String> {
+    fn expect(&mut self, kind: TokenKind, what: &str) -> Result<Token, crate::error::CompileError> {
         if self.check(&kind) {
             Ok(self.advance())
         } else {
-            Err(format!(
-                "expected {what}, found {:?} at {:?}",
-                self.peek_kind(),
-                self.peek().span
+            Err(crate::error::CompileError::new(
+                self.peek().span,
+                format!("expected {what}, found {:?}", self.peek_kind()),
             ))
         }
     }
 
-    fn expect_ident(&mut self, what: &str) -> Result<Token, String> {
+    fn expect_ident(&mut self, what: &str) -> Result<Token, crate::error::CompileError> {
         if matches!(self.peek_kind(), TokenKind::Ident(_)) {
             Ok(self.advance())
         } else {
-            Err(format!(
-                "expected {what}, found {:?} at {:?}",
-                self.peek_kind(),
-                self.peek().span
+            Err(crate::error::CompileError::new(
+                self.peek().span,
+                format!("expected {what}, found {:?}", self.peek_kind()),
             ))
         }
     }
@@ -631,14 +629,13 @@ impl Parser {
         }
     }
 
-    fn expect_str(&mut self, what: &str) -> Result<Token, String> {
+    fn expect_str(&mut self, what: &str) -> Result<Token, crate::error::CompileError> {
         if matches!(self.peek_kind(), TokenKind::Str(_)) {
             Ok(self.advance())
         } else {
-            Err(format!(
-                "expected {what}, found {:?} at {:?}",
-                self.peek_kind(),
-                self.peek().span
+            Err(crate::error::CompileError::new(
+                self.peek().span,
+                format!("expected {what}, found {:?}", self.peek_kind()),
             ))
         }
     }
@@ -654,7 +651,7 @@ impl Parser {
     // GRAMMAR.md's "Expressions" section exactly (one function per
     // precedence level) ---
 
-    fn parse_pipe(&mut self) -> Result<Expr, String> {
+    fn parse_pipe(&mut self) -> Result<Expr, crate::error::CompileError> {
         let mut lhs = self.parse_or()?;
         while self.bump_if(&TokenKind::PipeGt) {
             let rhs = self.parse_or()?;
@@ -669,7 +666,7 @@ impl Parser {
         Ok(lhs)
     }
 
-    fn parse_or(&mut self) -> Result<Expr, String> {
+    fn parse_or(&mut self) -> Result<Expr, crate::error::CompileError> {
         let mut lhs = self.parse_and()?;
         while self.bump_if(&TokenKind::OrOr) {
             let rhs = self.parse_and()?;
@@ -684,7 +681,7 @@ impl Parser {
         Ok(lhs)
     }
 
-    fn parse_and(&mut self) -> Result<Expr, String> {
+    fn parse_and(&mut self) -> Result<Expr, crate::error::CompileError> {
         let mut lhs = self.parse_compare()?;
         while self.bump_if(&TokenKind::AndAnd) {
             let rhs = self.parse_compare()?;
@@ -699,7 +696,7 @@ impl Parser {
         Ok(lhs)
     }
 
-    fn parse_compare(&mut self) -> Result<Expr, String> {
+    fn parse_compare(&mut self) -> Result<Expr, crate::error::CompileError> {
         let lhs = self.parse_range()?;
         let op = match self.peek_kind() {
             TokenKind::EqEq => BinaryOp::Eq,
@@ -713,9 +710,9 @@ impl Parser {
         self.advance();
         let rhs = self.parse_range()?;
         if is_compare_op(self.peek_kind()) {
-            return Err(format!(
-                "comparison operators do not chain — add parentheses (found another comparison operator at {:?})",
-                self.peek().span
+            return Err(crate::error::CompileError::new(
+                self.peek().span,
+                "comparison operators do not chain — add parentheses (found another comparison operator here)",
             ));
         }
         let span = lhs.span().to(rhs.span());
@@ -727,16 +724,16 @@ impl Parser {
         })
     }
 
-    fn parse_range(&mut self) -> Result<Expr, String> {
+    fn parse_range(&mut self) -> Result<Expr, crate::error::CompileError> {
         let lhs = self.parse_add()?;
         if !self.bump_if(&TokenKind::DotDot) {
             return Ok(lhs);
         }
         let rhs = self.parse_add()?;
         if self.check(&TokenKind::DotDot) {
-            return Err(format!(
-                "ranges do not chain — add parentheses (found another '..' at {:?})",
-                self.peek().span
+            return Err(crate::error::CompileError::new(
+                self.peek().span,
+                "ranges do not chain — add parentheses (found another '..' here)",
             ));
         }
         let span = lhs.span().to(rhs.span());
@@ -748,7 +745,7 @@ impl Parser {
         })
     }
 
-    fn parse_add(&mut self) -> Result<Expr, String> {
+    fn parse_add(&mut self) -> Result<Expr, crate::error::CompileError> {
         let mut lhs = self.parse_mul()?;
         loop {
             let op = match self.peek_kind() {
@@ -769,7 +766,7 @@ impl Parser {
         Ok(lhs)
     }
 
-    fn parse_mul(&mut self) -> Result<Expr, String> {
+    fn parse_mul(&mut self) -> Result<Expr, crate::error::CompileError> {
         let mut lhs = self.parse_unary()?;
         loop {
             let op = match self.peek_kind() {
@@ -791,7 +788,7 @@ impl Parser {
         Ok(lhs)
     }
 
-    fn parse_unary(&mut self) -> Result<Expr, String> {
+    fn parse_unary(&mut self) -> Result<Expr, crate::error::CompileError> {
         let op = match self.peek_kind() {
             TokenKind::Minus => Some(UnaryOp::Neg),
             TokenKind::Bang => Some(UnaryOp::Not),
@@ -810,7 +807,7 @@ impl Parser {
         })
     }
 
-    fn parse_postfix(&mut self) -> Result<Expr, String> {
+    fn parse_postfix(&mut self) -> Result<Expr, crate::error::CompileError> {
         let mut expr = self.parse_primary()?;
         loop {
             match self.peek_kind() {
@@ -882,7 +879,7 @@ impl Parser {
         }
     }
 
-    fn parse_arguments(&mut self) -> Result<(Vec<Expr>, Span), String> {
+    fn parse_arguments(&mut self) -> Result<(Vec<Expr>, Span), crate::error::CompileError> {
         self.expect(TokenKind::LParen, "'('")?;
         let mut args = Vec::new();
         if !self.check(&TokenKind::RParen) {
@@ -901,7 +898,7 @@ impl Parser {
     // `[e1, e2, ...]` — mirrors `parse_arguments`'s comma-separated,
     // optional-trailing-comma shape exactly, just bracketed instead of
     // parenthesized and with no callee to attach to.
-    fn parse_array_literal(&mut self) -> Result<Expr, String> {
+    fn parse_array_literal(&mut self) -> Result<Expr, crate::error::CompileError> {
         let start = self.expect(TokenKind::LBracket, "'['")?.span;
         let mut elements = Vec::new();
         if !self.check(&TokenKind::RBracket) {
@@ -917,7 +914,7 @@ impl Parser {
         Ok(Expr::ArrayLiteral(elements, start.to(close.span)))
     }
 
-    fn parse_generic_args(&mut self) -> Result<(Vec<Type>, Span), String> {
+    fn parse_generic_args(&mut self) -> Result<(Vec<Type>, Span), crate::error::CompileError> {
         self.expect(TokenKind::LBracket, "'['")?;
         let mut args = Vec::new();
         if !self.check(&TokenKind::RBracket) {
@@ -940,7 +937,7 @@ impl Parser {
     // VALUES but no tuple-type annotation syntax — and is rejected with
     // a clear error rather than silently guessed at. `(A, B) -> R` /
     // `() -> R` build a real `Type::Function`.
-    fn parse_type(&mut self) -> Result<Type, String> {
+    fn parse_type(&mut self) -> Result<Type, crate::error::CompileError> {
         if self.check(&TokenKind::LParen) {
             return self.parse_paren_or_function_type();
         }
@@ -965,7 +962,7 @@ impl Parser {
         Ok(Type::Path(segments, start.to(end)))
     }
 
-    fn parse_paren_or_function_type(&mut self) -> Result<Type, String> {
+    fn parse_paren_or_function_type(&mut self) -> Result<Type, crate::error::CompileError> {
         let open = self.expect(TokenKind::LParen, "'('")?.span;
         let mut params = Vec::new();
         if !self.check(&TokenKind::RParen) {
@@ -989,15 +986,17 @@ impl Parser {
         }
         match params.len() {
             1 => Ok(params.into_iter().next().expect("just checked len == 1")),
-            _ => Err(format!(
-                "expected a single parenthesized type or a function type ('(...) -> Type'), found {} at {:?}",
-                if params.is_empty() { "'()'" } else { "multiple types" },
-                open.to(close)
+            _ => Err(crate::error::CompileError::new(
+                open.to(close),
+                format!(
+                    "expected a single parenthesized type or a function type ('(...) -> Type'), found {}",
+                    if params.is_empty() { "'()'" } else { "multiple types" }
+                ),
             )),
         }
     }
 
-    fn parse_primary(&mut self) -> Result<Expr, String> {
+    fn parse_primary(&mut self) -> Result<Expr, crate::error::CompileError> {
         let tok = self.peek().clone();
         match &tok.kind {
             TokenKind::Int(n) => {
@@ -1056,11 +1055,11 @@ impl Parser {
                 let span = start.to(block.span);
                 Ok(Expr::Spawn(block, span))
             }
-            other => Err(format!("expected an expression, found {other:?} at {:?}", tok.span)),
+            other => Err(crate::error::CompileError::new(tok.span, format!("expected an expression, found {other:?}"))),
         }
     }
 
-    fn parse_paren_or_tuple(&mut self) -> Result<Expr, String> {
+    fn parse_paren_or_tuple(&mut self) -> Result<Expr, crate::error::CompileError> {
         let open = self.expect(TokenKind::LParen, "'('")?;
         if self.check(&TokenKind::RParen) {
             // `()` — Unit's literal form (see DESIGN.md's "Tuples and
@@ -1097,7 +1096,7 @@ impl Parser {
     // (`Point { ... }`) or just an ordinary value (rebuilt as the same
     // Field-chain shape `.` postfix parsing already produces, e.g. for
     // `Shape.Circle(r)` used as a call).
-    fn parse_expr_path(&mut self) -> Result<Vec<(String, Span)>, String> {
+    fn parse_expr_path(&mut self) -> Result<Vec<(String, Span)>, crate::error::CompileError> {
         let first = self.expect_ident("an identifier")?;
         let mut segments = vec![(Self::ident_text(&first), first.span)];
         while self.check(&TokenKind::Dot) {
@@ -1108,7 +1107,7 @@ impl Parser {
         Ok(segments)
     }
 
-    fn parse_path_shaped_expr(&mut self) -> Result<Expr, String> {
+    fn parse_path_shaped_expr(&mut self) -> Result<Expr, crate::error::CompileError> {
         let segments = self.parse_expr_path()?;
         let last_capitalized = segments[segments.len() - 1]
             .0
@@ -1134,7 +1133,7 @@ impl Parser {
         Ok(expr)
     }
 
-    fn parse_struct_literal(&mut self, path: Vec<String>, path_span: Span) -> Result<Expr, String> {
+    fn parse_struct_literal(&mut self, path: Vec<String>, path_span: Span) -> Result<Expr, crate::error::CompileError> {
         self.expect(TokenKind::LBrace, "'{'")?;
         let mut fields = Vec::new();
         let mut spread = None;
@@ -1162,7 +1161,7 @@ impl Parser {
         })
     }
 
-    fn parse_field_init(&mut self) -> Result<FieldInit, String> {
+    fn parse_field_init(&mut self) -> Result<FieldInit, crate::error::CompileError> {
         let name_tok = self.expect_ident("a field name")?;
         let name = Self::ident_text(&name_tok);
         if self.bump_if(&TokenKind::Colon) {
@@ -1178,7 +1177,7 @@ impl Parser {
         }
     }
 
-    fn parse_if_expr(&mut self) -> Result<Expr, String> {
+    fn parse_if_expr(&mut self) -> Result<Expr, crate::error::CompileError> {
         let start = self.expect(TokenKind::If, "'if'")?.span;
         let cond = self.parse_expr_no_struct_literal()?;
         let then_branch = self.parse_block()?;
@@ -1204,7 +1203,7 @@ impl Parser {
         })
     }
 
-    fn parse_match_expr(&mut self) -> Result<Expr, String> {
+    fn parse_match_expr(&mut self) -> Result<Expr, crate::error::CompileError> {
         let start = self.expect(TokenKind::Match, "'match'")?.span;
         let scrutinee = self.parse_expr_no_struct_literal()?;
         self.expect(TokenKind::LBrace, "'{'")?;
@@ -1247,7 +1246,7 @@ impl Parser {
     // inference), the same "grammar doesn't know about method-call-
     // shaped builtins" precedent `.join()`/`.send()`/`.recv()`
     // themselves already established.
-    fn parse_select_expr(&mut self) -> Result<Expr, String> {
+    fn parse_select_expr(&mut self) -> Result<Expr, crate::error::CompileError> {
         let start = self.expect(TokenKind::Select, "'select'")?.span;
         self.expect(TokenKind::LBrace, "'{'")?;
         let mut arms = Vec::new();
@@ -1275,7 +1274,7 @@ impl Parser {
         })
     }
 
-    fn parse_for_expr(&mut self) -> Result<Expr, String> {
+    fn parse_for_expr(&mut self) -> Result<Expr, crate::error::CompileError> {
         let start = self.expect(TokenKind::For, "'for'")?.span;
         let pattern = self.parse_pattern()?;
         self.expect(TokenKind::In, "'in'")?;
@@ -1290,7 +1289,7 @@ impl Parser {
         })
     }
 
-    fn parse_closure_expr(&mut self) -> Result<Expr, String> {
+    fn parse_closure_expr(&mut self) -> Result<Expr, crate::error::CompileError> {
         let start_tok = self.advance(); // Pipe or OrOr
         let mut params = Vec::new();
         // OrOr means both delimiters were already consumed as one
@@ -1313,7 +1312,7 @@ impl Parser {
         })
     }
 
-    fn parse_closure_param(&mut self) -> Result<ClosureParam, String> {
+    fn parse_closure_param(&mut self) -> Result<ClosureParam, crate::error::CompileError> {
         let name_tok = self.expect_ident("a closure parameter")?;
         let name = Self::ident_text(&name_tok);
         let ty = if self.bump_if(&TokenKind::Colon) {
@@ -1328,7 +1327,7 @@ impl Parser {
         })
     }
 
-    fn parse_block(&mut self) -> Result<Block, String> {
+    fn parse_block(&mut self) -> Result<Block, crate::error::CompileError> {
         let open = self.expect(TokenKind::LBrace, "'{'")?;
         let mut stmts = Vec::new();
         let mut tail = None;
@@ -1346,9 +1345,9 @@ impl Parser {
                 let name = match &expr {
                     Expr::Ident(name, _) => name.clone(),
                     _ => {
-                        return Err(format!(
-                            "invalid assignment target at {:?} — only a plain local variable may be assigned",
-                            expr.span()
+                        return Err(crate::error::CompileError::new(
+                            expr.span(),
+                            "invalid assignment target — only a plain local variable may be assigned",
                         ));
                     }
                 };
@@ -1375,7 +1374,7 @@ impl Parser {
         })
     }
 
-    fn parse_let_stmt(&mut self) -> Result<Stmt, String> {
+    fn parse_let_stmt(&mut self) -> Result<Stmt, crate::error::CompileError> {
         let start = self.expect(TokenKind::Let, "'let'")?.span;
         let is_mut = self.bump_if(&TokenKind::Mut);
         let pattern = self.parse_pattern()?;

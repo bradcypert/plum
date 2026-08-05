@@ -29,7 +29,7 @@ use std::collections::HashSet;
 /// `let` — nothing about one function's sends affects another's
 /// checking, matching how `plum-interp::call` gives each invocation a
 /// completely fresh environment.
-pub fn check_moves(program: &ast::Program) -> Result<(), String> {
+pub fn check_moves(program: &ast::Program) -> Result<(), plum_syntax::error::CompileError> {
     for item in &program.items {
         if let ast::ItemKind::Let(def) = &item.kind {
             let mut moved = HashSet::new();
@@ -77,12 +77,13 @@ fn pattern_names(pattern: &ast::Pattern, out: &mut Vec<String>) {
 ///     to these three constructs for refcounting), and because a
 ///     `Spawn`/`Closure` body's own captured names aren't governed by
 ///     this pass's simple sequential model at all.
-fn check_expr(expr: &ast::Expr, moved: &mut HashSet<String>) -> Result<(), String> {
+fn check_expr(expr: &ast::Expr, moved: &mut HashSet<String>) -> Result<(), plum_syntax::error::CompileError> {
     match expr {
         ast::Expr::Ident(name, span) => {
             if moved.contains(name) {
-                return Err(format!(
-                    "{name:?} used at {span:?}, but it was already sent on a channel (its last use)"
+                return Err(plum_syntax::error::CompileError::new(
+                    *span,
+                    format!("{name:?} used here, but it was already sent on a channel (its last use)"),
                 ));
             }
             Ok(())
@@ -211,7 +212,7 @@ fn check_expr(expr: &ast::Expr, moved: &mut HashSet<String>) -> Result<(), Strin
 
 /// A `Block`'s `stmts` then `tail`, in order — the actual "straight-
 /// line sequence" this whole pass is built around.
-fn check_block(block: &ast::Block, moved: &mut HashSet<String>) -> Result<(), String> {
+fn check_block(block: &ast::Block, moved: &mut HashSet<String>) -> Result<(), plum_syntax::error::CompileError> {
     for stmt in &block.stmts {
         match stmt {
             ast::Stmt::Let { pattern, value, .. } => {
@@ -252,7 +253,7 @@ mod tests {
         let tokens = Lexer::new(src).tokenize();
         let mut parser = Parser::new(tokens);
         let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
-        check_moves(&program).expect_err(&format!("expected {src:?} to fail move-checking"))
+        check_moves(&program).expect_err(&format!("expected {src:?} to fail move-checking")).to_string()
     }
 
     #[test]

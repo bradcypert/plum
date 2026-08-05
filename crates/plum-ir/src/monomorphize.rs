@@ -483,10 +483,10 @@ pub fn plan(
                     .with_extra_struct_fields(extra_struct_fields)
                     .with_closure_types(merged_closure_types)
                     .with_empty_array_elem_types(merged_empty_array_elem_types);
-                let (params, destructures) = lower_params(&def_clone.params)?;
-                let mut body = lower_expr(&def_clone.body, &lctx)?;
+                let (params, destructures) = lower_params(&def_clone.params).map_err(|e| e.to_string())?;
+                let mut body = lower_expr(&def_clone.body, &lctx).map_err(|e| e.to_string())?;
                 for (synthetic, pattern) in destructures.into_iter().rev() {
-                    body = wrap_destructure(synthetic, &pattern, &lctx, body)?;
+                    body = wrap_destructure(synthetic, &pattern, &lctx, body).map_err(|e| e.to_string())?;
                 }
                 functions.push(ir::Function {
                     name: mangled.clone(),
@@ -568,7 +568,7 @@ pub fn plan(
                     .with_extra_struct_fields(extra_struct_fields)
                     .with_closure_types(merged_closure_types)
                     .with_empty_array_elem_types(merged_empty_array_elem_types);
-                let body = lower_expr(&body_clone, &lctx)?;
+                let body = lower_expr(&body_clone, &lctx).map_err(|e| e.to_string())?;
                 globals_by_name.insert(name.clone(), ir::Global { name, value: body });
             }
 
