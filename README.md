@@ -378,6 +378,13 @@ program's prelude):
   `option_is_none`, `option_ok_or`; `result_map`, `result_map_err`,
   `result_and_then`, `result_unwrap_or`, `result_unwrap_or_else`,
   `result_is_ok`, `result_is_err`.
+- **`Int`/`Float` numbers** — same `int_*`/`float_*` prefixing reason
+  as above (`<`/`>` only type-check against a concrete numeric type,
+  not a generic bound, so `min`/`max`/`abs`/`clamp` need one
+  realization per type): `int_min`, `int_max`, `int_abs`, `int_clamp`;
+  `float_min`, `float_max`, `float_abs`, `float_clamp`, `float_floor`,
+  `float_ceil`, `float_round`, `float_pow`, `float_sqrt` (the last five
+  wrap real libm functions via `extern "C"`).
 - **`println(x)`/`print(x)`** — print any value's `.to_string()`
   (`print` with no trailing newline, `println` with one).
 - **`read_file(path): Result[String, String]`** / **`write_file(path,

@@ -1268,6 +1268,26 @@ mod tests {
         assert_eq!(out, "1");
     }
 
+    // --- standard library: number utilities (see `plumc::STDLIB_NUMBER_SRC`) ---
+
+    #[test]
+    fn int_and_float_min_max_abs_clamp_run_through_native_codegen() {
+        let src = "let go (): Int = int_clamp(int_abs(-15), int_min(3, 7), int_max(3, 7))";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "7");
+        let src = "let go (): Float = float_clamp(float_abs(-15.0), float_min(3.0, 7.0), float_max(3.0, 7.0))";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "7.000000");
+    }
+
+    #[test]
+    fn float_floor_ceil_round_pow_sqrt_run_through_libm_through_native_codegen() {
+        let src = "let go (): Float = float_floor(3.7) + float_ceil(3.2) + float_round(3.5) + float_pow(2.0, 4.0) + float_sqrt(81.0)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        // floor(3.7)=3, ceil(3.2)=4, round(3.5)=4, pow(2,4)=16, sqrt(81)=9 -> 36
+        assert_eq!(out, "36.000000");
+    }
+
     // --- standard library: Option/Result combinators (see `plumc::STDLIB_OPTION_RESULT_SRC`) ---
     //
     // The native-codegen counterpart to `plumc::lib.rs`'s own
@@ -3447,11 +3467,14 @@ mod tests {
 
     #[test]
     fn a_real_sqrt_extern_call_compiles_and_runs() {
+        // `cbrt`, not `sqrt` — `sqrt` is now declared by the prelude's
+        // own `STDLIB_NUMBER_SRC` (backing `float_sqrt`), so a user
+        // program can no longer redeclare it itself.
         let src = r#"
             extern "C" {
-                fn sqrt(x: Float) -> Float;
+                fn cbrt(x: Float) -> Float;
             }
-            let go (): Float = unsafe { sqrt(144.0) }
+            let go (): Float = unsafe { cbrt(1728.0) }
         "#;
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "12.000000");

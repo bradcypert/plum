@@ -779,6 +779,52 @@ let result_is_err[T, E] (r: Result[T, E]): Bool = match r {
 }
 ";
 
+/// `Int`/`Float` numeric utilities — prefixed `int_*`/`float_*`, not
+/// bare `min`/`max`/`abs`, for the same reason `option_*`/`result_*`
+/// are prefixed: `<`/`>` (and therefore any `if`-based `min`/`max`)
+/// only type-check against a CONCRETE numeric type (`infer_binary`'s
+/// `default_numeric` call, not a generic `Ord`-style bound — no such
+/// bound exists in this language yet), so `min`/`max`/`abs`/`clamp`
+/// genuinely need one realization per numeric type, not one generic
+/// definition — and a single bare `let min` couldn't serve both anyway
+/// (no dot-dispatch-by-receiver-type, same as the `Option`/`Result`
+/// story above).
+///
+/// `floor`/`ceil`/`round`/`pow`/`sqrt` are ordinary `extern \"C\"`
+/// declarations against libm (already unconditionally linked via
+/// `clang -lm`, confirmed in `codegen_cli::clang_compile`, and already
+/// resolvable through the interpreter's own dynamic extern-call path —
+/// both proven by this crate's own pre-existing `sqrt`/`abs` extern-
+/// call tests) — genuinely no pure-Plum way to compute these
+/// (`floor`/`ceil`/`round` need bit-level float manipulation, `pow`
+/// needs a real transcendental algorithm), unlike everything else here
+/// which is ordinary `if`/comparison logic. Wrapped in safe functions
+/// exactly like `print`/`println` wrap the raw `write` syscall.
+const STDLIB_NUMBER_SRC: &str = "\
+extern \"C\" {
+    fn floor(x: Float) -> Float;
+    fn ceil(x: Float) -> Float;
+    fn round(x: Float) -> Float;
+    fn pow(base: Float, exp: Float) -> Float;
+    fn sqrt(x: Float) -> Float;
+}
+
+let int_min (a: Int) (b: Int): Int = if a < b { a } else { b }
+let int_max (a: Int) (b: Int): Int = if a > b { a } else { b }
+let int_abs (a: Int): Int = if a < 0 { -a } else { a }
+let int_clamp (x: Int) (lo: Int) (hi: Int): Int = int_min(int_max(x, lo), hi)
+
+let float_min (a: Float) (b: Float): Float = if a < b { a } else { b }
+let float_max (a: Float) (b: Float): Float = if a > b { a } else { b }
+let float_abs (a: Float): Float = if a < 0.0 { -a } else { a }
+let float_clamp (x: Float) (lo: Float) (hi: Float): Float = float_min(float_max(x, lo), hi)
+let float_floor (x: Float): Float = unsafe { floor(x) }
+let float_ceil (x: Float): Float = unsafe { ceil(x) }
+let float_round (x: Float): Float = unsafe { round(x) }
+let float_pow (base: Float) (exp: Float): Float = unsafe { pow(base, exp) }
+let float_sqrt (x: Float): Float = unsafe { sqrt(x) }
+";
+
 /// Parses the prelude + stdlib sources once and prepends their items
 /// to `program`'s own — items earlier in the list are declared FIRST,
 /// but `TypeContext`'s two-phase construction (see its doc comment)
@@ -798,6 +844,7 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
         STDLIB_COLLECTIONS_SRC,
         STDLIB_ASSERT_SRC,
         STDLIB_OPTION_RESULT_SRC,
+        STDLIB_NUMBER_SRC,
     ] {
         let tokens = Lexer::with_base_offset(src, base).tokenize();
         let parsed_items = Parser::new(tokens)
@@ -829,7 +876,8 @@ const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len()
     + STDLIB_JSON_SRC.len()
     + STDLIB_COLLECTIONS_SRC.len()
     + STDLIB_ASSERT_SRC.len()
-    + STDLIB_OPTION_RESULT_SRC.len();
+    + STDLIB_OPTION_RESULT_SRC.len()
+    + STDLIB_NUMBER_SRC.len();
 
 /// Runs the whole pipeline — parse, type-check, lower, optimize, load,
 /// call — and returns the result of calling `fn_name` with `args`.
@@ -1056,23 +1104,28 @@ mod tests {
 
     #[test]
     fn extern_call_inside_unsafe_runs_through_the_full_gated_pipeline() {
+        // `cbrt` (cube root), not `sqrt` — `sqrt` is now a name the
+        // prelude's own `STDLIB_NUMBER_SRC` declares as an extern
+        // itself (backing `float_sqrt`), so a user program redeclaring
+        // it is a real "already declared" error, same as any other
+        // name collision with the prelude.
         let src = r#"
             extern "C" {
-                fn sqrt(x: Float) -> Float;
+                fn cbrt(x: Float) -> Float;
             }
-            let main x = unsafe { sqrt(x) }
+            let main x = unsafe { cbrt(x) }
         "#;
-        let result = typecheck_and_run(src, "main", vec![Value::Float(9.0)]);
-        assert_eq!(result, Ok(Value::Float(3.0)));
+        let result = typecheck_and_run(src, "main", vec![Value::Float(8.0)]);
+        assert_eq!(result, Ok(Value::Float(2.0)));
     }
 
     #[test]
     fn extern_call_outside_unsafe_is_rejected_before_it_ever_reaches_the_interpreter() {
         let src = r#"
             extern "C" {
-                fn sqrt(x: Float) -> Float;
+                fn cbrt(x: Float) -> Float;
             }
-            let main x = sqrt(x)
+            let main x = cbrt(x)
         "#;
         let err = typecheck_and_run(src, "main", vec![Value::Float(9.0)]).expect_err("expected a type error");
         assert!(err.contains("unsafe"), "unexpected error: {err}");
@@ -2093,6 +2146,44 @@ mod tests {
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
         let src = "let use_it dummy = result_is_err(Err(\"boom\"))";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
+    }
+
+    // --- standard library: number utilities (see `plumc::STDLIB_NUMBER_SRC`) ---
+
+    #[test]
+    fn int_min_max_abs_pick_the_expected_side() {
+        assert_eq!(typecheck_and_run("let use_it dummy = int_min(3, 7)", "use_it", vec![Value::Unit]), Ok(Value::Int(3)));
+        assert_eq!(typecheck_and_run("let use_it dummy = int_min(7, 3)", "use_it", vec![Value::Unit]), Ok(Value::Int(3)));
+        assert_eq!(typecheck_and_run("let use_it dummy = int_max(3, 7)", "use_it", vec![Value::Unit]), Ok(Value::Int(7)));
+        assert_eq!(typecheck_and_run("let use_it dummy = int_abs(-5)", "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
+        assert_eq!(typecheck_and_run("let use_it dummy = int_abs(5)", "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
+    }
+
+    #[test]
+    fn int_clamp_bounds_a_value_into_range() {
+        assert_eq!(typecheck_and_run("let use_it dummy = int_clamp(-5, 0, 10)", "use_it", vec![Value::Unit]), Ok(Value::Int(0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = int_clamp(15, 0, 10)", "use_it", vec![Value::Unit]), Ok(Value::Int(10)));
+        assert_eq!(typecheck_and_run("let use_it dummy = int_clamp(5, 0, 10)", "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
+    }
+
+    #[test]
+    fn float_min_max_abs_clamp_pick_the_expected_side() {
+        assert_eq!(typecheck_and_run("let use_it dummy = float_min(3.0, 7.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(3.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = float_max(3.0, 7.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(7.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = float_abs(-2.5)", "use_it", vec![Value::Unit]), Ok(Value::Float(2.5)));
+        assert_eq!(
+            typecheck_and_run("let use_it dummy = float_clamp(-1.0, 0.0, 10.0)", "use_it", vec![Value::Unit]),
+            Ok(Value::Float(0.0))
+        );
+    }
+
+    #[test]
+    fn float_floor_ceil_round_and_pow_run_through_libm_through_the_interpreter() {
+        assert_eq!(typecheck_and_run("let use_it dummy = float_floor(3.7)", "use_it", vec![Value::Unit]), Ok(Value::Float(3.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = float_ceil(3.2)", "use_it", vec![Value::Unit]), Ok(Value::Float(4.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = float_round(3.5)", "use_it", vec![Value::Unit]), Ok(Value::Float(4.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = float_pow(2.0, 10.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(1024.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = float_sqrt(81.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(9.0)));
     }
 
     // --- standard library: JSON (see `plumc::STDLIB_JSON_SRC`) ---

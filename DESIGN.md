@@ -2591,6 +2591,82 @@ real binaries), plus a real throwaway project run via `plum run`
 confirming `option_map`/`result_unwrap_or` produce the documented
 values. Workspace now 1503 tests (net +14), clean build, zero warnings.
 
+### Chunk 11: `Int`/`Float` numeric utilities — pure Plum + libm `extern "C"`, plus a real linker bug found and fixed
+
+Second item off the stdlib-growth list the user picked (Option/Result
+combinators, then number utilities, then array, then string). Same
+`int_*`/`float_*` prefixing rationale as chunk 10's `option_*`/
+`result_*`: `<`/`>` only type-check against a concrete numeric type
+(`infer_binary`'s `default_numeric`, not a generic `Ord`-style bound —
+none exists), so a single generic `min[T]` can't serve both `Int` and
+`Float` anyway, and there's still no dot-dispatch by receiver type.
+`int_min`/`int_max`/`int_abs`/`int_clamp` and `float_min`/`float_max`/
+`float_abs`/`float_clamp` are ordinary `if`/comparison Plum source, no
+FFI. `float_floor`/`float_ceil`/`float_round`/`float_pow`/`float_sqrt`
+wrap real libm functions via `extern "C"` (genuinely no pure-Plum way
+to compute floor/ceil/round without bit-level float manipulation, or
+`pow` without a real transcendental algorithm) — exactly the same
+`extern "C" { ... }` + `unsafe { ... }` wrapping shape `print`/
+`println` already use for the raw `write` syscall, so zero new
+type-system or IR work either.
+
+**One real, previously-latent linker bug found and fixed, not a
+language bug**: adding `sqrt` as a prelude-level extern (backing
+`float_sqrt`) collided with three PRE-EXISTING tests that each declared
+their own `extern "C" { fn sqrt(...) }` — fixed by switching those
+tests to `cbrt` (a different, equally-real libm function, keeping their
+original intent of testing genuine extern-call mechanics), since a user
+program redeclaring a prelude-claimed name is now a real, correct
+"already declared" error.
+
+Far more interesting: adding four NEW libm functions (previously only
+`sqrt`/`abs` had ever been exercised, both by extern-call test fixtures
+scattered across `plum-interp`, never through the prelude) surfaced a
+genuine, previously-invisible linker bug. The interpreter resolves
+`extern "C"` symbols via `libloading::os::unix::Library::this()` —
+looking up symbols already loaded into the CURRENT PROCESS, which only
+works if libm is actually linked into whatever binary is running.
+`plum-interp/build.rs`/`plumc/build.rs` already anticipated exactly
+this (`cargo:rustc-link-lib=dylib=m`) — but that alone wasn't enough:
+the default Linux linker `--as-needed` behavior drops a shared
+library's `NEEDED` ELF entry entirely if nothing in the STATICALLY
+linked object files references any of its symbols, which is true here
+by construction (every libm call goes through `dlsym` at runtime, never
+a real linked reference the linker itself can see). `sqrt`/`abs`
+HAPPENED to keep working regardless — both are ALSO present directly in
+`libc.so` on this system's glibc — masking the gap for years, until
+`floor`/`ceil`/`round`/`pow` (which genuinely only exist in `libm.so`,
+confirmed via `nm -D`) were used for the first time and failed at
+`plum test`... no, at plain `plum run`'s own hello-world smoke test,
+with "undefined symbol: floor," even though nothing in that program
+even calls a number function — because the interpreter eagerly resolves
+EVERY declared extern at program-load time, not lazily per call, and
+`float_floor`'s extern declaration is unconditionally present in every
+program via the prelude.
+Root-caused (not worked around) in two steps: first, adding a raw
+`-Wl,--no-as-needed` link-arg alongside the existing `-l dylib=m`
+directive fixed `plumc`'s own lib+test targets, but NOT the separate
+`plum` bin target — because `-C link-arg`s from a build script are
+appended at the very END of a DOWNSTREAM crate's own linker invocation,
+AFTER that crate's own auto-derived `-lm` (re-inserted by rustc from
+the upstream rlib's embedded native-lib metadata, at its NORMAL
+position in the link line, still under default `--as-needed`) — so the
+`--no-as-needed` arrived too late to affect it. Final fix: emit
+`--no-as-needed` and a raw `-lm` back-to-back as two `-C link-arg`s
+(not `cargo:rustc-link-lib`), landing adjacent at the very end of
+EVERY consuming crate's own link line regardless of how many crates
+deep the dependency chain goes — this SECOND, explicit `-lm` reference
+is the one that lands under `--no-as-needed`, satisfying the `NEEDED`
+entry unconditionally. Verified via `readelf -d` on both the debug test
+binary and a real `--release` build: `libm.so.6` now appears as
+`NEEDED` in both, where it was absent before.
+
+Verified end-to-end: both backends (interpreter + native-codegen tests
+for every new function), plus a real throwaway project run through
+BOTH `plum run` (interpreter) and a real compiled `plum build` binary,
+confirming identical numeric output on both paths. Workspace now 1509
+tests (net +6 — 4 interpreter + 2 native), zero warnings.
+
 ## Toolchain and diagnostics
 
 After JSON, the user redirected from stdlib growth toward user-facing
