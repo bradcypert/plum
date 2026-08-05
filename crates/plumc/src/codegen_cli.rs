@@ -849,7 +849,7 @@ pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue], has_globals: 
 /// `compile_ir_to_binary` (a scratch dir for the intermediate `.ll`
 /// only — the final binary itself goes to the CALLER-chosen `out_path`,
 /// not here).
-fn unique_temp_dir(prefix: &str) -> PathBuf {
+pub(crate) fn unique_temp_dir(prefix: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);

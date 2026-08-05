@@ -4,6 +4,7 @@ mod modules;
 mod project;
 #[cfg(test)]
 mod test_util;
+mod testing;
 pub use codegen_cli::{
     compile_and_run, compile_ir_to_binary, compile_program_to_ir, compile_program_to_ir_diag, emit_main, reject_unprintable_return, CgValue,
 };
@@ -12,6 +13,7 @@ pub use modules::{resolve_modules, typecheck_and_run_modules};
 pub use project::{
     collect_project_files, resolve_project, resolve_project_diag, typecheck_and_run_project, typecheck_and_run_project_diag,
 };
+pub use testing::{discover_tests, run_tests_interpreted, run_tests_native, TestOutcome};
 
 use plum_interp::{Interpreter, Value};
 use plum_ir::fbip::optimize_program;
