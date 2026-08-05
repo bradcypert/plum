@@ -1537,37 +1537,45 @@ impl Infer {
                 }
                 Ok((ty, Subst::empty()))
             }
-            ast::Expr::Unary { op, expr, .. } => self.infer_unary(op, expr, env),
+            ast::Expr::Unary { op, expr, .. } => {
+                let fallback_span = expr.span();
+                self.infer_unary(op, expr, env).map_err(|e| e.or_span(fallback_span))
+            }
             ast::Expr::Binary {
                 op: ast::BinaryOp::Pipe,
                 lhs,
                 rhs,
-                ..
-            } => self.infer_pipe(lhs, rhs, env),
+                span,
+            } => self.infer_pipe(lhs, rhs, env).map_err(|e| e.or_span(*span)),
             ast::Expr::Binary {
                 op: ast::BinaryOp::Range,
                 lhs,
                 rhs,
-                ..
+                span,
             } => {
                 let (lhs_ty, s) = self.infer_expr(lhs, env)?;
                 let mut acc = s;
-                let s = unify(&acc.apply(&lhs_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::spanless(format!("range start: {e}")))?;
+                let s = unify(&acc.apply(&lhs_ty), &Type::Int)
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("range start: {e}")))?;
                 acc = s.compose(&acc);
                 let (rhs_ty, s) = self.infer_expr(rhs, env)?;
                 acc = s.compose(&acc);
-                let s = unify(&acc.apply(&rhs_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::spanless(format!("range end: {e}")))?;
+                let s = unify(&acc.apply(&rhs_ty), &Type::Int)
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("range end: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Range, acc))
             }
-            ast::Expr::Binary { op, lhs, rhs, .. } => self.infer_binary(op, lhs, rhs, env),
+            ast::Expr::Binary { op, lhs, rhs, span } => self.infer_binary(op, lhs, rhs, env).map_err(|e| e.or_span(*span)),
             ast::Expr::Block(block, _) => self.infer_block(block, env),
             ast::Expr::If {
                 cond,
                 then_branch,
                 else_branch,
                 ..
-            } => self.infer_if(cond, then_branch, else_branch, env),
+            } => {
+                let fallback_span = cond.span();
+                self.infer_if(cond, then_branch, else_branch, env).map_err(|e| e.or_span(fallback_span))
+            }
             // `t.join()` — the type-level counterpart to lower.rs's
             // identical `Call` handling: ANY `expr.join()` call shape
             // is always treated as a task join, matching lowering's

@@ -44,6 +44,20 @@ impl CompileError {
         CompileError { span: self.span, message: format!("{prefix}: {}", self.message) }
     }
 
+    /// Backfills `span` onto `self` if it doesn't already have one —
+    /// used at a call site that has a reasonable fallback location
+    /// (e.g. the enclosing expression's own span) for an inner error
+    /// that couldn't attach anything more precise itself (e.g. `unify`,
+    /// which has no span of its own at all). A no-op if `self` already
+    /// has a (more precise) span.
+    pub fn or_span(self, span: Span) -> Self {
+        if self.span.is_some() {
+            self
+        } else {
+            CompileError { span: Some(span), message: self.message }
+        }
+    }
+
     /// Passthrough to `self.message.contains(..)` — lets the many
     /// existing `err.contains("...")` test assertions across this
     /// workspace (written back when every error was a plain `String`)

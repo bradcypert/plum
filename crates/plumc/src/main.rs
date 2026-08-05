@@ -1,7 +1,7 @@
 use plum_interp::Value;
 use plumc::{
-    compile_ir_to_binary, compile_program_to_ir, emit_main, reject_unprintable_return, resolve_project, typecheck_and_run,
-    typecheck_and_run_project, CgValue,
+    collect_project_files, compile_ir_to_binary, compile_program_to_ir_diag, emit_main, reject_unprintable_return, resolve_project_diag,
+    typecheck_and_run, typecheck_and_run_project_diag, CgValue, ModuleSources,
 };
 use std::path::{Path, PathBuf};
 
@@ -50,13 +50,20 @@ fn main() {
         }
         Some(project_dir) => {
             let root = Path::new(&project_dir);
-            match typecheck_and_run_project(root, "main", vec![Value::Unit]) {
+            let sources = match module_sources(root) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            match typecheck_and_run_project_diag(root, "main", vec![Value::Unit]) {
                 Ok(value) => {
                     unsafe { fflush(std::ptr::null_mut()) };
                     println!("{value:?}");
                 }
                 Err(e) => {
-                    eprintln!("{e}");
+                    eprintln!("{}", sources.render(&e));
                     std::process::exit(1);
                 }
             }
@@ -72,6 +79,20 @@ fn main() {
             }
         }
     }
+}
+
+/// Builds a `ModuleSources` from `root`'s own `.plum` files — shared by
+/// both CLI paths (the interpreter path in `main`, and `run_build`
+/// below) so a `CompileError` returned from EITHER pipeline can be
+/// rendered as a real `file:line:col` + source snippet (`ModuleSources
+/// ::render`) rather than a bare message. Walks the project directory a
+/// SECOND time, independently of whatever `typecheck_and_run_project_
+/// diag`/`resolve_project_diag` do internally — a deliberate, accepted
+/// inefficiency for a CLI invoked once per run, not a hot path.
+fn module_sources(root: &Path) -> Result<ModuleSources, String> {
+    let files = collect_project_files(root)?;
+    let modules: Vec<(&str, &str)> = files.iter().map(|(path, src)| (path.as_str(), src.as_str())).collect();
+    Ok(ModuleSources::new(&modules))
 }
 
 /// Parsed `plumc build` arguments — a single positional project
@@ -148,21 +169,32 @@ fn run_build(args: &[String]) {
         }
     };
     let out_path = parsed.output.map(PathBuf::from).unwrap_or_else(|| default_output_path(&parsed.project_dir));
+    let root = Path::new(&parsed.project_dir);
+    let sources = match module_sources(root) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
 
-    if let Err(e) = build(&parsed.project_dir, &out_path) {
-        eprintln!("{e}");
+    if let Err(e) = build(root, &out_path) {
+        eprintln!("{}", sources.render(&e));
         std::process::exit(1);
     }
     println!("built {:?} -> {:?}", parsed.project_dir, out_path);
 }
 
-fn build(project_dir: &str, out_path: &Path) -> Result<(), String> {
-    let root = Path::new(project_dir);
-    let program = resolve_project(root)?;
-    let (body_ir, signatures, resolved_entry, has_globals) = compile_program_to_ir(&program, "main")?;
+fn build(root: &Path, out_path: &Path) -> Result<(), plum_syntax::error::CompileError> {
+    let program = resolve_project_diag(root)?;
+    let (body_ir, signatures, resolved_entry, has_globals) = compile_program_to_ir_diag(&program, "main")?;
     let sig = signatures
         .get(&resolved_entry)
-        .ok_or_else(|| "codegen: no such function \"main\" — every buildable project needs a `main` entry point".to_string())?
+        .ok_or_else(|| {
+            plum_syntax::error::CompileError::spanless(
+                "codegen: no such function \"main\" — every buildable project needs a `main` entry point",
+            )
+        })?
         .clone();
     // Every compiled entry point this CLI produces takes exactly one
     // synthetic Unit parameter (`let main (): T = ...` lowers to a
@@ -170,15 +202,15 @@ fn build(project_dir: &str, out_path: &Path) -> Result<(), String> {
     // convention) — a `main` with any other arity is a clear error
     // here rather than a confusing argument-count mismatch downstream.
     if sig.params.len() != 1 {
-        return Err(format!(
+        return Err(plum_syntax::error::CompileError::spanless(format!(
             "codegen: \"main\" must take exactly one Unit parameter (`let main (): T = ...`), found {} parameter(s)",
             sig.params.len()
-        ));
+        )));
     }
-    reject_unprintable_return("main", sig.ret.clone())?;
+    reject_unprintable_return("main", sig.ret.clone()).map_err(plum_syntax::error::CompileError::spanless)?;
     let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit], has_globals);
     let full_ir = format!("{body_ir}\n{main_ir}");
-    compile_ir_to_binary(&full_ir, out_path)
+    compile_ir_to_binary(&full_ir, out_path).map_err(plum_syntax::error::CompileError::spanless)
 }
 
 #[cfg(test)]
@@ -266,7 +298,7 @@ mod tests {
         std::fs::write(dir.join("main.plum"), "let main (): Int = 6 * 7").unwrap();
         let out_bin = dir.join("built-from-main-rs");
 
-        let result = build(dir.to_str().unwrap(), &out_bin);
+        let result = build(&dir, &out_bin);
         assert!(result.is_ok(), "build failed: {result:?}");
         let output = std::process::Command::new(&out_bin).output().unwrap();
         assert!(output.status.success());
