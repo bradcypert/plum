@@ -30,17 +30,22 @@ unsafe extern "C" {
     fn fflush(stream: *mut std::ffi::c_void) -> i32;
 }
 
-/// `plumc <project-dir>` runs `<project-dir>`'s `main` function (a
-/// unit-param entry point — `let main () = { ... }`, the same
-/// convention `examples/overview.plum`'s own `example()` already
-/// uses) through the full module-aware pipeline. With no arguments,
-/// falls back to the original single-expression smoke-test demo, kept
-/// as a zero-setup sanity check that the whole lex/parse/type-check/
-/// lower/optimize/interpret pipeline still works end to end.
+/// `plum run <project-dir>` (or the bare `plum <project-dir>` shorthand
+/// — kept working for backward compatibility, since it predates `run`
+/// existing as an explicit subcommand at all) runs `<project-dir>`'s
+/// `main` function (a unit-param entry point — `let main () = { ... }`,
+/// the same convention `examples/overview.plum`'s own `example()`
+/// already uses) through the full module-aware pipeline. With no
+/// arguments, falls back to the original single-expression smoke-test
+/// demo, kept as a zero-setup sanity check that the whole lex/parse/
+/// type-check/lower/optimize/interpret pipeline still works end to end.
 ///
-/// `plumc build <project-dir> [-o <output>]` compiles+links the SAME
+/// `plum build <project-dir> [-o <output>]` compiles+links the SAME
 /// project through the LLVM codegen backend instead, producing a real
 /// native executable — see `run_build`'s own doc comment.
+///
+/// `plum new <name>` scaffolds a minimal starter project — see
+/// `run_new`'s own doc comment.
 fn main() {
     let mut cli_args = std::env::args().skip(1);
     match cli_args.next() {
@@ -48,26 +53,15 @@ fn main() {
             let rest: Vec<String> = cli_args.collect();
             run_build(&rest);
         }
-        Some(project_dir) => {
-            let root = Path::new(&project_dir);
-            let sources = match module_sources(root) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("{e}");
-                    std::process::exit(1);
-                }
-            };
-            match typecheck_and_run_project_diag(root, "main", vec![Value::Unit]) {
-                Ok(value) => {
-                    unsafe { fflush(std::ptr::null_mut()) };
-                    println!("{value:?}");
-                }
-                Err(e) => {
-                    eprintln!("{}", sources.render(&e));
-                    std::process::exit(1);
-                }
-            }
+        Some(first) if first == "run" => {
+            let rest: Vec<String> = cli_args.collect();
+            run_interpreter(&rest);
         }
+        Some(first) if first == "new" => {
+            let rest: Vec<String> = cli_args.collect();
+            run_new(&rest);
+        }
+        Some(project_dir) => run_interpreter(&[project_dir]),
         None => {
             let source = "let sum n acc = if n == 0 { acc } else { sum(n - 1, acc + n) }";
             match typecheck_and_run(source, "sum", vec![Value::Int(5), Value::Int(0)]) {
@@ -77,6 +71,34 @@ fn main() {
                 }
                 Err(e) => eprintln!("{e}"),
             }
+        }
+    }
+}
+
+/// The interpreter path itself, factored out of `main` so both `plum
+/// run <project-dir>` and the bare `plum <project-dir>` shorthand
+/// funnel through the exact same code.
+fn run_interpreter(args: &[String]) {
+    let Some(project_dir) = args.first() else {
+        eprintln!("usage: plum run <project-dir>");
+        std::process::exit(1);
+    };
+    let root = Path::new(project_dir);
+    let sources = match module_sources(root) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+    match typecheck_and_run_project_diag(root, "main", vec![Value::Unit]) {
+        Ok(value) => {
+            unsafe { fflush(std::ptr::null_mut()) };
+            println!("{value:?}");
+        }
+        Err(e) => {
+            eprintln!("{}", sources.render(&e));
+            std::process::exit(1);
         }
     }
 }
@@ -213,9 +235,42 @@ fn build(root: &Path, out_path: &Path) -> Result<(), plum_syntax::error::Compile
     compile_ir_to_binary(&full_ir, out_path).map_err(plum_syntax::error::CompileError::spanless)
 }
 
+/// `plum new <name>`: scaffolds a minimal starter project — a new
+/// directory `<name>/` (resolved against the current working
+/// directory, matching `plum build`'s own `-o` default convention)
+/// containing one `main.plum` with a hello-world `main`, so `plum run
+/// <name>` (or `plum build <name>`) works immediately with zero setup.
+/// Refuses to overwrite an existing path rather than silently
+/// clobbering whatever's already there — the same "don't destroy
+/// unexpected state" caution this whole toolchain otherwise applies to
+/// real user files.
+fn run_new(args: &[String]) {
+    let Some(name) = args.first() else {
+        eprintln!("usage: plum new <name>");
+        std::process::exit(1);
+    };
+    if let Err(e) = new_project(Path::new(name)) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+    println!("created {name:?}");
+}
+
+fn new_project(dir: &Path) -> Result<(), String> {
+    if dir.exists() {
+        return Err(format!("{dir:?} already exists — refusing to overwrite it"));
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("failed to create {dir:?}: {e}"))?;
+    let main_path = dir.join("main.plum");
+    std::fs::write(&main_path, "let main (): Unit = println(\"hello, plum\")\n")
+        .map_err(|e| format!("failed to write {main_path:?}: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use plumc::typecheck_and_run_project;
 
     #[test]
     fn a_bare_project_directory_with_no_flags_parses() {
@@ -303,6 +358,40 @@ mod tests {
         let output = std::process::Command::new(&out_bin).output().unwrap();
         assert!(output.status.success());
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), "42");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_project_scaffolds_a_runnable_hello_world() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("plumc-new-test-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        new_project(&dir).unwrap();
+        assert!(dir.join("main.plum").exists());
+
+        // The scaffolded project actually runs, not just "some file got
+        // written" — proves `new_project`'s hello-world source is real,
+        // valid Plum, not just plausible-looking text.
+        let result = typecheck_and_run_project(&dir, "main", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Unit));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_project_refuses_to_overwrite_an_existing_path() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("plumc-new-exists-test-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let err = new_project(&dir).expect_err("expected an already-exists error");
+        assert!(err.contains("already exists"), "unexpected error: {err}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

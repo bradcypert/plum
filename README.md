@@ -29,7 +29,11 @@ The `plum` binary is produced at `target/release/plum` (or
 ## Running a program
 
 Plum programs live in a project directory — a directory *is* a module
-(see "Modules" below). The simplest possible project is one file:
+(see "Modules" below). `plum new` scaffolds a minimal starter project:
+
+```sh
+plum new myapp
+```
 
 ```
 myapp/
@@ -44,8 +48,12 @@ let main (): Unit = println("hello, plum")
 Run it directly, through the interpreter:
 
 ```sh
-plum myapp
+plum run myapp
 ```
+
+(The bare `plum myapp` form — no `run` — still works too, for backward
+compatibility; `plum run` is the recommended, explicit spelling,
+symmetric with `plum build`.)
 
 Or compile it to a real native executable and run that:
 
@@ -68,6 +76,16 @@ when you want a real binary to ship or benchmark.
 With no arguments at all, `plum` runs a built-in one-expression smoke
 test — useful as a zero-setup sanity check that the toolchain itself is
 working, not something real programs rely on.
+
+Errors from either path point at real source locations:
+
+```
+error: type error: operator: type mismatch: expected Str, found Int
+  --> <root>:3:15
+  |
+3 |     let bad = "hello" + 1;
+  |               ^^^^^^^^^^^
+```
 
 ## Language tour
 

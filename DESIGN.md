@@ -2649,6 +2649,30 @@ edits to any pre-existing test across the whole ~1200-test suite.
 not started): `plum run <project>` as an explicit alias alongside
 `plum build`, and `plum new <name>` project scaffolding.
 
+### `plum run` and `plum new` — Decided, v1 implemented
+
+The two quick follow-ups flagged above. `plum run <project-dir>`
+(`main.rs`'s `run_interpreter`) is the interpreter path, factored out
+so both it and the pre-existing bare `plum <project-dir>` shorthand
+(kept working for backward compatibility — it predates `run` existing
+as an explicit subcommand) funnel through identical code; symmetric
+with `plum build <project-dir>`. `plum new <name>` (`run_new`/`new_
+project`) scaffolds a directory containing one `main.plum` with a
+hello-world `main`, so `plum run <name>` works immediately with zero
+setup — refuses to overwrite an existing path (checked via `Path::
+exists`) rather than silently clobbering it. Both are ordinary `String`
+errors (usage/`already exists`/IO failures) — no `Span` involved, so
+neither needed the `CompileError`/`ModuleSources` machinery the rest of
+this section covers. Verified: `plum new myapp` → `plum run myapp` →
+`plum build myapp -o myapp/out` → running the binary, all produce the
+exact output the README documents (each command was actually run
+before being written down, matching the whole README's own "verify
+before documenting" discipline). Workspace now 1461 tests (net +2 —
+`new_project_scaffolds_a_runnable_hello_world`, which confirms the
+scaffolded source is real, valid Plum by actually running it, not just
+checking a file got written; `new_project_refuses_to_overwrite_an_
+existing_path`), zero warnings.
+
 ## Target platforms
 
 - **Hosted (Linux/macOS/Windows), web APIs**: primary target, no special
