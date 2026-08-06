@@ -940,6 +940,55 @@ let array_sort_by_acc[T] (arr: Array[T]) (le: (T, T) -> Bool) (i: Int) (acc: Arr
 
 let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] = array_sort_by_acc(arr, le, 0, [])
 
+// `Array.sort_int`/`Array.sort_float`/`Array.sort_string` — `Array.
+// sort_by` with a comparator baked in, for the three types common
+// enough to want sorting with no comparator to write, same split-by-
+// concrete-type naming `Array.sum_int`/`Array.sum_float` above already
+// established (there's no generic `Ord` bound — `<`/`<=` themselves
+// only type-check against Int/Float, see `plum-types::infer::
+// default_numeric` — so a single generic `Array.sort` isn't possible
+// without that, a separate, bigger design question).
+// Closure params EXPLICITLY annotated here (`|a: Int, b: Int| ...`),
+// unlike the pre-existing `Array.sort_by([3, 1, 2], |a, b| a <= b)`
+// call-site pattern elsewhere — `Array.sort_by` is an ordinary stdlib
+// function taking a closure as a plain argument, not one of the three
+// builtins (`.fold`/`.map`/`.filter`) `Infer::infer_expr_as_callback`
+// specially seeds from the array's already-known element type (see
+// this file's own `STDLIB_ARRAY_SRC` doc comment on that fix). Without
+// an annotation, `a`/`b` start as fresh unconstrained type variables,
+// and the `<=` inside the closure body forces `default_numeric` to
+// default them to `Int` immediately — fine for `Array.sort_int` only
+// by COINCIDENCE (Int is the default), but confirmed to break `Array.
+// sort_float` for real (its `arr: Array[Float]` pins `T = Float`, so
+// the closure's Int-defaulted params then fail to unify against it) —
+// found empirically while writing this: an early unannotated version
+// made EVERY Plum program fail to type-check, not just this file's own
+// tests, since this is prelude-level code.
+let Array.sort_int (arr: Array[Int]): Array[Int] = Array.sort_by(arr, |a: Int, b: Int| a <= b)
+
+let Array.sort_float (arr: Array[Float]): Array[Float] = Array.sort_by(arr, |a: Float, b: Float| a <= b)
+
+// `String` has no `<=` operator at all (same `default_numeric`
+// restriction above) — so `Array.sort_string`'s comparator is built by
+// hand here, lexicographically over CODEPOINTS (`.runes()`, already
+// Unicode-aware — see `String.slice`/`String.index_of` in `STDLIB_
+// STRING_SRC` for the same building block), a prefix of a longer
+// string sorting first. Kept private/flat-named (`string_le_*`, not
+// `String.le`) deliberately — exposing general String ordering as
+// public API (byte-wise? codepoint-wise, as here? locale-aware?) is
+// its own separate design question, not decided just by this needing
+// SOME comparator to sort with.
+let string_le_runes_acc (a: Array[Int]) (b: Array[Int]) (i: Int): Bool =
+    if i >= a.len() { true }
+    else if i >= b.len() { false }
+    else if a[i] < b[i] { true }
+    else if a[i] > b[i] { false }
+    else { string_le_runes_acc(a, b, i + 1) }
+
+let string_le (a: String) (b: String): Bool = string_le_runes_acc(a.runes(), b.runes(), 0)
+
+let Array.sort_string (arr: Array[String]): Array[String] = Array.sort_by(arr, |a, b| string_le(a, b))
+
 struct Zipped[A, B] { first: A, second: B }
 
 let array_zip_acc[T, U] (a: Array[T]) (b: Array[U]) (i: Int) (acc: Array[Zipped[T, U]]): Array[Zipped[T, U]] =
@@ -2622,6 +2671,41 @@ mod tests {
                         sorted[0] * 100 + sorted[1] * 10 + sorted[2] \
                     }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(321)));
+    }
+
+    #[test]
+    fn array_sort_int_and_sort_float_need_no_comparator() {
+        let src = "let use_it dummy = { \
+                        let sorted = Array.sort_int([3, 1, 2]); \
+                        sorted[0] * 100 + sorted[1] * 10 + sorted[2] \
+                    }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(123)));
+        let src = "let use_it dummy = { \
+                        let sorted = Array.sort_float([3.0, 1.0, 2.0]); \
+                        sorted[0] \
+                    }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Float(1.0)));
+    }
+
+    #[test]
+    fn array_sort_string_orders_lexicographically_by_codepoint() {
+        let src = run_string_test(
+            "let use_it dummy = { \
+                let sorted = Array.sort_string([\"banana\", \"apple\", \"cherry\"]); \
+                sorted[0] == \"apple\" && sorted[1] == \"banana\" && sorted[2] == \"cherry\" \
+            }",
+        );
+        assert_eq!(src, Ok("Bool(true)".to_string()));
+        // A shorter string that's a PREFIX of a longer one sorts first
+        // — `string_le_runes_acc`'s `i >= a.len()` base case, not just
+        // its per-codepoint comparison.
+        let src = run_string_test(
+            "let use_it dummy = { \
+                let sorted = Array.sort_string([\"applesauce\", \"apple\"]); \
+                sorted[0] == \"apple\" && sorted[1] == \"applesauce\" \
+            }",
+        );
+        assert_eq!(src, Ok("Bool(true)".to_string()));
     }
 
     #[test]

@@ -1384,6 +1384,32 @@ mod tests {
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "2");
     }
 
+    #[test]
+    fn array_sort_int_float_string_run_through_native_codegen() {
+        // The native-codegen counterpart to `plumc::lib.rs`'s own
+        // interpreter-side tests — also the regression test for the
+        // unannotated-closure-defaults-too-early bug fixed alongside
+        // `Array.sort_int`/`Array.sort_float`'s own definitions (see
+        // `STDLIB_ARRAY_SRC`'s comment there): an early version broke
+        // EVERY native-codegen program, not just this one, since it's
+        // prelude-level code.
+        let src = "let go (): Int = { \
+                        let sorted = Array.sort_int([3, 1, 2]); \
+                        sorted[0] * 100 + sorted[1] * 10 + sorted[2] \
+                    }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "123");
+        let src = "let go (): Float = Array.sort_float([3.0, 1.0, 2.0])[0]";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1.000000");
+        // `emit_main`'s `Bool` case prints via `%d` (0/1), not "true"/
+        // "false" text — see `str_equality_is_true_for_equal_strings_
+        // in_native_codegen`'s own comment on this same convention.
+        let src = "let go (): Bool = { \
+                        let sorted = Array.sort_string([\"banana\", \"apple\", \"cherry\"]); \
+                        sorted[0] == \"apple\" && sorted[1] == \"banana\" && sorted[2] == \"cherry\" \
+                    }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
     // --- standard library: number utilities (see `plumc::STDLIB_NUMBER_SRC`) ---
 
     #[test]
