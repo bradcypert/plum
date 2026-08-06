@@ -1,0 +1,17 @@
+{
+  "name": "tree-sitter-plum",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for Plum — used for editor syntax highlighting/indentation, transcribed from the plum repo's own GRAMMAR.md",
+  "main": "bindings/node",
+  "keywords": ["tree-sitter", "plum"],
+  "license": "MIT",
+  "type": "commonjs",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.26.11"
+  },
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test",
+    "parse": "tree-sitter parse"
+  }
+}

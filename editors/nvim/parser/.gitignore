@@ -1,0 +1,5 @@
+# The compiled parser is a platform-specific build artifact, not
+# source — see this directory's parent README.md for how to build it.
+*.so
+*.dylib
+*.dll

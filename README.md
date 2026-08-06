@@ -149,6 +149,36 @@ test genuinely needs its own process to get an isolated pass/fail
 result at all. Both should always agree on the same project; if they
 ever don't, that's a real bug worth reporting.
 
+## Editor support
+
+Two pieces, independent of each other:
+
+- **`plum lsp`** — an LSP server served straight out of the `plum`
+  binary itself (the same shape `gopls` takes for Go), speaking LSP
+  over stdio. Diagnostics only for now (parse/resolution/type errors,
+  reported live as you edit) — no hover, go-to-definition, or
+  completion yet. Reports one error at a time, not every error in a
+  project at once — this matches how the rest of the compiler reports
+  errors today (every `CompileError` surface in this codebase stops at
+  the first error, not just the LSP), not an LSP-specific limitation.
+  Fix-and-recheck is fast in practice.
+- **[`tools/tree-sitter-plum`](tools/tree-sitter-plum)** — a
+  [tree-sitter](https://tree-sitter.github.io/) grammar for syntax
+  highlighting/indentation, transcribed from `GRAMMAR.md`. A genuinely
+  separate implementation from `plum-syntax`'s real parser (see that
+  directory's own README for the scope note and its two documented,
+  deliberate simplifications) — exists purely to drive editor
+  highlighting, not a second source of truth for the language's actual
+  syntax rules.
+
+**Neovim** is the only editor this is packaged and verified for so
+far — see [`editors/nvim`](editors/nvim) for a ready-to-use runtime
+bundle (LSP config + tree-sitter highlighting) and setup instructions.
+Other editors aren't packaged yet; both pieces above are general enough
+(stdio LSP, a standard tree-sitter grammar) that another editor's own
+LSP client / tree-sitter integration should be able to point at them
+directly, but that hasn't been tried.
+
 ## Language tour
 
 ### Functions, inference, recursion

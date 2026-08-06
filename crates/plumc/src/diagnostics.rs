@@ -46,15 +46,41 @@ impl ModuleSources {
     /// inside any known module — the caller falls back to message-only
     /// rendering, never panics on a bad offset.
     fn locate(&self, offset: u32) -> Option<(&str, usize, usize, &str)> {
+        let (idx, local) = self.locate_offset(offset)?;
+        let (mpath, _base, src) = &self.entries[idx];
+        let (line, col) = line_col(src, local);
+        Some((mpath, line, col, src))
+    }
+
+    /// The `plum lsp` sibling of `locate`: returns the INDEX into the
+    /// original `modules` slice `Self::new` was built from (so a caller
+    /// holding that same slice — or a parallel per-file table built in
+    /// the same order, see `project::collect_project_files_with_paths`
+    /// — can recover which exact file an offset landed in) plus the
+    /// module-local byte offset, instead of an already-rendered
+    /// (CHARACTER-counted) `(line, col)`. `plum lsp` needs UTF-16
+    /// CODE-UNIT columns (the LSP spec's `Position` encoding), which is
+    /// a different count for any non-ASCII source text — computed by
+    /// `lsp::position` from this raw offset, not by `line_col` here.
+    ///
+    /// `None` under the same conditions as `locate`.
+    ///
+    /// Upper bound is INCLUSIVE (`offset <= base + src.len()`, not
+    /// `<`) — a span's `end` is a one-past-the-last-byte offset (see
+    /// `Span::to`), so a span covering all the way to end-of-file
+    /// legitimately has `end == src.len()`, which is common for an
+    /// in-memory editor buffer with no trailing newline. An exclusive
+    /// check here would silently drop that span to the "unlocatable"
+    /// fallback for that content only — found by hand while smoke-
+    /// testing `plum lsp` against a real editor buffer, where it showed
+    /// up as a diagnostic's range randomly collapsing to zero-width
+    /// depending on whether the buffer happened to end in a newline.
+    pub(crate) fn locate_offset(&self, offset: u32) -> Option<(usize, usize)> {
         let offset = offset as usize;
-        for (mpath, base, src) in &self.entries {
-            if offset >= *base && offset < base + src.len() {
-                let local = offset - base;
-                let (line, col) = line_col(src, local);
-                return Some((mpath, line, col, src));
-            }
-        }
-        None
+        self.entries
+            .iter()
+            .position(|(_, base, src)| offset >= *base && offset <= base + src.len())
+            .map(|idx| (idx, offset - self.entries[idx].1))
     }
 
     /// Full `error: {msg}\n  --> {module}:{line}:{col}\n   |\n {line} | {source line}\n   | {caret}`

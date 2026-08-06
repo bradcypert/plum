@@ -69,6 +69,9 @@ fn main() {
             let rest: Vec<String> = cli_args.collect();
             run_test_cmd(&rest);
         }
+        Some(first) if first == "lsp" => {
+            plumc::lsp::run();
+        }
         Some(project_dir) => run_interpreter(&[project_dir]),
         None => {
             let source = "let sum n acc = if n == 0 { acc } else { sum(n - 1, acc + n) }";

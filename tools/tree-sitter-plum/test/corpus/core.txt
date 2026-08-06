@@ -1,0 +1,668 @@
+====================
+value and function let-defs
+====================
+
+let x = 5
+let sum n acc = n + acc
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (int_literal))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier))))
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))))))
+
+====================
+struct and enum decls
+====================
+
+struct Point {
+    x: Float,
+    y: Float,
+}
+
+enum Shape {
+    Circle(Float),
+    Rectangle(Float, Float),
+}
+
+---
+
+(source_file
+  (item
+    (struct_decl
+      (identifier)
+      (field_list
+        (field
+          (identifier)
+          (path_type
+            (identifier)))
+        (field
+          (identifier)
+          (path_type
+            (identifier))))))
+  (item
+    (enum_decl
+      (identifier)
+      (variant_list
+        (variant
+          (identifier)
+          (path_type
+            (identifier)))
+        (variant
+          (identifier)
+          (path_type
+            (identifier))
+          (path_type
+            (identifier)))))))
+
+====================
+associated functions
+====================
+
+let Point.add (a: Point) (b: Point): Point = a
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (identifier)
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))))))
+
+====================
+if-else and struct literal not in condition position
+====================
+
+let f p = if p { origin } else { p }
+let origin = Point { x: 0.0, y: 0.0 }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (if_expr
+                          (pipe_expr
+                            (or_expr
+                              (and_expr
+                                (compare_expr
+                                  (range_expr
+                                    (add_expr
+                                      (mul_expr
+                                        (unary_expr
+                                          (postfix_expr
+                                            (identifier))))))))))
+                          (block
+                            (pipe_expr
+                              (or_expr
+                                (and_expr
+                                  (compare_expr
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (identifier)))))))))))
+                          (block
+                            (pipe_expr
+                              (or_expr
+                                (and_expr
+                                  (compare_expr
+                                    (range_expr
+                                      (add_expr
+                                        (mul_expr
+                                          (unary_expr
+                                            (postfix_expr
+                                              (identifier)))))))))))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (struct_literal
+                          (path
+                            (identifier))
+                          (field_init_list
+                            (field_init
+                              (identifier)
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (float_literal)))))))))))
+                            (field_init
+                              (identifier)
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (float_literal)))))))))))))))))))))))))
+
+====================
+match with guard, or-pattern, and wildcard
+====================
+
+let f shape =
+    match shape {
+        Shape.Circle(r) if r == 0.0 => true,
+        Shape.Rectangle(_, _) | Shape.Triangle(_, _, _) => false,
+        _ => false,
+    }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (match_expr
+                          (pipe_expr
+                            (or_expr
+                              (and_expr
+                                (compare_expr
+                                  (range_expr
+                                    (add_expr
+                                      (mul_expr
+                                        (unary_expr
+                                          (postfix_expr
+                                            (identifier))))))))))
+                          (match_arm_list
+                            (match_arm
+                              (pattern
+                                (variant_pattern
+                                  (path
+                                    (identifier)
+                                    (identifier))
+                                  (pattern
+                                    (identifier))))
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (identifier))))))
+                                      (compare_op)
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (float_literal))))))))))
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (bool_literal)))))))))))
+                            (match_arm
+                              (pattern
+                                (variant_pattern
+                                  (path
+                                    (identifier)
+                                    (identifier))
+                                  (pattern)
+                                  (pattern))
+                                (variant_pattern
+                                  (path
+                                    (identifier)
+                                    (identifier))
+                                  (pattern)
+                                  (pattern)
+                                  (pattern)))
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (bool_literal)))))))))))
+                            (match_arm
+                              (pattern)
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (bool_literal)))))))))))))))))))))))))
+
+====================
+select expression
+====================
+
+let f rx1 rx2 =
+    select {
+        v = rx1.recv() => v,
+        _ = rx2.recv() => 0,
+    }
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (select_expr
+                          (select_arm_list
+                            (select_arm
+                              (pattern
+                                (identifier))
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (identifier)
+                                                (identifier)
+                                                (arguments))))))))))
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (identifier)))))))))))
+                            (select_arm
+                              (pattern)
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (identifier)
+                                                (identifier)
+                                                (arguments))))))))))
+                              (pipe_expr
+                                (or_expr
+                                  (and_expr
+                                    (compare_expr
+                                      (range_expr
+                                        (add_expr
+                                          (mul_expr
+                                            (unary_expr
+                                              (postfix_expr
+                                                (int_literal)))))))))))))))))))))))))
+
+====================
+array literal and unit param
+====================
+
+let numbers = [1, 2, 3]
+let f () = 0
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (array_literal
+                          (pipe_expr
+                            (or_expr
+                              (and_expr
+                                (compare_expr
+                                  (range_expr
+                                    (add_expr
+                                      (mul_expr
+                                        (unary_expr
+                                          (postfix_expr
+                                            (int_literal))))))))))
+                          (pipe_expr
+                            (or_expr
+                              (and_expr
+                                (compare_expr
+                                  (range_expr
+                                    (add_expr
+                                      (mul_expr
+                                        (unary_expr
+                                          (postfix_expr
+                                            (int_literal))))))))))
+                          (pipe_expr
+                            (or_expr
+                              (and_expr
+                                (compare_expr
+                                  (range_expr
+                                    (add_expr
+                                      (mul_expr
+                                        (unary_expr
+                                          (postfix_expr
+                                            (int_literal))))))))))))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (param)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (int_literal)))))))))))))
+
+====================
+pipe operator and closures
+====================
+
+let g shape = shape |> area |> to_string
+let h = |x, y| x + y
+let empty = ||0
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (param
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier)))))))))
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (closure_expr
+                          (closure_param
+                            (identifier))
+                          (closure_param
+                            (identifier))
+                          (pipe_expr
+                            (or_expr
+                              (and_expr
+                                (compare_expr
+                                  (range_expr
+                                    (add_expr
+                                      (mul_expr
+                                        (unary_expr
+                                          (postfix_expr
+                                            (identifier))))))))))))))
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (closure_expr
+                          (pipe_expr
+                            (or_expr
+                              (and_expr
+                                (compare_expr
+                                  (range_expr
+                                    (add_expr
+                                      (mul_expr
+                                        (unary_expr
+                                          (postfix_expr
+                                            (int_literal)))))))))))))))))))))))
+
+====================
+generic params and bounds, extern blocks
+====================
+
+let identity[T] (x: T): T = x
+let clamp[T: Ord] (x: T) (lo: T) (hi: T): T = x
+
+extern "C" {
+    fn sqrt(x: Float) -> Float;
+}
+
+---
+
+(source_file
+  (item
+    (let_def
+      (identifier)
+      (generic_params
+        (generic_param
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier))))))))))))
+  (item
+    (let_def
+      (identifier)
+      (generic_params
+        (generic_param
+          (identifier)
+          (bound
+            (identifier))))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (param
+        (pattern
+          (identifier))
+        (path_type
+          (identifier)))
+      (path_type
+        (identifier))
+      (pipe_expr
+        (or_expr
+          (and_expr
+            (compare_expr
+              (range_expr
+                (add_expr
+                  (mul_expr
+                    (unary_expr
+                      (postfix_expr
+                        (identifier))))))))))))
+  (item
+    (extern_block
+      (string_literal)
+      (extern_fn
+        (identifier)
+        (extern_param_list
+          (extern_param
+            (identifier)
+            (path_type
+              (identifier))))
+        (path_type
+          (identifier))))))

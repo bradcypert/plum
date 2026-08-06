@@ -1,0 +1,1 @@
+../../../../tools/tree-sitter-plum/queries/highlights.scm

@@ -26,6 +26,9 @@ let sum n acc =
 let double (n: Int): Int = n * 2
 let double n = n * 2
 
+let x = [1,2,3].map(|x| x.to_string())
+let y = [1,2,3].map(_.to_string())
+
 // --- Algebraic data types + exhaustive pattern matching ---
 //
 // `enum` for sum types — already means exactly "algebraic data type" to

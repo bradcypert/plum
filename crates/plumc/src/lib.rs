@@ -1,6 +1,8 @@
 mod assoc_fns;
+mod check;
 mod codegen_cli;
 mod diagnostics;
+pub mod lsp;
 mod modules;
 mod project;
 #[cfg(test)]
@@ -12,7 +14,8 @@ pub use codegen_cli::{
 pub use diagnostics::ModuleSources;
 pub use modules::{resolve_modules, typecheck_and_run_modules};
 pub use project::{
-    collect_project_files, resolve_project, resolve_project_diag, typecheck_and_run_project, typecheck_and_run_project_diag,
+    collect_project_files, collect_project_files_with_paths, resolve_project, resolve_project_diag, typecheck_and_run_project,
+    typecheck_and_run_project_diag,
 };
 pub use testing::{discover_tests, run_tests_interpreted, run_tests_native, TestOutcome};
 
