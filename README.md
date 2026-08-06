@@ -422,6 +422,13 @@ program's prelude):
   exists), `Array.zip: Array[Zipped[A, B]]` (`Zipped { first, second }`,
   a plain struct — no tuple codegen support yet), `Array.sum_int`/
   `Array.sum_float`.
+- **`String`** — `String.is_empty`, `String.slice` (codepoint-safe, not
+  raw byte indexing — never splits a multi-byte character), `String.
+  repeat(s, n)`, `String.trim_start`/`String.trim_end` (ASCII
+  whitespace only — narrower than the existing, real-Unicode-aware
+  `.trim()`), `String.index_of: Option[Int]`, `String.lines`, `String.
+  parse_int: Result[Int, String]`/`String.parse_float: Result[Float,
+  String]`.
 - **`println(x)`/`print(x)`** — print any value's `.to_string()`
   (`print` with no trailing newline, `println` with one).
 - **`read_file(path): Result[String, String]`** / **`write_file(path,

@@ -2925,6 +2925,72 @@ paths; every README example re-run and confirmed to match exactly as
 documented. Workspace now 1536 tests (net +14), zero warnings, zero
 regressions.
 
+### Chunk 15: `String` utilities — `String.func` from the start, plus a real, previously-latent FBIP reuse-in-place bug found and flagged (not fixed)
+
+The last stdlib group on the user's own previously-stated order (number,
+array, string), and the first to be declared as `Type.func` from the
+very start (chunk 14 having just shipped that syntax and migrated the
+rest of the stdlib to it): `String.is_empty`, `String.slice`, `String.
+repeat`, `String.trim_start`/`String.trim_end`, `String.index_of:
+Option[Int]`, `String.lines`, `String.parse_int`/`String.parse_float:
+Result[_, String]`. Pure Plum, zero new IR/codegen work.
+
+**Codepoint safety, not raw byte indexing.** `String.slice`/`String.
+index_of` are built entirely on `chars_of(s): Array[String]` — the
+SAME one-codepoint-per-element decomposition `STDLIB_JSON_SRC`'s parser
+already established (chunk 9) — never on raw `s[i]`/`.len()` byte
+indexing, which would either panic or silently split a multi-byte
+UTF-8 character in half. Verified directly with `\"café\"` (`é` is a
+2-byte codepoint): `String.slice(\"café\", 0, 3)` correctly yields
+`\"caf\"` (3 codepoints), not a corrupted 3-BYTE prefix. `Array.slice`/
+`Array.take`/`Array.drop`/`Array.reverse` (chunk 12) do the actual
+positional work on the resulting `Array[String]`; a new small, non-
+associated `chars_join` helper (internal plumbing, no public API to
+namespace — same reasoning as `array_reverse_acc` and its siblings)
+folds the array back into one `String`.
+
+**`String.parse_float` reuses `STDLIB_JSON_SRC`'s own already-tested
+`parse_number`** directly (handles sign/fraction/exponent already)
+rather than writing a second float parser from scratch — just checks
+`next_pos` consumed the whole input string, rejecting trailing garbage
+a partial JSON-internal parse would otherwise silently accept.
+
+**A real, previously-latent FBIP reuse-in-place bug was found while
+writing this chunk's own tests, not by construction.** The first,
+more obvious way to write `String.repeat` — `s.concat(String.repeat(s,
+n - 1))`, `s` as `.concat()`'s receiver, the recursive call as its
+argument — silently corrupted the result: `String.repeat(\"ab\", 3)`
+came back with length 8 instead of the correct 6. Confirmed as a REAL
+bug, not a test mistake, by isolating the minimal repro (a standalone
+recursive function with the exact same shape, no `String.repeat`
+involved) and confirming BOTH backends agree on the wrong answer —
+ruling out a codegen-only or interpreter-only issue. Root cause not
+fully traced to an exact line inside `plum-ir/src/fbip.rs` in this
+chunk (the leading suspect, from the shape of the bug, is `StrConcat`'s
+reuse-in-place last-use analysis mishandling a value used simultaneously
+as `.concat()`'s receiver AND passed again into a nested call that is
+itself `.concat()`'s own argument — analogous in spirit to chunk 13's
+`Subst::compose` finding, a correctness gap in how liveness/reuse
+interacts across two simultaneous uses of the same variable, though
+NOT confirmed to share that exact mechanism). Rather than chase it
+indefinitely inside a stdlib-additions chunk, this was flagged directly
+(see the matching \"Open questions\" entry below) and WORKED AROUND for
+`String.repeat` itself by writing it the other, equally correct way —
+`String.repeat(s, n - 1).concat(s)`, the recursive call as receiver,
+`s` as the argument — which is genuine, idiomatic Plum, not a hack. A
+dedicated `codegen_cli.rs` regression test pins the ORIGINAL unsafe
+shape directly (a standalone `rep` function, not `String.repeat`
+itself), so future coverage of this bug doesn't depend on `String.
+repeat`'s own implementation staying this exact shape.
+
+Verified end to end: both backends (dedicated interpreter + native-
+codegen tests for every function, including the codepoint-safety case
+and the FBIP-bug regression test), plus a real throwaway project
+exercising every new function, run through both `plum run` and a
+compiled `plum build` binary, confirming identical output on both
+paths. Workspace now 1546 tests (net +10), zero warnings, zero
+regressions.
+
 ## Toolchain and diagnostics
 
 After JSON, the user redirected from stdlib growth toward user-facing
@@ -4520,6 +4586,37 @@ summed), not just inspect emitted IR text.
 
 ## Open questions (not yet decided, flagged so we don't forget them)
 
+- **KNOWN BUG, not a design question — needs its own dedicated
+  session**: `plum-ir/src/fbip.rs` has a real, previously-latent FBIP
+  reuse-in-place correctness bug, found while building chunk 15's
+  `String` utilities (see \"Standard library\" chunk 15 above for full
+  detail). A value used simultaneously as `.concat()`'s RECEIVER and
+  passed again into a NESTED call that is itself `.concat()`'s own
+  ARGUMENT (e.g. `s.concat(rep(s, n - 1))`, where `rep` recurses on `s`
+  again) silently corrupts the result — confirmed a real, shared bug
+  (not a test mistake, not backend-specific) by isolating a minimal
+  standalone repro and confirming BOTH the interpreter and native
+  codegen agree on the SAME wrong answer. Not yet root-caused to an
+  exact line — leading suspect is `StrConcat`'s reuse-in-place last-use
+  analysis (`fbip.rs`) not correctly accounting for a variable's SECOND
+  use when the first use is as a reuse-eligible receiver, but this is
+  unconfirmed, and it's unknown whether `ArrayPush`/other reuse-in-place
+  operations sharing the same general shape (`ArrayPushReuse`,
+  `StrTrimReuse`, etc.) have the same latent gap or are unaffected.
+  WORKED AROUND (not fixed) for `String.repeat` itself by writing it
+  the other, equally idiomatic way (`String.repeat(s, n - 1).concat
+  (s)` — the recursive call as receiver, `s` as the argument) — this is
+  genuine correct Plum, not a hack, but the underlying bug it dodges is
+  real and still there for the next function/program shaped the
+  unsafe way. A dedicated `codegen_cli.rs` regression test
+  (`the_safe_recursive_concat_ordering_string_repeat_uses_gives_the_
+  correct_result_in_native_codegen`) pins the SAFE shape; the unsafe
+  shape itself is not currently covered by a passing/xfail test (it
+  would need to assert INCORRECT behavior to pass today, which this
+  codebase's testing discipline doesn't do — instead it's documented
+  here and left for a future session to root-cause and fix for real,
+  at which point a NEW regression test should assert the CORRECT
+  answer for the unsafe shape directly).
 - ~~KNOWN BUG — `plum-types::subst::Subst`'s composition~~ **RESOLVED
   in chunk 13.** Was two genuinely separate bugs, not one: (1)
   `Subst::compose` could merge two individually-acyclic substitutions

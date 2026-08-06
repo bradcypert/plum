@@ -1277,6 +1277,41 @@ mod tests {
         assert_eq!(out, "1");
     }
 
+    // --- standard library: string utilities (see `plumc::STDLIB_STRING_SRC`) ---
+
+    #[test]
+    fn string_slice_repeat_index_of_and_parse_run_through_native_codegen() {
+        let src = "let go (): Bool = String.slice(\"café\", 0, 3) == \"caf\"";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+        let src = "let go (): Bool = String.repeat(\"ab\", 3) == \"ababab\"";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+        let src = "let go (): Int = match String.index_of(\"hello world\", \"world\") { Some(i) => i, None => -1 }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "6");
+        let src = "let go (): Int = match String.parse_int(\"42\") { Ok(n) => n, Err(e) => -1 }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "42");
+    }
+
+    #[test]
+    fn the_safe_recursive_concat_ordering_string_repeat_uses_gives_the_correct_result_in_native_codegen() {
+        // `String.repeat` is deliberately written `rep(s, n - 1).concat
+        // (s)` (the recursive call as `.concat()`'s RECEIVER, `s` as
+        // its argument), not the more obvious `s.concat(rep(s, n - 1))`
+        // (`s` as receiver, the recursive call as argument) — the
+        // latter shape is a real, previously-latent FBIP reuse-in-place
+        // bug (see DESIGN.md's "Standard library" chunk 15): using a
+        // value as `.concat()`'s RECEIVER while ALSO passing that SAME
+        // value again into a recursive call that is itself `.concat()`'s
+        // own argument silently corrupted the result in BOTH backends
+        // (confirmed: length 8 instead of the correct 6, for `rep("ab",
+        // 3)`, written the unsafe way). This test pins the SAFE ordering
+        // directly, independent of `String.repeat`'s own source, so
+        // regression coverage doesn't depend on that implementation
+        // detail staying exactly this shape.
+        let src = "let rep (s: String) (n: Int): String = if n <= 0 { \"\" } else { rep(s, n - 1).concat(s) }\n\
+                    let go (): Int = rep(\"ab\", 3).len()";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "6");
+    }
+
     // --- associated functions: `Type.func(...)` (see `plumc::assoc_fns`) ---
 
     #[test]

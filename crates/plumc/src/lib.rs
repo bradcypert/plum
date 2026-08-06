@@ -945,6 +945,112 @@ let array_zip_acc[T, U] (a: Array[T]) (b: Array[U]) (i: Int) (acc: Array[Zipped[
 let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = array_zip_acc(a, b, 0, [])
 ";
 
+/// `String` utilities — pure Plum, declared via `let String.func (...)`
+/// (real associated functions, `plumc::assoc_fns`), no new IR/codegen
+/// work. Built on the SAME codepoint-safe decomposition the JSON
+/// parser already established and this file exports as a plain, non-
+/// associated helper (`chars_of(s): Array[String] = s.split(\"\").
+/// filter(|c| c != \"\")`, one-codepoint `String` elements) — reused
+/// directly, not redefined, so `String.slice`/`String.index_of` never
+/// risk splitting a multi-byte codepoint in half the way raw BYTE
+/// indexing (`s[i]`, `.len()`) would. `Array.slice`/`Array.take`/
+/// `Array.drop`/`Array.reverse` (chunk 12) do the actual positional
+/// work on the resulting `Array[String]`; `chars_join` (new here, a
+/// plain non-associated helper — internal plumbing, not public API,
+/// same reasoning as `array_reverse_acc` and its siblings) folds a
+/// character array back into one `String` via the existing `.concat()`
+/// builtin.
+///
+/// `String.trim_start`/`String.trim_end` strip only ASCII whitespace
+/// (space/tab/`\\n`/`\\r`) — narrower than the existing, real-Unicode-
+/// aware `.trim()` builtin (which strips both ends at once, no one-
+/// sided variant) — a real, honest v1 scope boundary, not a silent
+/// gap, matching the same restraint chunk 9's JSON escape-set scope
+/// already established for this codebase.
+///
+/// `String.parse_float` reuses `STDLIB_JSON_SRC`'s own already-tested
+/// `parse_number(chars, pos): Result[ParseResult[Float], String]`
+/// directly (handles sign/fraction/exponent already) rather than
+/// writing a second float parser — just checks `next_pos` consumed the
+/// WHOLE string, rejecting trailing garbage a partial JSON-internal
+/// parse would otherwise silently accept.
+///
+/// **`String.repeat` is deliberately written `String.repeat(s, n - 1).
+/// concat(s)`, NOT the more obvious `s.concat(String.repeat(s, n -
+/// 1))`.** The latter is a real, previously-latent FBIP reuse-in-place
+/// bug, found while writing this chunk's own tests (both backends
+/// agreed, so it's a shared bug, not a codegen-only or interpreter-only
+/// one): using a value as `.concat()`'s RECEIVER while ALSO passing
+/// that SAME value again into a recursive call that is itself
+/// `.concat()`'s own ARGUMENT silently corrupted the result (confirmed:
+/// `rep(\"ab\", 3)` came back length 8, not the correct 6, written the
+/// unsafe way). Not root-caused to an exact line inside `fbip.rs` in
+/// this chunk — flagged as a known bug (see DESIGN.md's \"Standard
+/// library\" chunk 15 and the matching \"Open questions\" entry) rather
+/// than chased indefinitely; `codegen_cli.rs` has a dedicated
+/// regression test pinning the exact unsafe shape directly, independent
+/// of `String.repeat`'s own implementation staying this exact shape.
+const STDLIB_STRING_SRC: &str = "\
+let chars_join (chars: Array[String]): String = chars.fold(\"\", |acc, c| acc.concat(c))
+
+let string_reverse (s: String): String = chars_join(Array.reverse(chars_of(s)))
+
+let String.is_empty (s: String): Bool = s.len() == 0
+
+let String.slice (s: String) (start: Int) (end: Int): String = chars_join(Array.slice(chars_of(s), start, end))
+
+let String.repeat (s: String) (n: Int): String = if n <= 0 { \"\" } else { String.repeat(s, n - 1).concat(s) }
+
+let string_is_ascii_ws (c: String): Bool = c == \" \" || c == \"\\t\" || c == \"\\n\" || c == \"\\r\"
+
+let string_ws_prefix_len_acc (chars: Array[String]) (i: Int): Int =
+    if i >= chars.len() { i } else if string_is_ascii_ws(chars[i]) { string_ws_prefix_len_acc(chars, i + 1) } else { i }
+
+let String.trim_start (s: String): String = {
+    let chars = chars_of(s);
+    chars_join(Array.drop(chars, string_ws_prefix_len_acc(chars, 0)))
+}
+
+let String.trim_end (s: String): String = string_reverse(String.trim_start(string_reverse(s)))
+
+let string_index_of_acc (chars: Array[String]) (needle: Array[String]) (i: Int): Option[Int] =
+    if i + needle.len() > chars.len() { None }
+    else if Array.slice(chars, i, i + needle.len()) == needle { Some(i) }
+    else { string_index_of_acc(chars, needle, i + 1) }
+
+let String.index_of (s: String) (needle: String): Option[Int] = string_index_of_acc(chars_of(s), chars_of(needle), 0)
+
+let String.lines (s: String): Array[String] = s.split(\"\\n\")
+
+let string_digit_value (c: String): Result[Int, String] = match c {
+    \"0\" => Ok(0), \"1\" => Ok(1), \"2\" => Ok(2), \"3\" => Ok(3), \"4\" => Ok(4),
+    \"5\" => Ok(5), \"6\" => Ok(6), \"7\" => Ok(7), \"8\" => Ok(8), \"9\" => Ok(9),
+    _ => Err(\"expected a digit, found \".concat(c)),
+}
+
+let string_parse_int_digits_acc (chars: Array[String]) (i: Int) (acc: Int) (any: Bool): Result[Int, String] =
+    if i >= chars.len() { if any { Ok(acc) } else { Err(\"expected at least one digit\") } }
+    else { match string_digit_value(chars[i]) {
+        Ok(d) => string_parse_int_digits_acc(chars, i + 1, acc * 10 + d, true),
+        Err(e) => Err(e),
+    } }
+
+let String.parse_int (s: String): Result[Int, String] = {
+    let chars = chars_of(s);
+    if Array.is_empty(chars) { Err(\"empty string\") }
+    else if chars[0] == \"-\" { Result.map(string_parse_int_digits_acc(Array.drop(chars, 1), 0, 0, false), |n| 0 - n) }
+    else { string_parse_int_digits_acc(chars, 0, 0, false) }
+}
+
+let String.parse_float (s: String): Result[Float, String] = {
+    let chars = chars_of(s);
+    match parse_number(chars, 0) {
+        Ok(r) => if r.next_pos == chars.len() { Ok(r.value) } else { Err(\"trailing characters after number\") },
+        Err(e) => Err(e),
+    }
+}
+";
+
 /// Parses the prelude + stdlib sources once and prepends their items
 /// to `program`'s own — items earlier in the list are declared FIRST,
 /// but `TypeContext`'s two-phase construction (see its doc comment)
@@ -966,6 +1072,7 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
         STDLIB_OPTION_RESULT_SRC,
         STDLIB_NUMBER_SRC,
         STDLIB_ARRAY_SRC,
+        STDLIB_STRING_SRC,
     ] {
         let tokens = Lexer::with_base_offset(src, base).tokenize();
         let parsed_items = Parser::new(tokens)
@@ -999,7 +1106,8 @@ const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len()
     + STDLIB_ASSERT_SRC.len()
     + STDLIB_OPTION_RESULT_SRC.len()
     + STDLIB_NUMBER_SRC.len()
-    + STDLIB_ARRAY_SRC.len();
+    + STDLIB_ARRAY_SRC.len()
+    + STDLIB_STRING_SRC.len();
 
 /// Runs the whole pipeline — parse, type-check, lower, optimize, load,
 /// call — and returns the result of calling `fn_name` with `args`.
@@ -2270,6 +2378,100 @@ mod tests {
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
         let src = "let use_it dummy = Result.is_err(Err(\"boom\"))";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
+    }
+
+    // --- standard library: string utilities (see `plumc::STDLIB_STRING_SRC`) ---
+    //
+    // `run_string_test` runs on a DEDICATED, generously-sized (16 MiB)
+    // stack, not the default `#[test]` thread — the SAME "test-harness
+    // artifact, not a real bug" reasoning `run_json_test` (below) is
+    // already documented for: `String.index_of`/`.slice`/`.trim_*` all
+    // go through `Array.slice`'s own `Array.take(Array.drop(...))`
+    // chain, and the interpreter's `eval` has no tail-call optimization
+    // (unlike native codegen's real `musttail` guarantee), so even a
+    // modest, correctly-terminating amount of Plum-level recursion
+    // (confirmed: `String.index_of("hello world", "world")` — 7 outer
+    // steps, each running its own `Array.slice` sub-recursion — is
+    // NOT a runaway loop, verified by re-running the exact same
+    // program on a bigger stack and getting the correct, immediate
+    // answer) fans out into far more actual Rust-level `eval` stack
+    // frames, enough to overflow `cargo test`'s own narrow default.
+    // `Value` isn't `Send` (it can transitively hold `Rc`), so it can't
+    // cross the thread boundary directly — reduced to its `Debug`
+    // representation instead, same "the actual value only ever needs
+    // comparing, never touching from the parent thread" reasoning
+    // `run_json_test`'s own `Bool`-only reduction uses, just general
+    // enough to cover the Int/Float/Bool results these tests check.
+    fn run_string_test(src: &str) -> Result<String, String> {
+        let src = src.to_string();
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || typecheck_and_run(&src, "use_it", vec![Value::Unit]).map(|v| format!("{v:?}")))
+            .unwrap()
+            .join()
+            .unwrap()
+    }
+
+    #[test]
+    fn string_is_empty_and_slice_are_codepoint_safe() {
+        assert_eq!(run_string_test("let use_it dummy = String.is_empty(\"\")"), Ok("Bool(true)".to_string()));
+        assert_eq!(run_string_test("let use_it dummy = String.is_empty(\"x\")"), Ok("Bool(false)".to_string()));
+        // "café" — 'é' is a 2-byte UTF-8 codepoint; slicing by BYTE
+        // index would either panic or split it in half. `String.slice`
+        // goes through `chars_of`'s codepoint-safe decomposition
+        // instead, so `String.slice("café", 0, 3)` must yield exactly
+        // "caf" — 3 CODEPOINTS, not a mangled 3-BYTE prefix of the
+        // 5-byte encoding (which would cut 'é' in half).
+        assert_eq!(run_string_test("let use_it dummy = String.slice(\"café\", 0, 3) == \"caf\""), Ok("Bool(true)".to_string()));
+    }
+
+    #[test]
+    fn string_slice_extracts_the_expected_substring() {
+        assert_eq!(run_string_test("let use_it dummy = String.slice(\"hello world\", 0, 5) == \"hello\""), Ok("Bool(true)".to_string()));
+        assert_eq!(run_string_test("let use_it dummy = String.slice(\"hello world\", 6, 11) == \"world\""), Ok("Bool(true)".to_string()));
+    }
+
+    #[test]
+    fn string_repeat_concatenates_n_copies() {
+        assert_eq!(run_string_test("let use_it dummy = String.repeat(\"ab\", 3) == \"ababab\""), Ok("Bool(true)".to_string()));
+        assert_eq!(run_string_test("let use_it dummy = String.repeat(\"x\", 0) == \"\""), Ok("Bool(true)".to_string()));
+    }
+
+    #[test]
+    fn string_trim_start_and_trim_end_strip_only_their_own_side() {
+        assert_eq!(run_string_test("let use_it dummy = String.trim_start(\"  hi  \") == \"hi  \""), Ok("Bool(true)".to_string()));
+        assert_eq!(run_string_test("let use_it dummy = String.trim_end(\"  hi  \") == \"  hi\""), Ok("Bool(true)".to_string()));
+    }
+
+    #[test]
+    fn string_index_of_finds_the_first_occurrence_or_none() {
+        let src = "let use_it dummy = match String.index_of(\"hello world\", \"world\") { Some(i) => i, None => -1 }";
+        assert_eq!(run_string_test(src), Ok("Int(6)".to_string()));
+        let src = "let use_it dummy = match String.index_of(\"hello\", \"xyz\") { Some(i) => i, None => -1 }";
+        assert_eq!(run_string_test(src), Ok("Int(-1)".to_string()));
+    }
+
+    #[test]
+    fn string_lines_splits_on_newlines() {
+        assert_eq!(run_string_test("let use_it dummy = String.lines(\"a\\nb\\nc\").len()"), Ok("Int(3)".to_string()));
+    }
+
+    #[test]
+    fn string_parse_int_handles_positive_negative_and_invalid_input() {
+        let src = "let use_it dummy = match String.parse_int(\"42\") { Ok(n) => n, Err(e) => -1 }";
+        assert_eq!(run_string_test(src), Ok("Int(42)".to_string()));
+        let src = "let use_it dummy = match String.parse_int(\"-42\") { Ok(n) => n, Err(e) => 999 }";
+        assert_eq!(run_string_test(src), Ok("Int(-42)".to_string()));
+        let src = "let use_it dummy = match String.parse_int(\"not a number\") { Ok(n) => n, Err(e) => -1 }";
+        assert_eq!(run_string_test(src), Ok("Int(-1)".to_string()));
+    }
+
+    #[test]
+    fn string_parse_float_handles_decimals_and_rejects_trailing_garbage() {
+        let src = "let use_it dummy = match String.parse_float(\"3.5\") { Ok(f) => f, Err(e) => -1.0 }";
+        assert_eq!(run_string_test(src), Ok("Float(3.5)".to_string()));
+        let src = "let use_it dummy = match String.parse_float(\"3.5xyz\") { Ok(f) => f, Err(e) => -1.0 }";
+        assert_eq!(run_string_test(src), Ok("Float(-1.0)".to_string()));
     }
 
     // --- associated functions: `Type.func(...)` (see `plumc::assoc_fns`) ---
