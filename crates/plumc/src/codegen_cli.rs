@@ -561,6 +561,15 @@ pub fn compile_program_to_ir_diag(
     program: &ast::Program,
     entry_fn: &str,
 ) -> Result<(String, HashMap<String, FnSig>, String, bool), plum_syntax::error::CompileError> {
+    // Cloned rather than taken as `&mut` — this fn's own signature is
+    // `pub` and already has several callers (`compile_to_ir`, the CLI's
+    // own `plumc build`), none of which have a `&mut ast::Program` to
+    // hand over; a compile isn't a hot enough path to justify the API
+    // churn just to avoid one clone. See `crate::assoc_fns`'s own doc
+    // comment for what this rewrites and why.
+    let mut program = program.clone();
+    crate::assoc_fns::resolve_associated_calls(&mut program);
+    let program = &program;
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
     let (mut tag_fields, mut struct_field_names) = derive_tag_fields(program, &type_ctx);
     let variant_payload_types = derive_variant_payload_types(program, &type_ctx);
@@ -1266,6 +1275,25 @@ mod tests {
         let src = "let go (): Bool = { assert_ne(1, 2); true }";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "1");
+    }
+
+    // --- associated functions: `Type.func(...)` (see `plumc::assoc_fns`) ---
+
+    #[test]
+    fn a_user_defined_struct_gets_a_real_associated_function_through_native_codegen() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let Point.add (a: Point) (b: Point): Point = Point { x: a.x + b.x, y: a.y + b.y }\n\
+                    let go (): Int = { let p = Point.add(Point { x: 1, y: 2 }, Point { x: 10, y: 20 }); p.x * 100 + p.y }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1122");
+    }
+
+    #[test]
+    fn a_qualified_variant_construction_still_works_unaffected_by_associated_functions_in_native_codegen() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let go (): Float = match Shape.Circle(2.0) { Circle(r) => r, Square(s) => s }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "2.000000");
     }
 
     // --- standard library: array utilities (see `plumc::STDLIB_ARRAY_SRC`) ---

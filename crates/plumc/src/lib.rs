@@ -1,3 +1,4 @@
+mod assoc_fns;
 mod codegen_cli;
 mod diagnostics;
 mod modules;
@@ -1033,6 +1034,8 @@ pub(crate) fn run_resolved_program_diag(
     fn_name: &str,
     args: Vec<Value>,
 ) -> Result<Value, plum_syntax::error::CompileError> {
+    let mut program = program;
+    assoc_fns::resolve_associated_calls(&mut program);
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
     let mut infer = Infer::with_context(type_ctx);
     infer.infer_program(&program).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
@@ -2253,6 +2256,51 @@ mod tests {
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
         let src = "let use_it dummy = result_is_err(Err(\"boom\"))";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
+    }
+
+    // --- associated functions: `Type.func(...)` (see `plumc::assoc_fns`) ---
+
+    #[test]
+    fn a_user_defined_struct_gets_a_real_associated_function_through_the_interpreter() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let Point.add (a: Point) (b: Point): Point = Point { x: a.x + b.x, y: a.y + b.y }\n\
+                    let use_it dummy = { let p = Point.add(Point { x: 1, y: 2 }, Point { x: 10, y: 20 }); p.x * 100 + p.y }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1122)));
+    }
+
+    #[test]
+    fn a_qualified_variant_construction_still_works_unaffected_by_associated_functions() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\n\
+                    let use_it dummy = match Shape.Circle(2.0) { Circle(r) => r, Square(s) => s }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Float(2.0)));
+    }
+
+    #[test]
+    fn a_local_shadowing_a_declared_type_name_is_ordinary_field_access_not_an_associated_call() {
+        // `Point` here is a CLOSURE PARAMETER, not the struct type —
+        // `Point.x` must resolve as ordinary field access, exactly as
+        // if no `Point.x` associated function existed at all. (An
+        // ordinary function parameter can't be spelled this way — a
+        // capitalized name in `Param`/`Pattern` position is always a
+        // struct/variant pattern, never a plain binding — but a closure
+        // parameter is a bare `String`, no such restriction, so this is
+        // the realistic way to construct the shadowing case at all.)
+        let src = "struct Point { x: Int }\n\
+                    let Point.x (a: Int): Int = a * 1000\n\
+                    let use_it dummy = { \
+                        let f = |Point: Point| Point.x; \
+                        f(Point { x: 7 }) \
+                    }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(7)));
+    }
+
+    #[test]
+    fn a_bare_associated_function_reference_works_as_a_higher_order_argument() {
+        let src = "struct Point { x: Int }\n\
+                    let Point.double_x (p: Point): Int = p.x * 2\n\
+                    let apply (p: Point) (f: (Point) -> Int): Int = f(p)\n\
+                    let use_it dummy = apply(Point { x: 5 }, Point.double_x)";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(10)));
     }
 
     // --- standard library: array utilities (see `plumc::STDLIB_ARRAY_SRC`) ---

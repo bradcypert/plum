@@ -122,7 +122,28 @@ impl Parser {
     fn parse_let_def(&mut self) -> Result<LetDef, crate::error::CompileError> {
         let start = self.expect(TokenKind::Let, "'let'")?.span;
         let name_tok = self.expect_ident("a name")?;
-        let name = Self::ident_text(&name_tok);
+        let mut name = Self::ident_text(&name_tok);
+        // `let Type.func (...) = ...` — a real, per-type ASSOCIATED
+        // function declaration (`Point.add`, `Option.map`), not a
+        // module-qualified name (those only ever appear on the
+        // resolver's rewritten OUTPUT, never typed by hand in source —
+        // see `plumc::modules::qualify`) and not a struct-literal path
+        // (`Type.Variant { .. }`/`shapes.Circle { .. }` are parsed
+        // through the EXPRESSION path, `parse_path_shaped_expr`, a
+        // completely different function from this one). Storing the
+        // combined `"Type.func"` directly as `LetDef.name` mirrors
+        // `qualify()`'s own module-qualification trick exactly — every
+        // downstream consumer (duplicate-name checking, monomorphization,
+        // codegen's LLVM symbol emission) already treats `LetDef.name`
+        // as an opaque string key, so `"Point.add"`/`"Circle.add"` are
+        // simply two different names, for free, with no other code
+        // needing to change. See `plumc::assoc_fns` for how a CALL site
+        // (`Point.add(a, b)`) gets resolved back to this exact name.
+        if self.check(&TokenKind::Dot) {
+            self.advance();
+            let second_tok = self.expect_ident("an associated function name")?;
+            name = format!("{name}.{}", Self::ident_text(&second_tok));
+        }
         let generics = if self.check(&TokenKind::LBracket) {
             self.parse_generic_params()?
         } else {
@@ -2427,6 +2448,29 @@ mod tests {
         assert_eq!(
             render_program(&parse_program("let sum_list[T: Num] (list: T): T = list")),
             "((let sum_list [T:Num] ((list:T)) ->T list))"
+        );
+    }
+
+    #[test]
+    fn item_let_associated_function_combines_the_dotted_name_into_one_string() {
+        // `let Type.func (...) = ...` — a real, per-type associated
+        // function declaration (`plumc::assoc_fns`'s own doc comment
+        // has the full design rationale). `LetDef.name` ends up
+        // literally `"Point.add"`, one string, exactly mirroring
+        // `plumc::modules::qualify`'s own module-qualification trick —
+        // every downstream consumer already treats `LetDef.name` as an
+        // opaque string key, so this needs no new AST field.
+        assert_eq!(
+            render_program(&parse_program("let Point.add (a: Point) (b: Point): Point = a")),
+            "((let Point.add ((a:Point) (b:Point)) ->Point a))"
+        );
+    }
+
+    #[test]
+    fn item_let_associated_function_with_generics_still_works() {
+        assert_eq!(
+            render_program(&parse_program("let Option.map[T, U] (o: T) (f: U): T = o")),
+            "((let Option.map [T,U] ((o:T) (f:U)) ->T o))"
         );
     }
 
