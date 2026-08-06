@@ -216,6 +216,35 @@ Bounded type parameters (`[T: Eq]`) are supported where a generic
 function needs `==` on its parameter — see `Map`/`Set` in the standard
 library below for real examples.
 
+### Associated functions: `Type.func(args)`
+
+```
+struct Point { x: Int, y: Int }
+
+let Point.add (a: Point) (b: Point): Point = Point { x: a.x + b.x, y: a.y + b.y }
+
+let main (): Unit = println(Point.add(Point { x: 1, y: 2 }, Point { x: 10, y: 20 }))
+```
+
+`let Type.func (...) = ...` declares a real, per-type associated
+function — called as `Type.func(args)`, with the "receiver" passed as
+an ordinary first argument, not `receiver.func(args)` method-dispatch
+syntax. This works for any struct/enum you declare, not just the
+standard library's own types (which is exactly how `Option.map`,
+`Array.reverse`, `Map.get`, and the rest of the standard library below
+are themselves built — see the [Standard
+library](#standard-library) section).
+
+Two types can each declare a function with the same name (`Point.add`
+and `Circle.add` coexist fine) — there's no collision, since each
+lives in its own type's namespace. This is unrelated to (and doesn't
+change) qualified enum-variant construction — `Type.Variant(args)`
+(e.g. `Shape.Circle(radius)`, always legal even without a `use`, the
+same as a bare `Circle(radius)`) still constructs a variant, not an
+associated-function call. The two are disambiguated by capitalization:
+an associated function name is always lowercase, a variant tag is
+always UpperCamelCase.
+
 ### Option and Result — no null, anywhere
 
 ```
@@ -250,8 +279,8 @@ hand — see the [Standard library](#standard-library) section below for
 the full list:
 
 ```
-let doubled = option_map(Some(21), |x| x * 2);          // Some(42)
-let total = result_unwrap_or(read_file("a.txt"), "");    // "" if the file is missing
+let doubled = Option.map(Some(21), |x| x * 2);          // Some(42)
+let total = Result.unwrap_or(read_file("a.txt"), "");    // "" if the file is missing
 ```
 
 ### Arrays
@@ -370,42 +399,41 @@ Currently available with no `use` needed (all merged into every
 program's prelude):
 
 - **`Option[T]`/`Result[T, E]`** and their constructors (`Some`/`None`/
-  `Ok`/`Err`), plus combinators — prefixed `option_`/`result_` rather
-  than bare names, since there's no dot-method overloading by receiver
-  type (`option_map`/`result_map` would otherwise collide as two
-  top-level functions both named `map`): `option_map`, `option_and_then`,
-  `option_unwrap_or`, `option_unwrap_or_else`, `option_is_some`,
-  `option_is_none`, `option_ok_or`; `result_map`, `result_map_err`,
-  `result_and_then`, `result_unwrap_or`, `result_unwrap_or_else`,
-  `result_is_ok`, `result_is_err`.
-- **`Int`/`Float` numbers** — same `int_*`/`float_*` prefixing reason
-  as above (`<`/`>` only type-check against a concrete numeric type,
-  not a generic bound, so `min`/`max`/`abs`/`clamp` need one
-  realization per type): `int_min`, `int_max`, `int_abs`, `int_clamp`;
-  `float_min`, `float_max`, `float_abs`, `float_clamp`, `float_floor`,
-  `float_ceil`, `float_round`, `float_pow`, `float_sqrt` (the last five
-  wrap real libm functions via `extern "C"`).
-- **`Array[T]`** — `array_is_empty`, `array_first`/`array_last:
-  Option[T]`, `array_reverse`, `array_concat`, `array_take`/`array_drop`,
-  `array_slice`, `array_find: Option[T]`, `array_any`/`array_all`,
-  `array_index_of: Option[Int]`, `array_contains` (both `Eq`-bounded),
-  `array_sort_by(arr, |a, b| ...)` (takes an explicit "is `a`
-  less-or-equal `b`" comparator — no generic `Ord` bound exists),
-  `array_zip: Array[Zipped[A, B]]` (`Zipped { first, second }`, a plain
-  struct — no tuple codegen support yet), `array_sum_int`/`array_sum_
-  float`.
+  `Ok`/`Err`), plus combinators declared as real [associated
+  functions](#associated-functions-typefuncargs): `Option.map`,
+  `Option.and_then`, `Option.unwrap_or`, `Option.unwrap_or_else`,
+  `Option.is_some`, `Option.is_none`, `Option.ok_or`; `Result.map`,
+  `Result.map_err`, `Result.and_then`, `Result.unwrap_or`, `Result.
+  unwrap_or_else`, `Result.is_ok`, `Result.is_err`.
+- **`Int`/`Float` numbers** — same associated-function treatment
+  (`<`/`>` only type-check against a concrete numeric type, not a
+  generic bound, so `min`/`max`/`abs`/`clamp` need one realization per
+  type — `Int.min`/`Float.min` simply coexist, no collision): `Int.min`,
+  `Int.max`, `Int.abs`, `Int.clamp`; `Float.min`, `Float.max`, `Float.
+  abs`, `Float.clamp`, `Float.floor`, `Float.ceil`, `Float.round`,
+  `Float.pow`, `Float.sqrt` (the last five wrap real libm functions via
+  `extern "C"`).
+- **`Array[T]`** — `Array.is_empty`, `Array.first`/`Array.last:
+  Option[T]`, `Array.reverse`, `Array.concat`, `Array.take`/`Array.
+  drop`, `Array.slice`, `Array.find: Option[T]`, `Array.any`/`Array.
+  all`, `Array.index_of: Option[Int]`, `Array.contains` (both
+  `Eq`-bounded), `Array.sort_by(arr, |a, b| ...)` (takes an explicit
+  "is `a` less-or-equal `b`" comparator — no generic `Ord` bound
+  exists), `Array.zip: Array[Zipped[A, B]]` (`Zipped { first, second }`,
+  a plain struct — no tuple codegen support yet), `Array.sum_int`/
+  `Array.sum_float`.
 - **`println(x)`/`print(x)`** — print any value's `.to_string()`
   (`print` with no trailing newline, `println` with one).
 - **`read_file(path): Result[String, String]`** / **`write_file(path,
   contents): Result[Unit, String]`** — whole-file I/O, no streaming/
   stateful file handle. Failure surfaces as `Err`, never a crash.
-- **`Map[K, V]`** — `map_new`, `map_insert`, `map_get: Option[V]`,
-  `map_contains`, `map_remove`, `map_len`, `map_keys`/`map_values:
-  Array[...]`, `map_from_arrays`. Association-list based (`O(n)`), no
+- **`Map[K, V]`** — `Map.new`, `Map.insert`, `Map.get: Option[V]`,
+  `Map.contains`, `Map.remove`, `Map.len`, `Map.keys`/`Map.values:
+  Array[...]`, `Map.from_arrays`. Association-list based (`O(n)`), no
   hashing — fine for small maps, not a performance-critical hash table.
-- **`Set[T]`** — `set_new`, `set_insert`, `set_contains`, `set_remove`,
-  `set_len`, `set_union`/`set_intersection`/`set_difference`,
-  `set_from_array`, `set_to_array`. Same `O(n)` caveat as `Map`.
+- **`Set[T]`** — `Set.new`, `Set.insert`, `Set.contains`, `Set.remove`,
+  `Set.len`, `Set.union`/`Set.intersection`/`Set.difference`,
+  `Set.from_array`, `Set.to_array`. Same `O(n)` caveat as `Map`.
 - **JSON** — `json_parse(s: String): Result[JsonValue, String]` /
   `json_stringify(v: JsonValue): String`, where `JsonValue` is a plain
   enum (`JsonNull`/`JsonBool`/`JsonNumber`/`JsonString`/`JsonArray`/

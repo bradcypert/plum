@@ -2837,6 +2837,94 @@ now 1522 tests (net +6 from chunk 12's 1516 — 3 interpreter array
 tests, 2 native-codegen array tests, 1 `subst.rs` regression test),
 zero warnings, zero regressions to the ~1500 pre-existing tests.
 
+### Chunk 14: `Type.func(args)` — real associated functions, and migrating the whole stdlib to them
+
+The user pushed back on the stdlib's flat prefixed naming (`option_
+map`, `array_reverse`, `map_get`, ...) and asked for `Option.map`,
+`Array.reverse`, `Map.get` instead — explicitly requested as a REAL
+language feature (not parser-level sugar), usable by user-defined
+structs/enums too (`Point.add(a, b)`, not just the seven builtin
+types), with the old flat names removed entirely, no aliases. Given
+the size and depth of a genuine new call-syntax feature, this went
+through a full `EnterPlanMode` design pass (two rounds of direct
+research reading `parser.rs`, `modules.rs`, `infer.rs`, `lower.rs`,
+`context.rs`, `codegen.rs`, and `plumc`'s pipeline entry points) before
+any code was written.
+
+**The key finding that made this cheap**: `plumc::modules::qualify`
+already proves, end to end through a real compiled binary, that a
+function's `LetDef.name` can be an arbitrary dotted string
+(`"shapes.Circle"`) with ZERO awareness needed anywhere downstream —
+duplicate-name checking, monomorphization, and LLVM symbol emission
+(never quoted, `@shapes.Circle` already round-trips) all just treat it
+as an opaque string key. So `let Type.func (...)` needed only ONE
+parser change (`parse_let_def` optionally consumes a `.` + second
+ident, combining into `"Type.func"` as the stored name — `plum-syntax/
+src/parser.rs`), and the call side (`Type.func(args)`, which ALREADY
+parses into the identical `Call{callee: Field{base: Ident, name}, ..}`
+shape `Shape.Circle(1.0)` qualified-variant-construction uses) needed
+one new, small resolution pass — `plumc::assoc_fns` (new file) —
+rewriting that shape into an ordinary `Ident("Type.func")` call BEFORE
+type inference ever runs. **Zero changes to `infer.rs`/`lower.rs`/
+codegen** — by the time inference sees `Option.map(Some(1), f)`, it's
+indistinguishable from what `option_map(Some(1), f)` looked like
+before.
+
+**Disambiguation from `Type.Variant(args)`** (the pre-existing
+qualified-variant-construction feature, completely untouched) is free:
+this codebase's own convention is variant tags are always
+UpperCamelCase, associated functions always lowercase — so `assoc_fns`
+only ever matches `Type.lowercase_name`, never touching `Type.
+UpperCase`. **Local-shadowing** is guarded the same way `modules::
+Resolver` already guards module-qualified names (the exact bug class
+that resolver was once fixed for) — a local variable/param sharing a
+name with a declared type is never rewritten, ordinary field access
+stays ordinary field access.
+
+**A real gap found during implementation** (not anticipated in the
+plan): `Int`/`Float`/`Bool`/`String`/`Unit`/`Array` are never declared
+`ast::Item`s at all — they're hardcoded string matches in `plum_types::
+infer::ast_type_to_type` — so `assoc_fns`'s type registry, originally
+built only from scanning `struct`/`enum` declarations, never recognized
+them; `Int.min(...)` silently fell through unrewritten. Fixed by
+seeding the registry with this fixed builtin-type set directly (`Map`/
+`Set` needed no such seeding — both are ordinary prelude `enum`
+declarations, already covered).
+
+**A second real gap**: two INDEPENDENT pipeline constructions —
+`plumc::testing::run_tests_interpreted` and a `codegen_cli.rs` test
+helper (`mono_tags`) — built their own `TypeContext::from_items`/
+`infer_program` calls directly, bypassing both of the two choke points
+`assoc_fns` was wired into (`lib.rs`'s `run_resolved_program_diag`,
+`codegen_cli.rs`'s `compile_program_to_ir_diag`). Missed in the
+original research since the pipeline-entry-point survey found only
+those two `pub`/`pub(crate)` functions, not test-only helper functions
+built inline. Found immediately by the full `cargo test --workspace`
+run after migrating the first stdlib group (`option_is_some` used
+inside `Array.contains`'s own body failed to resolve, surfacing as a
+confusing \"unbound variable: Option\" from these two bypassed paths) —
+both patched to call `assoc_fns::resolve_associated_calls` too.
+
+**Migration, one stdlib group at a time, workspace-clean between
+each** (matching this project's own established discipline): Option/
+Result, then Int/Float, then Array, then Map/Set — every old flat name
+removed, no aliases, every affected test's source string updated to
+the new syntax, private recursive helpers (`array_reverse_acc` and its
+many siblings) deliberately kept their plain flat names, since they're
+implementation detail with no public API to namespace.
+
+Verified end to end: a genuinely user-defined `struct Point`/`let
+Point.add` (not a builtin) through both backends; `Shape.Circle(1.0)`-
+style qualified variant construction confirmed completely unaffected;
+the local-shadowing case (a closure param literally named the same as
+a declared type) confirmed to still resolve as ordinary field access;
+a real throwaway project exercising every migrated stdlib group PLUS a
+user-defined associated function, run through both `plum run` and a
+compiled `plum build` binary, producing identical output on both
+paths; every README example re-run and confirmed to match exactly as
+documented. Workspace now 1536 tests (net +14), zero warnings, zero
+regressions.
+
 ## Toolchain and diagnostics
 
 After JSON, the user redirected from stdlib growth toward user-facing
