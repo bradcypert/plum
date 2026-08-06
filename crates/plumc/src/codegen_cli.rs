@@ -1055,7 +1055,7 @@ mod tests {
             }\n\
             \n\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_new(()), 1, 100), 2, 200);\n\
+                let m = Map.insert(Map.insert(Map.new(()), 1, 100), 2, 200);\n\
                 let ks: Array[Int] = [];\n\
                 let ks2 = map_keys_into(m, ks);\n\
                 ks2[0] + ks2[1]\n\
@@ -1089,10 +1089,10 @@ mod tests {
         // doc comment) rather than a local, hand-rolled redeclaration.
         let src = "\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_new(()), 1, 100), 2, 200);\n\
-                let ks = map_keys(m);\n\
-                let sm = map_insert(map_new(()), \"a\", true);\n\
-                let sks = map_keys(sm);\n\
+                let m = Map.insert(Map.insert(Map.new(()), 1, 100), 2, 200);\n\
+                let ks = Map.keys(m);\n\
+                let sm = Map.insert(Map.new(()), \"a\", true);\n\
+                let sks = Map.keys(sm);\n\
                 ks[0] + ks[1] + ks.len() * 100 + sks.len() * 1000\n\
             }\n\
         ";
@@ -1104,10 +1104,10 @@ mod tests {
     fn map_values_and_set_to_array_work_now_that_both_bugs_are_fixed() {
         let src = "\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_new(()), 1, 10), 2, 20);\n\
-                let vs = map_values(m);\n\
-                let s = set_from_array([1, 2, 3]);\n\
-                let arr = set_to_array(s);\n\
+                let m = Map.insert(Map.insert(Map.new(()), 1, 10), 2, 20);\n\
+                let vs = Map.values(m);\n\
+                let s = Set.from_array([1, 2, 3]);\n\
+                let arr = Set.to_array(s);\n\
                 vs[0] + vs[1] + arr.len() * 100\n\
             }\n\
         ";
@@ -1130,8 +1130,8 @@ mod tests {
         // end-to-end symptom.
         let src = "\
             let go (): Int = {\n\
-                let s = [1, 2, 2, 3].fold(set_new(()), |acc, x| set_insert(acc, x));\n\
-                set_len(s)\n\
+                let s = [1, 2, 2, 3].fold(Set.new(()), |acc, x| Set.insert(acc, x));\n\
+                Set.len(s)\n\
             }\n\
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
@@ -1664,10 +1664,10 @@ mod tests {
         let src = "\
             struct Point { x: Int, y: Int }\n\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_new(()), Point { x: 1, y: 1 }, 100), Point { x: 2, y: 2 }, 200);\n\
-                let got = match map_get(m, Point { x: 1, y: 1 }) { Some(v) => v, None => -1 };\n\
-                let has = map_contains(m, Point { x: 2, y: 2 });\n\
-                let missing = map_contains(m, Point { x: 9, y: 9 });\n\
+                let m = Map.insert(Map.insert(Map.new(()), Point { x: 1, y: 1 }, 100), Point { x: 2, y: 2 }, 200);\n\
+                let got = match Map.get(m, Point { x: 1, y: 1 }) { Some(v) => v, None => -1 };\n\
+                let has = Map.contains(m, Point { x: 2, y: 2 });\n\
+                let missing = Map.contains(m, Point { x: 9, y: 9 });\n\
                 got + (if has { 10 } else { 0 }) + (if missing { 100 } else { 0 })\n\
             }\n\
         ";
@@ -1703,7 +1703,7 @@ mod tests {
         // fine and only failing later, inside codegen, with a much
         // less clear error (`CgType` has no `Tuple` variant at all —
         // see `plum_type_to_cg_type`'s own doc comment).
-        let src = "let go (): Bool = { let s = set_insert(set_new(()), (1, 2)); set_contains(s, (1, 2)) }\n";
+        let src = "let go (): Bool = { let s = Set.insert(Set.new(()), (1, 2)); Set.contains(s, (1, 2)) }\n";
         let err = crate::typecheck_and_run(src, "go", vec![plum_interp::Value::Unit]).expect_err("expected a type error");
         assert!(err.contains("Eq"), "unexpected error: {err}");
     }
@@ -1785,7 +1785,7 @@ mod tests {
         // OUTERMOST, so `(2, 200)` (inserted last) wraps `(1, 100)`.
         let src = "\
             let go (): Bool = { \
-                let m = map_insert(map_insert(map_new(()), 1, 100), 2, 200); \
+                let m = Map.insert(Map.insert(Map.new(()), 1, 100), 2, 200); \
                 m.to_string() == \"MapNode(2, 200, MapNode(1, 100, MapEnd))\" \
             }\n\
         ";
@@ -1828,10 +1828,10 @@ mod tests {
     // --- standard library: Map[K,V]/Set[T] (see `plumc::STDLIB_COLLECTIONS_SRC`) ---
     //
     // Association-list-backed recursive generic enums, mirroring the
-    // `List[T]` pattern proven elsewhere in this file. `map_new()`/
-    // `set_new()` are curried, single-Unit-typed-parameter functions
+    // `List[T]` pattern proven elsewhere in this file. `Map.new()`/
+    // `Set.new()` are curried, single-Unit-typed-parameter functions
     // (`(): Map[K, V]`) — so call sites need an EXPLICIT unit argument,
-    // `map_new(())`/`set_new(())`, not `map_new()`. This was found
+    // `Map.new(())`/`Set.new(())`, not `Map.new()`. This was found
     // empirically while writing these tests: a bare `f()` call site
     // parses to zero arguments (`Expr::Call { args: vec![] }`), which
     // doesn't match a declared single Unit parameter — the same
@@ -1847,12 +1847,12 @@ mod tests {
     fn map_insert_get_contains_remove_work_for_int_keys() {
         let src = "\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_new(()), 1, 100), 2, 200);\n\
-                let got = match map_get(m, 1) { Some(v) => v, None => -1 };\n\
-                let has2 = map_contains(m, 2);\n\
-                let has3 = map_contains(m, 3);\n\
-                let m2 = map_remove(m, 1);\n\
-                let has1_after = map_contains(m2, 1);\n\
+                let m = Map.insert(Map.insert(Map.new(()), 1, 100), 2, 200);\n\
+                let got = match Map.get(m, 1) { Some(v) => v, None => -1 };\n\
+                let has2 = Map.contains(m, 2);\n\
+                let has3 = Map.contains(m, 3);\n\
+                let m2 = Map.remove(m, 1);\n\
+                let has1_after = Map.contains(m2, 1);\n\
                 got + (if has2 { 10 } else { 0 }) + (if has3 { 100 } else { 0 }) + (if has1_after { 1000 } else { 0 })\n\
             }\n\
         ";
@@ -1864,12 +1864,12 @@ mod tests {
     fn map_insert_get_contains_remove_work_for_str_keys() {
         let src = "\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_new(()), \"a\", 1), \"b\", 2);\n\
-                let got_a = match map_get(m, \"a\") { Some(v) => v, None => -1 };\n\
-                let got_b = match map_get(m, \"b\") { Some(v) => v, None => -1 };\n\
-                let has_c = map_contains(m, \"c\");\n\
-                let m2 = map_remove(m, \"a\");\n\
-                let has_a_after = map_contains(m2, \"a\");\n\
+                let m = Map.insert(Map.insert(Map.new(()), \"a\", 1), \"b\", 2);\n\
+                let got_a = match Map.get(m, \"a\") { Some(v) => v, None => -1 };\n\
+                let got_b = match Map.get(m, \"b\") { Some(v) => v, None => -1 };\n\
+                let has_c = Map.contains(m, \"c\");\n\
+                let m2 = Map.remove(m, \"a\");\n\
+                let has_a_after = Map.contains(m2, \"a\");\n\
                 got_a + got_b * 10 + (if has_c { 100 } else { 0 }) + (if has_a_after { 1000 } else { 0 })\n\
             }\n\
         ";
@@ -1886,8 +1886,8 @@ mod tests {
         // back, not the first.
         let src = "\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_new(()), 1, 100), 1, 200);\n\
-                match map_get(m, 1) { Some(v) => v, None => -1 }\n\
+                let m = Map.insert(Map.insert(Map.new(()), 1, 100), 1, 200);\n\
+                match Map.get(m, 1) { Some(v) => v, None => -1 }\n\
             }\n\
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
@@ -1902,9 +1902,9 @@ mod tests {
         // all trace of the key.
         let src = "\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_new(()), 1, 100), 1, 200);\n\
-                let m2 = map_remove(m, 1);\n\
-                match map_get(m2, 1) { Some(v) => v, None => -1 }\n\
+                let m = Map.insert(Map.insert(Map.new(()), 1, 100), 1, 200);\n\
+                let m2 = Map.remove(m, 1);\n\
+                match Map.get(m2, 1) { Some(v) => v, None => -1 }\n\
             }\n\
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
@@ -1915,8 +1915,8 @@ mod tests {
     fn map_len_counts_nodes_not_unique_keys() {
         let src = "\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_insert(map_new(()), 1, 1), 1, 2), 2, 3);\n\
-                map_len(m)\n\
+                let m = Map.insert(Map.insert(Map.insert(Map.new(()), 1, 1), 1, 2), 2, 3);\n\
+                Map.len(m)\n\
             }\n\
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
@@ -1927,13 +1927,13 @@ mod tests {
     fn set_insert_dedupes_and_len_contains_remove_work() {
         let src = "\
             let go (): Int = {\n\
-                let s = set_insert(set_insert(set_insert(set_new(()), 1), 1), 2);\n\
-                let n_before = set_len(s);\n\
-                let has1 = set_contains(s, 1);\n\
-                let has3 = set_contains(s, 3);\n\
-                let s2 = set_remove(s, 1);\n\
-                let has1_after = set_contains(s2, 1);\n\
-                let n_after = set_len(s2);\n\
+                let s = Set.insert(Set.insert(Set.insert(Set.new(()), 1), 1), 2);\n\
+                let n_before = Set.len(s);\n\
+                let has1 = Set.contains(s, 1);\n\
+                let has3 = Set.contains(s, 3);\n\
+                let s2 = Set.remove(s, 1);\n\
+                let has1_after = Set.contains(s2, 1);\n\
+                let n_after = Set.len(s2);\n\
                 n_before * 1000 + (if has1 { 100 } else { 0 }) + (if has3 { 10 } else { 0 }) + (if has1_after { 1 } else { 0 }) + n_after\n\
             }\n\
         ";
@@ -1953,17 +1953,17 @@ mod tests {
         // `Map[Str, Int]` both used in the SAME compiled program.
         let src = "\
             let go (): Int = {\n\
-                let m1 = map_insert(map_new(()), 1, \"one\");\n\
-                let m2 = map_insert(map_new(()), \"two\", 2);\n\
-                let s1 = set_insert(set_new(()), 1);\n\
-                let s2 = set_insert(set_new(()), \"x\");\n\
-                let v1 = match map_get(m1, 1) { Some(v) => v, None => \"?\" };\n\
-                let v2 = match map_get(m2, \"two\") { Some(v) => v, None => -1 };\n\
-                v1.len() + v2 + set_len(s1) + set_len(s2)\n\
+                let m1 = Map.insert(Map.new(()), 1, \"one\");\n\
+                let m2 = Map.insert(Map.new(()), \"two\", 2);\n\
+                let s1 = Set.insert(Set.new(()), 1);\n\
+                let s2 = Set.insert(Set.new(()), \"x\");\n\
+                let v1 = match Map.get(m1, 1) { Some(v) => v, None => \"?\" };\n\
+                let v2 = match Map.get(m2, \"two\") { Some(v) => v, None => -1 };\n\
+                v1.len() + v2 + Set.len(s1) + Set.len(s2)\n\
             }\n\
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
-        // v1 = "one" (len 3), v2 = 2, set_len(s1) = 1, set_len(s2) = 1
+        // v1 = "one" (len 3), v2 = 2, Set.len(s1) = 1, Set.len(s2) = 1
         assert_eq!(out, "7");
     }
 
@@ -1971,12 +1971,12 @@ mod tests {
     fn set_union_intersection_difference_and_from_array_all_work() {
         let src = "\
             let go (): Int = {\n\
-                let a = set_from_array([1, 2, 2, 3]);\n\
-                let b = set_from_array([2, 3, 4]);\n\
-                let u = set_union(a, b);\n\
-                let i = set_intersection(a, b);\n\
-                let d = set_difference(a, b);\n\
-                set_len(a) + set_len(u) * 10 + set_len(i) * 100 + set_len(d) * 1000\n\
+                let a = Set.from_array([1, 2, 2, 3]);\n\
+                let b = Set.from_array([2, 3, 4]);\n\
+                let u = Set.union(a, b);\n\
+                let i = Set.intersection(a, b);\n\
+                let d = Set.difference(a, b);\n\
+                Set.len(a) + Set.len(u) * 10 + Set.len(i) * 100 + Set.len(d) * 1000\n\
             }\n\
         ";
         // a = {1,2,3} (len 3), b = {2,3,4}, union = {1,2,3,4} (len 4),
@@ -1990,9 +1990,9 @@ mod tests {
     fn map_from_arrays_zips_keys_and_values_by_index() {
         let src = "\
             let go (): Int = {\n\
-                let m = map_from_arrays([1, 2, 3], [10, 20, 30]);\n\
-                let v = match map_get(m, 2) { Some(v) => v, None => -1 };\n\
-                map_len(m) * 100 + v\n\
+                let m = Map.from_arrays([1, 2, 3], [10, 20, 30]);\n\
+                let v = match Map.get(m, 2) { Some(v) => v, None => -1 };\n\
+                Map.len(m) * 100 + v\n\
             }\n\
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
@@ -2005,12 +2005,12 @@ mod tests {
         // instantiations, not just one" pattern for generics.
         let src = "\
             let go (): Int = {\n\
-                let a = set_from_array([\"x\", \"y\"]);\n\
-                let b = set_from_array([\"y\", \"z\"]);\n\
-                let u = set_union(a, b);\n\
-                let m = map_from_arrays([\"a\", \"b\"], [1, 2]);\n\
-                let v = match map_get(m, \"b\") { Some(v) => v, None => -1 };\n\
-                set_len(u) * 10 + v\n\
+                let a = Set.from_array([\"x\", \"y\"]);\n\
+                let b = Set.from_array([\"y\", \"z\"]);\n\
+                let u = Set.union(a, b);\n\
+                let m = Map.from_arrays([\"a\", \"b\"], [1, 2]);\n\
+                let v = match Map.get(m, \"b\") { Some(v) => v, None => -1 };\n\
+                Set.len(u) * 10 + v\n\
             }\n\
         ";
         // union({x,y}, {y,z}) = {x,y,z} (len 3), v = 2. Total: 3*10+2=32.

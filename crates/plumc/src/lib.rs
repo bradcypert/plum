@@ -573,96 +573,99 @@ let json_stringify (v: JsonValue): String = match v {
 /// `monomorphize.rs`, so `let f[T](): Array[T] = []` — an empty array
 /// literal pinned only to ITS OWN enclosing generic function's type
 /// param — now resolves correctly instead of a hard ambiguity error.
-/// `map_keys`/`map_values`/`set_to_array` below are the direct,
-/// concrete payoff: exactly the shape both bugs used to block.
+/// `Map.keys`/`Map.values`/`Set.to_array` below are the direct,
+/// concrete payoff: exactly the shape both bugs used to block. (Named
+/// via `let Type.func (...)`, real associated functions — `plumc::
+/// assoc_fns` — not the old flat `map_keys`/`set_to_array` naming,
+/// removed entirely; see DESIGN.md's \"Standard library\" chunk 14.)
 const STDLIB_COLLECTIONS_SRC: &str = "\
 enum Map[K, V] { MapNode(K, V, Map[K, V]), MapEnd }
 
-let map_new[K, V] (): Map[K, V] = MapEnd
+let Map.new[K, V] (): Map[K, V] = MapEnd
 
-let map_insert[K: Eq, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] =
+let Map.insert[K: Eq, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] =
     MapNode(k, v, m)
 
-let map_get[K: Eq, V] (m: Map[K, V]) (k: K): Option[V] = match m {
-    MapNode(k2, v, rest) => if k == k2 { Some(v) } else { map_get(rest, k) },
+let Map.get[K: Eq, V] (m: Map[K, V]) (k: K): Option[V] = match m {
+    MapNode(k2, v, rest) => if k == k2 { Some(v) } else { Map.get(rest, k) },
     MapEnd => None,
 }
 
-let map_contains[K: Eq, V] (m: Map[K, V]) (k: K): Bool = match m {
-    MapNode(k2, _, rest) => if k == k2 { true } else { map_contains(rest, k) },
+let Map.contains[K: Eq, V] (m: Map[K, V]) (k: K): Bool = match m {
+    MapNode(k2, _, rest) => if k == k2 { true } else { Map.contains(rest, k) },
     MapEnd => false,
 }
 
-let map_remove[K: Eq, V] (m: Map[K, V]) (k: K): Map[K, V] = match m {
-    MapNode(k2, v, rest) => if k == k2 { rest } else { MapNode(k2, v, map_remove(rest, k)) },
+let Map.remove[K: Eq, V] (m: Map[K, V]) (k: K): Map[K, V] = match m {
+    MapNode(k2, v, rest) => if k == k2 { rest } else { MapNode(k2, v, Map.remove(rest, k)) },
     MapEnd => MapEnd,
 }
 
-let map_len[K, V] (m: Map[K, V]): Int = match m {
-    MapNode(_, _, rest) => 1 + map_len(rest),
+let Map.len[K, V] (m: Map[K, V]): Int = match m {
+    MapNode(_, _, rest) => 1 + Map.len(rest),
     MapEnd => 0,
 }
 
 enum Set[T] { SetNode(T, Set[T]), SetEnd }
 
-let set_new[T] (): Set[T] = SetEnd
+let Set.new[T] (): Set[T] = SetEnd
 
-let set_contains[T: Eq] (s: Set[T]) (x: T): Bool = match s {
-    SetNode(y, rest) => if x == y { true } else { set_contains(rest, x) },
+let Set.contains[T: Eq] (s: Set[T]) (x: T): Bool = match s {
+    SetNode(y, rest) => if x == y { true } else { Set.contains(rest, x) },
     SetEnd => false,
 }
 
-let set_insert[T: Eq] (s: Set[T]) (x: T): Set[T] =
-    if set_contains(s, x) { s } else { SetNode(x, s) }
+let Set.insert[T: Eq] (s: Set[T]) (x: T): Set[T] =
+    if Set.contains(s, x) { s } else { SetNode(x, s) }
 
-let set_remove[T: Eq] (s: Set[T]) (x: T): Set[T] = match s {
-    SetNode(y, rest) => if x == y { rest } else { SetNode(y, set_remove(rest, x)) },
+let Set.remove[T: Eq] (s: Set[T]) (x: T): Set[T] = match s {
+    SetNode(y, rest) => if x == y { rest } else { SetNode(y, Set.remove(rest, x)) },
     SetEnd => SetEnd,
 }
 
-let set_len[T] (s: Set[T]): Int = match s {
-    SetNode(_, rest) => 1 + set_len(rest),
+let Set.len[T] (s: Set[T]): Int = match s {
+    SetNode(_, rest) => 1 + Set.len(rest),
     SetEnd => 0,
 }
 
-let set_union[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = match a {
-    SetNode(x, rest) => set_union(rest, set_insert(b, x)),
+let Set.union[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = match a {
+    SetNode(x, rest) => Set.union(rest, Set.insert(b, x)),
     SetEnd => b,
 }
 
 let set_intersection_acc[T: Eq] (a: Set[T]) (b: Set[T]) (acc: Set[T]): Set[T] = match a {
-    SetNode(x, rest) => if set_contains(b, x) { set_intersection_acc(rest, b, set_insert(acc, x)) } else { set_intersection_acc(rest, b, acc) },
+    SetNode(x, rest) => if Set.contains(b, x) { set_intersection_acc(rest, b, Set.insert(acc, x)) } else { set_intersection_acc(rest, b, acc) },
     SetEnd => acc,
 }
-let set_intersection[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = set_intersection_acc(a, b, set_new(()))
+let Set.intersection[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = set_intersection_acc(a, b, Set.new(()))
 
 let set_difference_acc[T: Eq] (a: Set[T]) (b: Set[T]) (acc: Set[T]): Set[T] = match a {
-    SetNode(x, rest) => if set_contains(b, x) { set_difference_acc(rest, b, acc) } else { set_difference_acc(rest, b, set_insert(acc, x)) },
+    SetNode(x, rest) => if Set.contains(b, x) { set_difference_acc(rest, b, acc) } else { set_difference_acc(rest, b, Set.insert(acc, x)) },
     SetEnd => acc,
 }
-let set_difference[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = set_difference_acc(a, b, set_new(()))
+let Set.difference[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = set_difference_acc(a, b, Set.new(()))
 
 let set_from_array_acc[T: Eq] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =
-    if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, set_insert(acc, arr[i])) }
-let set_from_array[T: Eq] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, set_new(()))
+    if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, Set.insert(acc, arr[i])) }
+let Set.from_array[T: Eq] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, Set.new(()))
 
 let map_from_arrays_acc[K: Eq, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =
-    if i >= keys.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, map_insert(acc, keys[i], values[i])) }
-let map_from_arrays[K: Eq, V] (keys: Array[K]) (values: Array[V]): Map[K, V] =
-    map_from_arrays_acc(keys, values, 0, map_new(()))
+    if i >= keys.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }
+let Map.from_arrays[K: Eq, V] (keys: Array[K]) (values: Array[V]): Map[K, V] =
+    map_from_arrays_acc(keys, values, 0, Map.new(()))
 
-let map_keys[K, V] (m: Map[K, V]): Array[K] = match m {
-    MapNode(k, _, rest) => map_keys(rest).push(k),
+let Map.keys[K, V] (m: Map[K, V]): Array[K] = match m {
+    MapNode(k, _, rest) => Map.keys(rest).push(k),
     MapEnd => [],
 }
 
-let map_values[K, V] (m: Map[K, V]): Array[V] = match m {
-    MapNode(_, v, rest) => map_values(rest).push(v),
+let Map.values[K, V] (m: Map[K, V]): Array[V] = match m {
+    MapNode(_, v, rest) => Map.values(rest).push(v),
     MapEnd => [],
 }
 
-let set_to_array[T] (s: Set[T]): Array[T] = match s {
-    SetNode(x, rest) => set_to_array(rest).push(x),
+let Set.to_array[T] (s: Set[T]): Array[T] = match s {
+    SetNode(x, rest) => Set.to_array(rest).push(x),
     SetEnd => [],
 }
 ";
@@ -1132,11 +1135,11 @@ mod tests {
     fn map_basic_insert_get_contains_remove_work_through_the_interpreter() {
         let src = "\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_new(()), 1, 100), 2, 200);\n\
-                let got = match map_get(m, 2) { Some(v) => v, None => -1 };\n\
-                let has1 = map_contains(m, 1);\n\
-                let m2 = map_remove(m, 2);\n\
-                let has2_after = map_contains(m2, 2);\n\
+                let m = Map.insert(Map.insert(Map.new(()), 1, 100), 2, 200);\n\
+                let got = match Map.get(m, 2) { Some(v) => v, None => -1 };\n\
+                let has1 = Map.contains(m, 1);\n\
+                let m2 = Map.remove(m, 2);\n\
+                let has2_after = Map.contains(m2, 2);\n\
                 got + (if has1 { 10 } else { 0 }) + (if has2_after { 1000 } else { 0 })\n\
             }\n\
         ";
@@ -1148,11 +1151,11 @@ mod tests {
     fn set_basic_insert_dedupe_contains_remove_len_work_through_the_interpreter() {
         let src = "\
             let go (): Int = {\n\
-                let s = set_insert(set_insert(set_insert(set_new(()), \"x\"), \"x\"), \"y\");\n\
-                let n = set_len(s);\n\
-                let has_x = set_contains(s, \"x\");\n\
-                let s2 = set_remove(s, \"x\");\n\
-                let has_x_after = set_contains(s2, \"x\");\n\
+                let s = Set.insert(Set.insert(Set.insert(Set.new(()), \"x\"), \"x\"), \"y\");\n\
+                let n = Set.len(s);\n\
+                let has_x = Set.contains(s, \"x\");\n\
+                let s2 = Set.remove(s, \"x\");\n\
+                let has_x_after = Set.contains(s2, \"x\");\n\
                 n * 100 + (if has_x { 10 } else { 0 }) + (if has_x_after { 1 } else { 0 })\n\
             }\n\
         ";
@@ -1165,11 +1168,11 @@ mod tests {
     fn set_algebra_and_map_from_arrays_work_through_the_interpreter() {
         let src = "\
             let go (): Int = {\n\
-                let a = set_from_array([1, 2, 2, 3]);\n\
-                let b = set_from_array([2, 3, 4]);\n\
-                let m = map_from_arrays([1, 2], [10, 20]);\n\
-                let got = match map_get(m, 2) { Some(v) => v, None => -1 };\n\
-                set_len(set_union(a, b)) * 100 + set_len(set_intersection(a, b)) * 10 + set_len(set_difference(a, b)) + got\n\
+                let a = Set.from_array([1, 2, 2, 3]);\n\
+                let b = Set.from_array([2, 3, 4]);\n\
+                let m = Map.from_arrays([1, 2], [10, 20]);\n\
+                let got = match Map.get(m, 2) { Some(v) => v, None => -1 };\n\
+                Set.len(Set.union(a, b)) * 100 + Set.len(Set.intersection(a, b)) * 10 + Set.len(Set.difference(a, b)) + got\n\
             }\n\
         ";
         // union len 4, intersection len 2, difference len 1, got = 20.
@@ -1190,10 +1193,10 @@ mod tests {
         // proof in `codegen_cli::tests`.
         let src = "\
             let go (): Int = {\n\
-                let m = map_insert(map_insert(map_new(()), 1, 10), 2, 20);\n\
-                let ks = map_keys(m);\n\
-                let vs = map_values(m);\n\
-                let s = set_to_array(set_from_array([1, 2, 3]));\n\
+                let m = Map.insert(Map.insert(Map.new(()), 1, 10), 2, 20);\n\
+                let ks = Map.keys(m);\n\
+                let vs = Map.values(m);\n\
+                let s = Set.to_array(Set.from_array([1, 2, 3]));\n\
                 ks[0] + ks[1] + vs[0] + vs[1] + s.len() * 100\n\
             }\n\
         ";
