@@ -3717,25 +3717,33 @@ mod tests {
         // Same reuse mechanism as structs — a same-arity deconstruct-
         // then-reconstruct is exactly the shape `mark_reuse` looks for,
         // and tuples lower to the identical `Ctor`/`Match` nodes.
-        let tokens = Lexer::new("match p { (a, b) => (b, a) }").tokenize();
+        //
+        // `p` MUST come from a real `let` here, not be injected
+        // straight into `interp.env` the way an earlier version of this
+        // test did — a bare free variable is exactly the "unprotected
+        // parameter" shape `mark_reuse`'s `known_heap` guard now
+        // correctly refuses to reuse (see `plum-ir/src/fbip.rs`'s
+        // `mark_reuse_scoped` doc comment and DESIGN.md's "Open
+        // questions" entry, RESOLVED). A real `let` is what actually
+        // gets `p` into `insert_refcount_ops`'s `known_heap`, which is
+        // what makes the runtime refcount check meaningful at all.
+        let tokens = Lexer::new("{ let p = (1, 2); match p { (a, b) => (b, a) } }").tokenize();
         let mut parser = Parser::new(tokens);
         let ast = parser.parse_expr().unwrap_or_else(|e| panic!("parse error: {e}"));
         let ir = lower_expr(&ast, &LoweringContext::new()).unwrap_or_else(|e| panic!("lowering error: {e}"));
         let optimized = plum_ir::fbip::optimize(ir);
         let mut interp = Interpreter::new();
-        // Construct the initial tuple directly on the heap, matching
-        // the capstone struct-reuse test's approach.
-        let addr = {
-            let tuple_val = interp.eval(&Expr::Ctor {
-                tag: "2Tuple".to_string(),
-                fields: vec![Expr::Int(1), Expr::Int(2)],
-            });
-            let Ok(Value::HeapRef(addr)) = tuple_val else { panic!("expected a HeapRef") };
-            addr
-        };
-        interp.env.push(("p".to_string(), Value::HeapRef(addr)));
         let result = interp.eval(&optimized).unwrap_or_else(|e| panic!("eval error: {e}"));
-        assert_eq!(result, Value::HeapRef(addr), "reuse should recycle the original cell");
+        // The original (1, 2) cell should have been recycled in place
+        // for (2, 1) — proven two ways: `alloc_count` never incremented
+        // past the one real allocation `let p = (1, 2)` made (reuse
+        // never counts as a fresh allocation, see `heap.rs`'s own
+        // tests), and the result's fields are correctly swapped.
+        assert_eq!(interp.heap.alloc_count(), 1, "reuse should recycle the original cell, not allocate a second one");
+        let Value::HeapRef(addr) = result else { panic!("expected a HeapRef") };
+        let (tag, fields) = interp.heap.read(addr).unwrap();
+        assert_eq!(tag, "2Tuple");
+        assert_eq!(fields, &[Value::Int(2), Value::Int(1)]);
     }
 
     // --- Heap-shaped values: Ctor/Match/CtorReuse/RcAnnotated ---

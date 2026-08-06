@@ -1292,24 +1292,29 @@ mod tests {
     }
 
     #[test]
-    fn the_safe_recursive_concat_ordering_string_repeat_uses_gives_the_correct_result_in_native_codegen() {
-        // `String.repeat` is deliberately written `rep(s, n - 1).concat
-        // (s)` (the recursive call as `.concat()`'s RECEIVER, `s` as
-        // its argument), not the more obvious `s.concat(rep(s, n - 1))`
-        // (`s` as receiver, the recursive call as argument) — the
-        // latter shape is a real, previously-latent FBIP reuse-in-place
-        // bug (see DESIGN.md's "Standard library" chunk 15): using a
-        // value as `.concat()`'s RECEIVER while ALSO passing that SAME
-        // value again into a recursive call that is itself `.concat()`'s
-        // own argument silently corrupted the result in BOTH backends
-        // (confirmed: length 8 instead of the correct 6, for `rep("ab",
-        // 3)`, written the unsafe way). This test pins the SAFE ordering
-        // directly, independent of `String.repeat`'s own source, so
-        // regression coverage doesn't depend on that implementation
-        // detail staying exactly this shape.
-        let src = "let rep (s: String) (n: Int): String = if n <= 0 { \"\" } else { rep(s, n - 1).concat(s) }\n\
+    fn both_recursive_concat_orderings_of_string_repeats_shape_now_give_the_correct_result_in_native_codegen() {
+        // Regression coverage for a real, previously-latent FBIP
+        // reuse-in-place bug (see DESIGN.md's "Standard library" chunk
+        // 15 and its "Open questions" entry, now RESOLVED): a function
+        // PARAMETER used as `.concat()`'s RECEIVER while ALSO passed
+        // again into a nested call that is itself `.concat()`'s own
+        // argument (`s.concat(rep(s, n - 1))`) used to silently corrupt
+        // the result in BOTH backends (length 8 instead of the correct
+        // 6, for `rep("ab", 3)`) — root-caused to `plum-ir/src/fbip.rs`
+        // `mark_reuse` rewriting ANY bare-variable base into a reuse
+        // candidate with no check that `insert_refcount_ops` had
+        // actually protected that name with Inc/Dec (function
+        // parameters never are, without a type checker to prove them
+        // heap-shaped). Fixed by gating every reuse rewrite on
+        // membership in the same `known_heap` set `insert_refcount_ops`
+        // itself tracks. Pins BOTH operand orderings directly,
+        // independent of `String.repeat`'s own source.
+        let unsafe_order = "let rep (s: String) (n: Int): String = if n <= 0 { \"\" } else { s.concat(rep(s, n - 1)) }\n\
                     let go (): Int = rep(\"ab\", 3).len()";
-        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "6");
+        assert_eq!(compile_and_run(unsafe_order, "go", &[CgValue::Unit]).unwrap(), "6");
+        let safe_order = "let rep (s: String) (n: Int): String = if n <= 0 { \"\" } else { rep(s, n - 1).concat(s) }\n\
+                    let go (): Int = rep(\"ab\", 3).len()";
+        assert_eq!(compile_and_run(safe_order, "go", &[CgValue::Unit]).unwrap(), "6");
     }
 
     // --- associated functions: `Type.func(...)` (see `plumc::assoc_fns`) ---

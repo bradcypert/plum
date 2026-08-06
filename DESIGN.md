@@ -2991,6 +2991,47 @@ compiled `plum build` binary, confirming identical output on both
 paths. Workspace now 1546 tests (net +10), zero warnings, zero
 regressions.
 
+### Chunk 16: root-causing and fixing the chunk 15 FBIP reuse-in-place bug
+
+Closed the "Open questions" entry chunk 15 flagged rather than chased.
+Root cause and fix are described in full in the matching (now RESOLVED)
+"Open questions" entry above — in short: `mark_reuse` (`plum-ir/src/
+fbip.rs`) rewrote any bare-variable base into a `*Reuse` reuse-in-place
+candidate with no check that `insert_refcount_ops` had actually
+protected that name with `Inc`/`Dec`, which it never does for function
+PARAMETERS (no type checker in this IR to prove one is heap-shaped).
+Two ALIASED uses of the same unprotected parameter (receiver of one
+`.concat()` AND passed again into a nested call that's itself another
+`.concat()`'s argument) could each see runtime refcount 1 and both
+destructively reuse the SAME cell. Fixed by threading the identical
+`known_heap` set through `mark_reuse` too, gating every `*Reuse`
+rewrite (not just `StrConcat`'s — `ArrayPush`/`Pop`/`Set`/`Remove`,
+`StrTrim`/`StrToUpper`/`StrToLower`/`StrReplace`, `Match`'s
+`CtorReuse`, all shared the identical unguarded check) on the base name
+actually being tracked.
+
+`String.repeat` reverted to the natural `s.concat(String.repeat(s, n -
+1))` (the chunk 15 workaround ordering is no longer needed, though
+still equally valid Plum). Both orderings now have dedicated regression
+tests at every layer: `plum-ir/src/fbip.rs`'s own unit tests (plus new
+ones proving a name ABSENT from `known_heap` is correctly refused, and
+a full-pipeline `optimize()` test for the untracked-parameter shape),
+`plumc/src/lib.rs`'s interpreter test, and `codegen_cli.rs`'s native
+test — all asserting the CORRECT answer for the once-unsafe shape
+directly. `plum-interp/src/lib.rs`'s existing `tuple_reuse_in_place_
+fires_via_fbip` test needed updating too: it had been injecting its
+scrutinee straight into `interp.env`, bypassing a real `let` — exactly
+the "unprotected free variable" shape this fix now (correctly) refuses
+to reuse — fixed by routing it through a real `let p = (1, 2); match p
+{ ... }` so `insert_refcount_ops` tracks `p` for real, matching how the
+mechanism is actually meant to be exercised.
+
+Verified end to end: full `cargo test --workspace` (1551 tests, zero
+warnings, zero regressions), plus a real throwaway project running the
+once-corrupting shape directly through both `plum run` and a compiled
+`plum build` binary, confirming both backends now agree on the correct
+answer.
+
 ## Toolchain and diagnostics
 
 After JSON, the user redirected from stdlib growth toward user-facing
@@ -4586,37 +4627,46 @@ summed), not just inspect emitted IR text.
 
 ## Open questions (not yet decided, flagged so we don't forget them)
 
-- **KNOWN BUG, not a design question — needs its own dedicated
-  session**: `plum-ir/src/fbip.rs` has a real, previously-latent FBIP
-  reuse-in-place correctness bug, found while building chunk 15's
-  `String` utilities (see \"Standard library\" chunk 15 above for full
-  detail). A value used simultaneously as `.concat()`'s RECEIVER and
-  passed again into a NESTED call that is itself `.concat()`'s own
-  ARGUMENT (e.g. `s.concat(rep(s, n - 1))`, where `rep` recurses on `s`
-  again) silently corrupts the result — confirmed a real, shared bug
-  (not a test mistake, not backend-specific) by isolating a minimal
-  standalone repro and confirming BOTH the interpreter and native
-  codegen agree on the SAME wrong answer. Not yet root-caused to an
-  exact line — leading suspect is `StrConcat`'s reuse-in-place last-use
-  analysis (`fbip.rs`) not correctly accounting for a variable's SECOND
-  use when the first use is as a reuse-eligible receiver, but this is
-  unconfirmed, and it's unknown whether `ArrayPush`/other reuse-in-place
-  operations sharing the same general shape (`ArrayPushReuse`,
-  `StrTrimReuse`, etc.) have the same latent gap or are unaffected.
-  WORKED AROUND (not fixed) for `String.repeat` itself by writing it
-  the other, equally idiomatic way (`String.repeat(s, n - 1).concat
-  (s)` — the recursive call as receiver, `s` as the argument) — this is
-  genuine correct Plum, not a hack, but the underlying bug it dodges is
-  real and still there for the next function/program shaped the
-  unsafe way. A dedicated `codegen_cli.rs` regression test
-  (`the_safe_recursive_concat_ordering_string_repeat_uses_gives_the_
-  correct_result_in_native_codegen`) pins the SAFE shape; the unsafe
-  shape itself is not currently covered by a passing/xfail test (it
-  would need to assert INCORRECT behavior to pass today, which this
-  codebase's testing discipline doesn't do — instead it's documented
-  here and left for a future session to root-cause and fix for real,
-  at which point a NEW regression test should assert the CORRECT
-  answer for the unsafe shape directly).
+- ~~KNOWN BUG — FBIP reuse-in-place correctness gap for aliased
+  parameters~~ **RESOLVED.** Root cause: `insert_refcount_ops`
+  (`plum-ir/src/fbip.rs`) deliberately never adds function PARAMETERS
+  to its `known_heap` set (no type checker in this IR to prove one is
+  heap-shaped), so a parameter's refcount is never `Inc`'d even when
+  genuinely aliased (used twice in one body). `mark_reuse`, the
+  separate pass that rewrites `StrConcat`/`ArrayPush`/`Match`'s
+  scrutinee/etc. into their `*Reuse` variants, didn't know or care
+  about any of this — it rewrote ANY bare-`Var` base into a reuse
+  candidate, on the false claim (a stale comment) that the runtime
+  refcount check alone made this safe regardless. For an unprotected
+  aliased parameter (e.g. `s.concat(rep(s, n - 1))`, where `rep`
+  recurses on `s` again), BOTH the outer `.concat()` and the inner
+  recursive call saw refcount 1 and each independently believed itself
+  the sole owner, so both destructively reused the SAME heap cell —
+  whichever ran second silently clobbered what the first had written.
+  Confirmed real (not backend-specific) by both the interpreter and
+  native codegen agreeing on the same wrong answer for a minimal
+  standalone repro.
+  **Fix**: `mark_reuse` now threads the identical `known_heap` set
+  `insert_refcount_ops` computes (same `Let`-only growth, same
+  non-extension for `Match` arm bindings/`Closure` params/`For` loop
+  vars — recomputed via the same `is_syntactically_heap` helper both
+  passes now share), and every `*Reuse` rewrite is gated on the base
+  name actually being a member. A name `insert_refcount_ops` never
+  protected can no longer be reused in place by construction, closing
+  the gap for every affected op uniformly (`StrConcat`, `StrTrim`,
+  `StrToUpper`, `StrToLower`, `StrReplace`, `ArrayPush`/`Pop`/`Set`/
+  `Remove`, and `Match`'s `CtorReuse`), not just `StrConcat`. This is a
+  real (bounded) loss of optimization opportunity — a parameter used
+  only once could, in principle, still be safely reused, but proving
+  that needs real type info this untyped IR doesn't carry yet — traded
+  for always being correct. `String.repeat` was reverted from its
+  chunk-15 workaround ordering back to the natural `s.concat(String.
+  repeat(s, n - 1))`, since it's now safe either way; both orderings
+  have dedicated regression tests (`plum-ir/src/fbip.rs`'s own unit
+  tests plus `plumc/src/lib.rs`'s and `codegen_cli.rs`'s end-to-end
+  ones) asserting the CORRECT answer for the once-unsafe shape
+  directly, verified through both `plum run` and a compiled `plum
+  build` binary agreeing.
 - ~~KNOWN BUG — `plum-types::subst::Subst`'s composition~~ **RESOLVED
   in chunk 13.** Was two genuinely separate bugs, not one: (1)
   `Subst::compose` could merge two individually-acyclic substitutions

@@ -58,36 +58,82 @@ pub fn optimize_program(program: Program) -> Program {
 /// this pass's stand-in for real layout/size compatibility, which
 /// needs a type checker we don't have yet).
 pub fn mark_reuse(expr: Expr) -> Expr {
+    mark_reuse_scoped(expr, &HashSet::new())
+}
+
+/// The real body of `mark_reuse` — takes a `known_heap` set tracked in
+/// EXACT lockstep with `transform`'s own (same `is_syntactically_heap`
+/// calls, same `Let`-only growth, same non-extension for `Match` arm
+/// bindings/`Closure` params/`For` loop vars) so that a reuse rewrite
+/// only ever fires for a name `insert_refcount_ops` actually protected
+/// with Inc/Dec.
+///
+/// This guard is load-bearing, not defensive: a function PARAMETER is
+/// never added to `known_heap` (see `transform`'s own `Closure`/params
+/// doc comment — no type checker in this IR to prove a param is
+/// heap-shaped), so `insert_refcount_ops` never Incs it even when it's
+/// genuinely aliased (used twice in one body). Before this guard,
+/// `mark_reuse` rewrote ANY bare-`Var` base into a `*Reuse` node
+/// regardless — so two simultaneous uses of the same unprotected
+/// parameter (e.g. `s.concat(rep(s, n - 1))`, where `rep` recurses on
+/// `s` again) could each see the runtime refcount as 1 and both
+/// destructively reuse the SAME heap cell, silently corrupting
+/// whichever wrote first. Confirmed real via a minimal repro agreeing
+/// across both backends — see DESIGN.md's "Open questions" entry this
+/// fix closes. Restricting reuse to names actually present in
+/// `known_heap` costs some optimization opportunity (a parameter used
+/// only once could, in principle, still be safely reused, but proving
+/// that needs real type info this IR doesn't have) in exchange for
+/// always being correct.
+fn mark_reuse_scoped(expr: Expr, known_heap: &HashSet<String>) -> Expr {
     match expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) | Expr::EmptyArray(_) => expr,
-        Expr::Unary(op, e) => Expr::Unary(op, Box::new(mark_reuse(*e))),
-        Expr::AsCStr(e) => Expr::AsCStr(Box::new(mark_reuse(*e))),
-        Expr::Binary(op, l, r) => Expr::Binary(op, Box::new(mark_reuse(*l)), Box::new(mark_reuse(*r))),
-        Expr::Let { name, value, body } => Expr::Let {
-            name,
-            value: Box::new(mark_reuse(*value)),
-            body: Box::new(mark_reuse(*body)),
-        },
+        Expr::Unary(op, e) => Expr::Unary(op, Box::new(mark_reuse_scoped(*e, known_heap))),
+        Expr::AsCStr(e) => Expr::AsCStr(Box::new(mark_reuse_scoped(*e, known_heap))),
+        Expr::Binary(op, l, r) => Expr::Binary(
+            op,
+            Box::new(mark_reuse_scoped(*l, known_heap)),
+            Box::new(mark_reuse_scoped(*r, known_heap)),
+        ),
+        Expr::Let { name, value, body } => {
+            // Mirrors `transform`'s own `Let` arm exactly: the decision
+            // uses the PRE-rewrite value shape (safe to recompute here
+            // since neither pass restructures a Let's own top-level
+            // Ctor/Str-literal/EmptyArray-literal/Var(already-heap)
+            // value node, only nested uses within it).
+            let is_heap_value = is_syntactically_heap(&value, known_heap);
+            let value_t = mark_reuse_scoped(*value, known_heap);
+            let mut inner_heap = known_heap.clone();
+            if is_heap_value {
+                inner_heap.insert(name.clone());
+            }
+            let body_t = mark_reuse_scoped(*body, &inner_heap);
+            Expr::Let {
+                name,
+                value: Box::new(value_t),
+                body: Box::new(body_t),
+            }
+        }
         Expr::If {
             cond,
             then_branch,
             else_branch,
         } => Expr::If {
-            cond: Box::new(mark_reuse(*cond)),
-            then_branch: Box::new(mark_reuse(*then_branch)),
-            else_branch: Box::new(mark_reuse(*else_branch)),
+            cond: Box::new(mark_reuse_scoped(*cond, known_heap)),
+            then_branch: Box::new(mark_reuse_scoped(*then_branch, known_heap)),
+            else_branch: Box::new(mark_reuse_scoped(*else_branch, known_heap)),
         },
         Expr::Call { callee, args } => Expr::Call {
-            callee: Box::new(mark_reuse(*callee)),
-            args: args.into_iter().map(mark_reuse).collect(),
+            callee: Box::new(mark_reuse_scoped(*callee, known_heap)),
+            args: args.into_iter().map(|a| mark_reuse_scoped(a, known_heap)).collect(),
         },
         Expr::ExternCall { name, args } => Expr::ExternCall {
             name,
-            args: args.into_iter().map(mark_reuse).collect(),
+            args: args.into_iter().map(|a| mark_reuse_scoped(a, known_heap)).collect(),
         },
         Expr::Ctor { tag, fields } => Expr::Ctor {
             tag,
-            fields: fields.into_iter().map(mark_reuse).collect(),
+            fields: fields.into_iter().map(|f| mark_reuse_scoped(f, known_heap)).collect(),
         },
         Expr::CtorReuse {
             reuse_of,
@@ -96,125 +142,130 @@ pub fn mark_reuse(expr: Expr) -> Expr {
         } => Expr::CtorReuse {
             reuse_of,
             tag,
-            fields: fields.into_iter().map(mark_reuse).collect(),
+            fields: fields.into_iter().map(|f| mark_reuse_scoped(f, known_heap)).collect(),
         },
         Expr::RcAnnotated { op, target, rest } => Expr::RcAnnotated {
             op,
             target,
-            rest: Box::new(mark_reuse(*rest)),
+            rest: Box::new(mark_reuse_scoped(*rest, known_heap)),
         },
         Expr::For { var, start, end, body } => Expr::For {
             var,
-            start: Box::new(mark_reuse(*start)),
-            end: Box::new(mark_reuse(*end)),
-            body: Box::new(mark_reuse(*body)),
+            start: Box::new(mark_reuse_scoped(*start, known_heap)),
+            end: Box::new(mark_reuse_scoped(*end, known_heap)),
+            body: Box::new(mark_reuse_scoped(*body, known_heap)),
         },
+        // Params aren't added — same as `transform`'s `Closure` arm,
+        // and for the same reason: a closure param is never provably
+        // heap-shaped here either. The outer `known_heap` still flows
+        // through unchanged (matching `transform`), so captured names
+        // stay correctly tracked.
         Expr::Closure { params, param_types, ret_type, body } => Expr::Closure {
             params,
             param_types,
             ret_type,
-            body: Box::new(mark_reuse(*body)),
+            body: Box::new(mark_reuse_scoped(*body, known_heap)),
         },
         Expr::Assign { name, value, rest } => Expr::Assign {
             name,
-            value: Box::new(mark_reuse(*value)),
-            rest: Box::new(mark_reuse(*rest)),
+            value: Box::new(mark_reuse_scoped(*value, known_heap)),
+            rest: Box::new(mark_reuse_scoped(*rest, known_heap)),
         },
         Expr::Spawn { block } => Expr::Spawn {
-            block: Box::new(mark_reuse(*block)),
+            block: Box::new(mark_reuse_scoped(*block, known_heap)),
         },
         Expr::TaskJoin { task } => Expr::TaskJoin {
-            task: Box::new(mark_reuse(*task)),
+            task: Box::new(mark_reuse_scoped(*task, known_heap)),
         },
         Expr::Channel => Expr::Channel,
         Expr::ChannelSend { sender, value } => Expr::ChannelSend {
-            sender: Box::new(mark_reuse(*sender)),
-            value: Box::new(mark_reuse(*value)),
+            sender: Box::new(mark_reuse_scoped(*sender, known_heap)),
+            value: Box::new(mark_reuse_scoped(*value, known_heap)),
         },
         Expr::ChannelRecv { receiver } => Expr::ChannelRecv {
-            receiver: Box::new(mark_reuse(*receiver)),
+            receiver: Box::new(mark_reuse_scoped(*receiver, known_heap)),
         },
         Expr::RefNew { value } => Expr::RefNew {
-            value: Box::new(mark_reuse(*value)),
+            value: Box::new(mark_reuse_scoped(*value, known_heap)),
         },
         Expr::RefGet { base } => Expr::RefGet {
-            base: Box::new(mark_reuse(*base)),
+            base: Box::new(mark_reuse_scoped(*base, known_heap)),
         },
         Expr::RefSet { base, value } => Expr::RefSet {
-            base: Box::new(mark_reuse(*base)),
-            value: Box::new(mark_reuse(*value)),
+            base: Box::new(mark_reuse_scoped(*base, known_heap)),
+            value: Box::new(mark_reuse_scoped(*value, known_heap)),
         },
         Expr::ReadFileRaw { path } => Expr::ReadFileRaw {
-            path: Box::new(mark_reuse(*path)),
+            path: Box::new(mark_reuse_scoped(*path, known_heap)),
         },
         Expr::WriteFileRaw { path, contents } => Expr::WriteFileRaw {
-            path: Box::new(mark_reuse(*path)),
-            contents: Box::new(mark_reuse(*contents)),
+            path: Box::new(mark_reuse_scoped(*path, known_heap)),
+            contents: Box::new(mark_reuse_scoped(*contents, known_heap)),
         },
         Expr::PanicRaw { message } => Expr::PanicRaw {
-            message: Box::new(mark_reuse(*message)),
+            message: Box::new(mark_reuse_scoped(*message, known_heap)),
         },
         Expr::Select { arms } => Expr::Select {
             arms: arms
                 .into_iter()
                 .map(|arm| SelectArm {
-                    receiver: mark_reuse(arm.receiver),
-                    body: mark_reuse(arm.body),
+                    receiver: mark_reuse_scoped(arm.receiver, known_heap),
+                    body: mark_reuse_scoped(arm.body, known_heap),
                 })
                 .collect(),
         },
         Expr::Index { base, index } => Expr::Index {
-            base: Box::new(mark_reuse(*base)),
-            index: Box::new(mark_reuse(*index)),
+            base: Box::new(mark_reuse_scoped(*base, known_heap)),
+            index: Box::new(mark_reuse_scoped(*index, known_heap)),
         },
         Expr::ArrayLen { array } => Expr::ArrayLen {
-            array: Box::new(mark_reuse(*array)),
+            array: Box::new(mark_reuse_scoped(*array, known_heap)),
         },
-        // A plain-variable `array` is a reuse-in-place CANDIDATE — same
-        // "only a bare variable names a specific cell we could target"
-        // precedent as `Match`'s scrutinee below. Whether reuse
-        // actually fires is decided at RUNTIME (via the refcount check
-        // in `Interpreter::eval`'s handling of the `*Reuse` nodes), not
-        // here: this is purely a structural rewrite, safe regardless of
-        // whether `array` turns out to still be shared, exactly like
-        // `Match` -> `CtorReuse` needs no additional liveness check of
-        // its own either.
+        // A plain-variable `array` is a reuse-in-place CANDIDATE ONLY
+        // when `insert_refcount_ops` actually tracked it (`name` is in
+        // `known_heap`) — same "only a bare variable names a specific
+        // cell we could target" precedent as `Match`'s scrutinee below,
+        // now paired with the refcount-tracking guard the doc comment
+        // above explains. Without a `known_heap` entry, the runtime
+        // refcount check in `Interpreter::eval`'s `*Reuse` handling has
+        // nothing meaningful to check against — a second, un-Inc'd
+        // alias would read as refcount 1 even though it isn't unique.
         Expr::ArrayPush { array, value } => match array.as_ref() {
-            Expr::Var(name) => Expr::ArrayPushReuse {
+            Expr::Var(name) if known_heap.contains(name) => Expr::ArrayPushReuse {
                 reuse_of: name.clone(),
-                value: Box::new(mark_reuse(*value)),
+                value: Box::new(mark_reuse_scoped(*value, known_heap)),
             },
             _ => Expr::ArrayPush {
-                array: Box::new(mark_reuse(*array)),
-                value: Box::new(mark_reuse(*value)),
+                array: Box::new(mark_reuse_scoped(*array, known_heap)),
+                value: Box::new(mark_reuse_scoped(*value, known_heap)),
             },
         },
         Expr::ArrayPop { array } => match array.as_ref() {
-            Expr::Var(name) => Expr::ArrayPopReuse { reuse_of: name.clone() },
+            Expr::Var(name) if known_heap.contains(name) => Expr::ArrayPopReuse { reuse_of: name.clone() },
             _ => Expr::ArrayPop {
-                array: Box::new(mark_reuse(*array)),
+                array: Box::new(mark_reuse_scoped(*array, known_heap)),
             },
         },
         Expr::ArraySet { array, index, value } => match array.as_ref() {
-            Expr::Var(name) => Expr::ArraySetReuse {
+            Expr::Var(name) if known_heap.contains(name) => Expr::ArraySetReuse {
                 reuse_of: name.clone(),
-                index: Box::new(mark_reuse(*index)),
-                value: Box::new(mark_reuse(*value)),
+                index: Box::new(mark_reuse_scoped(*index, known_heap)),
+                value: Box::new(mark_reuse_scoped(*value, known_heap)),
             },
             _ => Expr::ArraySet {
-                array: Box::new(mark_reuse(*array)),
-                index: Box::new(mark_reuse(*index)),
-                value: Box::new(mark_reuse(*value)),
+                array: Box::new(mark_reuse_scoped(*array, known_heap)),
+                index: Box::new(mark_reuse_scoped(*index, known_heap)),
+                value: Box::new(mark_reuse_scoped(*value, known_heap)),
             },
         },
         Expr::ArrayRemove { array, index } => match array.as_ref() {
-            Expr::Var(name) => Expr::ArrayRemoveReuse {
+            Expr::Var(name) if known_heap.contains(name) => Expr::ArrayRemoveReuse {
                 reuse_of: name.clone(),
-                index: Box::new(mark_reuse(*index)),
+                index: Box::new(mark_reuse_scoped(*index, known_heap)),
             },
             _ => Expr::ArrayRemove {
-                array: Box::new(mark_reuse(*array)),
-                index: Box::new(mark_reuse(*index)),
+                array: Box::new(mark_reuse_scoped(*array, known_heap)),
+                index: Box::new(mark_reuse_scoped(*index, known_heap)),
             },
         },
         // Shouldn't normally appear as INPUT here — these are produced
@@ -222,107 +273,113 @@ pub fn mark_reuse(expr: Expr) -> Expr {
         // ordering ever changes" precedent as `CtorReuse` below.
         Expr::ArrayPushReuse { reuse_of, value } => Expr::ArrayPushReuse {
             reuse_of,
-            value: Box::new(mark_reuse(*value)),
+            value: Box::new(mark_reuse_scoped(*value, known_heap)),
         },
         Expr::ArrayPopReuse { reuse_of } => Expr::ArrayPopReuse { reuse_of },
         Expr::ArraySetReuse { reuse_of, index, value } => Expr::ArraySetReuse {
             reuse_of,
-            index: Box::new(mark_reuse(*index)),
-            value: Box::new(mark_reuse(*value)),
+            index: Box::new(mark_reuse_scoped(*index, known_heap)),
+            value: Box::new(mark_reuse_scoped(*value, known_heap)),
         },
         Expr::ArrayRemoveReuse { reuse_of, index } => Expr::ArrayRemoveReuse {
             reuse_of,
-            index: Box::new(mark_reuse(*index)),
+            index: Box::new(mark_reuse_scoped(*index, known_heap)),
         },
-        // Same plain-variable-base reuse candidacy check as the array
-        // ops above.
+        // Same known_heap-gated reuse candidacy check as the array ops
+        // above — see this function's doc comment for why the guard is
+        // required, not just defensive.
         Expr::StrConcat { base, other } => match base.as_ref() {
-            Expr::Var(name) => Expr::StrConcatReuse {
+            Expr::Var(name) if known_heap.contains(name) => Expr::StrConcatReuse {
                 reuse_of: name.clone(),
-                other: Box::new(mark_reuse(*other)),
+                other: Box::new(mark_reuse_scoped(*other, known_heap)),
             },
             _ => Expr::StrConcat {
-                base: Box::new(mark_reuse(*base)),
-                other: Box::new(mark_reuse(*other)),
+                base: Box::new(mark_reuse_scoped(*base, known_heap)),
+                other: Box::new(mark_reuse_scoped(*other, known_heap)),
             },
         },
         Expr::StrConcatReuse { reuse_of, other } => Expr::StrConcatReuse {
             reuse_of,
-            other: Box::new(mark_reuse(*other)),
+            other: Box::new(mark_reuse_scoped(*other, known_heap)),
         },
         Expr::StrRunes { base } => Expr::StrRunes {
-            base: Box::new(mark_reuse(*base)),
+            base: Box::new(mark_reuse_scoped(*base, known_heap)),
         },
         Expr::StrTrim { base } => match base.as_ref() {
-            Expr::Var(name) => Expr::StrTrimReuse { reuse_of: name.clone() },
+            Expr::Var(name) if known_heap.contains(name) => Expr::StrTrimReuse { reuse_of: name.clone() },
             _ => Expr::StrTrim {
-                base: Box::new(mark_reuse(*base)),
+                base: Box::new(mark_reuse_scoped(*base, known_heap)),
             },
         },
         Expr::StrTrimReuse { reuse_of } => Expr::StrTrimReuse { reuse_of },
         Expr::StrSplit { base, sep } => Expr::StrSplit {
-            base: Box::new(mark_reuse(*base)),
-            sep: Box::new(mark_reuse(*sep)),
+            base: Box::new(mark_reuse_scoped(*base, known_heap)),
+            sep: Box::new(mark_reuse_scoped(*sep, known_heap)),
         },
         Expr::StrToUpper { base } => match base.as_ref() {
-            Expr::Var(name) => Expr::StrToUpperReuse { reuse_of: name.clone() },
+            Expr::Var(name) if known_heap.contains(name) => Expr::StrToUpperReuse { reuse_of: name.clone() },
             _ => Expr::StrToUpper {
-                base: Box::new(mark_reuse(*base)),
+                base: Box::new(mark_reuse_scoped(*base, known_heap)),
             },
         },
         Expr::StrToUpperReuse { reuse_of } => Expr::StrToUpperReuse { reuse_of },
         Expr::StrToLower { base } => match base.as_ref() {
-            Expr::Var(name) => Expr::StrToLowerReuse { reuse_of: name.clone() },
+            Expr::Var(name) if known_heap.contains(name) => Expr::StrToLowerReuse { reuse_of: name.clone() },
             _ => Expr::StrToLower {
-                base: Box::new(mark_reuse(*base)),
+                base: Box::new(mark_reuse_scoped(*base, known_heap)),
             },
         },
         Expr::StrToLowerReuse { reuse_of } => Expr::StrToLowerReuse { reuse_of },
         Expr::StrContains { base, needle } => Expr::StrContains {
-            base: Box::new(mark_reuse(*base)),
-            needle: Box::new(mark_reuse(*needle)),
+            base: Box::new(mark_reuse_scoped(*base, known_heap)),
+            needle: Box::new(mark_reuse_scoped(*needle, known_heap)),
         },
         Expr::StrStartsWith { base, prefix } => Expr::StrStartsWith {
-            base: Box::new(mark_reuse(*base)),
-            prefix: Box::new(mark_reuse(*prefix)),
+            base: Box::new(mark_reuse_scoped(*base, known_heap)),
+            prefix: Box::new(mark_reuse_scoped(*prefix, known_heap)),
         },
         Expr::StrEndsWith { base, suffix } => Expr::StrEndsWith {
-            base: Box::new(mark_reuse(*base)),
-            suffix: Box::new(mark_reuse(*suffix)),
+            base: Box::new(mark_reuse_scoped(*base, known_heap)),
+            suffix: Box::new(mark_reuse_scoped(*suffix, known_heap)),
         },
         Expr::StrReplace { base, from, to } => match base.as_ref() {
-            Expr::Var(name) => Expr::StrReplaceReuse {
+            Expr::Var(name) if known_heap.contains(name) => Expr::StrReplaceReuse {
                 reuse_of: name.clone(),
-                from: Box::new(mark_reuse(*from)),
-                to: Box::new(mark_reuse(*to)),
+                from: Box::new(mark_reuse_scoped(*from, known_heap)),
+                to: Box::new(mark_reuse_scoped(*to, known_heap)),
             },
             _ => Expr::StrReplace {
-                base: Box::new(mark_reuse(*base)),
-                from: Box::new(mark_reuse(*from)),
-                to: Box::new(mark_reuse(*to)),
+                base: Box::new(mark_reuse_scoped(*base, known_heap)),
+                from: Box::new(mark_reuse_scoped(*from, known_heap)),
+                to: Box::new(mark_reuse_scoped(*to, known_heap)),
             },
         },
         Expr::StrReplaceReuse { reuse_of, from, to } => Expr::StrReplaceReuse {
             reuse_of,
-            from: Box::new(mark_reuse(*from)),
-            to: Box::new(mark_reuse(*to)),
+            from: Box::new(mark_reuse_scoped(*from, known_heap)),
+            to: Box::new(mark_reuse_scoped(*to, known_heap)),
         },
         Expr::ToString { base } => Expr::ToString {
-            base: Box::new(mark_reuse(*base)),
+            base: Box::new(mark_reuse_scoped(*base, known_heap)),
         },
         Expr::Match { scrutinee, arms } => {
-            // Only a plain variable names a specific cell we could
-            // reuse — a call result or anything else isn't something
-            // we can point reuse at.
+            // Only a plain variable ALREADY TRACKED in known_heap names
+            // a specific cell we could safely reuse — a call result, an
+            // untracked parameter, or anything else isn't something we
+            // can point reuse at without risking the same aliasing bug
+            // this function's doc comment describes.
             let reuse_target = match scrutinee.as_ref() {
-                Expr::Var(name) => Some(name.clone()),
+                Expr::Var(name) if known_heap.contains(name) => Some(name.clone()),
                 _ => None,
             };
             let new_arms = arms
                 .into_iter()
                 .map(|arm| {
                     let arity = arm.bindings.len();
-                    let body = mark_reuse(arm.body);
+                    // Arm bindings aren't added to `known_heap` here
+                    // either — same conservative limitation `transform`
+                    // documents for its own `Match` arm.
+                    let body = mark_reuse_scoped(arm.body, known_heap);
                     let body = match (&reuse_target, &body) {
                         // 0-field constructions (e.g. `Nil`) have
                         // nothing worth reusing.
@@ -340,13 +397,13 @@ pub fn mark_reuse(expr: Expr) -> Expr {
                     MatchArm {
                         tag: arm.tag,
                         bindings: arm.bindings,
-                        guard: arm.guard.map(|g| Box::new(mark_reuse(*g))),
+                        guard: arm.guard.map(|g| Box::new(mark_reuse_scoped(*g, known_heap))),
                         body,
                     }
                 })
                 .collect();
             Expr::Match {
-                scrutinee: Box::new(mark_reuse(*scrutinee)),
+                scrutinee: Box::new(mark_reuse_scoped(*scrutinee, known_heap)),
                 arms: new_arms,
             }
         }
@@ -1418,6 +1475,14 @@ mod tests {
     fn var(name: &str) -> Expr {
         Expr::Var(name.to_string())
     }
+    // Builds the `known_heap` set `mark_reuse_scoped` needs to treat a
+    // name as reuse-eligible — see `mark_reuse_scoped`'s doc comment
+    // for why this is now required, not optional: only names
+    // `insert_refcount_ops` actually protects with Inc/Dec (i.e. would
+    // land in this set for real) are safe reuse targets.
+    fn known(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
     fn int(n: i64) -> Expr {
         Expr::Int(n)
     }
@@ -1544,7 +1609,20 @@ mod tests {
                 arm("Nil", vec![], ctor("Nil", vec![])),
             ],
         );
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["list"])), expected);
+    }
+
+    #[test]
+    fn a_scrutinee_not_present_in_known_heap_is_not_a_reuse_candidate() {
+        // Same shape as `map_like_shape_marks_reuse`, but `list` was
+        // never protected by `insert_refcount_ops` (e.g. it's a bare
+        // function parameter) — must NOT be reused, see
+        // `mark_reuse_scoped`'s doc comment for why.
+        let input = match_(
+            var("list"),
+            vec![arm("Cons", vec!["head", "tail"], ctor("Cons", vec![var("head"), var("tail")]))],
+        );
+        assert_eq!(mark_reuse(input.clone()), input);
     }
 
     #[test]
@@ -1602,14 +1680,25 @@ mod tests {
             reuse_of: "a".to_string(),
             value: Box::new(int(3)),
         };
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["a"])), expected);
+    }
+
+    #[test]
+    fn array_push_on_a_variable_absent_from_known_heap_is_not_a_reuse_candidate() {
+        // `a` was never protected by `insert_refcount_ops` (e.g. a bare
+        // function parameter) — see `mark_reuse_scoped`'s doc comment.
+        let input = Expr::ArrayPush {
+            array: Box::new(var("a")),
+            value: Box::new(int(3)),
+        };
+        assert_eq!(mark_reuse(input.clone()), input);
     }
 
     #[test]
     fn array_pop_on_a_plain_variable_marks_reuse() {
         let input = Expr::ArrayPop { array: Box::new(var("a")) };
         let expected = Expr::ArrayPopReuse { reuse_of: "a".to_string() };
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["a"])), expected);
     }
 
     #[test]
@@ -1624,7 +1713,7 @@ mod tests {
             index: Box::new(int(0)),
             value: Box::new(int(9)),
         };
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["a"])), expected);
     }
 
     #[test]
@@ -1637,7 +1726,7 @@ mod tests {
             reuse_of: "a".to_string(),
             index: Box::new(int(0)),
         };
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["a"])), expected);
     }
 
     #[test]
@@ -1661,7 +1750,23 @@ mod tests {
             reuse_of: "s".to_string(),
             other: Box::new(Expr::Str("x".to_string())),
         };
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["s"])), expected);
+    }
+
+    #[test]
+    fn str_concat_on_a_variable_absent_from_known_heap_is_not_a_reuse_candidate() {
+        // `s` was never protected by `insert_refcount_ops` (e.g. a bare
+        // function parameter) — see `mark_reuse_scoped`'s doc comment.
+        // This is the exact shape of the real bug found while building
+        // `String.repeat` (chunk 15): `s.concat(rep(s, n - 1))` where
+        // `s` is aliased between this call's receiver and a nested use
+        // — without this guard, both would wrongly believe they own
+        // the only reference and both would reuse the same cell.
+        let input = Expr::StrConcat {
+            base: Box::new(var("s")),
+            other: Box::new(Expr::Str("x".to_string())),
+        };
+        assert_eq!(mark_reuse(input.clone()), input);
     }
 
     #[test]
@@ -1677,7 +1782,7 @@ mod tests {
     fn str_trim_on_a_plain_variable_marks_reuse() {
         let input = Expr::StrTrim { base: Box::new(var("s")) };
         let expected = Expr::StrTrimReuse { reuse_of: "s".to_string() };
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["s"])), expected);
     }
 
     #[test]
@@ -1692,14 +1797,14 @@ mod tests {
     fn str_to_upper_on_a_plain_variable_marks_reuse() {
         let input = Expr::StrToUpper { base: Box::new(var("s")) };
         let expected = Expr::StrToUpperReuse { reuse_of: "s".to_string() };
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["s"])), expected);
     }
 
     #[test]
     fn str_to_lower_on_a_plain_variable_marks_reuse() {
         let input = Expr::StrToLower { base: Box::new(var("s")) };
         let expected = Expr::StrToLowerReuse { reuse_of: "s".to_string() };
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["s"])), expected);
     }
 
     #[test]
@@ -1714,7 +1819,7 @@ mod tests {
             from: Box::new(Expr::Str("x".to_string())),
             to: Box::new(Expr::Str("y".to_string())),
         };
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["s"])), expected);
     }
 
     #[test]
@@ -1786,13 +1891,61 @@ mod tests {
         );
         let input = let_("inner_list", var("outer"), inner);
         let expected = let_("inner_list", var("outer"), expected_inner);
-        assert_eq!(mark_reuse(input), expected);
+        // `outer` itself must already be known-heap for `inner_list`'s
+        // `Var("outer")` value to qualify — see `mark_reuse_scoped`'s
+        // `Let` handling.
+        assert_eq!(mark_reuse_scoped(input, &known(&["outer"])), expected);
     }
 
     #[test]
     fn composes_after_refcount_insertion() {
         // The realistic pipeline: refcount insertion runs first, then
-        // reuse marking on its output.
+        // reuse marking on its output — starting from a `Let`-bound
+        // `Ctor`, the one shape `insert_refcount_ops` actually proves
+        // heap-shaped without a type checker (a bare `Var("list")`
+        // scrutinee with no enclosing `Let`, e.g. a function parameter,
+        // is deliberately NOT a reuse candidate — see
+        // `a_bare_untracked_scrutinee_does_not_reuse_even_through_the_
+        // full_pipeline` below for that regression).
+        let input = let_(
+            "list",
+            ctor("Cons", vec![int(1), ctor("Nil", vec![])]),
+            match_(
+                var("list"),
+                vec![
+                    arm(
+                        "Cons",
+                        vec!["head", "tail"],
+                        ctor("Cons", vec![var("head"), var("tail")]),
+                    ),
+                    arm("Nil", vec![], ctor("Nil", vec![])),
+                ],
+            ),
+        );
+        let piped = optimize(input);
+        match &piped {
+            Expr::Let { body, .. } => match body.as_ref() {
+                Expr::Match { arms, .. } => match &arms[0].body {
+                    Expr::CtorReuse { reuse_of, tag, .. } => {
+                        assert_eq!(reuse_of, "list");
+                        assert_eq!(tag, "Cons");
+                    }
+                    other => panic!("expected a CtorReuse candidate, got {other:?}"),
+                },
+                other => panic!("expected a Match, got {other:?}"),
+            },
+            other => panic!("expected a Let, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_bare_untracked_scrutinee_does_not_reuse_even_through_the_full_pipeline() {
+        // Same shape as `composes_after_refcount_insertion`, but `list`
+        // is a bare, un-`Let`-bound variable — the realistic shape of a
+        // function PARAMETER, which `insert_refcount_ops` never proves
+        // heap-shaped (no type checker in this IR). Must NOT reuse,
+        // even after the full `optimize` pipeline — the regression this
+        // whole fix closes (see `mark_reuse_scoped`'s doc comment).
         let input = match_(
             var("list"),
             vec![
@@ -1807,11 +1960,8 @@ mod tests {
         let piped = optimize(input);
         match &piped {
             Expr::Match { arms, .. } => match &arms[0].body {
-                Expr::CtorReuse { reuse_of, tag, .. } => {
-                    assert_eq!(reuse_of, "list");
-                    assert_eq!(tag, "Cons");
-                }
-                other => panic!("expected a CtorReuse candidate, got {other:?}"),
+                Expr::Ctor { tag, .. } => assert_eq!(tag, "Cons"),
+                other => panic!("expected a plain (non-reused) Ctor, got {other:?}"),
             },
             other => panic!("expected a Match, got {other:?}"),
         }
@@ -1977,7 +2127,7 @@ mod tests {
                 vec![arm("Cons", vec!["h", "t"], ctor_reuse("list", "Cons", vec![var("h"), var("t")]))],
             ),
         );
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["list"])), expected);
     }
 
     #[test]
@@ -2028,7 +2178,7 @@ mod tests {
                 vec![arm("Cons", vec!["h", "t"], ctor_reuse("list", "Cons", vec![var("h"), var("t")]))],
             ),
         );
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["list"])), expected);
     }
 
     #[test]
@@ -2085,7 +2235,7 @@ mod tests {
                 vec![arm("Cons", vec!["h", "t"], ctor_reuse("list2", "Cons", vec![var("h"), var("t")]))],
             ),
         );
-        assert_eq!(mark_reuse(input), expected);
+        assert_eq!(mark_reuse_scoped(input, &known(&["list", "list2"])), expected);
     }
 
     #[test]

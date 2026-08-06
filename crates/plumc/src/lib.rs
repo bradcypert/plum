@@ -975,21 +975,24 @@ let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = array_zip
 /// WHOLE string, rejecting trailing garbage a partial JSON-internal
 /// parse would otherwise silently accept.
 ///
-/// **`String.repeat` is deliberately written `String.repeat(s, n - 1).
-/// concat(s)`, NOT the more obvious `s.concat(String.repeat(s, n -
-/// 1))`.** The latter is a real, previously-latent FBIP reuse-in-place
-/// bug, found while writing this chunk's own tests (both backends
-/// agreed, so it's a shared bug, not a codegen-only or interpreter-only
-/// one): using a value as `.concat()`'s RECEIVER while ALSO passing
-/// that SAME value again into a recursive call that is itself
-/// `.concat()`'s own ARGUMENT silently corrupted the result (confirmed:
-/// `rep(\"ab\", 3)` came back length 8, not the correct 6, written the
-/// unsafe way). Not root-caused to an exact line inside `fbip.rs` in
-/// this chunk — flagged as a known bug (see DESIGN.md's \"Standard
-/// library\" chunk 15 and the matching \"Open questions\" entry) rather
-/// than chased indefinitely; `codegen_cli.rs` has a dedicated
-/// regression test pinning the exact unsafe shape directly, independent
-/// of `String.repeat`'s own implementation staying this exact shape.
+/// **`String.repeat` is written the natural way, `s.concat(String.
+/// repeat(s, n - 1))`.** An earlier version of this function used the
+/// awkward `String.repeat(s, n - 1).concat(s)` ordering instead, to
+/// dodge a real, previously-latent FBIP reuse-in-place bug found while
+/// writing this chunk's own tests: a function PARAMETER used as
+/// `.concat()`'s RECEIVER while ALSO passed again into a recursive call
+/// that is itself `.concat()`'s own ARGUMENT silently corrupted the
+/// result in both backends (confirmed: `rep(\"ab\", 3)` came back length
+/// 8, not the correct 6). Root-caused and FIXED in `plum-ir/src/
+/// fbip.rs`'s `mark_reuse`: it rewrote any bare-variable base into a
+/// reuse candidate with no check that `insert_refcount_ops` had
+/// actually protected that name with Inc/Dec — which it never does for
+/// function parameters (no type checker in this IR to prove one is
+/// heap-shaped). Fixed by gating every reuse rewrite on membership in
+/// the same `known_heap` set `insert_refcount_ops` itself tracks. See
+/// DESIGN.md's \"Standard library\" chunk 15 and its (now RESOLVED)
+/// \"Open questions\" entry; `codegen_cli.rs` and this file both carry
+/// dedicated regression tests pinning the ONCE-unsafe ordering directly.
 const STDLIB_STRING_SRC: &str = "\
 let chars_join (chars: Array[String]): String = chars.fold(\"\", |acc, c| acc.concat(c))
 
@@ -999,7 +1002,7 @@ let String.is_empty (s: String): Bool = s.len() == 0
 
 let String.slice (s: String) (start: Int) (end: Int): String = chars_join(Array.slice(chars_of(s), start, end))
 
-let String.repeat (s: String) (n: Int): String = if n <= 0 { \"\" } else { String.repeat(s, n - 1).concat(s) }
+let String.repeat (s: String) (n: Int): String = if n <= 0 { \"\" } else { s.concat(String.repeat(s, n - 1)) }
 
 let string_is_ascii_ws (c: String): Bool = c == \" \" || c == \"\\t\" || c == \"\\n\" || c == \"\\r\"
 
@@ -2435,6 +2438,17 @@ mod tests {
     fn string_repeat_concatenates_n_copies() {
         assert_eq!(run_string_test("let use_it dummy = String.repeat(\"ab\", 3) == \"ababab\""), Ok("Bool(true)".to_string()));
         assert_eq!(run_string_test("let use_it dummy = String.repeat(\"x\", 0) == \"\""), Ok("Bool(true)".to_string()));
+    }
+
+    #[test]
+    fn the_previously_unsafe_recursive_concat_ordering_now_gives_the_correct_result_in_the_interpreter() {
+        // Interpreter-side counterpart to `codegen_cli.rs`'s regression
+        // test of the same shape — see this file's `STDLIB_STRING_SRC`
+        // doc comment and DESIGN.md's "Open questions" entry (RESOLVED)
+        // for the full FBIP reuse-in-place bug this pins.
+        let src = "let rep (s: String) (n: Int): String = if n <= 0 { \"\" } else { s.concat(rep(s, n - 1)) }\n\
+                    let use_it dummy = rep(\"ab\", 3).len() == 6";
+        assert_eq!(run_string_test(src), Ok("Bool(true)".to_string()));
     }
 
     #[test]
