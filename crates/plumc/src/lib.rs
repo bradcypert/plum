@@ -777,16 +777,24 @@ let Result.is_err[T, E] (r: Result[T, E]): Bool = match r {
 }
 ";
 
-/// `Int`/`Float` numeric utilities — prefixed `int_*`/`float_*`, not
-/// bare `min`/`max`/`abs`, for the same reason `option_*`/`result_*`
-/// are prefixed: `<`/`>` (and therefore any `if`-based `min`/`max`)
+/// `Int`/`Float` numeric utilities — declared via `let Type.func (...)`,
+/// real associated functions (`plumc::assoc_fns`), called as `Int.
+/// min(a, b)`/`Float.sqrt(x)`, not the old flat `int_min`/`float_sqrt`
+/// naming (removed entirely — see DESIGN.md's \"Standard library\"
+/// chunk 14). `Int`/`Float` are never declared `ast::Item`s of their
+/// own (they're hardcoded primitive-type string matches in
+/// `plum_types::infer::ast_type_to_type`) — `assoc_fns::resolve_
+/// associated_calls` seeds its own type registry with them directly to
+/// still recognize `Int.func`/`Float.func` correctly.
+///
+/// One generic `let min`/`max`/`abs`/`clamp` still couldn't serve both
+/// `Int` and `Float`: `<`/`>` (and therefore any `if`-based `min`/`max`)
 /// only type-check against a CONCRETE numeric type (`infer_binary`'s
 /// `default_numeric` call, not a generic `Ord`-style bound — no such
-/// bound exists in this language yet), so `min`/`max`/`abs`/`clamp`
-/// genuinely need one realization per numeric type, not one generic
-/// definition — and a single bare `let min` couldn't serve both anyway
-/// (no dot-dispatch-by-receiver-type, same as the `Option`/`Result`
-/// story above).
+/// bound exists in this language yet) — but `Int.min`/`Float.min` now
+/// coexist with zero collision regardless, since `Type.func` gives each
+/// its own distinct name (`\"Int.min\"`/`\"Float.min\"`) the same way
+/// `Option.map`/`Result.map` already do.
 ///
 /// `floor`/`ceil`/`round`/`pow`/`sqrt` are ordinary `extern \"C\"`
 /// declarations against libm (already unconditionally linked via
@@ -807,20 +815,20 @@ extern \"C\" {
     fn sqrt(x: Float) -> Float;
 }
 
-let int_min (a: Int) (b: Int): Int = if a < b { a } else { b }
-let int_max (a: Int) (b: Int): Int = if a > b { a } else { b }
-let int_abs (a: Int): Int = if a < 0 { -a } else { a }
-let int_clamp (x: Int) (lo: Int) (hi: Int): Int = int_min(int_max(x, lo), hi)
+let Int.min (a: Int) (b: Int): Int = if a < b { a } else { b }
+let Int.max (a: Int) (b: Int): Int = if a > b { a } else { b }
+let Int.abs (a: Int): Int = if a < 0 { -a } else { a }
+let Int.clamp (x: Int) (lo: Int) (hi: Int): Int = Int.min(Int.max(x, lo), hi)
 
-let float_min (a: Float) (b: Float): Float = if a < b { a } else { b }
-let float_max (a: Float) (b: Float): Float = if a > b { a } else { b }
-let float_abs (a: Float): Float = if a < 0.0 { -a } else { a }
-let float_clamp (x: Float) (lo: Float) (hi: Float): Float = float_min(float_max(x, lo), hi)
-let float_floor (x: Float): Float = unsafe { floor(x) }
-let float_ceil (x: Float): Float = unsafe { ceil(x) }
-let float_round (x: Float): Float = unsafe { round(x) }
-let float_pow (base: Float) (exp: Float): Float = unsafe { pow(base, exp) }
-let float_sqrt (x: Float): Float = unsafe { sqrt(x) }
+let Float.min (a: Float) (b: Float): Float = if a < b { a } else { b }
+let Float.max (a: Float) (b: Float): Float = if a > b { a } else { b }
+let Float.abs (a: Float): Float = if a < 0.0 { -a } else { a }
+let Float.clamp (x: Float) (lo: Float) (hi: Float): Float = Float.min(Float.max(x, lo), hi)
+let Float.floor (x: Float): Float = unsafe { floor(x) }
+let Float.ceil (x: Float): Float = unsafe { ceil(x) }
+let Float.round (x: Float): Float = unsafe { round(x) }
+let Float.pow (base: Float) (exp: Float): Float = unsafe { pow(base, exp) }
+let Float.sqrt (x: Float): Float = unsafe { sqrt(x) }
 ";
 
 /// `Array[T]` utilities — pure Plum, built entirely on the existing
@@ -2406,38 +2414,38 @@ mod tests {
 
     #[test]
     fn int_min_max_abs_pick_the_expected_side() {
-        assert_eq!(typecheck_and_run("let use_it dummy = int_min(3, 7)", "use_it", vec![Value::Unit]), Ok(Value::Int(3)));
-        assert_eq!(typecheck_and_run("let use_it dummy = int_min(7, 3)", "use_it", vec![Value::Unit]), Ok(Value::Int(3)));
-        assert_eq!(typecheck_and_run("let use_it dummy = int_max(3, 7)", "use_it", vec![Value::Unit]), Ok(Value::Int(7)));
-        assert_eq!(typecheck_and_run("let use_it dummy = int_abs(-5)", "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
-        assert_eq!(typecheck_and_run("let use_it dummy = int_abs(5)", "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Int.min(3, 7)", "use_it", vec![Value::Unit]), Ok(Value::Int(3)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Int.min(7, 3)", "use_it", vec![Value::Unit]), Ok(Value::Int(3)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Int.max(3, 7)", "use_it", vec![Value::Unit]), Ok(Value::Int(7)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Int.abs(-5)", "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Int.abs(5)", "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
     }
 
     #[test]
     fn int_clamp_bounds_a_value_into_range() {
-        assert_eq!(typecheck_and_run("let use_it dummy = int_clamp(-5, 0, 10)", "use_it", vec![Value::Unit]), Ok(Value::Int(0)));
-        assert_eq!(typecheck_and_run("let use_it dummy = int_clamp(15, 0, 10)", "use_it", vec![Value::Unit]), Ok(Value::Int(10)));
-        assert_eq!(typecheck_and_run("let use_it dummy = int_clamp(5, 0, 10)", "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Int.clamp(-5, 0, 10)", "use_it", vec![Value::Unit]), Ok(Value::Int(0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Int.clamp(15, 0, 10)", "use_it", vec![Value::Unit]), Ok(Value::Int(10)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Int.clamp(5, 0, 10)", "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
     }
 
     #[test]
     fn float_min_max_abs_clamp_pick_the_expected_side() {
-        assert_eq!(typecheck_and_run("let use_it dummy = float_min(3.0, 7.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(3.0)));
-        assert_eq!(typecheck_and_run("let use_it dummy = float_max(3.0, 7.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(7.0)));
-        assert_eq!(typecheck_and_run("let use_it dummy = float_abs(-2.5)", "use_it", vec![Value::Unit]), Ok(Value::Float(2.5)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Float.min(3.0, 7.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(3.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Float.max(3.0, 7.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(7.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Float.abs(-2.5)", "use_it", vec![Value::Unit]), Ok(Value::Float(2.5)));
         assert_eq!(
-            typecheck_and_run("let use_it dummy = float_clamp(-1.0, 0.0, 10.0)", "use_it", vec![Value::Unit]),
+            typecheck_and_run("let use_it dummy = Float.clamp(-1.0, 0.0, 10.0)", "use_it", vec![Value::Unit]),
             Ok(Value::Float(0.0))
         );
     }
 
     #[test]
     fn float_floor_ceil_round_and_pow_run_through_libm_through_the_interpreter() {
-        assert_eq!(typecheck_and_run("let use_it dummy = float_floor(3.7)", "use_it", vec![Value::Unit]), Ok(Value::Float(3.0)));
-        assert_eq!(typecheck_and_run("let use_it dummy = float_ceil(3.2)", "use_it", vec![Value::Unit]), Ok(Value::Float(4.0)));
-        assert_eq!(typecheck_and_run("let use_it dummy = float_round(3.5)", "use_it", vec![Value::Unit]), Ok(Value::Float(4.0)));
-        assert_eq!(typecheck_and_run("let use_it dummy = float_pow(2.0, 10.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(1024.0)));
-        assert_eq!(typecheck_and_run("let use_it dummy = float_sqrt(81.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(9.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Float.floor(3.7)", "use_it", vec![Value::Unit]), Ok(Value::Float(3.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Float.ceil(3.2)", "use_it", vec![Value::Unit]), Ok(Value::Float(4.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Float.round(3.5)", "use_it", vec![Value::Unit]), Ok(Value::Float(4.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Float.pow(2.0, 10.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(1024.0)));
+        assert_eq!(typecheck_and_run("let use_it dummy = Float.sqrt(81.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(9.0)));
     }
 
     // --- standard library: JSON (see `plumc::STDLIB_JSON_SRC`) ---

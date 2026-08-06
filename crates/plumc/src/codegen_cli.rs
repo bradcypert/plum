@@ -1348,17 +1348,17 @@ mod tests {
 
     #[test]
     fn int_and_float_min_max_abs_clamp_run_through_native_codegen() {
-        let src = "let go (): Int = int_clamp(int_abs(-15), int_min(3, 7), int_max(3, 7))";
+        let src = "let go (): Int = Int.clamp(Int.abs(-15), Int.min(3, 7), Int.max(3, 7))";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "7");
-        let src = "let go (): Float = float_clamp(float_abs(-15.0), float_min(3.0, 7.0), float_max(3.0, 7.0))";
+        let src = "let go (): Float = Float.clamp(Float.abs(-15.0), Float.min(3.0, 7.0), Float.max(3.0, 7.0))";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "7.000000");
     }
 
     #[test]
     fn float_floor_ceil_round_pow_sqrt_run_through_libm_through_native_codegen() {
-        let src = "let go (): Float = float_floor(3.7) + float_ceil(3.2) + float_round(3.5) + float_pow(2.0, 4.0) + float_sqrt(81.0)";
+        let src = "let go (): Float = Float.floor(3.7) + Float.ceil(3.2) + Float.round(3.5) + Float.pow(2.0, 4.0) + Float.sqrt(81.0)";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         // floor(3.7)=3, ceil(3.2)=4, round(3.5)=4, pow(2,4)=16, sqrt(81)=9 -> 36
         assert_eq!(out, "36.000000");

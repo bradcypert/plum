@@ -74,7 +74,18 @@ use std::collections::HashSet;
 /// module's own doc comment for the full design.
 pub fn resolve_associated_calls(program: &mut ast::Program) {
     let mut declared_names: HashSet<String> = HashSet::new();
-    let mut known_types: HashSet<String> = HashSet::new();
+    // Seeded with every BUILTIN type name, not just user-declared
+    // `struct`/`enum` names below — `Int`/`Float`/`Bool`/`String`/
+    // `Unit`/`Array` are never `ast::Item`s at all (confirmed via
+    // `plum_types::infer::ast_type_to_type`'s own hardcoded string
+    // matches, `infer.rs:3671-3675`, plus `Array`'s own separate
+    // opaque-pseudo-generic-builtin handling throughout the type
+    // checker), so `Int.min(...)`/`Array.reverse(...)` would never be
+    // recognized without this. `Map`/`Set` need no such seeding — both
+    // are ordinary `enum` declarations in `STDLIB_COLLECTIONS_SRC`,
+    // already covered by the loop below.
+    let mut known_types: HashSet<String> =
+        ["Int", "Float", "Bool", "String", "Unit", "Array"].iter().map(|s| s.to_string()).collect();
     for item in &program.items {
         match &item.kind {
             ast::ItemKind::Let(def) => {
@@ -332,6 +343,17 @@ mod tests {
         let mut program = parse("struct Point { x: Int } let Point.add (a: Int) (b: Int): Int = a + b let use_it () = Point.add(1, 2)");
         resolve_associated_calls(&mut program);
         assert_eq!(render(&program), " | (a+b) | Point.add(1,2)");
+    }
+
+    #[test]
+    fn a_builtin_type_with_no_declared_item_of_its_own_still_resolves() {
+        // `Int` is never an `ast::Item` at all — a hardcoded string
+        // match in `plum_types::infer::ast_type_to_type`, not a
+        // declared struct/enum — so `Int.min` needs the builtin-type
+        // seed, not the declared-struct/enum scan, to be recognized.
+        let mut program = parse("let Int.min (a: Int) (b: Int): Int = a let use_it () = Int.min(1, 2)");
+        resolve_associated_calls(&mut program);
+        assert_eq!(render(&program), "a | Int.min(1,2)");
     }
 
     #[test]
