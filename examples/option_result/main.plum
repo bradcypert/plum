@@ -1,0 +1,56 @@
+// Option/Result-based error handling — no null anywhere.
+//
+// Run: `plum run examples/option_result`
+// Build: `plum build examples/option_result -o out && ./out`
+
+// A plain struct instead of a `(String, Int)` tuple — general tuples
+// aren't yet supported by native codegen (see README's Standard
+// library section), so this codebase's own convention (see `Array.zip`
+// -> `Zipped { first, second }`) is a named struct instead.
+struct PriceEntry {
+    name: String,
+    price: Int,
+}
+
+let menu (): Array[PriceEntry] = [
+    PriceEntry { name: "apple", price: 3 },
+    PriceEntry { name: "banana", price: 1 },
+    PriceEntry { name: "cherry", price: 9 },
+]
+
+// A lookup that can fail: linear search, returning `Option[Int]`
+// instead of a sentinel or a null.
+let find_price (name: String): Option[Int] =
+    // `item`'s type annotation is required: an unannotated parameter
+    // used only for field access can't infer a struct type from that
+    // alone (see README's "Algebraic data types" section).
+    match Array.find(menu(()), |item: PriceEntry| item.name == name) {
+        Some(item) => Some(item.price),
+        None => None,
+    }
+
+// `String.parse_int` is `Result`-returning, not exception-based — a
+// malformed number is an ordinary value to handle, not a crash.
+let double_the_number_in (s: String): Result[Int, String] =
+    Result.map(String.parse_int(s), |n| n * 2)
+
+let main (): Unit = {
+    // `Option.map`/`Option.unwrap_or` avoid writing the `match` out by
+    // hand for the common cases.
+    println(Option.map(find_price("apple"), |p| p * 100));      // Some(300)
+    println(Option.unwrap_or(find_price("kiwi"), -1));           // -1, no crash
+
+    // Chaining through `match` when the shape doesn't fit a combinator.
+    let describe = |name: String| match find_price(name) {
+        Some(p) => name.concat(" costs ").concat(p.to_string()),
+        None => name.concat(" is not on the menu"),
+    };
+    println(describe("banana"));
+    println(describe("kiwi"));
+
+    println(double_the_number_in("21"));       // Ok(42)
+    println(double_the_number_in("banana"));   // Err(...)
+
+    // `Result.unwrap_or` for a sensible fallback instead of a crash.
+    println(Result.unwrap_or(double_the_number_in("not a number"), 0));
+}

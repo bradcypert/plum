@@ -471,6 +471,34 @@ exceptions:
   differs in wording between the two — the interpreter surfaces Rust's
   own `std::io::Error` text, native codegen surfaces glibc's
   `strerror`. Both correctly describe the same real OS error.
+- **`Ref[T]`** (see DESIGN.md's "Mutability and cycles" section) is
+  currently interpreter-only — native codegen has no representation
+  for it yet, a documented v1 scope boundary, not a bug.
+
+## Examples
+
+Real, runnable projects under [`examples/`](examples/), one per theme —
+each verified through both `plum run` and `plum build` (except
+`shared_mutability`, which needs the interpreter — see the `Ref[T]`
+note above):
+
+- [`adts_and_matching`](examples/adts_and_matching/main.plum) —
+  structs, enums, exhaustive `match`, guard clauses.
+- [`option_result`](examples/option_result/main.plum) — `Option`/
+  `Result` combinators for error handling with no null anywhere.
+- [`json_and_files`](examples/json_and_files/main.plum) — build a
+  `JsonValue`, stringify it, round-trip it through a real file.
+- [`concurrency`](examples/concurrency/main.plum) — `spawn`/`.join()`,
+  channels, `send`/`recv`.
+- [`generics_and_assoc_fns`](examples/generics_and_assoc_fns/main.plum)
+  — generic structs and `Type.func(args)` associated functions on your
+  own types.
+- [`shared_mutability`](examples/shared_mutability/main.plum) —
+  `Ref[T]`, the opt-in escape hatch for state that's genuinely shared
+  or mutated in place.
+
+`examples/overview.plum` is a separate, older syntax sketch from early
+in the project's design — illustrative only, not a runnable project.
 
 ## Status
 

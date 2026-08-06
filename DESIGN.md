@@ -3032,6 +3032,104 @@ once-corrupting shape directly through both `plum run` and a compiled
 `plum build` binary, confirming both backends now agree on the correct
 answer.
 
+### Chunk 17: real example projects under `examples/`, and three more real bugs found (one fixed, two flagged)
+
+User-directed: "add some more example files to showcase the language."
+Scoped via `AskUserQuestion` (real, runnable projects verified through
+both backends, covering everything: ADTs/matching, Option/Result,
+JSON+files, concurrency, generics+`Type.func`, `Ref[T]`) rather than
+guessed. Six new `examples/<theme>/main.plum` projects, each with a
+real `main` and heavy explanatory comments, added alongside the
+pre-existing `examples/overview.plum` (an older, explicitly-labeled
+syntax SKETCH, not a runnable project — left untouched).
+
+Writing real, from-scratch programs (rather than more stdlib additions
+in the compiler's own established idiom) surfaced THREE more real,
+previously-latent bugs — exactly the value of this kind of exercise:
+
+1. **A native-codegen CRASH for `Array[Bool]`/`Array[Unit]` `.to_
+   string()` — FIXED.** `emit_array_to_string_fns` (`plum-codegen/src/
+   lib.rs`) built a counted loop whose back-edge `phi` nodes hardcoded
+   `%render_elem` as their predecessor block, but its own per-element
+   helper (`render_word_as_string`) branches into EXTRA blocks for
+   `Bool`/`Unit` elements specifically (to pick `"true"`/`"false"`
+   text) — so the code emitted right after that call actually landed in
+   whatever merge block it opened, not literally `%render_elem`, and
+   `clang` correctly rejected the stale hardcoded predecessor
+   (`"PHI node entries do not match predecessors!"`). Since
+   monomorphization emits this function eagerly for every array type
+   reachable in the program (whether or not its `.to_string()` is ever
+   actually CALLED), this broke `plum build` outright for any program
+   with an `Array[Bool]`/`Array[Unit]` anywhere — a fairly easy shape
+   to hit by accident (e.g. `xs.map(f).map(println)`, whose outer
+   `.map()` produces `Array[Unit]`), first hit while writing the
+   `adts_and_matching` example. FIXED: `render_word_as_string` now
+   takes an in/out `current_block: &mut String` cursor it updates
+   whenever it opens new blocks itself, and the array-loop's phi
+   predecessors now read that real final-block label instead of the
+   stale hardcoded one. `emit_struct_to_string`, this helper's other
+   caller, never needed the fix — it has no fixed block name anywhere
+   else in its own output to go stale against. New regression tests in
+   `codegen_cli.rs` pin both the direct shape (`[true, false, true].
+   to_string()`) and the `.map().map()`-chain shape that first found it.
+2. **`Unit.to_string()` renders as `"false"` in native codegen — NOT
+   fixed, flagged.** `CgType::Bool`/`CgType::Unit` are merged into one
+   shared render arm everywhere in `plum-codegen` — happens to "work"
+   for `Bool`, is simply wrong for `Unit` (always renders `"false"`,
+   since `Unit`'s runtime word is always `0`). The interpreter instead
+   correctly REJECTS `Unit.to_string()` outright — a real behavioral-
+   parity gap between backends. Deferred: needs an actual design
+   decision (reject, like the interpreter, or render some fixed literal
+   like `"()"`), not a one-line patch. Routed around in the new example
+   files by never printing a bare `Unit`/`Array[Unit]` directly.
+3. **User source identifiers can collide with codegen-reserved LLVM
+   names — NOT fixed, flagged.** A closure parameter literally named
+   `entry` (`|entry: PriceEntry| entry.name == name` — an entirely
+   ordinary name) made `plum build` fail outright: `emit_closure_body_
+   fn` uses the RAW Plum source name directly as the LLVM register name
+   with zero escaping, and EVERY function's first block is
+   unconditionally labeled the bare string `entry` too, so the two
+   collide. The closure env pointer (`%env`) is hardcoded the exact
+   same unescaped way, so a parameter/capture named `env` would hit the
+   identical class of bug. Deferred: a real fix needs a systematic
+   escaping/mangling scheme for every user-sourced LLVM identifier
+   (parameters, `let` locals, closure captures), not a one-line patch —
+   its own scoped session. Routed around in the new example files by
+   avoiding `entry`/`env` as identifiers.
+4. **A discarded `spawn` statement's result can poison a LATER,
+   unrelated `spawn` — NOT fixed, flagged.** A bare `spawn { ... };`
+   statement (result discarded, ordinary "fire and forget") left a
+   `Task` value bound under `lower_block`'s synthetic `"_"` name for
+   the rest of that block; a LATER, completely unrelated `spawn`/`.
+   join()` pair in the same function then failed with `"cannot send a
+   task handle across a task boundary"`, since `Expr::Spawn` captures
+   its WHOLE current environment (not just the names its body actually
+   references) and swept the stale `"_"`-bound task into its capture
+   set. Same underlying root cause as bug 3's sibling entry in "Open
+   questions": whole-scope capture instead of free-variable-analyzed
+   capture. Deferred for the same reason. Routed around in the new
+   `concurrency` example by wrapping every `spawn`/`.join()` pair
+   (including the discarded one) in its own nested `{ }` block, so any
+   Task-typed binding goes out of scope before the next `spawn` runs. A
+   dedicated `plum-interp` regression test
+   (`a_discarded_fire_and_forget_spawn_does_not_poison_a_later_
+   unrelated_spawn`) pins that the workaround actually works.
+
+Also surfaced (not a bug): `Ref[T]` has zero native-codegen
+representation, already fully decided/documented in "Mutability and
+cycles" above — just never mentioned in the README's own backend-parity
+list before this chunk, now fixed there too. General tuples similarly
+have no native-codegen support (already documented under `Array.zip`'s
+bullet) — the `option_result` example uses a small named struct
+instead, matching this codebase's own established `Zipped { first,
+second }` precedent for the same gap.
+
+Verified end to end: every one of the six new examples run through
+both `plum run` and `plum build` (except `shared_mutability`, `Ref[T]`
+being interpreter-only), full `cargo test --workspace` clean before and
+after. README gained a new "Examples" section pointing at all six, plus
+the `Ref[T]` native-codegen-scope bullet.
+
 ## Toolchain and diagnostics
 
 After JSON, the user redirected from stdlib growth toward user-facing
@@ -4627,6 +4725,119 @@ summed), not just inspect emitted IR text.
 
 ## Open questions (not yet decided, flagged so we don't forget them)
 
+- **KNOWN BUG, real but NOT fixed here — a discarded statement-
+  expression result can linger in the interpreter's environment and
+  get captured by a LATER, unrelated `spawn`.** Found while writing a
+  new file under `examples/` (see this file's example-files chunk): a
+  bare `spawn { ... };` statement (its `Task` result never `let`-
+  bound, just discarded — an ordinary "fire and forget" pattern) made
+  a COMPLETELY separate, later `spawn`/`.join()` pair in the SAME
+  function fail with `"cannot send a task handle across a task
+  boundary"`, even though the second `spawn`'s own body never
+  references the first task at all. Root cause: `lower_block`
+  (`plum-ir/src/lower.rs`) desugars every bare statement-expression
+  `e;` into `Let { name: "_", value: e, body: rest }` — completely
+  ordinary, matches how `let mut`-style discards already work — but
+  the interpreter's `Expr::Spawn` handling captures its WHOLE current
+  environment via `self.env.clone()` (see the entry below this one for
+  the SAME "captures whole scope, not just referenced names" root
+  cause manifesting a different way), so the earlier spawn's `Task`
+  value, still bound under the synthetic name `"_"` for the rest of
+  that block, gets swept into the LATER spawn's capture set and
+  rejected by `to_portable` (`Task` is documented as never portable —
+  see its own doc comment). NOT fixed here — the real fix is the same
+  one the entry below already calls for (free-variable-analyzed
+  capture instead of whole-scope capture), just a different trigger for
+  it; a narrower alternative (special-casing `"_"`-bound values as
+  immediately droppable) would only band-aid this one manifestation.
+  Worked around in the new example files by wrapping every `spawn`/
+  `.join()` pair in its own nested `{ }` block, so any Task-typed
+  binding (including an anonymous `"_"` one) goes out of scope before
+  the next `spawn` runs.
+- **KNOWN BUG, real but NOT fixed here — user source identifiers can
+  collide with codegen-reserved LLVM names in native codegen, with no
+  escaping/mangling at all.** Found while writing a new file under
+  `examples/` (see this file's example-files chunk): a closure
+  parameter literally named `entry` (`|entry: PriceEntry| entry.name
+  == name` — an entirely ordinary name, e.g. for a map/cache entry)
+  made `plum build` fail with `clang` rejecting the IR outright
+  (`"unable to create block named 'entry'"`). Root cause: `emit_
+  closure_body_fn` (`plum-codegen/src/codegen.rs`) uses the RAW Plum
+  source parameter name directly as the LLVM register name
+  (`format!("%{name}")`, no prefix/mangling at all), and EVERY
+  function's first basic block is unconditionally labeled the bare
+  string `entry` — so a parameter named `entry` collides with that
+  block label in the exact same namespace. The closure's own env
+  pointer parameter is hardcoded as `%env` the same unescaped way, so a
+  parameter/capture literally named `env` would hit the identical class
+  of bug (confirmed by reading the code, not independently reproduced —
+  `entry` was the one that actually got hit by accident). NOT fixed
+  here — unlike this chunk's other two bugs (both narrow, single-
+  function fixes), a real fix needs a genuine design decision (a
+  systematic escaping/mangling scheme for every user-sourced LLVM
+  identifier — parameters, `let` locals, closure captures — probably a
+  prefix no valid Plum identifier can produce, applied consistently
+  across `codegen.rs`/`lib.rs`), not a one-line patch, and deserves its
+  own scoped session rather than a hasty guess. Worked around in the
+  new example files by simply not naming anything `entry`/`env`.
+- **KNOWN BUG, narrower than it sounds — `Unit.to_string()` renders as
+  `"false"` in native codegen instead of being rejected/rendered
+  correctly, a real interpreter/codegen behavioral-parity gap.** Found
+  while writing new files under `examples/` (see this file's example-
+  files chunk), not hypothetical: `println([(), ()].to_string())`
+  prints `[false, false]` when compiled via `plum build`, but the
+  interpreter correctly REJECTS the same expression with `` `.to_
+  string()` is not yet supported for Unit ``. Root cause: `plum-codegen`
+  merges `CgType::Bool | CgType::Unit` into one shared render arm
+  everywhere a value gets stringified (`render_word_as_string` and
+  every top-level `Expr::ToString` site in `codegen.rs` alike) — the
+  arm does `icmp ne i64 word_reg, 0` and picks `"true"`/`"false"`
+  text, which happens to "work" for `Bool` but is simply wrong for
+  `Unit` (whose runtime representation is always the word `0`, so it
+  always renders `"false"`). NOT fixed here — this is a narrower,
+  lower-priority gap than a codegen crash (found alongside, and fixed
+  separately in this same chunk, a REAL crash: see the array-to-string
+  loop entry immediately below), and the fix likely wants its own
+  small design decision (should native codegen reject `Unit.to_
+  string()` the same way the interpreter does, or should `Unit` legitimately
+  render as some fixed literal like `"Unit"` or `"()"` — the
+  interpreter's existing behavior suggests REJECTING was the intended
+  design, in which case `codegen.rs` needs a real `CgType::Unit` arm
+  of its own rather than continuing to share `Bool`'s). Routed around
+  in the new example files by never `.to_string()`-ing/printing a bare
+  `Unit` value or `Array[Unit]` directly.
+- **KNOWN BUG, FIXED in this same chunk — a real native-codegen crash
+  for `Array[Bool]`/`Array[Unit]` `.to_string()`.** Found the same way
+  as the entry above (writing a new `examples/` file that chained two
+  `.map()` calls, the second returning `Array[Unit]`) — `plum build`
+  failed outright with `clang` rejecting the generated LLVM IR:
+  `"PHI node entries do not match predecessors!"`. Root cause:
+  `emit_array_to_string_fns` (`plum-codegen/src/lib.rs`) builds a
+  counted loop whose back-edge `phi` nodes hardcoded `%render_elem` as
+  the predecessor block — but its own per-element helper, `render_word_
+  as_string`, branches into EXTRA blocks for `Bool`/`Unit` elements
+  specifically (to pick between `"true"`/`"false"` text), so the code
+  emitted right after that call actually lands in the merge block it
+  opened, not literally `%render_elem` — the loop's `br label %loop_
+  check` really originates from that merge block, and `clang` correctly
+  rejected the stale hardcoded predecessor. Since monomorphization
+  emits this function eagerly for every array type reachable in the
+  program (whether or not its `.to_string()` is ever actually called),
+  ANY program with an `Array[Bool]` or `Array[Unit]` ANYWHERE — e.g.
+  `xs.map(f).map(println)`, whose outer `.map()` produces `Array[Unit]`
+  — broke native codegen outright, a fairly easy shape to hit by
+  accident. FIXED: `render_word_as_string` now takes an in/out
+  `current_block: &mut String` cursor, updated whenever it opens new
+  blocks itself, and `emit_array_to_string_fns`'s loop-back-edge phi
+  predecessors now read that real final-block label instead of the
+  stale hardcoded one (built via a two-buffer approach, since the loop
+  preamble's phi nodes are emitted textually BEFORE the label they need
+  is known). `emit_struct_to_string`, `render_word_as_string`'s other
+  caller, never needed this — it has no fixed block name anywhere else
+  in its own output to go stale against. Verified via the original
+  crashing repro now compiling and running correctly on both backends,
+  plus new coverage for `Array[Bool]`/`Array[Unit]` `.to_string()`
+  specifically.
 - ~~KNOWN BUG — FBIP reuse-in-place correctness gap for aliased
   parameters~~ **RESOLVED.** Root cause: `insert_refcount_ops`
   (`plum-ir/src/fbip.rs`) deliberately never adds function PARAMETERS

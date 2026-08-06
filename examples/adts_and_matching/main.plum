@@ -1,0 +1,57 @@
+// Algebraic data types + exhaustive pattern matching.
+//
+// Run: `plum run examples/adts_and_matching`
+// Build: `plum build examples/adts_and_matching -o out && ./out`
+
+struct Point {
+    x: Float,
+    y: Float,
+}
+
+enum Shape {
+    Circle(Point, Float),
+    Rectangle(Point, Point),
+    Triangle(Point, Point, Point),
+}
+
+let area (s: Shape): Float = match s {
+    Circle(_, r) => 3.14159 * r * r,
+    Rectangle(a, b) => (b.x - a.x) * (b.y - a.y),
+    Triangle(a, b, c) => {
+        // Shoelace formula — no `sqrt` needed here, unlike Heron's.
+        let cross = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+        Float.abs(cross) / 2.0
+    },
+}
+// `match` is exhaustive over `Shape`'s variants, checked at compile
+// time — no wildcard needed above, and adding a fourth `Shape` variant
+// without updating this `match` would be a compile error.
+
+// A guard clause plus a trailing wildcard for everything else.
+let is_axis_aligned_square (s: Shape): Bool = match s {
+    Rectangle(a, b) if Float.abs((b.x - a.x)) == Float.abs((b.y - a.y)) => true,
+    _ => false,
+}
+
+let describe (s: Shape): String = {
+    let a = area(s);
+    let square = if is_axis_aligned_square(s) { " (a square!)" } else { "" };
+    "area = ".concat(a.to_string()).concat(square)
+}
+
+let main (): Unit = {
+    let shapes = [
+        Circle(Point { x: 0.0, y: 0.0 }, 2.0),
+        Rectangle(Point { x: 0.0, y: 0.0 }, Point { x: 3.0, y: 3.0 }),
+        Rectangle(Point { x: 0.0, y: 0.0 }, Point { x: 4.0, y: 2.0 }),
+        Triangle(Point { x: 0.0, y: 0.0 }, Point { x: 4.0, y: 0.0 }, Point { x: 0.0, y: 3.0 }),
+    ];
+    // `.map` over an array of a user-defined enum. Native codegen needs
+    // a closure literal written directly at the call site (not a bare
+    // named function passed by value) — a real, documented v1 scope
+    // boundary, not a bug — so wrap `describe`/`println` in `|s| ...`.
+    shapes.map(|s| describe(s)).map(|line| println(line));
+    // Struct/enum equality and `.to_string()` are structural, generated
+    // automatically for every type — no `derive` anywhere.
+    println(Point { x: 1.0, y: 2.0 } == Point { x: 1.0, y: 2.0 });
+}

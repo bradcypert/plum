@@ -1,0 +1,54 @@
+// JSON + file I/O: build a value, stringify it, write it to disk, then
+// read it back and parse it — a real round trip, no glue code needed
+// on either library's part (they compose through ordinary `Result`
+// propagation).
+//
+// Run: `plum run examples/json_and_files`
+// Build: `plum build examples/json_and_files -o out && ./out`
+
+let build_config (): JsonValue =
+    JsonObject([
+        JsonEntry { key: "name", value: JsonString("plum-demo") },
+        JsonEntry { key: "version", value: JsonNumber(1.0) },
+        JsonEntry {
+            key: "tags",
+            value: JsonArray([JsonString("json"), JsonString("files")]),
+        },
+        JsonEntry { key: "stable", value: JsonBool(true) },
+    ])
+
+// `JsonValue` is a plain enum — no accessor helpers, `match` directly.
+let describe (v: JsonValue): String = match v {
+    JsonNull => "null",
+    JsonBool(b) => if b { "a bool: true" } else { "a bool: false" },
+    JsonNumber(n) => "a number: ".concat(n.to_string()),
+    JsonString(s) => "a string: ".concat(s),
+    JsonArray(items) => "an array of ".concat(items.len().to_string()).concat(" item(s)"),
+    JsonObject(entries) => "an object with ".concat(entries.len().to_string()).concat(" key(s)"),
+}
+
+let main (): Unit = {
+    let config = build_config(());
+    let text = json_stringify(config);
+    println(text);
+
+    let path = "plum_demo_config.json";
+    match write_file(path, text) {
+        Err(e) => println("write failed: ".concat(e)),
+        Ok(_) => {
+            match read_file(path) {
+                Err(e) => println("read failed: ".concat(e)),
+                Ok(contents) => match json_parse(contents) {
+                    Err(e) => println("parse failed: ".concat(e)),
+                    Ok(parsed) => {
+                        println(describe(parsed));
+                        // Structural equality — generated for every
+                        // type automatically, works recursively through
+                        // the whole nested JsonValue tree.
+                        println(parsed == config);
+                    },
+                },
+            }
+        },
+    }
+}

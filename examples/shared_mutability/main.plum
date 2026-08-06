@@ -1,0 +1,54 @@
+// `Ref[T]`: the opt-in escape hatch for state that's genuinely shared
+// or mutated in place — everything else in Plum stays purely
+// functional, with FBIP making that fast under the hood without the
+// programmer ever asking for it. Reference cycles are only possible
+// through `Ref`, never through an ordinary value.
+//
+// Run: `plum run examples/shared_mutability`
+//
+// `Ref[T]` is currently INTERPRETER-ONLY — native codegen has no
+// representation for it yet (a documented, deliberate v1 scope
+// boundary, not a bug: see DESIGN.md's "Mutability and cycles"
+// section), so `plum build examples/shared_mutability` doesn't work
+// yet the way every other example here does.
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+let main (): Unit = {
+    // `ref(v)` wraps a value in a mutable cell; `.get()`/`.set(v)` read
+    // and write it. Ordinary values never need this — only `counter`
+    // itself does.
+    let counter = ref(0);
+    counter.set(counter.get() + 1);
+    counter.set(counter.get() + 1);
+    counter.set(counter.get() + 1);
+    println(counter.get());   // 3
+
+    // Two names can alias the SAME cell — `b` isn't a copy of `a`, it's
+    // the same underlying `Ref`, so a write through either name is
+    // visible through the other. This is exactly the graph-shaped
+    // sharing an ordinary (non-`Ref`) value can't express.
+    let a = ref(Point { x: 0, y: 0 });
+    let b = a;
+    b.set(Point { x: 5, y: 5 });
+    println(a.get());   // Point { x: 5, y: 5 } — visible through `a` too
+    println(a == b);    // true — `Ref` equality is identity, not structural
+
+    // Two DIFFERENT cells holding equal contents are NOT `==`, which is
+    // exactly what makes `Ref` useful for aliasing in the first place.
+    let c = ref(Point { x: 5, y: 5 });
+    println(a == c);    // false
+
+    // A closure over a `Ref` is how you'd model something like a
+    // running total shared across several calls, without threading an
+    // accumulator through every one explicitly.
+    let running_total = ref(0);
+    let add_to_total = |n: Int| running_total.set(running_total.get() + n);
+    add_to_total(10);
+    add_to_total(20);
+    add_to_total(12);
+    println(running_total.get());   // 42
+}

@@ -1796,6 +1796,36 @@ mod tests {
     }
 
     #[test]
+    fn array_of_bools_to_string_compiles_and_renders_correctly_in_native_codegen() {
+        // Regression test for a real native-codegen crash: `emit_array_
+        // to_string_fns`'s loop back-edge phi nodes hardcoded
+        // `%render_elem` as their predecessor block, but `render_word_
+        // as_string` branches into EXTRA blocks for `Bool`/`Unit`
+        // elements specifically — so `clang` rejected the generated IR
+        // outright ("PHI node entries do not match predecessors!") the
+        // moment an `Array[Bool]`/`Array[Unit]` needed stringifying
+        // anywhere in the program (monomorphization emits this function
+        // eagerly for every reachable array type, whether or not it's
+        // actually called). See DESIGN.md's "Open questions" entry for
+        // the full root cause and fix. This alone used to be enough to
+        // reproduce the crash — no chained `.map()`s needed.
+        let src = "let go (): Bool = [true, false, true].to_string() == \"[true, false, true]\"\n";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn a_map_chain_producing_array_unit_compiles_in_native_codegen() {
+        // The exact shape that first surfaced the crash the previous
+        // test pins directly: `.map()` chained into another `.map()`
+        // whose closure returns `Unit` (e.g. calling `println` for its
+        // side effect) monomorphizes an `Array[Unit]`, which used to
+        // make `plum build` fail outright — see DESIGN.md's "Open
+        // questions" entry.
+        let src = "let go (): Int = { [1, 2, 3].map(|x| x * 2).map(|x| println(x)); 42 }\n";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "2\n4\n6\n42");
+    }
+
+    #[test]
     fn array_of_structs_to_string_recurses_into_each_element_in_native_codegen() {
         let src = "\
             struct Point { x: Int, y: Int }\n\

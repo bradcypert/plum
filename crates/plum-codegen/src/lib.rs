@@ -415,7 +415,30 @@ fn next_reg(next_id: &mut usize) -> String {
     format!("%v{v}")
 }
 
-fn render_word_as_string(out: &mut String, next_id: &mut usize, word_reg: &str, ty: &CgType) -> String {
+/// Renders `word_reg` (a raw `i64` word of static type `ty`) as a `Str`
+/// cell, returning its register.
+///
+/// `current_block` is an in/out cursor: callers pass in the label of
+/// whatever block is "currently open" (i.e. where the NEXT instruction
+/// they append will actually land), and this function updates it in
+/// place whenever it branches into new blocks itself, so the label the
+/// caller sees on return is always accurate — not necessarily the same
+/// one passed in. This matters because the `Bool`/`Unit` arm below is
+/// the ONE case in this function that isn't straight-line code: it
+/// branches into `bl{tl}`/`bl{fl}` and merges into `bl{ml}`, so any
+/// instruction textually appended right after this call actually
+/// belongs to `bl{ml}`, not whatever block the caller thought it was
+/// still in. `emit_struct_to_string` (this function's other caller)
+/// never needed to care, since it only ever appends MORE instructions
+/// or a final `ret` — it has no fixed block name anywhere else in its
+/// own output that could go stale. `emit_array_to_string_fns` DOES: its
+/// loop back-edge phi nodes name a specific predecessor block, and
+/// silently assuming that predecessor was always `%render_elem` (never
+/// re-reading `current_block`) is exactly the bug this parameter fixes
+/// — confirmed via a real repro (`xs.map(...).map(println)`, i.e. any
+/// `Array[Unit]`, or an `Array[Bool]`) that `clang` rejected outright
+/// with "PHI node entries do not match predecessors!", not a hypothetical.
+fn render_word_as_string(out: &mut String, next_id: &mut usize, word_reg: &str, ty: &CgType, current_block: &mut String) -> String {
     match ty {
         CgType::Int => {
             let buf = next_reg(next_id);
@@ -493,6 +516,7 @@ fn render_word_as_string(out: &mut String, next_id: &mut usize, word_reg: &str, 
             out.push_str(&format!(
                 "  {result} = phi ptr [ {true_cell}, %bl{tl} ], [ {false_cell}, %bl{fl} ]\n"
             ));
+            *current_block = format!("bl{ml}");
             result
         }
         _ => {
@@ -643,6 +667,13 @@ fn emit_struct_to_string(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>,
         let display_name = name.split('$').next().unwrap_or(name);
         let field_names = struct_field_names.get(*name);
         let arity = field_types.len();
+        // Only fed to `render_word_as_string` below and never read back
+        // — this function has no fixed block name anywhere else in its
+        // own output for the tracked label to go stale against (it only
+        // ever appends more instructions or a final `ret`), unlike
+        // `emit_array_to_string_fns`'s loop. See `render_word_as_string`'s
+        // own doc comment for the full story.
+        let mut current_block = body_label.clone();
 
         if arity == 0 {
             let bare = if field_names.is_some() { format!("{display_name} {{}}") } else { display_name.to_string() };
@@ -668,13 +699,13 @@ fn emit_struct_to_string(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>,
             format!("{display_name}(")
         };
         let mut acc = tostr_lit_cell(&mut lit_globals, &mut lit_id, "struct", prefix_bytes.as_bytes());
-        let v0 = render_word_as_string(&mut out, &mut next_id, &words[0], &field_types[0]);
+        let v0 = render_word_as_string(&mut out, &mut next_id, &words[0], &field_types[0], &mut current_block);
         acc = concat_str(&mut out, &mut next_id, &acc, &v0);
         for j in 1..arity {
             let infix_bytes = if let Some(names) = field_names { format!(", {}: ", names[j]) } else { ", ".to_string() };
             let infix = tostr_lit_cell(&mut lit_globals, &mut lit_id, "struct", infix_bytes.as_bytes());
             acc = concat_str(&mut out, &mut next_id, &acc, &infix);
-            let vj = render_word_as_string(&mut out, &mut next_id, &words[j], &field_types[j]);
+            let vj = render_word_as_string(&mut out, &mut next_id, &words[j], &field_types[j], &mut current_block);
             acc = concat_str(&mut out, &mut next_id, &acc, &vj);
         }
         let suffix_bytes: &[u8] = if field_names.is_some() { b" }" } else { b")" };
@@ -2346,32 +2377,49 @@ fn emit_array_to_string_fns(needed: &HashMap<String, CgType>) -> String {
         let elem = &needed[mangled];
         let name = format!("plum_array_to_string_{mangled}");
         let mut next_id: usize = 0;
+
+        // Built into its own buffer, ahead of `loop_check`'s own phi
+        // nodes, because the loop's back-edge predecessor isn't known
+        // until AFTER rendering one element: `render_word_as_string`
+        // can branch into extra blocks of its own (e.g. for a `Bool`/
+        // `Unit` element) and updates `current_block` in place when it
+        // does — see its doc comment for the full story, and this
+        // function's own history: `%render_elem` used to be hardcoded
+        // as the loop-back predecessor here, which `clang` correctly
+        // rejected the moment an `Array[Bool]`/`Array[Unit]` needed
+        // stringifying, since the REAL predecessor by then was whatever
+        // merge block rendering the element last opened, not literally
+        // `%render_elem` itself.
+        let mut body = String::new();
+        body.push_str("loop_body:\n");
+        body.push_str("  %is_first = icmp eq i64 %i, 0\n");
+        body.push_str("  br i1 %is_first, label %render_elem, label %add_sep\n");
+        body.push_str("add_sep:\n");
+        let acc_with_sep = concat_str(&mut body, &mut next_id, "%acc", &comma_sp);
+        body.push_str("  br label %render_elem\n");
+        body.push_str("render_elem:\n");
+        body.push_str(&format!("  %acc_before_elem = phi ptr [ %acc, %loop_body ], [ {acc_with_sep}, %add_sep ]\n"));
+        body.push_str("  %word_off = mul i64 %i, 8\n");
+        body.push_str("  %byte_off = add i64 %word_off, 16\n");
+        body.push_str("  %elem_addr = getelementptr i8, ptr %p, i64 %byte_off\n");
+        body.push_str("  %elem_word = load i64, ptr %elem_addr\n");
+        let mut current_block = "render_elem".to_string();
+        let elem_str = render_word_as_string(&mut body, &mut next_id, "%elem_word", elem, &mut current_block);
+        body.push_str(&format!("  %acc_next = call ptr @plum_str_concat(ptr %acc_before_elem, ptr {elem_str})\n"));
+        body.push_str("  %i_next = add i64 %i, 1\n");
+        body.push_str("  br label %loop_check\n");
+
         out.push_str(&format!("define ptr @{name}(ptr %p) {{\n"));
         out.push_str("entry:\n");
         out.push_str("  %len_addr = getelementptr i8, ptr %p, i64 8\n");
         out.push_str("  %len = load i64, ptr %len_addr\n");
         out.push_str("  br label %loop_check\n");
         out.push_str("loop_check:\n");
-        out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %render_elem ]\n");
-        out.push_str(&format!("  %acc = phi ptr [ {lbracket}, %entry ], [ %acc_next, %render_elem ]\n"));
+        out.push_str(&format!("  %i = phi i64 [ 0, %entry ], [ %i_next, %{current_block} ]\n"));
+        out.push_str(&format!("  %acc = phi ptr [ {lbracket}, %entry ], [ %acc_next, %{current_block} ]\n"));
         out.push_str("  %continue = icmp slt i64 %i, %len\n");
         out.push_str("  br i1 %continue, label %loop_body, label %after_loop\n");
-        out.push_str("loop_body:\n");
-        out.push_str("  %is_first = icmp eq i64 %i, 0\n");
-        out.push_str("  br i1 %is_first, label %render_elem, label %add_sep\n");
-        out.push_str("add_sep:\n");
-        let acc_with_sep = concat_str(&mut out, &mut next_id, "%acc", &comma_sp);
-        out.push_str("  br label %render_elem\n");
-        out.push_str("render_elem:\n");
-        out.push_str(&format!("  %acc_before_elem = phi ptr [ %acc, %loop_body ], [ {acc_with_sep}, %add_sep ]\n"));
-        out.push_str("  %word_off = mul i64 %i, 8\n");
-        out.push_str("  %byte_off = add i64 %word_off, 16\n");
-        out.push_str("  %elem_addr = getelementptr i8, ptr %p, i64 %byte_off\n");
-        out.push_str("  %elem_word = load i64, ptr %elem_addr\n");
-        let elem_str = render_word_as_string(&mut out, &mut next_id, "%elem_word", elem);
-        out.push_str(&format!("  %acc_next = call ptr @plum_str_concat(ptr %acc_before_elem, ptr {elem_str})\n"));
-        out.push_str("  %i_next = add i64 %i, 1\n");
-        out.push_str("  br label %loop_check\n");
+        out.push_str(&body);
         out.push_str("after_loop:\n");
         let final_str = concat_str(&mut out, &mut next_id, "%acc", &rbracket);
         out.push_str(&format!("  ret ptr {final_str}\n"));

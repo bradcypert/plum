@@ -2958,6 +2958,25 @@ mod tests {
     }
 
     #[test]
+    fn a_discarded_fire_and_forget_spawn_does_not_poison_a_later_unrelated_spawn() {
+        // Regression test for a real bug (see DESIGN.md's "Open
+        // questions"): a bare `spawn { ... };` STATEMENT (its `Task`
+        // result never `let`-bound, discarded like any other statement)
+        // used to leave that `Task` value bound under `lower_block`'s
+        // synthetic `"_"` name for the rest of the enclosing block —
+        // `Expr::Spawn`'s handling captures its WHOLE current
+        // environment, so a LATER, completely unrelated `spawn` in the
+        // same scope would try to capture that stale `"_"`-bound task
+        // too and fail (`Task` is never portable across a spawn
+        // boundary). Wrapping the discarded spawn in its own nested
+        // block (so `"_"` goes out of scope before the later spawn
+        // runs) is the documented workaround — this test pins that it
+        // actually works, not just that the bug reproduces.
+        let src = "{ { spawn { 1 }; }; spawn { 2 }.join() }";
+        assert_eq!(eval(src), Value::Int(2));
+    }
+
+    #[test]
     fn joining_the_same_task_twice_is_a_runtime_error() {
         let src = "let use_it dummy = { let t = spawn { 1 }; { t.join(); t.join() } }";
         let err = run_err(src, "use_it", vec![Value::Unit]);

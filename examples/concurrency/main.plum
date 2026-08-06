@@ -1,0 +1,49 @@
+// Concurrency: `spawn`/`.join()` for tasks, channels for communication.
+// Sending is a MOVE — after `tx.send(msg)`, the compiler treats `msg`
+// as used for the last time, so reusing it is a compile error, not a
+// runtime race: ownership transferred rather than being shared.
+//
+// Run: `plum run examples/concurrency`
+// Build: `plum build examples/concurrency -o out && ./out`
+
+let square (n: Int): Int = n * n
+
+// `spawn { ... }` starts a lightweight task running `{ ... }`;
+// `.join()` blocks until it finishes and returns its result.
+let compute_in_background (n: Int): Int = spawn { square(n) }.join()
+
+let producer (tx: Sender[Int]) (n: Int): Unit = {
+    let msg = square(n);
+    tx.send(msg)
+    // tx.send(msg); // <- would be a compile error: `msg` already moved
+}
+// See DESIGN.md's "Concurrency" section: `.recv()`/`select` BLOCK — no
+// runtime `None` for a closed channel the way the language sketch in
+// DESIGN.md's history once considered; a closed-with-no-sender channel
+// is a hang, not a value, matching Go's own channel semantics.
+
+let main (): Unit = {
+    // A single background task, joined for its result.
+    println(compute_in_background(9));   // 81
+
+    // Producer/consumer over a typed channel. `.recv()` blocks until a
+    // value arrives and returns it directly (not wrapped in `Option`).
+    // The "fire and forget" `spawn` below is wrapped in its own block:
+    // `spawn` captures its WHOLE enclosing scope (not just the names
+    // its body actually mentions), and even a DISCARDED task result
+    // stays bound under the hood until its block ends — a later,
+    // unrelated `spawn` in the same scope would otherwise try to
+    // capture it too and fail, since a `Task` handle can never cross
+    // another task boundary (see DESIGN.md's "Open questions").
+    let (tx, rx) = channel[Int]();
+    { spawn { producer(tx, 7) }; };
+    println(rx.recv());   // 49
+
+    // Each spawn/join pair below gets its own nested block too, for
+    // the same reason.
+    let r1 = { let t = spawn { square(1) }; t.join() };
+    let r2 = { let t = spawn { square(2) }; t.join() };
+    let r3 = { let t = spawn { square(3) }; t.join() };
+    let r4 = { let t = spawn { square(4) }; t.join() };
+    println([r1, r2, r3, r4]);   // [1, 4, 9, 16]
+}

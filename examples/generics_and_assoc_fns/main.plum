@@ -1,0 +1,52 @@
+// Generics + `Type.func(args)` associated functions — the same style
+// the entire standard library is built with (`Option.map`, `Array.
+// reverse`, ...), available for any struct/enum you declare too.
+//
+// Run: `plum run examples/generics_and_assoc_fns`
+// Build: `plum build examples/generics_and_assoc_fns -o out && ./out`
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+// `Point.add(a, b)`, not `a.add(b)` method-dispatch syntax — the
+// "receiver" is an ordinary first argument. Two types can each declare
+// a function with the same name (`Point.add` and, say, `Vector.add`)
+// with no collision, since each lives in its own type's namespace.
+let Point.add (a: Point) (b: Point): Point = Point { x: a.x + b.x, y: a.y + b.y }
+let Point.scale (p: Point) (factor: Int): Point = Point { x: p.x * factor, y: p.y * factor }
+
+// A generic struct — `[T]` on the declaration, `[T]`-instantiated on
+// use, inferred from context most of the time.
+struct Pair[T] {
+    first: T,
+    second: T,
+}
+
+let Pair.swap[T] (p: Pair[T]): Pair[T] = Pair { first: p.second, second: p.first }
+
+// A generic associated function bounded to types that support `==` —
+// same `[T: Eq]` syntax the standard library's own `Array.contains`
+// uses.
+let Pair.is_matched[T: Eq] (p: Pair[T]): Bool = p.first == p.second
+
+let main (): Unit = {
+    let p1 = Point { x: 1, y: 2 };
+    let p2 = Point { x: 10, y: 20 };
+    println(Point.add(p1, p2));            // Point { x: 11, y: 22 }
+    println(Point.scale(p1, 3));           // Point { x: 3, y: 6 }
+
+    let pair = Pair { first: "a", second: "b" };
+    println(Pair.swap(pair));              // Pair { first: "b", second: "a" }
+    println(Pair.is_matched(pair));        // false
+    println(Pair.is_matched(Pair { first: 5, second: 5 }));   // true
+
+    // `Type.Variant(args)` (qualified enum-variant construction, e.g.
+    // `Shape.Circle(...)`) is a completely different thing from
+    // `Type.func(args)` and unaffected by any of the above —
+    // disambiguated purely by capitalization (associated functions are
+    // always lowercase, variant tags always UpperCamelCase).
+    let some_point: Option[Point] = Some(p1);
+    println(Option.map(some_point, |p| Point.scale(p, 2)));
+}
