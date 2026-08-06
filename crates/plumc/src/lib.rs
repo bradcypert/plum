@@ -833,11 +833,17 @@ let Float.sqrt (x: Float): Float = unsafe { sqrt(x) }
 
 /// `Array[T]` utilities — pure Plum, built entirely on the existing
 /// builtin surface (`.len()`/`arr[i]` indexing/`.push()`/`.fold()`, all
-/// already real), no new IR/codegen work. `array_*`-prefixed, matching
-/// every other stdlib chunk's own convention.
+/// already real), no new IR/codegen work. Declared via `let Array.func
+/// (...)`, real associated functions (`plumc::assoc_fns`), called as
+/// `Array.reverse(arr)` — not the old flat `array_reverse` naming
+/// (removed entirely, see DESIGN.md's \"Standard library\" chunk 14).
+/// Private recursive helpers (`array_reverse_acc` and its siblings)
+/// deliberately keep their plain flat names — they're implementation
+/// detail, never called from outside this file, so there's no public
+/// API surface to namespace.
 ///
-/// **Originally shipped NARROWER than this** — `array_sort_by`,
-/// `array_zip`, `array_sum_int`/`array_sum_float` were all cut from the
+/// **Originally shipped NARROWER than this** — `Array.sort_by`,
+/// `Array.zip`, `Array.sum_int`/`Array.sum_float` were all cut from the
 /// first pass after surfacing two real, previously-latent `plum-types`
 /// bugs, both now root-caused and fixed (see DESIGN.md's \"Standard
 /// library\" chunk 12/13 for the full story):
@@ -868,57 +874,57 @@ let Float.sqrt (x: Float): Float = unsafe { sqrt(x) }
 ///   argument's params from the ALREADY-KNOWN expected types before
 ///   inferring its body, instead of leaving them independently fresh.
 const STDLIB_ARRAY_SRC: &str = "\
-let array_is_empty[T] (arr: Array[T]): Bool = arr.len() == 0
+let Array.is_empty[T] (arr: Array[T]): Bool = arr.len() == 0
 
-let array_first[T] (arr: Array[T]): Option[T] = if array_is_empty(arr) { None } else { Some(arr[0]) }
+let Array.first[T] (arr: Array[T]): Option[T] = if Array.is_empty(arr) { None } else { Some(arr[0]) }
 
-let array_last[T] (arr: Array[T]): Option[T] = if array_is_empty(arr) { None } else { Some(arr[arr.len() - 1]) }
+let Array.last[T] (arr: Array[T]): Option[T] = if Array.is_empty(arr) { None } else { Some(arr[arr.len() - 1]) }
 
 let array_reverse_acc[T] (arr: Array[T]) (i: Int) (acc: Array[T]): Array[T] =
     if i < 0 { acc } else { array_reverse_acc(arr, i - 1, acc.push(arr[i])) }
 
-let array_reverse[T] (arr: Array[T]): Array[T] = array_reverse_acc(arr, arr.len() - 1, [])
+let Array.reverse[T] (arr: Array[T]): Array[T] = array_reverse_acc(arr, arr.len() - 1, [])
 
 let array_concat_acc[T] (a: Array[T]) (b: Array[T]) (i: Int): Array[T] =
     if i >= b.len() { a } else { array_concat_acc(a.push(b[i]), b, i + 1) }
 
-let array_concat[T] (a: Array[T]) (b: Array[T]): Array[T] = array_concat_acc(a, b, 0)
+let Array.concat[T] (a: Array[T]) (b: Array[T]): Array[T] = array_concat_acc(a, b, 0)
 
 let array_take_acc[T] (arr: Array[T]) (n: Int) (i: Int) (acc: Array[T]): Array[T] =
     if i >= n { acc } else if i >= arr.len() { acc } else { array_take_acc(arr, n, i + 1, acc.push(arr[i])) }
 
-let array_take[T] (arr: Array[T]) (n: Int): Array[T] = array_take_acc(arr, n, 0, [])
+let Array.take[T] (arr: Array[T]) (n: Int): Array[T] = array_take_acc(arr, n, 0, [])
 
 let array_drop_acc[T] (arr: Array[T]) (n: Int) (i: Int) (acc: Array[T]): Array[T] =
     if i >= arr.len() { acc } else { array_drop_acc(arr, n, i + 1, if i < n { acc } else { acc.push(arr[i]) }) }
 
-let array_drop[T] (arr: Array[T]) (n: Int): Array[T] = array_drop_acc(arr, n, 0, [])
+let Array.drop[T] (arr: Array[T]) (n: Int): Array[T] = array_drop_acc(arr, n, 0, [])
 
-let array_slice[T] (arr: Array[T]) (start: Int) (end: Int): Array[T] = array_take(array_drop(arr, start), end - start)
+let Array.slice[T] (arr: Array[T]) (start: Int) (end: Int): Array[T] = Array.take(Array.drop(arr, start), end - start)
 
 let array_find_acc[T] (arr: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =
     if i >= arr.len() { None } else if f(arr[i]) { Some(arr[i]) } else { array_find_acc(arr, f, i + 1) }
 
-let array_find[T] (arr: Array[T]) (f: (T) -> Bool): Option[T] = array_find_acc(arr, f, 0)
+let Array.find[T] (arr: Array[T]) (f: (T) -> Bool): Option[T] = array_find_acc(arr, f, 0)
 
-let array_any[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(false, |acc, x| acc || f(x))
+let Array.any[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(false, |acc, x| acc || f(x))
 
-let array_all[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(true, |acc, x| acc && f(x))
+let Array.all[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(true, |acc, x| acc && f(x))
 
 let array_index_of_acc[T: Eq] (arr: Array[T]) (x: T) (i: Int): Option[Int] =
     if i >= arr.len() { None } else if arr[i] == x { Some(i) } else { array_index_of_acc(arr, x, i + 1) }
 
-let array_index_of[T: Eq] (arr: Array[T]) (x: T): Option[Int] = array_index_of_acc(arr, x, 0)
+let Array.index_of[T: Eq] (arr: Array[T]) (x: T): Option[Int] = array_index_of_acc(arr, x, 0)
 
-let array_contains[T: Eq] (arr: Array[T]) (x: T): Bool = Option.is_some(array_index_of(arr, x))
+let Array.contains[T: Eq] (arr: Array[T]) (x: T): Bool = Option.is_some(Array.index_of(arr, x))
 
-let array_sum_int (arr: Array[Int]): Int = arr.fold(0, |acc, x| acc + x)
+let Array.sum_int (arr: Array[Int]): Int = arr.fold(0, |acc, x| acc + x)
 
-let array_sum_float (arr: Array[Float]): Float = arr.fold(0.0, |acc, x| acc + x)
+let Array.sum_float (arr: Array[Float]): Float = arr.fold(0.0, |acc, x| acc + x)
 
 let array_sort_insert_acc[T] (sorted: Array[T]) (x: T) (le: (T, T) -> Bool) (i: Int): Array[T] =
     if i >= sorted.len() { sorted.push(x) }
-    else if le(x, sorted[i]) { array_concat(array_take(sorted, i).push(x), array_drop(sorted, i)) }
+    else if le(x, sorted[i]) { Array.concat(Array.take(sorted, i).push(x), Array.drop(sorted, i)) }
     else { array_sort_insert_acc(sorted, x, le, i + 1) }
 
 let array_sort_insert[T] (sorted: Array[T]) (x: T) (le: (T, T) -> Bool): Array[T] = array_sort_insert_acc(sorted, x, le, 0)
@@ -926,14 +932,14 @@ let array_sort_insert[T] (sorted: Array[T]) (x: T) (le: (T, T) -> Bool): Array[T
 let array_sort_by_acc[T] (arr: Array[T]) (le: (T, T) -> Bool) (i: Int) (acc: Array[T]): Array[T] =
     if i >= arr.len() { acc } else { array_sort_by_acc(arr, le, i + 1, array_sort_insert(acc, arr[i], le)) }
 
-let array_sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] = array_sort_by_acc(arr, le, 0, [])
+let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] = array_sort_by_acc(arr, le, 0, [])
 
 struct Zipped[A, B] { first: A, second: B }
 
 let array_zip_acc[T, U] (a: Array[T]) (b: Array[U]) (i: Int) (acc: Array[Zipped[T, U]]): Array[Zipped[T, U]] =
     if i >= a.len() || i >= b.len() { acc } else { array_zip_acc(a, b, i + 1, acc.push(Zipped { first: a[i], second: b[i] })) }
 
-let array_zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = array_zip_acc(a, b, 0, [])
+let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = array_zip_acc(a, b, 0, [])
 ";
 
 /// Parses the prelude + stdlib sources once and prepends their items
@@ -2312,50 +2318,50 @@ mod tests {
 
     #[test]
     fn array_is_empty_and_reverse_behave_as_expected() {
-        assert_eq!(typecheck_and_run("let use_it dummy = array_is_empty([1, 2])", "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
-        let src = "let use_it dummy = { let arr: Array[Int] = []; array_is_empty(arr) }";
+        assert_eq!(typecheck_and_run("let use_it dummy = Array.is_empty([1, 2])", "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
+        let src = "let use_it dummy = { let arr: Array[Int] = []; Array.is_empty(arr) }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
-        let src = "let use_it dummy = match array_reverse([1, 2, 3]) { arr => arr[0] * 100 + arr[1] * 10 + arr[2] }";
+        let src = "let use_it dummy = match Array.reverse([1, 2, 3]) { arr => arr[0] * 100 + arr[1] * 10 + arr[2] }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(321)));
     }
 
     #[test]
     fn array_first_and_last_return_none_on_empty() {
-        let src = "let use_it dummy = match array_first([1, 2, 3]) { Some(x) => x, None => -1 }";
+        let src = "let use_it dummy = match Array.first([1, 2, 3]) { Some(x) => x, None => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
-        let src = "let use_it dummy = match array_last([1, 2, 3]) { Some(x) => x, None => -1 }";
+        let src = "let use_it dummy = match Array.last([1, 2, 3]) { Some(x) => x, None => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(3)));
-        let src = "let use_it dummy = { let arr: Array[Int] = []; match array_first(arr) { Some(x) => x, None => -1 } }";
+        let src = "let use_it dummy = { let arr: Array[Int] = []; match Array.first(arr) { Some(x) => x, None => -1 } }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(-1)));
     }
 
     #[test]
     fn array_concat_take_and_drop_slice_correctly() {
-        let src = "let use_it dummy = { let arr = array_concat([1, 2], [3, 4]); arr[0] * 1000 + arr[1] * 100 + arr[2] * 10 + arr[3] }";
+        let src = "let use_it dummy = { let arr = Array.concat([1, 2], [3, 4]); arr[0] * 1000 + arr[1] * 100 + arr[2] * 10 + arr[3] }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1234)));
-        let src = "let use_it dummy = { let arr = array_take([1, 2, 3, 4], 2); arr[0] * 10 + arr[1] }";
+        let src = "let use_it dummy = { let arr = Array.take([1, 2, 3, 4], 2); arr[0] * 10 + arr[1] }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(12)));
-        let src = "let use_it dummy = { let arr = array_drop([1, 2, 3, 4], 2); arr[0] * 10 + arr[1] }";
+        let src = "let use_it dummy = { let arr = Array.drop([1, 2, 3, 4], 2); arr[0] * 10 + arr[1] }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(34)));
-        let src = "let use_it dummy = { let arr = array_slice([1, 2, 3, 4, 5], 1, 4); arr[0] * 100 + arr[1] * 10 + arr[2] }";
+        let src = "let use_it dummy = { let arr = Array.slice([1, 2, 3, 4, 5], 1, 4); arr[0] * 100 + arr[1] * 10 + arr[2] }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(234)));
     }
 
     #[test]
     fn array_find_any_all_locate_and_test_elements() {
-        let src = "let use_it dummy = match array_find([1, 2, 3, 4], |x| x % 2 == 0) { Some(x) => x, None => -1 }";
+        let src = "let use_it dummy = match Array.find([1, 2, 3, 4], |x| x % 2 == 0) { Some(x) => x, None => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(2)));
-        let src = "let use_it dummy = array_any([1, 3, 5], |x| x % 2 == 0)";
+        let src = "let use_it dummy = Array.any([1, 3, 5], |x| x % 2 == 0)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
-        let src = "let use_it dummy = array_all([2, 4, 6], |x| x % 2 == 0)";
+        let src = "let use_it dummy = Array.all([2, 4, 6], |x| x % 2 == 0)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
     }
 
     #[test]
     fn array_index_of_and_contains_use_the_eq_bound() {
-        let src = "let use_it dummy = match array_index_of([10, 20, 30], 20) { Some(i) => i, None => -1 }";
+        let src = "let use_it dummy = match Array.index_of([10, 20, 30], 20) { Some(i) => i, None => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
-        let src = "let use_it dummy = array_contains([10, 20, 30], 99)";
+        let src = "let use_it dummy = Array.contains([10, 20, 30], 99)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
     }
 
@@ -2369,9 +2375,9 @@ mod tests {
         // before the fix, merely having BOTH declared (regardless of
         // which was actually called) made this fail with a bogus
         // "expected Int, found Float".
-        let src = "let use_it dummy = array_sum_int([1, 2, 3])";
+        let src = "let use_it dummy = Array.sum_int([1, 2, 3])";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(6)));
-        let src = "let use_it dummy = array_sum_float([1.5, 2.5, 3.0])";
+        let src = "let use_it dummy = Array.sum_float([1.5, 2.5, 3.0])";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Float(7.0)));
     }
 
@@ -2385,12 +2391,12 @@ mod tests {
         // recursive call in the other, used to send `Subst::apply` into
         // genuine unbounded recursion before this was fixed.
         let src = "let use_it dummy = { \
-                        let sorted = array_sort_by([3, 1, 2], |a, b| a <= b); \
+                        let sorted = Array.sort_by([3, 1, 2], |a, b| a <= b); \
                         sorted[0] * 100 + sorted[1] * 10 + sorted[2] \
                     }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(123)));
         let src = "let use_it dummy = { \
-                        let sorted = array_sort_by([3, 1, 2], |a, b| a >= b); \
+                        let sorted = Array.sort_by([3, 1, 2], |a, b| a >= b); \
                         sorted[0] * 100 + sorted[1] * 10 + sorted[2] \
                     }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(321)));
@@ -2399,12 +2405,12 @@ mod tests {
     #[test]
     fn array_zip_pairs_elements_positionally_and_stops_at_the_shorter_array() {
         let src = "let use_it dummy = { \
-                        let zipped = array_zip([1, 2, 3], [\"a\", \"b\"]); \
+                        let zipped = Array.zip([1, 2, 3], [\"a\", \"b\"]); \
                         zipped.len() \
                     }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(2)));
         let src = "let use_it dummy = { \
-                        let zipped = array_zip([1, 2], [\"a\", \"b\"]); \
+                        let zipped = Array.zip([1, 2], [\"a\", \"b\"]); \
                         match zipped[1] { Zipped { first, second } => first } \
                     }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(2)));

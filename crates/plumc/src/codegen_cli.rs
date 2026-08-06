@@ -1300,19 +1300,19 @@ mod tests {
 
     #[test]
     fn array_reverse_take_drop_and_slice_run_through_native_codegen() {
-        let src = "let go (): Int = { let arr = array_reverse([1, 2, 3]); arr[0] * 100 + arr[1] * 10 + arr[2] }";
+        let src = "let go (): Int = { let arr = Array.reverse([1, 2, 3]); arr[0] * 100 + arr[1] * 10 + arr[2] }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "321");
-        let src = "let go (): Int = { let arr = array_slice(array_concat([1, 2], [3, 4, 5]), 1, 4); arr[0] * 100 + arr[1] * 10 + arr[2] }";
+        let src = "let go (): Int = { let arr = Array.slice(Array.concat([1, 2], [3, 4, 5]), 1, 4); arr[0] * 100 + arr[1] * 10 + arr[2] }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "234");
     }
 
     #[test]
     fn array_find_any_all_index_of_and_contains_run_through_native_codegen() {
-        let src = "let go (): Int = match array_find([1, 2, 3, 4], |x| x % 2 == 0) { Some(x) => x, None => -1 }";
+        let src = "let go (): Int = match Array.find([1, 2, 3, 4], |x| x % 2 == 0) { Some(x) => x, None => -1 }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "2");
-        let src = "let go (): Bool = array_all([2, 4, 6], |x| x % 2 == 0)";
+        let src = "let go (): Bool = Array.all([2, 4, 6], |x| x % 2 == 0)";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
-        let src = "let go (): Bool = array_contains([10, 20, 30], 99)";
+        let src = "let go (): Bool = Array.contains([10, 20, 30], 99)";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "0");
     }
 
@@ -1322,9 +1322,9 @@ mod tests {
         // `default_numeric`-fires-too-early regression test — proves
         // the fix holds through a REAL compiled binary, not just the
         // interpreter.
-        let src = "let go (): Int = array_sum_int([1, 2, 3])";
+        let src = "let go (): Int = Array.sum_int([1, 2, 3])";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "6");
-        let src = "let go (): Float = array_sum_float([1.5, 2.5, 3.0])";
+        let src = "let go (): Float = Array.sum_float([1.5, 2.5, 3.0])";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "7.000000");
     }
 
@@ -1333,12 +1333,12 @@ mod tests {
         // Native-codegen counterpart to `plumc::lib.rs`'s own `Subst::
         // compose` cyclic-binding regression test.
         let src = "let go (): Int = { \
-                        let sorted = array_sort_by([3, 1, 2], |a, b| a <= b); \
+                        let sorted = Array.sort_by([3, 1, 2], |a, b| a <= b); \
                         sorted[0] * 100 + sorted[1] * 10 + sorted[2] \
                     }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "123");
         let src = "let go (): Int = { \
-                        let zipped = array_zip([1, 2], [\"a\", \"b\"]); \
+                        let zipped = Array.zip([1, 2], [\"a\", \"b\"]); \
                         match zipped[1] { Zipped { first, second } => first } \
                     }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "2");
