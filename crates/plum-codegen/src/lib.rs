@@ -399,16 +399,19 @@ fn tostr_lit_cell(lit_globals: &mut String, lit_id: &mut usize, prefix: &str, by
 /// `@plum_struct_eq`'s own "load the word, then decide what it means
 /// from the STATIC `CgType`" convention) — shared by `emit_struct_to_
 /// string` and `emit_array_to_string_fns`, the one place both need
-/// identical scalar/heap-shaped rendering logic. `Int`/`Float`/`Bool`
-/// render inline via `snprintf`/branching, mirroring `codegen.rs`'s
-/// own top-level `Expr::ToString` codegen exactly (just emitted as raw
-/// text here instead of through the `Emitter` API). Anything non-
-/// scalar goes through `to_string_fn_for` after `inttoptr`; a type
-/// that isn't stringifiable at all (a Closure/Task/Sender/Receiver/
-/// CStr field — reachable only through the same pre-existing, shallow-
-/// bound-checking gap `eq_fn_for`'s own doc comment already flags,
-/// never through a well-typed TOP-level `.to_string()` call) renders as
-/// an empty string rather than aborting codegen.
+/// identical scalar/heap-shaped rendering logic. `Int`/`Float`/`Bool`/
+/// `Unit` render inline via `snprintf`/branching/a fixed literal,
+/// mirroring `codegen.rs`'s own top-level `Expr::ToString` codegen
+/// exactly (just emitted as raw text here instead of through the
+/// `Emitter` API — see that arm's own doc comment for why `Unit`
+/// renders as the literal `"Unit"` rather than being rejected the way
+/// it once was). Anything non-scalar goes through `to_string_fn_for`
+/// after `inttoptr`; a type that isn't stringifiable at all (a
+/// Closure/Task/Sender/Receiver/CStr field — reachable only through
+/// the same pre-existing, shallow-bound-checking gap `eq_fn_for`'s own
+/// doc comment already flags, never through a well-typed TOP-level
+/// `.to_string()` call) renders as an empty string rather than
+/// aborting codegen.
 fn next_reg(next_id: &mut usize) -> String {
     let v = *next_id;
     *next_id += 1;
@@ -476,7 +479,21 @@ fn render_word_as_string(out: &mut String, next_id: &mut usize, word_reg: &str, 
             out.push_str(&format!("  {copy} = call ptr @memcpy(ptr {dst}, ptr {buf}, i64 {len})\n"));
             cell
         }
-        CgType::Bool | CgType::Unit => {
+        // `Unit` has exactly one possible value, so unlike `Bool` this
+        // needs no branching at all — always the same fixed 4-byte
+        // literal, straight-line code. `current_block` is deliberately
+        // left untouched (no `br` means no block change), unlike the
+        // `Bool` arm just below.
+        CgType::Unit => {
+            let cell = next_reg(next_id);
+            out.push_str(&format!("  {cell} = call ptr @plum_alloc_str(i64 4)\n"));
+            let dst = next_reg(next_id);
+            out.push_str(&format!("  {dst} = getelementptr i8, ptr {cell}, i64 16\n"));
+            let copy = next_reg(next_id);
+            out.push_str(&format!("  {copy} = call ptr @memcpy(ptr {dst}, ptr @plum_tostr_unit, i64 4)\n"));
+            cell
+        }
+        CgType::Bool => {
             let is_true = next_reg(next_id);
             out.push_str(&format!("  {is_true} = icmp ne i64 {word_reg}, 0\n"));
             // Plain numeric label suffixes (`next_id` shared with
@@ -538,26 +555,27 @@ fn render_word_as_string(out: &mut String, next_id: &mut usize, word_reg: &str, 
     }
 }
 
-/// `@plum_tostr_true`/`@plum_tostr_false` (raw byte buffers, matching
-/// the SAME `@memcpy`-from-a-declared-constant pattern `codegen.rs`'s
-/// own top-level `Expr::ToString`/`CgType::Bool` codegen already uses —
-/// deliberately NOT the `tostr_lit_cell` "pre-built cell" shape, since
-/// `render_word_as_string`'s `Bool` case builds its OWN fresh cell via
-/// `@plum_alloc_str`+`@memcpy`, exactly mirroring that existing
-/// top-level codegen instead of introducing a second convention) and
-/// `@plum_str_quote` — escapes `"`/`\` and wraps a `Str` cell in
-/// quotes, for a `Str` value rendered NESTED inside a struct/enum/
-/// array (never for a bare top-level `.to_string()` on a `Str`, which
-/// stays raw — see `codegen.rs`'s own `CgType::Str` arm, untouched by
-/// this chunk). Two passes over the source bytes, both plain counted
-/// `phi`-loops matching `emit_array_release_fns`'s established loop
-/// shape: the first counts how many bytes need an extra escape
-/// backslash (to size the fresh allocation exactly once, no
-/// reallocation/growth), the second copies byte-by-byte, escaping as
-/// it goes.
+/// `@plum_tostr_true`/`@plum_tostr_false`/`@plum_tostr_unit` (raw byte
+/// buffers, matching the SAME `@memcpy`-from-a-declared-constant
+/// pattern `codegen.rs`'s own top-level `Expr::ToString`/`CgType::Bool`/
+/// `CgType::Unit` codegen already uses — deliberately NOT the `tostr_
+/// lit_cell` "pre-built cell" shape, since `render_word_as_string`'s
+/// `Bool`/`Unit` cases build their OWN fresh cell via `@plum_alloc_str`+
+/// `@memcpy`, exactly mirroring that existing top-level codegen instead
+/// of introducing a second convention) and `@plum_str_quote` — escapes
+/// `"`/`\` and wraps a `Str` cell in quotes, for a `Str` value rendered
+/// NESTED inside a struct/enum/array (never for a bare top-level `.to_
+/// string()` on a `Str`, which stays raw — see `codegen.rs`'s own
+/// `CgType::Str` arm, untouched by this chunk). Two passes over the
+/// source bytes, both plain counted `phi`-loops matching `emit_array_
+/// release_fns`'s established loop shape: the first counts how many
+/// bytes need an extra escape backslash (to size the fresh allocation
+/// exactly once, no reallocation/growth), the second copies byte-by-
+/// byte, escaping as it goes.
 const STR_QUOTE_RUNTIME: &str = "\
 @plum_tostr_true = private constant [4 x i8] c\"true\"\n\
-@plum_tostr_false = private constant [5 x i8] c\"false\"\n\n\
+@plum_tostr_false = private constant [5 x i8] c\"false\"\n\
+@plum_tostr_unit = private constant [4 x i8] c\"Unit\"\n\n\
 define ptr @plum_str_quote(ptr %s) {\n\
 entry:\n\
   %len_addr = getelementptr i8, ptr %s, i64 8\n\
@@ -3514,8 +3532,13 @@ fn emit_function(
     let mut env = HashMap::new();
     let mut param_decls = Vec::with_capacity(f.params.len());
     for (name, ty) in f.params.iter().zip(&sig.params) {
-        env.insert(name.clone(), (format!("%{name}"), ty.clone()));
-        param_decls.push(format!("{} %{name}", ty.llvm_type()));
+        // See `codegen::param_reg`'s doc comment: a raw `%{name}` could
+        // collide with a codegen-reserved LLVM name (most notably the
+        // `entry` block label every function gets) — a real bug found
+        // while writing a new file under `examples/`.
+        let reg = codegen::param_reg(name);
+        param_decls.push(format!("{} {reg}", ty.llvm_type()));
+        env.insert(name.clone(), (reg, ty.clone()));
     }
 
     let mut em = codegen::Emitter::new();
@@ -3693,8 +3716,11 @@ mod tests {
             body: Expr::Binary(BinOp::Mul, Box::new(Expr::Var("n".to_string())), Box::new(Expr::Int(2))),
         }]);
         let ir = emit(&prog, &sigs(&[("double", vec![CgType::Int], CgType::Int)]), &TagFields::new()).unwrap();
-        assert!(ir.contains("define i64 @double(i64 %n) {"), "{ir}");
-        assert!(ir.contains("mul i64 %n, 2"), "{ir}");
+        // `%.n`, not `%n` — see `codegen::param_reg`'s doc comment: a
+        // user parameter's own LLVM register is `.`-prefixed so it can
+        // never collide with a codegen-reserved bare name.
+        assert!(ir.contains("define i64 @double(i64 %.n) {"), "{ir}");
+        assert!(ir.contains("mul i64 %.n, 2"), "{ir}");
         assert!(ir.contains("ret i64"), "{ir}");
     }
 
@@ -3728,7 +3754,7 @@ mod tests {
             body: Expr::Binary(BinOp::Eq, Box::new(Expr::Var("a".to_string())), Box::new(Expr::Var("b".to_string()))),
         }]);
         let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str, CgType::Str], CgType::Bool)]), &TagFields::new()).unwrap();
-        assert!(ir.contains("call i1 @plum_str_eq(ptr %a, ptr %b)"), "{ir}");
+        assert!(ir.contains("call i1 @plum_str_eq(ptr %.a, ptr %.b)"), "{ir}");
     }
 
     #[test]
@@ -3739,7 +3765,7 @@ mod tests {
             body: Expr::Binary(BinOp::Ne, Box::new(Expr::Var("a".to_string())), Box::new(Expr::Var("b".to_string()))),
         }]);
         let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str, CgType::Str], CgType::Bool)]), &TagFields::new()).unwrap();
-        assert!(ir.contains("call i1 @plum_str_eq(ptr %a, ptr %b)"), "{ir}");
+        assert!(ir.contains("call i1 @plum_str_eq(ptr %.a, ptr %.b)"), "{ir}");
         let call_idx = ir.find("call i1 @plum_str_eq").unwrap();
         assert!(ir[call_idx..].contains("xor i1"), "{ir}");
     }
@@ -3863,7 +3889,7 @@ mod tests {
             body: Expr::Binary(BinOp::And, Box::new(Expr::Var("a".to_string())), Box::new(Expr::Var("b".to_string()))),
         }]);
         let ir = emit(&prog, &sigs(&[("go", vec![CgType::Bool, CgType::Bool], CgType::Bool)]), &TagFields::new()).unwrap();
-        assert!(ir.contains("br i1 %a"), "{ir}");
+        assert!(ir.contains("br i1 %.a"), "{ir}");
         assert!(ir.contains(" = phi i1 "), "{ir}");
         // Scoped to `@go`'s OWN body, not the whole emitted program —
         // as of this chunk's Unicode string runtime, `emit_runtime`
@@ -4053,8 +4079,8 @@ mod tests {
             &tags(&[("Point", vec![CgType::Int])]),
         )
         .unwrap();
-        assert!(ir.contains("call void @plum_rc_inc(ptr %p)"), "{ir}");
-        assert!(ir.contains("call void @plum_rc_dec(ptr %p)"), "{ir}");
+        assert!(ir.contains("call void @plum_rc_inc(ptr %.p)"), "{ir}");
+        assert!(ir.contains("call void @plum_rc_dec(ptr %.p)"), "{ir}");
     }
 
     #[test]
@@ -4083,7 +4109,7 @@ mod tests {
         .unwrap();
         assert!(ir.contains("reuse0:") || ir.contains("reuse"), "{ir}");
         assert!(ir.contains("call ptr @plum_alloc(i64"), "{ir}");
-        assert!(ir.contains("call void @plum_release_fields(ptr %old)"), "{ir}");
+        assert!(ir.contains("call void @plum_release_fields(ptr %.old)"), "{ir}");
         // The reuse block itself must not contain an alloc call — check
         // the text BETWEEN the reuse label and the next label, scoped
         // to `@go`'s OWN body text (the always-emitted runtime preamble
@@ -4099,7 +4125,7 @@ mod tests {
         // the name) appears strictly AFTER the reuse label's own
         // release-fields call — i.e. in a later (fresh-alloc) block,
         // not folded into the reuse path.
-        let store_tag_idx = go_body.find("call void @plum_release_fields(ptr %old)").unwrap();
+        let store_tag_idx = go_body.find("call void @plum_release_fields(ptr %.old)").unwrap();
         let alloc_idx = go_body.find("call ptr @plum_alloc(i64").unwrap();
         assert!(alloc_idx > store_tag_idx, "{go_body}");
     }
@@ -4882,19 +4908,19 @@ mod tests {
             &tags(&[("Point", vec![CgType::Int, CgType::Int])]),
         )
         .unwrap();
-        // The captured original (`%p`, the function's own parameter
+        // The captured original (`%.p`, the function's own parameter
         // register) is deep-copied via `@plum_deepcopy_heap` — the key
         // structural proxy that this is a real, independent snapshot,
         // not a shared pointer a closure capture would instead
         // `plum_rc_inc`.
-        assert!(ir.contains("call ptr @plum_deepcopy_heap(ptr %p)"), "{ir}");
+        assert!(ir.contains("call ptr @plum_deepcopy_heap(ptr %.p)"), "{ir}");
         // And critically: nothing anywhere in the whole program ever
-        // `plum_rc_inc`s `%p` — if it did, both this thread and the
+        // `plum_rc_inc`s `%.p` — if it did, both this thread and the
         // spawned one could end up racing a non-atomic refcount word on
         // the SAME original cell, exactly the bug deep-copy exists to
         // prevent (see `deep_copy_capture`'s own doc comment in
         // codegen.rs).
-        assert!(!ir.contains("call void @plum_rc_inc(ptr %p)"), "{ir}");
+        assert!(!ir.contains("call void @plum_rc_inc(ptr %.p)"), "{ir}");
     }
 
     #[test]
@@ -5089,8 +5115,8 @@ mod tests {
             ]),
         )
         .unwrap();
-        assert!(ir.contains("call ptr @plum_deepcopy_heap(ptr %p)"), "{ir}");
-        assert!(!ir.contains("call void @plum_rc_inc(ptr %p)"), "{ir}");
+        assert!(ir.contains("call ptr @plum_deepcopy_heap(ptr %.p)"), "{ir}");
+        assert!(!ir.contains("call void @plum_rc_inc(ptr %.p)"), "{ir}");
         assert!(ir.contains("call void @plum_channel_send("), "{ir}");
     }
 
@@ -5127,12 +5153,12 @@ mod tests {
             &TagFields::new(),
         )
         .unwrap();
-        assert!(ir.contains("call void @plum_channel_send(ptr %outer_tx, i64"), "{ir}");
+        assert!(ir.contains("call void @plum_channel_send(ptr %.outer_tx, i64"), "{ir}");
         assert!(!ir.contains("call ptr @plum_deepcopy_heap("), "{ir}");
         assert!(!ir.contains("call ptr @plum_deepcopy_str("), "{ir}");
-        // The word sent is `%inner_tx` itself (`ptrtoint`), not the
+        // The word sent is `%.inner_tx` itself (`ptrtoint`), not the
         // result of any copy function.
-        assert!(ir.contains("ptrtoint ptr %inner_tx to i64"), "{ir}");
+        assert!(ir.contains("ptrtoint ptr %.inner_tx to i64"), "{ir}");
     }
 
     #[test]
@@ -5146,7 +5172,7 @@ mod tests {
             &tags(&[("Point", vec![CgType::Int, CgType::Int])]),
         )
         .unwrap();
-        assert!(ir.contains("call i64 @plum_channel_recv(ptr %rx)"), "{ir}");
+        assert!(ir.contains("call i64 @plum_channel_recv(ptr %.rx)"), "{ir}");
         assert!(ir.contains("call i32 @pthread_cond_wait(ptr %cond, ptr %q)"), "{ir}");
         // No deep-copy CALL anywhere in the whole program — `.recv()`
         // adopts the popped word directly (see `codegen_channel_recv`'s
@@ -5178,11 +5204,11 @@ mod tests {
             &TagFields::new(),
         )
         .unwrap();
-        // Fixed index order: %rx0's try_recv call textually precedes
-        // %rx1's, which precedes %rx2's.
-        let i0 = ir.find("@plum_channel_try_recv(ptr %rx0").unwrap();
-        let i1 = ir.find("@plum_channel_try_recv(ptr %rx1").unwrap();
-        let i2 = ir.find("@plum_channel_try_recv(ptr %rx2").unwrap();
+        // Fixed index order: %.rx0's try_recv call textually precedes
+        // %.rx1's, which precedes %.rx2's.
+        let i0 = ir.find("@plum_channel_try_recv(ptr %.rx0").unwrap();
+        let i1 = ir.find("@plum_channel_try_recv(ptr %.rx1").unwrap();
+        let i2 = ir.find("@plum_channel_try_recv(ptr %.rx2").unwrap();
         assert!(i0 < i1 && i1 < i2, "expected fixed arm-0/1/2 poll order:\n{ir}");
         // A genuine busy-poll (usleep-and-retry) — never a blocking
         // `pthread_cond_wait`, unlike `.recv()`. `@plum_channel_recv`
@@ -5324,7 +5350,7 @@ mod tests {
         let ir = emit(&prog, &sigs(&[("go", vec![CgType::Bool], CgType::Bool)]), &TagFields::new()).unwrap();
         // Argument direction: `i1 -> i32` via `zext`, never a bitcast/
         // truncation pretending the two widths are interchangeable.
-        assert!(ir.contains("zext i1 %b to i32"), "{ir}");
+        assert!(ir.contains("zext i1 %.b to i32"), "{ir}");
         // Return direction: `icmp ne i32 .., 0` — matching C's "any
         // nonzero is true" convention — NEVER `trunc`, which would only
         // look at the low bit.
@@ -5375,10 +5401,10 @@ mod tests {
         assert!(ir.contains("store i8 0, ptr"), "{ir}");
         // The mandatory ownership-discharge dec MUST reference the
         // ORIGINAL Str cell's own register — a function parameter named
-        // `s` is bound directly to `%s` (see `emit_function`'s param
-        // binding), so this is exactly `%s`, never the fresh `CStr`
-        // buffer register.
-        assert!(ir.contains("call void @plum_rc_dec_str(ptr %s)"), "{ir}");
+        // `s` is bound to `%.s` (see `codegen::param_reg`'s doc comment
+        // for the leading `.`), so this is exactly `%.s`, never the
+        // fresh `CStr` buffer register.
+        assert!(ir.contains("call void @plum_rc_dec_str(ptr %.s)"), "{ir}");
     }
 
     #[test]
@@ -5689,8 +5715,8 @@ mod tests {
         let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
         assert!(!ir.contains("plum_str_to_upper_inplace"), "{ir}");
         let go_body = &ir[ir.find("define ptr @go(").unwrap()..];
-        assert!(go_body.contains("call ptr @plum_str_to_upper(ptr %s)"), "{go_body}");
-        assert!(go_body.contains("call void @free(ptr %s)"), "{go_body}");
+        assert!(go_body.contains("call ptr @plum_str_to_upper(ptr %.s)"), "{go_body}");
+        assert!(go_body.contains("call void @free(ptr %.s)"), "{go_body}");
 
         let prog2 = program(vec![Function {
             name: "go".to_string(),
@@ -5700,8 +5726,8 @@ mod tests {
         let ir2 = emit(&prog2, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
         assert!(!ir2.contains("plum_str_to_lower_inplace"), "{ir2}");
         let go_body2 = &ir2[ir2.find("define ptr @go(").unwrap()..];
-        assert!(go_body2.contains("call ptr @plum_str_to_lower(ptr %s)"), "{go_body2}");
-        assert!(go_body2.contains("call void @free(ptr %s)"), "{go_body2}");
+        assert!(go_body2.contains("call ptr @plum_str_to_lower(ptr %.s)"), "{go_body2}");
+        assert!(go_body2.contains("call void @free(ptr %.s)"), "{go_body2}");
     }
 
     #[test]
@@ -5716,7 +5742,7 @@ mod tests {
             body: Expr::StrTrimReuse { reuse_of: "s".to_string() },
         }]);
         let ir = emit(&prog, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
-        assert!(ir.contains("call void @plum_str_trim_inplace(ptr %s)"), "{ir}");
+        assert!(ir.contains("call void @plum_str_trim_inplace(ptr %.s)"), "{ir}");
         let go_body = &ir[ir.find("define ptr @go(").unwrap()..];
         assert!(!go_body.contains("call ptr @realloc"), "{go_body}");
     }
@@ -5745,10 +5771,10 @@ mod tests {
         )
         .unwrap();
         // Both branches call the same fresh-building runtime function...
-        let call_count = ir.matches("call ptr @plum_str_replace(ptr %s, ptr %from, ptr %to)").count();
+        let call_count = ir.matches("call ptr @plum_str_replace(ptr %.s, ptr %.from, ptr %.to)").count();
         assert_eq!(call_count, 2, "{ir}");
         // ...and the reuse branch additionally frees the old cell.
-        assert!(ir.contains("call void @free(ptr %s)"), "{ir}");
+        assert!(ir.contains("call void @free(ptr %.s)"), "{ir}");
     }
 
     #[test]
@@ -5759,7 +5785,7 @@ mod tests {
             body: Expr::StrTrim { base: Box::new(Expr::Var("s".to_string())) },
         }]);
         let trim_ir = emit(&trim_prog, &sigs(&[("go", vec![CgType::Str], CgType::Str)]), &TagFields::new()).unwrap();
-        assert!(trim_ir.contains("call ptr @plum_str_trim(ptr %s)"), "{trim_ir}");
+        assert!(trim_ir.contains("call ptr @plum_str_trim(ptr %.s)"), "{trim_ir}");
 
         let split_prog = program(vec![Function {
             name: "go".to_string(),
@@ -5772,7 +5798,7 @@ mod tests {
             &TagFields::new(),
         )
         .unwrap();
-        assert!(split_ir.contains("call ptr @plum_str_split(ptr %s, ptr %sep)"), "{split_ir}");
+        assert!(split_ir.contains("call ptr @plum_str_split(ptr %.s, ptr %.sep)"), "{split_ir}");
 
         let replace_prog = program(vec![Function {
             name: "go".to_string(),
@@ -5789,7 +5815,7 @@ mod tests {
             &TagFields::new(),
         )
         .unwrap();
-        assert!(replace_ir.contains("call ptr @plum_str_replace(ptr %s, ptr %from, ptr %to)"), "{replace_ir}");
+        assert!(replace_ir.contains("call ptr @plum_str_replace(ptr %.s, ptr %.from, ptr %.to)"), "{replace_ir}");
     }
 
     #[test]

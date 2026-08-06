@@ -3130,6 +3130,65 @@ being interpreter-only), full `cargo test --workspace` clean before and
 after. README gained a new "Examples" section pointing at all six, plus
 the `Ref[T]` native-codegen-scope bullet.
 
+### Chunk 18: fixing chunk 17's three flagged (not fixed) bugs
+
+User asked to fix everything chunk 17 flagged but didn't fix. All three
+are now RESOLVED — full root-cause/fix detail is in the matching (now
+RESOLVED) "Open questions" entries above; short version here:
+
+1. **`Unit.to_string()`** — asked the user directly first (a real
+   design fork: reject like the interpreter used to, or render some
+   fixed literal), since this genuinely wasn't an obvious bug fix.
+   Chose to render the literal `"Unit"` in both backends, everywhere.
+   `plum-codegen` gained a real `CgType::Unit` arm (previously shared
+   `Bool`'s, wrong for `Unit`) in both the top-level `Expr::ToString`
+   codegen and `render_word_as_string` (the array/struct-field-nested
+   helper — this was the ACTUAL source of the `"false"` mis-render);
+   the interpreter's `render_value` gained a matching `Value::Unit`
+   arm.
+2. **User identifiers colliding with reserved LLVM names** — surveyed
+   every `CgType::Bool | CgType::Unit`-merged match arm across `plum-
+   codegen` first (there are ~18) to confirm which were genuinely
+   relevant (only the stringification ones) versus legitimately
+   identical at the representation level (word conversion, equality,
+   thread-boundary checks — all correctly left merged). Then found the
+   ACTUAL raw-name-leak sites (only two: `emit_closure_body_fn`'s and
+   `codegen_function`'s own param declarations — ordinary `let` locals
+   and closure captures both already mapped to a compiler-generated
+   register, never a raw name). Fixed via one new helper, `codegen::
+   param_reg`, `.`-prefixing every user parameter's register — a
+   character no Plum identifier can ever contain, making the collision
+   class structurally impossible rather than avoided word-by-word.
+   Required updating 17 existing `plum-codegen` unit tests that
+   asserted exact (now-stale) `%name`-shaped IR text — an expected,
+   mechanical consequence of a representation change, not a sign
+   anything was wrong with the tests themselves.
+3. **A discarded `spawn` statement poisoning a later, unrelated
+   `spawn`** — root cause was `Expr::Spawn`'s interpreter handling
+   capturing its WHOLE current environment rather than `block`'s actual
+   free variables. Fixed by porting `plum-codegen`'s own `free_vars`/
+   `free_vars_scoped` (already used there for closure-capture analysis)
+   into `plum-interp`, duplicated across the crate boundary rather than
+   newly shared — this codebase's own established precedent for small,
+   independently-verifiable logic (e.g. `plumc::assoc_fns`'s pattern-
+   binding helpers) — and using it to filter the capture set. This one
+   fix closes BOTH manifestations chunk 17 hit: the discarded-statement
+   case AND the "multiple live Task-typed locals" case (`examples/
+   concurrency`'s original array-of-joined-tasks attempt, which needed
+   working around with per-task nested blocks) — both were the same
+   root cause, just different triggers.
+
+The `examples/concurrency` file was simplified back to its natural,
+un-worked-around form (no more per-spawn nested blocks) to prove the
+fix directly, not just leave the workaround in place now that it's
+unnecessary. Verified end to end: the ORIGINAL corrupting/crashing
+repro for all three bugs re-run and confirmed fixed on both backends
+(interpreter AND `plum build`, where applicable), full `cargo test
+--workspace` clean throughout (net new regression tests: `plum-interp`
+gained 4, `plum-codegen`/`plumc` gained several more across the Unit-
+rendering and identifier-collision fixes), zero warnings, zero
+regressions.
+
 ## Toolchain and diagnostics
 
 After JSON, the user redirected from stdlib growth toward user-facing
@@ -4725,87 +4784,65 @@ summed), not just inspect emitted IR text.
 
 ## Open questions (not yet decided, flagged so we don't forget them)
 
-- **KNOWN BUG, real but NOT fixed here — a discarded statement-
-  expression result can linger in the interpreter's environment and
-  get captured by a LATER, unrelated `spawn`.** Found while writing a
-  new file under `examples/` (see this file's example-files chunk): a
-  bare `spawn { ... };` statement (its `Task` result never `let`-
-  bound, just discarded — an ordinary "fire and forget" pattern) made
-  a COMPLETELY separate, later `spawn`/`.join()` pair in the SAME
-  function fail with `"cannot send a task handle across a task
-  boundary"`, even though the second `spawn`'s own body never
-  references the first task at all. Root cause: `lower_block`
-  (`plum-ir/src/lower.rs`) desugars every bare statement-expression
-  `e;` into `Let { name: "_", value: e, body: rest }` — completely
-  ordinary, matches how `let mut`-style discards already work — but
-  the interpreter's `Expr::Spawn` handling captures its WHOLE current
-  environment via `self.env.clone()` (see the entry below this one for
-  the SAME "captures whole scope, not just referenced names" root
-  cause manifesting a different way), so the earlier spawn's `Task`
-  value, still bound under the synthetic name `"_"` for the rest of
-  that block, gets swept into the LATER spawn's capture set and
-  rejected by `to_portable` (`Task` is documented as never portable —
-  see its own doc comment). NOT fixed here — the real fix is the same
-  one the entry below already calls for (free-variable-analyzed
-  capture instead of whole-scope capture), just a different trigger for
-  it; a narrower alternative (special-casing `"_"`-bound values as
-  immediately droppable) would only band-aid this one manifestation.
-  Worked around in the new example files by wrapping every `spawn`/
-  `.join()` pair in its own nested `{ }` block, so any Task-typed
-  binding (including an anonymous `"_"` one) goes out of scope before
-  the next `spawn` runs.
-- **KNOWN BUG, real but NOT fixed here — user source identifiers can
-  collide with codegen-reserved LLVM names in native codegen, with no
-  escaping/mangling at all.** Found while writing a new file under
-  `examples/` (see this file's example-files chunk): a closure
-  parameter literally named `entry` (`|entry: PriceEntry| entry.name
-  == name` — an entirely ordinary name, e.g. for a map/cache entry)
-  made `plum build` fail with `clang` rejecting the IR outright
-  (`"unable to create block named 'entry'"`). Root cause: `emit_
-  closure_body_fn` (`plum-codegen/src/codegen.rs`) uses the RAW Plum
-  source parameter name directly as the LLVM register name
-  (`format!("%{name}")`, no prefix/mangling at all), and EVERY
-  function's first basic block is unconditionally labeled the bare
-  string `entry` — so a parameter named `entry` collides with that
-  block label in the exact same namespace. The closure's own env
-  pointer parameter is hardcoded as `%env` the same unescaped way, so a
-  parameter/capture literally named `env` would hit the identical class
-  of bug (confirmed by reading the code, not independently reproduced —
-  `entry` was the one that actually got hit by accident). NOT fixed
-  here — unlike this chunk's other two bugs (both narrow, single-
-  function fixes), a real fix needs a genuine design decision (a
-  systematic escaping/mangling scheme for every user-sourced LLVM
-  identifier — parameters, `let` locals, closure captures — probably a
-  prefix no valid Plum identifier can produce, applied consistently
-  across `codegen.rs`/`lib.rs`), not a one-line patch, and deserves its
-  own scoped session rather than a hasty guess. Worked around in the
-  new example files by simply not naming anything `entry`/`env`.
-- **KNOWN BUG, narrower than it sounds — `Unit.to_string()` renders as
-  `"false"` in native codegen instead of being rejected/rendered
-  correctly, a real interpreter/codegen behavioral-parity gap.** Found
-  while writing new files under `examples/` (see this file's example-
-  files chunk), not hypothetical: `println([(), ()].to_string())`
-  prints `[false, false]` when compiled via `plum build`, but the
-  interpreter correctly REJECTS the same expression with `` `.to_
-  string()` is not yet supported for Unit ``. Root cause: `plum-codegen`
-  merges `CgType::Bool | CgType::Unit` into one shared render arm
-  everywhere a value gets stringified (`render_word_as_string` and
-  every top-level `Expr::ToString` site in `codegen.rs` alike) — the
-  arm does `icmp ne i64 word_reg, 0` and picks `"true"`/`"false"`
-  text, which happens to "work" for `Bool` but is simply wrong for
-  `Unit` (whose runtime representation is always the word `0`, so it
-  always renders `"false"`). NOT fixed here — this is a narrower,
-  lower-priority gap than a codegen crash (found alongside, and fixed
-  separately in this same chunk, a REAL crash: see the array-to-string
-  loop entry immediately below), and the fix likely wants its own
-  small design decision (should native codegen reject `Unit.to_
-  string()` the same way the interpreter does, or should `Unit` legitimately
-  render as some fixed literal like `"Unit"` or `"()"` — the
-  interpreter's existing behavior suggests REJECTING was the intended
-  design, in which case `codegen.rs` needs a real `CgType::Unit` arm
-  of its own rather than continuing to share `Bool`'s). Routed around
-  in the new example files by never `.to_string()`-ing/printing a bare
-  `Unit` value or `Array[Unit]` directly.
+- ~~KNOWN BUG — a discarded statement-expression result can linger in
+  the interpreter's environment and get captured by a LATER, unrelated
+  `spawn`~~ **RESOLVED in chunk 18.** Root cause: the interpreter's
+  `Expr::Spawn` handling captured its WHOLE current environment
+  (`self.env.clone()`), not just the names its own body actually
+  references — so a discarded `spawn { ... };` statement's `Task`,
+  still bound under `lower_block`'s synthetic `"_"` name for the rest
+  of the block, could get swept into a LATER, unrelated spawn's capture
+  set and rejected (`Task` is never portable). Fixed by adding a real
+  free-variable walker (`plum-interp::free_vars`, ported from and kept
+  in sync with `plum-codegen`'s own identically-named/identically-
+  shaped function, duplicated across the crate boundary rather than
+  newly shared — matching this codebase's own established precedent)
+  and using it to filter `Expr::Spawn`'s capture set down to only the
+  names `block` genuinely references. Also fixes the sibling shape from
+  the entry below (multiple live `Task`-typed locals in scope — each
+  spawn now only captures what it actually needs, so an earlier
+  unrelated task in scope is no longer swept in either). Regression
+  tests in `plum-interp` pin BOTH the original unsafe shape (a bare
+  discarded `spawn` before a later one, no nested-block workaround
+  needed anymore) and that a spawn still correctly captures a local its
+  body genuinely depends on.
+- ~~KNOWN BUG — user source identifiers can collide with codegen-
+  reserved LLVM names in native codegen, with no escaping/mangling at
+  all~~ **RESOLVED in chunk 18.** Root cause: `emit_closure_body_fn`
+  (closures) and `codegen_function` (top-level functions) both used a
+  parameter's RAW Plum source name directly as its LLVM register
+  (`format!("%{name}")`), with zero escaping — so a parameter literally
+  named `entry` collided with the bare `entry` block label every
+  function's first block gets, and a parameter named `env` would
+  collide with the closure environment pointer's own hardcoded
+  register the same way. Fixed via a single new helper, `codegen::
+  param_reg`, which `.`-prefixes every user parameter's register
+  (`%.name`) — a character LLVM local identifiers freely allow but a
+  Plum source identifier can NEVER contain (`is_ident_start`/`is_ident_
+  continue` only ever accept `[a-zA-Z_][a-zA-Z0-9_]*`), so the
+  collision is now structurally impossible, not just avoided for the
+  two words that happened to get hit. `let`-bound locals and closure
+  CAPTURES were already safe (both map to a compiler-generated `%v<N>`
+  register, never a raw name) — only these two call sites needed the
+  fix. A native-codegen regression test pins both `entry` and `env` as
+  parameter/closure-param names compiling and running correctly.
+- ~~KNOWN BUG — `Unit.to_string()` renders as `"false"` in native
+  codegen instead of being rejected/rendered correctly, a real
+  interpreter/codegen behavioral-parity gap~~ **RESOLVED in chunk 18,**
+  per the user's own explicit choice (asked directly, given this was a
+  real design fork, not an obvious bug fix): `Unit.to_string()` now
+  renders the literal `"Unit"` in BOTH backends, everywhere (a bare
+  top-level call, nested inside an array/struct field). Native codegen
+  gained a real `CgType::Unit` arm (previously merged with `Bool`'s,
+  which "happened to work" for `Bool` but was simply wrong for `Unit`)
+  in both the top-level `Expr::ToString` codegen (which used to reject
+  Unit as a compile error — the array/struct-field-nested path was the
+  ACTUAL source of the `"false"` mis-render, via `render_word_as_
+  string`'s shared arm) and that shared helper; the interpreter's own
+  `render_value` gained a matching `Value::Unit` arm (previously fell
+  into the generic "not yet supported" error). Regression tests in
+  `plum-interp` and `codegen_cli.rs` (both bare and array-nested shapes)
+  pin the literal `"Unit"` output on both backends.
 - **KNOWN BUG, FIXED in this same chunk — a real native-codegen crash
   for `Array[Bool]`/`Array[Unit]` `.to_string()`.** Found the same way
   as the entry above (writing a new `examples/` file that chained two

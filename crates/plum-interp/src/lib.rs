@@ -2,7 +2,7 @@ mod heap;
 
 use plum_ir::ir::{BinOp, Expr, ExternType, Function, Program, RcOp, UnOp};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::mpsc::TryRecvError;
@@ -509,6 +509,217 @@ fn resolve_extern_fn(f: &plum_ir::ir::ExternFn) -> Result<ExternFnHandle, String
     })
 }
 
+/// Collects every free variable of `expr` — every `Var(name)`/`reuse_
+/// of` name reachable from it that ISN'T shadowed by something `expr`
+/// introduces itself (a `Let`/`Match` binding, a `For` loop variable, a
+/// closure's own params, ...). A purely structural walk, exhaustive
+/// over every `ir::Expr` variant — ported from (and kept in sync with)
+/// `plum-codegen`'s own identically-named `free_vars`/`free_vars_
+/// scoped` (used there for closure-capture analysis), duplicated rather
+/// than shared across the crate boundary, matching this codebase's own
+/// established "small, independently-verified duplication over new
+/// shared plumbing" precedent (e.g. `plumc::assoc_fns`'s own pattern-
+/// binding helpers).
+///
+/// Used by `Interpreter::eval`'s `Expr::Spawn` handling to fix a real
+/// bug: capturing `self.env` WHOLESALE (every local currently in
+/// scope, not just the ones `block` actually mentions) meant a
+/// discarded `spawn { ... };` STATEMENT's `Task` result — left bound
+/// under `lower_block`'s synthetic `"_"` name for the rest of the
+/// enclosing block — could get swept into a LATER, unrelated `spawn`'s
+/// capture set and rejected (`Task` is never portable). See DESIGN.md's
+/// "Open questions" entry (RESOLVED) for the full writeup. Returns a
+/// `BTreeSet` (sorted) purely for deterministic iteration order in
+/// tests/error messages, not for any correctness reason this crate
+/// itself depends on (unlike `plum-codegen`'s version, where the order
+/// becomes a real capture-cell field-index assignment).
+fn free_vars(expr: &Expr, out: &mut BTreeSet<String>) {
+    free_vars_scoped(expr, &HashSet::new(), out);
+}
+
+fn free_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<String>) {
+    let candidate = |name: &str, local: &HashSet<String>, out: &mut BTreeSet<String>| {
+        if !local.contains(name) {
+            out.insert(name.to_string());
+        }
+    };
+    match expr {
+        Expr::Var(name) => candidate(name, local, out),
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel => {}
+        Expr::Unary(_, e) | Expr::AsCStr(e) => free_vars_scoped(e, local, out),
+        Expr::Binary(_, l, r) => {
+            free_vars_scoped(l, local, out);
+            free_vars_scoped(r, local, out);
+        }
+        Expr::Let { name, value, body } => {
+            free_vars_scoped(value, local, out);
+            let mut inner = local.clone();
+            inner.insert(name.clone());
+            free_vars_scoped(body, &inner, out);
+        }
+        Expr::If { cond, then_branch, else_branch } => {
+            free_vars_scoped(cond, local, out);
+            free_vars_scoped(then_branch, local, out);
+            free_vars_scoped(else_branch, local, out);
+        }
+        Expr::Call { callee, args } => {
+            free_vars_scoped(callee, local, out);
+            for a in args {
+                free_vars_scoped(a, local, out);
+            }
+        }
+        Expr::ExternCall { args, .. } => {
+            for a in args {
+                free_vars_scoped(a, local, out);
+            }
+        }
+        Expr::Ctor { fields, .. } => {
+            for f in fields {
+                free_vars_scoped(f, local, out);
+            }
+        }
+        Expr::CtorReuse { reuse_of, fields, .. } => {
+            candidate(reuse_of, local, out);
+            for f in fields {
+                free_vars_scoped(f, local, out);
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            free_vars_scoped(scrutinee, local, out);
+            for arm in arms {
+                let mut inner = local.clone();
+                for b in &arm.bindings {
+                    inner.insert(b.clone());
+                }
+                if let Some(g) = &arm.guard {
+                    free_vars_scoped(g, &inner, out);
+                }
+                free_vars_scoped(&arm.body, &inner, out);
+            }
+        }
+        Expr::RcAnnotated { target, rest, .. } => {
+            candidate(target, local, out);
+            free_vars_scoped(rest, local, out);
+        }
+        Expr::For { var, start, end, body } => {
+            free_vars_scoped(start, local, out);
+            free_vars_scoped(end, local, out);
+            let mut inner = local.clone();
+            inner.insert(var.clone());
+            free_vars_scoped(body, &inner, out);
+        }
+        Expr::Closure { params, body, .. } => {
+            let mut inner = local.clone();
+            for p in params {
+                inner.insert(p.clone());
+            }
+            free_vars_scoped(body, &inner, out);
+        }
+        Expr::Assign { name, value, rest } => {
+            candidate(name, local, out);
+            free_vars_scoped(value, local, out);
+            free_vars_scoped(rest, local, out);
+        }
+        Expr::Spawn { block } => free_vars_scoped(block, local, out),
+        Expr::TaskJoin { task } => free_vars_scoped(task, local, out),
+        Expr::ChannelSend { sender, value } => {
+            free_vars_scoped(sender, local, out);
+            free_vars_scoped(value, local, out);
+        }
+        Expr::ChannelRecv { receiver } => free_vars_scoped(receiver, local, out),
+        Expr::Select { arms } => {
+            for arm in arms {
+                free_vars_scoped(&arm.receiver, local, out);
+                free_vars_scoped(&arm.body, local, out);
+            }
+        }
+        Expr::Index { base, index } => {
+            free_vars_scoped(base, local, out);
+            free_vars_scoped(index, local, out);
+        }
+        Expr::ArrayLen { array } | Expr::ArrayPop { array } => free_vars_scoped(array, local, out),
+        Expr::ArrayPush { array, value } => {
+            free_vars_scoped(array, local, out);
+            free_vars_scoped(value, local, out);
+        }
+        Expr::ArraySet { array, index, value } => {
+            free_vars_scoped(array, local, out);
+            free_vars_scoped(index, local, out);
+            free_vars_scoped(value, local, out);
+        }
+        Expr::ArrayRemove { array, index } => {
+            free_vars_scoped(array, local, out);
+            free_vars_scoped(index, local, out);
+        }
+        Expr::ArrayPushReuse { reuse_of, value } => {
+            candidate(reuse_of, local, out);
+            free_vars_scoped(value, local, out);
+        }
+        Expr::ArrayPopReuse { reuse_of } => candidate(reuse_of, local, out),
+        Expr::ArraySetReuse { reuse_of, index, value } => {
+            candidate(reuse_of, local, out);
+            free_vars_scoped(index, local, out);
+            free_vars_scoped(value, local, out);
+        }
+        Expr::ArrayRemoveReuse { reuse_of, index } => {
+            candidate(reuse_of, local, out);
+            free_vars_scoped(index, local, out);
+        }
+        Expr::StrConcat { base, other } => {
+            free_vars_scoped(base, local, out);
+            free_vars_scoped(other, local, out);
+        }
+        Expr::StrConcatReuse { reuse_of, other } => {
+            candidate(reuse_of, local, out);
+            free_vars_scoped(other, local, out);
+        }
+        Expr::StrRunes { base } | Expr::StrTrim { base } | Expr::StrToUpper { base } | Expr::StrToLower { base } | Expr::ToString { base } => {
+            free_vars_scoped(base, local, out)
+        }
+        Expr::StrTrimReuse { reuse_of } | Expr::StrToUpperReuse { reuse_of } | Expr::StrToLowerReuse { reuse_of } => {
+            candidate(reuse_of, local, out)
+        }
+        Expr::StrSplit { base, sep } => {
+            free_vars_scoped(base, local, out);
+            free_vars_scoped(sep, local, out);
+        }
+        Expr::StrContains { base, needle } => {
+            free_vars_scoped(base, local, out);
+            free_vars_scoped(needle, local, out);
+        }
+        Expr::StrStartsWith { base, prefix } => {
+            free_vars_scoped(base, local, out);
+            free_vars_scoped(prefix, local, out);
+        }
+        Expr::StrEndsWith { base, suffix } => {
+            free_vars_scoped(base, local, out);
+            free_vars_scoped(suffix, local, out);
+        }
+        Expr::StrReplace { base, from, to } => {
+            free_vars_scoped(base, local, out);
+            free_vars_scoped(from, local, out);
+            free_vars_scoped(to, local, out);
+        }
+        Expr::StrReplaceReuse { reuse_of, from, to } => {
+            candidate(reuse_of, local, out);
+            free_vars_scoped(from, local, out);
+            free_vars_scoped(to, local, out);
+        }
+        Expr::RefNew { value } => free_vars_scoped(value, local, out),
+        Expr::RefGet { base } => free_vars_scoped(base, local, out),
+        Expr::RefSet { base, value } => {
+            free_vars_scoped(base, local, out);
+            free_vars_scoped(value, local, out);
+        }
+        Expr::ReadFileRaw { path } => free_vars_scoped(path, local, out),
+        Expr::WriteFileRaw { path, contents } => {
+            free_vars_scoped(path, local, out);
+            free_vars_scoped(contents, local, out);
+        }
+        Expr::PanicRaw { message } => free_vars_scoped(message, local, out),
+    }
+}
+
 // A flat, innermost-last scope stack — `let` pushes one entry, evaluates
 // its body, then pops. Variable lookup scans from the end so shadowing
 // (an inner `let x` hiding an outer one) falls out for free, and
@@ -845,6 +1056,18 @@ impl Interpreter {
             Value::Int(n) => Ok(n.to_string()),
             Value::Float(f) => Ok(f.to_string()),
             Value::Bool(b) => Ok(b.to_string()),
+            // Matches native codegen's own `CgType::Unit` arm exactly
+            // (`plum-codegen`'s top-level `Expr::ToString` codegen and
+            // `render_word_as_string`'s array/struct-field counterpart)
+            // — both backends used to disagree here (this side simply
+            // fell into the generic "not yet supported" error below;
+            // native codegen either rejected it too, at the top level,
+            // or — worse — silently mis-rendered it as `"false"` inside
+            // an array/struct field, since `Unit` shared `Bool`'s render
+            // arm there). Fixed together, deliberately, not by
+            // coincidence: see DESIGN.md's "Open questions" entry this
+            // closes.
+            Value::Unit => Ok("Unit".to_string()),
             Value::HeapRef(addr) => match self.heap.read_any(*addr)? {
                 heap::CellView::Str(s) => {
                     if quote_str {
@@ -1202,16 +1425,41 @@ impl Interpreter {
                 Ok(Value::Closure(id))
             }
             Expr::Spawn { block } => {
-                // Snapshot everything `block` can see and convert it
-                // to portable form BEFORE crossing the thread boundary
-                // — see `to_portable`'s doc comment. Fails loudly (in
-                // THIS thread, before anything spawns) if the captured
-                // environment contains something that can't cross yet
+                // Snapshot only `block`'s actual FREE VARIABLES (see
+                // `free_vars`'s own doc comment) and convert them to
+                // portable form BEFORE crossing the thread boundary —
+                // see `to_portable`'s doc comment. Fails loudly (in
+                // THIS thread, before anything spawns) if a captured
+                // name's value contains something that can't cross yet
                 // (a closure, a bare function value, a task handle).
-                let portable_env = self
-                    .env
+                //
+                // Deliberately NOT `self.env.iter()` (every local
+                // currently in scope, unconditionally) — that used to
+                // be a real bug: a bare `spawn { ... };` STATEMENT
+                // (its `Task` result discarded, bound only under `lower_
+                // block`'s synthetic `"_"` name) left that `Task` value
+                // sitting in `self.env` for the rest of the enclosing
+                // block, and a LATER, completely unrelated `spawn` in
+                // the same scope would try to capture it too and fail —
+                // even though its own body never referenced it. See
+                // DESIGN.md's "Open questions" entry (RESOLVED) for the
+                // full writeup.
+                let mut free = BTreeSet::new();
+                free_vars(block, &mut free);
+                let portable_env = free
                     .iter()
-                    .map(|(name, v)| Ok((name.clone(), self.to_portable(v)?)))
+                    // A name that resolves to a top-level FUNCTION
+                    // reference needs no capturing at all — the spawned
+                    // thread already gets the whole function table
+                    // (`functions: self.functions.clone()` below),
+                    // and `to_portable` would reject a bare `Value::
+                    // Function` outright the same way it rejects a
+                    // closure.
+                    .filter_map(|name| match self.lookup(name) {
+                        Ok(Value::Function(_)) | Err(_) => None,
+                        Ok(v) => Some((name.clone(), v)),
+                    })
+                    .map(|(name, v)| Ok((name, self.to_portable(&v)?)))
                     .collect::<Result<Vec<(String, PortableValue)>, String>>()?;
                 let portable_globals = self
                     .globals
@@ -2364,6 +2612,19 @@ mod tests {
     }
 
     #[test]
+    fn to_string_on_unit_renders_the_literal_unit() {
+        // Regression test for a real backend-parity bug (see DESIGN.md's
+        // "Open questions", RESOLVED): `Value::Unit` used to fall into
+        // `render_value`'s generic "not yet supported" error, while
+        // native codegen either rejected it too (top level) or, worse,
+        // silently mis-rendered it as `"false"` (nested inside an array/
+        // struct field, sharing `Bool`'s render arm). Both now render
+        // the literal `"Unit"` — see `codegen_cli.rs`'s matching test.
+        assert_eq!(eval("().to_string() == \"Unit\""), Value::Bool(true));
+        assert_eq!(eval("[(), ()].to_string() == \"[Unit, Unit]\""), Value::Bool(true));
+    }
+
+    #[test]
     fn to_string_on_a_struct_renders_named_fields() {
         let src = "struct Point { x: Int, y: Int }\n\
                     let use_it dummy = Point { x: 1, y: 2 }.to_string() == \"Point { x: 1, y: 2 }\"";
@@ -2960,20 +3221,31 @@ mod tests {
     #[test]
     fn a_discarded_fire_and_forget_spawn_does_not_poison_a_later_unrelated_spawn() {
         // Regression test for a real bug (see DESIGN.md's "Open
-        // questions"): a bare `spawn { ... };` STATEMENT (its `Task`
-        // result never `let`-bound, discarded like any other statement)
-        // used to leave that `Task` value bound under `lower_block`'s
-        // synthetic `"_"` name for the rest of the enclosing block —
-        // `Expr::Spawn`'s handling captures its WHOLE current
-        // environment, so a LATER, completely unrelated `spawn` in the
-        // same scope would try to capture that stale `"_"`-bound task
-        // too and fail (`Task` is never portable across a spawn
-        // boundary). Wrapping the discarded spawn in its own nested
-        // block (so `"_"` goes out of scope before the later spawn
-        // runs) is the documented workaround — this test pins that it
-        // actually works, not just that the bug reproduces.
-        let src = "{ { spawn { 1 }; }; spawn { 2 }.join() }";
+        // questions", RESOLVED): a bare `spawn { ... };` STATEMENT (its
+        // `Task` result never `let`-bound, discarded like any other
+        // statement) used to leave that `Task` value bound under `lower_
+        // block`'s synthetic `"_"` name for the rest of the enclosing
+        // block — `Expr::Spawn`'s handling used to capture its WHOLE
+        // current environment, so a LATER, completely unrelated `spawn`
+        // in the same scope would try to capture that stale `"_"`-bound
+        // task too and fail (`Task` is never portable across a spawn
+        // boundary). Fixed by capturing only `block`'s actual free
+        // variables (`free_vars`) instead of the whole scope — this
+        // pins the ORIGINAL unsafe shape directly (no nested-block
+        // workaround needed anymore), not just a workaround that avoids
+        // it.
+        let src = "{ spawn { 1 }; spawn { 2 }.join() }";
         assert_eq!(eval(src), Value::Int(2));
+    }
+
+    #[test]
+    fn spawn_still_captures_a_local_its_own_body_actually_references() {
+        // The flip side of the fix above: free-variable-scoped capture
+        // must still capture what a spawn's body GENUINELY needs, not
+        // become overly narrow. `n` is a real, live dependency of the
+        // second spawn's body.
+        let src = "{ let n = 21; spawn { 1 }; spawn { n * 2 }.join() }";
+        assert_eq!(eval(src), Value::Int(42));
     }
 
     #[test]

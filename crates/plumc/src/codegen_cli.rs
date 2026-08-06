@@ -1826,6 +1826,51 @@ mod tests {
     }
 
     #[test]
+    fn unit_to_string_renders_the_literal_unit_in_native_codegen() {
+        // Regression test for a real backend-parity bug (see DESIGN.md's
+        // "Open questions", RESOLVED): a bare `Unit.to_string()` used to
+        // be a compile error at the top level, and silently mis-rendered
+        // as `"false"` when nested inside an array/struct field (`Unit`
+        // shared `Bool`'s render arm). Both now render the literal
+        // `"Unit"`, matching the interpreter (`plum-interp`'s own
+        // `render_value` test covers that side).
+        let src = "let go (): Bool = ().to_string() == \"Unit\"\n";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+        let src = "let go (): Bool = [(), ()].to_string() == \"[Unit, Unit]\"\n";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn a_parameter_named_entry_or_env_compiles_and_runs_correctly_in_native_codegen() {
+        // Regression test for a real native-codegen crash (see
+        // DESIGN.md's "Open questions", RESOLVED): a function or closure
+        // parameter using the raw Plum source name AS its own LLVM
+        // register — with no escaping — could collide with a codegen-
+        // RESERVED name in the same namespace. `entry` collided with the
+        // literal block label every function's first block is
+        // unconditionally given (`clang` rejected the IR outright:
+        // "unable to create block named 'entry'"); `env` collides with
+        // the closure environment pointer's own hardcoded register.
+        // Fixed via `codegen::param_reg`, which `.`-prefixes every user
+        // parameter's LLVM register — a character no Plum source
+        // identifier can ever contain, so the collision is now
+        // structurally impossible, not just avoided for these two
+        // specific words.
+        let src = "struct Item { name: String, price: Int }\n\
+                    let find_by_name (items: Array[Item]) (target: String): Option[Int] = \
+                        match Array.find(items, |entry: Item| entry.name == target) { \
+                            Some(entry) => Some(entry.price), None => None } \n\
+                    let go (): Int = match find_by_name([Item { name: \"apple\", price: 3 }], \"apple\") { \
+                        Some(p) => p, None => -1 }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "3");
+
+        let src2 = "let describe (env: String): String = env.concat(\"!\")\n\
+                     let with_closure (env: Int): Int = { let f = |env: Int| env * 2; f(env) }\n\
+                     let go (): Bool = describe(\"prod\") == \"prod!\" && with_closure(21) == 42";
+        assert_eq!(compile_and_run(src2, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
     fn array_of_structs_to_string_recurses_into_each_element_in_native_codegen() {
         let src = "\
             struct Point { x: Int, y: Int }\n\

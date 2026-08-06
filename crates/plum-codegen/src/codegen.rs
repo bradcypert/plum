@@ -528,6 +528,37 @@ fn codegen_and_or(op: BinOp, l: &Expr, r: &Expr, env: &Env, em: &mut Emitter, ct
     Ok((phi_reg, CgType::Bool))
 }
 
+/// Turns a Plum source parameter name into a SAFE LLVM local register
+/// name — used for the two places (an ordinary top-level function's own
+/// params, `lib.rs`'s `codegen_function`; a closure's own params,
+/// `emit_closure_body_fn` below) that expose a parameter's raw source
+/// name directly as an LLVM identifier, rather than mapping it to a
+/// compiler-generated `%v<N>` register the way every OTHER Plum name
+/// (an ordinary `let`-bound local, a closure CAPTURE) already does —
+/// see `codegen_expr`'s own `Let` arm and `emit_closure_body_fn`'s
+/// capture loop just below, neither of which needed this fix, since
+/// both already bind to a computed register, never a raw name.
+///
+/// A raw `%{name}` used to be able to collide with a codegen-RESERVED
+/// LLVM name in the exact same local-identifier namespace — most
+/// notably the literal block label every function's very first block
+/// is unconditionally given, `entry`, and the closure environment
+/// pointer's own hardcoded register, `%env`. A parameter named `entry`
+/// (an entirely ordinary word — a map/cache entry) made `plum build`
+/// fail outright with `clang` rejecting the generated IR ("unable to
+/// create block named 'entry'"), confirmed as a real bug, not
+/// hypothetical, while writing a new file under `examples/`. Fixed by
+/// prefixing with `.` — a character an LLVM local identifier freely
+/// allows (`%.entry` is valid syntax) but a Plum source identifier can
+/// NEVER contain (`is_ident_start`/`is_ident_continue`, `plum-syntax`'s
+/// lexer, only ever accept `[a-zA-Z_][a-zA-Z0-9_]*`) — so a name built
+/// this way can never collide with a bare, un-prefixed reserved name,
+/// structurally, not just by convention or by avoiding known reserved
+/// words one at a time.
+pub(crate) fn param_reg(name: &str) -> String {
+    format!("%.{name}")
+}
+
 fn field_byte_offset(index: usize) -> i64 {
     // Header is 2 words (refcount, tag) = 16 bytes; each field slot is
     // one more 8-byte word after that.
@@ -1557,8 +1588,9 @@ fn emit_closure_body_fn(
     }
     let mut param_decls = vec!["ptr %env".to_string()];
     for (name, ty) in params.iter().zip(param_types) {
-        env.insert(name.clone(), (format!("%{name}"), ty.clone()));
-        param_decls.push(format!("{} %{name}", ty.llvm_type()));
+        let reg = param_reg(name);
+        param_decls.push(format!("{} {reg}", ty.llvm_type()));
+        env.insert(name.clone(), (reg, ty.clone()));
     }
     let inner_ctx = Ctx {
         sigs: ctx.sigs,
@@ -4364,6 +4396,32 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
                         "  {result} = phi ptr [ {true_cell}, %{true_label} ], [ {false_cell}, %{false_label} ]"
                     ));
                     Ok((result, CgType::Str))
+                }
+                // `Unit` has exactly one possible value, so — unlike
+                // `Bool` just above — this needs no branching at all:
+                // always the same fixed literal `"Unit"`. Was previously
+                // routed into the `other =>` catch-all below (a real
+                // compile error), which meant a `Unit` value could never
+                // be `.to_string()`'d/`println`'d at all in native
+                // codegen; the interpreter had the exact same gap (see
+                // `plum-interp::Interpreter::render_value`'s own `Value::
+                // Unit` arm, fixed alongside this one) — an honest,
+                // matched-across-both-backends limitation until this
+                // fix, not a silent mismatch. `Array[Unit]`/struct-field-
+                // of-`Unit` rendering shares this exact same literal via
+                // `render_word_as_string`'s own `CgType::Unit` arm
+                // (`lib.rs`) — kept in sync deliberately, not by
+                // coincidence.
+                CgType::Unit => {
+                    let bytes = b"Unit";
+                    let cell = em.fresh_reg();
+                    em.push(format!("  {cell} = call ptr @plum_alloc_str(i64 {})", bytes.len()));
+                    let g = em.fresh_string_global(ctx.fn_name, bytes);
+                    let dst = em.fresh_reg();
+                    em.push(format!("  {dst} = getelementptr i8, ptr {cell}, i64 16"));
+                    let copy_r = em.fresh_reg();
+                    em.push(format!("  {copy_r} = call ptr @memcpy(ptr {dst}, ptr {g}, i64 {})", bytes.len()));
+                    Ok((cell, CgType::Str))
                 }
                 CgType::Str => {
                     let len = load_array_len(em, &reg);

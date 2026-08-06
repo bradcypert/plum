@@ -28,22 +28,16 @@ let main (): Unit = {
 
     // Producer/consumer over a typed channel. `.recv()` blocks until a
     // value arrives and returns it directly (not wrapped in `Option`).
-    // The "fire and forget" `spawn` below is wrapped in its own block:
-    // `spawn` captures its WHOLE enclosing scope (not just the names
-    // its body actually mentions), and even a DISCARDED task result
-    // stays bound under the hood until its block ends — a later,
-    // unrelated `spawn` in the same scope would otherwise try to
-    // capture it too and fail, since a `Task` handle can never cross
-    // another task boundary (see DESIGN.md's "Open questions").
+    // The "fire and forget" `spawn` below discards its own `Task`
+    // result — ordinary, no special handling needed.
     let (tx, rx) = channel[Int]();
-    { spawn { producer(tx, 7) }; };
+    spawn { producer(tx, 7) };
     println(rx.recv());   // 49
 
-    // Each spawn/join pair below gets its own nested block too, for
-    // the same reason.
-    let r1 = { let t = spawn { square(1) }; t.join() };
-    let r2 = { let t = spawn { square(2) }; t.join() };
-    let r3 = { let t = spawn { square(3) }; t.join() };
-    let r4 = { let t = spawn { square(4) }; t.join() };
-    println([r1, r2, r3, r4]);   // [1, 4, 9, 16]
+    // Several tasks, spawned and joined individually.
+    let t1 = spawn { square(1) };
+    let t2 = spawn { square(2) };
+    let t3 = spawn { square(3) };
+    let t4 = spawn { square(4) };
+    println([t1.join(), t2.join(), t3.join(), t4.join()]);   // [1, 4, 9, 16]
 }
