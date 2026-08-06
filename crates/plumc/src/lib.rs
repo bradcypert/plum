@@ -697,84 +697,81 @@ let assert_ne[T: Eq + Show] (a: T) (b: T): Unit =
 ";
 
 /// `Option[T]`/`Result[T, E]` combinators — pure Plum source, no new
-/// primitives. Named `option_*`/`result_*` (not bare `map`/`unwrap_or`/
-/// `and_then`) for the SAME reason `map_get`/`set_insert` are prefixed
-/// rather than bare `get`/`insert`: there is no dot-method dispatch for
-/// user-callable functions (confirmed: `map_get`/`set_insert` are
-/// always called as plain `map_get(m, k)`, never `m.map_get(k)` — the
-/// `.name(...)` call shape is reserved for a fixed set of compiler-
-/// recognized builtins matched directly in `infer.rs`/`lower.rs`, e.g.
-/// `.map`/`.filter`/`.fold` on `Array`). Two top-level `let map` — one
-/// for `Option[T]`, one for `Result[T, E]` — would just be a duplicate-
-/// name error, since ordinary function names never overload on
-/// argument type.
+/// primitives. Declared via `let Type.func (...)` — real, per-type
+/// associated functions (`plumc::assoc_fns`), called as `Option.
+/// map(o, f)`/`Result.and_then(r, f)`, not the old flat `option_map`/
+/// `result_and_then` naming (removed entirely, no aliases kept — see
+/// DESIGN.md's \"Standard library\" chunk 14). Two `let Type.map` — one
+/// under `Option`, one under `Result` — coexist with zero collision,
+/// since `LetDef.name` ends up as the two different strings `\"Option.
+/// map\"`/`\"Result.map\"`, exactly like `Point.add`/`Circle.add` would.
 const STDLIB_OPTION_RESULT_SRC: &str = "\
-let option_map[T, U] (o: Option[T]) (f: (T) -> U): Option[U] = match o {
+let Option.map[T, U] (o: Option[T]) (f: (T) -> U): Option[U] = match o {
     Some(x) => Some(f(x)),
     None => None,
 }
 
-let option_and_then[T, U] (o: Option[T]) (f: (T) -> Option[U]): Option[U] = match o {
+let Option.and_then[T, U] (o: Option[T]) (f: (T) -> Option[U]): Option[U] = match o {
     Some(x) => f(x),
     None => None,
 }
 
-let option_unwrap_or[T] (o: Option[T]) (default: T): T = match o {
+let Option.unwrap_or[T] (o: Option[T]) (default: T): T = match o {
     Some(x) => x,
     None => default,
 }
 
-let option_unwrap_or_else[T] (o: Option[T]) (f: () -> T): T = match o {
+let Option.unwrap_or_else[T] (o: Option[T]) (f: () -> T): T = match o {
     Some(x) => x,
     None => f(),
 }
 
-let option_is_some[T] (o: Option[T]): Bool = match o {
+let Option.is_some[T] (o: Option[T]): Bool = match o {
     Some(_) => true,
     None => false,
 }
 
-let option_is_none[T] (o: Option[T]): Bool = match o {
+let Option.is_none[T] (o: Option[T]): Bool = match o {
     Some(_) => false,
     None => true,
 }
 
-let option_ok_or[T, E] (o: Option[T]) (err: E): Result[T, E] = match o {
+let Option.ok_or[T, E] (o: Option[T]) (err: E): Result[T, E] = match o {
     Some(x) => Ok(x),
     None => Err(err),
 }
 
-let result_map[T, E, U] (r: Result[T, E]) (f: (T) -> U): Result[U, E] = match r {
+let Result.map[T, E, U] (r: Result[T, E]) (f: (T) -> U): Result[U, E] = match r {
     Ok(x) => Ok(f(x)),
     Err(e) => Err(e),
 }
 
-let result_map_err[T, E, F] (r: Result[T, E]) (f: (E) -> F): Result[T, F] = match r {
+let Result.map_err[T, E, F] (r: Result[T, E]) (f: (E) -> F): Result[T, F] = match r {
     Ok(x) => Ok(x),
     Err(e) => Err(f(e)),
 }
 
-let result_and_then[T, E, U] (r: Result[T, E]) (f: (T) -> Result[U, E]): Result[U, E] = match r {
+let Result.and_then[T, E, U] (r: Result[T, E]) (f: (T) -> Result[U, E]): Result[U, E] = match r {
     Ok(x) => f(x),
     Err(e) => Err(e),
 }
 
-let result_unwrap_or[T, E] (r: Result[T, E]) (default: T): T = match r {
+let Result.unwrap_or[T, E] (r: Result[T, E]) (default: T): T = match r {
     Ok(x) => x,
     Err(_) => default,
 }
 
-let result_unwrap_or_else[T, E] (r: Result[T, E]) (f: (E) -> T): T = match r {
+let Result.unwrap_or_else[T, E] (r: Result[T, E]) (f: (E) -> T): T = match r {
     Ok(x) => x,
     Err(e) => f(e),
 }
 
-let result_is_ok[T, E] (r: Result[T, E]): Bool = match r {
+let Result.is_ok[T, E] (r: Result[T, E]): Bool = match r {
     Ok(_) => true,
     Err(_) => false,
 }
 
-let result_is_err[T, E] (r: Result[T, E]): Bool = match r {
+let Result.is_err[T, E] (r: Result[T, E]): Bool = match r {
     Ok(_) => false,
     Err(_) => true,
 }
@@ -905,7 +902,7 @@ let array_index_of_acc[T: Eq] (arr: Array[T]) (x: T) (i: Int): Option[Int] =
 
 let array_index_of[T: Eq] (arr: Array[T]) (x: T): Option[Int] = array_index_of_acc(arr, x, 0)
 
-let array_contains[T: Eq] (arr: Array[T]) (x: T): Bool = option_is_some(array_index_of(arr, x))
+let array_contains[T: Eq] (arr: Array[T]) (x: T): Bool = Option.is_some(array_index_of(arr, x))
 
 let array_sum_int (arr: Array[Int]): Int = arr.fold(0, |acc, x| acc + x)
 
@@ -2153,108 +2150,108 @@ mod tests {
 
     #[test]
     fn option_map_transforms_a_some_and_leaves_none_alone() {
-        let src = "let use_it dummy = match option_map(Some(1), |x| x + 1) { Some(x) => x, None => -1 }";
+        let src = "let use_it dummy = match Option.map(Some(1), |x| x + 1) { Some(x) => x, None => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(2)));
-        let src = "let use_it dummy = match option_map(None, |x: Int| x + 1) { Some(x) => x, None => -1 }";
+        let src = "let use_it dummy = match Option.map(None, |x: Int| x + 1) { Some(x) => x, None => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(-1)));
     }
 
     #[test]
     fn option_and_then_chains_a_some_and_short_circuits_a_none() {
         let src = "let half x = if x % 2 == 0 { Some(x / 2) } else { None }\n\
-                    let use_it dummy = match option_and_then(Some(4), half) { Some(x) => x, None => -1 }";
+                    let use_it dummy = match Option.and_then(Some(4), half) { Some(x) => x, None => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(2)));
         let src = "let half x = if x % 2 == 0 { Some(x / 2) } else { None }\n\
-                    let use_it dummy = match option_and_then(Some(3), half) { Some(x) => x, None => -1 }";
+                    let use_it dummy = match Option.and_then(Some(3), half) { Some(x) => x, None => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(-1)));
     }
 
     #[test]
     fn option_unwrap_or_falls_back_only_on_none() {
-        let src = "let use_it dummy = option_unwrap_or(Some(1), 9)";
+        let src = "let use_it dummy = Option.unwrap_or(Some(1), 9)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
-        let src = "let use_it dummy = option_unwrap_or(None, 9)";
+        let src = "let use_it dummy = Option.unwrap_or(None, 9)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(9)));
     }
 
     #[test]
     fn option_unwrap_or_else_only_calls_its_closure_on_none() {
-        let src = "let use_it dummy = option_unwrap_or_else(Some(1), || panic_raw(\"should not run\").concat(0))";
+        let src = "let use_it dummy = Option.unwrap_or_else(Some(1), || panic_raw(\"should not run\").concat(0))";
         // deliberately invalid closure body to prove it's never called when the value is `Some`
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert!(result.is_err(), "expected a type error from the deliberately-invalid closure body, not evaluation");
 
-        let src = "let use_it dummy = option_unwrap_or_else(None, || 9)";
+        let src = "let use_it dummy = Option.unwrap_or_else(None, || 9)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(9)));
     }
 
     #[test]
     fn option_is_some_and_is_none_agree_with_the_variant() {
-        let src = "let use_it dummy = option_is_some(Some(1))";
+        let src = "let use_it dummy = Option.is_some(Some(1))";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
-        let src = "let use_it dummy = option_is_some(None)";
+        let src = "let use_it dummy = Option.is_some(None)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
-        let src = "let use_it dummy = option_is_none(None)";
+        let src = "let use_it dummy = Option.is_none(None)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
     }
 
     #[test]
     fn option_ok_or_converts_some_and_none_to_result() {
-        let src = "let use_it dummy = match option_ok_or(Some(1), \"missing\") { Ok(x) => x, Err(e) => -1 }";
+        let src = "let use_it dummy = match Option.ok_or(Some(1), \"missing\") { Ok(x) => x, Err(e) => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
-        let src = "let use_it dummy = match option_ok_or(None, \"missing\") { Ok(x) => x, Err(e) => -1 }";
+        let src = "let use_it dummy = match Option.ok_or(None, \"missing\") { Ok(x) => x, Err(e) => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(-1)));
     }
 
     #[test]
     fn result_map_transforms_an_ok_and_leaves_err_alone() {
-        let src = "let use_it dummy = match result_map(Ok(1), |x| x + 1) { Ok(x) => x, Err(e) => -1 }";
+        let src = "let use_it dummy = match Result.map(Ok(1), |x| x + 1) { Ok(x) => x, Err(e) => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(2)));
-        let src = "let use_it dummy = match result_map(Err(\"boom\"), |x: Int| x + 1) { Ok(x) => x, Err(e) => -1 }";
+        let src = "let use_it dummy = match Result.map(Err(\"boom\"), |x: Int| x + 1) { Ok(x) => x, Err(e) => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(-1)));
     }
 
     #[test]
     fn result_map_err_transforms_an_err_and_leaves_ok_alone() {
-        let src = "let use_it dummy = match result_map_err(Err(\"boom\"), |e| e.concat(\"!\")) { Ok(x) => x, Err(e) => e.len() }";
+        let src = "let use_it dummy = match Result.map_err(Err(\"boom\"), |e| e.concat(\"!\")) { Ok(x) => x, Err(e) => e.len() }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
-        let src = "let use_it dummy = match result_map_err(Ok(1), |e: String| e.concat(\"!\")) { Ok(x) => x, Err(e) => -1 }";
+        let src = "let use_it dummy = match Result.map_err(Ok(1), |e: String| e.concat(\"!\")) { Ok(x) => x, Err(e) => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
     }
 
     #[test]
     fn result_and_then_chains_an_ok_and_short_circuits_an_err() {
         let src = "let half x = if x % 2 == 0 { Ok(x / 2) } else { Err(\"odd\") }\n\
-                    let use_it dummy = match result_and_then(Ok(4), half) { Ok(x) => x, Err(e) => -1 }";
+                    let use_it dummy = match Result.and_then(Ok(4), half) { Ok(x) => x, Err(e) => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(2)));
         let src = "let half x = if x % 2 == 0 { Ok(x / 2) } else { Err(\"odd\") }\n\
-                    let use_it dummy = match result_and_then(Err(\"boom\"), half) { Ok(x) => x, Err(e) => -1 }";
+                    let use_it dummy = match Result.and_then(Err(\"boom\"), half) { Ok(x) => x, Err(e) => -1 }";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(-1)));
     }
 
     #[test]
     fn result_unwrap_or_falls_back_only_on_err() {
-        let src = "let use_it dummy = result_unwrap_or(Ok(1), 9)";
+        let src = "let use_it dummy = Result.unwrap_or(Ok(1), 9)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
-        let src = "let use_it dummy = result_unwrap_or(Err(\"boom\"), 9)";
+        let src = "let use_it dummy = Result.unwrap_or(Err(\"boom\"), 9)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(9)));
     }
 
     #[test]
     fn result_unwrap_or_else_receives_the_err_payload() {
-        let src = "let use_it dummy = result_unwrap_or_else(Ok(1), |e: String| -1)";
+        let src = "let use_it dummy = Result.unwrap_or_else(Ok(1), |e: String| -1)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
-        let src = "let use_it dummy = result_unwrap_or_else(Err(\"boom\"), |e: String| e.concat(\"!\").len())";
+        let src = "let use_it dummy = Result.unwrap_or_else(Err(\"boom\"), |e: String| e.concat(\"!\").len())";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(5)));
     }
 
     #[test]
     fn result_is_ok_and_is_err_agree_with_the_variant() {
-        let src = "let use_it dummy = result_is_ok(Ok(1))";
+        let src = "let use_it dummy = Result.is_ok(Ok(1))";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
-        let src = "let use_it dummy = result_is_ok(Err(\"boom\"))";
+        let src = "let use_it dummy = Result.is_ok(Err(\"boom\"))";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
-        let src = "let use_it dummy = result_is_err(Err(\"boom\"))";
+        let src = "let use_it dummy = Result.is_err(Err(\"boom\"))";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
     }
 

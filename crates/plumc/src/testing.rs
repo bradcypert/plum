@@ -67,6 +67,8 @@ pub fn discover_tests(program: &ast::Program) -> Vec<String> {
 /// expected outcome of running tests, not a reason to abort the whole
 /// `plum test` invocation.
 pub fn run_tests_interpreted(program: ast::Program, names: &[String]) -> Result<Vec<TestOutcome>, CompileError> {
+    let mut program = program;
+    crate::assoc_fns::resolve_associated_calls(&mut program);
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e: CompileError| e.context("type error"))?;
     let mut infer = Infer::with_context(type_ctx);
     infer.infer_program(&program).map_err(|e: CompileError| e.context("type error"))?;

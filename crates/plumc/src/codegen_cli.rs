@@ -1375,10 +1375,10 @@ mod tests {
 
     #[test]
     fn option_map_and_unwrap_or_run_through_native_codegen() {
-        let src = "let go (): Int = option_unwrap_or(option_map(Some(1), |x| x + 1), -1)";
+        let src = "let go (): Int = Option.unwrap_or(Option.map(Some(1), |x| x + 1), -1)";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "2");
-        let src = "let go (): Int = option_unwrap_or(option_map(None, |x: Int| x + 1), -1)";
+        let src = "let go (): Int = Option.unwrap_or(Option.map(None, |x: Int| x + 1), -1)";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "-1");
     }
@@ -1386,11 +1386,11 @@ mod tests {
     #[test]
     fn result_and_then_and_unwrap_or_else_run_through_native_codegen() {
         let src = "let half x = if x % 2 == 0 { Ok(x / 2) } else { Err(\"odd\") }\n\
-                    let go (): Int = result_unwrap_or_else(result_and_then(Ok(4), half), |e: String| -1)";
+                    let go (): Int = Result.unwrap_or_else(Result.and_then(Ok(4), half), |e: String| -1)";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "2");
         let src = "let half x = if x % 2 == 0 { Ok(x / 2) } else { Err(\"odd\") }\n\
-                    let go (): Int = result_unwrap_or_else(result_and_then(Ok(3), half), |e: String| -1)";
+                    let go (): Int = Result.unwrap_or_else(Result.and_then(Ok(3), half), |e: String| -1)";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "-1");
     }
@@ -2468,7 +2468,8 @@ mod tests {
         let tokens = Lexer::with_base_offset(src, crate::PRELUDE_TOTAL_LEN).tokenize();
         let mut parser = Parser::new(tokens);
         let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
-        let program = with_prelude(program);
+        let mut program = with_prelude(program);
+        crate::assoc_fns::resolve_associated_calls(&mut program);
         let type_ctx = TypeContext::from_items(&program.items).unwrap_or_else(|e| panic!("context error: {e}"));
         let mut infer = Infer::with_context(type_ctx);
         let types = infer.infer_program(&program).unwrap_or_else(|e| panic!("type error: {e}"));
