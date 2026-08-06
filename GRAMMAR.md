@@ -165,7 +165,10 @@ Postfix     ::= "." Identifier
               | GenericArgs
               | Arguments
               | "[" Expr "]"
-Arguments   ::= "(" [ Expr { "," Expr } ] ")"
+Arguments   ::= "(" [ Argument { "," Argument } ] ")"
+Argument    ::= PlaceholderChain | Expr
+
+PlaceholderChain ::= "_" { Postfix }
 ```
 
 `CompareExpr` and `RangeExpr` each allow **at most one** operator
@@ -173,6 +176,16 @@ application (non-associative) — `a < b < c` and `a..b..c` are both
 grammar errors, not parsed with some implied associativity. See
 DESIGN.md for why (chained comparisons silently meaning something other
 than the mathematical reading is a documented footgun).
+
+An `Argument` that begins with `_` is placeholder-lambda sugar: `_`
+followed by zero or more `Postfix` steps desugars to an implicit
+single-param closure over that chain, e.g. `numbers.map(_.toString())`
+means `numbers.map(|n| n.toString())`, and `xs.map(_)` (the
+zero-`Postfix` case) means `xs.map(|x| x)`. This is deliberately
+narrow — see DESIGN.md — `_` is recognized only as the receiver of a
+postfix chain that is the *entire* argument, not a general
+Scala-style placeholder usable anywhere in an expression (`_ + 1` is
+a plain parse error, not sugar for `|x| x + 1`).
 
 `Postfix` repeats to handle chains like `Ref.new(start)` (`.new` then
 `(start)`, two postfix steps) and `channel[Int]()` (`[Int]` then `()`,

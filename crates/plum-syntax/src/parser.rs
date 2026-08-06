@@ -829,7 +829,17 @@ impl Parser {
     }
 
     fn parse_postfix(&mut self) -> Result<Expr, crate::error::CompileError> {
-        let mut expr = self.parse_primary()?;
+        let expr = self.parse_primary()?;
+        self.parse_postfix_from(expr)
+    }
+
+    // Continues a postfix chain (`.field`, `.method(...)`, `[index]`,
+    // generic instantiation) from an already-parsed base expression,
+    // rather than starting from `parse_primary`. Factored out of
+    // `parse_postfix` so `_`-placeholder argument sugar (see
+    // `parse_argument`) can build a chain starting from a synthetic
+    // `_` base instead of a real primary expression.
+    fn parse_postfix_from(&mut self, mut expr: Expr) -> Result<Expr, crate::error::CompileError> {
         loop {
             match self.peek_kind() {
                 TokenKind::Dot => {
@@ -904,16 +914,52 @@ impl Parser {
         self.expect(TokenKind::LParen, "'('")?;
         let mut args = Vec::new();
         if !self.check(&TokenKind::RParen) {
-            args.push(self.parse_expr_allowing_struct_literal()?);
+            args.push(self.parse_argument()?);
             while self.bump_if(&TokenKind::Comma) {
                 if self.check(&TokenKind::RParen) {
                     break;
                 }
-                args.push(self.parse_expr_allowing_struct_literal()?);
+                args.push(self.parse_argument()?);
             }
         }
         let close = self.expect(TokenKind::RParen, "')'")?;
         Ok((args, close.span))
+    }
+
+    // Placeholder-lambda sugar: a call argument that starts with `_`
+    // is a postfix chain off an implicit single parameter, e.g.
+    // `numbers.map(_.toString)` desugars to
+    // `numbers.map(|_| _.toString)` (equivalent to `|n| n.toString()`).
+    // Deliberately narrow, by design (see DESIGN.md): `_` is only
+    // recognized as the RECEIVER of a postfix chain that is the
+    // entire argument, not a general Scala-style placeholder usable
+    // anywhere in an expression (`_ + 1`, `_.x + _.y`) — that's a
+    // strictly more powerful, scoping-ambiguous feature that was
+    // considered and intentionally deferred. Bare `_` (no chain, e.g.
+    // `xs.map(_)`) is the identity function, the natural zero-length
+    // case of the same rule.
+    //
+    // `"_"` is used as the synthetic parameter's name because it can
+    // never collide with a real user identifier: the lexer emits a
+    // distinct `Underscore` token for `_`, so `Ident("_")` is not
+    // otherwise reachable by parsing real source text.
+    fn parse_argument(&mut self) -> Result<Expr, crate::error::CompileError> {
+        if self.check(&TokenKind::Underscore) {
+            let underscore = self.advance();
+            let base = Expr::Ident("_".to_string(), underscore.span);
+            let chain = self.parse_postfix_from(base)?;
+            let span = underscore.span.to(chain.span());
+            return Ok(Expr::Closure {
+                params: vec![ClosureParam {
+                    name: "_".to_string(),
+                    ty: None,
+                    span: underscore.span,
+                }],
+                body: Box::new(chain),
+                span,
+            });
+        }
+        self.parse_expr_allowing_struct_literal()
     }
 
     // `[e1, e2, ...]` — mirrors `parse_arguments`'s comma-separated,
@@ -2187,6 +2233,61 @@ mod tests {
     #[test]
     fn closure_annotated_param() {
         assert_eq!(render(&parse("|p: Point| p")), "(closure (p) p)");
+    }
+
+    #[test]
+    fn underscore_placeholder_method_call_argument() {
+        // `numbers.map(_.toString)` desugars to `numbers.map(|_| _.toString)`
+        // — equivalent in meaning to `numbers.map(|n| n.toString())`, just
+        // rendered with the synthetic param's real name, "_".
+        assert_eq!(
+            render(&parse("numbers.map(_.toString())")),
+            "(call (field numbers map) (closure (_) (call (field _ toString))))"
+        );
+    }
+
+    #[test]
+    fn underscore_placeholder_field_access_argument() {
+        assert_eq!(
+            render(&parse("points.map(_.x)")),
+            "(call (field points map) (closure (_) (field _ x)))"
+        );
+    }
+
+    #[test]
+    fn underscore_placeholder_bare_is_identity() {
+        // No chain at all — the zero-length case of the same rule,
+        // equivalent to `xs.map(|x| x)`.
+        assert_eq!(render(&parse("xs.map(_)")), "(call (field xs map) (closure (_) _))");
+    }
+
+    #[test]
+    fn underscore_placeholder_chained_access() {
+        assert_eq!(
+            render(&parse("things.each(_.a.b())")),
+            "(call (field things each) (closure (_) (call (field (field _ a) b))))"
+        );
+    }
+
+    #[test]
+    fn underscore_placeholder_alongside_other_arguments() {
+        // Only the argument that STARTS with `_` gets the sugar — a
+        // sibling argument is parsed normally, unaffected.
+        assert_eq!(
+            render(&parse("pairs.fold(0, _.value)")),
+            "(call (field pairs fold) 0 (closure (_) (field _ value)))"
+        );
+    }
+
+    #[test]
+    fn underscore_placeholder_not_a_general_expression() {
+        // Deliberately narrow: `_` is only sugar as the receiver of a
+        // postfix chain that IS the whole argument, not usable
+        // anywhere in an expression like Scala's placeholder syntax.
+        parse_err("xs.map(_ + 1)");
+        // And outside argument position, `_` is still just the plain
+        // Underscore token — not a general expression.
+        parse_err("let x = _;");
     }
 
     #[test]
