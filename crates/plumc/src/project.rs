@@ -10,7 +10,7 @@
 //! is no per-file declaration of which module a file belongs to, only
 //! its location in the tree.
 
-use crate::modules::{resolve_modules, resolve_modules_diag, typecheck_and_run_modules_diag};
+use crate::modules::{resolve_modules, resolve_modules_diag, typecheck_and_run_modules_with_process_args_diag};
 use crate::typecheck_and_run_modules;
 use plum_interp::Value;
 use plum_syntax::ast;
@@ -34,9 +34,23 @@ pub fn typecheck_and_run_project(root: &Path, fn_name: &str, args: Vec<Value>) -
 /// `Display` at its own boundary, so its own (pre-existing) tests need
 /// no changes at all.
 pub fn typecheck_and_run_project_diag(root: &Path, fn_name: &str, args: Vec<Value>) -> Result<Value, plum_syntax::error::CompileError> {
+    typecheck_and_run_project_with_process_args_diag(root, fn_name, args, Vec::new())
+}
+
+/// The `args()`-aware sibling of `typecheck_and_run_project_diag` —
+/// used only by `plum run <project-dir> -- <arg>...`'s own CLI path in
+/// `main.rs`. See `run_resolved_program_with_process_args_diag`'s own
+/// doc comment for why this exists as a separate function rather than
+/// a new parameter on the existing one.
+pub fn typecheck_and_run_project_with_process_args_diag(
+    root: &Path,
+    fn_name: &str,
+    args: Vec<Value>,
+    process_args: Vec<String>,
+) -> Result<Value, plum_syntax::error::CompileError> {
     let files = collect_plum_files(root, root).map_err(plum_syntax::error::CompileError::spanless)?;
     let modules: Vec<(&str, &str)> = files.iter().map(|(_path, mpath, src)| (mpath.as_str(), src.as_str())).collect();
-    typecheck_and_run_modules_diag(&modules, fn_name, args)
+    typecheck_and_run_modules_with_process_args_diag(&modules, fn_name, args, process_args)
 }
 
 /// The front half of `typecheck_and_run_project`: directory walk +
@@ -126,6 +140,27 @@ mod tests {
         project.write("main.plum", "let main unused = 1 + 2");
 
         let result = typecheck_and_run_project(&project.path, "main", vec![Value::Int(0)]);
+        assert_eq!(result, Ok(Value::Int(3)));
+    }
+
+    #[test]
+    fn process_args_reach_args_only_when_explicitly_threaded_through() {
+        // `typecheck_and_run_project` (and so `typecheck_and_run_project
+        // _diag`) always sees an EMPTY `args()` — proving the "existing
+        // callers stay untouched" half of `run_resolved_program_with_
+        // process_args_diag`'s own doc comment.
+        let project = TempProject::new();
+        project.write("main.plum", "let main unused = args(()).len()");
+        let result = typecheck_and_run_project(&project.path, "main", vec![Value::Int(0)]);
+        assert_eq!(result, Ok(Value::Int(0)));
+
+        // The `_with_process_args` sibling actually threads them through.
+        let result = typecheck_and_run_project_with_process_args_diag(
+            &project.path,
+            "main",
+            vec![Value::Int(0)],
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+        );
         assert_eq!(result, Ok(Value::Int(3)));
     }
 

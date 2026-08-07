@@ -1716,6 +1716,43 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((Type::Struct("__FileIoResult".to_string(), vec![]), acc))
             }
+            // `env_var_raw(name)` — same bare-`Ident`-named-call
+            // precedent as `read_file_raw`/`write_file_raw` above.
+            // Evaluates to the prelude's own `__EnvResult` struct
+            // directly (see `ir::Expr::EnvVarRaw`'s own doc comment for
+            // why this is a DIFFERENT shape story than `__FileIoResult`
+            // — no OS error message half, since absence isn't an
+            // error).
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "env_var_raw") =>
+            {
+                let (name_ty, s) = self.infer_expr(&args[0], env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&name_ty), &Type::Str)
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`env_var_raw` argument: {e}")))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("__EnvResult".to_string(), vec![]), acc))
+            }
+            // `args_raw(())` — same bare-`Ident`-named-call precedent
+            // again, but with a Unit-typed argument (`ir::Expr::
+            // ArgsRaw`'s own doc comment explains why: matching Plum's
+            // own "every function takes exactly one argument"
+            // convention, not because the argument itself carries any
+            // information — it's discarded during lowering). Evaluates
+            // to `Array[Str]` directly, no intermediate `__*Result`
+            // struct: reading argv never fails, so there's no `ok`/
+            // `payload` split needed the way `ReadFileRaw`/`EnvVarRaw`
+            // need one.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "args_raw") =>
+            {
+                let (unit_ty, s) = self.infer_expr(&args[0], env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&unit_ty), &Type::Unit)
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`args_raw` argument: {e}")))?;
+                acc = s.compose(&acc);
+                Ok((Type::Struct("Array".to_string(), vec![Type::Str]), acc))
+            }
             // `panic_raw(msg)` — same shape precedent again; evaluates
             // to `Unit` (never actually reached on the failure path,
             // but a real, checkable type is still needed for the

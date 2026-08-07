@@ -1,8 +1,8 @@
 use plum_interp::Value;
 use plumc::{
     collect_project_files, compile_ir_to_binary, compile_program_to_ir_diag, discover_tests, emit_main, reject_unprintable_return,
-    resolve_project_diag, run_tests_interpreted, run_tests_native, typecheck_and_run, typecheck_and_run_project_diag, CgValue,
-    ModuleSources, TestOutcome,
+    resolve_project_diag, run_tests_interpreted, run_tests_native, typecheck_and_run, typecheck_and_run_project_with_process_args_diag,
+    CgValue, ModuleSources, TestOutcome,
 };
 use std::path::{Path, PathBuf};
 
@@ -90,11 +90,14 @@ fn main() {
 /// run <project-dir>` and the bare `plum <project-dir>` shorthand
 /// funnel through the exact same code.
 fn run_interpreter(args: &[String]) {
-    let Some(project_dir) = args.first() else {
-        eprintln!("usage: plum run <project-dir>");
-        std::process::exit(1);
+    let RunArgs { project_dir, process_args } = match parse_run_args(args) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
     };
-    let root = Path::new(project_dir);
+    let root = Path::new(&project_dir);
     let sources = match module_sources(root) {
         Ok(s) => s,
         Err(e) => {
@@ -102,7 +105,7 @@ fn run_interpreter(args: &[String]) {
             std::process::exit(1);
         }
     };
-    match typecheck_and_run_project_diag(root, "main", vec![Value::Unit]) {
+    match typecheck_and_run_project_with_process_args_diag(root, "main", vec![Value::Unit], process_args) {
         Ok(value) => {
             unsafe { fflush(std::ptr::null_mut()) };
             println!("{value:?}");
@@ -112,6 +115,38 @@ fn run_interpreter(args: &[String]) {
             std::process::exit(1);
         }
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct RunArgs {
+    project_dir: String,
+    process_args: Vec<String>,
+}
+
+/// `plum run <project-dir> [-- <arg>...]` — the cargo-style `--`
+/// separator (`cargo run -- foo bar`, `npm run x -- foo bar`):
+/// everything before a literal `--` token is this CLI's own argument
+/// (just `<project-dir>`, today), everything AFTER it is passed
+/// through VERBATIM as the Plum program's own `args()` — no further
+/// flag parsing on that side at all, matching cargo/npm's own
+/// semantics exactly (so e.g. a Plum program wanting its OWN `-o` flag
+/// doesn't collide with this CLI's unrelated flags). The bare `plum
+/// <project-dir>` shorthand (no `run`) reuses this same function (see
+/// `main`), so it gets `--`-args for free too.
+fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
+    let separator = args.iter().position(|a| a == "--");
+    let (own_args, process_args) = match separator {
+        Some(i) => (&args[..i], args[i + 1..].to_vec()),
+        None => (args, Vec::new()),
+    };
+    let project_dir = own_args
+        .first()
+        .ok_or_else(|| "usage: plum run <project-dir> [-- <arg>...]".to_string())?
+        .clone();
+    if own_args.len() > 1 {
+        return Err(format!("unexpected argument: {:?}", own_args[1]));
+    }
+    Ok(RunArgs { project_dir, process_args })
 }
 
 /// Builds a `ModuleSources` from `root`'s own `.plum` files — shared by
@@ -429,6 +464,44 @@ mod tests {
     fn a_second_unexpected_positional_argument_is_a_clear_error() {
         let args: Vec<String> = vec!["myproj".to_string(), "extra".to_string()];
         let err = parse_build_args(&args).expect_err("expected an unexpected-argument error");
+        assert!(err.contains("unexpected argument"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_bare_project_directory_with_no_separator_has_no_process_args() {
+        let args: Vec<String> = vec!["myproj".to_string()];
+        let parsed = parse_run_args(&args).unwrap();
+        assert_eq!(parsed, RunArgs { project_dir: "myproj".to_string(), process_args: vec![] });
+    }
+
+    #[test]
+    fn everything_after_the_separator_becomes_process_args_verbatim() {
+        let args: Vec<String> = vec!["myproj".to_string(), "--".to_string(), "foo".to_string(), "-o".to_string(), "bar".to_string()];
+        let parsed = parse_run_args(&args).unwrap();
+        assert_eq!(
+            parsed,
+            RunArgs { project_dir: "myproj".to_string(), process_args: vec!["foo".to_string(), "-o".to_string(), "bar".to_string()] }
+        );
+    }
+
+    #[test]
+    fn a_trailing_separator_with_nothing_after_it_is_an_empty_process_args() {
+        let args: Vec<String> = vec!["myproj".to_string(), "--".to_string()];
+        let parsed = parse_run_args(&args).unwrap();
+        assert_eq!(parsed, RunArgs { project_dir: "myproj".to_string(), process_args: vec![] });
+    }
+
+    #[test]
+    fn missing_project_directory_is_a_clear_error_for_run_args() {
+        let args: Vec<String> = vec![];
+        let err = parse_run_args(&args).expect_err("expected a usage error");
+        assert!(err.contains("usage"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_second_positional_before_the_separator_is_a_clear_error() {
+        let args: Vec<String> = vec!["myproj".to_string(), "extra".to_string()];
+        let err = parse_run_args(&args).expect_err("expected an unexpected-argument error");
         assert!(err.contains("unexpected argument"), "unexpected error: {err}");
     }
 

@@ -1337,6 +1337,8 @@ fn free_vars_scoped(expr: &Expr, env: &Env, local: &HashSet<String>, out: &mut B
             free_vars_scoped(path, env, local, out);
             free_vars_scoped(contents, env, local, out);
         }
+        Expr::EnvVarRaw { name } => free_vars_scoped(name, env, local, out),
+        Expr::ArgsRaw => {}
         Expr::PanicRaw { message } => free_vars_scoped(message, env, local, out),
     }
 }
@@ -1530,6 +1532,8 @@ fn assigned_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet
             assigned_vars_scoped(path, local, out);
             assigned_vars_scoped(contents, local, out);
         }
+        Expr::EnvVarRaw { name } => assigned_vars_scoped(name, local, out),
+        Expr::ArgsRaw => {}
         Expr::PanicRaw { message } => assigned_vars_scoped(message, local, out),
     }
 }
@@ -2412,6 +2416,96 @@ fn codegen_write_file_raw(path: &Expr, contents: &Expr, env: &Env, em: &mut Emit
     em.start_block(&merge_label);
     let result = em.fresh_reg();
     em.push(format!("  {result} = phi ptr [ {fail_result}, %{fail_block} ], [ {ok_result}, %{ok_block} ]"));
+    Ok((result, CgType::Heap))
+}
+
+/// `env_var_raw(name)` — see `ir::Expr::EnvVarRaw`'s own doc comment
+/// for the overall design (why this builds an `__EnvResult` struct
+/// directly rather than `Option`/`Some`/`None` itself). Simpler than
+/// `codegen_read_file_raw`/`codegen_write_file_raw`: `@getenv` needs no
+/// `@fopen`-style resource to close, and a missing variable isn't an OS
+/// error with a `strerror` message to report (see `codegen_errno_
+/// string`'s own doc comment for that distinction) — the fail branch
+/// just needs an empty `Str` cell, never read by the prelude's `env_
+/// var` wrapper on that path anyway. `name`'s bytes are passed DIRECTLY
+/// to `@getenv` as a C string (same guaranteed-trailing-NUL cell layout
+/// `codegen_read_file_raw`'s `path` argument already relies on — see
+/// that function's own doc comment). The success branch's `@strlen`-
+/// then-`@memcpy` sequence is the exact same "raw C string ptr -> fresh
+/// Plum `Str`" copy `codegen_errno_string` performs for `@strerror`'s
+/// result, just inlined here rather than shared — that helper's own
+/// name/doc comment are specific to errno, and this has no error code
+/// of its own to format alongside the copy.
+fn codegen_env_var_raw(name: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (name_reg, name_ty) = codegen_value(name, env, em, ctx)?;
+    if name_ty != CgType::Str {
+        return Err(format!("codegen: `env_var_raw` requires a Str name, found {name_ty:?}"));
+    }
+
+    let name_cstr = em.fresh_reg();
+    em.push(format!("  {name_cstr} = getelementptr i8, ptr {name_reg}, i64 16"));
+    let value_ptr = em.fresh_reg();
+    em.push(format!("  {value_ptr} = call ptr @getenv(ptr {name_cstr})"));
+    let is_null = em.fresh_reg();
+    em.push(format!("  {is_null} = icmp eq ptr {value_ptr}, null"));
+
+    let fail_label = em.fresh_label("env_var_fail");
+    let ok_label = em.fresh_label("env_var_ok");
+    let merge_label = em.fresh_label("env_var_merge");
+    em.push(format!("  br i1 {is_null}, label %{fail_label}, label %{ok_label}"));
+
+    em.start_block(&fail_label);
+    let empty_cell = em.fresh_reg();
+    em.push(format!("  {empty_cell} = call ptr @plum_alloc_str(i64 0)"));
+    let fail_result = codegen_ctor_alloc("__EnvResult", &[("0".to_string(), CgType::Bool), (empty_cell, CgType::Str)], em, ctx)?;
+    let fail_block = em.current_block().to_string();
+    em.push(format!("  br label %{merge_label}"));
+
+    em.start_block(&ok_label);
+    let len = em.fresh_reg();
+    em.push(format!("  {len} = call i64 @strlen(ptr {value_ptr})"));
+    let cell = em.fresh_reg();
+    em.push(format!("  {cell} = call ptr @plum_alloc_str(i64 {len})"));
+    let dst = em.fresh_reg();
+    em.push(format!("  {dst} = getelementptr i8, ptr {cell}, i64 16"));
+    let copy_r = em.fresh_reg();
+    em.push(format!("  {copy_r} = call ptr @memcpy(ptr {dst}, ptr {value_ptr}, i64 {len})"));
+    let ok_result = codegen_ctor_alloc("__EnvResult", &[("1".to_string(), CgType::Bool), (cell, CgType::Str)], em, ctx)?;
+    let ok_block = em.current_block().to_string();
+    em.push(format!("  br label %{merge_label}"));
+
+    em.start_block(&merge_label);
+    let result = em.fresh_reg();
+    em.push(format!("  {result} = phi ptr [ {fail_result}, %{fail_block} ], [ {ok_result}, %{ok_block} ]"));
+    Ok((result, CgType::Heap))
+}
+
+/// `args_raw(())` — see `ir::Expr::ArgsRaw`'s own doc comment for the
+/// overall design. Trivial by construction: `@plum_argc`/`@plum_argv`
+/// (two globals, unconditionally declared in `plum_codegen::emit_
+/// runtime`, written ONCE by `plumc::emit_main`'s own hand-written
+/// `main(i32 %argc, ptr %argv)` prologue — see that function's own doc
+/// comment) are just loaded and handed to `@plum_build_args_array`
+/// (also in `emit_runtime`, doing the actual per-element `Str`-cell
+/// allocation loop — the same "hand-write the loop as a runtime helper
+/// function" precedent `@plum_str_split` already established, rather
+/// than emitting a Rust-side unrolled loop here). Builds a FRESH
+/// `Array[Str]` on every call — deliberately NOT a cached/shared array
+/// returned by pointer on repeat calls, matching every other raw
+/// builtin in this file (`codegen_read_file_raw`/`codegen_env_var_
+/// raw`): a shared heap value handed out by multiple call sites would
+/// need real, careful refcounting to stay safe under FBIP's reuse-in-
+/// place rewrites (`.push()`/etc. on one caller's `args()` result could
+/// otherwise corrupt every OTHER caller's own copy) — a fresh
+/// allocation sidesteps that class of bug entirely, at the cost of a
+/// small, bounded (CLI arg counts are never large) allocation per call.
+fn codegen_args_raw(em: &mut Emitter) -> Result<(String, CgType), String> {
+    let argc = em.fresh_reg();
+    em.push(format!("  {argc} = load i32, ptr @plum_argc"));
+    let argv = em.fresh_reg();
+    em.push(format!("  {argv} = load ptr, ptr @plum_argv"));
+    let result = em.fresh_reg();
+    em.push(format!("  {result} = call ptr @plum_build_args_array(i32 {argc}, ptr {argv})"));
     Ok((result, CgType::Heap))
 }
 
@@ -4496,6 +4590,8 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         Expr::AsCStr(inner) => codegen_as_cstr(inner, env, em, ctx),
         Expr::ReadFileRaw { path } => codegen_read_file_raw(path, env, em, ctx),
         Expr::WriteFileRaw { path, contents } => codegen_write_file_raw(path, contents, env, em, ctx),
+        Expr::EnvVarRaw { name } => codegen_env_var_raw(name, env, em, ctx),
+        Expr::ArgsRaw => codegen_args_raw(em),
         Expr::PanicRaw { message } => codegen_panic_raw(message, env, em, ctx),
         other => Err(format!("codegen does not yet support this construct: {other:?}")),
     }

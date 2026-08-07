@@ -845,8 +845,22 @@ pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue], has_globals: 
     // degrading to the ASCII-only "C" locale glibc otherwise defaults
     // to. Placed BEFORE `@plum_init_globals()` in case a global
     // initializer itself calls `.to_upper()`/`.to_lower()`.
+    //
+    // `main(i32 %argc, ptr %argv)` — the real C ABI entry point shape
+    // (`int main(int argc, char** argv)`, `char**` written as `ptr`,
+    // matching this whole backend's opaque-pointer convention), not
+    // `main()`'s previous zero-arg form: `args_raw` (`codegen_args_
+    // raw`/`@plum_build_args_array`, see `plum_codegen::emit_runtime`'s
+    // own doc comment) needs REAL process argv, and the OS only ever
+    // hands it to `main` itself — nowhere else in a compiled binary can
+    // reach it. Stored into `@plum_argc`/`@plum_argv` as the very FIRST
+    // instructions, before even `@plum_locale_init()`, so every later
+    // `args()` call site (including inside a global initializer) sees
+    // them already populated.
     format!(
-        "@fmt = constant [{fmt_len} x i8] c\"{fmt_bytes}\"\n\ndefine i32 @main() {{\nentry:\n  call void @plum_locale_init()\n{init_globals_call}{call_line}  ret i32 0\n}}\n"
+        "@fmt = constant [{fmt_len} x i8] c\"{fmt_bytes}\"\n\ndefine i32 @main(i32 %argc, ptr %argv) {{\nentry:\n  \
+         store i32 %argc, ptr @plum_argc\n  store ptr %argv, ptr @plum_argv\n  \
+         call void @plum_locale_init()\n{init_globals_call}{call_line}  ret i32 0\n}}\n"
     )
 }
 
@@ -1223,6 +1237,66 @@ mod tests {
                     Ok(_) => false, Err(_) => true }";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "1");
+    }
+
+    // --- standard library: `env_var` (see `plumc::STDLIB_ENV_SRC`) ---
+
+    #[test]
+    fn env_var_finds_a_real_variable_and_returns_none_for_a_missing_one_in_native_codegen() {
+        // Same `CARGO_PKG_NAME`-reading trick as `plumc::lib.rs`'s own
+        // interpreter-path test (see its comment for why this reads
+        // rather than sets an env var) — `compile_and_run`'s spawned
+        // subprocess inherits this test process's own environment by
+        // default (`std::process::Command` does this unless told
+        // otherwise, confirmed: no `.env_clear()`/`.env_remove()`
+        // anywhere in this file), so `CARGO_PKG_NAME` is visible to the
+        // compiled binary too, with no extra plumbing needed.
+        let src = "let go (): Bool = env_var(\"CARGO_PKG_NAME\") == Some(\"plumc\")";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+
+        let src = "let go (): Bool = env_var(\"PLUM_TEST_DEFINITELY_UNSET_XYZ\") == None";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
+    }
+
+    // --- standard library: `args` (see `plumc::STDLIB_ARGS_SRC`) ---
+
+    #[test]
+    fn args_returns_the_real_process_argv_after_the_program_name_in_native_codegen() {
+        // Doesn't go through `compile_and_run`/`run_via_clang` — those
+        // always invoke the compiled binary with ZERO extra args (see
+        // `run_via_clang`'s own `Command::new(&bin_path).output()`, no
+        // `.args(..)`), which can only ever prove the empty-`args()`
+        // case. Replicates `compile_and_run`'s own front half by hand
+        // instead, so this test can pass REAL argv to the compiled
+        // binary and prove `args()` actually reads it — the whole point
+        // of `@plum_argc`/`@plum_argv`/`@plum_build_args_array` (see
+        // `plum_codegen::emit_runtime`'s own doc comment) existing.
+        let src = "let go (): Unit = { \
+                        let a = args(()); \
+                        println(a.len().to_string()); \
+                        for x in a { println(x); }; \
+                    }";
+        let (body_ir, signatures, resolved_entry, has_globals) = compile_to_ir(src, "go").unwrap();
+        let sig = signatures.get(&resolved_entry).unwrap().clone();
+        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit], has_globals);
+        let full_ir = format!("{body_ir}\n{main_ir}");
+
+        let dir = unique_temp_dir("plumc-codegen-args");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ll_path = dir.join("program.ll");
+        let bin_path = dir.join("program");
+        clang_compile(&full_ir, &ll_path, &bin_path).unwrap();
+
+        let run = Command::new(&bin_path).args(["foo", "bar", "baz qux"]).output().unwrap();
+        assert!(run.status.success(), "stderr: {}", String::from_utf8_lossy(&run.stderr));
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        let lines: Vec<&str> = stdout.lines().collect();
+        // `go`'s own `Unit` return prints last, via `emit_main`'s own
+        // `%d\n` — see `println`'s doc comment on why THAT print (not
+        // this test's own `println` calls) is the trailing `0`.
+        assert_eq!(lines, vec!["3", "foo", "bar", "baz qux", "0"]);
     }
 
     // --- testing framework: `panic_raw` (see `ir::Expr::PanicRaw`) ---

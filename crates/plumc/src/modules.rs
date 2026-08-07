@@ -78,8 +78,21 @@ pub(crate) fn typecheck_and_run_modules_diag(
     fn_name: &str,
     args: Vec<Value>,
 ) -> Result<Value, plum_syntax::error::CompileError> {
+    typecheck_and_run_modules_with_process_args_diag(modules, fn_name, args, Vec::new())
+}
+
+/// The `args()`-aware sibling of `typecheck_and_run_modules_diag` —
+/// see `run_resolved_program_with_process_args_diag`'s own doc comment
+/// for why this exists as a separate function rather than a new
+/// parameter on the existing one.
+pub(crate) fn typecheck_and_run_modules_with_process_args_diag(
+    modules: &[(&str, &str)],
+    fn_name: &str,
+    args: Vec<Value>,
+    process_args: Vec<String>,
+) -> Result<Value, plum_syntax::error::CompileError> {
     let program = resolve_modules_diag(modules)?;
-    crate::run_resolved_program_diag(program, fn_name, args)
+    crate::run_resolved_program_with_process_args_diag(program, fn_name, args, process_args)
 }
 
 /// The front half of `typecheck_and_run_modules`: parses every module,

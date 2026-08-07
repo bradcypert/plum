@@ -618,6 +618,36 @@ pub enum Expr {
         path: Box<Expr>,
         contents: Box<Expr>,
     },
+    // `env_var_raw(name)` — low-level environment-variable-read
+    // primitive, same `__EnvResult { ok: Bool, payload: Str }` shape
+    // precedent as `ReadFileRaw`'s own `__FileIoResult` (`payload` is
+    // the variable's value on success, empty on failure — UNLIKE
+    // `ReadFileRaw`, there's no OS error message to report: a missing
+    // env var isn't a system error, just absence, so the prelude's own
+    // `env_var` wrapper (ordinary Plum source) translates this into
+    // `Option[Str]`, not `Result[Str, Str]`). Never itself constructs
+    // `Some`/`None` — same reasoning as `ReadFileRaw` not constructing
+    // `Ok`/`Err` itself.
+    EnvVarRaw {
+        name: Box<Expr>,
+    },
+    // `args_raw(())` — low-level process-command-line-args primitive.
+    // Carries no argument of its own (unlike `EnvVarRaw`'s `name`):
+    // Plum's own "every function takes exactly one argument" convention
+    // (see GRAMMAR.md/README) means the SURFACE call is `args_raw(())`
+    // — one Unit-typed argument — but that argument carries no runtime
+    // information at all, so `lower.rs`'s lowering arm discards it
+    // rather than storing an always-`Expr::Unit` field here for no
+    // reason. Evaluates directly to a FRESH `Array[Str]` (never a
+    // shared/cached one — see `codegen_args_raw`'s own doc comment for
+    // why always-fresh is the safe choice here, matching every other
+    // raw builtin in this file), one element per real process argv
+    // entry AFTER the program name (`argv[1..]`, matching e.g. Rust's
+    // own `std::env::args().skip(1)` convention). The prelude's own
+    // `args` wrapper (ordinary Plum source) is a trivial rename — no
+    // `Result`/`Option` translation needed, unlike `ReadFileRaw`/
+    // `EnvVarRaw`'s wrappers: reading argv never fails.
+    ArgsRaw,
     // `panic_raw(msg)` — the testing framework's own low-level
     // primitive, same bare-`Ident`-named-call recognition as `ReadFileRaw`/
     // `WriteFileRaw` above. Unlike those two, this never constructs a

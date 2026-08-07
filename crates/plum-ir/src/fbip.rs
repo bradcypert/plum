@@ -202,6 +202,12 @@ fn mark_reuse_scoped(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             path: Box::new(mark_reuse_scoped(*path, known_heap)),
             contents: Box::new(mark_reuse_scoped(*contents, known_heap)),
         },
+        Expr::EnvVarRaw { name } => Expr::EnvVarRaw {
+            name: Box::new(mark_reuse_scoped(*name, known_heap)),
+        },
+        // `ArgsRaw` carries no sub-expression at all (see its own doc
+        // comment in `ir.rs`) — nothing to recurse into.
+        Expr::ArgsRaw => Expr::ArgsRaw,
         Expr::PanicRaw { message } => Expr::PanicRaw {
             message: Box::new(mark_reuse_scoped(*message, known_heap)),
         },
@@ -541,6 +547,10 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             path: Box::new(transform(*path, known_heap)),
             contents: Box::new(transform(*contents, known_heap)),
         },
+        Expr::EnvVarRaw { name } => Expr::EnvVarRaw {
+            name: Box::new(transform(*name, known_heap)),
+        },
+        Expr::ArgsRaw => Expr::ArgsRaw,
         Expr::PanicRaw { message } => Expr::PanicRaw {
             message: Box::new(transform(*message, known_heap)),
         },
@@ -733,6 +743,8 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::RefSet { base, value } => expr_mentions_var(base, name) || expr_mentions_var(value, name),
         Expr::ReadFileRaw { path } => expr_mentions_var(path, name),
         Expr::WriteFileRaw { path, contents } => expr_mentions_var(path, name) || expr_mentions_var(contents, name),
+        Expr::EnvVarRaw { name: n } => expr_mentions_var(n, name),
+        Expr::ArgsRaw => false,
         Expr::PanicRaw { message } => expr_mentions_var(message, name),
         Expr::Select { arms } => arms
             .iter()
@@ -1147,6 +1159,11 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
                 used_path || used_contents,
             )
         }
+        Expr::EnvVarRaw { name: n } => {
+            let (n_t, used) = mark_last_uses(*n, name, live_after);
+            (Expr::EnvVarRaw { name: Box::new(n_t) }, used)
+        }
+        Expr::ArgsRaw => (Expr::ArgsRaw, false),
         Expr::PanicRaw { message } => {
             let (message_t, used) = mark_last_uses(*message, name, live_after);
             (Expr::PanicRaw { message: Box::new(message_t) }, used)

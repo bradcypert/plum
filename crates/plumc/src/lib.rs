@@ -15,7 +15,7 @@ pub use diagnostics::ModuleSources;
 pub use modules::{resolve_modules, typecheck_and_run_modules};
 pub use project::{
     collect_project_files, collect_project_files_with_paths, resolve_project, resolve_project_diag, typecheck_and_run_project,
-    typecheck_and_run_project_diag,
+    typecheck_and_run_project_diag, typecheck_and_run_project_with_process_args_diag,
 };
 pub use testing::{discover_tests, run_tests_interpreted, run_tests_native, TestOutcome};
 
@@ -196,6 +196,47 @@ let write_file (path: String) (contents: String): Result[Unit, String] = {
     let r = write_file_raw(path, contents);
     if r.ok { Ok(()) } else { Err(r.payload) }
 }
+";
+
+/// `env_var(name): Option[String]` — the SAME `let name (...) = { let r
+/// = name_raw(...); if r.ok { ... } else { ... } }` shape `STDLIB_FILE_
+/// SRC` above already established for `read_file`/`write_file`, just
+/// translating to `Option`, not `Result`, on the `else` branch: a
+/// missing env var isn't an error to report text for (see `ir::Expr::
+/// EnvVarRaw`'s own doc comment), so there's no `r.payload` worth
+/// keeping on that path, unlike `read_file`'s `Err(r.payload)`.
+/// `env_var_raw`/`__EnvResult` are the genuinely new core-language
+/// builtin this needs (see `ir::Expr::EnvVarRaw`) — `getenv` itself
+/// CAN'T be reached through an ordinary `extern \"C\"` block instead:
+/// confirmed empirically (not assumed) that a missing variable's null
+/// `CStr` return is a hard runtime error under this language's
+/// existing `CStr` semantics (`DESIGN.md`'s own documented, deliberate
+/// behavior for ANY null `CStr` return), which would crash the whole
+/// program rather than yield `None`.
+const STDLIB_ENV_SRC: &str = "\
+struct __EnvResult { ok: Bool, payload: String }
+
+let env_var (name: String): Option[String] = {
+    let r = env_var_raw(name);
+    if r.ok { Some(r.payload) } else { None }
+}
+";
+
+/// `args(): Array[String]` — a trivial rename of `args_raw`, unlike
+/// `read_file`/`env_var`'s own wrappers above: reading argv never
+/// fails, so there's no `Result`/`Option` translation to do (see `ir::
+/// Expr::ArgsRaw`'s own doc comment). Real process args, one element
+/// per `argv[1..]` entry (the program's own name, `argv[0]`, is never
+/// included — matching e.g. Rust's own `std::env::args().skip(1)`
+/// convention) — see `plum_codegen::emit_runtime`'s `@plum_build_args_
+/// array` (native) and `Interpreter::set_process_args` (interpreted,
+/// wired up ONLY by `plum run <project-dir> -- <arg>...`'s own CLI
+/// path in `main.rs`; every other interpreted entry point, including
+/// `plum test`, sees an empty `args()` — a real, deliberate v1 scope
+/// boundary, not a bug, since neither has a `--`-args convention of
+/// its own yet).
+const STDLIB_ARGS_SRC: &str = "\
+let args (): Array[String] = args_raw(())
 ";
 
 /// JSON parsing/serialization — chunk 9 of the standard library, pure
@@ -1121,6 +1162,8 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
         PRELUDE_SRC,
         STDLIB_IO_SRC,
         STDLIB_FILE_SRC,
+        STDLIB_ENV_SRC,
+        STDLIB_ARGS_SRC,
         STDLIB_JSON_SRC,
         STDLIB_COLLECTIONS_SRC,
         STDLIB_ASSERT_SRC,
@@ -1156,6 +1199,8 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
 const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len()
     + STDLIB_IO_SRC.len()
     + STDLIB_FILE_SRC.len()
+    + STDLIB_ENV_SRC.len()
+    + STDLIB_ARGS_SRC.len()
     + STDLIB_JSON_SRC.len()
     + STDLIB_COLLECTIONS_SRC.len()
     + STDLIB_ASSERT_SRC.len()
@@ -1211,6 +1256,28 @@ pub(crate) fn run_resolved_program_diag(
     fn_name: &str,
     args: Vec<Value>,
 ) -> Result<Value, plum_syntax::error::CompileError> {
+    run_resolved_program_with_process_args_diag(program, fn_name, args, Vec::new())
+}
+
+/// The `args()`-aware sibling of `run_resolved_program_diag` — used
+/// ONLY by `plum run <project-dir> -- <arg>...` (see `main.rs`'s own
+/// CLI parsing), which is the one call site that actually has real
+/// process command-line args to thread through. Everything else
+/// (`run_resolved_program_diag` itself, and so every one of ITS own
+/// many pre-existing callers/tests — `typecheck_and_run`, `modules::
+/// typecheck_and_run_modules_diag`, ...) just calls straight through
+/// here with an empty `process_args`, exactly the same "new sibling
+/// function, existing signature/callers untouched" shape this whole
+/// `_diag` family already established for `CompileError` preservation.
+/// `Interpreter::set_process_args` is a setter (not a `load_program`
+/// parameter), for the identical reason `set_struct_field_names` is —
+/// see that method's own doc comment.
+pub(crate) fn run_resolved_program_with_process_args_diag(
+    program: ast::Program,
+    fn_name: &str,
+    args: Vec<Value>,
+    process_args: Vec<String>,
+) -> Result<Value, plum_syntax::error::CompileError> {
     let mut program = program;
     assoc_fns::resolve_associated_calls(&mut program);
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
@@ -1238,6 +1305,7 @@ pub(crate) fn run_resolved_program_diag(
 
     let mut interp = Interpreter::new();
     interp.set_struct_field_names(lowering_ctx.struct_fields().clone());
+    interp.set_process_args(process_args);
     interp.load_program(&ir_program).map_err(|e| plum_syntax::error::CompileError::spanless(format!("load error: {e}")))?;
     interp.call(fn_name, args).map_err(Into::into)
 }
@@ -2249,6 +2317,30 @@ mod tests {
     fn write_file_to_an_invalid_path_returns_err_through_the_interpreter() {
         let src = "let use_it dummy = match write_file(\"/plum_test_nonexistent_dir_xyz/f.txt\", \"x\") { \
                     Ok(_) => false, Err(_) => true }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    // --- standard library: `env_var` (see `plumc::STDLIB_ENV_SRC`) ---
+
+    #[test]
+    fn env_var_finds_a_real_variable_and_returns_none_for_a_missing_one() {
+        // Deliberately reads existing env vars rather than SETTING one
+        // itself — `std::env::set_var` mutates genuinely global process
+        // state, unsafe to do from an individual `#[test]` when cargo
+        // runs the whole suite's tests concurrently across threads in
+        // one process (confirmed real: recent Rust marks `set_var`
+        // itself `unsafe` for exactly this reason). `CARGO_PKG_NAME` is
+        // a var Cargo itself guarantees is set, to this crate's own
+        // name, for every test binary it runs — see the Cargo book's
+        // "environment variables Cargo sets for crates" — so this needs
+        // no env mutation of its own at all, sidestepping the hazard
+        // entirely rather than working around it.
+        let src = "let use_it dummy = env_var(\"CARGO_PKG_NAME\") == Some(\"plumc\")";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+
+        let src = "let use_it dummy = env_var(\"PLUM_TEST_DEFINITELY_UNSET_XYZ\") == None";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Bool(true)));
     }

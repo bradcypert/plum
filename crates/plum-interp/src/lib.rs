@@ -716,6 +716,8 @@ fn free_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<Str
             free_vars_scoped(path, local, out);
             free_vars_scoped(contents, local, out);
         }
+        Expr::EnvVarRaw { name } => free_vars_scoped(name, local, out),
+        Expr::ArgsRaw => {}
         Expr::PanicRaw { message } => free_vars_scoped(message, local, out),
     }
 }
@@ -760,6 +762,16 @@ pub struct Interpreter {
     // tag (which never HAS field names, by language design) already
     // does, never a crash or a missing-data error.
     struct_field_names: HashMap<String, Vec<String>>,
+    // The real command-line args a Plum program's own `args()` should
+    // see (see `ir::Expr::ArgsRaw`'s doc comment) — empty unless a
+    // caller opts in via `set_process_args`, the SAME "setter, not a
+    // `load_program` parameter" shape `set_struct_field_names` already
+    // established, for the identical reason: only `plum run <project>
+    // -- <arg>...`'s own CLI path (see `plumc::run_resolved_program_
+    // with_process_args_diag`) actually has real process args to give,
+    // so every one of this crate's OWN (many, pre-existing) test call
+    // sites stays untouched, correctly defaulting to an empty `args()`.
+    process_args: Vec<String>,
 }
 
 impl Interpreter {
@@ -773,7 +785,16 @@ impl Interpreter {
             globals: HashMap::new(),
             extern_fns: HashMap::new(),
             struct_field_names: HashMap::new(),
+            process_args: Vec::new(),
         }
+    }
+
+    /// Sets what this interpreter's own `args()` (`Expr::ArgsRaw`)
+    /// returns — see `process_args`'s own field doc comment for why
+    /// this is a setter, called before `load_program`, rather than a
+    /// constructor/`load_program` parameter.
+    pub fn set_process_args(&mut self, process_args: Vec<String>) {
+        self.process_args = process_args;
     }
 
     /// Opts this interpreter into named-field `.to_string()` rendering
@@ -2084,6 +2105,47 @@ impl Interpreter {
                 };
                 let payload_addr = self.heap.alloc_str(payload);
                 let addr = self.heap.alloc("__FileIoResult".to_string(), vec![Value::Bool(ok), Value::HeapRef(payload_addr)]);
+                Ok(Value::HeapRef(addr))
+            }
+            // `env_var_raw(name)` — low-level environment-variable-read
+            // primitive (see `ir::Expr::EnvVarRaw`'s own doc comment
+            // for why this builds `__EnvResult` rather than `Option`/
+            // `Some`/`None` itself). `payload` is the variable's value
+            // on success, empty (never read by the prelude's own
+            // `env_var` wrapper on this path) on absence — unlike
+            // `ReadFileRaw`, `std::env::var`'s `Err` case is never
+            // surfaced as text: a missing/non-Unicode env var both
+            // collapse to plain absence, matching `getenv`'s own C-level
+            // "null means not set" semantics native codegen's sibling
+            // implementation is bound by.
+            Expr::EnvVarRaw { name } => {
+                let Value::HeapRef(name_addr) = self.eval(name)? else {
+                    return Err("`env_var_raw` requires a String name".to_string());
+                };
+                let name_str = self.heap.read_str(name_addr)?.to_string();
+                let (ok, payload) = match std::env::var(&name_str) {
+                    Ok(value) => (true, value),
+                    Err(_) => (false, String::new()),
+                };
+                let payload_addr = self.heap.alloc_str(payload);
+                let addr = self.heap.alloc("__EnvResult".to_string(), vec![Value::Bool(ok), Value::HeapRef(payload_addr)]);
+                Ok(Value::HeapRef(addr))
+            }
+            // `args_raw(())` — low-level process-command-line-args
+            // primitive (see `ir::Expr::ArgsRaw`'s own doc comment).
+            // Builds a FRESH `Array[Str]` every call, straight from
+            // `self.process_args` (populated once via `set_process_
+            // args` — see that method's own doc comment) — the exact
+            // same `heap.alloc(ARRAY_TAG, ..)` shape `Expr::EmptyArray`
+            // and every `Array.*` builtin already use, no new heap
+            // representation needed.
+            Expr::ArgsRaw => {
+                let elements: Vec<Value> = self
+                    .process_args
+                    .iter()
+                    .map(|s| Value::HeapRef(self.heap.alloc_str(s.clone())))
+                    .collect();
+                let addr = self.heap.alloc(ARRAY_TAG.to_string(), elements);
                 Ok(Value::HeapRef(addr))
             }
             // `panic_raw(msg)` — the testing framework's own primitive

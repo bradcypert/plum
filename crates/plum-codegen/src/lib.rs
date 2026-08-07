@@ -779,6 +779,13 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     // their own `strlen`/`memchr` would otherwise collide with these.
     out.push_str("declare i64 @strlen(ptr)\n");
     out.push_str("declare ptr @memchr(ptr, i32, i64)\n");
+    // `@getenv` — backs `env_var_raw` (`codegen_env_var_raw`), the same
+    // "tiny, fixed cost, simpler than a fourth reactive-gating flag"
+    // reasoning as `@strlen`/`@memchr` immediately above, not the
+    // `needs_file_io_runtime`-style gating `read_file_raw`/`write_
+    // file_raw` use (those pull in a whole cluster of `@fopen`/`@fread`
+    // /etc. declares together; this is one line).
+    out.push_str("declare ptr @getenv(ptr)\n");
     // `@memcmp` — backs `@plum_str_eq` below (Str `==`/`!=`), the same
     // "reach for a real libc declare" precedent as `@memcpy`/`@strlen`/
     // `@memchr` above.
@@ -2227,6 +2234,59 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
          }\n\n",
     );
 
+    // `@plum_argc`/`@plum_argv` — real GLOBAL VARIABLE storage (not
+    // just `declare`s), backing `args_raw` (`codegen_args_raw`). Always
+    // present (tiny, fixed cost — two words — same "simpler than a
+    // gating flag" reasoning as `@getenv` above), written ONCE by
+    // `plumc::emit_main`'s own hand-written `main(i32 %argc, ptr
+    // %argv)` prologue, read fresh on every `args()` call site.
+    // Zero-initialized so a program that (somehow) reads `args()`
+    // before `main`'s prologue runs — never possible through ordinary
+    // Plum code, `@plum_init_globals` always runs AFTER this store —
+    // sees an empty array rather than a null-pointer crash, a
+    // defensive default with no real caller today.
+    out.push_str("@plum_argc = global i32 0\n");
+    out.push_str("@plum_argv = global ptr null\n\n");
+
+    // `@plum_build_args_array` — builds `Array[Str]` from real process
+    // `argv`, skipping `argv[0]` (the program's own name — matching
+    // e.g. Rust's own `std::env::args().skip(1)` convention). Unlike
+    // `@plum_str_split` above, this needs no two-pass count-then-fill
+    // (the element count — `argc - 1` — is already known up front, no
+    // scan needed), so it's a single loop: one `@strlen`+`@plum_alloc_
+    // str`+`@memcpy` per argument, copied into `%arr`'s element slots
+    // at `16 + i*8` — the exact same `Array[Str]` element layout
+    // `@plum_str_split`'s own `%eaddr`/`%paddr` stores already
+    // establish.
+    out.push_str("define ptr @plum_build_args_array(i32 %argc, ptr %argv) {\n");
+    out.push_str("entry:\n");
+    out.push_str("  %count32 = sub i32 %argc, 1\n");
+    out.push_str("  %count = sext i32 %count32 to i64\n");
+    out.push_str("  %arr = call ptr @plum_alloc_array(i64 %count)\n");
+    out.push_str("  br label %loop_check\n");
+    out.push_str("loop_check:\n");
+    out.push_str("  %i = phi i64 [ 0, %entry ], [ %i_next, %loop_body ]\n");
+    out.push_str("  %cont = icmp slt i64 %i, %count\n");
+    out.push_str("  br i1 %cont, label %loop_body, label %loop_done\n");
+    out.push_str("loop_body:\n");
+    out.push_str("  %argv_i = add i64 %i, 1\n");
+    out.push_str("  %argv_slot = getelementptr ptr, ptr %argv, i64 %argv_i\n");
+    out.push_str("  %arg_ptr = load ptr, ptr %argv_slot\n");
+    out.push_str("  %alen = call i64 @strlen(ptr %arg_ptr)\n");
+    out.push_str("  %cell = call ptr @plum_alloc_str(i64 %alen)\n");
+    out.push_str("  %dst = getelementptr i8, ptr %cell, i64 16\n");
+    out.push_str("  call ptr @memcpy(ptr %dst, ptr %arg_ptr, i64 %alen)\n");
+    out.push_str("  %word = ptrtoint ptr %cell to i64\n");
+    out.push_str("  %off = mul i64 %i, 8\n");
+    out.push_str("  %byteoff = add i64 %off, 16\n");
+    out.push_str("  %eaddr = getelementptr i8, ptr %arr, i64 %byteoff\n");
+    out.push_str("  store i64 %word, ptr %eaddr\n");
+    out.push_str("  %i_next = add i64 %i, 1\n");
+    out.push_str("  br label %loop_check\n");
+    out.push_str("loop_done:\n");
+    out.push_str("  ret ptr %arr\n");
+    out.push_str("}\n\n");
+
     out
 }
 
@@ -3116,6 +3176,7 @@ fn is_reserved_extern_name(name: &str) -> bool {
         "snprintf",
         "strlen",
         "memchr",
+        "getenv",
         "pthread_create",
         "pthread_join",
         "pthread_mutex_init",
@@ -3173,6 +3234,7 @@ fn reserved_extern_signature(name: &str) -> Option<(&'static str, &'static [&'st
         "exit" => Some(("void", &["i32"])),
         "strlen" => Some(("i64", &["ptr"])),
         "memchr" => Some(("ptr", &["ptr", "i32", "i64"])),
+        "getenv" => Some(("ptr", &["ptr"])),
         "usleep" => Some(("i32", &["i32"])),
         _ => None,
     }

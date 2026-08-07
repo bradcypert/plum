@@ -1001,6 +1001,23 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
                 contents: Box::new(lower_expr(&args[1], ctx)?),
             })
         }
+        // `env_var_raw(name)` — same shape-only precedent again.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "env_var_raw") =>
+        {
+            Ok(ir::Expr::EnvVarRaw {
+                name: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
+        // `args_raw(())` — same shape-only precedent again, EXCEPT the
+        // one argument itself is deliberately NOT lowered/stored (see
+        // `ir::Expr::ArgsRaw`'s own doc comment: it's always `Expr::
+        // Unit`, carrying no runtime information at all).
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "args_raw") =>
+        {
+            Ok(ir::Expr::ArgsRaw)
+        }
         // `panic_raw(msg)` — same shape-only precedent again.
         ast::Expr::Call { callee, args, .. }
             if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "panic_raw") =>
