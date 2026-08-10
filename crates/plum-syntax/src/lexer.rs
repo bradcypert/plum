@@ -7,6 +7,12 @@ pub enum TokenKind {
     Int(i64),
     Float(f64),
     Str(String),
+    // A DOUBLE-QUOTED string containing at least one `${expr}`
+    // interpolation — see `InterpPart`'s own doc comment. An ordinary
+    // string (the overwhelming common case) is STILL a plain `Str`,
+    // completely unaffected by this variant existing — `lex_string`
+    // only produces `InterpStr` when it actually finds a `${`.
+    InterpStr(Vec<InterpPart>),
     True,
     False,
     // `_` is its own token, not an Ident — GRAMMAR.md's pattern grammar
@@ -66,6 +72,35 @@ pub enum TokenKind {
     FatArrow,
 
     Eof,
+}
+
+/// One piece of an interpolated string (`TokenKind::InterpStr`) — a
+/// literal run of characters, or the RAW SOURCE TEXT (not yet lexed or
+/// parsed — see `parser::parse_interp_str` for that) of a `${...}`
+/// expression, together with its real span in the ORIGINAL file
+/// (`Lexer::with_base_offset`'s existing offsetting mechanism gives
+/// this for free, the same way it already does for merged-fragment
+/// programs like the prelude — see `Lexer::base`'s own doc comment).
+///
+/// **Deliberately restricted scope** (see DESIGN.md's "String
+/// interpolation" entry for the fuller "why"): finding `${...}`'s
+/// closing `}` only tracks `(`/`[` depth (so `${f(a, g(b))}` works) and
+/// skips over any NESTED double-quoted string's content wholesale (so
+/// a literal `}` inside a nested string, like `${f("a}b")}`, doesn't
+/// prematurely end the interpolation) — it does NOT track `{`/`}`
+/// depth. A block expression, closure with a block body, struct
+/// literal, or `if`/`match` inside `${...}` will therefore, at worst,
+/// grab the WRONG (truncated) closing `}` and produce a raw source
+/// string that fails to parse as a valid expression — a real, visible
+/// parse error at that point, never silently wrong behavior, just not
+/// as precise a message as a purpose-built check would give. A nested
+/// string's OWN `${...}` (if it somehow contained one) is never
+/// re-interpreted — it stays literal text of that inner string, i.e.
+/// interpolation does not recurse.
+#[derive(Debug, Clone, PartialEq)]
+pub enum InterpPart {
+    Literal(String),
+    Expr(String, Span),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -222,14 +257,16 @@ impl<'a> Lexer<'a> {
 
     fn lex_string(&mut self) -> TokenKind {
         self.advance(); // opening quote
+        let mut parts: Vec<InterpPart> = Vec::new();
         let mut s = String::new();
-        while let Some(c) = self.peek_char() {
-            match c {
-                '"' => {
+        loop {
+            match self.peek_char() {
+                None => break, // unterminated — same permissive "just stop" precedent as before this feature existed
+                Some('"') => {
                     self.advance();
                     break;
                 }
-                '\\' => {
+                Some('\\') => {
                     self.advance();
                     match self.advance() {
                         Some('n') => s.push('\n'),
@@ -237,17 +274,97 @@ impl<'a> Lexer<'a> {
                         Some('r') => s.push('\r'),
                         Some('\\') => s.push('\\'),
                         Some('"') => s.push('"'),
+                        // `\$` — a literal `$` that would otherwise be
+                        // read as the start of `${...}` interpolation
+                        // if followed by `{`. Not needed before a `$`
+                        // that isn't followed by `{` (bare `$` is
+                        // always literal), but harmless either way.
+                        Some('$') => s.push('$'),
                         Some(other) => s.push(other),
                         None => break,
                     }
                 }
-                _ => {
+                Some('$') if self.peek_char_at(1) == Some('{') => {
+                    parts.push(InterpPart::Literal(std::mem::take(&mut s)));
+                    self.advance(); // '$'
+                    self.advance(); // '{'
+                    let (expr_src, expr_span) = self.lex_interp_expr_source();
+                    parts.push(InterpPart::Expr(expr_src, expr_span));
+                }
+                Some(c) => {
                     s.push(c);
                     self.advance();
                 }
             }
         }
-        TokenKind::Str(s)
+        if parts.is_empty() {
+            TokenKind::Str(s)
+        } else {
+            parts.push(InterpPart::Literal(s));
+            TokenKind::InterpStr(parts)
+        }
+    }
+
+    /// Scans the RAW SOURCE TEXT of one `${...}` interpolation, called
+    /// right after its opening `${` has already been consumed — returns
+    /// that text (not yet lexed/parsed — `parser::parse_interp_str`
+    /// does that) and its real span in the original file. See
+    /// `InterpPart`'s own doc comment for exactly what this does and
+    /// does not track while scanning for the closing `}`.
+    fn lex_interp_expr_source(&mut self) -> (String, Span) {
+        let start = (self.pos + self.base) as u32;
+        let mut src = String::new();
+        let mut depth: i32 = 0;
+        loop {
+            match self.peek_char() {
+                None => break, // unterminated — falls through to the natural "doesn't parse" error downstream
+                Some('}') if depth == 0 => break,
+                Some('(') | Some('[') => {
+                    depth += 1;
+                    src.push(self.advance().expect("just peeked"));
+                }
+                Some(')') | Some(']') => {
+                    depth -= 1;
+                    src.push(self.advance().expect("just peeked"));
+                }
+                // A nested double-quoted string's content is skipped
+                // WHOLESALE (its own `}`/`{`/`(`/`[` never affect this
+                // interpolation's depth tracking, and its own `\"`
+                // escape is respected so an escaped quote doesn't end
+                // it early) — but never re-interpreted as its own
+                // interpolation; see `InterpPart`'s doc comment.
+                Some('"') => {
+                    src.push(self.advance().expect("just peeked"));
+                    loop {
+                        match self.peek_char() {
+                            None | Some('"') => {
+                                if let Some(c) = self.advance() {
+                                    src.push(c);
+                                }
+                                break;
+                            }
+                            Some('\\') => {
+                                src.push(self.advance().expect("just peeked"));
+                                if let Some(c) = self.advance() {
+                                    src.push(c);
+                                }
+                            }
+                            Some(c) => {
+                                src.push(c);
+                                self.advance();
+                            }
+                        }
+                    }
+                }
+                Some(c) => {
+                    src.push(c);
+                    self.advance();
+                }
+            }
+        }
+        let end = (self.pos + self.base) as u32;
+        self.bump_if('}');
+        (src, Span::new(start, end))
     }
 
     fn lex_ident_or_keyword(&mut self) -> TokenKind {
@@ -469,6 +586,90 @@ mod tests {
         );
         assert_eq!(kinds("\"a\\tb\""), vec![TokenKind::Str("a\tb".to_string())]);
         assert_eq!(kinds("\"quote:\\\"\""), vec![TokenKind::Str("quote:\"".to_string())]);
+    }
+
+    #[test]
+    fn interpolated_string_produces_literal_and_expr_parts() {
+        // `"a${x}b"` — byte offsets: `"` at 0, `a` at 1, `${` at 2-3,
+        // `x` at 4, `}` at 5, `b` at 6, closing `"` at 7.
+        let tokens = Lexer::new("\"a${x}b\"").tokenize();
+        assert_eq!(
+            tokens[0].kind,
+            TokenKind::InterpStr(vec![
+                InterpPart::Literal("a".to_string()),
+                InterpPart::Expr("x".to_string(), Span::new(4, 5)),
+                InterpPart::Literal("b".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn interpolated_string_with_no_leading_or_trailing_literal() {
+        assert_eq!(
+            kinds("\"${x}\""),
+            vec![TokenKind::InterpStr(vec![
+                InterpPart::Literal(String::new()),
+                InterpPart::Expr("x".to_string(), Span::new(3, 4)),
+                InterpPart::Literal(String::new()),
+            ])]
+        );
+    }
+
+    #[test]
+    fn interpolated_string_with_multiple_interpolations() {
+        assert_eq!(
+            kinds("\"x=${x}, y=${y}\""),
+            vec![TokenKind::InterpStr(vec![
+                InterpPart::Literal("x=".to_string()),
+                InterpPart::Expr("x".to_string(), Span::new(5, 6)),
+                InterpPart::Literal(", y=".to_string()),
+                InterpPart::Expr("y".to_string(), Span::new(13, 14)),
+                InterpPart::Literal(String::new()),
+            ])]
+        );
+    }
+
+    #[test]
+    fn interpolation_expr_source_can_contain_balanced_parens() {
+        assert_eq!(
+            kinds("\"${f(a, g(b))}\""),
+            vec![TokenKind::InterpStr(vec![
+                InterpPart::Literal(String::new()),
+                InterpPart::Expr("f(a, g(b))".to_string(), Span::new(3, 13)),
+                InterpPart::Literal(String::new()),
+            ])]
+        );
+    }
+
+    #[test]
+    fn interpolation_expr_source_skips_over_a_nested_strings_own_brace() {
+        // The `}` inside the nested string must NOT end the
+        // interpolation early.
+        assert_eq!(
+            kinds("\"${f(\"a}b\")}\""),
+            vec![TokenKind::InterpStr(vec![
+                InterpPart::Literal(String::new()),
+                InterpPart::Expr("f(\"a}b\")".to_string(), Span::new(3, 11)),
+                InterpPart::Literal(String::new()),
+            ])]
+        );
+    }
+
+    #[test]
+    fn a_dollar_not_followed_by_a_brace_is_a_literal_dollar() {
+        assert_eq!(kinds("\"$5\""), vec![TokenKind::Str("$5".to_string())]);
+    }
+
+    #[test]
+    fn an_escaped_dollar_before_a_brace_is_a_literal_dollar_no_interpolation() {
+        assert_eq!(kinds("\"\\${x}\""), vec![TokenKind::Str("${x}".to_string())]);
+    }
+
+    #[test]
+    fn a_plain_string_with_no_interpolation_still_produces_the_plain_str_token() {
+        // Confirms zero behavior change for the overwhelmingly common
+        // case — this variant of `TokenKind::Str` is untouched.
+        assert_eq!(kinds("\"just plain text\""), vec![TokenKind::Str("just plain text".to_string())]);
     }
 
     #[test]

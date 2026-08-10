@@ -35,12 +35,37 @@ sections.
 ```
 IntLiteral    ::= digit { digit | "_" }
 FloatLiteral  ::= digit { digit | "_" } "." digit { digit | "_" }
-StringLiteral ::= '"' { StringChar } '"'
-StringChar    ::= any character except '"' or newline, or an escape sequence
+StringLiteral ::= '"' { StringChar | Interpolation } '"'
+StringChar    ::= any character except '"', '$', or newline, or an escape sequence
+Interpolation ::= "${" InterpExprSource "}"
 BoolLiteral   ::= "true" | "false"
 Literal       ::= IntLiteral | FloatLiteral | StringLiteral | BoolLiteral
 Comment       ::= "//" { any character except newline }
 ```
+
+**String interpolation** (`"hello, ${name}!"`) is pure syntax sugar,
+fully resolved by the lexer+parser — `plum-types`/`plum-ir`/both
+backends never see it, only the ordinary `.concat()`/`.to_string()`
+calls it desugars into (`"hello, ".concat(name.to_string()).concat("!"
+)`), which already exist and already work generically over every type.
+No `f"..."` prefix — every double-quoted string supports `${...}`. A
+bare `$` not immediately followed by `{` is always a literal `$`; `\$`
+escapes a literal `$` immediately before a `{` that would otherwise
+start an interpolation.
+
+`InterpExprSource` is an ordinary `Expr`, parsed by re-lexing the raw
+text between `${` and its matching `}` — but finding that matching `}`
+is DELIBERATELY RESTRICTED (see DESIGN.md's "String interpolation"
+entry for the fuller "why"): only `(`/`[` nesting depth is tracked (so
+`${f(a, g(b))}` works), and a nested double-quoted string's content is
+skipped wholesale so an embedded `}` inside it (`${f("a}b")}`) doesn't
+end the interpolation early — but `{`/`}` themselves are NOT
+depth-tracked. A block expression, closure with a block body, struct
+literal, `if`/`match`, or a nested string containing ITS OWN `${...}`
+therefore isn't supported directly inside `${...}` — pull it into a
+variable first. Getting this wrong produces a real, visible parse error
+(the truncated text fails to parse as a valid expression), never
+silently wrong behavior.
 
 Comments and whitespace are insignificant except as token separators (no
 significant indentation — see DESIGN.md, braces were chosen deliberately

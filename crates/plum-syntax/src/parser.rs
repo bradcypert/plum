@@ -3,7 +3,7 @@ use crate::ast::{
     ExternParam, FieldInit, FieldPattern, GenericParam, Item, ItemKind, LetDef, MatchArm, Param,
     ParamKind, Pattern, Program, SelectArm, Stmt, StructDecl, StructField, Type, UnaryOp, UseDecl,
 };
-use crate::lexer::{Token, TokenKind};
+use crate::lexer::{InterpPart, Lexer, Token, TokenKind};
 use crate::span::Span;
 
 pub struct Parser {
@@ -1078,6 +1078,10 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Str(s.clone(), tok.span))
             }
+            TokenKind::InterpStr(parts) => {
+                self.advance();
+                Self::desugar_interp_str(parts, tok.span)
+            }
             TokenKind::True => {
                 self.advance();
                 Ok(Expr::Bool(true, tok.span))
@@ -1123,6 +1127,94 @@ impl Parser {
                 Ok(Expr::Spawn(block, span))
             }
             other => Err(crate::error::CompileError::new(tok.span, format!("expected an expression, found {other:?}"))),
+        }
+    }
+
+    /// Desugars an interpolated string's `InterpPart`s into ordinary
+    /// `.concat()`/`.to_string()` calls — `"a${x}b"` becomes `"a".
+    /// concat(x.to_string()).concat("b")` — reusing the core builtins
+    /// that already exist and already work generically over every
+    /// type, rather than any new IR/backend machinery. Skips an empty
+    /// literal segment's own `.concat("")` call (the common `"${x}"`
+    /// case, no leading/trailing text) purely to keep the generated
+    /// expression tree (and what it compiles to) a little leaner; not
+    /// needed for correctness, `.concat("")` would be a no-op anyway.
+    fn desugar_interp_str(parts: &[InterpPart], span: Span) -> Result<Expr, crate::error::CompileError> {
+        let mut iter = parts.iter();
+        let Some(InterpPart::Literal(first_lit)) = iter.next() else {
+            unreachable!("lex_string always starts an InterpStr with a Literal part");
+        };
+        let mut acc: Option<Expr> = if first_lit.is_empty() { None } else { Some(Expr::Str(first_lit.clone(), span)) };
+        while let Some(part) = iter.next() {
+            let InterpPart::Expr(src, expr_span) = part else {
+                unreachable!("lex_string always alternates Literal/Expr — two Literals in a row can't happen");
+            };
+            let inner = Self::parse_interp_expr(src, *expr_span)?;
+            let stringified = Expr::Call {
+                callee: Box::new(Expr::Field { base: Box::new(inner), name: "to_string".to_string(), span: *expr_span }),
+                args: vec![],
+                span: *expr_span,
+            };
+            acc = Some(match acc {
+                None => stringified,
+                Some(prev) => Expr::Call {
+                    callee: Box::new(Expr::Field { base: Box::new(prev), name: "concat".to_string(), span }),
+                    args: vec![stringified],
+                    span,
+                },
+            });
+            let Some(InterpPart::Literal(lit)) = iter.next() else {
+                unreachable!("lex_string always alternates Expr/Literal, ending on a Literal");
+            };
+            if !lit.is_empty() {
+                acc = Some(Expr::Call {
+                    callee: Box::new(Expr::Field { base: Box::new(acc.expect("just set above")), name: "concat".to_string(), span }),
+                    args: vec![Expr::Str(lit.clone(), span)],
+                    span,
+                });
+            }
+        }
+        Ok(acc.expect("lex_string only emits InterpStr when at least one Expr part is present"))
+    }
+
+    /// Re-lexes and parses ONE `${...}` interpolation's raw source text
+    /// as an ordinary expression — `Lexer::with_base_offset` anchors
+    /// every token's span back to where `src` actually sits in the
+    /// original file, so error locations (and anything else keyed by
+    /// `Span`, like `plum_types::infer::Infer::field_owners`) are
+    /// exactly as if this text had been parsed in place, not as a
+    /// separate fragment. A parse failure here is enriched with a hint
+    /// when `src` contains a `{` or another `"` — the two shapes
+    /// `InterpPart`'s own doc comment documents as unsupported (block
+    /// expressions/closures with block bodies, and nested interpolated
+    /// strings) — since THAT'S the overwhelmingly likely reason,
+    /// rather than an ordinary typo, that something here failed to
+    /// parse.
+    fn parse_interp_expr(src: &str, span: Span) -> Result<Expr, crate::error::CompileError> {
+        let tokens = Lexer::with_base_offset(src, span.start as usize).tokenize();
+        let mut parser = Parser::new(tokens);
+        let expr = parser.parse_expr().map_err(|e| Self::enrich_interp_parse_error(e, src, span))?;
+        if !matches!(parser.peek_kind(), TokenKind::Eof) {
+            return Err(Self::enrich_interp_parse_error(
+                crate::error::CompileError::new(parser.peek().span, "unexpected trailing content inside `${...}`".to_string()),
+                src,
+                span,
+            ));
+        }
+        Ok(expr)
+    }
+
+    fn enrich_interp_parse_error(e: crate::error::CompileError, src: &str, span: Span) -> crate::error::CompileError {
+        if src.contains('{') || src.contains('"') {
+            crate::error::CompileError::new(
+                span,
+                format!(
+                    "{e} (hint: block expressions, closures with a block body, and nested interpolated \
+                     strings aren't supported inside `${{...}}` — pull it into a variable first)"
+                ),
+            )
+        } else {
+            e
         }
     }
 
@@ -2418,6 +2510,56 @@ mod tests {
     #[test]
     fn struct_literal_nested_field_update_path_requires_an_explicit_value() {
         parse_err("Game { ship.position }");
+    }
+
+    // --- String interpolation: desugars entirely at parse time into
+    // ordinary `.concat()`/`.to_string()` calls — no new `Expr` variant,
+    // so `render`'s existing arms show it exactly as if it had been
+    // hand-written that way.
+
+    #[test]
+    fn interpolated_string_desugars_to_concat_and_to_string_calls() {
+        assert_eq!(
+            render(&parse("\"hello, ${name}!\"")),
+            "(call (field (call (field \"hello, \" concat) (call (field name to_string))) concat) \"!\")"
+        );
+    }
+
+    #[test]
+    fn an_interpolation_with_no_surrounding_literal_text_skips_the_empty_concat() {
+        // `"${x}"` should desugar straight to `x.to_string()`, not
+        // `"".concat(x.to_string()).concat("")`.
+        assert_eq!(render(&parse("\"${x}\"")), "(call (field x to_string))");
+    }
+
+    #[test]
+    fn multiple_interpolations_chain_left_to_right() {
+        assert_eq!(
+            render(&parse("\"a${x}b${y}c\"")),
+            "(call (field (call (field (call (field (call (field \"a\" concat) (call (field x to_string))) concat) \"b\") concat) \
+             (call (field y to_string))) concat) \"c\")"
+        );
+    }
+
+    #[test]
+    fn an_interpolated_expression_can_be_an_arbitrary_arithmetic_or_call_expression() {
+        assert_eq!(
+            render(&parse("\"${1 + f(2, 3)}\"")),
+            "(call (field (+ 1 (call f 2 3)) to_string))"
+        );
+    }
+
+    #[test]
+    fn a_plain_string_with_no_interpolation_is_unaffected() {
+        assert_eq!(render(&parse("\"just plain text\"")), "\"just plain text\"");
+    }
+
+    #[test]
+    fn a_block_expression_inside_interpolation_is_a_clear_parse_error() {
+        parse_err("\"${if x { 1 } else { 2 }}\"");
+        let tokens = Lexer::new("\"${if x { 1 } else { 2 }}\"").tokenize();
+        let err = Parser::new(tokens).parse_expr().expect_err("expected a parse error");
+        assert!(err.to_string().contains("hint"), "expected the block-expression hint, got: {err}");
     }
 
     #[test]

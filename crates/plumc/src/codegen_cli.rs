@@ -2041,6 +2041,21 @@ mod tests {
     }
 
     #[test]
+    fn string_interpolation_runs_through_native_codegen() {
+        let src = "\
+            struct Point { x: Int, y: Int }\n\
+            let go (): Bool = {\n\
+                let name = \"world\";\n\
+                let n = 41;\n\
+                let p = Point { x: 1, y: 2 };\n\
+                \"hello, ${name}! n=${n + 1}, point=${p.to_string()}\" \
+                == \"hello, world! n=42, point=Point { x: 1, y: 2 }\"\n\
+            }\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
     fn nested_struct_to_string_recurses_in_native_codegen() {
         let src = "\
             struct Point { x: Int, y: Int }\n\

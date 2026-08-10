@@ -420,6 +420,25 @@ string conversion in either direction — see the standard library's
 JSON implementation for the `chars_of`/one-character-`String`-array
 pattern used to work around this.
 
+**Interpolation**: `"${...}"` inside any double-quoted string, no
+prefix needed —
+
+```
+let name = "world";
+let n = 41;
+println("hello, ${name}! n=${n + 1}")   // hello, world! n=42
+```
+
+is exactly `"hello, ".concat(name.to_string()).concat("! n=").concat((n
++ 1).to_string())` — pure syntax sugar over `.concat()`/`.to_string()`
+(both already generic over every type), resolved entirely by the
+lexer/parser, so it works everywhere a string literal does. A bare `$`
+not followed by `{` is always literal; `\$` escapes one that would
+otherwise start an interpolation. `${...}`'s contents can be any
+ordinary expression (arithmetic, field access, calls, ...) but can't
+itself contain a block expression, a closure with a block body, or a
+nested string with its own `${...}` — pull those into a variable first.
+
 ### Local mutability, `if`/blocks as expressions
 
 ```

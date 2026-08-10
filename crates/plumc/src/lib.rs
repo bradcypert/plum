@@ -1875,6 +1875,46 @@ mod tests {
     }
 
     #[test]
+    fn string_interpolation_runs_through_the_full_gated_pipeline() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                    let use_it dummy = {\n\
+                        let name = \"world\";\n\
+                        let n = 41;\n\
+                        let p = Point { x: 1, y: 2 };\n\
+                        \"hello, ${name}! n=${n + 1}, point=${p.to_string()}\" \
+                        == \"hello, world! n=42, point=Point { x: 1, y: 2 }\"\n\
+                    }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn string_interpolation_with_no_surrounding_text_and_a_literal_dollar() {
+        let src = "let use_it dummy = { let x = 5; \"${x}\" == \"5\" && \"price: $${x}\" == \"price: $5\" }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn an_escaped_dollar_prevents_interpolation() {
+        // `\${x} literal` (an ESCAPED `$`) must equal the same text
+        // built via plain concatenation (`"$".concat("{x} literal")`,
+        // which can't possibly trigger interpolation) — proving the
+        // escape produced the literal 4 characters `$`, `{`, `x`, `}`,
+        // not an interpolated `5`.
+        let src = "let use_it dummy = { let x = 5; \"\\${x} literal\" == \"$\".concat(\"{x} literal\") }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn a_block_expression_inside_string_interpolation_is_rejected_before_running() {
+        let src = "let use_it dummy = { let x = 5; \"${if x > 0 { 1 } else { 2 }}\" }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit]).expect_err("expected a parse error");
+        assert!(err.contains("hint"), "{err}");
+    }
+
+    #[test]
     fn to_string_on_a_still_unresolved_generic_parameter_is_permitted_and_works_when_called() {
         // Regression coverage: `.to_string()` used inside a generic
         // function body (where the parameter's type isn't resolved

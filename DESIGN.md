@@ -5122,3 +5122,56 @@ name, separate from `span`'s whole-`FieldInit` range) and extending
 `extra_path` from `Vec<String>` to `Vec<(String, Span)>`, so every
 segment at every nesting depth has its own real, distinct span to give
 its synthesized `Field` node — not a fabricated/offset one.
+
+### String interpolation (`"hello, ${name}!"`) — Decided and implemented
+
+`${...}` inside any double-quoted string, no `f"..."` prefix. Desugars
+entirely at lex/parse time into ordinary `.concat()`/`.to_string()`
+calls (`"a".concat(x.to_string()).concat("b")`) — both already real,
+already generic over every type — so `plum-types`/`plum-ir`/both
+backends need ZERO new code; the whole feature lives in `plum-syntax`'s
+lexer and parser.
+
+**The real design fork**: how much can legally appear inside `${...}`.
+Considered and rejected: full arbitrary expressions (Kotlin/Swift/JS
+template-literal style), including nested block expressions/closures/
+struct literals and even a nested string with ITS OWN `${...}`. That
+needs a genuinely stateful lexer — a mode stack toggling between
+"scanning string characters" and "scanning ordinary tokens," tracking
+brace depth so `${if x { 1 } else { 2 }}` or a doubly-nested `${f("${
+inner}")}` don't get the wrong closing `}` — a class of complexity
+nothing else in this lexer has needed. Landed instead on a RESTRICTED
+scope, deliberately mirroring the `_` placeholder-chain sugar's own
+precedent (GRAMMAR.md: "not a general Scala-style placeholder usable
+anywhere"): `${...}`'s closing `}` is found by tracking ONLY `(`/`[`
+depth (so `${f(a, g(b))}` works) and skipping a nested plain string's
+content wholesale (so `${f("a}b")}`'s embedded `}` doesn't end the
+interpolation early) — `{`/`}` themselves are never depth-tracked, and
+a nested string's own `${...}`, if it had one, is never re-interpreted
+(interpolation does not recurse). A block expression, closure with a
+block body, struct literal, or `if`/`match` inside `${...}` will, at
+worst, grab the wrong closing `}` and produce a raw substring that
+fails to parse as a valid expression — a real, visible parse error
+(enriched with a hint when the failed substring contains `{` or `"`,
+since that's the overwhelmingly likely cause), never silently wrong
+behavior. Covers the vast majority of real uses (`"${g.score}"`,
+`"${p.x}"`, `"${f(x, y)}"`, `"${a + b}"`) with a bounded, single-level
+lexer change (no mode stack) instead.
+
+**Implementation shape**: the lexer's `lex_string` now optionally
+produces `TokenKind::InterpStr(Vec<InterpPart>)` (a NEW variant sitting
+ALONGSIDE the existing `TokenKind::Str(String)`, which stays completely
+unchanged and is still what every non-interpolated string literal — the
+overwhelming common case — lexes to) — an alternating `Literal(String)`/
+`Expr(String, Span)` sequence, where each `Expr` part is the interpolated
+expression's RAW SOURCE TEXT plus its real span in the ORIGINAL file
+(`Lexer::with_base_offset`'s existing offset mechanism, already proven
+for merging the prelude into user source, gives this for free — no new
+span machinery). The PARSER, on seeing `InterpStr`, re-lexes+parses each
+`Expr` part's raw text as an ordinary expression and folds the whole
+thing into a left-associated `.concat()`/`.to_string()` call chain,
+skipping a `.concat("")` for an empty literal segment (so `"${x}"`
+desugars straight to `x.to_string()`, not `"".concat(x.to_string()).
+concat("")`) purely to keep the generated tree lean, not for
+correctness. Zero new `ast::Expr` variant either — the desugared output
+is indistinguishable from the same call chain hand-written directly.
