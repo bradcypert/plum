@@ -2261,7 +2261,7 @@ impl Infer {
                     .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.map()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
-                let (f_ty, s) = self.infer_expr_as_callback(&args[0], &refined_env, &[acc.apply(&elem_ty)])?;
+                let (f_ty, s) = self.infer_expr_as_callback(&args[0], &refined_env, Some(&[acc.apply(&elem_ty)]))?;
                 acc = s.compose(&acc);
                 let out_ty = self.fresh();
                 let s = unify(
@@ -2288,7 +2288,7 @@ impl Infer {
                     .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.filter()`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
-                let (f_ty, s) = self.infer_expr_as_callback(&args[0], &refined_env, &[acc.apply(&elem_ty)])?;
+                let (f_ty, s) = self.infer_expr_as_callback(&args[0], &refined_env, Some(&[acc.apply(&elem_ty)]))?;
                 acc = s.compose(&acc);
                 let s = unify(
                     &acc.apply(&f_ty),
@@ -2317,7 +2317,7 @@ impl Infer {
                 let (init_ty, s) = self.infer_expr(&args[0], &refined_env)?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
-                let (f_ty, s) = self.infer_expr_as_callback(&args[1], &refined_env, &[acc.apply(&init_ty), acc.apply(&elem_ty)])?;
+                let (f_ty, s) = self.infer_expr_as_callback(&args[1], &refined_env, Some(&[acc.apply(&init_ty), acc.apply(&elem_ty)]))?;
                 acc = s.compose(&acc);
                 let s = unify(
                     &acc.apply(&f_ty),
@@ -2615,6 +2615,32 @@ impl Infer {
     /// they're checked with the FINAL, fully-unified argument types —
     /// exactly the point `instantiate_with_bounds`'s doc comment says
     /// they only become checkable.
+    ///
+    /// Every argument is routed through `infer_expr_as_callback`
+    /// (originally `.map`/`.filter`/`.fold`'s own private helper —
+    /// see that method's doc comment for why generalizing it here, not
+    /// just those 3 hardcoded builtins, closes a real inference gap:
+    /// ANY function taking a closure argument, stdlib or user-defined,
+    /// used to have the SAME "closure params start as disconnected
+    /// fresh vars, `default_numeric` can commit them wrong before
+    /// they're ever linked to the real expected type" bug those 3 were
+    /// individually patched against). `callee_ty` is ALREADY a
+    /// `Type::Function` immediately after ordinary name lookup or
+    /// generic instantiation (fresh type variables fill in whatever
+    /// isn't concrete YET — instantiation always produces the outer
+    /// `Function` SHAPE up front, only the vars inside remain to be
+    /// resolved) — so `acc.apply(&callee_ty)`'s param list is
+    /// consultable from argument 0 onward, and gets MORE resolved
+    /// after each earlier argument's own unification contributes to
+    /// `acc`, the same threading this loop already did. When it
+    /// resolves to `Type::Function(params, _)` with a param at THIS
+    /// index that's ITSELF a `Type::Function` (a callback parameter),
+    /// that inner param list is passed as the seed; every other case
+    /// (`callee_ty` not yet resolved to a `Function` at all, arity
+    /// mismatch, a non-callback param) passes `None`, under which
+    /// `infer_expr_as_callback` behaves EXACTLY like the bare `infer_
+    /// expr` this loop always called — the safe, unchanged fallback for
+    /// every call shape this can't help with.
     fn infer_call_with_callee(
         &mut self,
         callee_ty: Type,
@@ -2627,10 +2653,38 @@ impl Infer {
         let mut acc = callee_subst;
         let mut refined_env = env.apply_subst(&acc);
         let mut arg_types = Vec::with_capacity(args.len());
-        for arg in args {
-            let (t, s) = self.infer_expr(arg, &refined_env)?;
+        for (i, arg) in args.iter().enumerate() {
+            let param_ty_at_i = match acc.apply(&callee_ty) {
+                Type::Function(params, _) if i < params.len() => Some(params[i].clone()),
+                _ => None,
+            };
+            let expected_params = match &param_ty_at_i {
+                Some(Type::Function(inner_params, _)) => Some(inner_params.clone()),
+                _ => None,
+            };
+            let (t, s) = self.infer_expr_as_callback(arg, &refined_env, expected_params.as_deref())?;
             acc = s.compose(&acc);
             refined_env = refined_env.apply_subst(&acc);
+            let arg_ty = acc.apply(&t);
+            // Unify THIS argument against its own parameter type right
+            // away, rather than waiting for the aggregate `expected_fn_ty`
+            // unify below — earlier arguments (e.g. an `Array[T]` receiver
+            // pinning `T`) must resolve BEFORE a later callback argument
+            // is inferred, or `expected_params`, above, would still be
+            // peeking at an unresolved `T` for every argument after the
+            // first. Failures are swallowed here on purpose: the real
+            // program-facing error, if any, is still produced below by
+            // the unchanged final unify against `expected_fn_ty`, using
+            // each argument's own natural (not forcibly-unified) type —
+            // this early pass only exists to propagate SUCCESSFUL
+            // resolutions forward, never to surface a different error
+            // than the one that already existed here.
+            if let Some(param_ty) = param_ty_at_i {
+                if let Ok(u) = unify(&acc.apply(&param_ty), &arg_ty) {
+                    acc = u.compose(&acc);
+                    refined_env = refined_env.apply_subst(&acc);
+                }
+            }
             arg_types.push(acc.apply(&t));
         }
         let ret_var = self.fresh();
@@ -3323,26 +3377,36 @@ impl Infer {
         Ok((Type::Function(resolved_params, Box::new(acc.apply(&body_ty))), acc))
     }
 
-    /// Used by `.map`/`.filter`/`.fold`'s own builtin-call inference
-    /// arms in place of a bare `self.infer_expr(arg, env)` — a callback
+    /// Originally `.map`/`.filter`/`.fold`'s own private helper (those
+    /// 3 builtins always KNOW their callback's expected param types up
+    /// front, from the array's own element type, before ever inferring
+    /// the callback argument) — now the general entry point `infer_
+    /// call_with_callee`'s own argument loop ALSO routes every
+    /// argument through, closures and non-closures alike. A callback
     /// argument that's LITERALLY a closure literal at this call site
     /// (the overwhelmingly common case: `arr.fold(0, |acc, x| ...)`,
     /// not `arr.fold(0, some_named_fn)`) gets its params seeded from
-    /// `expected_param_types` (see `infer_closure`'s own doc comment
-    /// for why this matters, not just why it's convenient). A callback
-    /// that ISN'T a bare closure literal (a named function reference, a
-    /// parenthesized expression, ...) falls through to the ordinary
-    /// `infer_expr` path unchanged — nothing about ordinary function-
-    /// typed values needs or benefits from pre-seeding.
+    /// `expected_param_types`, WHEN available (see `infer_closure`'s
+    /// own doc comment for why this matters, not just why it's
+    /// convenient) — `None` for an ordinary call whose callee type
+    /// isn't (yet) known to be a function accepting a callback at this
+    /// position (see `infer_call_with_callee`'s own doc comment for
+    /// exactly when that's the case), in which case this behaves
+    /// identically to a bare `infer_expr` call. A callback that ISN'T a
+    /// bare closure literal (a named function reference, a
+    /// parenthesized expression, ...) ALSO falls through to the
+    /// ordinary `infer_expr` path unchanged either way — nothing about
+    /// ordinary function-typed values needs or benefits from pre-
+    /// seeding.
     fn infer_expr_as_callback(
         &mut self,
         expr: &ast::Expr,
         env: &TypeEnv,
-        expected_param_types: &[Type],
+        expected_param_types: Option<&[Type]>,
     ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
-        match expr {
-            ast::Expr::Closure { params, body, span } => {
-                self.infer_closure(params, body, env, *span, Some(expected_param_types))
+        match (expr, expected_param_types) {
+            (ast::Expr::Closure { params, body, span }, Some(expected)) => {
+                self.infer_closure(params, body, env, *span, Some(expected))
             }
             _ => self.infer_expr(expr, env),
         }
@@ -6352,6 +6416,31 @@ mod tests {
     #[test]
     fn fold_on_a_non_array_is_an_error() {
         infer_err("5.fold(0, f)");
+    }
+
+    #[test]
+    fn an_unannotated_closure_passed_to_a_user_defined_generic_function_is_seeded_from_the_receiver_argument() {
+        // Regression test for a real bug found while porting an
+        // Asteroids demo: a generic function taking BOTH a value AND a
+        // callback (e.g. stdlib's `Array.any[T] (arr: Array[T]) (f: (T)
+        // -> Bool): Bool`) used to leave the callback's closure param
+        // as a disconnected fresh type variable, because the value
+        // argument's type was only unified against the callee's
+        // parameter list in the AGGREGATE unify at the very end of
+        // `infer_call_with_callee` — too late for the closure argument,
+        // inferred earlier in the same call, to have benefited from it.
+        // `infer_call_with_callee` now unifies each argument against
+        // its own parameter type immediately after inferring it, so a
+        // later callback argument sees an already-resolved element
+        // type. Field access on `a` here (`a.active`) is exactly what
+        // used to fail with "field access requires a struct value with
+        // a statically known type".
+        let types = infer_program(
+            "struct Asteroid { active: Bool }\n\
+             let any[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(false, |acc, x| acc || f(x))\n\
+             let main (asteroids: Array[Asteroid]): Bool = any(asteroids, |a| a.active)",
+        );
+        assert_eq!(types["main"], fn_ty(vec![Type::Struct("Array".to_string(), vec![Type::Struct("Asteroid".to_string(), vec![])])], Type::Bool));
     }
 
     #[test]
