@@ -45,6 +45,15 @@ pub struct LoweringContext {
     // `for x in arr`) is unaffected, since the literal-range fast path
     // and the ordinary Range-Match-unwrap fallback don't consult it.
     array_for_loops: std::collections::HashSet<plum_syntax::span::Span>,
+    // `Expr::Call` spans recorded as needing a synthesized `Expr::Unit`
+    // argument — the `f()` sugar for `f(())`, exactly as `plum_types::
+    // Infer::unit_sugar_calls` recorded it during inference (see that
+    // field's own doc comment for the full "why"). Consulted by the
+    // ordinary `Call`-lowering arm: a call whose AST `args` list is
+    // empty AND whose span is in this set lowers as if ONE `Expr::
+    // Unit` argument were present; empty by default, so a lowering-
+    // only test that never populates this is unaffected.
+    unit_sugar_calls: std::collections::HashSet<plum_syntax::span::Span>,
     // `Expr::ArrayLiteral` span -> resolved element type, but ONLY for
     // EMPTY literals (`[]`) — exactly as `plum_types::Infer` resolved it
     // after inference completes. Every OTHER array-shaped expression
@@ -116,6 +125,7 @@ impl LoweringContext {
             variants: HashMap::new(),
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
+            unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
             closure_types: HashMap::new(),
             variant_payload_types: HashMap::new(),
@@ -135,6 +145,14 @@ impl LoweringContext {
     /// computed during inference — see `array_for_loops`'s doc comment.
     pub fn with_array_for_loops(mut self, array_for_loops: std::collections::HashSet<plum_syntax::span::Span>) -> Self {
         self.array_for_loops = array_for_loops;
+        self
+    }
+
+    /// Attaches the set of zero-arg `f()` call sites `plum-types`
+    /// computed during inference — see `unit_sugar_calls`'s own doc
+    /// comment.
+    pub fn with_unit_sugar_calls(mut self, unit_sugar_calls: std::collections::HashSet<plum_syntax::span::Span>) -> Self {
+        self.unit_sugar_calls = unit_sugar_calls;
         self
     }
 
@@ -1343,7 +1361,19 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
                 }
             }
             let ir_callee = lower_expr(callee, ctx)?;
-            let ir_args = args.iter().map(|a| lower_expr(a, ctx)).collect::<Result<_, _>>()?;
+            // `f()` sugar for `f(())` — `plum_types::Infer` already
+            // decided (during inference, when it had the callee's real
+            // type available) that THIS zero-arg call site needs one
+            // synthesized `Expr::Unit` argument; see `unit_sugar_calls`
+            // 's own doc comment. `args` itself is empty on this path
+            // (nothing to lower), so this is the only case that needs
+            // special handling here — every other call just lowers its
+            // real argument list unchanged.
+            let ir_args = if args.is_empty() && ctx.unit_sugar_calls.contains(span) {
+                vec![ir::Expr::Unit]
+            } else {
+                args.iter().map(|a| lower_expr(a, ctx)).collect::<Result<_, _>>()?
+            };
             Ok(ir::Expr::Call {
                 callee: Box::new(ir_callee),
                 args: ir_args,

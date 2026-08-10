@@ -597,6 +597,7 @@ pub fn compile_program_to_ir_diag(
         &types,
         infer.field_owners(),
         infer.array_for_loops(),
+        infer.unit_sugar_calls(),
         &closure_types,
         &empty_array_elem_types,
         &variant_payload_types,
@@ -606,6 +607,7 @@ pub fn compile_program_to_ir_diag(
     let lowering_ctx = LoweringContext::from_items(&program.items)
         .with_field_owners(infer.field_owners().clone())
         .with_array_for_loops(infer.array_for_loops().clone())
+        .with_unit_sugar_calls(infer.unit_sugar_calls().clone())
         .with_empty_array_elem_types(empty_array_elem_types)
         .with_closure_types(closure_types)
         .with_variant_payload_types(variant_payload_types);
@@ -1389,6 +1391,22 @@ mod tests {
         let safe_order = "let rep (s: String) (n: Int): String = if n <= 0 { \"\" } else { rep(s, n - 1).concat(s) }\n\
                     let go (): Int = rep(\"ab\", 3).len()";
         assert_eq!(compile_and_run(safe_order, "go", &[CgValue::Unit]).unwrap(), "6");
+    }
+
+    // --- core language: `f()` sugar for `f(())` (see `plum_types::infer::Infer::unit_sugar_calls`) ---
+
+    #[test]
+    fn a_bare_zero_arg_call_against_a_unit_only_function_is_accepted_in_native_codegen() {
+        let src = "let helper (): Int = 42 \
+                    let go (): Int = helper()";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "42");
+    }
+
+    #[test]
+    fn the_explicit_unit_spelling_still_works_unchanged_in_native_codegen() {
+        let src = "let helper (): Int = 42 \
+                    let go (): Int = helper(())";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "42");
     }
 
     // --- associated functions: `Type.func(...)` (see `plumc::assoc_fns`) ---
@@ -2699,6 +2717,7 @@ mod tests {
             &types,
             infer.field_owners(),
             infer.array_for_loops(),
+            infer.unit_sugar_calls(),
             &closure_types,
             &HashMap::new(),
             &HashMap::new(),

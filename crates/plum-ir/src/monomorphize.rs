@@ -252,6 +252,14 @@ pub fn plan(
     types: &HashMap<String, Type>,
     field_owners: &HashMap<Span, String>,
     array_for_loops: &std::collections::HashSet<Span>,
+    // `f()` zero-arg-call-sugar sites — the SAME reasoning as `array_
+    // for_loops` immediately above applies (`MonoPlan::functions`
+    // re-lowers EVERY function through this module's OWN `base_lctx`,
+    // not the caller's), and the SAME "spans stay valid across this
+    // module's AST clone+rewrite" guarantee holds too — see `plum_
+    // types::Infer::unit_sugar_calls`'s own doc comment for what this
+    // set means.
+    unit_sugar_calls: &std::collections::HashSet<Span>,
     // Closure-literal span -> resolved (param types, return type), and
     // variant-tag -> payload types — the SAME two side-channels
     // `plumc::codegen_cli` threads into its own top-level
@@ -329,6 +337,7 @@ pub fn plan(
     // its own merged copy instead.
     let base_lctx = LoweringContext::from_items(&program.items)
         .with_array_for_loops(array_for_loops.clone())
+        .with_unit_sugar_calls(unit_sugar_calls.clone())
         .with_closure_types(closure_types.clone())
         .with_empty_array_elem_types(empty_array_elem_types.clone())
         .with_variant_payload_types(variant_payload_types.clone());
@@ -1080,6 +1089,7 @@ mod tests {
             &types,
             infer.field_owners(),
             infer.array_for_loops(),
+            infer.unit_sugar_calls(),
             &closure_types,
             &empty_array_elem_types,
             &HashMap::new(),

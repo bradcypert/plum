@@ -261,6 +261,23 @@ pub struct Infer {
     // which of the two totally different desugarings — Range-Match-
     // unwrap vs. index-based array loop — applies.
     array_for_loops: std::collections::HashSet<plum_syntax::span::Span>,
+    // `Expr::Call` spans where the call site supplies ZERO arguments
+    // against a callee whose only declared parameter is `Unit` — the
+    // `f()` sugar for `f(())`. Plum has no true nullary functions (see
+    // GRAMMAR.md: zero declared params makes a value BINDING, one or
+    // more makes a function — a `()` param list is sugar for ONE
+    // Unit-typed parameter, never zero), so a bare `f()` otherwise
+    // fails during `infer_call_with_callee` purely because `Function
+    // ([], _)` and the callee's real `Function([Unit], _)` have
+    // different argument COUNTS, not because anything is actually
+    // wrong with the call. `infer_call_with_callee` tries this
+    // reading FIRST whenever `args.is_empty()`, and records the span
+    // here on success — span-keyed for the identical reason `field_
+    // owners`/`array_for_loops` are (lowering runs as a separate pass
+    // over the same AST with no type information of its own, and
+    // needs a stable handle back to "this specific zero-arg call site
+    // needs a synthesized `Expr::Unit` argument inserted").
+    unit_sugar_calls: std::collections::HashSet<plum_syntax::span::Span>,
     // `Expr::ArrayLiteral` span -> its element type's still-possibly-
     // unresolved `Type`, recorded ONLY for EMPTY literals (`[]`) — see
     // `resolve_empty_array_elem_types`'s doc comment for why this needs
@@ -383,6 +400,7 @@ impl Infer {
             ctx: crate::context::TypeContext::new(),
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
+            unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
             closure_types: HashMap::new(),
             in_unsafe: false,
@@ -405,6 +423,7 @@ impl Infer {
             ctx,
             field_owners: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
+            unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
             closure_types: HashMap::new(),
             in_unsafe: false,
@@ -430,6 +449,13 @@ impl Infer {
     /// `array_for_loops`'s doc comment.
     pub fn array_for_loops(&self) -> &std::collections::HashSet<plum_syntax::span::Span> {
         &self.array_for_loops
+    }
+
+    /// The set of zero-argument `Expr::Call` sites recorded as needing
+    /// a synthesized `Expr::Unit` argument during lowering — see
+    /// `unit_sugar_calls`'s own field doc comment.
+    pub fn unit_sugar_calls(&self) -> &std::collections::HashSet<plum_syntax::span::Span> {
+        &self.unit_sugar_calls
     }
 
     /// Every generic function's own declared generic parameter names,
@@ -2376,12 +2402,13 @@ impl Infer {
                                 &arg_refs,
                                 env,
                                 pending_bounds,
+                                *span,
                             );
                         }
                     }
                 }
                 let arg_refs: Vec<&ast::Expr> = args.iter().collect();
-                self.infer_call(callee, &arg_refs, env)
+                self.infer_call(callee, &arg_refs, env, *span)
             }
             ast::Expr::StructLiteral {
                 path,
@@ -2504,18 +2531,33 @@ impl Infer {
     // duplicating its unification logic.
     fn infer_pipe(&mut self, lhs: &ast::Expr, rhs: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         match rhs {
-            ast::Expr::Call { callee, args, .. } => {
+            ast::Expr::Call { callee, args, span } => {
                 let mut all_args: Vec<&ast::Expr> = args.iter().collect();
                 all_args.push(lhs);
-                self.infer_call(callee, &all_args, env)
+                // `all_args` always has at least ONE entry (`lhs`,
+                // just appended) — the `f()` zero-arg sugar branch in
+                // `infer_call_with_callee` can never fire from here,
+                // so `*span` is only ever used for an error location
+                // in practice, never recorded into `unit_sugar_calls`.
+                self.infer_call(callee, &all_args, env, *span)
             }
-            other => self.infer_call(other, &[lhs], env),
+            // `x |> f` (bare callee, no parens) — same "never actually
+            // zero args" reasoning as above (`&[lhs]` always has one
+            // entry); `other.span()` is the closest available call-site
+            // span.
+            other => self.infer_call(other, &[lhs], env, other.span()),
         }
     }
 
-    fn infer_call(&mut self, callee: &ast::Expr, args: &[&ast::Expr], env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
+    fn infer_call(
+        &mut self,
+        callee: &ast::Expr,
+        args: &[&ast::Expr],
+        env: &TypeEnv,
+        span: plum_syntax::span::Span,
+    ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let (callee_ty, s) = self.infer_expr(callee, env)?;
-        self.infer_call_with_callee(callee_ty, s, args, env, Vec::new())
+        self.infer_call_with_callee(callee_ty, s, args, env, Vec::new(), span)
     }
 
     /// The shared core of "call this function type with these
@@ -2534,6 +2576,7 @@ impl Infer {
         args: &[&ast::Expr],
         env: &TypeEnv,
         pending_bounds: Vec<(TypeVarId, Vec<String>)>,
+        span: plum_syntax::span::Span,
     ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         let mut acc = callee_subst;
         let mut refined_env = env.apply_subst(&acc);
@@ -2545,9 +2588,40 @@ impl Infer {
             arg_types.push(acc.apply(&t));
         }
         let ret_var = self.fresh();
+
+        // `f()` sugar for `f(())` — see `unit_sugar_calls`'s own field
+        // doc comment for the full "why". Tried FIRST, purely
+        // speculatively (unification failure here is silently
+        // discarded, not surfaced — the ordinary zero-arg path below
+        // still runs and produces today's real error message), and
+        // ONLY when the call site supplies genuinely zero arguments —
+        // so this can never change the type-checking outcome of any
+        // call that already supplies real arguments.
+        if args.is_empty() {
+            let sugared_fn_ty = Type::Function(vec![Type::Unit], Box::new(ret_var.clone()));
+            if let Ok(s) = unify(&acc.apply(&callee_ty), &sugared_fn_ty) {
+                self.unit_sugar_calls.insert(span);
+                return self.finish_call(s.compose(&acc), ret_var, pending_bounds);
+            }
+        }
+
         let expected_fn_ty = Type::Function(arg_types, Box::new(ret_var.clone()));
         let s = unify(&acc.apply(&callee_ty), &expected_fn_ty).map_err(|e| plum_syntax::error::CompileError::spanless(format!("call: {e}")))?;
         acc = s.compose(&acc);
+        self.finish_call(acc, ret_var, pending_bounds)
+    }
+
+    /// The shared tail of `infer_call_with_callee`'s two paths (the
+    /// ordinary one, and the `f()`-sugar one above it) — bound-checking
+    /// against the FINAL, fully-unified argument types, then resolving
+    /// the call's own return type. Factored out so the sugar path can
+    /// return early without duplicating this logic.
+    fn finish_call(
+        &mut self,
+        acc: Subst,
+        ret_var: Type,
+        pending_bounds: Vec<(TypeVarId, Vec<String>)>,
+    ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         for (var_id, bounds) in pending_bounds {
             let resolved = acc.apply(&Type::Var(var_id));
             // Still unresolved (nothing pinned this specific generic

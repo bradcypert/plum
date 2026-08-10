@@ -1299,7 +1299,8 @@ pub(crate) fn run_resolved_program_with_process_args_diag(
     // comments for the full reasoning.
     let lowering_ctx = LoweringContext::from_items(&program.items)
         .with_field_owners(infer.field_owners().clone())
-        .with_array_for_loops(infer.array_for_loops().clone());
+        .with_array_for_loops(infer.array_for_loops().clone())
+        .with_unit_sugar_calls(infer.unit_sugar_calls().clone());
     let ir_program = lower_program(&program, &lowering_ctx).map_err(|e: plum_syntax::error::CompileError| e.context("lowering error"))?;
     let ir_program = optimize_program(ir_program);
 
@@ -2630,6 +2631,47 @@ mod tests {
         assert_eq!(run_string_test(src), Ok("Float(3.5)".to_string()));
         let src = "let use_it dummy = match String.parse_float(\"3.5xyz\") { Ok(f) => f, Err(e) => -1.0 }";
         assert_eq!(run_string_test(src), Ok("Float(-1.0)".to_string()));
+    }
+
+    // --- core language: `f()` sugar for `f(())` (see `plum_types::infer::Infer::unit_sugar_calls`) ---
+
+    #[test]
+    fn a_bare_zero_arg_call_against_a_unit_only_function_is_accepted() {
+        let src = "let go (): Int = 42 \
+                    let use_it dummy = go()";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn the_explicit_unit_spelling_still_works_unchanged() {
+        // The sugar is purely ADDITIVE — `f(())` never stops working.
+        let src = "let go (): Int = 42 \
+                    let use_it dummy = go(())";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn a_bare_zero_arg_call_against_a_generic_unit_function_still_resolves_its_return_type() {
+        // `identity[T] (x: T): T = x` isn't Unit-shaped in general — but
+        // called bare (`identity()`), `T` must resolve to `Unit`
+        // specifically for the sugar to apply at all, proving the
+        // sugar path composes with ordinary generic instantiation
+        // rather than bypassing it.
+        let src = "let identity[T] (x: T): T = x \
+                    let use_it dummy = identity()";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Unit));
+    }
+
+    #[test]
+    fn a_bare_zero_arg_call_against_a_non_unit_function_is_still_a_clear_arity_error() {
+        // The sugar only ever ADDS an accepted reading — a function
+        // whose param genuinely isn't (and can't be) `Unit` still
+        // rejects a zero-arg call, with the same error shape as before
+        // this feature existed.
+        let src = "let go (n: Int): Int = n + 1 \
+                    let use_it dummy = go()";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert!(result.is_err(), "{result:?}");
     }
 
     // --- associated functions: `Type.func(...)` (see `plumc::assoc_fns`) ---
