@@ -26,10 +26,18 @@ pub(crate) fn check_program_diag(program: &ast::Program) -> Result<(), CompileEr
     // need afterward (or don't own at all, e.g. a fresh one built
     // per-keystroke).
     let mut program = program.clone();
+    // Built BEFORE `resolve_associated_calls` (unlike this fn's own
+    // comment above once suggested) — `nested_struct_update` needs it
+    // for struct field-name lookups, and it only ever reads top-level
+    // declarations, never expression bodies, so running it before
+    // `assoc_fns`'s call-site rewrites changes nothing it looks at. See
+    // `nested_struct_update`'s own doc comment for the full ordering
+    // story.
+    let type_ctx = TypeContext::from_items(&program.items).map_err(|e: CompileError| e.context("type error"))?;
+    crate::nested_struct_update::expand_nested_field_updates(&mut program, &type_ctx).map_err(|e| e.context("type error"))?;
     crate::assoc_fns::resolve_associated_calls(&mut program);
     let program = &program;
 
-    let type_ctx = TypeContext::from_items(&program.items).map_err(|e: CompileError| e.context("type error"))?;
     let mut infer = Infer::with_context(type_ctx);
     infer.infer_program(program).map_err(|e: CompileError| e.context("type error"))?;
     plum_ir::movecheck::check_moves(program).map_err(|e: CompileError| e.context("move error"))?;

@@ -4,6 +4,7 @@ mod codegen_cli;
 mod diagnostics;
 pub mod lsp;
 mod modules;
+mod nested_struct_update;
 mod project;
 #[cfg(test)]
 mod test_util;
@@ -1304,8 +1305,14 @@ pub(crate) fn run_resolved_program_with_process_args_diag(
     process_args: Vec<String>,
 ) -> Result<Value, plum_syntax::error::CompileError> {
     let mut program = program;
-    assoc_fns::resolve_associated_calls(&mut program);
+    // `TypeContext` built BEFORE `resolve_associated_calls` so `nested_
+    // struct_update` (which needs it for struct field-name lookups) can
+    // run first — safe since `TypeContext::from_items` only ever reads
+    // top-level declarations, never expression bodies. See `nested_
+    // struct_update`'s own doc comment for the full ordering story.
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
+    nested_struct_update::expand_nested_field_updates(&mut program, &type_ctx).map_err(|e| e.context("type error"))?;
+    assoc_fns::resolve_associated_calls(&mut program);
     let mut infer = Infer::with_context(type_ctx);
     infer.infer_program(&program).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
 
@@ -2148,6 +2155,40 @@ mod tests {
         let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
             .expect_err("expected a type error, not a successful run");
         assert!(err.starts_with("type error:"), "expected a type error, got: {err}");
+    }
+
+    #[test]
+    fn nested_field_update_path_runs_through_the_full_gated_pipeline() {
+        // Regression test for a real bug: two dotted-path fields
+        // sharing a prefix (`ship.position.x`/`ship.position.y`) used
+        // to produce synthesized `Field`-access AST nodes (`g.ship`,
+        // `g.ship.position`) that all reused the SAME span, silently
+        // clobbering each other's entry in `infer.rs`'s span-keyed
+        // `field_owners` side-channel — lowering then read back the
+        // WRONG struct's field list and failed with a spurious
+        // "struct X has no field Y". `plumc::nested_struct_update` now
+        // gives every synthesized node its own real, distinct span
+        // (see `ast::FieldInit::name_span`), so this actually runs.
+        let src = "struct Vec2 { x: Float, y: Float }\n\
+                    struct Ship { position: Vec2, rotation: Float }\n\
+                    struct Game { ship: Ship, score: Int }\n\
+                    let use_it dummy = {\n\
+                        let g = Game { ship: Ship { position: Vec2 { x: 1.0, y: 2.0 }, rotation: 0.0 }, score: 0 };\n\
+                        let g2 = Game { ship.position.x: 5.0, ship.position.y: 6.0, score: g.score + 1, ..g };\n\
+                        g2.ship.position.x == 5.0 && g2.ship.position.y == 6.0 && g2.ship.rotation == 0.0 && g2.score == 1\n\
+                    }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn nested_field_update_path_without_a_spread_is_rejected_before_running() {
+        let src = "struct Vec2 { x: Float, y: Float }\n\
+                    struct Ship { position: Vec2 }\n\
+                    let use_it dummy = Ship { position.x: 1.0 }";
+        let err = typecheck_and_run(src, "use_it", vec![Value::Unit])
+            .expect_err("expected an error: no `..` spread to read the old value from");
+        assert!(err.contains("`..` spread"), "{err}");
     }
 
     #[test]
@@ -3383,3 +3424,4 @@ mod tests {
     }
 
 }
+

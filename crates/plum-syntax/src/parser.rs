@@ -1228,19 +1228,41 @@ impl Parser {
         })
     }
 
+    // `Identifier { "." Identifier } [ ":" Expr ]` — a plain field
+    // (`x` or `x: expr`) is the zero-dot case; further `.segment` steps
+    // are the nested field-update path sugar (`ship.position.x: nx`,
+    // see `plumc::nested_struct_update` for what it expands to). The
+    // shorthand form (no `: expr`) is only valid with ZERO extra
+    // segments — `ship.position` alone doesn't mean anything (there's
+    // no local named `ship.position` for it to shorthand to).
     fn parse_field_init(&mut self) -> Result<FieldInit, crate::error::CompileError> {
         let name_tok = self.expect_ident("a field name")?;
         let name = Self::ident_text(&name_tok);
+        let mut extra_path = Vec::new();
+        let mut last_span = name_tok.span;
+        while self.check(&TokenKind::Dot) {
+            self.advance();
+            let seg_tok = self.expect_ident("a nested field-update path segment")?;
+            last_span = seg_tok.span;
+            extra_path.push((Self::ident_text(&seg_tok), seg_tok.span));
+        }
         if self.bump_if(&TokenKind::Colon) {
             let value = self.parse_expr()?;
             let span = name_tok.span.to(value.span());
-            Ok(FieldInit { name, value, span })
-        } else {
+            Ok(FieldInit { name, name_span: name_tok.span, extra_path, value, span })
+        } else if extra_path.is_empty() {
             Ok(FieldInit {
                 value: Expr::Ident(name.clone(), name_tok.span),
                 name,
+                name_span: name_tok.span,
+                extra_path,
                 span: name_tok.span,
             })
+        } else {
+            Err(crate::error::CompileError::new(
+                last_span,
+                "a nested field-update path (`a.b.c`) needs an explicit `: value` — there's no shorthand form for it".to_string(),
+            ))
         }
     }
 
@@ -1635,7 +1657,14 @@ mod tests {
                 ..
             } => {
                 let mut parts = vec!["struct-lit".to_string(), path.join(".")];
-                parts.extend(fields.iter().map(|f| format!("{}={}", f.name, render(&f.value))));
+                parts.extend(fields.iter().map(|f| {
+                    let mut key = f.name.clone();
+                    for (seg, _) in &f.extra_path {
+                        key.push('.');
+                        key.push_str(seg);
+                    }
+                    format!("{key}={}", render(&f.value))
+                }));
                 if let Some(s) = spread {
                     parts.push(format!("..{}", render(s)));
                 }
@@ -2373,6 +2402,22 @@ mod tests {
             render(&parse("shapes.Circle { radius: 2.0 }")),
             "(struct-lit shapes.Circle radius=2)"
         );
+    }
+
+    #[test]
+    fn struct_literal_nested_field_update_path() {
+        // Parsed only — `plumc::nested_struct_update` is what actually
+        // expands this into real nested `StructLiteral`s; the parser's
+        // only job is capturing the dotted path onto `FieldInit`.
+        assert_eq!(
+            render(&parse("Game { ship.position.x: nx, score: s, ..g }")),
+            "(struct-lit Game ship.position.x=nx score=s ..g)"
+        );
+    }
+
+    #[test]
+    fn struct_literal_nested_field_update_path_requires_an_explicit_value() {
+        parse_err("Game { ship.position }");
     }
 
     #[test]

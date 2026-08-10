@@ -568,9 +568,15 @@ pub fn compile_program_to_ir_diag(
     // churn just to avoid one clone. See `crate::assoc_fns`'s own doc
     // comment for what this rewrites and why.
     let mut program = program.clone();
+    // `TypeContext` built BEFORE `resolve_associated_calls` so `nested_
+    // struct_update` (which needs it for struct field-name lookups) can
+    // run first — safe since `TypeContext::from_items` only ever reads
+    // top-level declarations, never expression bodies. See `nested_
+    // struct_update`'s own doc comment for the full ordering story.
+    let type_ctx = TypeContext::from_items(&program.items).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
+    crate::nested_struct_update::expand_nested_field_updates(&mut program, &type_ctx).map_err(|e| e.context("type error"))?;
     crate::assoc_fns::resolve_associated_calls(&mut program);
     let program = &program;
-    let type_ctx = TypeContext::from_items(&program.items).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
     let (mut tag_fields, mut struct_field_names) = derive_tag_fields(program, &type_ctx);
     let variant_payload_types = derive_variant_payload_types(program, &type_ctx);
     let mut infer = Infer::with_context(type_ctx);
@@ -3549,6 +3555,23 @@ mod tests {
                     |> Array.fold(_, 0, |acc, x| acc + x)";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "24");
+    }
+
+    #[test]
+    fn nested_field_update_path_runs_through_native_codegen() {
+        // Native-codegen mirror of `lib.rs`'s identically-named test —
+        // see its own comment for the real span-collision bug this
+        // guards against.
+        let src = "struct Vec2 { x: Float, y: Float }\n\
+                    struct Ship { position: Vec2, rotation: Float }\n\
+                    struct Game { ship: Ship, score: Int }\n\
+                    let go () = {\n\
+                        let g = Game { ship: Ship { position: Vec2 { x: 1.0, y: 2.0 }, rotation: 0.0 }, score: 0 };\n\
+                        let g2 = Game { ship.position.x: 5.0, ship.position.y: 6.0, score: g.score + 1, ..g };\n\
+                        g2.score\n\
+                    }";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1");
     }
 
     #[test]

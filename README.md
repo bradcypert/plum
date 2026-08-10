@@ -241,6 +241,37 @@ function/closure parameter that's only ever used for field access
 won't infer a struct type from that alone, so give it an explicit type
 annotation (as `area` does above).
 
+### Struct updates
+
+There's no field mutation (`p.x = 5` isn't valid) — structs are updated
+functionally, by spreading the rest of an old value's fields into a new
+one, with the spread always last:
+
+```
+let p2 = Point { x: 9.0, ..p }
+```
+
+For a NESTED field, a dotted path in the field key avoids having to
+hand-reconstruct every intermediate level:
+
+```
+struct Vec2 { x: Float, y: Float }
+struct Ship { position: Vec2, rotation: Float }
+struct Game { ship: Ship, score: Int }
+
+let move_ship (g: Game) (nx: Float) (ny: Float): Game =
+    Game { ship.position.x: nx, ship.position.y: ny, ..g }
+```
+
+This desugars, before type inference runs, into the fully-nested
+version you'd otherwise write by hand (`Game { ship: Ship { position:
+Vec2 { x: nx, y: ny, ..g.ship.position }, ..g.ship }, ..g }`) — paths
+sharing a prefix merge into one nested literal per level. Requires the
+literal to also have a `..` spread (nothing else to read the
+intermediate values from), and every intermediate segment (`ship`,
+`position`) must have a concrete struct type, not a still-generic type
+parameter.
+
 ### Generics
 
 ```

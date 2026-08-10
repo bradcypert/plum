@@ -2774,6 +2774,24 @@ impl Infer {
         span: plum_syntax::span::Span,
         env: &TypeEnv,
     ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
+        // A dotted-path `FieldInit` reaching type inference at all means
+        // `plumc::nested_struct_update` didn't run (or ran on a
+        // different copy of this `Program` than the one being type-
+        // checked) — an internal-error assertion, not a user-facing
+        // type error, mirroring `unify`'s own `Type::Param` precedent
+        // (a real `Result::Err`, not a panic, so it stays informative
+        // even in a release build).
+        if let Some(f) = fields.iter().find(|f| !f.extra_path.is_empty()) {
+            return Err(plum_syntax::error::CompileError::new(
+                f.span,
+                format!(
+                    "internal error: dotted field-update path `{}.{}` reached type inference unexpanded \
+                     (should have been expanded by `plumc::nested_struct_update` first)",
+                    f.name,
+                    f.extra_path.iter().map(|(seg, _)| seg.as_str()).collect::<Vec<_>>().join(".")
+                ),
+            ));
+        }
         let tag = path.last().cloned().expect("a path always has at least one segment");
         let declared_fields = self
             .ctx

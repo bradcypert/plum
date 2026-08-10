@@ -1522,6 +1522,19 @@ fn lower_struct_literal(
     span: plum_syntax::span::Span,
     ctx: &LoweringContext,
 ) -> Result<ir::Expr, plum_syntax::error::CompileError> {
+    // Mirrors `infer.rs`'s own identical check on `infer_struct_literal`
+    // — see its doc comment for the full "why".
+    if let Some(f) = fields.iter().find(|f| !f.extra_path.is_empty()) {
+        return Err(plum_syntax::error::CompileError::new(
+            f.span,
+            format!(
+                "internal error: dotted field-update path `{}.{}` reached lowering unexpanded \
+                 (should have been expanded by `plumc::nested_struct_update` first)",
+                f.name,
+                f.extra_path.iter().map(|(seg, _)| seg.as_str()).collect::<Vec<_>>().join(".")
+            ),
+        ));
+    }
     let tag = path.last().cloned().expect("a path always has at least one segment");
     let Some(declared_fields) = ctx.struct_fields.get(&tag) else {
         return Err(plum_syntax::error::CompileError::new(

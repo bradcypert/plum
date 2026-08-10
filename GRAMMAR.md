@@ -238,12 +238,41 @@ MatchArm      ::= Pattern [ "if" Expr ] "=>" Expr
 StructLiteral ::= PathType "{" [ FieldInitList ] "}"
 FieldInitList ::= FieldInit { "," FieldInit } [ "," ] [ ".." Expr ]
                 | ".." Expr
-FieldInit     ::= Identifier [ ":" Expr ]
+FieldInit     ::= Identifier { "." Identifier } [ ":" Expr ]
 ```
 
-`FieldInit`'s shorthand form (`Identifier` with no `: Expr`) means
-`field: field` — binds a field from a same-named variable in scope, the
-same shorthand Rust's struct literals allow.
+`FieldInit`'s shorthand form (`Identifier` with no `: Expr`, and no `.`
+segments) means `field: field` — binds a field from a same-named
+variable in scope, the same shorthand Rust's struct literals allow.
+
+**Nested field-update path sugar**: further `.segment` steps after the
+first identifier are a DIFFERENT sugar (`plumc::nested_struct_update`,
+a pre-inference AST-rewrite pass — no grammar ambiguity with anything
+else, since a plain field name never contains a `.`) for deep struct
+updates without hand-reconstructing every intermediate level:
+
+```
+Game { ship.position.x: nx, ship.position.y: ny, ..g }
+```
+
+expands to
+
+```
+Game {
+    ship: Ship { position: Vec2 { x: nx, y: ny, ..g.ship.position }, ..g.ship },
+    ..g
+}
+```
+
+before type inference ever runs — paths sharing a prefix merge into ONE
+nested literal per level, not independent reconstructions. Requires the
+literal to also carry a `..` spread (there's nothing else to read the
+intermediate values from); no shorthand form (`ship.position` alone,
+no `: expr`, is a parse error — there's no local named `ship.position`
+for it to mean). Every intermediate segment's declared field type must
+be a concrete struct (not a still-generic type parameter) — see
+`nested_struct_update`'s own doc comment for the full "why" and this
+v1 scope limit.
 
 ### Blocks (the statement/expression rule)
 

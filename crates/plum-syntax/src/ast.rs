@@ -214,10 +214,41 @@ pub struct ClosureParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FieldInit {
     pub name: String,
+    // The span of JUST `name` (not the whole `FieldInit`, which `span`
+    // below already covers) — needed so `plumc::nested_struct_update`
+    // can give the Field-access node it synthesizes for `name` its own
+    // genuinely distinct span, separate from any synthesized for
+    // `extra_path`'s own segments. See `extra_path`'s own doc comment
+    // for why per-segment spans matter here specifically.
+    pub name_span: Span,
     // Shorthand (`x`, meaning `x: x`) is resolved at parse time into
     // `Expr::Ident(name, _)`, same reasoning as FieldPattern's
     // shorthand below.
     pub value: Expr,
+    // Remaining segments of a DOTTED field-update path, each with its
+    // OWN real span (`ship.position.x: nx` parses as `name: "ship"`,
+    // `extra_path: [("position", <span>), ("x", <span>)]`) — empty for
+    // an ordinary single-segment field, the overwhelming common case.
+    // Never non-empty at the shorthand form (`ship.position` alone, no
+    // `: expr`, is a parse error — see `parse_field_init`). Per-segment
+    // spans (not just one span for the whole path) matter: `plumc::
+    // nested_struct_update` synthesizes one real `Field`-access AST
+    // node PER segment when expanding this sugar, and each needs its
+    // OWN genuinely distinct span — `infer.rs`'s `field_owners` is a
+    // `Span -> struct name` side-channel lowering depends on, and two
+    // different `Field` nodes sharing one span would silently clobber
+    // each other's entry in it (a real bug this exact design was
+    // needed to catch and fix).
+    //
+    // A NESTED-path `FieldInit` is pure surface syntax: `plumc::
+    // nested_struct_update` expands every non-empty `extra_path` into
+    // genuinely nested `StructLiteral`s before type inference ever
+    // runs, so `infer.rs`/`lower.rs` never see one — either of them
+    // encountering a non-empty `extra_path` is an internal-error
+    // assertion (that pass didn't run), not a user-facing type error,
+    // mirroring the precedent `Type::Param` reaching `unify` already
+    // sets.
+    pub extra_path: Vec<(String, Span)>,
     pub span: Span,
 }
 

@@ -5064,3 +5064,61 @@ summed), not just inspect emitted IR text.
   norm), deferred because of its interaction with the calling
   convention and FBIP (see Surface syntax above; note the `|>` pipe
   desugaring does NOT depend on this being resolved).
+
+### Nested field-update path sugar (`ship.position.x: nx`) — Decided and implemented
+
+Motivated directly by porting an Asteroids demo (`games/plum/`): deeply
+nested structs (`Game { ship: Ship { position: Vec2 { .. } } }`) made
+even a single-field deep update require hand-reconstructing every
+intermediate level with `..` spread. Considered and rejected: (a)
+Elm-style shallow-only record update — Elm itself doesn't have a deep
+variant; this is a known, still-unresolved pain point in real Elm code,
+not a precedent to port. (b) Composable lenses (Haskell/Elm-community
+style) — fully general (works through generics, computed access) but
+needs real new machinery (a `Lens` type, composition combinators) and a
+noticeably different call-site shape; too heavy for what this language
+needs, and in tension with Plum's existing "no macros, no typeclasses"
+bias. Landed on Haskell's `RecordDotSyntax`/Idris's record-update
+precedent instead: a dotted path AS the field key.
+
+`Game { ship.position.x: nx, ship.position.y: ny, ..g }` expands, via a
+new pre-inference AST-rewrite pass (`plumc::nested_struct_update`,
+architecturally identical to `plumc::assoc_fns` — see its own doc
+comment), into `Game { ship: Ship { position: Vec2 { x: nx, y: ny, ..g.
+ship.position }, ..g.ship }, ..g }` — paths sharing a prefix merge into
+ONE nested literal per level. Requires the literal to also carry a `..`
+spread (nothing else to read the intermediate values from otherwise).
+Once expanded, the completely UNCHANGED existing struct-literal type-
+checking/lowering/FBIP-reuse-in-place machinery handles the rest —
+including, for free, "unknown field"/"missing field"/"duplicate field"
+errors (a path colliding with a plain field of the same name becomes
+two ordinary `FieldInit`s with the same name, already rejected).
+
+**Known v1 scope limit, accepted deliberately**: an intermediate
+segment whose declared field type is still a bare generic parameter
+(`struct Wrapper[T] { inner: T }`, `w.inner.field: x`) can't be
+resolved to a concrete struct name at this stage — the pass only has
+`TypeContext`'s DECLARED field shape (`Type::Param("T")`), not whatever
+`T` happens to be instantiated to at any particular use site (real
+per-call-site type inference would be needed, a materially bigger
+change). A clear compile error, not silently wrong behavior.
+
+**A real, subtle bug found and fixed while implementing this**: the
+first version gave every synthesized `Field`-access node (`g.ship`,
+`g.ship.position`) THE SAME reused span (the outer literal's, or later,
+one shared per-original-field span reused unchanged at every nesting
+depth). `infer.rs`'s `field_owners` is a `HashMap<Span, StructName>`
+side-channel lowering depends on (lowering has no type information of
+its own) — two DIFFERENT `Field` nodes sharing one span silently
+clobber each other's entry, so lowering read back the WRONG struct's
+field list for one of them and failed with a spurious "struct X has no
+field Y", despite the desugared AST itself being structurally correct
+end to end (confirmed by direct inspection — the bug was invisible at
+the AST level, only surfacing at lowering). Root-caused by realizing
+per-nesting-depth spans need to be genuinely UNIQUE, not just "real
+spans from parsing" reused across levels. Fixed by giving `ast::
+FieldInit` a new `name_span: Span` field (the span of JUST the field
+name, separate from `span`'s whole-`FieldInit` range) and extending
+`extra_path` from `Vec<String>` to `Vec<(String, Span)>`, so every
+segment at every nesting depth has its own real, distinct span to give
+its synthesized `Field` node — not a fabricated/offset one.
