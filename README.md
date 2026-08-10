@@ -324,11 +324,23 @@ let total = Result.unwrap_or(read_file("a.txt"), "");    // "" if the file is mi
 
 ```
 let xs = [1, 2, 3];
-let doubled = xs.map(|x| x * 2);          // [2, 4, 6]
-let evens = xs.filter(|x| x % 2 == 0);    // [2]
-let total = xs.fold(0, |acc, x| acc + x); // 6
-let ys = xs.push(4);                      // [1, 2, 3, 4] — xs itself is untouched
+let doubled = Array.map(xs, |x| x * 2);          // [2, 4, 6]
+let evens = Array.filter(xs, |x| x % 2 == 0);    // [2]
+let total = Array.fold(xs, 0, |acc, x| acc + x); // 6
+let ys = xs.push(4);                             // [1, 2, 3, 4] — xs itself is untouched
 ```
+
+`map`/`filter`/`fold` are the one part of the standard library that's
+implemented as compiler primitives (not ordinary Plum functions) —
+called as `Array.map(xs, f)`, never `xs.map(f)`. Dot-call syntax
+(`value.name(...)`) is reserved exclusively for the small, fixed set of
+zero-argument core value conversions (`.to_string()`, `.to_int()`,
+`.round_to_int()`, `.to_float()`, `.as_cstr()`, plus true mutation-shaped
+array/string operations like `.push()`/`.len()`) — every stdlib function
+that takes real arguments, `map`/`filter`/`fold` included, is always
+`Type.func(value, ...args)`. This keeps the rule simple to remember
+("does it take extra arguments? then it's `Type.func(...)`") and avoids
+ambiguity between field access and method dispatch.
 
 Array mutation-shaped methods (`.push()`, `.pop()`, `.set()`,
 `.remove()`) are all *functional* — they return a new array rather than
@@ -336,6 +348,26 @@ mutating in place, but the compiler applies a reuse-in-place
 optimization (FBIP) under the hood when it can prove the original array
 is no longer needed, so this is often as cheap as a real mutation
 without giving up value semantics.
+
+### Pipe
+
+`x |> f(a, b)` inserts `x` as `f`'s *last* argument — `f(a, b, x)` — and
+`x |> f` (no parens) means `f(x)`. Chains read top to bottom instead of
+inside out:
+
+```
+[1, 2, 3]
+    |> Array.map(_, |x| x * 2)
+    |> Array.filter(_, |x| x > 2)
+    |> Array.fold(_, 0, |acc, x| acc + x)   // 10
+```
+
+Since most stdlib functions take their array/subject *first*, not last,
+a bare `_` in one of `f`'s arguments marks where `x` actually goes
+instead of appending it — that's what `_` is doing in every call above:
+without it, `[1,2,3] |> Array.map(f)` would (wrongly) mean
+`Array.map(f, [1,2,3])`. At most one `_` per call; a plain single-
+argument call like `xs |> Array.reverse` doesn't need one.
 
 ### Strings
 

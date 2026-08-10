@@ -326,7 +326,7 @@ enum JsonValue {
 }
 struct ParseResult[T] { value: T, next_pos: Int }
 
-let chars_of (s: String): Array[String] = s.split(\"\").filter(|c| c != \"\")
+let chars_of (s: String): Array[String] = Array.filter(s.split(\"\"), |c| c != \"\")
 
 let skip_ws (chars: Array[String]) (pos: Int): Int =
     if pos >= chars.len() { pos }
@@ -557,8 +557,8 @@ let json_stringify (v: JsonValue): String = match v {
     JsonBool(b) => if b { \"true\" } else { \"false\" },
     JsonNumber(n) => n.to_string(),
     JsonString(s) => json_quote(s),
-    JsonArray(arr) => \"[\".concat(join_with_commas(arr.map(|x: JsonValue| json_stringify(x)), 0, \"\")).concat(\"]\"),
-    JsonObject(entries) => \"{\".concat(join_with_commas(entries.map(|e: JsonEntry| json_quote(e.key).concat(\":\").concat(json_stringify(e.value))), 0, \"\")).concat(\"}\"),
+    JsonArray(arr) => \"[\".concat(join_with_commas(Array.map(arr, |x: JsonValue| json_stringify(x)), 0, \"\")).concat(\"]\"),
+    JsonObject(entries) => \"{\".concat(join_with_commas(Array.map(entries, |e: JsonEntry| json_quote(e.key).concat(\":\").concat(json_stringify(e.value))), 0, \"\")).concat(\"}\"),
 }
 ";
 
@@ -897,8 +897,8 @@ let Float.sqrt (x: Float): Float = unsafe { sqrt(x) }
 ";
 
 /// `Array[T]` utilities — pure Plum, built entirely on the existing
-/// builtin surface (`.len()`/`arr[i]` indexing/`.push()`/`.fold()`, all
-/// already real), no new IR/codegen work. Declared via `let Array.func
+/// builtin surface (`.len()`/`arr[i]` indexing/`.push()`/`Array.fold()`,
+/// all already real), no new IR/codegen work. Declared via `let Array.func
 /// (...)`, real associated functions (`plumc::assoc_fns`), called as
 /// `Array.reverse(arr)` — not the old flat `array_reverse` naming
 /// (removed entirely, see DESIGN.md's \"Standard library\" chunk 14).
@@ -977,9 +977,9 @@ let array_find_index_acc[T] (arr: Array[T]) (f: (T) -> Bool) (i: Int): Option[In
 
 let Array.find_index[T] (arr: Array[T]) (f: (T) -> Bool): Option[Int] = array_find_index_acc(arr, f, 0)
 
-let Array.any[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(false, |acc, x| acc || f(x))
+let Array.any[T] (arr: Array[T]) (f: (T) -> Bool): Bool = Array.fold(arr, false, |acc, x| acc || f(x))
 
-let Array.all[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(true, |acc, x| acc && f(x))
+let Array.all[T] (arr: Array[T]) (f: (T) -> Bool): Bool = Array.fold(arr, true, |acc, x| acc && f(x))
 
 let array_index_of_acc[T: Eq] (arr: Array[T]) (x: T) (i: Int): Option[Int] =
     if i >= arr.len() { None } else if arr[i] == x { Some(i) } else { array_index_of_acc(arr, x, i + 1) }
@@ -988,9 +988,9 @@ let Array.index_of[T: Eq] (arr: Array[T]) (x: T): Option[Int] = array_index_of_a
 
 let Array.contains[T: Eq] (arr: Array[T]) (x: T): Bool = Option.is_some(Array.index_of(arr, x))
 
-let Array.sum_int (arr: Array[Int]): Int = arr.fold(0, |acc, x| acc + x)
+let Array.sum_int (arr: Array[Int]): Int = Array.fold(arr, 0, |acc, x| acc + x)
 
-let Array.sum_float (arr: Array[Float]): Float = arr.fold(0.0, |acc, x| acc + x)
+let Array.sum_float (arr: Array[Float]): Float = Array.fold(arr, 0.0, |acc, x| acc + x)
 
 let array_sort_insert_acc[T] (sorted: Array[T]) (x: T) (le: (T, T) -> Bool) (i: Int): Array[T] =
     if i >= sorted.len() { sorted.push(x) }
@@ -1110,7 +1110,7 @@ let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = array_zip
 /// \"Open questions\" entry; `codegen_cli.rs` and this file both carry
 /// dedicated regression tests pinning the ONCE-unsafe ordering directly.
 const STDLIB_STRING_SRC: &str = "\
-let chars_join (chars: Array[String]): String = chars.fold(\"\", |acc, c| acc.concat(c))
+let chars_join (chars: Array[String]): String = Array.fold(chars, \"\", |acc, c| acc.concat(c))
 
 let string_reverse (s: String): String = chars_join(Array.reverse(chars_of(s)))
 
@@ -1681,15 +1681,29 @@ mod tests {
 
     #[test]
     fn array_map_filter_fold_run_through_the_full_gated_pipeline() {
-        let src = "let use_it dummy = [1, 2, 3, 4, 5].map(|x| x * 2).filter(|x| x > 4).fold(0, |acc, x| acc + x)";
+        let src = "let use_it dummy = Array.fold(Array.filter(Array.map([1, 2, 3, 4, 5], |x| x * 2), |x| x > 4), 0, |acc, x| acc + x)";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         // [2,4,6,8,10] -> filter >4 -> [6,8,10] -> fold sum -> 24
         assert_eq!(result, Ok(Value::Int(24)));
     }
 
     #[test]
+    fn pipe_with_placeholder_chains_array_map_filter_fold_the_same_as_writing_them_directly() {
+        // The exact real-world motivation: `Array.map(Array.map(shapes,
+        // f), g)`-shaped nesting rewritten with `|>` and an explicit `_`
+        // placeholder (pipe inserts LAST by default, but `Array.map`'s
+        // array param comes FIRST).
+        let src = "let use_it dummy = [1, 2, 3, 4, 5]\n\
+                    |> Array.map(_, |x| x * 2)\n\
+                    |> Array.filter(_, |x| x > 4)\n\
+                    |> Array.fold(_, 0, |acc, x| acc + x)";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Int(24)));
+    }
+
+    #[test]
     fn array_map_can_change_the_element_type() {
-        let src = "let use_it dummy = [1, 2, 3].map(|x| x > 1).filter(|b| b).len()";
+        let src = "let use_it dummy = Array.filter(Array.map([1, 2, 3], |x| x > 1), |b| b).len()";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Int(2)));
     }
@@ -1892,8 +1906,8 @@ mod tests {
     #[test]
     fn to_string_composes_with_map_and_fold_to_build_a_string() {
         // Combines several of tonight's chunks: build a string out of
-        // numbers via .map()/.to_string()/.concat()/.fold().
-        let src = "let use_it dummy = [1, 2, 3].map(|x| x.to_string()).fold(\"\", |acc, s| acc.concat(s)) == \"123\"";
+        // numbers via Array.map()/.to_string()/.concat()/Array.fold().
+        let src = "let use_it dummy = Array.fold(Array.map([1, 2, 3], |x| x.to_string()), \"\", |acc, s| acc.concat(s)) == \"123\"";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Bool(true)));
     }
@@ -3254,7 +3268,7 @@ mod tests {
 
     #[test]
     fn an_array_typed_return_annotation_runs_through_the_full_gated_pipeline() {
-        let src = "let doubled (arr: Array[Int]): Array[Int] = arr.map(|x| x * 2)\n\
+        let src = "let doubled (arr: Array[Int]): Array[Int] = Array.map(arr, |x| x * 2)\n\
                     let use_it dummy = doubled([1, 2, 3])[1]";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Int(4)));

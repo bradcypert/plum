@@ -498,6 +498,45 @@ not require currying (deferred, see Surface syntax above) to work, and
 it produces exactly the same result currying would if added later, so
 adopting it now costs nothing and won't need revisiting.
 
+**Amendment — `_` placeholder for non-last insertion position**: almost
+every stdlib associated function (`Array.map(arr, f)`, `Array.take(arr,
+n)`, `Array.sort_by(arr, cmp)`, ...) takes its "subject" value FIRST,
+not last — the opposite position "insert as last argument" targets. So
+`x |> Array.map(f)` (meaning `Array.map(f, x)`) doesn't work at all; it's
+a type error, not just unidiomatic. Discovered while trying to pipe two
+chained `Array.map` calls in `examples/adts_and_matching/main.plum`.
+Fixed by letting a literal `_` argument in `rhs`'s call mark WHERE `x`
+goes instead of always appending: `x |> f(a, _, b)` means `f(a, x, b)`;
+no `_` anywhere falls back to the original append-last rule, unchanged.
+More than one `_` is a compile error (ambiguous — which one?), not a
+silent pick.
+
+No grammar change needed for this — `_` as a bare call argument (no
+postfix chain following it) was ALREADY parsed as sugar for the trivial
+identity closure `|_| _` (see GRAMMAR.md's `PlaceholderChain`), for an
+unrelated reason (`xs.map(_)` meaning `xs.map(|x| x)` back when `.map`
+still had dot-call sugar). Pipe desugaring just gives that same,
+already-produced AST shape a SECOND meaning, specifically and only
+inside a pipe's own RHS argument list: nobody writes a literal identity
+closure as an explicit call argument on purpose, so repurposing it there
+is unambiguous in practice, and it costs zero parser/grammar changes —
+purely a `plum-types::infer::infer_pipe` / `plum-ir::lower::lower_pipe`
+desugaring-time change (see `splice_pipe_args`/`is_pipe_placeholder` in
+both).
+
+**A related bug this surfaced and fixed**: `infer_pipe`/`lower_pipe`
+used to build the desugared call DIRECTLY (calling `infer_call`/
+emitting `ir::Expr::Call` by hand) instead of going back through the
+ordinary `ast::Expr::Call` dispatch path — meaning piping into `Array.
+map`/`Array.filter`/`Array.fold` specifically (recognized purely by AST
+SHAPE inside that ordinary dispatch, not through the general name/
+scheme-lookup machinery every other call uses) produced a spurious
+"unbound variable: Array", independent of and in addition to the
+argument-order problem above. Fixed the same way: both functions now
+rebuild a genuine `ast::Expr::Call` and recurse through `infer_expr`/
+`lower_expr`, so pipe desugaring is indistinguishable from writing the
+same call out by hand.
+
 ### Block statement/expression rule — Decided
 
 A block is a sequence of items followed optionally by a tail expression:

@@ -179,13 +179,26 @@ than the mathematical reading is a documented footgun).
 
 An `Argument` that begins with `_` is placeholder-lambda sugar: `_`
 followed by zero or more `Postfix` steps desugars to an implicit
-single-param closure over that chain, e.g. `numbers.map(_.toString())`
-means `numbers.map(|n| n.toString())`, and `xs.map(_)` (the
-zero-`Postfix` case) means `xs.map(|x| x)`. This is deliberately
+single-param closure over that chain, e.g. `Array.find(xs, _.toString())`
+means `Array.find(xs, |n| n.toString())`, and `Array.map(xs, _)` (the
+zero-`Postfix` case) means `Array.map(xs, |x| x)`. This is deliberately
 narrow — see DESIGN.md — `_` is recognized only as the receiver of a
 postfix chain that is the *entire* argument, not a general
 Scala-style placeholder usable anywhere in an expression (`_ + 1` is
 a plain parse error, not sugar for `|x| x + 1`).
+
+**Pipe desugaring** (`x |> rhs`, see DESIGN.md's "Operator precedence
+and pipe semantics" for the full rationale): `x |> f(a, b)` normally
+means `f(a, b, x)` — `x` inserted as the LAST argument. If one of
+`rhs`'s arguments is a bare `_` (the zero-`Postfix` case of
+`PlaceholderChain` above — the same shape `Array.map(xs, _)` already
+uses for the identity closure), `x` is spliced in AT that position
+instead: `x |> f(a, _, b)` means `f(a, x, b)`. This matters because most
+stdlib associated functions take their "subject" value FIRST, not
+last — `xs |> Array.map(_, f)` is how to pipe into `Array.map(arr, f)`,
+since plain `xs |> Array.map(f)` would (wrongly) mean `Array.map(f, xs)`.
+More than one `_` in the same call is a compile error, not a silent
+pick of one.
 
 `Postfix` repeats to handle chains like `Ref.new(start)` (`.new` then
 `(start)`, two postfix steps) and `channel[Int]()` (`[Int]` then `()`,

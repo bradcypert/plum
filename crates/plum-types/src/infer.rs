@@ -2245,79 +2245,87 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
-            // `arr.map(f)` — `arr` must be `Array[T]`, `f` must be a
-            // ONE-argument function from `T` to some `U`; evaluates to
-            // `Array[U]`.
+            // `Array.map(arr, f)` — `arr` must be `Array[T]`, `f` must be
+            // a ONE-argument function from `T` to some `U`; evaluates to
+            // `Array[U]`. Recognized by SHAPE alone (`Field { base:
+            // Ident("Array"), name: "map" }` in call position), the same
+            // established convention core builtins like `.to_int()` use
+            // — NOT by dot-call on an arbitrary receiver: `map`/`filter`/
+            // `fold` are the one exception to "every stdlib function is
+            // an ordinary `Type.func(value, ...)` call, no dot-call
+            // sugar ever" (see this match's sibling arms and README's
+            // "Standard library" section for the fuller rule) because
+            // they're compiler primitives, not real declared functions
+            // — `plumc::assoc_fns` only rewrites `Array.foo(...)` into a
+            // plain named call when `"Array.foo"` is an ACTUAL declared
+            // top-level function, which these deliberately aren't, so
+            // this exact `Field`-in-call-position shape is what always
+            // reaches here unchanged.
             ast::Expr::Call { callee, args, span }
-                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "map") =>
+                if args.len() == 2 && is_array_builtin_call(callee, "map") =>
             {
-                let ast::Expr::Field { base, .. } = callee.as_ref() else {
-                    unreachable!("just matched this shape above");
-                };
-                let (base_ty, s) = self.infer_expr(base, env)?;
+                let (base_ty, s) = self.infer_expr(&args[0], env)?;
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.map()`: {e}")))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`Array.map`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
-                let (f_ty, s) = self.infer_expr_as_callback(&args[0], &refined_env, Some(&[acc.apply(&elem_ty)]))?;
+                let (f_ty, s) = self.infer_expr_as_callback(&args[1], &refined_env, Some(&[acc.apply(&elem_ty)]))?;
                 acc = s.compose(&acc);
                 let out_ty = self.fresh();
                 let s = unify(
                     &acc.apply(&f_ty),
                     &Type::Function(vec![acc.apply(&elem_ty)], Box::new(out_ty.clone())),
                 )
-                .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.map()` function argument: {e}")))?;
+                .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`Array.map` function argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&out_ty)]), acc))
             }
-            // `arr.filter(f)` — `arr` must be `Array[T]`, `f` must be a
-            // ONE-argument function from `T` to `Bool`; evaluates to
-            // `Array[T]` (unchanged element type).
+            // `Array.filter(arr, f)` — `arr` must be `Array[T]`, `f` must
+            // be a ONE-argument function from `T` to `Bool`; evaluates to
+            // `Array[T]` (unchanged element type). See `Array.map`'s own
+            // comment just above for why this is recognized by shape,
+            // not dot-call.
             ast::Expr::Call { callee, args, span }
-                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "filter") =>
+                if args.len() == 2 && is_array_builtin_call(callee, "filter") =>
             {
-                let ast::Expr::Field { base, .. } = callee.as_ref() else {
-                    unreachable!("just matched this shape above");
-                };
-                let (base_ty, s) = self.infer_expr(base, env)?;
+                let (base_ty, s) = self.infer_expr(&args[0], env)?;
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.filter()`: {e}")))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`Array.filter`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
-                let (f_ty, s) = self.infer_expr_as_callback(&args[0], &refined_env, Some(&[acc.apply(&elem_ty)]))?;
+                let (f_ty, s) = self.infer_expr_as_callback(&args[1], &refined_env, Some(&[acc.apply(&elem_ty)]))?;
                 acc = s.compose(&acc);
                 let s = unify(
                     &acc.apply(&f_ty),
                     &Type::Function(vec![acc.apply(&elem_ty)], Box::new(Type::Bool)),
                 )
-                .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.filter()` function argument: {e}")))?;
+                .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`Array.filter` function argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![acc.apply(&elem_ty)]), acc))
             }
-            // `arr.fold(init, f)` — `arr` must be `Array[T]`, `f` must
-            // be a TWO-argument function `(U, T) -> U` where `U` is
-            // `init`'s type; evaluates to `U`.
+            // `Array.fold(arr, init, f)` — `arr` must be `Array[T]`, `f`
+            // must be a TWO-argument function `(U, T) -> U` where `U` is
+            // `init`'s type; evaluates to `U`. See `Array.map`'s own
+            // comment above for why this is recognized by shape, not
+            // dot-call.
             ast::Expr::Call { callee, args, span }
-                if args.len() == 2 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "fold") =>
+                if args.len() == 3 && is_array_builtin_call(callee, "fold") =>
             {
-                let ast::Expr::Field { base, .. } = callee.as_ref() else {
-                    unreachable!("just matched this shape above");
-                };
-                let (base_ty, s) = self.infer_expr(base, env)?;
+                let (base_ty, s) = self.infer_expr(&args[0], env)?;
                 let mut acc = s;
                 let elem_ty = self.fresh();
                 let s = unify(&acc.apply(&base_ty), &Type::Struct("Array".to_string(), vec![elem_ty.clone()]))
-                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.fold()`: {e}")))?;
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`Array.fold`: {e}")))?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
-                let (init_ty, s) = self.infer_expr(&args[0], &refined_env)?;
+                let (init_ty, s) = self.infer_expr(&args[1], &refined_env)?;
                 acc = s.compose(&acc);
                 let refined_env = env.apply_subst(&acc);
-                let (f_ty, s) = self.infer_expr_as_callback(&args[1], &refined_env, Some(&[acc.apply(&init_ty), acc.apply(&elem_ty)]))?;
+                let (f_ty, s) = self.infer_expr_as_callback(&args[2], &refined_env, Some(&[acc.apply(&init_ty), acc.apply(&elem_ty)]))?;
                 acc = s.compose(&acc);
                 let s = unify(
                     &acc.apply(&f_ty),
@@ -2326,7 +2334,7 @@ impl Infer {
                         Box::new(acc.apply(&init_ty)),
                     ),
                 )
-                .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.fold()` function argument: {e}")))?;
+                .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`Array.fold` function argument: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((acc.apply(&init_ty), acc))
             }
@@ -2572,26 +2580,42 @@ impl Infer {
     // `x |> rhs` type-checks by desugaring EXACTLY the way lower.rs's
     // `lower_pipe` does at the IR level — `x |> f` is a call to `f`
     // with `x`; `x |> f(a, b)` is a call to `f` with `(a, b, x)`, the
-    // piped value appended as the LAST argument. Kept as its own
-    // function so the two shapes share `infer_call` rather than
-    // duplicating its unification logic.
+    // piped value appended as the LAST argument — UNLESS one of `f`'s
+    // arguments is a bare `_` placeholder (see `splice_pipe_args`'s own
+    // doc comment), in which case `x` is spliced in at that position
+    // instead. Rebuilds an ordinary `ast::Expr::Call` and routes it
+    // through `infer_expr` (rather than calling `infer_call` directly,
+    // as an earlier version of this function did) specifically so
+    // piping into `Array.map`/`Array.filter`/`Array.fold` works: those
+    // 3 are recognized by AST SHAPE in `infer_expr`'s own big match
+    // (see `is_array_builtin_call`), a check `infer_call` alone never
+    // performs — calling it directly on a pipe-desugared callee used to
+    // produce a spurious "unbound variable: Array" for exactly this
+    // case.
     fn infer_pipe(&mut self, lhs: &ast::Expr, rhs: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         match rhs {
             ast::Expr::Call { callee, args, span } => {
-                let mut all_args: Vec<&ast::Expr> = args.iter().collect();
-                all_args.push(lhs);
-                // `all_args` always has at least ONE entry (`lhs`,
-                // just appended) — the `f()` zero-arg sugar branch in
-                // `infer_call_with_callee` can never fire from here,
-                // so `*span` is only ever used for an error location
-                // in practice, never recorded into `unit_sugar_calls`.
-                self.infer_call(callee, &all_args, env, *span)
+                let new_args = splice_pipe_args(args, lhs, *span)?;
+                let synthetic = ast::Expr::Call {
+                    callee: callee.clone(),
+                    args: new_args,
+                    span: *span,
+                };
+                self.infer_expr(&synthetic, env)
             }
-            // `x |> f` (bare callee, no parens) — same "never actually
-            // zero args" reasoning as above (`&[lhs]` always has one
-            // entry); `other.span()` is the closest available call-site
+            // `x |> f` (bare callee, no parens) — no argument list to
+            // search for a `_` placeholder in, so this is always just
+            // `f(x)`; `other.span()` is the closest available call-site
             // span.
-            other => self.infer_call(other, &[lhs], env, other.span()),
+            other => {
+                let span = other.span();
+                let synthetic = ast::Expr::Call {
+                    callee: Box::new(other.clone()),
+                    args: vec![lhs.clone()],
+                    span,
+                };
+                self.infer_expr(&synthetic, env)
+            }
         }
     }
 
@@ -3335,7 +3359,7 @@ impl Infer {
     // ever gets a chance to connect them to the REAL (possibly `Float`)
     // expected type, producing a spurious "expected Int, found Float"
     // even for an entirely correctly-typed program (confirmed via a
-    // minimal repro: `arr.fold(0.0, |acc, x| acc + x)` over an
+    // minimal repro: `Array.fold(arr, 0.0, |acc, x| acc + x)` over an
     // `Array[Float]`, `arr`'s own element type ALREADY known to be
     // `Float` at the call site, still failed this way before this fix
     // — see DESIGN.md's "Standard library" chunk 12 for the full story
@@ -3377,15 +3401,16 @@ impl Infer {
         Ok((Type::Function(resolved_params, Box::new(acc.apply(&body_ty))), acc))
     }
 
-    /// Originally `.map`/`.filter`/`.fold`'s own private helper (those
-    /// 3 builtins always KNOW their callback's expected param types up
-    /// front, from the array's own element type, before ever inferring
-    /// the callback argument) — now the general entry point `infer_
-    /// call_with_callee`'s own argument loop ALSO routes every
-    /// argument through, closures and non-closures alike. A callback
-    /// argument that's LITERALLY a closure literal at this call site
-    /// (the overwhelmingly common case: `arr.fold(0, |acc, x| ...)`,
-    /// not `arr.fold(0, some_named_fn)`) gets its params seeded from
+    /// Originally `Array.map`/`Array.filter`/`Array.fold`'s own private
+    /// helper (those 3 builtins always KNOW their callback's expected
+    /// param types up front, from the array's own element type, before
+    /// ever inferring the callback argument) — now the general entry
+    /// point `infer_call_with_callee`'s own argument loop ALSO routes
+    /// every argument through, closures and non-closures alike. A
+    /// callback argument that's LITERALLY a closure literal at this
+    /// call site (the overwhelmingly common case: `Array.fold(arr, 0,
+    /// |acc, x| ...)`, not `Array.fold(arr, 0, some_named_fn)`) gets
+    /// its params seeded from
     /// `expected_param_types`, WHEN available (see `infer_closure`'s
     /// own doc comment for why this matters, not just why it's
     /// convenient) — `None` for an ordinary call whose callee type
@@ -3785,6 +3810,66 @@ pub(crate) fn subst_params(ty: &Type, mapping: &HashMap<String, Type>) -> Type {
 // every other shape-detection check in this file already follows,
 // e.g. `.push()`/`.len()`/etc. are each independently checked in both
 // lower.rs and infer.rs).
+/// True for a call's `callee` shaped exactly `Field { base: Ident("Array"),
+/// name: fn_name }` — the `Array.map`/`Array.filter`/`Array.fold`
+/// call-syntax shape these 3 compiler-primitive builtins are recognized
+/// by (see their own match arms' doc comment for the fuller "why shape,
+/// not dot-call, and why not through `plumc::assoc_fns` instead" story).
+fn is_array_builtin_call(callee: &ast::Expr, fn_name: &str) -> bool {
+    matches!(callee, ast::Expr::Field { base, name, .. }
+        if name == fn_name && matches!(base.as_ref(), ast::Expr::Ident(n, _) if n == "Array"))
+}
+
+/// True for the exact AST shape a bare `_` argument (no postfix chain
+/// following it) already desugars to at parse time — `parse_argument`
+/// turns it into the trivial identity closure `Closure { params: ["_"],
+/// body: Ident("_") }` — see that function's own doc comment. Reused
+/// here as `|>`'s placeholder marker: `x |> f(a, _, b)` splices `x` in
+/// at the `_` position instead of appending it at the end (see
+/// `splice_pipe_args`). No grammar/parser change needed for this — pipe
+/// simply gives special MEANING, at desugaring time, to an argument
+/// shape the parser already produces for an unrelated reason. Nobody
+/// writes a literal identity closure as an explicit call argument on
+/// purpose, so repurposing this one specific shape, and ONLY inside a
+/// pipe's own call-argument list, is unambiguous in practice.
+fn is_pipe_placeholder(expr: &ast::Expr) -> bool {
+    matches!(expr, ast::Expr::Closure { params, body, .. }
+        if params.len() == 1
+            && params[0].name == "_"
+            && params[0].ty.is_none()
+            && matches!(body.as_ref(), ast::Expr::Ident(name, _) if name == "_"))
+}
+
+/// `x |> f(a, b)`'s argument-list half of pipe desugaring: appends `x`
+/// as the last argument, UNLESS exactly one argument is the `_`
+/// placeholder (`is_pipe_placeholder`), in which case `x` is spliced in
+/// at that position instead — `x |> f(a, _, b)` means `f(a, x, b)`.
+/// More than one placeholder is rejected outright (which of several
+/// would `x` even go in?) rather than silently picking one.
+fn splice_pipe_args(
+    args: &[ast::Expr],
+    lhs: &ast::Expr,
+    span: plum_syntax::span::Span,
+) -> Result<Vec<ast::Expr>, plum_syntax::error::CompileError> {
+    let placeholders: Vec<usize> = args.iter().enumerate().filter(|(_, a)| is_pipe_placeholder(a)).map(|(i, _)| i).collect();
+    match placeholders.as_slice() {
+        [] => {
+            let mut new_args = args.to_vec();
+            new_args.push(lhs.clone());
+            Ok(new_args)
+        }
+        [i] => {
+            let mut new_args = args.to_vec();
+            new_args[*i] = lhs.clone();
+            Ok(new_args)
+        }
+        _ => Err(plum_syntax::error::CompileError::new(
+            span,
+            "at most one `_` placeholder is allowed in a piped call".to_string(),
+        )),
+    }
+}
+
 fn is_catchall_pattern(pattern: &ast::Pattern) -> bool {
     matches!(pattern, ast::Pattern::Wildcard(_) | ast::Pattern::Ident(..))
 }
@@ -5477,6 +5562,49 @@ mod tests {
         assert_eq!(infer_in("5 |> f(1)", &env2), Type::Bool);
     }
 
+    #[test]
+    fn pipe_placeholder_marks_the_insertion_position_instead_of_appending_last() {
+        // `f`'s FIRST param is `Bool` and its SECOND is `Int` — only
+        // resolvable if `5 |> f(_, true)` actually splices `5` in at
+        // the `_` (first) position rather than always appending it
+        // last (which would try `f(true, 5)`, `Int` where `Bool` is
+        // expected, a type error).
+        let env = TypeEnv::new().extend(
+            "f".to_string(),
+            Type::Function(vec![Type::Int, Type::Bool], Box::new(Type::Str)),
+        );
+        assert_eq!(infer_in("5 |> f(_, true)", &env), Type::Str);
+    }
+
+    #[test]
+    fn more_than_one_pipe_placeholder_is_a_type_error() {
+        let env = TypeEnv::new().extend(
+            "f".to_string(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        infer_err_in("5 |> f(_, _)", &env);
+    }
+
+    #[test]
+    fn pipe_into_array_map_via_the_placeholder_type_checks() {
+        // Regression test for a real bug: `infer_pipe` used to call
+        // `infer_call` directly, bypassing the shape-based recognition
+        // `Array.map`/`Array.filter`/`Array.fold` need — piping into
+        // them produced "unbound variable: Array" even with the
+        // argument order fixed by a `_` placeholder. `infer_pipe` now
+        // rebuilds an ordinary `Call` and recurses through `infer_expr`,
+        // so this type-checks exactly like `Array.map(xs, f)` written
+        // directly would.
+        let env = TypeEnv::new().extend(
+            "f".to_string(),
+            Type::Function(vec![Type::Int], Box::new(Type::Bool)),
+        );
+        assert_eq!(
+            infer_in("[1, 2, 3] |> Array.map(_, f)", &env),
+            Type::Struct("Array".to_string(), vec![Type::Bool])
+        );
+    }
+
     // --- Call expressions, against a manually-populated env (no
     // program-level machinery needed to test this in isolation) ---
 
@@ -6350,7 +6478,7 @@ mod tests {
             Type::Function(vec![Type::Int], Box::new(Type::Str)),
         );
         assert_eq!(
-            infer_in("[1, 2, 3].map(to_str)", &env),
+            infer_in("Array.map([1, 2, 3], to_str)", &env),
             Type::Struct("Array".to_string(), vec![Type::Str])
         );
     }
@@ -6361,12 +6489,12 @@ mod tests {
             "to_str".to_string(),
             Type::Function(vec![Type::Int], Box::new(Type::Str)),
         );
-        infer_err_in("[true, false].map(to_str)", &env);
+        infer_err_in("Array.map([true, false], to_str)", &env);
     }
 
     #[test]
     fn map_on_a_non_array_is_an_error() {
-        infer_err("5.map(f)");
+        infer_err("Array.map(5, f)");
     }
 
     #[test]
@@ -6376,7 +6504,7 @@ mod tests {
             Type::Function(vec![Type::Int], Box::new(Type::Bool)),
         );
         assert_eq!(
-            infer_in("[1, 2, 3].filter(is_pos)", &env),
+            infer_in("Array.filter([1, 2, 3], is_pos)", &env),
             Type::Struct("Array".to_string(), vec![Type::Int])
         );
     }
@@ -6387,12 +6515,12 @@ mod tests {
             "to_str".to_string(),
             Type::Function(vec![Type::Int], Box::new(Type::Str)),
         );
-        infer_err_in("[1, 2, 3].filter(to_str)", &env);
+        infer_err_in("Array.filter([1, 2, 3], to_str)", &env);
     }
 
     #[test]
     fn filter_on_a_non_array_is_an_error() {
-        infer_err("5.filter(f)");
+        infer_err("Array.filter(5, f)");
     }
 
     #[test]
@@ -6401,7 +6529,7 @@ mod tests {
             "add".to_string(),
             Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
         );
-        assert_eq!(infer_in("[1, 2, 3].fold(0, add)", &env), Type::Int);
+        assert_eq!(infer_in("Array.fold([1, 2, 3], 0, add)", &env), Type::Int);
     }
 
     #[test]
@@ -6410,12 +6538,12 @@ mod tests {
             "add".to_string(),
             Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
         );
-        infer_err_in("[true, false].fold(0, add)", &env);
+        infer_err_in("Array.fold([true, false], 0, add)", &env);
     }
 
     #[test]
     fn fold_on_a_non_array_is_an_error() {
-        infer_err("5.fold(0, f)");
+        infer_err("Array.fold(5, 0, f)");
     }
 
     #[test]
@@ -6437,7 +6565,7 @@ mod tests {
         // a statically known type".
         let types = infer_program(
             "struct Asteroid { active: Bool }\n\
-             let any[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(false, |acc, x| acc || f(x))\n\
+             let any[T] (arr: Array[T]) (f: (T) -> Bool): Bool = Array.fold(arr, false, |acc, x| acc || f(x))\n\
              let main (asteroids: Array[Asteroid]): Bool = any(asteroids, |a| a.active)",
         );
         assert_eq!(types["main"], fn_ty(vec![Type::Struct("Array".to_string(), vec![Type::Struct("Asteroid".to_string(), vec![])])], Type::Bool));

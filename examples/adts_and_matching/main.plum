@@ -46,11 +46,14 @@ let main (): Unit = {
         Rectangle(Point { x: 0.0, y: 0.0 }, Point { x: 4.0, y: 2.0 }),
         Triangle(Point { x: 0.0, y: 0.0 }, Point { x: 4.0, y: 0.0 }, Point { x: 0.0, y: 3.0 }),
     ];
-    // `.map` over an array of a user-defined enum. Native codegen needs
-    // a closure literal written directly at the call site (not a bare
-    // named function passed by value) — a real, documented v1 scope
+    // `Array.map` over an array of a user-defined enum, chained via
+    // `|>` with an explicit `_` placeholder (pipe inserts as the LAST
+    // argument by default, but `Array.map`'s array param comes FIRST —
+    // `_` marks where the piped value actually goes). Native codegen
+    // needs a closure literal written directly at the call site (not a
+    // bare named function passed by value) — a real, documented v1 scope
     // boundary, not a bug — so wrap `describe`/`println` in `|s| ...`.
-    shapes.map(|s| describe(s)).map(|line| println(line));
+    shapes |> Array.map(_, |s| describe(s)) |> Array.map(_, |line| println(line));
     // Struct/enum equality and `.to_string()` are structural, generated
     // automatically for every type — no `derive` anywhere.
     println(Point { x: 1.0, y: 2.0 } == Point { x: 1.0, y: 2.0 });

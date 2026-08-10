@@ -1318,39 +1318,26 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
                 base: Box::new(lower_expr(base, ctx)?),
             })
         }
-        // `arr.map(f)` — desugars into an index-based loop reusing only
-        // EXISTING IR nodes (`Let`, `For`, `ArrayLen`, `Index`,
-        // `ArrayPush`, `Assign`), same convention as `for x in arr`'s
-        // own desugaring: build a fresh output array, push `f(elem)`
-        // for each element in order.
-        ast::Expr::Call { callee, args, .. }
-            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "map") =>
-        {
-            let ast::Expr::Field { base, .. } = callee.as_ref() else {
-                unreachable!("just matched this shape above");
-            };
-            lower_array_map(base, &args[0], ctx)
+        // `Array.map(arr, f)` — desugars into an index-based loop reusing
+        // only EXISTING IR nodes (`Let`, `For`, `ArrayLen`, `Index`,
+        // `ArrayPush`, `Assign`), same convention as `for x in arr`'s own
+        // desugaring: build a fresh output array, push `f(elem)` for
+        // each element in order. Recognized by SHAPE, not dot-call — see
+        // `infer.rs`'s matching arm (and its own doc comment) for the
+        // full "why".
+        ast::Expr::Call { callee, args, .. } if args.len() == 2 && is_array_builtin_call(callee, "map") => {
+            lower_array_map(&args[0], &args[1], ctx)
         }
-        // `arr.filter(f)` — same desugaring shape as `.map()`, but only
-        // pushes an element when `f(elem)` is true.
-        ast::Expr::Call { callee, args, .. }
-            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "filter") =>
-        {
-            let ast::Expr::Field { base, .. } = callee.as_ref() else {
-                unreachable!("just matched this shape above");
-            };
-            lower_array_filter(base, &args[0], ctx)
+        // `Array.filter(arr, f)` — same desugaring shape as `map`, but
+        // only pushes an element when `f(elem)` is true.
+        ast::Expr::Call { callee, args, .. } if args.len() == 2 && is_array_builtin_call(callee, "filter") => {
+            lower_array_filter(&args[0], &args[1], ctx)
         }
-        // `arr.fold(init, f)` — same desugaring family, but accumulates
-        // into a scalar (`f(acc, elem)`) instead of building a new
-        // array.
-        ast::Expr::Call { callee, args, .. }
-            if args.len() == 2 && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "fold") =>
-        {
-            let ast::Expr::Field { base, .. } = callee.as_ref() else {
-                unreachable!("just matched this shape above");
-            };
-            lower_array_fold(base, &args[0], &args[1], ctx)
+        // `Array.fold(arr, init, f)` — same desugaring family, but
+        // accumulates into a scalar (`f(acc, elem)`) instead of building
+        // a new array.
+        ast::Expr::Call { callee, args, .. } if args.len() == 3 && is_array_builtin_call(callee, "fold") => {
+            lower_array_fold(&args[0], &args[1], &args[2], ctx)
         }
         ast::Expr::Call { callee, args, span } => {
             // `Circle(1.0)` or `Shape.Circle(1.0)` constructs a variant
@@ -1602,6 +1589,16 @@ fn lower_struct_literal(
 
 // A catch-all pattern — matches ANY value unconditionally (no tag
 // inspection needed at all), used by both special cases below.
+/// True for a call's `callee` shaped exactly `Field { base: Ident("Array"),
+/// name: fn_name }` — the `Array.map`/`Array.filter`/`Array.fold`
+/// call-syntax shape these 3 compiler-primitive builtins are recognized
+/// by. Mirrors `plum_types::infer`'s own identically-named helper exactly
+/// (its doc comment has the fuller "why").
+fn is_array_builtin_call(callee: &ast::Expr, fn_name: &str) -> bool {
+    matches!(callee, ast::Expr::Field { base, name, .. }
+        if name == fn_name && matches!(base.as_ref(), ast::Expr::Ident(n, _) if n == "Array"))
+}
+
 fn is_catchall_pattern(pattern: &ast::Pattern) -> bool {
     matches!(pattern, ast::Pattern::Wildcard(_) | ast::Pattern::Ident(..))
 }
@@ -2245,22 +2242,71 @@ fn lower_for(
 // zero-argument call before insertion. This is DESIGN.md's pipe
 // desugaring rule, and it's a compile-time rewrite, not a runtime
 // capability — it doesn't need currying to work, see DESIGN.md.
+// Mirrors `infer.rs`'s own `infer_pipe`/`splice_pipe_args`/`is_pipe_
+// placeholder` exactly — see those doc comments for the full "why".
+// Rebuilds an ordinary `ast::Expr::Call` and routes it back through
+// `lower_expr` (rather than emitting `ir::Expr::Call` directly, as an
+// earlier version of this function did) so piping into `Array.map`/
+// `Array.filter`/`Array.fold` — recognized by AST SHAPE inside `lower_
+// expr`'s own big match — works, instead of producing a spurious
+// "unbound variable: Array".
 fn lower_pipe(lhs: &ast::Expr, rhs: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, plum_syntax::error::CompileError> {
-    let ir_lhs = lower_expr(lhs, ctx)?;
     match rhs {
-        ast::Expr::Call { callee, args, .. } => {
-            let mut ir_args: Vec<ir::Expr> =
-                args.iter().map(|a| lower_expr(a, ctx)).collect::<Result<_, _>>()?;
-            ir_args.push(ir_lhs);
-            Ok(ir::Expr::Call {
-                callee: Box::new(lower_expr(callee, ctx)?),
-                args: ir_args,
-            })
+        ast::Expr::Call { callee, args, span } => {
+            let new_args = splice_pipe_args(args, lhs, *span)?;
+            let synthetic = ast::Expr::Call {
+                callee: callee.clone(),
+                args: new_args,
+                span: *span,
+            };
+            lower_expr(&synthetic, ctx)
         }
-        other => Ok(ir::Expr::Call {
-            callee: Box::new(lower_expr(other, ctx)?),
-            args: vec![ir_lhs],
-        }),
+        other => {
+            let synthetic = ast::Expr::Call {
+                callee: Box::new(other.clone()),
+                args: vec![lhs.clone()],
+                span: other.span(),
+            };
+            lower_expr(&synthetic, ctx)
+        }
+    }
+}
+
+/// True for the exact AST shape a bare `_` argument (no postfix chain
+/// following it) already desugars to at parse time — see `infer.rs`'s
+/// identically-named helper for the full "why" (this is a plain mirror,
+/// duplicated rather than shared, matching this pair's own established
+/// convention).
+fn is_pipe_placeholder(expr: &ast::Expr) -> bool {
+    matches!(expr, ast::Expr::Closure { params, body, .. }
+        if params.len() == 1
+            && params[0].name == "_"
+            && params[0].ty.is_none()
+            && matches!(body.as_ref(), ast::Expr::Ident(name, _) if name == "_"))
+}
+
+/// Mirrors `infer.rs`'s identically-named helper exactly.
+fn splice_pipe_args(
+    args: &[ast::Expr],
+    lhs: &ast::Expr,
+    span: plum_syntax::span::Span,
+) -> Result<Vec<ast::Expr>, plum_syntax::error::CompileError> {
+    let placeholders: Vec<usize> = args.iter().enumerate().filter(|(_, a)| is_pipe_placeholder(a)).map(|(i, _)| i).collect();
+    match placeholders.as_slice() {
+        [] => {
+            let mut new_args = args.to_vec();
+            new_args.push(lhs.clone());
+            Ok(new_args)
+        }
+        [i] => {
+            let mut new_args = args.to_vec();
+            new_args[*i] = lhs.clone();
+            Ok(new_args)
+        }
+        _ => Err(plum_syntax::error::CompileError::new(
+            span,
+            "at most one `_` placeholder is allowed in a piped call".to_string(),
+        )),
     }
 }
 
@@ -2618,6 +2664,50 @@ mod tests {
                 )],
             }
         );
+    }
+
+    // --- Pipe's `_` placeholder — splices the piped value in at the
+    // marked position instead of appending it last. See `infer.rs`'s
+    // `splice_pipe_args`/`is_pipe_placeholder` doc comments.
+
+    #[test]
+    fn pipe_placeholder_splices_at_its_own_position_not_the_end() {
+        assert_eq!(
+            lower("x |> f(a, _, b)"),
+            ir::Expr::Call {
+                callee: Box::new(ir::Expr::Var("f".to_string())),
+                args: vec![
+                    ir::Expr::Var("a".to_string()),
+                    ir::Expr::Var("x".to_string()),
+                    ir::Expr::Var("b".to_string()),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn pipe_placeholder_as_the_only_argument_is_equivalent_to_no_placeholder() {
+        assert_eq!(lower("x |> f(_)"), lower("x |> f"));
+    }
+
+    #[test]
+    fn pipe_into_array_map_via_the_placeholder_routes_through_the_ordinary_array_map_shape() {
+        // Regression test: an earlier version of `lower_pipe` built
+        // `ir::Expr::Call` directly, bypassing the `Array.map` shape
+        // match entirely — piping into it produced a spurious "unbound
+        // variable: Array" instead of the SAME desugaring `Array.map(xs,
+        // f)` gets when written out directly (no pipe at all).
+        assert_eq!(lower("xs |> Array.map(_, f)"), lower("Array.map(xs, f)"));
+    }
+
+    #[test]
+    fn more_than_one_pipe_placeholder_in_the_same_call_is_an_error() {
+        let tokens = Lexer::new("x |> f(_, _)").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap();
+        let ctx = LoweringContext::new();
+        let err = lower_expr(&ast, &ctx).expect_err("expected an error for 2 placeholders");
+        assert!(err.to_string().contains("at most one"), "{err}");
     }
 
     // --- Blocks fold into nested lets; a discarded expression-
@@ -4255,7 +4345,7 @@ mod tests {
         };
         assert_eq!(
             lower_array_op_with_closure_types(
-                "arr.map(|x| x)",
+                "Array.map(arr, |x| x)",
                 vec![plum_types::types::Type::Int],
                 plum_types::types::Type::Int,
             ),
@@ -4302,7 +4392,7 @@ mod tests {
         // element type now comes from (the SAME type the input array's
         // elements have — filter never changes element type).
         let result = lower_array_op_with_closure_types(
-            "arr.filter(|x| x > 0)",
+            "Array.filter(arr, |x| x > 0)",
             vec![plum_types::types::Type::Int],
             plum_types::types::Type::Bool,
         );
@@ -4331,7 +4421,7 @@ mod tests {
     #[test]
     fn array_fold_desugars_to_an_index_based_accumulator_loop() {
         assert_eq!(
-            lower("arr.fold(0, f)"),
+            lower("Array.fold(arr, 0, f)"),
             ir::Expr::Let {
                 name: "__fold_arr".to_string(),
                 value: Box::new(ir::Expr::Var("arr".to_string())),

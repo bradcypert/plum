@@ -3654,35 +3654,35 @@ mod tests {
 
     #[test]
     fn array_map_applies_the_function_to_every_element() {
-        assert_eq!(eval("[1, 2, 3].map(|x| x * 2).len()"), Value::Int(3));
-        assert_eq!(eval("[1, 2, 3].map(|x| x * 2)[0]"), Value::Int(2));
-        assert_eq!(eval("[1, 2, 3].map(|x| x * 2)[2]"), Value::Int(6));
+        assert_eq!(eval("Array.map([1, 2, 3], |x| x * 2).len()"), Value::Int(3));
+        assert_eq!(eval("Array.map([1, 2, 3], |x| x * 2)[0]"), Value::Int(2));
+        assert_eq!(eval("Array.map([1, 2, 3], |x| x * 2)[2]"), Value::Int(6));
     }
 
     #[test]
     fn array_map_on_an_empty_array_is_empty() {
-        assert_eq!(eval("[].map(|x| x * 2).len()"), Value::Int(0));
+        assert_eq!(eval("Array.map([], |x| x * 2).len()"), Value::Int(0));
     }
 
     #[test]
     fn array_filter_keeps_only_matching_elements() {
-        assert_eq!(eval("[1, 2, 3, 4].filter(|x| x > 2).len()"), Value::Int(2));
-        assert_eq!(eval("[1, 2, 3, 4].filter(|x| x > 2)[0]"), Value::Int(3));
+        assert_eq!(eval("Array.filter([1, 2, 3, 4], |x| x > 2).len()"), Value::Int(2));
+        assert_eq!(eval("Array.filter([1, 2, 3, 4], |x| x > 2)[0]"), Value::Int(3));
     }
 
     #[test]
     fn array_filter_preserves_relative_order() {
-        assert_eq!(eval("[3, 1, 4, 1, 5].filter(|x| x > 2)[1]"), Value::Int(4));
+        assert_eq!(eval("Array.filter([3, 1, 4, 1, 5], |x| x > 2)[1]"), Value::Int(4));
     }
 
     #[test]
     fn array_fold_accumulates_left_to_right() {
-        assert_eq!(eval("[1, 2, 3, 4].fold(0, |acc, x| acc + x)"), Value::Int(10));
+        assert_eq!(eval("Array.fold([1, 2, 3, 4], 0, |acc, x| acc + x)"), Value::Int(10));
     }
 
     #[test]
     fn array_fold_on_an_empty_array_returns_the_initial_value() {
-        assert_eq!(eval("[].fold(42, |acc, x| acc + x)"), Value::Int(42));
+        assert_eq!(eval("Array.fold([], 42, |acc, x| acc + x)"), Value::Int(42));
     }
 
     #[test]

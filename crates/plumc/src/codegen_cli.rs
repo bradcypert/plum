@@ -1200,7 +1200,7 @@ mod tests {
         // end-to-end symptom.
         let src = "\
             let go (): Int = {\n\
-                let s = [1, 2, 2, 3].fold(Set.new(()), |acc, x| Set.insert(acc, x));\n\
+                let s = Array.fold([1, 2, 2, 3], Set.new(()), |acc, x| Set.insert(acc, x));\n\
                 Set.len(s)\n\
             }\n\
         ";
@@ -1217,7 +1217,7 @@ mod tests {
         // the (incomplete) `musttail` eligibility check.
         let src = "\
             let add_one (n: Int): Int = n + 1\n\
-            let go (): Int = [1, 2, 3].map(|x| add_one(x))[0]\n\
+            let go (): Int = Array.map([1, 2, 3], |x| add_one(x))[0]\n\
         ";
         let (body_ir, ..) = compile_to_ir(src, "go").unwrap();
         // Scoped to the specific `@add_one` call site (not "no `musttail`
@@ -2095,7 +2095,7 @@ mod tests {
         // side effect) monomorphizes an `Array[Unit]`, which used to
         // make `plum build` fail outright — see DESIGN.md's "Open
         // questions" entry.
-        let src = "let go (): Int = { [1, 2, 3].map(|x| x * 2).map(|x| println(x)); 42 }\n";
+        let src = "let go (): Int = { Array.map(Array.map([1, 2, 3], |x| x * 2), |x| println(x)); 42 }\n";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "2\n4\n6\n42");
     }
 
@@ -3522,23 +3522,33 @@ mod tests {
 
     #[test]
     fn array_map_produces_the_correct_transformed_elements() {
-        let src = "let go () = [1, 2, 3].map(|x| x * 2).fold(0, |acc, x| acc + x)";
+        let src = "let go () = Array.fold(Array.map([1, 2, 3], |x| x * 2), 0, |acc, x| acc + x)";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "12");
     }
 
     #[test]
     fn array_filter_keeps_only_the_matching_elements_with_correct_values() {
-        let src = "let go () = [1, 2, 3, 4, 5].filter(|x| x > 2).fold(0, |acc, x| acc + x)";
+        let src = "let go () = Array.fold(Array.filter([1, 2, 3, 4, 5], |x| x > 2), 0, |acc, x| acc + x)";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "12");
     }
 
     #[test]
     fn array_fold_produces_the_correct_accumulated_value() {
-        let src = "let go () = [1, 2, 3, 4].fold(0, |acc, x| acc + x)";
+        let src = "let go () = Array.fold([1, 2, 3, 4], 0, |acc, x| acc + x)";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "10");
+    }
+
+    #[test]
+    fn pipe_with_placeholder_chains_array_map_filter_fold_in_native_codegen() {
+        let src = "let go () = [1, 2, 3, 4, 5]\n\
+                    |> Array.map(_, |x| x * 2)\n\
+                    |> Array.filter(_, |x| x > 4)\n\
+                    |> Array.fold(_, 0, |acc, x| acc + x)";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "24");
     }
 
     #[test]
