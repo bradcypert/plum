@@ -203,8 +203,15 @@ native codegen" below.
 
 `String` is the surface-syntax keyword for text (its type is
 occasionally referred to as `Str` in compiler-internal contexts, but
-`String` is what you write in source). There is no `Int`-to-`Float`
-cast — write a `Float` literal (`0.0`) instead of relying on one.
+`String` is what you write in source). `Int`/`Float` conversions are
+explicit, never implicit: `n.to_float()` (widening — always succeeds,
+though not always *exact* for very large `Int` values, since `Float`'s
+53-bit mantissa can't represent every `i64` value precisely), `x.
+to_int()` (truncates toward zero), `x.round_to_int()` (rounds to the
+nearest integer first, same convention `Float.round()` itself uses).
+Both `Float`-to-`Int` conversions are saturating, never undefined
+behavior — `NaN` becomes `0`, and a value outside `Int`'s range becomes
+whichever bound it overshot.
 
 ### Algebraic data types and pattern matching
 
@@ -445,7 +452,8 @@ program's prelude):
   `extern "C"`).
 - **`Array[T]`** — `Array.is_empty`, `Array.first`/`Array.last:
   Option[T]`, `Array.reverse`, `Array.concat`, `Array.take`/`Array.
-  drop`, `Array.slice`, `Array.find: Option[T]`, `Array.any`/`Array.
+  drop`, `Array.slice`, `Array.find: Option[T]`, `Array.find_index:
+  Option[Int]`, `Array.any`/`Array.
   all`, `Array.index_of: Option[Int]`, `Array.contains` (both
   `Eq`-bounded), `Array.sort_by(arr, |a, b| ...)` (takes an explicit
   "is `a` less-or-equal `b`" comparator — no generic `Ord` bound

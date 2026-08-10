@@ -157,6 +157,28 @@ pub enum Expr {
     // `ExternCall`'s `CStr`-typed argument without going through this
     // node first).
     AsCStr(Box<Expr>),
+    // `x.to_int()` — truncates a `Float` toward zero (C-cast style,
+    // matching what the raylib shim's own `(int)x` conversions already
+    // do internally). `x.round_to_int()` — rounds to the nearest
+    // integer FIRST (same convention `Float.round()` itself already
+    // uses — half away from zero), then converts. Both are SATURATING,
+    // not the raw LLVM `fptosi`/Rust `as` UB some of those have for
+    // out-of-range input in OTHER languages: NaN -> 0, too-large ->
+    // `Int::MAX`, too-negative -> `Int::MIN` — confirmed a real,
+    // deliberate design decision (asked directly, given the earlier
+    // Unit-call-sugar precedent of consulting on anything touching
+    // core semantics), matching Rust's OWN `as` cast semantics since
+    // 1.45 (no UB, ever) rather than C's classic undefined behavior.
+    // `x.to_float()` — the widening direction, `Int` -> `Float`,
+    // always succeeds (every `i64` value is IN RANGE for `f64`) but
+    // isn't always EXACT — `f64`'s 53-bit mantissa can't represent
+    // every `i64` value precisely, a real, honest precision-loss gap
+    // for very large integers, not a silently-wrong one (the same
+    // rounding-to-nearest-representable-value any language's
+    // int-to-float widening does).
+    ToIntTrunc(Box<Expr>),
+    ToIntRound(Box<Expr>),
+    ToFloat(Box<Expr>),
     // A heap-allocated, tagged value with positional fields — the
     // minimal representation of "a struct or an enum variant" this IR
     // needs. E.g. `Ctor("Point", [x, y])` or `Ctor("Cons", [head, tail])`.
@@ -648,6 +670,26 @@ pub enum Expr {
     // `Result`/`Option` translation needed, unlike `ReadFileRaw`/
     // `EnvVarRaw`'s wrappers: reading argv never fails.
     ArgsRaw,
+    // `random_raw(())` — low-level random-number-generation primitive.
+    // Same "carries no argument of its own" reasoning as `ArgsRaw`
+    // immediately above (the surface call is `random_raw(())` to match
+    // Plum's own "every function takes exactly one argument"
+    // convention, but the Unit argument itself carries no runtime
+    // information). Evaluates to a `Float` uniformly distributed over
+    // `[0.0, 1.0)` — deliberately the ONE new primitive this needs,
+    // not a whole random-number stdlib: there's no `Int`-ranged
+    // sibling (Plum has no `Float`-to-`Int` conversion at all, in
+    // EITHER direction — adding one just for this would be a separate,
+    // bigger design question), and no seeding control exposed to Plum
+    // source — each backend seeds its own generator ONCE, at process
+    // start (`Interpreter::new` for the interpreter; `@srand(@time(..))`
+    // in `plumc::emit_main`'s prologue for native codegen — see
+    // `codegen_random_raw`'s own doc comment). The two backends are
+    // NOT expected to produce the same sequence for the same program —
+    // an intentional, obvious-by-nature asymmetry for genuine
+    // randomness, unlike every other documented interpreter/native
+    // difference in this codebase, which are all narrow edge cases.
+    RandomRaw,
     // `panic_raw(msg)` — the testing framework's own low-level
     // primitive, same bare-`Ident`-named-call recognition as `ReadFileRaw`/
     // `WriteFileRaw` above. Unlike those two, this never constructs a

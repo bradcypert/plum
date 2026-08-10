@@ -373,7 +373,14 @@ fn resolve_extern_fn(f: &ast::ExternFn, ctx: &LoweringContext) -> Result<ir::Ext
         .iter()
         .map(|p| resolve_extern_type(&p.ty, ctx))
         .collect::<Result<_, _>>()?;
-    let ret_type = f.ret_ty.as_ref().map(|t| resolve_extern_type(t, ctx)).transpose()?;
+    let ret_type = match &f.ret_ty {
+        // `-> Unit` means the SAME thing as omitting the arrow — see
+        // `plum_types::context`'s identical, independently-duplicated
+        // special case (its own doc comment there has the full "why").
+        Some(ast::Type::Path(segments, _)) if segments.len() == 1 && segments[0] == "Unit" => None,
+        Some(t) => Some(resolve_extern_type(t, ctx)?),
+        None => None,
+    };
     // Calling a C-supplied function pointer FROM Plum isn't
     // implemented — a callback type is only meaningful as a PARAMETER
     // (Plum passing a function TO C), matching `plum-types`'
@@ -1036,6 +1043,12 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
         {
             Ok(ir::Expr::ArgsRaw)
         }
+        // `random_raw(())` — same shape-only precedent again.
+        ast::Expr::Call { callee, args, .. }
+            if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "random_raw") =>
+        {
+            Ok(ir::Expr::RandomRaw)
+        }
         // `panic_raw(msg)` — same shape-only precedent again.
         ast::Expr::Call { callee, args, .. }
             if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "panic_raw") =>
@@ -1170,6 +1183,32 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
                 unreachable!("just matched this shape above");
             };
             Ok(ir::Expr::AsCStr(Box::new(lower_expr(base, ctx)?)))
+        }
+        // `x.to_int()`/`x.round_to_int()`/`x.to_float()` — same shape-
+        // only precedent again.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "to_int") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ToIntTrunc(Box::new(lower_expr(base, ctx)?)))
+        }
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "round_to_int") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ToIntRound(Box::new(lower_expr(base, ctx)?)))
+        }
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "to_float") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::ToFloat(Box::new(lower_expr(base, ctx)?)))
         }
         // `s.trim()` — same shape-only precedent, zero args.
         ast::Expr::Call { callee, args, .. }
@@ -4763,6 +4802,16 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_unit_return_type_lowers_the_same_as_omitting_the_arrow() {
+        // `-> Unit` isn't itself an FFI-safe scalar type (see `plum_
+        // types::context::check_ffi_safe`) — special-cased here to
+        // mean exactly the same thing as no arrow at all, matching the
+        // SAME allowance a callback's own return position already had.
+        let program = lower_program("extern \"C\" { fn srand(seed: Int) -> Unit; }");
+        assert_eq!(program.externs[0].ret_type, None);
+    }
+
+    #[test]
     fn extern_fn_with_an_unsupported_param_type_is_a_lowering_error() {
         let err = lower_program_err("extern \"C\" { fn foo(x: Bool2) -> Int; }");
         assert!(err.contains("Int, Float, Bool, CStr"), "unexpected error: {err}");
@@ -4885,6 +4934,13 @@ mod tests {
             lower("\"hi\".as_cstr()"),
             ir::Expr::AsCStr(Box::new(ir::Expr::Str("hi".to_string())))
         );
+    }
+
+    #[test]
+    fn to_int_round_to_int_and_to_float_lower_to_their_own_nodes() {
+        assert_eq!(lower("3.5.to_int()"), ir::Expr::ToIntTrunc(Box::new(ir::Expr::Float(3.5))));
+        assert_eq!(lower("3.5.round_to_int()"), ir::Expr::ToIntRound(Box::new(ir::Expr::Float(3.5))));
+        assert_eq!(lower("5.to_float()"), ir::Expr::ToFloat(Box::new(ir::Expr::Int(5))));
     }
 
     #[test]

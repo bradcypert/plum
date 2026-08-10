@@ -1779,6 +1779,21 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((Type::Struct("Array".to_string(), vec![Type::Str]), acc))
             }
+            // `random_raw(())` — same bare-`Ident`-named-call, Unit-
+            // argument precedent as `args_raw` immediately above (see
+            // `ir::Expr::RandomRaw`'s own doc comment). Evaluates to
+            // `Float` directly — generation never fails, so, like
+            // `args_raw`, there's no `__*Result` struct to build.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "random_raw") =>
+            {
+                let (unit_ty, s) = self.infer_expr(&args[0], env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&unit_ty), &Type::Unit)
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`random_raw` argument: {e}")))?;
+                acc = s.compose(&acc);
+                Ok((Type::Float, acc))
+            }
             // `panic_raw(msg)` — same shape precedent again; evaluates
             // to `Unit` (never actually reached on the failure path,
             // but a real, checkable type is still needed for the
@@ -1914,6 +1929,37 @@ impl Infer {
                 let s = unify(&acc.apply(&base_ty), &Type::Str).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.as_cstr()`: {e}")))?;
                 acc = s.compose(&acc);
                 Ok((Type::CStr, acc))
+            }
+            // `x.to_int()`/`x.round_to_int()` — `x` must be `Float`;
+            // evaluates to `Int`. See `ir::Expr::ToIntTrunc`/`ToIntRound`'s
+            // own doc comment for the saturating (never UB) conversion
+            // semantics.
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "to_int" || name == "round_to_int") =>
+            {
+                let ast::Expr::Field { base, name, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Float).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.{name}()`: {e}")))?;
+                acc = s.compose(&acc);
+                Ok((Type::Int, acc))
+            }
+            // `x.to_float()` — `x` must be `Int`; evaluates to `Float`.
+            // See `ir::Expr::ToFloat`'s own doc comment for the
+            // "always succeeds, not always exact" story.
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "to_float") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Int).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.to_float()`: {e}")))?;
+                acc = s.compose(&acc);
+                Ok((Type::Float, acc))
             }
             // `s.trim()` — `s` must be `Str`; evaluates to `Str`.
             ast::Expr::Call { callee, args, span }
@@ -6806,6 +6852,32 @@ mod tests {
     #[test]
     fn as_cstr_on_a_non_string_is_an_error() {
         infer_err_in("5.as_cstr()", &TypeEnv::new());
+    }
+
+    #[test]
+    fn to_int_and_round_to_int_on_a_float_evaluate_to_int() {
+        assert_eq!(infer_in("3.5.to_int()", &TypeEnv::new()), Type::Int);
+        assert_eq!(infer_in("3.5.round_to_int()", &TypeEnv::new()), Type::Int);
+    }
+
+    #[test]
+    fn to_int_on_a_non_float_is_an_error() {
+        infer_err_in("5.to_int()", &TypeEnv::new());
+    }
+
+    #[test]
+    fn round_to_int_on_a_non_float_is_an_error() {
+        infer_err_in("5.round_to_int()", &TypeEnv::new());
+    }
+
+    #[test]
+    fn to_float_on_an_int_evaluates_to_float() {
+        assert_eq!(infer_in("5.to_float()", &TypeEnv::new()), Type::Float);
+    }
+
+    #[test]
+    fn to_float_on_a_non_int_is_an_error() {
+        infer_err_in("3.5.to_float()", &TypeEnv::new());
     }
 
     #[test]

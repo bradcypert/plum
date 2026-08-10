@@ -786,6 +786,42 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     // file_raw` use (those pull in a whole cluster of `@fopen`/`@fread`
     // /etc. declares together; this is one line).
     out.push_str("declare ptr @getenv(ptr)\n");
+    // `@rand`/`@srand`/`@time`/`@getpid` — back `random_raw` (`codegen_
+    // random_raw`) and its ONE-TIME seeding call in `plumc::emit_main`'s
+    // own prologue — same "tiny, fixed cost" reasoning as `@getenv`
+    // immediately above. `@time`'s real C signature takes a `time_t*`
+    // (nullable) and returns `time_t`; both are `i64`-sized on this
+    // platform (glibc/x86-64, matching this backend's existing Linux-
+    // first precedent elsewhere), so `i64` stands in for `time_t`
+    // directly rather than inventing a distinct type for it. `@getpid`
+    // is mixed into the seed alongside `@time` — found genuinely
+    // necessary by hand: `@time`'s own SECOND-granularity alone made
+    // two back-to-back runs of the same compiled binary (well within
+    // one second of each other, an entirely realistic case, not a
+    // contrived one) produce the IDENTICAL random sequence, since
+    // `@srand` got the same seed twice. Mirrors the interpreter's own
+    // `plum_interp::seed_rng` exactly (nanoseconds XORed with `std::
+    // process::id()`) — same reasoning, since native codegen has no
+    // nanosecond-resolution clock declared here (`@time` is the
+    // coarser, POSIX-simplest option; a higher-resolution one would
+    // need `@clock_gettime`'s out-pointer-parameter shape, real extra
+    // machinery not justified just to shave this down further given
+    // `@getpid` alone already fixes the actually-observed collision).
+    out.push_str("declare i32 @rand()\n");
+    out.push_str("declare void @srand(i32)\n");
+    out.push_str("declare i64 @time(ptr)\n");
+    out.push_str("declare i32 @getpid()\n");
+    // `@llvm.fptosi.sat.i64.f64` — an LLVM INTRINSIC (not a libc
+    // function), backing `x.to_int()`/`x.round_to_int()` (`codegen_to_
+    // int_trunc`/`codegen_to_int_round`). Declared unconditionally,
+    // same "tiny, always declare" precedent as everything else in this
+    // block — chosen specifically over the raw `fptosi` INSTRUCTION,
+    // which is undefined behavior for a value that doesn't fit `i64`
+    // (including NaN/+-infinity); the `.sat` intrinsic is a real,
+    // well-defined SATURATING conversion instead, matching Rust's own
+    // `as` cast semantics (confirmed as the deliberate choice for this
+    // feature, not assumed).
+    out.push_str("declare i64 @llvm.fptosi.sat.i64.f64(double)\n");
     // `@memcmp` — backs `@plum_str_eq` below (Str `==`/`!=`), the same
     // "reach for a real libc declare" precedent as `@memcpy`/`@strlen`/
     // `@memchr` above.
@@ -3177,6 +3213,10 @@ fn is_reserved_extern_name(name: &str) -> bool {
         "strlen",
         "memchr",
         "getenv",
+        "rand",
+        "srand",
+        "time",
+        "getpid",
         "pthread_create",
         "pthread_join",
         "pthread_mutex_init",

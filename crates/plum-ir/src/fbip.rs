@@ -90,6 +90,9 @@ fn mark_reuse_scoped(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) | Expr::EmptyArray(_) => expr,
         Expr::Unary(op, e) => Expr::Unary(op, Box::new(mark_reuse_scoped(*e, known_heap))),
         Expr::AsCStr(e) => Expr::AsCStr(Box::new(mark_reuse_scoped(*e, known_heap))),
+        Expr::ToIntTrunc(e) => Expr::ToIntTrunc(Box::new(mark_reuse_scoped(*e, known_heap))),
+        Expr::ToIntRound(e) => Expr::ToIntRound(Box::new(mark_reuse_scoped(*e, known_heap))),
+        Expr::ToFloat(e) => Expr::ToFloat(Box::new(mark_reuse_scoped(*e, known_heap))),
         Expr::Binary(op, l, r) => Expr::Binary(
             op,
             Box::new(mark_reuse_scoped(*l, known_heap)),
@@ -208,6 +211,7 @@ fn mark_reuse_scoped(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         // `ArgsRaw` carries no sub-expression at all (see its own doc
         // comment in `ir.rs`) — nothing to recurse into.
         Expr::ArgsRaw => Expr::ArgsRaw,
+        Expr::RandomRaw => Expr::RandomRaw,
         Expr::PanicRaw { message } => Expr::PanicRaw {
             message: Box::new(mark_reuse_scoped(*message, known_heap)),
         },
@@ -424,6 +428,9 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) | Expr::EmptyArray(_) => expr,
         Expr::Unary(op, e) => Expr::Unary(op, Box::new(transform(*e, known_heap))),
         Expr::AsCStr(e) => Expr::AsCStr(Box::new(transform(*e, known_heap))),
+        Expr::ToIntTrunc(e) => Expr::ToIntTrunc(Box::new(transform(*e, known_heap))),
+        Expr::ToIntRound(e) => Expr::ToIntRound(Box::new(transform(*e, known_heap))),
+        Expr::ToFloat(e) => Expr::ToFloat(Box::new(transform(*e, known_heap))),
         Expr::Binary(op, l, r) => Expr::Binary(
             op,
             Box::new(transform(*l, known_heap)),
@@ -551,6 +558,7 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             name: Box::new(transform(*name, known_heap)),
         },
         Expr::ArgsRaw => Expr::ArgsRaw,
+        Expr::RandomRaw => Expr::RandomRaw,
         Expr::PanicRaw { message } => Expr::PanicRaw {
             message: Box::new(transform(*message, known_heap)),
         },
@@ -705,6 +713,9 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) => false,
         Expr::Unary(_, e) => expr_mentions_var(e, name),
         Expr::AsCStr(e) => expr_mentions_var(e, name),
+        Expr::ToIntTrunc(e) => expr_mentions_var(e, name),
+        Expr::ToIntRound(e) => expr_mentions_var(e, name),
+        Expr::ToFloat(e) => expr_mentions_var(e, name),
         Expr::Binary(_, l, r) => expr_mentions_var(l, name) || expr_mentions_var(r, name),
         Expr::Let { value, body, .. } => expr_mentions_var(value, name) || expr_mentions_var(body, name),
         Expr::If {
@@ -745,6 +756,7 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::WriteFileRaw { path, contents } => expr_mentions_var(path, name) || expr_mentions_var(contents, name),
         Expr::EnvVarRaw { name: n } => expr_mentions_var(n, name),
         Expr::ArgsRaw => false,
+        Expr::RandomRaw => false,
         Expr::PanicRaw { message } => expr_mentions_var(message, name),
         Expr::Select { arms } => arms
             .iter()
@@ -849,6 +861,18 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
         Expr::AsCStr(e) => {
             let (e_t, used) = mark_last_uses(*e, name, live_after);
             (Expr::AsCStr(Box::new(e_t)), used)
+        }
+        Expr::ToIntTrunc(e) => {
+            let (e_t, used) = mark_last_uses(*e, name, live_after);
+            (Expr::ToIntTrunc(Box::new(e_t)), used)
+        }
+        Expr::ToIntRound(e) => {
+            let (e_t, used) = mark_last_uses(*e, name, live_after);
+            (Expr::ToIntRound(Box::new(e_t)), used)
+        }
+        Expr::ToFloat(e) => {
+            let (e_t, used) = mark_last_uses(*e, name, live_after);
+            (Expr::ToFloat(Box::new(e_t)), used)
         }
         Expr::Binary(op, l, r) => {
             // Evaluation order is l-then-r, so process backward: r
@@ -1164,6 +1188,7 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
             (Expr::EnvVarRaw { name: Box::new(n_t) }, used)
         }
         Expr::ArgsRaw => (Expr::ArgsRaw, false),
+        Expr::RandomRaw => (Expr::RandomRaw, false),
         Expr::PanicRaw { message } => {
             let (message_t, used) = mark_last_uses(*message, name, live_after);
             (Expr::PanicRaw { message: Box::new(message_t) }, used)

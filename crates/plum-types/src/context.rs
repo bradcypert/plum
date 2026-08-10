@@ -175,6 +175,21 @@ impl TypeContext {
                         .map(|p| extern_ast_type_to_type(&p.ty, &ctx))
                         .collect::<Result<Vec<_>, _>>()?;
                     let ret_type = match &f.ret_ty {
+                        // `-> Unit` written explicitly means exactly
+                        // the same thing as omitting the arrow — void
+                        // — matching the SAME allowance a callback's
+                        // own return position already has (see this
+                        // function's `check_ffi_safe` call below, whose
+                        // `Type::Function` arm already treats `Unit`
+                        // as valid specifically in return position, not
+                        // as an FFI-safe scalar in general). Checked
+                        // here, before ever calling `extern_ast_type_
+                        // to_type` (which would otherwise reject `Unit`
+                        // outright — it's not Int/Float/Bool/CStr/a
+                        // qualifying struct), so `Unit`/no-arrow are
+                        // truly indistinguishable from this point on,
+                        // not two paths that happen to agree.
+                        Some(ast::Type::Path(segments, _)) if segments.len() == 1 && segments[0] == "Unit" => Type::Unit,
                         Some(t) => extern_ast_type_to_type(t, &ctx)?,
                         None => Type::Unit,
                     };
@@ -635,5 +650,12 @@ mod tests {
     fn a_struct_and_an_enum_sharing_a_name_is_an_error() {
         let err = context_err("struct Thing { x: Int }\nenum Thing { A }");
         assert!(err.contains("already declared"), "expected an already-declared error, got: {err}");
+    }
+
+    #[test]
+    fn an_explicit_unit_return_type_means_the_same_thing_as_omitting_the_arrow() {
+        let ctx = context("extern \"C\" { fn no_arrow(x: Int); fn explicit_unit(x: Int) -> Unit; }");
+        assert_eq!(ctx.extern_fn("no_arrow").unwrap(), &(vec![Type::Int], Type::Unit));
+        assert_eq!(ctx.extern_fn("explicit_unit").unwrap(), &(vec![Type::Int], Type::Unit));
     }
 }

@@ -32,6 +32,55 @@ const DEFAULT_ARM_TAG: &str = "0Default";
 // comment already explains.
 const ARRAY_TAG: &str = "0Array";
 
+/// A one-time seed for `Interpreter::rng_state` — real wall-clock
+/// nanoseconds (no meaningful concept of "deterministic" seeding
+/// exists for this interpreter today, so there's no reason to prefer
+/// anything else) XORed with the process id, so two interpreters
+/// started in the same nanosecond (e.g. `plum test`'s own parallel
+/// test threads, each spawning nothing extra, but a CI matrix running
+/// several `plum` processes at once is a real case) still diverge.
+/// `.max(1)` guards splitmix64's own precondition — a zero seed isn't
+/// UB, just a statistically bad one (many of its first outputs would
+/// be zero too) — matching this crate's existing `std::process::id()`/
+/// `std::env::temp_dir()` precedent of reaching for plain `std`, no
+/// new crate dependency, for exactly this kind of one-time OS-facing
+/// need.
+fn seed_rng() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    (nanos ^ (std::process::id() as u64)).max(1)
+}
+
+/// `random_raw`'s (`ir::Expr::RandomRaw`) actual generator —
+/// [splitmix64](https://prng.di.unimi.it/splitmix64.c), a small, fast,
+/// well-established, dependency-free PRNG (public domain, originally
+/// by Sebastiano Vigna) — chosen over e.g. a linear congruential
+/// generator for noticeably better statistical quality at almost the
+/// same implementation cost, and over pulling in a `rand`-crate-style
+/// dependency per this codebase's own self-hosting-dependency-
+/// avoidance policy (a future self-hosted Plum compiler's own
+/// interpreter would need to implement SOME PRNG regardless of
+/// implementation language; a hand-written ~10-line algorithm is
+/// exactly as portable to that as a crate would NOT be). Not
+/// cryptographically secure — irrelevant here, `random_raw` is
+/// explicitly scoped to ordinary program randomness (see `ir::Expr::
+/// RandomRaw`'s own doc comment), never security-sensitive use.
+/// Advances `state` and returns a `Float` uniform over `[0.0, 1.0)`,
+/// built from the top 53 bits of the generator's own 64-bit output —
+/// the standard, bias-free technique for turning a uniform `u64` into
+/// a uniform `f64` in that range (53 bits is `f64`'s full mantissa
+/// precision, so every representable output is equally likely).
+fn next_random_f64(state: &mut u64) -> f64 {
+    *state = state.wrapping_add(0x9E3779B97F4A7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    z ^= z >> 31;
+    (z >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
@@ -546,7 +595,7 @@ fn free_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<Str
     match expr {
         Expr::Var(name) => candidate(name, local, out),
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel => {}
-        Expr::Unary(_, e) | Expr::AsCStr(e) => free_vars_scoped(e, local, out),
+        Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => free_vars_scoped(e, local, out),
         Expr::Binary(_, l, r) => {
             free_vars_scoped(l, local, out);
             free_vars_scoped(r, local, out);
@@ -718,6 +767,7 @@ fn free_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<Str
         }
         Expr::EnvVarRaw { name } => free_vars_scoped(name, local, out),
         Expr::ArgsRaw => {}
+        Expr::RandomRaw => {}
         Expr::PanicRaw { message } => free_vars_scoped(message, local, out),
     }
 }
@@ -772,6 +822,14 @@ pub struct Interpreter {
     // so every one of this crate's OWN (many, pre-existing) test call
     // sites stays untouched, correctly defaulting to an empty `args()`.
     process_args: Vec<String>,
+    // `random_raw`'s (`ir::Expr::RandomRaw`) own generator state — a
+    // splitmix64 generator (see `next_random_f64`'s own doc comment
+    // for why this specific algorithm), seeded ONCE per `Interpreter`
+    // instance, here in `new()`, not opt-in like `process_args`/
+    // `struct_field_names` above: there's no sensible "empty default"
+    // for randomness the way an empty `args()` is a sensible default
+    // for a caller that doesn't care about process args.
+    rng_state: u64,
 }
 
 impl Interpreter {
@@ -786,6 +844,7 @@ impl Interpreter {
             extern_fns: HashMap::new(),
             struct_field_names: HashMap::new(),
             process_args: Vec::new(),
+            rng_state: seed_rng(),
         }
     }
 
@@ -1431,6 +1490,36 @@ impl Interpreter {
                     return Err("`.as_cstr()`: string contains an embedded null byte".to_string());
                 }
                 Ok(v)
+            }
+            // `x.to_int()`/`x.round_to_int()`/`x.to_float()` — see
+            // `ir::Expr::ToIntTrunc`'s own doc comment for the
+            // saturating-conversion design. Rust's own `as` cast
+            // between `f64`/`i64` has been saturating (NaN -> 0,
+            // out-of-range -> the nearest representable bound) since
+            // Rust 1.45, with NO undefined behavior for any input —
+            // exactly the semantics decided on, so this needs no extra
+            // clamping logic of its own at all, just the plain cast.
+            Expr::ToIntTrunc(inner) => {
+                let Value::Float(f) = self.eval(inner)? else {
+                    return Err("`.to_int()` requires a Float value".to_string());
+                };
+                Ok(Value::Int(f as i64))
+            }
+            Expr::ToIntRound(inner) => {
+                let Value::Float(f) = self.eval(inner)? else {
+                    return Err("`.round_to_int()` requires a Float value".to_string());
+                };
+                // `f64::round()` rounds half away from zero, the SAME
+                // convention the existing `Float.round()` builtin
+                // (libm's `round()`) already uses — consistent with
+                // it, not a second, differently-rounding primitive.
+                Ok(Value::Int(f.round() as i64))
+            }
+            Expr::ToFloat(inner) => {
+                let Value::Int(n) = self.eval(inner)? else {
+                    return Err("`.to_float()` requires an Int value".to_string());
+                };
+                Ok(Value::Float(n as f64))
             }
             Expr::Closure { params, body, .. } => {
                 let id = self.next_closure_id;
@@ -2148,6 +2237,13 @@ impl Interpreter {
                 let addr = self.heap.alloc(ARRAY_TAG.to_string(), elements);
                 Ok(Value::HeapRef(addr))
             }
+            // `random_raw(())` — see `ir::Expr::RandomRaw`'s own doc
+            // comment for the overall design. `next_random_f64` is a
+            // free function (not a method) purely so it can take
+            // `&mut self.rng_state` alone — matching this file's own
+            // established `Expr::ArgsRaw` pattern of borrowing exactly
+            // one field, not `&mut self` as a whole.
+            Expr::RandomRaw => Ok(Value::Float(next_random_f64(&mut self.rng_state))),
             // `panic_raw(msg)` — the testing framework's own primitive
             // (see `ir::Expr::PanicRaw`'s own doc comment). Evaluates
             // `message` then returns `Err` DIRECTLY — the exact same

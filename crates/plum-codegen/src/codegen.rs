@@ -1167,7 +1167,7 @@ fn free_vars_scoped(expr: &Expr, env: &Env, local: &HashSet<String>, out: &mut B
     match expr {
         Expr::Var(name) => candidate(name, local, out),
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel => {}
-        Expr::Unary(_, e) | Expr::AsCStr(e) => free_vars_scoped(e, env, local, out),
+        Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => free_vars_scoped(e, env, local, out),
         Expr::Binary(_, l, r) => {
             free_vars_scoped(l, env, local, out);
             free_vars_scoped(r, env, local, out);
@@ -1339,6 +1339,7 @@ fn free_vars_scoped(expr: &Expr, env: &Env, local: &HashSet<String>, out: &mut B
         }
         Expr::EnvVarRaw { name } => free_vars_scoped(name, env, local, out),
         Expr::ArgsRaw => {}
+        Expr::RandomRaw => {}
         Expr::PanicRaw { message } => free_vars_scoped(message, env, local, out),
     }
 }
@@ -1382,7 +1383,7 @@ fn assigned_vars(expr: &Expr) -> BTreeSet<String> {
 fn assigned_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<String>) {
     match expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel | Expr::Var(_) => {}
-        Expr::Unary(_, e) | Expr::AsCStr(e) => assigned_vars_scoped(e, local, out),
+        Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => assigned_vars_scoped(e, local, out),
         Expr::Binary(_, l, r) => {
             assigned_vars_scoped(l, local, out);
             assigned_vars_scoped(r, local, out);
@@ -1534,6 +1535,7 @@ fn assigned_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet
         }
         Expr::EnvVarRaw { name } => assigned_vars_scoped(name, local, out),
         Expr::ArgsRaw => {}
+        Expr::RandomRaw => {}
         Expr::PanicRaw { message } => assigned_vars_scoped(message, local, out),
     }
 }
@@ -2277,6 +2279,66 @@ fn codegen_as_cstr(inner: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Resu
     Ok((buf, CgType::CStr))
 }
 
+/// `x.to_int()` — see `ir::Expr::ToIntTrunc`'s own doc comment for the
+/// saturating-conversion design. `@llvm.fptosi.sat.i64.f64` is an LLVM
+/// INTRINSIC (declared unconditionally in `plum_codegen::emit_runtime`,
+/// same "tiny, always declare" precedent as `@getenv`/`@rand`),
+/// specifically chosen over the raw `fptosi` INSTRUCTION: plain
+/// `fptosi` is UNDEFINED BEHAVIOR for a value that doesn't fit `i64`
+/// (including NaN/+-infinity) — the `.sat` intrinsic is a real,
+/// well-defined, saturating conversion instead (NaN -> 0, out-of-range
+/// -> the nearest representable `i64` bound), matching Rust's own `as`
+/// cast semantics exactly, confirmed as the deliberate choice (asked
+/// directly) over letting this be UB the way a raw C `(long long)`
+/// cast — what the raylib shim itself uses internally, safe there only
+/// because its own inputs are always in-range by construction — would
+/// be.
+fn codegen_to_int_trunc(inner: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (f, ty) = codegen_value(inner, env, em, ctx)?;
+    if ty != CgType::Float {
+        return Err(format!("codegen: `.to_int()` requires a Float value, found {ty:?}"));
+    }
+    let result = em.fresh_reg();
+    em.push(format!("  {result} = call i64 @llvm.fptosi.sat.i64.f64(double {f})"));
+    Ok((result, CgType::Int))
+}
+
+/// `x.round_to_int()` — rounds to the nearest integer FIRST via libm's
+/// `@round` (the SAME function the existing `Float.round()` builtin
+/// already calls — always available, unconditionally declared by the
+/// prelude's own `STDLIB_NUMBER_SRC` extern block, present in every
+/// compiled program regardless of whether the user's own code
+/// references it), THEN saturates via the identical intrinsic
+/// `codegen_to_int_trunc` uses (rounding first makes the subsequent
+/// truncation exact, since `@round`'s own output is already a whole
+/// number).
+fn codegen_to_int_round(inner: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (f, ty) = codegen_value(inner, env, em, ctx)?;
+    if ty != CgType::Float {
+        return Err(format!("codegen: `.round_to_int()` requires a Float value, found {ty:?}"));
+    }
+    let rounded = em.fresh_reg();
+    em.push(format!("  {rounded} = call double @round(double {f})"));
+    let result = em.fresh_reg();
+    em.push(format!("  {result} = call i64 @llvm.fptosi.sat.i64.f64(double {rounded})"));
+    Ok((result, CgType::Int))
+}
+
+/// `x.to_float()` — the widening direction, always well-defined (every
+/// `i64` value is in `f64`'s representable RANGE, even where it isn't
+/// exactly representable — see `ir::Expr::ToFloat`'s own doc comment),
+/// so a plain `sitofp` is safe here with no saturating intrinsic
+/// needed at all.
+fn codegen_to_float(inner: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (n, ty) = codegen_value(inner, env, em, ctx)?;
+    if ty != CgType::Int {
+        return Err(format!("codegen: `.to_float()` requires an Int value, found {ty:?}"));
+    }
+    let result = em.fresh_reg();
+    em.push(format!("  {result} = sitofp i64 {n} to double"));
+    Ok((result, CgType::Float))
+}
+
 /// `strerror(errno)`, copied into a fresh Plum `Str` cell — the OS
 /// error message half of `__FileIoResult`'s `payload` field on any
 /// `read_file_raw`/`write_file_raw` failure. The exact same "raw C
@@ -2507,6 +2569,29 @@ fn codegen_args_raw(em: &mut Emitter) -> Result<(String, CgType), String> {
     let result = em.fresh_reg();
     em.push(format!("  {result} = call ptr @plum_build_args_array(i32 {argc}, ptr {argv})"));
     Ok((result, CgType::Heap))
+}
+
+/// `random_raw(())` — see `ir::Expr::RandomRaw`'s own doc comment for
+/// the overall design. Backed by libc's `@rand()` (declared
+/// unconditionally in `plum_codegen::emit_runtime`, same "tiny, fixed
+/// cost" precedent as `@getenv`), seeded ONCE via `@srand(@time(0))`
+/// in `plumc::emit_main`'s own prologue (see that function's own doc
+/// comment) — this call site just converts `@rand()`'s raw `i32`
+/// result into a `Float` uniform over `[0.0, 1.0)`. `2147483648.0`
+/// (`RAND_MAX + 1`, as `RAND_MAX` is DEFINED on this platform) is
+/// glibc-specific, not POSIX-guaranteed in general (POSIX only
+/// requires `RAND_MAX >= 32767`) — a real, documented, narrower-than-
+/// ideal portability scope, matching this backend's existing Linux-
+/// first precedent (e.g. the locale chunk's own confirmed-on-this-
+/// platform `LC_ALL` value), not a silent gap.
+fn codegen_random_raw(em: &mut Emitter) -> Result<(String, CgType), String> {
+    let r = em.fresh_reg();
+    em.push(format!("  {r} = call i32 @rand()"));
+    let rf = em.fresh_reg();
+    em.push(format!("  {rf} = sitofp i32 {r} to double"));
+    let result = em.fresh_reg();
+    em.push(format!("  {result} = fdiv double {rf}, {}", format_double(2147483648.0)));
+    Ok((result, CgType::Float))
 }
 
 /// `panic_raw(msg)` — see `ir::Expr::PanicRaw`'s own doc comment.
@@ -4588,10 +4673,14 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         Expr::TaskJoin { task } => codegen_task_join(task, env, em, ctx),
         Expr::ExternCall { name, args } => codegen_extern_call(name, args, env, em, ctx),
         Expr::AsCStr(inner) => codegen_as_cstr(inner, env, em, ctx),
+        Expr::ToIntTrunc(inner) => codegen_to_int_trunc(inner, env, em, ctx),
+        Expr::ToIntRound(inner) => codegen_to_int_round(inner, env, em, ctx),
+        Expr::ToFloat(inner) => codegen_to_float(inner, env, em, ctx),
         Expr::ReadFileRaw { path } => codegen_read_file_raw(path, env, em, ctx),
         Expr::WriteFileRaw { path, contents } => codegen_write_file_raw(path, contents, env, em, ctx),
         Expr::EnvVarRaw { name } => codegen_env_var_raw(name, env, em, ctx),
         Expr::ArgsRaw => codegen_args_raw(em),
+        Expr::RandomRaw => codegen_random_raw(em),
         Expr::PanicRaw { message } => codegen_panic_raw(message, env, em, ctx),
         other => Err(format!("codegen does not yet support this construct: {other:?}")),
     }

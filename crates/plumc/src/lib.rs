@@ -9,7 +9,8 @@ mod project;
 mod test_util;
 mod testing;
 pub use codegen_cli::{
-    compile_and_run, compile_ir_to_binary, compile_program_to_ir, compile_program_to_ir_diag, emit_main, reject_unprintable_return, CgValue,
+    compile_and_run, compile_ir_to_binary, compile_ir_to_binary_with_native, compile_program_to_ir, compile_program_to_ir_diag, emit_main,
+    reject_unprintable_return, CgValue,
 };
 pub use diagnostics::ModuleSources;
 pub use modules::{resolve_modules, typecheck_and_run_modules};
@@ -237,6 +238,23 @@ let env_var (name: String): Option[String] = {
 /// its own yet).
 const STDLIB_ARGS_SRC: &str = "\
 let args (): Array[String] = args_raw(())
+";
+
+/// `Float.random(): Float` / `Float.random_range(lo, hi): Float` —
+/// `random_raw` is the ONE new primitive this needs (see `ir::Expr::
+/// RandomRaw`'s own doc comment for why there's no `Int`-ranged
+/// sibling); everything else is ordinary Plum arithmetic on top of it,
+/// the same \"one true primitive, rest is prelude source\" shape
+/// `STDLIB_ARGS_SRC`/`STDLIB_ENV_SRC` above already establish.
+/// `random_range`'s `lo + (hi - lo) * random()` is the standard
+/// linear-rescaling technique for turning a `[0, 1)` uniform variate
+/// into a `[lo, hi)` one — exact at both ends: `random() == 0.0` gives
+/// exactly `lo`, and `random()` never reaches `1.0` (see `next_random_
+/// f64`'s own doc comment), so the result never reaches `hi` either.
+const STDLIB_RANDOM_SRC: &str = "\
+let Float.random (): Float = random_raw(())
+
+let Float.random_range (lo: Float) (hi: Float): Float = lo + (hi - lo) * Float.random()
 ";
 
 /// JSON parsing/serialization — chunk 9 of the standard library, pure
@@ -954,6 +972,11 @@ let array_find_acc[T] (arr: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =
 
 let Array.find[T] (arr: Array[T]) (f: (T) -> Bool): Option[T] = array_find_acc(arr, f, 0)
 
+let array_find_index_acc[T] (arr: Array[T]) (f: (T) -> Bool) (i: Int): Option[Int] =
+    if i >= arr.len() { None } else if f(arr[i]) { Some(i) } else { array_find_index_acc(arr, f, i + 1) }
+
+let Array.find_index[T] (arr: Array[T]) (f: (T) -> Bool): Option[Int] = array_find_index_acc(arr, f, 0)
+
 let Array.any[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(false, |acc, x| acc || f(x))
 
 let Array.all[T] (arr: Array[T]) (f: (T) -> Bool): Bool = arr.fold(true, |acc, x| acc && f(x))
@@ -1164,6 +1187,7 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
         STDLIB_FILE_SRC,
         STDLIB_ENV_SRC,
         STDLIB_ARGS_SRC,
+        STDLIB_RANDOM_SRC,
         STDLIB_JSON_SRC,
         STDLIB_COLLECTIONS_SRC,
         STDLIB_ASSERT_SRC,
@@ -1201,6 +1225,7 @@ const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len()
     + STDLIB_FILE_SRC.len()
     + STDLIB_ENV_SRC.len()
     + STDLIB_ARGS_SRC.len()
+    + STDLIB_RANDOM_SRC.len()
     + STDLIB_JSON_SRC.len()
     + STDLIB_COLLECTIONS_SRC.len()
     + STDLIB_ASSERT_SRC.len()
@@ -2674,6 +2699,41 @@ mod tests {
         assert!(result.is_err(), "{result:?}");
     }
 
+    // --- core language: `.to_int()`/`.round_to_int()`/`.to_float()` (see `ir::Expr::ToIntTrunc`) ---
+
+    #[test]
+    fn to_int_truncates_toward_zero() {
+        assert_eq!(typecheck_and_run("let use_it dummy = 3.7.to_int()", "use_it", vec![Value::Unit]), Ok(Value::Int(3)));
+        assert_eq!(
+            typecheck_and_run("let use_it dummy = (0.0 - 3.7).to_int()", "use_it", vec![Value::Unit]),
+            Ok(Value::Int(-3))
+        );
+    }
+
+    #[test]
+    fn round_to_int_rounds_to_nearest_first() {
+        assert_eq!(typecheck_and_run("let use_it dummy = 3.5.round_to_int()", "use_it", vec![Value::Unit]), Ok(Value::Int(4)));
+        assert_eq!(typecheck_and_run("let use_it dummy = 3.2.round_to_int()", "use_it", vec![Value::Unit]), Ok(Value::Int(3)));
+    }
+
+    #[test]
+    fn to_float_widens_exactly_for_small_ints() {
+        assert_eq!(typecheck_and_run("let use_it dummy = 42.to_float()", "use_it", vec![Value::Unit]), Ok(Value::Float(42.0)));
+    }
+
+    #[test]
+    fn to_int_saturates_instead_of_producing_undefined_behavior() {
+        // The whole point of this feature over a raw C-style cast: NaN
+        // and out-of-i64-range values are well-defined, not UB. `1e30`
+        // (built via `Float.pow`, since Plum has no scientific-notation
+        // float literal syntax) is far outside `i64`'s range in both
+        // directions.
+        let src = "let use_it dummy = Float.pow(10.0, 30.0).to_int()";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(i64::MAX)));
+        let src = "let use_it dummy = (0.0 - Float.pow(10.0, 30.0)).to_int()";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(i64::MIN)));
+    }
+
     // --- associated functions: `Type.func(...)` (see `plumc::assoc_fns`) ---
 
     #[test]
@@ -2760,6 +2820,14 @@ mod tests {
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(false)));
         let src = "let use_it dummy = Array.all([2, 4, 6], |x| x % 2 == 0)";
         assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn array_find_index_locates_the_first_matching_index_or_none() {
+        let src = "let use_it dummy = match Array.find_index([1, 2, 3, 4], |x| x % 2 == 0) { Some(i) => i, None => -1 }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(1)));
+        let src = "let use_it dummy = match Array.find_index([1, 3, 5], |x| x % 2 == 0) { Some(i) => i, None => -1 }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Int(-1)));
     }
 
     #[test]
@@ -2892,6 +2960,44 @@ mod tests {
         assert_eq!(typecheck_and_run("let use_it dummy = Float.round(3.5)", "use_it", vec![Value::Unit]), Ok(Value::Float(4.0)));
         assert_eq!(typecheck_and_run("let use_it dummy = Float.pow(2.0, 10.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(1024.0)));
         assert_eq!(typecheck_and_run("let use_it dummy = Float.sqrt(81.0)", "use_it", vec![Value::Unit]), Ok(Value::Float(9.0)));
+    }
+
+    // --- standard library: `Float.random`/`Float.random_range` (see `plumc::STDLIB_RANDOM_SRC`) ---
+
+    #[test]
+    fn float_random_stays_in_0_1_and_genuinely_varies_through_the_interpreter() {
+        // Checks STATISTICAL properties, not exact values — there's no
+        // meaningful "expected output" for a random generator. 100
+        // samples, all must land in `[0.0, 1.0)`, and (a weak but real
+        // sanity check against a broken generator that always returns
+        // the same constant) the min and max seen must genuinely
+        // differ.
+        let src = "let use_it dummy = { \
+                        let mut ok = true; \
+                        let mut lo = 2.0; \
+                        let mut hi = -1.0; \
+                        for i in 0..100 { \
+                            let r = Float.random(); \
+                            ok = ok && r >= 0.0 && r < 1.0; \
+                            lo = Float.min(lo, r); \
+                            hi = Float.max(hi, r); \
+                        }; \
+                        ok && hi > lo \
+                    }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn float_random_range_stays_within_its_bounds_through_the_interpreter() {
+        let src = "let use_it dummy = { \
+                        let mut ok = true; \
+                        for i in 0..100 { \
+                            let r = Float.random_range(10.0, 20.0); \
+                            ok = ok && r >= 10.0 && r < 20.0; \
+                        }; \
+                        ok \
+                    }";
+        assert_eq!(typecheck_and_run(src, "use_it", vec![Value::Unit]), Ok(Value::Bool(true)));
     }
 
     // --- standard library: JSON (see `plumc::STDLIB_JSON_SRC`) ---

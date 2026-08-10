@@ -859,9 +859,27 @@ pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue], has_globals: 
     // instructions, before even `@plum_locale_init()`, so every later
     // `args()` call site (including inside a global initializer) sees
     // them already populated.
+    //
+    // `@srand(@time(null) xor @getpid())` — seeds `random_raw`'s
+    // (`codegen_random_raw`) libc `@rand()` generator exactly ONCE, for
+    // the same reason argc/argv are stored here rather than anywhere
+    // else: this is the one place that runs before any user code,
+    // including a global initializer that might itself call `Float.
+    // random()`. `@time`'s `time_t*` parameter is passed `null` (a
+    // real, POSIX-legal way to ask for "just give me the return value,
+    // don't also write it through a pointer") — safe here specifically
+    // because `@time` never actually WRITES through that pointer when
+    // it's null, unlike an ordinary Plum `CStr` argument (always
+    // expected to be a real, non-null string) — see `plum_codegen::
+    // emit_runtime`'s own doc comment on `@time`/`@getpid` for why
+    // neither is exposed as an ordinary user-callable extern, and for
+    // why `@getpid` is mixed in at all (found genuinely necessary by
+    // hand, not defensive over-engineering — see that comment).
     format!(
         "@fmt = constant [{fmt_len} x i8] c\"{fmt_bytes}\"\n\ndefine i32 @main(i32 %argc, ptr %argv) {{\nentry:\n  \
          store i32 %argc, ptr @plum_argc\n  store ptr %argv, ptr @plum_argv\n  \
+         %seedt = call i64 @time(ptr null)\n  %seedt32 = trunc i64 %seedt to i32\n  \
+         %seedpid = call i32 @getpid()\n  %seed32 = xor i32 %seedt32, %seedpid\n  call void @srand(i32 %seed32)\n  \
          call void @plum_locale_init()\n{init_globals_call}{call_line}  ret i32 0\n}}\n"
     )
 }
@@ -886,10 +904,28 @@ pub(crate) fn unique_temp_dir(prefix: &str) -> PathBuf {
 /// don't run it) and `run_via_clang` (the existing test harness: build,
 /// run, capture stdout) share the exact same compile step rather than
 /// two independent copies drifting apart.
-fn clang_compile(ir: &str, ll_path: &std::path::Path, bin_path: &std::path::Path) -> Result<(), String> {
+///
+/// `extra_c_sources`/`extra_libs` back `plum build`'s native-linking
+/// support (see `run_build`'s own doc comment for the full "why" — a
+/// C library like raylib whose real ABI (`float`, `unsigned char`
+/// struct fields, ...) doesn't fit Plum's own `extern "C"` type
+/// surface needs a hand-written C shim compiled and linked in
+/// alongside the generated IR, in the SAME `clang` invocation — LLVM
+/// IR and ordinary C translation units link together freely, there's
+/// no separate build step needed). Both empty for every OTHER existing
+/// caller (`run_via_clang`, `run_via_clang_with_c_helper`'s own
+/// internals) — this doesn't change what they produce at all.
+fn clang_compile(
+    ir: &str,
+    ll_path: &std::path::Path,
+    bin_path: &std::path::Path,
+    extra_c_sources: &[PathBuf],
+    extra_libs: &[String],
+) -> Result<(), String> {
     std::fs::write(ll_path, ir).map_err(|e| format!("failed to write generated IR: {e}"))?;
     let compile = Command::new("clang")
         .arg(ll_path)
+        .args(extra_c_sources)
         // `-lm` — a Plum program can now `extern "C"` a real libm
         // function (`sqrt`, ...) via `plum_codegen::emit_program`'s new
         // FFI support; unlike `plum-interp` (which resolves against the
@@ -901,6 +937,7 @@ fn clang_compile(ir: &str, ll_path: &std::path::Path, bin_path: &std::path::Path
         // for a program that never calls a libm function — `clang`/`ld`
         // only pull in the specific object code actually referenced.
         .arg("-lm")
+        .args(extra_libs.iter().map(|lib| format!("-l{lib}")))
         .arg("-o")
         .arg(bin_path)
         .output()
@@ -922,6 +959,23 @@ fn clang_compile(ir: &str, ll_path: &std::path::Path, bin_path: &std::path::Path
 /// wherever `out_path` lives) via the same `clang_compile` helper
 /// `run_via_clang` uses, so both paths compile identically.
 pub fn compile_ir_to_binary(ir: &str, out_path: &std::path::Path) -> Result<(), String> {
+    compile_ir_to_binary_with_native(ir, out_path, &[], &[])
+}
+
+/// The native-linking-aware sibling of `compile_ir_to_binary` — see
+/// `clang_compile`'s own doc comment for what `extra_c_sources`/
+/// `extra_libs` are for. `compile_ir_to_binary` itself (and so its own
+/// pre-existing callers — `testing.rs`'s `plum test --native`, and a
+/// pre-existing codegen test) is unaffected, exactly the same "new
+/// sibling function, existing signature/callers untouched" shape this
+/// whole crate's own `_diag`/`_with_process_args` families already
+/// established.
+pub fn compile_ir_to_binary_with_native(
+    ir: &str,
+    out_path: &std::path::Path,
+    extra_c_sources: &[PathBuf],
+    extra_libs: &[String],
+) -> Result<(), String> {
     if let Some(parent) = out_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| format!("failed to create output directory {parent:?}: {e}"))?;
@@ -930,7 +984,7 @@ pub fn compile_ir_to_binary(ir: &str, out_path: &std::path::Path) -> Result<(), 
     let dir = unique_temp_dir("plumc-build");
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp build directory: {e}"))?;
     let ll_path = dir.join("program.ll");
-    clang_compile(ir, &ll_path, out_path)
+    clang_compile(ir, &ll_path, out_path, extra_c_sources, extra_libs)
 }
 
 /// The compile-and-run test harness's C-fixture VARIANT — links an
@@ -1025,7 +1079,7 @@ fn run_via_clang(ir: &str) -> Result<String, String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp build directory: {e}"))?;
     let ll_path = dir.join("program.ll");
     let bin_path: PathBuf = dir.join("program");
-    clang_compile(ir, &ll_path, &bin_path)?;
+    clang_compile(ir, &ll_path, &bin_path, &[], &[])?;
 
     let run = Command::new(&bin_path)
         .output()
@@ -1289,7 +1343,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let ll_path = dir.join("program.ll");
         let bin_path = dir.join("program");
-        clang_compile(&full_ir, &ll_path, &bin_path).unwrap();
+        clang_compile(&full_ir, &ll_path, &bin_path, &[], &[]).unwrap();
 
         let run = Command::new(&bin_path).args(["foo", "bar", "baz qux"]).output().unwrap();
         assert!(run.status.success(), "stderr: {}", String::from_utf8_lossy(&run.stderr));
@@ -1409,6 +1463,31 @@ mod tests {
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "42");
     }
 
+    // --- core language: `.to_int()`/`.round_to_int()`/`.to_float()` (see `ir::Expr::ToIntTrunc`) ---
+
+    #[test]
+    fn to_int_and_round_to_int_and_to_float_run_through_native_codegen() {
+        let src = "let go (): Int = 3.7.to_int()";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "3");
+        let src = "let go (): Int = (0.0 - 3.7).to_int()";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "-3");
+        let src = "let go (): Int = 3.5.round_to_int()";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "4");
+        let src = "let go (): Float = 42.to_float()";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "42.000000");
+    }
+
+    #[test]
+    fn to_int_saturates_instead_of_producing_undefined_behavior_in_native_codegen() {
+        // The regression test for the whole reason `@llvm.fptosi.sat`
+        // was used over a raw `fptosi` instruction — see `plum_
+        // codegen::codegen::codegen_to_int_trunc`'s own doc comment.
+        let src = "let go (): Int = Float.pow(10.0, 30.0).to_int()";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), i64::MAX.to_string());
+        let src = "let go (): Int = (0.0 - Float.pow(10.0, 30.0)).to_int()";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), i64::MIN.to_string());
+    }
+
     // --- associated functions: `Type.func(...)` (see `plumc::assoc_fns`) ---
 
     #[test]
@@ -1446,6 +1525,14 @@ mod tests {
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
         let src = "let go (): Bool = Array.contains([10, 20, 30], 99)";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "0");
+    }
+
+    #[test]
+    fn array_find_index_locates_the_first_matching_index_or_none_in_native_codegen() {
+        let src = "let go (): Int = match Array.find_index([1, 2, 3, 4], |x| x % 2 == 0) { Some(i) => i, None => -1 }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+        let src = "let go (): Int = match Array.find_index([1, 3, 5], |x| x % 2 == 0) { Some(i) => i, None => -1 }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "-1");
     }
 
     #[test]
@@ -1520,6 +1607,75 @@ mod tests {
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         // floor(3.7)=3, ceil(3.2)=4, round(3.5)=4, pow(2,4)=16, sqrt(81)=9 -> 36
         assert_eq!(out, "36.000000");
+    }
+
+    // --- standard library: `Float.random`/`Float.random_range` (see `plumc::STDLIB_RANDOM_SRC`) ---
+
+    #[test]
+    fn float_random_and_random_range_stay_in_bounds_and_genuinely_vary_in_native_codegen() {
+        // Same statistical-properties check as `plumc::lib.rs`'s own
+        // interpreter-path test — see its comment for why there's no
+        // "expected value" for a random generator to assert against.
+        let src = "let go (): Bool = { \
+                        let mut ok = true; \
+                        let mut lo = 2.0; \
+                        let mut hi = -1.0; \
+                        for i in 0..100 { \
+                            let r = Float.random(); \
+                            ok = ok && r >= 0.0 && r < 1.0; \
+                            lo = Float.min(lo, r); \
+                            hi = Float.max(hi, r); \
+                        }; \
+                        ok && hi > lo \
+                    }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+        let src = "let go (): Bool = { \
+                        let mut ok = true; \
+                        for i in 0..100 { \
+                            let r = Float.random_range(10.0, 20.0); \
+                            ok = ok && r >= 10.0 && r < 20.0; \
+                        }; \
+                        ok \
+                    }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
+    fn two_compiled_binaries_run_back_to_back_produce_different_random_sequences() {
+        // The regression test for the real bug found by hand while
+        // writing this feature: seeding `@srand` from `@time(null)`
+        // ALONE has only SECOND resolution, so two runs of the same
+        // compiled binary launched within the same second (an entirely
+        // realistic case — e.g. a shell script running the binary
+        // twice in a row, exactly what this test itself does) produced
+        // the IDENTICAL sequence. Fixed by also mixing in `@getpid()` —
+        // see `plum_codegen::emit_runtime`'s own doc comment on
+        // `@getpid` for the full story. This test compiles ONCE and
+        // runs the SAME binary twice, capturing raw stdout each time
+        // (not `compile_and_run`, which only surfaces the entry
+        // function's own final return value — this needs the actual
+        // printed sequence to compare).
+        let src = "let go (): Unit = { \
+                        for i in 0..5 { \
+                            println(Float.random().to_string()); \
+                        }; \
+                    }";
+        let (body_ir, signatures, resolved_entry, has_globals) = compile_to_ir(src, "go").unwrap();
+        let sig = signatures.get(&resolved_entry).unwrap().clone();
+        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit], has_globals);
+        let full_ir = format!("{body_ir}\n{main_ir}");
+
+        let dir = unique_temp_dir("plumc-codegen-random-seed");
+        std::fs::create_dir_all(&dir).unwrap();
+        let ll_path = dir.join("program.ll");
+        let bin_path = dir.join("program");
+        clang_compile(&full_ir, &ll_path, &bin_path, &[], &[]).unwrap();
+
+        let run1 = Command::new(&bin_path).output().unwrap();
+        let run2 = Command::new(&bin_path).output().unwrap();
+        assert!(run1.status.success());
+        assert!(run2.status.success());
+        assert_ne!(run1.stdout, run2.stdout, "two back-to-back runs produced the identical random sequence");
     }
 
     // --- standard library: Option/Result combinators (see `plumc::STDLIB_OPTION_RESULT_SRC`) ---
