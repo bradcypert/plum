@@ -600,7 +600,8 @@ exceptions:
 Real, runnable projects under [`examples/`](examples/), one per theme —
 each verified through both `plum run` and `plum build` (except
 `shared_mutability`, which needs the interpreter — see the `Ref[T]`
-note above):
+note above — and `asteroids`, which needs `make`/`--link-lib raylib`,
+see its own entry below):
 
 - [`adts_and_matching`](examples/adts_and_matching/main.plum) —
   structs, enums, exhaustive `match`, guard clauses.
@@ -616,6 +617,15 @@ note above):
 - [`shared_mutability`](examples/shared_mutability/main.plum) —
   `Ref[T]`, the opt-in escape hatch for state that's genuinely shared
   or mutated in place.
+- [`asteroids`](examples/asteroids/main.plum) — a full playable
+  Asteroids clone against real [raylib](https://www.raylib.com/), the
+  one example that links native C (`native/raylib_shim.c` bridges
+  raylib's real ABI — 32-bit `float`/`unsigned char` fields — across
+  `extern "C"`'s closed, ABI-safe type surface; see that file's own
+  doc comment). Build/run with `make`/`make run` inside the example's
+  own directory (needs raylib installed and on your linker path), not
+  `plum run`/`plum build` directly. The most complete demonstration of
+  functional game-state-as-value-not-mutation in the whole repo.
 
 `examples/overview.plum` is a separate, older syntax sketch from early
 in the project's design — illustrative only, not a runnable project.

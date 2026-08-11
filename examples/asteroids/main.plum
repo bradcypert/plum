@@ -1,0 +1,518 @@
+// `Game` (and every entity inside it) is threaded through `update`
+// functionally, not mutated — there's no field-assignment syntax in
+// Plum (`p.x = 5` isn't valid; see DESIGN.md's "Block statement/
+// expression rule" / "no null anywhere" design). Each `update_*`
+// helper takes a `Game`/entity and returns a NEW one, built via `{
+// ..old, field: new }` struct-update syntax; `game_loop` below is a
+// plain tail call passing the newest `Game` forward each frame — the
+// same "functional but in place" story the whole language is built
+// around (FBIP reuse-in-place makes this compile down to real mutation
+// whenever the old value isn't needed anymore, which is every frame
+// here).
+//
+// raylib itself is reached through `native/raylib_shim.c` — its real
+// C ABI (`Vector2`'s 32-bit `float` fields, `Color`'s `unsigned char`
+// fields) doesn't fit Plum's own `extern "C"` type surface (`Int`/
+// `Float`/`Bool`/`CStr`/qualifying-struct only), so the shim exposes
+// an ABI-safe wrapper API instead — see that file's own doc comment.
+// `sin`/`cos`/`sqrt` DON'T need a shim: libm's `double`-based versions
+// already match Plum's own `Float` representation exactly, so they're
+// bound directly below, the same way DESIGN.md's own `sqrt` FFI
+// example does.
+
+extern "C" {
+    fn raylib_init_window(width: Int, height: Int, title: CStr);
+    fn raylib_close_window();
+    fn raylib_window_should_close() -> Bool;
+    fn raylib_set_target_fps(fps: Int);
+    fn raylib_get_frame_time() -> Float;
+    fn raylib_begin_drawing();
+    fn raylib_end_drawing();
+    fn raylib_clear_background(r: Int, g: Int, b: Int, a: Int);
+    fn raylib_draw_circle_lines(x: Float, y: Float, radius: Float, r: Int, g: Int, b: Int, a: Int);
+    fn raylib_draw_circle_v(x: Float, y: Float, radius: Float, r: Int, g: Int, b: Int, a: Int);
+    fn raylib_draw_triangle_lines(x1: Float, y1: Float, x2: Float, y2: Float, x3: Float, y3: Float, r: Int, g: Int, b: Int, a: Int);
+    fn raylib_draw_text(text: CStr, x: Int, y: Int, font_size: Int, r: Int, g: Int, b: Int, a: Int);
+    fn raylib_measure_text(text: CStr, font_size: Int) -> Int;
+    fn raylib_is_key_down(key: Int) -> Bool;
+    fn raylib_is_key_pressed(key: Int) -> Bool;
+
+    fn sin(x: Float) -> Float;
+    fn cos(x: Float) -> Float;
+}
+
+// --- Constants ---
+
+let SCREEN_WIDTH = 800
+let SCREEN_HEIGHT = 600
+let SCREEN_WIDTH_F = 800.0
+let SCREEN_HEIGHT_F = 600.0
+
+let PI = 3.14159265358979
+
+let SHIP_SIZE = 20.0
+let SHIP_ROTATION_SPEED = 3.5
+let SHIP_THRUST = 220.0
+let SHIP_DRAG = 0.60
+let MAX_SHIP_SPEED = 380.0
+let SHIP_COLLISION_RADIUS = 12.0
+
+let BULLET_SPEED = 520.0
+let BULLET_LIFETIME = 1.1
+let FIRE_COOLDOWN = 0.25
+let MAX_BULLETS = 32
+let BULLET_RADIUS = 2.0
+
+let MAX_ASTEROIDS = 64
+let ASTEROID_SPEED_MIN = 40.0
+let ASTEROID_SPEED_MAX = 110.0
+let ASTEROID_SPLIT_COUNT = 2
+
+let STARTING_LIVES = 3
+let STARTING_ASTEROIDS = 4
+let INVULNERABILITY_TIME = 2.0
+let RESPAWN_DELAY = 1.5
+
+let KEY_A = 65
+let KEY_D = 68
+let KEY_W = 87
+let KEY_LEFT = 263
+let KEY_RIGHT = 262
+let KEY_UP = 265
+let KEY_SPACE = 32
+let KEY_ENTER = 257
+
+struct Vec2 { x: Float, y: Float }
+
+enum AsteroidSize { Large, Medium, Small }
+
+let asteroid_radius (size: AsteroidSize): Float =
+    match size { Large => 40.0, Medium => 22.0, Small => 12.0 }
+
+let asteroid_score (size: AsteroidSize): Int =
+    match size { Large => 20, Medium => 50, Small => 100 }
+
+let asteroid_next_size (size: AsteroidSize): Option[AsteroidSize] =
+    match size { Large => Some(Medium), Medium => Some(Small), Small => None }
+
+struct Ship {
+    position: Vec2,
+    velocity: Vec2,
+    rotation: Float,
+    alive: Bool,
+    invulnerable_timer: Float,
+}
+
+struct Bullet {
+    position: Vec2,
+    velocity: Vec2,
+    lifetime: Float,
+    active: Bool,
+}
+
+struct Asteroid {
+    position: Vec2,
+    velocity: Vec2,
+    size: AsteroidSize,
+    rotation: Float,
+    rotation_speed: Float,
+    active: Bool,
+}
+
+enum GameState { Playing, GameOver }
+
+struct Game {
+    ship: Ship,
+    bullets: Array[Bullet],
+    asteroids: Array[Asteroid],
+    score: Int,
+    lives: Int,
+    wave: Int,
+    fire_cooldown: Float,
+    respawn_timer: Float,
+    state: GameState,
+}
+
+let vec2_add (a: Vec2) (b: Vec2): Vec2 = Vec2 { x: a.x + b.x, y: a.y + b.y }
+let vec2_sub (a: Vec2) (b: Vec2): Vec2 = Vec2 { x: a.x - b.x, y: a.y - b.y }
+let vec2_scale (a: Vec2) (s: Float): Vec2 = Vec2 { x: a.x * s, y: a.y * s }
+let vec2_length (a: Vec2): Float = Float.sqrt(a.x * a.x + a.y * a.y)
+let zero_vec2 (): Vec2 = Vec2 { x: 0.0, y: 0.0 }
+
+let ship_facing (rotation: Float): Vec2 = unsafe { Vec2 { x: sin(rotation), y: 0.0 - cos(rotation) } }
+
+let wrap_position (pos: Vec2): Vec2 = {
+    let x =
+        if pos.x < 0.0 { pos.x + SCREEN_WIDTH_F }
+        else if pos.x > SCREEN_WIDTH_F { pos.x - SCREEN_WIDTH_F }
+        else { pos.x };
+    let y =
+        if pos.y < 0.0 { pos.y + SCREEN_HEIGHT_F }
+        else if pos.y > SCREEN_HEIGHT_F { pos.y - SCREEN_HEIGHT_F }
+        else { pos.y };
+    Vec2 { x: x, y: y }
+}
+
+let circle_collide (a_pos: Vec2) (a_r: Float) (b_pos: Vec2) (b_r: Float): Bool =
+    vec2_length(vec2_sub(a_pos, b_pos)) < (a_r + b_r)
+
+let make_bullets_acc (n: Int) (acc: Array[Bullet]): Array[Bullet] =
+    if n <= 0 { acc }
+    else {
+        make_bullets_acc(n - 1, acc.push(Bullet {
+            position: zero_vec2(),
+            velocity: zero_vec2(),
+            lifetime: 0.0,
+            active: false,
+        }))
+    }
+
+let empty_bullets (): Array[Bullet] = make_bullets_acc(MAX_BULLETS, [])
+
+let make_asteroids_acc (n: Int) (acc: Array[Asteroid]): Array[Asteroid] =
+    if n <= 0 { acc }
+    else {
+        make_asteroids_acc(n - 1, acc.push(Asteroid {
+            position: zero_vec2(),
+            velocity: zero_vec2(),
+            size: Large,
+            rotation: 0.0,
+            rotation_speed: 0.0,
+            active: false,
+        }))
+    }
+
+let empty_asteroids (): Array[Asteroid] = make_asteroids_acc(MAX_ASTEROIDS, [])
+
+let find_inactive_bullet_index (bullets: Array[Bullet]) (i: Int): Option[Int] =
+    if i >= bullets.len() { None }
+    else if bullets[i].active { find_inactive_bullet_index(bullets, i + 1) }
+    else { Some(i) }
+
+let find_inactive_asteroid_index (asteroids: Array[Asteroid]) (i: Int): Option[Int] =
+    if i >= asteroids.len() { None }
+    else if asteroids[i].active { find_inactive_asteroid_index(asteroids, i + 1) }
+    else { Some(i) }
+
+let find_colliding_asteroid_index (asteroids: Array[Asteroid]) (pos: Vec2) (radius: Float) (i: Int): Option[Int] =
+    if i >= asteroids.len() { None }
+    else if asteroids[i].active
+        && circle_collide(pos, radius, asteroids[i].position, asteroid_radius(asteroids[i].size)) { Some(i) }
+    else { find_colliding_asteroid_index(asteroids, pos, radius, i + 1) }
+
+let spawn_asteroid (asteroids: Array[Asteroid]) (position: Vec2) (size: AsteroidSize): Array[Asteroid] =
+    match find_inactive_asteroid_index(asteroids, 0) {
+        None => asteroids,
+        Some(i) => {
+            let angle = Float.random_range(0.0, 2.0 * PI);
+            let speed = Float.random_range(ASTEROID_SPEED_MIN, ASTEROID_SPEED_MAX);
+            let velocity = unsafe { Vec2 { x: cos(angle) * speed, y: sin(angle) * speed } };
+            let a = Asteroid {
+                position: position,
+                velocity: velocity,
+                size: size,
+                rotation: Float.random_range(0.0, 2.0 * PI),
+                rotation_speed: Float.random_range(-2.0, 2.0),
+                active: true,
+            };
+            asteroids.set(i, a)
+        }
+    }
+
+let spawn_n_asteroids (asteroids: Array[Asteroid]) (position: Vec2) (size: AsteroidSize) (n: Int): Array[Asteroid] =
+    if n <= 0 { asteroids }
+    else { spawn_n_asteroids(spawn_asteroid(asteroids, position, size), position, size, n - 1) }
+
+let random_edge_position (): Vec2 =
+    if Float.random() < 0.5 {
+        let x = if Float.random() < 0.5 { 0.0 } else { SCREEN_WIDTH_F };
+        Vec2 { x: x, y: Float.random_range(0.0, SCREEN_HEIGHT_F) }
+    } else {
+        let y = if Float.random() < 0.5 { 0.0 } else { SCREEN_HEIGHT_F };
+        Vec2 { x: Float.random_range(0.0, SCREEN_WIDTH_F), y: y }
+    }
+
+let spawn_wave_loop (g: Game) (remaining: Int): Game =
+    if remaining <= 0 { g }
+    else {
+        spawn_wave_loop(
+            Game { asteroids: spawn_asteroid(g.asteroids, random_edge_position(), Large), ..g },
+            remaining - 1,
+        )
+    }
+
+let spawn_wave (g: Game): Game = spawn_wave_loop(g, STARTING_ASTEROIDS + (g.wave - 1))
+
+let init_game (): Game =
+    spawn_wave(Game {
+        ship: Ship {
+            position: Vec2 { x: SCREEN_WIDTH_F / 2.0, y: SCREEN_HEIGHT_F / 2.0 },
+            velocity: zero_vec2(),
+            rotation: 0.0,
+            alive: true,
+            invulnerable_timer: INVULNERABILITY_TIME,
+        },
+        bullets: empty_bullets(),
+        asteroids: empty_asteroids(),
+        score: 0,
+        lives: STARTING_LIVES,
+        wave: 1,
+        fire_cooldown: 0.0,
+        respawn_timer: 0.0,
+        state: Playing,
+    })
+
+let fire_bullet (g: Game): Game =
+    if g.fire_cooldown > 0.0 { g } else {
+        match find_inactive_bullet_index(g.bullets, 0) {
+            None => g,
+            Some(i) => {
+                let facing = ship_facing(g.ship.rotation);
+                let nose = vec2_add(g.ship.position, vec2_scale(facing, SHIP_SIZE));
+                let b = Bullet {
+                    position: nose,
+                    velocity: vec2_scale(facing, BULLET_SPEED),
+                    lifetime: BULLET_LIFETIME,
+                    active: true,
+                };
+                Game { bullets: g.bullets.set(i, b), fire_cooldown: FIRE_COOLDOWN, ..g }
+            }
+        }
+    }
+
+let tick_respawn (g: Game) (dt: Float): Game = {
+    let new_timer = g.respawn_timer - dt;
+    if new_timer <= 0.0 {
+        Game {
+            respawn_timer: new_timer,
+            ship: Ship {
+                position: Vec2 { x: SCREEN_WIDTH_F / 2.0, y: SCREEN_HEIGHT_F / 2.0 },
+                velocity: zero_vec2(),
+                rotation: 0.0,
+                alive: true,
+                invulnerable_timer: INVULNERABILITY_TIME,
+            },
+            ..g
+        }
+    } else {
+        Game { respawn_timer: new_timer, ..g }
+    }
+}
+
+let handle_input_and_physics (g: Game) (dt: Float): Game = unsafe {
+    let rot1 = g.ship.rotation;
+    let rot2 =
+        if raylib_is_key_down(KEY_A) || raylib_is_key_down(KEY_LEFT) { rot1 - SHIP_ROTATION_SPEED * dt }
+        else { rot1 };
+    let rot3 =
+        if raylib_is_key_down(KEY_D) || raylib_is_key_down(KEY_RIGHT) { rot2 + SHIP_ROTATION_SPEED * dt }
+        else { rot2 };
+    let vel1 =
+        if raylib_is_key_down(KEY_W) || raylib_is_key_down(KEY_UP) {
+            vec2_add(g.ship.velocity, vec2_scale(ship_facing(rot3), SHIP_THRUST * dt))
+        } else { g.ship.velocity };
+    let g_after_fire = if raylib_is_key_down(KEY_SPACE) { fire_bullet(g) } else { g };
+    let speed = vec2_length(vel1);
+    let vel2 = if speed > MAX_SHIP_SPEED { vec2_scale(vel1, MAX_SHIP_SPEED / speed) } else { vel1 };
+    let drag_factor = Float.pow(SHIP_DRAG, dt);
+    let vel3 = vec2_scale(vel2, drag_factor);
+    let position = wrap_position(vec2_add(g.ship.position, vec2_scale(vel3, dt)));
+    Game { ship.rotation: rot3, ship.velocity: vel3, ship.position: position, ..g_after_fire }
+}
+
+let tick_fire_cooldown (g: Game) (dt: Float): Game =
+    if g.fire_cooldown > 0.0 { Game { fire_cooldown: g.fire_cooldown - dt, ..g } } else { g }
+
+let update_bullet (b: Bullet) (dt: Float): Bullet =
+    if !b.active { b }
+    else {
+        let position = vec2_add(b.position, vec2_scale(b.velocity, dt));
+        let lifetime = b.lifetime - dt;
+        let out_of_bounds =
+            position.x < 0.0 || position.x > SCREEN_WIDTH_F
+            || position.y < 0.0 || position.y > SCREEN_HEIGHT_F;
+        Bullet {
+            position: position,
+            velocity: b.velocity,
+            lifetime: lifetime,
+            active: lifetime > 0.0 && !out_of_bounds,
+        }
+    }
+
+let update_bullets (g: Game) (dt: Float): Game =
+    Game { bullets: Array.map(g.bullets, |b| update_bullet(b, dt)), ..g }
+
+let update_asteroid (a: Asteroid) (dt: Float): Asteroid =
+    if !a.active { a } else {
+        Asteroid {
+            position: wrap_position(vec2_add(a.position, vec2_scale(a.velocity, dt))),
+            velocity: a.velocity,
+            size: a.size,
+            rotation: a.rotation + a.rotation_speed * dt,
+            rotation_speed: a.rotation_speed,
+            active: true,
+        }
+    }
+
+let update_asteroids (g: Game) (dt: Float): Game =
+    Game { asteroids: Array.map(g.asteroids, |a| update_asteroid(a, dt)), ..g }
+
+let split_asteroid (g: Game) (idx: Int): Game = {
+    let a = g.asteroids[idx];
+    let g2 = Game {
+        score: g.score + asteroid_score(a.size),
+        asteroids: g.asteroids.set(idx, Asteroid { active: false, ..a }),
+        ..g
+    };
+    match asteroid_next_size(a.size) {
+        None => g2,
+        Some(next) => Game {
+            asteroids: spawn_n_asteroids(g2.asteroids, a.position, next, ASTEROID_SPLIT_COUNT),
+            ..g2
+        },
+    }
+}
+
+let resolve_bullet_collision_at (g: Game) (bullet_idx: Int): Game =
+    if bullet_idx >= g.bullets.len() { g }
+    else if !g.bullets[bullet_idx].active { resolve_bullet_collision_at(g, bullet_idx + 1) }
+    else {
+        match find_colliding_asteroid_index(g.asteroids, g.bullets[bullet_idx].position, BULLET_RADIUS, 0) {
+            None => resolve_bullet_collision_at(g, bullet_idx + 1),
+            Some(asteroid_idx) => {
+                let g2 = split_asteroid(g, asteroid_idx);
+                let g3 = Game {
+                    bullets: g2.bullets.set(bullet_idx, Bullet { active: false, ..g2.bullets[bullet_idx] }),
+                    ..g2
+                };
+                resolve_bullet_collision_at(g3, bullet_idx + 1)
+            }
+        }
+    }
+
+let resolve_bullet_asteroid_collisions (g: Game): Game = resolve_bullet_collision_at(g, 0)
+
+let resolve_ship_asteroid_collision (g: Game): Game =
+    if g.ship.alive && g.ship.invulnerable_timer <= 0.0 {
+        match find_colliding_asteroid_index(g.asteroids, g.ship.position, SHIP_COLLISION_RADIUS, 0) {
+            None => g,
+            Some(_) => {
+                let new_lives = g.lives - 1;
+                let ship = Ship { alive: false, ..g.ship };
+                if new_lives <= 0 { Game { lives: new_lives, ship: ship, state: GameOver, ..g } }
+                else { Game { lives: new_lives, ship: ship, respawn_timer: RESPAWN_DELAY, ..g } }
+            }
+        }
+    } else { g }
+
+let tick_invulnerability (g: Game) (dt: Float): Game =
+    if g.ship.invulnerable_timer > 0.0 {
+        Game { ship.invulnerable_timer: g.ship.invulnerable_timer - dt, ..g }
+    } else { g }
+
+let any_asteroid_active (asteroids: Array[Asteroid]): Bool = Array.any(asteroids, |a| a.active)
+
+let advance_wave_if_clear (g: Game): Game =
+    if !any_asteroid_active(g.asteroids) { spawn_wave(Game { wave: g.wave + 1, ..g }) } else { g }
+
+let update_playing (g: Game) (dt: Float): Game = {
+    let g1 = if g.respawn_timer > 0.0 { tick_respawn(g, dt) } else { handle_input_and_physics(g, dt) };
+    let g2 = tick_fire_cooldown(g1, dt);
+    let g3 = update_bullets(g2, dt);
+    let g4 = update_asteroids(g3, dt);
+    let g5 = resolve_bullet_asteroid_collisions(g4);
+    let g6 = resolve_ship_asteroid_collision(g5);
+    let g7 = tick_invulnerability(g6, dt);
+    advance_wave_if_clear(g7)
+}
+
+let update (g: Game) (dt: Float): Game =
+    match g.state {
+        GameOver => if unsafe { raylib_is_key_pressed(KEY_ENTER) } { init_game() } else { g },
+        Playing => update_playing(g, dt),
+    }
+
+let draw_ship (ship: Ship): Unit = {
+    if ship.alive {
+        let should_draw = if ship.invulnerable_timer > 0.0 {
+            let phase = (INVULNERABILITY_TIME - ship.invulnerable_timer) * 10.0;
+            phase % 2.0 < 1.0
+        } else { true };
+        if should_draw {
+            let nose = vec2_add(ship.position, vec2_scale(ship_facing(ship.rotation), SHIP_SIZE));
+            let left = vec2_add(ship.position, vec2_scale(ship_facing(ship.rotation + 2.5), SHIP_SIZE));
+            let right = vec2_add(ship.position, vec2_scale(ship_facing(ship.rotation - 2.5), SHIP_SIZE));
+            unsafe {
+                raylib_draw_triangle_lines(
+                    nose.x, nose.y, left.x, left.y, right.x, right.y,
+                    255, 255, 255, 255,
+                );
+            }
+        };
+    };
+}
+
+let draw_asteroids (asteroids: Array[Asteroid]): Unit = {
+    for a in asteroids {
+        if a.active {
+            unsafe {
+                raylib_draw_circle_lines(a.position.x, a.position.y, asteroid_radius(a.size), 130, 130, 130, 255);
+            }
+        };
+    };
+}
+
+let draw_bullets (bullets: Array[Bullet]): Unit = {
+    for b in bullets {
+        if b.active {
+            unsafe {
+                raylib_draw_circle_v(b.position.x, b.position.y, BULLET_RADIUS, 255, 255, 0, 255);
+            }
+        };
+    };
+}
+
+let draw_ui (g: Game): Unit = unsafe {
+    raylib_draw_text("SCORE ${g.score}".as_cstr(), 10, 10, 20, 255, 255, 255, 255);
+    raylib_draw_text("LIVES ${g.lives}".as_cstr(), 10, 34, 20, 255, 255, 255, 255);
+    raylib_draw_text("WAVE ${g.wave}".as_cstr(), 10, 58, 20, 255, 255, 255, 255);
+    if g.state == GameOver {
+        let msg = "GAME OVER";
+        let w = raylib_measure_text(msg.as_cstr(), 40);
+        raylib_draw_text(
+            msg.as_cstr(), SCREEN_WIDTH / 2 - w / 2, SCREEN_HEIGHT / 2 - 40, 40,
+            255, 0, 0, 255,
+        );
+        let sub = "Press ENTER to restart";
+        let w2 = raylib_measure_text(sub.as_cstr(), 20);
+        raylib_draw_text(
+            sub.as_cstr(), SCREEN_WIDTH / 2 - w2 / 2, SCREEN_HEIGHT / 2 + 10, 20,
+            255, 255, 255, 255,
+        );
+    };
+}
+
+let draw (g: Game): Unit = unsafe {
+    raylib_begin_drawing();
+    raylib_clear_background(0, 0, 0, 255);
+    draw_ship(g.ship);
+    draw_asteroids(g.asteroids);
+    draw_bullets(g.bullets);
+    draw_ui(g);
+    raylib_end_drawing();
+}
+
+let game_loop (g: Game): Unit =
+    if unsafe { raylib_window_should_close() } { () } else {
+        let dt = unsafe { raylib_get_frame_time() };
+        let g2 = update(g, dt);
+        draw(g2);
+        game_loop(g2)
+    }
+
+let main (): Unit = unsafe {
+    raylib_init_window(SCREEN_WIDTH, SCREEN_HEIGHT, "Asteroids - Plum".as_cstr());
+    raylib_set_target_fps(60);
+    game_loop(init_game());
+    raylib_close_window();
+}
