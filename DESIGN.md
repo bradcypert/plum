@@ -5410,3 +5410,172 @@ Verified with real compile-and-run tests in BOTH backends (interpreted
 socket, not a mocked/stubbed one, confirming the whole stack end to
 end: the real shim, the linking/exporting fixes above, and `.as_string
 ()` turning `tcp_recv`'s result into a comparable `String`.
+
+### HTTP client — Decided and implemented (2026-08-11): http:// only, built as pure Plum on top of TCP
+
+Second piece of the networking roadmap, immediately after TCP. Built
+entirely as ordinary Plum source (`STDLIB_HTTP_SRC`, merged into `with_
+prelude` same as everything else) on top of the `Net` module above —
+zero new IR/backend/extern surface, the whole point of doing TCP first.
+Exposes `http_get(url)`, `http_post(url, body)`, and the general `http_
+request(method, url, headers, body)`, all `Result[HttpResponse, String]`
+(`HttpResponse { status: Int, headers: Array[HttpHeader], body: String
+}`).
+
+**`http://` only.** `https://` is explicitly rejected with a clear
+`Err`, not silently attempted — TLS needs a real implementation or FFI
+to a library like OpenSSL/LibreSSL, a genuinely new native dependency
+and its own design question, deliberately weighed against and deferred
+rather than bundled into this pass (the same "flag the big fork before
+building" instinct as everything else on this list).
+
+**Response body framing — a real, honest v1 scope trade, same spirit as
+`tcp_recv`'s own.** A `Content-Length` header is read exactly that many
+bytes; a `Transfer-Encoding` header (chunked or otherwise) is REJECTED
+with a clear `Err`, never silently mis-parsed as a literal body;
+anything with neither is read until the connection closes (safe since
+every request sends `Connection: close`). Response header NAME matching
+is exact-case only (`Content-Length`, not case-insensitively) — true in
+practice for virtually every real server, a real simplification
+nonetheless.
+
+**No `while` loop exists in this language** (only `for i in a..b`), so
+every "read until X" operation (waiting for the header/body separator,
+reading a known-length body, reading until close) is a tail-recursive
+accumulator function — the exact same idiom `STDLIB_STRING_SRC`'s own
+parsers (`string_parse_int_digits_acc`, etc.) already established.
+Nothing new stylistically, just a bigger, more realistic exercise of it.
+
+**Two real bugs found while building this, both fixed, one predating
+this chunk entirely:**
+
+1. **A genuine, previously-undiscovered PARSER restriction**: the
+   struct-literal-vs-block disambiguation heuristic (`GRAMMAR.md`) keys
+   off the type name's first character being UPPERCASE — `Identifier {
+   ... }` is only recognized as a struct literal when `Identifier`
+   starts uppercase. `__FileIoResult`/`__EnvResult` (the double-
+   underscore internal-struct convention `STDLIB_FILE_SRC`/`STDLIB_ENV_
+   SRC` already use) never tripped this because those are ONLY ever
+   constructed by Rust-side compiler-builtin codegen, never as real
+   Plum struct-literal SOURCE TEXT. This HTTP module's own internal
+   parsing-result structs (`HttpUrlParts`, `HttpHead`) ARE constructed
+   as ordinary Plum expressions, so the double-underscore convention
+   genuinely breaks there — confirmed directly with a minimal repro
+   (`struct __Foo { x: Int } let go (): __Foo = __Foo { x: 1 }` fails
+   with a confusing "expected an item... found LBrace", not an obvious
+   error pointing at the real cause). Fixed by simply using plain
+   capitalized names for these two structs instead — not a language bug
+   to fix, a real constraint on anything actually built via struct-
+   literal syntax, worth knowing for any FUTURE internal struct that's
+   also constructed in real Plum source (not just returned/consumed by
+   Rust-side codegen).
+2. **A real use-after-free in `tcp_write` — predates this HTTP chunk
+   entirely (it shipped with `STDLIB_NET_SRC`), surfaced only now
+   because a bare string literal with no other reference (`tcp_write
+   (fd, "hello")`) hits the unlucky case an already-referenced variable
+   (`STDLIB_NET_SRC`'s own round-trip TEST happened to use) doesn't
+   reliably hit.** `tcp_send(fd, data.as_cstr(), data.len())` evaluates
+   `.as_cstr()` (which FREES `data`'s cell if this was its last
+   reference — see `.as_cstr()`'s own doc comment) before `.len()`,
+   reading a potentially-already-freed cell. This is the EXACT bug
+   `println`'s own doc comment (right there in the same file) already
+   documents finding and fixing once before (`write(1, s.as_cstr(), s.
+   len())` → `let n = s.len(); write(1, s.as_cstr(), n)`) — missed the
+   first time because `tcp_write` was written without re-reading that
+   warning. Confirmed directly, not theorized: an actual byte-for-byte
+   capture on the wire (a real `recv()` on the other end) showed `"hello
+   "` followed by ~4KB of garbage (a freed allocator chunk's leftover
+   freelist bookkeeping, read back as if it were the string's length)
+   instead of exactly 5 bytes. `write(2)`'s own "silent, not a crash"
+   character (per that original doc comment) is exactly why the
+   existing `tcp_round_trip` test — a like-for-like comparison of what
+   was SENT against what was READ BACK, both ends in the SAME process —
+   never caught it: whatever got sent (correct or garbage) was also
+   whatever got echoed and compared, a tautology that can't detect a
+   send-side bug. Fixed the same way `println`'s was: `let len = data.
+   len();` bound BEFORE `.as_cstr()` runs.
+
+**A genuine, backend-SPECIFIC recursion-depth limitation, found and
+scoped honestly rather than worked around silently.** `String.index_of`
+(used internally to find the header/body separator) recurses to a depth
+proportional to the search string's length. `plum-interp`'s tree-
+walking `eval` has NO tail-call optimization (unlike native codegen's
+real `musttail` guarantee), so a REALISTIC-sized HTTP response (a ~138-
+byte header block, nowhere near contrived) already needs a stack far
+beyond even the workspace's existing 16 MiB test-thread bump (sized
+against much shorter strings) — 256 MiB was needed to pass reliably
+under `cargo test`. Confirmed this is genuinely backend-specific, not a
+property of the algorithm: the equivalent native-codegen test needs NO
+special stack handling at all. This is a real, pre-existing
+characteristic of the interpreter (not something this chunk introduced,
+just the first thing to exercise it with realistic data) worth knowing
+before leaning on `plum run` for any workload doing substantial string
+search/processing — `plum build` has no such ceiling.
+
+Verified with real compile-and-run tests in BOTH backends: an actual
+HTTP/1.1 round trip against a real `std::net::TcpListener` fixture (not
+mocked), confirming URL parsing, request building, response header/
+body-framing parsing, and the `https://` rejection path, end to end.
+
+### HTTP server — Decided and implemented (2026-08-11): sequential (one connection at a time), built on the same request/response parsing as the client
+
+Third piece of the networking roadmap, immediately after the HTTP
+client. Sequential for v1 (Brad's explicit choice, weighed against
+spawning a task per connection): `accept → read request → call handler
+→ write response → close → repeat`. Real concurrency (spawn-per-
+connection, using the `spawn`/`.join()` primitive whose whole-scope-
+capture bug was just fixed this same session) is a real, isolated
+follow-up once this is proven correct — not bundled in now, so this
+pass doesn't compound network+parsing+concurrency risk at once.
+
+Exposes `http_serve_once(port, handler)` (listens, accepts and handles
+exactly ONE connection, then returns — a real, useful one-shot server
+on its own, and what this module's own tests exercise directly) and
+`http_serve(port, handler)` (the real long-running server: accept,
+handle, close, repeat, forever). `handler: (HttpRequest) -> HttpResponse`
+— `HttpRequest { method, path, headers, body }`, reusing `HttpResponse`/
+`HttpHeader` from the client side unchanged. Every request gets exactly
+one response and the connection is always closed afterward — no keep-
+alive, symmetric with the client always sending `Connection: close`.
+
+**Two real bugs found while building this:**
+
+1. **`let _ = expr;` is not a supported `let`-binding shape** — `_` is a
+   valid MATCH-arm pattern but plum-types' `let`-binding inference only
+   handles `Ident`/`Tuple`/`Struct` patterns, hitting its own catch-all
+   \"destructuring let-bindings of this shape\" error otherwise. Wanted
+   to discard `http_handle_connection`'s `Result` inside `http_serve_
+   loop` (one bad connection shouldn't kill the server) — fixed by using
+   a bare statement instead (`http_handle_connection(conn, handler);`),
+   the SAME idiom `println`'s own `write(1, s.as_cstr(), n);` already
+   established for discarding a non-`Unit` value. Not a language bug to
+   fix — a real, existing constraint, just not one this codebase had
+   run into with a `let` before (only ever inside `match` arms).
+2. **A genuine, real protocol-framing asymmetry between requests and
+   responses — found via an actual live deadlock, not by inspection.**
+   Originally reused the CLIENT's own `http_read_body` unchanged for
+   request parsing too, on the assumption body-framing rules (`Content-
+   Length`/`Transfer-Encoding`/read-until-close) don't care which side
+   of the connection they're reading. That assumption is WRONG: on the
+   response side, \"no `Content-Length`, no `Transfer-Encoding`\"
+   legitimately means \"read until the peer closes\" — safe, because
+   every request this client sends already includes `Connection:
+   close`, bounding that wait by the SERVER eventually closing. Applied
+   to a REQUEST, the same rule is a deadlock waiting to happen: a
+   bodyless `GET` (no `Content-Length`, since there's no body to
+   measure) has no reason to ever close its own write side, so a server
+   \"reading until close\" on it blocks forever waiting for a body that
+   will never arrive. Root-caused by isolating the exact hang site with
+   `println` debugging (accept → headers → parse-head → body-read, one
+   step at a time) after a real test hung indefinitely against a real
+   socket — not solved by inspection first. Fixed with a genuinely
+   separate `http_read_request_body`, identical to `http_read_body`
+   except its \"neither header present\" case returns an EMPTY body
+   instead of reading until close.
+
+Verified with real compile-and-run HTTP/1.1 round trips in BOTH
+backends — a plain `std::net::TcpStream` fixture acting as the CLIENT
+this time (the reverse of the HTTP client's own tests), sending a real
+bodyless `GET` (deliberately, since that's the exact request shape that
+caught bug #2 above) and checking the handler saw the real parsed
+method/path, not just that SOME 200 came back.

@@ -1216,8 +1216,23 @@ let tcp_accept_connection (fd: Int): Result[Int, String] = unsafe {
     if client < 0 { Err(\"tcp_accept_connection: accept failed\") } else { Ok(client) }
 }
 
+// `len` MUST be computed and bound BEFORE `.as_cstr()` is called, not
+// inline as a later argument in the same call — `.as_cstr()` (see its
+// own doc comment) decrements `data`'s refcount as part of producing
+// the copy, and FREES the original cell outright if that was its last
+// reference (e.g. a fresh string literal with no other binding, exactly
+// what a direct `tcp_write(fd, \"hello\")` call is). Evaluating `data.
+// len()` AFTER that in the same argument list — `tcp_send(fd, data.
+// as_cstr(), data.len())` — reads a potentially-already-freed cell, a
+// real use-after-free (confirmed directly: manifested as garbage bytes
+// trailing the real content over an actual socket, sent-and-observed on
+// the wire, not just theorized). `println`'s own `write(1, s.as_cstr(),
+// n)` already established the correct ordering — `n = s.len()` bound
+// FIRST, `.as_cstr()` called only afterward — this just wasn't followed
+// here originally.
 let tcp_write (fd: Int) (data: String): Result[Int, String] = unsafe {
-    let n = tcp_send(fd, data.as_cstr(), data.len());
+    let len = data.len();
+    let n = tcp_send(fd, data.as_cstr(), len);
     if n < 0 { Err(\"tcp_write: send failed\") } else { Ok(n) }
 }
 
@@ -1229,6 +1244,381 @@ let tcp_write (fd: Int) (data: String): Result[Int, String] = unsafe {
 let tcp_read (fd: Int) (max_len: Int): String = unsafe { tcp_recv(fd, max_len).as_string() }
 
 let tcp_close_connection (fd: Int): Unit = unsafe { tcp_close(fd); () }
+";
+
+/// HTTP client — built entirely as ordinary Plum source on top of
+/// `STDLIB_NET_SRC` above, no new IR/backend/extern surface of its own
+/// at all (the whole point of building TCP first — see DESIGN.md's own
+/// \"HTTP client\" section for the full writeup). No `while` loop exists
+/// in this language (only `for i in a..b`), so every \"read until X\"
+/// operation here is a tail-recursive accumulator function, the SAME
+/// idiom `STDLIB_STRING_SRC`'s own parsers (`string_parse_int_digits_
+/// acc`, etc.) already established — nothing new stylistically either.
+///
+/// **`http://` only — `https://` is explicitly rejected with a clear
+/// `Err`, not silently attempted.** TLS needs a real implementation
+/// (handshake, cert validation) or FFI to a library like OpenSSL/
+/// LibreSSL — a genuinely new native dependency, its own design
+/// question, deliberately deferred rather than bundled into this pass.
+///
+/// **Response body framing — a real, honest v1 scope trade**: a
+/// `Content-Length` response header is read exactly that many bytes;
+/// a `Transfer-Encoding` response header (chunked or otherwise) is
+/// rejected with a clear `Err` rather than silently mis-parsed as a
+/// literal body; anything with NEITHER header is read until the
+/// connection closes (valid since every request sends `Connection:
+/// close`, so a well-behaved server closes once its response is
+/// complete either way). Response header NAME matching (`Content-
+/// Length`, `Transfer-Encoding`) is exact-case only, not the case-
+/// insensitive match HTTP header names are technically allowed to use
+/// — true in practice for virtually every real server, a real
+/// simplification nonetheless.
+///
+/// `HttpUrlParts`/`HttpHead` (internal parsing-result structs, not part
+/// of the public surface a caller is meant to reach for) are plain
+/// capitalized names, NOT the `__FileIoResult`/`__EnvResult`-style
+/// double-underscore convention `STDLIB_FILE_SRC`/`STDLIB_ENV_SRC` use
+/// — found empirically that the two aren't interchangeable: THOSE
+/// structs are only ever constructed by Rust-side compiler-builtin
+/// codegen (`codegen_ctor_alloc`), never as real Plum struct-literal
+/// SOURCE TEXT, so they never exercise the parser's struct-literal-vs-
+/// block disambiguation heuristic (`GRAMMAR.md`) at all — which keys
+/// specifically off the identifier's first character being uppercase.
+/// `HttpUrlParts { .. }`/`HttpHead { .. }` ARE constructed as ordinary
+/// Plum expressions right here, so a leading `_` (lowercase by that
+/// heuristic) genuinely breaks parsing (confirmed directly: `struct
+/// __Foo { x: Int } let go (): __Foo = __Foo { x: 1 }` fails with
+/// \"expected an item... found LBrace\" — the parser doesn't even
+/// consider `__Foo {` a struct literal, sees `__Foo` alone as the
+/// whole expression, then a stray `{`). Not a naming preference, a real
+/// constraint this v1 heuristic imposes on anything actually built via
+/// struct-literal syntax.
+const STDLIB_HTTP_SRC: &str = "\
+struct HttpHeader { name: String, value: String }
+struct HttpResponse { status: Int, headers: Array[HttpHeader], body: String }
+struct HttpUrlParts { host: String, port: Int, path: String }
+struct HttpHead { status: Int, headers: Array[HttpHeader], leftover_body: String }
+struct HttpRequest { method: String, path: String, headers: Array[HttpHeader], body: String }
+struct HttpRequestLine { method: String, path: String }
+struct HttpRequestHead { method: String, path: String, headers: Array[HttpHeader], leftover_body: String }
+
+let http_parse_url (url: String): Result[HttpUrlParts, String] =
+    if String.index_of(url, \"https://\") == Some(0) { Err(\"http client: https:// is not supported yet\") }
+    else if String.index_of(url, \"http://\") != Some(0) { Err(\"http client: url must start with http://\") }
+    else {
+        let rest = String.slice(url, 7, url.len());
+        let path_start = match String.index_of(rest, \"/\") { Some(i) => i, None => rest.len() };
+        let authority = String.slice(rest, 0, path_start);
+        let path = if path_start == rest.len() { \"/\" } else { String.slice(rest, path_start, rest.len()) };
+        match String.index_of(authority, \":\") {
+            None => Ok(HttpUrlParts { host: authority, port: 80, path: path }),
+            Some(i) => match String.parse_int(String.slice(authority, i + 1, authority.len())) {
+                Err(e) => Err(\"http client: invalid port in url: \".concat(e)),
+                Ok(port) => Ok(HttpUrlParts { host: String.slice(authority, 0, i), port: port, path: path }),
+            },
+        }
+    }
+
+let http_build_request (method: String) (parsed: HttpUrlParts) (headers: Array[HttpHeader]) (body: String): String = {
+    let extra_header_lines = Array.fold(headers, \"\", |acc, h| acc.concat(h.name).concat(\": \").concat(h.value).concat(\"\\r\\n\"));
+    let content_length_line = if String.is_empty(body) { \"\" } else { \"Content-Length: \".concat(body.len().to_string()).concat(\"\\r\\n\") };
+    method.concat(\" \").concat(parsed.path).concat(\" HTTP/1.1\\r\\n\")
+        .concat(\"Host: \").concat(parsed.host).concat(\"\\r\\n\")
+        .concat(\"Connection: close\\r\\n\")
+        .concat(content_length_line)
+        .concat(extra_header_lines)
+        .concat(\"\\r\\n\")
+        .concat(body)
+}
+
+// Reads (and accumulates) until the blank-line header/body separator
+// has actually arrived — it may take more than one `tcp_read` call to
+// see it at all, and a single `tcp_read` may ALSO return part of the
+// body past it in the same chunk (`http_parse_head` below splits that
+// back out). An empty read here means the peer closed before the
+// headers even finished, always a real error, never a legitimate
+// empty response.
+let http_recv_headers_acc (fd: Int) (acc: String): Result[String, String] =
+    match String.index_of(acc, \"\\r\\n\\r\\n\") {
+        Some(_) => Ok(acc),
+        None => {
+            let chunk = tcp_read(fd, 4096);
+            if String.is_empty(chunk) { Err(\"http client: connection closed before the response headers were complete\") }
+            else { http_recv_headers_acc(fd, acc.concat(chunk)) }
+        },
+    }
+
+let http_parse_status_line (line: String): Result[Int, String] = {
+    let parts = String.trim_end(line).split(\" \");
+    if parts.len() < 2 { Err(\"http client: malformed status line: \".concat(line)) }
+    else { match String.parse_int(parts[1]) {
+        Err(e) => Err(\"http client: malformed status code: \".concat(e)),
+        Ok(code) => Ok(code),
+    } }
+}
+
+let http_parse_header_line (line: String): Option[HttpHeader] =
+    match String.index_of(line, \": \") {
+        None => None,
+        Some(i) => Some(HttpHeader { name: String.slice(line, 0, i), value: String.trim_end(String.slice(line, i + 2, line.len())) }),
+    }
+
+let http_parse_headers (lines: Array[String]): Array[HttpHeader] =
+    Array.fold(lines, [], |acc, line| match http_parse_header_line(line) {
+        None => acc,
+        Some(h) => acc.push(h),
+    })
+
+let http_find_header (headers: Array[HttpHeader]) (name: String): Option[String] =
+    Option.map(Array.find(headers, |h| h.name == name), |h| h.value)
+
+// Splits the raw, already-fully-received header block (see `http_recv_
+// headers_acc` above) into the parsed status/headers plus whatever body
+// bytes rode along in the same read.
+let http_parse_head (raw: String): Result[HttpHead, String] = {
+    let sep_index = match String.index_of(raw, \"\\r\\n\\r\\n\") { Some(i) => i, None => raw.len() };
+    let leftover_body = if sep_index + 4 <= raw.len() { String.slice(raw, sep_index + 4, raw.len()) } else { \"\" };
+    let lines = String.slice(raw, 0, sep_index).split(\"\\n\");
+    if lines.len() == 0 { Err(\"http client: empty response\") }
+    else { match http_parse_status_line(lines[0]) {
+        Err(e) => Err(e),
+        Ok(status) => Ok(HttpHead {
+            status: status,
+            headers: http_parse_headers(Array.drop(lines, 1)),
+            leftover_body: leftover_body,
+        }),
+    } }
+}
+
+let http_recv_body_by_length_acc (fd: Int) (acc: String) (remaining: Int): Result[String, String] =
+    if remaining <= 0 { Ok(acc) }
+    else {
+        let chunk = tcp_read(fd, remaining);
+        if String.is_empty(chunk) { Err(\"http client: connection closed before the full response body was received\") }
+        else { http_recv_body_by_length_acc(fd, acc.concat(chunk), remaining - chunk.len()) }
+    }
+
+let http_recv_body_until_close_acc (fd: Int) (acc: String): String = {
+    let chunk = tcp_read(fd, 4096);
+    if String.is_empty(chunk) { acc } else { http_recv_body_until_close_acc(fd, acc.concat(chunk)) }
+}
+
+// Takes `headers`/`leftover_body` directly (not a whole `HttpHead`) —
+// but, UNLIKE the rest of this module's shared parsing helpers, this
+// one is response-side ONLY, not reused for requests (see `http_read_
+// request_body` below for why the two genuinely differ, not just a
+// convenience split).
+let http_read_body (fd: Int) (headers: Array[HttpHeader]) (leftover_body: String): Result[String, String] =
+    match http_find_header(headers, \"Content-Length\") {
+        Some(cl) => match String.parse_int(cl) {
+            Err(e) => Err(\"http: invalid Content-Length header: \".concat(e)),
+            Ok(content_length) => http_recv_body_by_length_acc(fd, leftover_body, content_length - leftover_body.len()),
+        },
+        None => match http_find_header(headers, \"Transfer-Encoding\") {
+            Some(te) => Err(\"http: Transfer-Encoding (\".concat(te).concat(\") is not supported yet\")),
+            None => Ok(http_recv_body_until_close_acc(fd, leftover_body)),
+        },
+    }
+
+// The REQUEST-side sibling of `http_read_body` above — same `Content-
+// Length`/`Transfer-Encoding` handling, but a DELIBERATELY different
+// answer when NEITHER is present: an EMPTY body (`leftover_body` as-
+// is), never \"read until the connection closes.\" Originally shared
+// `http_read_body` directly for both — a real, live DEADLOCK surfaced
+// exactly that assumption was wrong, not just imprecise: a bodyless
+// `GET` (no `Content-Length`, since there's no body to measure) has no
+// reason to ever close its OWN write side, so a server blocked
+// \"reading until close\" on it hangs forever waiting for a body that
+// will never arrive — confirmed directly (a real test hung against a
+// real socket, root-caused by isolating each step with `println`
+// debugging until the exact hang site was found), not merely
+// theorized. The response side's OWN \"no length header -> read until
+// close\" answer stays correct on ITS side: every request this client
+// sends already includes `Connection: close`, so that read is bounded
+// by the SERVER eventually closing once it's done writing — a
+// guarantee nothing analogous exists for on the request side.
+let http_read_request_body (fd: Int) (headers: Array[HttpHeader]) (leftover_body: String): Result[String, String] =
+    match http_find_header(headers, \"Content-Length\") {
+        Some(cl) => match String.parse_int(cl) {
+            Err(e) => Err(\"http: invalid Content-Length header: \".concat(e)),
+            Ok(content_length) => http_recv_body_by_length_acc(fd, leftover_body, content_length - leftover_body.len()),
+        },
+        None => match http_find_header(headers, \"Transfer-Encoding\") {
+            Some(te) => Err(\"http: Transfer-Encoding (\".concat(te).concat(\") is not supported yet\")),
+            None => Ok(leftover_body),
+        },
+    }
+
+let http_do_request (fd: Int) (method: String) (parsed: HttpUrlParts) (headers: Array[HttpHeader]) (body: String): Result[HttpResponse, String] =
+    match tcp_write(fd, http_build_request(method, parsed, headers, body)) {
+        Err(e) => Err(e),
+        Ok(_) => match http_recv_headers_acc(fd, \"\") {
+            Err(e) => Err(e),
+            Ok(raw) => match http_parse_head(raw) {
+                Err(e) => Err(e),
+                Ok(head) => match http_read_body(fd, head.headers, head.leftover_body) {
+                    Err(e) => Err(e),
+                    Ok(response_body) => Ok(HttpResponse { status: head.status, headers: head.headers, body: response_body }),
+                },
+            },
+        },
+    }
+
+let http_request (method: String) (url: String) (headers: Array[HttpHeader]) (body: String): Result[HttpResponse, String] =
+    match http_parse_url(url) {
+        Err(e) => Err(e),
+        Ok(parsed) => match tcp_connect_to(parsed.host, parsed.port) {
+            Err(e) => Err(e),
+            Ok(fd) => match http_do_request(fd, method, parsed, headers, body) {
+                Ok(r) => { tcp_close_connection(fd); Ok(r) },
+                Err(e) => { tcp_close_connection(fd); Err(e) },
+            },
+        },
+    }
+
+let http_get (url: String): Result[HttpResponse, String] = http_request(\"GET\", url, [], \"\")
+
+let http_post (url: String) (body: String): Result[HttpResponse, String] = http_request(\"POST\", url, [], body)
+
+// --- HTTP server ---
+
+let http_parse_request_line (line: String): Result[HttpRequestLine, String] = {
+    let parts = String.trim_end(line).split(\" \");
+    if parts.len() < 2 { Err(\"http server: malformed request line: \".concat(line)) }
+    else { Ok(HttpRequestLine { method: parts[0], path: parts[1] }) }
+}
+
+// Same shape as `http_parse_head` above, just parsing a request's own
+// first line (`METHOD path HTTP/1.1`) instead of a response's status
+// line — everything past that (splitting headers from leftover body
+// bytes, `http_parse_headers`) is identical, reused unchanged.
+let http_parse_request_head (raw: String): Result[HttpRequestHead, String] = {
+    let sep_index = match String.index_of(raw, \"\\r\\n\\r\\n\") { Some(i) => i, None => raw.len() };
+    let leftover_body = if sep_index + 4 <= raw.len() { String.slice(raw, sep_index + 4, raw.len()) } else { \"\" };
+    let lines = String.slice(raw, 0, sep_index).split(\"\\n\");
+    if lines.len() == 0 { Err(\"http server: empty request\") }
+    else { match http_parse_request_line(lines[0]) {
+        Err(e) => Err(e),
+        Ok(rl) => Ok(HttpRequestHead {
+            method: rl.method,
+            path: rl.path,
+            headers: http_parse_headers(Array.drop(lines, 1)),
+            leftover_body: leftover_body,
+        }),
+    } }
+}
+
+// A small, fixed table covering the reason phrases any real client
+// actually looks at — not the full IANA registry. An unrecognized code
+// still produces a syntactically valid status line (`\"Unknown\"`), just
+// a less informative one; never a hard error, since the STATUS CODE
+// itself (not its phrase) is what every real HTTP client actually acts
+// on.
+let http_status_reason (code: Int): String = match code {
+    200 => \"OK\", 201 => \"Created\", 204 => \"No Content\",
+    301 => \"Moved Permanently\", 302 => \"Found\",
+    400 => \"Bad Request\", 401 => \"Unauthorized\", 403 => \"Forbidden\", 404 => \"Not Found\", 405 => \"Method Not Allowed\",
+    500 => \"Internal Server Error\", 501 => \"Not Implemented\", 502 => \"Bad Gateway\", 503 => \"Service Unavailable\",
+    _ => \"Unknown\",
+}
+
+// The wire-format inverse of `http_build_request` — unlike that
+// function, `Content-Length` is ALWAYS sent (even `0` for an empty
+// body), not just when the body is non-empty: a request omitting it
+// for a bodyless `GET` is common/idiomatic, but a SERVER leaving a
+// client to guess whether a response has a body at all is not.
+let http_response_to_wire (resp: HttpResponse): String = {
+    let extra_header_lines = Array.fold(resp.headers, \"\", |acc, h| acc.concat(h.name).concat(\": \").concat(h.value).concat(\"\\r\\n\"));
+    \"HTTP/1.1 \".concat(resp.status.to_string()).concat(\" \").concat(http_status_reason(resp.status)).concat(\"\\r\\n\")
+        .concat(\"Content-Length: \").concat(resp.body.len().to_string()).concat(\"\\r\\n\")
+        .concat(\"Connection: close\\r\\n\")
+        .concat(extra_header_lines)
+        .concat(\"\\r\\n\")
+        .concat(resp.body)
+}
+
+// Reads exactly one request off `conn`, runs `handler`, writes exactly
+// one response back — never touches `conn`'s own lifecycle (opening/
+// closing), that's `http_serve_once`/`http_serve_loop`'s job below, so
+// this stays testable on its own without a real listening socket
+// (any connected `fd` pair works, e.g. the SAME loopback-pair shape
+// `tcp_round_trip`'s own test already uses).
+let http_handle_connection (conn: Int) (handler: (HttpRequest) -> HttpResponse): Result[Unit, String] =
+    match http_recv_headers_acc(conn, \"\") {
+        Err(e) => Err(e),
+        Ok(raw) => match http_parse_request_head(raw) {
+            Err(e) => Err(e),
+            Ok(head) => match http_read_request_body(conn, head.headers, head.leftover_body) {
+                Err(e) => Err(e),
+                Ok(body) => {
+                    let request = HttpRequest { method: head.method, path: head.path, headers: head.headers, body: body };
+                    let response = handler(request);
+                    match tcp_write(conn, http_response_to_wire(response)) {
+                        Err(e) => Err(e),
+                        Ok(_) => Ok(()),
+                    }
+                },
+            },
+        },
+    }
+
+// Handles exactly ONE connection then returns — listens, accepts once,
+// closes both the connection and the listening socket, and gives back
+// whatever `http_handle_connection` produced. Real, useful on its own
+// (a one-shot server, or a test fixture — this is what THIS module's
+// own tests exercise directly), not just a building block for `http_
+// serve` below.
+let http_serve_once (port: Int) (handler: (HttpRequest) -> HttpResponse): Result[Unit, String] =
+    match tcp_listen_on(port) {
+        Err(e) => Err(e),
+        Ok(server) => match tcp_accept_connection(server) {
+            Err(e) => { tcp_close_connection(server); Err(e) },
+            Ok(conn) => {
+                let result = http_handle_connection(conn, handler);
+                tcp_close_connection(conn);
+                tcp_close_connection(server);
+                result
+            },
+        },
+    }
+
+// The REAL long-running server: accept, handle, close the connection,
+// repeat — forever. A single misbehaving/erroring connection does NOT
+// bring the server down (its `Result` is deliberately discarded — a
+// bare statement, not bound to anything, same idiom `println`'s own
+// `write(1, s.as_cstr(), n);` already established for a discarded non-
+// `Unit` extern return; `let _ = ..` is NOT the same thing here — `_`
+// is a valid MATCH-arm pattern but not a supported LET-binding pattern
+// shape, confirmed directly: it hit `plum-types`' own \"destructuring
+// let-bindings of this shape\" catch-all) — only a hard failure to
+// ACCEPT (a real listener-level problem, not a per-connection one)
+// stops the loop, matching `Err` propagating out of `tcp_accept_
+// connection` itself.
+//
+// Deliberately not directly compile-and-run tested, unlike everything
+// else in this module: it's an intentionally infinite recursion (no
+// `while`/loop-with-an-exit exists in this language, and this function
+// genuinely has none by design — a real server keeps serving) with no
+// way to observe it finish. Every piece it's built from — request
+// parsing, body framing, response serialization, and single-connection
+// handling via `http_handle_connection`/`http_serve_once` — IS tested
+// directly; this wrapper itself is a two-line recursive loop with
+// nothing of its own left to get wrong.
+let http_serve_loop (server: Int) (handler: (HttpRequest) -> HttpResponse): Result[Unit, String] =
+    match tcp_accept_connection(server) {
+        Err(e) => Err(e),
+        Ok(conn) => {
+            http_handle_connection(conn, handler);
+            tcp_close_connection(conn);
+            http_serve_loop(server, handler)
+        },
+    }
+
+let http_serve (port: Int) (handler: (HttpRequest) -> HttpResponse): Result[Unit, String] =
+    match tcp_listen_on(port) {
+        Err(e) => Err(e),
+        Ok(server) => http_serve_loop(server, handler),
+    }
 ";
 
 /// Parses the prelude + stdlib sources once and prepends their items
@@ -1257,6 +1647,7 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
         STDLIB_ARRAY_SRC,
         STDLIB_STRING_SRC,
         STDLIB_NET_SRC,
+        STDLIB_HTTP_SRC,
     ] {
         let tokens = Lexer::with_base_offset(src, base).tokenize();
         let parsed_items = Parser::new(tokens)
@@ -1295,7 +1686,8 @@ const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len()
     + STDLIB_NUMBER_SRC.len()
     + STDLIB_ARRAY_SRC.len()
     + STDLIB_STRING_SRC.len()
-    + STDLIB_NET_SRC.len();
+    + STDLIB_NET_SRC.len()
+    + STDLIB_HTTP_SRC.len();
 
 /// Runs the whole pipeline — parse, type-check, lower, optimize, load,
 /// call — and returns the result of calling `fn_name` with `args`.
@@ -2000,6 +2392,146 @@ mod tests {
                    }";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn http_get_runs_through_the_full_gated_pipeline() {
+        // A real HTTP/1.1 round trip against an actual TCP server — the
+        // SERVER side is a plain `std::net::TcpListener` fixture (not
+        // Plum's own `Net` module), deliberately, so this test proves
+        // the CLIENT in isolation rather than compounding two new
+        // pieces of Plum code against each other. Replies with a
+        // canned, real `Content-Length`-framed response, exercising
+        // `http_get` end to end: URL parsing, request building, header/
+        // body-framing parsing, and `tcp_read`'s `.as_string()` chain.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::Builder::new()
+            .spawn(move || {
+                use std::io::{Read, Write};
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).unwrap();
+                let body = "hello from server";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            })
+            .unwrap();
+
+        // `run_string_test`'s existing 16 MiB stack (shared with
+        // several OTHER deeply-recursive prelude tests) turned out NOT
+        // to be enough here — confirmed directly, then root-caused, not
+        // just bumped blindly: `String.index_of` (used internally by
+        // `http_recv_headers_acc`, searching a REAL ~138-byte header
+        // block for `\"\\r\\n\\r\\n\"`) recurses to a depth proportional to
+        // the string's length, and `plum-interp`'s tree-walking `eval`
+        // is NOT tail-call-optimized (unlike native codegen's real
+        // `musttail` guarantee — see `run_string_test`'s own doc
+        // comment) — a 138-character search fans out into far more
+        // actual Rust-level stack frames than the SHORT strings
+        // (`\"hello world\"`, 11 chars) that comment's own 16 MiB figure
+        // was sized against. A genuine, pre-existing INTERPRETER
+        // characteristic this HTTP client's real-world-sized data
+        // simply surfaced for the first time, not a bug introduced
+        // here — see DESIGN.md's \"HTTP client\" section for the honest
+        // scope note this earns the interpreted backend specifically
+        // (native `plum build` has no such limit, confirmed separately
+        // in `codegen_cli.rs`).
+        let src = format!(
+            "let use_it dummy = match http_get(\"http://127.0.0.1:{port}/\") {{\n\
+                 Err(e) => e,\n\
+                 Ok(r) => if r.status == 200 && r.body == \"hello from server\" {{ \"ok\" }} else {{ \"unexpected\" }},\n\
+             }} == \"ok\""
+        );
+        let result = std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(move || typecheck_and_run(&src, "use_it", vec![Value::Unit]).map(|v| format!("{v:?}")))
+            .unwrap()
+            .join()
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(result, Ok("Bool(true)".to_string()));
+    }
+
+    #[test]
+    fn http_client_rejects_https_before_ever_touching_the_network() {
+        let src = "let use_it dummy = match http_get(\"https://example.com/\") { Err(e) => String.index_of(e, \"https\") != None, Ok(_) => false }";
+        let result = run_string_test(src);
+        assert_eq!(result, Ok("Bool(true)".to_string()));
+    }
+
+    #[test]
+    fn http_serve_once_runs_through_the_full_gated_pipeline() {
+        // The SERVER-side mirror of `http_get_runs_through_the_full_
+        // gated_pipeline` — this time the CLIENT is the plain `std::net`
+        // fixture (a real `TcpStream`, sending a raw request byte-for-
+        // byte and reading the raw response), and `http_serve_once` is
+        // the Plum code under test. The handler closure echoes the
+        // parsed method+path back in the body, proving REQUEST parsing
+        // (not just response serialization) actually works — a
+        // request that merely got a 200 back could still have silently
+        // misparsed the method/path.
+        //
+        // `http_serve_once` BLOCKS inside `tcp_accept_connection` until
+        // a connection arrives, so it has to run on its own thread
+        // (same 256 MiB stack `http_get`'s own test needed, for the
+        // exact same `String.index_of`-recursion-depth reason) while
+        // the client, on THIS thread, retry-connects — `tcp_listen_on`
+        // completing (the port becoming acceptable) happens at some
+        // non-deterministic point after the server thread starts, not
+        // synchronized any other way.
+        let port = 58940;
+        let src = format!(
+            "let handler (req: HttpRequest): HttpResponse = HttpResponse {{ status: 200, headers: [], body: req.method.concat(\" \").concat(req.path) }}\n\
+             let use_it dummy = match http_serve_once({port}, handler) {{ Err(e) => e, Ok(_) => \"ok\" }} == \"ok\""
+        );
+        let server = std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(move || typecheck_and_run(&src, "use_it", vec![Value::Unit]).map(|v| format!("{v:?}")))
+            .unwrap();
+
+        // Retries generously (up to 20s) rather than a tight bound —
+        // under the FULL workspace suite (many tests, including several
+        // OTHER 256 MiB-stack ones, all competing for CPU time in
+        // parallel), the server thread genuinely can take several
+        // seconds just to get SCHEDULED before it ever reaches `tcp_
+        // listen_on` — confirmed directly (this exact retry loop, at a
+        // tighter 100 * 20ms = 2s bound, flaked under the full suite
+        // even though it passed reliably in isolation every time).
+        use std::io::{Read, Write};
+        let mut stream = None;
+        for _ in 0..400 {
+            if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+                stream = Some(s);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let mut stream = stream.expect("server never started listening");
+        // A bodyless `GET` (no `Content-Length`) — see `http_read_
+        // request_body`'s own doc comment for why this SPECIFIC shape
+        // (no length header, connection left open) is exactly what
+        // surfaced the real request/response body-framing asymmetry
+        // bug this test caught: with the old shared `http_read_body`,
+        // THIS exact request would have deadlocked the server waiting
+        // for a body that was never coming, and this test would have
+        // hung instead of failing cleanly.
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        stream
+            .write_all(b"GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut resp = Vec::new();
+        stream.read_to_end(&mut resp).unwrap();
+        let resp = String::from_utf8_lossy(&resp);
+        assert!(resp.contains("HTTP/1.1 200 OK"), "unexpected response: {resp}");
+        assert!(resp.contains("GET /hello"), "handler didn't see the real method/path: {resp}");
+
+        let result = server.join().unwrap();
+        assert_eq!(result, Ok("Bool(true)".to_string()));
     }
 
     #[test]

@@ -587,6 +587,34 @@ program's prelude):
   DESIGN.md's "TCP sockets" section for the full reasoning). UDP isn't
   in yet — deferred pending its own design for `recvfrom`'s sender-
   address problem.
+- **HTTP client** — `http_get(url): Result[HttpResponse, String]`,
+  `http_post(url, body): Result[HttpResponse, String]`, and the general
+  `http_request(method, url, headers, body): Result[HttpResponse,
+  String]` (`headers: Array[HttpHeader]`), where `HttpResponse { status:
+  Int, headers: Array[HttpHeader], body: String }`. Built entirely on
+  top of the TCP module above, no compiler magic. **`http://` only —
+  `https://` is rejected with a clear `Err`**, not silently attempted;
+  TLS is deliberately deferred as its own future design question. A
+  `Transfer-Encoding` (chunked) response is also rejected with a clear
+  `Err` rather than mis-parsed — only `Content-Length`-framed or
+  read-until-close responses are supported. See DESIGN.md's "HTTP
+  client" section for the full scope writeup, including a real
+  interpreter-only recursion-depth caveat for very large responses
+  under `plum run` (native `plum build` has no such limit).
+- **HTTP server** — `http_serve_once(port, handler): Result[Unit,
+  String]` (listens, handles exactly one connection, returns — a real
+  one-shot server on its own) and `http_serve(port, handler): Result
+  [Unit, String]` (the real long-running server: accept, handle, close,
+  repeat, forever). `handler: (HttpRequest) -> HttpResponse`, where
+  `HttpRequest { method: String, path: String, headers: Array
+  [HttpHeader], body: String }`. **Sequential — one connection at a
+  time**, not concurrent; spawn-per-connection is a deliberate later
+  follow-up, not bundled in now. Every request gets exactly one
+  response, connection always closed afterward (no keep-alive). See
+  DESIGN.md's "HTTP server" section for the full writeup, including a
+  real request/response body-framing asymmetry bug found via an actual
+  deadlock (a bodyless `GET` with no `Content-Length` means different
+  things on the two sides of a connection).
 
 All of the above are ordinary Plum source, not compiler magic — you
 could write equivalents yourself. They currently live in a shared

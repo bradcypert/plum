@@ -2123,6 +2123,95 @@ mod tests {
     }
 
     #[test]
+    fn http_get_runs_through_native_codegen() {
+        // The native-codegen sibling of `plumc::tests::http_get_runs_
+        // through_the_full_gated_pipeline` — same real HTTP/1.1 round
+        // trip against a real `std::net::TcpListener` fixture, but
+        // compiled and run as an actual binary here. Deliberately does
+        // NOT need the interpreter test's huge (256 MiB) stack bump:
+        // native codegen's real `musttail`-based tail-call elimination
+        // means `String.index_of`'s recursion depth costs nothing extra
+        // on THIS backend's own native call stack, confirmed directly
+        // by this test passing with no special handling at all — the
+        // interpreter's own stack-depth issue (see the other test's own
+        // doc comment) is a real, backend-SPECIFIC limitation, not a
+        // property of the recursive algorithm itself.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::Builder::new()
+            .spawn(move || {
+                use std::io::{Read, Write};
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).unwrap();
+                let body = "hello from server";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            })
+            .unwrap();
+
+        let src = format!(
+            "let go (): String = match http_get(\"http://127.0.0.1:{port}/\") {{\n\
+                 Err(e) => e,\n\
+                 Ok(r) => if r.status == 200 && r.body == \"hello from server\" {{ \"ok\" }} else {{ \"unexpected\" }},\n\
+             }}\n"
+        );
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        server.join().unwrap();
+        assert_eq!(out, "ok");
+    }
+
+    #[test]
+    fn http_serve_once_runs_through_native_codegen() {
+        // The native-codegen sibling of `plumc::tests::http_serve_once_
+        // runs_through_the_full_gated_pipeline` — this time `compile_
+        // and_run` (which blocks until the compiled BINARY exits) has to
+        // run on its own thread instead, since `http_serve_once` only
+        // returns after handling one real connection; the CLIENT (a
+        // plain `std::net::TcpStream`, retry-connecting the same way the
+        // interpreter test's does) runs on this thread meanwhile.
+        let port = 58941;
+        let src = format!(
+            "let handler (req: HttpRequest): HttpResponse = HttpResponse {{ status: 200, headers: [], body: req.method.concat(\" \").concat(req.path) }}\n\
+             let go (): String = match http_serve_once({port}, handler) {{ Err(e) => e, Ok(_) => \"ok\" }}\n"
+        );
+        let server = std::thread::Builder::new().spawn(move || compile_and_run(&src, "go", &[CgValue::Unit])).unwrap();
+
+        // See the interpreter sibling test's own doc comment for why
+        // this is generous (400 * 50ms = 20s) rather than tight — the
+        // same CPU-contention-under-the-full-suite reasoning applies
+        // here too (compiling+linking via `clang` AND getting the
+        // resulting binary scheduled both compete for the same CPU
+        // time every other parallel test is using).
+        use std::io::{Read, Write};
+        let mut stream = None;
+        for _ in 0..400 {
+            if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+                stream = Some(s);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let mut stream = stream.expect("server never started listening");
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        stream
+            .write_all(b"GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut resp = Vec::new();
+        stream.read_to_end(&mut resp).unwrap();
+        let resp = String::from_utf8_lossy(&resp);
+        assert!(resp.contains("HTTP/1.1 200 OK"), "unexpected response: {resp}");
+        assert!(resp.contains("GET /hello"), "handler didn't see the real method/path: {resp}");
+
+        let out = server.join().unwrap().unwrap();
+        assert_eq!(out, "ok");
+    }
+
+    #[test]
     fn nested_struct_to_string_recurses_in_native_codegen() {
         let src = "\
             struct Point { x: Int, y: Int }\n\
