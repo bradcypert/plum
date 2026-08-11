@@ -6,9 +6,10 @@
 // Every function here takes/returns only `long long` (Plum `Int`),
 // `double` (Plum `Float`), `int` (Plum `Bool`, 0/1), or `const char *`
 // (Plum `CStr`) — building the real raylib types internally before
-// calling through. See ../../SPEC.md for the game this backs, and the
-// plum repo's own README ("Editor support"/FFI section) for why this
-// shim exists at all rather than binding raylib directly.
+// calling through. See `main.plum` for the game this backs, this
+// example's own README.md for how to build/install it, and the plum
+// repo's own README (FFI section) for why this shim exists at all
+// rather than binding raylib directly.
 #include <raylib.h>
 
 void raylib_init_window(long long width, long long height, const char *title) {

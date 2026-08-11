@@ -623,9 +623,11 @@ see its own entry below):
   raylib's real ABI — 32-bit `float`/`unsigned char` fields — across
   `extern "C"`'s closed, ABI-safe type surface; see that file's own
   doc comment). Build/run with `make`/`make run` inside the example's
-  own directory (needs raylib installed and on your linker path), not
-  `plum run`/`plum build` directly. The most complete demonstration of
-  functional game-state-as-value-not-mutation in the whole repo.
+  own directory (needs raylib installed and on your linker path, not
+  `plum run`/`plum build` directly — see [its own
+  README](examples/asteroids/README.md) for install/build steps and
+  controls). The most complete demonstration of functional
+  game-state-as-value-not-mutation in the whole repo.
 
 `examples/overview.plum` is a separate, older syntax sketch from early
 in the project's design — illustrative only, not a runnable project.
