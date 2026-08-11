@@ -1167,7 +1167,7 @@ fn free_vars_scoped(expr: &Expr, env: &Env, local: &HashSet<String>, out: &mut B
     match expr {
         Expr::Var(name) => candidate(name, local, out),
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel => {}
-        Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => free_vars_scoped(e, env, local, out),
+        Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::AsString(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => free_vars_scoped(e, env, local, out),
         Expr::Binary(_, l, r) => {
             free_vars_scoped(l, env, local, out);
             free_vars_scoped(r, env, local, out);
@@ -1383,7 +1383,7 @@ fn assigned_vars(expr: &Expr) -> BTreeSet<String> {
 fn assigned_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<String>) {
     match expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel | Expr::Var(_) => {}
-        Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => assigned_vars_scoped(e, local, out),
+        Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::AsString(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => assigned_vars_scoped(e, local, out),
         Expr::Binary(_, l, r) => {
             assigned_vars_scoped(l, local, out);
             assigned_vars_scoped(r, local, out);
@@ -2277,6 +2277,40 @@ fn codegen_as_cstr(inner: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Resu
     em.push(format!("  call void @plum_rc_dec_str(ptr {str_reg})"));
 
     Ok((buf, CgType::CStr))
+}
+
+/// `c.as_string()` — the reverse of `.as_cstr()` above; see `ir::Expr::
+/// AsString`'s own doc comment for why this exists.
+///
+/// A `Type::CStr` value can arrive here with EITHER of two different
+/// underlying `CgType`s, and both are real, not a bug to paper over:
+/// - `CgType::Str` — a `CStr`-typed extern call's OWN return value
+///   already gets copied into a fully-formed `Str` cell automatically,
+///   by `codegen_extern_call`'s `Some(ir::ExternType::Str)` arm (the
+///   SAME "raw C string ptr -> fresh Plum `Str`" sequence this function
+///   would otherwise have to repeat) — so the common case (`tcp_recv(..
+///   ).as_string()`) is a pure pass-through, no copy needed at all.
+/// - `CgType::CStr` — a bare, unrefcounted `malloc`'d buffer, e.g. the
+///   (unusual, but legal) round trip `s.as_cstr().as_string()` — this
+///   DOES need the real `@strlen`+`@plum_alloc_str`+`@memcpy` copy,
+///   same shape as `codegen_extern_call`'s own `Str`-return arm.
+fn codegen_as_string(inner: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (reg, ty) = codegen_value(inner, env, em, ctx)?;
+    match ty {
+        CgType::Str => Ok((reg, CgType::Str)),
+        CgType::CStr => {
+            let len = em.fresh_reg();
+            em.push(format!("  {len} = call i64 @strlen(ptr {reg})"));
+            let cell = em.fresh_reg();
+            em.push(format!("  {cell} = call ptr @plum_alloc_str(i64 {len})"));
+            let dst = em.fresh_reg();
+            em.push(format!("  {dst} = getelementptr i8, ptr {cell}, i64 16"));
+            let memcpy_r = em.fresh_reg();
+            em.push(format!("  {memcpy_r} = call ptr @memcpy(ptr {dst}, ptr {reg}, i64 {len})"));
+            Ok((cell, CgType::Str))
+        }
+        other => Err(format!("codegen: `.as_string()` requires a CStr value, found {other:?}")),
+    }
 }
 
 /// `x.to_int()` — see `ir::Expr::ToIntTrunc`'s own doc comment for the
@@ -4673,6 +4707,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         Expr::TaskJoin { task } => codegen_task_join(task, env, em, ctx),
         Expr::ExternCall { name, args } => codegen_extern_call(name, args, env, em, ctx),
         Expr::AsCStr(inner) => codegen_as_cstr(inner, env, em, ctx),
+        Expr::AsString(inner) => codegen_as_string(inner, env, em, ctx),
         Expr::ToIntTrunc(inner) => codegen_to_int_trunc(inner, env, em, ctx),
         Expr::ToIntRound(inner) => codegen_to_int_round(inner, env, em, ctx),
         Expr::ToFloat(inner) => codegen_to_float(inner, env, em, ctx),

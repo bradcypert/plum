@@ -1930,6 +1930,25 @@ impl Infer {
                 acc = s.compose(&acc);
                 Ok((Type::CStr, acc))
             }
+            // `c.as_string()` — the reverse of `.as_cstr()` above: `c`
+            // must be `CStr`; evaluates to `Str`. See `ir::Expr::
+            // AsString`'s own doc comment for why this exists at all —
+            // `Type::CStr` otherwise has NO way back into a usable Plum
+            // value (found while wiring up TCP: an extern call that
+            // legitimately returns string data, not just a null-check,
+            // had nothing to convert its `CStr` result with).
+            ast::Expr::Call { callee, args, span }
+                if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "as_string") =>
+            {
+                let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                    unreachable!("just matched this shape above");
+                };
+                let (base_ty, s) = self.infer_expr(base, env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::CStr).map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`.as_string()`: {e}")))?;
+                acc = s.compose(&acc);
+                Ok((Type::Str, acc))
+            }
             // `x.to_int()`/`x.round_to_int()` — `x` must be `Float`;
             // evaluates to `Int`. See `ir::Expr::ToIntTrunc`/`ToIntRound`'s
             // own doc comment for the saturating (never UB) conversion
@@ -7087,6 +7106,17 @@ mod tests {
     #[test]
     fn as_cstr_on_a_non_string_is_an_error() {
         infer_err_in("5.as_cstr()", &TypeEnv::new());
+    }
+
+    #[test]
+    fn as_string_on_a_cstr_evaluates_to_str() {
+        assert_eq!(infer_in("\"hi\".as_cstr().as_string()", &TypeEnv::new()), Type::Str);
+    }
+
+    #[test]
+    fn as_string_on_a_non_cstr_is_an_error() {
+        infer_err_in("\"hi\".as_string()", &TypeEnv::new());
+        infer_err_in("5.as_string()", &TypeEnv::new());
     }
 
     #[test]

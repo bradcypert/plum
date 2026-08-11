@@ -157,6 +157,22 @@ pub enum Expr {
     // `ExternCall`'s `CStr`-typed argument without going through this
     // node first).
     AsCStr(Box<Expr>),
+    // `c.as_string()` — the reverse of `AsCStr` above: copies a `CStr`
+    // (typically an extern call's return value — e.g. a socket shim's
+    // `tcp_recv`) into a fresh, owned Plum heap `String`, byte-for-byte
+    // up to the first null. Added specifically to close a real gap
+    // found while wiring up TCP: before this, `CStr` had NO operations
+    // of its own at all (see `plum-types::Type::CStr`'s doc comment —
+    // `.as_cstr()` only goes `Str -> CStr`), so an extern call that
+    // legitimately returns string DATA (not just a null-check, like
+    // `getenv`'s existing test) had no way to turn that into a usable
+    // Plum value. A null `CStr` here is a runtime error, same as any
+    // other null `CStr`-return (see DESIGN.md) — `.as_string()` itself
+    // does no null handling of its own, callers that might receive
+    // null must guard some other way (e.g. the socket shim never
+    // returns null from `tcp_recv`, only from hard-error sentinels
+    // elsewhere).
+    AsString(Box<Expr>),
     // `x.to_int()` — truncates a `Float` toward zero (C-cast style,
     // matching what the raylib shim's own `(int)x` conversions already
     // do internally). `x.round_to_int()` — rounds to the nearest

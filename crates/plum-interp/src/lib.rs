@@ -595,7 +595,7 @@ fn free_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<Str
     match expr {
         Expr::Var(name) => candidate(name, local, out),
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel => {}
-        Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => free_vars_scoped(e, local, out),
+        Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::AsString(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => free_vars_scoped(e, local, out),
         Expr::Binary(_, l, r) => {
             free_vars_scoped(l, local, out);
             free_vars_scoped(r, local, out);
@@ -1488,6 +1488,21 @@ impl Interpreter {
                 let s = self.heap.read_str(addr)?;
                 if s.contains('\0') {
                     return Err("`.as_cstr()`: string contains an embedded null byte".to_string());
+                }
+                Ok(v)
+            }
+            // `c.as_string()` — the reverse of `.as_cstr()` above; see
+            // `ir::Expr::AsString`'s own doc comment. Since the
+            // interpreter has no separate runtime representation for
+            // `CStr` at all (same as `.as_cstr()`'s own note just
+            // above), this is ALSO just a same-value pass-through — the
+            // only thing this node adds is making the conversion legal
+            // at the TYPE level (`plum-types` blocks a `Type::CStr`
+            // value from being used as a `Str` anywhere else).
+            Expr::AsString(inner) => {
+                let v = self.eval(inner)?;
+                if !matches!(v, Value::HeapRef(_)) {
+                    return Err(format!("`.as_string()` requires a CStr value, found {v:?}"));
                 }
                 Ok(v)
             }
@@ -4916,6 +4931,23 @@ mod tests {
             .eval(&Expr::AsCStr(Box::new(Expr::Int(5))))
             .expect_err("expected a non-string value to be rejected");
         assert!(err.contains("String value"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn as_string_round_trips_a_string_through_as_cstr() {
+        let ir_expr = Expr::AsString(Box::new(Expr::AsCStr(Box::new(Expr::Str("round trip".to_string())))));
+        let mut interp = Interpreter::new();
+        let v = interp.eval(&ir_expr).unwrap();
+        let Value::HeapRef(addr) = v else { panic!("expected a HeapRef, found {v:?}") };
+        assert_eq!(interp.heap.read_str(addr).unwrap(), "round trip");
+    }
+
+    #[test]
+    fn as_string_on_a_non_cstr_value_is_a_runtime_error() {
+        let err = Interpreter::new()
+            .eval(&Expr::AsString(Box::new(Expr::Int(5))))
+            .expect_err("expected a non-CStr value to be rejected");
+        assert!(err.contains("CStr value"), "unexpected error: {err}");
     }
 
     // A plain Rust `extern "C" fn`, callable directly (bypassing

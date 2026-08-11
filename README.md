@@ -478,6 +478,12 @@ type surface is intentionally closed: `Int`/`Float`/`Bool`/`CStr`/a
 callback/a struct made of those — no raw pointers, no C-variadic
 functions, no extern global variables.
 
+`.as_cstr()` goes `String -> CStr` (for passing Plum strings out to C);
+`.as_string()` goes the other way, `CStr -> String` (for turning a C
+function's returned string data — e.g. a socket's `tcp_recv` — into a
+real, usable Plum value). `CStr` otherwise has no operations of its
+own.
+
 ## Modules
 
 A directory *is* a module — no `mod foo;` declaration anywhere. Every
@@ -568,6 +574,19 @@ program's prelude):
   Supports the escapes Plum's own string-literal lexer can itself
   produce (`\"`, `\\`, `\/`, `\n`, `\r`, `\t`); `\uXXXX`/`\b`/`\f` are
   rejected with a clear `Err` on parse rather than mishandled silently.
+- **TCP sockets** — `tcp_listen_on(port): Result[Int, String]`, `tcp_
+  connect_to(host, port): Result[Int, String]`, `tcp_accept_connection
+  (fd): Result[Int, String]`, `tcp_write(fd, data): Result[Int, String]`,
+  `tcp_read(fd, max_len): String`, `tcp_close_connection(fd): Unit` —
+  blocking, fd-based (an `Int` is the connection). **Unix-only (Linux/
+  macOS)**, same documented scope as extern-symbol-resolution has
+  elsewhere (see DESIGN.md). `tcp_read` is NUL-terminated (not binary-
+  safe — fine for line-oriented protocols like HTTP, not arbitrary
+  binary payloads) and returns `""` on both a clean peer-close and a
+  hard socket error — a real, deliberate v1 scope trade, not a bug (see
+  DESIGN.md's "TCP sockets" section for the full reasoning). UDP isn't
+  in yet — deferred pending its own design for `recvfrom`'s sender-
+  address problem.
 
 All of the above are ordinary Plum source, not compiler magic — you
 could write equivalents yourself. They currently live in a shared

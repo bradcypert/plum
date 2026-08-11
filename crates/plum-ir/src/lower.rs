@@ -1184,6 +1184,15 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
             };
             Ok(ir::Expr::AsCStr(Box::new(lower_expr(base, ctx)?)))
         }
+        // `c.as_string()` — same shape-only precedent, zero args.
+        ast::Expr::Call { callee, args, .. }
+            if args.is_empty() && matches!(callee.as_ref(), ast::Expr::Field { name, .. } if name == "as_string") =>
+        {
+            let ast::Expr::Field { base, .. } = callee.as_ref() else {
+                unreachable!("just matched this shape above");
+            };
+            Ok(ir::Expr::AsString(Box::new(lower_expr(base, ctx)?)))
+        }
         // `x.to_int()`/`x.round_to_int()`/`x.to_float()` — same shape-
         // only precedent again.
         ast::Expr::Call { callee, args, .. }
@@ -5036,6 +5045,14 @@ mod tests {
         assert_eq!(
             lower("\"hi\".as_cstr()"),
             ir::Expr::AsCStr(Box::new(ir::Expr::Str("hi".to_string())))
+        );
+    }
+
+    #[test]
+    fn as_string_lowers_to_its_own_node() {
+        assert_eq!(
+            lower("\"hi\".as_cstr().as_string()"),
+            ir::Expr::AsString(Box::new(ir::Expr::AsCStr(Box::new(ir::Expr::Str("hi".to_string())))))
         );
     }
 

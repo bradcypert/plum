@@ -1171,6 +1171,66 @@ let String.parse_float (s: String): Result[Float, String] = {
 }
 ";
 
+/// TCP sockets — the first piece of the networking roadmap (see
+/// DESIGN.md's own \"TCP sockets\" section for the full design writeup:
+/// Unix-only, why a shim was needed at all, why `tcp_recv` returns
+/// `CStr` instead of an `Int` count, why it's NUL-terminated/not
+/// binary-safe, why it collapses \"peer closed\" and \"real error\" into
+/// the same empty-string result). The `extern \"C\"` declarations here
+/// name `native_stdlib/net_shim.c`'s own functions directly — see that
+/// file's own doc comment for the shim itself, and `plum-interp`/
+/// `plumc`'s `build.rs` for how it gets linked into both `plum run`
+/// (interpreted) and `plum build` (native) alike.
+///
+/// Every wrapper follows the SAME `let r = ..._raw(...); if <ok> { Ok
+/// (..) } else { Err(..) }` shape `STDLIB_FILE_SRC`/`STDLIB_ENV_SRC`
+/// already established, just built on real extern calls (sentinel `-1`
+/// for a failed `Int`-returning call) rather than a compiler-builtin
+/// `__FileIoResult`/`__EnvResult` struct — no error CODE detail is
+/// available from an `errno` here (unlike `codegen_errno_string`'s own
+/// `strerror` message for file I/O), since a raw BSD sockets call
+/// crossing this shim doesn't preserve one; the message is a fixed
+/// string per call site instead, still enough to say WHAT failed.
+const STDLIB_NET_SRC: &str = "\
+extern \"C\" {
+    fn tcp_connect(host: CStr, port: Int) -> Int;
+    fn tcp_listen(port: Int) -> Int;
+    fn tcp_accept(fd: Int) -> Int;
+    fn tcp_send(fd: Int, buf: CStr, len: Int) -> Int;
+    fn tcp_recv(fd: Int, max_len: Int) -> CStr;
+    fn tcp_close(fd: Int) -> Unit;
+}
+
+let tcp_connect_to (host: String) (port: Int): Result[Int, String] = unsafe {
+    let fd = tcp_connect(host.as_cstr(), port);
+    if fd < 0 { Err(\"tcp_connect_to: could not connect to \".concat(host).concat(\":\").concat(port.to_string())) } else { Ok(fd) }
+}
+
+let tcp_listen_on (port: Int): Result[Int, String] = unsafe {
+    let fd = tcp_listen(port);
+    if fd < 0 { Err(\"tcp_listen_on: could not listen on port \".concat(port.to_string())) } else { Ok(fd) }
+}
+
+let tcp_accept_connection (fd: Int): Result[Int, String] = unsafe {
+    let client = tcp_accept(fd);
+    if client < 0 { Err(\"tcp_accept_connection: accept failed\") } else { Ok(client) }
+}
+
+let tcp_write (fd: Int) (data: String): Result[Int, String] = unsafe {
+    let n = tcp_send(fd, data.as_cstr(), data.len());
+    if n < 0 { Err(\"tcp_write: send failed\") } else { Ok(n) }
+}
+
+// Returns \"\" both on a clean peer-close and on a hard socket error —
+// see this constant's own doc comment (and DESIGN.md) for why that
+// distinction isn't preserved in v1; either way, \"stop reading\" is the
+// right response, which is exactly what an empty-String result already
+// signals to a caller looping until end-of-stream.
+let tcp_read (fd: Int) (max_len: Int): String = unsafe { tcp_recv(fd, max_len).as_string() }
+
+let tcp_close_connection (fd: Int): Unit = unsafe { tcp_close(fd); () }
+";
+
 /// Parses the prelude + stdlib sources once and prepends their items
 /// to `program`'s own — items earlier in the list are declared FIRST,
 /// but `TypeContext`'s two-phase construction (see its doc comment)
@@ -1196,6 +1256,7 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
         STDLIB_NUMBER_SRC,
         STDLIB_ARRAY_SRC,
         STDLIB_STRING_SRC,
+        STDLIB_NET_SRC,
     ] {
         let tokens = Lexer::with_base_offset(src, base).tokenize();
         let parsed_items = Parser::new(tokens)
@@ -1233,7 +1294,8 @@ const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len()
     + STDLIB_OPTION_RESULT_SRC.len()
     + STDLIB_NUMBER_SRC.len()
     + STDLIB_ARRAY_SRC.len()
-    + STDLIB_STRING_SRC.len();
+    + STDLIB_STRING_SRC.len()
+    + STDLIB_NET_SRC.len();
 
 /// Runs the whole pipeline — parse, type-check, lower, optimize, load,
 /// call — and returns the result of calling `fn_name` with `args`.
@@ -1903,6 +1965,39 @@ mod tests {
         // escape produced the literal 4 characters `$`, `{`, `x`, `}`,
         // not an interpolated `5`.
         let src = "let use_it dummy = { let x = 5; \"\\${x} literal\" == \"$\".concat(\"{x} literal\") }";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn tcp_round_trip_runs_through_the_full_gated_pipeline() {
+        // A real listen/connect/accept/send/recv/close round trip over
+        // an actual loopback TCP connection, entirely through the
+        // `Net` module's `Result`-wrapped surface (`tcp_listen_on`/
+        // `tcp_connect_to`/etc. — never the raw `extern` names
+        // directly) — proving the whole stack: `net_shim.c`'s real BSD
+        // sockets calls, `plum-interp`'s `build.rs` linking/exporting
+        // them so extern-call resolution finds them, and `.as_string()`
+        // turning `tcp_recv`'s `CStr` result into a comparable `String`.
+        let src = "let use_it dummy = {\n\
+                       match tcp_listen_on(58232) {\n\
+                           Err(e) => e,\n\
+                           Ok(server) => match tcp_connect_to(\"127.0.0.1\", 58232) {\n\
+                               Err(e) => e,\n\
+                               Ok(client) => match tcp_accept_connection(server) {\n\
+                                   Err(e) => e,\n\
+                                   Ok(conn) => {\n\
+                                       let sent = tcp_write(client, \"hello tcp\");\n\
+                                       let received = tcp_read(conn, 100);\n\
+                                       tcp_close_connection(client);\n\
+                                       tcp_close_connection(conn);\n\
+                                       tcp_close_connection(server);\n\
+                                       received\n\
+                                   },\n\
+                               },\n\
+                           },\n\
+                       } == \"hello tcp\"\n\
+                   }";
         let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
         assert_eq!(result, Ok(Value::Bool(true)));
     }

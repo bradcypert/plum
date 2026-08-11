@@ -90,6 +90,7 @@ fn mark_reuse_scoped(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) | Expr::EmptyArray(_) => expr,
         Expr::Unary(op, e) => Expr::Unary(op, Box::new(mark_reuse_scoped(*e, known_heap))),
         Expr::AsCStr(e) => Expr::AsCStr(Box::new(mark_reuse_scoped(*e, known_heap))),
+        Expr::AsString(e) => Expr::AsString(Box::new(mark_reuse_scoped(*e, known_heap))),
         Expr::ToIntTrunc(e) => Expr::ToIntTrunc(Box::new(mark_reuse_scoped(*e, known_heap))),
         Expr::ToIntRound(e) => Expr::ToIntRound(Box::new(mark_reuse_scoped(*e, known_heap))),
         Expr::ToFloat(e) => Expr::ToFloat(Box::new(mark_reuse_scoped(*e, known_heap))),
@@ -428,6 +429,7 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) | Expr::EmptyArray(_) => expr,
         Expr::Unary(op, e) => Expr::Unary(op, Box::new(transform(*e, known_heap))),
         Expr::AsCStr(e) => Expr::AsCStr(Box::new(transform(*e, known_heap))),
+        Expr::AsString(e) => Expr::AsString(Box::new(transform(*e, known_heap))),
         Expr::ToIntTrunc(e) => Expr::ToIntTrunc(Box::new(transform(*e, known_heap))),
         Expr::ToIntRound(e) => Expr::ToIntRound(Box::new(transform(*e, known_heap))),
         Expr::ToFloat(e) => Expr::ToFloat(Box::new(transform(*e, known_heap))),
@@ -713,6 +715,7 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) => false,
         Expr::Unary(_, e) => expr_mentions_var(e, name),
         Expr::AsCStr(e) => expr_mentions_var(e, name),
+        Expr::AsString(e) => expr_mentions_var(e, name),
         Expr::ToIntTrunc(e) => expr_mentions_var(e, name),
         Expr::ToIntRound(e) => expr_mentions_var(e, name),
         Expr::ToFloat(e) => expr_mentions_var(e, name),
@@ -861,6 +864,10 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
         Expr::AsCStr(e) => {
             let (e_t, used) = mark_last_uses(*e, name, live_after);
             (Expr::AsCStr(Box::new(e_t)), used)
+        }
+        Expr::AsString(e) => {
+            let (e_t, used) = mark_last_uses(*e, name, live_after);
+            (Expr::AsString(Box::new(e_t)), used)
         }
         Expr::ToIntTrunc(e) => {
             let (e_t, used) = mark_last_uses(*e, name, live_after);

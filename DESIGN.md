@@ -5064,6 +5064,77 @@ summed), not just inspect emitted IR text.
   norm), deferred because of its interaction with the calling
   convention and FBIP (see Surface syntax above; note the `|>` pipe
   desugaring does NOT depend on this being resolved).
+- **Future stdlib/toolchain roadmap, flagged 2026-08-11, none of it
+  started yet**: HTTP as a real stdlib module — Brad wants BOTH a
+  client and a server, not just the client-side fetch-shaped thing
+  most young languages ship first. TCP/UDP sockets — tentative
+  ("maybe", Brad's own word), likely only worth it if HTTP's own
+  implementation doesn't already need them exposed as a byproduct.
+  Cryptographic primitives — scope (hashing only? symmetric/asymmetric
+  too?) not yet discussed. Running alongside all of it as an ongoing
+  lens on every future stdlib/toolchain decision, not a one-time
+  chunk: everything that moves the toolchain closer to SELF-HOSTING —
+  a Plum compiler written in Plum. File operations (`read_file`/
+  `write_file` exist as of chunk 8, whole-file only, no streaming)
+  were flagged as probably belonging in a real `IO` module, built on
+  the record-of-closures Reader/Writer pattern just below — not
+  staying flat prelude functions forever.
+
+### Interfaces/traits for Reader/Writer-shaped abstractions — Decided (2026-08-11): no new construct, records of closures
+
+Raised by Brad ("should we have interfaces???") specifically wanting
+Go's `io.Reader`/`io.Writer`-shaped abstractions for streaming I/O, not
+a general OOP interface system. Considered and rejected: a real user-
+definable trait system (Rust-style nominal `impl Trait for Type`, or
+Go-style implicit structural satisfaction) — the "Ad-hoc polymorphism
+(v1)" section above already deliberately deferred this exact thing, on
+purpose, to keep the type system's complexity budget on the memory
+model rather than generics machinery; reopening it now for Reader/
+Writer specifically would be solving a much bigger problem than the one
+actually in front of us.
+
+**Decided instead**: Plum already has everything Reader/Writer needs,
+today, with zero new language machinery — a STRUCT WHOSE FIELDS ARE
+CLOSURES (the standard ML-family "record of functions" pattern, not a
+Plum-specific invention):
+
+```
+struct Reader { read: (Array[Int]) -> Result[Int, String] }
+struct Writer { write: (Array[Int]) -> Result[Int, String] }
+
+let file_reader (f: File): Reader = Reader { read: |buf| unsafe { file_read_raw(f, buf) } }
+let socket_writer (s: Socket): Writer = Writer { write: |buf| unsafe { socket_write_raw(s, buf) } }
+
+let copy (r: Reader) (w: Writer): Result[Unit, String] = { ... }  // works on ANY Reader/Writer
+```
+
+This already type-checks and runs with the language exactly as it
+exists — struct fields can be `Function` types, closures are first-
+class values, both true since the very first codegen chunks. Gives, for
+free: multi-method "interfaces" (a struct with several closure fields
+is a hand-assembled vtable), heterogeneous storage (`Array[Reader]`
+mixing a file-backed and a socket-backed reader — closures already
+carry their own captured environment, no separate vtable machinery to
+invent), and zero tension with "no macros, no typeclasses."
+
+**What this deliberately gives up**, weighed and accepted rather than
+overlooked: no compile-time "this type implements Reader" check (you
+just call a constructor function like `file_reader` that builds the
+record — nothing enforces the shape beyond what building any struct
+literal already enforces); no static, monomorphized generic dispatch
+(`fn copy[R: Reader]` isn't expressible — every call goes through the
+closure, dynamic dispatch by construction); no retrofitting an
+existing type with a new "interface" after the fact without writing an
+adapter constructor (consistent with everything else in Plum being
+nominal, not a new gap this decision introduces). For I/O specifically,
+a syscall dwarfs a closure-call's overhead, so the dynamic-dispatch
+cost is real but not expected to matter in practice.
+
+**Not revisited preemptively**: if real Plum code (the future HTTP/IO
+work above) surfaces a genuine need for compile-time conformance
+checking or zero-cost static dispatch that records-of-closures can't
+give, that's the trigger to reopen user-definable traits as their own
+real design conversation — not something to build ahead of that need.
 
 ### Nested field-update path sugar (`ship.position.x: nx`) — Decided and implemented
 
@@ -5175,3 +5246,167 @@ desugars straight to `x.to_string()`, not `"".concat(x.to_string()).
 concat("")`) purely to keep the generated tree lean, not for
 correctness. Zero new `ast::Expr` variant either — the desugared output
 is indistinguishable from the same call chain hand-written directly.
+
+### TCP sockets — Decided and implemented (2026-08-11): first piece of the networking roadmap, UDP deferred
+
+Kicked off the "HTTP/TCP/crypto/self-hosting" roadmap bullet above,
+starting with TCP as the foundation HTTP client/server will eventually
+sit on (an HTTP/1.1 client/server is just a parser + state machine over
+`send`/`recv` — belongs entirely in Plum-level code once TCP exists,
+not a separate C HTTP library dependency, same self-hosting-friendly
+instinct as everything else on this list).
+
+**How other languages handle this, checked rather than assumed**: every
+one of them crosses an FFI boundary somewhere — `socket()`/`connect()`/
+etc. are OS syscalls, not implementable in userspace. Go makes raw
+syscalls directly (bypassing libc, with per-OS files for the differing
+ABI); Rust's `std::net` calls libc sockets on Unix and Winsock on
+Windows via two separate code paths; Python/Ruby/Node/Java all go
+through a C extension or native layer either way. So `extern "C"` +a
+hand-written shim isn't a workaround here, it's the only path in,
+matching what everyone else does.
+
+**Unix-only (Linux/macOS) for v1 — a real platform gap, honestly
+documented, not silently swept.** Windows' Winsock is a genuinely
+different API in the details that matter for a shim (needs `WSAStartup`
+/`WSACleanup`, `SOCKET` isn't `int`, `closesocket()` not `close()`, and
+needs `ws2_32.lib` explicitly linked) — a POSIX-sockets shim won't even
+compile against it. This mirrors the EXISTING extern-symbol-resolution
+scope exactly (`libloading::Library::this()` is already "Unix-only for
+v1... Windows has no clean equivalent... an honest, documented gap, not
+a silent wrong answer" — see the FFI section above), so this isn't a
+new kind of gap for the project, just the same one showing up again.
+
+**A native C shim was required, not optional**, for the same reason
+`raylib_shim.c` exists: POSIX sockets need `struct sockaddr`/`struct
+addrinfo`/`socklen_t *` — none of which fit Plum's `extern "C"` type
+surface (`Int`/`Float`/`Bool`/`CStr`/qualifying-struct only, no raw
+pointers). `native_stdlib/net_shim.c` hides all of that behind flat
+`Int`/`CStr` functions (`tcp_connect(host: CStr, port: Int) -> Int`,
+`tcp_listen`, `tcp_accept`, `tcp_send`, `tcp_recv`, `tcp_close`),
+building the real `sockaddr`/`addrinfo` structs internally.
+
+**A genuinely new gap found and closed along the way: `CStr` had no way
+back into a usable `String` at all.** `.as_cstr()` only ever went `Str
+-> CStr`; `Type::CStr` had zero operations of its own (the existing
+`getenv` test immediately discarded its `CStr` result specifically
+because there was nothing else to do with it — `env_var`/`read_file`
+sidestepped this entirely via compiler-builtin IR nodes that never
+touch `CStr` for the VALUE at all). This blocked `tcp_recv` from
+returning usable data, and isn't sockets-specific — it would've blocked
+ANY future extern call meant to return real string content (`getcwd`,
+`readlink`, ...). Closed generally, not with a one-off workaround:
+added `.as_string()` (the symmetric inverse of `.as_cstr()`, same
+shape-based-recognition precedent, `ir::Expr::AsString`), rather than
+routing `tcp_recv` through ANOTHER bespoke compiler-builtin IR node the
+way `read_file`/`env_var` did. Interesting codegen wrinkle found while
+building it: a `CStr`-typed extern call's OWN return value ALREADY gets
+copied into a real `CgType::Str` register automatically, by `codegen_
+extern_call`'s existing `Some(ir::ExternType::Str)` arm (previously only
+reachable via `let _ = ..`-and-discard, e.g. `getenv`'s own null-check
+test) — so `.as_string()` on that path is a pure type-level pass-
+through, no copy of its own; it only needs a REAL copy
+(`@strlen`+`@plum_alloc_str`+`@memcpy`) for the other, rarer origin: a
+bare `CgType::CStr` buffer from `.as_cstr()` itself (e.g. the round trip
+`s.as_cstr().as_string()`). Verified both origins directly with real
+compile-and-run tests, not just unit-level IR assertions.
+
+**`tcp_recv` returns `CStr`, not `Int` count** — deliberately, so
+`.as_string()` can turn it into usable data at all. Two real, honestly-
+documented v1 scope trades follow from that:
+- **Not binary-safe.** A `CStr` is NUL-terminated; an embedded `\0`
+  byte in a response silently truncates it. Acceptable for a v1 scoped
+  at line-oriented HTTP/1.1 (headers + mostly-text bodies); would be a
+  real problem for arbitrary binary payloads over raw TCP.
+- **"Peer closed" and "real socket error" are collapsed into the same
+  empty-string result.** A null `CStr` return is a hard runtime ABORT
+  under Plum's existing FFI semantics (see the `CStr` null-return note
+  above) — crashing the whole program on an ordinary, everyday
+  connection close isn't acceptable for a `Result`-shaped Net API, so
+  `tcp_recv` never returns null, on EITHER path, discarding the real
+  distinction between them. "Stop reading" is the right response either
+  way, which is exactly what an empty `String` already signals to a
+  caller looping until end-of-stream.
+
+**A `--gc-sections`/`dlsym` linking wrinkle, found and fixed empirically
+(not guessed at)**: getting `net_shim.c`'s functions merely COMPILED
+into `plum-interp`/`plumc`'s own process wasn't enough for `plum run`'s
+extern-call resolution (`Library::this()` + `dlsym(RTLD_DEFAULT, ..)`)
+to actually find them — two separate problems, confirmed one at a time
+with a minimal standalone repro before touching the real build scripts:
+1. Rust's default linker flags include `--gc-sections` (dead-code
+   stripping) — since nothing in the STATICALLY linked Rust code ever
+   references `tcp_connect`/etc. directly (every call goes through
+   runtime symbol resolution, same "no real linked reference" shape
+   `-lm`'s own `--no-as-needed` note already describes for a different
+   reason), the whole `net_shim.o` translation unit was silently
+   dropped from the binary entirely. Fixed with a per-symbol `-Wl,-u,
+   <name>` for each of the six functions — forces the linker to treat
+   each as a real GC root, without disabling `--gc-sections` (and its
+   real binary-size benefit) for the REST of the binary the way a
+   blanket `--no-gc-sections` would.
+2. Even once kept, the symbols still weren't `dlsym`-visible: `dlsym
+   (RTLD_DEFAULT, ..)` only searches a process's DYNAMIC symbol table
+   (`.dynsym`), and a normal PIE executable's own locally-defined
+   symbols aren't exported there by default (unlike `sqrt`, which lives
+   in `libm.so`'s OWN already-dynamic table — a separate shared object
+   `dlsym` also searches). Fixed with `-Wl,--export-dynamic`.
+
+Both `plum-interp`'s and `plumc`'s own `build.rs` independently compile
+`native_stdlib/net_shim.c` and apply both flags (a dependency crate's
+build-script link-args don't propagate to a separate downstream binary
+target — the EXACT same reason `plumc/build.rs` already had to re-emit
+its own `-lm`/`--no-as-needed` rather than trusting `plum-interp`'s copy
+to cover it, confirmed real, not just a defensive guess, the first time
+`-lm` was wired up).
+
+**A SEPARATE linking story for `plum build`'s own output.** `net_shim.c
+`'s source is `include_str!`'d directly into the `plumc`/`plum` binary
+at compile time (not read from disk at runtime — an installed `plum`
+binary has no guarantee the original source tree is anywhere nearby),
+written back out to a real temp `.c` file and passed to `clang`
+alongside the generated `.ll` for every `plum build` invocation, and —
+found only once the FULL test suite was run, not just the new TCP
+tests — for EVERY OTHER independent `clang` invocation this crate's own
+test harness has (`run_via_clang_with_c_helper`, `run_under_sanitizer_
+with_src`, and one inlined ASan test), since the `Net` prelude's `tcp_*`
+wrapper functions are ordinary, non-generic top-level functions —
+unlike a generic function (only ever codegen'd per call-site
+instantiation), those get emitted into EVERY compiled program's IR
+unconditionally, whether a given program calls any of them or not. 12
+previously-unrelated codegen tests broke on exactly this ("undefined
+reference to `tcp_connect`") the first time the full suite ran after
+wiring up `STDLIB_NET_SRC` — found and fixed before calling the chunk
+done, not left as a surprise for later.
+
+**UDP was raised, then explicitly deferred** rather than shipped
+alongside TCP in the same pass: `recvfrom()` needs to hand back the
+sender's address as well as the data, and Plum's FFI has no multi-value
+return (and `CStr` can't live inside a struct either) — the only way to
+get it is a SECOND call reading state a first call stashed C-side,
+which is a genuine race if two `spawn`ed tasks ever call it
+concurrently. Brad chose "ship TCP only now" over shipping something
+concurrency-unsafe just to say UDP was included, or dropping the
+sender's address entirely (unusable for request/reply protocols). Real
+follow-up work, not forgotten: needs its own concurrency-safe design
+for the sender-address problem before it's worth building.
+
+**Exposed as `Net`-flavored plain functions** (`tcp_connect_to`, `tcp_
+listen_on`, `tcp_accept_connection`, `tcp_write`, `tcp_read`, `tcp_
+close_connection`), merged into `with_prelude` as `STDLIB_NET_SRC`, same
+"no `use` needed yet" pattern every other stdlib piece uses today —
+`Type.func(...)` associated-function styling wasn't a fit here since a
+socket is just an `Int` fd, no natural product-type receiver to hang
+associated functions off of. Every fallible one wraps the raw `extern`
+call in the same `let r = ..._raw(...); if <ok> { Ok(..) } else { Err
+(..) }` shape `STDLIB_FILE_SRC`/`STDLIB_ENV_SRC` already established,
+sentinel `-1` for a failed `Int`-returning call standing in for the
+`errno`-message detail those two have and this genuinely doesn't (no
+richer error code survives crossing this particular shim).
+
+Verified with real compile-and-run tests in BOTH backends (interpreted
+`plum run` and native `plum build`) — an actual loopback `listen`/
+`connect`/`accept`/`send`/`recv`/`close` round trip over a real TCP
+socket, not a mocked/stubbed one, confirming the whole stack end to
+end: the real shim, the linking/exporting fixes above, and `.as_string
+()` turning `tcp_recv`'s result into a comparable `String`.

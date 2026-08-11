@@ -921,6 +921,21 @@ pub(crate) fn unique_temp_dir(prefix: &str) -> PathBuf {
 /// no separate build step needed). Both empty for every OTHER existing
 /// caller (`run_via_clang`, `run_via_clang_with_c_helper`'s own
 /// internals) — this doesn't change what they produce at all.
+/// The TCP socket shim's own source, embedded directly into the
+/// `plumc`/`plum` binary at COMPILE time (`include_str!`, same "no
+/// external file needed at runtime" reasoning `with_prelude`'s Plum-
+/// source constants already rely on) — unlike `plum-interp`/`plumc`'s
+/// own `build.rs` copies (which compile this same source into THEIR
+/// OWN process, for `plum run`'s extern-call resolution), a `plum
+/// build` OUTPUT binary is compiled by shelling out to `clang` from
+/// wherever the installed `plum` binary happens to be running, with no
+/// guarantee the original source tree (`native_stdlib/net_shim.c` on
+/// disk) is anywhere nearby — so the source has to travel INSIDE the
+/// `plum` binary itself, written back out to a real temp `.c` file only
+/// at the moment `clang` actually needs it (mirrors `run_via_clang_
+/// with_c_helper`'s existing pattern for its own transient `.c` file).
+const NET_SHIM_C: &str = include_str!("../../../native_stdlib/net_shim.c");
+
 fn clang_compile(
     ir: &str,
     ll_path: &std::path::Path,
@@ -929,8 +944,14 @@ fn clang_compile(
     extra_libs: &[String],
 ) -> Result<(), String> {
     std::fs::write(ll_path, ir).map_err(|e| format!("failed to write generated IR: {e}"))?;
+    let net_shim_path = ll_path
+        .parent()
+        .ok_or("internal error: ll_path has no parent directory")?
+        .join("net_shim.c");
+    std::fs::write(&net_shim_path, NET_SHIM_C).map_err(|e| format!("failed to write embedded net_shim.c: {e}"))?;
     let compile = Command::new("clang")
         .arg(ll_path)
+        .arg(&net_shim_path)
         .args(extra_c_sources)
         // `-lm` — a Plum program can now `extern "C"` a real libm
         // function (`sqrt`, ...) via `plum_codegen::emit_program`'s new
@@ -1017,9 +1038,23 @@ fn run_via_clang_with_c_helper(ir: &str, c_source: &str) -> Result<String, Strin
     let bin_path: PathBuf = dir.join("program");
     std::fs::write(&ll_path, ir).map_err(|e| format!("failed to write generated IR: {e}"))?;
     std::fs::write(&c_path, c_source).map_err(|e| format!("failed to write C helper source: {e}"))?;
+    // `STDLIB_NET_SRC`'s `tcp_*` wrapper functions (in `with_prelude`,
+    // `plumc::lib.rs`) are ordinary, non-generic top-level functions —
+    // unlike a generic function (only ever codegen'd per call-site
+    // instantiation), those get emitted into EVERY compiled program's
+    // IR unconditionally, whether the program actually calls any of
+    // them or not. That means EVERY native-compiled Plum program now
+    // references `tcp_connect`/etc. at the LLVM IR level, so this
+    // helper — a SEPARATE `clang` invocation from `clang_compile`'s own
+    // (already net_shim-aware) one — needs the same shim linked in too,
+    // or every test using it fails to link with "undefined reference to
+    // `tcp_connect`" regardless of what it's actually testing.
+    let net_shim_path = dir.join("net_shim.c");
+    std::fs::write(&net_shim_path, NET_SHIM_C).map_err(|e| format!("failed to write embedded net_shim.c: {e}"))?;
     let compile = Command::new("clang")
         .arg(&ll_path)
         .arg(&c_path)
+        .arg(&net_shim_path)
         .arg("-lm")
         .arg("-o")
         .arg(&bin_path)
@@ -2056,6 +2091,38 @@ mod tests {
     }
 
     #[test]
+    fn tcp_round_trip_runs_through_native_codegen() {
+        // Same real loopback listen/connect/accept/send/recv/close
+        // round trip `plumc::tests::tcp_round_trip_runs_through_the_
+        // full_gated_pipeline` proves for the interpreter, compiled and
+        // run as an actual native binary here instead — a different
+        // port than that test's (58232) since both can run concurrently
+        // in the same `cargo test` process.
+        let src = "\
+            let go (): Bool = {\n\
+                match tcp_listen_on(58233) {\n\
+                    Err(e) => e,\n\
+                    Ok(server) => match tcp_connect_to(\"127.0.0.1\", 58233) {\n\
+                        Err(e) => e,\n\
+                        Ok(client) => match tcp_accept_connection(server) {\n\
+                            Err(e) => e,\n\
+                            Ok(conn) => {\n\
+                                let sent = tcp_write(client, \"hello tcp\");\n\
+                                let received = tcp_read(conn, 100);\n\
+                                tcp_close_connection(client);\n\
+                                tcp_close_connection(conn);\n\
+                                tcp_close_connection(server);\n\
+                                received\n\
+                            },\n\
+                        },\n\
+                    },\n\
+                } == \"hello tcp\"\n\
+            }\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
     fn nested_struct_to_string_recurses_in_native_codegen() {
         let src = "\
             struct Point { x: Int, y: Int }\n\
@@ -2643,10 +2710,14 @@ mod tests {
         let ll_path = dir.join("program.ll");
         let bin_path = dir.join("program-asan");
         std::fs::write(&ll_path, &full_ir).unwrap();
+        // See `run_via_clang_with_c_helper`'s own doc comment for why.
+        let net_shim_path = dir.join("net_shim.c");
+        std::fs::write(&net_shim_path, NET_SHIM_C).unwrap();
 
         let compile = Command::new("clang")
             .arg("-fsanitize=address")
             .arg(&ll_path)
+            .arg(&net_shim_path)
             .arg("-o")
             .arg(&bin_path)
             .output()
@@ -3946,11 +4017,19 @@ mod tests {
         let ll_path = dir.join("program.ll");
         let bin_path = dir.join("program-sanitized");
         std::fs::write(&ll_path, &full_ir).unwrap();
+        // See `run_via_clang_with_c_helper`'s own doc comment for why
+        // this is needed here too: the `Net` prelude's `tcp_*` wrapper
+        // functions are emitted into EVERY compiled program's IR
+        // unconditionally, so every independent `clang` invocation
+        // needs `net_shim.c` linked in, not just `clang_compile`'s own.
+        let net_shim_path = dir.join("net_shim.c");
+        std::fs::write(&net_shim_path, NET_SHIM_C).unwrap();
 
         let compile = Command::new("clang")
             .arg(sanitizer_flag)
             .arg("-pthread")
             .arg(&ll_path)
+            .arg(&net_shim_path)
             .arg("-o")
             .arg(&bin_path)
             .output()
@@ -4011,6 +4090,46 @@ mod tests {
         "#;
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "11");
+    }
+
+    #[test]
+    fn as_string_converts_a_real_extern_cstr_return_into_a_usable_str() {
+        // `getenv` on a variable that IS set returns a real, non-null
+        // `char*` — `.as_string()` turns that `CStr` into an ordinary
+        // `Str` `go` can return (and this harness can print), proving
+        // the whole round trip through REAL native code: `codegen_
+        // extern_call`'s own `CStr`-return arm already produced a
+        // `CgType::Str` register here, so `.as_string()` is the pure-
+        // pass-through path (see `codegen_as_string`'s own doc comment)
+        // — no separate malloc/memcpy of its own fires in THIS case.
+        unsafe {
+            std::env::set_var("PLUM_CODEGEN_AS_STRING_TEST_VAR", "hello from getenv");
+        }
+        let src = r#"
+            extern "C" {
+                fn getenv(name: CStr) -> CStr;
+            }
+            let go (): String = unsafe {
+                getenv("PLUM_CODEGEN_AS_STRING_TEST_VAR".as_cstr()).as_string()
+            }
+        "#;
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "hello from getenv");
+    }
+
+    #[test]
+    fn as_string_after_as_cstr_round_trips_through_a_fresh_copy() {
+        // The OTHER origin `.as_string()` has to handle: a `CgType::
+        // CStr` (a bare, unrefcounted `malloc`'d buffer from `.as_cstr
+        // ()` itself, not an extern call's auto-converted return) —
+        // this exercises `codegen_as_string`'s `CgType::CStr` arm (the
+        // real `@strlen`+`@plum_alloc_str`+`@memcpy` copy), not just
+        // the pass-through arm the test above covers.
+        let src = r#"
+            let go (): String = unsafe { "round trip".as_cstr().as_string() }
+        "#;
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "round trip");
     }
 
     // NOTE: no real-compile-and-run test exercises `.as_cstr()`'s
