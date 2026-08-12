@@ -921,20 +921,42 @@ pub(crate) fn unique_temp_dir(prefix: &str) -> PathBuf {
 /// no separate build step needed). Both empty for every OTHER existing
 /// caller (`run_via_clang`, `run_via_clang_with_c_helper`'s own
 /// internals) — this doesn't change what they produce at all.
-/// The TCP socket shim's own source, embedded directly into the
-/// `plumc`/`plum` binary at COMPILE time (`include_str!`, same "no
+/// Every `native_stdlib/*.c` shim's own source, embedded directly into
+/// the `plumc`/`plum` binary at COMPILE time (`include_str!`, same "no
 /// external file needed at runtime" reasoning `with_prelude`'s Plum-
 /// source constants already rely on) — unlike `plum-interp`/`plumc`'s
 /// own `build.rs` copies (which compile this same source into THEIR
 /// OWN process, for `plum run`'s extern-call resolution), a `plum
 /// build` OUTPUT binary is compiled by shelling out to `clang` from
 /// wherever the installed `plum` binary happens to be running, with no
-/// guarantee the original source tree (`native_stdlib/net_shim.c` on
-/// disk) is anywhere nearby — so the source has to travel INSIDE the
-/// `plum` binary itself, written back out to a real temp `.c` file only
-/// at the moment `clang` actually needs it (mirrors `run_via_clang_
-/// with_c_helper`'s existing pattern for its own transient `.c` file).
-const NET_SHIM_C: &str = include_str!("../../../native_stdlib/net_shim.c");
+/// guarantee the original source tree (`native_stdlib/*.c` on disk) is
+/// anywhere nearby — so the source has to travel INSIDE the `plum`
+/// binary itself, written back out to real temp `.c` files only at the
+/// moment `clang` actually needs them (mirrors `run_via_clang_with_c_
+/// helper`'s existing pattern for its own transient `.c` file). Must be
+/// kept in sync BY HAND with `plum-interp/build.rs`'s/`plumc/build.rs`'s
+/// identical `native_shims()` lists — see that function's own doc
+/// comment for why that duplication is accepted, not an oversight.
+const ALL_NATIVE_SHIMS: &[(&str, &str)] = &[
+    ("net_shim.c", include_str!("../../../native_stdlib/net_shim.c")),
+    ("dir_shim.c", include_str!("../../../native_stdlib/dir_shim.c")),
+    ("process_shim.c", include_str!("../../../native_stdlib/process_shim.c")),
+];
+
+/// Writes every embedded shim out to real `.c` files inside `dir`,
+/// returning their paths — the shared "why" for every `clang`
+/// invocation in this file needing this same step is `ALL_NATIVE_
+/// SHIMS`'s own doc comment above.
+fn write_native_shims(dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
+    ALL_NATIVE_SHIMS
+        .iter()
+        .map(|(file_name, source)| {
+            let path = dir.join(file_name);
+            std::fs::write(&path, source).map_err(|e| format!("failed to write embedded {file_name}: {e}"))?;
+            Ok(path)
+        })
+        .collect()
+}
 
 fn clang_compile(
     ir: &str,
@@ -944,14 +966,10 @@ fn clang_compile(
     extra_libs: &[String],
 ) -> Result<(), String> {
     std::fs::write(ll_path, ir).map_err(|e| format!("failed to write generated IR: {e}"))?;
-    let net_shim_path = ll_path
-        .parent()
-        .ok_or("internal error: ll_path has no parent directory")?
-        .join("net_shim.c");
-    std::fs::write(&net_shim_path, NET_SHIM_C).map_err(|e| format!("failed to write embedded net_shim.c: {e}"))?;
+    let shim_paths = write_native_shims(ll_path.parent().ok_or("internal error: ll_path has no parent directory")?)?;
     let compile = Command::new("clang")
         .arg(ll_path)
-        .arg(&net_shim_path)
+        .args(&shim_paths)
         .args(extra_c_sources)
         // `-lm` — a Plum program can now `extern "C"` a real libm
         // function (`sqrt`, ...) via `plum_codegen::emit_program`'s new
@@ -1049,12 +1067,11 @@ fn run_via_clang_with_c_helper(ir: &str, c_source: &str) -> Result<String, Strin
     // (already net_shim-aware) one — needs the same shim linked in too,
     // or every test using it fails to link with "undefined reference to
     // `tcp_connect`" regardless of what it's actually testing.
-    let net_shim_path = dir.join("net_shim.c");
-    std::fs::write(&net_shim_path, NET_SHIM_C).map_err(|e| format!("failed to write embedded net_shim.c: {e}"))?;
+    let shim_paths = write_native_shims(&dir)?;
     let compile = Command::new("clang")
         .arg(&ll_path)
         .arg(&c_path)
-        .arg(&net_shim_path)
+        .args(&shim_paths)
         .arg("-lm")
         .arg("-o")
         .arg(&bin_path)
@@ -2212,6 +2229,46 @@ mod tests {
     }
 
     #[test]
+    fn list_dir_and_is_directory_run_through_native_codegen() {
+        let dir = std::env::temp_dir().join(format!("plumc-codegen-listdir-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("subdir")).unwrap();
+        std::fs::write(dir.join("a.txt"), "").unwrap();
+        std::fs::write(dir.join("b.txt"), "").unwrap();
+        let dir_str = dir.to_str().unwrap();
+
+        // A LOCAL `let dir = ..`, deliberately, not a top-level global
+        // — see DESIGN.md's "OS module" section for a real, separate
+        // bug this exact shape (a value passed to two different
+        // functions) would trip if `dir` were a global instead.
+        let src = format!(
+            "let go (): String = {{\n\
+                 let dir = \"{dir_str}\";\n\
+                 match list_dir(dir) {{\n\
+                     Err(e) => e,\n\
+                     Ok(entries) => match is_directory(dir) {{\n\
+                         Err(e) => e,\n\
+                         Ok(is_dir) => if entries.len() == 3 && is_dir {{ \"ok\" }} else {{ \"unexpected\" }},\n\
+                     }},\n\
+                 }}\n\
+             }}\n"
+        );
+        let out = compile_and_run(&src, "go", &[CgValue::Unit]).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(out, "ok");
+    }
+
+    #[test]
+    fn run_process_runs_through_native_codegen() {
+        let src = "\
+            let go (): String = match run_process(\"echo\", [\"hello\", \"world\"]) {\n\
+                Err(e) => e,\n\
+                Ok(r) => if r.exit_code == 0 && r.stdout == \"hello world\\n\" { \"ok\" } else { \"unexpected: \".concat(r.stdout) },\n\
+            }\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "ok");
+    }
+
+    #[test]
     fn nested_struct_to_string_recurses_in_native_codegen() {
         let src = "\
             struct Point { x: Int, y: Int }\n\
@@ -2800,13 +2857,12 @@ mod tests {
         let bin_path = dir.join("program-asan");
         std::fs::write(&ll_path, &full_ir).unwrap();
         // See `run_via_clang_with_c_helper`'s own doc comment for why.
-        let net_shim_path = dir.join("net_shim.c");
-        std::fs::write(&net_shim_path, NET_SHIM_C).unwrap();
+        let shim_paths = write_native_shims(&dir).unwrap();
 
         let compile = Command::new("clang")
             .arg("-fsanitize=address")
             .arg(&ll_path)
-            .arg(&net_shim_path)
+            .args(&shim_paths)
             .arg("-o")
             .arg(&bin_path)
             .output()
@@ -4107,18 +4163,17 @@ mod tests {
         let bin_path = dir.join("program-sanitized");
         std::fs::write(&ll_path, &full_ir).unwrap();
         // See `run_via_clang_with_c_helper`'s own doc comment for why
-        // this is needed here too: the `Net` prelude's `tcp_*` wrapper
-        // functions are emitted into EVERY compiled program's IR
-        // unconditionally, so every independent `clang` invocation
-        // needs `net_shim.c` linked in, not just `clang_compile`'s own.
-        let net_shim_path = dir.join("net_shim.c");
-        std::fs::write(&net_shim_path, NET_SHIM_C).unwrap();
+        // this is needed here too: several prelude modules' own
+        // wrapper functions are emitted into EVERY compiled program's
+        // IR unconditionally, so every independent `clang` invocation
+        // needs every shim linked in, not just `clang_compile`'s own.
+        let shim_paths = write_native_shims(&dir).unwrap();
 
         let compile = Command::new("clang")
             .arg(sanitizer_flag)
             .arg("-pthread")
             .arg(&ll_path)
-            .arg(&net_shim_path)
+            .args(&shim_paths)
             .arg("-o")
             .arg(&bin_path)
             .output()
@@ -4219,6 +4274,54 @@ mod tests {
         "#;
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "round trip");
+    }
+
+    #[test]
+    fn as_cstr_called_twice_on_a_plain_function_parameter_does_not_corrupt() {
+        // Regression test for a REAL use-after-free found while testing
+        // the OS module (`native_stdlib/dir_shim.c`/`process_shim.c`)
+        // — see `plum_ir::fbip::transform`'s own `AsCStr` arm doc
+        // comment for the full root-cause story. `s` here is a plain
+        // function PARAMETER (never added to `known_heap` by design —
+        // see that module's own scope note), used with `.as_cstr()`
+        // TWICE: before the fix, the first call's unconditional `Dec`
+        // freed `s` outright, and the second call read freed memory —
+        // confirmed directly via a real libc call over this exact
+        // shape, not just inspected.
+        let src = r#"
+            extern "C" {
+                fn strlen(s: CStr) -> Int;
+            }
+            let double_strlen (s: String): Int = unsafe {
+                let a = strlen(s.as_cstr());
+                let b = strlen(s.as_cstr());
+                a + b
+            }
+            let go (): Int = double_strlen("hello")
+        "#;
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "10");
+    }
+
+    #[test]
+    fn as_cstr_called_twice_on_a_top_level_global_does_not_corrupt() {
+        // The OTHER shape the same bug hit — a top-level GLOBAL (also
+        // never in `known_heap`) — plus the SEPARATE codegen fix this
+        // needed on top of `fbip`'s own: `Expr::RcAnnotated`'s codegen
+        // didn't know how to look up a GLOBAL target at all before this
+        // (only ever checked `env`, which holds locals/params, never
+        // globals) — see that arm's own doc comment.
+        let src = r#"
+            extern "C" {
+                fn strlen(s: CStr) -> Int;
+            }
+            let g = "hello"
+            let go (): Int = unsafe {
+                let a = strlen(g.as_cstr());
+                let b = strlen(g.as_cstr());
+                a + b
+            }
+        "#;
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "10");
     }
 
     // NOTE: no real-compile-and-run test exercises `.as_cstr()`'s

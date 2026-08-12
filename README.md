@@ -615,6 +615,18 @@ program's prelude):
   real request/response body-framing asymmetry bug found via an actual
   deadlock (a bodyless `GET` with no `Content-Length` means different
   things on the two sides of a connection).
+- **OS: directory listing + subprocess exec** — `list_dir(path): Result
+  [Array[String], String]` (entry names, `.`/`..` already skipped),
+  `is_directory(path): Result[Bool, String]`, and `run_process(program,
+  args): Result[ProcessResult, String]` where `ProcessResult { exit_
+  code: Int, stdout: String, stderr: String }` — a non-zero exit code
+  is an ordinary `Ok`, `Err` only means the process could never even be
+  started. Subprocess output is captured via temp files (not pipes),
+  deliberately, to avoid the classic pipe-deadlock class of bug. See
+  DESIGN.md's "OS module" section for the full writeup, including a
+  real, SEPARATE bug found (and filed, not fixed here) while testing
+  this: a top-level global `let` used twice with a heap-consuming
+  operation like `.as_cstr()` corrupts under native codegen.
 
 All of the above are ordinary Plum source, not compiler magic — you
 could write equivalents yourself. They currently live in a shared

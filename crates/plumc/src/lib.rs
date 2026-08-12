@@ -1621,6 +1621,103 @@ let http_serve (port: Int) (handler: (HttpRequest) -> HttpResponse): Result[Unit
     }
 ";
 
+/// Directory listing + subprocess exec — the two HARD blockers toward
+/// ever self-hosting (see DESIGN.md's own \"OS module\" section for the
+/// full design writeup: the handle-based multi-call-return pattern
+/// `net_shim.c`'s sockets already established, the temp-file-based
+/// subprocess capture that avoids the classic pipe-deadlock class of
+/// bug, and why argument-joining uses a tab separator rather than a
+/// rarer control byte — forced by what Plum's OWN string-literal lexer
+/// can actually express, not the ideal choice). `native_stdlib/dir_
+/// shim.c`/`process_shim.c` are this module's own C shims — see their
+/// doc comments for the shims themselves.
+const STDLIB_OS_SRC: &str = "\
+extern \"C\" {
+    fn dir_open(path: CStr) -> Int;
+    fn dir_read_next(handle: Int) -> CStr;
+    fn dir_close(handle: Int) -> Unit;
+    fn path_is_dir(path: CStr) -> Int;
+    fn process_run(program: CStr, args_joined: CStr, argc: Int) -> Int;
+    fn process_exit_code(handle: Int) -> Int;
+    fn process_stdout_data(handle: Int) -> CStr;
+    fn process_stderr_data(handle: Int) -> CStr;
+    fn process_free(handle: Int) -> Unit;
+}
+
+// Every raw extern name above is wrapped in its own tiny SAFE Plum
+// function immediately, right here — never called directly anywhere
+// else in this module — the SAME layering `tcp_read`/`tcp_write`
+// already established for `Net`: composition (the recursive `dir_read_
+// all_acc` below, which mixes an extern-backed call with an ordinary
+// self-recursive one) reads cleanly without an `unsafe` block needed
+// at every call site, only once, right here.
+let dir_open_handle (path: String): Int = unsafe { dir_open(path.as_cstr()) }
+let dir_next_entry (handle: Int): String = unsafe { dir_read_next(handle).as_string() }
+let dir_close_handle (handle: Int): Unit = unsafe { dir_close(handle); () }
+let path_is_dir_raw (path: String): Int = unsafe { path_is_dir(path.as_cstr()) }
+
+let dir_read_all_acc (handle: Int) (acc: Array[String]): Array[String] = {
+    let name = dir_next_entry(handle);
+    if String.is_empty(name) { acc } else { dir_read_all_acc(handle, acc.push(name)) }
+}
+
+// Entry NAMES only (not full paths, not `.`/`..` — the shim already
+// skips those) — matches `read_file`/`write_file`'s own \"whole
+// operation, simplest useful shape\" scope. A caller walking a project
+// tree joins `path` and each name itself (ordinary `String.concat`)
+// and calls `is_directory` on the result to decide whether to recurse.
+let list_dir (path: String): Result[Array[String], String] = {
+    let handle = dir_open_handle(path);
+    if handle < 0 { Err(\"list_dir: could not open directory: \".concat(path)) }
+    else {
+        let entries = dir_read_all_acc(handle, []);
+        dir_close_handle(handle);
+        Ok(entries)
+    }
+}
+
+// A real three-way outcome under the hood (`path_is_dir`: 1/0/-1) — a
+// path that doesn't exist at all is a real `Err`, not silently `Ok
+// (false)` the way it would be if this just returned a `Bool`.
+let is_directory (path: String): Result[Bool, String] = {
+    let r = path_is_dir_raw(path);
+    if r < 0 { Err(\"is_directory: path does not exist: \".concat(path)) }
+    else { Ok(r == 1) }
+}
+
+struct ProcessResult { exit_code: Int, stdout: String, stderr: String }
+
+// See `native_stdlib/process_shim.c`'s own doc comment for why a tab
+// (not a rarer control byte) is the argument separator — forced by
+// what Plum's string-literal lexer can express, not the ideal choice.
+let join_args_acc (args: Array[String]) (i: Int) (acc: String): String =
+    if i >= args.len() { acc }
+    else if i == 0 { join_args_acc(args, i + 1, args[i]) }
+    else { join_args_acc(args, i + 1, acc.concat(\"\\t\").concat(args[i])) }
+
+// Runs `program` with `args` (NOT including the program name itself —
+// matches `execvp`'s own `argv[0]`-is-separate convention), blocking
+// until it exits. A non-zero EXIT CODE is an ordinary, successful `Ok
+// (ProcessResult { .. })` — a failing compile is a routine, expected
+// outcome for a compiler-shaped caller to inspect, not a shim-level
+// `Err`; `Err` here means the process could never even be STARTED at
+// all (see `process_run`'s own doc comment).
+let run_process (program: String) (args: Array[String]): Result[ProcessResult, String] = unsafe {
+    let joined = join_args_acc(args, 0, \"\");
+    let handle = process_run(program.as_cstr(), joined.as_cstr(), args.len());
+    if handle < 0 { Err(\"run_process: could not start process: \".concat(program)) }
+    else {
+        let result = ProcessResult {
+            exit_code: process_exit_code(handle),
+            stdout: process_stdout_data(handle).as_string(),
+            stderr: process_stderr_data(handle).as_string(),
+        };
+        process_free(handle);
+        Ok(result)
+    }
+}
+";
+
 /// Parses the prelude + stdlib sources once and prepends their items
 /// to `program`'s own — items earlier in the list are declared FIRST,
 /// but `TypeContext`'s two-phase construction (see its doc comment)
@@ -1648,6 +1745,7 @@ pub(crate) fn with_prelude(program: ast::Program) -> ast::Program {
         STDLIB_STRING_SRC,
         STDLIB_NET_SRC,
         STDLIB_HTTP_SRC,
+        STDLIB_OS_SRC,
     ] {
         let tokens = Lexer::with_base_offset(src, base).tokenize();
         let parsed_items = Parser::new(tokens)
@@ -1687,7 +1785,8 @@ const PRELUDE_TOTAL_LEN: usize = PRELUDE_SRC.len()
     + STDLIB_ARRAY_SRC.len()
     + STDLIB_STRING_SRC.len()
     + STDLIB_NET_SRC.len()
-    + STDLIB_HTTP_SRC.len();
+    + STDLIB_HTTP_SRC.len()
+    + STDLIB_OS_SRC.len();
 
 /// Runs the whole pipeline — parse, type-check, lower, optimize, load,
 /// call — and returns the result of calling `fn_name` with `args`.
@@ -2532,6 +2631,92 @@ mod tests {
 
         let result = server.join().unwrap();
         assert_eq!(result, Ok("Bool(true)".to_string()));
+    }
+
+    #[test]
+    fn list_dir_and_is_directory_run_through_the_full_gated_pipeline() {
+        let dir = std::env::temp_dir().join(format!("plumc-listdir-test-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("subdir")).unwrap();
+        std::fs::write(dir.join("a.txt"), "").unwrap();
+        std::fs::write(dir.join("b.txt"), "").unwrap();
+        let dir_str = dir.to_str().unwrap();
+
+        // Deliberately a LOCAL `let dir = ..`, not a top-level global —
+        // see DESIGN.md's "OS module" section for a real, SEPARATE bug
+        // found while testing this feature (unrelated to `list_dir`/
+        // `is_directory` themselves): a top-level global `Str` used
+        // TWICE with a heap-consuming operation like `.as_cstr()`
+        // corrupts under native codegen. Filed as its own issue, not
+        // fixed here — this test's own use of `dir` (passed to BOTH
+        // `list_dir` and `is_directory`) is exactly the shape that
+        // would trip it if `dir` were a global instead of a local.
+        let src = format!(
+            "let use_it dummy = {{\n\
+                 let dir = \"{dir_str}\";\n\
+                 match list_dir(dir) {{\n\
+                     Err(e) => e,\n\
+                     Ok(entries) => match is_directory(dir) {{\n\
+                         Err(e) => e,\n\
+                         Ok(is_dir) => if entries.len() == 3 && is_dir {{ \"ok\" }} else {{ \"unexpected\" }},\n\
+                     }},\n\
+                 }}\n\
+             }} == \"ok\""
+        );
+        let result = typecheck_and_run(&src, "use_it", vec![Value::Unit]);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn list_dir_and_is_directory_return_err_for_a_nonexistent_path() {
+        let src = "let use_it dummy = {\n\
+                       let missing = \"/definitely/does/not/exist/plumc-test-xyz\";\n\
+                       match list_dir(missing) {\n\
+                           Err(_) => match is_directory(missing) { Err(_) => \"ok\", Ok(_) => \"unexpected\" },\n\
+                           Ok(_) => \"unexpected\",\n\
+                       }\n\
+                   } == \"ok\"";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn run_process_runs_through_the_full_gated_pipeline() {
+        let src = "let use_it dummy = match run_process(\"echo\", [\"hello\", \"world\"]) {\n\
+                       Err(e) => e,\n\
+                       Ok(r) => if r.exit_code == 0 && r.stdout == \"hello world\\n\" { \"ok\" } else { \"unexpected: \".concat(r.stdout) },\n\
+                   } == \"ok\"";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn run_process_surfaces_a_nonzero_exit_code_as_an_ordinary_ok_not_an_err() {
+        // A failing CHILD PROCESS is a routine, expected `Ok` outcome
+        // (see `run_process`'s own doc comment) — only a process that
+        // could never be STARTED at all is `Err`.
+        let src = "let use_it dummy = match run_process(\"sh\", [\"-c\", \"exit 3\"]) {\n\
+                       Err(e) => e,\n\
+                       Ok(r) => if r.exit_code == 3 { \"ok\" } else { \"unexpected: \".concat(r.exit_code.to_string()) },\n\
+                   } == \"ok\"";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
+    fn run_process_on_a_nonexistent_program_still_starts_and_exits_127() {
+        // A program `execvp` can't find still lets `fork` SUCCEED — the
+        // failure only shows up as the CHILD exiting 127 (this shim's
+        // own `_exit(127)` on a failed `execvp`), which is a real,
+        // successful `Ok` outcome from `process_run`'s own perspective
+        // (see its doc comment: `Err` means the process could never
+        // even be STARTED at all, not that it failed once it was).
+        let src = "let use_it dummy = match run_process(\"definitely_not_a_real_program_xyz\", []) {\n\
+                       Err(e) => e,\n\
+                       Ok(r) => if r.exit_code == 127 { \"ok\" } else { \"unexpected: \".concat(r.exit_code.to_string()) },\n\
+                   } == \"ok\"";
+        let result = typecheck_and_run(src, "use_it", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
     }
 
     #[test]

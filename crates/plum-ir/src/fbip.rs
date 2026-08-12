@@ -428,7 +428,46 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
     match expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::Var(_) | Expr::EmptyArray(_) => expr,
         Expr::Unary(op, e) => Expr::Unary(op, Box::new(transform(*e, known_heap))),
-        Expr::AsCStr(e) => Expr::AsCStr(Box::new(transform(*e, known_heap))),
+        // `.as_cstr()` is architecturally UNIQUE among heap-consuming
+        // operations (see `ir::Expr::AsCStr`'s own doc comment and
+        // `codegen_as_cstr`'s): it's the ONLY one whose codegen
+        // unconditionally decrements its operand's refcount, with NO
+        // separate `RcAnnotated::Dec` ever inserted for it elsewhere —
+        // every other consuming operation (`.concat()`'s `StrConcat`,
+        // `.push()`'s `ArrayPush`, ...) instead leaves refcount
+        // management ENTIRELY to whatever `RcAnnotated` this pass
+        // separately inserts, which only ever fires for a TRACKED
+        // (`known_heap`) name, so an untracked operand there just never
+        // gets decremented at all (a leak, not a use-after-free).
+        // `.as_cstr()` breaks that invariant by design, which means the
+        // ordinary "untracked name -> no Inc/Dec inserted, nothing to
+        // get wrong" reasoning this whole pass otherwise relies on does
+        // NOT hold for it — a real, confirmed use-after-free (`.as_cstr
+        // ()` called twice on a plain function PARAMETER, or on a top-
+        // level GLOBAL, both — neither is ever added to `known_heap` by
+        // design, see this function's own scope note above) that
+        // manifested as garbage bytes on an actual live socket before
+        // being root-caused here, not a theoretical gap.
+        //
+        // The fix: when `.as_cstr()`'s operand is a `Var` that ISN'T
+        // tracked, wrap it in a protective `Inc` right here — `.as_cstr
+        // ()`'s own guaranteed `Dec` then just cancels that BACK out
+        // (net zero effect on the real refcount), turning what would
+        // otherwise be an unconditional consume into a safe, ordinary
+        // borrow-and-copy. A TRACKED name needs no such protection —
+        // this pass's EXISTING `mark_last_uses` machinery already
+        // proves whether it's genuinely safe to consume (and inserts
+        // its own `Inc` first if it isn't), which is exactly why this
+        // arm only ever fires for the UNTRACKED case, never doubling up
+        // with that existing mechanism.
+        Expr::AsCStr(e) => match e.as_ref() {
+            Expr::Var(name) if !known_heap.contains(name) => Expr::RcAnnotated {
+                op: RcOp::Inc,
+                target: name.clone(),
+                rest: Box::new(Expr::AsCStr(e)),
+            },
+            _ => Expr::AsCStr(Box::new(transform(*e, known_heap))),
+        },
         Expr::AsString(e) => Expr::AsString(Box::new(transform(*e, known_heap))),
         Expr::ToIntTrunc(e) => Expr::ToIntTrunc(Box::new(transform(*e, known_heap))),
         Expr::ToIntRound(e) => Expr::ToIntRound(Box::new(transform(*e, known_heap))),
@@ -2364,6 +2403,68 @@ mod tests {
             args: vec![var("x")],
         };
         let input = let_("r", call, ctor("Pair", vec![var("r"), var("r")]));
+        assert_eq!(insert_refcount_ops(input.clone()), input);
+    }
+
+    // --- `.as_cstr()` on an untracked variable — the real use-after-
+    // free found and fixed while building the OS module (see `transform
+    // `'s own `AsCStr` arm doc comment for the full "why"). ---
+
+    #[test]
+    fn as_cstr_on_an_untracked_variable_is_wrapped_with_a_protective_inc() {
+        // `s` here is a bare free variable (no enclosing `let`), the
+        // EXACT "unprotected parameter"/"untracked global" shape that
+        // corrupted for real — `insert_refcount_ops` starts with an
+        // empty `known_heap`, so `s` is never tracked no matter what
+        // it's aliased from.
+        let input = Expr::AsCStr(Box::new(var("s")));
+        assert_eq!(insert_refcount_ops(input.clone()), inc("s", Expr::AsCStr(Box::new(var("s")))));
+    }
+
+    #[test]
+    fn as_cstr_on_a_tracked_last_use_needs_no_extra_protection() {
+        // `s` comes from a real `let` and is used exactly once — the
+        // EXISTING last-use machinery already proves this consume is
+        // safe, so the NEW untracked-only fix must not fire here (no
+        // redundant `Inc` on top of what's already correct).
+        let input = let_("s", Expr::Str("hi".to_string()), Expr::AsCStr(Box::new(var("s"))));
+        assert_eq!(insert_refcount_ops(input), let_("s", Expr::Str("hi".to_string()), Expr::AsCStr(Box::new(var("s")))));
+    }
+
+    #[test]
+    fn as_cstr_on_a_tracked_variable_used_again_afterward_is_dupd_by_the_existing_machinery() {
+        // A tracked `s` used by `.as_cstr()` FIRST, then again
+        // afterward, already needs (and already gets, via the pre-
+        // existing `mark_last_uses` pass, not this fix) a protective
+        // `Inc` before the `.as_cstr()` call — this proves the OLD
+        // mechanism and the NEW untracked-only fix don't double up for
+        // a tracked name.
+        let input = let_(
+            "s",
+            Expr::Str("hi".to_string()),
+            Expr::Binary(BinOp::Add, Box::new(Expr::AsCStr(Box::new(var("s")))), Box::new(var("s"))),
+        );
+        // `mark_last_uses` wraps the specific (non-last) OCCURRENCE
+        // with its protective `Inc`, not the whole surrounding
+        // expression — confirmed by running it, not assumed.
+        let expected = let_(
+            "s",
+            Expr::Str("hi".to_string()),
+            Expr::Binary(
+                BinOp::Add,
+                Box::new(Expr::AsCStr(Box::new(inc("s", var("s"))))),
+                Box::new(var("s")),
+            ),
+        );
+        assert_eq!(insert_refcount_ops(input), expected);
+    }
+
+    #[test]
+    fn as_cstr_on_a_non_variable_operand_is_left_alone() {
+        // A fresh, unnamed temporary (a literal here) has no binding
+        // for a protective `Inc` to even target, and needs none — it's
+        // not shared with anything else by construction.
+        let input = Expr::AsCStr(Box::new(Expr::Str("hi".to_string())));
         assert_eq!(insert_refcount_ops(input.clone()), input);
     }
 }

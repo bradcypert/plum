@@ -5579,3 +5579,192 @@ this time (the reverse of the HTTP client's own tests), sending a real
 bodyless `GET` (deliberately, since that's the exact request shape that
 caught bug #2 above) and checking the handler saw the real parsed
 method/path, not just that SOME 200 came back.
+
+### OS module: directory listing + subprocess exec — Decided and implemented (2026-08-11): the two hard self-hosting blockers
+
+Picked directly out of a "when does it make sense to self-host"
+discussion with Brad: two HARD blockers (a self-hosted `plum build`
+needs to shell out to `clang`; module resolution needs to walk a
+project's file tree) plus lower-priority should-haves (real hash-based
+`Map`/`Set`; `?`/early-return sugar) — Brad chose to close the two hard
+blockers now.
+
+**Same `net_shim.c` shim pattern throughout** (see that file's own doc
+comment for the general story) — `dir_shim.c`/`process_shim.c`, flat
+`Int`/`CStr` extern functions hiding real POSIX types (`DIR *`, `struct
+dirent`, `fork`/`execvp`/`waitpid`) that don't fit Plum's extern
+surface. **Handle-based, multi-call return** — the same pattern
+sockets' fds and `.accept()` loops already established: `dir_open`/
+`process_run` return an opaque `Int`; further calls (`dir_read_next`,
+`process_exit_code`/`process_stdout_data`/`process_stderr_data`) read
+results back out. This is what makes a "run a process, get back THREE
+things (exit code/stdout/stderr)" operation possible at all — the
+extern surface still has no multi-value return.
+
+**A real refactor forced by scale, done proactively**: the "compile a
+shim, force-keep its symbols against `--gc-sections`, export them to
+`.dynsym`, write its source into every native `clang` invocation"
+recipe was hand-duplicated per shim across SIX call sites (`plum-
+interp`/`plumc`'s own `build.rs`, and FOUR independent `clang`
+invocations in `codegen_cli.rs`). Adding a 2nd and 3rd shim in the SAME
+pass as the 1st would have meant hand-duplicating it a 2nd/3rd time —
+refactored FIRST, before adding the new shims, into a shared `native_
+shims()` list (`build.rs`) / `ALL_NATIVE_SHIMS` + `write_native_shims`
+(`codegen_cli.rs`) that every call site loops over. The three lists
+still have to be kept in sync by hand (a `build.rs` can't easily share
+code across crates, and `codegen_cli.rs` embeds via `include_str!` at
+compile time) — an accepted duplication, not fully eliminated, but
+reduced from "N call sites × M shims" hand-written blocks to "N call
+sites, one loop each."
+
+**Directory listing**: `list_dir(path): Result[Array[String], String]`
+(entry NAMES only, `.`/`..` already skipped by the shim) and
+`is_directory(path): Result[Bool, String]` (a real three-way `stat`
+outcome under the hood — nonexistent path is `Err`, not silently
+folded into `Ok(false)`). `dir_read_all_acc`'s tail-recursive
+accumulator is the SAME "no `while` loop, read until empty" idiom every
+other stdlib "read until done" function already uses.
+
+**Subprocess exec**: `run_process(program, args): Result[ProcessResult,
+String]`, `ProcessResult { exit_code, stdout, stderr }`. A non-zero
+CHILD exit code is an ordinary, successful `Ok` (a failing compile is
+routine for a compiler-shaped caller to inspect) — `Err` means the
+process could never even be STARTED. **Captures stdout/stderr via TEMP
+FILES, not pipes** — deliberately, to sidestep the classic pipe-
+deadlock class of bug (`fork`+pipe+`waitpid`-before-draining can
+deadlock if a child writes more than the pipe's kernel buffer before
+anyone reads it; a temp file has no such buffer, so there's no writer/
+reader ordering dependency at all). **Arguments joined with a TAB
+separator, not a rarer control byte** (the natural choice, e.g. ASCII
+Unit Separator `0x1F`, would have been genuinely safer against a real
+argument containing it) — forced by what Plum's own string-literal
+lexer can actually express (`\n`/`\t`/`\r`/`\\`/`\"` only, no `\xNN`
+hex escape); a real, honest trade, not the ideal choice, same spirit as
+`CStr`'s NUL-truncation.
+
+**A real, separate bug found while testing, NOT fixed here — filed
+instead.** A top-level GLOBAL `let` (e.g. `let g = "hello"`) used
+TWICE, where at least one use goes through a heap-consuming operation
+like `.as_cstr()`, corrupts under NATIVE codegen: confirmed with a
+minimal repro entirely unrelated to this chunk's own new code (`extern
+"C" { fn strlen(s: CStr) -> Int; } let g = "hello" let main (): Int =
+unsafe { let a = strlen(g.as_cstr()); let b = strlen(g.as_cstr()); a +
+b }` fails with \"embedded null byte\" — the SAME symptom class the
+`tcp_write` use-after-free earlier this session had). Root cause,
+diagnosed but not yet fixed: `plum-ir::fbip`'s last-use analysis
+(`insert_refcount_ops`) reasons about heap-value ownership PER FUNCTION
+BODY, keyed by locally-scoped variable names — a reference to a GLOBAL
+inside a function body isn't in that function's own `known_heap`
+tracking, so no protective refcount `Inc` is ever inserted before a
+consuming use, and `.as_cstr()`'s own unconditional decrement (see its
+doc comment: \"the ONLY place that ever discharges the incoming Str's
+refcount ownership\") frees the shared global cell on its FIRST use
+anywhere in the whole program, corrupting every subsequent reference.
+This chunk's OWN new stdlib code and tests are unaffected (every
+`list_dir`/`is_directory` call site uses a LOCAL `let`, verified
+directly, both by the fix working when switched from global to local
+and by dedicated tests exercising exactly this double-use shape with a
+local). A real, standalone bug — filed on the roadmap, not fixed in
+this pass; **fixed in a following pass, same session — see "`.as_cstr
+()` use-after-free on untracked variables — Decided and fixed" below**
+for the real fix (which turned out to be broader than "globals": a
+plain function PARAMETER has the identical bug, found while root-
+causing this one).
+
+Verified with real compile-and-run tests in BOTH backends: a real temp
+directory (multiple files + a subdirectory) for `list_dir`/`is_
+directory`, and a real `echo`/`sh -c "exit N"`/nonexistent-program
+subprocess invocation for `run_process`, including the routine-vs-
+Err distinction (nonzero exit code is `Ok`; a nonexistent program still
+starts and exits 127 via the shim's own `_exit(127)`, also `Ok` — `Err`
+is reserved for a genuine failure to even fork/create the capture temp
+files, not exercised by these tests since it's not realistically
+triggerable in a unit test).
+
+### `.as_cstr()` use-after-free on untracked variables — Decided and fixed (2026-08-11)
+
+The real fix for the bug filed in the "OS module" section above —
+turned out to be broader than that section's own framing ("globals").
+
+**Root cause, precisely**: `plum-ir::fbip`'s last-use analysis
+(`insert_refcount_ops`/`transform`) only tracks a name as heap-shaped
+(`known_heap`) when it's bound by a real `let` to a directly-provable-
+heap value (a `Ctor`, a `Str`/`EmptyArray` literal, or an alias of an
+already-tracked name) — **by design**, documented as conservative scope
+("without a type checker") since the pass predates real type info
+reaching it. Two other kinds of names are NEVER added to `known_heap`,
+also by design: function PARAMETERS (confirmed by an existing test's
+own comment: "a bare free variable is exactly the 'unprotected
+parameter' shape") and top-level GLOBALS (never touched by the per-
+function `known_heap` set at all). For nearly every heap-consuming
+operation in this compiler, that's harmless — `.concat()`'s `StrConcat`,
+`.push()`'s `ArrayPush`, etc. never touch their operand's refcount
+directly; ALL refcount management for them is delegated entirely to
+whatever `RcAnnotated` `fbip` separately decides to insert, so an
+untracked name just never gets an Inc OR a Dec — a leak, never a
+use-after-free. **`.as_cstr()` is the one architectural exception**:
+its own codegen (`codegen_as_cstr`) unconditionally decrements its
+operand's refcount as part of producing the `CStr` copy — by design
+(see its own doc comment: "the ONLY place that ever discharges the
+incoming `Str`'s refcount ownership"), because SOMETHING has to
+discharge it, and the reuse-preventing copy it makes means the fresh
+`CStr` buffer can safely outlive the original regardless. That
+unconditional Dec is only actually SAFE when `fbip` can guarantee this
+was the value's true last use — a guarantee that only ever existed for
+TRACKED names. For an untracked name (a parameter or a global), no such
+guarantee exists, so `.as_cstr()` called on it — even ONCE, if the
+value is used again afterward, or TWICE, as both this bug's real
+repros and its regression tests do — frees a cell something else still
+holds a live reference to.
+
+Found via `list_dir`/`is_directory`, but proven to be nothing to do
+with directory listing specifically: a minimal repro with a bare
+top-level `let g = "hello"` and two `strlen(g.as_cstr())` calls
+reproduces it with zero new stdlib code involved. Then, while narrowing
+the repro down, found the SAME bug for a plain function PARAMETER too
+(`let double_strlen (s: String): Int = unsafe { let a = strlen(s.
+as_cstr()); let b = strlen(s.as_cstr()); a + b }`) — confirming the real
+scope is "any untracked name," not "globals" specifically. Both
+confirmed via a real libc `strlen` call over an ACTUAL corrupted
+buffer (observed directly: `.as_cstr()`'s own embedded-NUL validation
+correctly caught the corruption and aborted, rather than silently
+returning a wrong answer — the SAME "silent, not a crash" character the
+`println`/`tcp_write` UAFs of earlier this session had was, this time,
+caught by an existing safety check instead of slipping through).
+
+**The fix**: `fbip::transform`'s `AsCStr` arm now special-cases the
+untracked case specifically — when `.as_cstr()`'s operand is a bare
+`Var(name)` where `name` ISN'T in `known_heap`, wrap the whole thing in
+a protective `RcAnnotated::Inc` on `name` first. `.as_cstr()`'s own
+guaranteed `Dec` then just cancels that back out — net zero effect on
+the value's REAL refcount — turning what would otherwise be an
+unconditional consume into an ordinary, safe borrow-and-copy. A TRACKED
+name needs no such protection (the EXISTING `mark_last_uses` machinery
+already proves whether a consume is genuinely safe there, and inserts
+its own `Inc` first if it isn't — confirmed this doesn't double up via
+a dedicated test); a non-`Var` operand (a literal, an inline call
+result) needs none either, since it's a fresh, unshared value by
+construction with no name for a protective `Inc` to even target.
+
+**A second, separate fix this surfaced**: `Expr::RcAnnotated`'s own
+CODEGEN only ever resolved its `target` against `env` (locals/params) —
+which is exactly why the parameter case started working the moment the
+`fbip` fix landed, but the GLOBAL case still failed with "unbound
+variable" until `RcAnnotated`'s codegen arm was ALSO extended to fall
+back to the same `ctx.globals` resolution (a `load` of the already-
+materialized `@global.{name}` slot) `Expr::Var`'s own codegen arm
+already used. Two genuinely separate gaps, both real, both needed:
+`fbip` didn't know an untracked-`Var`-as-`.as_cstr()`-operand needed
+protecting at all; codegen's `RcAnnotated` didn't know how to apply
+that protection to a global even once `fbip` asked it to.
+
+Verified via the two SAME minimal repros that first found the bug (a
+plain-parameter double-`.as_cstr()`, and a top-level-global double-
+`.as_cstr()`), now passing correctly in both the interpreter AND native
+codegen (the interpreter, it turned out, never actually had this bug —
+its OWN `.as_cstr()` evaluation is a pure pass-through with no refcount
+side effect at all, unlike native codegen's real malloc+memcpy+decrement
+— confirmed directly rather than assumed, which is also why no
+interpreter-side regression test was needed, only `plum-ir::fbip`'s own
+unit tests plus two native `compile_and_run` regression tests). Full
+workspace suite green, zero new clippy warnings.

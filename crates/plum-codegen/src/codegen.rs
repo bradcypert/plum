@@ -4894,7 +4894,28 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
         // per-field dispatch uses, in lib.rs — the two are guaranteed
         // to always agree on which function decrements which shape).
         Expr::RcAnnotated { op, target, rest } => {
-            let (reg, ty) = env.get(target).cloned().ok_or_else(|| format!("codegen: unbound variable {target:?}"))?;
+            // `env` alone isn't enough — `target` can legitimately name
+            // a top-level GLOBAL, not just a local/param (confirmed
+            // directly: `fbip::transform`'s own protective-`Inc`-before-
+            // `.as_cstr()` fix, added specifically to close a real use-
+            // after-free on globals, targets exactly this shape). Falls
+            // back to the SAME "load the already-materialized global
+            // slot" resolution `Expr::Var`'s own codegen arm uses — a
+            // real `Global`'s VALUE is always a `load` of `@global.
+            // {name}`, never a re-evaluation of its initializer.
+            let (reg, ty) = match env.get(target).cloned() {
+                Some(v) => v,
+                None => {
+                    let ty = ctx
+                        .globals
+                        .get(target)
+                        .cloned()
+                        .ok_or_else(|| format!("codegen: unbound variable {target:?}"))?;
+                    let r = em.fresh_reg();
+                    em.push(format!("  {r} = load {}, ptr @global.{target}", ty.llvm_type()));
+                    (r, ty)
+                }
+            };
             match op {
                 RcOp::Inc => {
                     if !matches!(ty, CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..)) {
