@@ -161,16 +161,21 @@ Two pieces, independent of each other:
   struct/enum names, `.field` access, enum variant references), and
   completion — keywords + every function/global/struct/enum/extern
   name in scope (including the whole standard library) generally, and
-  a struct's own fields right after typing `.`. Diagnostics report one
-  error at a time, not every error in a project at once — this matches
-  how the rest of the compiler reports errors today (every
-  `CompileError` surface in this codebase stops at the first error,
-  not just the LSP), not an LSP-specific limitation; hover/go-to-
-  definition need the project to type-check cleanly first, same
-  reason. General completion falls back to the last successfully
-  checked snapshot when the current buffer doesn't (typing itself
-  usually leaves it that way); dot completion works around this
-  differently — see DESIGN.md's "Completion" section for the trick.
+  a struct's own fields right after typing `.`. Every file that fails
+  to PARSE gets its own diagnostic simultaneously (fix three broken
+  files, see all three); module-resolution/type errors still cap out
+  at one at a time — a later function's error can genuinely depend on
+  an earlier one's real, resolved signature (mutual recursion), so
+  reporting more than one there risks a misleading cascade, not just
+  extra convenience — this matches how the rest of the compiler
+  reports errors today (every `CompileError` surface in this codebase
+  stops at the first, not just the LSP), not an LSP-specific
+  limitation; hover/go-to-definition need the project to type-check
+  cleanly first, same reason. General completion falls back to the
+  last successfully checked snapshot when the current buffer doesn't
+  (typing itself usually leaves it that way); dot completion works
+  around this differently — see DESIGN.md's "Completion" and "Multiple
+  diagnostics" sections for the details.
   Fix-and-recheck is fast in
   practice.
 - **[`tools/tree-sitter-plum`](tools/tree-sitter-plum)** — a

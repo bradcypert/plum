@@ -106,6 +106,49 @@ pub fn resolve_modules(modules: &[(&str, &str)]) -> Result<ast::Program, String>
     resolve_modules_diag(modules).map_err(|e| e.to_string())
 }
 
+/// The LSP's own sibling of `resolve_modules_diag`'s FIRST phase
+/// (per-file parsing) — collects every FILE's own parse error instead
+/// of stopping at the first, so a project with more than one broken
+/// file can get a diagnostic for each at once. Deliberately narrow:
+/// only PARSE errors get this treatment, since each file parses fully
+/// independently (zero cascade risk — one file's tokens/parser state
+/// never touches another's). Module resolution and type-checking still
+/// stop at the first error, same as `check_modules_diag` always has —
+/// see DESIGN.md's "Multiple diagnostics" section for why: `infer_
+/// program`'s Phase 2 threads ONE shared, accumulating substitution
+/// across every function body ON PURPOSE, for mutual recursion: two
+/// functions calling each other need to see each other's real,
+/// resolved-so-far signature, not each start over with a private one.
+/// Skipping a failed function's contribution there and continuing
+/// risks a LATER function that genuinely depends on it producing a
+/// spurious, misleading secondary error that has nothing to do with
+/// what's actually wrong in it — the classic cascading-error problem,
+/// a real design cost, not just an untried convenience.
+///
+/// `Ok(())` iff every file parses cleanly — callers proceed to the
+/// ordinary `resolve_modules_diag`/`check_modules_diag` pipeline from
+/// there, exactly as before this function existed. `Err(errors)` — one
+/// entry per BROKEN file, in `modules`' own order — otherwise; no
+/// `Program` is built at all in this case (matching today's behavior:
+/// a parse failure already meant module resolution never ran).
+pub(crate) fn parse_every_module_diag(modules: &[(&str, &str)]) -> Result<(), Vec<plum_syntax::error::CompileError>> {
+    let mut errors = Vec::new();
+    let mut base = crate::PRELUDE_TOTAL_LEN;
+    for (mpath, src) in modules {
+        let tokens = Lexer::with_base_offset(src, base).tokenize();
+        let mut parser = Parser::new(tokens);
+        if let Err(e) = parser.parse_program() {
+            errors.push(e.context(format!("parse error in module {mpath:?}")));
+        }
+        base += src.len();
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
 /// The `CompileError`-preserving sibling of `resolve_modules` — see
 /// `typecheck_and_run_modules_diag`'s doc comment for why this split
 /// exists. Used by `project::resolve_project_diag` (`plum build`'s own
@@ -863,5 +906,30 @@ mod tests {
         // behavior.
         let result = crate::typecheck_and_run("let double n = n * 2", "double", vec![Value::Int(21)]);
         assert_eq!(result, Ok(Value::Int(42)));
+    }
+
+    #[test]
+    fn parse_every_module_diag_is_ok_when_every_file_parses_cleanly() {
+        let modules: &[(&str, &str)] = &[("a", "let x = 1"), ("b", "let y = 2")];
+        assert_eq!(parse_every_module_diag(modules), Ok(()));
+    }
+
+    #[test]
+    fn parse_every_module_diag_collects_one_error_per_broken_file_not_just_the_first() {
+        // The whole point: unlike `resolve_modules_diag` (which bails
+        // at the FIRST broken file), this must still notice module "c"
+        // is ALSO broken even though "a" already failed.
+        let modules: &[(&str, &str)] = &[("a", "let x = ("), ("b", "let y = 2"), ("c", "let z = (")];
+        let errors = parse_every_module_diag(modules).expect_err("expected both a and c to fail to parse");
+        assert_eq!(errors.len(), 2, "expected exactly 2 errors (a and c), got: {errors:?}");
+        assert!(errors[0].message.contains("module \"a\""), "expected the first error to name module a: {}", errors[0].message);
+        assert!(errors[1].message.contains("module \"c\""), "expected the second error to name module c: {}", errors[1].message);
+    }
+
+    #[test]
+    fn parse_every_module_diag_reports_nothing_for_the_files_that_parse_fine() {
+        let modules: &[(&str, &str)] = &[("a", "let x = ("), ("b", "let y = 2")];
+        let errors = parse_every_module_diag(modules).expect_err("expected a to fail to parse");
+        assert_eq!(errors.len(), 1, "expected only a's error, not one for b too: {errors:?}");
     }
 }

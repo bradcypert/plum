@@ -114,12 +114,16 @@ struct Backend {
     /// the on-disk tree on every recheck so diagnostics reflect what's
     /// actually in the editor, not the last save.
     open_docs: Mutex<HashMap<Url, String>>,
-    /// The file a diagnostic was last published to, if any — so the
-    /// NEXT recheck knows to clear it first if the error moved to a
-    /// different file (or disappeared). `check_modules_diag` only ever
-    /// reports one error at a time (see this module's own doc comment),
-    /// so this server only ever needs to track one.
-    last_diagnosed: Mutex<Option<Url>>,
+    /// Every file a diagnostic was last published to — so the NEXT
+    /// recheck knows to clear any that are no longer broken (fixed, or
+    /// the error moved elsewhere). More than one file can appear here
+    /// at once: multiple FILES can each show their own parse error
+    /// simultaneously (`parse_every_module_diag`, since each file
+    /// parses fully independently — no cascade risk); type/resolution
+    /// errors still cap out at one file at a time — see `recheck`'s own
+    /// doc comment for why that boundary is deliberate, not just
+    /// unfinished.
+    last_diagnosed: Mutex<std::collections::HashSet<Url>>,
     /// Bumped once per open/change/save/close event, and read back
     /// twice per `recheck` (see `recheck_debounced`/`recheck`
     /// themselves) — a monotonic "which edit is this recheck for" tag.
@@ -162,7 +166,7 @@ impl Backend {
             client,
             root: Mutex::new(None),
             open_docs: Mutex::new(HashMap::new()),
-            last_diagnosed: Mutex::new(None),
+            last_diagnosed: Mutex::new(std::collections::HashSet::new()),
             generation: Generation::default(),
             last_good_completions: Mutex::new(Vec::new()),
         }
@@ -227,12 +231,65 @@ impl Backend {
         )
     }
 
+    /// Turns a `CompileError` into a `(Url, Diagnostic)` pair, using
+    /// `sources`/`overlaid` to locate its span — shared by every path
+    /// through `recheck` that ends up with an error to report (per-file
+    /// parse errors AND the single type/resolution-error fallback).
+    /// `None` (after logging instead) for a genuinely spanless error
+    /// (codegen-/interpreter-runtime-level, or a file path that
+    /// couldn't round-trip through `Url::from_file_path`) — there's no
+    /// file/range to attach a `Diagnostic` to at all in that case.
+    async fn diagnostic_for(
+        &self,
+        e: &plum_syntax::error::CompileError,
+        sources: &crate::ModuleSources,
+        overlaid: &[(PathBuf, String, String)],
+    ) -> Option<(Url, Diagnostic)> {
+        let (idx, local_start) = e.span.and_then(|span| sources.locate_offset(span.start))?;
+        let span = e.span.expect("just matched Some above via `e.span.and_then`");
+        let (path, _mpath, src) = &overlaid[idx];
+        let Ok(uri) = Url::from_file_path(path) else {
+            self.client.log_message(MessageType::ERROR, format!("plum lsp: {}", e.message)).await;
+            return None;
+        };
+        let start_pos = position::byte_offset_to_position(src, local_start);
+        // The span's END might land past this module's own source
+        // (rare — see `ModuleSources::render`'s own comment on the same
+        // edge case) or, in principle, inside a DIFFERENT file's range
+        // entirely; either way, falling back to a zero-width range at
+        // `start_pos` is always safe and never panics.
+        let end_pos = sources
+            .locate_offset(span.end)
+            .filter(|(end_idx, _)| *end_idx == idx)
+            .map(|(_, local_end)| position::byte_offset_to_position(src, local_end))
+            .unwrap_or(start_pos);
+        let diagnostic = Diagnostic {
+            range: Range::new(start_pos, end_pos),
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("plum".to_string()),
+            message: e.message.clone(),
+            ..Diagnostic::default()
+        };
+        Some((uri, diagnostic))
+    }
+
     /// Re-walks the workspace root, overlays any open buffers' unsaved
     /// content, type-checks the result, and publishes (or clears)
-    /// exactly one diagnostic accordingly. `my_gen` is checked against
-    /// the CURRENT generation counter immediately before every publish/
-    /// state-mutating step below — see `generation`'s own doc comment
-    /// for why. Always called via `recheck_debounced`, never directly.
+    /// diagnostics accordingly. `my_gen` is checked against the CURRENT
+    /// generation counter immediately before every publish/state-
+    /// mutating step below — see `generation`'s own doc comment for
+    /// why. Always called via `recheck_debounced`, never directly.
+    ///
+    /// Two tiers, deliberately different in how many errors they
+    /// report at once — see `parse_every_module_diag`'s own doc comment
+    /// for the full reasoning: every FILE that fails to PARSE gets its
+    /// own diagnostic, all at once (parsing is fully independent per
+    /// file, zero cascade risk); but the moment every file parses
+    /// cleanly, module resolution and type-checking fall back to the
+    /// single-error `check_modules_diag` exactly as before — a later
+    /// function's error can genuinely depend on an earlier one's real,
+    /// resolved signature (mutual recursion), so reporting more than
+    /// one there risks a misleading cascade, not just extra convenience.
     async fn recheck(&self, my_gen: u64) {
         let Some(overlaid) = self.overlaid_files().await else {
             return;
@@ -244,66 +301,38 @@ impl Backend {
         // Bail before doing the (potentially real) typecheck work at
         // all if a NEWER event already superseded this one — see
         // `generation`'s own doc comment. Checked again below, right
-        // before each actual publish, since `check_modules_diag`
-        // itself is the slow part a newer recheck could easily finish
-        // ahead of.
+        // before each actual publish, since checking itself is the
+        // slow part a newer recheck could easily finish ahead of.
         if self.is_stale(my_gen) {
             return;
         }
 
-        let new_diagnosed = match check_modules_diag(&modules) {
-            Ok(()) => {
-                // Cache top-level completion items on every SUCCESSFUL
-                // check — see `Backend::last_good_completions`'s own
-                // doc comment for why this needs to be a cache (rather
-                // than computed fresh at completion-request time) at
-                // all: general completion is most useful mid-edit,
-                // exactly when the CURRENT buffer often doesn't parse.
-                if let Ok(program) = crate::modules::resolve_modules_diag(&modules) {
-                    *self.last_good_completions.lock().unwrap() = top_level_completion_items(&program);
-                }
-                None
-            }
-            Err(e) => match e.span.and_then(|span| sources.locate_offset(span.start).map(|start| (start, span))) {
-                Some(((idx, local_start), span)) => {
-                    let (path, _mpath, src) = &overlaid[idx];
-                    let Ok(uri) = Url::from_file_path(path) else {
-                        self.client.log_message(MessageType::ERROR, format!("plum lsp: {}", e.message)).await;
-                        return;
-                    };
-                    let start_pos = position::byte_offset_to_position(src, local_start);
-                    // The span's END might land past this module's own
-                    // source (rare — see `ModuleSources::render`'s own
-                    // comment on the same edge case) or, in principle,
-                    // inside a DIFFERENT file's range entirely; either
-                    // way, falling back to a zero-width range at
-                    // `start_pos` is always safe and never panics.
-                    let end_pos = sources
-                        .locate_offset(span.end)
-                        .filter(|(end_idx, _)| *end_idx == idx)
-                        .map(|(_, local_end)| position::byte_offset_to_position(src, local_end))
-                        .unwrap_or(start_pos);
-                    let diagnostic = Diagnostic {
-                        range: Range::new(start_pos, end_pos),
-                        severity: Some(DiagnosticSeverity::ERROR),
-                        source: Some("plum".to_string()),
-                        message: e.message.clone(),
-                        ..Diagnostic::default()
-                    };
-                    if self.is_stale(my_gen) {
-                        return;
+        let mut new_diagnostics: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
+        match crate::modules::parse_every_module_diag(&modules) {
+            Err(errors) => {
+                for e in &errors {
+                    if let Some((uri, diagnostic)) = self.diagnostic_for(e, &sources, &overlaid).await {
+                        new_diagnostics.entry(uri).or_default().push(diagnostic);
                     }
-                    self.client.publish_diagnostics(uri.clone(), vec![diagnostic], None).await;
-                    Some(uri)
                 }
-                // A spanless error (see `CompileError`'s own doc
-                // comment — genuinely locationless, e.g. a codegen- or
-                // interpreter-runtime-level failure) can't be attached
-                // to a file/range at all; surface it as a log message
-                // instead of silently dropping it.
-                None => {
-                    self.client.log_message(MessageType::ERROR, format!("plum lsp: {}", e.message)).await;
-                    None
+            }
+            Ok(()) => match check_modules_diag(&modules) {
+                Ok(()) => {
+                    // Cache top-level completion items on every
+                    // SUCCESSFUL check — see `Backend::last_good_
+                    // completions`'s own doc comment for why this needs
+                    // to be a cache (rather than computed fresh at
+                    // completion-request time) at all: general
+                    // completion is most useful mid-edit, exactly when
+                    // the CURRENT buffer often doesn't parse.
+                    if let Ok(program) = crate::modules::resolve_modules_diag(&modules) {
+                        *self.last_good_completions.lock().unwrap() = top_level_completion_items(&program);
+                    }
+                }
+                Err(e) => {
+                    if let Some((uri, diagnostic)) = self.diagnostic_for(&e, &sources, &overlaid).await {
+                        new_diagnostics.entry(uri).or_default().push(diagnostic);
+                    }
                 }
             },
         };
@@ -312,16 +341,18 @@ impl Backend {
             return;
         }
 
+        let new_diagnosed: std::collections::HashSet<Url> = new_diagnostics.keys().cloned().collect();
         // Each `.lock()` guard is scoped to its own statement here (not
-        // held across the `.await` in between) — a `std::sync::Mutex`
-        // guard isn't `Send`, so holding one across an await point
-        // would make this whole async fn's future non-`Send`, which
+        // held across the `.await`s below) — a `std::sync::Mutex` guard
+        // isn't `Send`, so holding one across an await point would
+        // make this whole async fn's future non-`Send`, which
         // `tower_lsp`'s trait requires it to be.
-        let prev = self.last_diagnosed.lock().unwrap().take();
-        if let Some(prev) = prev
-            && new_diagnosed.as_ref() != Some(&prev)
-        {
-            self.client.publish_diagnostics(prev, Vec::new(), None).await;
+        let prev = std::mem::take(&mut *self.last_diagnosed.lock().unwrap());
+        for uri in prev.difference(&new_diagnosed) {
+            self.client.publish_diagnostics(uri.clone(), Vec::new(), None).await;
+        }
+        for (uri, diagnostics) in new_diagnostics {
+            self.client.publish_diagnostics(uri, diagnostics, None).await;
         }
         *self.last_diagnosed.lock().unwrap() = new_diagnosed;
     }
@@ -789,6 +820,55 @@ mod integration_tests {
             })
             .await;
         file_uri
+    }
+
+    #[tokio::test]
+    async fn recheck_reports_a_diagnostic_for_each_broken_file_at_once() {
+        // The actual new behavior this session's ask was about: TWO
+        // separately-broken files (each a genuine parse error) must
+        // BOTH get a diagnostic from one recheck, not just the first
+        // one found — `last_diagnosed` (a private field, readable here
+        // since this test module is nested inside the same crate) is
+        // inspected DIRECTLY rather than trying to intercept published
+        // notifications over a transport nothing in this harness
+        // actually drives (see `make_backend`'s own doc comment on why
+        // `_socket` is discarded).
+        let dir = std::env::temp_dir().join(format!("plum-lsp-multifile-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.plum"), "let x = (").unwrap();
+        std::fs::write(dir.join("b.plum"), "let y = 2").unwrap();
+        std::fs::write(dir.join("c.plum"), "let z = (").unwrap();
+
+        let backend = make_backend();
+        let root_uri = Url::from_directory_path(&dir).unwrap();
+        backend.initialize(InitializeParams { root_uri: Some(root_uri), ..Default::default() }).await.unwrap();
+        backend.initialized(InitializedParams {}).await;
+
+        let a_uri = Url::from_file_path(dir.join("a.plum")).unwrap();
+        let b_uri = Url::from_file_path(dir.join("b.plum")).unwrap();
+        let c_uri = Url::from_file_path(dir.join("c.plum")).unwrap();
+        let diagnosed = backend.last_diagnosed.lock().unwrap().clone();
+        assert_eq!(diagnosed.len(), 2, "expected exactly a.plum and c.plum to have a diagnostic, got: {diagnosed:?}");
+        assert!(diagnosed.contains(&a_uri), "expected a.plum to be diagnosed: {diagnosed:?}");
+        assert!(diagnosed.contains(&c_uri), "expected c.plum to be diagnosed: {diagnosed:?}");
+        assert!(!diagnosed.contains(&b_uri), "b.plum parses fine, expected no diagnostic for it: {diagnosed:?}");
+
+        // Fix `a` — its own diagnostic must clear while `c`'s (still
+        // broken) stays, proving the diff-based clear logic works for
+        // the now-multi-entry `last_diagnosed`, not just the old
+        // single-`Option<Url>` case.
+        backend
+            .did_change(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier { uri: a_uri.clone(), version: 2 },
+                content_changes: vec![TextDocumentContentChangeEvent { range: None, range_length: None, text: "let x = 1".to_string() }],
+            })
+            .await;
+        let diagnosed_after_fix = backend.last_diagnosed.lock().unwrap().clone();
+        assert_eq!(diagnosed_after_fix.len(), 1, "expected only c.plum left diagnosed, got: {diagnosed_after_fix:?}");
+        assert!(diagnosed_after_fix.contains(&c_uri));
+        assert!(!diagnosed_after_fix.contains(&a_uri), "expected a.plum's diagnostic to have cleared after the fix");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[tokio::test]

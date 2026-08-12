@@ -5212,6 +5212,73 @@ mechanism doesn't depend on the dot being freshly typed) plus 2 new
 reordering and the lenient variant's own contract directly. Full
 workspace suite: 0 failures.
 
+### Multiple diagnostics — Done (2026-08-12), same session, narrower than first asked
+
+Asked as a follow-up: "we also talked about surfacing more than one
+error at a time?" Investigated before proposing anything, and found
+"multiple diagnostics" actually splits into three genuinely different
+problems, not one, each with a very different risk profile:
+
+1. **Multiple PARSE errors across different FILES** — `resolve_
+   modules_diag` parses each file independently in a loop, bailing at
+   the first `?`. Each file's own parse shares NO state with any
+   other's, so collecting all of them instead of stopping at the first
+   is safe and mechanical.
+2. **Multiple parse errors WITHIN one file** — not tractable without
+   real parser error recovery, the same wall hit scoping completion:
+   this parser is strict, single-pass, first-error-wins, with zero
+   recovery/synchronize machinery anywhere. A structural rewrite, not a
+   bugfix.
+3. **Multiple TYPE errors across different top-level functions**
+   (probably what "why do I only see one error" usually means in
+   practice) — genuinely risky: `infer_program`'s Phase 2 threads ONE
+   shared, accumulating substitution across every function body ON
+   PURPOSE, so mutual recursion works (two functions calling each other
+   need to see each other's real, resolved-so-far signature). Skipping
+   a failed function's contribution and continuing risks a LATER
+   function that genuinely depends on it producing a spurious,
+   misleading secondary error that has nothing to do with what's
+   actually wrong in it — the classic cascading-error problem, real
+   design work on an already-intricate, previously-hard-won algorithm
+   (its own surrounding comments document regressions found
+   "empirically" while getting the ordering right the first time), not
+   just an untried convenience.
+
+Presented all three with their real trade-offs; Brad chose #1 only —
+real value for a genuinely common case (more than one broken file in a
+project), zero risk, leaving #2 and #3 explicitly out of scope rather
+than attempted partially.
+
+**Built**: `parse_every_module_diag` (`modules.rs`) — collects every
+FILE's own parse error into a `Vec`, instead of `resolve_modules_diag`'s
+existing first-error-wins `?`; a genuinely NEW, separate function, not
+a behavior change to the existing one (`plum build`/`run`/`test`'s own
+single-error UX is untouched — nobody asked for that to change, and
+CLI tooling showing "fix this one, then rerun" is arguably fine as-is).
+`Backend::recheck` now tries this FIRST: if any files fail to parse,
+every one gets its own `Diagnostic`, published together; only once
+EVERY file parses cleanly does it fall through to the existing single-
+error `check_modules_diag` path for module-resolution/type errors,
+unchanged. `Backend::last_diagnosed` grew from `Option<Url>` to
+`HashSet<Url>` to track possibly-many currently-diagnosed files at
+once, with the clear-on-fix logic generalized to a set difference
+(files that WERE diagnosed but aren't in the new result get cleared;
+everything in the new result gets (re-)published) rather than a single
+before/after comparison.
+
+Verified with 3 new pure unit tests on `parse_every_module_diag`
+itself (clean, one broken file, two broken files with a clean one in
+between — proving it doesn't stop at the first) plus a real end-to-end
+`Backend` test: three files (two broken, one clean) opened through the
+REAL `initialize`/`initialized` startup sequence, `last_diagnosed`
+(a private field, inspected directly — same crate's own test module)
+asserted to contain exactly the two broken files' URIs and NEITHER the
+clean one, then one of the two fixed via a real `did_change` and
+`last_diagnosed` re-checked to confirm exactly that one file's
+diagnostic cleared while the other, still-broken one's stayed — proving
+the set-difference clear logic, not just the initial collection. Full
+workspace suite: 0 failures.
+
 ## Open questions (not yet decided, flagged so we don't forget them)
 
 - ~~KNOWN BUG — a discarded statement-expression result can linger in
