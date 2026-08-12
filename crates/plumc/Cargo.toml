@@ -19,4 +19,4 @@ plum-codegen = { path = "../plum-codegen" }
 # shipped alongside the compiler, not the compiler (or its runtime)
 # itself.
 tower-lsp = "0.20"
-tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "io-std", "macros", "time"] }

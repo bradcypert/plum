@@ -4962,6 +4962,256 @@ summed), not just inspect emitted IR text.
   backend swaps from "interpret the IR" to "codegen the IR via LLVM" —
   the frontend and refcount-insertion pass should barely change.
 
+## Editor tooling (LSP)
+
+`plum lsp` (`crates/plumc/src/lsp/`) — an LSP server served straight
+out of the `plum` binary itself (the `gopls`-for-Go shape, not a
+separate `plum-lsp` binary/crate). **Scope**: diagnostics (parse/
+module-resolution/type errors) on open/change/save/close, hover
+(resolved type), go-to-definition (variables/params/`let`s, function/
+global calls, struct/enum names, `.field` access, enum variant
+references — see "Hover and go-to-definition" below), and completion
+(keywords + top-level names generally, struct fields after a `.` —
+see "Completion" below). Full-document sync only, and whole-PROJECT
+semantics:
+every edit re-walks and re-typechecks the ENTIRE workspace root (with
+any open buffers' unsaved content overlaid), not just the changed
+file. `check_modules_diag`, like the rest of this codebase's front
+end, reports at most one `CompileError` per check — so does the LSP;
+a project with more than one error only shows a diagnostic for the
+first until it's fixed, AND gets no hover/go-to-definition at all
+until it does (both need a successful `infer_program` to have
+anything to answer from). Both of these (whole-project re-walk per
+edit, one error at a time) are honest, documented v1 costs, acceptable
+while every project this compiler targets stays small — not yet
+revisited.
+
+### Recheck staleness/debounce fix — Decided (2026-08-12)
+
+Asked "how can we improve the LSP" as an open discussion, given the
+v1 scope's own honest gaps (no hover/go-to-def/completion, single-
+error-at-a-time, whole-project-per-keystroke). Presented four ranked
+options — this fix, hover, go-to-definition, and multi-error
+diagnostics (the last two blocked on more front-end plumbing than the
+first two, especially multi-error, which needs the parser/type
+checker's own single-`CompileError`-result design to change, not just
+the LSP layer) — and this one was chosen as the contained, immediate
+first step.
+
+**The gap**: every LSP event handler (`did_open`/`did_change`/`did_
+save`/`did_close`) called `Backend::recheck` directly, with zero
+debounce, and `recheck` itself had no notion of "am I still the most
+recent request." A whole-project re-walk + re-typecheck is not
+instant; a realistic edit burst could launch several overlapping
+`recheck`s that finish in a DIFFERENT order than they started in, and
+an OLDER one finishing LAST would publish its now-stale diagnostic
+over a NEWER, already-correct one — a real, live race, not
+hypothetical.
+
+**The fix**: a `Generation` type (`Backend::generation`) — a monotonic
+`AtomicU64` tag wrapped in a tiny `bump()`/`is_current()` API, pulled
+out as its own standalone type specifically so its actual correctness
+property is unit-testable directly (three new tests, including one
+spawning 50 real OS threads bumping concurrently and confirming
+exactly the highest tag stays current) without needing a fake `tower_
+lsp::Client` (no public test-double constructor exists for one — the
+whole `Backend` struct is otherwise untestable in isolation). Every
+event handler now calls a new `recheck_debounced` instead of `recheck`
+directly: it bumps the generation, waits a short `DEBOUNCE` (150ms),
+and only then calls `recheck` — abandoning silently if a later event
+already bumped the generation again during the wait, so a realistic
+typing burst collapses into one recheck instead of one per keystroke.
+`recheck` itself re-checks the generation immediately before every
+publish/state-mutating step (not just once at the top), since the
+walk+typecheck itself — not just the debounce wait — is exactly where
+a newer recheck can race ahead and finish first.
+
+### Hover and go-to-definition — Done (2026-08-12), same session
+
+Built the two next-ranked options from the same "how can we improve
+the LSP" discussion, together, since go-to-definition's plumbing
+(declaration-site spans) mostly subsumes what hover needs too (span-
+indexed lookups against a live `Infer`). Scoped explicitly with Brad
+first: hover shows just the resolved type (not type + doc comment);
+go-to-definition covers variables/params/`let`s, function/global
+calls, struct/enum names, `.field` access, AND enum variant
+references (not just the narrower variables-and-calls baseline).
+
+**The core mechanism, in `plum-types::infer::Infer`** — two new,
+deliberately SEPARATE span-keyed side-channels, following the exact
+precedent `field_owners`/`empty_array_elem_types` already established
+(a narrow `HashMap<Span, T>`, not a full typed IR):
+
+- **`node_types: HashMap<Span, (Type, Option<String>)>`** — every
+  expression node's (possibly still-unresolved) type, recorded by
+  wrapping `infer_expr` itself: the existing giant match became a
+  private `infer_expr_inner`, and the new public `infer_expr` just
+  calls it and records the result before returning. Since EVERY
+  recursive call anywhere in the module already goes through `self.
+  infer_expr(..)`, this one wrapper covers every node in the program
+  with zero changes to any of the match's ~80 arms. `resolve_node_
+  types()` applies the program's final substitution to every entry
+  once inference completes — mirrors `resolve_empty_array_elem_types`
+  exactly, except deliberately LENIENT (an entry still unresolved even
+  after the closure-component template fallback is silently dropped,
+  not a hard `Err` — hover is best-effort UI, and one un-renderable
+  node must never make an otherwise-successful `infer_program` look
+  like it failed).
+- **`definitions: HashMap<Span, Span>`** — a reference's own span ->
+  where the thing it resolved to was DECLARED. Needed `TypeEnv` (the
+  local scope chain) to grow an `Option<Span>` per binding — but as a
+  NEW `extend_spanned`/`extend_scheme_spanned` pair alongside the
+  EXISTING `extend`/`extend_scheme` (which now just pass `None`),
+  never a signature change to the originals. This mattered for real:
+  `TypeEnv::extend` has ~100 call sites, the overwhelming majority in
+  tests constructing an env directly with no real span to give — a
+  breaking signature change would have touched every one of them for
+  no benefit. Only the ~10 call sites that are the AUTHORITATIVE
+  binding site for something a user would actually want to jump to
+  (a function parameter, a `let`, a closure param, a `for`/`match`
+  binding, a function/global/extern's own final signature
+  registration) were switched to the spanned variant — every
+  SPECULATIVE/internal one (a multi-phase pass's placeholder, a self-
+  recursion pre-bind immediately superseded) stayed unspanned on
+  purpose, since there's no single well-defined "jump here" site for
+  those anyway. `TypeContext` (struct/enum declarations) got the same
+  treatment: four new, entirely separate span maps (`struct_decl_
+  spans`/`enum_decl_spans`/`struct_field_spans`/`variant_spans`)
+  alongside the existing ones, so `struct_fields`'s own return type —
+  asserted against directly by ~15 existing tests — never changed
+  either.
+
+**Wiring it up, in `plumc`**: `check.rs` gained `check_program(_modules)
+_diag_with_infer`, a sibling of the existing `_diag` functions that
+returns the `Infer` instance on success instead of discarding it —
+`check_program_diag`/`check_modules_diag` themselves are now thin
+wrappers around the new functions, one real implementation instead of
+two that could drift. `diagnostics::ModuleSources` gained `to_global_
+offset`, the exact inverse of its existing `locate_offset` (module
+index + local byte offset -> the merged-module GLOBAL offset `Infer`'s
+maps are keyed by). `lsp::position` gained `position_to_byte_offset`,
+the inverse of `byte_offset_to_position` (LSP's UTF-16-code-unit
+`Position` -> a local byte offset) — proven a true round-trip inverse
+by a dedicated test iterating every byte offset in a real source
+string. `Backend::overlaid_files` was factored out of `recheck` (which
+now just calls it) since `hover`/`goto_definition` need the exact same
+"current content of every file in the project" view; a new shared
+`Backend::resolve_at` builds on it to turn a request's `(uri,
+position)` into `(Infer, ModuleSources, global_offset, overlaid_
+files)` in one place. A small `smallest_containing` helper picks the
+narrowest span containing the cursor out of either side-channel (so
+hovering `x` inside `x + 1` shows `x`'s own type, not the whole binary
+expression's) — used for both hover and go-to-definition. `render_type`
+renders a `Type` in Plum surface syntax (`Array[Int]`, `(Int) -> Bool`,
+`Str` as `"String"`, matching the surface name rather than the
+internal variant name) rather than leaking `{ty:?}`'s Rust `Debug`
+noise into a hover popup the way every internal error message renders
+one.
+
+Verified for real, not just via the underlying helpers' own unit
+tests: three new end-to-end tests drive `Backend::hover`/`Backend::
+goto_definition` DIRECTLY (bypassing JSON-RPC serialization — `tower_
+lsp::Client` has no public standalone constructor, so a real one is
+captured out of `LspService::new`'s init closure via `Clone`, then a
+fresh `Backend` built from it) against a real temp-directory project
+on disk — proving the whole path (file walk, module merge, type-check,
+span lookup, byte-offset conversion, LSP response construction) works
+together, including a "cursor on whitespace, nothing resolves" case
+returning `None` cleanly rather than erroring. 6 new tests in `plum-
+types` (`resolve_node_types`/`definitions`, one per reference kind)
+and 6 new position-conversion tests round out the coverage. Full
+workspace suite: 0 failures.
+
+### Completion — Done (2026-08-12), same session
+
+Asked as a follow-up: "what about autocomplete?" Investigated before
+committing to a design, and found a real structural wrinkle hover/
+go-to-definition never hit: `plum-syntax`'s parser is strict, single-
+pass, first-error-wins — confirmed directly (grepped for any recovery/
+synchronize machinery: none exists). Hover/go-to-definition only ever
+need the code the CURSOR is already sitting in to be complete, which
+it normally is. Completion is different — the two moments it matters
+most are exactly when the buffer ISN'T complete: right after typing
+`.` (`parse_postfix_from` calls `self.expect_ident("a field name")?`
+unconditionally — `p.` with nothing after is a hard parse error, not a
+tolerated gap) and mid-typing a field/identifier name (parses fine
+syntactically, but the wrong-so-far name is a real TYPE error, which
+fails the WHOLE project's check under this front end's "one error
+stops everything" design — the same boundary hover/go-to-definition
+already live with, but completion runs into it far more, at exactly
+its most valuable moment).
+
+Presented the real trade-offs and got scope confirmed before building:
+dot/member completion via "splice a placeholder + reparse" (always
+reflects the CURRENT buffer, zero parser changes — the chosen approach
+over a last-good-snapshot heuristic, which risks staleness, or
+skipping dot completion for v1 entirely) and general completion via
+keywords + last-successfully-checked top-level names (not additionally
+locally-in-scope names, which would reopen the same incomplete-parse
+problem a second time for comparatively less value).
+
+**General completion**: `Backend::last_good_completions` — a CACHE
+(`Mutex<Vec<CompletionItem>>`), refreshed on every successful `recheck`
+from a fresh walk of the merged `Program`'s top-level items (`top_
+level_completion_items`) — a zero-param `let` is a global, one WITH
+params is a function, a `struct`/`enum` contributes its own name plus,
+for an enum, every variant tag too, an `extern` block contributes each
+declared function. Since `resolve_modules_diag` already injects the
+whole prelude before this ever sees it, this naturally covers every
+stdlib function/type too, not just the user's own project — with zero
+extra plumbing. A cache, not computed fresh per request, specifically
+because the moment completion is most useful is often the moment the
+current buffer doesn't parse at all — stale-but-mostly-right beats
+nothing while the user's mid-edit. Merged with a static `KEYWORDS` list
+(every reserved word the lexer recognizes, including `fn`/`mod`, which
+the grammar barely uses yet but are still real reserved tokens).
+
+**Dot/member completion**: `Backend::dot_completion` detects a `.`
+immediately before the cursor (scanning backward over identifier-
+continue bytes to find the start of whatever partial name is being
+typed, possibly zero-length), then SPLICES: replaces that partial name
+with a fixed placeholder identifier (`__plum_lsp_completion__`) before
+handing the modified buffer to the ordinary, otherwise-UNCHANGED parse
++typecheck pipeline. `base.__plum_lsp_completion__` parses exactly
+like any other field access — no parser changes anywhere — but since
+the placeholder never names a REAL field, `infer_program` still fails
+overall (a genuine "no field named …" type error), and the existing
+`check_modules_diag_with_infer` DISCARDS its whole `Infer` on any
+failure (correctly so, for hover/go-to-definition/diagnostics, which
+must never answer with something a broken program didn't actually
+prove).
+
+Fixed this with two small, real, and completion-specific changes: (1)
+`Infer::field_owners`' recording moved earlier — as soon as `base` is
+KNOWN to resolve to a real struct, BEFORE checking whether the (in
+this case deliberately fake) field name exists at all. Zero behavior
+change for `plum build`/`run`/`test` (a program with an invalid field
+name fails to type-check either way, so `lower.rs` — `field_owners`'
+only OTHER consumer — never runs on it regardless of exactly when this
+line executes); a new regression test pins the ordering directly. (2)
+A new `check_modules_diag_lenient_infer` — same inputs as `check_
+modules_diag_with_infer`, but NEVER propagates `infer_program`'s own
+failure, always handing back the `Infer` with whatever got recorded
+before it gave up. Used ONLY by `dot_completion`, nowhere else — every
+other handler keeps the strict, error-propagating version, since
+answering with a WRONG type/location would be worse than answering
+nothing, and only this one narrow probe has a reason to accept a
+knowingly-incomplete result. Once the struct name is recovered (via
+`field_owners`, keyed by the synthetic Field node's own span — computed
+directly from the splice, not searched for, so unambiguous), `Infer::
+ctx().struct_fields(..)` (a new `pub fn ctx()` getter, mirroring
+`field_owners`/`definitions`) gives the completable field list.
+
+Verified end-to-end: 4 new `Backend::completion` integration tests
+(general completion offering both keywords and top-level names; a
+BROKEN buffer still offering the last-good snapshot's names, driven
+through a real `did_change`; dot completion on a bare trailing `.`;
+dot completion mid-typing a partial field name — proving the splice
+mechanism doesn't depend on the dot being freshly typed) plus 2 new
+`plum-types`/`check.rs` regression tests pinning the `field_owners`
+reordering and the lenient variant's own contract directly. Full
+workspace suite: 0 failures.
+
 ## Open questions (not yet decided, flagged so we don't forget them)
 
 - ~~KNOWN BUG — a discarded statement-expression result can linger in

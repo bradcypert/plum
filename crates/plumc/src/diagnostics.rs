@@ -83,6 +83,19 @@ impl ModuleSources {
             .map(|idx| (idx, offset - self.entries[idx].1))
     }
 
+    /// The exact inverse of `locate_offset`: given a module INDEX
+    /// (into the same `modules` slice `Self::new` was built from) and a
+    /// byte offset LOCAL to that module, returns the GLOBAL (merged-
+    /// module) offset — what `Infer::resolve_node_types`/`definitions`
+    /// key their spans by. `plum lsp`'s hover/go-to-definition handlers
+    /// need this to turn "cursor is at byte N in THIS open file" into
+    /// something they can actually look up. `None` for an out-of-range
+    /// `idx`, never a panic.
+    pub(crate) fn to_global_offset(&self, idx: usize, local_offset: usize) -> Option<u32> {
+        let (_, base, _) = self.entries.get(idx)?;
+        Some((base + local_offset) as u32)
+    }
+
     /// Full `error: {msg}\n  --> {module}:{line}:{col}\n   |\n {line} | {source line}\n   | {caret}`
     /// rendering, falling back to `error: {msg}` alone when `err.span`
     /// is `None` (a genuinely spanless error — codegen/interpreter

@@ -42,6 +42,50 @@ pub(crate) fn byte_offset_to_position(src: &str, byte_offset: usize) -> Position
     Position::new(line, character)
 }
 
+/// The inverse of `byte_offset_to_position` — an LSP `Position`
+/// (cursor location, as sent by a `textDocument/hover`/`definition`
+/// request) back into a byte offset LOCAL to `src`, for looking a span
+/// up in `resolve_node_types`/`definitions`. Same UTF-16-vs-byte
+/// distinction as the forward direction, just walked in reverse.
+///
+/// Both a `line` past the end of `src` and a `character` past the end
+/// of that line clamp (to `src.len()`/the line's own end respectively)
+/// rather than panicking — same defensive stance `byte_offset_to_
+/// position` itself takes, since a Position an editor sends can, in
+/// principle, race slightly ahead of what THIS server's own last-
+/// rechecked buffer content still has.
+pub(crate) fn position_to_byte_offset(src: &str, position: Position) -> usize {
+    let line_start_byte = if position.line == 0 {
+        Some(0)
+    } else {
+        let mut current_line = 0u32;
+        let mut found = None;
+        for (i, ch) in src.char_indices() {
+            if ch == '\n' {
+                current_line += 1;
+                if current_line == position.line {
+                    found = Some(i + 1);
+                    break;
+                }
+            }
+        }
+        found
+    };
+    let Some(line_start) = line_start_byte else {
+        return src.len();
+    };
+    let line_end = src[line_start..].find('\n').map(|off| line_start + off).unwrap_or(src.len());
+
+    let mut utf16_count = 0u32;
+    for (i, ch) in src[line_start..line_end].char_indices() {
+        if utf16_count >= position.character {
+            return line_start + i;
+        }
+        utf16_count += ch.len_utf16() as u32;
+    }
+    line_end
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +136,51 @@ mod tests {
     fn an_offset_past_the_end_of_source_clamps_instead_of_panicking() {
         let src = "let x = 1";
         assert_eq!(byte_offset_to_position(src, 999), byte_offset_to_position(src, src.len()));
+    }
+
+    #[test]
+    fn position_to_byte_offset_start_of_file_is_zero() {
+        assert_eq!(position_to_byte_offset("let x = 1", Position::new(0, 0)), 0);
+    }
+
+    #[test]
+    fn position_to_byte_offset_finds_the_start_of_a_later_line() {
+        let src = "let a = 1\nlet b = 2\nlet c = 3";
+        assert_eq!(position_to_byte_offset(src, Position::new(1, 0)), 10);
+        assert_eq!(position_to_byte_offset(src, Position::new(2, 0)), 20);
+    }
+
+    #[test]
+    fn position_to_byte_offset_is_the_true_inverse_of_byte_offset_to_position_for_ascii() {
+        let src = "let a = 1\nlet bcd = 2 + 3\nlet e = 4";
+        for byte_offset in 0..=src.len() {
+            // Only true byte offsets that land on a char boundary are
+            // meaningful round-trip inputs — every ASCII offset does.
+            let pos = byte_offset_to_position(src, byte_offset);
+            assert_eq!(position_to_byte_offset(src, pos), byte_offset, "round trip failed for byte offset {byte_offset}");
+        }
+    }
+
+    #[test]
+    fn position_to_byte_offset_round_trips_through_a_surrogate_pair_character() {
+        // Mirrors `a_character_outside_the_basic_multilingual_plane_
+        // counts_as_two_utf16_units` above, just in reverse: the
+        // POSITION right after '🦀' (UTF-16 column 4) must map back to
+        // the same byte offset (6) that produced it.
+        let src = "\"🦀\" + 1";
+        let pos = byte_offset_to_position(src, 6);
+        assert_eq!(position_to_byte_offset(src, pos), 6);
+    }
+
+    #[test]
+    fn position_to_byte_offset_clamps_a_character_past_the_end_of_its_line() {
+        let src = "let x = 1\nlet y = 2";
+        assert_eq!(position_to_byte_offset(src, Position::new(0, 999)), 9); // end of line 0
+    }
+
+    #[test]
+    fn position_to_byte_offset_clamps_a_line_past_the_end_of_the_file() {
+        let src = "let x = 1";
+        assert_eq!(position_to_byte_offset(src, Position::new(999, 0)), src.len());
     }
 }

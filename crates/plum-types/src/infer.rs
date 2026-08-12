@@ -154,7 +154,7 @@ fn free_vars_scheme(scheme: &Scheme) -> HashSet<TypeVarId> {
 /// pin them down consistently — quantifying them here would let each
 /// instantiation drift independently, silently losing that constraint.
 fn generalize(ty: &Type, env: &TypeEnv) -> Scheme {
-    let env_vars: HashSet<TypeVarId> = env.0.iter().flat_map(|(_, s)| free_vars_scheme(s)).collect();
+    let env_vars: HashSet<TypeVarId> = env.0.iter().flat_map(|(_, s, _)| free_vars_scheme(s)).collect();
     let vars: Vec<TypeVarId> = free_vars(ty).difference(&env_vars).copied().collect();
     Scheme {
         vars,
@@ -169,25 +169,64 @@ fn generalize(ty: &Type, env: &TypeEnv) -> Scheme {
 /// only top-level functions are ever stored as genuinely polymorphic
 /// ones — see `generalize`.
 #[derive(Clone)]
-pub struct TypeEnv(Vec<(String, Scheme)>);
+pub struct TypeEnv(Vec<(String, Scheme, Option<Span>)>);
 
 impl TypeEnv {
     pub fn new() -> Self {
         TypeEnv(Vec::new())
     }
 
+    /// Binds `name` with no recorded declaration site — the go-to-
+    /// definition index (see `Infer::definitions`) simply has nothing
+    /// to offer for a lookup that resolves through one of these. Used
+    /// by every SPECULATIVE/internal binding (a multi-phase inference
+    /// pass's placeholder, a self-recursion pre-bind that's immediately
+    /// superseded, ...) where there's no single well-defined "this is
+    /// where the user would expect to land" site anyway, and by every
+    /// existing test call site (of which there are ~100, constructing
+    /// an env directly rather than through real parsed source) —
+    /// unchanged on purpose, so this is a purely additive extension,
+    /// not a signature change forcing every one of them to invent a
+    /// span. See `extend_spanned` for the counterpart that DOES record
+    /// one, used at the actual AUTHORITATIVE binding sites during real
+    /// program inference.
     pub fn extend(&self, name: String, ty: Type) -> TypeEnv {
         self.extend_scheme(name, Scheme::monomorphic(ty))
     }
 
     pub fn extend_scheme(&self, name: String, scheme: Scheme) -> TypeEnv {
+        self.extend_scheme_spanned(name, scheme, None)
+    }
+
+    /// Same as `extend`, but records `span` (the binding's own
+    /// declaration site — a parameter's span, a `let`'s, a match
+    /// pattern's identifier span, ...) so a later `lookup_span` for
+    /// this name can hand it back — see `extend`'s own doc comment for
+    /// when to use this instead.
+    pub fn extend_spanned(&self, name: String, ty: Type, span: Span) -> TypeEnv {
+        self.extend_scheme_spanned(name, Scheme::monomorphic(ty), Some(span))
+    }
+
+    pub fn extend_scheme_spanned(&self, name: String, scheme: Scheme, span: Option<Span>) -> TypeEnv {
         let mut v = self.0.clone();
-        v.push((name, scheme));
+        v.push((name, scheme, span));
         TypeEnv(v)
     }
 
     fn lookup_scheme(&self, name: &str) -> Option<&Scheme> {
-        self.0.iter().rev().find(|(n, _)| n == name).map(|(_, s)| s)
+        self.0.iter().rev().find(|(n, _, _)| n == name).map(|(_, s, _)| s)
+    }
+
+    /// The declaration span `name`'s CURRENT (innermost-scope, per
+    /// ordinary shadowing rules — same `.rev().find(..)` lookup
+    /// `lookup_scheme` itself uses) binding was recorded with, if any
+    /// — `None` either because `name` isn't bound at all, or because
+    /// it WAS bound, but through `extend`/`extend_scheme` (no span)
+    /// rather than `extend_spanned`/`extend_scheme_spanned`. Used by
+    /// go-to-definition; nothing in ordinary type inference itself
+    /// ever calls this.
+    pub fn lookup_span(&self, name: &str) -> Option<Span> {
+        self.0.iter().rev().find(|(n, _, _)| n == name).and_then(|(_, _, sp)| *sp)
     }
 
     /// Refines every binding already in the env through `subst` — not
@@ -213,7 +252,7 @@ impl TypeEnv {
         TypeEnv(
             self.0
                 .iter()
-                .map(|(n, s)| {
+                .map(|(n, s, sp)| {
                     (
                         n.clone(),
                         Scheme {
@@ -221,6 +260,7 @@ impl TypeEnv {
                             ty: subst.apply(&s.ty),
                             bounds: s.bounds.clone(),
                         },
+                        *sp,
                     )
                 })
                 .collect(),
@@ -252,6 +292,28 @@ pub struct Infer {
     // carrying a type. See `lower.rs`'s `LoweringContext::field_owners`
     // doc comment for how it's consumed.
     field_owners: HashMap<plum_syntax::span::Span, String>,
+    // Go-to-definition: a reference/use-site span -> where the thing it
+    // resolved to was DECLARED — a variable/parameter/`let` binding
+    // (via `TypeEnv::lookup_span`), a top-level function/global call
+    // (same lookup, since those live in the same `TypeEnv` chain), a
+    // struct/enum name in a type position or construction site (via
+    // `TypeContext::type_decl_span`), a `.field` access (`TypeContext::
+    // struct_field_span`), or an enum variant reference/construction
+    // (`TypeContext::variant_span`). Deliberately best-effort: a lookup
+    // that resolves through an UNSPANNED binding (see `TypeEnv::extend`'s
+    // own doc comment for which ones those are) simply has no entry
+    // here, not an error — the LSP's own `textDocument/definition`
+    // handler treats "not found" as "nothing to jump to," never a hard
+    // failure. `plum` proper (`plum build`/`run`/`test`) never reads
+    // this map at all; only the LSP does, via `Infer::definitions`.
+    definitions: HashMap<plum_syntax::span::Span, plum_syntax::span::Span>,
+    // Hover: every expression node's span -> its (possibly still
+    // unresolved) type, recorded RAW as `infer_expr` computes it —
+    // `resolve_node_types` applies the program's FINAL substitution to
+    // every entry, exactly mirroring `empty_array_elem_types`'s own
+    // "record raw during the walk, resolve once at the end" shape (see
+    // that field's doc comment). Also `plum`-proper-inert, LSP-only.
+    node_types: HashMap<plum_syntax::span::Span, (Type, Option<String>)>,
     // `for` loops whose iterand resolved to `Array[T]` rather than
     // `Range` — keyed by the `Expr::For` node's own span, for the same
     // reason `field_owners` is span-keyed (lowering has no type
@@ -399,6 +461,8 @@ impl Infer {
             next_var: 0,
             ctx: crate::context::TypeContext::new(),
             field_owners: HashMap::new(),
+            definitions: HashMap::new(),
+            node_types: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
             unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
@@ -422,6 +486,8 @@ impl Infer {
             next_var: 0,
             ctx,
             field_owners: HashMap::new(),
+            definitions: HashMap::new(),
+            node_types: HashMap::new(),
             array_for_loops: std::collections::HashSet::new(),
             unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
@@ -442,6 +508,48 @@ impl Infer {
     /// comment for why a span-keyed side-channel, not a typed IR.
     pub fn field_owners(&self) -> &HashMap<plum_syntax::span::Span, String> {
         &self.field_owners
+    }
+
+    /// The go-to-definition index built up during inference — see
+    /// `definitions`'s own doc comment for exactly what's covered and
+    /// what isn't. LSP-only; `plum` proper never calls this.
+    pub fn definitions(&self) -> &HashMap<plum_syntax::span::Span, plum_syntax::span::Span> {
+        &self.definitions
+    }
+
+    /// The `TypeContext` this `Infer` was built against — struct/enum
+    /// declarations, their fields, generic parameters, and so on. LSP-
+    /// only use so far: `plum lsp`'s completion handler needs `struct_
+    /// fields` to list a struct's completable fields once it's found
+    /// which struct a `.` was typed after (via `field_owners`).
+    pub fn ctx(&self) -> &crate::context::TypeContext {
+        &self.ctx
+    }
+
+    /// Resolves every recorded node's (possibly still-`Var`) type
+    /// against the program's final substitution, for hover — see
+    /// `node_types`'s own doc comment. Deliberately LENIENT, unlike
+    /// `resolve_empty_array_elem_types`/`resolve_closure_types`: an
+    /// entry that's STILL unresolved even after the template fallback
+    /// (`resolve_closure_component`) is simply DROPPED, not a hard
+    /// `Err` — hover is best-effort UI, and a single un-renderable
+    /// node's type (e.g. deep inside a branch of the program that
+    /// genuinely never got pinned to anything concrete) must never be
+    /// able to make an otherwise-successful `infer_program` call look
+    /// like it failed from the LSP's point of view. Must be called
+    /// after a successful `infer_program`, same precondition as those
+    /// two — `None`/empty if called before that (not a panic).
+    pub fn resolve_node_types(&self) -> HashMap<plum_syntax::span::Span, Type> {
+        let Some(subst) = &self.final_subst else {
+            return HashMap::new();
+        };
+        let mut out = HashMap::with_capacity(self.node_types.len());
+        for (span, (ty, enclosing_fn)) in &self.node_types {
+            if let Ok(resolved) = self.resolve_closure_component(ty, enclosing_fn, subst, *span) {
+                out.insert(*span, resolved);
+            }
+        }
+        out
     }
 
     /// The set of `for` loops (keyed by the `Expr::For` node's own
@@ -972,7 +1080,13 @@ impl Infer {
                         .cloned()
                         .ok_or_else(|| plum_syntax::error::CompileError::spanless(format!("internal error: extern function {:?} not in context", f.name)))?;
                     let fn_ty = Type::Function(param_types, Box::new(ret_type));
-                    global_env = global_env.extend(f.name.clone(), fn_ty);
+                    // An extern's signature is declared, never inferred
+                    // — this registration is the one and only (no later
+                    // multi-phase refresh the way an ordinary function's
+                    // Phase-1 placeholder gets), so it's already the
+                    // authoritative site a go-to-definition on a call to
+                    // `f.name` should land on.
+                    global_env = global_env.extend_spanned(f.name.clone(), fn_ty, f.span);
                 }
             }
         }
@@ -1132,7 +1246,7 @@ impl Infer {
             for (param, param_ty) in def.params.iter().zip(param_vars.iter()) {
                 match &param.kind {
                     ast::ParamKind::Ident(name) => {
-                        body_env = body_env.extend(name.clone(), acc.apply(param_ty));
+                        body_env = body_env.extend_spanned(name.clone(), acc.apply(param_ty), param.span);
                     }
                     // `(x: Int)` — a declared PARAMETER annotation,
                     // previously parsed (`ParamKind::Pattern`'s second
@@ -1147,7 +1261,7 @@ impl Infer {
                     // a MISMATCH between the annotation and how the
                     // body actually uses the parameter is now a real,
                     // reported type error, not silently accepted.
-                    ast::ParamKind::Pattern(ast::Pattern::Ident(name, _), annotation) => {
+                    ast::ParamKind::Pattern(ast::Pattern::Ident(name, name_span), annotation) => {
                         if let Some(ty) = annotation {
                             let annotated_ty = self.resolve_annotation(ty, &generic_vars)?;
                             let s = unify(&acc.apply(param_ty), &acc.apply(&annotated_ty)).map_err(|e| {
@@ -1155,7 +1269,7 @@ impl Infer {
                             })?;
                             acc = s.compose(&acc);
                         }
-                        body_env = body_env.extend(name.clone(), acc.apply(param_ty));
+                        body_env = body_env.extend_spanned(name.clone(), acc.apply(param_ty), *name_span);
                     }
                     // `bind_pattern` unifies `param_ty` (the single
                     // fresh var Phase 1 gave this flat-arity parameter)
@@ -1299,7 +1413,12 @@ impl Infer {
                     }
                 }
             }
-            global_env = global_env.extend_scheme(def.name.clone(), scheme);
+            // The AUTHORITATIVE final registration of this function's
+            // signature (`extend` appends/shadows, so later callers see
+            // this, not the Phase-1 placeholder above) — recorded WITH
+            // a span, unlike that placeholder, since a call site's go-
+            // to-definition should land here.
+            global_env = global_env.extend_scheme_spanned(def.name.clone(), scheme, Some(def.span));
 
             // Recorded regardless of whether `generalize` ended up
             // in SOURCE order, which is what makes a mangled name
@@ -1406,7 +1525,12 @@ impl Infer {
             self.current_fn = None;
             acc = s.compose(&acc);
             let resolved = acc.apply(&ty);
-            global_env = global_env.extend(def.name.clone(), resolved.clone());
+            // The AUTHORITATIVE final registration of this global's
+            // type — see the matching function-signature comment above
+            // for why this is where the span belongs (Phase 1.5-early's
+            // own speculative `global_env_early.extend` stays unspanned
+            // on purpose).
+            global_env = global_env.extend_spanned(def.name.clone(), resolved.clone(), def.span);
             global_env = global_env.apply_subst(&acc);
             global_types.insert(def.name.clone(), resolved);
         }
@@ -1431,7 +1555,23 @@ impl Infer {
         Ok(result)
     }
 
+    /// Thin wrapper around `infer_expr_inner` that ALSO records
+    /// `expr`'s own (possibly still unresolved — see `node_types`'s own
+    /// doc comment) type for hover, keyed by `expr`'s span. Every
+    /// recursive call anywhere in this module already goes through
+    /// `self.infer_expr(..)` (never `infer_expr_inner` directly), so
+    /// this single wrapper is enough to cover EVERY expression node in
+    /// the program, not just top-level ones — no per-arm changes needed
+    /// anywhere in the giant match `infer_expr_inner` itself is.
     pub fn infer_expr(&mut self, expr: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
+        let result = self.infer_expr_inner(expr, env);
+        if let Ok((ty, _)) = &result {
+            self.node_types.insert(expr.span(), (ty.clone(), self.current_fn.clone()));
+        }
+        result
+    }
+
+    fn infer_expr_inner(&mut self, expr: &ast::Expr, env: &TypeEnv) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
         match expr {
             ast::Expr::Int(_, _) => Ok((Type::Int, Subst::empty())),
             ast::Expr::Float(_, _) => Ok((Type::Float, Subst::empty())),
@@ -1526,6 +1666,9 @@ impl Infer {
                 if !args.is_empty() {
                     self.record_site(SiteKind::Enum, name, &args, *span);
                 }
+                if let Some(decl_span) = self.ctx.variant_span(name) {
+                    self.definitions.insert(*span, decl_span);
+                }
                 Ok((Type::Enum(enum_name, args), Subst::empty()))
             }
             // A non-zero-arity variant referenced BARE (not called) is
@@ -1540,6 +1683,9 @@ impl Infer {
                 if !args.is_empty() {
                     self.record_site(SiteKind::Enum, name, &args, *span);
                 }
+                if let Some(decl_span) = self.ctx.variant_span(name) {
+                    self.definitions.insert(*span, decl_span);
+                }
                 Ok((Type::Function(payload, Box::new(Type::Enum(enum_name, args))), Subst::empty()))
             }
             ast::Expr::Ident(name, span) => {
@@ -1547,6 +1693,9 @@ impl Infer {
                     .lookup_scheme(name)
                     .cloned()
                     .ok_or_else(|| plum_syntax::error::CompileError::new(*span, format!("unbound variable: {name}")))?;
+                if let Some(decl_span) = env.lookup_span(name) {
+                    self.definitions.insert(*span, decl_span);
+                }
                 let (ty, _bounds, mapping) = self.instantiate_with_bounds(&scheme);
                 if !scheme.vars.is_empty() {
                     self.record_fn_call_site(name, &mapping, *span);
@@ -2448,6 +2597,9 @@ impl Infer {
                         if !enum_args.is_empty() {
                             self.record_site(SiteKind::Enum, tag, &enum_args, *span);
                         }
+                        if let Some(decl_span) = self.ctx.variant_span(tag) {
+                            self.definitions.insert(callee.span(), decl_span);
+                        }
                         let mut acc = Subst::empty();
                         let mut refined_env = env.clone();
                         for (arg, expected_ty) in args.iter().zip(payload_types.iter()) {
@@ -2477,6 +2629,9 @@ impl Infer {
                 if let ast::Expr::Ident(name, ident_span) = callee.as_ref() {
                     if let Some(scheme) = env.lookup_scheme(name) {
                         if !scheme.bounds.is_empty() {
+                            if let Some(decl_span) = env.lookup_span(name) {
+                                self.definitions.insert(*ident_span, decl_span);
+                            }
                             let scheme = scheme.clone();
                             let (callee_ty, pending_bounds, mapping) = self.instantiate_with_bounds(&scheme);
                             if !scheme.vars.is_empty() {
@@ -2570,6 +2725,24 @@ impl Infer {
                     .ctx
                     .struct_fields(struct_name)
                     .ok_or_else(|| plum_syntax::error::CompileError::new(*span, format!("unknown struct type {struct_name:?}")))?;
+                // Recorded as soon as `base` is KNOWN to resolve to a
+                // real struct — deliberately BEFORE checking whether
+                // `name` actually names one of its fields, unlike every
+                // other side-table this module populates (which only
+                // ever record a fully-successful resolution). `plum
+                // build`/`run`/`test` never observe the difference (a
+                // program with an invalid field name fails to type-
+                // check either way, so `lower.rs` — `field_owners`'
+                // only OTHER consumer — never runs on it regardless of
+                // exactly when this line executes); `plum lsp`'s
+                // completion handler is the reason this ordering
+                // matters: it deliberately probes with a field name
+                // that DOESN'T exist yet (the user hasn't finished
+                // typing it), and needs to recover WHICH STRUCT `base`
+                // resolved to even though the overall program still
+                // fails to type-check on the unknown-field error right
+                // below.
+                self.field_owners.insert(*span, struct_name.clone());
                 let field_ty = declared_fields
                     .iter()
                     .find(|(field_name, _)| field_name == name)
@@ -2586,7 +2759,14 @@ impl Infer {
                 let mapping: HashMap<String, Type> =
                     param_names.into_iter().zip(struct_args.iter().cloned()).collect();
                 let field_ty = subst_params(&field_ty, &mapping);
-                self.field_owners.insert(*span, struct_name.clone());
+                // Go-to-definition target for `.{name}` — `Expr::Field`
+                // has only ONE span (covering `base.name` as a whole,
+                // not `name` alone), so that's what's used as the USE-
+                // site key here too; a cursor anywhere in that range
+                // resolves to this same field declaration.
+                if let Some(decl_span) = self.ctx.struct_field_span(struct_name, name) {
+                    self.definitions.insert(*span, decl_span);
+                }
                 // A field access on a GENERIC struct instance needs its
                 // own site recorded too, even though it constructs
                 // nothing — `lower.rs`'s field-access lowering resolves
@@ -2844,6 +3024,19 @@ impl Infer {
         }
         let declared_fields: Vec<(String, Type)> =
             declared_field_names.into_iter().zip(declared_field_types).collect();
+        // Go-to-definition: the WHOLE literal (`span`) jumps to the
+        // struct's own declaration, and each individual `name: value`
+        // field init (`f.span` — see `FieldInit`'s own doc comment for
+        // why that's JUST the name, not the whole `FieldInit`) jumps to
+        // THAT field's declaration.
+        if let Some(decl_span) = self.ctx.type_decl_span(&tag) {
+            self.definitions.insert(span, decl_span);
+        }
+        for f in fields {
+            if let Some(field_decl_span) = self.ctx.struct_field_span(&tag, &f.name) {
+                self.definitions.insert(f.span, field_decl_span);
+            }
+        }
 
         let mut by_name: HashMap<&str, &ast::Expr> = HashMap::new();
         for f in fields {
@@ -2911,7 +3104,7 @@ impl Infer {
         acc: &mut Subst,
     ) -> Result<TypeEnv, plum_syntax::error::CompileError> {
         match pattern {
-            ast::Pattern::Ident(name, _) => Ok(env.extend(name.clone(), acc.apply(scrutinee_ty))),
+            ast::Pattern::Ident(name, span) => Ok(env.extend_spanned(name.clone(), acc.apply(scrutinee_ty), *span)),
             ast::Pattern::Wildcard(_) => Ok(env),
             // Literal patterns bind no names (same as movecheck.rs's
             // own treatment) — just unify the scrutinee against the
@@ -3104,7 +3297,7 @@ impl Infer {
         for alt in alts {
             let alt_env = self.bind_pattern(alt, scrutinee_ty, env.clone(), acc)?;
             let new_bindings: Vec<(String, Type)> =
-                alt_env.0[before_len..].iter().map(|(name, scheme)| (name.clone(), scheme.ty.clone())).collect();
+                alt_env.0[before_len..].iter().map(|(name, scheme, _)| (name.clone(), scheme.ty.clone())).collect();
             match &first_new {
                 None => first_new = Some(new_bindings),
                 Some(first) => {
@@ -3434,7 +3627,7 @@ impl Infer {
                     None => self.fresh(),
                 },
             };
-            closure_env = closure_env.extend(p.name.clone(), ty.clone());
+            closure_env = closure_env.extend_spanned(p.name.clone(), ty.clone(), p.span);
             param_types.push(ty);
         }
         let (body_ty, acc) = self.infer_expr(body, &closure_env)?;
@@ -3505,8 +3698,8 @@ impl Infer {
         span: plum_syntax::span::Span,
         env: &TypeEnv,
     ) -> Result<(Type, Subst), plum_syntax::error::CompileError> {
-        let var = match pattern {
-            ast::Pattern::Ident(name, _) => name.clone(),
+        let (var, var_span) = match pattern {
+            ast::Pattern::Ident(name, span) => (name.clone(), *span),
             other => {
                 return Err(plum_syntax::error::CompileError::new(
                     other.span(),
@@ -3561,7 +3754,7 @@ impl Infer {
                     if name == "Array" && args.len() == 1 {
                         self.array_for_loops.insert(span);
                         let elem_ty = args[0].clone();
-                        let body_env = env.apply_subst(&acc).extend(var, elem_ty);
+                        let body_env = env.apply_subst(&acc).extend_spanned(var, elem_ty, var_span);
                         let (_, s) = self.infer_block(body, &body_env)?;
                         acc = s.compose(&acc);
                         return Ok((Type::Unit, acc));
@@ -3574,7 +3767,7 @@ impl Infer {
             }
         };
 
-        let body_env = env.apply_subst(&acc).extend(var, Type::Int);
+        let body_env = env.apply_subst(&acc).extend_spanned(var, Type::Int, var_span);
         let (_, s) = self.infer_block(body, &body_env)?;
         acc = s.compose(&acc);
 
@@ -3687,7 +3880,7 @@ impl Infer {
         for stmt in &block.stmts {
             match stmt {
                 ast::Stmt::Let {
-                    pattern: ast::Pattern::Ident(name, _),
+                    pattern: ast::Pattern::Ident(name, name_span),
                     value,
                     ty,
                     ..
@@ -3725,7 +3918,7 @@ impl Infer {
                         acc = s.compose(&acc);
                         resolved = acc.apply(&resolved);
                     }
-                    cur_env = cur_env.extend(name.clone(), resolved);
+                    cur_env = cur_env.extend_spanned(name.clone(), resolved, *name_span);
                     cur_env = cur_env.apply_subst(&acc);
                 }
                 // `let (a, b) = expr;` / `let Point { x, y } = expr;` —
@@ -5033,6 +5226,28 @@ mod tests {
     }
 
     #[test]
+    fn field_access_on_an_unknown_field_still_records_the_owning_struct_before_erroring() {
+        // Regression test for `plum lsp`'s completion handler: it
+        // deliberately probes with a field name that DOESN'T exist yet
+        // (the user hasn't finished typing it) and needs `field_owners`
+        // to already know which struct `p` resolved to, even though
+        // the overall expression is a real type error. `field_owners`'
+        // own doc comment on this exact ordering explains why this is
+        // safe for `plum build`/`run`/`test` (which never observe the
+        // difference — a program that fails to type-check never reaches
+        // `lower.rs`, `field_owners`' only OTHER consumer, regardless).
+        let mut infer = Infer::with_context(context("struct Point { x: Float, y: Float }"));
+        let env = TypeEnv::new().extend("p".to_string(), Type::Struct("Point".to_string(), vec![]));
+        let tokens = Lexer::new("p.z").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap();
+        let err = infer.infer_expr(&ast, &env).expect_err("expected p.z to be a real type error (no field z)");
+        assert!(err.to_string().contains("no field named"), "unexpected error: {err}");
+        assert_eq!(infer.field_owners().len(), 1, "expected the owning struct to be recorded despite the error");
+        assert_eq!(infer.field_owners().values().next().unwrap(), "Point");
+    }
+
+    #[test]
     fn field_access_on_a_non_struct_is_an_error() {
         let mut infer = Infer::new();
         let env = TypeEnv::new().extend("n".to_string(), Type::Int);
@@ -5752,6 +5967,111 @@ mod tests {
 
     fn fn_ty(params: Vec<Type>, ret: Type) -> Type {
         Type::Function(params, Box::new(ret))
+    }
+
+    /// Like `infer_program`, but hands back the whole `Infer` instance
+    /// instead of discarding everything except its `HashMap<String,
+    /// Type>` result — needed by any test exercising `resolve_node_
+    /// types`/`definitions`, neither of which `infer_program` itself
+    /// exposes.
+    fn infer_program_with_infer(src: &str) -> Infer {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let program = parser.parse_program().unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let ctx = crate::context::TypeContext::from_items(&program.items)
+            .unwrap_or_else(|e| panic!("context error for {src:?}: {e}"));
+        let mut infer = Infer::with_context(ctx);
+        infer.infer_program(&program).unwrap_or_else(|e| panic!("program inference error for {src:?}: {e}"));
+        infer
+    }
+
+    /// The 0-indexed byte offset of `needle`'s first occurrence in
+    /// `src` — used throughout the tests below to compute an expected
+    /// `Span` from a human-readable substring instead of hand-counting
+    /// byte offsets, which would be both tedious and fragile against
+    /// any future edit to these test sources.
+    fn offset_of(src: &str, needle: &str) -> u32 {
+        src.find(needle).unwrap_or_else(|| panic!("{needle:?} not found in {src:?}")) as u32
+    }
+
+    #[test]
+    fn resolve_node_types_reports_a_local_variables_type_at_its_use_site() {
+        let src = "let go (): Int = { let x = 5; x + 1 }";
+        let infer = infer_program_with_infer(src);
+        let node_types = infer.resolve_node_types();
+        // The SECOND `x` (the use inside `x + 1`), not the binding one.
+        let use_start = src.rfind('x').unwrap() as u32;
+        let span = Span::new(use_start, use_start + 1);
+        assert_eq!(node_types.get(&span), Some(&Type::Int));
+    }
+
+    #[test]
+    fn definitions_maps_a_local_variables_use_to_its_own_parameter_span() {
+        let src = "let add_one (x: Int): Int = x + 1";
+        let infer = infer_program_with_infer(src);
+        let definitions = infer.definitions();
+        let use_start = src.rfind('x').unwrap() as u32;
+        let use_span = Span::new(use_start, use_start + 1);
+        let decl_start = offset_of(src, "(x: Int)") + 1; // skip the `(`
+        let decl_span = Span::new(decl_start, decl_start + 1);
+        assert_eq!(definitions.get(&use_span), Some(&decl_span));
+    }
+
+    #[test]
+    fn definitions_maps_a_function_call_to_its_own_declaration_span() {
+        let src = "let add_one (x: Int): Int = x + 1\nlet go (): Int = add_one(41)";
+        let infer = infer_program_with_infer(src);
+        let definitions = infer.definitions();
+        let call_start = offset_of(src, "add_one(41)");
+        let call_span = Span::new(call_start, call_start + "add_one".len() as u32);
+        // `LetDef.span` covers the WHOLE definition (`let ... = ...`),
+        // not just the name — confirmed directly (not assumed) by
+        // running this test against the real implementation.
+        let def_text = "let add_one (x: Int): Int = x + 1";
+        let decl_span = Span::new(0, def_text.len() as u32);
+        assert_eq!(definitions.get(&call_span), Some(&decl_span));
+    }
+
+    #[test]
+    fn definitions_maps_a_struct_field_access_to_its_own_field_declaration() {
+        let src = "struct Point { x: Int, y: Int }\nlet go (p: Point): Int = p.x";
+        let infer = infer_program_with_infer(src);
+        let definitions = infer.definitions();
+        // `Expr::Field` records ITS OWN whole-node span (`p.x`), not
+        // just `.x` — see the field-access `infer_expr` arm's own
+        // comment on why.
+        let use_start = offset_of(src, "p.x");
+        let use_span = Span::new(use_start, use_start + "p.x".len() as u32);
+        // `StructField.span` covers the WHOLE `name: Type` text, not
+        // just the name — confirmed directly, same as `LetDef.span`
+        // above.
+        let decl_start = offset_of(src, "x: Int, y: Int");
+        let decl_span = Span::new(decl_start, decl_start + "x: Int".len() as u32);
+        assert_eq!(definitions.get(&use_span), Some(&decl_span));
+    }
+
+    #[test]
+    fn definitions_maps_a_struct_literals_own_path_to_its_struct_declaration() {
+        let src = "struct Point { x: Int, y: Int }\nlet go (): Int = { let p = Point { x: 1, y: 2 }; p.x }";
+        let infer = infer_program_with_infer(src);
+        let definitions = infer.definitions();
+        let use_start = offset_of(src, "Point { x: 1, y: 2 }");
+        let use_span = Span::new(use_start, use_start + "Point { x: 1, y: 2 }".len() as u32);
+        let decl_start = offset_of(src, "struct Point");
+        let decl_span = Span::new(decl_start, decl_start + "struct Point { x: Int, y: Int }".len() as u32);
+        assert_eq!(definitions.get(&use_span), Some(&decl_span));
+    }
+
+    #[test]
+    fn definitions_maps_an_enum_variant_construction_to_its_own_variant_declaration() {
+        let src = "enum Shape { Circle(Float), Square(Float) }\nlet go (): Float = match Circle(1.0) { Circle(r) => r, Square(s) => s }";
+        let infer = infer_program_with_infer(src);
+        let definitions = infer.definitions();
+        let use_start = offset_of(src, "Circle(1.0)");
+        let use_span = Span::new(use_start, use_start + "Circle".len() as u32);
+        let decl_start = offset_of(src, "Circle(Float)");
+        let decl_span = Span::new(decl_start, decl_start + "Circle(Float)".len() as u32);
+        assert_eq!(definitions.get(&use_span), Some(&decl_span));
     }
 
     #[test]

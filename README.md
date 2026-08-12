@@ -155,13 +155,24 @@ Two pieces, independent of each other:
 
 - **`plum lsp`** — an LSP server served straight out of the `plum`
   binary itself (the same shape `gopls` takes for Go), speaking LSP
-  over stdio. Diagnostics only for now (parse/resolution/type errors,
-  reported live as you edit) — no hover, go-to-definition, or
-  completion yet. Reports one error at a time, not every error in a
-  project at once — this matches how the rest of the compiler reports
-  errors today (every `CompileError` surface in this codebase stops at
-  the first error, not just the LSP), not an LSP-specific limitation.
-  Fix-and-recheck is fast in practice.
+  over stdio. Diagnostics (parse/resolution/type errors, reported live
+  as you edit), hover (shows the resolved type under your cursor),
+  go-to-definition (variables, params, `let`s, function/global calls,
+  struct/enum names, `.field` access, enum variant references), and
+  completion — keywords + every function/global/struct/enum/extern
+  name in scope (including the whole standard library) generally, and
+  a struct's own fields right after typing `.`. Diagnostics report one
+  error at a time, not every error in a project at once — this matches
+  how the rest of the compiler reports errors today (every
+  `CompileError` surface in this codebase stops at the first error,
+  not just the LSP), not an LSP-specific limitation; hover/go-to-
+  definition need the project to type-check cleanly first, same
+  reason. General completion falls back to the last successfully
+  checked snapshot when the current buffer doesn't (typing itself
+  usually leaves it that way); dot completion works around this
+  differently — see DESIGN.md's "Completion" section for the trick.
+  Fix-and-recheck is fast in
+  practice.
 - **[`tools/tree-sitter-plum`](tools/tree-sitter-plum)** — a
   [tree-sitter](https://tree-sitter.github.io/) grammar for syntax
   highlighting/indentation, transcribed from `GRAMMAR.md`. A genuinely

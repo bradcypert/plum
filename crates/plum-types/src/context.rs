@@ -1,6 +1,7 @@
 use crate::infer::ast_type_to_type;
 use crate::types::Type;
 use plum_syntax::ast;
+use plum_syntax::span::Span;
 use std::collections::{HashMap, HashSet};
 
 /// Struct/enum declarations' field and variant payload types, resolved
@@ -65,6 +66,22 @@ pub struct TypeContext {
     // `Call` handling consults it to enforce `unsafe`-gating (see
     // `Infer::in_unsafe`'s doc comment).
     extern_fns: HashMap<String, (Vec<Type>, Type)>,
+    // Declaration-site spans, kept entirely SEPARATE from the maps
+    // above rather than folded into them (e.g. `struct_fields` growing
+    // a `Span` per entry) — purely for go-to-definition, consulted by
+    // NOTHING else in ordinary type inference. Keeping them apart means
+    // every existing `struct_fields`/`variant`/etc. caller (including
+    // the ~15 existing tests asserting exact expected values) needed
+    // zero changes to accommodate this — a genuinely additive
+    // extension, not a signature change forcing a span onto call sites
+    // that have no use for one.
+    struct_decl_spans: HashMap<String, Span>,
+    enum_decl_spans: HashMap<String, Span>,
+    // (struct name, field name) -> the field's OWN declaration span
+    // (not the whole struct's).
+    struct_field_spans: HashMap<(String, String), Span>,
+    // variant tag -> its own declaration span (not the whole enum's).
+    variant_spans: HashMap<String, Span>,
 }
 
 impl TypeContext {
@@ -78,6 +95,10 @@ impl TypeContext {
             generic_params: HashMap::new(),
             generic_bounds: HashMap::new(),
             extern_fns: HashMap::new(),
+            struct_decl_spans: HashMap::new(),
+            enum_decl_spans: HashMap::new(),
+            struct_field_spans: HashMap::new(),
+            variant_spans: HashMap::new(),
         }
     }
 
@@ -103,6 +124,7 @@ impl TypeContext {
                         ));
                     }
                     ctx.struct_names.insert(decl.name.clone());
+                    ctx.struct_decl_spans.insert(decl.name.clone(), decl.span);
                     let params = decl.generics.iter().map(|g| g.name.clone()).collect();
                     ctx.generic_params.insert(decl.name.clone(), params);
                     let bounds = decl.generics.iter().map(|g| g.bound.clone()).collect();
@@ -116,6 +138,7 @@ impl TypeContext {
                         ));
                     }
                     ctx.enum_names.insert(decl.name.clone());
+                    ctx.enum_decl_spans.insert(decl.name.clone(), decl.span);
                     let params = decl.generics.iter().map(|g| g.name.clone()).collect();
                     ctx.generic_params.insert(decl.name.clone(), params);
                     let bounds = decl.generics.iter().map(|g| g.bound.clone()).collect();
@@ -140,6 +163,7 @@ impl TypeContext {
                     let mut fields = Vec::with_capacity(decl.fields.len());
                     for f in &decl.fields {
                         fields.push((f.name.clone(), ast_type_to_type(&f.ty, &ctx, &params)?));
+                        ctx.struct_field_spans.insert((decl.name.clone(), f.name.clone()), f.span);
                     }
                     ctx.struct_fields.insert(decl.name.clone(), fields);
                 }
@@ -153,6 +177,7 @@ impl TypeContext {
                             .map(|t| ast_type_to_type(t, &ctx, &params))
                             .collect::<Result<Vec<_>, _>>()?;
                         ctx.variants.insert(variant.name.clone(), (decl.name.clone(), payload));
+                        ctx.variant_spans.insert(variant.name.clone(), variant.span);
                         tags.push(variant.name.clone());
                     }
                     ctx.enum_variant_tags.insert(decl.name.clone(), tags);
@@ -217,6 +242,29 @@ impl TypeContext {
 
     pub fn struct_fields(&self, name: &str) -> Option<&[(String, Type)]> {
         self.struct_fields.get(name).map(|v| v.as_slice())
+    }
+
+    /// The declaration span of `name` (a struct OR an enum — checked in
+    /// that order, though the two namespaces are already guaranteed
+    /// disjoint by `from_items`'s own collision check), for go-to-
+    /// definition on a type-position reference or a `StructLiteral`/
+    /// construction-site path. `None` for a name that isn't a declared
+    /// struct/enum at all (a type variable, an unresolvable typo, ...).
+    pub fn type_decl_span(&self, name: &str) -> Option<Span> {
+        self.struct_decl_spans.get(name).or_else(|| self.enum_decl_spans.get(name)).copied()
+    }
+
+    /// The declaration span of struct `struct_name`'s field
+    /// `field_name` — for go-to-definition on a `.field` access.
+    pub fn struct_field_span(&self, struct_name: &str, field_name: &str) -> Option<Span> {
+        self.struct_field_spans.get(&(struct_name.to_string(), field_name.to_string())).copied()
+    }
+
+    /// The declaration span of enum variant tag `tag` — for go-to-
+    /// definition on a construction site (`Circle(1.0)`) or a bare
+    /// variant reference/pattern (`None`, `Circle(r)` in a `match`).
+    pub fn variant_span(&self, tag: &str) -> Option<Span> {
+        self.variant_spans.get(tag).copied()
     }
 
     pub fn variant(&self, tag: &str) -> Option<&(String, Vec<Type>)> {
