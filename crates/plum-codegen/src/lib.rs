@@ -5026,8 +5026,23 @@ mod tests {
     }
 
     #[test]
-    fn spawn_capturing_a_closure_typed_value_is_a_clear_error() {
+    fn spawn_capturing_a_closure_typed_value_compiles_a_runtime_zero_capture_check_not_a_compile_time_error() {
         // let go(f: Closure([Int], Int)): Int = { spawn { f(1) }; 0 }
+        //
+        // A closure-typed capture is no longer a BLANKET compile-time
+        // rejection (see `codegen_spawn_literal`'s own doc comment in
+        // codegen.rs, and DESIGN.md's Concurrency section): whether
+        // `f` holds a real closure (captured live state — unsafe) or a
+        // zero-capture closure/bare top-level function reference (safe
+        // — `codegen_bare_fn_value` and a captureless closure literal
+        // both already share `@plum_closure_release_noop`) can't be
+        // told apart from `f`'s STATIC type alone, only from the VALUE
+        // that actually flows in at runtime. So `emit` now succeeds
+        // unconditionally here, and the generated IR carries a runtime
+        // check instead — loading `f`'s release-function pointer and
+        // comparing it against `@plum_closure_release_noop`, aborting
+        // via the same `emit_runtime_check`/`@plum_abort` machinery
+        // array-bounds checks already use, only if it's a REAL closure.
         let body = Expr::Let {
             name: "_t".to_string(),
             value: Box::new(Expr::Spawn {
@@ -5037,9 +5052,19 @@ mod tests {
         };
         let prog = program(vec![Function { name: "go".to_string(), params: vec!["f".to_string()], body }]);
         let closure_sig = CgType::Closure(vec![CgType::Int], Box::new(CgType::Int));
-        let err = emit(&prog, &sigs(&[("go", vec![closure_sig], CgType::Int)]), &TagFields::new())
-            .expect_err("expected a closure-typed spawn capture to be rejected");
-        assert!(err.contains("spawn") && err.contains("cross a thread boundary"), "unexpected error: {err}");
+        let ir = emit(&prog, &sigs(&[("go", vec![closure_sig], CgType::Int)]), &TagFields::new())
+            .expect("a closure-typed spawn capture must compile — the reject-or-not decision is now at runtime");
+        assert!(
+            ir.contains("ptrtoint ptr @plum_closure_release_noop to i64"),
+            "expected the generated IR to compare against the zero-capture sentinel: {ir}"
+        );
+        // The abort message itself is emitted hex-escaped (`emit_
+        // runtime_check`'s own string-global convention), so this
+        // checks for the runtime-check STRUCTURE — an `icmp eq`
+        // against the sentinel feeding a conditional `@plum_abort` —
+        // rather than the message text directly.
+        assert!(ir.contains("icmp eq i64"), "expected a runtime equality check in the generated IR: {ir}");
+        assert!(ir.contains("call void @plum_abort("), "expected a conditional abort in the generated IR: {ir}");
     }
 
     #[test]

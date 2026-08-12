@@ -2975,10 +2975,41 @@ fn deep_copy_capture(em: &mut Emitter, ctx: &Ctx, reg: &str, ty: &CgType) -> Str
             em.push(format!("  {r} = call ptr @plum_deepcopy_array_{mangled}(ptr {reg})"));
             r
         }
+        // Reached only for a capture that already passed `codegen_
+        // spawn_literal`'s own runtime zero-capture check (see that
+        // function's own doc comment) — never for a real closure with
+        // live captures. Builds a FRESH zero-capture cell rather than
+        // passing `reg` through verbatim: even a genuinely zero-
+        // capture cell has its OWN refcount header (`plum_alloc_
+        // closure`-allocated, like any other heap cell), and sharing
+        // that raw pointer across threads would let both threads
+        // concurrently `plum_rc_inc`/`plum_rc_dec` the SAME non-atomic
+        // refcount word — exactly the race deep-copying every other
+        // heap type here already exists to prevent. Mirrors `codegen_
+        // bare_fn_value`'s own construction exactly, just with a
+        // RUNTIME-loaded code pointer (`reg`'s own, at the same fixed
+        // offset) instead of a compile-time symbol reference.
+        CgType::Closure(..) => {
+            let code_addr = em.fresh_reg();
+            em.push(format!("  {code_addr} = getelementptr i8, ptr {reg}, i64 8"));
+            let code_word = em.fresh_reg();
+            em.push(format!("  {code_word} = load i64, ptr {code_addr}"));
+            let cell = em.fresh_reg();
+            em.push(format!("  {cell} = call ptr @plum_alloc_closure(i64 0)"));
+            let new_code_addr = em.fresh_reg();
+            em.push(format!("  {new_code_addr} = getelementptr i8, ptr {cell}, i64 8"));
+            em.push(format!("  store i64 {code_word}, ptr {new_code_addr}"));
+            let release_word = em.fresh_reg();
+            em.push(format!("  {release_word} = ptrtoint ptr @plum_closure_release_noop to i64"));
+            let new_release_addr = em.fresh_reg();
+            em.push(format!("  {new_release_addr} = getelementptr i8, ptr {cell}, i64 16"));
+            em.push(format!("  store i64 {release_word}, ptr {new_release_addr}"));
+            cell
+        }
         // Guaranteed unreachable — `crosses_thread_boundary` already
-        // rejected any capture that could get here — but the match
-        // still needs to be total.
-        CgType::Closure(..) | CgType::Task(_) | CgType::CStr => reg.to_string(),
+        // rejected any `Task`/`CStr` capture that could get here — but
+        // the match still needs to be total.
+        CgType::Task(_) | CgType::CStr => reg.to_string(),
         // A `Sender`/`Receiver` crosses VERBATIM — never a deep copy.
         // Both ends must keep pointing at the SAME shared queue struct,
         // or the channel would silently split into two mutually-
@@ -3127,12 +3158,56 @@ fn codegen_spawn_literal(block: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -
             .get(&name)
             .cloned()
             .ok_or_else(|| format!("codegen: unbound variable {name:?} (spawn capture)"))?;
-        if crosses_thread_boundary(&ty) {
+        if let CgType::Closure(..) = &ty {
+            // A closure-typed capture ISN'T a blanket reject the way
+            // `crosses_thread_boundary` treats it everywhere else (see
+            // that function's own doc comment, and `codegen_channel_
+            // send`, which deliberately keeps the blanket version) —
+            // a bare reference to a TOP-LEVEL function (`codegen_bare_
+            // fn_value`) and a closure literal with genuinely zero free
+            // variables (`codegen_closure_literal`, `captures.is_empty
+            // ()` branch) BOTH already share the exact same no-op
+            // release function, `@plum_closure_release_noop`, and hold
+            // no owned captured heap data at all — exactly as safe to
+            // cross a thread boundary as the interpreter's own `Value::
+            // Function` already is (see `Expr::Spawn`'s interpreter-
+            // side handling, which lets a bare top-level function
+            // capture through for free the same way). A REAL closure
+            // that captured live local state is still unsafe, exactly
+            // as before.
+            //
+            // Which shape `reg` holds can't be told apart at COMPILE
+            // time — the same `env` slot/register could hold either,
+            // depending on which value actually flows in at runtime —
+            // so this is a RUNTIME check + abort instead, the same
+            // `emit_runtime_check` idiom already used for e.g. array-
+            // bounds checks, not a silent narrowing of the restriction.
+            // See `deep_copy_capture`'s own `Closure` arm for how a
+            // capture that passes this check gets reconstructed on the
+            // spawned thread's side.
+            let release_addr = em.fresh_reg();
+            em.push(format!("  {release_addr} = getelementptr i8, ptr {reg}, i64 16"));
+            let release_word = em.fresh_reg();
+            em.push(format!("  {release_word} = load i64, ptr {release_addr}"));
+            let noop_word = em.fresh_reg();
+            em.push(format!("  {noop_word} = ptrtoint ptr @plum_closure_release_noop to i64"));
+            let ok = em.fresh_reg();
+            em.push(format!("  {ok} = icmp eq i64 {release_word}, {noop_word}"));
+            emit_runtime_check(
+                em,
+                ctx,
+                &ok,
+                &format!(
+                    "spawn: cannot capture {name:?} — it's a closure that captured live local state, which \
+                     can't cross a thread boundary (only a zero-capture closure or a bare top-level function \
+                     reference can)"
+                ),
+            );
+        } else if crosses_thread_boundary(&ty) {
             return Err(format!(
                 "codegen: `spawn` cannot capture {name:?} — its type ({ty:?}) can't cross a thread boundary \
-                 (a closure's captured environment and a task handle are both tied to the thread that \
-                 created them, so there's nothing meaningful to deep-copy), matching the interpreter's own \
-                 restriction (see `plum_interp::Interpreter::to_portable`)"
+                 (a task handle is tied to the thread that created it, so there's nothing meaningful to \
+                 deep-copy), matching the interpreter's own restriction (see `plum_interp::Interpreter::to_portable`)"
             ));
         }
         captures.push((name, ty, reg));

@@ -310,6 +310,147 @@ discipline as the GC decision) — switching later is an implementation
 change, not a language-semantics change, since `send` already reads as
 a move at the source level either way.
 
+### `spawn` + `extern` calls — a real bug, found and fixed (2026-08-12)
+
+A task thread's own `Interpreter` (`Expr::Spawn`'s handling) started
+with a completely empty `extern_fns` table — only `Interpreter::load_
+program`, run once on the MAIN thread, ever populated it. Any `extern`-
+backed call inside a `spawn { .. }` block — every `tcp_*`/`dir_*`/
+`process_*` stdlib function, all of it — failed with "unknown extern
+function" even though the identical call worked fine outside a
+`spawn`. Found incidentally while doing unrelated work, filed, and
+fixed here: `Interpreter` now also keeps the raw `ExternFn`
+declarations it resolved (`extern_defs`, plain `String`/`Vec`/enum
+data, genuinely `Send` — unlike `ExternFnHandle` itself, which wraps a
+foreign `CodePtr` `libffi` gives no `Send` impl for), and `Expr::Spawn`
+hands a COPY of those declarations across the thread boundary so the
+new task's own `Interpreter` can re-resolve them itself (a second
+`dlsym`+`Cif::new` per extern, paid once at spawn time). Native codegen
+never had this bug — an `ExternCall` there compiles to a plain,
+statically-linked LLVM `call`, valid identically in every thread, no
+per-thread resolution table involved at all.
+
+While fixing this, a SECOND real bug surfaced: a spawned task's own
+thread used Rust's small (~2 MiB) `thread::spawn` default stack, not
+the much larger stack size (256 MiB) this interpreter's OTHER call
+sites already have to hand-configure around plain (non-tail) recursion
+in stdlib code (deep `String` scanning, HTTP parsing, ...) — see
+`Interpreter::eval`'s own doc comment on why it has no TCO. A spawned
+task's body is exactly as likely to hit that recursion as top-level
+code is; confirmed by a real stack overflow (not hypothetically) the
+first time a real recursive HTTP parse ran inside a spawned task.
+Fixed by giving every spawned task's thread the same 256 MiB stack.
+
+### HTTP server concurrency — attempted, reverted (2026-08-12)
+
+With the `spawn`+`extern` bug above fixed, `http_serve_loop` was
+rewritten to `spawn` a task per accepted connection instead of running
+`http_handle_connection` inline before accepting the next one — the
+natural next step once `spawn` could actually make the `tcp_*` calls
+`http_handle_connection` needs. Verified working, for real, in the
+INTERPRETER: a dedicated test opened two connections, left the first
+one's request deliberately incomplete (so the server's read for it
+stays genuinely blocked), and confirmed the second connection still
+gets accepted and served promptly rather than waiting behind the first.
+
+It broke NATIVE codegen, though — not just for programs that actually
+use `http_serve_loop`, but for every native-codegen program that pulls
+in the HTTP module AT ALL (confirmed directly: even the plain HTTP
+*client* test, which never calls `http_serve_loop`, started failing
+to compile), because this backend codegens every concrete top-level
+function in the loaded module unconditionally, not just ones reachable
+from the entry point. Root cause: `plum-codegen`'s `spawn` capture
+check (`crosses_thread_boundary`) rejects EVERY closure-typed free
+variable by TYPE alone, with no per-VALUE distinction between a real
+closure (genuine captured heap state, can't safely cross a thread) and
+a bare reference to a top-level function (`codegen_bare_fn_value`
+already generates this as a genuinely zero-capture closure cell —
+`plum_alloc_closure(i64 0)`, a no-op release function — which is just
+as safe to send as the interpreter's own `Value::Function` already is,
+see the section above). The interpreter has exactly this per-value
+distinction already (`Value::Function` vs `Value::Closure(id)`); native
+codegen's closure representation currently erases it once a value is
+stored in `env` — by the time `spawn`'s capture check runs, there's no
+way to tell "this Closure-typed register holds a bare top-level
+function reference" from "this Closure-typed register holds a real
+closure with live captures" without a runtime tag on the closure cell
+itself (its release-function pointer, stored at a known offset, could
+serve as exactly that tag — equal to `@plum_closure_release_noop`
+`iff` zero-capture — but wiring that into `spawn`'s codegen changes a
+compile-time rejection into a value that can only be checked at
+runtime, a bigger, cross-cutting change not attempted here).
+
+**Decision: reverted, for the moment.** `http_serve_loop` went back to
+sequential — real, useful, precedented (Apache prefork/early Java/Ruby
+WEBrick all shipped this shape for years) — while the real fix (below)
+was scoped and built.
+
+### Native-codegen zero-capture closure fix — done (2026-08-12), same session
+
+Scoped and built the fix flagged above, then re-shipped `http_serve_
+loop`'s spawn-per-connection concurrency on top of it. Three changes,
+all in `plum-codegen`, nothing elsewhere:
+
+1. **`codegen_spawn_literal`**: a closure-typed captured free variable
+   is no longer a blanket compile-time `Err`. Instead, it emits a
+   RUNTIME check — load the cell's release-function pointer (a fixed
+   offset, already used identically by `codegen_bare_fn_value`/`codegen_
+   closure_literal`'s own zero-capture case) and compare it against
+   `@plum_closure_release_noop`, using the exact same `emit_runtime_
+   check`/`@plum_abort` idiom this backend already uses for e.g. array-
+   bounds checks. A real closure with live captures still aborts
+   cleanly; a zero-capture closure or bare top-level function reference
+   now passes through.
+2. **`deep_copy_capture`**'s `Closure` arm went from a "guaranteed
+   unreachable" stub to a real implementation: build a FRESH zero-
+   capture cell (`plum_alloc_closure(i64 0)`, code pointer copied from
+   the original cell at its own known offset, release fn set to the
+   noop) rather than passing the original pointer through unchanged —
+   even a zero-capture cell has its own refcount header, and sharing
+   that raw pointer across threads would let both threads race on it,
+   exactly the class of bug deep-copying every other heap type already
+   exists to prevent.
+3. `crosses_thread_boundary` itself, and `codegen_channel_send`'s use
+   of it, were left UNTOUCHED — this only changes `spawn`'s own capture
+   loop. Matches an asymmetry the interpreter already has (it lets a
+   bare top-level function cross `spawn` for free via `functions.
+   clone()`, but `channel.send()` still rejects one via `to_portable`)
+   rather than inventing new cross-backend behavior. Array-typed
+   captures containing closures also stay hard-rejected, unchanged —
+   narrowly scoped to the exact case that was blocking, not a general
+   capability expansion.
+
+Verified with three new native-codegen tests: a zero-capture closure
+literal crossing `spawn` successfully, a closure that genuinely closed
+over a local variable aborting cleanly at runtime (not a compile-time
+reject — confirmed by updating the OLD test that asserted the old
+compile-time-reject behavior, since a zero-capture closure it had been
+using as its example — `|x: Int| x + 1`, no free variables — is now
+legitimately ALLOWED, not a bug), and a bare top-level function passed
+by name crossing `spawn` (the exact `handler`-parameter shape `http_
+serve_loop` needs). Then re-applied the `http_serve_loop` spawn-per-
+connection rewrite, this time verified working in BOTH backends — a new
+native-codegen concurrency test mirrors the interpreter one: client A
+connects and sends a deliberately incomplete request (leaving its
+task genuinely blocked), client B connects with a complete, ordinary
+request and gets served promptly regardless.
+
+**A real, separate bug found while writing that native test**: since
+`http_serve`/`http_serve_loop` never returns, a `compile_and_run`-based
+test's underlying compiled BINARY runs forever — and a `Command`-
+spawned child process that outlives its Rust parent does NOT get killed
+when the parent exits (it's reparented, not reaped), unlike a merely-
+leaked Rust THREAD (which dies with its process). An early version of
+this test leaked a real orphaned server process holding its port across
+LATER, unrelated test runs, causing spurious failures against a STALE
+process's stale binary. Fixed by spawning the compiled binary directly
+(bypassing `compile_and_run`) and wrapping the `Child` in a `Drop`-based
+kill guard, so it's reaped even if an assertion panics partway through.
+
+**`http_serve_loop` is spawn-per-connection concurrent in BOTH backends
+now** — the interpreter version from the attempt above, unchanged; the
+native-codegen path newly unblocked by this fix.
+
 ## Syntax and surface semantics
 
 ### Load-bearing ML semantics — Decided
@@ -5866,3 +6007,77 @@ keyed maps (exercising `value_hash`'s reuse of `.to_string()`'s
 existing recursive struct rendering), and a real 1000-entry stress test
 crossing multiple resize boundaries with every key individually
 verified afterward — not just "didn't crash."
+
+### `?`/early-return sugar — Decided (2026-08-12): not built; adopted pipe + `Result.and_then`/`Result.map` as house style instead
+
+Raised as the last remaining self-hosting "should-have" from the
+earlier roadmap discussion. Brad was skeptical going in — right to be.
+
+**Why `?` isn't just sugar over `match` here.** Checked directly: Plum
+has NO `return` statement/keyword at all. Every function body is a
+single expression flowing to its value (`if`/`match`/blocks are all
+expressions) — `?` fundamentally means "stop evaluating this function
+and produce a value right now, from the middle of an expression tree,"
+which is a genuinely new kind of control flow, not a desugaring of
+something that already exists. Two more real costs, not just the
+`return` gap: (1) Rust's `?` is pleasant specifically because it auto-
+converts the error type via `From` — Plum's ad-hoc-polymorphism story
+is deliberately closed (`Num`/`Eq`/`Show` only, confirmed directly via
+`satisfies_bound`, no user-extensible conversion trait), so `?` here
+would only work cleanly when every fallible call in a function already
+agrees on the exact same error type; (2) an early return needs to
+release any live local heap values at that exit point, a genuinely NEW
+exit path `fbip`'s last-use analysis (which currently only ever sees
+one exit, the function's tail) has never had to reason about.
+
+**Decided instead: adopt pipe + `Result.and_then`/`Result.map` as the
+house style for straight-line Result chains**, which already existed
+(no new language work at all) and get most of the real readability
+win. Proven by rewriting a real, already-shipped chain BOTH ways and
+running both against the REAL counterpart before choosing — not just
+theorized:
+
+```
+// Before (nested match, 12 lines):
+let http_do_request (fd: Int) ... : Result[HttpResponse, String] =
+    match tcp_write(...) {
+        Err(e) => Err(e),
+        Ok(_) => match http_recv_headers_acc(fd, \"\") {
+            Err(e) => Err(e),
+            Ok(raw) => match http_parse_head(raw) { ... },
+        },
+    }
+
+// After (pipe + and_then, 4 lines) — SHIPPED:
+let http_do_request (fd: Int) ... : Result[HttpResponse, String] =
+    tcp_write(fd, http_build_request(method, parsed, headers, body))
+        |> Result.and_then(_, |ignored| http_recv_headers_acc(fd, \"\"))
+        |> Result.and_then(_, http_parse_head)
+        |> Result.and_then(_, |head| Result.map(http_read_body(fd, head.headers, head.leftover_body), |response_body| HttpResponse { status: head.status, headers: head.headers, body: response_body }))
+```
+
+Verified by writing `_v2` alternates of `http_do_request`/`http_
+request`/`http_parse_head`/`http_parse_request_head`/`http_handle_
+connection` calling the SAME already-shipped underlying helpers,
+running the CLIENT rewrite against the REAL, unmodified server and the
+SERVER rewrite against the REAL, unmodified client (both directions,
+both backends) — proving each rewrite independently correct against a
+known-good counterpart, not just \"compiles.\" Then applied to the real
+prelude source; the FULL existing HTTP test suite (unchanged) passed
+against the rewritten implementation with zero modifications needed.
+
+**The honest limit found along the way, not glossed over**: `Result.
+and_then`-chaining loses access to earlier bound values once you move
+past them — `http_do_request`'s last step needs BOTH `head` (from step
+3) and `response_body` (step 4's own result), so the chain can't stay
+FLAT; it needs one level of closure nesting so `head` stays in scope
+via capture. `http_request` (needing `fd` alive for cleanup regardless
+of outcome) and `http_handle_connection` (needing `head` alive across
+two more steps) hit the same thing, one level deeper each. Real local
+variables from a genuine `?`/early-return wouldn't have this problem —
+this is exactly the shape of chain `?` is actually good at that the
+combinator style doesn't fully replace. Not built anyway: none of the
+chains that existed needed MORE than one level of this, and the
+version with it stayed clearly more readable than the original nested
+`match`. Revisit if real self-hosting work surfaces a chain where this
+actually bites — not before.

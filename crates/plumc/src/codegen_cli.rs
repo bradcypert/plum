@@ -2238,6 +2238,93 @@ mod tests {
     }
 
     #[test]
+    fn http_serve_loop_handles_two_connections_concurrently_not_serially_in_native_codegen() {
+        // The native-codegen sibling of `plumc::tests::http_serve_loop_
+        // handles_two_connections_concurrently_not_serially` — this is
+        // the exact case that used to break native-codegen HTTP
+        // entirely (`spawn` rejecting `handler`, a closure-typed value,
+        // unconditionally by type alone) before the zero-capture-
+        // closure fix; see DESIGN.md's Concurrency section for the
+        // full writeup. Same proof shape: client A connects and sends
+        // only a PARTIAL request (no terminating blank line), leaving
+        // the server's task for it genuinely blocked reading more
+        // bytes; client B, a complete ordinary request, must still get
+        // served promptly.
+        let port = 58943;
+        let src = format!(
+            "let handler (req: HttpRequest): HttpResponse = HttpResponse {{ status: 200, headers: [], body: req.method.concat(\" \").concat(req.path) }}\n\
+             let go (): String = match http_serve({port}, handler) {{ Err(e) => e, Ok(_) => \"ok\" }}\n"
+        );
+        // Unlike `compile_and_run` (used by every OTHER test here),
+        // this spawns the compiled binary directly and keeps the
+        // `Child` handle so it can be `.kill()`ed explicitly at the
+        // end — `http_serve` never returns on its own (an
+        // intentionally infinite accept loop), and a `Command::output
+        // ()`-spawned child that outlives its parent doesn't get
+        // reaped just because the PARENT test process eventually
+        // exits (it's reparented, not killed) — confirmed directly:
+        // an earlier version of this test using `compile_and_run`
+        // (never explicitly killed) left a real orphaned process
+        // holding the port across LATER, unrelated test runs, causing
+        // spurious failures/hangs on results from a stale binary
+        // rather than the current one.
+        // A `Drop`-based kill guard — NOT just `child.kill()` called at
+        // the bottom of the test — because every client step below can
+        // panic via `.unwrap()`/`.expect()`, and an un-killed child
+        // would still leak in exactly that case (the one case a leak
+        // is most likely, since it's the failure path).
+        struct KillOnDrop(std::process::Child);
+        impl Drop for KillOnDrop {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let (body_ir, signatures, resolved_entry, has_globals) = compile_to_ir(&src, "go").unwrap();
+        let sig = signatures.get(&resolved_entry).unwrap().clone();
+        let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit], has_globals);
+        let full_ir = format!("{body_ir}\n{main_ir}");
+        let dir = unique_temp_dir("plumc-codegen-http-serve-loop");
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin_path = dir.join("program");
+        compile_ir_to_binary(&full_ir, &bin_path).unwrap();
+        let child = std::process::Command::new(&bin_path).spawn().expect("failed to launch compiled server");
+        let _guard = KillOnDrop(child);
+
+        use std::io::{Read, Write};
+        let mut client_a = None;
+        for _ in 0..400 {
+            if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+                client_a = Some(s);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let mut client_a = client_a.expect("server never started listening");
+        client_a.write_all(b"GET /a HTTP/1.1\r\nHost: 127.0.0.1\r\n").unwrap();
+
+        let mut client_b = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect for client B failed");
+        client_b.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        client_b
+            .write_all(b"GET /b HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut resp_b = Vec::new();
+        client_b.read_to_end(&mut resp_b).unwrap();
+        let resp_b = String::from_utf8_lossy(&resp_b);
+        assert!(resp_b.contains("HTTP/1.1 200 OK"), "client B didn't get served while A was stuck: {resp_b}");
+        assert!(resp_b.contains("GET /b"), "client B got the wrong response: {resp_b}");
+
+        client_a.write_all(b"Connection: close\r\n\r\n").unwrap();
+        client_a.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        let mut resp_a = Vec::new();
+        client_a.read_to_end(&mut resp_a).unwrap();
+        let resp_a = String::from_utf8_lossy(&resp_a);
+        assert!(resp_a.contains("GET /a"), "client A's own eventual response looked wrong: {resp_a}");
+        // `_guard` drops here, killing the server — no leaked process.
+    }
+
+    #[test]
     fn list_dir_and_is_directory_run_through_native_codegen() {
         let dir = std::env::temp_dir().join(format!("plumc-codegen-listdir-test-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("subdir")).unwrap();
@@ -2830,21 +2917,70 @@ mod tests {
     }
 
     #[test]
-    fn spawn_rejects_capturing_a_closure_across_the_thread_boundary() {
-        // A closure's captured environment is tied to the thread that
-        // created it — mirrors the interpreter's own `to_portable`
-        // rejection (`plum_interp::Interpreter::to_portable`'s `Value::
-        // Closure` arm). `add_one` is captured (used inside `block`),
-        // and its resolved type is `Closure`.
+    fn spawn_can_capture_a_zero_capture_closure_across_the_thread_boundary() {
+        // `add_one` captures NOTHING from its enclosing scope (only its
+        // own parameter `x`) — codegen already builds this as a
+        // genuinely zero-capture closure cell (same shape/release
+        // function as a bare top-level function reference), so it's
+        // exactly as safe to cross a `spawn` boundary as one is. See
+        // `spawn_rejects_capturing_a_closure_that_actually_captured_
+        // live_state_across_the_thread_boundary` below for the case
+        // that's still rejected.
         let src = "\
             let go (): Int = {\n\
               let add_one = |x: Int| x + 1;\n\
-              spawn { add_one(1) }.join()\n\
+              spawn { add_one(41) }.join()\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "42");
+    }
+
+    #[test]
+    fn spawn_rejects_capturing_a_closure_that_actually_captured_live_state_across_the_thread_boundary() {
+        // Unlike the zero-capture case above, `add_n` genuinely closes
+        // over `n` (a real captured local) — its cell's release
+        // function is a real, per-literal-site one, not the shared
+        // no-op `add_one` above gets. `codegen_spawn_literal` can't
+        // tell which shape a `Closure`-typed capture holds at COMPILE
+        // time (the same register could hold either, depending on
+        // which value flows in), so this is a RUNTIME check + abort —
+        // same crash semantics as any other runtime check in this
+        // backend (e.g. `a_failing_global_initializer_crashes_the_
+        // process_cleanly`'s division-by-zero case above), not a
+        // distinct failure mode.
+        let src = "\
+            let go (): Int = {\n\
+              let n = 1;\n\
+              let add_n = |x: Int| x + n;\n\
+              spawn { add_n(41) }.join()\n\
             }\n\
         ";
         let err = compile_and_run(src, "go", &[CgValue::Unit])
-            .expect_err("expected a closure-typed spawn capture to be rejected at compile time");
-        assert!(err.contains("spawn") && err.contains("thread boundary"), "unexpected error: {err}");
+            .expect_err("expected capturing a closure that closed over live state to abort at runtime");
+        assert!(
+            err.contains("non-zero status"),
+            "expected a clean non-zero-exit crash, got: {err}"
+        );
+    }
+
+    #[test]
+    fn spawn_can_capture_a_bare_top_level_function_passed_as_a_value() {
+        // The exact shape a handler-taking function like `http_serve_
+        // loop` needs: `handler` is a genuine top-level function,
+        // passed by NAME as a first-class value into `run_it`, then
+        // captured by `spawn` — `codegen_bare_fn_value` already builds
+        // this as a zero-capture closure cell (same release function
+        // as `codegen_closure_literal`'s own zero-capture case, see
+        // `spawn_can_capture_a_zero_capture_closure_across_the_thread_
+        // boundary` above), so it crosses for the same reason.
+        let src = "\
+            let add_one (x: Int): Int = x + 1\n\
+            let run_it (handler: (Int) -> Int): Int = spawn { handler(41) }.join()\n\
+            let go (): Int = run_it(add_one)\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "42");
     }
 
     #[test]

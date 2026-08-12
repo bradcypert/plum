@@ -400,6 +400,25 @@ without it, `[1,2,3] |> Array.map(f)` would (wrongly) mean
 `Array.map(f, [1,2,3])`. At most one `_` per call; a plain single-
 argument call like `xs |> Array.reverse` doesn't need one.
 
+**Pipe + `Result.and_then`/`Result.map` is the house style for
+chaining fallible calls** — Plum has no `?`/early-return (deliberately
+not built, see DESIGN.md's own section: it would need a `return`
+statement the language doesn't have at all, plus a `From`-style error-
+conversion mechanism the closed trait set has no room for):
+
+```
+tcp_write(fd, request)
+    |> Result.and_then(_, |ignored| read_response(fd))
+    |> Result.and_then(_, parse_response)
+```
+
+reads top-to-bottom instead of the nested-`match` alternative
+(`match x { Err(e) => Err(e), Ok(v) => match ... }`). It has one real
+limit worth knowing: a later step needing a value from TWO steps back
+can't stay flat — wrap that one step in a closure so the earlier
+binding stays in scope via capture (`Result.and_then(_, |head| Result
+.map(read_body(head), |body| Response { head, body }))`).
+
 ### Strings
 
 ```
@@ -616,11 +635,16 @@ program's prelude):
   [Unit, String]` (the real long-running server: accept, handle, close,
   repeat, forever). `handler: (HttpRequest) -> HttpResponse`, where
   `HttpRequest { method: String, path: String, headers: Array
-  [HttpHeader], body: String }`. **Sequential — one connection at a
-  time**, not concurrent; spawn-per-connection is a deliberate later
-  follow-up, not bundled in now. Every request gets exactly one
-  response, connection always closed afterward (no keep-alive). See
-  DESIGN.md's "HTTP server" section for the full writeup, including a
+  [HttpHeader], body: String }`. **Concurrent — spawn-per-connection**:
+  `http_serve`/`http_serve_loop` spawn a real OS-thread task per
+  accepted connection (both backends), so one slow client can't stall
+  another behind it; `handler` must be a plain top-level function or a
+  closure capturing nothing (a closure that closes over live local
+  state can't cross the `spawn` boundary — a clear error in the
+  interpreter, a clean runtime abort in native codegen). Every request
+  gets exactly one response, connection always closed afterward (no
+  keep-alive). See DESIGN.md's "HTTP server" and "Native-codegen
+  zero-capture closure fix" sections for the full writeup, including a
   real request/response body-framing asymmetry bug found via an actual
   deadlock (a bodyless `GET` with no `Content-Length` means different
   things on the two sides of a connection).

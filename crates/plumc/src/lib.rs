@@ -1407,14 +1407,11 @@ let http_parse_head (raw: String): Result[HttpHead, String] = {
     let leftover_body = if sep_index + 4 <= raw.len() { String.slice(raw, sep_index + 4, raw.len()) } else { \"\" };
     let lines = String.slice(raw, 0, sep_index).split(\"\\n\");
     if lines.len() == 0 { Err(\"http client: empty response\") }
-    else { match http_parse_status_line(lines[0]) {
-        Err(e) => Err(e),
-        Ok(status) => Ok(HttpHead {
-            status: status,
-            headers: http_parse_headers(Array.drop(lines, 1)),
-            leftover_body: leftover_body,
-        }),
-    } }
+    else { Result.map(http_parse_status_line(lines[0]), |status| HttpHead {
+        status: status,
+        headers: http_parse_headers(Array.drop(lines, 1)),
+        leftover_body: leftover_body,
+    }) }
 }
 
 let http_recv_body_by_length_acc (fd: Int) (acc: String) (remaining: Int): Result[String, String] =
@@ -1476,32 +1473,35 @@ let http_read_request_body (fd: Int) (headers: Array[HttpHeader]) (leftover_body
         },
     }
 
+// Pipe + `Result.and_then`/`Result.map`, not nested `match` — a
+// deliberate house-style adoption (see DESIGN.md's own \"?/early-return
+// sugar\" section for the full writeup: real `?`-style early return
+// would need a language feature Plum doesn't have at all, `return`,
+// plus a `From`-style error-conversion mechanism the closed trait set
+// has no room for — this gets most of the real readability benefit
+// today, for free, confirmed by rewriting this exact chain both ways
+// and running BOTH against the real shipped counterpart before
+// choosing this one). `|ignored| ..` discards `tcp_write`'s own `Int`
+// (bytes-written count) — the next step doesn't need it, only that the
+// write succeeded at all.
 let http_do_request (fd: Int) (method: String) (parsed: HttpUrlParts) (headers: Array[HttpHeader]) (body: String): Result[HttpResponse, String] =
-    match tcp_write(fd, http_build_request(method, parsed, headers, body)) {
-        Err(e) => Err(e),
-        Ok(_) => match http_recv_headers_acc(fd, \"\") {
-            Err(e) => Err(e),
-            Ok(raw) => match http_parse_head(raw) {
-                Err(e) => Err(e),
-                Ok(head) => match http_read_body(fd, head.headers, head.leftover_body) {
-                    Err(e) => Err(e),
-                    Ok(response_body) => Ok(HttpResponse { status: head.status, headers: head.headers, body: response_body }),
-                },
-            },
-        },
-    }
+    tcp_write(fd, http_build_request(method, parsed, headers, body))
+        |> Result.and_then(_, |ignored| http_recv_headers_acc(fd, \"\"))
+        |> Result.and_then(_, http_parse_head)
+        |> Result.and_then(_, |head| Result.map(http_read_body(fd, head.headers, head.leftover_body), |response_body| HttpResponse { status: head.status, headers: head.headers, body: response_body }))
 
+// `fd` has to stay reachable for the FINAL cleanup step regardless of
+// `http_do_request`'s own outcome — closure capture (`fd` bound by the
+// outer `and_then`, still in scope in the block passed to the inner
+// one) does this without needing the old two-armed \"close then re-wrap
+// Ok/Err separately\" match at all.
 let http_request (method: String) (url: String) (headers: Array[HttpHeader]) (body: String): Result[HttpResponse, String] =
-    match http_parse_url(url) {
-        Err(e) => Err(e),
-        Ok(parsed) => match tcp_connect_to(parsed.host, parsed.port) {
-            Err(e) => Err(e),
-            Ok(fd) => match http_do_request(fd, method, parsed, headers, body) {
-                Ok(r) => { tcp_close_connection(fd); Ok(r) },
-                Err(e) => { tcp_close_connection(fd); Err(e) },
-            },
-        },
-    }
+    http_parse_url(url)
+        |> Result.and_then(_, |parsed| tcp_connect_to(parsed.host, parsed.port) |> Result.and_then(_, |fd| {
+            let result = http_do_request(fd, method, parsed, headers, body);
+            tcp_close_connection(fd);
+            result
+        }))
 
 let http_get (url: String): Result[HttpResponse, String] = http_request(\"GET\", url, [], \"\")
 
@@ -1524,15 +1524,12 @@ let http_parse_request_head (raw: String): Result[HttpRequestHead, String] = {
     let leftover_body = if sep_index + 4 <= raw.len() { String.slice(raw, sep_index + 4, raw.len()) } else { \"\" };
     let lines = String.slice(raw, 0, sep_index).split(\"\\n\");
     if lines.len() == 0 { Err(\"http server: empty request\") }
-    else { match http_parse_request_line(lines[0]) {
-        Err(e) => Err(e),
-        Ok(rl) => Ok(HttpRequestHead {
-            method: rl.method,
-            path: rl.path,
-            headers: http_parse_headers(Array.drop(lines, 1)),
-            leftover_body: leftover_body,
-        }),
-    } }
+    else { Result.map(http_parse_request_line(lines[0]), |rl| HttpRequestHead {
+        method: rl.method,
+        path: rl.path,
+        headers: http_parse_headers(Array.drop(lines, 1)),
+        leftover_body: leftover_body,
+    }) }
 }
 
 // A small, fixed table covering the reason phrases any real client
@@ -1571,23 +1568,13 @@ let http_response_to_wire (resp: HttpResponse): String = {
 // (any connected `fd` pair works, e.g. the SAME loopback-pair shape
 // `tcp_round_trip`'s own test already uses).
 let http_handle_connection (conn: Int) (handler: (HttpRequest) -> HttpResponse): Result[Unit, String] =
-    match http_recv_headers_acc(conn, \"\") {
-        Err(e) => Err(e),
-        Ok(raw) => match http_parse_request_head(raw) {
-            Err(e) => Err(e),
-            Ok(head) => match http_read_request_body(conn, head.headers, head.leftover_body) {
-                Err(e) => Err(e),
-                Ok(body) => {
-                    let request = HttpRequest { method: head.method, path: head.path, headers: head.headers, body: body };
-                    let response = handler(request);
-                    match tcp_write(conn, http_response_to_wire(response)) {
-                        Err(e) => Err(e),
-                        Ok(_) => Ok(()),
-                    }
-                },
-            },
-        },
-    }
+    http_recv_headers_acc(conn, \"\")
+        |> Result.and_then(_, http_parse_request_head)
+        |> Result.and_then(_, |head| http_read_request_body(conn, head.headers, head.leftover_body) |> Result.and_then(_, |body| {
+            let request = HttpRequest { method: head.method, path: head.path, headers: head.headers, body: body };
+            let response = handler(request);
+            Result.map(tcp_write(conn, http_response_to_wire(response)), |sent| ())
+        }))
 
 // Handles exactly ONE connection then returns — listens, accepts once,
 // closes both the connection and the listening socket, and gives back
@@ -1609,34 +1596,42 @@ let http_serve_once (port: Int) (handler: (HttpRequest) -> HttpResponse): Result
         },
     }
 
-// The REAL long-running server: accept, handle, close the connection,
-// repeat — forever. A single misbehaving/erroring connection does NOT
-// bring the server down (its `Result` is deliberately discarded — a
-// bare statement, not bound to anything, same idiom `println`'s own
-// `write(1, s.as_cstr(), n);` already established for a discarded non-
-// `Unit` extern return; `let _ = ..` is NOT the same thing here — `_`
-// is a valid MATCH-arm pattern but not a supported LET-binding pattern
-// shape, confirmed directly: it hit `plum-types`' own \"destructuring
-// let-bindings of this shape\" catch-all) — only a hard failure to
+// The REAL long-running server: accept, hand the connection off to its
+// own task, repeat — forever. Concurrent by design: `spawn` puts each
+// connection's `http_handle_connection`/close on its own real OS
+// thread (see DESIGN.md's Concurrency section — \"OS threads first\")
+// so one slow client (a slow body, a slow handler) can't stall every
+// OTHER connection behind it the way a single sequential accept-loop
+// would. A single misbehaving/erroring connection does NOT bring the
+// server down (the spawned task's `Result` is deliberately never
+// joined, let alone matched — a bare discarded statement, same idiom
+// `println`'s own `write(1, s.as_cstr(), n);` already established for
+// a discarded non-`Unit` extern return) — only a hard failure to
 // ACCEPT (a real listener-level problem, not a per-connection one)
 // stops the loop, matching `Err` propagating out of `tcp_accept_
 // connection` itself.
 //
-// Deliberately not directly compile-and-run tested, unlike everything
-// else in this module: it's an intentionally infinite recursion (no
-// `while`/loop-with-an-exit exists in this language, and this function
-// genuinely has none by design — a real server keeps serving) with no
-// way to observe it finish. Every piece it's built from — request
-// parsing, body framing, response serialization, and single-connection
-// handling via `http_handle_connection`/`http_serve_once` — IS tested
-// directly; this wrapper itself is a two-line recursive loop with
-// nothing of its own left to get wrong.
+// `handler` must be a plain top-level function or a closure that
+// captures NOTHING (both cross a `spawn` boundary equally, see
+// DESIGN.md's \"native-codegen zero-capture closure fix\" section) — a
+// closure that DOES capture live local state still can't cross: the
+// interpreter rejects it with a clear error at the `spawn` site, and
+// native codegen rejects it with a clean runtime abort (can't be
+// proven safe/unsafe at compile time — the same free-variable slot
+// could hold either shape depending on what's passed in).
+//
+// Deliberately not directly compile-and-run tested for the INFINITE-
+// LOOP shape itself (no `while`/loop-with-an-exit exists in this
+// language, and this function genuinely has none by design — a real
+// server keeps serving), same as before this change; what IS new here
+// (spawn-per-connection actually running two connections concurrently,
+// not serially) is covered by `http_serve_loop_handles_two_connections_
+// concurrently_not_serially` below.
 let http_serve_loop (server: Int) (handler: (HttpRequest) -> HttpResponse): Result[Unit, String] =
     match tcp_accept_connection(server) {
         Err(e) => Err(e),
         Ok(conn) => {
-            http_handle_connection(conn, handler);
-            tcp_close_connection(conn);
+            spawn { http_handle_connection(conn, handler); tcp_close_connection(conn) };
             http_serve_loop(server, handler)
         },
     }
@@ -2697,6 +2692,83 @@ mod tests {
 
         let result = server.join().unwrap();
         assert_eq!(result, Ok("Bool(true)".to_string()));
+    }
+
+    #[test]
+    fn http_serve_loop_handles_two_connections_concurrently_not_serially() {
+        // The whole point of `http_serve_loop` now spawning a task per
+        // connection instead of handling each one inline before
+        // accepting the next: a SLOW/stuck connection must not stall a
+        // later, independent one behind it. Proven directly, not just
+        // asserted: client A opens a connection and sends only a
+        // PARTIAL request (no terminating blank line), so the server's
+        // `http_recv_headers_acc` is genuinely still blocked inside
+        // `tcp_read` on A's task thread when client B connects. If
+        // `http_serve_loop` were still sequential, B's `tcp_accept_
+        // connection` would never even run until A's handler finished
+        // (which it can't, since A never sends the rest) — B's read
+        // would time out. With per-connection `spawn`, B gets accepted
+        // and served immediately regardless of A's state.
+        let port = 58942;
+        let src = format!(
+            "let handler (req: HttpRequest): HttpResponse = HttpResponse {{ status: 200, headers: [], body: req.method.concat(\" \").concat(req.path) }}\n\
+             let use_it dummy = match http_serve({port}, handler) {{ Err(e) => e, Ok(_) => \"ok\" }} == \"ok\""
+        );
+        // Deliberately not joined: `http_serve`/`http_serve_loop` is an
+        // intentionally infinite recursive accept loop (see `http_
+        // serve_loop`'s own doc comment) with no way to observe it
+        // finish — same reasoning as why that function has no direct
+        // compile-and-run test of its own. The thread is left running
+        // for the rest of the test binary's process lifetime, same as
+        // any other never-joined background thread.
+        std::thread::Builder::new()
+            .stack_size(256 * 1024 * 1024)
+            .spawn(move || {
+                // `Value` (via `Ref`/`Task`'s non-`Send` `Rc`) isn't
+                // `Send`, so the closure can't hand it back across
+                // `JoinHandle` even if we wanted to — collapse to a
+                // `Send`-safe `String` immediately, matching this
+                // test's own "never joined" design (the result is
+                // never read either way).
+                let _ = typecheck_and_run(&src, "use_it", vec![Value::Unit]).map(|v| format!("{v:?}"));
+            })
+            .unwrap();
+
+        use std::io::{Read, Write};
+        let mut client_a = None;
+        for _ in 0..400 {
+            if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+                client_a = Some(s);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let mut client_a = client_a.expect("server never started listening");
+        // No terminating "\r\n\r\n" — the server's task for A is left
+        // genuinely blocked reading more header bytes that never come.
+        client_a.write_all(b"GET /a HTTP/1.1\r\nHost: 127.0.0.1\r\n").unwrap();
+
+        // Client B: a complete, ordinary request — must get served
+        // promptly even though A's task is still stuck.
+        let mut client_b = std::net::TcpStream::connect(("127.0.0.1", port)).expect("connect for client B failed");
+        client_b.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        client_b
+            .write_all(b"GET /b HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        let mut resp_b = Vec::new();
+        client_b.read_to_end(&mut resp_b).unwrap();
+        let resp_b = String::from_utf8_lossy(&resp_b);
+        assert!(resp_b.contains("HTTP/1.1 200 OK"), "client B didn't get served while A was stuck: {resp_b}");
+        assert!(resp_b.contains("GET /b"), "client B got the wrong response: {resp_b}");
+
+        // Cleanup: finish A's request too so its task can exit rather
+        // than staying blocked for the rest of the process's lifetime.
+        client_a.write_all(b"Connection: close\r\n\r\n").unwrap();
+        client_a.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+        let mut resp_a = Vec::new();
+        client_a.read_to_end(&mut resp_a).unwrap();
+        let resp_a = String::from_utf8_lossy(&resp_a);
+        assert!(resp_a.contains("GET /a"), "client A's own eventual response looked wrong: {resp_a}");
     }
 
     #[test]

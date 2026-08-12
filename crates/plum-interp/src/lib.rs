@@ -798,11 +798,22 @@ pub struct Interpreter {
     // after scanning `env` comes up empty.
     globals: HashMap<String, Value>,
     // Resolved `extern "C"` functions — see `ExternFnHandle`'s doc
-    // comment. Populated once by `load_program`; empty in a task
-    // thread's own `Interpreter::new()` (see `Expr::Spawn`'s handling),
-    // an honest v1 gap — an extern call inside a spawned block fails
-    // with "unknown extern function" rather than silently working.
+    // comment. Populated once by `load_program`.
     extern_fns: HashMap<String, ExternFnHandle>,
+    // The raw `ExternFn` declarations `extern_fns` was resolved from —
+    // kept around (plain data: `String`/`Vec`/enum, genuinely `Send`,
+    // unlike `ExternFnHandle` itself which wraps a foreign `CodePtr`
+    // libffi gives no `Send` impl for) purely so `Expr::Spawn` can
+    // hand a COPY of the declarations across the thread boundary and
+    // have the new task's own `Interpreter` re-resolve them itself
+    // (a second `dlsym`+`Cif::new` per extern, paid once at spawn
+    // time) rather than trying to move the unresolved handles
+    // directly. Fixes a real gap: before this field existed, a task
+    // thread's own `Interpreter::new()` had no extern table at all,
+    // so any `extern`-backed call inside a `spawn { .. }` block
+    // (`tcp_*`, `dir_*`, `process_*`, ...) failed with "unknown
+    // extern function" — see DESIGN.md's concurrency section.
+    extern_defs: Vec<plum_ir::ir::ExternFn>,
     // Struct tag -> field names, in DECLARED order — needed ONLY for
     // `.to_string()`'s named-field rendering (`Point { x: 1, y: 2 }`).
     // Empty unless a caller opts in via `set_struct_field_names` (see
@@ -842,6 +853,7 @@ impl Interpreter {
             next_closure_id: 0,
             globals: HashMap::new(),
             extern_fns: HashMap::new(),
+            extern_defs: Vec::new(),
             struct_field_names: HashMap::new(),
             process_args: Vec::new(),
             rng_state: seed_rng(),
@@ -889,6 +901,7 @@ impl Interpreter {
             let handle = resolve_extern_fn(extern_fn)?;
             self.extern_fns.insert(extern_fn.name.clone(), handle);
         }
+        self.extern_defs = program.externs.clone();
         for g in &program.globals {
             let value = self.eval(&g.value)?;
             self.globals.insert(g.name.clone(), value);
@@ -1592,22 +1605,45 @@ impl Interpreter {
                     .map(|(name, v)| Ok((name.clone(), self.to_portable(v)?)))
                     .collect::<Result<Vec<(String, PortableValue)>, String>>()?;
                 let functions = self.functions.clone();
+                let extern_defs = self.extern_defs.clone();
                 let block = (**block).clone();
 
-                let join_handle = thread::spawn(move || -> Result<PortableValue, String> {
-                    let mut task_interp = Interpreter::new();
-                    task_interp.functions = functions;
-                    for (name, pv) in portable_globals {
-                        let v = task_interp.from_portable(pv);
-                        task_interp.globals.insert(name, v);
-                    }
-                    for (name, pv) in portable_env {
-                        let v = task_interp.from_portable(pv);
-                        task_interp.env.push((name, v));
-                    }
-                    let result = task_interp.eval(&block)?;
-                    task_interp.to_portable(&result)
-                });
+                // A generous 256 MiB stack, not Rust's small (~2 MiB)
+                // spawned-thread default — matches the stack size the
+                // CLI's own test/CLI call sites already have to hand-
+                // configure around plain (non-tail) RECURSION in
+                // stdlib code (deep `String` scanning, HTTP header/
+                // body parsing, ...) genuinely needing it; see this
+                // interpreter's own doc comments on why `eval` has no
+                // TCO. A spawned task's body is exactly as likely to
+                // hit that recursion as top-level code is — found via
+                // a real stack overflow, not hypothetically, wiring up
+                // spawn-per-connection HTTP concurrency (`http_serve_
+                // loop`), where the default stack overflowed on real
+                // request parsing the moment a connection's handling
+                // moved onto its own task thread.
+                let join_handle = thread::Builder::new()
+                    .stack_size(256 * 1024 * 1024)
+                    .spawn(move || -> Result<PortableValue, String> {
+                        let mut task_interp = Interpreter::new();
+                        task_interp.functions = functions;
+                        for extern_fn in &extern_defs {
+                            let handle = resolve_extern_fn(extern_fn)?;
+                            task_interp.extern_fns.insert(extern_fn.name.clone(), handle);
+                        }
+                        task_interp.extern_defs = extern_defs;
+                        for (name, pv) in portable_globals {
+                            let v = task_interp.from_portable(pv);
+                            task_interp.globals.insert(name, v);
+                        }
+                        for (name, pv) in portable_env {
+                            let v = task_interp.from_portable(pv);
+                            task_interp.env.push((name, v));
+                        }
+                        let result = task_interp.eval(&block)?;
+                        task_interp.to_portable(&result)
+                    })
+                    .expect("failed to spawn task thread");
 
                 Ok(Value::Task(TaskHandle(Rc::new(RefCell::new(Some(join_handle))))))
             }
@@ -3422,6 +3458,42 @@ mod tests {
     #[test]
     fn nested_spawn_inside_a_spawned_task() {
         assert_eq!(eval("spawn { spawn { 5 }.join() + 1 }.join()"), Value::Int(6));
+    }
+
+    #[test]
+    fn an_extern_call_inside_a_spawned_task_resolves_correctly() {
+        // Regression test: a task thread's own `Interpreter::new()`
+        // used to start with an EMPTY `extern_fns` table (only `load_
+        // program`, run once on the MAIN thread, ever populated it),
+        // so any `extern`-backed call inside a `spawn { .. }` block —
+        // this includes every `tcp_*`/`dir_*`/`process_*` stdlib
+        // function real HTTP-server concurrency needs — failed with
+        // "unknown extern function" even though the exact same call
+        // worked fine outside a `spawn`. Fixed by carrying the raw
+        // `ExternFn` declarations (`extern_defs`, plain `Send` data)
+        // across the thread boundary and having the task's own
+        // `Interpreter` re-resolve them itself.
+        let src = r#"
+            extern "C" {
+                fn strlen(s: CStr) -> Int;
+            }
+            let use_it dummy = spawn { unsafe { strlen("hello".as_cstr()) } }.join()
+        "#;
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(5));
+    }
+
+    #[test]
+    fn a_nested_spawn_can_also_make_an_extern_call() {
+        // Same fix, one level deeper — proves `extern_defs` itself
+        // propagates into the nested task's `Interpreter`, not just
+        // the outer one's.
+        let src = r#"
+            extern "C" {
+                fn strlen(s: CStr) -> Int;
+            }
+            let use_it dummy = spawn { spawn { unsafe { strlen("hi".as_cstr()) } }.join() }.join()
+        "#;
+        assert_eq!(run(src, "use_it", vec![Value::Unit]), Value::Int(2));
     }
 
     #[test]
