@@ -600,6 +600,34 @@ pub enum Expr {
     ToString {
         base: Box<Expr>,
     },
+    // `String.hash(s)` — a deterministic FNV-1a hash of `s`'s raw
+    // bytes, masked non-negative (the top bit cleared) so a caller can
+    // safely `% bucket_count` without the negative-modulo problem.
+    // Scoped to `Str` ONLY, unlike `ToString` (which dispatches
+    // dynamically across four types) — recognized as a `Type.func(..)`
+    // shape (`is_array_builtin_call`'s own precedent, generalized: `Array
+    // .map`/`filter`/`fold` established this "core builtin spelled like
+    // an associated function, recognized by AST shape before any real
+    // name lookup" pattern first), not a dot-call, since hashing isn't
+    // one of the small fixed set of zero-arg CONVERSIONS `.to_string()`/
+    // `.as_cstr()`/etc. are.
+    //
+    // This is the ONE new compiler primitive the hash-based `Map`/`Set`
+    // rewrite needed — everything else (bucket arrays, insert/get/
+    // remove/resize) is ordinary Plum stdlib source built on it plus
+    // `Array`, deliberately NOT a deep native collection type the way
+    // `Array` itself is (see DESIGN.md's "Hash-based Map/Set" section
+    // for the full scope discussion). A fully GENERIC structural hash
+    // (working on any type, mirroring `ToString`'s own per-type
+    // dispatch) was considered and rejected as the compiler-level
+    // primitive: `to_string()` already IS a deterministic structural
+    // representation for every type it supports, so `value_hash[T](x:
+    // T): Int = String.hash(x.to_string())`, written entirely in the
+    // PRELUDE on top of this one new primitive, gets the same coverage
+    // for free — no new recursive per-type codegen needed at all.
+    StrHash {
+        base: Box<Expr>,
+    },
     // `ref(v)` — allocates a genuinely SHARED mutable cell (DESIGN.md's
     // "Mutability and cycles" section), holding `v` initially. Evaluates
     // to `Value::Ref`, a handle OUTSIDE the toy refcounted heap

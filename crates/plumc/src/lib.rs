@@ -642,95 +642,122 @@ let json_stringify (v: JsonValue): String = match v {
 /// assoc_fns` — not the old flat `map_keys`/`set_to_array` naming,
 /// removed entirely; see DESIGN.md's \"Standard library\" chunk 14.)
 const STDLIB_COLLECTIONS_SRC: &str = "\
-enum Map[K, V] { MapNode(K, V, Map[K, V]), MapEnd }
-
-let Map.new[K, V] (): Map[K, V] = MapEnd
-
-let Map.insert[K: Eq, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] =
-    MapNode(k, v, m)
-
-let Map.get[K: Eq, V] (m: Map[K, V]) (k: K): Option[V] = match m {
-    MapNode(k2, v, rest) => if k == k2 { Some(v) } else { Map.get(rest, k) },
-    MapEnd => None,
-}
-
-let Map.contains[K: Eq, V] (m: Map[K, V]) (k: K): Bool = match m {
-    MapNode(k2, _, rest) => if k == k2 { true } else { Map.contains(rest, k) },
-    MapEnd => false,
-}
-
-let Map.remove[K: Eq, V] (m: Map[K, V]) (k: K): Map[K, V] = match m {
-    MapNode(k2, v, rest) => if k == k2 { rest } else { MapNode(k2, v, Map.remove(rest, k)) },
-    MapEnd => MapEnd,
-}
-
-let Map.len[K, V] (m: Map[K, V]): Int = match m {
-    MapNode(_, _, rest) => 1 + Map.len(rest),
-    MapEnd => 0,
-}
-
-enum Set[T] { SetNode(T, Set[T]), SetEnd }
-
-let Set.new[T] (): Set[T] = SetEnd
-
-let Set.contains[T: Eq] (s: Set[T]) (x: T): Bool = match s {
-    SetNode(y, rest) => if x == y { true } else { Set.contains(rest, x) },
-    SetEnd => false,
-}
-
-let Set.insert[T: Eq] (s: Set[T]) (x: T): Set[T] =
-    if Set.contains(s, x) { s } else { SetNode(x, s) }
-
-let Set.remove[T: Eq] (s: Set[T]) (x: T): Set[T] = match s {
-    SetNode(y, rest) => if x == y { rest } else { SetNode(y, Set.remove(rest, x)) },
-    SetEnd => SetEnd,
-}
-
-let Set.len[T] (s: Set[T]): Int = match s {
-    SetNode(_, rest) => 1 + Set.len(rest),
-    SetEnd => 0,
-}
-
-let Set.union[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = match a {
-    SetNode(x, rest) => Set.union(rest, Set.insert(b, x)),
-    SetEnd => b,
-}
-
-let set_intersection_acc[T: Eq] (a: Set[T]) (b: Set[T]) (acc: Set[T]): Set[T] = match a {
-    SetNode(x, rest) => if Set.contains(b, x) { set_intersection_acc(rest, b, Set.insert(acc, x)) } else { set_intersection_acc(rest, b, acc) },
-    SetEnd => acc,
-}
-let Set.intersection[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = set_intersection_acc(a, b, Set.new(()))
-
-let set_difference_acc[T: Eq] (a: Set[T]) (b: Set[T]) (acc: Set[T]): Set[T] = match a {
-    SetNode(x, rest) => if Set.contains(b, x) { set_difference_acc(rest, b, acc) } else { set_difference_acc(rest, b, Set.insert(acc, x)) },
-    SetEnd => acc,
-}
-let Set.difference[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = set_difference_acc(a, b, Set.new(()))
-
-let set_from_array_acc[T: Eq] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =
-    if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, Set.insert(acc, arr[i])) }
-let Set.from_array[T: Eq] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, Set.new(()))
-
-let map_from_arrays_acc[K: Eq, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =
-    if i >= keys.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }
-let Map.from_arrays[K: Eq, V] (keys: Array[K]) (values: Array[V]): Map[K, V] =
-    map_from_arrays_acc(keys, values, 0, Map.new(()))
-
-let Map.keys[K, V] (m: Map[K, V]): Array[K] = match m {
-    MapNode(k, _, rest) => Map.keys(rest).push(k),
-    MapEnd => [],
-}
-
-let Map.values[K, V] (m: Map[K, V]): Array[V] = match m {
-    MapNode(_, v, rest) => Map.values(rest).push(v),
-    MapEnd => [],
-}
-
-let Set.to_array[T] (s: Set[T]): Array[T] = match s {
-    SetNode(x, rest) => Set.to_array(rest).push(x),
-    SetEnd => [],
-}
+struct MapEntry[K, V] { key: K, value: V }\n\
+struct Map[K, V] { buckets: Array[Array[MapEntry[K, V]]], size: Int }\n\
+\n\
+let MAP_INITIAL_BUCKETS: Int = 8\n\
+let MAP_LOAD_FACTOR_NUM: Int = 3\n\
+let MAP_LOAD_FACTOR_DEN: Int = 4\n\
+\n\
+let map_make_buckets[K, V] (n: Int): Array[Array[MapEntry[K, V]]] = {\n\
+    let mut buckets = [];\n\
+    for i in 0..n { buckets = buckets.push([]); };\n\
+    buckets\n\
+}\n\
+\n\
+let value_hash[T] (x: T): Int = String.hash(x.to_string())\n\
+\n\
+let map_bucket_index[K] (k: K) (bucket_count: Int): Int = value_hash(k) % bucket_count\n\
+\n\
+let map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: Int): Int =\n\
+    if i >= bucket.len() { -1 }\n\
+    else if bucket[i].key == k { i }\n\
+    else { map_bucket_find_index(bucket, k, i + 1) }\n\
+\n\
+let Map.new[K, V] (): Map[K, V] = Map { buckets: map_make_buckets(MAP_INITIAL_BUCKETS), size: 0 }\n\
+\n\
+let map_rehash[K, V] (m: Map[K, V]) (new_bucket_count: Int): Map[K, V] = {\n\
+    let mut new_buckets = map_make_buckets(new_bucket_count);\n\
+    for bucket in m.buckets {\n\
+        for entry in bucket {\n\
+            let idx = map_bucket_index(entry.key, new_bucket_count);\n\
+            new_buckets = new_buckets.set(idx, new_buckets[idx].push(entry));\n\
+        }\n\
+    };\n\
+    Map { buckets: new_buckets, size: m.size }\n\
+}\n\
+\n\
+let Map.insert[K: Eq, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {\n\
+    let idx = map_bucket_index(k, m.buckets.len());\n\
+    let bucket = m.buckets[idx];\n\
+    let existing_i = map_bucket_find_index(bucket, k, 0);\n\
+    let inserted = if existing_i >= 0 {\n\
+        Map { buckets: m.buckets.set(idx, bucket.set(existing_i, MapEntry { key: k, value: v })), size: m.size }\n\
+    } else {\n\
+        Map { buckets: m.buckets.set(idx, bucket.push(MapEntry { key: k, value: v })), size: m.size + 1 }\n\
+    };\n\
+    if inserted.size * MAP_LOAD_FACTOR_DEN > inserted.buckets.len() * MAP_LOAD_FACTOR_NUM {\n\
+        map_rehash(inserted, inserted.buckets.len() * 2)\n\
+    } else {\n\
+        inserted\n\
+    }\n\
+}\n\
+\n\
+let Map.get[K: Eq, V] (m: Map[K, V]) (k: K): Option[V] = {\n\
+    let bucket = m.buckets[map_bucket_index(k, m.buckets.len())];\n\
+    let i = map_bucket_find_index(bucket, k, 0);\n\
+    if i >= 0 { Some(bucket[i].value) } else { None }\n\
+}\n\
+\n\
+let Map.contains[K: Eq, V] (m: Map[K, V]) (k: K): Bool =\n\
+    map_bucket_find_index(m.buckets[map_bucket_index(k, m.buckets.len())], k, 0) >= 0\n\
+\n\
+let Map.remove[K: Eq, V] (m: Map[K, V]) (k: K): Map[K, V] = {\n\
+    let idx = map_bucket_index(k, m.buckets.len());\n\
+    let bucket = m.buckets[idx];\n\
+    let i = map_bucket_find_index(bucket, k, 0);\n\
+    if i >= 0 { Map { buckets: m.buckets.set(idx, bucket.remove(i)), size: m.size - 1 } } else { m }\n\
+}\n\
+\n\
+let Map.len[K, V] (m: Map[K, V]): Int = m.size\n\
+\n\
+let Map.keys[K, V] (m: Map[K, V]): Array[K] = {\n\
+    let mut acc = [];\n\
+    for bucket in m.buckets { for entry in bucket { acc = acc.push(entry.key); } };\n\
+    acc\n\
+}\n\
+\n\
+let Map.values[K, V] (m: Map[K, V]): Array[V] = {\n\
+    let mut acc = [];\n\
+    for bucket in m.buckets { for entry in bucket { acc = acc.push(entry.value); } };\n\
+    acc\n\
+}\n\
+\n\
+let map_from_arrays_acc[K: Eq, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =\n\
+    if i >= keys.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }\n\
+let Map.from_arrays[K: Eq, V] (keys: Array[K]) (values: Array[V]): Map[K, V] = map_from_arrays_acc(keys, values, 0, Map.new(()))\n\
+\n\
+struct Set[T] { inner: Map[T, Unit] }\n\
+\n\
+let Set.new[T] (): Set[T] = Set { inner: Map.new(()) }\n\
+let Set.insert[T: Eq] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.insert(s.inner, x, ()) }\n\
+let Set.contains[T: Eq] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)\n\
+let Set.remove[T: Eq] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.remove(s.inner, x) }\n\
+let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)\n\
+let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)\n\
+\n\
+let Set.union[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {\n\
+    let mut result = b;\n\
+    for x in Set.to_array(a) { result = Set.insert(result, x); };\n\
+    result\n\
+}\n\
+\n\
+let Set.intersection[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {\n\
+    let mut result = Set.new(());\n\
+    for x in Set.to_array(a) { if Set.contains(b, x) { result = Set.insert(result, x); } };\n\
+    result\n\
+}\n\
+\n\
+let Set.difference[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {\n\
+    let mut result = Set.new(());\n\
+    for x in Set.to_array(a) { if !Set.contains(b, x) { result = Set.insert(result, x); } };\n\
+    result\n\
+}\n\
+\n\
+let set_from_array_acc[T: Eq] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =\n\
+    if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, Set.insert(acc, arr[i])) }\n\
+let Set.from_array[T: Eq] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, Set.new(()))\n\
+\n\
 ";
 
 /// The testing framework's own assertions — pure Plum prelude source
@@ -1965,6 +1992,42 @@ mod tests {
     }
 
     #[test]
+    fn map_grows_correctly_and_stays_accurate_at_scale_through_the_interpreter() {
+        // Real hash-table growth: 1000 inserts, starting from `MAP_
+        // INITIAL_BUCKETS` (8), each resize doubling once the load
+        // factor (3/4) is exceeded — 8 -> 16 -> 32 -> 64 -> 128 -> 256
+        // -> 512 -> 1024 -> 2048 (1000 > 1024*0.75=768, so ONE more
+        // doubling past 1024 is needed). Checks EVERY key retrieves
+        // its correct value afterward, not just that insertion didn't
+        // crash — the real risk this guards against is entries getting
+        // lost or misplaced across a resize/rehash, not just \"does it
+        // run\". Uses a `for` loop (not recursion) for both the insert
+        // loop and the verify loop — deliberately: a recursive version
+        // of this exact test is EXACTLY what originally overflowed the
+        // interpreter's stack while building this feature (`map_make_
+        // buckets` was originally recursive; see DESIGN.md's \"Hash-
+        // based Map/Set\" section for the full story) — `for` loops
+        // don't grow the Rust call stack per iteration the way this
+        // interpreter's non-tail-call-optimized recursion does.
+        let src = "\
+            let go (): Bool = {\n\
+                let mut m = Map.new(());\n\
+                for i in 0..1000 { m = Map.insert(m, i, i * 2); };\n\
+                let mut all_ok = Map.len(m) == 1000;\n\
+                for i in 0..1000 {\n\
+                    match Map.get(m, i) {\n\
+                        Some(v) => if v != i * 2 { all_ok = false; },\n\
+                        None => { all_ok = false; },\n\
+                    };\n\
+                };\n\
+                all_ok\n\
+            }\n\
+        ";
+        let result = typecheck_and_run(src, "go", vec![Value::Unit]);
+        assert_eq!(result, Ok(Value::Bool(true)));
+    }
+
+    #[test]
     fn set_basic_insert_dedupe_contains_remove_len_work_through_the_interpreter() {
         let src = "\
             let go (): Int = {\n\
@@ -2018,10 +2081,13 @@ mod tests {
             }\n\
         ";
         let result = typecheck_and_run(src, "go", vec![Value::Unit]);
-        // ks = [1, 2], vs = [10, 20] (map_keys/map_values recurse to
-        // the tail first, so the OLDEST-inserted key/value ends up
-        // FIRST in the resulting array), s.len() = 3.
-        // Total: 1 + 2 + 10 + 20 + 300 = 333.
+        // Deliberately SUMS `ks`/`vs` rather than checking a specific
+        // position/order — the hash-based `Map` (see `STDLIB_
+        // COLLECTIONS_SRC`'s own doc comment) has no guaranteed
+        // iteration order at all, unlike the old linked-list one's
+        // (incidental, never a real guarantee either) insertion order.
+        // ks sums to 1+2=3, vs sums to 10+20=30, s.len() = 3.
+        // Total: 3 + 30 + 300 = 333.
         assert_eq!(result, Ok(Value::Int(333)));
     }
 

@@ -1171,21 +1171,30 @@ mod tests {
         // values`/`set_to_array` in the "Set algebra" chunk: `[]`,
         // concretely typed via an explicit annotation in a NON-generic
         // caller (`go`), passed as an argument into a generic function
-        // (`map_keys_into[K, V]`). Root cause: `monomorphize::plan`
+        // (`list_keys_into[K, V]`). Root cause: `monomorphize::plan`
         // never threaded `empty_array_elem_types` through AT ALL (every
         // function/global plumc emits gets re-lowered through `plan`'s
         // own `base_lctx`, which had no such map) — fixed by threading
         // it exactly like `closure_types` already was.
+        //
+        // Uses a local, hand-rolled `List` enum rather than the real
+        // stdlib `Map` this bug was ORIGINALLY found through — `Map`
+        // became a real hash-based struct (see `STDLIB_COLLECTIONS_
+        // SRC`'s own doc comment), so it no longer has `MapNode`/
+        // `MapEnd` variants to pattern-match at all; the underlying
+        // monomorphization bug this test guards against was never
+        // Map-specific to begin with, just first FOUND through it.
         let src = "\
-            let map_keys_into[K, V] (m: Map[K, V]) (acc: Array[K]): Array[K] = match m {\n\
-                MapNode(k, _, rest) => map_keys_into(rest, acc.push(k)),\n\
-                MapEnd => acc,\n\
+            enum List[K, V] { Node(K, V, List[K, V]), End }\n\
+            let list_keys_into[K, V] (m: List[K, V]) (acc: Array[K]): Array[K] = match m {\n\
+                Node(k, _, rest) => list_keys_into(rest, acc.push(k)),\n\
+                End => acc,\n\
             }\n\
             \n\
             let go (): Int = {\n\
-                let m = Map.insert(Map.insert(Map.new(()), 1, 100), 2, 200);\n\
+                let m = Node(1, 100, Node(2, 200, End));\n\
                 let ks: Array[Int] = [];\n\
-                let ks2 = map_keys_into(m, ks);\n\
+                let ks2 = list_keys_into(m, ks);\n\
                 ks2[0] + ks2[1]\n\
             }\n\
         ";
@@ -2402,14 +2411,23 @@ mod tests {
     }
 
     #[test]
-    fn map_to_string_renders_the_underlying_recursive_enum_generically_in_native_codegen() {
-        // `map_insert` PREPENDS (see `plumc::STDLIB_COLLECTIONS_SRC`'s
-        // own doc comment) — the most-recently-inserted key ends up
-        // OUTERMOST, so `(2, 200)` (inserted last) wraps `(1, 100)`.
+    fn map_to_string_renders_the_underlying_struct_generically_in_native_codegen() {
+        // `Map` is a real STRUCT now (hash-based, see `STDLIB_
+        // COLLECTIONS_SRC`'s own doc comment), not the old recursive
+        // enum — this just confirms generic `.to_string()` still
+        // recurses correctly through ITS shape (a `buckets: Array[
+        // Array[MapEntry[K, V]]]` field plus `size`), by checking a
+        // structural PROPERTY of the rendered text (contains both
+        // inserted values, starts with the struct's own name) rather
+        // than an exact string — bucket order/count are real
+        // implementation details this test shouldn't pin down.
         let src = "\
             let go (): Bool = { \
                 let m = Map.insert(Map.insert(Map.new(()), 1, 100), 2, 200); \
-                m.to_string() == \"MapNode(2, 200, MapNode(1, 100, MapEnd))\" \
+                let rendered = m.to_string(); \
+                String.index_of(rendered, \"Map {\") == Some(0) \
+                    && String.index_of(rendered, \"100\") != None \
+                    && String.index_of(rendered, \"200\") != None \
             }\n\
         ";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
@@ -2484,6 +2502,31 @@ mod tests {
     }
 
     #[test]
+    fn map_grows_correctly_and_stays_accurate_at_scale_in_native_codegen() {
+        // The native-codegen sibling of `plumc::tests::map_grows_
+        // correctly_and_stays_accurate_at_scale_through_the_
+        // interpreter` — see that test's own doc comment for the full
+        // "why" (real hash-table growth across several resizes, every
+        // key checked afterward, `for` loops deliberately not
+        // recursion).
+        let src = "\
+            let go (): Bool = {\n\
+                let mut m = Map.new(());\n\
+                for i in 0..1000 { m = Map.insert(m, i, i * 2); };\n\
+                let mut all_ok = Map.len(m) == 1000;\n\
+                for i in 0..1000 {\n\
+                    match Map.get(m, i) {\n\
+                        Some(v) => if v != i * 2 { all_ok = false; },\n\
+                        None => { all_ok = false; },\n\
+                    };\n\
+                };\n\
+                all_ok\n\
+            }\n\
+        ";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
+    }
+
+    #[test]
     fn map_insert_get_contains_remove_work_for_str_keys() {
         let src = "\
             let go (): Int = {\n\
@@ -2501,12 +2544,12 @@ mod tests {
     }
 
     #[test]
-    fn map_get_returns_the_most_recently_inserted_value_for_a_repeated_key() {
-        // Documented v1 semantics: `map_insert` always PREPENDS, and
-        // `map_get` scans from the head, so the LAST insert for a given
-        // key wins — proven here by inserting key 1 twice with
-        // different values and checking the second one is what comes
-        // back, not the first.
+    fn map_insert_overwrites_an_existing_key_rather_than_shadowing_it() {
+        // Standard hash-map semantics (Brad's explicit choice over the
+        // old linked-list implementation's shadow/duplicate-key
+        // behavior — see `STDLIB_COLLECTIONS_SRC`'s own doc comment):
+        // inserting the SAME key twice REPLACES the value, doesn't
+        // retain both.
         let src = "\
             let go (): Int = {\n\
                 let m = Map.insert(Map.insert(Map.new(()), 1, 100), 1, 200);\n\
@@ -2518,11 +2561,11 @@ mod tests {
     }
 
     #[test]
-    fn map_remove_uncovers_the_older_value_when_a_key_was_inserted_twice() {
-        // Documented v1 semantics: `map_remove` deletes only the FIRST
-        // (most recent) matching node — removing once after a key was
-        // inserted twice uncovers the OLDER value rather than erasing
-        // all trace of the key.
+    fn map_remove_erases_the_key_entirely_even_after_being_overwritten() {
+        // The overwrite-semantics sibling of the test above: after
+        // inserting key 1 TWICE (200 overwrites 100) and then removing
+        // it once, the key is gone completely — no "older value"
+        // resurfaces, unlike the old shadow-based implementation.
         let src = "\
             let go (): Int = {\n\
                 let m = Map.insert(Map.insert(Map.new(()), 1, 100), 1, 200);\n\
@@ -2531,11 +2574,15 @@ mod tests {
             }\n\
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
-        assert_eq!(out, "100");
+        assert_eq!(out, "-1");
     }
 
     #[test]
-    fn map_len_counts_nodes_not_unique_keys() {
+    fn map_len_counts_unique_keys_not_insertions() {
+        // Inserting key 1 TWICE (100 then overwritten by 2) then key 2
+        // once — `len` is 2 (unique keys), not 3 (total inserts),
+        // confirming overwrite semantics all the way through `size`
+        // bookkeeping, not just `get`/`remove`.
         let src = "\
             let go (): Int = {\n\
                 let m = Map.insert(Map.insert(Map.insert(Map.new(()), 1, 1), 1, 2), 2, 3);\n\
@@ -2543,7 +2590,7 @@ mod tests {
             }\n\
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
-        assert_eq!(out, "3");
+        assert_eq!(out, "2");
     }
 
     #[test]
@@ -4274,6 +4321,23 @@ mod tests {
         "#;
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "round trip");
+    }
+
+    #[test]
+    fn string_hash_matches_the_interpreters_own_value_and_an_independent_fnv1a() {
+        // The SAME expected values `plum_interp::string_hash_matches_
+        // an_independently_computed_fnv1a_value` checks — the whole
+        // point is proving native codegen's `codegen_str_hash` (a real
+        // hand-emitted LLVM loop) computes byte-for-byte the SAME hash
+        // the interpreter's `fnv1a_hash` does, both checked against a
+        // third, independent Python FNV-1a implementation, not just
+        // against each other.
+        let src = r#"
+            let go (): Bool =
+                String.hash("hello") == 2607821981565500683
+                && String.hash("world") == 5717881983045765875
+        "#;
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]).unwrap(), "1");
     }
 
     #[test]

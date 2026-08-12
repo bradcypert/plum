@@ -562,11 +562,20 @@ program's prelude):
   stateful file handle. Failure surfaces as `Err`, never a crash.
 - **`Map[K, V]`** — `Map.new`, `Map.insert`, `Map.get: Option[V]`,
   `Map.contains`, `Map.remove`, `Map.len`, `Map.keys`/`Map.values:
-  Array[...]`, `Map.from_arrays`. Association-list based (`O(n)`), no
-  hashing — fine for small maps, not a performance-critical hash table.
+  Array[...]`, `Map.from_arrays`. A real hash table (amortized `O(1)`
+  average case) — `Array`-of-buckets, resizing at a 0.75 load factor,
+  built on the new `String.hash` primitive (see below). `insert`
+  overwrites an existing key rather than shadowing it; `len` is the
+  unique-key count.
 - **`Set[T]`** — `Set.new`, `Set.insert`, `Set.contains`, `Set.remove`,
   `Set.len`, `Set.union`/`Set.intersection`/`Set.difference`,
-  `Set.from_array`, `Set.to_array`. Same `O(n)` caveat as `Map`.
+  `Set.from_array`, `Set.to_array`. A thin wrapper around `Map[T,
+  Unit]`, same hash-table performance.
+- **`String.hash(s): Int`** — a real FNV-1a hash, always non-negative.
+  The one new compiler primitive `Map`/`Set` are built on; any type's
+  generic hash is just `String.hash(x.to_string())`, reusing `.to_
+  string()`'s own existing structural recursion rather than needing a
+  second one.
 - **JSON** — `json_parse(s: String): Result[JsonValue, String]` /
   `json_stringify(v: JsonValue): String`, where `JsonValue` is a plain
   enum (`JsonNull`/`JsonBool`/`JsonNumber`/`JsonString`/`JsonArray`/

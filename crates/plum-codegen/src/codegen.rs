@@ -1294,7 +1294,7 @@ fn free_vars_scoped(expr: &Expr, env: &Env, local: &HashSet<String>, out: &mut B
             candidate(reuse_of, local, out);
             free_vars_scoped(other, env, local, out);
         }
-        Expr::StrRunes { base } | Expr::StrTrim { base } | Expr::StrToUpper { base } | Expr::StrToLower { base } | Expr::ToString { base } => {
+        Expr::StrRunes { base } | Expr::StrTrim { base } | Expr::StrToUpper { base } | Expr::StrToLower { base } | Expr::ToString { base } | Expr::StrHash { base } => {
             free_vars_scoped(base, env, local, out)
         }
         Expr::StrTrimReuse { reuse_of } | Expr::StrToUpperReuse { reuse_of } | Expr::StrToLowerReuse { reuse_of } => {
@@ -1493,7 +1493,7 @@ fn assigned_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet
             assigned_vars_scoped(other, local, out);
         }
         Expr::StrConcatReuse { other, .. } => assigned_vars_scoped(other, local, out),
-        Expr::StrRunes { base } | Expr::StrTrim { base } | Expr::StrToUpper { base } | Expr::StrToLower { base } | Expr::ToString { base } => {
+        Expr::StrRunes { base } | Expr::StrTrim { base } | Expr::StrToUpper { base } | Expr::StrToLower { base } | Expr::ToString { base } | Expr::StrHash { base } => {
             assigned_vars_scoped(base, local, out)
         }
         Expr::StrTrimReuse { .. } | Expr::StrToUpperReuse { .. } | Expr::StrToLowerReuse { .. } => {}
@@ -3559,6 +3559,82 @@ fn codegen_call(callee: &Expr, args: &[Expr], env: &Env, em: &mut Emitter, ctx: 
     Ok((reg, sig.ret, false))
 }
 
+/// `String.hash(s)` — FNV-1a over `s`'s raw bytes, computed with a
+/// real LLVM loop (the phi-based "header/body" shape `codegen_for`
+/// already established for `for` loops — same idiom, reused here since
+/// this loop's body is FIXED, hand-written code with no internal
+/// branching of its own, unlike `codegen_for`'s user-supplied body, so
+/// the simpler direct-phi-wiring version suffices, no `reserve_line`
+/// patching needed). MUST compute byte-for-byte the SAME hash the
+/// interpreter's own `fnv1a_hash` does — both independently implement
+/// the identical FNV-1a constants/algorithm, not shared code (no
+/// runtime helper crosses the interp/codegen boundary), so the two
+/// were checked against each other directly (a real compile-and-run
+/// test asserts an ACTUAL value, not just "doesn't crash").
+fn codegen_str_hash(base: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (reg, ty) = codegen_value(base, env, em, ctx)?;
+    if ty != CgType::Str {
+        return Err(format!("codegen: `String.hash` requires a Str value, found {ty:?}"));
+    }
+    let len = load_array_len(em, &reg);
+    let bytes_ptr = em.fresh_reg();
+    em.push(format!("  {bytes_ptr} = getelementptr i8, ptr {reg}, i64 16"));
+
+    let preheader_block = em.current_block().to_string();
+    let cond_label = em.fresh_label("str_hash_cond");
+    let body_label = em.fresh_label("str_hash_body");
+    let end_label = em.fresh_label("str_hash_end");
+    em.push(format!("  br label %{cond_label}"));
+
+    em.start_block(&cond_label);
+    let i_reg = em.fresh_reg();
+    let i_idx = em.reserve_line();
+    let hash_reg = em.fresh_reg();
+    let hash_idx = em.reserve_line();
+    let cmp_reg = em.fresh_reg();
+    em.push(format!("  {cmp_reg} = icmp slt i64 {i_reg}, {len}"));
+    em.push(format!("  br i1 {cmp_reg}, label %{body_label}, label %{end_label}"));
+
+    em.start_block(&body_label);
+    let byte_ptr = em.fresh_reg();
+    em.push(format!("  {byte_ptr} = getelementptr i8, ptr {bytes_ptr}, i64 {i_reg}"));
+    let byte_reg = em.fresh_reg();
+    em.push(format!("  {byte_reg} = load i8, ptr {byte_ptr}"));
+    let byte_ext = em.fresh_reg();
+    em.push(format!("  {byte_ext} = zext i8 {byte_reg} to i64"));
+    let xored = em.fresh_reg();
+    em.push(format!("  {xored} = xor i64 {hash_reg}, {byte_ext}"));
+    // `1099511628211` — the 64-bit FNV prime, same constant `fnv1a_hash`
+    // (interp) uses (`0x100000001b3`).
+    let hash_next = em.fresh_reg();
+    em.push(format!("  {hash_next} = mul i64 {xored}, 1099511628211"));
+    let i_next = em.fresh_reg();
+    em.push(format!("  {i_next} = add i64 {i_reg}, 1"));
+    em.push(format!("  br label %{cond_label}"));
+
+    // `-3750763034362895579` — the 64-bit FNV offset basis
+    // (`0xcbf29ce484222325`) as a signed `i64` bit pattern (LLVM `i64`
+    // integer literals are parsed as signed; this is the same bits
+    // `fnv1a_hash`'s `u64` constant is, just spelled the way `i64`
+    // needs it).
+    em.patch_line(
+        i_idx,
+        format!("  {i_reg} = phi i64 [ 0, %{preheader_block} ], [ {i_next}, %{body_label} ]"),
+    );
+    em.patch_line(
+        hash_idx,
+        format!("  {hash_reg} = phi i64 [ -3750763034362895579, %{preheader_block} ], [ {hash_next}, %{body_label} ]"),
+    );
+
+    em.start_block(&end_label);
+    // Clears the sign bit — never negative, matching `fnv1a_hash`'s own
+    // `& i64::MAX` — so a caller can `%` a bucket count directly with
+    // no negative-modulo handling needed.
+    let masked = em.fresh_reg();
+    em.push(format!("  {masked} = and i64 {hash_reg}, 9223372036854775807"));
+    Ok((masked, CgType::Int))
+}
+
 /// Computes an ordinary SSA value for `expr` — used for every position
 /// that is NEVER a tail position (operands, call arguments, `If`'s
 /// `cond`, a `Let`'s `value`, `Match`'s `scrutinee`/guards, an
@@ -4510,6 +4586,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             em.push(format!("  {result} = phi ptr [ {reused}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Str))
         }
+        Expr::StrHash { base } => codegen_str_hash(base, env, em, ctx),
         // `x.to_string()` — dispatch on `base`'s STATIC `CgType` (a
         // stronger, compile-time version of the interpreter's
         // necessarily-dynamic runtime-value dispatch — see `ir::Expr::

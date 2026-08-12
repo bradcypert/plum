@@ -2175,6 +2175,20 @@ impl Infer {
                 }
                 Ok((Type::Str, acc))
             }
+            // `String.hash(s)` — `s` must be `Str`; evaluates to `Int`.
+            // Recognized by shape (`Type.func(..)`, `is_string_builtin_
+            // call`'s own precedent), not dot-call — see `ir::Expr::
+            // StrHash`'s doc comment for why.
+            ast::Expr::Call { callee, args, span }
+                if args.len() == 1 && is_string_builtin_call(callee, "hash") =>
+            {
+                let (base_ty, s) = self.infer_expr(&args[0], env)?;
+                let mut acc = s;
+                let s = unify(&acc.apply(&base_ty), &Type::Str)
+                    .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`String.hash`: {e}")))?;
+                acc = s.compose(&acc);
+                Ok((Type::Int, acc))
+            }
             // `arr.push(v)` — `arr` must be `Array[T]`, `v` must be
             // that SAME `T`; evaluates to a (new) `Array[T]`.
             ast::Expr::Call { callee, args, span }
@@ -3855,6 +3869,16 @@ pub(crate) fn subst_params(ty: &Type, mapping: &HashMap<String, Type>) -> Type {
 fn is_array_builtin_call(callee: &ast::Expr, fn_name: &str) -> bool {
     matches!(callee, ast::Expr::Field { base, name, .. }
         if name == fn_name && matches!(base.as_ref(), ast::Expr::Ident(n, _) if n == "Array"))
+}
+
+/// Same shape-based-recognition precedent as `is_array_builtin_call`
+/// above, generalized to `String.` — used by `String.hash` (see `ir::
+/// Expr::StrHash`'s own doc comment for why this is a core builtin,
+/// spelled like an associated function, rather than a dot-call or a
+/// real prelude-declared `String.hash` function).
+fn is_string_builtin_call(callee: &ast::Expr, fn_name: &str) -> bool {
+    matches!(callee, ast::Expr::Field { base, name, .. }
+        if name == fn_name && matches!(base.as_ref(), ast::Expr::Ident(n, _) if n == "String"))
 }
 
 /// True for the exact AST shape a bare `_` argument (no postfix chain
@@ -7101,6 +7125,16 @@ mod tests {
     #[test]
     fn as_cstr_on_a_string_evaluates_to_cstr() {
         assert_eq!(infer_in("\"hi\".as_cstr()", &TypeEnv::new()), Type::CStr);
+    }
+
+    #[test]
+    fn string_hash_on_a_string_evaluates_to_int() {
+        assert_eq!(infer_in("String.hash(\"hi\")", &TypeEnv::new()), Type::Int);
+    }
+
+    #[test]
+    fn string_hash_on_a_non_string_is_an_error() {
+        infer_err_in("String.hash(5)", &TypeEnv::new());
     }
 
     #[test]

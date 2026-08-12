@@ -722,7 +722,7 @@ fn free_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<Str
             candidate(reuse_of, local, out);
             free_vars_scoped(other, local, out);
         }
-        Expr::StrRunes { base } | Expr::StrTrim { base } | Expr::StrToUpper { base } | Expr::StrToLower { base } | Expr::ToString { base } => {
+        Expr::StrRunes { base } | Expr::StrTrim { base } | Expr::StrToUpper { base } | Expr::StrToLower { base } | Expr::ToString { base } | Expr::StrHash { base } => {
             free_vars_scoped(base, local, out)
         }
         Expr::StrTrimReuse { reuse_of } | Expr::StrToUpperReuse { reuse_of } | Expr::StrToLowerReuse { reuse_of } => {
@@ -2140,6 +2140,21 @@ impl Interpreter {
                 let new_addr = self.heap.alloc_str(rendered);
                 Ok(Value::HeapRef(new_addr))
             }
+            // `String.hash(s)` — see `ir::Expr::StrHash`'s own doc
+            // comment for the overall design. `fnv1a_hash` (a free
+            // function, not a method — needs no `&self` at all) is
+            // shared byte-for-byte with native codegen's OWN hash loop,
+            // both independently implementing the exact same FNV-1a
+            // algorithm — matching values MUST hash identically in both
+            // backends, the same "both backends behave identically"
+            // bar every other builtin here is already held to.
+            Expr::StrHash { base } => {
+                let Value::HeapRef(addr) = self.eval(base)? else {
+                    return Err("`String.hash` requires a String value".to_string());
+                };
+                let s = self.heap.read_str(addr)?;
+                Ok(Value::Int(fnv1a_hash(s.as_bytes())))
+            }
             // `ref(v)` — see `RefHandle`'s doc comment for why this is
             // a plain `Rc<RefCell<Value>>`, entirely outside the toy
             // `Heap`.
@@ -2423,6 +2438,24 @@ impl Default for Interpreter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The FNV-1a hash `String.hash`/`Expr::StrHash` computes — see that
+/// IR node's own doc comment for the overall design. Standard FNV-1a
+/// (64-bit offset basis/prime), computed in `u64` (wrapping is exactly
+/// what FNV-1a wants — it's DEFINED via modular arithmetic, not
+/// something to avoid), then bit-cast to `i64` (Plum's `Int`) and
+/// masked to clear the sign bit — never negative, so a caller can `%
+/// bucket_count` directly with no negative-modulo handling needed.
+fn fnv1a_hash(bytes: &[u8]) -> i64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET_BASIS;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    (hash as i64) & i64::MAX
 }
 
 fn eval_unary(op: &UnOp, v: Value) -> Result<Value, String> {
@@ -4948,6 +4981,52 @@ mod tests {
             .eval(&Expr::AsString(Box::new(Expr::Int(5))))
             .expect_err("expected a non-CStr value to be rejected");
         assert!(err.contains("CStr value"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn string_hash_matches_an_independently_computed_fnv1a_value() {
+        // Checked against a from-scratch, THIRD, independent FNV-1a
+        // implementation (a plain Python script, not this crate's own
+        // `fnv1a_hash` or native codegen's `codegen_str_hash` — a
+        // typo'd shared CONSTANT in either of THOSE could agree with
+        // itself and still be wrong) — real, verified values, not
+        // just "doesn't crash": `String.hash("hello") == 2607821981565500683`,
+        // `String.hash("world") == 5717881983045765875`, `String.hash
+        // ("") == 0xcbf29ce484222325 & i64::MAX` (the untouched FNV
+        // offset basis, since an empty byte loop never runs).
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            interp.eval(&Expr::StrHash { base: Box::new(Expr::Str("hello".to_string())) }).unwrap(),
+            Value::Int(2607821981565500683)
+        );
+        assert_eq!(
+            interp.eval(&Expr::StrHash { base: Box::new(Expr::Str("world".to_string())) }).unwrap(),
+            Value::Int(5717881983045765875)
+        );
+        assert_eq!(
+            interp.eval(&Expr::StrHash { base: Box::new(Expr::Str(String::new())) }).unwrap(),
+            Value::Int(0xcbf29ce484222325_u64 as i64 & i64::MAX)
+        );
+    }
+
+    #[test]
+    fn string_hash_is_deterministic_and_distinguishes_different_strings() {
+        let mut interp = Interpreter::new();
+        let h1 = interp.eval(&Expr::StrHash { base: Box::new(Expr::Str("same".to_string())) }).unwrap();
+        let h2 = interp.eval(&Expr::StrHash { base: Box::new(Expr::Str("same".to_string())) }).unwrap();
+        let h3 = interp.eval(&Expr::StrHash { base: Box::new(Expr::Str("different".to_string())) }).unwrap();
+        assert_eq!(h1, h2);
+        assert_ne!(h1, h3);
+        let Value::Int(n) = h1 else { panic!("expected an Int, found {h1:?}") };
+        assert!(n >= 0, "String.hash must never be negative, found {n}");
+    }
+
+    #[test]
+    fn string_hash_on_a_non_string_value_is_a_runtime_error() {
+        let err = Interpreter::new()
+            .eval(&Expr::StrHash { base: Box::new(Expr::Int(5)) })
+            .expect_err("expected a non-String value to be rejected");
+        assert!(err.contains("String value"), "unexpected error: {err}");
     }
 
     // A plain Rust `extern "C" fn`, callable directly (bypassing

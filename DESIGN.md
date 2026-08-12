@@ -5768,3 +5768,101 @@ side effect at all, unlike native codegen's real malloc+memcpy+decrement
 interpreter-side regression test was needed, only `plum-ir::fbip`'s own
 unit tests plus two native `compile_and_run` regression tests). Full
 workspace suite green, zero new clippy warnings.
+
+### Hash-based Map/Set — Decided and implemented (2026-08-11): pure-Plum hash table on one new `String.hash` primitive
+
+Picked directly out of the self-hosting discussion — `Map`/`Set` were
+association-list based (`O(n)` per lookup, explicitly documented as
+fine for small maps, not a performance-critical hash table), exactly
+the workload a self-hosted compiler's own symbol tables/type
+environments would be. Weighed against a true native collection type
+(Array-scale effort — new heap layout, dedicated IR nodes, FBIP
+awareness) and deliberately built the LIGHTER way instead: an ordinary
+Plum stdlib rewrite (Array-of-buckets) on top of ONE new compiler
+primitive, similar scope to the TCP/HTTP/OS work earlier this session,
+not a multi-session undertaking.
+
+**The one new primitive: `String.hash(s): Int`.** A REAL FNV-1a hash
+(64-bit offset basis/prime), computed independently in BOTH backends —
+the interpreter as a plain Rust loop (`fnv1a_hash`), native codegen as
+a real hand-emitted LLVM phi-based loop (`codegen_str_hash`, mirroring
+`codegen_for`'s existing loop-codegen idiom) — and cross-checked
+against a THIRD, independent from-scratch Python FNV-1a implementation
+before being trusted (not just the two Rust implementations agreeing
+with each other, which could both share the same typo'd constant).
+Always non-negative (top bit cleared) so a caller can `%` a bucket
+count directly, no negative-modulo handling needed. Recognized via the
+SAME shape-based-recognition precedent `Array.map`/`filter`/`fold`
+already established (`Type.func(value)`, not a dot-call — hashing
+isn't one of the small fixed set of zero-arg CONVERSIONS `.to_string()`
+/`.as_cstr()`/etc. are) — a NEW `is_string_builtin_call` helper,
+generalizing the existing `is_array_builtin_call` one, in both `infer.
+rs` and `lower.rs`.
+
+**A fully GENERIC structural hash (recursing into any type, mirroring
+`ToString`'s own per-type dispatch) was considered and rejected as the
+compiler-level primitive.** `.to_string()` ALREADY is a deterministic
+structural representation for every type it supports — so `value_hash
+[T](x: T): Int = String.hash(x.to_string())`, written entirely in the
+PRELUDE on top of this one `String`-only primitive, gets the same type
+coverage for free (confirmed directly: a `Map` keyed by a real struct
+already worked, via `.to_string()`'s existing recursive struct
+rendering, with zero extra code). No new recursive per-type codegen
+needed at all — `ToString`'s own native-codegen implementation
+required a substantial amount of per-shape specialized code generation
+(`render_word_as_string`, per-tag/per-array-elem-type functions); a
+hash primitive with the SAME breadth, built the SAME way, would have
+been a comparably large undertaking for no real benefit once `.to_
+string()` can already be reused as the structural basis.
+
+**The hash table itself, pure Plum**: `struct Map[K, V] { buckets:
+Array[Array[MapEntry[K, V]]], size: Int }`, `MapEntry[K, V] { key: K,
+value: V }`. Starts at 8 buckets, resizes (doubling) whenever `size *
+4 > buckets.len() * 3` (a 0.75 load factor, integer arithmetic —
+comparing cross-multiplied products avoids needing float division for
+something this simple). `Set[T]` is a thin wrapper around `Map[T,
+Unit]` (`struct Set[T] { inner: Map[T, Unit] }`), not a second parallel
+bucket implementation — halves the amount of new stdlib code needed,
+`Set.to_array` is literally `Map.keys`.
+
+**A real recursion-depth bug found and fixed WHILE building this
+(not shipped, caught before landing)**: the very first draft of `map_
+make_buckets` (building the initial `Array[Array[MapEntry[K,V]]]` of N
+empty buckets) was written recursively, matching the \"no `while` loop,
+recurse instead\" idiom this whole stdlib otherwise uses — and hit the
+interpreter's own well-documented non-tail-call-optimized recursion-
+depth ceiling at a mere ~256 levels (triggered by growing past 128
+buckets during a real stress test), overflowing even the DEFAULT thread
+stack. Confirmed by bisecting the exact entry count that broke (95
+worked, 99 didn't — precisely the point a real resize, 128 -> 256
+buckets, first fires). Fixed by rewriting `map_make_buckets` with a
+`for` loop instead — `for` loops are real ITERATION, proven not to grow
+the interpreter's Rust call stack per iteration regardless of count (a
+1000-entry stress test, `for`-loop-based throughout, passes on the
+interpreter's completely default, un-boosted stack). A genuinely useful
+data point for anything ELSE built on `for i in a..b`/`for x in arr`
+going forward: prefer it over a hand-written recursive accumulator
+whenever the iteration count could meaningfully grow, not just for
+style — it's a REAL, not cosmetic, difference under this interpreter.
+
+**A genuine semantic change from the old implementation, decided
+explicitly, not silently**: the old linked-list `Map`'s `insert`
+PREPENDED rather than overwrote — a repeated key left BOTH values in
+the structure (newest shadows oldest; `remove` uncovered the older one;
+`len` counted entries, not unique keys) — extensively tested as
+deliberate-looking behavior, but really just an accidental byproduct of
+the simplest possible linked-list `insert`. Brad confirmed switching to
+standard overwrite-on-insert semantics (unique keys, `len` = key count)
+for the new hash table — matches every mainstream language's map, and
+is almost certainly what any real caller actually wants. The three
+tests that specifically probed the old shadow behavior were rewritten
+to assert the new, correct one, not deleted — regression coverage for
+the NEW contract, not a gap.
+
+Verified with real compile-and-run tests in both backends: basic
+insert/get/contains/remove, overwrite-not-shadow semantics, `len` =
+unique-key-count, `Set` dedup/union/intersection/difference, struct-
+keyed maps (exercising `value_hash`'s reuse of `.to_string()`'s
+existing recursive struct rendering), and a real 1000-entry stress test
+crossing multiple resize boundaries with every key individually
+verified afterward — not just "didn't crash."

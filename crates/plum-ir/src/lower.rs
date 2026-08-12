@@ -1348,6 +1348,14 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
         ast::Expr::Call { callee, args, .. } if args.len() == 3 && is_array_builtin_call(callee, "fold") => {
             lower_array_fold(&args[0], &args[1], &args[2], ctx)
         }
+        // `String.hash(s)` — recognized by shape, same as `Array.map`/
+        // etc. above — see `is_string_builtin_call`'s own doc comment
+        // and `ir::Expr::StrHash`'s doc comment for the full "why".
+        ast::Expr::Call { callee, args, .. } if args.len() == 1 && is_string_builtin_call(callee, "hash") => {
+            Ok(ir::Expr::StrHash {
+                base: Box::new(lower_expr(&args[0], ctx)?),
+            })
+        }
         ast::Expr::Call { callee, args, span } => {
             // `Circle(1.0)` or `Shape.Circle(1.0)` constructs a variant
             // if the callee names one — checked BEFORE falling back to
@@ -1619,6 +1627,13 @@ fn lower_struct_literal(
 fn is_array_builtin_call(callee: &ast::Expr, fn_name: &str) -> bool {
     matches!(callee, ast::Expr::Field { base, name, .. }
         if name == fn_name && matches!(base.as_ref(), ast::Expr::Ident(n, _) if n == "Array"))
+}
+
+/// Same precedent as `is_array_builtin_call` above, generalized to
+/// `String.` — mirrors `plum_types::infer`'s identically-named helper.
+fn is_string_builtin_call(callee: &ast::Expr, fn_name: &str) -> bool {
+    matches!(callee, ast::Expr::Field { base, name, .. }
+        if name == fn_name && matches!(base.as_ref(), ast::Expr::Ident(n, _) if n == "String"))
 }
 
 fn is_catchall_pattern(pattern: &ast::Pattern) -> bool {
@@ -5045,6 +5060,16 @@ mod tests {
         assert_eq!(
             lower("\"hi\".as_cstr()"),
             ir::Expr::AsCStr(Box::new(ir::Expr::Str("hi".to_string())))
+        );
+    }
+
+    #[test]
+    fn string_hash_lowers_to_its_own_node() {
+        assert_eq!(
+            lower("String.hash(\"hi\")"),
+            ir::Expr::StrHash {
+                base: Box::new(ir::Expr::Str("hi".to_string())),
+            }
         );
     }
 
