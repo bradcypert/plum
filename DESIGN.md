@@ -511,12 +511,16 @@ sized-integer zoo), the `Ref[T]` shared-mutable type with
 `.get()`/`.set()`/`.update(|old| new)`, `extern "C" { }` + `unsafe { }`
 for FFI, and `spawn { }` + `channel[T]()` with move-on-send.
 
-**Deliberately deferred, not adopted**: full ML-style currying by
-default (`add 5` partially applying to return a function). Real ML
-flavor, but it has implementation weight — it needs a fully-applied
-direct-call fast path plus a closure-allocating path for partial
-application, touching the calling convention and interacting with FBIP.
-Revisit later rather than fold in by default now.
+**Originally deliberately deferred, since revisited and built**: full
+ML-style currying (`add(5)` partially applying to return a function).
+This paragraph originally read "deliberately deferred, not adopted,"
+citing real implementation weight — a fully-applied direct-call fast
+path plus a closure-allocating path for partial application, touching
+the calling convention and interacting with `fbip`. That concern turned
+out to be smaller than expected once actually scoped: see this file's
+own "Currying" section (way below, dated 2026-08-12) for what shipped
+and why the feared cost mostly evaporated (the closure-allocating path
+already existed, for an unrelated reason).
 
 ### Local mutability — Decided
 
@@ -5279,6 +5283,105 @@ diagnostic cleared while the other, still-broken one's stayed — proving
 the set-difference clear logic, not just the initial collection. Full
 workspace suite: 0 failures.
 
+### Completion gap found and fixed: `Array.`/`String.`/`Type.func` namespace completion — Done (2026-08-12), same session
+
+Reported directly: "I don't see autocompletion for `Array.`" — a real
+gap in what "Completion" above shipped, not a setup problem. Root
+cause: `dot_completion` only ever handles ordinary struct field access
+(`p.x`), because it resolves `p`'s type through ordinary type
+inference. `Array.map(...)` LOOKS identical at the AST level (`Field {
+base: Ident("Array"), name: "map" }`), but `Array` is never a bound
+VALUE at all — it's `Type.func` associated-function call syntax (see
+`assoc_fns.rs`'s own doc comment: a call-site rewrite of `Type.func(..
+.)` into an ordinary call against the top-level function literally
+named `"Type.func"`), so inferring `Array` as an expression just fails
+with "unbound variable," a completely different code path than the one
+`field_owners` populates.
+
+Fixed by adding a SECOND, separate completion mechanism —
+`Backend::namespace_completion`, checked before `dot_completion` — that
+doesn't need type inference OR a reparse at all: every `Type.func`
+associated function is already an ordinary `LetDef` whose NAME
+literally contains a `.`, sitting right there in the merged program's
+own item list. `top_level_completion_items` now splits on that: a
+dotted `LetDef` name is excluded from the flat general-completion list
+(nobody types `"Array.reverse"` as one token) and instead keyed by its
+type name into a new `Backend::last_good_namespace_completions` cache,
+refreshed alongside the existing one. `namespace_completion` scans
+backward from the cursor (reusing a newly-extracted `dot_trigger`
+helper, shared with `dot_completion`) to find the base identifier
+before the dot, then just looks it up in that cache — cheaper than the
+struct-field splice path (no reparse needed) and correct even on a
+buffer broken by the very typing that triggered completion, same
+reasoning as general completion's own cache.
+
+One more real gap found finishing this: `Array.map`/`Array.filter`/
+`Array.fold` and `String.hash` are genuine COMPILER PRIMITIVES,
+recognized directly by AST shape in `infer_expr`'s `Call` arm (`is_
+array_builtin_call`/`is_string_builtin_call`) — there's no `LetDef` for
+any of them anywhere, so the program-walk approach above could never
+find them on its own (confirmed directly: a first test asserting
+`Array.map`/`Array.filter` failed, listing everything ELSE `Array.`
+has). Fixed with a small, explicitly-scoped `CORE_BUILTIN_ASSOCIATED_
+FNS` constant (exactly the 4 real primitives, cross-referenced against
+`infer.rs`'s own two helper functions' call sites) seeded into the
+namespace map directly, alongside whatever the program walk finds.
+
+Verified with 4 new end-to-end tests: `Array.` (a real parse error on
+its own, same as `p.`) correctly answering from the cached snapshot
+with real Array members including the hardcoded primitives; a user's
+own `Point.add` showing up the same way; confirming dotted names never
+leak into general completion's flat list either direction. Full
+workspace suite: 0 failures.
+
+### Completion cold-start bug: the cache started genuinely EMPTY — Done (2026-08-12), same session, found via live use
+
+Still not seeing `Array.` complete after the fix above, reinstalling,
+and restarting the LSP client (twice — the first "restart" turned out
+to be a DIFFERENT Neovim session; a genuinely stale `plum lsp` process
+from Aug 11, a child of a still-running `nvim` on another pty, was
+found and killed before this bug surfaced). Verified the SERVER itself
+directly — a small Python harness driving the real installed binary
+over actual LSP JSON-RPC (framed `Content-Length` messages over
+stdio), bypassing every Rust-level test harness entirely — and found a
+real, separate bug: `Backend::new` started `last_good_completions`/
+`last_good_namespace_completions` genuinely EMPTY, populated only by a
+SUCCESSFUL `recheck`. A project opened DIRECTLY into a broken state
+(exactly what a fresh `Array.` — a real parse error on its own — looks
+like on the very first `didOpen`, with no prior edit history) never
+had a chance to populate the cache at all — confirmed directly: the
+same probe against a file that opened with valid content FIRST, then
+transitioned to `Array.` via `didChange`, worked (24 real items,
+including the hardcoded primitives); the identical file opened
+DIRECTLY into the broken state returned only keywords.
+
+**Fixed**: `Backend::new` now seeds both caches from the PRELUDE ALONE
+(`top_level_completion_items(&with_prelude(Program { items: vec![] }))`)
+instead of empty collections — the prelude is compiler-controlled and
+unconditionally valid, entirely independent of whether the user's OWN
+project code has ever type-checked, so this baseline (every stdlib
+`Array.`/`String.`/etc. member, every prelude keyword-adjacent symbol)
+is available from the very first request, before `initialize` even
+finishes. A real project's first successful `recheck` still overwrites
+this with the full result — a strict superset, nothing lost.
+
+Verified three ways: a new Rust regression test (`Backend::new` +
+`did_open` straight into broken `Array.` content, no prior success at
+all); re-running the SAME real-JSON-RPC Python probe against the
+rebuilt release binary in this exact cold-start shape (24 items,
+`map`/`reverse` both present); and reinstalling `~/.cargo/bin/plum`
+again. Full workspace suite: 0 failures.
+
+**Process note**: this is the second real bug in this feature caught
+only by testing the ACTUAL installed binary over real LSP JSON-RPC,
+not by the (already-passing) Rust integration test suite — those tests
+always seed state via `Backend::new()` then real event handlers in a
+fresh process per test, which happens to never exercise "first-ever
+request, nothing cached yet, opened directly into a broken file" quite
+this starkly. Worth remembering for future LSP work: the Rust-level
+harness proves the LOGIC is right; driving the real binary over real
+stdio JSON-RPC is what catches gaps in when that logic actually runs.
+
 ## Open questions (not yet decided, flagged so we don't forget them)
 
 - ~~KNOWN BUG — a discarded statement-expression result can linger in
@@ -6398,3 +6501,284 @@ chains that existed needed MORE than one level of this, and the
 version with it stayed clearly more readable than the original nested
 `match`. Revisit if real self-hosting work surfaces a chain where this
 actually bites — not before.
+
+### Contracts (`require`/`ensure`) — Decided and implemented (2026-08-12)
+
+Raised by Brad as a specific question about adopting C3's contracts
+feature (`<* @require ... @ensure ... *>`), while explicitly open to
+other C3 ideas too. Surveyed the rest of C3's feature set first —
+faults/optionals (`Option`/`Result` already cover this), macros (real
+compile-time-metaprogramming scope, no self-hosting payoff proportional
+to the cost), `@pure` (would need an actual purity/effects analysis;
+"Effect/unsafe tracking" above already deliberately drew that line at
+just the FFI trust boundary), distinct types (already expressible today
+as a one-field struct, a dedicated `distinct` keyword would need real
+nominal-conversion machinery to pay for itself) — none of those cleared
+the bar. Contracts did: genuinely cheap (pure sugar over machinery that
+already existed) and genuinely valuable (self-documenting function
+boundaries, more valuable the more a self-hosted compiler leans on
+itself).
+
+**The key realization that made this cheap**: `panic_raw`/`assert` (the
+"Testing framework" section above) already IS what a contract check
+compiles down to. A `require`/`ensure` clause is nothing but an
+`assert`-shaped call spliced into the function body — no new IR node,
+no backend work, no new runtime semantics. Exactly the same shape
+decision as string interpolation ("lexer+parser only, zero IR/backend
+changes") and the polar opposite of `?`/early-return sugar just above
+(which got rejected specifically because it needed a genuinely new
+control-flow primitive `fbip` had never had to reason about). Contracts
+don't need that: `require` clauses are ordinary statements prepended to
+the body; `ensure` clauses just need to see the body's own return value
+before it returns, which a single injected `let` already gives for
+free.
+
+**Grammar** — added to `LetDef` between the return-type annotation and
+`=` (GRAMMAR.md's own "Contracts" note has the formal rule):
+
+```
+let divide (a: Int) (b: Int): Int
+  require b != 0 : "b must be non-zero"
+  ensure result >= 0
+= a / b
+```
+
+Fixed order (every `require` before any `ensure` — interleaving is a
+clear parse error), each clause optionally taking a `: "message"`
+suffix appended to a generic base message
+(`"precondition failed: b must be non-zero"` vs. bare
+`"precondition failed"`) — cheap to parse, and a real step up from
+`assert`'s own generic "assertion failed" with no indication of WHICH
+condition fired or why. Brad confirmed including this in v1 rather than
+deferring it.
+
+**`require`/`ensure` are contextual keywords, not reserved words** —
+`Parser::peek_is_contextual_kw` checks token TEXT, not a new
+`TokenKind`. Safe and unambiguous specifically because the only other
+legal token in that exact grammar slot (right after a `LetDef`'s
+params/ret_ty) is `=` — no existing valid program could have an
+identifier there already, so recognizing `require`/`ensure` by text
+costs nothing and regresses nothing. The payoff: `let require = 5`
+stays perfectly ordinary Plum everywhere else in the language, unlike
+adding these to the `unsafe`/`spawn`-style hard keyword list would have
+meant. A new regression test pins this directly.
+
+**Desugaring** (`Parser::desugar_contracts`, entirely inside
+`parse_let_def` — `LetDef`'s own struct shape doesn't change at all, so
+nothing downstream of the parser needs to know contracts exist):
+
+```
+let f (a: Int) (b: Int): Int
+  require b != 0 : "b must be non-zero"
+  ensure result >= 0
+= a / b
+```
+becomes, before `plum-types`/`plum-ir` ever see it:
+```
+let f (a: Int) (b: Int): Int = {
+  __contract_require(b != 0, "precondition failed: b must be non-zero");
+  let result = a / b;
+  __contract_ensure(result >= 0, "postcondition failed");
+  result
+}
+```
+`__contract_require`/`__contract_ensure` are two new one-line prelude
+functions appended directly to the existing `STDLIB_ASSERT_SRC` const
+(same file, same category, and — since `PRELUDE_TOTAL_LEN`'s span-offset
+math derives from `.len()` on that same const — zero other wiring
+needed anywhere `with_prelude`'s fragment list is threaded through).
+
+**Two deliberate design decisions, both scoped via `AskUserQuestion`
+before writing any code** (per the project's own established practice
+of discussing new checks before building them solo):
+
+1. **Custom `: "message"` syntax — included in v1** (the alternative was
+   shipping message-less clauses now, adding text later). Worth the
+   small grammar cost for meaningfully better failure output.
+2. **A parameter literally named `result` + an `ensure` clause is a
+   parse-time error, not silent shadowing.** The injected `let result =
+   …` would otherwise make a same-named parameter invisible for the
+   rest of the body with zero warning — `desugar_contracts` checks for
+   this and rejects with a clear message before any lowering runs.
+   `require`-only functions are unaffected (no `result` binding gets
+   injected when there are no `ensure` clauses at all) — pinned by its
+   own regression test.
+
+**The one real, inherent trade-off, flagged explicitly rather than
+found by surprise later**: an `ensure` clause costs that function's own
+tail-call optimization. A postcondition has to intercept the return
+value before returning it — `let result = BODY; check(result); result`
+moves whatever tail call `BODY` had out of tail position. This isn't a
+Plum bug; it's inherent to postconditions in any language (Eiffel/
+Dafny have the identical property) — but worth calling out loudly given
+recursion-depth limits have genuinely bitten this project more than
+once already (the HTTP client's non-TCO interpreter recursion, the
+`map_make_buckets` stack-overflow bug). `require` alone costs nothing
+here: `desugar_contracts` deliberately keeps the original body in TAIL
+position (not a statement) when there are no `ensure` clauses, so a
+`require`-only function's own tail-call shape is preserved exactly.
+Verified directly, not just reasoned about: a `require`-only function
+tail-recursing 2,000,000 times compiled and ran to completion under
+native codegen with no stack growth, identical to the same function
+with no contract at all.
+
+**Verified end-to-end**, not just via parser unit tests: real
+`plum run`/`plum build` round trips through a temp project — a
+precondition violation (`divide(1, 0)`), a postcondition violation
+(`ensure result > 100` on a function that returns `1`), and the
+parameter/`result` collision error — all producing the expected,
+correctly-labeled failure, in BOTH backends. 10 new `plum-syntax`
+parser tests (contract-free bodies unchanged, `require`-only preserves
+tail position, `ensure`-only binds+yields `result`, both together,
+multiple `require`s, `require`/`ensure` staying usable as ordinary
+identifiers elsewhere, the interleaving-order error, the `result`-
+collision error). Full workspace suite (`cargo test --workspace`) green
+throughout, zero regressions.
+
+**Explicitly out of scope for v1** (both flagged up front, not
+discovered as gaps later):
+- **`old(x)`** (pre-call snapshots of mutable arguments, for `ensure`
+  clauses that need to reason about a value BEFORE the call) — no real
+  use case in the stdlib yet to motivate the extra machinery (capturing
+  a copy at function entry before the body runs). Revisit if one shows
+  up.
+- **Release-mode stripping** of contract checks — there's no debug/
+  release build distinction in the compiler at all today, so nothing
+  exists yet to strip against. Also revisit together if that
+  distinction is ever added.
+
+### Currying (partial application) — Decided and implemented (2026-08-12)
+
+Raised by Brad directly, prompted by the contracts conversation above:
+multi-param function definitions (`let divide (a: Int) (b: Int) = ...`)
+already LOOK curried — the "Surface syntax" section (way above) is
+explicit that this was a deliberate cosmetic borrowing from OCaml/F#'s
+`let f (a: int) (b: int) = ...`, while "Deliberately deferred, not
+adopted" explicitly punted on making it REAL, citing "a fully-applied
+direct-call fast path plus a closure-allocating path for partial
+application, touching the calling convention." Brad's question: does
+that deferral still make sense, or should it be revisited now?
+
+**Scoped and confirmed via `AskUserQuestion` before writing any code**
+(per this project's established practice for anything touching a new
+static-checking behavior): build real partial application at CALL
+SITES, leaving function `Type::Function`'s representation and function
+DEFINITION syntax completely untouched; and keep `f()` on a multi-param
+`f` meaning exactly what it means today (never a vacuous "give me `f`
+back" 0-of-N partial application).
+
+**The architecture turned out to already be halfway there.**
+`plum-codegen::codegen_call` already has a two-tier calling convention,
+for an unrelated reason (functions are already first-class values): a
+DIRECT fast path (a bare identifier naming a known top-level function
+compiles to a real LLVM `call @name(...)`, even `musttail` when
+eligible) and an INDIRECT path (anything else — a closure value, a
+variable holding a function — loads a code pointer out of a closure
+cell and calls through it). That means the runtime representation for
+"a function value waiting for more arguments" — a closure — already
+existed, already refcounted correctly by `fbip`, and already understood
+by monomorphization. **This is why currying didn't need a new IR node,
+a `Type::Function` representation change, or ANY new codegen at all**:
+it's built as "infer under-application as valid, producing a residual
+function type" + "lowering rewrites the under-applied call into an
+ORDINARY `Expr::Closure`" — everything downstream (codegen, `fbip`,
+monomorphization) already knows how to handle a closure, zero new cases
+needed anywhere.
+
+**A real correction made mid-design, not glossed over**: the obvious
+worry going in was that real currying would turn DESIGN.md's own
+documented footgun (`sum (n - 1) (acc + n)` — juxtaposed single-arg
+calls, missing a comma, currently a compile error since Plum has no
+currying) into something silently wrong instead of loudly rejected.
+Working through the actual semantics of a CORRECTLY-threaded partial
+application shows the opposite: `sum(n - 1)` produces a closure over
+sum's remaining parameter whose body calls `sum(n - 1, acc)`; calling
+that closure with `(acc + n)` supplies the missing slot. Net effect:
+`sum(n - 1)(acc + n)` and `sum(n - 1, acc + n)` become PROVABLY
+IDENTICAL — the well-known ML property (`f(a)(b) === f(a, b)`) — not a
+new footgun, a *resolution* of the old one (the ambiguity that made it
+a footgun dissolves once both parses mean the same thing). Verified
+directly, not just argued in prose: `plum-types::infer`'s own
+`chained_partial_application_calls_equal_one_fully_applied_call` test,
+and its real compile-and-run counterpart in `plumc::codegen_cli`.
+
+**Implementation, three layers:**
+
+1. **`plum-types::infer` (`infer_call_with_callee`)**: the existing
+   exact-arity `unify` attempt is tried FIRST, unchanged; only on ITS
+   failure does a new fallback try `try_partial_application` — unifies
+   each SUPPLIED argument against the callee's own param list positionally
+   (stopping short, not the full list), and returns the REMAINING
+   (unsupplied) param types as a residual `Type::Function`. Two hard
+   gates, both deliberate: `args.is_empty()` never takes this path (the
+   confirmed "f() stays f()" scope decision), and the callee's type must
+   ALREADY be a concrete `Function` (never for a still-unconstrained
+   callee — there's no "right" residual shape to infer from a bare type
+   variable). A genuine type mismatch on a supplied argument (not an
+   arity issue) surfaces its own real error, not a misleading "arity
+   mismatch" one. New `Infer::partial_calls: HashMap<Span, usize>`
+   records WHICH call sites took this path (residual param count) —
+   lowering's stable, span-keyed handle back to "rewrite me," the same
+   `field_owners`/`unit_sugar_calls` precedent. The residual param/
+   return TYPES themselves are recorded into the ALREADY-EXISTING
+   `closure_types` map (keyed by the call's own span — there's no
+   closure-literal span to key by, which is fine, `closure_types` was
+   never actually required to be one) rather than inventing a parallel
+   side-channel, since a partial application's residual shape genuinely
+   IS a closure's shape.
+2. **`plum-ir::lower`**: the ordinary `Call`-lowering arm checks `ctx.
+   partial_calls` first; a hit rewrites the node into `Expr::Closure`
+   with synthetic params (`__partial_arg0`, ...) whose body is an
+   ordinary, FULLY-applied `Call` to the original callee (supplied args
+   followed by the synthetic params as `Var`s) — mirroring the EXISTING
+   bare-variant-reference eta-expansion in the very same function
+   almost exactly (`Circle` alone already lowers to a synthesized
+   `Closure` wrapping `Ctor`; this is the identical idiom one level up).
+   Param/return types come from `closure_types` via the SAME `type_
+   contains_param` filter the real closure-literal case already applies
+   — `None`/`None` (harmless everywhere except native codegen, which
+   requires `Some`/`Some` for any closure) falls out for free whenever
+   a partial-application site sits inside a still-generic function's own
+   body, since that's exactly the shape `closure_types` was never given
+   a tier-2 template-fallback for (see point 3).
+3. **`plum_ir::monomorphize::plan`**: `MonoPlan::functions` re-lowers
+   EVERY function through its OWN `base_lctx`, not the caller's already-
+   lowered output — so `partial_calls` needed threading through here
+   too (a new parameter, `.with_partial_calls(partial_calls.clone())`
+   on `base_lctx`), or partial application would silently break for
+   every function compiled natively, not just ones inside generic
+   bodies. Threaded as a FLAT pass-through, mirroring `unit_sugar_
+   calls`'s (simpler) precedent rather than `closure_types`'/`empty_
+   array_elem_types`'s per-instantiation MERGE logic.
+
+**Deliberate v1 scope cut, stated up front rather than found as a
+gap**: a partial-application call site written INSIDE a still-generic
+function's own body has no tier-2 template-fallback resolution (unlike
+`closure_types`/`empty_array_elem_types`, which each gained one after a
+real reported bug — see this file's "Chunk 5" and the OS-module
+section). This produces a CLEAR native-codegen error ("closure literal
+it can't resolve static param/return types for"), never a silent
+miscompile — the interpreter is entirely unaffected (dynamically typed,
+never needs static closure types at all). Revisit if a real generic-body
+partial-application need shows up, the same "ship the common case,
+close the generic gap later" precedent `empty_array_elem_types` itself
+already set.
+
+**Verified**: 8 new `plum-types::infer` unit tests (residual type
+inference, full application unaffected, the chained-equals-fully-
+applied proof, argument type-checking still enforced, the `f()`/
+over-application/unresolved-callee scope decisions all still error
+exactly as before), 3 new `plum-ir::lower` unit tests (the closure
+rewrite's exact shape, the `None`/`None` fallback, full calls
+unaffected), and 4 new real compile-and-run `plumc::codegen_cli`
+tests — under-application producing a working closure, the chained-
+equals-fully-applied proof compiled and run for real (not just typed),
+a partial application escaping its creating closure's own defunct stack
+frame (mirroring an existing ordinary-closure escape-analysis stress
+test exactly), and full application confirmed unaffected. Full
+workspace suite green throughout, zero regressions. Also manually
+verified end-to-end in both backends against a small standalone project
+mixing all four shapes (full call, chained partial call, a partial
+application bound to a variable and called later, and a partial
+application nested inside an ordinary closure) — every value came out
+correct.

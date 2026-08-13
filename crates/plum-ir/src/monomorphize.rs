@@ -273,6 +273,17 @@ pub fn plan(
     // mutates NAMES in place, never spans), so the caller's `Infer`-
     // derived maps still key correctly here.
     closure_types: &HashMap<Span, (Vec<Type>, Type)>,
+    // Partial-application `Call` span -> how many trailing parameters it
+    // left unsupplied (DESIGN.md's "Currying" section) — needed HERE for
+    // the SAME reason `closure_types`/`unit_sugar_calls` are: `MonoPlan::
+    // functions` re-lowers EVERY function through this module's OWN
+    // `base_lctx`, not the caller's. No tier-2 per-instantiation merge
+    // logic (unlike `closure_types`/`empty_array_elem_types` below) — a
+    // partial-application call site inside a still-generic function's
+    // own body is out of scope for v1 (see `plum_types::Infer::
+    // partial_calls`'s doc comment), so this is threaded straight
+    // through unchanged, mirroring `unit_sugar_calls` exactly.
+    partial_calls: &HashMap<Span, usize>,
     // Empty-array-literal span -> resolved (possibly template)
     // element type — the empty-array counterpart to `closure_types`
     // immediately above, needed HERE for the same reason (see this
@@ -338,6 +349,7 @@ pub fn plan(
     let base_lctx = LoweringContext::from_items(&program.items)
         .with_array_for_loops(array_for_loops.clone())
         .with_unit_sugar_calls(unit_sugar_calls.clone())
+        .with_partial_calls(partial_calls.clone())
         .with_closure_types(closure_types.clone())
         .with_empty_array_elem_types(empty_array_elem_types.clone())
         .with_variant_payload_types(variant_payload_types.clone());
@@ -1091,6 +1103,7 @@ mod tests {
             infer.array_for_loops(),
             infer.unit_sugar_calls(),
             &closure_types,
+            infer.partial_calls(),
             &empty_array_elem_types,
             &HashMap::new(),
         )

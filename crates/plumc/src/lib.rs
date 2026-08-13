@@ -787,6 +787,20 @@ let assert_ne[T: Eq + Show] (a: T) (b: T): Unit =
     if a != b { () } else {
         panic_raw(\"assertion failed: left == right\\n  left:  \".concat(a.to_string()).concat(\"\\n  right: \").concat(b.to_string()))
     }
+
+// Backing calls for `require`/`ensure` function-contract clauses (see
+// DESIGN.md's \"Contracts\" section) — `plum-syntax`'s parser desugars
+// every clause into a call to one of these two BEFORE `plum-types`/
+// `plum-ir` ever see the function body, so contracts need no IR/codegen
+// work of their own, only these two prelude one-liners (mirroring
+// `assert` itself exactly). Double-underscore-prefixed: internal, not
+// meant to be called directly from user code, same convention already
+// used for other compiler-synthesized names.
+let __contract_require (cond: Bool) (msg: String): Unit =
+    if cond { () } else { panic_raw(msg) }
+
+let __contract_ensure (cond: Bool) (msg: String): Unit =
+    if cond { () } else { panic_raw(msg) }
 ";
 
 /// `Option[T]`/`Result[T, E]` combinators — pure Plum source, no new
@@ -1907,7 +1921,8 @@ pub(crate) fn run_resolved_program_with_process_args_diag(
     let lowering_ctx = LoweringContext::from_items(&program.items)
         .with_field_owners(infer.field_owners().clone())
         .with_array_for_loops(infer.array_for_loops().clone())
-        .with_unit_sugar_calls(infer.unit_sugar_calls().clone());
+        .with_unit_sugar_calls(infer.unit_sugar_calls().clone())
+        .with_partial_calls(infer.partial_calls().clone());
     let ir_program = lower_program(&program, &lowering_ctx).map_err(|e: plum_syntax::error::CompileError| e.context("lowering error"))?;
     let ir_program = optimize_program(ir_program);
 

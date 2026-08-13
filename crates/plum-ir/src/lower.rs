@@ -86,6 +86,19 @@ pub struct LoweringContext {
     // since `plum-interp` (which lowers WITHOUT ever needing static
     // types) never reads them, and only `plum-codegen` requires `Some`.
     closure_types: HashMap<plum_syntax::span::Span, (Vec<plum_types::types::Type>, plum_types::types::Type)>,
+    // `Expr::Call` span -> how many trailing parameters it left
+    // unsupplied, exactly as `plum_types::Infer::partial_calls` recorded
+    // it during inference — see DESIGN.md's "Currying" section and that
+    // field's own doc comment. Consulted by the ordinary `Call`-lowering
+    // arm: a call whose span is in this map gets rewritten into an
+    // `Expr::Closure` (synthetic params for the unsupplied suffix,
+    // wrapping a full call to the original callee) instead of an
+    // ordinary `Expr::Call` — the residual params'/return's static
+    // TYPES for that same span live in `closure_types` immediately
+    // above, not a separate map (a partial application's residual shape
+    // IS a closure's shape). Empty by default: a lowering-only test
+    // that never populates this is unaffected.
+    partial_calls: HashMap<plum_syntax::span::Span, usize>,
     // Enum variant tag -> its declared payload types, resolved via
     // `plum_types::context::TypeContext::variant` — needed ONLY for a
     // bare non-zero-arity variant reference used as a VALUE (`let f =
@@ -128,6 +141,7 @@ impl LoweringContext {
             unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
             closure_types: HashMap::new(),
+            partial_calls: HashMap::new(),
             variant_payload_types: HashMap::new(),
             extern_fns: HashMap::new(),
             struct_field_types: HashMap::new(),
@@ -175,6 +189,14 @@ impl LoweringContext {
         closure_types: HashMap<plum_syntax::span::Span, (Vec<plum_types::types::Type>, plum_types::types::Type)>,
     ) -> Self {
         self.closure_types = closure_types;
+        self
+    }
+
+    /// Attaches the span -> residual-param-count map for partial-
+    /// application `Call` sites `plum-types` computed during inference
+    /// — see `partial_calls`'s own doc comment.
+    pub fn with_partial_calls(mut self, partial_calls: HashMap<plum_syntax::span::Span, usize>) -> Self {
+        self.partial_calls = partial_calls;
         self
     }
 
@@ -1404,6 +1426,47 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
                 }
             }
             let ir_callee = lower_expr(callee, ctx)?;
+            // Partial application (DESIGN.md's "Currying" section):
+            // `plum_types::Infer` already decided (during inference,
+            // when it had the callee's real type available) that THIS
+            // call site supplies fewer arguments than the callee's own
+            // declared arity — see `partial_calls`'s own doc comment.
+            // Rewritten into a real `Expr::Closure`, mirroring the
+            // `Ident`-arm variant-constructor eta-expansion just above
+            // in this same function exactly (synthetic param names,
+            // `Some`/`Some` types when a real `plum_types::Infer` pass
+            // resolved concrete ones, `None`/`None` otherwise — the SAME
+            // harmless fallback every other closure-typing gap in this
+            // file already has): the closure's body is an ordinary,
+            // FULLY-applied `Expr::Call` to the original callee, the
+            // already-supplied arguments followed by one fresh `Var` per
+            // synthetic param — exactly what calling the closure with
+            // the REMAINING arguments needs to thread through correctly.
+            if let Some(&missing) = ctx.partial_calls.get(span) {
+                let supplied: Vec<ir::Expr> = args.iter().map(|a| lower_expr(a, ctx)).collect::<Result<_, _>>()?;
+                let synthetic_params: Vec<String> = (0..missing).map(|i| format!("__partial_arg{i}")).collect();
+                let resolved = ctx
+                    .closure_types
+                    .get(span)
+                    .filter(|(ptys, rty)| !ptys.iter().any(type_contains_param) && !type_contains_param(rty));
+                let param_types = resolved
+                    .map(|(ptys, _)| ptys.iter().map(type_to_prim_ty).collect::<Result<Vec<_>, _>>())
+                    .transpose()?;
+                let ret_type = resolved.map(|(_, rty)| type_to_prim_ty(rty)).transpose()?;
+                let call_args: Vec<ir::Expr> = supplied
+                    .into_iter()
+                    .chain(synthetic_params.iter().cloned().map(ir::Expr::Var))
+                    .collect();
+                return Ok(ir::Expr::Closure {
+                    params: synthetic_params,
+                    param_types,
+                    ret_type,
+                    body: Box::new(ir::Expr::Call {
+                        callee: Box::new(ir_callee),
+                        args: call_args,
+                    }),
+                });
+            }
             // `f()` sugar for `f(())` — `plum_types::Infer` already
             // decided (during inference, when it had the callee's real
             // type available) that THIS zero-arg call site needs one
@@ -3037,6 +3100,86 @@ mod tests {
             ir::Expr::Call {
                 callee: Box::new(ir::Expr::Var("double".to_string())),
                 args: vec![ir::Expr::Int(5)],
+            }
+        );
+    }
+
+    // --- Currying (partial application) — see DESIGN.md's "Currying"
+    // section. Mirrors `lower_array_op_with_closure_types`'s own
+    // "hand-stamp the side-channels `plum_types::Infer` would already
+    // have populated" pattern, but keyed by the CALL's own span (there's
+    // no closure-literal span to key by — that's the entire point). ---
+
+    fn lower_partial_call_with(src: &str, missing: usize, param_tys: Vec<plum_types::types::Type>, ret_ty: plum_types::types::Type) -> ir::Expr {
+        let tokens = Lexer::new(src).tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser
+            .parse_expr()
+            .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
+        let call_span = ast.span();
+        let mut partial_calls = HashMap::new();
+        partial_calls.insert(call_span, missing);
+        let mut closure_types = HashMap::new();
+        closure_types.insert(call_span, (param_tys, ret_ty));
+        let ctx = LoweringContext::new()
+            .with_partial_calls(partial_calls)
+            .with_closure_types(closure_types);
+        lower_expr(&ast, &ctx).unwrap_or_else(|e| panic!("lowering error for {src:?}: {e}"))
+    }
+
+    #[test]
+    fn under_applied_call_lowers_to_a_closure_wrapping_the_full_call() {
+        assert_eq!(
+            lower_partial_call_with("divide(10)", 1, vec![plum_types::types::Type::Int], plum_types::types::Type::Int),
+            ir::Expr::Closure {
+                params: vec!["__partial_arg0".to_string()],
+                param_types: Some(vec![ir::PrimTy::Int]),
+                ret_type: Some(ir::PrimTy::Int),
+                body: Box::new(ir::Expr::Call {
+                    callee: Box::new(ir::Expr::Var("divide".to_string())),
+                    args: vec![ir::Expr::Int(10), ir::Expr::Var("__partial_arg0".to_string())],
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn under_applied_call_with_no_resolved_types_falls_back_to_none_like_any_other_closure() {
+        // No `plum_types::Infer` pass behind this `LoweringContext` (only
+        // `partial_calls` populated, `closure_types` left empty) — same
+        // harmless `None`/`None` fallback every other closure-typing gap
+        // in this file already has (see `bare_non_zero_arity_variant_
+        // eta_expands_into_a_closure` immediately above). `plum-codegen`
+        // is what actually requires `Some` on both; this crate's own
+        // lowering never does.
+        let tokens = Lexer::new("divide(10)").tokenize();
+        let mut parser = Parser::new(tokens);
+        let ast = parser.parse_expr().unwrap();
+        let mut partial_calls = HashMap::new();
+        partial_calls.insert(ast.span(), 1);
+        let ctx = LoweringContext::new().with_partial_calls(partial_calls);
+        assert_eq!(
+            lower_expr(&ast, &ctx).unwrap(),
+            ir::Expr::Closure {
+                params: vec!["__partial_arg0".to_string()],
+                param_types: None,
+                ret_type: None,
+                body: Box::new(ir::Expr::Call {
+                    callee: Box::new(ir::Expr::Var("divide".to_string())),
+                    args: vec![ir::Expr::Int(10), ir::Expr::Var("__partial_arg0".to_string())],
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn fully_applied_calls_are_unaffected_by_partial_call_lowering() {
+        let ctx = LoweringContext::new();
+        assert_eq!(
+            lower_with("divide(10, 2)", &ctx),
+            ir::Expr::Call {
+                callee: Box::new(ir::Expr::Var("divide".to_string())),
+                args: vec![ir::Expr::Int(10), ir::Expr::Int(2)],
             }
         );
     }

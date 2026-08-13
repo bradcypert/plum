@@ -92,18 +92,38 @@ same module.
 
 ```
 LetDef        ::= "let" Identifier [ GenericParams ] { Param }
-                   [ ":" Type ] "=" Expr
+                   [ ":" Type ] { RequireClause } { EnsureClause } "=" Expr
 Param         ::= Identifier
                  | "(" Pattern [ ":" Type ] ")"
 GenericParams ::= "[" GenericParam { "," GenericParam } "]"
 GenericParam  ::= Identifier [ ":" Bound ]
 Bound         ::= Identifier { "+" Identifier }
+RequireClause ::= "require" Expr [ ":" StringLiteral ]
+EnsureClause  ::= "ensure" Expr [ ":" StringLiteral ]
 ```
 
 Zero `Param`s makes this a plain value binding (`let x = 5`); one or
 more makes it a function definition (`let sum n acc = ...`). This is
 deliberate, not a simplification for the grammar's sake — see DESIGN.md,
 "functions are just values" is a load-bearing ML idea, not a decoration.
+
+**Contracts** (`require`/`ensure`, DESIGN.md's "Contracts" section) —
+`require` states a precondition, checked on entry; `ensure` states a
+postcondition, checked just before returning, with `result` bound to
+the function's own return value inside `ensure` clauses only. Every
+`require` must come before any `ensure`; interleaving them is a parse
+error. `require`/`ensure` are **contextual** keywords, not reserved
+words — recognized only in this one grammar slot (the only other legal
+token there is `=`), so `let require = 5` elsewhere is still ordinary,
+valid Plum. A function with an `ensure` clause can't declare a
+parameter literally named `result` (rejected at parse time — the
+postcondition needs that name for the return value). Both clause kinds
+desugar entirely at parse time into ordinary `assert`-shaped calls
+(`plum-types`/`plum-ir` never see a contract as such) — see DESIGN.md
+for the exact rewrite and its one real trade-off: `ensure` clauses cost
+that function's own tail-call-optimization, since a postcondition has
+to intercept the return value before returning it; `require` alone does
+not.
 
 ### Struct and enum declarations
 
@@ -201,6 +221,26 @@ application (non-associative) — `a < b < c` and `a..b..c` are both
 grammar errors, not parsed with some implied associativity. See
 DESIGN.md for why (chained comparisons silently meaning something other
 than the mathematical reading is a documented footgun).
+
+**Currying (partial application)** — DESIGN.md's "Currying" section.
+No grammar change: `PostfixExpr`'s repeated `Arguments` already allowed
+`f(a)(b)` syntactically. What's new is purely semantic — a `Call`
+supplying FEWER arguments than its callee's own declared arity is now a
+valid PARTIAL APPLICATION (producing a function value over the
+remaining parameters) rather than an arity-mismatch type error, PROVIDED
+at least one argument is supplied (`f()` on a multi-param `f` is
+unaffected — still either the ordinary zero-arg-Unit sugar or a hard
+error, never a vacuous "give me `f` back") and the callee's type is
+already resolved at that call site (a still-fully-generic, unconstrained
+callee doesn't get this — falls back to the ordinary arity error).
+`f(a)(b)` and `f(a, b)` are provably equivalent under this rule — the
+well-known ML property that also means Plum's own documented `sum (n -
+1) (acc + n)` footgun (missing comma between two single-arg calls) is
+no longer silently different from `sum(n - 1, acc + n)`, just a
+different, equally-valid way of writing the same call. Function
+DEFINITION syntax (`LetDef`, above) is completely unaffected by this —
+`let divide (a: Int) (b: Int) = ...` still declares one ordinary
+2-param function, never real curried nesting.
 
 An `Argument` that begins with `_` is placeholder-lambda sugar: `_`
 followed by zero or more `Postfix` steps desugars to an implicit

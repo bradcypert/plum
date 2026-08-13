@@ -158,9 +158,11 @@ impl Parser {
         } else {
             None
         };
+        let (requires, ensures) = self.parse_contract_clauses()?;
         self.expect(TokenKind::Eq, "'='")?;
-        let body = self.parse_expr()?;
-        let span = start.to(body.span());
+        let raw_body = self.parse_expr()?;
+        let span = start.to(raw_body.span());
+        let body = Self::desugar_contracts(&params, requires, ensures, raw_body, span)?;
         Ok(LetDef {
             name,
             generics,
@@ -169,6 +171,139 @@ impl Parser {
             body,
             span,
         })
+    }
+
+    // `{ RequireClause } { EnsureClause }` — see GRAMMAR.md's "Contracts"
+    // section. Fixed order (every `require` before any `ensure`) rather
+    // than free interleaving, purely to keep both this parse and the
+    // desugaring below simple; a stray `require` after an `ensure` is a
+    // clear parse error, not silently accepted.
+    #[allow(clippy::type_complexity)]
+    fn parse_contract_clauses(
+        &mut self,
+    ) -> Result<(Vec<(Expr, Option<String>, Span)>, Vec<(Expr, Option<String>, Span)>), crate::error::CompileError> {
+        let mut requires = Vec::new();
+        while self.peek_is_contextual_kw("require") {
+            requires.push(self.parse_contract_clause()?);
+        }
+        let mut ensures = Vec::new();
+        while self.peek_is_contextual_kw("ensure") {
+            ensures.push(self.parse_contract_clause()?);
+        }
+        if self.peek_is_contextual_kw("require") {
+            return Err(crate::error::CompileError::new(
+                self.peek().span,
+                "'require' clauses must all come before any 'ensure' clauses".to_string(),
+            ));
+        }
+        Ok((requires, ensures))
+    }
+
+    fn parse_contract_clause(&mut self) -> Result<(Expr, Option<String>, Span), crate::error::CompileError> {
+        let start = self.advance().span; // consume `require`/`ensure`
+        let cond = self.parse_expr()?;
+        let mut end = cond.span();
+        let message = if self.bump_if(&TokenKind::Colon) {
+            let tok = self.expect_str("a string literal")?;
+            end = tok.span;
+            Some(Self::str_text(&tok))
+        } else {
+            None
+        };
+        Ok((cond, message, start.to(end)))
+    }
+
+    // Rewrites `require`/`ensure` clauses into plain `assert`-shaped
+    // calls, entirely at parse time — mirrors string interpolation's own
+    // precedent exactly (lexer+parser only, zero IR/backend changes):
+    // by the time `plum-types`/`plum-ir` see this `LetDef`, its `body`
+    // is ordinary Plum, indistinguishable from anything a user could
+    // have written by hand. See DESIGN.md's "Contracts" section for the
+    // full "why" (including the deliberate `ensure`-breaks-tail-calls
+    // trade-off this shape implies).
+    fn desugar_contracts(
+        params: &[Param],
+        requires: Vec<(Expr, Option<String>, Span)>,
+        ensures: Vec<(Expr, Option<String>, Span)>,
+        raw_body: Expr,
+        span: Span,
+    ) -> Result<Expr, crate::error::CompileError> {
+        if requires.is_empty() && ensures.is_empty() {
+            return Ok(raw_body);
+        }
+        if !ensures.is_empty() {
+            if let Some(p) = params.iter().find(|p| matches!(&p.kind, ParamKind::Ident(n) if n == "result")
+                || matches!(&p.kind, ParamKind::Pattern(Pattern::Ident(n, _), _) if n == "result"))
+            {
+                return Err(crate::error::CompileError::new(
+                    p.span,
+                    "a function with 'ensure' clauses can't have a parameter named 'result' \
+                     (the postcondition needs that name for the return value)"
+                        .to_string(),
+                ));
+            }
+        }
+        let mut stmts = Vec::new();
+        for (cond, message, clause_span) in requires {
+            stmts.push(Stmt::Expr(Self::contract_check_call(
+                "__contract_require",
+                "precondition failed",
+                cond,
+                message,
+                clause_span,
+            )));
+        }
+        if ensures.is_empty() {
+            // `require`-only: the original body stays in TAIL position,
+            // not a statement — preserves whatever tail-call shape it
+            // had (`require` alone never costs TCO; only `ensure` does,
+            // since it has to intercept the return value to check it).
+            return Ok(Expr::Block(
+                Block {
+                    stmts,
+                    tail: Some(Box::new(raw_body)),
+                    span,
+                },
+                span,
+            ));
+        }
+        let body_span = raw_body.span();
+        stmts.push(Stmt::Let {
+            is_mut: false,
+            pattern: Pattern::Ident("result".to_string(), body_span),
+            ty: None,
+            value: raw_body,
+            span: body_span,
+        });
+        for (cond, message, clause_span) in ensures {
+            stmts.push(Stmt::Expr(Self::contract_check_call(
+                "__contract_ensure",
+                "postcondition failed",
+                cond,
+                message,
+                clause_span,
+            )));
+        }
+        let tail = Some(Box::new(Expr::Ident("result".to_string(), body_span)));
+        Ok(Expr::Block(Block { stmts, tail, span }, span))
+    }
+
+    fn contract_check_call(
+        callee: &str,
+        base_msg: &str,
+        cond: Expr,
+        message: Option<String>,
+        span: Span,
+    ) -> Expr {
+        let msg = match message {
+            Some(m) => format!("{base_msg}: {m}"),
+            None => base_msg.to_string(),
+        };
+        Expr::Call {
+            callee: Box::new(Expr::Ident(callee.to_string(), span)),
+            args: vec![cond, Expr::Str(msg, span)],
+            span,
+        }
     }
 
     fn parse_param(&mut self) -> Result<Param, crate::error::CompileError> {
@@ -610,6 +745,17 @@ impl Parser {
 
     fn check(&self, kind: &TokenKind) -> bool {
         self.peek_kind() == kind
+    }
+
+    // Contextual-keyword check — `require`/`ensure` (see `parse_contract_
+    // clauses`) are ordinary identifiers everywhere EXCEPT this one
+    // grammar slot (directly after a `LetDef`'s params/ret_ty, where the
+    // only other legal token is `=`), so recognizing them by text here
+    // rather than adding real `TokenKind` variants keeps them fully
+    // usable as ordinary names anywhere else in the language — no lexer
+    // change, no new reserved word.
+    fn peek_is_contextual_kw(&self, word: &str) -> bool {
+        matches!(self.peek_kind(), TokenKind::Ident(name) if name == word)
     }
 
     fn bump_if(&mut self, kind: &TokenKind) -> bool {
@@ -2759,6 +2905,107 @@ mod tests {
         assert_eq!(
             render_program(&parse_program("let Option.map[T, U] (o: T) (f: U): T = o")),
             "((let Option.map [T,U] ((o:T) (f:U)) ->T o))"
+        );
+    }
+
+    // --- Contract clauses (`require`/`ensure`) — see DESIGN.md's
+    // "Contracts" section. These desugar entirely at parse time, so
+    // every test here asserts on the REWRITTEN body, not on any
+    // separate AST representation of the clauses (there isn't one). ---
+
+    #[test]
+    fn item_let_with_require_only_prepends_a_contract_check_and_leaves_the_tail_alone() {
+        assert_eq!(
+            render_program(&parse_program("let divide (a: Int) (b: Int): Int require b != 0 = a")),
+            "((let divide ((a:Int) (b:Int)) ->Int \
+             (block (stmt (call __contract_require (!= b 0) \"precondition failed\")) a)))"
+        );
+    }
+
+    #[test]
+    fn item_let_with_require_message_appends_it_to_the_base_message() {
+        assert_eq!(
+            render_program(&parse_program(
+                "let divide (a: Int) (b: Int): Int require b != 0 : \"b must be non-zero\" = a"
+            )),
+            "((let divide ((a:Int) (b:Int)) ->Int \
+             (block (stmt (call __contract_require (!= b 0) \"precondition failed: b must be non-zero\")) a)))"
+        );
+    }
+
+    #[test]
+    fn item_let_with_ensure_only_binds_result_and_yields_it() {
+        assert_eq!(
+            render_program(&parse_program("let f (a: Int): Int ensure result >= 0 = a")),
+            "((let f ((a:Int)) ->Int \
+             (block (let result a) \
+             (stmt (call __contract_ensure (>= result 0) \"postcondition failed\")) result)))"
+        );
+    }
+
+    #[test]
+    fn item_let_with_both_require_and_ensure_orders_requires_before_the_result_binding() {
+        assert_eq!(
+            render_program(&parse_program(
+                "let divide (a: Int) (b: Int): Int require b != 0 ensure result >= 0 = a"
+            )),
+            "((let divide ((a:Int) (b:Int)) ->Int \
+             (block (stmt (call __contract_require (!= b 0) \"precondition failed\")) \
+             (let result a) \
+             (stmt (call __contract_ensure (>= result 0) \"postcondition failed\")) result)))"
+        );
+    }
+
+    #[test]
+    fn item_let_with_multiple_require_clauses_checks_each_one() {
+        assert_eq!(
+            render_program(&parse_program(
+                "let f (a: Int) (b: Int): Int require a > 0 require b > 0 = a"
+            )),
+            "((let f ((a:Int) (b:Int)) ->Int \
+             (block (stmt (call __contract_require (> a 0) \"precondition failed\")) \
+             (stmt (call __contract_require (> b 0) \"precondition failed\")) a)))"
+        );
+    }
+
+    #[test]
+    fn item_let_with_no_contract_clauses_is_unchanged_from_before_contracts_existed() {
+        // `require`/`ensure` are contextual keywords, only recognized in
+        // this one grammar slot — an ordinary function body is untouched
+        // by the desugar entirely (`desugar_contracts` short-circuits).
+        assert_eq!(
+            render_program(&parse_program("let double (n: Int): Int = n * 2")),
+            "((let double ((n:Int)) ->Int (* n 2)))"
+        );
+    }
+
+    #[test]
+    fn require_and_ensure_stay_usable_as_ordinary_identifiers_elsewhere() {
+        assert_eq!(
+            render_program(&parse_program("let require = 5")),
+            "((let require () 5))"
+        );
+        assert_eq!(render_program(&parse_program("let ensure = 6")), "((let ensure () 6))");
+    }
+
+    #[test]
+    fn ensure_after_require_reappears_is_a_clear_parse_error() {
+        program_parse_err("let f (a: Int): Int ensure a >= 0 require a > 0 = a");
+    }
+
+    #[test]
+    fn ensure_clause_rejects_a_parameter_literally_named_result() {
+        program_parse_err("let f (result: Int): Int ensure result > 0 = result");
+    }
+
+    #[test]
+    fn require_clause_alone_does_not_reject_a_parameter_named_result() {
+        // Only `ensure` needs the `result` name — a `require`-only
+        // function is free to use it as an ordinary parameter.
+        assert_eq!(
+            render_program(&parse_program("let f (result: Int): Int require result > 0 = result")),
+            "((let f ((result:Int)) ->Int \
+             (block (stmt (call __contract_require (> result 0) \"precondition failed\")) result)))"
         );
     }
 

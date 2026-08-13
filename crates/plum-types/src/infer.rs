@@ -367,6 +367,32 @@ pub struct Infer {
     // is pinned only to ITS enclosing generic function's own
     // still-unresolved generic, not to anything concrete.
     closure_types: HashMap<Span, (Vec<Type>, Type, Option<String>)>,
+    // `Call` span -> how many trailing parameters it left unsupplied —
+    // see DESIGN.md's "Currying" section. Populated by `infer_call_
+    // with_callee` exactly when a call site supplies FEWER arguments
+    // than its (already-resolved) callee's own declared arity: rather
+    // than the ordinary arity-mismatch error, that becomes a valid
+    // PARTIAL APPLICATION, and this is lowering's stable span-keyed
+    // handle back to "rewrite this Call into a Closure wrapping the
+    // full call" — the exact same "lowering has no type information of
+    // its own" reasoning `field_owners`/`unit_sugar_calls` already
+    // established. The residual parameter/return TYPES themselves are
+    // recorded into `closure_types` above, keyed by this SAME span, not
+    // a separate map — a partial application's residual shape IS a
+    // closure's shape, so reusing that exact side-channel (rather than
+    // inventing a parallel one) is what lets `plum-ir::lower` treat the
+    // synthesized closure identically to a real closure literal, all
+    // the way through codegen/`fbip`/monomorphization, with zero new
+    // cases anywhere downstream. Deliberately NOT given the same tier-2
+    // generic-body template-fallback `closure_types`/`empty_array_elem_
+    // types` both have (see `resolve_closure_component`) — a partial
+    // application written INSIDE a still-generic function's own body is
+    // out of scope for v1 (produces a clear native-codegen error via
+    // the same "closure literal with no resolvable static type" path
+    // any other under-specified closure already hits, never a silent
+    // miscompile), matching the precedent `empty_array_elem_types`
+    // itself set before ITS OWN tier-2 fallback was added later.
+    partial_calls: HashMap<Span, usize>,
     // Whether the expression currently being inferred is lexically
     // inside an `unsafe { .. }` block — toggled true/false around
     // `ast::Expr::Unsafe`'s own handling, not a stack (nested `unsafe`
@@ -467,6 +493,7 @@ impl Infer {
             unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
             closure_types: HashMap::new(),
+            partial_calls: HashMap::new(),
             in_unsafe: false,
             top_level_fns: HashSet::new(),
             current_fn: None,
@@ -492,6 +519,7 @@ impl Infer {
             unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
             closure_types: HashMap::new(),
+            partial_calls: HashMap::new(),
             in_unsafe: false,
             top_level_fns: HashSet::new(),
             current_fn: None,
@@ -564,6 +592,16 @@ impl Infer {
     /// `unit_sugar_calls`'s own field doc comment.
     pub fn unit_sugar_calls(&self) -> &std::collections::HashSet<plum_syntax::span::Span> {
         &self.unit_sugar_calls
+    }
+
+    /// Every partial-application `Call` site recorded during inference,
+    /// mapped to how many trailing parameters it left unsupplied — see
+    /// `partial_calls`'s own field doc comment. The residual parameter/
+    /// return TYPES for the same span live in `closure_types` (via
+    /// `resolve_closure_types`), not here — this map exists purely so
+    /// `plum-ir::lower` knows WHICH `Call` nodes need rewriting at all.
+    pub fn partial_calls(&self) -> &HashMap<plum_syntax::span::Span, usize> {
+        &self.partial_calls
     }
 
     /// Every generic function's own declared generic parameter names,
@@ -2942,10 +2980,68 @@ impl Infer {
             }
         }
 
-        let expected_fn_ty = Type::Function(arg_types, Box::new(ret_var.clone()));
-        let s = unify(&acc.apply(&callee_ty), &expected_fn_ty).map_err(|e| plum_syntax::error::CompileError::spanless(format!("call: {e}")))?;
-        acc = s.compose(&acc);
-        self.finish_call(acc, ret_var, pending_bounds)
+        let expected_fn_ty = Type::Function(arg_types.clone(), Box::new(ret_var.clone()));
+        match unify(&acc.apply(&callee_ty), &expected_fn_ty) {
+            Ok(s) => {
+                acc = s.compose(&acc);
+                self.finish_call(acc, ret_var, pending_bounds)
+            }
+            Err(exact_arity_err) => {
+                // Partial application (DESIGN.md's "Currying" section):
+                // fewer args supplied than the callee's own declared
+                // arity — tried ONLY once the ordinary exact-arity unify
+                // has already failed, and ONLY when (1) at least one
+                // argument was actually supplied (`f()` on a multi-param
+                // `f` stays exactly what it means today — either the
+                // zero-arg-Unit sugar above, or this same arity error —
+                // never a vacuous "give me `f` back" partial application,
+                // a deliberate scope decision, not an oversight) and (2)
+                // the callee's type is ALREADY resolved to a concrete
+                // `Function` (never for a still-unconstrained callee —
+                // there's no "right" residual shape to infer yet).
+                if !args.is_empty() {
+                    if let Type::Function(full_params, real_ret) = acc.apply(&callee_ty) {
+                        if arg_types.len() < full_params.len() {
+                            match self.try_partial_application(&arg_types, &full_params, &acc) {
+                                Ok((residual_params, s)) => {
+                                    let real_ret = s.apply(&real_ret);
+                                    self.partial_calls.insert(span, residual_params.len());
+                                    self.closure_types
+                                        .insert(span, (residual_params.clone(), real_ret.clone(), self.current_fn.clone()));
+                                    let residual_ty = Type::Function(residual_params, Box::new(real_ret));
+                                    return self.finish_call(s, residual_ty, pending_bounds);
+                                }
+                                Err(partial_err) => {
+                                    return Err(plum_syntax::error::CompileError::spanless(format!("call: {partial_err}")));
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(plum_syntax::error::CompileError::spanless(format!("call: {exact_arity_err}")))
+            }
+        }
+    }
+
+    /// The partial-application half of `infer_call_with_callee`'s tail —
+    /// unifies each SUPPLIED argument against its corresponding prefix
+    /// entry of the callee's full param list (the exact same element-
+    /// wise unification `unify`'s own `Type::Function` arm would do for
+    /// a full call, just stopped short), and returns the REMAINING
+    /// (unsupplied) param types, still possibly containing type
+    /// variables `finish_call`'s caller resolves further via its own
+    /// `acc`. A real unify failure here (a genuine type mismatch on one
+    /// of the supplied arguments, not an arity issue — arity is already
+    /// guaranteed to fit by the caller's own `arg_types.len() < full_
+    /// params.len()` check) is surfaced as `Err`, not silently retried.
+    fn try_partial_application(&mut self, arg_types: &[Type], full_params: &[Type], acc: &Subst) -> Result<(Vec<Type>, Subst), String> {
+        let mut acc = acc.clone();
+        for (arg_ty, param_ty) in arg_types.iter().zip(full_params.iter()) {
+            let s = unify(&acc.apply(param_ty), &acc.apply(arg_ty))?;
+            acc = s.compose(&acc);
+        }
+        let residual = full_params[arg_types.len()..].iter().map(|t| acc.apply(t)).collect();
+        Ok((residual, acc))
     }
 
     /// The shared tail of `infer_call_with_callee`'s two paths (the
@@ -5859,6 +5955,95 @@ mod tests {
             Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
         );
         infer_err_in("5 |> f(_, _)", &env);
+    }
+
+    // --- Currying (partial application) — see DESIGN.md's "Currying"
+    // section. `divide`'s own DEFINITION shape never changes; these
+    // tests are entirely about what an under-applied CALL SITE infers
+    // to. ---
+
+    #[test]
+    fn under_applied_call_infers_a_residual_function_type() {
+        let env = TypeEnv::new().extend(
+            "divide".to_string(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        assert_eq!(
+            infer_in("divide(10)", &env),
+            Type::Function(vec![Type::Int], Box::new(Type::Int))
+        );
+    }
+
+    #[test]
+    fn fully_applied_call_is_unaffected_by_partial_application_support() {
+        let env = TypeEnv::new().extend(
+            "divide".to_string(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        assert_eq!(infer_in("divide(10, 2)", &env), Type::Int);
+    }
+
+    #[test]
+    fn chained_partial_application_calls_equal_one_fully_applied_call() {
+        // `divide(10)(2)` and `divide(10, 2)` must be provably
+        // equivalent — the well-known ML property that's the whole
+        // point of currying, verified directly at the type level rather
+        // than just asserted in prose.
+        let env = TypeEnv::new().extend(
+            "divide".to_string(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        assert_eq!(infer_in("divide(10)(2)", &env), Type::Int);
+    }
+
+    #[test]
+    fn partial_application_still_type_checks_the_supplied_argument() {
+        let env = TypeEnv::new().extend(
+            "divide".to_string(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        // The first param is `Int`; a `Bool` there is a real type
+        // error, not silently accepted just because this is now an
+        // under-applied call.
+        infer_err_in("divide(true)", &env);
+    }
+
+    #[test]
+    fn zero_arg_call_on_a_multi_param_function_stays_an_arity_error() {
+        // The deliberate v1 scope decision: `f()` never means "give me
+        // `f` back" as a vacuous 0-of-N partial application — it keeps
+        // meaning exactly what it means today.
+        let env = TypeEnv::new().extend(
+            "divide".to_string(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        infer_err_in("divide()", &env);
+    }
+
+    #[test]
+    fn over_applied_call_in_one_call_node_is_still_an_arity_error() {
+        // Supplying MORE arguments than the callee's own arity, in a
+        // SINGLE call node, is never partial application (there's
+        // nothing left to be "partial" about) — stays a hard error, same
+        // as before this feature existed. Legitimate over-application
+        // (calling a function-valued RESULT with more args) already
+        // works via ordinary chained call nodes, exercised by
+        // `chained_partial_application_calls_equal_one_fully_applied_call`.
+        let env = TypeEnv::new().extend(
+            "divide".to_string(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        infer_err_in("divide(10, 2, 3)", &env);
+    }
+
+    #[test]
+    fn partial_application_of_an_unresolved_callee_is_still_an_arity_error() {
+        // No entry for `g` in scope at all makes it an unbound-variable
+        // error rather than an arity one — the real point of this test
+        // is `infer_err_in` succeeding at all (i.e. this doesn't panic
+        // or silently type-check), pinning that an utterly unconstrained
+        // callee never takes the partial-application path.
+        infer_err_in("g(10)", &TypeEnv::new());
     }
 
     #[test]

@@ -158,17 +158,50 @@ struct Backend {
     /// — stale-but-mostly-still-right beats nothing while the user
     /// fixes whatever they just broke.
     last_good_completions: Mutex<Vec<CompletionItem>>,
+    /// `Type.func` associated-function completions (`Array.map`,
+    /// `String.hash`, a user's own `Point.add`, ...), keyed by the
+    /// TYPE name, refreshed alongside `last_good_completions` on every
+    /// successful `recheck` — see `assoc_fns.rs`'s own module doc
+    /// comment for the mechanism this reuses directly: `Array.reverse`
+    /// isn't struct field access at all (`Array` is never a bound
+    /// value), it's a call-site rewrite of `Field { base: Ident
+    /// ("Array"), name: "reverse" }` into an ordinary call against the
+    /// top-level function LITERALLY named `"Array.reverse"` — so every
+    /// completable member of every namespace is already sitting right
+    /// there in the merged program's own `LetDef` names, split on the
+    /// first `.`, no new registry needed. Checked BEFORE the struct-
+    /// field splice path (`dot_completion`) — cheap (no reparse) and
+    /// unambiguous in practice (nothing plausible is both a real bound
+    /// struct value AND a known namespace name).
+    last_good_namespace_completions: Mutex<HashMap<String, Vec<CompletionItem>>>,
 }
 
 impl Backend {
     fn new(client: Client) -> Self {
+        // Seeded with the PRELUDE-ONLY item list, not empty — see
+        // `last_good_completions`/`last_good_namespace_completions`'s
+        // own doc comments for why an empty starting cache is a real
+        // bug, not just a cosmetic gap: a project whose OWN code has
+        // never yet type-checked cleanly (a brand-new file, or one
+        // with some other pre-existing error that hasn't been fixed)
+        // would otherwise offer NO completion at all — not even for
+        // `Array.`/`String.`/keywords, which have nothing to do with
+        // whether the user's OWN code is currently well-typed. The
+        // prelude itself is compiler-controlled and unconditionally
+        // valid — `crate::with_prelude` never fails — so this baseline
+        // is always available, even before `initialize` has even run.
+        // A real project's first successful `recheck` overwrites this
+        // with the full (prelude + user code) result, a strict
+        // superset — nothing here is ever lost, just extended.
+        let (items, namespaces) = top_level_completion_items(&crate::with_prelude(ast::Program { items: Vec::new() }));
         Backend {
             client,
             root: Mutex::new(None),
             open_docs: Mutex::new(HashMap::new()),
             last_diagnosed: Mutex::new(std::collections::HashSet::new()),
             generation: Generation::default(),
-            last_good_completions: Mutex::new(Vec::new()),
+            last_good_completions: Mutex::new(items),
+            last_good_namespace_completions: Mutex::new(namespaces),
         }
     }
 
@@ -326,7 +359,9 @@ impl Backend {
                     // completion is most useful mid-edit, exactly when
                     // the CURRENT buffer often doesn't parse.
                     if let Ok(program) = crate::modules::resolve_modules_diag(&modules) {
-                        *self.last_good_completions.lock().unwrap() = top_level_completion_items(&program);
+                        let (items, namespaces) = top_level_completion_items(&program);
+                        *self.last_good_completions.lock().unwrap() = items;
+                        *self.last_good_namespace_completions.lock().unwrap() = namespaces;
                     }
                 }
                 Err(e) => {
@@ -416,24 +451,7 @@ impl Backend {
         let idx = overlaid.iter().position(|(path, _, _)| path == &target_path)?;
         let (path, mpath, src) = &overlaid[idx];
         let local_offset = position::position_to_byte_offset(src, position);
-
-        // Scan backward from the cursor over identifier-continue bytes
-        // to find the start of whatever partial name is being typed
-        // (zero-length if the cursor is immediately after the `.`
-        // itself, the most common completion-trigger moment). Byte-
-        // wise, not char-wise, is safe here specifically because every
-        // identifier-continue character this loop matches is ASCII
-        // (Plum identifiers are ASCII-only — ordinary alphanumeric/
-        // underscore — so a multi-byte UTF-8 character never has a
-        // continuation byte that could be misread as one).
-        let bytes = src.as_bytes();
-        let mut name_start = local_offset;
-        while name_start > 0 && (bytes[name_start - 1].is_ascii_alphanumeric() || bytes[name_start - 1] == b'_') {
-            name_start -= 1;
-        }
-        if name_start == 0 || bytes[name_start - 1] != b'.' {
-            return None;
-        }
+        let name_start = dot_trigger(src, local_offset)?;
 
         const PLACEHOLDER: &str = "__plum_lsp_completion__";
         let mut spliced = String::with_capacity(src.len() - (local_offset - name_start) + PLACEHOLDER.len());
@@ -472,6 +490,63 @@ impl Backend {
                 .collect(),
         )
     }
+
+    /// `Type.func` namespace completion for a `.` immediately before
+    /// `position` — `Array.map`, `String.hash`, a user's own `Point.
+    /// add`, ... — see `Backend::last_good_namespace_completions`'s own
+    /// doc comment for the mechanism. Checked BEFORE `dot_completion`
+    /// (cheap — no reparse, just the same cached-snapshot lookup
+    /// general completion already relies on): `Array` is never a real
+    /// bound value, so the struct-field splice path would find nothing
+    /// for it anyway, but checking namespace names first costs nothing
+    /// and avoids a needless reparse+typecheck attempt in the common
+    /// case.
+    async fn namespace_completion(&self, uri: &Url, position: Position) -> Option<Vec<CompletionItem>> {
+        let overlaid = self.overlaid_files().await?;
+        let target_path = uri.to_file_path().ok()?;
+        let idx = overlaid.iter().position(|(path, _, _)| path == &target_path)?;
+        let src = &overlaid[idx].2;
+        let local_offset = position::position_to_byte_offset(src, position);
+        let name_start = dot_trigger(src, local_offset)?;
+
+        // The dot itself sits at `name_start - 1` (`dot_trigger` only
+        // returns `Some` when that holds) — scan backward FROM there,
+        // past the dot, to find where the BASE identifier starts.
+        let bytes = src.as_bytes();
+        let dot_pos = name_start - 1;
+        let mut base_start = dot_pos;
+        while base_start > 0 && (bytes[base_start - 1].is_ascii_alphanumeric() || bytes[base_start - 1] == b'_') {
+            base_start -= 1;
+        }
+        let base = &src[base_start..dot_pos];
+
+        self.last_good_namespace_completions.lock().unwrap().get(base).cloned()
+    }
+}
+
+/// Scans backward from `local_offset` to find where a `.`-triggered
+/// partial member name starts (zero-length if the cursor is
+/// immediately after the `.` itself, the most common completion-
+/// trigger moment) — `None` if `local_offset` isn't immediately after
+/// a `.`-prefixed partial name at all. Shared by `dot_completion`
+/// (struct fields) and `namespace_completion` (`Type.func`
+/// associated functions) — both trigger on the exact same textual
+/// shape, just resolve the base differently afterward. Byte-wise, not
+/// char-wise, is safe here specifically because every identifier-
+/// continue character this loop matches is ASCII (Plum identifiers
+/// are ASCII-only — ordinary alphanumeric/underscore — so a multi-byte
+/// UTF-8 character never has a continuation byte that could be
+/// misread as one).
+fn dot_trigger(src: &str, local_offset: usize) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut name_start = local_offset;
+    while name_start > 0 && (bytes[name_start - 1].is_ascii_alphanumeric() || bytes[name_start - 1] == b'_') {
+        name_start -= 1;
+    }
+    if name_start == 0 || bytes[name_start - 1] != b'.' {
+        return None;
+    }
+    Some(name_start)
 }
 
 /// The smallest span in `map` that CONTAINS `offset`, if any — "smallest"
@@ -540,27 +615,65 @@ const KEYWORDS: &[&str] = &[
     "unsafe", "spawn", "select", "true", "false",
 ];
 
+/// The small, fixed set of `Type.func` associated-function NAMES that
+/// are genuine compiler primitives — recognized directly by shape in
+/// `plum_types::infer::infer_expr`'s own `Call` arm (`is_array_builtin_
+/// call`/`is_string_builtin_call`) — rather than an ordinary prelude
+/// `LetDef` the way every OTHER `Array.*`/`String.*` function is (see
+/// `assoc_fns.rs`'s own doc comment). `top_level_completion_items`'s
+/// program walk can never find these on its own (there's no `LetDef`
+/// anywhere for `map`/`filter`/`fold`/`hash` to find), so they're
+/// seeded into the namespace map directly instead. Small and stable —
+/// `plum-types/src/infer.rs`'s own two helper functions are the only
+/// two call sites that could ever grow a new entry here, and both are
+/// already searched by name in this comment's own git history, so a
+/// future addition there is easy to notice and mirror here too.
+const CORE_BUILTIN_ASSOCIATED_FNS: &[(&str, &str)] = &[("Array", "map"), ("Array", "filter"), ("Array", "fold"), ("String", "hash")];
+
 /// Walks `program`'s own top-level items (which already includes the
 /// injected prelude — `resolve_modules_diag` runs `with_prelude` before
 /// this ever sees it, so this naturally covers every stdlib function/
 /// type too, not just the user's own project) into completable
-/// `CompletionItem`s. A zero-param top-level `let` is a global
-/// (`CONSTANT`); one WITH params is a function; a `struct`/`enum`
-/// declaration contributes its own name plus, for an enum, each
+/// `CompletionItem`s, split into two results: the flat GENERAL list
+/// (typeable bare, e.g. `go` or `Point`), and a NAMESPACE map (`Array.
+/// map`, `String.hash`, a user's own `Point.add` — see `assoc_fns.rs`'s
+/// own doc comment: these are ordinary `LetDef`s whose NAME literally
+/// contains a `.`, rewritten from `Type.func(..)` CALL syntax at the
+/// call site, never something a user types as one flat identifier, so
+/// they're excluded from the general list and keyed by their type name
+/// instead — see `Backend::last_good_namespace_completions`'s own doc
+/// comment for how that's consumed). A zero-param top-level `let` is a
+/// global (`CONSTANT`); one WITH params is a function; a `struct`/
+/// `enum` declaration contributes its own name plus, for an enum, each
 /// variant tag too (`Circle`/`None`-shaped bare references are common
 /// enough to be worth suggesting directly, not just the enum's own
 /// name); an `extern` block contributes each declared function. A
 /// `use` declaration contributes nothing of its own (it names an
 /// ALREADY-listed item from elsewhere, not a new declaration).
-fn top_level_completion_items(program: &ast::Program) -> Vec<CompletionItem> {
+fn top_level_completion_items(program: &ast::Program) -> (Vec<CompletionItem>, HashMap<String, Vec<CompletionItem>>) {
     let mut items = Vec::new();
+    let mut namespaces: HashMap<String, Vec<CompletionItem>> = HashMap::new();
+    for (type_name, func_name) in CORE_BUILTIN_ASSOCIATED_FNS {
+        namespaces
+            .entry(type_name.to_string())
+            .or_default()
+            .push(CompletionItem { label: func_name.to_string(), kind: Some(CompletionItemKind::FUNCTION), ..Default::default() });
+    }
     for item in &program.items {
         match &item.kind {
-            ast::ItemKind::Let(def) if def.params.is_empty() => {
-                items.push(CompletionItem { label: def.name.clone(), kind: Some(CompletionItemKind::CONSTANT), ..Default::default() });
-            }
             ast::ItemKind::Let(def) => {
-                items.push(CompletionItem { label: def.name.clone(), kind: Some(CompletionItemKind::FUNCTION), ..Default::default() });
+                let kind = if def.params.is_empty() { CompletionItemKind::CONSTANT } else { CompletionItemKind::FUNCTION };
+                match def.name.split_once('.') {
+                    Some((type_name, func_name)) => {
+                        namespaces
+                            .entry(type_name.to_string())
+                            .or_default()
+                            .push(CompletionItem { label: func_name.to_string(), kind: Some(kind), ..Default::default() });
+                    }
+                    None => {
+                        items.push(CompletionItem { label: def.name.clone(), kind: Some(kind), ..Default::default() });
+                    }
+                }
             }
             ast::ItemKind::Struct(decl) => {
                 items.push(CompletionItem { label: decl.name.clone(), kind: Some(CompletionItemKind::STRUCT), ..Default::default() });
@@ -579,7 +692,7 @@ fn top_level_completion_items(program: &ast::Program) -> Vec<CompletionItem> {
             ast::ItemKind::Use(_) => {}
         }
     }
-    items
+    (items, namespaces)
 }
 
 #[tower_lsp::async_trait]
@@ -682,6 +795,9 @@ impl LanguageServer for Backend {
 
     async fn completion(&self, params: CompletionParams) -> RpcResult<Option<CompletionResponse>> {
         let text_doc_pos = params.text_document_position;
+        if let Some(items) = self.namespace_completion(&text_doc_pos.text_document.uri, text_doc_pos.position).await {
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
         if let Some(items) = self.dot_completion(&text_doc_pos.text_document.uri, text_doc_pos.position).await {
             return Ok(Some(CompletionResponse::Array(items)));
         }
@@ -1006,6 +1122,36 @@ mod integration_tests {
     }
 
     #[tokio::test]
+    async fn completion_works_before_the_project_has_ever_type_checked_cleanly_even_once() {
+        // Regression test for a REAL bug found via live use (Brad
+        // reported `Array.` showing nothing at all): a brand-new
+        // `Backend` used to start with genuinely EMPTY completion
+        // caches, populated only by a SUCCESSFUL `recheck` — so a
+        // project whose own code has never yet type-checked cleanly
+        // (opened directly into a broken state, or with some other
+        // persistent, never-fixed error elsewhere) got NO completion
+        // at all, not even for `Array.`/keywords, which have nothing
+        // to do with whether the user's OWN code happens to be well-
+        // typed. `Backend::new` now seeds both caches from the
+        // PRELUDE alone (always valid, no project involved at all) —
+        // this project's file is BROKEN from the very first `did_
+        // open` (a real parse error, trailing `.`), so this test only
+        // passes if that seeding actually happened.
+        let dir = std::env::temp_dir().join(format!("plum-lsp-completion-coldstart-test-{}", std::process::id()));
+        let backend = make_backend();
+        let src = "let go (): Int = { let a = [1, 2, 3]; Array.";
+        let uri = open_project(&backend, &dir, "main.plum", src).await;
+
+        let pos = position::byte_offset_to_position(src, src.len());
+        let response = backend.completion(completion_params(uri, pos)).await.unwrap().expect("expected completion items");
+        let labels = completion_labels(response);
+        assert!(labels.contains(&"map".to_string()), "expected Array.map even with no prior successful check, got: {labels:?}");
+        assert!(labels.contains(&"reverse".to_string()), "expected Array.reverse even with no prior successful check, got: {labels:?}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
     async fn general_completion_falls_back_to_the_last_good_snapshot_when_the_current_buffer_is_broken() {
         // First open a WELL-TYPED buffer so a snapshot gets cached...
         let dir = std::env::temp_dir().join(format!("plum-lsp-completion-stale-test-{}", std::process::id()));
@@ -1070,6 +1216,86 @@ mod integration_tests {
         let labels = completion_labels(response);
         assert!(labels.contains(&"x".to_string()));
         assert!(labels.contains(&"y".to_string()));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn namespace_completion_lists_arrays_builtin_associated_functions() {
+        // `Array` is never a bound VALUE — `Array.map`/`Array.filter`/
+        // etc. are `Type.func` associated-function sugar (see `assoc_
+        // fns.rs`), a completely different mechanism from ordinary
+        // struct field access. `Array.` (nothing typed after the dot
+        // yet) is ALSO a real parse error, same as `p.` — so this only
+        // works at all because `namespace_completion` answers from the
+        // CACHED last-good snapshot, never the current (broken) buffer.
+        let dir = std::env::temp_dir().join(format!("plum-lsp-completion-namespace-array-test-{}", std::process::id()));
+        let backend = make_backend();
+        let good_src = "let go (): Int = 1";
+        let uri = open_project(&backend, &dir, "main.plum", good_src).await;
+
+        let broken_src = "let go (): Int = { let a = [1, 2, 3]; Array.";
+        backend
+            .did_change(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 2 },
+                content_changes: vec![TextDocumentContentChangeEvent { range: None, range_length: None, text: broken_src.to_string() }],
+            })
+            .await;
+
+        let pos = position::byte_offset_to_position(broken_src, broken_src.len());
+        let response = backend.completion(completion_params(uri, pos)).await.unwrap().expect("expected completion items");
+        let labels = completion_labels(response);
+        assert!(labels.contains(&"map".to_string()), "expected Array.map, got: {labels:?}");
+        assert!(labels.contains(&"filter".to_string()), "expected Array.filter, got: {labels:?}");
+        // Not a struct field, and not a bare top-level identifier —
+        // `map`/`filter` must ONLY show up via the namespace path, not
+        // leak into general completion's own flat list too.
+        assert!(!labels.contains(&"let".to_string()), "namespace completion must not also include keywords: {labels:?}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn namespace_completion_also_lists_a_user_defined_associated_function() {
+        let dir = std::env::temp_dir().join(format!("plum-lsp-completion-namespace-user-test-{}", std::process::id()));
+        let backend = make_backend();
+        let good_src = "struct Point { x: Int, y: Int }\n\
+             let Point.add (a: Point) (b: Point): Point = Point { x: a.x + b.x, y: a.y + b.y }\n\
+             let go (): Int = 1";
+        let uri = open_project(&backend, &dir, "main.plum", good_src).await;
+
+        let broken_src = format!("{good_src}\nlet go2 (): Int = {{ let p = Point {{ x: 1, y: 2 }}; Point.");
+        backend
+            .did_change(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier { uri: uri.clone(), version: 2 },
+                content_changes: vec![TextDocumentContentChangeEvent { range: None, range_length: None, text: broken_src.clone() }],
+            })
+            .await;
+
+        let pos = position::byte_offset_to_position(&broken_src, broken_src.len());
+        let response = backend.completion(completion_params(uri, pos)).await.unwrap().expect("expected completion items");
+        let labels = completion_labels(response);
+        assert!(labels.contains(&"add".to_string()), "expected Point.add, got: {labels:?}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn general_completion_no_longer_lists_namespaced_names_as_flat_identifiers() {
+        // Regression test for `top_level_completion_items`'s own split:
+        // "Array.map" (or ANY dotted associated-function name) must
+        // never appear as something to complete BARE (a user would
+        // never type it as one flat token) — only under its own
+        // namespace.
+        let dir = std::env::temp_dir().join(format!("plum-lsp-completion-general-no-dots-test-{}", std::process::id()));
+        let backend = make_backend();
+        let src = "let go (): Int = 1";
+        let uri = open_project(&backend, &dir, "main.plum", src).await;
+
+        let pos = position::byte_offset_to_position(src, src.len());
+        let response = backend.completion(completion_params(uri, pos)).await.unwrap().expect("expected completion items");
+        let labels = completion_labels(response);
+        assert!(!labels.iter().any(|l| l.contains('.')), "expected no dotted names in general completion, got: {labels:?}");
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -605,6 +605,7 @@ pub fn compile_program_to_ir_diag(
         infer.array_for_loops(),
         infer.unit_sugar_calls(),
         &closure_types,
+        infer.partial_calls(),
         &empty_array_elem_types,
         &variant_payload_types,
     )
@@ -614,6 +615,7 @@ pub fn compile_program_to_ir_diag(
         .with_field_owners(infer.field_owners().clone())
         .with_array_for_loops(infer.array_for_loops().clone())
         .with_unit_sugar_calls(infer.unit_sugar_calls().clone())
+        .with_partial_calls(infer.partial_calls().clone())
         .with_empty_array_elem_types(empty_array_elem_types)
         .with_closure_types(closure_types)
         .with_variant_payload_types(variant_payload_types);
@@ -3295,6 +3297,7 @@ mod tests {
             infer.array_for_loops(),
             infer.unit_sugar_calls(),
             &closure_types,
+            infer.partial_calls(),
             &HashMap::new(),
             &HashMap::new(),
         )
@@ -3806,6 +3809,73 @@ mod tests {
         ";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "15");
+    }
+
+    // --- Currying (partial application) — see DESIGN.md's "Currying"
+    // section. `divide`'s own DEFINITION never changes shape; every test
+    // here is about what an under-applied CALL SITE does, compiled and
+    // run for real (not just asserted at the type/IR level, which
+    // `plum-types`/`plum-ir`'s own unit tests already cover). ---
+
+    #[test]
+    fn under_applied_call_produces_a_working_closure() {
+        let src = "\
+            let divide (a: Int) (b: Int): Int = a / b\n\
+            let go (): Int = {\n\
+                let half = divide(10);\n\
+                half(2)\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "5");
+    }
+
+    #[test]
+    fn chained_partial_application_call_equals_one_fully_applied_call() {
+        // The well-known ML property that's the whole point of
+        // currying, verified for real this time (the type-level
+        // equivalence is already pinned by `plum-types::infer`'s own
+        // `chained_partial_application_calls_equal_one_fully_applied_
+        // call`) — `divide(10)(2)` must compile and run to the exact
+        // same answer as `divide(10, 2)`.
+        let src = "\
+            let divide (a: Int) (b: Int): Int = a / b\n\
+            let go (): Int = divide(10)(2)\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "5");
+    }
+
+    #[test]
+    fn a_partial_application_returned_from_a_closure_still_works_after_its_creating_scope_is_gone() {
+        // The escape-analysis-flavored stress case immediately above
+        // (`a_closure_returned_from_a_function_still_works...`), but for
+        // a SYNTHESIZED partial-application closure instead of a
+        // hand-written one — `make_subtractor_of`'s own partial call
+        // (`divide(20 - n)`) has to capture `n`'s resolved value into
+        // its own heap cell at creation time, independent of `make_
+        // subtractor_of`'s now-defunct stack frame, exactly like an
+        // ordinary closure literal already does.
+        let src = "\
+            let divide (a: Int) (b: Int): Int = a / b\n\
+            let make_divider_of (n: Int): (Int) -> Int = divide(20 - n)\n\
+            let go (): Int = {\n\
+                let f = make_divider_of(5);\n\
+                f(3)\n\
+            }\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "5");
+    }
+
+    #[test]
+    fn fully_applied_calls_still_work_exactly_as_before_currying() {
+        let src = "\
+            let divide (a: Int) (b: Int): Int = a / b\n\
+            let go (): Int = divide(10, 2)\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "5");
     }
 
     #[test]
