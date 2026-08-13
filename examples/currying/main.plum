@@ -1,0 +1,36 @@
+// Currying (partial application) — an under-applied call becomes a
+// function value over the remaining parameters, instead of an arity
+// error. See DESIGN.md's "Currying" section for the full design story.
+//
+// Run: `plum run examples/currying`
+// Build: `plum build examples/currying -o out && ./out`
+
+let scale (factor: Int) (x: Int): Int = factor * x
+
+let main (): Unit = {
+    // Fully applied, exactly as before this feature existed.
+    println(scale(2, 21)); // 42
+
+    // Partially applied: `scale(2)` alone is a real function value,
+    // `(Int) -> Int`, not an arity error.
+    let double = scale(2);
+    println(double(21)); // 42
+
+    // `f(a)(b)` and `f(a, b)` are provably the SAME call — chaining the
+    // two calls threads `21` into exactly the parameter position a
+    // single two-arg call would have.
+    println(scale(2)(21)); // 42
+
+    // Partial application composes with ordinary higher-order functions
+    // for free, no special-casing anywhere — `scale(3)` here is just an
+    // ordinary `(Int) -> Int` value, the same shape a closure literal
+    // like `|x| 3 * x` would have produced.
+    println(Array.map([1, 2, 3, 4], scale(3))); // [3, 6, 9, 12]
+
+    // A partial application can be built inside a closure and returned
+    // — it's an ordinary function value, so it survives past the scope
+    // that created it exactly like any other closure would.
+    let make_scaler = |factor: Int| scale(factor);
+    let times_ten = make_scaler(10);
+    println(times_ten(7)); // 70
+}

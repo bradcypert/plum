@@ -6647,6 +6647,18 @@ discovered as gaps later):
   exists yet to strip against. Also revisit together if that
   distinction is ever added.
 
+**`examples/contracts/main.plum` added (2026-08-12)**, same style as
+the rest of `examples/` — an `Account.withdraw` with two `require`
+clauses (one with a custom message) and one `ensure`, plus an
+`average` guarded against division by zero, contrasted directly in
+comments against `option_result`'s `Result`-based handling of the
+"same kind" of failure (contracts are for invariants a caller should
+never violate; `Result` is still right for genuinely expected
+failure). Verified via both `plum run` and `plum build`; the two
+commented-out violation lines were independently confirmed to produce
+exactly the messages their comments claim. Listed in README.md's
+Examples section.
+
 ### Currying (partial application) — Decided and implemented (2026-08-12)
 
 Raised by Brad directly, prompted by the contracts conversation above:
@@ -6782,3 +6794,11 @@ mixing all four shapes (full call, chained partial call, a partial
 application bound to a variable and called later, and a partial
 application nested inside an ordinary closure) — every value came out
 correct.
+
+**`examples/currying/main.plum` added (2026-08-12)**, same style as
+the rest of `examples/` — a `scale(factor)(x)` demonstrating full
+application, partial application bound to a variable, the chained-
+call-equals-fully-applied-call proof, composing with `Array.map` as an
+ordinary higher-order argument, and a partial application built inside
+a closure and returned. Verified via both `plum run` and `plum build`.
+Listed in README.md's Examples section.

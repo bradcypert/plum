@@ -725,6 +725,14 @@ see its own entry below):
 - [`shared_mutability`](examples/shared_mutability/main.plum) —
   `Ref[T]`, the opt-in escape hatch for state that's genuinely shared
   or mutated in place.
+- [`contracts`](examples/contracts/main.plum) — `require`/`ensure`
+  function contracts: preconditions and postconditions checked at the
+  call boundary, contrasted with `option_result`'s `Result`-based
+  handling for genuinely expected failure.
+- [`currying`](examples/currying/main.plum) — partial application at
+  call sites: an under-applied call becomes a real function value over
+  the remaining parameters, composing with ordinary closures and
+  higher-order functions for free.
 - [`asteroids`](examples/asteroids/main.plum) — a full playable
   Asteroids clone against real [raylib](https://www.raylib.com/), the
   one example that links native C (`native/raylib_shim.c` bridges

@@ -1,0 +1,51 @@
+// Function contracts (`require`/`ensure`) — preconditions checked on
+// entry, postconditions checked just before returning, both compiled
+// down to ordinary `assert`-shaped panics at parse time (see DESIGN.md's
+// "Contracts" section for the full design story).
+//
+// Run: `plum run examples/contracts`
+// Build: `plum build examples/contracts -o out && ./out`
+
+struct Account {
+    balance: Int,
+}
+
+// `require` clauses run first, in the order written, each with its own
+// optional message. `ensure` clauses run last, with `result` bound to
+// the function's own return value — here, guaranteeing the account
+// never goes negative no matter what the body above computes.
+let withdraw (account: Account) (amount: Int): Account
+    require amount > 0 : "withdrawal amount must be positive"
+    require amount <= account.balance : "insufficient funds"
+    ensure result.balance >= 0
+= Account { balance: account.balance - amount }
+
+// A precondition can replace a hand-written guard clause entirely.
+// Contrast with `option_result`'s example, which threads this same
+// kind of failure through `Result` instead: contracts are for
+// INVARIANTS a caller should never be able to violate in the first
+// place (a programming mistake, not routine control flow) — `Result`
+// is still the right choice for genuinely expected failure, like a
+// malformed string or a missing key.
+let average (total: Int) (count: Int): Int
+    require count > 0 : "average of zero items is undefined"
+= total / count
+
+let main (): Unit = {
+    let account = Account { balance: 100 };
+    let after_rent = withdraw(account, 60);
+    println(after_rent.balance); // 40
+
+    let after_groceries = withdraw(after_rent, 25);
+    println(after_groceries.balance); // 15
+
+    println(average(90, 3)); // 30
+
+    // Uncommenting either line below crashes the program — that's the
+    // whole point of a contract: a caller's mistake is caught loudly,
+    // at the exact call site, with a message naming WHICH rule broke,
+    // instead of silently producing a negative balance or dividing by
+    // zero somewhere deep inside the body.
+    // withdraw(after_groceries, 1000); // "precondition failed: insufficient funds"
+    // average(10, 0);                  // "precondition failed: average of zero items is undefined"
+}
