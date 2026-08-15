@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("xs") Colon Ident("Array") LBracket Ident("Int") RBracket RParen Colon Ident("Array") LBracket Ident("String") RBracket Eq Ident("Array") Dot Ident("map") LParen Ident("xs") Comma Underscore Dot Ident("to_string") LParen RParen RParen

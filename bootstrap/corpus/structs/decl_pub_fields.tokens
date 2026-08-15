@@ -1,0 +1,1 @@
+Struct Ident("Point") LBrace Pub Ident("x") Colon Ident("Int") Comma Pub Ident("y") Colon Ident("Int") RBrace

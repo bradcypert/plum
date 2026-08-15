@@ -1,0 +1,1 @@
+((extern "C" fn qsort(base:Int,cmp:(fn (Int Int) -> Int))))

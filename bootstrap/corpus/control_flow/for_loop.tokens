@@ -1,0 +1,1 @@
+Let Ident("case") LParen RParen Colon Ident("Unit") Eq LBrace For Ident("i") In Int(0) DotDot Int(10) LBrace Ident("println") LParen Ident("i") RParen Semicolon RBrace Semicolon RBrace

@@ -1,0 +1,6 @@
+struct Point { x: Int, y: Int }
+let main (): Unit = {
+  let p = Point { x: 3, y: 4 };
+  println(p.x.to_string());
+  println(p.y.to_string());
+}

@@ -1,0 +1,16 @@
+let apply_twice (f: (Int) -> Int) (x: Int): Int = f(f(x))
+
+let main (): Unit = {
+    let add_one = |n| n + 1;
+    println(add_one(41).to_string());
+
+    let make_adder = |amount| |n| n + amount;
+    let add_five = make_adder(5);
+    println(add_five(10).to_string());
+
+    println(apply_twice(add_one, 3).to_string());
+
+    let base = 100;
+    let offset_by_base = |n| n + base;
+    println(offset_by_base(1).to_string());
+}

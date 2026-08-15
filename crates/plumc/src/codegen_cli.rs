@@ -3699,6 +3699,41 @@ mod tests {
     }
 
     #[test]
+    fn repeated_array_push_reuse_grows_correctly_across_many_capacity_doublings() {
+        // The actual regression test for a real, serious performance
+        // bug (see DESIGN.md's "Array push scaling bug" section): the
+        // array cell gained a dedicated `capacity` field and `.push()`'s
+        // reuse-in-place codegen now only `realloc`s when capacity is
+        // actually exhausted, doubling it each time, instead of
+        // `realloc`-ing to the exact new size on EVERY push. 2,000
+        // pushes crosses roughly 11 doubling boundaries (1, 2, 4, 8,
+        // ..., 2048) — if the `select`-based `new_cap = max(old_cap*2,
+        // new_len)` computation or the no-grow/grow branch merge were
+        // subtly wrong (an off-by-one, a stale `len`/`capacity` read,
+        // reading/writing the wrong element slot after a growth step),
+        // this is exactly the shape that would surface it: either as a
+        // wrong final length/sum, or as a real crash (writing past the
+        // allocated capacity, or a bounds-check failure from a corrupted
+        // `len`).
+        let src = "\
+            let build_acc (n: Int) (i: Int) (acc: Array[Int]): Array[Int] = \
+                if i >= n { acc } else { build_acc(n, i + 1, acc.push(i)) }\n\
+            let sum_from (a: Array[Int]) (i: Int) (acc: Int): Int = \
+                if i == a.len() { acc } else { sum_from(a, i + 1, acc + a[i]) }\n\
+            let go (): Int = { \
+                let a = build_acc(2000, 0, []); \
+                sum_from(a, 0, a.len()) - a.len() \
+            }\n\
+        ";
+        // a = [0, 1, ..., 1999], len 2000, sum 1999*2000/2 = 1_999_000;
+        // `sum_from(a, 0, a.len())` seeds the accumulator with `len`
+        // (2000) so a WRONG length shows up in the result too, not just
+        // a wrong sum — subtracted back out at the end.
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "1999000");
+    }
+
+    #[test]
     fn nested_heap_array_elements_are_refcounted_correctly_when_popped() {
         // `Array[List[Int]]` — proves `@plum_rc_dec_array_Heap` (the
         // array release function for a HEAP-shaped, tag-dispatched

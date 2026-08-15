@@ -1,0 +1,1 @@
+let Option.map[T, U] (o: T) (f: U): T = o

@@ -1,0 +1,1 @@
+((let Point.add ((a:Point) (b:Point)) ->Point a))

@@ -1,0 +1,1 @@
+Let Ident("case") LParen RParen Colon Ident("Unit") Eq LBrace Spawn LBrace Ident("println") LParen Str("hi") RParen Semicolon RBrace Semicolon RBrace

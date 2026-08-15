@@ -1,0 +1,1 @@
+((let case ((n:Int)) ->String (match n (arm 0 "zero") (arm _ "other"))))

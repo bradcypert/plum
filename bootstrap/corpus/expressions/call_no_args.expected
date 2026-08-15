@@ -1,0 +1,1 @@
+((let case ((f:(fn () -> Int))) ->Int (call f)))

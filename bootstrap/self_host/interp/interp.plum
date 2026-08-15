@@ -1,0 +1,722 @@
+// Self-hosted Plum interpreter — Stage 3 of self-hosting (see
+// DESIGN.md's "Self-hosting bootstrap corpus" section and the project
+// roadmap). Walks `parser.PExpr`/`parser.PPattern`/etc DIRECTLY (no
+// lowering step, no IR — a genuine simplification versus the real
+// pipeline's AST -> IR -> `plum-interp` shape, deliberate for v1: see
+// "Deliberate v1 scope cuts" below). Mirrors `plum-interp`'s own
+// dynamically-typed runtime model exactly — no type checking happens
+// anywhere in this file, matching the real interpreter's own "values
+// carry their own shape at runtime, inference is a separate front-end
+// pass" character.
+//
+// Validated against bootstrap/exec_corpus/*/expected.txt — running a
+// fixture's `main()` through this interpreter must print byte-for-byte
+// what the REAL `plum run` prints for the same program.
+//
+// **Validate via the NATIVE build, not `plum run`** — same reasoning
+// as `lexer/lexer.plum`/`parser/parser.plum`'s own top comments (a
+// real, documented interpreter stack-cost limit for source shaped like
+// a wide per-node dispatch table).
+//
+// **Deliberate v1 scope cuts, stated up front, not discovered as
+// gaps**: closures ARE now supported as values (`VClosure`, captured
+// lexically at the closure LITERAL's own creation site — see "Runtime
+// values" below), and arrays ARE now supported too (`VArray`, `EArray`/
+// `EIndex`, `.len()`/`.push()`/`.set()`, plus `Array.map`/`filter`/
+// `fold` as namespace calls — see the "Arrays" section further down),
+// but `EGenericInst` (explicit turbofish-style generic instantiation)
+// still isn't — no exec-corpus fixture needs it, and nothing else in
+// this file consults declared generics at all; no `spawn`/`select`/
+// `unsafe`/extern FFI (concurrency and FFI are out of scope); no
+// struct-literal `..spread` (a real, narrow gap — easy to add later,
+// just not needed by any exec-corpus fixture yet). Every unsupported
+// shape fails with a clear `panic_raw`, never silently wrong behavior.
+// Struct/enum DECLARATIONS themselves are never consulted at all —
+// dynamically-typed values already carry their own field names/variant
+// tags at runtime, so there's no need for the declaration metadata a
+// statically-typed backend would require.
+
+use lexer;
+use parser;
+
+// --- Runtime values ---
+
+// `VClosure` carries its own params (plain names, same v1 restriction
+// as top-level function params — see `param_name`'s own doc comment),
+// its body (unevaluated `parser.PExpr`), and a CAPTURED environment: a
+// snapshot of `env` as it existed at the closure LITERAL's own creation
+// site, not the call site — genuine lexical scoping, matching real
+// Plum/`plum-interp` semantics, and the one real way this file's
+// values now differ from top-level functions (`call_fn`'s own doc
+// comment: top-level functions get a fresh, EMPTY environment; a
+// closure's captured `Array[EnvEntry]` is the whole reason it can see
+// outer bindings at all).
+pub enum Value {
+    VInt(Int),
+    VFloat(Float),
+    VStr(String),
+    VBool(Bool),
+    VUnit,
+    VTuple(Array[Value]),
+    VStruct(String, Array[FieldVal]),
+    VVariant(String, Array[Value]),
+    VClosure(Array[String], parser.PExpr, Array[EnvEntry]),
+    // A real host `Array[Value]` underneath — this file is itself
+    // ordinary Plum source compiled by the REAL compiler, so `Array.
+    // map`/`.push`/`.set`/indexing on `elems` below all reuse the
+    // REAL, already-correct host Array primitives directly; this
+    // interpreter never needs to reimplement array semantics from
+    // scratch, only wrap/unwrap `VArray`.
+    VArray(Array[Value]),
+}
+
+pub struct FieldVal { name: String, value: Value }
+
+struct EnvEntry { name: String, value: Value }
+struct FnDef { name: String, params: Array[String], body: parser.PExpr }
+
+// --- Program setup: split top-level `let`s into callable functions
+// (1+ params) vs. globals (0 params, re-evaluated each reference —
+// simple, no caching, adequate for exec-corpus-sized programs). Struct/
+// enum/extern/use items are dropped entirely — nothing here needs
+// them (see this file's own top comment).
+
+struct ProgramState { fns: Array[FnDef], globals: Array[FnDef] }
+
+pub let build_program_state (program: parser.ProgramNode): ProgramState = collect_items_acc(items_of(program), 0, [], [])
+
+let items_of (program: parser.ProgramNode): Array[parser.ItemNode] = program.items
+
+let collect_items_acc (items: Array[parser.ItemNode]) (i: Int) (fns: Array[FnDef]) (globals: Array[FnDef]): ProgramState =
+    if i >= items.len() { ProgramState { fns: fns, globals: globals } }
+    else {
+        match items[i].kind {
+            IKLet(def) => {
+                // Function-vs-global is decided by the RAW `def.params`
+                // (matching `plum-types::infer_program`'s own Phase 1
+                // rule exactly), NOT by `real_param_names`'s filtered
+                // count — `let main (): Unit = ...` has ONE raw param
+                // (the Unit pattern `()`, real syntax for "takes the
+                // Unit value," not sugar for "takes nothing"), so it's
+                // correctly a FUNCTION, even though it binds zero real
+                // names.
+                let param_names = real_param_names(def.params);
+                if Array.is_empty(def.params) { collect_items_acc(items, i + 1, fns, globals.push(FnDef { name: def.name, params: [], body: def.body })) }
+                else { collect_items_acc(items, i + 1, fns.push(FnDef { name: def.name, params: param_names, body: def.body }), globals) }
+            },
+            _ => collect_items_acc(items, i + 1, fns, globals),
+        }
+    }
+
+// `()` — the Unit pattern (`let main (): Unit = ...`'s own single
+// param) — parses as `ParamPatternTy(PTuple([]), None)`, NOT zero
+// params: every Plum function takes exactly one argument, `()` is
+// real syntax for "the Unit value," not sugar for "no parameter at
+// all." It binds no NAME, so it contributes nothing to this
+// interpreter's own param-name list (`param_name` returns `None` for
+// it) — filtered out here, not an error. `main`'s call convention
+// (`run_main` calls it with a literal empty `args` array) and an
+// ordinary zero-arg call site (`ECall(callee, [])`, since this parser
+// doesn't implement the `f()`-for-`f(())` sugar at all) both agree:
+// zero real bindings, zero real arguments, consistently.
+let real_param_names (params: Array[parser.ParamNode]): Array[String] =
+    Array.map(Array.filter(Array.map(params, |p| param_name(p)), |o| Option.is_some(o)), |o| Option.unwrap_or(o, ""))
+
+// v1 only supports plain-identifier-shaped params (`ParamIdent`, or a
+// `ParamPatternTy` wrapping a bare `PIdent` — the annotated-plain-name
+// case, e.g. `(n: Int)`) and the Unit pattern `()` above —
+// destructuring params (`(a, b)`, `(Point { x, y })`) aren't supported
+// yet, a real, narrow, documented gap, not exercised by any exec-
+// corpus fixture.
+let param_name (p: parser.ParamNode): Option[String] =
+    match p {
+        ParamIdent(name) => Some(name),
+        ParamPatternTy(pattern, _) => match pattern {
+            PIdent(name) => Some(name),
+            PTuple(elems) => if Array.is_empty(elems) { None } else { { fail_interp("destructuring function parameters aren't supported yet"); None } },
+            _ => { fail_interp("destructuring function parameters aren't supported yet"); None },
+        },
+    }
+
+let fail_interp (msg: String): Unit = panic_raw("self-hosted interpreter: ".concat(msg))
+
+// --- Environment ---
+
+let env_lookup (env: Array[EnvEntry]) (name: String): Option[Value] = env_lookup_from(env, name, env.len() - 1)
+
+// Scans from the END — the most recently bound entry for a shadowed
+// name wins, matching ordinary lexical shadowing.
+let env_lookup_from (env: Array[EnvEntry]) (name: String) (i: Int): Option[Value] =
+    if i < 0 { None }
+    else if env[i].name == name { Some(env[i].value) }
+    else { env_lookup_from(env, name, i - 1) }
+
+let env_assign (env: Array[EnvEntry]) (name: String) (value: Value): Array[EnvEntry] = env_assign_from(env, name, value, env.len() - 1)
+
+let env_assign_from (env: Array[EnvEntry]) (name: String) (value: Value) (i: Int): Array[EnvEntry] =
+    if i < 0 { { fail_interp("assignment to an unbound name: ".concat(name)); env } }
+    else if env[i].name == name { env.set(i, EnvEntry { name: name, value: value }) }
+    else { env_assign_from(env, name, value, i - 1) }
+
+// --- Calling a top-level function by name ---
+
+let find_fn (state: ProgramState) (name: String): Option[FnDef] = find_fn_acc(state.fns, name, 0)
+
+let find_fn_acc (fns: Array[FnDef]) (name: String) (i: Int): Option[FnDef] =
+    if i >= fns.len() { None }
+    else if fns[i].name == name { Some(fns[i]) }
+    else { find_fn_acc(fns, name, i + 1) }
+
+let find_global (state: ProgramState) (name: String): Option[FnDef] = find_fn_acc(state.globals, name, 0)
+
+// Functions are NOT closures over their call site — a fresh, EMPTY
+// environment plus just the bound params, matching real Plum semantics
+// exactly (only closure LITERALS capture, which v1 doesn't support at
+// all — see this file's own top comment).
+let call_fn (state: ProgramState) (def: FnDef) (args: Array[Value]): Value = {
+    let call_env = bind_params(def.params, args, 0, []);
+    eval_expr(state, call_env, def.body)
+}
+
+let bind_params (params: Array[String]) (args: Array[Value]) (i: Int) (acc: Array[EnvEntry]): Array[EnvEntry] =
+    if i >= params.len() { acc } else { bind_params(params, args, i + 1, acc.push(EnvEntry { name: params[i], value: args[i] })) }
+
+// Calling a CLOSURE (as opposed to `call_fn`'s top-level function
+// call, just above): extends its CAPTURED environment (not a fresh
+// empty one — that's the whole point of a closure) with its own
+// params bound to this call's args. `bind_params` is reused as-is;
+// only the starting accumulator differs (`captured_env` here, `[]` in
+// `call_fn`).
+let call_closure (state: ProgramState) (params: Array[String]) (body: parser.PExpr) (captured_env: Array[EnvEntry]) (args: Array[Value]): Value = {
+    let call_env = bind_params(params, args, 0, captured_env);
+    eval_expr(state, call_env, body)
+}
+
+// --- Expression evaluation ---
+
+let eval_exprs (state: ProgramState) (env: Array[EnvEntry]) (exprs: Array[parser.PExpr]): Array[Value] = Array.map(exprs, |e| eval_expr(state, env, e))
+
+pub let eval_expr (state: ProgramState) (env: Array[EnvEntry]) (e: parser.PExpr): Value =
+    match e {
+        EInt(n) => VInt(n),
+        EFloat(f) => VFloat(f),
+        EStr(s) => VStr(s),
+        EBool(b) => VBool(b),
+        EIdent(name) => eval_ident(state, env, name),
+        ETuple(elems) => VTuple(eval_exprs(state, env, elems)),
+        EUnary(op, inner) => eval_unary(op, eval_expr(state, env, inner)),
+        EBinary(op, lhs, rhs) => eval_binary(op, eval_expr(state, env, lhs), eval_expr(state, env, rhs)),
+        EField(base, name) => struct_field(eval_expr(state, env, base), name),
+        ECall(callee, args) => eval_call(state, env, callee, args),
+        EBlock(block) => eval_block(state, env, block),
+        EIf(cond, then_branch, else_branch) => eval_if(state, env, cond, then_branch, else_branch),
+        EMatch(scrutinee, arms) => eval_match(state, env, eval_expr(state, env, scrutinee), arms),
+        EFor(pattern, iter, body) => eval_for(state, env, pattern, iter, body),
+        EStructLit(path, fields, spread) => eval_struct_lit(state, env, path, fields, spread),
+        EGenericInst(_, _) => { fail_interp("generic instantiation syntax isn't supported yet"); VUnit },
+        EIndex(base, idx) => array_index(eval_expr(state, env, base), eval_expr(state, env, idx)),
+        EArray(elems) => VArray(eval_exprs(state, env, elems)),
+        // Captures `env` AS IT IS RIGHT HERE — the closure literal's own
+        // creation site, not wherever it's eventually called from. See
+        // "Runtime values" above for why that's the one real semantic
+        // difference from an ordinary top-level function call.
+        EClosure(params, body) => VClosure(params, body, env),
+        EUnsafe(_) => { fail_interp("unsafe/extern FFI isn't supported yet"); VUnit },
+        ESpawn(_) => { fail_interp("spawn/concurrency isn't supported yet"); VUnit },
+        ESelect(_) => { fail_interp("select/channels aren't supported yet"); VUnit },
+    }
+
+// A bare identifier is, in order: a local binding, a zero-arg global
+// (re-evaluated on each reference), or — capitalized with no other
+// binding — a zero-payload variant construction (`None`, bare
+// `Circle`-with-no-fields-if-it-existed). No enum declaration table is
+// consulted (see this file's own top comment) — a capitalized unbound
+// name is ALWAYS treated as a variant construction, never an error;
+// that's the ONE deliberate looseness this dynamically-typed
+// interpreter accepts in exchange for needing no static enum metadata
+// at all.
+let eval_ident (state: ProgramState) (env: Array[EnvEntry]) (name: String): Value =
+    match env_lookup(env, name) {
+        Some(v) => v,
+        None => match find_global(state, name) {
+            Some(def) => eval_expr(state, [], def.body),
+            None => if is_capitalized_name(name) { VVariant(name, []) } else { { fail_interp("unbound variable: ".concat(name)); VUnit } },
+        },
+    }
+
+// Pre-split uppercase alphabet as a GLOBAL (evaluated once), tested
+// with `Array.contains` — NOT `String.index_of("ABC...", c)`, which
+// re-splits the whole 26-character literal into 26 fresh heap strings
+// on every single call. See `lexer/lexer.plum`'s own character-
+// classification comment for the measurement behind this.
+let UPPERCASE_CHARS: Array[String] = chars_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+let is_capitalized_name (name: String): Bool = Array.contains(UPPERCASE_CHARS, chars_of(name)[0])
+
+let eval_unary (op: parser.UOp) (v: Value): Value =
+    match op {
+        UNot => match v { VBool(b) => VBool(!b), _ => { fail_interp("'!' requires a Bool"); VUnit } },
+        UNeg => match v { VInt(n) => VInt(0 - n), VFloat(f) => VFloat(0.0 - f), _ => { fail_interp("unary '-' requires an Int or Float"); VUnit } },
+    }
+
+// A call is, in order: a LOCAL BINDING holding a closure value (a
+// param/`let` bound to a closure literal — checked FIRST, so a local
+// shadowing a top-level name of the same name is called correctly, not
+// silently routed to the top-level function instead), a BUILT-IN
+// (`println`, or a `.method()`-shaped call recognized by name —
+// `to_string`/`concat`), a top-level function (looked up by name,
+// called with a fresh environment), or — capitalized with no matching
+// function — a variant construction. `EField(base, name)` ALSO covers
+// calling a closure stored in a STRUCT FIELD (`reader.read(x)` — the
+// "interfaces via records of closures" pattern DESIGN.md settled on
+// for Plum's own higher-order-polymorphism story), and any other
+// callee shape (an immediately-invoked closure literal, a closure
+// returned from a call/`if`/`match`) falls to the general case at the
+// bottom: evaluate it, expect a `VClosure`.
+let eval_call (state: ProgramState) (env: Array[EnvEntry]) (callee: parser.PExpr) (args: Array[parser.PExpr]): Value =
+    match callee {
+        EIdent(name) => match env_lookup(env, name) {
+            // Two separate `match`es (outer `Some`/`None`, then an inner
+            // match on the unwrapped value), NOT `Some(VClosure(..))` as
+            // one nested pattern — see the `EField`/`to_string` arm's own
+            // comment below for why a variant pattern nested inside
+            // another variant's payload is avoided throughout this file.
+            Some(v) => match v {
+                VClosure(params, body, captured_env) => call_closure(state, params, body, captured_env, eval_exprs(state, env, args)),
+                _ => { fail_interp("called a non-function value: ".concat(name)); VUnit },
+            },
+            None => {
+                if name == "println" { eval_println(eval_expr(state, env, args[0])) }
+                else if name == "__contract_require" || name == "__contract_ensure" { eval_contract_check(state, env, args) }
+                else { match find_fn(state, name) {
+                    Some(def) => call_fn(state, def, eval_exprs(state, env, args)),
+                    None => if is_capitalized_name(name) { VVariant(name, eval_exprs(state, env, args)) } else { { fail_interp("unbound function: ".concat(name)); VUnit } },
+                } }
+            },
+        },
+        // Bare-ident binding + a follow-up `==` check, NOT a literal
+        // pattern nested inside `EField`'s own payload (`EField(base,
+        // "to_string")`) — a real, existing native-codegen gap found
+        // empirically: ANY pattern nested inside a variant payload
+        // beyond a plain ident/wildcard fails monomorphization with
+        // "lowering not yet implemented for this pattern shape nested
+        // inside another pattern" (confirmed via a minimal isolated
+        // repro), even though the same shape works fine under the
+        // interpreter. Since this file is validated via the NATIVE
+        // build (see this file's own top comment), this is the shape
+        // that actually needs to work here. Same reasoning applies to
+        // `EIdent(ns)`'s own bind-then-`if` check just below, for the
+        // exact same reason.
+        EField(base, method_name) => match base {
+            // `Array.map`/`filter`/`fold` — a NAMESPACE call, not a
+            // value method call: `base` is the bare name "Array" itself
+            // (real Plum's own `Type.func(value, ...)` associated-
+            // function convention — see DESIGN.md's language-ergonomics
+            // notes on why `.map`/`.filter`/`.fold` dot-call sugar was
+            // removed). Checked BEFORE evaluating `base` as an
+            // expression — "Array" is never a bound value, and
+            // `eval_ident` would otherwise happily (and wrongly)
+            // construct a bogus zero-payload `VVariant("Array", [])`
+            // for it, since it starts with a capital letter.
+            EIdent(ns) => if ns == "Array" { eval_array_ns_call(state, env, method_name, args) } else { eval_dot_call(state, env, base, method_name, args) },
+            _ => eval_dot_call(state, env, base, method_name, args),
+        },
+        // General case: any other callee shape (an immediately-invoked
+        // closure literal, a closure produced by a call/`if`/`match`)
+        // is evaluated normally and must itself be a `VClosure`.
+        _ => match eval_expr(state, env, callee) {
+            VClosure(params, body, captured_env) => call_closure(state, params, body, captured_env, eval_exprs(state, env, args)),
+            _ => { fail_interp("only bare-name calls, .to_string()/.concat(), and closure values are callable"); VUnit },
+        },
+    }
+
+// An ordinary `base.method_name(args)` call — `to_string`/`concat`
+// (any value/`String`), `len`/`push`/`set` (`Array`, arity-
+// disambiguated exactly like the real compiler's own lowering: `len`
+// takes zero args, `push` one, `set` two — see `plum-ir::lower`'s own
+// identically-shaped arity guards), or a struct-field closure call
+// (the record-of-closures dispatch pattern) as the final fallback.
+let eval_dot_call (state: ProgramState) (env: Array[EnvEntry]) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): Value =
+    if method_name == "to_string" { VStr(value_to_display(eval_expr(state, env, base))) }
+    else if method_name == "concat" { concat_strings(eval_expr(state, env, base), eval_expr(state, env, args[0])) }
+    else if method_name == "len" && Array.is_empty(args) { array_len(eval_expr(state, env, base)) }
+    else if method_name == "push" && args.len() == 1 { array_push(eval_expr(state, env, base), eval_expr(state, env, args[0])) }
+    else if method_name == "set" && args.len() == 2 { array_set(eval_expr(state, env, base), eval_expr(state, env, args[0]), eval_expr(state, env, args[1])) }
+    // Struct-field closure call — the record-of-closures dispatch
+    // pattern. Nested MATCH EXPRESSIONS (fine, used throughout this
+    // file), not a nested PATTERN, so this doesn't hit the native-
+    // codegen gap `to_string`'s own arm comment (above, at this
+    // function's call site) describes.
+    else { match eval_expr(state, env, base) {
+        VStruct(_, fields) => match find_field(fields, method_name, 0) {
+            VClosure(params, body, captured_env) => call_closure(state, params, body, captured_env, eval_exprs(state, env, args)),
+            _ => { fail_interp("field is not callable: ".concat(method_name)); VUnit },
+        },
+        _ => { fail_interp("only .to_string()/.concat()/.len()/.push()/.set() and struct-field closure calls are supported"); VUnit },
+    } }
+
+// --- Arrays: `VArray` wraps a real HOST `Array[Value]` — this file is
+// itself compiled by the real Plum compiler, so `.push`/`.set`/`.len`/
+// indexing/`Array.map`/`filter`/`fold` on `elems` below all reuse the
+// real, already-correct host primitives directly; none of this
+// reimplements array semantics from scratch. ---
+
+let array_index (v: Value) (idx: Value): Value = match v { VArray(elems) => elems[as_int(idx)], _ => { fail_interp("indexing requires an Array"); VUnit } }
+let array_len (v: Value): Value = match v { VArray(elems) => VInt(elems.len()), _ => { fail_interp(".len() requires an Array"); VUnit } }
+let array_push (v: Value) (item: Value): Value = match v { VArray(elems) => VArray(elems.push(item)), _ => { fail_interp(".push() requires an Array"); VUnit } }
+let array_set (v: Value) (idx: Value) (item: Value): Value = match v { VArray(elems) => VArray(elems.set(as_int(idx), item)), _ => { fail_interp(".set() requires an Array"); VUnit } }
+
+// `Array.map(arr, f)`/`Array.filter(arr, f)`/`Array.fold(arr, init,
+// f)` — `f` is evaluated ONCE (matching ordinary call-argument
+// evaluation: the closure expression yields one callable value, then
+// that SAME value is invoked once per element), and must itself be a
+// `VClosure` — a bare named-function reference isn't a first-class
+// `Value` in this interpreter at all (see `eval_ident`'s own doc
+// comment), so passing one here fails the same way calling one as a
+// local binding would. A real, narrower v1 gap than the full language
+// allows, not exercised by any exec-corpus fixture.
+let eval_array_ns_call (state: ProgramState) (env: Array[EnvEntry]) (fn_name: String) (args: Array[parser.PExpr]): Value =
+    if fn_name == "map" { array_map(state, env, eval_expr(state, env, args[0]), args[1]) }
+    else if fn_name == "filter" { array_filter(state, env, eval_expr(state, env, args[0]), args[1]) }
+    else if fn_name == "fold" { array_fold(state, env, eval_expr(state, env, args[0]), eval_expr(state, env, args[1]), args[2]) }
+    else { { fail_interp("unsupported Array.".concat(fn_name).concat("(...) call")); VUnit } }
+
+let array_map (state: ProgramState) (env: Array[EnvEntry]) (arr: Value) (f_expr: parser.PExpr): Value =
+    match arr {
+        VArray(elems) => match eval_expr(state, env, f_expr) {
+            VClosure(params, body, captured_env) => VArray(Array.map(elems, |x| call_closure(state, params, body, captured_env, [x]))),
+            _ => { fail_interp("Array.map's second argument must be a closure"); VUnit },
+        },
+        _ => { fail_interp("Array.map's first argument must be an Array"); VUnit },
+    }
+
+let array_filter (state: ProgramState) (env: Array[EnvEntry]) (arr: Value) (f_expr: parser.PExpr): Value =
+    match arr {
+        VArray(elems) => match eval_expr(state, env, f_expr) {
+            VClosure(params, body, captured_env) => VArray(Array.filter(elems, |x| match call_closure(state, params, body, captured_env, [x]) {
+                VBool(b) => b,
+                _ => { fail_interp("Array.filter's predicate must return a Bool"); false },
+            })),
+            _ => { fail_interp("Array.filter's second argument must be a closure"); VUnit },
+        },
+        _ => { fail_interp("Array.filter's first argument must be an Array"); VUnit },
+    }
+
+let array_fold (state: ProgramState) (env: Array[EnvEntry]) (arr: Value) (init: Value) (f_expr: parser.PExpr): Value =
+    match arr {
+        VArray(elems) => match eval_expr(state, env, f_expr) {
+            VClosure(params, body, captured_env) => array_fold_acc(state, params, body, captured_env, elems, init, 0),
+            _ => { fail_interp("Array.fold's third argument must be a closure"); VUnit },
+        },
+        _ => { fail_interp("Array.fold's first argument must be an Array"); VUnit },
+    }
+
+let array_fold_acc (state: ProgramState) (params: Array[String]) (body: parser.PExpr) (captured_env: Array[EnvEntry]) (elems: Array[Value]) (acc: Value) (i: Int): Value =
+    if i >= elems.len() { acc } else { array_fold_acc(state, params, body, captured_env, elems, call_closure(state, params, body, captured_env, [acc, elems[i]]), i + 1) }
+
+let eval_println (v: Value): Value = { println(value_to_display(v)); VUnit }
+
+// Bare-ident binding + a follow-up `if`, NOT `VBool(true)`/`VBool
+// (false)`-shaped patterns — a bool LITERAL nested inside a variant
+// payload hits the same native-codegen "pattern nested inside another
+// pattern" gap `EField(base, "to_string")` did above (see that arm's
+// own comment for the full story).
+let eval_contract_check (state: ProgramState) (env: Array[EnvEntry]) (args: Array[parser.PExpr]): Value =
+    match eval_expr(state, env, args[0]) {
+        VBool(cond) => if cond { VUnit } else {
+            let msg = match eval_expr(state, env, args[1]) { VStr(s) => s, _ => "contract failed" };
+            fail_interp(msg);
+            VUnit
+        },
+        _ => { fail_interp("a contract condition must be a Bool"); VUnit },
+    }
+
+let concat_strings (a: Value) (b: Value): Value =
+    match a {
+        VStr(sa) => match b { VStr(sb) => VStr(sa.concat(sb)), _ => { fail_interp(".concat() requires a String argument"); VUnit } },
+        _ => { fail_interp(".concat() requires a String receiver"); VUnit },
+    }
+
+let value_to_display (v: Value): String =
+    match v {
+        VInt(n) => n.to_string(),
+        VFloat(f) => f.to_string(),
+        VStr(s) => s,
+        VBool(b) => b.to_string(),
+        VUnit => "()",
+        VTuple(_) => { fail_interp("printing a tuple isn't supported yet"); "" },
+        VStruct(_, _) => { fail_interp("printing a struct isn't supported yet"); "" },
+        VVariant(_, _) => { fail_interp("printing a variant isn't supported yet"); "" },
+        VClosure(_, _, _) => { fail_interp("printing a closure isn't supported"); "" },
+        VArray(_) => { fail_interp("printing an array isn't supported yet"); "" },
+    }
+
+let struct_field (v: Value) (name: String): Value =
+    match v {
+        VStruct(_, fields) => find_field(fields, name, 0),
+        _ => { fail_interp("field access on a non-struct value"); VUnit },
+    }
+
+let find_field (fields: Array[FieldVal]) (name: String) (i: Int): Value =
+    if i >= fields.len() { { fail_interp("no such field: ".concat(name)); VUnit } }
+    else if fields[i].name == name { fields[i].value }
+    else { find_field(fields, name, i + 1) }
+
+let eval_struct_lit (state: ProgramState) (env: Array[EnvEntry]) (path: Array[String]) (fields: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): Value = {
+    if Option.is_some(spread) { fail_interp("struct-literal ..spread isn't supported yet") };
+    let tag = path[path.len() - 1];
+    VStruct(tag, Array.map(fields, |f| FieldVal { name: f.name, value: eval_expr(state, env, f.value) }))
+}
+
+let eval_block (state: ProgramState) (env: Array[EnvEntry]) (block: parser.PBlock): Value = {
+    let env2 = eval_stmts(state, env, block.stmts, 0);
+    match block.tail { Some(t) => eval_expr(state, env2, t), None => VUnit }
+}
+
+let eval_stmts (state: ProgramState) (env: Array[EnvEntry]) (stmts: Array[parser.PStmt]) (i: Int): Array[EnvEntry] =
+    if i >= stmts.len() { env }
+    else {
+        match stmts[i] {
+            SLet(_, pattern, value) => {
+                let v = eval_expr(state, env, value);
+                match match_pattern(pattern, v) {
+                    Some(bindings) => eval_stmts(state, Array.concat(env, bindings), stmts, i + 1),
+                    None => { fail_interp("irrefutable let pattern failed to match"); eval_stmts(state, env, stmts, i + 1) },
+                }
+            },
+            SAssign(name, value) => eval_stmts(state, env_assign(env, name, eval_expr(state, env, value)), stmts, i + 1),
+            // `eval_stmt_for_env`, NOT plain `eval_expr` — see its own
+            // doc comment for why a bare-statement `for` loop needs its
+            // own env-threading path (assignment to an OUTER variable
+            // inside its body, `for i in 0..5 { total = total + i; }`,
+            // has to be visible to statements AFTER the loop).
+            SExpr(e) => eval_stmts(state, eval_stmt_for_env(state, env, e), stmts, i + 1),
+        }
+    }
+
+// The env-threading counterpart to `eval_expr`'s general, value-only
+// dispatch — used ONLY here, from `eval_stmts`'s `SExpr` arm, for the
+// one shape whose OWN internal reassignment to an ALREADY-EXISTING
+// outer name needs to survive past it: a `for` loop. Every other
+// expression shape just evaluates normally (for side effects, e.g.
+// `println(..)`) and returns `env` completely unchanged — a real,
+// deliberately narrower v1 gap than fully general env-threading would
+// close: an `if`/`match`/bare `{ }` block used DIRECTLY as a statement
+// (not a `for` loop) that reassigns an outer name inside doesn't
+// propagate that reassignment to later statements in the same block.
+// Not exercised by any exec-corpus fixture; `for`-loop accumulation
+// (DESIGN.md's own "classic case" for local mutability) is the one
+// that is.
+let eval_stmt_for_env (state: ProgramState) (env: Array[EnvEntry]) (e: parser.PExpr): Array[EnvEntry] =
+    match e {
+        EFor(pattern, iter, body) => eval_for_env(state, env, pattern, iter, body),
+        _ => { eval_expr(state, env, e); env },
+    }
+
+let eval_for_env (state: ProgramState) (env: Array[EnvEntry]) (pattern: parser.PPattern) (iter: parser.PExpr) (body: parser.PBlock): Array[EnvEntry] =
+    match iter {
+        EBinary(BRange, lo_e, hi_e) => {
+            let lo = as_int(eval_expr(state, env, lo_e));
+            let hi = as_int(eval_expr(state, env, hi_e));
+            eval_for_loop_env(state, env, pattern, body, lo, hi)
+        },
+        _ => { fail_interp("'for' only supports a literal range (lo..hi) as its iterand"); env },
+    }
+
+// Threads the OUTER env forward across iterations (unlike `eval_for_
+// loop` below, which always re-derives from the SAME original `env`
+// each time — correct only because it's used exclusively where no
+// caller ever observes reassignment past the loop anyway): each
+// iteration's fresh loop-variable/`let` bindings simply get shadowed
+// by the next iteration's own (`env_lookup`/`env_assign` both scan
+// from the END, so the most recent binding always wins) — harmless
+// env growth, not a correctness problem, for exec-corpus-sized
+// programs.
+let eval_for_loop_env (state: ProgramState) (env: Array[EnvEntry]) (pattern: parser.PPattern) (body: parser.PBlock) (i: Int) (hi: Int): Array[EnvEntry] =
+    if i >= hi { env }
+    else {
+        match match_pattern(pattern, VInt(i)) {
+            Some(bindings) => {
+                let body_env = eval_stmts(state, Array.concat(env, bindings), body.stmts, 0);
+                eval_for_loop_env(state, body_env, pattern, body, i + 1, hi)
+            },
+            None => { fail_interp("'for' pattern failed to match an Int"); env },
+        }
+    }
+
+let eval_if (state: ProgramState) (env: Array[EnvEntry]) (cond: parser.PExpr) (then_branch: parser.PBlock) (else_branch: Option[parser.PExpr]): Value =
+    match eval_expr(state, env, cond) {
+        VBool(c) => if c { eval_block(state, env, then_branch) } else { match else_branch { Some(e) => eval_expr(state, env, e), None => VUnit } },
+        _ => { fail_interp("'if' condition must be a Bool"); VUnit },
+    }
+
+let eval_for (state: ProgramState) (env: Array[EnvEntry]) (pattern: parser.PPattern) (iter: parser.PExpr) (body: parser.PBlock): Value = {
+    match iter {
+        EBinary(BRange, lo_e, hi_e) => {
+            let lo = as_int(eval_expr(state, env, lo_e));
+            let hi = as_int(eval_expr(state, env, hi_e));
+            eval_for_loop(state, env, pattern, body, lo, hi)
+        },
+        _ => { fail_interp("'for' only supports a literal range (lo..hi) as its iterand"); VUnit },
+    }
+}
+
+let as_int (v: Value): Int = match v { VInt(n) => n, _ => { fail_interp("expected an Int"); 0 } }
+
+let eval_for_loop (state: ProgramState) (env: Array[EnvEntry]) (pattern: parser.PPattern) (body: parser.PBlock) (i: Int) (hi: Int): Value =
+    if i >= hi { VUnit }
+    else {
+        match match_pattern(pattern, VInt(i)) {
+            Some(bindings) => { eval_block(state, Array.concat(env, bindings), body); eval_for_loop(state, env, pattern, body, i + 1, hi) },
+            None => { fail_interp("'for' pattern failed to match an Int"); VUnit },
+        }
+    }
+
+let eval_match (state: ProgramState) (env: Array[EnvEntry]) (scrutinee: Value) (arms: Array[parser.MatchArmNode]): Value = eval_match_acc(state, env, scrutinee, arms, 0)
+
+let eval_match_acc (state: ProgramState) (env: Array[EnvEntry]) (scrutinee: Value) (arms: Array[parser.MatchArmNode]) (i: Int): Value =
+    if i >= arms.len() { { fail_interp("no match arm matched"); VUnit } }
+    else {
+        match match_pattern(arms[i].pattern, scrutinee) {
+            None => eval_match_acc(state, env, scrutinee, arms, i + 1),
+            Some(bindings) => {
+                let arm_env = Array.concat(env, bindings);
+                let guard_ok = match arms[i].guard { Some(g) => match eval_expr(state, arm_env, g) { VBool(b) => b, _ => { fail_interp("match guard must be a Bool"); false } }, None => true };
+                if guard_ok { eval_expr(state, arm_env, arms[i].body) } else { eval_match_acc(state, env, scrutinee, arms, i + 1) }
+            },
+        }
+    }
+
+// --- Pattern matching: `Some(bindings)` on match, `None` otherwise ---
+
+let match_pattern (pattern: parser.PPattern) (v: Value): Option[Array[EnvEntry]] =
+    match pattern {
+        PWildcard => Some([]),
+        PIdent(name) => Some([EnvEntry { name: name, value: v }]),
+        PInt(n) => match v { VInt(m) => if n == m { Some([]) } else { None }, _ => None },
+        PFloat(f) => match v { VFloat(g) => if f == g { Some([]) } else { None }, _ => None },
+        PStr(s) => match v { VStr(t) => if s == t { Some([]) } else { None }, _ => None },
+        PBool(b) => match v { VBool(c) => if b == c { Some([]) } else { None }, _ => None },
+        PTuple(pats) => match v { VTuple(vals) => match_pattern_list(pats, vals), _ => None },
+        PVariant(path, arg_pats) => match v {
+            VVariant(tag, vals) => if tag == path[path.len() - 1] { match_pattern_list(arg_pats, vals) } else { None },
+            _ => None,
+        },
+        PStruct(path, field_pats, _) => match v {
+            VStruct(tag, fields) => if tag == path[path.len() - 1] { match_field_patterns(field_pats, fields, 0, []) } else { None },
+            _ => None,
+        },
+        POr(alts) => match_or_acc(alts, v, 0),
+    }
+
+let match_pattern_list (pats: Array[parser.PPattern]) (vals: Array[Value]): Option[Array[EnvEntry]] =
+    if pats.len() != vals.len() { None } else { match_pattern_list_acc(pats, vals, 0, []) }
+
+let match_pattern_list_acc (pats: Array[parser.PPattern]) (vals: Array[Value]) (i: Int) (acc: Array[EnvEntry]): Option[Array[EnvEntry]] =
+    if i >= pats.len() { Some(acc) }
+    else {
+        match match_pattern(pats[i], vals[i]) {
+            None => None,
+            Some(bindings) => match_pattern_list_acc(pats, vals, i + 1, Array.concat(acc, bindings)),
+        }
+    }
+
+let match_field_patterns (field_pats: Array[parser.FieldPatternNode]) (fields: Array[FieldVal]) (i: Int) (acc: Array[EnvEntry]): Option[Array[EnvEntry]] =
+    if i >= field_pats.len() { Some(acc) }
+    else {
+        let target = find_field(fields, field_pats[i].name, 0);
+        match match_pattern(field_pats[i].pattern, target) {
+            None => None,
+            Some(bindings) => match_field_patterns(field_pats, fields, i + 1, Array.concat(acc, bindings)),
+        }
+    }
+
+let match_or_acc (alts: Array[parser.PPattern]) (v: Value) (i: Int): Option[Array[EnvEntry]] =
+    if i >= alts.len() { None }
+    else {
+        match match_pattern(alts[i], v) {
+            Some(bindings) => Some(bindings),
+            None => match_or_acc(alts, v, i + 1),
+        }
+    }
+
+// --- Binary operators: Int/Float ad-hoc polymorphism (a small,
+// closed set, mirroring the real compiler's own `Num`/`Eq` built-in
+// traits — no user-definable operator overloading either way) ---
+//
+// `numeric_op`/`compare_op`/`values_equal` are declared BEFORE
+// `eval_binary`, not after (unlike most of this file's other
+// definition order, which mostly follows `crates/plum-syntax/src/
+// parser.rs`'s own top-to-bottom shape) — a real, deliberate ordering
+// choice, not incidental style. `eval_binary` passes TWO textually-
+// identical closures per call (`|a, b| a + b, |a, b| a + b`, one
+// meant for `Int`, one for `Float`) whose OWN param types need to be
+// seeded from `numeric_op`'s declared parameter types before their
+// bodies are inferred (the same closure-param-type-seeding mechanism
+// DESIGN.md's language-ergonomics chunk fixed for `Array.fold`-shaped
+// calls). Unlike `parser.plum`'s genuinely CYCLIC forward references
+// (which needed a real compiler fix — see DESIGN.md's "Stage 2" entry
+// for that story), this one isn't cyclic at all — `numeric_op` never
+// calls back into `eval_binary` — so simple definition order was
+// enough to route around it, no compiler change needed here.
+
+// Nested nested-match (`match lhs { VInt(a) => match rhs { ... } }`),
+// NOT a single tuple-of-variant-patterns match (`match (lhs, rhs) {
+// (VInt(a), VInt(b)) => .., .. }`) — a real, existing native-codegen
+// gap found empirically: a variant pattern nested inside a TUPLE
+// pattern fails with "unknown tag" at codegen time (confirmed via a
+// minimal isolated repro before rewriting this file), even though the
+// exact same shape works fine under the interpreter. Since this file
+// is validated via the NATIVE build specifically (see this file's own
+// top comment), the nested-match shape is the one that actually needs
+// to work here — not a stylistic preference.
+let numeric_op (lhs: Value) (rhs: Value) (int_op: (Int, Int) -> Int) (float_op: (Float, Float) -> Float): Value =
+    match lhs {
+        VInt(a) => match rhs { VInt(b) => VInt(int_op(a, b)), _ => { fail_interp("arithmetic requires two Ints or two Floats"); VUnit } },
+        VFloat(a) => match rhs { VFloat(b) => VFloat(float_op(a, b)), _ => { fail_interp("arithmetic requires two Ints or two Floats"); VUnit } },
+        _ => { fail_interp("arithmetic requires two Ints or two Floats"); VUnit },
+    }
+
+let compare_op (lhs: Value) (rhs: Value) (int_op: (Int, Int) -> Bool) (float_op: (Float, Float) -> Bool): Value =
+    match lhs {
+        VInt(a) => match rhs { VInt(b) => VBool(int_op(a, b)), _ => { fail_interp("comparison requires two Ints or two Floats"); VUnit } },
+        VFloat(a) => match rhs { VFloat(b) => VBool(float_op(a, b)), _ => { fail_interp("comparison requires two Ints or two Floats"); VUnit } },
+        _ => { fail_interp("comparison requires two Ints or two Floats"); VUnit },
+    }
+
+let values_equal (a: Value) (b: Value): Bool =
+    match a {
+        VInt(x) => match b { VInt(y) => x == y, _ => false },
+        VFloat(x) => match b { VFloat(y) => x == y, _ => false },
+        VStr(x) => match b { VStr(y) => x == y, _ => false },
+        VBool(x) => match b { VBool(y) => x == y, _ => false },
+        VUnit => match b { VUnit => true, _ => false },
+        _ => { fail_interp("'=='/'!=' between these two value shapes isn't supported yet"); false },
+    }
+
+let eval_binary (op: parser.BOp) (lhs: Value) (rhs: Value): Value =
+    match op {
+        BAdd => numeric_op(lhs, rhs, |a, b| a + b, |a, b| a + b),
+        BSub => numeric_op(lhs, rhs, |a, b| a - b, |a, b| a - b),
+        BMul => numeric_op(lhs, rhs, |a, b| a * b, |a, b| a * b),
+        BDiv => numeric_op(lhs, rhs, |a, b| a / b, |a, b| a / b),
+        BRem => match lhs { VInt(a) => match rhs { VInt(b) => VInt(a % b), _ => { fail_interp("'%' requires two Ints"); VUnit } }, _ => { fail_interp("'%' requires two Ints"); VUnit } },
+        BEq => VBool(values_equal(lhs, rhs)),
+        BNe => VBool(!values_equal(lhs, rhs)),
+        BLt => compare_op(lhs, rhs, |a, b| a < b, |a, b| a < b),
+        BGt => compare_op(lhs, rhs, |a, b| a > b, |a, b| a > b),
+        BLe => compare_op(lhs, rhs, |a, b| a <= b, |a, b| a <= b),
+        BGe => compare_op(lhs, rhs, |a, b| a >= b, |a, b| a >= b),
+        BAnd => match lhs { VBool(a) => match rhs { VBool(b) => VBool(a && b), _ => { fail_interp("'&&' requires two Bools"); VUnit } }, _ => { fail_interp("'&&' requires two Bools"); VUnit } },
+        BOr => match lhs { VBool(a) => match rhs { VBool(b) => VBool(a || b), _ => { fail_interp("'||' requires two Bools"); VUnit } }, _ => { fail_interp("'||' requires two Bools"); VUnit } },
+        BRange => { fail_interp("'..' is only supported directly as a 'for' iterand"); VUnit },
+        BPipe => { fail_interp("'|>' isn't supported yet"); VUnit },
+    }
+
+// --- Entry point: evaluate `main`'s body against `state` ---
+
+pub let run_main (state: ProgramState): Value =
+    match find_fn(state, "main") {
+        Some(def) => call_fn(state, def, []),
+        None => { fail_interp("no top-level 'main' function found"); VUnit },
+    }

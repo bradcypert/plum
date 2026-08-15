@@ -1,0 +1,1 @@
+((let case () (struct-lit shapes.Circle radius=1)))

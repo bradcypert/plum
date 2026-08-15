@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("arr") Colon Ident("Array") LBracket Ident("Int") RBracket RParen LParen Ident("i") Colon Ident("Int") RParen Colon Ident("Int") Eq Ident("arr") LBracket Ident("i") RBracket

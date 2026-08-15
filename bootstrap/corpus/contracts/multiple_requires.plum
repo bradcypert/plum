@@ -1,0 +1,4 @@
+let clamp (n: Int) (lo: Int) (hi: Int): Int
+  require lo <= hi
+  require n >= 0
+= n

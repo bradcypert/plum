@@ -1,0 +1,3 @@
+struct Point { x: Int, y: Int }
+let manhattan (p: Point): Int = match p { Point { x, y } => x + y }
+let main (): Unit = println(manhattan(Point { x: 3, y: 4 }).to_string())

@@ -1,0 +1,6 @@
+let main (): Unit = {
+  println((2 + 3 * 4).to_string());
+  println((10 - 4 / 2).to_string());
+  println((7 % 3).to_string());
+  println((1.5 + 2.5).to_string());
+}

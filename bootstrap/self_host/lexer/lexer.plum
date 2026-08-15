@@ -1,0 +1,498 @@
+// Self-hosted Plum lexer — Stage 1 of self-hosting (see DESIGN.md's
+// "Self-hosting bootstrap corpus" section and the project roadmap).
+// Mirrors crates/plum-syntax/src/lexer.rs's `Lexer` exactly: same
+// token set, same keyword table, same operator-lexing rules, same
+// string-interpolation depth-tracking scan.
+//
+// The `lexer` MODULE (this directory) — no `main` of its own; see
+// `bootstrap/self_host/main.plum` for the real entry point, and
+// `bootstrap/self_host/parser/parser.plum` (Stage 2, `use lexer;`) for
+// this module's other real consumer besides that entry point.
+//
+// Validated against bootstrap/corpus/*/*.tokens — `render_tokens`'s
+// output must match crates/plum-syntax/src/render.rs's `render_tokens`
+// byte for byte, for every corpus fixture.
+//
+// **Validate via the NATIVE build, not `plum run`**: this file's
+// `render_token`/`lex_operator`/`keyword_or_ident` are each one wide
+// `match`/`if`-chain (50+ arms for `render_token`) evaluated freshly
+// PER TOKEN — found empirically, not by inspection, while validating
+// against the corpus: `plum run` genuinely stack-overflows on some
+// fixtures as small as `{ let x = 5; x }` (14 tokens), while `plum
+// build` compiles and runs the EXACT same program and fixture
+// correctly. Root cause: `plum-interp` is a tree-walking interpreter,
+// so evaluating a deeply-nested `if`/`match` expression costs real
+// Rust call-stack depth PROPORTIONAL TO THAT EXPRESSION'S OWN nesting
+// — not just proportional to explicit Plum-level recursive calls the
+// way `mark_last_uses`'s/DESIGN.md's other documented interpreter-
+// recursion-depth issues are. Across many tokens (each one re-walking
+// these wide chains), that cost compounds fast. `plum build` has no
+// such cost (real branches, not nested `Interpreter::eval` calls) —
+// confirmed directly: the exact fixture that overflowed the
+// interpreter ran correctly under native codegen. Not a correctness
+// bug in this lexer; a genuine, now-documented interpreter scaling
+// limit for source shaped like a large dispatch table, distinct from
+// every previously-documented instance of this class of issue.
+//
+// Deliberately span-free (unlike the real Rust `Lexer`, which tracks
+// exact byte-offset spans for every token) — the corpus's own goldens
+// are span-free by design (see `plum_syntax::render`'s own doc
+// comment), and this Stage-1 lexer only needs to prove it recognizes
+// the SAME token stream, not reproduce span bookkeeping too. Spans can
+// be added later if/when Stage 2 (the parser) turns out to need them
+// for its own error messages.
+
+pub enum Token {
+    TokIdent(String),
+    TokInt(Int),
+    TokFloat(Float),
+    TokStr(String),
+    TokInterpStr(Array[InterpPiece]),
+    TokTrue,
+    TokFalse,
+    TokUnderscore,
+    TokLet,
+    TokMut,
+    TokFn,
+    TokStruct,
+    TokEnum,
+    TokMatch,
+    TokIf,
+    TokElse,
+    TokFor,
+    TokIn,
+    TokPub,
+    TokUse,
+    TokMod,
+    TokExtern,
+    TokUnsafe,
+    TokSpawn,
+    TokSelect,
+    TokLParen,
+    TokRParen,
+    TokLBrace,
+    TokRBrace,
+    TokLBracket,
+    TokRBracket,
+    TokComma,
+    TokSemicolon,
+    TokColon,
+    TokDot,
+    TokDotDot,
+    TokEq,
+    TokEqEq,
+    TokNotEq,
+    TokLt,
+    TokGt,
+    TokLtEq,
+    TokGtEq,
+    TokPlus,
+    TokMinus,
+    TokStar,
+    TokSlash,
+    TokPercent,
+    TokAndAnd,
+    TokOrOr,
+    TokBang,
+    TokPipe,
+    TokPipeGt,
+    TokArrow,
+    TokFatArrow,
+    TokEof,
+}
+
+// One piece of an interpolated string — mirrors `plum_syntax::lexer::
+// InterpPart`, minus the span (see this file's own top comment on why
+// spans are dropped entirely here).
+pub enum InterpPiece {
+    PieceLiteral(String),
+    PieceExpr(String),
+}
+
+// --- Character classification ---
+//
+// Plum has no char-code/ord conversion (checked directly — no such
+// primitive exists), so these are membership checks against a fixed
+// alphabet, not range arithmetic the way the Rust lexer's
+// `is_ascii_alphabetic`/`is_ascii_digit` work.
+//
+// The alphabets are pre-split into `Array[String]` GLOBALS (evaluated
+// exactly once at startup) and tested with `Array.contains`, rather
+// than calling `String.index_of(<alphabet>, c)` per character. That
+// looks equivalent but isn't: `String.index_of` is defined as
+// `string_index_of_acc(chars_of(s), chars_of(needle), 0)`, so every
+// single call re-split the whole 52-character alphabet into 52
+// separate heap-allocated one-character strings. With classification
+// running two or three times per source character, that was ~7 million
+// string allocations while tokenizing this project's own 69KB parser
+// source — the dominant cost by a wide margin, measured with
+// `PLUM_ALLOC_STATS`. Hoisting the split to a global makes it 52
+// allocations total, once, for the whole program.
+let PLUM_ALPHA: String = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+let PLUM_DIGITS: String = "0123456789"
+let PLUM_ALPHA_CHARS: Array[String] = chars_of(PLUM_ALPHA)
+let PLUM_DIGIT_CHARS: Array[String] = chars_of(PLUM_DIGITS)
+
+let is_digit_char (c: String): Bool = Array.contains(PLUM_DIGIT_CHARS, c)
+let is_ident_start_char (c: String): Bool = Array.contains(PLUM_ALPHA_CHARS, c) || c == "_"
+let is_ident_continue_char (c: String): Bool = is_ident_start_char(c) || is_digit_char(c)
+
+// --- Whitespace/comment skipping ---
+
+let skip_line_comment (chars: Array[String]) (pos: Int): Int =
+    if pos >= chars.len() { pos }
+    else if chars[pos] == "\n" { pos }
+    else { skip_line_comment(chars, pos + 1) }
+
+let skip_ws_and_comments (chars: Array[String]) (pos: Int): Int =
+    if pos >= chars.len() { pos }
+    else if string_is_ascii_ws(chars[pos]) { skip_ws_and_comments(chars, pos + 1) }
+    else if chars[pos] == "/" && pos + 1 < chars.len() && chars[pos + 1] == "/" {
+        skip_ws_and_comments(chars, skip_line_comment(chars, pos + 2))
+    }
+    else { pos }
+
+// --- Numbers ---
+
+struct NumResult { token: Token, next_pos: Int }
+
+let scan_digit_run (chars: Array[String]) (pos: Int): Int =
+    if pos >= chars.len() { pos }
+    else if is_digit_char(chars[pos]) || chars[pos] == "_" { scan_digit_run(chars, pos + 1) }
+    else { pos }
+
+// Same "collect digits/underscores, strip underscores before parsing"
+// shape as `crates/plum-syntax/src/lexer.rs::lex_number` — reuses
+// `String.parse_int`/`String.parse_float` rather than re-deriving the
+// digit-accumulation those already do (`Result.unwrap_or`'s fallback
+// never actually fires: `scan_digit_run` only ever collects real
+// digits/underscores, so the string handed to `parse_int`/`parse_float`
+// is always well-formed by construction).
+let lex_number (chars: Array[String]) (pos: Int): NumResult = {
+    let int_end = scan_digit_run(chars, pos);
+    let is_float = int_end < chars.len() && chars[int_end] == "." && int_end + 1 < chars.len() && is_digit_char(chars[int_end + 1]);
+    if is_float {
+        let frac_end = scan_digit_run(chars, int_end + 1);
+        let text = chars_join(Array.filter(Array.slice(chars, pos, frac_end), |c| c != "_"));
+        NumResult { token: TokFloat(Result.unwrap_or(String.parse_float(text), 0.0)), next_pos: frac_end }
+    } else {
+        let text = chars_join(Array.filter(Array.slice(chars, pos, int_end), |c| c != "_"));
+        NumResult { token: TokInt(Result.unwrap_or(String.parse_int(text), 0)), next_pos: int_end }
+    }
+}
+
+// --- Strings (including `${...}` interpolation) ---
+
+struct EscResult { ch: String, next_pos: Int }
+
+let escape_char (chars: Array[String]) (pos: Int): EscResult =
+    if pos >= chars.len() { EscResult { ch: "", next_pos: pos } }
+    else if chars[pos] == "n" { EscResult { ch: "\n", next_pos: pos + 1 } }
+    else if chars[pos] == "t" { EscResult { ch: "\t", next_pos: pos + 1 } }
+    else if chars[pos] == "r" { EscResult { ch: "\r", next_pos: pos + 1 } }
+    else if chars[pos] == "\\" { EscResult { ch: "\\", next_pos: pos + 1 } }
+    else if chars[pos] == "\"" { EscResult { ch: "\"", next_pos: pos + 1 } }
+    else if chars[pos] == "$" { EscResult { ch: "$", next_pos: pos + 1 } }
+    else { EscResult { ch: chars[pos], next_pos: pos + 1 } }
+
+struct InterpExprResult { text: String, next_pos: Int }
+
+// A nested double-quoted string INSIDE a `${...}` is copied verbatim
+// (opening quote through closing quote/EOF, escapes un-interpreted) —
+// mirrors `lex_interp_expr_source`'s own `Some('"')` arm exactly, same
+// "never re-interpreted as its own interpolation" rule.
+let scan_nested_string_body (chars: Array[String]) (pos: Int) (acc: String): InterpExprResult =
+    if pos >= chars.len() { InterpExprResult { text: acc, next_pos: pos } }
+    else if chars[pos] == "\"" { InterpExprResult { text: acc.concat(chars[pos]), next_pos: pos + 1 } }
+    else if chars[pos] == "\\" && pos + 1 < chars.len() {
+        scan_nested_string_body(chars, pos + 2, acc.concat(chars[pos]).concat(chars[pos + 1]))
+    }
+    else { scan_nested_string_body(chars, pos + 1, acc.concat(chars[pos])) }
+
+let scan_nested_string (chars: Array[String]) (pos: Int): InterpExprResult =
+    scan_nested_string_body(chars, pos + 1, chars[pos])
+
+// Scans the raw source text of one `${...}` interpolation, called
+// right after its opening `${` has already been consumed — mirrors
+// `lex_interp_expr_source`'s `(`/`[`-depth tracking exactly (see that
+// function's own doc comment in the Rust lexer for the full "why").
+let scan_interp_expr (chars: Array[String]) (pos: Int) (acc: String) (depth: Int): InterpExprResult =
+    if pos >= chars.len() { InterpExprResult { text: acc, next_pos: pos } }
+    else if chars[pos] == "}" && depth == 0 { InterpExprResult { text: acc, next_pos: pos + 1 } }
+    else if chars[pos] == "(" || chars[pos] == "[" { scan_interp_expr(chars, pos + 1, acc.concat(chars[pos]), depth + 1) }
+    else if chars[pos] == ")" || chars[pos] == "]" { scan_interp_expr(chars, pos + 1, acc.concat(chars[pos]), depth - 1) }
+    else if chars[pos] == "\"" {
+        let nested = scan_nested_string(chars, pos);
+        scan_interp_expr(chars, nested.next_pos, acc.concat(nested.text), depth)
+    }
+    else { scan_interp_expr(chars, pos + 1, acc.concat(chars[pos]), depth) }
+
+struct StrResult { token: Token, next_pos: Int }
+
+let finish_string (pieces: Array[InterpPiece]) (acc: String) (has_interp: Bool) (next_pos: Int): StrResult =
+    if has_interp { StrResult { token: TokInterpStr(pieces.push(PieceLiteral(acc))), next_pos: next_pos } }
+    else { StrResult { token: TokStr(acc), next_pos: next_pos } }
+
+// `pos` is right after the opening `"`. `acc` is the literal text
+// accumulated since the last interpolation piece (or since the start,
+// if none yet); `has_interp` mirrors the Rust lexer's own `parts.is_
+// empty()` check — a plain `Str`, unless at least one `${...}` was
+// seen, in which case the whole thing becomes an `InterpStr`.
+let scan_string_body (chars: Array[String]) (pos: Int) (acc: String) (pieces: Array[InterpPiece]) (has_interp: Bool): StrResult =
+    if pos >= chars.len() {
+        // Unterminated — same permissive "just stop" precedent the
+        // Rust lexer uses.
+        finish_string(pieces, acc, has_interp, pos)
+    }
+    else if chars[pos] == "\"" {
+        finish_string(pieces, acc, has_interp, pos + 1)
+    }
+    else if chars[pos] == "\\" {
+        let esc = escape_char(chars, pos + 1);
+        scan_string_body(chars, esc.next_pos, acc.concat(esc.ch), pieces, has_interp)
+    }
+    else if chars[pos] == "$" && pos + 1 < chars.len() && chars[pos + 1] == "{" {
+        let with_literal = pieces.push(PieceLiteral(acc));
+        let expr = scan_interp_expr(chars, pos + 2, "", 0);
+        scan_string_body(chars, expr.next_pos, "", with_literal.push(PieceExpr(expr.text)), true)
+    }
+    else {
+        scan_string_body(chars, pos + 1, acc.concat(chars[pos]), pieces, has_interp)
+    }
+
+let lex_string (chars: Array[String]) (pos: Int): StrResult =
+    scan_string_body(chars, pos + 1, "", [], false)
+
+// --- Identifiers and keywords ---
+
+struct IdentResult { token: Token, next_pos: Int }
+
+let scan_ident_chars (chars: Array[String]) (pos: Int): Int =
+    if pos >= chars.len() { pos }
+    else if is_ident_continue_char(chars[pos]) { scan_ident_chars(chars, pos + 1) }
+    else { pos }
+
+let keyword_or_ident (text: String): Token = match text {
+    "let" => TokLet, "mut" => TokMut, "fn" => TokFn, "struct" => TokStruct, "enum" => TokEnum,
+    "match" => TokMatch, "if" => TokIf, "else" => TokElse, "for" => TokFor, "in" => TokIn,
+    "pub" => TokPub, "use" => TokUse, "mod" => TokMod, "extern" => TokExtern, "unsafe" => TokUnsafe,
+    "spawn" => TokSpawn, "select" => TokSelect, "true" => TokTrue, "false" => TokFalse, "_" => TokUnderscore,
+    _ => TokIdent(text),
+}
+
+let lex_ident_or_keyword (chars: Array[String]) (pos: Int): IdentResult = {
+    let end = scan_ident_chars(chars, pos);
+    let text = chars_join(Array.slice(chars, pos, end));
+    IdentResult { token: keyword_or_ident(text), next_pos: end }
+}
+
+// --- Operators and punctuation ---
+
+struct OpResult { token: Token, next_pos: Int }
+
+let unexpected_char (c: String): OpResult = {
+    // `panic_raw` is itself `Unit`-typed (see DESIGN.md's "Testing
+    // framework" section — it never diverges STATICALLY, only at
+    // runtime via `@plum_abort`), so it can't be used directly as an
+    // `OpResult`-typed branch the way Rust's `panic!` (typed `!`,
+    // unifying with anything) can. Sequencing it as a discarded
+    // statement ahead of a placeholder return value is the same
+    // pattern `assert`'s own definition establishes — dead code in
+    // practice (the process is gone before this placeholder is ever
+    // used), but ordinary, well-typed Plum.
+    panic_raw("unexpected character ".concat(c));
+    OpResult { token: TokEof, next_pos: 0 }
+}
+
+let lex_operator (chars: Array[String]) (pos: Int): OpResult =
+    if chars[pos] == "(" { OpResult { token: TokLParen, next_pos: pos + 1 } }
+    else if chars[pos] == ")" { OpResult { token: TokRParen, next_pos: pos + 1 } }
+    else if chars[pos] == "{" { OpResult { token: TokLBrace, next_pos: pos + 1 } }
+    else if chars[pos] == "}" { OpResult { token: TokRBrace, next_pos: pos + 1 } }
+    else if chars[pos] == "[" { OpResult { token: TokLBracket, next_pos: pos + 1 } }
+    else if chars[pos] == "]" { OpResult { token: TokRBracket, next_pos: pos + 1 } }
+    else if chars[pos] == "," { OpResult { token: TokComma, next_pos: pos + 1 } }
+    else if chars[pos] == ";" { OpResult { token: TokSemicolon, next_pos: pos + 1 } }
+    else if chars[pos] == ":" { OpResult { token: TokColon, next_pos: pos + 1 } }
+    else if chars[pos] == "." {
+        if pos + 1 < chars.len() && chars[pos + 1] == "." { OpResult { token: TokDotDot, next_pos: pos + 2 } }
+        else { OpResult { token: TokDot, next_pos: pos + 1 } }
+    }
+    else if chars[pos] == "=" {
+        if pos + 1 < chars.len() && chars[pos + 1] == "=" { OpResult { token: TokEqEq, next_pos: pos + 2 } }
+        else if pos + 1 < chars.len() && chars[pos + 1] == ">" { OpResult { token: TokFatArrow, next_pos: pos + 2 } }
+        else { OpResult { token: TokEq, next_pos: pos + 1 } }
+    }
+    else if chars[pos] == "!" {
+        if pos + 1 < chars.len() && chars[pos + 1] == "=" { OpResult { token: TokNotEq, next_pos: pos + 2 } }
+        else { OpResult { token: TokBang, next_pos: pos + 1 } }
+    }
+    else if chars[pos] == "<" {
+        if pos + 1 < chars.len() && chars[pos + 1] == "=" { OpResult { token: TokLtEq, next_pos: pos + 2 } }
+        else { OpResult { token: TokLt, next_pos: pos + 1 } }
+    }
+    else if chars[pos] == ">" {
+        if pos + 1 < chars.len() && chars[pos + 1] == "=" { OpResult { token: TokGtEq, next_pos: pos + 2 } }
+        else { OpResult { token: TokGt, next_pos: pos + 1 } }
+    }
+    else if chars[pos] == "+" { OpResult { token: TokPlus, next_pos: pos + 1 } }
+    else if chars[pos] == "-" {
+        if pos + 1 < chars.len() && chars[pos + 1] == ">" { OpResult { token: TokArrow, next_pos: pos + 2 } }
+        else { OpResult { token: TokMinus, next_pos: pos + 1 } }
+    }
+    else if chars[pos] == "*" { OpResult { token: TokStar, next_pos: pos + 1 } }
+    else if chars[pos] == "/" { OpResult { token: TokSlash, next_pos: pos + 1 } }
+    else if chars[pos] == "%" { OpResult { token: TokPercent, next_pos: pos + 1 } }
+    else if chars[pos] == "&" {
+        if pos + 1 < chars.len() && chars[pos + 1] == "&" { OpResult { token: TokAndAnd, next_pos: pos + 2 } }
+        else { unexpected_char("'&' (Plum has no bitwise-and token)") }
+    }
+    else if chars[pos] == "|" {
+        if pos + 1 < chars.len() && chars[pos + 1] == ">" { OpResult { token: TokPipeGt, next_pos: pos + 2 } }
+        else if pos + 1 < chars.len() && chars[pos + 1] == "|" { OpResult { token: TokOrOr, next_pos: pos + 2 } }
+        else { OpResult { token: TokPipe, next_pos: pos + 1 } }
+    }
+    else { unexpected_char(chars[pos]) }
+
+// --- Top-level driver ---
+
+struct FullTokResult { token: Token, next_pos: Int }
+
+let lex_one (chars: Array[String]) (pos: Int): FullTokResult =
+    if pos >= chars.len() { FullTokResult { token: TokEof, next_pos: pos } }
+    else if is_digit_char(chars[pos]) { let r = lex_number(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+    else if chars[pos] == "\"" { let r = lex_string(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+    else if is_ident_start_char(chars[pos]) { let r = lex_ident_or_keyword(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+    else { let r = lex_operator(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+
+// `let mut`/`for` (a bounded loop, NOT the original's unbounded
+// self-recursion) — a real, deliberate workaround, not just a style
+// preference: see DESIGN.md's "Array push scaling bug" section for the
+// full story. `acc` threaded through a recursive function's own
+// PARAMETER (the original shape) can NEVER be marked reuse-eligible by
+// `plum-ir::fbip`'s `known_heap` analysis (a parameter is never
+// provably uniquely owned without a type checker at that stage) — every
+// `.push()` fell back to a fresh allocation + full copy AND leaked the
+// previous cell outright (never decremented), making `tokenize` alone
+// enough to OOM-kill a process on a real, only-few-KB source file. A
+// `let mut` LOCAL, reassigned via `for`'s own body, DOES get tracked
+// (`EmptyArray`'s own `is_syntactically_heap` case), so this shape
+// reaches the genuinely fixed, real-amortized-growth `Array.push()`
+// path. An attempted compiler-level fix for the parameter case (seeding
+// `known_heap` with parameters PROVEN array-shaped by their own body's
+// use) was tried and REVERTED the same session after it caused a real
+// crash elsewhere (a parameter can be array-shaped and still be an
+// unsafe-to-reuse alias — syntactic shape alone isn't enough proof) —
+// see `plum-ir::fbip::optimize_program`'s own doc comment for the full
+// story, so this file stays on the `let mut`+`for` workaround for now,
+// not the more natural recursive shape every OTHER `_acc`-suffixed
+// helper here uses. `chars.len() + 1` is a safe upper bound on
+// iteration count — `lex_one` always advances `pos` by at least one
+// character per token (the same invariant the original recursion
+// relied on implicitly to terminate at all), so there are never more
+// tokens than characters, plus one more iteration to actually observe
+// `TokEof` and stop; `done` makes every iteration past the real
+// stopping point a cheap no-op rather than continuing to scan
+// (harmless — `skip_ws_and_comments`/`lex_one` at `pos >= chars.len()`
+// would keep re-observing `TokEof` forever otherwise, appending it
+// repeatedly).
+pub let tokenize (source: String): Array[Token] = {
+    let chars = chars_of(source);
+    let mut pos = 0;
+    let mut acc = [];
+    let mut done = false;
+    for tok_step in 0..(chars.len() + 1) {
+        if !done {
+            let start = skip_ws_and_comments(chars, pos);
+            let r = lex_one(chars, start);
+            match r.token {
+                TokEof => { acc = acc.push(TokEof); done = true; },
+                _ => { acc = acc.push(r.token); pos = r.next_pos; },
+            }
+        };
+    };
+    acc
+}
+
+// --- Rendering (must match `plum_syntax::render::render_tokens`) ---
+
+let escape_str_chars (chars: Array[String]) (i: Int) (acc: String): String =
+    if i >= chars.len() { acc }
+    else if chars[i] == "\n" { escape_str_chars(chars, i + 1, acc.concat("\\n")) }
+    else if chars[i] == "\t" { escape_str_chars(chars, i + 1, acc.concat("\\t")) }
+    else if chars[i] == "\r" { escape_str_chars(chars, i + 1, acc.concat("\\r")) }
+    else if chars[i] == "\\" { escape_str_chars(chars, i + 1, acc.concat("\\\\")) }
+    else if chars[i] == "\"" { escape_str_chars(chars, i + 1, acc.concat("\\\"")) }
+    else { escape_str_chars(chars, i + 1, acc.concat(chars[i])) }
+
+// Mirrors Rust's `format!("{s:?}")` for the simple ASCII strings this
+// corpus's fixtures actually contain (`\n`/`\t`/`\r`/`\\`/`"` escapes)
+// — NOT a general Rust-`Debug`-compatible string escaper (no `\u{...}`
+// handling for arbitrary control/non-ASCII characters). A real gap if
+// Stage 2 ever needs one, not a silent one: an un-escaped character
+// would show up directly in the output, visibly wrong against the
+// golden, not swallowed.
+let quote (s: String): String = "\"".concat(escape_str_chars(chars_of(s), 0, "")).concat("\"")
+
+// `let mut` + TWO single-`.concat()` statements, NOT the more obvious
+// `Array.fold(strs, "", |acc, s| .. acc.concat(" ").concat(s))` — a
+// real, measured performance fix, not a style preference. In the
+// chained form the OUTER `.concat(s)`'s receiver is a freshly-built
+// TEMPORARY (the result of `acc.concat(" ")`), and `plum-ir::fbip`'s
+// reuse analysis only ever marks a BARE VARIABLE receiver as
+// reuse-eligible — so that outer concat always took the allocate-a-
+// fresh-string-and-copy-everything path, copying the whole accumulated
+// output once per token. Building this file's own 163KB token dump that
+// way cost 2.8GB of string allocation (measured with `PLUM_ALLOC_STATS`
+// — it was ~98% of all memory the tokenizer touched). Splitting into
+// two statements gives each `.concat()` a bare `acc` receiver, so both
+// reuse in place. See DESIGN.md's "Array push scaling bug" section.
+//
+// Behavioral note: separator placement is keyed off the INDEX (`i > 0`)
+// rather than the old version's `acc == ""` test. Those differ only if
+// an element is itself the empty string — the old form would then treat
+// the FOLLOWING element as if it were first and omit its separator.
+// Nothing here renders to `""` (`render_token` always produces at least
+// a tag name), so this is a fix to a latent edge case, not a change to
+// any behavior the corpus actually exercises — 98/98 fixtures confirm
+// byte-identical output either way.
+let string_join_with_space (strs: Array[String]): String = {
+    let mut acc = "";
+    for i in 0..strs.len() {
+        if i > 0 { acc = acc.concat(" "); };
+        acc = acc.concat(strs[i]);
+    };
+    acc
+}
+
+let render_interp_piece (p: InterpPiece): String = match p {
+    PieceLiteral(s) => "Literal(".concat(quote(s)).concat(")"),
+    PieceExpr(s) => "Expr(".concat(quote(s)).concat(")"),
+}
+
+let render_token (t: Token): String = match t {
+    TokIdent(s) => "Ident(".concat(quote(s)).concat(")"),
+    TokInt(n) => "Int(".concat(n.to_string()).concat(")"),
+    TokFloat(f) => "Float(".concat(f.to_string()).concat(")"),
+    TokStr(s) => "Str(".concat(quote(s)).concat(")"),
+    TokInterpStr(pieces) => "InterpStr(".concat(string_join_with_space(Array.map(pieces, |p| render_interp_piece(p)))).concat(")"),
+    TokTrue => "True", TokFalse => "False", TokUnderscore => "Underscore",
+    TokLet => "Let", TokMut => "Mut", TokFn => "Fn", TokStruct => "Struct", TokEnum => "Enum",
+    TokMatch => "Match", TokIf => "If", TokElse => "Else", TokFor => "For", TokIn => "In",
+    TokPub => "Pub", TokUse => "Use", TokMod => "Mod", TokExtern => "Extern", TokUnsafe => "Unsafe",
+    TokSpawn => "Spawn", TokSelect => "Select",
+    TokLParen => "LParen", TokRParen => "RParen", TokLBrace => "LBrace", TokRBrace => "RBrace",
+    TokLBracket => "LBracket", TokRBracket => "RBracket",
+    TokComma => "Comma", TokSemicolon => "Semicolon", TokColon => "Colon", TokDot => "Dot", TokDotDot => "DotDot",
+    TokEq => "Eq", TokEqEq => "EqEq", TokNotEq => "NotEq", TokLt => "Lt", TokGt => "Gt", TokLtEq => "LtEq", TokGtEq => "GtEq",
+    TokPlus => "Plus", TokMinus => "Minus", TokStar => "Star", TokSlash => "Slash", TokPercent => "Percent",
+    TokAndAnd => "AndAnd", TokOrOr => "OrOr", TokBang => "Bang", TokPipe => "Pipe", TokPipeGt => "PipeGt",
+    TokArrow => "Arrow", TokFatArrow => "FatArrow",
+    TokEof => "Eof",
+}
+
+// `Eof` is deliberately excluded — same reasoning as `plum_syntax::
+// render::render_tokens`'s own doc comment: constant, uninteresting
+// boilerplate every single token stream would otherwise end with.
+pub let render_tokens (tokens: Array[Token]): String =
+    string_join_with_space(Array.map(Array.filter(tokens, |t| match t { TokEof => false, _ => true }), |t| render_token(t)))

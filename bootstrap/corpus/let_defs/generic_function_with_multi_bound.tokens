@@ -1,0 +1,1 @@
+Let Ident("describe") LBracket Ident("T") Colon Ident("Eq") Plus Ident("Show") RBracket LParen Ident("a") Colon Ident("T") RParen LParen Ident("b") Colon Ident("T") RParen Colon Ident("String") Eq Ident("a") Dot Ident("to_string") LParen RParen

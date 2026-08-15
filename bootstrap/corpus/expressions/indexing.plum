@@ -1,0 +1,1 @@
+let case (arr: Array[Int]) (i: Int): Int = arr[i]

@@ -1,0 +1,1 @@
+((let abs_val ((n:Int)) ->Int (block (let result (if (< n 0) (block (- n)) (block n))) (stmt (call __contract_ensure (>= result 0) "postcondition failed")) result)))

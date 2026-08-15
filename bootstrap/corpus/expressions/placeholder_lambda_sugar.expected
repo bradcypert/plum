@@ -1,0 +1,1 @@
+((let case ((xs:(gt Array Int))) ->(gt Array String) (call (field Array map) xs (closure (_) (call (field _ to_string))))))

@@ -1,0 +1,1 @@
+((extern "C" fn sqrt(x:Float)->Float fn abs(x:Int)->Int))

@@ -1,0 +1,1 @@
+Let Ident("scale") LParen Ident("factor") Colon Ident("Int") RParen LParen Ident("x") Colon Ident("Int") RParen Colon Ident("Int") Eq Ident("factor") Star Ident("x") Let Ident("case") Colon LParen Ident("Int") RParen Arrow Ident("Int") Eq Ident("scale") LParen Int(2) RParen

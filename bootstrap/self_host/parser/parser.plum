@@ -1,0 +1,1327 @@
+// Self-hosted Plum parser — Stage 2 of self-hosting (see DESIGN.md's
+// "Self-hosting bootstrap corpus" section and the project roadmap).
+// Mirrors crates/plum-syntax/src/parser.rs's `Parser` structurally:
+// same recursive-descent shape, same precedence-climbing expression
+// grammar (one function per level, loosest to tightest), same
+// struct-literal/generic-instantiation disambiguation heuristics, same
+// `require`/`ensure` contract desugaring (see DESIGN.md's "Contracts"
+// section) done entirely at parse time.
+//
+// Validated against bootstrap/corpus/*/*.expected — `render_program`'s
+// output must match crates/plum-syntax/src/render.rs's `render_program`
+// byte for byte, for every corpus fixture. Validate via the NATIVE
+// build, not `plum run` — see `lexer/lexer.plum`'s own top comment for
+// why (a genuine, documented interpreter scaling limit; this file's
+// own `render_expr`/`lex_operator`-shaped wide `match` chains hit the
+// exact same thing).
+//
+// Deliberately span-free, same reasoning as `lexer/lexer.plum` — the
+// corpus's own goldens never mention a span, so there's nothing to
+// reproduce.
+//
+// **Deliberate v1 scope cuts, stated up front, not discovered as
+// gaps**:
+// - No `no_struct_literal` suppression (GRAMMAR.md's "struct-literal
+//   vs. block ambiguity in `if`/`match` scrutinee position"). Checked
+//   directly: none of the 98 corpus fixtures exercise an `if`/`match`
+//   with a struct-literal condition, so this parser doesn't need the
+//   restriction to pass the corpus. A REAL gap versus the Rust parser
+//   — `if Point { x: 1 } { .. }` would misparse here — revisit if a
+//   fixture ever needs it.
+// - No parse-error recovery or messages: every "expected X, found Y"
+//   failure is a bare `panic_raw`, not a `Result`-returning diagnostic.
+//   The corpus is 100% valid Plum by construction; there's nothing
+//   here that needs to parse malformed input gracefully yet.
+
+use lexer;
+
+// --- AST ---
+
+pub enum Ty {
+    TyPath(Array[String]),
+    TyGeneric(Array[String], Array[Ty]),
+    TyFunction(Array[Ty], Ty),
+}
+
+pub enum UOp { UNeg, UNot }
+pub enum BOp { BAdd, BSub, BMul, BDiv, BRem, BEq, BNe, BLt, BGt, BLe, BGe, BAnd, BOr, BRange, BPipe }
+
+pub struct FieldInitNode { name: String, extra_path: Array[String], value: PExpr }
+
+pub enum PExpr {
+    EInt(Int),
+    EFloat(Float),
+    EStr(String),
+    EBool(Bool),
+    EIdent(String),
+    ETuple(Array[PExpr]),
+    EArray(Array[PExpr]),
+    EUnary(UOp, PExpr),
+    EBinary(BOp, PExpr, PExpr),
+    EField(PExpr, String),
+    ECall(PExpr, Array[PExpr]),
+    EGenericInst(PExpr, Array[Ty]),
+    EIndex(PExpr, PExpr),
+    EBlock(PBlock),
+    EIf(PExpr, PBlock, Option[PExpr]),
+    EMatch(PExpr, Array[MatchArmNode]),
+    EFor(PPattern, PExpr, PBlock),
+    EClosure(Array[String], PExpr),
+    EUnsafe(PBlock),
+    ESpawn(PBlock),
+    EStructLit(Array[String], Array[FieldInitNode], Option[PExpr]),
+    ESelect(Array[SelectArmNode]),
+}
+
+pub struct PBlock { stmts: Array[PStmt], tail: Option[PExpr] }
+
+pub enum PStmt {
+    SLet(Bool, PPattern, PExpr),
+    SAssign(String, PExpr),
+    SExpr(PExpr),
+}
+
+pub struct MatchArmNode { pattern: PPattern, guard: Option[PExpr], body: PExpr }
+pub struct SelectArmNode { pattern: PPattern, expr: PExpr, body: PExpr }
+pub struct FieldPatternNode { name: String, pattern: PPattern }
+
+pub enum PPattern {
+    PInt(Int),
+    PFloat(Float),
+    PStr(String),
+    PBool(Bool),
+    PWildcard,
+    PIdent(String),
+    PTuple(Array[PPattern]),
+    PVariant(Array[String], Array[PPattern]),
+    PStruct(Array[String], Array[FieldPatternNode], Bool),
+    POr(Array[PPattern]),
+}
+
+pub struct GenericParamNode { name: String, bound: Array[String] }
+
+pub enum ParamNode {
+    ParamIdent(String),
+    ParamPatternTy(PPattern, Option[Ty]),
+}
+
+pub struct LetDefNode { name: String, generics: Array[GenericParamNode], params: Array[ParamNode], ret_ty: Option[Ty], body: PExpr }
+pub struct StructFieldNode { is_pub: Bool, name: String, ty: Ty }
+pub struct StructDeclNode { name: String, generics: Array[GenericParamNode], fields: Array[StructFieldNode] }
+pub struct EnumVariantNode { name: String, payload: Array[Ty] }
+pub struct EnumDeclNode { name: String, generics: Array[GenericParamNode], variants: Array[EnumVariantNode] }
+pub struct ExternParamNode { name: String, ty: Ty }
+pub struct ExternFnNode { name: String, params: Array[ExternParamNode], ret_ty: Option[Ty] }
+pub struct ExternBlockNode { abi: String, fns: Array[ExternFnNode] }
+pub struct UseDeclNode { path: Array[String] }
+
+pub enum ItemKindNode {
+    IKLet(LetDefNode),
+    IKStruct(StructDeclNode),
+    IKEnum(EnumDeclNode),
+    IKExtern(ExternBlockNode),
+    IKUse(UseDeclNode),
+}
+
+pub struct ItemNode { is_pub: Bool, kind: ItemKindNode }
+pub struct ProgramNode { items: Array[ItemNode] }
+
+// --- lexer.Token-stream helpers (the `(tokens, pos) -> (value, next_pos)`
+// idiom this whole self-hosting effort has used since the lexer) ---
+
+let fail (msg: String): Unit = panic_raw(msg)
+
+let check (tokens: Array[lexer.Token]) (pos: Int) (expected: lexer.Token): Bool = tokens[pos] == expected
+
+struct Bumped { matched: Bool, next_pos: Int }
+let bump_if (tokens: Array[lexer.Token]) (pos: Int) (expected: lexer.Token): Bumped =
+    if check(tokens, pos, expected) { Bumped { matched: true, next_pos: pos + 1 } } else { Bumped { matched: false, next_pos: pos } }
+
+let expect (tokens: Array[lexer.Token]) (pos: Int) (expected: lexer.Token) (what: String): Int =
+    if check(tokens, pos, expected) { pos + 1 } else { { fail("expected ".concat(what)); pos } }
+
+struct IdentTok { name: String, next_pos: Int }
+let expect_ident (tokens: Array[lexer.Token]) (pos: Int): IdentTok =
+    match tokens[pos] {
+        TokIdent(name) => IdentTok { name: name, next_pos: pos + 1 },
+        _ => { fail("expected an identifier"); IdentTok { name: "", next_pos: pos } },
+    }
+
+struct StrTok { text: String, next_pos: Int }
+let expect_str_tok (tokens: Array[lexer.Token]) (pos: Int): StrTok =
+    match tokens[pos] {
+        TokStr(s) => StrTok { text: s, next_pos: pos + 1 },
+        _ => { fail("expected a string literal"); StrTok { text: "", next_pos: pos } },
+    }
+
+// `require`/`ensure` are contextual keywords — see `crates/plum-syntax/
+// src/parser.rs::peek_is_contextual_kw`'s own doc comment for why text-
+// checking an `Ident` (not a dedicated `TokenKind`) is safe here.
+let peek_is_contextual_kw (tokens: Array[lexer.Token]) (pos: Int) (word: String): Bool =
+    match tokens[pos] {
+        TokIdent(name) => name == word,
+        _ => false,
+    }
+
+// --- Program / items ---
+
+pub let parse_program (tokens: Array[lexer.Token]): ProgramNode = ProgramNode { items: parse_items_acc(tokens, 0, []) }
+
+let is_at_eof (tokens: Array[lexer.Token]) (pos: Int): Bool = check(tokens, pos, TokEof)
+
+let parse_items_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[ItemNode]): Array[ItemNode] =
+    if is_at_eof(tokens, pos) { acc }
+    else {
+        let r = parse_item(tokens, pos);
+        parse_items_acc(tokens, r.next_pos, acc.push(r.value))
+    }
+
+struct ItemResult { value: ItemNode, next_pos: Int }
+
+let parse_item (tokens: Array[lexer.Token]) (pos: Int): ItemResult = {
+    let pub_bump = bump_if(tokens, pos, TokPub);
+    let start = pub_bump.next_pos;
+    match tokens[start] {
+        TokLet => { let r = parse_let_def(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, kind: IKLet(r.value) }, next_pos: r.next_pos } },
+        TokStruct => { let r = parse_struct_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, kind: IKStruct(r.value) }, next_pos: r.next_pos } },
+        TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, kind: IKEnum(r.value) }, next_pos: r.next_pos } },
+        TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, kind: IKExtern(r.value) }, next_pos: r.next_pos } },
+        TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, kind: IKUse(r.value) }, next_pos: r.next_pos } },
+        _ => { fail("expected an item (let/struct/enum/extern/use)"); ItemResult { value: ItemNode { is_pub: false, kind: IKUse(UseDeclNode { path: [] }) }, next_pos: start } },
+    }
+}
+
+// --- Generics ---
+
+struct GenericParamsResult { value: Array[GenericParamNode], next_pos: Int }
+
+let parse_generic_params (tokens: Array[lexer.Token]) (pos: Int): GenericParamsResult = {
+    let p1 = expect(tokens, pos, TokLBracket, "'['");
+    if check(tokens, p1, TokRBracket) { GenericParamsResult { value: [], next_pos: p1 + 1 } }
+    else {
+        let r = parse_generic_params_acc(tokens, p1, []);
+        GenericParamsResult { value: r.value, next_pos: expect(tokens, r.next_pos, TokRBracket, "']'") }
+    }
+}
+
+struct GenericParamResult { value: GenericParamNode, next_pos: Int }
+
+let parse_generic_params_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[GenericParamNode]): GenericParamsResult = {
+    let r = parse_generic_param(tokens, pos);
+    let new_acc = acc.push(r.value);
+    let b = bump_if(tokens, r.next_pos, TokComma);
+    if !b.matched || check(tokens, b.next_pos, TokRBracket) { GenericParamsResult { value: new_acc, next_pos: b.next_pos } }
+    else { parse_generic_params_acc(tokens, b.next_pos, new_acc) }
+}
+
+let parse_generic_param (tokens: Array[lexer.Token]) (pos: Int): GenericParamResult = {
+    let name_tok = expect_ident(tokens, pos);
+    let b = bump_if(tokens, name_tok.next_pos, TokColon);
+    if !b.matched { GenericParamResult { value: GenericParamNode { name: name_tok.name, bound: [] }, next_pos: b.next_pos } }
+    else {
+        let first = expect_ident(tokens, b.next_pos);
+        let r = parse_bound_acc(tokens, first.next_pos, [first.name]);
+        GenericParamResult { value: GenericParamNode { name: name_tok.name, bound: r.value }, next_pos: r.next_pos }
+    }
+}
+
+struct BoundResult { value: Array[String], next_pos: Int }
+
+let parse_bound_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[String]): BoundResult = {
+    let b = bump_if(tokens, pos, TokPlus);
+    if !b.matched { BoundResult { value: acc, next_pos: pos } }
+    else {
+        let next = expect_ident(tokens, b.next_pos);
+        parse_bound_acc(tokens, next.next_pos, acc.push(next.name))
+    }
+}
+
+// --- `let` definitions + contracts ---
+
+struct LetDefResult { value: LetDefNode, next_pos: Int }
+
+let parse_let_def (tokens: Array[lexer.Token]) (pos: Int): LetDefResult = {
+    let p1 = expect(tokens, pos, TokLet, "'let'");
+    let name_tok = expect_ident(tokens, p1);
+    let dot_bump = bump_if(tokens, name_tok.next_pos, TokDot);
+    let name_r = if dot_bump.matched {
+        let second = expect_ident(tokens, dot_bump.next_pos);
+        NameResult { value: name_tok.name.concat(".").concat(second.name), next_pos: second.next_pos }
+    } else {
+        NameResult { value: name_tok.name, next_pos: dot_bump.next_pos }
+    };
+    let generics_r = if check(tokens, name_r.next_pos, TokLBracket) { parse_generic_params(tokens, name_r.next_pos) } else { GenericParamsResult { value: [], next_pos: name_r.next_pos } };
+    let params_r = parse_params_acc(tokens, generics_r.next_pos, []);
+    let ret_bump = bump_if(tokens, params_r.next_pos, TokColon);
+    let ret_r = if ret_bump.matched { let t = parse_type(tokens, ret_bump.next_pos); TypeOptResult { value: Some(t.value), next_pos: t.next_pos } } else { TypeOptResult { value: None, next_pos: ret_bump.next_pos } };
+    let clauses_r = parse_contract_clauses(tokens, ret_r.next_pos);
+    let eq_pos = expect(tokens, clauses_r.next_pos, TokEq, "'='");
+    let body_r = parse_expr(tokens, eq_pos);
+    let final_body = desugar_contracts(params_r.value, clauses_r.requires, clauses_r.ensures, body_r.value);
+    LetDefResult {
+        value: LetDefNode { name: name_r.value, generics: generics_r.value, params: params_r.value, ret_ty: ret_r.value, body: final_body },
+        next_pos: body_r.next_pos,
+    }
+}
+
+struct NameResult { value: String, next_pos: Int }
+struct TypeOptResult { value: Option[Ty], next_pos: Int }
+
+struct ParamsResult { value: Array[ParamNode], next_pos: Int }
+
+let parse_params_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[ParamNode]): ParamsResult =
+    match tokens[pos] {
+        TokIdent(_) => { let r = parse_param(tokens, pos); parse_params_acc(tokens, r.next_pos, acc.push(r.value)) },
+        TokLParen => { let r = parse_param(tokens, pos); parse_params_acc(tokens, r.next_pos, acc.push(r.value)) },
+        _ => ParamsResult { value: acc, next_pos: pos },
+    }
+
+struct ContractClause { cond: PExpr, message: Option[String] }
+struct ContractClausesResult { requires: Array[ContractClause], ensures: Array[ContractClause], next_pos: Int }
+
+let parse_contract_clauses (tokens: Array[lexer.Token]) (pos: Int): ContractClausesResult = {
+    let req_r = parse_contract_clause_list(tokens, pos, "require", []);
+    let ens_r = parse_contract_clause_list(tokens, req_r.next_pos, "ensure", []);
+    if peek_is_contextual_kw(tokens, ens_r.next_pos, "require") {
+        fail("'require' clauses must all come before any 'ensure' clauses");
+    };
+    ContractClausesResult { requires: req_r.value, ensures: ens_r.value, next_pos: ens_r.next_pos }
+}
+
+struct ClauseListResult { value: Array[ContractClause], next_pos: Int }
+
+let parse_contract_clause_list (tokens: Array[lexer.Token]) (pos: Int) (keyword: String) (acc: Array[ContractClause]): ClauseListResult =
+    if !peek_is_contextual_kw(tokens, pos, keyword) { ClauseListResult { value: acc, next_pos: pos } }
+    else {
+        let cond_r = parse_expr(tokens, pos + 1);
+        let colon_bump = bump_if(tokens, cond_r.next_pos, TokColon);
+        let msg_r = if colon_bump.matched { let s = expect_str_tok(tokens, colon_bump.next_pos); MsgResult { value: Some(s.text), next_pos: s.next_pos } } else { MsgResult { value: None, next_pos: colon_bump.next_pos } };
+        parse_contract_clause_list(tokens, msg_r.next_pos, keyword, acc.push(ContractClause { cond: cond_r.value, message: msg_r.value }))
+    }
+
+struct MsgResult { value: Option[String], next_pos: Int }
+
+// Mirrors `crates/plum-syntax/src/parser.rs::desugar_contracts` exactly
+// — see DESIGN.md's "Contracts" section for the full "why."
+let desugar_contracts (params: Array[ParamNode]) (requires: Array[ContractClause]) (ensures: Array[ContractClause]) (raw_body: PExpr): PExpr =
+    if Array.is_empty(requires) && Array.is_empty(ensures) { raw_body }
+    else {
+        if !Array.is_empty(ensures) && Array.any(params, |p| match p { ParamIdent(n) => n == "result", ParamPatternTy(pat, _) => match pat { PIdent(n) => n == "result", _ => false } }) {
+            fail("a function with 'ensure' clauses can't have a parameter named 'result'");
+        };
+        let require_stmts = Array.map(requires, |c| SExpr(contract_check_call("__contract_require", "precondition failed", c)));
+        if Array.is_empty(ensures) {
+            EBlock(PBlock { stmts: require_stmts, tail: Some(raw_body) })
+        } else {
+            let with_let = require_stmts.push(SLet(false, PIdent("result"), raw_body));
+            let ensure_stmts = Array.map(ensures, |c| SExpr(contract_check_call("__contract_ensure", "postcondition failed", c)));
+            EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result")) })
+        }
+    }
+
+let contract_check_call (callee: String) (base_msg: String) (clause: ContractClause): PExpr = {
+    let msg = match clause.message { Some(m) => base_msg.concat(": ").concat(m), None => base_msg };
+    ECall(EIdent(callee), [clause.cond, EStr(msg)])
+}
+
+// --- Params ---
+
+struct ParamResult { value: ParamNode, next_pos: Int }
+
+let parse_param (tokens: Array[lexer.Token]) (pos: Int): ParamResult =
+    match tokens[pos] {
+        TokIdent(name) => ParamResult { value: ParamIdent(name), next_pos: pos + 1 },
+        TokLParen => {
+            let open = pos + 1;
+            if check(tokens, open, TokRParen) { ParamResult { value: ParamPatternTy(PTuple([]), None), next_pos: open + 1 } }
+            else {
+                let first = parse_pattern(tokens, open);
+                let comma_bump = bump_if(tokens, first.next_pos, TokComma);
+                if comma_bump.matched {
+                    let elems_r = parse_tuple_param_elems_acc(tokens, comma_bump.next_pos, [first.value]);
+                    ParamResult { value: ParamPatternTy(PTuple(elems_r.value), None), next_pos: expect(tokens, elems_r.next_pos, TokRParen, "')'") }
+                } else {
+                    let ty_bump = bump_if(tokens, first.next_pos, TokColon);
+                    let ty_r = if ty_bump.matched { let t = parse_type(tokens, ty_bump.next_pos); TypeOptResult { value: Some(t.value), next_pos: t.next_pos } } else { TypeOptResult { value: None, next_pos: ty_bump.next_pos } };
+                    ParamResult { value: ParamPatternTy(first.value, ty_r.value), next_pos: expect(tokens, ty_r.next_pos, TokRParen, "')'") }
+                }
+            }
+        },
+        _ => { fail("expected a parameter"); ParamResult { value: ParamIdent(""), next_pos: pos } },
+    }
+
+struct PatternListResult { value: Array[PPattern], next_pos: Int }
+
+let parse_tuple_param_elems_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[PPattern]): PatternListResult =
+    if check(tokens, pos, TokRParen) { PatternListResult { value: acc, next_pos: pos } }
+    else {
+        let r = parse_pattern(tokens, pos);
+        let new_acc = acc.push(r.value);
+        let b = bump_if(tokens, r.next_pos, TokComma);
+        if !b.matched || check(tokens, b.next_pos, TokRParen) { PatternListResult { value: new_acc, next_pos: b.next_pos } }
+        else { parse_tuple_param_elems_acc(tokens, b.next_pos, new_acc) }
+    }
+
+// --- Struct / enum / extern / use declarations ---
+
+struct StructDeclResult { value: StructDeclNode, next_pos: Int }
+
+let parse_struct_decl (tokens: Array[lexer.Token]) (pos: Int): StructDeclResult = {
+    let p1 = expect(tokens, pos, TokStruct, "'struct'");
+    let name_tok = expect_ident(tokens, p1);
+    let generics_r = if check(tokens, name_tok.next_pos, TokLBracket) { parse_generic_params(tokens, name_tok.next_pos) } else { GenericParamsResult { value: [], next_pos: name_tok.next_pos } };
+    let p2 = expect(tokens, generics_r.next_pos, TokLBrace, "'{'");
+    if check(tokens, p2, TokRBrace) { StructDeclResult { value: StructDeclNode { name: name_tok.name, generics: generics_r.value, fields: [] }, next_pos: p2 + 1 } }
+    else {
+        let fields_r = parse_struct_fields_acc(tokens, p2, []);
+        StructDeclResult { value: StructDeclNode { name: name_tok.name, generics: generics_r.value, fields: fields_r.value }, next_pos: expect(tokens, fields_r.next_pos, TokRBrace, "'}'") }
+    }
+}
+
+struct StructFieldsResult { value: Array[StructFieldNode], next_pos: Int }
+
+let parse_struct_fields_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[StructFieldNode]): StructFieldsResult = {
+    let r = parse_struct_field(tokens, pos);
+    let new_acc = acc.push(r.value);
+    let b = bump_if(tokens, r.next_pos, TokComma);
+    if !b.matched || check(tokens, b.next_pos, TokRBrace) { StructFieldsResult { value: new_acc, next_pos: b.next_pos } }
+    else { parse_struct_fields_acc(tokens, b.next_pos, new_acc) }
+}
+
+struct StructFieldResult { value: StructFieldNode, next_pos: Int }
+
+let parse_struct_field (tokens: Array[lexer.Token]) (pos: Int): StructFieldResult = {
+    let pub_b = bump_if(tokens, pos, TokPub);
+    let name_tok = expect_ident(tokens, pub_b.next_pos);
+    let colon_pos = expect(tokens, name_tok.next_pos, TokColon, "':'");
+    let ty_r = parse_type(tokens, colon_pos);
+    StructFieldResult { value: StructFieldNode { is_pub: pub_b.matched, name: name_tok.name, ty: ty_r.value }, next_pos: ty_r.next_pos }
+}
+
+struct EnumDeclResult { value: EnumDeclNode, next_pos: Int }
+
+let parse_enum_decl (tokens: Array[lexer.Token]) (pos: Int): EnumDeclResult = {
+    let p1 = expect(tokens, pos, TokEnum, "'enum'");
+    let name_tok = expect_ident(tokens, p1);
+    let generics_r = if check(tokens, name_tok.next_pos, TokLBracket) { parse_generic_params(tokens, name_tok.next_pos) } else { GenericParamsResult { value: [], next_pos: name_tok.next_pos } };
+    let p2 = expect(tokens, generics_r.next_pos, TokLBrace, "'{'");
+    if check(tokens, p2, TokRBrace) { EnumDeclResult { value: EnumDeclNode { name: name_tok.name, generics: generics_r.value, variants: [] }, next_pos: p2 + 1 } }
+    else {
+        let variants_r = parse_enum_variants_acc(tokens, p2, []);
+        EnumDeclResult { value: EnumDeclNode { name: name_tok.name, generics: generics_r.value, variants: variants_r.value }, next_pos: expect(tokens, variants_r.next_pos, TokRBrace, "'}'") }
+    }
+}
+
+struct EnumVariantsResult { value: Array[EnumVariantNode], next_pos: Int }
+
+let parse_enum_variants_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[EnumVariantNode]): EnumVariantsResult = {
+    let r = parse_enum_variant(tokens, pos);
+    let new_acc = acc.push(r.value);
+    let b = bump_if(tokens, r.next_pos, TokComma);
+    if !b.matched || check(tokens, b.next_pos, TokRBrace) { EnumVariantsResult { value: new_acc, next_pos: b.next_pos } }
+    else { parse_enum_variants_acc(tokens, b.next_pos, new_acc) }
+}
+
+struct EnumVariantResult { value: EnumVariantNode, next_pos: Int }
+
+let parse_enum_variant (tokens: Array[lexer.Token]) (pos: Int): EnumVariantResult = {
+    let name_tok = expect_ident(tokens, pos);
+    let paren_b = bump_if(tokens, name_tok.next_pos, TokLParen);
+    if !paren_b.matched { EnumVariantResult { value: EnumVariantNode { name: name_tok.name, payload: [] }, next_pos: paren_b.next_pos } }
+    else if check(tokens, paren_b.next_pos, TokRParen) { EnumVariantResult { value: EnumVariantNode { name: name_tok.name, payload: [] }, next_pos: paren_b.next_pos + 1 } }
+    else {
+        let payload_r = parse_type_list_acc(tokens, paren_b.next_pos, []);
+        EnumVariantResult { value: EnumVariantNode { name: name_tok.name, payload: payload_r.value }, next_pos: expect(tokens, payload_r.next_pos, TokRParen, "')'") }
+    }
+}
+
+struct TypeListResult { value: Array[Ty], next_pos: Int }
+
+let parse_type_list_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[Ty]): TypeListResult = {
+    let r = parse_type(tokens, pos);
+    let new_acc = acc.push(r.value);
+    let b = bump_if(tokens, r.next_pos, TokComma);
+    if !b.matched { TypeListResult { value: new_acc, next_pos: b.next_pos } }
+    else if check(tokens, b.next_pos, TokRParen) || check(tokens, b.next_pos, TokRBracket) { TypeListResult { value: new_acc, next_pos: b.next_pos } }
+    else { parse_type_list_acc(tokens, b.next_pos, new_acc) }
+}
+
+struct ExternBlockResult { value: ExternBlockNode, next_pos: Int }
+
+let parse_extern_block (tokens: Array[lexer.Token]) (pos: Int): ExternBlockResult = {
+    let p1 = expect(tokens, pos, TokExtern, "'extern'");
+    let abi_tok = expect_str_tok(tokens, p1);
+    let p2 = expect(tokens, abi_tok.next_pos, TokLBrace, "'{'");
+    let fns_r = parse_extern_fns_acc(tokens, p2, []);
+    ExternBlockResult { value: ExternBlockNode { abi: abi_tok.text, fns: fns_r.value }, next_pos: expect(tokens, fns_r.next_pos, TokRBrace, "'}'") }
+}
+
+struct ExternFnsResult { value: Array[ExternFnNode], next_pos: Int }
+
+let parse_extern_fns_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[ExternFnNode]): ExternFnsResult =
+    if check(tokens, pos, TokRBrace) { ExternFnsResult { value: acc, next_pos: pos } }
+    else { let r = parse_extern_fn(tokens, pos); parse_extern_fns_acc(tokens, r.next_pos, acc.push(r.value)) }
+
+struct ExternFnResult { value: ExternFnNode, next_pos: Int }
+
+let parse_extern_fn (tokens: Array[lexer.Token]) (pos: Int): ExternFnResult = {
+    let p1 = expect(tokens, pos, TokFn, "'fn'");
+    let name_tok = expect_ident(tokens, p1);
+    let p2 = expect(tokens, name_tok.next_pos, TokLParen, "'('");
+    let params_r = if check(tokens, p2, TokRParen) { ExternParamsResult { value: [], next_pos: p2 } } else { parse_extern_params_acc(tokens, p2, []) };
+    let p3 = expect(tokens, params_r.next_pos, TokRParen, "')'");
+    let arrow_b = bump_if(tokens, p3, TokArrow);
+    let ret_r = if arrow_b.matched { let t = parse_type(tokens, arrow_b.next_pos); TypeOptResult { value: Some(t.value), next_pos: t.next_pos } } else { TypeOptResult { value: None, next_pos: arrow_b.next_pos } };
+    let semi_pos = expect(tokens, ret_r.next_pos, TokSemicolon, "';'");
+    ExternFnResult { value: ExternFnNode { name: name_tok.name, params: params_r.value, ret_ty: ret_r.value }, next_pos: semi_pos }
+}
+
+struct ExternParamsResult { value: Array[ExternParamNode], next_pos: Int }
+
+let parse_extern_params_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[ExternParamNode]): ExternParamsResult = {
+    let r = parse_extern_param(tokens, pos);
+    let new_acc = acc.push(r.value);
+    let b = bump_if(tokens, r.next_pos, TokComma);
+    if !b.matched || check(tokens, b.next_pos, TokRParen) { ExternParamsResult { value: new_acc, next_pos: b.next_pos } }
+    else { parse_extern_params_acc(tokens, b.next_pos, new_acc) }
+}
+
+struct ExternParamResult { value: ExternParamNode, next_pos: Int }
+
+let parse_extern_param (tokens: Array[lexer.Token]) (pos: Int): ExternParamResult = {
+    let name_tok = expect_ident(tokens, pos);
+    let colon_pos = expect(tokens, name_tok.next_pos, TokColon, "':'");
+    let ty_r = parse_type(tokens, colon_pos);
+    ExternParamResult { value: ExternParamNode { name: name_tok.name, ty: ty_r.value }, next_pos: ty_r.next_pos }
+}
+
+struct UseDeclResult { value: UseDeclNode, next_pos: Int }
+
+let parse_use_decl (tokens: Array[lexer.Token]) (pos: Int): UseDeclResult = {
+    let p1 = expect(tokens, pos, TokUse, "'use'");
+    let path_r = parse_dotted_path_acc(tokens, p1, []);
+    UseDeclResult { value: UseDeclNode { path: path_r.value }, next_pos: expect(tokens, path_r.next_pos, TokSemicolon, "';'") }
+}
+
+struct PathResult { value: Array[String], next_pos: Int }
+
+let parse_dotted_path_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[String]): PathResult = {
+    let name_tok = expect_ident(tokens, pos);
+    let new_acc = acc.push(name_tok.name);
+    let b = bump_if(tokens, name_tok.next_pos, TokDot);
+    if !b.matched { PathResult { value: new_acc, next_pos: b.next_pos } }
+    else { parse_dotted_path_acc(tokens, b.next_pos, new_acc) }
+}
+
+// --- Types ---
+
+struct TypeResult { value: Ty, next_pos: Int }
+
+let parse_type (tokens: Array[lexer.Token]) (pos: Int): TypeResult =
+    if check(tokens, pos, TokLParen) { parse_paren_or_function_type(tokens, pos) }
+    else {
+        let path_r = parse_dotted_path_acc(tokens, pos, []);
+        if check(tokens, path_r.next_pos, TokLBracket) {
+            let args_r = parse_generic_args(tokens, path_r.next_pos);
+            TypeResult { value: TyGeneric(path_r.value, args_r.value), next_pos: args_r.next_pos }
+        } else {
+            TypeResult { value: TyPath(path_r.value), next_pos: path_r.next_pos }
+        }
+    }
+
+let parse_paren_or_function_type (tokens: Array[lexer.Token]) (pos: Int): TypeResult = {
+    let open = pos + 1;
+    let params_r = if check(tokens, open, TokRParen) { TypeListResult { value: [], next_pos: open } } else { parse_type_list_acc(tokens, open, []) };
+    let close_pos = expect(tokens, params_r.next_pos, TokRParen, "')'");
+    let arrow_b = bump_if(tokens, close_pos, TokArrow);
+    if arrow_b.matched {
+        let ret_r = parse_type(tokens, arrow_b.next_pos);
+        TypeResult { value: TyFunction(params_r.value, ret_r.value), next_pos: ret_r.next_pos }
+    } else if params_r.value.len() == 1 {
+        TypeResult { value: params_r.value[0], next_pos: close_pos }
+    } else {
+        fail("expected a single parenthesized type or a function type");
+        TypeResult { value: TyPath(["Unit"]), next_pos: close_pos }
+    }
+}
+
+struct GenericArgsResult { value: Array[Ty], next_pos: Int }
+
+let parse_generic_args (tokens: Array[lexer.Token]) (pos: Int): GenericArgsResult = {
+    let open = pos + 1;
+    if check(tokens, open, TokRBracket) { GenericArgsResult { value: [], next_pos: open + 1 } }
+    else {
+        let r = parse_type_list_acc(tokens, open, []);
+        GenericArgsResult { value: r.value, next_pos: expect(tokens, r.next_pos, TokRBracket, "']'") }
+    }
+}
+
+// --- Patterns ---
+
+struct PatResult { value: PPattern, next_pos: Int }
+
+pub let parse_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult = {
+    let first = parse_primary_pattern(tokens, pos);
+    if !check(tokens, first.next_pos, TokPipe) { first }
+    else {
+        let r = parse_or_pattern_acc(tokens, first.next_pos, [first.value]);
+        PatResult { value: POr(r.value), next_pos: r.next_pos }
+    }
+}
+
+let parse_or_pattern_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[PPattern]): PatternListResult = {
+    let b = bump_if(tokens, pos, TokPipe);
+    if !b.matched { PatternListResult { value: acc, next_pos: pos } }
+    else { let r = parse_primary_pattern(tokens, b.next_pos); parse_or_pattern_acc(tokens, r.next_pos, acc.push(r.value)) }
+}
+
+let parse_primary_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult =
+    match tokens[pos] {
+        TokInt(n) => PatResult { value: PInt(n), next_pos: pos + 1 },
+        TokFloat(f) => PatResult { value: PFloat(f), next_pos: pos + 1 },
+        TokStr(s) => PatResult { value: PStr(s), next_pos: pos + 1 },
+        TokTrue => PatResult { value: PBool(true), next_pos: pos + 1 },
+        TokFalse => PatResult { value: PBool(false), next_pos: pos + 1 },
+        TokUnderscore => PatResult { value: PWildcard, next_pos: pos + 1 },
+        TokIdent(name) => {
+            if is_capitalized(name) { parse_path_shaped_pattern(tokens, pos) }
+            else { PatResult { value: PIdent(name), next_pos: pos + 1 } }
+        },
+        TokLParen => parse_tuple_pattern(tokens, pos),
+        _ => { fail("expected a pattern"); PatResult { value: PWildcard, next_pos: pos } },
+    }
+
+// Pre-split uppercase alphabet as a GLOBAL (evaluated once), tested
+// with `Array.contains` — NOT `String.index_of("ABC...", c)`, which
+// re-splits the whole 26-character literal into 26 fresh heap strings
+// on every single call. See `lexer/lexer.plum`'s own character-
+// classification comment for the measurement behind this.
+let UPPERCASE_CHARS: Array[String] = chars_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+let is_capitalized (name: String): Bool = Array.contains(UPPERCASE_CHARS, chars_of(name)[0])
+
+let parse_path_shaped_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult = {
+    let path_r = parse_dotted_path_acc(tokens, pos, []);
+    match tokens[path_r.next_pos] {
+        TokLParen => {
+            let open = path_r.next_pos + 1;
+            if check(tokens, open, TokRParen) { PatResult { value: PVariant(path_r.value, []), next_pos: open + 1 } }
+            else {
+                let args_r = parse_tuple_param_elems_acc(tokens, open, []);
+                PatResult { value: PVariant(path_r.value, args_r.value), next_pos: expect(tokens, args_r.next_pos, TokRParen, "')'") }
+            }
+        },
+        TokLBrace => parse_struct_pattern(tokens, path_r.next_pos, path_r.value),
+        _ => PatResult { value: PVariant(path_r.value, []), next_pos: path_r.next_pos },
+    }
+}
+
+let parse_struct_pattern (tokens: Array[lexer.Token]) (pos: Int) (path: Array[String]): PatResult = {
+    let open = pos + 1;
+    let dotdot_b = bump_if(tokens, open, TokDotDot);
+    if dotdot_b.matched { PatResult { value: PStruct(path, [], true), next_pos: expect(tokens, dotdot_b.next_pos, TokRBrace, "'}'") } }
+    else if check(tokens, open, TokRBrace) { PatResult { value: PStruct(path, [], false), next_pos: open + 1 } }
+    else {
+        let r = parse_field_patterns_acc(tokens, open, [], false);
+        PatResult { value: PStruct(path, r.fields, r.has_rest), next_pos: expect(tokens, r.next_pos, TokRBrace, "'}'") }
+    }
+}
+
+struct FieldPatternsResult { fields: Array[FieldPatternNode], has_rest: Bool, next_pos: Int }
+
+let parse_field_patterns_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[FieldPatternNode]) (has_rest: Bool): FieldPatternsResult = {
+    let r = parse_field_pattern(tokens, pos);
+    let new_acc = acc.push(r.value);
+    let b = bump_if(tokens, r.next_pos, TokComma);
+    if !b.matched { FieldPatternsResult { fields: new_acc, has_rest: has_rest, next_pos: b.next_pos } }
+    else {
+        let dotdot_b = bump_if(tokens, b.next_pos, TokDotDot);
+        if dotdot_b.matched { FieldPatternsResult { fields: new_acc, has_rest: true, next_pos: dotdot_b.next_pos } }
+        else if check(tokens, b.next_pos, TokRBrace) { FieldPatternsResult { fields: new_acc, has_rest: false, next_pos: b.next_pos } }
+        else { parse_field_patterns_acc(tokens, b.next_pos, new_acc, false) }
+    }
+}
+
+struct FieldPatResult { value: FieldPatternNode, next_pos: Int }
+
+let parse_field_pattern (tokens: Array[lexer.Token]) (pos: Int): FieldPatResult = {
+    let name_tok = expect_ident(tokens, pos);
+    let colon_b = bump_if(tokens, name_tok.next_pos, TokColon);
+    if colon_b.matched {
+        let pat_r = parse_pattern(tokens, colon_b.next_pos);
+        FieldPatResult { value: FieldPatternNode { name: name_tok.name, pattern: pat_r.value }, next_pos: pat_r.next_pos }
+    } else {
+        FieldPatResult { value: FieldPatternNode { name: name_tok.name, pattern: PIdent(name_tok.name) }, next_pos: colon_b.next_pos }
+    }
+}
+
+let parse_tuple_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult = {
+    let open = pos + 1;
+    if check(tokens, open, TokRParen) { PatResult { value: PTuple([]), next_pos: open + 1 } }
+    else {
+        let first = parse_pattern(tokens, open);
+        let comma_b = bump_if(tokens, first.next_pos, TokComma);
+        if !comma_b.matched { PatResult { value: first.value, next_pos: expect(tokens, first.next_pos, TokRParen, "')'") } }
+        else {
+            let r = parse_tuple_param_elems_acc(tokens, comma_b.next_pos, [first.value]);
+            PatResult { value: PTuple(r.value), next_pos: expect(tokens, r.next_pos, TokRParen, "')'") }
+        }
+    }
+}
+
+// --- Expressions: precedence climbing, loosest to tightest ---
+
+struct ExprResult { value: PExpr, next_pos: Int }
+
+pub let parse_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = parse_pipe(tokens, pos)
+
+let parse_pipe (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let lhs = parse_or(tokens, pos);
+    parse_pipe_rest(tokens, lhs.next_pos, lhs.value)
+}
+let parse_pipe_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprResult = {
+    let b = bump_if(tokens, pos, TokPipeGt);
+    if !b.matched { ExprResult { value: lhs, next_pos: pos } }
+    else { let rhs = parse_or(tokens, b.next_pos); parse_pipe_rest(tokens, rhs.next_pos, EBinary(BPipe, lhs, rhs.value)) }
+}
+
+let parse_or (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let lhs = parse_and(tokens, pos);
+    parse_or_rest(tokens, lhs.next_pos, lhs.value)
+}
+let parse_or_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprResult = {
+    let b = bump_if(tokens, pos, TokOrOr);
+    if !b.matched { ExprResult { value: lhs, next_pos: pos } }
+    else { let rhs = parse_and(tokens, b.next_pos); parse_or_rest(tokens, rhs.next_pos, EBinary(BOr, lhs, rhs.value)) }
+}
+
+let parse_and (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let lhs = parse_compare(tokens, pos);
+    parse_and_rest(tokens, lhs.next_pos, lhs.value)
+}
+let parse_and_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprResult = {
+    let b = bump_if(tokens, pos, TokAndAnd);
+    if !b.matched { ExprResult { value: lhs, next_pos: pos } }
+    else { let rhs = parse_compare(tokens, b.next_pos); parse_and_rest(tokens, rhs.next_pos, EBinary(BAnd, lhs, rhs.value)) }
+}
+
+struct CompareOp { op: BOp, next_pos: Int }
+let compare_op_at (tokens: Array[lexer.Token]) (pos: Int): Option[CompareOp] =
+    match tokens[pos] {
+        TokEqEq => Some(CompareOp { op: BEq, next_pos: pos + 1 }),
+        TokNotEq => Some(CompareOp { op: BNe, next_pos: pos + 1 }),
+        TokLt => Some(CompareOp { op: BLt, next_pos: pos + 1 }),
+        TokGt => Some(CompareOp { op: BGt, next_pos: pos + 1 }),
+        TokLtEq => Some(CompareOp { op: BLe, next_pos: pos + 1 }),
+        TokGtEq => Some(CompareOp { op: BGe, next_pos: pos + 1 }),
+        _ => None,
+    }
+
+let parse_compare (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let lhs = parse_range(tokens, pos);
+    match compare_op_at(tokens, lhs.next_pos) {
+        None => lhs,
+        Some(op_r) => {
+            let rhs = parse_range(tokens, op_r.next_pos);
+            if Option.is_some(compare_op_at(tokens, rhs.next_pos)) { fail("comparison operators do not chain") };
+            ExprResult { value: EBinary(op_r.op, lhs.value, rhs.value), next_pos: rhs.next_pos }
+        },
+    }
+}
+
+let parse_range (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let lhs = parse_add(tokens, pos);
+    let b = bump_if(tokens, lhs.next_pos, TokDotDot);
+    if !b.matched { lhs }
+    else {
+        let rhs = parse_add(tokens, b.next_pos);
+        if check(tokens, rhs.next_pos, TokDotDot) { fail("ranges do not chain") };
+        ExprResult { value: EBinary(BRange, lhs.value, rhs.value), next_pos: rhs.next_pos }
+    }
+}
+
+let parse_add (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let lhs = parse_mul(tokens, pos);
+    parse_add_rest(tokens, lhs.next_pos, lhs.value)
+}
+let parse_add_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprResult =
+    match tokens[pos] {
+        TokPlus => { let rhs = parse_mul(tokens, pos + 1); parse_add_rest(tokens, rhs.next_pos, EBinary(BAdd, lhs, rhs.value)) },
+        TokMinus => { let rhs = parse_mul(tokens, pos + 1); parse_add_rest(tokens, rhs.next_pos, EBinary(BSub, lhs, rhs.value)) },
+        _ => ExprResult { value: lhs, next_pos: pos },
+    }
+
+let parse_mul (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let lhs = parse_unary(tokens, pos);
+    parse_mul_rest(tokens, lhs.next_pos, lhs.value)
+}
+let parse_mul_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprResult =
+    match tokens[pos] {
+        TokStar => { let rhs = parse_unary(tokens, pos + 1); parse_mul_rest(tokens, rhs.next_pos, EBinary(BMul, lhs, rhs.value)) },
+        TokSlash => { let rhs = parse_unary(tokens, pos + 1); parse_mul_rest(tokens, rhs.next_pos, EBinary(BDiv, lhs, rhs.value)) },
+        TokPercent => { let rhs = parse_unary(tokens, pos + 1); parse_mul_rest(tokens, rhs.next_pos, EBinary(BRem, lhs, rhs.value)) },
+        _ => ExprResult { value: lhs, next_pos: pos },
+    }
+
+let parse_unary (tokens: Array[lexer.Token]) (pos: Int): ExprResult =
+    match tokens[pos] {
+        TokMinus => { let r = parse_unary(tokens, pos + 1); ExprResult { value: EUnary(UNeg, r.value), next_pos: r.next_pos } },
+        TokBang => { let r = parse_unary(tokens, pos + 1); ExprResult { value: EUnary(UNot, r.value), next_pos: r.next_pos } },
+        _ => parse_postfix(tokens, pos),
+    }
+
+let parse_postfix (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let base = parse_primary(tokens, pos);
+    parse_postfix_from(tokens, base.next_pos, base.value)
+}
+
+let parse_postfix_from (tokens: Array[lexer.Token]) (pos: Int) (expr: PExpr): ExprResult =
+    match tokens[pos] {
+        TokDot => {
+            let name_tok = expect_ident(tokens, pos + 1);
+            parse_postfix_from(tokens, name_tok.next_pos, EField(expr, name_tok.name))
+        },
+        TokLParen => {
+            let args_r = parse_arguments(tokens, pos);
+            parse_postfix_from(tokens, args_r.next_pos, ECall(expr, args_r.value))
+        },
+        TokLBracket => {
+            if next_bracket_is_generic(tokens, pos + 1) {
+                let args_r = parse_generic_args(tokens, pos);
+                parse_postfix_from(tokens, args_r.next_pos, EGenericInst(expr, args_r.value))
+            } else {
+                let index_r = parse_expr(tokens, pos + 1);
+                let close_pos = expect(tokens, index_r.next_pos, TokRBracket, "']'");
+                parse_postfix_from(tokens, close_pos, EIndex(expr, index_r.value))
+            }
+        },
+        _ => ExprResult { value: expr, next_pos: pos },
+    }
+
+// Mirrors `crates/plum-syntax/src/parser.rs::next_bracket_is_generic`
+// exactly: capitalization of the LAST segment of a dotted identifier
+// chain immediately after `[`, bounded lookahead, no backtracking.
+let next_bracket_is_generic (tokens: Array[lexer.Token]) (pos: Int): Bool =
+    match tokens[pos] {
+        TokIdent(name) => {
+            let capitalized = is_capitalized(name);
+            if check(tokens, pos + 1, TokDot) { next_bracket_is_generic(tokens, pos + 2) } else { capitalized }
+        },
+        _ => false,
+    }
+
+struct ArgsResult { value: Array[PExpr], next_pos: Int }
+
+let parse_arguments (tokens: Array[lexer.Token]) (pos: Int): ArgsResult = {
+    let open = pos + 1;
+    if check(tokens, open, TokRParen) { ArgsResult { value: [], next_pos: open + 1 } }
+    else {
+        let r = parse_argument_list_acc(tokens, open, []);
+        ArgsResult { value: r.value, next_pos: expect(tokens, r.next_pos, TokRParen, "')'") }
+    }
+}
+
+let parse_argument_list_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[PExpr]): ArgsResult = {
+    let r = parse_argument(tokens, pos);
+    let new_acc = acc.push(r.value);
+    let b = bump_if(tokens, r.next_pos, TokComma);
+    if !b.matched || check(tokens, b.next_pos, TokRParen) { ArgsResult { value: new_acc, next_pos: b.next_pos } }
+    else { parse_argument_list_acc(tokens, b.next_pos, new_acc) }
+}
+
+// Placeholder-lambda sugar (`_.chain`) — see `crates/plum-syntax/src/
+// parser.rs::parse_argument`'s own doc comment for the full "why."
+let parse_argument (tokens: Array[lexer.Token]) (pos: Int): ExprResult =
+    if check(tokens, pos, TokUnderscore) {
+        let chain_r = parse_postfix_from(tokens, pos + 1, EIdent("_"));
+        ExprResult { value: EClosure(["_"], chain_r.value), next_pos: chain_r.next_pos }
+    } else {
+        parse_expr(tokens, pos)
+    }
+
+let parse_array_literal (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let open = pos + 1;
+    if check(tokens, open, TokRBracket) { ExprResult { value: EArray([]), next_pos: open + 1 } }
+    else {
+        let r = parse_expr_list_acc(tokens, open, [], TokRBracket);
+        ExprResult { value: EArray(r.value), next_pos: expect(tokens, r.next_pos, TokRBracket, "']'") }
+    }
+}
+
+struct ExprListResult { value: Array[PExpr], next_pos: Int }
+
+let parse_expr_list_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[PExpr]) (closer: lexer.Token): ExprListResult = {
+    let r = parse_expr(tokens, pos);
+    let new_acc = acc.push(r.value);
+    let b = bump_if(tokens, r.next_pos, TokComma);
+    if !b.matched || check(tokens, b.next_pos, closer) { ExprListResult { value: new_acc, next_pos: b.next_pos } }
+    else { parse_expr_list_acc(tokens, b.next_pos, new_acc, closer) }
+}
+
+// --- Primary expressions ---
+
+let parse_primary (tokens: Array[lexer.Token]) (pos: Int): ExprResult =
+    match tokens[pos] {
+        TokInt(n) => ExprResult { value: EInt(n), next_pos: pos + 1 },
+        TokFloat(f) => ExprResult { value: EFloat(f), next_pos: pos + 1 },
+        TokStr(s) => ExprResult { value: EStr(s), next_pos: pos + 1 },
+        TokInterpStr(parts) => ExprResult { value: desugar_interp_str(parts), next_pos: pos + 1 },
+        TokTrue => ExprResult { value: EBool(true), next_pos: pos + 1 },
+        TokFalse => ExprResult { value: EBool(false), next_pos: pos + 1 },
+        TokIdent(_) => parse_path_shaped_expr(tokens, pos),
+        TokLParen => parse_paren_or_tuple(tokens, pos),
+        TokLBracket => parse_array_literal(tokens, pos),
+        TokLBrace => { let b = parse_block(tokens, pos); ExprResult { value: EBlock(b.value), next_pos: b.next_pos } },
+        TokIf => parse_if_expr(tokens, pos),
+        TokMatch => parse_match_expr(tokens, pos),
+        TokSelect => parse_select_expr(tokens, pos),
+        TokFor => parse_for_expr(tokens, pos),
+        TokPipe => parse_closure_expr(tokens, pos),
+        TokOrOr => parse_closure_expr(tokens, pos),
+        TokUnsafe => { let b = parse_block(tokens, pos + 1); ExprResult { value: EUnsafe(b.value), next_pos: b.next_pos } },
+        TokSpawn => { let b = parse_block(tokens, pos + 1); ExprResult { value: ESpawn(b.value), next_pos: b.next_pos } },
+        _ => { fail("expected an expression"); ExprResult { value: EInt(0), next_pos: pos } },
+    }
+
+// Desugars `"a${x}b"` into `"a".concat(x.to_string()).concat("b")` —
+// mirrors `crates/plum-syntax/src/parser.rs::desugar_interp_str`
+// exactly, re-lexing/re-parsing each `${...}` piece's raw source text
+// via THIS SAME lexer/parser (recursive, not a separate code path).
+let desugar_interp_str (parts: Array[lexer.InterpPiece]): PExpr = desugar_interp_str_acc(parts, 1, first_literal_expr(parts))
+
+let first_literal_expr (parts: Array[lexer.InterpPiece]): Option[PExpr] =
+    match parts[0] {
+        PieceLiteral(s) => if s == "" { None } else { Some(EStr(s)) },
+        PieceExpr(_) => None,
+    }
+
+let desugar_interp_str_acc (parts: Array[lexer.InterpPiece]) (i: Int) (acc: Option[PExpr]): PExpr =
+    if i >= parts.len() { Option.unwrap_or(acc, EStr("")) }
+    else {
+        let inner = match parts[i] { PieceExpr(src) => reparse_interp_expr(src), PieceLiteral(_) => { fail("interpolation pieces must alternate Literal/Expr"); EStr("") } };
+        let stringified = ECall(EField(inner, "to_string"), []);
+        let acc2 = match acc { None => stringified, Some(prev) => ECall(EField(prev, "concat"), [stringified]) };
+        let lit = match parts[i + 1] { PieceLiteral(s) => s, PieceExpr(_) => { fail("interpolation pieces must alternate Expr/Literal"); "" } };
+        let acc3 = if lit == "" { acc2 } else { ECall(EField(acc2, "concat"), [EStr(lit)]) };
+        desugar_interp_str_acc(parts, i + 2, Some(acc3))
+    }
+
+let reparse_interp_expr (src: String): PExpr = {
+    let inner_tokens = lexer.tokenize(src);
+    parse_expr(inner_tokens, 0).value
+}
+
+let parse_paren_or_tuple (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let open = pos + 1;
+    if check(tokens, open, TokRParen) { ExprResult { value: ETuple([]), next_pos: open + 1 } }
+    else {
+        let first = parse_expr(tokens, open);
+        let comma_b = bump_if(tokens, first.next_pos, TokComma);
+        if !comma_b.matched { ExprResult { value: first.value, next_pos: expect(tokens, first.next_pos, TokRParen, "')'") } }
+        else if check(tokens, comma_b.next_pos, TokRParen) { ExprResult { value: ETuple([first.value]), next_pos: comma_b.next_pos + 1 } }
+        else {
+            let r = parse_expr_list_acc(tokens, comma_b.next_pos, [first.value], TokRParen);
+            ExprResult { value: ETuple(r.value), next_pos: expect(tokens, r.next_pos, TokRParen, "')'") }
+        }
+    }
+}
+
+let parse_path_shaped_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let path_r = parse_expr_path_acc(tokens, pos, []);
+    let last_name = path_r.value[path_r.value.len() - 1];
+    if check(tokens, path_r.next_pos, TokLBrace) && is_capitalized(last_name) {
+        parse_struct_literal(tokens, path_r.next_pos, path_r.value)
+    } else {
+        ExprResult { value: path_to_field_chain(path_r.value), next_pos: path_r.next_pos }
+    }
+}
+
+let path_to_field_chain (segments: Array[String]): PExpr = path_to_field_chain_acc(segments, 1, EIdent(segments[0]))
+let path_to_field_chain_acc (segments: Array[String]) (i: Int) (acc: PExpr): PExpr =
+    if i >= segments.len() { acc } else { path_to_field_chain_acc(segments, i + 1, EField(acc, segments[i])) }
+
+let parse_expr_path_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[String]): PathResult = {
+    let name_tok = expect_ident(tokens, pos);
+    let new_acc = acc.push(name_tok.name);
+    if check(tokens, name_tok.next_pos, TokDot) { parse_expr_path_acc(tokens, name_tok.next_pos + 1, new_acc) }
+    else { PathResult { value: new_acc, next_pos: name_tok.next_pos } }
+}
+
+let parse_struct_literal (tokens: Array[lexer.Token]) (pos: Int) (path: Array[String]): ExprResult = {
+    let open = pos + 1;
+    let dotdot_b = bump_if(tokens, open, TokDotDot);
+    if dotdot_b.matched {
+        let spread_r = parse_expr(tokens, dotdot_b.next_pos);
+        ExprResult { value: EStructLit(path, [], Some(spread_r.value)), next_pos: expect(tokens, spread_r.next_pos, TokRBrace, "'}'") }
+    } else if check(tokens, open, TokRBrace) {
+        ExprResult { value: EStructLit(path, [], None), next_pos: open + 1 }
+    } else {
+        let r = parse_field_inits_acc(tokens, open, [], None);
+        ExprResult { value: EStructLit(path, r.fields, r.spread), next_pos: expect(tokens, r.next_pos, TokRBrace, "'}'") }
+    }
+}
+
+struct FieldInitsResult { fields: Array[FieldInitNode], spread: Option[PExpr], next_pos: Int }
+
+let parse_field_inits_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[FieldInitNode]) (spread: Option[PExpr]): FieldInitsResult = {
+    let r = parse_field_init(tokens, pos);
+    let new_acc = acc.push(r.value);
+    let b = bump_if(tokens, r.next_pos, TokComma);
+    if !b.matched { FieldInitsResult { fields: new_acc, spread: spread, next_pos: b.next_pos } }
+    else {
+        let dotdot_b = bump_if(tokens, b.next_pos, TokDotDot);
+        if dotdot_b.matched {
+            let spread_r = parse_expr(tokens, dotdot_b.next_pos);
+            FieldInitsResult { fields: new_acc, spread: Some(spread_r.value), next_pos: spread_r.next_pos }
+        } else if check(tokens, b.next_pos, TokRBrace) { FieldInitsResult { fields: new_acc, spread: spread, next_pos: b.next_pos } }
+        else { parse_field_inits_acc(tokens, b.next_pos, new_acc, spread) }
+    }
+}
+
+struct FieldInitResult { value: FieldInitNode, next_pos: Int }
+
+let parse_field_init (tokens: Array[lexer.Token]) (pos: Int): FieldInitResult = {
+    let name_tok = expect_ident(tokens, pos);
+    let extra_r = parse_extra_path_acc(tokens, name_tok.next_pos, []);
+    let colon_b = bump_if(tokens, extra_r.next_pos, TokColon);
+    if colon_b.matched {
+        let value_r = parse_expr(tokens, colon_b.next_pos);
+        FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: extra_r.value, value: value_r.value }, next_pos: value_r.next_pos }
+    } else if Array.is_empty(extra_r.value) {
+        FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: [], value: EIdent(name_tok.name) }, next_pos: extra_r.next_pos }
+    } else {
+        fail("a nested field-update path needs an explicit ': value'");
+        FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: extra_r.value, value: EInt(0) }, next_pos: extra_r.next_pos }
+    }
+}
+
+let parse_extra_path_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[String]): PathResult = {
+    let b = bump_if(tokens, pos, TokDot);
+    if !b.matched { PathResult { value: acc, next_pos: pos } }
+    else { let seg = expect_ident(tokens, b.next_pos); parse_extra_path_acc(tokens, seg.next_pos, acc.push(seg.name)) }
+}
+
+let parse_if_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let cond_r = parse_expr(tokens, pos + 1);
+    let then_r = parse_block(tokens, cond_r.next_pos);
+    let else_b = bump_if(tokens, then_r.next_pos, TokElse);
+    if !else_b.matched { ExprResult { value: EIf(cond_r.value, then_r.value, None), next_pos: else_b.next_pos } }
+    else if check(tokens, else_b.next_pos, TokIf) {
+        let else_r = parse_if_expr(tokens, else_b.next_pos);
+        ExprResult { value: EIf(cond_r.value, then_r.value, Some(else_r.value)), next_pos: else_r.next_pos }
+    } else {
+        let else_block_r = parse_block(tokens, else_b.next_pos);
+        ExprResult { value: EIf(cond_r.value, then_r.value, Some(EBlock(else_block_r.value))), next_pos: else_block_r.next_pos }
+    }
+}
+
+let parse_match_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let scrutinee_r = parse_expr(tokens, pos + 1);
+    let open = expect(tokens, scrutinee_r.next_pos, TokLBrace, "'{'");
+    if check(tokens, open, TokRBrace) { ExprResult { value: EMatch(scrutinee_r.value, []), next_pos: open + 1 } }
+    else {
+        let arms_r = parse_match_arms_acc(tokens, open, []);
+        ExprResult { value: EMatch(scrutinee_r.value, arms_r.value), next_pos: expect(tokens, arms_r.next_pos, TokRBrace, "'}'") }
+    }
+}
+
+struct MatchArmsResult { value: Array[MatchArmNode], next_pos: Int }
+
+let parse_match_arms_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[MatchArmNode]): MatchArmsResult =
+    if check(tokens, pos, TokRBrace) { MatchArmsResult { value: acc, next_pos: pos } }
+    else {
+        let pat_r = parse_pattern(tokens, pos);
+        let if_b = bump_if(tokens, pat_r.next_pos, TokIf);
+        let guard_r = if if_b.matched { let g = parse_expr(tokens, if_b.next_pos); GuardResult { value: Some(g.value), next_pos: g.next_pos } } else { GuardResult { value: None, next_pos: if_b.next_pos } };
+        let arrow_pos = expect(tokens, guard_r.next_pos, TokFatArrow, "'=>'");
+        let body_r = parse_expr(tokens, arrow_pos);
+        let new_acc = acc.push(MatchArmNode { pattern: pat_r.value, guard: guard_r.value, body: body_r.value });
+        let comma_b = bump_if(tokens, body_r.next_pos, TokComma);
+        if !comma_b.matched { MatchArmsResult { value: new_acc, next_pos: comma_b.next_pos } }
+        else { parse_match_arms_acc(tokens, comma_b.next_pos, new_acc) }
+    }
+
+struct GuardResult { value: Option[PExpr], next_pos: Int }
+
+let parse_select_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let open = expect(tokens, pos + 1, TokLBrace, "'{'");
+    if check(tokens, open, TokRBrace) { ExprResult { value: ESelect([]), next_pos: open + 1 } }
+    else {
+        let arms_r = parse_select_arms_acc(tokens, open, []);
+        ExprResult { value: ESelect(arms_r.value), next_pos: expect(tokens, arms_r.next_pos, TokRBrace, "'}'") }
+    }
+}
+
+struct SelectArmsResult { value: Array[SelectArmNode], next_pos: Int }
+
+let parse_select_arms_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[SelectArmNode]): SelectArmsResult =
+    if check(tokens, pos, TokRBrace) { SelectArmsResult { value: acc, next_pos: pos } }
+    else {
+        let pat_r = parse_pattern(tokens, pos);
+        let eq_pos = expect(tokens, pat_r.next_pos, TokEq, "'='");
+        let expr_r = parse_expr(tokens, eq_pos);
+        let arrow_pos = expect(tokens, expr_r.next_pos, TokFatArrow, "'=>'");
+        let body_r = parse_expr(tokens, arrow_pos);
+        let new_acc = acc.push(SelectArmNode { pattern: pat_r.value, expr: expr_r.value, body: body_r.value });
+        let comma_b = bump_if(tokens, body_r.next_pos, TokComma);
+        if !comma_b.matched { SelectArmsResult { value: new_acc, next_pos: comma_b.next_pos } }
+        else { parse_select_arms_acc(tokens, comma_b.next_pos, new_acc) }
+    }
+
+let parse_for_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+    let pat_r = parse_pattern(tokens, pos + 1);
+    let in_pos = expect(tokens, pat_r.next_pos, TokIn, "'in'");
+    let iter_r = parse_expr(tokens, in_pos);
+    let body_r = parse_block(tokens, iter_r.next_pos);
+    ExprResult { value: EFor(pat_r.value, iter_r.value, body_r.value), next_pos: body_r.next_pos }
+}
+
+let parse_closure_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult =
+    match tokens[pos] {
+        TokOrOr => { let body_r = parse_expr(tokens, pos + 1); ExprResult { value: EClosure([], body_r.value), next_pos: body_r.next_pos } },
+        _ => {
+            let params_r = if check(tokens, pos + 1, TokPipe) { NamesResult { value: [], next_pos: pos + 1 } } else { parse_closure_params_acc(tokens, pos + 1, []) };
+            let close_pos = expect(tokens, params_r.next_pos, TokPipe, "'|'");
+            let body_r = parse_expr(tokens, close_pos);
+            ExprResult { value: EClosure(params_r.value, body_r.value), next_pos: body_r.next_pos }
+        },
+    }
+
+struct NamesResult { value: Array[String], next_pos: Int }
+
+let parse_closure_params_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[String]): NamesResult = {
+    let name_tok = expect_ident(tokens, pos);
+    let ty_b = bump_if(tokens, name_tok.next_pos, TokColon);
+    let after_ty = if ty_b.matched { let t = parse_type(tokens, ty_b.next_pos); t.next_pos } else { ty_b.next_pos };
+    let new_acc = acc.push(name_tok.name);
+    let comma_b = bump_if(tokens, after_ty, TokComma);
+    if !comma_b.matched { NamesResult { value: new_acc, next_pos: after_ty } }
+    else { parse_closure_params_acc(tokens, comma_b.next_pos, new_acc) }
+}
+
+// --- Blocks ---
+
+struct BlockResult { value: PBlock, next_pos: Int }
+
+let parse_block (tokens: Array[lexer.Token]) (pos: Int): BlockResult = {
+    let open = expect(tokens, pos, TokLBrace, "'{'");
+    let r = parse_block_items_acc(tokens, open, [], None);
+    BlockResult { value: PBlock { stmts: r.stmts, tail: r.tail }, next_pos: expect(tokens, r.next_pos, TokRBrace, "'}'") }
+}
+
+struct BlockItemsResult { stmts: Array[PStmt], tail: Option[PExpr], next_pos: Int }
+
+// `no_tail(())` instead of a bare `None` at each recursive call below —
+// a real, narrow type-inference gap found while building this file:
+// `None`'s own type parameter genuinely can't be pinned at some of
+// these call sites (self-recursive calls inside a 3-way branching
+// `if`/`else if`/`else`, each branch required to unify to the SAME
+// `BlockItemsResult`), even though the callee's own parameter is
+// concretely annotated `Option[PExpr]`. This explicit, annotated
+// helper sidesteps it entirely rather than depending on that
+// resolution — `no_tail`'s OWN declared return type pins the `Option`
+// down before it's ever passed anywhere.
+let no_tail (unit: Unit): Option[PExpr] = None
+
+let parse_block_items_acc (tokens: Array[lexer.Token]) (pos: Int) (stmts: Array[PStmt]) (tail: Option[PExpr]): BlockItemsResult =
+    if check(tokens, pos, TokRBrace) { BlockItemsResult { stmts: stmts, tail: tail, next_pos: pos } }
+    else if check(tokens, pos, TokLet) {
+        let stmt_r = parse_let_stmt(tokens, pos);
+        let semi_pos = expect(tokens, stmt_r.next_pos, TokSemicolon, "';'");
+        parse_block_items_acc(tokens, semi_pos, stmts.push(stmt_r.value), no_tail(()))
+    } else {
+        let expr_r = parse_expr(tokens, pos);
+        if check(tokens, expr_r.next_pos, TokEq) {
+            let name = match expr_r.value { EIdent(n) => n, _ => { fail("invalid assignment target"); "" } };
+            let value_r = parse_expr(tokens, expr_r.next_pos + 1);
+            let semi_pos = expect(tokens, value_r.next_pos, TokSemicolon, "';'");
+            parse_block_items_acc(tokens, semi_pos, stmts.push(SAssign(name, value_r.value)), no_tail(()))
+        } else {
+            let semi_b = bump_if(tokens, expr_r.next_pos, TokSemicolon);
+            if semi_b.matched { parse_block_items_acc(tokens, semi_b.next_pos, stmts.push(SExpr(expr_r.value)), no_tail(())) }
+            else { BlockItemsResult { stmts: stmts, tail: Some(expr_r.value), next_pos: expr_r.next_pos } }
+        }
+    }
+
+struct LetStmtResult { value: PStmt, next_pos: Int }
+
+let parse_let_stmt (tokens: Array[lexer.Token]) (pos: Int): LetStmtResult = {
+    let mut_b = bump_if(tokens, pos + 1, TokMut);
+    let pat_r = parse_pattern(tokens, mut_b.next_pos);
+    let ty_b = bump_if(tokens, pat_r.next_pos, TokColon);
+    let after_ty = if ty_b.matched { let t = parse_type(tokens, ty_b.next_pos); t.next_pos } else { ty_b.next_pos };
+    let eq_pos = expect(tokens, after_ty, TokEq, "'='");
+    let value_r = parse_expr(tokens, eq_pos);
+    LetStmtResult { value: SLet(mut_b.matched, pat_r.value, value_r.value), next_pos: value_r.next_pos }
+}
+
+// --- Rendering (must match crates/plum-syntax/src/render.rs's
+// `render_program` byte for byte) ---
+
+let quote (s: String): String = "\"".concat(escape_str_chars(chars_of(s), 0, "")).concat("\"")
+
+let escape_str_chars (chars: Array[String]) (i: Int) (acc: String): String =
+    if i >= chars.len() { acc }
+    else if chars[i] == "\n" { escape_str_chars(chars, i + 1, acc.concat("\\n")) }
+    else if chars[i] == "\t" { escape_str_chars(chars, i + 1, acc.concat("\\t")) }
+    else if chars[i] == "\r" { escape_str_chars(chars, i + 1, acc.concat("\\r")) }
+    else if chars[i] == "\\" { escape_str_chars(chars, i + 1, acc.concat("\\\\")) }
+    else if chars[i] == "\"" { escape_str_chars(chars, i + 1, acc.concat("\\\"")) }
+    else { escape_str_chars(chars, i + 1, acc.concat(chars[i])) }
+
+let join_space (strs: Array[String]): String = Array.fold(strs, "", |acc, s| if acc == "" { s } else { acc.concat(" ").concat(s) })
+let join_comma (strs: Array[String]): String = Array.fold(strs, "", |acc, s| if acc == "" { s } else { acc.concat(",").concat(s) })
+let paren (s: String): String = "(".concat(s).concat(")")
+let sexpr (parts: Array[String]): String = paren(join_space(parts))
+
+let op_symbol (op: BOp): String = match op {
+    BAdd => "+", BSub => "-", BMul => "*", BDiv => "/", BRem => "%",
+    BEq => "==", BNe => "!=", BLt => "<", BGt => ">", BLe => "<=", BGe => ">=",
+    BAnd => "&&", BOr => "||", BRange => "..", BPipe => "|>",
+}
+
+let render_type (ty: Ty): String = match ty {
+    TyPath(segments) => join_dot(segments),
+    TyGeneric(base, args) => sexpr(Array.concat(["gt", join_dot(base)], Array.map(args, |t| render_type(t)))),
+    TyFunction(params, ret) => "(fn (".concat(join_space(Array.map(params, |t| render_type(t)))).concat(") -> ").concat(render_type(ret)).concat(")"),
+}
+
+let join_dot (segments: Array[String]): String = Array.fold(segments, "", |acc, s| if acc == "" { s } else { acc.concat(".").concat(s) })
+
+let render_expr (e: PExpr): String = match e {
+    EInt(n) => n.to_string(),
+    EFloat(f) => f.to_string(),
+    EStr(s) => quote(s),
+    EBool(b) => b.to_string(),
+    EIdent(name) => name,
+    ETuple(elems) => sexpr(Array.concat(["tuple"], Array.map(elems, |x| render_expr(x)))),
+    EArray(elems) => sexpr(Array.concat(["array"], Array.map(elems, |x| render_expr(x)))),
+    EUnary(op, inner) => {
+        let sym = match op { UNeg => "-", UNot => "!" };
+        "(".concat(sym).concat(" ").concat(render_expr(inner)).concat(")")
+    },
+    EBinary(op, lhs, rhs) => sexpr([op_symbol(op), render_expr(lhs), render_expr(rhs)]),
+    EField(base, name) => "(field ".concat(render_expr(base)).concat(" ").concat(name).concat(")"),
+    ECall(callee, args) => sexpr(Array.concat(["call", render_expr(callee)], Array.map(args, |x| render_expr(x)))),
+    EGenericInst(callee, args) => sexpr(Array.concat(["generic", render_expr(callee)], Array.map(args, |t| render_type(t)))),
+    EIndex(base, index) => "(index ".concat(render_expr(base)).concat(" ").concat(render_expr(index)).concat(")"),
+    EBlock(block) => render_block(block),
+    EIf(cond, then_branch, else_branch) => {
+        let base = ["if", render_expr(cond), render_block(then_branch)];
+        let parts = match else_branch { Some(e) => base.push(render_expr(e)), None => base };
+        sexpr(parts)
+    },
+    EMatch(scrutinee, arms) => sexpr(Array.concat(["match", render_expr(scrutinee)], Array.map(arms, |a| render_arm(a)))),
+    EFor(pattern, iter, body) => "(for ".concat(render_pattern(pattern)).concat(" ").concat(render_expr(iter)).concat(" ").concat(render_block(body)).concat(")"),
+    EClosure(params, body) => sexpr(["closure", paren(join_space(params)), render_expr(body)]),
+    EUnsafe(block) => "(unsafe ".concat(render_block(block)).concat(")"),
+    ESpawn(block) => "(spawn ".concat(render_block(block)).concat(")"),
+    EStructLit(path, fields, spread) => {
+        let field_strs = Array.map(fields, |f| render_field_init(f));
+        let base = Array.concat(["struct-lit", join_dot(path)], field_strs);
+        let parts = match spread { Some(s) => base.push("..".concat(render_expr(s))), None => base };
+        sexpr(parts)
+    },
+    ESelect(arms) => sexpr(Array.concat(["select"], Array.map(arms, |a| render_select_arm(a)))),
+}
+
+let render_field_init (f: FieldInitNode): String = {
+    let key = Array.fold(f.extra_path, f.name, |acc, seg| acc.concat(".").concat(seg));
+    key.concat("=").concat(render_expr(f.value))
+}
+
+let render_block (b: PBlock): String = {
+    let stmt_strs = Array.map(b.stmts, |s| render_stmt(s));
+    let parts = match b.tail { Some(t) => stmt_strs.push(render_expr(t)), None => stmt_strs };
+    sexpr(Array.concat(["block"], parts))
+}
+
+let render_stmt (s: PStmt): String = match s {
+    SLet(is_mut, pattern, value) => {
+        let mut_marker = if is_mut { "mut " } else { "" };
+        "(let ".concat(mut_marker).concat(render_pattern(pattern)).concat(" ").concat(render_expr(value)).concat(")")
+    },
+    SAssign(name, value) => "(= ".concat(name).concat(" ").concat(render_expr(value)).concat(")"),
+    SExpr(e) => "(stmt ".concat(render_expr(e)).concat(")"),
+}
+
+let render_arm (a: MatchArmNode): String = match a.guard {
+    Some(g) => "(arm ".concat(render_pattern(a.pattern)).concat(" if=").concat(render_expr(g)).concat(" ").concat(render_expr(a.body)).concat(")"),
+    None => "(arm ".concat(render_pattern(a.pattern)).concat(" ").concat(render_expr(a.body)).concat(")"),
+}
+
+let render_select_arm (a: SelectArmNode): String =
+    "(arm ".concat(render_pattern(a.pattern)).concat(" = ").concat(render_expr(a.expr)).concat(" ").concat(render_expr(a.body)).concat(")")
+
+let render_field_pattern (fp: FieldPatternNode): String = fp.name.concat("=").concat(render_pattern(fp.pattern))
+
+let render_pattern (p: PPattern): String = match p {
+    PInt(n) => n.to_string(),
+    PFloat(f) => f.to_string(),
+    PStr(s) => quote(s),
+    PBool(b) => b.to_string(),
+    PWildcard => "_",
+    PIdent(name) => name,
+    PTuple(elems) => sexpr(Array.concat(["tuple"], Array.map(elems, |x| render_pattern(x)))),
+    PVariant(path, args) => sexpr(Array.concat(["variant", join_dot(path)], Array.map(args, |x| render_pattern(x)))),
+    PStruct(path, fields, has_rest) => {
+        let base = Array.concat(["struct", join_dot(path)], Array.map(fields, |f| render_field_pattern(f)));
+        let parts = if has_rest { base.push("..") } else { base };
+        sexpr(parts)
+    },
+    POr(alts) => sexpr(Array.concat(["or"], Array.map(alts, |x| render_pattern(x)))),
+}
+
+let render_generic_params (params: Array[GenericParamNode]): String =
+    if Array.is_empty(params) { "" }
+    else { "[".concat(join_comma(Array.map(params, |p| if Array.is_empty(p.bound) { p.name } else { p.name.concat(":").concat(join_plus(p.bound)) }))).concat("]") }
+
+let join_plus (strs: Array[String]): String = Array.fold(strs, "", |acc, s| if acc == "" { s } else { acc.concat("+").concat(s) })
+
+let render_param (p: ParamNode): String = match p {
+    ParamIdent(name) => name,
+    ParamPatternTy(pattern, Some(ty)) => "(".concat(render_pattern(pattern)).concat(":").concat(render_type(ty)).concat(")"),
+    ParamPatternTy(pattern, None) => "(".concat(render_pattern(pattern)).concat(")"),
+}
+
+let render_item (item: ItemNode): String = {
+    let pub_marker = if item.is_pub { "pub " } else { "" };
+    match item.kind {
+        IKLet(def) => {
+            let generics_str = render_generic_params(def.generics);
+            let base1 = ["let", pub_marker.concat(def.name)];
+            let base2 = if generics_str == "" { base1 } else { base1.push(generics_str) };
+            let base3 = base2.push(paren(join_space(Array.map(def.params, |p| render_param(p)))));
+            let base4 = match def.ret_ty { Some(t) => base3.push("->".concat(render_type(t))), None => base3 };
+            sexpr(base4.push(render_expr(def.body)))
+        },
+        IKStruct(decl) => {
+            let generics_str = render_generic_params(decl.generics);
+            let base1 = ["struct", pub_marker.concat(decl.name)];
+            let base2 = if generics_str == "" { base1 } else { base1.push(generics_str) };
+            sexpr(Array.concat(base2, Array.map(decl.fields, |f| {
+                let fpub = if f.is_pub { "pub " } else { "" };
+                fpub.concat(f.name).concat(":").concat(render_type(f.ty))
+            })))
+        },
+        IKEnum(decl) => {
+            let generics_str = render_generic_params(decl.generics);
+            let base1 = ["enum", pub_marker.concat(decl.name)];
+            let base2 = if generics_str == "" { base1 } else { base1.push(generics_str) };
+            sexpr(Array.concat(base2, Array.map(decl.variants, |v| {
+                if Array.is_empty(v.payload) { v.name } else { v.name.concat("(").concat(join_comma(Array.map(v.payload, |t| render_type(t)))).concat(")") }
+            })))
+        },
+        IKExtern(block) => {
+            let base = ["extern", quote(block.abi)];
+            sexpr(Array.concat(base, Array.map(block.fns, |f| {
+                let params_str = join_comma(Array.map(f.params, |p| p.name.concat(":").concat(render_type(p.ty))));
+                let ret_str = match f.ret_ty { Some(t) => "->".concat(render_type(t)), None => "" };
+                "fn ".concat(f.name).concat("(").concat(params_str).concat(")").concat(ret_str)
+            })))
+        },
+        IKUse(decl) => "(".concat(pub_marker).concat("use ").concat(join_dot(decl.path)).concat(")"),
+    }
+}
+
+pub let render_program (program: ProgramNode): String = sexpr(Array.map(program.items, |i| render_item(i)))

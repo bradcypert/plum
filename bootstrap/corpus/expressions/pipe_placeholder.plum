@@ -1,0 +1,1 @@
+let case (xs: Array[Int]) (f: (Int) -> Int): Array[Int] = xs |> Array.map(_, f)

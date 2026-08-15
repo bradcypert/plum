@@ -274,6 +274,7 @@ what's being chased.
 PrimaryExpr ::= Literal
               | Identifier
               | "(" [ Expr { "," Expr } [ "," ] ] ")"
+              | ArrayLiteral
               | Block
               | IfExpr
               | MatchExpr
@@ -282,7 +283,18 @@ PrimaryExpr ::= Literal
               | UnsafeExpr
               | SpawnExpr
               | StructLiteral
+
+ArrayLiteral ::= "[" [ Expr { "," Expr } [ "," ] ] "]"
 ```
+
+`[e1, e2, ...]` is an `Array[T]` literal — every element must unify to
+the same type `T` (checked downstream, not by the parser); `[]` is
+valid, its element type resolved from context (a still-unresolved fresh
+var if nothing ever constrains it). This was previously, incorrectly,
+documented below as "intentionally absent, not yet decided" — stale by
+the time that note was written; the real parser has supported this
+since early on (`ast::Expr::ArrayLiteral`). Fixed here rather than left
+to keep drifting further from the real implementation.
 
 The parenthesized form follows the same tuple-vs-grouping rule as
 types: `(x)` is `x`, `(x,)` is a one-element tuple, `(x, y)` is a
@@ -428,23 +440,20 @@ implementation decisions, not open language-design questions:
   `GenericArgs` productions without encoding the disambiguation rule
   itself, since it's a semantic (name-resolution-time) rule, not a
   syntactic one.
-- **Array/list literal syntax is intentionally absent** from this
-  grammar — not yet decided (see DESIGN.md's open questions). Adding it
-  later should slot into `PrimaryExpr` without disturbing anything else
-  here.
-- **`f (a) (b)` parses successfully but is a semantic trap, not a
-  two-argument call.** Because `Postfix` repeats (see "Expressions"
-  above), a call immediately followed by another parenthesized group is
-  parsed as two *chained* single-argument calls — `f(a)` first, then
-  the parenthesized `(b)` applied again to *that result* — the same
-  shape currying would produce, even though Plum doesn't have currying
-  (see DESIGN.md's "Surface syntax," deliberately deferred). This isn't
-  a parse error; it silently produces the wrong arity, and would only
-  surface as a type error once type-checking exists. Found by parsing
+- **`f (a) (b)` parses as two chained single-argument calls, not one
+  two-argument call — and, as of currying (see "Expressions" above),
+  that's no longer a trap.** Because `Postfix` repeats, a call
+  immediately followed by another parenthesized group is `f(a)` first,
+  then the parenthesized `(b)` applied again to *that result*. Before
+  currying existed, `f`'s own multi-param arity made `f(a)` alone an
+  arity-mismatch type error — a loud failure, at least, even though the
+  syntax LOOKED like a valid two-argument call (found by parsing
   `examples/overview.plum`'s original `sum (n - 1) (acc + n)`, which
   looked like an OCaml-style two-argument call but actually meant
   something else entirely — the example was corrected to
-  `sum(n - 1, acc + n)`. The only real fix here is discipline (always
-  use one comma-separated argument list per call) until/unless currying
-  is revisited; a parser-level warning for "call result immediately
-  called again" is possible future tooling, not a grammar change.
+  `sum(n - 1, acc + n)`, and the "always use one comma-separated
+  argument list" discipline note that used to live here is now
+  historical, not live advice). Now `f(a)` alone is a valid partial
+  application, and `f(a)(b)` is PROVABLY equivalent to `f(a, b)` — see
+  DESIGN.md's "Currying" section for the exact reasoning. The two forms
+  are genuinely interchangeable today, not a footgun to route around.

@@ -1,0 +1,1 @@
+Extern Str("C") LBrace Fn Ident("puts") LParen Ident("s") Colon Ident("CStr") RParen Semicolon RBrace

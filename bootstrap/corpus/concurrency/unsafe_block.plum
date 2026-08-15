@@ -1,0 +1,1 @@
+let case (): Float = unsafe { sqrt(4.0) }

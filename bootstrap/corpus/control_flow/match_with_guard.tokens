@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("n") Colon Ident("Int") RParen Colon Ident("String") Eq Match Ident("n") LBrace Ident("x") If Ident("x") Gt Int(0) FatArrow Str("positive") Comma Underscore FatArrow Str("other") RBrace

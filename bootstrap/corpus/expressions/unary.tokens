@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("n") Colon Ident("Int") RParen LParen Ident("flag") Colon Ident("Bool") RParen Colon Ident("Bool") Eq Bang Ident("flag") Let Ident("neg") LParen Ident("n") Colon Ident("Int") RParen Colon Ident("Int") Eq Minus Ident("n")

@@ -1,0 +1,1 @@
+let case (ch: Channel[Int]): Int = select { x = ch.recv() => x }

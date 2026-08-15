@@ -1,0 +1,1 @@
+Let Ident("Point") Dot Ident("add") LParen Ident("a") Colon Ident("Point") RParen LParen Ident("b") Colon Ident("Point") RParen Colon Ident("Point") Eq Ident("a")

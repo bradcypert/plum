@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("n") Colon Ident("Int") RParen Colon Ident("Bool") Eq Match Ident("n") LBrace Int(1) Pipe Int(2) Pipe Int(3) FatArrow True Comma Underscore FatArrow False RBrace

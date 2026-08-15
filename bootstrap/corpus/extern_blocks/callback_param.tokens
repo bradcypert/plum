@@ -1,0 +1,1 @@
+Extern Str("C") LBrace Fn Ident("qsort") LParen Ident("base") Colon Ident("Int") Comma Ident("cmp") Colon LParen Ident("Int") Comma Ident("Int") RParen Arrow Ident("Int") RParen Semicolon RBrace

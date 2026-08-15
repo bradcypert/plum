@@ -1,0 +1,1 @@
+Enum Ident("Shape") LBrace Ident("Circle") LParen Ident("Float") RParen Comma Ident("Rectangle") LParen Ident("Float") Comma Ident("Float") RParen RBrace

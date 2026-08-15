@@ -1,0 +1,1 @@
+((let case ((p:Point)) ->Int (match p (arm (struct Point x=x y=y) (+ x y)))))

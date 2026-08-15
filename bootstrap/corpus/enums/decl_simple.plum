@@ -1,0 +1,1 @@
+enum Shape { Circle(Float), Rectangle(Float, Float) }

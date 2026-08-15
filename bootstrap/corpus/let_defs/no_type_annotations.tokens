@@ -1,0 +1,1 @@
+Let Ident("sum") Ident("n") Ident("acc") Eq If Ident("n") EqEq Int(0) LBrace Ident("acc") RBrace Else LBrace Ident("sum") LParen Ident("n") Minus Int(1) Comma Ident("acc") Plus Ident("n") RParen RBrace

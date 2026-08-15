@@ -1,0 +1,1 @@
+let case (p: Point): Int = match p { Point { x, y } => x + y }

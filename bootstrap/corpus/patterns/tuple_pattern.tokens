@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("t") RParen Colon Ident("Int") Eq Match Ident("t") LBrace LParen Ident("a") Comma Ident("b") RParen FatArrow Ident("a") Plus Ident("b") RBrace

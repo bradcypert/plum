@@ -1,0 +1,1 @@
+Let Ident("case") Eq Pipe Ident("x") Colon Ident("Int") Pipe LBrace Let Ident("y") Eq Ident("x") Plus Int(1) Semicolon Ident("y") Star Int(2) RBrace

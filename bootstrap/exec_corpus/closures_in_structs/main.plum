@@ -1,0 +1,7 @@
+struct Ops { add: (Int, Int) -> Int, mul: (Int, Int) -> Int }
+
+let main (): Unit = {
+    let ops = Ops { add: |a, b| a + b, mul: |a, b| a * b };
+    println(ops.add(3, 4).to_string());
+    println(ops.mul(3, 4).to_string());
+}

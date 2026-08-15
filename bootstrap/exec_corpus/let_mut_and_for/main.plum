@@ -1,0 +1,5 @@
+let main (): Unit = {
+  let mut total = 0;
+  for i in 0..5 { total = total + i; };
+  println(total.to_string());
+}

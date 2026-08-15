@@ -1139,7 +1139,55 @@ impl Infer {
                     continue;
                 }
                 let param_vars: Vec<Type> = def.params.iter().map(|_| self.fresh()).collect();
-                let ret_var = self.fresh();
+                // A NON-generic function's explicitly annotated return
+                // type is already fully known, syntactically, before any
+                // inference runs at all — seed Phase 1's placeholder with
+                // it directly (via `ast_type_to_type`, the same converter
+                // `extern` signatures already use) instead of an
+                // unrelated fresh `Var`, when it's safe to (never for a
+                // generic function — its return type may mention a
+                // generic name with no `Var` minted for it yet; that
+                // minting only happens per-function inside Phase 2's own
+                // loop, see `generic_vars` below).
+                //
+                // Found empirically, not by inspection, while building
+                // the self-hosted Plum parser (Stage 2 of self-hosting):
+                // a genuinely well-typed, non-generic function `f`
+                // calling a LATER-declared, non-generic function `g` and
+                // immediately doing FIELD ACCESS on `g`'s struct-typed
+                // return value failed with "field access requires a
+                // struct value with a statically known type" — `Expr::
+                // Field`'s inference requires its base's type to already
+                // be a resolved `Type::Struct` (see `global_types_early`'s
+                // own doc comment for the identical constraint already
+                // documented for GLOBALS), and a same-signature bare
+                // fresh `Var` Phase 1 minted for `g`'s return type isn't
+                // resolved to anything yet by the time `f`'s OWN body
+                // gets checked (Phase 2 processes functions in file
+                // order; `g` hadn't been reached yet). A genuinely CYCLIC
+                // call graph (exactly what a real recursive-descent
+                // parser's own expression grammar is — `parse_expr` ->
+                // `parse_primary` -> `parse_block` -> `parse_expr`, no
+                // valid definition order avoids this) means reordering
+                // source can't fully route around it either; this was
+                // the actual, minimal, safe fix. Purely ADDITIVE and
+                // best-effort, matching `global_types_early`'s own
+                // "opportunistic extra precision, never a source of
+                // truth" philosophy exactly: on ANY failure to resolve
+                // the annotation here (an unsupported shape, a genuinely
+                // bad annotation, whatever) this silently falls back to
+                // today's plain fresh `Var` — Phase 2/3 remain the real,
+                // authoritative type-checking passes regardless, so this
+                // can only ever make MORE programs infer correctly, never
+                // change what a well-typed program means.
+                let ret_var = if def.generics.is_empty() {
+                    match &def.ret_ty {
+                        Some(ann) => ast_type_to_type(ann, &self.ctx, &[]).unwrap_or_else(|_| self.fresh()),
+                        None => self.fresh(),
+                    }
+                } else {
+                    self.fresh()
+                };
                 let fn_ty = Type::Function(param_vars.clone(), Box::new(ret_var.clone()));
                 global_env = global_env.extend(def.name.clone(), fn_ty);
                 signatures.insert(def.name.clone(), (param_vars, ret_var));
@@ -7880,6 +7928,37 @@ mod tests {
         let src = "struct Box { val: Int }\nlet g = Box { val: 1 }\nlet go () = g.val";
         let types = infer_program(src);
         assert_eq!(types["go"], fn_ty(vec![Type::Unit], Type::Int));
+    }
+
+    #[test]
+    fn a_function_can_do_field_access_on_a_later_declared_functions_struct_typed_return_value() {
+        // The FUNCTION-to-FUNCTION counterpart of the test immediately
+        // above (which covers a GLOBAL) — found empirically, not by
+        // inspection, while building the self-hosted Plum parser (Stage
+        // 2 of self-hosting, DESIGN.md's "Self-hosting bootstrap corpus"
+        // section): a non-generic function calling a LATER-declared,
+        // non-generic function and immediately doing field access on its
+        // struct-typed return value used to fail with "field access
+        // requires a struct value with a statically known type" — Phase
+        // 1 pre-declared `g`'s return type as a bare, disconnected fresh
+        // `Var` regardless of its own explicit `: Box` annotation, and
+        // that annotation was only ever unified into place once Phase 2
+        // reached `g`'s OWN body — too late for `f`'s body (processed
+        // first, in file order) to see it as anything but unresolved.
+        // Fixed in `infer_program`'s Phase 1: a NON-generic function's
+        // explicitly annotated return type is seeded directly (via
+        // `ast_type_to_type`) instead of an unrelated fresh `Var` —
+        // real ML type inference doesn't need to defer what was already
+        // written down in the source. Real production motivation, not
+        // contrived: this exact shape is unavoidable in a genuinely
+        // CYCLIC call graph (a recursive-descent parser's own expression
+        // grammar), where no source reordering can route around it —
+        // `parse_expr` calling `parse_primary` calling `parse_block`
+        // calling `parse_expr` again, forever.
+        let src = "struct Box { val: Int }\nlet f (n: Int): Int = g(n).val\nlet g (n: Int): Box = Box { val: n }";
+        let types = infer_program(src);
+        assert_eq!(types["f"], fn_ty(vec![Type::Int], Type::Int));
+        assert_eq!(types["g"], fn_ty(vec![Type::Int], Type::Struct("Box".to_string(), vec![])));
     }
 
     #[test]

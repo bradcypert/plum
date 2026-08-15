@@ -1868,37 +1868,54 @@ impl Interpreter {
             }
             // The reuse-in-place counterparts to `ArrayPush`/`ArrayPop`/
             // `ArraySet`/`ArrayRemove` — see ir.rs's `ArrayPushReuse`
-            // doc comment for the full safety argument. Mirrors
-            // `CtorReuse`'s own eval exactly: the new field list is
-            // always computed FIRST, then `dec_and_maybe_reuse` decides
-            // whether that overwrites the SAME cell (uniquely owned) or
-            // allocates a fresh one (still shared) — this node never
-            // decides that itself.
+            // doc comment for the full safety argument. UNIQUELY owned
+            // (refcount == 1, checked FIRST, before any mutation)
+            // mutates the existing cell's backing `Vec` directly via
+            // `Heap::array_*_in_place` — genuine O(1) amortized growth
+            // for `.push()` (reuses `Vec`'s own spare capacity), no
+            // wasted clone. SHARED (refcount > 1) falls back to the
+            // original clone-then-allocate-fresh behavior, same as
+            // `CtorReuse`'s own eval — mutating aliased data isn't safe
+            // regardless of how cheap we could make it. See `heap.rs`'s
+            // `array_push_in_place` doc comment for the real bug this
+            // closes: the OLD code built the full clone unconditionally,
+            // even on the unique-owner fast path, making any tight
+            // accumulation loop O(n²) instead of O(n).
             Expr::ArrayPushReuse { reuse_of, value } => {
                 let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
                     return Err(format!("reuse target {reuse_of:?} is not a heap value"));
                 };
                 let v = self.eval(value)?;
-                let (tag, fields) = self.heap.read(addr)?;
-                let tag = tag.to_string();
-                let mut new_fields = fields.to_vec();
-                new_fields.push(v);
-                let new_addr = self.heap.dec_and_maybe_reuse(addr, tag, new_fields)?;
-                Ok(Value::HeapRef(new_addr))
+                if self.heap.refcount(addr)? == 1 {
+                    self.heap.array_push_in_place(addr, v)?;
+                    Ok(Value::HeapRef(addr))
+                } else {
+                    let (tag, fields) = self.heap.read(addr)?;
+                    let tag = tag.to_string();
+                    let mut new_fields = fields.to_vec();
+                    new_fields.push(v);
+                    self.heap.dec(addr)?;
+                    Ok(Value::HeapRef(self.heap.alloc(tag, new_fields)))
+                }
             }
             Expr::ArrayPopReuse { reuse_of } => {
                 let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
                     return Err(format!("reuse target {reuse_of:?} is not a heap value"));
                 };
-                let (tag, fields) = self.heap.read(addr)?;
-                if fields.is_empty() {
-                    return Err("cannot pop from an empty array".to_string());
+                if self.heap.refcount(addr)? == 1 {
+                    self.heap.array_pop_in_place(addr)?;
+                    Ok(Value::HeapRef(addr))
+                } else {
+                    let (tag, fields) = self.heap.read(addr)?;
+                    if fields.is_empty() {
+                        return Err("cannot pop from an empty array".to_string());
+                    }
+                    let tag = tag.to_string();
+                    let mut new_fields = fields.to_vec();
+                    new_fields.pop();
+                    self.heap.dec(addr)?;
+                    Ok(Value::HeapRef(self.heap.alloc(tag, new_fields)))
                 }
-                let tag = tag.to_string();
-                let mut new_fields = fields.to_vec();
-                new_fields.pop();
-                let new_addr = self.heap.dec_and_maybe_reuse(addr, tag, new_fields)?;
-                Ok(Value::HeapRef(new_addr))
             }
             Expr::ArraySetReuse { reuse_of, index, value } => {
                 let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
@@ -1908,18 +1925,23 @@ impl Interpreter {
                     return Err("`.set()` index must be an Int".to_string());
                 };
                 let v = self.eval(value)?;
-                let (tag, fields) = self.heap.read(addr)?;
-                let tag = tag.to_string();
-                let mut new_fields = fields.to_vec();
                 let Ok(i) = usize::try_from(i) else {
-                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                    return Err(format!("array index out of bounds: {i}"));
                 };
-                if i >= new_fields.len() {
-                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                if self.heap.refcount(addr)? == 1 {
+                    self.heap.array_set_in_place(addr, i, v)?;
+                    Ok(Value::HeapRef(addr))
+                } else {
+                    let (tag, fields) = self.heap.read(addr)?;
+                    let tag = tag.to_string();
+                    let mut new_fields = fields.to_vec();
+                    if i >= new_fields.len() {
+                        return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                    }
+                    new_fields[i] = v;
+                    self.heap.dec(addr)?;
+                    Ok(Value::HeapRef(self.heap.alloc(tag, new_fields)))
                 }
-                new_fields[i] = v;
-                let new_addr = self.heap.dec_and_maybe_reuse(addr, tag, new_fields)?;
-                Ok(Value::HeapRef(new_addr))
             }
             Expr::ArrayRemoveReuse { reuse_of, index } => {
                 let Value::HeapRef(addr) = self.lookup(reuse_of)? else {
@@ -1928,18 +1950,23 @@ impl Interpreter {
                 let Value::Int(i) = self.eval(index)? else {
                     return Err("`.remove()` index must be an Int".to_string());
                 };
-                let (tag, fields) = self.heap.read(addr)?;
-                let tag = tag.to_string();
-                let mut new_fields = fields.to_vec();
                 let Ok(i) = usize::try_from(i) else {
-                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                    return Err(format!("array index out of bounds: {i}"));
                 };
-                if i >= new_fields.len() {
-                    return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                if self.heap.refcount(addr)? == 1 {
+                    self.heap.array_remove_in_place(addr, i)?;
+                    Ok(Value::HeapRef(addr))
+                } else {
+                    let (tag, fields) = self.heap.read(addr)?;
+                    let tag = tag.to_string();
+                    let mut new_fields = fields.to_vec();
+                    if i >= new_fields.len() {
+                        return Err(format!("array index out of bounds: {i} (len {})", new_fields.len()));
+                    }
+                    new_fields.remove(i);
+                    self.heap.dec(addr)?;
+                    Ok(Value::HeapRef(self.heap.alloc(tag, new_fields)))
                 }
-                new_fields.remove(i);
-                let new_addr = self.heap.dec_and_maybe_reuse(addr, tag, new_fields)?;
-                Ok(Value::HeapRef(new_addr))
             }
             // `s.concat(other)` — always allocates a fresh string cell.
             // See `StrConcatReuse` (below) for the reuse-in-place
@@ -4563,6 +4590,47 @@ mod tests {
         assert_eq!(addr, 0, "should reuse address 0 — the original array's cell");
         assert_eq!(interp.alloc_count(), 1, "reuse must not count as a second allocation");
         assert_eq!(interp.heap.read(addr).unwrap(), ("0Array", &[Value::Int(1), Value::Int(2), Value::Int(3)][..]));
+    }
+
+    #[test]
+    fn array_push_in_place_reuses_the_same_cell_at_real_scale() {
+        // The actual regression test for a real, serious performance
+        // bug found while pushing self-hosting further (see DESIGN.md's
+        // "Array push scaling bug" section): the OLD `ArrayPushReuse`
+        // eval built a full CLONE of the backing `Vec` via `.to_vec()`
+        // BEFORE deciding whether the cell was uniquely owned, so even
+        // the "reuse in place" fast path still paid an O(current
+        // length) copy every single call — making any tight
+        // accumulation loop O(n^2), not O(n). `alloc_count` staying at
+        // 1 across TWO reuse calls (the existing tests just above this
+        // one) doesn't distinguish "genuinely no clone" from "clone,
+        // but still land on the same address" — only doing this at
+        // real scale does: 20,000 in-place pushes finishing quickly and
+        // `alloc_count` staying at 1 the WHOLE time is only possible if
+        // each push is genuinely O(1) amortized (reusing the backing
+        // `Vec`'s own spare capacity via `Vec::push`, exactly what
+        // `Heap::array_push_in_place` now does), not O(n).
+        //
+        // Deliberately calls `Heap::array_push_in_place` directly in a
+        // plain Rust loop, NOT through nested `Interpreter::eval` calls
+        // or genuine Plum-level recursion — `plum-interp` has no tail-
+        // call optimization at all (a real, separate, pre-existing,
+        // documented limit unrelated to arrays; this whole project
+        // validates deep recursion via native `plum build`, never `plum
+        // run`), so a single nested expression or a real recursive Plum
+        // program would hit THAT limit long before 20,000 elements and
+        // tell us nothing about the array fix specifically.
+        let mut interp = Interpreter::new();
+        let addr = interp.heap.alloc("0Array".to_string(), vec![]);
+        for i in 0..20_000 {
+            interp.heap.array_push_in_place(addr, Value::Int(i)).unwrap();
+        }
+        assert_eq!(interp.alloc_count(), 1, "20,000 in-place pushes must never allocate a second cell");
+        let (tag, fields) = interp.heap.read(addr).unwrap();
+        assert_eq!(tag, "0Array");
+        assert_eq!(fields.len(), 20_000);
+        assert_eq!(fields[0], Value::Int(0));
+        assert_eq!(fields[19_999], Value::Int(19_999));
     }
 
     #[test]

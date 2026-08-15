@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("ch") Colon Ident("Channel") LBracket Ident("Int") RBracket RParen Colon Ident("Int") Eq Select LBrace Ident("x") Eq Ident("ch") Dot Ident("recv") LParen RParen FatArrow Ident("x") RBrace

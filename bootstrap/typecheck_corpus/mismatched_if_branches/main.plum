@@ -1,0 +1,2 @@
+let f (n: Int): Int = if n > 0 { 1 } else { "negative" }
+let main (): Unit = println(f(5).to_string())

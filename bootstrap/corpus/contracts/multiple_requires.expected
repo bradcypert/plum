@@ -1,0 +1,1 @@
+((let clamp ((n:Int) (lo:Int) (hi:Int)) ->Int (block (stmt (call __contract_require (<= lo hi) "precondition failed")) (stmt (call __contract_require (>= n 0) "precondition failed")) n)))

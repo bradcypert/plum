@@ -1,0 +1,140 @@
+// Layer 1.5: struct/enum declaration context + AST-annotation ->
+// `ITy` resolution — mirrors `crates/plum-types/src/context.rs`'s
+// `TypeContext` (field/variant templates, keyed by declaration name)
+// and `infer.rs`'s `ast_type_to_type`/`resolve_annotation` (the two
+// AST-type -> `Type` converters — this module doesn't need to keep
+// them separate the way the real compiler does, since this checker
+// has no `extern` support to justify the split).
+//
+// **Deliberate v1 scope cut**: of the real compiler's own five built-in
+// generic-arity-one pseudo-types, only `Array` is recognized here
+// (`Task`/`Sender`/`Receiver`/`Ref` aren't — `interp/interp.plum`
+// doesn't support concurrency either, so there's nothing for a type
+// checker to validate for those yet). Referencing one of THOSE names in
+// an annotation still fails with a clear "unknown type" error, not
+// silently wrong behavior. `Array[T]` resolves to `ITStruct("Array",
+// [T])` — the exact same representation the real compiler's own
+// `ast_type_to_type` uses (`Type::Struct("Array", vec![elem_ty])`, see
+// `plum-types::infer.rs`), reused as-is rather than adding a dedicated
+// `ITy` case: every existing `ITStruct` machinery (`unify`, `subst_
+// apply`, `instantiate_template`) already handles it correctly with
+// zero new code.
+
+use parser;
+
+struct StructFieldTemplate { name: String, ty: ITy }
+struct StructInfo { name: String, generics: Array[String], fields: Array[StructFieldTemplate] }
+struct VariantInfo { tag: String, enum_name: String, payload: Array[ITy] }
+struct EnumInfo { name: String, generics: Array[String], variants: Array[VariantInfo] }
+
+pub struct TyContext { structs: Array[StructInfo], enums: Array[EnumInfo] }
+
+let fail_ctx (msg: String): Unit = panic_raw("self-hosted type checker: ".concat(msg))
+
+// --- Building the context from a whole program's declarations ---
+
+pub let build_context (program: parser.ProgramNode): TyContext = collect_decls_acc(program.items, 0, TyContext { structs: [], enums: [] })
+
+let collect_decls_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext): TyContext =
+    if i >= items.len() { ctx }
+    else {
+        match items[i].kind {
+            IKStruct(decl) => collect_decls_acc(items, i + 1, add_struct(ctx, decl)),
+            IKEnum(decl) => collect_decls_acc(items, i + 1, add_enum(ctx, decl)),
+            _ => collect_decls_acc(items, i + 1, ctx),
+        }
+    }
+
+let add_struct (ctx: TyContext) (decl: parser.StructDeclNode): TyContext = {
+    // A struct's OWN declared generic names are already fully known
+    // from its own declaration — resolving its fields' annotations
+    // needs no fresh-var bootstrapping the way a mutually-recursive
+    // FUNCTION signature would (see `infer.plum`'s own top comment for
+    // that same reasoning, applied to functions instead of structs).
+    let generic_names = Array.map(decl.generics, |g| g.name);
+    let fields = Array.map(decl.fields, |f| StructFieldTemplate { name: f.name, ty: resolve_ann(ctx, generic_names, f.ty) });
+    TyContext { structs: ctx.structs.push(StructInfo { name: decl.name, generics: generic_names, fields: fields }), enums: ctx.enums }
+}
+
+let add_enum (ctx: TyContext) (decl: parser.EnumDeclNode): TyContext = {
+    let generic_names = Array.map(decl.generics, |g| g.name);
+    let variants = Array.map(decl.variants, |v| VariantInfo {
+        tag: v.name,
+        enum_name: decl.name,
+        payload: Array.map(v.payload, |t| resolve_ann(ctx, generic_names, t)),
+    });
+    TyContext { structs: ctx.structs, enums: ctx.enums.push(EnumInfo { name: decl.name, generics: generic_names, variants: variants }) }
+}
+
+// --- Lookups ---
+
+pub let find_struct (ctx: TyContext) (name: String): Option[StructInfo] = find_struct_acc(ctx.structs, name, 0)
+let find_struct_acc (structs: Array[StructInfo]) (name: String) (i: Int): Option[StructInfo] =
+    if i >= structs.len() { None } else if structs[i].name == name { Some(structs[i]) } else { find_struct_acc(structs, name, i + 1) }
+
+pub let find_enum (ctx: TyContext) (name: String): Option[EnumInfo] = find_enum_acc(ctx.enums, name, 0)
+let find_enum_acc (enums: Array[EnumInfo]) (name: String) (i: Int): Option[EnumInfo] =
+    if i >= enums.len() { None } else if enums[i].name == name { Some(enums[i]) } else { find_enum_acc(enums, name, i + 1) }
+
+// A variant tag's owning enum + declared generics + payload template
+// — tags are looked up by bare name alone, no owning-enum qualifier
+// needed (mirrors the real compiler's own "variant tags live in one
+// flat, global namespace" precedent — DESIGN.md's module-system
+// section documents this as a deliberate, pre-existing v1 scope
+// boundary, not something specific to this checker).
+pub struct VariantLookup { enum_name: String, enum_generics: Array[String], payload: Array[ITy] }
+
+pub let find_variant (ctx: TyContext) (tag: String): Option[VariantLookup] = find_variant_in_enums(ctx.enums, tag, 0)
+let find_variant_in_enums (enums: Array[EnumInfo]) (tag: String) (i: Int): Option[VariantLookup] =
+    if i >= enums.len() { None }
+    else {
+        match find_variant_acc(enums[i].variants, tag, 0) {
+            Some(v) => Some(VariantLookup { enum_name: enums[i].name, enum_generics: enums[i].generics, payload: v.payload }),
+            None => find_variant_in_enums(enums, tag, i + 1),
+        }
+    }
+let find_variant_acc (variants: Array[VariantInfo]) (tag: String) (i: Int): Option[VariantInfo] =
+    if i >= variants.len() { None } else if variants[i].tag == tag { Some(variants[i]) } else { find_variant_acc(variants, tag, i + 1) }
+
+// --- AST annotation -> `ITy` ---
+
+pub let resolve_ann (ctx: TyContext) (in_scope: Array[String]) (t: parser.Ty): ITy =
+    match t {
+        TyFunction(params, ret) => ITFunction(Array.map(params, |p| resolve_ann(ctx, in_scope, p)), resolve_ann(ctx, in_scope, ret)),
+        TyGeneric(base, args) => resolve_named(ctx, in_scope, base[base.len() - 1], Array.map(args, |a| resolve_ann(ctx, in_scope, a))),
+        TyPath(segments) => resolve_named(ctx, in_scope, segments[segments.len() - 1], []),
+    }
+
+let resolve_named (ctx: TyContext) (in_scope: Array[String]) (name: String) (args: Array[ITy]): ITy =
+    if name == "Int" { ITInt }
+    else if name == "Float" { ITFloat }
+    else if name == "Bool" { ITBool }
+    else if name == "String" { ITStr }
+    else if name == "Unit" { ITUnit }
+    else if name == "Array" { ITStruct("Array", args) }
+    else if Array.contains(in_scope, name) { ITParam(name) }
+    else if Option.is_some(find_struct(ctx, name)) { ITStruct(name, args) }
+    else if Option.is_some(find_enum(ctx, name)) { ITEnum(name, args) }
+    else { { fail_ctx("unknown type: ".concat(name)); ITUnit } }
+
+// --- Instantiating a declaration's template at a concrete use site ---
+
+// Substitutes every `ITParam(name)` in `template` for the matching
+// entry of `args` (positional, same order as `generics`) — the fixed-
+// arity, explicit-declaration-driven counterpart to a polymorphic
+// function's `Scheme` instantiation (see `infer.plum`'s own doc
+// comment on why this checker needs no `Scheme`/`generalize` machinery
+// at all: Plum's generics are always explicitly declared, never
+// inferred from usage).
+pub let instantiate_template (generics: Array[String]) (args: Array[ITy]) (template: ITy): ITy =
+    match template {
+        ITParam(name) => Option.unwrap_or(lookup_generic_arg(generics, args, name, 0), template),
+        ITFunction(params, ret) => ITFunction(Array.map(params, |p| instantiate_template(generics, args, p)), instantiate_template(generics, args, ret)),
+        ITTuple(elems) => ITTuple(Array.map(elems, |e| instantiate_template(generics, args, e))),
+        ITStruct(name, sargs) => ITStruct(name, Array.map(sargs, |a| instantiate_template(generics, args, a))),
+        ITEnum(name, sargs) => ITEnum(name, Array.map(sargs, |a| instantiate_template(generics, args, a))),
+        _ => template,
+    }
+
+let lookup_generic_arg (generics: Array[String]) (args: Array[ITy]) (name: String) (i: Int): Option[ITy] =
+    if i >= generics.len() { None } else if generics[i] == name { Some(args[i]) } else { lookup_generic_arg(generics, args, name, i + 1) }

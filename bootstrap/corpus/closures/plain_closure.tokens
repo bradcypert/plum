@@ -1,0 +1,1 @@
+Let Ident("case") Colon LParen Ident("Int") RParen Arrow Ident("Int") Eq Pipe Ident("x") Pipe Ident("x") Plus Int(1)

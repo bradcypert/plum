@@ -28,6 +28,30 @@ pub fn optimize(expr: Expr) -> Expr {
 /// loading a program into the interpreter — without it, functions run
 /// with no refcounting or reuse-in-place at all, since `optimize` only
 /// ever touched whatever single expression was handed to it directly.
+///
+/// **REVERTED, not just never-attempted**: this briefly seeded `known_
+/// heap` with parameters PROVEN array/string-shaped by their own body's
+/// use (via `confirmed_array_or_str_params`, still present below,
+/// unused) — intended to fix a real perf bug (self-tail-recursive
+/// accumulators threaded through a parameter never reaching the reuse-
+/// in-place `.push()` path, see DESIGN.md's "Array push scaling bug"
+/// section). It was wrong: syntactic proof that a parameter is ARRAY-
+/// SHAPED isn't proof that it's SAFE TO REUSE — a parameter can be
+/// array-shaped AND still be an alias of something the CALLER still
+/// needs (e.g. `bind_params`'s own `acc` parameter, called with a
+/// closure's CAPTURED environment — extracted via a `Match` arm binding
+/// that this pass has never tracked as `known_heap` either, so nothing
+/// upstream Inc'd it before handing it in), and this pass's `known_heap`
+/// gating was never meant to answer "is this the right TYPE," only "do
+/// I actually know this name's refcount is being correctly threaded" —
+/// see `mark_reuse_scoped`'s own doc comment for why that distinction
+/// is load-bearing. Found via a REAL crash (`exec_corpus/closures`,
+/// `apply_twice` calling the same closure twice — a segfault, not
+/// silently wrong output), not by inspection; reverted the same session
+/// rather than shipping something merely believed safe. A genuinely
+/// correct fix needs to also account for match-extracted bindings'
+/// ownership (deeper than parameter-tracking alone) — left for a future,
+/// more careful pass; see DESIGN.md's own section for the full story.
 pub fn optimize_program(program: Program) -> Program {
     Program {
         functions: program
@@ -846,6 +870,386 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
     }
 }
 
+/// Scans a whole function body for its OWN declared parameters used in
+/// an array/string-typed OPERAND position — `.push()`/`.pop()`/`.set()`
+/// /`.remove()`/`.len()`/indexing/`.concat()`/`.trim()`/`.as_cstr()`/
+/// etc only exist on arrays or strings syntactically, so finding a
+/// parameter directly in one of those positions PROVES it's array/
+/// string-shaped there, without needing the general type information
+/// this IR doesn't carry (see `mark_reuse_scoped`'s own doc comment on
+/// why an ARBITRARY parameter can't otherwise be assumed heap-shaped —
+/// that reasoning still holds for every OTHER parameter; this only
+/// narrows it for the specific ones this evidence actually proves).
+///
+/// **Currently UNUSED — kept deliberately, not dead weight to delete.**
+/// This was meant to let `optimize_program` seed `known_heap` with
+/// confirmed-shape parameters (closing a real perf gap — see DESIGN.md's
+/// "Array push scaling bug" section), and the shadowing-awareness this
+/// function implements (narrowing `params` at every `Let`/`Match`-arm/
+/// `Closure`/`For` binding that could shadow one) is itself genuinely
+/// correct and was hard-won (a real crash found and fixed the FIRST
+/// version's naive, shadowing-unaware scan). But shape evidence alone
+/// turned out to be insufficient PROOF of safety: a parameter can be
+/// array-shaped and still be an unsafe-to-reuse ALIAS of something the
+/// CALLER still needs (found via a second real crash — a closure's
+/// captured environment, extracted via a `Match` arm binding this pass
+/// has never tracked, handed into a function whose own parameter this
+/// scan correctly-but-insufficiently proved array-shaped). `optimize_
+/// program` was reverted rather than ship something merely believed
+/// safe — see its own doc comment for the full story. A genuinely
+/// correct future fix needs this function's shadowing-awareness PLUS a
+/// real answer for match-extracted bindings' ownership, not this alone.
+#[allow(dead_code)] // kept unused deliberately — see this function's own doc comment.
+fn confirmed_array_or_str_params(body: &Expr, params: &[String]) -> HashSet<String> {
+    let mut out = HashSet::new();
+    collect_confirmed_params(body, params, &mut out);
+    out
+}
+
+fn collect_confirmed_params(expr: &Expr, params: &[String], out: &mut HashSet<String>) {
+    // Records `e` as confirmed if it's a bare reference to one of
+    // `params` — used at every "this operand MUST be array/string-
+    // shaped" site below, alongside the ordinary recursive walk that
+    // still needs to visit every subexpression regardless (a param
+    // could show up in more than one place, including nested deeper
+    // inside a non-evidentiary position elsewhere).
+    fn mark(e: &Expr, params: &[String], out: &mut HashSet<String>) {
+        if let Expr::Var(n) = e {
+            if params.iter().any(|p| p == n) {
+                out.insert(n.clone());
+            }
+        }
+    }
+    // `params` MINUS one shadowed name, for descending into a scope a
+    // `Let`/`Closure`/`For` binding shadows it in — load-bearing, not
+    // cosmetic: without this, `let acc = <a plain Int>; ... f(|acc|
+    // acc.push(x))` (an unrelated INNER `acc` — a closure param, say —
+    // that happens to reuse an OUTER parameter's name) would wrongly
+    // attribute the inner closure's own array-shaped `acc` as evidence
+    // for the OUTER parameter, seeding a genuinely non-heap-shaped
+    // parameter into `known_heap` — exactly the false-positive this
+    // function's own doc comment promises never happens. Confirmed
+    // real via an actual crash (a genuine parameter-name collision
+    // inside `bootstrap/self_host/interp/interp.plum`, caught by its
+    // own `exec_corpus/closures` fixture) before this fix, not
+    // theoretical.
+    fn without<'a>(params: &'a [String], shadowed: &str) -> std::borrow::Cow<'a, [String]> {
+        if params.iter().any(|p| p == shadowed) {
+            std::borrow::Cow::Owned(params.iter().filter(|p| p.as_str() != shadowed).cloned().collect())
+        } else {
+            std::borrow::Cow::Borrowed(params)
+        }
+    }
+    fn without_many<'a>(params: &'a [String], shadowed: &[String]) -> std::borrow::Cow<'a, [String]> {
+        if params.iter().any(|p| shadowed.contains(p)) {
+            std::borrow::Cow::Owned(params.iter().filter(|p| !shadowed.contains(p)).cloned().collect())
+        } else {
+            std::borrow::Cow::Borrowed(params)
+        }
+    }
+    match expr {
+        Expr::Var(_) | Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) => {}
+        Expr::Unary(_, e) => collect_confirmed_params(e, params, out),
+        Expr::AsCStr(e) => {
+            mark(e, params, out);
+            collect_confirmed_params(e, params, out);
+        }
+        Expr::AsString(e) => collect_confirmed_params(e, params, out),
+        Expr::ToIntTrunc(e) => collect_confirmed_params(e, params, out),
+        Expr::ToIntRound(e) => collect_confirmed_params(e, params, out),
+        Expr::ToFloat(e) => collect_confirmed_params(e, params, out),
+        Expr::Binary(_, l, r) => {
+            collect_confirmed_params(l, params, out);
+            collect_confirmed_params(r, params, out);
+        }
+        // `value` is evaluated BEFORE the shadow takes effect (same
+        // convention `mark_last_uses`'s own `Let` arm already uses), so
+        // it still sees the OUTER name if `bound` happens to collide;
+        // `body` only ever sees the NEW, inner one.
+        Expr::Let { name: bound, value, body } => {
+            collect_confirmed_params(value, params, out);
+            collect_confirmed_params(body, &without(params, bound), out);
+        }
+        Expr::If { cond, then_branch, else_branch } => {
+            collect_confirmed_params(cond, params, out);
+            collect_confirmed_params(then_branch, params, out);
+            collect_confirmed_params(else_branch, params, out);
+        }
+        Expr::Call { callee, args } => {
+            collect_confirmed_params(callee, params, out);
+            for a in args {
+                collect_confirmed_params(a, params, out);
+            }
+        }
+        Expr::ExternCall { args, .. } => {
+            for a in args {
+                collect_confirmed_params(a, params, out);
+            }
+        }
+        Expr::Ctor { fields, .. } => {
+            for f in fields {
+                collect_confirmed_params(f, params, out);
+            }
+        }
+        Expr::CtorReuse { fields, .. } => {
+            for f in fields {
+                collect_confirmed_params(f, params, out);
+            }
+        }
+        Expr::RcAnnotated { rest, .. } => collect_confirmed_params(rest, params, out),
+        Expr::Match { scrutinee, arms } => {
+            collect_confirmed_params(scrutinee, params, out);
+            for a in arms {
+                let arm_params = without_many(params, &a.bindings);
+                collect_confirmed_params(&a.body, &arm_params, out);
+                if let Some(g) = a.guard.as_deref() {
+                    collect_confirmed_params(g, &arm_params, out);
+                }
+            }
+        }
+        Expr::For { var, start, end, body } => {
+            collect_confirmed_params(start, params, out);
+            collect_confirmed_params(end, params, out);
+            collect_confirmed_params(body, &without(params, var), out);
+        }
+        Expr::Closure { params: cparams, body, .. } => {
+            collect_confirmed_params(body, &without_many(params, cparams), out);
+        }
+        Expr::Assign { value, rest, .. } => {
+            collect_confirmed_params(value, params, out);
+            collect_confirmed_params(rest, params, out);
+        }
+        Expr::Spawn { block } => collect_confirmed_params(block, params, out),
+        Expr::TaskJoin { task } => collect_confirmed_params(task, params, out),
+        Expr::Channel => {}
+        Expr::ChannelSend { sender, value } => {
+            collect_confirmed_params(sender, params, out);
+            collect_confirmed_params(value, params, out);
+        }
+        Expr::ChannelRecv { receiver } => collect_confirmed_params(receiver, params, out),
+        Expr::RefNew { value } => collect_confirmed_params(value, params, out),
+        Expr::RefGet { base } => collect_confirmed_params(base, params, out),
+        Expr::RefSet { base, value } => {
+            collect_confirmed_params(base, params, out);
+            collect_confirmed_params(value, params, out);
+        }
+        Expr::ReadFileRaw { path } => collect_confirmed_params(path, params, out),
+        Expr::WriteFileRaw { path, contents } => {
+            collect_confirmed_params(path, params, out);
+            collect_confirmed_params(contents, params, out);
+        }
+        Expr::EnvVarRaw { name } => collect_confirmed_params(name, params, out),
+        Expr::ArgsRaw => {}
+        Expr::RandomRaw => {}
+        Expr::PanicRaw { message } => collect_confirmed_params(message, params, out),
+        Expr::Select { arms } => {
+            for arm in arms {
+                collect_confirmed_params(&arm.receiver, params, out);
+                collect_confirmed_params(&arm.body, params, out);
+            }
+        }
+        Expr::Index { base, index } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+            collect_confirmed_params(index, params, out);
+        }
+        Expr::ArrayLen { array } => {
+            mark(array, params, out);
+            collect_confirmed_params(array, params, out);
+        }
+        Expr::ArrayPush { array, value } => {
+            mark(array, params, out);
+            collect_confirmed_params(array, params, out);
+            collect_confirmed_params(value, params, out);
+        }
+        Expr::ArrayPop { array } => {
+            mark(array, params, out);
+            collect_confirmed_params(array, params, out);
+        }
+        Expr::ArraySet { array, index, value } => {
+            mark(array, params, out);
+            collect_confirmed_params(array, params, out);
+            collect_confirmed_params(index, params, out);
+            collect_confirmed_params(value, params, out);
+        }
+        Expr::ArrayRemove { array, index } => {
+            mark(array, params, out);
+            collect_confirmed_params(array, params, out);
+            collect_confirmed_params(index, params, out);
+        }
+        // Shouldn't normally appear as input here — produced BY this
+        // pass, same "handled for robustness" precedent `transform`'s
+        // own arms for these already document.
+        Expr::ArrayPushReuse { value, .. } => collect_confirmed_params(value, params, out),
+        Expr::ArrayPopReuse { .. } => {}
+        Expr::ArraySetReuse { index, value, .. } => {
+            collect_confirmed_params(index, params, out);
+            collect_confirmed_params(value, params, out);
+        }
+        Expr::ArrayRemoveReuse { index, .. } => collect_confirmed_params(index, params, out),
+        Expr::StrConcat { base, other } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+            collect_confirmed_params(other, params, out);
+        }
+        Expr::StrConcatReuse { other, .. } => collect_confirmed_params(other, params, out),
+        Expr::StrRunes { base } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+        }
+        Expr::StrTrim { base } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+        }
+        Expr::StrTrimReuse { .. } => {}
+        Expr::StrSplit { base, sep } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+            collect_confirmed_params(sep, params, out);
+        }
+        Expr::StrToUpper { base } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+        }
+        Expr::StrToUpperReuse { .. } => {}
+        Expr::StrToLower { base } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+        }
+        Expr::StrToLowerReuse { .. } => {}
+        Expr::StrContains { base, needle } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+            collect_confirmed_params(needle, params, out);
+        }
+        Expr::StrStartsWith { base, prefix } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+            collect_confirmed_params(prefix, params, out);
+        }
+        Expr::StrEndsWith { base, suffix } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+            collect_confirmed_params(suffix, params, out);
+        }
+        Expr::StrReplace { base, from, to } => {
+            mark(base, params, out);
+            collect_confirmed_params(base, params, out);
+            collect_confirmed_params(from, params, out);
+            collect_confirmed_params(to, params, out);
+        }
+        Expr::StrReplaceReuse { from, to, .. } => {
+            collect_confirmed_params(from, params, out);
+            collect_confirmed_params(to, params, out);
+        }
+        // `.to_string()`/hashing apply to ANY type (Int/Bool/Float too),
+        // not just heap-shaped ones — no evidence here, deliberately.
+        Expr::ToString { base } => collect_confirmed_params(base, params, out),
+        Expr::StrHash { base } => collect_confirmed_params(base, params, out),
+    }
+}
+
+/// Does `expr` REBIND `name` via an `Assign` — i.e. is there a
+/// self-update `name = <...>` somewhere in here? Used by `mark_last_
+/// uses`'s `For` arm to decide whether the loop-carried liveness of
+/// `name` is actually broken by a rebind each iteration (see that arm's
+/// own doc comment for the full argument).
+///
+/// Shadowing-aware, deliberately: an `Assign` to an INNER binding that
+/// merely reuses `name`'s spelling says nothing about the OUTER name,
+/// and mistaking one for the other is exactly the class of error that
+/// produced a real crash in an earlier attempt at parameter tracking.
+/// Descends into `Let`/`For`/`Match`-arm scopes only where they don't
+/// shadow `name`.
+///
+/// Deliberately does NOT count an `Assign` inside a `Closure` or
+/// `Spawn` body: those can run zero times, many times, or on another
+/// thread entirely, so a rebind in there is no guarantee the rebind
+/// actually happens on this iteration. Returning `false` there is the
+/// conservative direction — it just keeps the caller on its existing
+/// forced-`live_after` path.
+fn expr_assigns_var(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Assign { name: target, value, rest } => {
+            target == name || expr_assigns_var(value, name) || expr_assigns_var(rest, name)
+        }
+        // `value` is evaluated before the shadow takes effect; `body`
+        // only ever sees the inner binding.
+        Expr::Let { name: bound, value, body } => {
+            expr_assigns_var(value, name) || (bound != name && expr_assigns_var(body, name))
+        }
+        Expr::For { var, start, end, body } => {
+            expr_assigns_var(start, name) || expr_assigns_var(end, name) || (var != name && expr_assigns_var(body, name))
+        }
+        Expr::Match { scrutinee, arms } => {
+            expr_assigns_var(scrutinee, name)
+                || arms.iter().any(|a| {
+                    !a.bindings.iter().any(|b| b == name)
+                        && (expr_assigns_var(&a.body, name)
+                            || a.guard.as_deref().is_some_and(|g| expr_assigns_var(g, name)))
+                })
+        }
+        // See this function's own doc comment — deliberately not counted.
+        Expr::Closure { .. } | Expr::Spawn { .. } => false,
+        Expr::Var(_) | Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) => false,
+        Expr::Unary(_, e) => expr_assigns_var(e, name),
+        Expr::AsCStr(e) | Expr::AsString(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => {
+            expr_assigns_var(e, name)
+        }
+        Expr::Binary(_, l, r) => expr_assigns_var(l, name) || expr_assigns_var(r, name),
+        Expr::If { cond, then_branch, else_branch } => {
+            expr_assigns_var(cond, name) || expr_assigns_var(then_branch, name) || expr_assigns_var(else_branch, name)
+        }
+        Expr::Call { callee, args } => {
+            expr_assigns_var(callee, name) || args.iter().any(|a| expr_assigns_var(a, name))
+        }
+        Expr::ExternCall { args, .. } => args.iter().any(|a| expr_assigns_var(a, name)),
+        Expr::Ctor { fields, .. } | Expr::CtorReuse { fields, .. } => fields.iter().any(|f| expr_assigns_var(f, name)),
+        Expr::RcAnnotated { rest, .. } => expr_assigns_var(rest, name),
+        Expr::TaskJoin { task } => expr_assigns_var(task, name),
+        Expr::Channel => false,
+        Expr::ChannelSend { sender, value } => expr_assigns_var(sender, name) || expr_assigns_var(value, name),
+        Expr::ChannelRecv { receiver } => expr_assigns_var(receiver, name),
+        Expr::RefNew { value } => expr_assigns_var(value, name),
+        Expr::RefGet { base } => expr_assigns_var(base, name),
+        Expr::RefSet { base, value } => expr_assigns_var(base, name) || expr_assigns_var(value, name),
+        Expr::ReadFileRaw { path } => expr_assigns_var(path, name),
+        Expr::WriteFileRaw { path, contents } => expr_assigns_var(path, name) || expr_assigns_var(contents, name),
+        Expr::EnvVarRaw { name: n } => expr_assigns_var(n, name),
+        Expr::ArgsRaw | Expr::RandomRaw => false,
+        Expr::PanicRaw { message } => expr_assigns_var(message, name),
+        Expr::Select { arms } => arms
+            .iter()
+            .any(|arm| expr_assigns_var(&arm.receiver, name) || expr_assigns_var(&arm.body, name)),
+        Expr::Index { base, index } => expr_assigns_var(base, name) || expr_assigns_var(index, name),
+        Expr::ArrayLen { array } | Expr::ArrayPop { array } => expr_assigns_var(array, name),
+        Expr::ArrayPush { array, value } => expr_assigns_var(array, name) || expr_assigns_var(value, name),
+        Expr::ArraySet { array, index, value } => {
+            expr_assigns_var(array, name) || expr_assigns_var(index, name) || expr_assigns_var(value, name)
+        }
+        Expr::ArrayRemove { array, index } => expr_assigns_var(array, name) || expr_assigns_var(index, name),
+        Expr::ArrayPushReuse { value, .. } => expr_assigns_var(value, name),
+        Expr::ArrayPopReuse { .. } => false,
+        Expr::ArraySetReuse { index, value, .. } => expr_assigns_var(index, name) || expr_assigns_var(value, name),
+        Expr::ArrayRemoveReuse { index, .. } => expr_assigns_var(index, name),
+        Expr::StrConcat { base, other } => expr_assigns_var(base, name) || expr_assigns_var(other, name),
+        Expr::StrConcatReuse { other, .. } => expr_assigns_var(other, name),
+        Expr::StrRunes { base } | Expr::StrTrim { base } | Expr::StrToUpper { base } | Expr::StrToLower { base } => {
+            expr_assigns_var(base, name)
+        }
+        Expr::StrTrimReuse { .. } | Expr::StrToUpperReuse { .. } | Expr::StrToLowerReuse { .. } => false,
+        Expr::StrSplit { base, sep } => expr_assigns_var(base, name) || expr_assigns_var(sep, name),
+        Expr::StrContains { base, needle } => expr_assigns_var(base, name) || expr_assigns_var(needle, name),
+        Expr::StrStartsWith { base, prefix } => expr_assigns_var(base, name) || expr_assigns_var(prefix, name),
+        Expr::StrEndsWith { base, suffix } => expr_assigns_var(base, name) || expr_assigns_var(suffix, name),
+        Expr::StrReplace { base, from, to } => {
+            expr_assigns_var(base, name) || expr_assigns_var(from, name) || expr_assigns_var(to, name)
+        }
+        Expr::StrReplaceReuse { from, to, .. } => expr_assigns_var(from, name) || expr_assigns_var(to, name),
+        Expr::ToString { base } | Expr::StrHash { base } => expr_assigns_var(base, name),
+    }
+}
+
 /// A name is provably heap-shaped if it's a direct `Ctor` construction,
 /// or a plain alias of an already-known-heap variable. Everything else
 /// (call results, match results, literals) is left untracked — see
@@ -1094,19 +1498,71 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
         Expr::For { var, start, end, body } => {
             // `body` is a SINGLE syntactic subtree that may run zero,
             // one, or many times at runtime — ordinary last-use
-            // reasoning doesn't apply to it. Marking a use of an OUTER
-            // heap-tracked variable inside `body` as "the last use"
-            // would insert a Dec that fires on the FIRST iteration,
-            // freeing something a LATER iteration still needs.
-            // Conservatively force `live_after = true` for the whole
-            // body, so any use there always gets Inc'd (dup'd) rather
-            // than treated as a move — this leaks one reference per
-            // iteration instead of risking a use-after-free, the safe
-            // direction to be wrong in. Precise per-iteration Dec
-            // accounting is real loop-refcounting work, deferred.
+            // reasoning doesn't apply to it in general. Marking a use of
+            // an OUTER heap-tracked variable inside `body` as "the last
+            // use" lets a CONSUMING operation there (`.push()`'s
+            // reuse-in-place, say) destructively recycle a cell a LATER
+            // iteration still needs. So the default stays conservative:
+            // force `live_after = true` for the whole body, Inc'ing
+            // (dup'ing) every use rather than treating any as a move —
+            // leaking one reference per iteration instead of risking a
+            // use-after-free, the safe direction to be wrong in.
+            //
+            // THE ONE EXCEPTION, and the reason this arm isn't just that
+            // blanket rule: if the body REBINDS `name` itself (`acc =
+            // acc.push(x)` — `expr_assigns_var`), the value the next
+            // iteration reads is the NEW binding, not the old one. The
+            // rebind is precisely what carries the loop-carried
+            // dependency forward, so the OLD reference's liveness does
+            // NOT cross the iteration boundary, and ordinary backward
+            // analysis is sound. This matters enormously in practice:
+            // `let mut acc = []; for .. { acc = acc.push(x) }` is the
+            // idiomatic way to build a collection in this language AND
+            // what `Array.map`/`Array.filter` themselves lower to (see
+            // `lower.rs::lower_array_filter`), so under the blanket rule
+            // every such accumulation re-Inc'd its accumulator each
+            // iteration, forcing `.push()` onto its fresh-allocate-and-
+            // copy path — quadratic behavior for the single most common
+            // collection-building shape in the language. See DESIGN.md's
+            // "Array push scaling bug" section.
+            //
+            // Safety of the exception, spelled out because this is the
+            // delicate part: relaxing to the ORDINARY walk does not mean
+            // assuming every use in the body is a last use. A use that
+            // ISN'T superseded by the rebind still gets its Inc from the
+            // ordinary backward analysis — e.g. `let snap = acc; acc =
+            // acc.push(x); use(snap)` walks backward, sees `acc` used by
+            // the (later) `Assign`, and therefore Inc's the (earlier)
+            // read into `snap`, so the push observes refcount 2 and
+            // correctly takes the fresh-allocate path instead of
+            // corrupting `snap`. A CONDITIONAL rebind (`if c { acc =
+            // acc.push(x) }`, exactly what `Array.filter` emits) is fine
+            // too: the consume and the rebind live in the same branch,
+            // so on the taken path `acc` is consumed and immediately
+            // rebound, and on the untaken path it's neither.
             let (body_t, used_in_body) = if expr_mentions_var(&body, name) {
-                let (t, _) = mark_last_uses(*body, name, true);
-                (t, true)
+                if expr_assigns_var(&body, name) {
+                    // `false`, NOT the incoming `live_after` — this is
+                    // the whole point of the rebind argument, and
+                    // getting it wrong silently defeats the rule. A use
+                    // AFTER the loop (`let mut acc = []; for .. { acc =
+                    // acc.push(x) }; acc.len()` — i.e. essentially every
+                    // real accumulator, since you build a collection in
+                    // order to use it) reads the value the LAST
+                    // iteration's rebind produced, never the old
+                    // reference the body consumed. Threading the outer
+                    // `live_after` in here instead would mark that
+                    // consumed read as still-live and Inc it, which is
+                    // exactly the fresh-allocate-and-copy behavior this
+                    // rule exists to remove — verified from generated
+                    // LLVM, where the stray `@plum_rc_inc` survived an
+                    // earlier version of this code that did just that.
+                    let (t, used) = mark_last_uses(*body, name, false);
+                    (t, used)
+                } else {
+                    let (t, _) = mark_last_uses(*body, name, true);
+                    (t, true)
+                }
             } else {
                 (*body, false)
             };
@@ -1520,7 +1976,32 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
         // same accepted-leak precedent as `For`/`Closure`.
         Expr::Assign { name: target, value, rest } => {
             let (rest_t, used_rest) = mark_last_uses(*rest, name, live_after);
-            let (value_t, used_value) = mark_last_uses(*value, name, used_rest || live_after);
+            // When this assignment REBINDS the very name being analyzed
+            // (`acc = acc.concat(x)`), every use in `rest` reads the NEW
+            // value — so they must NOT keep the OLD one alive. Analyzing
+            // `value` with `live_after = false` is what lets the read
+            // inside it be a genuine last use, so a consuming operation
+            // there can reuse in place. Same severing argument as the
+            // `For` arm's rebind rule, applied to ordinary sequencing
+            // rather than the loop-carried edge — and BOTH are needed:
+            // `for .. { if c { acc = acc.concat(" ") }; acc = acc.concat
+            // (s) }` (what a string join looks like, and what `Array.
+            // map`/`filter` lower to) has two rebinds in one body, and
+            // without this the FIRST one saw the SECOND one's read as
+            // still-live, took the allocate-and-copy path, and made the
+            // whole join quadratic — measured at 900MB for a 10,000-
+            // element join before this, 4x per doubling.
+            //
+            // Aliasing is still handled by the ordinary walk, not
+            // special-cased: `let snap = acc; acc = acc.concat(x); use
+            // (snap)` still Inc's the read into `snap` (the `Assign`
+            // reports the name as used, so the earlier binding sees
+            // `live_after = true`), leaving refcount 2 so the concat's
+            // runtime check takes the fresh-allocation path instead of
+            // corrupting `snap`.
+            let rebinds_analyzed_name = target.as_str() == name;
+            let value_live_after = if rebinds_analyzed_name { false } else { used_rest || live_after };
+            let (value_t, used_value) = mark_last_uses(*value, name, value_live_after);
             (
                 Expr::Assign {
                     name: target,
@@ -1568,7 +2049,36 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{BinOp, RcOp};
+    use crate::ir::{BinOp, PrimTy, RcOp};
+
+    /// Does `expr` contain an `RcAnnotated { op: Inc, target: name, .. }`
+    /// anywhere in its tree? Used by the loop-accumulator tests, which
+    /// care that a protective dup exists (or provably doesn't) somewhere,
+    /// not about its exact structural position — an `assert_eq!` against
+    /// a fully-built expected tree would be far more brittle for the
+    /// `Let`/`For`/`Assign`-nested bodies those tests build.
+    fn expr_mentions_inc(expr: &Expr, name: &str) -> bool {
+        match expr {
+            Expr::RcAnnotated { op: RcOp::Inc, target, .. } if target == name => true,
+            Expr::RcAnnotated { rest, .. } => expr_mentions_inc(rest, name),
+            Expr::Let { value, body, .. } => expr_mentions_inc(value, name) || expr_mentions_inc(body, name),
+            Expr::For { start, end, body, .. } => {
+                expr_mentions_inc(start, name) || expr_mentions_inc(end, name) || expr_mentions_inc(body, name)
+            }
+            Expr::Assign { value, rest, .. } => expr_mentions_inc(value, name) || expr_mentions_inc(rest, name),
+            Expr::If { cond, then_branch, else_branch } => {
+                expr_mentions_inc(cond, name) || expr_mentions_inc(then_branch, name) || expr_mentions_inc(else_branch, name)
+            }
+            Expr::Call { callee, args } => expr_mentions_inc(callee, name) || args.iter().any(|a| expr_mentions_inc(a, name)),
+            Expr::Binary(_, l, r) => expr_mentions_inc(l, name) || expr_mentions_inc(r, name),
+            Expr::ArrayPush { array, value } => expr_mentions_inc(array, name) || expr_mentions_inc(value, name),
+            Expr::ArrayPushReuse { value, .. } => expr_mentions_inc(value, name),
+            Expr::Match { scrutinee, arms } => {
+                expr_mentions_inc(scrutinee, name) || arms.iter().any(|a| expr_mentions_inc(&a.body, name))
+            }
+            _ => false,
+        }
+    }
 
     // Small constructors so tests read as trees, not boilerplate.
     fn var(name: &str) -> Expr {
@@ -2204,6 +2714,258 @@ mod tests {
         assert_eq!(insert_refcount_ops(input.clone()), input);
     }
 
+    // --- Loop-carried accumulators: `let mut acc = []; for .. { acc =
+    // acc.push(x) }`, the idiomatic collection-building shape in this
+    // language and what `Array.map`/`Array.filter` themselves lower to.
+    // See `mark_last_uses`'s `For` arm for the full safety argument. ---
+
+    #[test]
+    fn a_self_rebinding_accumulator_in_a_loop_body_is_a_last_use_not_a_dup() {
+        // `acc = acc.push(1)` inside the loop: the rebind carries the
+        // loop-carried dependency, so the OLD reference genuinely dies
+        // here and the push may consume (and later reuse) it. Under the
+        // old blanket-force rule this got an Inc every iteration,
+        // pinning refcount >= 2 and forcing `.push()` onto its
+        // fresh-allocate-and-copy path — quadratic accumulation.
+        let input = let_(
+            "acc",
+            Expr::EmptyArray(PrimTy::Int),
+            for_(
+                "i",
+                int(0),
+                int(5),
+                assign_(
+                    "acc",
+                    Expr::ArrayPush { array: Box::new(var("acc")), value: Box::new(int(1)) },
+                    Expr::Unit,
+                ),
+            ),
+        );
+        let out = insert_refcount_ops(input);
+        assert!(
+            !expr_mentions_inc(&out, "acc"),
+            "the self-rebinding accumulator must not be dup'd every iteration: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_self_rebinding_accumulator_is_a_last_use_even_when_used_after_the_loop() {
+        // The REALISTIC shape, and the one an earlier version of this
+        // rule silently failed: `let mut acc = []; for .. { acc =
+        // acc.push(x) }; <use acc>`. You always build a collection in
+        // order to use it afterward, so `live_after` at the `For` node
+        // is essentially always true — and threading it into the body
+        // re-Inc's the consumed read, defeating the whole rule. The
+        // earlier version passed the weaker test below (which had
+        // nothing after the loop, so `live_after` was already false)
+        // while the real compiler still emitted a per-iteration
+        // `@plum_rc_inc` + fresh allocation + memcpy. Caught by reading
+        // generated LLVM, not by this suite — hence this test.
+        let input = let_(
+            "acc",
+            Expr::EmptyArray(PrimTy::Int),
+            let_(
+                "_",
+                for_(
+                    "i",
+                    int(0),
+                    int(5),
+                    assign_(
+                        "acc",
+                        Expr::ArrayPush { array: Box::new(var("acc")), value: Box::new(int(1)) },
+                        Expr::Unit,
+                    ),
+                ),
+                Expr::ArrayLen { array: Box::new(var("acc")) },
+            ),
+        );
+        let out = optimize(input);
+        assert!(
+            !expr_mentions_inc(&out, "acc"),
+            "a post-loop use must not resurrect the consumed in-loop read: {out:?}"
+        );
+        assert!(
+            format!("{out:?}").contains("ArrayPushReuse"),
+            "the accumulator should still reach the reuse-in-place push path: {out:?}"
+        );
+    }
+
+    #[test]
+    fn two_rebinds_in_one_loop_body_are_both_last_uses() {
+        // The string-join shape: `for .. { if c { acc = acc.concat(" ") };
+        // acc = acc.concat(s) }`. Before the `Assign` rebind rule, the
+        // FIRST rebind saw the SECOND one's read as still-live and got an
+        // Inc, so it took the allocate-and-copy path and the whole join
+        // was quadratic (900MB for a 10,000-element join, 4x per
+        // doubling). Both rebinds must come out as last uses.
+        let input = let_(
+            "acc",
+            Expr::Str("".to_string()),
+            let_(
+                "_",
+                for_(
+                    "i",
+                    int(0),
+                    int(5),
+                    Expr::If {
+                        cond: Box::new(Expr::Bool(true)),
+                        then_branch: Box::new(assign_(
+                            "acc",
+                            Expr::StrConcat { base: Box::new(var("acc")), other: Box::new(Expr::Str(" ".to_string())) },
+                            Expr::Unit,
+                        )),
+                        else_branch: Box::new(assign_(
+                            "acc",
+                            Expr::StrConcat { base: Box::new(var("acc")), other: Box::new(Expr::Str("x".to_string())) },
+                            Expr::Unit,
+                        )),
+                    },
+                ),
+                var("acc"),
+            ),
+        );
+        let out = optimize(input);
+        assert!(!expr_mentions_inc(&out, "acc"), "neither rebind should be dup'd: {out:?}");
+        assert!(
+            format!("{out:?}").matches("StrConcatReuse").count() == 2,
+            "both concats should reuse in place: {out:?}"
+        );
+    }
+
+    #[test]
+    fn an_alias_read_before_a_rebinding_assign_is_still_duped() {
+        // The safety counterpart: `snap` aliases `acc` before the rebind
+        // and outlives it, so the read into `snap` must still be Inc'd —
+        // leaving refcount 2 so the concat's runtime check takes the
+        // fresh-allocation path instead of corrupting `snap`.
+        let input = let_(
+            "acc",
+            Expr::Str("".to_string()),
+            let_(
+                "snap",
+                var("acc"),
+                assign_(
+                    "acc",
+                    Expr::StrConcat { base: Box::new(var("acc")), other: Box::new(Expr::Str("x".to_string())) },
+                    call(var("use_it"), vec![var("snap")]),
+                ),
+            ),
+        );
+        let out = insert_refcount_ops(input);
+        assert!(
+            expr_mentions_inc(&out, "acc"),
+            "an alias read before a rebinding assign must still be dup'd: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_self_rebinding_accumulator_still_reaches_array_push_reuse() {
+        // The end-to-end point of the above: with no forced Inc in the
+        // way, `mark_reuse` can turn the push into `ArrayPushReuse`.
+        let input = let_(
+            "acc",
+            Expr::EmptyArray(PrimTy::Int),
+            for_(
+                "i",
+                int(0),
+                int(5),
+                assign_(
+                    "acc",
+                    Expr::ArrayPush { array: Box::new(var("acc")), value: Box::new(int(1)) },
+                    Expr::Unit,
+                ),
+            ),
+        );
+        let out = optimize(input);
+        assert!(
+            format!("{out:?}").contains("ArrayPushReuse"),
+            "a loop accumulator should reach the reuse-in-place push path: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_loop_body_use_that_is_not_a_self_rebind_is_still_conservatively_duped() {
+        // No `Assign` to `xs` anywhere in the body — nothing breaks the
+        // loop-carried liveness, so the old conservative rule must still
+        // apply, or a consuming op here could recycle a cell the next
+        // iteration still needs.
+        let input = let_(
+            "xs",
+            ctor("Pair", vec![int(1), int(2)]),
+            for_("i", int(0), int(5), call(var("consume"), vec![var("xs")])),
+        );
+        let out = insert_refcount_ops(input);
+        assert!(
+            expr_mentions_inc(&out, "xs"),
+            "a non-rebinding loop-body use must still be dup'd: {out:?}"
+        );
+    }
+
+    #[test]
+    fn an_aliasing_read_before_a_self_rebind_is_still_duped() {
+        // THE safety test for the exception. `snap` aliases `acc`
+        // BEFORE the rebind and is used AFTER it. The backward walk must
+        // see that `acc` is still needed (by the later `Assign`) at the
+        // point `snap` reads it, and Inc there — so the push observes
+        // refcount 2 and takes the fresh-allocate path instead of
+        // destructively recycling the buffer `snap` still points at.
+        // Without this, the exception would be a silent corruption bug.
+        let input = let_(
+            "acc",
+            Expr::EmptyArray(PrimTy::Int),
+            for_(
+                "i",
+                int(0),
+                int(5),
+                let_(
+                    "snap",
+                    var("acc"),
+                    assign_(
+                        "acc",
+                        Expr::ArrayPush { array: Box::new(var("acc")), value: Box::new(int(1)) },
+                        call(var("use_it"), vec![var("snap")]),
+                    ),
+                ),
+            ),
+        );
+        let out = insert_refcount_ops(input);
+        assert!(
+            expr_mentions_inc(&out, "acc"),
+            "an aliasing read before the rebind must be dup'd so the push can't corrupt the alias: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_shadowed_inner_rebind_does_not_relax_the_outer_names_loop_rule() {
+        // The `Assign` targets an INNER `acc` introduced by a `Let`
+        // inside the body — it says nothing about the outer `acc`, whose
+        // loop-carried liveness is therefore NOT broken. The outer name
+        // must stay on the conservative dup'ing path.
+        let input = let_(
+            "acc",
+            ctor("Pair", vec![int(1), int(2)]),
+            for_(
+                "i",
+                int(0),
+                int(5),
+                let_(
+                    "acc", // shadows
+                    Expr::EmptyArray(PrimTy::Int),
+                    assign_("acc", Expr::EmptyArray(PrimTy::Int), Expr::Unit),
+                ),
+            ),
+        );
+        // The OUTER acc is never actually read in the body here, so the
+        // meaningful assertion is on `expr_assigns_var` itself: it must
+        // not claim the outer name is rebound.
+        let Expr::Let { body, .. } = &input else { panic!("shape") };
+        let Expr::For { body: loop_body, .. } = body.as_ref() else { panic!("shape") };
+        assert!(
+            !expr_assigns_var(loop_body, "acc"),
+            "a shadowed inner rebind must not count as rebinding the outer name"
+        );
+    }
+
     #[test]
     fn mark_reuse_recurses_into_a_loop_body() {
         // A reuse-eligible shape (deconstruct-then-reconstruct-same-
@@ -2401,6 +3163,56 @@ mod tests {
             optimized.globals[0].value,
             optimize(let_("p", ctor("Point", vec![int(1), int(2)]), var("p")))
         );
+    }
+
+    // --- `confirmed_array_or_str_params` — currently UNUSED by
+    // `optimize_program` (see that function's own doc comment for why
+    // the attempted fix built on top of this was reverted), but its own
+    // shadowing-awareness is genuinely correct and tested directly
+    // here, kept for a future, more careful attempt. ---
+
+    #[test]
+    fn confirmed_array_or_str_params_finds_a_parameter_proven_by_its_own_push_call() {
+        let body = Expr::ArrayPush {
+            array: Box::new(var("acc")),
+            value: Box::new(var("v")),
+        };
+        let found = confirmed_array_or_str_params(&body, &["acc".to_string(), "v".to_string()]);
+        assert_eq!(found, known(&["acc"]));
+    }
+
+    #[test]
+    fn confirmed_array_or_str_params_does_not_attribute_a_shadowed_inner_bindings_use_to_the_outer_param() {
+        // `acc` is an OUTER parameter (plainly scalar, per its own use
+        // below), but a NESTED closure parameter reuses the SAME name
+        // and genuinely IS array-shaped inside that closure's own body.
+        // A shadowing-UNAWARE scan would see `acc.push(...)` textually
+        // anywhere in the body and wrongly attribute it to the OUTER
+        // `acc` — exactly the real bug (a segfault treating an Int as a
+        // heap pointer) found via `exec_corpus/closures` when this was
+        // first tried without shadowing-awareness.
+        let body = let_(
+            "make_pusher",
+            Expr::Closure {
+                params: vec!["acc".to_string()], // shadows the OUTER `acc`
+                param_types: None,
+                ret_type: None,
+                body: Box::new(Expr::ArrayPush {
+                    array: Box::new(var("acc")), // the INNER (shadowed) acc
+                    value: Box::new(int(1)),
+                }),
+            },
+            Expr::Binary(BinOp::Add, Box::new(var("acc")), Box::new(int(1))), // the OUTER acc, used as a plain Int
+        );
+        let found = confirmed_array_or_str_params(&body, &["acc".to_string()]);
+        assert!(found.is_empty(), "the outer Int parameter must not be attributed the shadowed inner binding's array use: {found:?}");
+    }
+
+    #[test]
+    fn confirmed_array_or_str_params_finds_nothing_for_a_plain_scalar_parameter() {
+        let body = Expr::Binary(BinOp::Add, Box::new(var("n")), Box::new(var("n")));
+        let found = confirmed_array_or_str_params(&body, &["n".to_string()]);
+        assert!(found.is_empty(), "plain arithmetic is no evidence of array/string shape: {found:?}");
     }
 
     #[test]

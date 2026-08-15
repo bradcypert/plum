@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("o") Colon Ident("Option") LBracket Ident("Int") RBracket RParen Colon Ident("Int") Eq Match Ident("o") LBrace Ident("Some") LParen Ident("x") RParen FatArrow Ident("x") Comma Ident("None") FatArrow Int(0) RBrace

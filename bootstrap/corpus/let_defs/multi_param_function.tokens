@@ -1,0 +1,1 @@
+Let Ident("add") LParen Ident("a") Colon Ident("Int") RParen LParen Ident("b") Colon Ident("Int") RParen Colon Ident("Int") Eq Ident("a") Plus Ident("b")

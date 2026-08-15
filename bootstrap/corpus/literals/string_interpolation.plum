@@ -1,0 +1,1 @@
+let case (name: String) (n: Int): String = "hello, ${name}! you are ${n + 1} now."

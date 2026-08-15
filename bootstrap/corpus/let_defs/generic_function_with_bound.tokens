@@ -1,0 +1,1 @@
+Let Ident("smallest") LBracket Ident("T") Colon Ident("Num") RBracket LParen Ident("a") Colon Ident("T") RParen LParen Ident("b") Colon Ident("T") RParen Colon Ident("T") Eq If Ident("a") Lt Ident("b") LBrace Ident("a") RBrace Else LBrace Ident("b") RBrace

@@ -1,0 +1,1 @@
+Struct Ident("Pair") LBracket Ident("A") Comma Ident("B") RBracket LBrace Ident("first") Colon Ident("A") Comma Ident("second") Colon Ident("B") RBrace

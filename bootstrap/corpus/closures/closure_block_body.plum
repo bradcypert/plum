@@ -1,0 +1,1 @@
+let case = |x: Int| { let y = x + 1; y * 2 }

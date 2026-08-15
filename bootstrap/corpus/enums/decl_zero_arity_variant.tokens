@@ -1,0 +1,1 @@
+Enum Ident("Option") LBracket Ident("T") RBracket LBrace Ident("Some") LParen Ident("T") RParen Comma Ident("None") RBrace

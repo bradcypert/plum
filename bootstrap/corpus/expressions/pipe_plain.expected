@@ -1,0 +1,1 @@
+((let case ((x:Int) (f:(fn (Int) -> Int))) ->Int (|> x f)))

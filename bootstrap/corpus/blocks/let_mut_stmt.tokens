@@ -1,0 +1,1 @@
+Let Ident("case") LParen RParen Colon Ident("Int") Eq LBrace Let Mut Ident("x") Eq Int(5) Semicolon Ident("x") Eq Ident("x") Plus Int(1) Semicolon Ident("x") RBrace

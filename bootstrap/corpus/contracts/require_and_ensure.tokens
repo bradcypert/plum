@@ -1,0 +1,1 @@
+Let Ident("divide") LParen Ident("a") Colon Ident("Int") RParen LParen Ident("b") Colon Ident("Int") RParen Colon Ident("Int") Ident("require") Ident("b") NotEq Int(0) Ident("ensure") Ident("result") GtEq Int(0) Eq Ident("a") Slash Ident("b")

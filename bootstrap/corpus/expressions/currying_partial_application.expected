@@ -1,0 +1,1 @@
+((let scale ((factor:Int) (x:Int)) ->Int (* factor x)) (let case () ->(fn (Int) -> Int) (call scale 2)))

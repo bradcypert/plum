@@ -1,0 +1,1 @@
+Let Ident("case") Eq Ident("Point") LBrace Ident("x") Colon Int(1) Comma Ident("y") Colon Int(2) RBrace

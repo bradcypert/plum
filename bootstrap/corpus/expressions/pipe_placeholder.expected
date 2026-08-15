@@ -1,0 +1,1 @@
+((let case ((xs:(gt Array Int)) (f:(fn (Int) -> Int))) ->(gt Array Int) (|> xs (call (field Array map) (closure (_) _) f))))

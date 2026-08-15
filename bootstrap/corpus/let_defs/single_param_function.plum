@@ -1,0 +1,1 @@
+let double (n: Int): Int = n * 2

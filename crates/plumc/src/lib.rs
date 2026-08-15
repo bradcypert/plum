@@ -1007,7 +1007,10 @@ let array_drop_acc[T] (arr: Array[T]) (n: Int) (i: Int) (acc: Array[T]): Array[T
 
 let Array.drop[T] (arr: Array[T]) (n: Int): Array[T] = array_drop_acc(arr, n, 0, [])
 
-let Array.slice[T] (arr: Array[T]) (start: Int) (end: Int): Array[T] = Array.take(Array.drop(arr, start), end - start)
+let array_slice_acc[T] (arr: Array[T]) (i: Int) (remaining: Int) (acc: Array[T]): Array[T] =
+    if remaining <= 0 { acc } else if i >= arr.len() { acc } else { array_slice_acc(arr, i + 1, remaining - 1, acc.push(arr[i])) }
+
+let Array.slice[T] (arr: Array[T]) (start: Int) (end: Int): Array[T] = array_slice_acc(arr, if start < 0 { 0 } else { start }, end - start, [])
 
 let array_find_acc[T] (arr: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =
     if i >= arr.len() { None } else if f(arr[i]) { Some(arr[i]) } else { array_find_acc(arr, f, i + 1) }
@@ -1174,9 +1177,14 @@ let String.trim_start (s: String): String = {
 
 let String.trim_end (s: String): String = string_reverse(String.trim_start(string_reverse(s)))
 
+let string_matches_at (chars: Array[String]) (needle: Array[String]) (base: Int) (j: Int): Bool =
+    if j >= needle.len() { true }
+    else if chars[base + j] != needle[j] { false }
+    else { string_matches_at(chars, needle, base, j + 1) }
+
 let string_index_of_acc (chars: Array[String]) (needle: Array[String]) (i: Int): Option[Int] =
     if i + needle.len() > chars.len() { None }
-    else if Array.slice(chars, i, i + needle.len()) == needle { Some(i) }
+    else if string_matches_at(chars, needle, i, 0) { Some(i) }
     else { string_index_of_acc(chars, needle, i + 1) }
 
 let String.index_of (s: String) (needle: String): Option[Int] = string_index_of_acc(chars_of(s), chars_of(needle), 0)

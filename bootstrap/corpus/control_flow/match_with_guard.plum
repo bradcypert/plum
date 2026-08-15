@@ -1,0 +1,1 @@
+let case (n: Int): String = match n { x if x > 0 => "positive", _ => "other" }

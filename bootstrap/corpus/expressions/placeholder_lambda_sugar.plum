@@ -1,0 +1,1 @@
+let case (xs: Array[Int]): Array[String] = Array.map(xs, _.to_string())

@@ -1,0 +1,1 @@
+let case (x: Array[Int]): Bool = true

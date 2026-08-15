@@ -1,0 +1,1 @@
+let main (): Unit = println(nonexistent_thing.to_string())

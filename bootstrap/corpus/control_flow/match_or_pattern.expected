@@ -1,0 +1,1 @@
+((let case ((n:Int)) ->Bool (match n (arm (or 1 2 3) true) (arm _ false))))

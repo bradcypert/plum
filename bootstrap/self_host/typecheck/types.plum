@@ -1,0 +1,205 @@
+// Self-hosted type checker — Stage 4 of self-hosting (see DESIGN.md's
+// "Self-hosting bootstrap corpus" section and the project roadmap).
+// This file is Layer 1: the inferred-type representation, substitution,
+// and unification — mirrors `crates/plum-types/src/types.rs`/`subst.rs`/
+// `unify.rs` closely, including `Subst::compose`'s documented self-loop
+// -avoidance fix (a REAL bug the real compiler found and fixed once
+// already — see that file's own doc comment; ported here deliberately,
+// not rediscovered the hard way).
+//
+// Named `ITy`/`ITInt`/etc — "Inferred Type" — not `Type`/`TInt`, to
+// stay clearly distinct from `parser.Ty` (the AST-level type
+// ANNOTATION syntax, e.g. `TyPath`/`TyGeneric`) this module converts
+// FROM, not the same thing.
+//
+// **Deliberate v1 scope cut versus `plum_types::Type`**: no `CStr`
+// (FFI isn't supported by `interp/interp.plum` either) and no `Range`
+// (ditto — `for` loops are handled structurally by this checker, not
+// via a first-class range value). Everything else is present.
+
+pub enum ITy {
+    ITInt,
+    ITFloat,
+    ITBool,
+    ITStr,
+    ITUnit,
+    ITVar(Int),
+    ITFunction(Array[ITy], ITy),
+    // The `Array[ITy]` is the struct's/enum's type ARGUMENTS at this
+    // use site — empty for non-generic, one entry per declared param
+    // for a generic one, in declared order. Mirrors `Type::Struct`/
+    // `Type::Enum` exactly.
+    ITStruct(String, Array[ITy]),
+    ITEnum(String, Array[ITy]),
+    // A generic declaration's own type parameter, named exactly as
+    // written (`T`) — only ever meant to exist transiently inside a
+    // stored declaration template; every real use substitutes it for a
+    // fresh `ITVar` before it could ever reach `unify`. Mirrors
+    // `Type::Param` exactly, including the same "should never reach
+    // unify in practice" invariant.
+    ITParam(String),
+    ITTuple(Array[ITy]),
+}
+
+// --- Substitution ---
+
+struct SubstEntry { id: Int, ty: ITy }
+pub struct Subst { entries: Array[SubstEntry] }
+
+pub let subst_empty (unit: Unit): Subst = Subst { entries: [] }
+pub let subst_single (id: Int) (ty: ITy): Subst = Subst { entries: [SubstEntry { id: id, ty: ty }] }
+
+let subst_lookup (s: Subst) (id: Int): Option[ITy] = subst_lookup_acc(s.entries, id, 0)
+
+let subst_lookup_acc (entries: Array[SubstEntry]) (id: Int) (i: Int): Option[ITy] =
+    if i >= entries.len() { None }
+    else if entries[i].id == id { Some(entries[i].ty) }
+    else { subst_lookup_acc(entries, id, i + 1) }
+
+// Replaces every variable in `ty` with what `s` knows about it,
+// resolving chains (`T0 -> T1 -> Int` resolves fully to `Int`, not
+// stopping at `T1`) and recursing into compound types — mirrors
+// `Subst::apply` exactly.
+pub let subst_apply (s: Subst) (ty: ITy): ITy =
+    match ty {
+        ITVar(id) => match subst_lookup(s, id) {
+            Some(replacement) => subst_apply(s, replacement),
+            None => ty,
+        },
+        ITFunction(params, ret) => ITFunction(Array.map(params, |p| subst_apply(s, p)), subst_apply(s, ret)),
+        ITTuple(elems) => ITTuple(Array.map(elems, |e| subst_apply(s, e))),
+        ITStruct(name, args) => ITStruct(name, Array.map(args, |a| subst_apply(s, a))),
+        ITEnum(name, args) => ITEnum(name, Array.map(args, |a| subst_apply(s, a))),
+        _ => ty,
+    }
+
+let entries_have_key (entries: Array[SubstEntry]) (id: Int): Bool = Option.is_some(subst_lookup_acc(entries, id, 0))
+
+// `self_s.compose(other)` — equivalent to applying `other` FIRST, then
+// `self_s`. Mirrors `Subst::compose` exactly, INCLUDING the documented
+// self-loop-avoidance step (`resolved == ITVar(k)` dropped, not
+// inserted): composing two acyclic substitutions can still produce a
+// NEW cycle where neither input alone had one — a real, previously-
+// latent bug the real compiler found via an actual 100,000+-frame
+// stack overflow, not a hypothetical. Ported deliberately, not
+// rediscovered here the hard way.
+pub let subst_compose (self_s: Subst) (other: Subst): Subst = {
+    let resolved_other = compose_resolve_acc(self_s, other.entries, 0, []);
+    let kept_self = Array.filter(self_s.entries, |e| !entries_have_key(resolved_other, e.id));
+    Subst { entries: Array.concat(resolved_other, kept_self) }
+}
+
+let compose_resolve_acc (self_s: Subst) (other_entries: Array[SubstEntry]) (i: Int) (acc: Array[SubstEntry]): Array[SubstEntry] =
+    if i >= other_entries.len() { acc }
+    else {
+        let k = other_entries[i].id;
+        let resolved = subst_apply(self_s, other_entries[i].ty);
+        let is_self_loop = match resolved { ITVar(v) => v == k, _ => false };
+        if is_self_loop { compose_resolve_acc(self_s, other_entries, i + 1, acc) }
+        else { compose_resolve_acc(self_s, other_entries, i + 1, acc.push(SubstEntry { id: k, ty: resolved })) }
+    }
+
+// --- Unification ---
+
+// Finds a substitution that makes `a` and `b` equal, or reports why
+// none exists — mirrors `unify::unify` exactly, including its ORDER OF
+// ARMS (a real, load-bearing detail, not cosmetic): a bare `ITVar` on
+// EITHER side is checked first, before any structural (primitive/
+// struct/enum/function/tuple) comparison — `unify_non_var` below is
+// only ever reached once BOTH sides are confirmed non-`Var`.
+pub let unify (a: ITy) (b: ITy): Result[Subst, String] =
+    match a {
+        ITVar(a_id) => match b {
+            ITVar(b_id) => if a_id == b_id { Ok(subst_empty(())) } else { bind_var(a_id, b) },
+            _ => bind_var(a_id, b),
+        },
+        _ => match b {
+            ITVar(b_id) => bind_var(b_id, a),
+            _ => unify_non_var(a, b),
+        },
+    }
+
+let unify_non_var (a: ITy) (b: ITy): Result[Subst, String] =
+    match a {
+        ITInt => match b { ITInt => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        ITFloat => match b { ITFloat => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        ITBool => match b { ITBool => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        ITStr => match b { ITStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        ITUnit => match b { ITUnit => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        ITStruct(a_name, a_args) => match b {
+            ITStruct(b_name, b_args) => if a_name == b_name { unify_arg_lists(a_args, b_args) } else { type_mismatch(a, b) },
+            _ => type_mismatch(a, b),
+        },
+        ITEnum(a_name, a_args) => match b {
+            ITEnum(b_name, b_args) => if a_name == b_name { unify_arg_lists(a_args, b_args) } else { type_mismatch(a, b) },
+            _ => type_mismatch(a, b),
+        },
+        ITParam(name) => Err("internal error: unresolved generic parameter ".concat(name).concat(" reached unification")),
+        ITFunction(p1, r1) => match b {
+            ITFunction(p2, r2) => unify_fn_types(p1, r1, p2, r2),
+            _ => type_mismatch(a, b),
+        },
+        ITTuple(e1) => match b {
+            ITTuple(e2) => unify_arg_lists(e1, e2),
+            _ => type_mismatch(a, b),
+        },
+        ITVar(_) => Err("internal error: unify_non_var received a Var"),
+    }
+
+let bind_var (id: Int) (ty: ITy): Result[Subst, String] =
+    if occurs(id, ty) { Err("infinite type: a type variable occurs within its own binding") } else { Ok(subst_single(id, ty)) }
+
+// True if type variable `id` appears anywhere inside `ty` — binding a
+// variable to a type containing itself would describe an infinite
+// type (`T = T -> Int` has no finite solution).
+let occurs (id: Int) (ty: ITy): Bool =
+    match ty {
+        ITVar(other) => other == id,
+        ITFunction(params, ret) => Array.any(params, |p| occurs(id, p)) || occurs(id, ret),
+        ITTuple(elems) => Array.any(elems, |e| occurs(id, e)),
+        ITStruct(_, args) => Array.any(args, |a| occurs(id, a)),
+        ITEnum(_, args) => Array.any(args, |a| occurs(id, a)),
+        _ => false,
+    }
+
+// Unifies two arg/element lists pairwise, threading a `Subst`
+// accumulator — the shared shape `unify_args`/`Tuple`'s own
+// element-wise unify both need in the real compiler.
+let unify_arg_lists (a_list: Array[ITy]) (b_list: Array[ITy]): Result[Subst, String] =
+    if a_list.len() != b_list.len() { Err("argument/arity count mismatch") } else { unify_pairwise(a_list, b_list, 0, subst_empty(())) }
+
+let unify_pairwise (a_list: Array[ITy]) (b_list: Array[ITy]) (i: Int) (acc: Subst): Result[Subst, String] =
+    if i >= a_list.len() { Ok(acc) }
+    else {
+        match unify(subst_apply(acc, a_list[i]), subst_apply(acc, b_list[i])) {
+            Err(e) => Err(e),
+            Ok(step) => unify_pairwise(a_list, b_list, i + 1, subst_compose(step, acc)),
+        }
+    }
+
+let unify_fn_types (p1: Array[ITy]) (r1: ITy) (p2: Array[ITy]) (r2: ITy): Result[Subst, String] =
+    if p1.len() != p2.len() { Err("function arity mismatch") }
+    else { match unify_pairwise(p1, p2, 0, subst_empty(())) {
+        Err(e) => Err(e),
+        Ok(acc) => match unify(subst_apply(acc, r1), subst_apply(acc, r2)) {
+            Err(e) => Err(e),
+            Ok(step) => Ok(subst_compose(step, acc)),
+        },
+    } }
+
+let type_mismatch (a: ITy) (b: ITy): Result[Subst, String] = Err(render_ty(a).concat(" != ").concat(render_ty(b)))
+
+// --- Rendering (for error messages) ---
+
+pub let render_ty (ty: ITy): String =
+    match ty {
+        ITInt => "Int", ITFloat => "Float", ITBool => "Bool", ITStr => "String", ITUnit => "Unit",
+        ITVar(id) => "T".concat(id.to_string()),
+        ITFunction(params, ret) => "(".concat(join_comma_ty(params)).concat(") -> ").concat(render_ty(ret)),
+        ITStruct(name, args) => if Array.is_empty(args) { name } else { name.concat("[").concat(join_comma_ty(args)).concat("]") },
+        ITEnum(name, args) => if Array.is_empty(args) { name } else { name.concat("[").concat(join_comma_ty(args)).concat("]") },
+        ITParam(name) => name,
+        ITTuple(elems) => "(".concat(join_comma_ty(elems)).concat(")"),
+    }
+
+let join_comma_ty (tys: Array[ITy]): String = Array.fold(tys, "", |acc, t| if acc == "" { render_ty(t) } else { acc.concat(", ").concat(render_ty(t)) })

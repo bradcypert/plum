@@ -1,0 +1,1 @@
+((let divide ((a:Int) (b:Int)) ->Int (block (stmt (call __contract_require (!= b 0) "precondition failed")) (let result (/ a b)) (stmt (call __contract_ensure (>= result 0) "postcondition failed")) result)))

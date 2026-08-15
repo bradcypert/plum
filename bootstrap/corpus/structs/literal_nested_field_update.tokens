@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("g") Colon Ident("Game") RParen LParen Ident("nx") Colon Ident("Int") RParen LParen Ident("ny") Colon Ident("Int") RParen Colon Ident("Game") Eq Ident("Game") LBrace Ident("ship") Dot Ident("position") Dot Ident("x") Colon Ident("nx") Comma Ident("ship") Dot Ident("position") Dot Ident("y") Colon Ident("ny") Comma DotDot Ident("g") RBrace

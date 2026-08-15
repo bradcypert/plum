@@ -6802,3 +6802,1119 @@ call-equals-fully-applied-call proof, composing with `Array.map` as an
 ordinary higher-order argument, and a partial application built inside
 a closure and returned. Verified via both `plum run` and `plum build`.
 Listed in README.md's Examples section.
+
+## Self-hosting bootstrap corpus — Decided and implemented (2026-08-13)
+
+Brad, after agreeing to start self-hosting (see the project roadmap),
+raised a real worry before any Stage 1 code got written: build the
+whole lexer/parser in Plum, discover partway through that some real
+syntax construct was never exercised, and end up needing to rework
+already-written self-hosted code to cover it — a genuinely expensive
+way to find a gap. Proposed instead: build the comparison corpus
+FIRST, entirely against the existing Rust implementation, so "did we
+miss something" becomes a fast, already-answered question before Stage
+1 starts, not a discovery made partway through it.
+
+**Motivating evidence found while scoping this, not hypothetical**:
+GRAMMAR.md itself had already drifted from the real parser — it
+documented array literals as "intentionally absent, not yet decided"
+(false; `ast::Expr::ArrayLiteral` has existed and been used throughout
+`examples/` for a long time) and still described the `f (a) (b)`
+footgun as a silent-wrongness trap "even though Plum doesn't have
+currying" (stale as of yesterday's currying work). Both fixed in this
+same pass. This is the concrete case FOR building a corpus straight
+from the real parser's actual behavior rather than trusting prose
+documentation to have kept up — the docs already hadn't.
+
+**Three pieces, all reusable independent of Stage 1 ever starting:**
+
+1. **`plum_syntax::render`** — the s-expression AST printer (`(let
+   double ((n:Int)) ->Int (* n 2))`) that already existed, but only as
+   a private, test-only helper inside `parser.rs`'s own test module,
+   scattered across several locations in that file. Promoted verbatim
+   (same output, same function names, zero behavior change — the
+   existing 175 `plum-syntax` tests all still pass unchanged, now via
+   `use crate::render::*` instead of local definitions) into a real
+   `pub mod`, because it now has a second real consumer beyond this
+   crate's own tests. Deliberately NOT `Debug`-derived output: `Debug`
+   includes exact byte-offset `Span`s, which would make every golden
+   file brittle to irrelevant whitespace/comment reformatting in a
+   fixture — this format drops spans entirely, so two semantically-
+   identical parses always render identically.
+2. **`plum dump-ast <file>`** (`plumc::main`) — a new CLI subcommand,
+   parsing exactly one `.plum` FILE (no module resolution, no prelude
+   injection, no `assoc_fns`/`nested_struct_update` AST rewriting —
+   just this crate's real `Lexer`+`Parser` on precisely what's in the
+   file) and printing its `render_program` output to stdout. This is
+   what generated every golden file in the corpus below, and what a
+   future self-hosted parser's own equivalent tool gets checked
+   against.
+3. **`bootstrap/corpus/`** — a NEW top-level directory (deliberately
+   outside `crates/plum-syntax/`, since this corpus is a contract
+   between implementations, not one crate's own fixtures — see
+   `bootstrap/README.md`), 98 small, focused `<topic>/<name>.plum` +
+   `<name>.expected` pairs, one isolated grammar construct per fixture
+   rather than the big narrative demos `examples/` already has.
+   Topics: literals (incl. string interpolation), let-defs (incl.
+   generics/bounds/associated functions/destructuring params),
+   structs (incl. nested field-update sugar), enums, types, expressions
+   (incl. pipe/placeholder sugar, currying), control flow, closures,
+   patterns (incl. or-patterns), contracts, extern blocks, use
+   declarations, blocks, and concurrency (spawn/unsafe/select). Found
+   and fixed 4 real fixture-authoring mistakes along the way by
+   actually running them through the real parser rather than assuming
+   correctness (extern fn syntax uses `->`, not `:`, for its return
+   type; extern params are one flat list, never curried like ordinary
+   functions; tuple type ANNOTATIONS aren't implemented — see
+   GRAMMAR.md's own note) — exactly the kind of real, easy-to-get-wrong
+   detail this corpus exists to pin down before Stage 1 has to
+   rediscover it independently.
+
+**`crates/plum-syntax/tests/golden.rs`** walks the corpus (via
+`CARGO_MANIFEST_DIR`-relative pathing to the repo-root `bootstrap/`
+directory) and asserts the real parser's output still matches every
+golden — two jobs at once: an ordinary regression guard for THIS
+parser today, and the corpus's own self-consistency check as fixtures
+get added or edited over time. Verified the test genuinely catches
+real mismatches (not just trivially passing): corrupted one golden
+file by hand, confirmed a real, correctly-attributed failure, restored
+it, confirmed green again. Full workspace suite green throughout, zero
+regressions — 98/98 fixtures passing.
+
+**Token-level goldens added the same session, right after, prompted by
+scoping "what's next" (Stage 1 itself).** The AST-level corpus above
+only gets a real signal once BOTH a self-hosted lexer AND parser exist
+— a Stage-1 lexer bug would only surface once the parser was also far
+enough along to expose it, and could easily be misattributed to the
+wrong stage. Fixed by giving the lexer its own independent golden:
+`plum_syntax::render::render_tokens` (a flat, space-separated, span-
+free token list — `Let Ident("x") Eq Int(5)`, `Eof` deliberately
+omitted as constant boilerplate) and `plum dump-tokens <file>`, exact
+mirrors of `render_program`/`plum dump-ast`. Every existing fixture got
+a second, paired `<name>.tokens` golden (98 generated, reusing the same
+source files — no new fixtures needed, since lexing and parsing exist
+on the same source either way), and `golden.rs` gained a second test
+function validating them, verified the same way (a hand-corrupted
+`.tokens` file caught, then restored). One real, deliberate design
+choice inside `render_tokens`: it strips `InterpPart::Expr`'s embedded
+`Span` (the one token payload that isn't already span-free) but
+otherwise reuses `TokenKind`'s own derived `Debug` output directly for
+every other variant (`Ident("x")`, `Int(5)`, bare `Let`/`LParen`/...) —
+deliberately NOT hand-writing a match arm per token kind the way
+`render_program` hand-writes one per AST node kind, since a `Debug`-
+derived unit variant has no field-order/verbosity risk to hedge
+against (that risk is real for STRUCT-shaped `Debug`, not empty tuple/
+unit variants). Full workspace suite green throughout — 98/98 fixtures
+now passing on BOTH goldens.
+
+**What this deliberately doesn't cover**: type inference, lowering, or
+codegen — this corpus tests the PARSER specifically (Stage 1's own
+scope), not the whole pipeline. A fixture like the nested-field-update
+sugar's golden shows the RAW, un-expanded `ship.position.x=nx` path
+(that expansion is a `plumc`-level pass, `nested_struct_update`, which
+never runs inside `plum dump-ast` at all) — correctly narrow, not an
+oversight.
+
+## Stage 1: self-hosted lexer — Decided and implemented (2026-08-13)
+
+`bootstrap/self_host/lexer/main.plum` — the first real self-hosted
+Plum source in this project, written to answer the bootstrap corpus's
+own whole purpose: does a Plum lexer, written in Plum, actually
+reproduce what the real Rust lexer produces, for real syntax, checked
+against goldens generated entirely independently of this code. Mirrors
+`crates/plum-syntax/src/lexer.rs::Lexer` structurally (same `Token`
+variant set — prefixed `Tok`/enum-payload shape, not required to match
+Rust's names textually, since `render_token` is hand-written and
+decouples internal naming from golden-format text entirely; same
+keyword table; same operator-lexing lookahead rules; same `${...}`
+interpolation depth-tracking scan, including verbatim-copying a nested
+double-quoted string's content). Built on the exact recursive `(chars:
+Array[String], pos: Int) -> Result-shaped-record` idiom `json_parse`/
+`String.parse_int` already established in the real stdlib — not a new
+pattern, reused directly. `String.index_of`/`.parse_int`/`.parse_float`
+called via the namespaced `Type.func(value, ...)` form (dot-sugar only
+works for genuine compiler primitives like `.concat()`/`.push()`/`.len()`,
+not stdlib-defined associated functions — a real, if minor, gotcha hit
+immediately on the first run and fixed in seconds by the golden-comparison
+tool itself, not discovered by inspection). `panic_raw`'s own `Unit`
+static type (never `!`-typed, unlike Rust's `panic!`) meant the
+"unexpected character" branches needed the same "sequence panic_raw,
+then return a placeholder value of the right type" shape `assert`'s
+own definition already established, not something new invented here.
+
+**Two real, concrete findings, both found via the corpus/tooling
+itself, not by inspection — exactly the payoff this whole exercise
+was built for:**
+
+1. **A genuine format bug in the golden generator itself**:
+   `render_token_kind`'s fallback (`{other:?}`, Rust's derived `Debug`)
+   forces a decimal point on every float (`1.0`), but `render_program`'s
+   own `Expr::Float` arm already uses `Display` (`f.to_string()`, `1`)
+   — and Plum's own `Float.to_string()` naturally produces the SAME
+   `Display`-shaped output, with no reason any correct Plum
+   implementation would ever reproduce Rust `Debug`'s forced-decimal
+   quirk. Verified directly (a real `rustc`-compiled 4-line program,
+   not assumed) that Rust's `Display`/`Debug` for `f64` genuinely
+   differ this way before concluding which side was "wrong." Fixed by
+   adding an explicit `TokenKind::Float` arm to `render_token_kind`
+   (matching `render_program`'s existing convention instead of standing
+   apart from it) and regenerating all 98 `.tokens` goldens — the
+   corpus's OWN infrastructure had a real, if narrow, bug, caught
+   before Stage 1 needed to work around it.
+2. **A genuine, previously-undocumented interpreter scaling limit,
+   distinct from every prior instance of "the interpreter's recursion
+   depth" already on record**: `plum run` genuinely stack-overflowed
+   on fixtures as small as 14 tokens (`{ let x = 5; x }`), while `plum
+   build` compiled and ran the identical program and fixture
+   correctly. Root-caused, not worked around: `render_token`/
+   `lex_operator`/`keyword_or_ident` are each one wide `match`/`if`-
+   chain (50+ arms for `render_token`), evaluated fresh per token —
+   `plum-interp` is a tree-walking interpreter, so evaluating a deeply
+   NESTED expression costs real Rust call-stack depth proportional to
+   that expression's own AST nesting, not just proportional to
+   explicit Plum-level recursive calls (every previously-documented
+   instance of "interpreter recursion depth" in this file was about
+   the LATTER). Across many tokens, each re-walking the same wide
+   chains, that per-token cost compounds. Confirmed directly by
+   building the exact same source natively and re-running the exact
+   fixture that overflowed — passed immediately, no code change
+   needed. Documented in `lexer/main.plum`'s own top comment: validate
+   this program (and likely any future large self-hosted source with
+   wide dispatch tables) via `plum build`, not `plum run`.
+
+**Also found and fixed, smaller**: native codegen's `.map()`/`.filter()`
+require a closure LITERAL written directly at the call site — passing
+an already-named top-level function value (`Array.map(pieces,
+render_interp_piece)`) fails monomorphization with a clear error, not
+a silent miscompile. A real, existing v1 scope limit (not something to
+fix in the compiler for this), worked around the intended way: wrap in
+a literal (`Array.map(pieces, |p| render_interp_piece(p))`).
+
+**Result**: 98/98 corpus fixtures pass, validated via the native
+build. First real self-hosted Plum source in the project, and it
+already justified the corpus-first sequencing twice over — one bug in
+the corpus's own tooling, one genuine new interpreter limit — both
+found before Stage 1 (the parser) had to rediscover either
+independently.
+
+## Stage 2: self-hosted parser — Decided and implemented (2026-08-13)
+
+`bootstrap/self_host/parser/parser.plum` — mirrors `crates/plum-syntax/
+src/parser.rs`'s `Parser` structurally: same recursive-descent shape,
+same one-function-per-precedence-level expression grammar (loosest to
+tightest — pipe, or, and, compare, range, add, mul, unary, postfix,
+primary), same capitalization-based struct-literal/generic-
+instantiation disambiguation, same `${...}` string-interpolation
+desugaring (re-lexing/re-parsing each piece's raw text through THIS
+SAME lexer/parser, recursively), same `require`/`ensure` contract
+desugaring (DESIGN.md's "Contracts" section) done entirely at parse
+time. Restructured `lexer/` from its own standalone project into a
+proper library MODULE (`bootstrap/self_host/lexer/lexer.plum`, `pub`
+on `Token`/`InterpPiece`/`tokenize`/`render_tokens`), with `bootstrap/
+self_host/main.plum` as the one real project root (`use lexer; use
+parser;`) dispatching to either stage by its first process arg
+(`tokens`/`ast`) — real, filesystem-level proof that Go-style directory
+modules (DESIGN.md's "Module system" section) work for exactly the
+purpose they were designed for.
+
+**Deliberate v1 scope cuts, stated up front**: no `no_struct_literal`
+suppression (GRAMMAR.md's struct-literal-vs-block ambiguity in `if`/
+`match` scrutinee position — checked directly, none of the 98 corpus
+fixtures need it, a real but currently-inert gap versus the Rust
+parser); no parse-error recovery or diagnostics (every "expected X"
+failure is a bare `panic_raw`, matching `lexer/lexer.plum`'s own
+"unexpected character" precedent — the corpus is 100% valid Plum by
+construction, nothing here needs to parse malformed input gracefully
+yet).
+
+**A second genuinely new, previously-undiscovered compiler bug found
+and FIXED, not just documented** (the lexer stage's two findings were
+a golden-generator bug and a fully-worked-around interpreter limit;
+this one is a real gap in `plum-types::infer` itself, fixed at its
+root): a non-generic function calling a LATER-declared, non-generic
+function and immediately doing FIELD ACCESS on its struct-typed return
+value failed with "field access requires a struct value with a
+statically known type" — the exact same constraint already documented
+for GLOBALS (`a_function_can_do_field_access_on_a_struct_typed_global`,
+above) turned out to have never been extended to ordinary FUNCTION-to-
+FUNCTION calls: `infer_program`'s Phase 1 pre-declares every function's
+signature with bare, disconnected fresh `Var`s for its return type,
+REGARDLESS of whether it has an explicit annotation — the annotation
+only gets unified into place once Phase 2 reaches that function's OWN
+body, in file order. A genuinely CYCLIC call graph — exactly what a
+recursive-descent parser's own expression grammar is (`parse_expr` ->
+`parse_primary` -> `parse_block` -> `parse_expr`, forever) — means no
+source reordering can route around this, unlike an ordinary forward-
+reference in an acyclic program. **Root-caused via a minimal, isolated
+repro before touching the real 90-function parser** (a 9-line
+throwaway program reproducing the exact shape), confirmed the fix in
+that repro FIRST, then confirmed it against the real file. **Fix**: a
+non-generic function's explicitly annotated return type is now seeded
+directly into Phase 1's placeholder (via the same `ast_type_to_type`
+converter `extern` signatures already use) instead of an unrelated
+fresh `Var` — purely additive and best-effort (falls back to today's
+plain fresh `Var` on ANY resolution failure, matching `global_types_
+early`'s own "opportunistic extra precision, never a source of truth"
+philosophy exactly), so it can only make MORE well-typed programs infer
+correctly, never change what an already-working program means. Scoped
+to non-generic functions only — a generic function's return type may
+mention a generic name with no `Var` minted for it yet (that minting
+is per-function, inside Phase 2's own loop). New regression test,
+`a_function_can_do_field_access_on_a_later_declared_functions_struct_
+typed_return_value`. Full workspace suite green throughout — 446 tests
+in `plum-types` alone (net +1), zero regressions.
+
+**One remaining, narrower inference gap found, NOT fixed — worked
+around in Plum source instead**: a bare `None` passed as an argument to
+a self-recursive call, inside one branch of a 3-way `if`/`else if`/
+`else` where sibling branches also recurse (each required to unify to
+the same overall block-parsing result type), couldn't always have its
+own `Option[T]` pinned down, even with the concrete-annotation fix
+above and even though the callee's own parameter is concretely
+annotated `Option[PExpr]`. A minimal isolated repro of the same general
+shape (self-recursive call passing `None`) type-checked FINE — this is
+narrower than the fixed bug, tied to the specific 3-way-branch-
+unification shape, not chased further given the real fix above already
+unblocked the actual work. Worked around with `no_tail(())`, a tiny
+explicitly-annotated wrapper (`let no_tail (unit: Unit): Option[PExpr]
+= None`) whose OWN return-type annotation pins the ambiguity before
+`None` is ever passed anywhere — cheaper than a deeper compiler dive,
+and the honest, narrower gap is documented in `parser.plum`'s own
+comment at that exact call site rather than silently papered over.
+
+**Result**: 98/98 corpus fixtures pass on BOTH the `tokens` and `ast`
+entry points, validated via the native build (see `lexer/lexer.plum`'s
+own top comment for why `plum run` isn't the validation path here
+either — the exact same wide-`match`-per-node interpreter-stack cost
+applies to `render_expr`/`lex_operator`-shaped code). Two self-hosted
+Plum stages now exist and pass their full corpus; Stage 3 (type
+checker? codegen? interpreter?) remains deliberately unscoped until a
+real need narrows it down, matching this project's own "close one
+phase fully before scoping the next" pattern throughout.
+
+## Stage 3: self-hosted interpreter — Decided and implemented (2026-08-13)
+
+Asked "what's next" after Stage 2; recommended and confirmed a minimal
+self-hosted INTERPRETER over the much bigger type checker, since `plum-
+interp` is dynamically typed at runtime and needs no static type
+information to execute correctly — the smallest slice that gets self-
+hosted Plum to actually RUN a program (lex -> parse -> run, all in
+Plum), deferring Hindley-Milner to a later Stage 4.
+
+**`bootstrap/self_host/interp/interp.plum`** walks `parser.PExpr`/
+`parser.PPattern`/etc DIRECTLY — no lowering step, no IR, a genuine
+simplification versus the real AST -> IR -> `plum-interp` pipeline,
+deliberate for v1. A `Value` enum (`VInt`/`VFloat`/`VStr`/`VBool`/
+`VUnit`/`VTuple`/`VStruct`/`VVariant`) carries its own shape at
+runtime — struct/enum DECLARATIONS are never consulted at all (a
+`VStruct`'s fields already carry their own NAMES, a `VVariant`'s tag is
+just a string), so this interpreter needs no declaration-metadata table
+a statically-typed backend would require. **Deliberate v1 scope
+cuts, stated up front**: no closures-as-values (rules out `Array.map`/
+higher-order functions; ordinary named-function calls including full
+recursion work fully), no `Array`/indexing/generic-instantiation
+syntax, no `spawn`/`select`/`unsafe`/extern FFI, no struct-literal
+`..spread`. Every unsupported shape fails with a clear `panic_raw`,
+never silent wrong behavior.
+
+**`bootstrap/exec_corpus/`** — a new, separate corpus (token/AST dumps
+can't validate an interpreter at all): 12 small runnable programs, each
+`<name>/main.plum` + `<name>/expected.txt` (the real `plum run`'s
+stdout, minus its own trailing return-value echo). Two originally-
+planned fixtures (`match` with a guard, `match` with an or-pattern)
+were DROPPED, not worked around — direct testing found the REAL Rust
+interpreter itself can't run those exact shapes yet (pre-existing,
+unrelated compiler limits: a guarded bare-identifier arm anywhere but
+truly last, and any or-pattern, both rejected before this session's
+own code ever ran), so there was no golden to validate against at all.
+
+**Real bugs found while getting the first fixture to run, same
+methodology as every prior stage — build, run against the corpus,
+root-cause every real failure before moving on:**
+
+1. **A genuine misunderstanding of `()` corrected immediately by a
+   real failure, not assumed away**: `let main (): Unit = ...`'s own
+   `()` parses as ONE param (the Unit pattern `ParamPatternTy(PTuple([]),
+   None)`), not zero params — Plum's "every function takes exactly one
+   argument" convention applies to `main` too. The interpreter's own
+   param-name collection needed to treat the Unit pattern as "one
+   param, contributing zero bound NAMES" (filtered via `Option[String]`,
+   `None` for `()`) while still classifying the DECLARATION as a
+   function, not a global, by the RAW (pre-filter) param count —
+   matching `plum-types::infer_program`'s own Phase 1 rule exactly.
+   Getting the classification wrong either way broke every single
+   fixture identically (either "no top-level main found" or a
+   "destructuring not supported" panic on `main` itself), a strong
+   signal the bug was structural, not fixture-specific.
+2. **Two more native-codegen pattern-lowering gaps, both distinct from
+   the tuple-of-variant-patterns gap Stage 2 already knew to avoid**:
+   a LITERAL nested inside a variant's own payload (`VBool(true)`,
+   `EField(base, "to_string")`) also fails monomorphization with
+   "lowering not yet implemented for this pattern shape nested inside
+   another pattern" — confirmed via minimal isolated repros before
+   rewriting the real file, exactly like Stage 2's own methodology.
+   Worked around the same way throughout: bind to a plain identifier,
+   follow up with an ordinary `==`/`if` check instead of a literal
+   pattern. A bare zero-arg variant tag nested inside another variant's
+   payload (`EBinary(BRange, lo_e, hi_e)`) was confirmed, via the same
+   kind of isolated repro, to NOT hit this gap — the restriction is
+   specifically about literal patterns, not all nested patterns.
+3. **A real, substantial design gap in the interpreter's own env
+   model, found via the ONE fixture DESIGN.md itself calls "the
+   classic case" for local mutability** (`let mut` + `for`-loop
+   accumulation): `total = total + i` inside a `for` loop body never
+   reached the `println` after the loop, because the interpreter's
+   environment is a purely functional `Array[EnvEntry]` — each `for`
+   iteration re-derived its own env from the SAME pre-loop snapshot
+   instead of threading forward, so every iteration's assignment was
+   silently discarded once that iteration's own `eval_block` call
+   returned. Scoped the fix deliberately narrower than a fully general
+   env-threading rewrite (which would need EVERY `eval_expr` call to
+   return `(Value, env)`, touching the entire file): a dedicated
+   `eval_stmt_for_env` path, used ONLY by `eval_stmts`'s own `SExpr`
+   arm, threads env across `for`-loop iterations AND back out to
+   subsequent statements in the same block — the one shape DESIGN.md's
+   own "classic case" needs. Explicitly documented as a real, narrower
+   gap than the fully general fix: an `if`/`match`/bare `{ }` block
+   used directly as a statement (not a `for` loop) that reassigns an
+   outer name doesn't propagate that reassignment either — not
+   exercised by any exec-corpus fixture, not chased further.
+
+**Result**: 12/12 execution-corpus fixtures pass, validated via the
+native build (`./sh run <file>`). Full workspace suite green throughout
+— no Rust compiler changes needed this stage, unlike Stage 2. Three
+self-hosted Plum stages now exist (lexer, parser, interpreter), each
+validated against its own real corpus; Stage 4 (a type checker,
+finally needed for static safety and eventual codegen) remains
+deliberately unscoped until a real need narrows it down.
+
+## Stage 4: self-hosted type checker — Decided and implemented (2026-08-13)
+
+Asked directly whether to build the real thing (full Hindley-Milner
+unification, as the actual compiler does) or a much smaller annotation
+-driven checker; Brad chose full HM over the smaller recommendation.
+Built it in validated layers — same discipline as every prior stage,
+scaled up for a genuinely bigger piece: (1) `types.plum` — the `ITy`
+representation, `Subst`, and `unify`, ported faithfully from `crates/
+plum-types/src/types.rs`/`subst.rs`/`unify.rs`, INCLUDING `Subst::
+compose`'s documented self-loop-avoidance fix (a real bug the real
+compiler found via an actual 100,000+-frame stack overflow once — the
+fix was ported deliberately, not rediscovered here the hard way);
+verified in isolation (a throwaway smoke-test project checking
+`unify`/`subst_apply`/`subst_compose` directly) before building
+anything on top of it. (2) `context.plum` — struct/enum field/variant
+templates + AST-annotation -> `ITy` resolution. (3) `infer.plum` — the
+real inference engine: fresh type variables, a `TyEnv`, and `infer_
+expr`/pattern-typing/whole-program checking.
+
+**Two real, deliberate simplifications versus the real compiler, both
+stated up front, that made "full Hindley-Milner in one session"
+tractable at all**:
+
+1. **Top-level function signatures must be fully annotated** (every
+   param, and the return type). This sidesteps the real compiler's
+   single hardest, most historically bug-prone piece — the whole
+   reason `infer_program`'s Phase 1/Phase 2 split (fresh-var
+   placeholders, unified with annotations once each body is checked)
+   exists at all is to support signatures that might need to be
+   INFERRED. When every signature is already concrete text, mutual
+   recursion — even a genuinely CYCLIC call graph, exactly the shape
+   this project's own recursive-descent parser has — "just works" for
+   free: every signature is already in the environment before any body
+   is checked, no unification-order dependency, no Phase split needed
+   at all. Real unification/`Subst`/fresh variables are still fully
+   exercised, just for expression bodies and unannotated LOCAL `let`s
+   (`let mut total = 0`'s own type is genuinely inferred, not
+   annotated), not signature bootstrapping.
+2. **No `Scheme`/`generalize` machinery.** Plum's generics are always
+   explicitly declared (`let f[T] (x: T): T = ...`), never discovered
+   by generalizing an inferred type the way classic ML let-polymorphism
+   does — a genuine, real difference between Plum's own generics story
+   and textbook Hindley-Milner, not a cut corner invented for this
+   checker. A generic function's own declared parameter names ARE its
+   scheme; `context.plum`'s `instantiate_template` just substitutes
+   fresh `ITVar`s for them at each call site.
+
+**Error handling**: `fail_tc` (`panic_raw`), matching this bootstrap
+effort's own established house style throughout every prior stage
+(`lexer.plum`'s `unexpected_char`, `parser.plum`'s `fail`, `interp.
+plum`'s `fail_interp`) — not the real compiler's `Result`-based
+diagnostics. This checker can say "type-checks" or crash loudly
+explaining why not; everything needed to validate real accept/reject
+behavior, not to recover and keep checking past one error.
+
+**A real bug found immediately by the FIRST real test failure, not by
+inspection**: `Option.unwrap_or(tyenv_lookup(env, name), { fail_tc(...);
+ITUnit })` — assignment to a `let mut` variable declared earlier in the
+SAME block failed with "unbound name" every single time, even for
+completely ordinary, valid code (`let mut total = 0; total = total +
+1;`). Root cause: `Option.unwrap_or`'s fallback is an ordinary VALUE
+argument (unlike `unwrap_or_else`'s closure), and Plum evaluates
+function arguments eagerly, not lazily — so `fail_tc(...)` inside that
+fallback position ran UNCONDITIONALLY before the call, regardless of
+whether the lookup actually found anything. Fixed by using `match`
+instead (which only evaluates the branch actually taken) — the
+general lesson (any `unwrap_or`-shaped fallback with a side effect is
+almost certainly a bug, `unwrap_or_else`/`match` are the correct
+tools) generalizes to any future Plum code, self-hosted or otherwise.
+
+**Validated two ways, since "prints `ok` for everything" and "actually
+discriminates well-typed from ill-typed programs" are indistinguishable
+without both**:
+- `bootstrap/exec_corpus/` (reused from Stage 3, not rebuilt) — 11 of
+  12 fixtures type-check successfully. The one exclusion,
+  `tuples/main.plum`, is real and expected, not a bug: it uses an
+  UNANNOTATED tuple-shaped parameter, and Plum has no tuple type-
+  ANNOTATION syntax at all (only tuple values) — there's no way to
+  satisfy this checker's own annotation requirement for that specific
+  fixture, full stop.
+- `bootstrap/typecheck_corpus/` (new) — 5 deliberately ill-typed
+  programs (wrong return type, wrong argument type, mismatched `if`/
+  `else` branches, an unbound variable, a wrong struct-field type),
+  each independently CONFIRMED to be genuinely rejected by the real
+  Plum compiler first, before being added — a fixture that happened to
+  accidentally be valid Plum would prove nothing. All 5 correctly
+  rejected by the self-hosted checker too, with real, specific error
+  messages (`"function f: declared return type Int doesn't match body
+  type Bool"`, not a generic failure).
+
+**Result**: 11/12 `exec_corpus` fixtures accepted (1 real, documented
+exclusion) + 5/5 `typecheck_corpus` fixtures correctly rejected,
+validated via the native build. Full workspace suite green throughout
+— no Rust compiler changes needed this stage. Four self-hosted Plum
+stages now exist (lexer, parser, interpreter, type checker), each
+validated against its own real corpus.
+
+## Pipeline wiring: `./sh run` now type-checks before interpreting — Decided and implemented (2026-08-13)
+
+Asked directly "what's next" after Stage 4; the four stages existed
+only as four independently-invoked modes — `./sh run` never called the
+type checker at all, unlike the real `plum run`, which always type-
+checks first and never executes an ill-typed program. Small, well-
+scoped fix: `run` mode now calls `typecheck.check_program` before
+`interp.build_program_state`/`run_main`, matching the real pipeline's
+own order exactly. `check` stays its own separate mode (useful for a
+program whose `main` isn't meant to run yet). Result: 11 of 12
+`exec_corpus` fixtures pass end to end unchanged; `tuples/` now fails
+at the type-check step specifically (the same, real, already-documented
+exclusion `./sh check` alone already had — Plum has no tuple type-
+annotation syntax), confirmed to surface the identical error either
+way, not some other crash. All 5 `typecheck_corpus` fixtures confirmed
+to stop at the type-check step too, never reaching the interpreter.
+Full 98/98 lexer/parser corpus reconfirmed unaffected.
+
+Real self-hosting is still genuinely far off, stated plainly rather
+than oversold: none of these four stages can process THEMSELVES yet —
+`interp.plum`/`infer.plum` lean on closures and `Array.map`/`filter`/
+`fold` throughout, both explicitly scoped OUT of both the interpreter
+and the type checker so far. Asked whether to keep pushing toward true
+self-hosting (extend interp/typecheck to cover closures + arrays, then
+eventually build a real codegen backend — genuinely the biggest
+remaining piece, a different KIND of problem than tree-walking
+interpretation) or declare the 4-stage proof of concept complete and
+return to other roadmap work (crypto). Brad chose to keep pushing.
+Next concrete slice: closures-as-values in the interpreter first (the
+single most-blocking gap — without it, neither `Array.map` nor any
+other higher-order stdlib function is reachable at all), the type
+checker to follow once the interpreter's own shape is proven.
+
+## Closures-as-values in `interp.plum` and `infer.plum` — Decided and implemented (2026-08-13)
+
+The blocking gap from the previous slice: neither self-hosted stage
+could treat a closure literal as a real VALUE — bind it to a name, pass
+it as an argument, store it in a struct field, return it. Both stages
+closed this the same session, since the interpreter's own shape needed
+proving before mirroring it in the type checker (as planned).
+
+**`interp/interp.plum`**: a new `Value` case, `VClosure(Array[String],
+parser.PExpr, Array[EnvEntry])` — params, unevaluated body, and a
+CAPTURED environment snapshotted at the closure literal's own creation
+site (genuine lexical scoping, not the call site — the one real
+semantic difference from an ordinary top-level function, which
+`call_fn` always gets a fresh, EMPTY environment for). `eval_call` was
+restructured to check, in order: a LOCAL name bound to a `VClosure`
+(checked FIRST, so a local shadows a same-named top-level function
+correctly — a real gap in the OLD `eval_call`, which never consulted
+`env` at all for its `EIdent` case); built-ins (`println`/contracts);
+top-level functions; capitalized-name variant construction. `EField`
+calls also gained a fallback: if the field name isn't `to_string`/
+`concat`, evaluate the base, look for a struct field by that name, and
+call it if it's a `VClosure` — enables the "interfaces via records of
+closures" pattern (this file's own Reader/Writer story, "Interfaces/
+traits for Reader/Writer-shaped abstractions" above) to actually run
+under the self-hosted interpreter. Any other callee shape (an
+immediately-invoked closure literal, a closure returned from a call/
+`if`/`match`) falls to a general case: evaluate it, expect a
+`VClosure`. `Some(VClosure(..))` as ONE nested pattern was deliberately
+avoided (two separate `match`es instead) — consistent with this file's
+established practice of routing around the native-codegen "pattern
+nested inside another pattern" gap, even in a spot not directly
+confirmed to hit it, since the existing examples of that gap are all
+variant-nested-in-variant shapes too.
+
+**`typecheck/infer.plum`**: `EClosure(params, body)` gets fresh type
+variables for each param (no annotations exist on `|a, b| ...` syntax
+at all), infers the body against them, and produces `ITFunction(param_
+tys, body_ty)` — the closure's own type is pinned down entirely by how
+it's later USED. `infer_call` mirrors the interpreter's own ordering
+exactly: a local binding is checked first (`infer_closure_call` unifies
+it against a freshly-built `ITFunction`, then checks each argument),
+falling through to `infer_named_call` (the existing println/contract/
+signature/variant path) only when the name isn't locally bound.
+`infer_method_call` gained the same struct-field-closure fallback as
+the interpreter's `EField` case.
+
+**Validated against two new `exec_corpus` fixtures** (`closures/` —
+returning a closure from a closure, passing one as a higher-order
+argument, capturing an outer local; `closures_in_structs/` — the
+record-of-closures dispatch pattern), generated against the REAL `plum
+run` first, then confirmed byte-for-byte identical via `./sh run`. All
+13 non-`tuples` `exec_corpus` fixtures and all 5 `typecheck_corpus`
+rejections reconfirmed unaffected; full 98/98 lexer/parser corpus
+reconfirmed unaffected too.
+
+**One incidental but real fix along the way**: the installed `plum`
+CLI (`~/.cargo/bin/plum`) was stale — built before this session's
+uncommitted `plum-types::infer.rs` fix (the Phase 1 return-type-seeding
+fix from Stage 2) — so it failed to build `bootstrap/self_host` at all
+with an unrelated-looking error inside `parser.plum`. `cargo install
+--path crates/plumc --force` fixed it. Not a new bug, just this
+project's own documented "stale diagnostics" trap (a background build
+finishing doesn't mean the *installed* binary reflects it) catching
+itself.
+
+Still not self-hosting: `Array`/`EIndex`/`EGenericInst` remain
+unsupported in both stages, so `interp.plum`/`infer.plum` still can't
+process themselves (both lean on `Array.map`/`filter`/`fold`
+throughout). Arrays are the next real blocker; a codegen backend
+remains the biggest piece after that.
+
+## Arrays in `interp.plum` and `infer.plum` — Decided and implemented (2026-08-13)
+
+The remaining blocker from the previous slice, closed the same session
+("great, let's continue"). Both stages gained: `EArray`/`EIndex`
+(array literals + indexing), the `.len()`/`.push(v)`/`.set(i, v)` dot-
+call trio (arity-disambiguated exactly like the real compiler's own
+`plum-ir::lower` — `len` takes zero args, `push` one, `set` two), and
+`Array.map`/`filter`/`fold` as NAMESPACE calls (`Type.func(value, ...)`
+syntax, matching the real language's own convention — `.map`/`.filter`/
+`.fold` dot-call sugar was deliberately removed, see the language-
+ergonomics chunk earlier in this doc).
+
+**`interp/interp.plum`**: a new `Value::VArray(Array[Value])` case —
+notably, this wraps a real HOST `Array[Value]`, since `interp.plum`
+ITSELF is ordinary Plum source compiled by the real compiler. `.push`/
+`.set`/`.len`/indexing/`Array.map`/`filter`/`fold` on the wrapped
+`elems` all reuse the real, already-correct host `Array` primitives
+directly — this interpreter never reimplements array semantics from
+scratch, only wraps/unwraps `VArray`. The one real design wrinkle:
+`Array.map(arr, f)` parses as `ECall(EField(EIdent("Array"), "map"),
+[arr, f])` — `EField`'s `base` is the bare capitalized name `"Array"`
+itself, which is a NAMESPACE, not a bound value. Evaluating it as an
+ordinary expression would have silently "succeeded" the wrong way:
+`eval_ident`'s own capitalized-unbound-name rule (any capitalized name
+with no other binding is a zero-payload variant construction) would
+happily produce a bogus `VVariant("Array", [])` instead of failing
+loudly. Fixed by checking `EField(EIdent(ns), method)` BEFORE
+evaluating `base` at all, routing `ns == "Array"` to a dedicated
+`eval_array_ns_call`, mirroring the SAME check this file already had to
+add for local-binding-vs-top-level-function dispatch in the closures
+chunk just before this one. `eval_call`'s `EField` handling was
+refactored into a standalone `eval_dot_call` to keep this dispatch
+readable.
+
+**`typecheck/infer.plum`**: `Array[T]` is represented as `ITStruct
+("Array", [T])` — the EXACT same representation the real compiler's
+own `ast_type_to_type` already uses (`Type::Struct("Array", vec![elem_
+ty])`, `plum-types::infer.rs`), reused as-is rather than adding a
+dedicated `ITy` case: every existing `ITStruct` mechanism (`unify`,
+`subst_apply`, `instantiate_template`) already handles it correctly
+with zero new type-system primitives. `context.plum`'s `resolve_named`
+gained one new branch (`"Array" => ITStruct("Array", args)`) so
+`Array[T]`-annotated top-level signatures resolve correctly too (this
+checker requires full top-level annotations, so this was needed even
+though `interp.plum` itself never consults annotations at all).
+`infer_call` gained the identical `EField(EIdent(ns), method)`
+namespace check as the interpreter, routing to `infer_array_map`/
+`filter`/`fold` — each unifies the array argument against a fresh
+`ITStruct("Array", [<fresh elem var>])`, then unifies the closure
+argument against the appropriate `ITFunction` shape built from that
+same element type (mirrors `infer_fn_call`'s own fresh-var-then-unify
+shape). `infer_method_call` gained `.len()`/`.push()`/`.set()`, arity-
+guarded the same way `interp.plum`'s own `eval_dot_call` is.
+
+**Validated with one new `exec_corpus` fixture** (`arrays/` — literal
+construction, indexing, `.len()`/`.push()`/`.set()`, `Array.map`/
+`filter`/`fold`, and an empty-array literal), generated against the
+REAL `plum run` first, then confirmed byte-for-byte identical via `./sh
+run`. All prior fixtures reconfirmed unaffected: 14/15 `exec_corpus`
+(the documented `tuples` exclusion still the only one), 5/5
+`typecheck_corpus` rejections, 98/98 lexer/parser corpus, full
+workspace suite green throughout — no Rust compiler changes needed this
+stage either.
+
+**Deliberate v1 scope cut, stated up front**: `Array.map`/`filter`/
+`fold`'s function argument must evaluate to a `VClosure` — a bare named
+top-level function passed by reference (`Array.map(xs, some_named_fn)`,
+as opposed to a closure literal `Array.map(xs, |x| some_named_fn(x))`)
+isn't a first-class `Value` in this interpreter at all yet (matches the
+"only bare-name calls...are callable" scope this whole file already
+has), so it fails the same way calling one as a local binding would.
+Not exercised by any exec-corpus fixture. `EGenericInst` (explicit
+turbofish-style generic instantiation) remains unsupported in both
+stages too — nothing in either file consults declared generics at all
+yet, and no fixture needs it.
+
+Worth noting: `interp.plum`'s own `array_map`/`array_filter` helpers
+call the REAL, HOST `Array.map`/`Array.filter` on the wrapped `elems`
+— this file was already relying on host `Array.map`/`filter`/`fold`
+throughout (`resolve_ann`, `instantiate_template`, etc.), so this isn't
+new dogfooding, just one more ordinary use. Neither file can process
+ITSELF yet (that needs a great deal more: generics, more of the
+standard library surface, and eventually real codegen). Closures and
+arrays — the two biggest blockers identified when this push toward
+true self-hosting began — are both done now; a real codegen backend
+remains the single biggest remaining piece.
+
+## Array push scaling bug — partially fixed, real gap remains open (2026-08-14)
+
+Attempting the "try self-interpretation first" experiment (running
+`./sh check`/`./sh tokens` against the self-hosted lexer's OWN ~450-
+line source, the smallest useful test of whether the four self-hosted
+stages could ever process themselves) OOM-killed the compiled `sh`
+process at **44–45 GB** — repeatedly, across several attempts, and
+because that process shared the invoking terminal's cgroup, each OOM
+kill took the entire terminal (and the Claude Code session running in
+it) down with it, not just the one process. Confirmed via the kernel
+OOM log each time, not assumed.
+
+**Root cause, isolated via careful bisection under `ulimit`/`timeout`
+guards**: `Array.push()`'s reuse-in-place path — the fast path taken
+when the array being pushed to is uniquely owned — built a full CLONE
+of the entire backing storage via `.to_vec()`/an exact-size `realloc`
+BEFORE ever deciding whether reuse would even apply. So even the
+"already uniquely owned, safe to mutate" case still paid an O(current
+length) copy on every single `.push()` call, making any accumulation
+loop O(n²) instead of O(n) — confirmed with a minimal isolated repro
+(a plain `Array.push`-in-a-loop function, nothing else) showing
+textbook quadratic memory growth (16,000 pushes → ~900MB peak, both
+backends) purely from this, unrelated to anything array-CONTENT-
+specific.
+
+**Fixed, part 1 — `plum-interp` (the tree-walking interpreter)**:
+`Heap::array_push_in_place`/`array_pop_in_place`/`array_set_in_place`/
+`array_remove_in_place` (`crates/plum-interp/src/heap.rs`) mutate the
+cell's own `Vec<Value>` directly via `&mut` access when the caller has
+already confirmed unique ownership — reusing Rust's OWN `Vec`'s
+amortized-doubling growth, zero hand-rolled capacity tracking needed on
+this side. `Interpreter::eval`'s four `*Reuse` cases (`lib.rs`) now
+check `refcount == 1` FIRST, then either call the new in-place method or
+fall back to the original clone-then-allocate-fresh behavior for the
+genuinely-shared case (unchanged, still correct — sharing requires a
+copy, that part was never the bug). Verified with a new, deliberately
+SAFE unit test (`array_push_in_place_reuses_the_same_cell_at_real_scale`)
+that calls the heap API directly in a plain Rust loop — 20,000 pushes,
+`alloc_count` staying at 1 the whole time — specifically avoiding
+`Interpreter::eval`'s own separate, pre-existing, unrelated non-tail-
+call-optimization limit (a real, different constraint this whole
+project has always validated deep recursion around via native `plum
+build`, never `plum run`). All 274 pre-existing `plum-interp` tests
+still pass.
+
+**Fixed, part 2 — native codegen (`plum-codegen`)**: array cells gained
+a genuine THIRD header word, `capacity` (`{ refcount, len, capacity,
+elements[capacity] }`, 24-byte header — up from `Ctor`'s shared 16-byte
+one), so `.push()`'s reuse-in-place codegen can check whether there's
+already room before ever calling `realloc`, and when it does need to
+grow, doubles capacity (`select`-based `max(capacity*2, new_len)`)
+instead of growing to the bare minimum — genuine O(1) amortized growth,
+O(log n) reallocations total instead of n. `array_elem_byte_offset`/
+`store_array_elem_static` (codegen.rs) are arrays' own dedicated
+counterparts to `field_byte_offset`/`store_field_word` — ordinary
+`Ctor` cells (structs/enums/tuples) are completely untouched, they have
+no use for a capacity field since they never grow. `ArrayPopReuse`/
+`ArrayRemoveReuse` simplified to skip `realloc` entirely (capacity only
+ever needs to grow, never shrink). This is a genuinely wide, layout-
+sensitive change — EVERY array-cell producer in the runtime needed its
+element offsets updated (`plum_alloc_array` itself, the four `codegen_
+array_*_fresh` functions, `codegen_array_literal`, and — found only by
+enumerating every single `@plum_alloc_array(` call site directly, not
+by guessing — `.runes()`, `.split()` (both its empty- and non-empty-
+separator paths), `args()`'s own array-building loop, and the array
+release/equality/to-string/deepcopy runtime-generated functions).
+Verified two ways: the full existing `plum-codegen` (80 tests) and
+`plumc` (493+27 tests) suites — covering array-of-structs equality/
+to-string/deepcopy-under-spawn, nested heap elements, bounds checks,
+etc. — all still pass unchanged (a wrong offset anywhere would have
+shown up as wrong VALUES or a crash in one of these, not silent
+success), plus one new dedicated regression test (`repeated_array_
+push_reuse_grows_correctly_across_many_capacity_doublings`, 2,000
+pushes crossing ~11 doubling boundaries, checking both final length AND
+sum).
+
+**NOT fixed — the actual pattern this project's own bootstrap code
+uses, discovered only after the fix above still didn't resolve the
+original crash.** Two SEPARATE, deeper gaps in `plum-ir::fbip`'s
+`known_heap` tracking mean `.push()`'s now-genuinely-O(1) reuse path
+frequently never gets REACHED at all, regardless of how correct it is
+once reached:
+
+1. **A function PARAMETER is never added to `known_heap`** (a real,
+   pre-existing, already-documented limitation — no type checker exists
+   at the FBIP stage to prove a parameter is uniquely owned). The
+   self-hosted bootstrap's own idiom for building up a collection —
+   `build_acc (n) (i) (acc) = if i >= n { acc } else { build_acc(n, i+1,
+   acc.push(i)) }`, used throughout `tokenize_acc`/`parse_items_acc`/
+   etc. — threads its accumulator through a PARAMETER, never a `let`.
+   Confirmed directly by dumping the generated LLVM IR for exactly this
+   shape: the recursive call compiles to a plain `codegen_array_push_
+   fresh` (unconditional fresh alloc + full memcpy, no refcount check
+   at all) with the OLD array cell never freed either — leaked outright,
+   not just slow.
+
+2. **A `for`-loop-body accumulator gets a conservative `Inc` inserted on
+   EVERY iteration**, discovered while chasing down why REWRITING
+   `tokenize` to the "safe" `let mut acc = []; for ... { acc = acc.push
+   (x); }` shape (assumed safe, based on reading `fbip.rs`'s `For`/
+   `Assign` handling, which passes `known_heap` through unchanged) still
+   didn't fix the original crash. Confirmed directly the same way: `chars_
+   of`'s generated IR (`chars_of` = `.split("")` + `Array.filter`, and
+   `Array.filter` desugars to exactly this `let mut`+`for` shape) shows
+   `call void @plum_rc_inc(ptr %v9)` immediately before EVERY push inside
+   the loop body — FBIP's static last-use analysis can't prove any one
+   textual occurrence inside a loop body is the "last" one across N
+   runtime iterations, so it conservatively treats the accumulator as
+   potentially-still-needed and forces the fresh-alloc-and-copy path
+   every time, same as gap 1's symptom, different mechanism. This means
+   the "rewrite the bootstrap code to use `let mut`+`for`" plan (chosen
+   over extending FBIP itself, specifically to avoid touching memory-
+   safety-critical refcounting code again) does NOT actually work — `for`
+   loops hit their own, different flavor of the same underlying "can't
+   prove this is safe to reuse" conservatism.
+
+Both remaining gaps need the SAME kind of fix: teaching FBIP's `known_
+heap`/last-use analysis to recognize a genuinely safe-to-reuse case it
+currently can't prove (a parameter used in a self-tail-recursive
+"consume once, pass the result on" pattern; a `for`-loop accumulator
+reassigned via `Assign` where the old value is always immediately
+superseded, never read again). That's real, memory-safety-critical
+compiler work — not a source-level workaround — which is exactly the
+scope the "rewrite to `let mut`+`for`" choice was meant to avoid. `lexer/
+lexer.plum`'s own `tokenize` was rewritten to the `let mut`+`for` shape
+regardless (a real, harmless simplification, verified against the full
+98/98 corpus + `exec_corpus`, all still passing) but does NOT resolve
+the original self-interpretation crash on its own.
+
+**Where this leaves self-hosting**: still not resolved. `Array.push`
+itself is now genuinely O(1) amortized in both backends when its fast
+path is actually reached (a real, tested, valuable fix on its own,
+independent of self-hosting) — but the specific accumulation idioms
+this project's own bootstrap code and standard library helpers
+(`Array.map`/`filter`/`fold`, `chars_of`, `.split()`'s `Array.filter`
+composition, every `_acc`-suffixed parser/lexer helper) actually use
+still don't reach it. A future session extending FBIP's `known_heap`
+analysis to cover BOTH gaps is the real next step for this specific
+line of work; recommend treating that as its own carefully-scoped,
+carefully-tested piece, not a quick follow-on, given the two real
+sessions' worth of OOM-kill-driven crashes this investigation already
+cost.
+
+## Gap 1 (parameter tracking) — attempted, found unsafe, REVERTED (2026-08-14)
+
+Prioritized closing gap 1 first (the lower-risk of the two, per its own
+narrow justification: `.push()`/`.pop()`/`.set()`/`.remove()`/`.concat()`
+/etc only exist on arrays or strings syntactically, so finding a
+parameter in one of those OPERAND positions proves it's array/string-
+shaped there without needing general type info). Built `plum-ir::fbip::
+confirmed_array_or_str_params`, wired into `optimize_program` to seed
+`known_heap` with any parameter it confirms, each then getting the same
+`mark_last_uses`-at-its-own-binding-site treatment a `Let`-bound local
+already gets (so a genuinely ALIASED parameter still gets its
+protective `Inc`, not just reuse eligibility with no safety net).
+
+**Found a real bug in the FIRST version via a real crash, not
+inspection**: `exec_corpus/closures` (previously passing) segfaulted
+after this landed. Root cause: the scan was shadowing-UNAWARE — a
+NESTED binding (a `Closure` param, `Let`, `Match`-arm binding, or `for`
+variable) reusing an OUTER parameter's name could have its own,
+unrelated array use wrongly attributed to the OUTER parameter, seeding
+a genuinely SCALAR parameter into `known_heap` — which then made
+`transform` insert nonsensical Inc/Dec/reuse machinery on a raw Int,
+crashing when the runtime tried to treat it as a heap pointer. Fixed
+with proper scope-narrowing (removing a name from the tracked set at
+every point that could shadow it, mirroring the exact discipline
+`mark_last_uses`'s own `Let`/`Match` arms already use) — verified with
+a dedicated regression test pinning this exact shape, plus reconfirmed
+the full corpus.
+
+**Found a SECOND, deeper bug immediately after, via another real
+crash**: `exec_corpus/closures` failed again — same fixture, different
+line (`apply_twice(add_one, 3)`, calling the same closure twice).
+Traced to `interp.plum`'s own `bind_params`, whose `acc` parameter is a
+genuine, correctly-detected `acc.push(...)` accumulator — but the value
+handed into it, `call_closure`'s `captured_env`, is extracted from a
+`VClosure` via a `Match`-arm binding that this whole pass has NEVER
+tracked as `known_heap` (match-arm bindings are conservatively left
+untracked everywhere else in this file too — "we don't know a
+constructor's field types without a type checker," per `transform`'s
+own existing comment). Nothing upstream necessarily Inc'd that
+extracted binding before handing it into `bind_params`, so `bind_
+params`'s now-correctly-threaded Inc/Dec bookkeeping for its OWN `acc`
+parameter can end up trusting a refcount that was never actually
+correct to begin with — corrupting the closure's own stored environment
+across its second call. In short: **syntactic proof that a parameter is
+array-shaped is not proof that it's safe to reuse** — safety also
+depends on every CALLER of that function having correctly threaded
+ownership into the argument being passed, which is a strictly bigger
+question than this pass (or arguably any purely intraprocedural, type-
+free analysis) can answer for match-extracted values.
+
+**Decision: reverted `optimize_program` back to its original,
+unmodified form** rather than ship something merely believed safe after
+one fix. `confirmed_array_or_str_params`/`collect_confirmed_params`
+(the shadowing-aware scan itself, which IS genuinely correct on its own
+terms) are kept in the source, `#[allow(dead_code)]`, with their own
+tests retargeted to test the function directly rather than through
+`optimize_program` — real, hard-won groundwork for a future attempt,
+not thrown away, but not wired in until the match-extracted-binding
+question has a real answer too. `bootstrap/self_host/lexer/lexer.plum`'s
+`tokenize` reverted back to the `let mut`+`for` workaround it had
+before this attempt (gap 2, still open, so it still doesn't resolve the
+original self-interpretation crash on its own — but it's the same
+already-validated-safe state as before this whole gap-1 detour).
+Reconfirmed clean afterward: full workspace suite (1,766 tests) green,
+98/98 corpus, 13/14 `exec_corpus` (including `closures`, now passing
+again), 5/5 `typecheck_corpus` rejections, all under the guarded runner
+with zero session crashes during this cleanup.
+
+**Where this leaves things**: both gap 1 and gap 2 are still open.
+A genuinely correct future fix needs MORE than parameter-shape
+evidence — it needs a real answer for ownership across match-extracted
+bindings (which touches far more than just this one accumulator
+pattern; `Match` arm bindings are untracked EVERYWHERE in this pass,
+by design, today). That's a bigger, more careful piece of work than
+either gap looked like in isolation, and it should be scoped as its
+own dedicated design pass — not attempted casually again, given it
+already produced two distinct real crashes in the course of one
+session's work.
+
+## Loop-accumulator last-use rule ("gap 2") — implemented (2026-08-14)
+
+`mark_last_uses`'s `For` arm forced `live_after = true` across the whole
+loop body, so every use of an outer heap-tracked name inside a loop got
+an `Inc`. That pinned refcounts at >= 2 and forced `.push()` onto its
+fresh-allocate-and-copy path for `let mut acc = []; for .. { acc =
+acc.push(x) }` — the idiomatic collection-building shape in this
+language, and exactly what `Array.map`/`Array.filter` lower to
+(`lower.rs::lower_array_filter`). Quadratic accumulation for the most
+common collection idiom in the language.
+
+**The rule**: if the loop body REBINDS the name (`expr_assigns_var` —
+shadowing-aware, and deliberately not counting rebinds inside `Closure`/
+`Spawn` bodies, which may not run on this iteration), the value the next
+iteration reads is the NEW binding, so the old reference's liveness does
+not cross the iteration boundary and ordinary backward analysis is
+sound. Otherwise the conservative force stays.
+
+**Safety**: relaxing to the ordinary walk does NOT assume every body use
+is a last use. `let snap = acc; acc = acc.push(x); use(snap)` walks
+backward, sees `acc` still needed by the later `Assign`, and Inc's the
+earlier read into `snap` — so the push observes refcount 2 and correctly
+takes the fresh-allocate path instead of corrupting `snap`. Pinned by a
+dedicated test. A conditional rebind (`if c { acc = acc.push(x) }`,
+exactly what `Array.filter` emits) is fine too: consume and rebind live
+in the same branch.
+
+**Verified**: `chars_of` (= `.split("")` + `Array.filter`, previously
+dying at 20,000 characters) now handles 100,000 characters at a flat
+~2.1MB RSS. 5 new `fbip` tests including the aliasing-safety case; full
+workspace suite green (1,771 tests); 98/98 corpus, 13/14 `exec_corpus`,
+5/5 `typecheck_corpus` unchanged.
+
+**NOT fixed**: `./sh tokens` on the full 20KB `lexer.plum` still exceeds
+1GB. The ceiling moved (~5.7KB -> ~8KB of source) but something remains
+superlinear, and it is NOT: array push (fixed), `chars_of` (fixed),
+string `concat` folding (measured flat at 50,000 double-concats), or
+stack depth (a "stack overflow" reading was an artifact of a `ulimit -v`
+cap killing the process before RSS could grow — see below). Unknown.
+
+### Guard lesson, corrected
+
+Running the self-hosted binary unguarded OOM-killed the whole terminal
+(and the session in it) five times, because the process shares the
+terminal's cgroup and a global OOM tears down the entire scope. Two
+successive guard designs were wrong:
+
+- A hand-typed `ulimit` per command: shell state does not persist
+  between commands, so it had to be retyped every time, and was dropped
+  repeatedly under iteration pressure.
+- `ulimit -v` in a wrapper: caps VIRTUAL address space, so it (a) trips
+  on harmless large reservations, producing false failures, and (b)
+  kills before RSS grows, producing a false "low memory use" reading
+  that led directly to a wrong stack-overflow diagnosis AND to disabling
+  the guard right before a 44.9GB terminal-killing OOM.
+
+**The working design** (`./sh` in the repo root, wrapping `./sh.real`):
+`systemd-run --user --scope -p MemoryMax=1G -p MemorySwapMax=0`. A real
+RSS-based cgroup cap — the kill is `CONSTRAINT_MEMCG` scoped to the
+process's own transient cgroup, never `CONSTRAINT_NONE`/`global_oom`, so
+a runaway cannot reach the terminal. Rebuild with `-o sh.real`, never
+`-o sh`.
+
+## Profiling the remaining blowup — self-hosted lexer now lexes itself (2026-08-14)
+
+After the loop-accumulator rule landed, `./sh tokens lexer.plum` still
+exceeded 1GB, and three successive attempts to guess the cause had all
+been wrong. Switched to measurement.
+
+**The instrument** (kept, it's real tooling): per-allocator counters in
+the generated runtime — `plum_alloc`/`plum_alloc_array`/`plum_alloc_str`
+/`plum_alloc_closure` each bump a count and a byte total, dumped to fd 2
+at exit by a global destructor, gated on `PLUM_ALLOC_STATS` so normal
+runs are unaffected and stdout stays clean for golden comparisons. No
+external profiler is installed on this machine, and "which allocator is
+being hammered" was otherwise pure guesswork.
+
+**What it found, in order.**
+
+1. *The loop-accumulator fix wasn't actually working in the real
+   pipeline.* A pure `let mut acc = []; for .. { acc = acc.push(i) }`
+   showed 1,008 array allocations for n=1000 and bytes going 4MB → 16MB
+   → 64MB across doublings: textbook quadratic. Dumping the generated
+   LLVM showed a surviving `@plum_rc_inc` before every push. Cause: the
+   `For` arm passed the incoming `live_after` into the body, but a use
+   AFTER the loop (`acc.len()` — i.e. essentially every real
+   accumulator, since you build a collection to use it) makes that true,
+   which re-marked the consumed read as live. The rebind argument says
+   the post-loop use reads the value the LAST rebind produced, never the
+   consumed one, so the body must be analyzed with `live_after = false`.
+   The unit test had passed only because it put nothing after the loop.
+   Fixed, and a test pinning the realistic shape added. Result: 1,008
+   allocations → **4**, constant from n=1,000 to n=100,000.
+
+2. *`Array.slice` was O(tail), not O(range).* Defined as `Array.take
+   (Array.drop(arr, start), end - start)`, and `Array.drop` copies the
+   entire remaining tail — so slicing a 5-character identifier out of a
+   20KB source char array allocated ~20KB. `lexer.plum` does exactly
+   that per identifier/number token, giving O(input²). Rewritten as a
+   direct single-pass `array_slice_acc` with the original's exact edge-
+   case semantics preserved (including its odd negative-`start`
+   behavior, which the take∘drop composition produced and which the
+   existing tests pin).
+
+3. *`String.index_of` was quadratic on its own.* `string_index_of_acc`
+   called `Array.slice` at EVERY position to compare against the needle.
+   Replaced with `string_matches_at`, an in-place elementwise compare —
+   zero allocation. This one is called per character for classification
+   (`is_digit_char`/`is_ident_start_char` against fixed alphabets), so
+   it was a large constant on top of the quadratic.
+
+4. *String join was ~98% of what remained.* With arrays fixed, the
+   profile showed string allocation dominating: 2,789MB of string
+   allocation for a 69KB input (vs 44MB of array). `string_join_with_
+   space` used `Array.fold(.., |acc, s| acc.concat(" ").concat(s))`, and
+   the OUTER concat's receiver is a freshly-built temporary — `fbip`'s
+   reuse analysis only marks a bare VARIABLE receiver, so that concat
+   always allocated-and-copied the whole accumulated output, once per
+   token. Split into two single-`.concat()` statements so each has a
+   bare `acc` receiver: 2.75GB → 1.63GB, 864ms → 500ms.
+
+**Result — the milestone this whole investigation was chasing.** Every
+self-hosted source file now tokenizes AND parses itself, with output
+**byte-identical** to the real Rust compiler:
+
+| file | size | `tokens` | `ast` |
+|---|---|---|---|
+| lexer.plum | 22,797 B | match | match |
+| parser.plum | 68,888 B | match | match |
+| interp.plum | 41,520 B | match | match |
+| types.plum | 10,055 B | match | match |
+| context.plum | 8,190 B | match | match |
+| infer.plum | 48,664 B | match | match |
+| main.plum | 3,897 B | match | match |
+
+Cost: lexer.plum 121MB/165ms; parser.plum 1.63GB/500ms. All 14 Rust
+test suites green, 196/196 corpus checks, 13/13 exec_corpus, 5/5
+typecheck_corpus rejections.
+
+**Still open, and now precisely located**: string cells have no
+`capacity` field, so `StrConcatReuse` reallocs to exact size on every
+append — the same bug the array layout change fixed, but for strings.
+That's why 69KB of input still costs 1.63GB: memory is still quadratic
+in output length, just with a much smaller constant. The fix is the
+string-cell counterpart of the array `capacity` word (a wide, layout-
+sensitive change touching every string producer in the runtime), and it
+is the clear next step for this line of work.
+
+## Closing the string blowup — three more fixes, 72x less memory (2026-08-15)
+
+Continued from the profiling pass above, which had left `parser.plum`
+tokenizing itself at 1.63GB. The allocation counters made each step a
+measurement rather than a guess.
+
+**1. `StrConcatReuse` reallocated to exact size on every append.** The
+array-cell fix had added a stored `capacity` word, but doing the same
+for strings would move every string's data offset from 16 to 24 — 76
+sites in this backend assume it, and separating the string ones from
+the structurally identical `Ctor` ones is exactly the error-prone audit
+worth avoiding. Instead capacity is DERIVED from `malloc_usable_size`:
+ask the allocator how big the block really is, append in place when it
+fits, and otherwise `realloc` to double. Same amortized-O(1) growth as
+the array fix, **zero layout change** — `plum_alloc_str` and every
+reader are untouched. (`other` can never alias the receiver on the
+reuse path: that would be two live references, so the refcount check
+would already have taken the fresh branch — which is also why the
+`realloc` can't invalidate the copy source.)
+
+**2. Character classification re-split its alphabet on every call.**
+`String.index_of` is defined as `string_index_of_acc(chars_of(s),
+chars_of(needle), 0)`, so `is_ident_start_char(c)` re-split the whole
+52-character alphabet into 52 fresh one-character heap strings *per
+source character*. That was ~7 million string allocations while
+tokenizing the 69KB parser source — the single largest cost at that
+point. Hoisted the split into `Array[String]` GLOBALS (evaluated once)
+tested with `Array.contains`, in all four places that did this
+(`lexer.plum`'s digit/alpha checks, and `is_capitalized`/`is_capitalized
+_name` in `parser.plum`/`interp.plum`/`infer.plum`). String allocations
+dropped ~9x.
+
+**3. Two rebinds in one loop body defeated the rebind rule.** A string
+join is `for .. { if c { acc = acc.concat(" ") }; acc = acc.concat(s) }`
+— and the backward walk saw the SECOND rebind's read as making the
+FIRST one live, so the first concat took the allocate-and-copy path and
+the whole join stayed quadratic (900MB for a 10,000-element join, 4x
+per doubling). The `For` arm's rebind rule only severed the
+loop-carried edge; ordinary sequencing needed the same treatment. Now
+`Assign`'s own arm analyzes its `value` with `live_after = false`
+whenever it rebinds the name being analyzed, since every use in `rest`
+reads the NEW binding. Aliasing safety is unchanged and still comes
+from the ordinary walk, not a special case: `let snap = acc; acc =
+acc.concat(x); use(snap)` still Inc's the read into `snap`, so the
+concat's runtime refcount check takes the fresh path rather than
+corrupting the alias. Both properties are pinned by tests. The join
+benchmark went from 225MB to 260KB at n=5,000 and is now exactly
+linear (2.0x bytes per 2x input, measured to n=40,000).
+
+**Result.** Every self-hosted file tokenizes AND parses itself,
+byte-identical to the real Rust compiler, now within the ordinary 1GB
+guard:
+
+| file | size | peak RSS | wall | before |
+|---|---|---|---|---|
+| lexer.plum | 25 KB | 4 MB | 49 ms | 224 MB |
+| parser.plum | 69 KB | 38 MB | 102 ms | 2,752 MB |
+| interp.plum | 42 KB | 4 MB | 80 ms | — |
+| infer.plum | 49 KB | 30 MB | 57 ms | — |
+
+7/7 files match on both `tokens` and `ast`. 196/196 corpus checks,
+13/13 exec_corpus, 5/5 typecheck_corpus rejections, all 14 Rust suites
+green. Peak memory for the largest file fell 72x and wall time 8.5x.
+
+**Method note worth keeping.** Every one of these was found by
+measurement and every one contradicted a plausible-sounding guess — the
+`ulimit -v` "stack overflow" that was really a capped allocation, the
+string-concat hypothesis that measured flat, the loop-accumulator fix
+whose unit test passed while the real pipeline still emitted a
+per-iteration `Inc`. The allocation counters (`PLUM_ALLOC_STATS=1`) and
+reading actual generated LLVM are what turned each one from speculation
+into a specific line to change.

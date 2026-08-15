@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("name") Colon Ident("String") RParen LParen Ident("n") Colon Ident("Int") RParen Colon Ident("String") Eq InterpStr(Literal("hello, ") Expr("name") Literal("! you are ") Expr("n + 1") Literal(" now."))

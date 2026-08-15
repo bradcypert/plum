@@ -1,0 +1,1 @@
+Enum Ident("Direction") LBrace Ident("North") Comma Ident("South") Comma Ident("East") Comma Ident("West") RBrace

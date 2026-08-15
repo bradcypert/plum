@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("a") Colon Ident("A") RParen Colon Ident("Int") Eq Ident("a") Dot Ident("b") Dot Ident("c")

@@ -1,0 +1,1 @@
+Let Ident("clamp") LParen Ident("n") Colon Ident("Int") RParen LParen Ident("lo") Colon Ident("Int") RParen LParen Ident("hi") Colon Ident("Int") RParen Colon Ident("Int") Ident("require") Ident("lo") LtEq Ident("hi") Ident("require") Ident("n") GtEq Int(0) Eq Ident("n")

@@ -1,0 +1,4 @@
+let divide (a: Int) (b: Int): Int
+  require b != 0
+  ensure result >= 0
+= a / b

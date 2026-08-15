@@ -1,0 +1,1 @@
+((let case ((g:Game) (nx:Int) (ny:Int)) ->Game (struct-lit Game ship.position.x=nx ship.position.y=ny ..g)))

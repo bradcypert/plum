@@ -1,0 +1,1 @@
+((let case ((o:(gt Option Int))) ->Int (match o (arm (variant Some x) x) (arm (variant None) 0))))

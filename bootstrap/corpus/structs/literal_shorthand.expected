@@ -1,0 +1,1 @@
+((let case ((x:Int) (y:Int)) ->Point (struct-lit Point x=x y=y)))

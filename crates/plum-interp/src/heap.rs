@@ -183,6 +183,86 @@ impl Heap {
             Ok(self.alloc_str(new_str))
         }
     }
+
+    /// True in-place array mutation for the sole-owner case — the fix
+    /// for a real, serious performance bug: `ArrayPushReuse`/`ArrayPop
+    /// Reuse`/`ArraySetReuse`/`ArrayRemoveReuse`'s callers used to
+    /// unconditionally build a full CLONE of the backing `Vec<Value>`
+    /// via `.to_vec()` BEFORE deciding whether the cell was uniquely
+    /// owned — so even the "reuse in place" fast path (refcount == 1)
+    /// still paid an O(current length) copy on every single call,
+    /// making any tight accumulation loop (`let mut acc = []; for x in
+    /// ... { acc = acc.push(x); }`, the idiomatic way to build a
+    /// collection in this language) genuinely O(n²), not O(n) —
+    /// confirmed empirically: a 16,000-element accumulation loop peaked
+    /// at ~900MB before this fix, and a real ~15KB self-hosted-compiler
+    /// source file, run through several such loops in sequence
+    /// (`chars_of`, `tokenize_acc`, `parse_items_acc`, ...), compounded
+    /// this into a genuine ~44GB OOM kill.
+    ///
+    /// These four methods take a DIFFERENT contract than `dec_and_
+    /// maybe_reuse`: the caller must have ALREADY confirmed `addr`'s
+    /// refcount is exactly 1 (see `Interpreter::eval`'s `*Reuse` cases)
+    /// before calling — there is no shared-cell fallback here, because
+    /// there is nothing left to decide: mutating a cell nobody else can
+    /// observe is always safe, and this method exists specifically to
+    /// avoid the wasted clone the shared-fallback path still needs (see
+    /// `dec_and_maybe_reuse`, still used, unchanged, for exactly that
+    /// case). Reusing Rust's own `Vec::push`/`pop`/`remove`/index-write
+    /// directly means genuine amortized-doubling growth comes for free
+    /// from `std`'s own `Vec` implementation — no hand-rolled capacity
+    /// tracking needed on this side of the language.
+    pub fn array_push_in_place(&mut self, addr: usize, value: Value) -> Result<(), String> {
+        match &mut self.cell_mut(addr)?.data {
+            CellData::Ctor { fields, .. } => {
+                fields.push(value);
+                Ok(())
+            }
+            CellData::Str(_) => Err(format!("expected a constructor value, found a string at heap address {addr}")),
+        }
+    }
+
+    /// The in-place counterpart to `array_push_in_place`, for `.pop()`.
+    /// Errors on an empty array — same contract `ArrayPop`'s existing
+    /// (non-reuse) eval case already enforces, just checked here
+    /// instead since this method owns the actual removal now.
+    pub fn array_pop_in_place(&mut self, addr: usize) -> Result<Value, String> {
+        match &mut self.cell_mut(addr)?.data {
+            CellData::Ctor { fields, .. } => fields.pop().ok_or_else(|| "cannot pop from an empty array".to_string()),
+            CellData::Str(_) => Err(format!("expected a constructor value, found a string at heap address {addr}")),
+        }
+    }
+
+    /// The in-place counterpart to `array_push_in_place`, for `.set()`.
+    pub fn array_set_in_place(&mut self, addr: usize, index: usize, value: Value) -> Result<(), String> {
+        match &mut self.cell_mut(addr)?.data {
+            CellData::Ctor { fields, .. } => {
+                let len = fields.len();
+                let Some(slot) = fields.get_mut(index) else {
+                    return Err(format!("array index out of bounds: {index} (len {len})"));
+                };
+                *slot = value;
+                Ok(())
+            }
+            CellData::Str(_) => Err(format!("expected a constructor value, found a string at heap address {addr}")),
+        }
+    }
+
+    /// The in-place counterpart to `array_push_in_place`, for
+    /// `.remove()`.
+    pub fn array_remove_in_place(&mut self, addr: usize, index: usize) -> Result<(), String> {
+        match &mut self.cell_mut(addr)?.data {
+            CellData::Ctor { fields, .. } => {
+                let len = fields.len();
+                if index >= len {
+                    return Err(format!("array index out of bounds: {index} (len {len})"));
+                }
+                fields.remove(index);
+                Ok(())
+            }
+            CellData::Str(_) => Err(format!("expected a constructor value, found a string at heap address {addr}")),
+        }
+    }
 }
 
 impl Default for Heap {

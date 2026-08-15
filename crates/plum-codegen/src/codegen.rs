@@ -565,6 +565,20 @@ fn field_byte_offset(index: usize) -> i64 {
     16 + (index as i64) * 8
 }
 
+/// The array-cell counterpart to `field_byte_offset` — see `plum_alloc_
+/// array`'s own doc comment (lib.rs) for why arrays now have their OWN
+/// dedicated 3-word header (`{ refcount, len, capacity }`, 24 bytes)
+/// instead of reusing `Ctor`'s 2-word one: real amortized-growth
+/// `.push()` needs a place to remember how much spare room the backing
+/// allocation already has, and a `Ctor` cell (fixed field count,
+/// nothing ever grows it) has no use for that field at all. Kept as a
+/// SEPARATE function from `field_byte_offset` rather than widening that
+/// one's header size, specifically so ordinary struct/enum/tuple `Ctor`
+/// cells stay exactly as they were — untouched by this change.
+fn array_elem_byte_offset(index: usize) -> i64 {
+    24 + (index as i64) * 8
+}
+
 /// Writes `value` (already computed, in its OWN native LLVM
 /// representation — `i64`/`double`/`i1`/`ptr`) into field `index` of
 /// the cell at `cell_ptr`, converting it to the uniform 64-bit word
@@ -589,6 +603,38 @@ fn store_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, value: &str,
         // `Heap` — see `CgType::Str`/`Array`'s own doc comment for why
         // they're still distinct at the `CgType` level despite sharing
         // this exact store/load mechanism.
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
+            r
+        }
+    };
+    em.push(format!("  store i64 {word}, ptr {addr}"));
+}
+
+/// The array-literal counterpart to `store_field_word` — identical
+/// conversion logic, just addressed via `array_elem_byte_offset`
+/// instead of `field_byte_offset` (arrays' own 3-word header, not
+/// `Ctor`'s 2-word one — see that function's doc comment). Used ONLY by
+/// `codegen_array_literal` (a compile-time-known index, same as `store_
+/// field_word`'s own callers); `.push()`/`.set()`/indexing all go
+/// through the RUNTIME-index counterpart, `store_array_elem` (via
+/// `array_elem_addr`), just below.
+fn store_array_elem_static(em: &mut Emitter, cell_ptr: &str, index: usize, value: &str, ty: CgType) {
+    let addr = em.fresh_reg();
+    em.push(format!("  {addr} = getelementptr i8, ptr {cell_ptr}, i64 {}", array_elem_byte_offset(index)));
+    let word = match ty {
+        CgType::Int => value.to_string(),
+        CgType::Bool | CgType::Unit => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = zext i1 {value} to i64"));
+            r
+        }
+        CgType::Float => {
+            let r = em.fresh_reg();
+            em.push(format!("  {r} = bitcast double {value} to i64"));
+            r
+        }
         CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
@@ -773,13 +819,28 @@ fn prim_ty_to_cg_type(ty: &PrimTy) -> CgType {
 }
 
 /// Reads an array/string cell's `len` field (byte offset 8, shared by
-/// both layouts — see this section's own doc comment).
+/// both layouts — see this section's own doc comment). Unaffected by
+/// arrays' own dedicated `capacity` field (offset 16, see `array_elem_
+/// byte_offset`'s doc comment) — `len` kept the SAME offset it always
+/// had, only `capacity` is new, and only arrays have one.
 fn load_array_len(em: &mut Emitter, ptr: &str) -> String {
     let addr = em.fresh_reg();
     em.push(format!("  {addr} = getelementptr i8, ptr {ptr}, i64 8"));
     let len = em.fresh_reg();
     em.push(format!("  {len} = load i64, ptr {addr}"));
     len
+}
+
+/// Reads an array cell's `capacity` field (byte offset 16) — how many
+/// element slots are ALREADY allocated, which may be more than `len`
+/// currently uses. Array-only; strings have no such field (see `array_
+/// elem_byte_offset`'s doc comment).
+fn load_array_capacity(em: &mut Emitter, ptr: &str) -> String {
+    let addr = em.fresh_reg();
+    em.push(format!("  {addr} = getelementptr i8, ptr {ptr}, i64 16"));
+    let cap = em.fresh_reg();
+    em.push(format!("  {cap} = load i64, ptr {addr}"));
+    cap
 }
 
 /// `0 <= idx < len`, as a single `i1` SSA value — shared by every
@@ -881,7 +942,7 @@ fn array_elem_addr(em: &mut Emitter, array_ptr: &str, index_reg: &str) -> String
     let word_off = em.fresh_reg();
     em.push(format!("  {word_off} = mul i64 {index_reg}, 8"));
     let byte_off = em.fresh_reg();
-    em.push(format!("  {byte_off} = add i64 {word_off}, 16"));
+    em.push(format!("  {byte_off} = add i64 {word_off}, 24"));
     let addr = em.fresh_reg();
     em.push(format!("  {addr} = getelementptr i8, ptr {array_ptr}, i64 {byte_off}"));
     addr
@@ -1002,7 +1063,7 @@ fn codegen_array_literal(fields: &[Expr], env: &Env, em: &mut Emitter, ctx: &Ctx
     let cell = em.fresh_reg();
     em.push(format!("  {cell} = call ptr @plum_alloc_array(i64 {len})"));
     for (i, (reg, ty)) in vals.iter().enumerate() {
-        store_field_word(em, &cell, i, reg, ty.clone());
+        store_array_elem_static(em, &cell, i, reg, ty.clone());
     }
     Ok((cell, CgType::Array(Box::new(elem_ty))))
 }
@@ -1019,9 +1080,9 @@ fn codegen_array_push_fresh(src: &str, elem_ty: CgType, value_reg: &str, em: &mu
     let new_cell = em.fresh_reg();
     em.push(format!("  {new_cell} = call ptr @plum_alloc_array(i64 {new_len})"));
     let old_bytes = em.fresh_reg();
-    em.push(format!("  {old_bytes} = getelementptr i8, ptr {src}, i64 16"));
+    em.push(format!("  {old_bytes} = getelementptr i8, ptr {src}, i64 24"));
     let new_bytes = em.fresh_reg();
-    em.push(format!("  {new_bytes} = getelementptr i8, ptr {new_cell}, i64 16"));
+    em.push(format!("  {new_bytes} = getelementptr i8, ptr {new_cell}, i64 24"));
     let copy_size = em.fresh_reg();
     em.push(format!("  {copy_size} = mul i64 {old_len}, 8"));
     let memcpy_r = em.fresh_reg();
@@ -1048,9 +1109,9 @@ fn codegen_array_pop_fresh(src: &str, elem_ty: CgType, em: &mut Emitter, ctx: &C
     let new_cell = em.fresh_reg();
     em.push(format!("  {new_cell} = call ptr @plum_alloc_array(i64 {new_len})"));
     let old_bytes = em.fresh_reg();
-    em.push(format!("  {old_bytes} = getelementptr i8, ptr {src}, i64 16"));
+    em.push(format!("  {old_bytes} = getelementptr i8, ptr {src}, i64 24"));
     let new_bytes = em.fresh_reg();
-    em.push(format!("  {new_bytes} = getelementptr i8, ptr {new_cell}, i64 16"));
+    em.push(format!("  {new_bytes} = getelementptr i8, ptr {new_cell}, i64 24"));
     let copy_size = em.fresh_reg();
     em.push(format!("  {copy_size} = mul i64 {new_len}, 8"));
     let memcpy_r = em.fresh_reg();
@@ -1074,9 +1135,9 @@ fn codegen_array_set_fresh(src: &str, elem_ty: CgType, idx_reg: &str, value_reg:
     let new_cell = em.fresh_reg();
     em.push(format!("  {new_cell} = call ptr @plum_alloc_array(i64 {len})"));
     let old_bytes = em.fresh_reg();
-    em.push(format!("  {old_bytes} = getelementptr i8, ptr {src}, i64 16"));
+    em.push(format!("  {old_bytes} = getelementptr i8, ptr {src}, i64 24"));
     let new_bytes = em.fresh_reg();
-    em.push(format!("  {new_bytes} = getelementptr i8, ptr {new_cell}, i64 16"));
+    em.push(format!("  {new_bytes} = getelementptr i8, ptr {new_cell}, i64 24"));
     let copy_size = em.fresh_reg();
     em.push(format!("  {copy_size} = mul i64 {len}, 8"));
     let memcpy_r = em.fresh_reg();
@@ -1103,9 +1164,9 @@ fn codegen_array_remove_fresh(src: &str, elem_ty: CgType, idx_reg: &str, em: &mu
     let new_cell = em.fresh_reg();
     em.push(format!("  {new_cell} = call ptr @plum_alloc_array(i64 {new_len})"));
     let old_bytes = em.fresh_reg();
-    em.push(format!("  {old_bytes} = getelementptr i8, ptr {src}, i64 16"));
+    em.push(format!("  {old_bytes} = getelementptr i8, ptr {src}, i64 24"));
     let new_bytes = em.fresh_reg();
-    em.push(format!("  {new_bytes} = getelementptr i8, ptr {new_cell}, i64 16"));
+    em.push(format!("  {new_bytes} = getelementptr i8, ptr {new_cell}, i64 24"));
 
     let head_size = em.fresh_reg();
     em.push(format!("  {head_size} = mul i64 {idx_reg}, 8"));
@@ -3992,14 +4053,63 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             let merge_label = em.fresh_label("array_push_merge");
             em.push(format!("  br i1 {is_zero}, label %{reuse_label}, label %{alloc_label}"));
 
+            // UNIQUELY owned (refcount just hit 0): real amortized-
+            // growth `.push()` — the actual fix for a real, serious
+            // performance bug (see DESIGN.md's "Array push scaling bug"
+            // section): the OLD code here reallocated to the EXACT new
+            // size on EVERY push, no matter how much slack the previous
+            // growth step already reserved, making a tight accumulation
+            // loop O(n^2) in practice (`realloc`'ing to `len+1` almost
+            // always has to move the whole block, since there was never
+            // any slack left to grow into). Checking `capacity` FIRST
+            // and only reallocating when it's actually exhausted — and
+            // then reallocating to DOUBLE the capacity, not just one
+            // more slot — is what makes this genuinely O(1) amortized:
+            // a `.push()`-heavy loop reallocates O(log n) times total,
+            // not n times.
             em.start_block(&reuse_label);
             let old_len = load_array_len(em, &old_ptr);
+            let old_cap = load_array_capacity(em, &old_ptr);
             let new_len = em.fresh_reg();
             em.push(format!("  {new_len} = add i64 {old_len}, 1"));
+            let has_room = em.fresh_reg();
+            em.push(format!("  {has_room} = icmp sle i64 {new_len}, {old_cap}"));
+
+            let no_grow_label = em.fresh_label("array_push_no_grow");
+            let grow_label = em.fresh_label("array_push_grow");
+            let reuse_merge_label = em.fresh_label("array_push_reuse_merge");
+            em.push(format!("  br i1 {has_room}, label %{no_grow_label}, label %{grow_label}"));
+
+            // Room already reserved from a PRIOR growth step — no
+            // allocator call at all, just write the element and bump
+            // `len`. `refcount` needs restoring to 1 here too (see the
+            // `grow_label` branch's own comment — same reasoning,
+            // `old_ptr`'s cell is being kept, not moved).
+            em.start_block(&no_grow_label);
+            em.push(format!("  store i64 1, ptr {old_ptr}"));
+            let len_addr_ng = em.fresh_reg();
+            em.push(format!("  {len_addr_ng} = getelementptr i8, ptr {old_ptr}, i64 8"));
+            em.push(format!("  store i64 {new_len}, ptr {len_addr_ng}"));
+            store_array_elem(em, &old_ptr, &old_len, &val_reg, (*elem_ty).clone());
+            let no_grow_end = em.current_block().to_string();
+            em.push(format!("  br label %{reuse_merge_label}"));
+
+            // Capacity exhausted — grow geometrically (double, or
+            // `new_len` itself if doubling zero/small capacity still
+            // wouldn't be enough room) rather than to the bare minimum,
+            // so the NEXT several pushes can all take the cheap `no_
+            // grow_label` path above instead of reallocating again.
+            em.start_block(&grow_label);
+            let doubled_cap = em.fresh_reg();
+            em.push(format!("  {doubled_cap} = mul i64 {old_cap}, 2"));
+            let doubled_enough = em.fresh_reg();
+            em.push(format!("  {doubled_enough} = icmp sge i64 {doubled_cap}, {new_len}"));
+            let new_cap = em.fresh_reg();
+            em.push(format!("  {new_cap} = select i1 {doubled_enough}, i64 {doubled_cap}, i64 {new_len}"));
             let elems_bytes = em.fresh_reg();
-            em.push(format!("  {elems_bytes} = mul i64 {new_len}, 8"));
+            em.push(format!("  {elems_bytes} = mul i64 {new_cap}, 8"));
             let new_size = em.fresh_reg();
-            em.push(format!("  {new_size} = add i64 {elems_bytes}, 16"));
+            em.push(format!("  {new_size} = add i64 {elems_bytes}, 24"));
             let grown = em.fresh_reg();
             em.push(format!("  {grown} = call ptr @realloc(ptr {old_ptr}, i64 {new_size})"));
             // `realloc` doesn't preserve our OWN refcount bookkeeping
@@ -4011,8 +4121,17 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             let len_addr = em.fresh_reg();
             em.push(format!("  {len_addr} = getelementptr i8, ptr {grown}, i64 8"));
             em.push(format!("  store i64 {new_len}, ptr {len_addr}"));
+            let cap_addr = em.fresh_reg();
+            em.push(format!("  {cap_addr} = getelementptr i8, ptr {grown}, i64 16"));
+            em.push(format!("  store i64 {new_cap}, ptr {cap_addr}"));
             store_array_elem(em, &grown, &old_len, &val_reg, (*elem_ty).clone());
-            let reuse_end = em.current_block().to_string();
+            let grow_end = em.current_block().to_string();
+            em.push(format!("  br label %{reuse_merge_label}"));
+
+            em.start_block(&reuse_merge_label);
+            let reuse_result = em.fresh_reg();
+            em.push(format!("  {reuse_result} = phi ptr [ {old_ptr}, %{no_grow_end} ], [ {grown}, %{grow_end} ]"));
+            let reuse_merge_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
 
             em.start_block(&alloc_label);
@@ -4022,7 +4141,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
+            em.push(format!("  {result} = phi ptr [ {reuse_result}, %{reuse_merge_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Array(elem_ty)))
         }
         Expr::ArrayPopReuse { reuse_of } => {
@@ -4061,15 +4180,16 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             // provably uniquely owned here) — dec it BEFORE shrinking,
             // if heap-shaped.
             dec_array_element_at(em, ctx, &old_ptr, &new_len, &elem_ty);
-            let elems_bytes = em.fresh_reg();
-            em.push(format!("  {elems_bytes} = mul i64 {new_len}, 8"));
-            let new_size = em.fresh_reg();
-            em.push(format!("  {new_size} = add i64 {elems_bytes}, 16"));
-            let grown = em.fresh_reg();
-            em.push(format!("  {grown} = call ptr @realloc(ptr {old_ptr}, i64 {new_size})"));
-            em.push(format!("  store i64 1, ptr {grown}"));
+            // No `realloc` at all — capacity only ever needs to GROW
+            // (see `ArrayPushReuse`'s own doc comment on why that one
+            // now checks capacity before reallocating); shrinking never
+            // needs to shrink the actual allocation too, so this is
+            // simpler AND cheaper than the old code's unconditional
+            // realloc-to-exact-size on every `.pop()`: just restore the
+            // refcount and write the smaller `len`, done.
+            em.push(format!("  store i64 1, ptr {old_ptr}"));
             let len_addr = em.fresh_reg();
-            em.push(format!("  {len_addr} = getelementptr i8, ptr {grown}, i64 8"));
+            em.push(format!("  {len_addr} = getelementptr i8, ptr {old_ptr}, i64 8"));
             em.push(format!("  store i64 {new_len}, ptr {len_addr}"));
             let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
@@ -4081,7 +4201,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
+            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Array(elem_ty)))
         }
         Expr::ArraySetReuse { reuse_of, index, value } => {
@@ -4183,7 +4303,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             // distinction actually matters, since every OTHER copy here
             // is always between two DISTINCT, freshly-allocated cells.
             let base = em.fresh_reg();
-            em.push(format!("  {base} = getelementptr i8, ptr {old_ptr}, i64 16"));
+            em.push(format!("  {base} = getelementptr i8, ptr {old_ptr}, i64 24"));
             let idx_plus1 = em.fresh_reg();
             em.push(format!("  {idx_plus1} = add i64 {idx_reg}, 1"));
             let tail_count = em.fresh_reg();
@@ -4201,15 +4321,12 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             let memmove_r = em.fresh_reg();
             em.push(format!("  {memmove_r} = call ptr @memmove(ptr {dst_tail}, ptr {src_tail}, i64 {tail_size})"));
 
-            let elems_bytes = em.fresh_reg();
-            em.push(format!("  {elems_bytes} = mul i64 {new_len}, 8"));
-            let new_size = em.fresh_reg();
-            em.push(format!("  {new_size} = add i64 {elems_bytes}, 16"));
-            let grown = em.fresh_reg();
-            em.push(format!("  {grown} = call ptr @realloc(ptr {old_ptr}, i64 {new_size})"));
-            em.push(format!("  store i64 1, ptr {grown}"));
+            // No `realloc` — same reasoning as `ArrayPopReuse`'s own
+            // reuse branch: shrinking never needs the allocation itself
+            // to shrink, only `len`.
+            em.push(format!("  store i64 1, ptr {old_ptr}"));
             let len_addr = em.fresh_reg();
-            em.push(format!("  {len_addr} = getelementptr i8, ptr {grown}, i64 8"));
+            em.push(format!("  {len_addr} = getelementptr i8, ptr {old_ptr}, i64 8"));
             em.push(format!("  store i64 {new_len}, ptr {len_addr}"));
             let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
@@ -4221,7 +4338,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
+            em.push(format!("  {result} = phi ptr [ {old_ptr}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Array(elem_ty)))
         }
         // `.concat()` — fresh path: a plain runtime-function call. See
@@ -4269,6 +4386,23 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             let merge_label = em.fresh_label("str_concat_merge");
             em.push(format!("  br i1 {is_zero}, label %{reuse_label}, label %{alloc_label}"));
 
+            // UNIQUELY owned (refcount just hit 0): append in place, with
+            // GEOMETRIC growth. The old code `realloc`'d to the exact new
+            // size on every single append, so building a string by
+            // repeated `.concat()` copied the whole accumulated result
+            // each time — O(n^2) in the final length. Rendering this
+            // project's own 69KB parser source to a token dump spent
+            // 2.8GB that way, ~98% of all memory the tokenizer touched
+            // (measured with `PLUM_ALLOC_STATS`). See DESIGN.md's
+            // "Profiling the remaining blowup" section.
+            //
+            // Capacity is DERIVED from `malloc_usable_size`, not stored:
+            // a stored capacity word would move every string's data
+            // offset and force an audit of all 76 sites that assume it
+            // (see that declaration's own comment). Asking the allocator
+            // how big the block really is answers the same question
+            // without touching the layout, so `plum_alloc_str` and every
+            // reader stay exactly as they were.
             em.start_block(&reuse_label);
             let old_len = load_array_len(em, &old_ptr);
             let other_len = load_array_len(em, &o_reg);
@@ -4276,26 +4410,69 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             em.push(format!("  {new_len} = add i64 {old_len}, {other_len}"));
             let bytes_and_nul = em.fresh_reg();
             em.push(format!("  {bytes_and_nul} = add i64 {new_len}, 1"));
-            let new_size = em.fresh_reg();
-            em.push(format!("  {new_size} = add i64 {bytes_and_nul}, 16"));
+            let needed = em.fresh_reg();
+            em.push(format!("  {needed} = add i64 {bytes_and_nul}, 16"));
+            let avail = em.fresh_reg();
+            em.push(format!("  {avail} = call i64 @malloc_usable_size(ptr {old_ptr})"));
+            let fits = em.fresh_reg();
+            em.push(format!("  {fits} = icmp ule i64 {needed}, {avail}"));
+
+            let no_grow_label = em.fresh_label("str_concat_no_grow");
+            let grow_label = em.fresh_label("str_concat_grow");
+            let reuse_merge_label = em.fresh_label("str_concat_reuse_merge");
+            em.push(format!("  br i1 {fits}, label %{no_grow_label}, label %{grow_label}"));
+
+            // Already enough room from a prior growth step — no allocator
+            // call at all, just write into the existing block.
+            em.start_block(&no_grow_label);
+            let no_grow_end = em.current_block().to_string();
+            em.push(format!("  br label %{reuse_merge_label}"));
+
+            // Out of room: double the block (or jump straight to what's
+            // needed, when doubling still wouldn't cover it), so the next
+            // several appends take the no-grow path above.
+            em.start_block(&grow_label);
+            let doubled = em.fresh_reg();
+            em.push(format!("  {doubled} = mul i64 {avail}, 2"));
+            let doubled_enough = em.fresh_reg();
+            em.push(format!("  {doubled_enough} = icmp sge i64 {doubled}, {needed}"));
+            let grow_size = em.fresh_reg();
+            em.push(format!("  {grow_size} = select i1 {doubled_enough}, i64 {doubled}, i64 {needed}"));
             let grown = em.fresh_reg();
-            em.push(format!("  {grown} = call ptr @realloc(ptr {old_ptr}, i64 {new_size})"));
-            em.push(format!("  store i64 1, ptr {grown}"));
+            em.push(format!("  {grown} = call ptr @realloc(ptr {old_ptr}, i64 {grow_size})"));
+            let grow_end = em.current_block().to_string();
+            em.push(format!("  br label %{reuse_merge_label}"));
+
+            // `other` can never alias `old_ptr` on this path — that would
+            // mean two live references, so the refcount check above would
+            // have sent us to the fresh-allocation branch instead. So the
+            // `realloc` above can't have invalidated `o_reg`, and the
+            // copy below can't overlap.
+            em.start_block(&reuse_merge_label);
+            let base = em.fresh_reg();
+            em.push(format!("  {base} = phi ptr [ {old_ptr}, %{no_grow_end} ], [ {grown}, %{grow_end} ]"));
+            // `realloc` copies our own refcount word (just written as 0)
+            // along with everything else, so restore it — same reasoning
+            // as `CtorReuse`/`ArrayPushReuse`'s own reuse branches.
+            em.push(format!("  store i64 1, ptr {base}"));
             let len_addr = em.fresh_reg();
-            em.push(format!("  {len_addr} = getelementptr i8, ptr {grown}, i64 8"));
+            em.push(format!("  {len_addr} = getelementptr i8, ptr {base}, i64 8"));
             em.push(format!("  store i64 {new_len}, ptr {len_addr}"));
             let tail_off = em.fresh_reg();
             em.push(format!("  {tail_off} = add i64 {old_len}, 16"));
             let tail_dst = em.fresh_reg();
-            em.push(format!("  {tail_dst} = getelementptr i8, ptr {grown}, i64 {tail_off}"));
+            em.push(format!("  {tail_dst} = getelementptr i8, ptr {base}, i64 {tail_off}"));
             let other_src = em.fresh_reg();
             em.push(format!("  {other_src} = getelementptr i8, ptr {o_reg}, i64 16"));
             let copy_r = em.fresh_reg();
             em.push(format!("  {copy_r} = call ptr @memcpy(ptr {tail_dst}, ptr {other_src}, i64 {other_len})"));
+            // The NUL terminator `.as_cstr()`/FFI relies on has to move
+            // out to the new end — see `plum_alloc_str`, which maintains
+            // the same invariant on a fresh allocation.
             let nul_off = em.fresh_reg();
             em.push(format!("  {nul_off} = add i64 {new_len}, 16"));
             let nul_dst = em.fresh_reg();
-            em.push(format!("  {nul_dst} = getelementptr i8, ptr {grown}, i64 {nul_off}"));
+            em.push(format!("  {nul_dst} = getelementptr i8, ptr {base}, i64 {nul_off}"));
             em.push(format!("  store i8 0, ptr {nul_dst}"));
             let reuse_end = em.current_block().to_string();
             em.push(format!("  br label %{merge_label}"));
@@ -4308,7 +4485,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
 
             em.start_block(&merge_label);
             let result = em.fresh_reg();
-            em.push(format!("  {result} = phi ptr [ {grown}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
+            em.push(format!("  {result} = phi ptr [ {base}, %{reuse_end} ], [ {fresh}, %{alloc_end} ]"));
             Ok((result, CgType::Str))
         }
         Expr::StrContains { base, needle } => {

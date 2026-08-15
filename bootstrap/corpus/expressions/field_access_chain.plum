@@ -1,0 +1,1 @@
+let case (a: A): Int = a.b.c

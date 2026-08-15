@@ -1,0 +1,83 @@
+// Self-hosting bootstrap — project root. See DESIGN.md's "Self-hosting
+// bootstrap corpus" and "Stage 1/2/3/4: self-hosted lexer/parser/
+// interpreter/type checker" sections, and the project roadmap, for the
+// full story.
+//
+// `lexer/`, `parser/`, `interp/`, and `typecheck/` are library MODULES
+// (Go-style directory modules — see DESIGN.md's "Module system"
+// section), not their own runnable projects; this file is the one real
+// entry point tying them together.
+//
+// Modes (dispatched on the first process arg):
+//   plum build bootstrap/self_host -o sh && ./sh tokens <file>
+//     — tokenize <file>, print `lexer.render_tokens`'s output.
+//     Validate against bootstrap/corpus/*/*.tokens.
+//   ./sh ast <file>
+//     — tokenize + parse <file>, print `parser.render_program`'s
+//     output. Validate against bootstrap/corpus/*/*.expected.
+//   ./sh run <file>
+//     — tokenize + parse + TYPE-CHECK + INTERPRET <file>'s `main()`,
+//     printing whatever the program itself prints (nothing extra — no
+//     return-value echo). Matches the real `plum run`'s own order
+//     (type-check first, only interpret a program that passes) — an
+//     ill-typed program never reaches the interpreter at all, the same
+//     `fail_tc`/`panic_raw` `./sh check` alone already produces.
+//     Validate against bootstrap/exec_corpus/*/expected.txt (14 of 15
+//     — `tuples/` fails type-checking specifically, see `typecheck_
+//     corpus/README.md`, so it no longer reaches "run" successfully
+//     either; that one fixture is now `check`/`run`-exempt, tracked as
+//     a real, documented exception, not a regression). Includes
+//     closures-as-values (`closures/`, `closures_in_structs/`) and
+//     arrays (`arrays/`) — both the interpreter and type checker
+//     support them now.
+//   ./sh check <file>
+//     — tokenize + parse + TYPE-CHECK every top-level function's body
+//     against its own declared signature, printing "ok" on success (a
+//     real `panic_raw` on any type error — see `typecheck/infer.plum`'s
+//     own top comment for why). Validate against bootstrap/exec_corpus
+//     (every fixture is well-typed, "ok" expected) and bootstrap/
+//     typecheck_corpus (a mix of well-typed and deliberately-ill-typed
+//     snippets). Kept as its OWN mode, not folded away now that `run`
+//     also type-checks — useful on its own for a program whose `main`
+//     you don't actually want to execute yet.
+//
+// **Validate via the NATIVE build, not `plum run`** — see `lexer/
+// lexer.plum`'s own top comment for why (a real, documented
+// interpreter scaling limit hit while validating Stage 1, not a
+// correctness bug).
+
+use lexer;
+use parser;
+use interp;
+use typecheck;
+
+let usage (): Unit = println("usage: self_host (tokens|ast|run|check) <file>")
+
+let main (): Unit = {
+    let argv = args();
+    if argv.len() < 2 {
+        usage(());
+    } else {
+        match read_file(argv[1]) {
+            Err(e) => println("failed to read file: ".concat(e)),
+            Ok(src) => {
+                if argv[0] == "tokens" {
+                    println(lexer.render_tokens(lexer.tokenize(src)));
+                } else if argv[0] == "ast" {
+                    println(parser.render_program(parser.parse_program(lexer.tokenize(src))));
+                } else if argv[0] == "run" {
+                    let program = parser.parse_program(lexer.tokenize(src));
+                    typecheck.check_program(program);
+                    let state = interp.build_program_state(program);
+                    interp.run_main(state);
+                } else if argv[0] == "check" {
+                    let program = parser.parse_program(lexer.tokenize(src));
+                    typecheck.check_program(program);
+                    println("ok");
+                } else {
+                    usage(());
+                }
+            }
+        }
+    }
+}

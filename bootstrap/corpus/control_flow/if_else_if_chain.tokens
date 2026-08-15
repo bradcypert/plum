@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("n") Colon Ident("Int") RParen Colon Ident("Int") Eq If Ident("n") Gt Int(0) LBrace Int(1) RBrace Else LBrace If Ident("n") Lt Int(0) LBrace Minus Int(1) RBrace Else LBrace Int(0) RBrace RBrace

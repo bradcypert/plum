@@ -1,0 +1,8 @@
+let main (): Unit = {
+  println((3 < 5).to_string());
+  println((3 == 3).to_string());
+  println((3 != 3).to_string());
+  println((true && false).to_string());
+  println((true || false).to_string());
+  println((!true).to_string());
+}

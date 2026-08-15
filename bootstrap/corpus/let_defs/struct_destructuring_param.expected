@@ -1,0 +1,1 @@
+((let midpoint ((p:Point) ((struct Point x=x y=y))) ->Int (+ x y)))

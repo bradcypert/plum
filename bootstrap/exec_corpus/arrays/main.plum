@@ -1,0 +1,27 @@
+let main (): Unit = {
+    let xs = [1, 2, 3, 4, 5];
+    println(xs.len().to_string());
+    println(xs[0].to_string());
+    println(xs[4].to_string());
+
+    let ys = xs.push(6);
+    println(ys.len().to_string());
+    println(ys[5].to_string());
+
+    let zs = ys.set(0, 100);
+    println(zs[0].to_string());
+    println(zs.len().to_string());
+
+    let doubled = Array.map(xs, |n| n * 2);
+    println(doubled[2].to_string());
+
+    let evens = Array.filter(xs, |n| n % 2 == 0);
+    println(evens.len().to_string());
+    println(evens[0].to_string());
+
+    let total = Array.fold(xs, 0, |acc, n| acc + n);
+    println(total.to_string());
+
+    let empty = [];
+    println(empty.len().to_string());
+}

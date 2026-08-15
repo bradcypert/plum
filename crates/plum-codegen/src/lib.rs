@@ -756,6 +756,17 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     // comment on that call site for why.
     out.push_str("declare ptr @memmove(ptr, ptr, i64)\n");
     out.push_str("declare ptr @realloc(ptr, i64)\n");
+    // Lets `StrConcatReuse` DERIVE a string cell's spare capacity rather
+    // than storing one. A stored `capacity` word (what the array cell
+    // got) would mean moving every string's data offset from 16 to 24 —
+    // 76 sites across this backend assume that offset, and separating
+    // the string ones from the structurally identical `Ctor` ones is
+    // exactly the error-prone audit worth avoiding. `malloc_usable_size`
+    // asks the allocator how much room the block ACTUALLY has, which is
+    // all the capacity check needs. glibc/musl both provide it; this
+    // backend is already Unix-only (see the FFI/extern-resolution scope
+    // note).
+    out.push_str("declare i64 @malloc_usable_size(ptr)\n");
     out.push_str("declare void @exit(i32)\n");
     out.push_str("declare i32 @printf(ptr, ...)\n");
     out.push_str("declare i32 @snprintf(ptr, i64, ptr, ...)\n");
@@ -855,6 +866,63 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     out.push_str("  ret void\n");
     out.push_str("}\n\n");
 
+    // --- allocation statistics (opt-in, off unless PLUM_ALLOC_STATS is
+    // set in the environment) ---
+    //
+    // Four counters-plus-byte-totals, one pair per allocator, dumped to
+    // fd 2 (stderr, so a program's own stdout stays clean and golden-file
+    // comparisons are unaffected) by a global destructor at exit.
+    //
+    // Exists because this project has no external profiler available and
+    // "which allocator is being hammered" is otherwise pure guesswork —
+    // guesswork that produced three successive wrong diagnoses while
+    // chasing a superlinear-memory bug (see DESIGN.md's "Array push
+    // scaling bug" section). Attribution per allocator, compared across
+    // two input sizes, turns "something is quadratic somewhere" into a
+    // measurement. The counters themselves are a load/add/store pair
+    // next to a `malloc` call, i.e. noise against the allocation they
+    // annotate; only the DUMP is env-gated, so there's no separate
+    // instrumented build to get out of sync with the real one.
+    out.push_str("@plum_stat_n_ctor = global i64 0\n");
+    out.push_str("@plum_stat_b_ctor = global i64 0\n");
+    out.push_str("@plum_stat_n_array = global i64 0\n");
+    out.push_str("@plum_stat_b_array = global i64 0\n");
+    out.push_str("@plum_stat_n_str = global i64 0\n");
+    out.push_str("@plum_stat_b_str = global i64 0\n");
+    out.push_str("@plum_stat_n_closure = global i64 0\n");
+    out.push_str("@plum_stat_b_closure = global i64 0\n");
+    out.push_str("declare i32 @dprintf(i32, ptr, ...)\n");
+    out.push_str(&c_string_constant("@.plum_stats_env", "PLUM_ALLOC_STATS"));
+    out.push_str(&c_string_constant(
+        "@.plum_stats_fmt",
+        "[plum-alloc] ctor n=%lld b=%lld | array n=%lld b=%lld | str n=%lld b=%lld | closure n=%lld b=%lld\n",
+    ));
+    out.push_str(
+        "define void @plum_dump_alloc_stats() {\n\
+         entry:\n\
+         \x20 %e = call ptr @getenv(ptr @.plum_stats_env)\n\
+         \x20 %off = icmp eq ptr %e, null\n\
+         \x20 br i1 %off, label %done, label %print\n\
+         print:\n\
+         \x20 %n1 = load i64, ptr @plum_stat_n_ctor\n\
+         \x20 %b1 = load i64, ptr @plum_stat_b_ctor\n\
+         \x20 %n2 = load i64, ptr @plum_stat_n_array\n\
+         \x20 %b2 = load i64, ptr @plum_stat_b_array\n\
+         \x20 %n3 = load i64, ptr @plum_stat_n_str\n\
+         \x20 %b3 = load i64, ptr @plum_stat_b_str\n\
+         \x20 %n4 = load i64, ptr @plum_stat_n_closure\n\
+         \x20 %b4 = load i64, ptr @plum_stat_b_closure\n\
+         \x20 %r = call i32 (i32, ptr, ...) @dprintf(i32 2, ptr @.plum_stats_fmt, i64 %n1, i64 %b1, i64 %n2, i64 %b2, i64 %n3, i64 %b3, i64 %n4, i64 %b4)\n\
+         \x20 br label %done\n\
+         done:\n\
+         \x20 ret void\n\
+         }\n\n",
+    );
+    out.push_str(
+        "@llvm.global_dtors = appending global [1 x { i32, ptr, ptr }] \
+         [{ i32, ptr, ptr } { i32 65535, ptr @plum_dump_alloc_stats, ptr null }]\n\n",
+    );
+
     // Shared by every runtime-checked failure (bounds/emptiness checks
     // — see `codegen.rs`'s `emit_bounds_check` — there's no compile-
     // time-provable-exhaustive case like `Match`'s `unreachable` for
@@ -874,18 +942,20 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
          }\n\n",
     );
 
-    out.push_str(
-        "define ptr @plum_alloc(i64 %tag, i64 %num_fields) {\n\
+    out.push_str(&format!(
+        "define ptr @plum_alloc(i64 %tag, i64 %num_fields) {{\n\
          entry:\n\
          \x20 %fields_bytes = mul i64 %num_fields, 8\n\
          \x20 %size = add i64 %fields_bytes, 16\n\
+         {}\
          \x20 %p = call ptr @malloc(i64 %size)\n\
          \x20 store i64 1, ptr %p\n\
          \x20 %tag_addr = getelementptr i8, ptr %p, i64 8\n\
          \x20 store i64 %tag, ptr %tag_addr\n\
          \x20 ret ptr %p\n\
-         }\n\n",
-    );
+         }}\n\n",
+        alloc_stat_bump("ctor", "%size")
+    ));
 
     out.push_str(
         "define void @plum_rc_inc(ptr %p) {\n\
@@ -1057,11 +1127,12 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     // heap-shaped fields, so — unlike `plum_rc_dec` — `plum_rc_dec_str`
     // needs no `plum_release_fields`-style recursive step at all: at
     // refcount zero it just frees directly.
-    out.push_str(
-        "define ptr @plum_alloc_str(i64 %len) {\n\
+    out.push_str(&format!(
+        "define ptr @plum_alloc_str(i64 %len) {{\n\
          entry:\n\
          \x20 %bytes_and_nul = add i64 %len, 1\n\
          \x20 %size = add i64 %bytes_and_nul, 16\n\
+         {}\
          \x20 %p = call ptr @malloc(i64 %size)\n\
          \x20 store i64 1, ptr %p\n\
          \x20 %len_addr = getelementptr i8, ptr %p, i64 8\n\
@@ -1070,8 +1141,9 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
          \x20 %nul_addr2 = getelementptr i8, ptr %nul_addr, i64 %len\n\
          \x20 store i8 0, ptr %nul_addr2\n\
          \x20 ret ptr %p\n\
-         }\n\n",
-    );
+         }}\n\n",
+        alloc_stat_bump("str", "%size")
+    ));
 
     out.push_str(
         "define void @plum_rc_dec_str(ptr %p) {\n\
@@ -2014,7 +2086,7 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     out.push_str("  %nbytes_slot = alloca i64\n");
     out.push_str("  %cp = call i64 @plum_utf8_decode(ptr %sbase, i64 %pos2, ptr %nbytes_slot)\n");
     out.push_str("  %off = mul i64 %idx, 8\n");
-    out.push_str("  %byteoff = add i64 %off, 16\n");
+    out.push_str("  %byteoff = add i64 %off, 24\n");
     out.push_str("  %eaddr = getelementptr i8, ptr %arr, i64 %byteoff\n");
     out.push_str("  store i64 %cp, ptr %eaddr\n");
     out.push_str("  %nbytes = load i64, ptr %nbytes_slot\n");
@@ -2093,7 +2165,7 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     out.push_str("  call ptr @memcpy(ptr %piece_dst, ptr %piece_src, i64 %piecelen)\n");
     out.push_str("  %pword = ptrtoint ptr %piece_cell to i64\n");
     out.push_str("  %poff = mul i64 %idx, 8\n");
-    out.push_str("  %pbyteoff = add i64 %poff, 16\n");
+    out.push_str("  %pbyteoff = add i64 %poff, 24\n");
     out.push_str("  %paddr = getelementptr i8, ptr %arr, i64 %pbyteoff\n");
     out.push_str("  store i64 %pword, ptr %paddr\n");
     out.push_str("  br label %found_piece\n");
@@ -2112,7 +2184,7 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     out.push_str("  call ptr @memcpy(ptr %last_dst, ptr %last_src, i64 %lastlen)\n");
     out.push_str("  %lword = ptrtoint ptr %last_cell to i64\n");
     out.push_str("  %loff = mul i64 %idx, 8\n");
-    out.push_str("  %lbyteoff = add i64 %loff, 16\n");
+    out.push_str("  %lbyteoff = add i64 %loff, 24\n");
     out.push_str("  %laddr = getelementptr i8, ptr %arr, i64 %lbyteoff\n");
     out.push_str("  store i64 %lword, ptr %laddr\n");
     out.push_str("  ret ptr %arr\n");
@@ -2134,7 +2206,7 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     out.push_str("  %piece_count2 = add i64 %echars2, 2\n");
     out.push_str("  %arr2 = call ptr @plum_alloc_array(i64 %piece_count2)\n");
     out.push_str("  %word0 = ptrtoint ptr %empty0 to i64\n");
-    out.push_str("  %addr0 = getelementptr i8, ptr %arr2, i64 16\n");
+    out.push_str("  %addr0 = getelementptr i8, ptr %arr2, i64 24\n");
     out.push_str("  store i64 %word0, ptr %addr0\n");
     out.push_str("  br label %esplit_check\n");
     out.push_str("esplit_check:\n");
@@ -2150,7 +2222,7 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     out.push_str("  call ptr @memcpy(ptr %echar_dst, ptr %echar_src, i64 %eclen3)\n");
     out.push_str("  %eword3 = ptrtoint ptr %echar_cell to i64\n");
     out.push_str("  %eoff3 = mul i64 %eidx3, 8\n");
-    out.push_str("  %ebyteoff3 = add i64 %eoff3, 16\n");
+    out.push_str("  %ebyteoff3 = add i64 %eoff3, 24\n");
     out.push_str("  %eaddr3 = getelementptr i8, ptr %arr2, i64 %ebyteoff3\n");
     out.push_str("  store i64 %eword3, ptr %eaddr3\n");
     out.push_str("  %epos3_next = add i64 %epos3, %eclen3\n");
@@ -2160,7 +2232,7 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     out.push_str("  %empty_tail = call ptr @plum_alloc_str(i64 0)\n");
     out.push_str("  %tword3 = ptrtoint ptr %empty_tail to i64\n");
     out.push_str("  %toff3 = mul i64 %eidx3, 8\n");
-    out.push_str("  %tbyteoff3 = add i64 %toff3, 16\n");
+    out.push_str("  %tbyteoff3 = add i64 %toff3, 24\n");
     out.push_str("  %taddr3 = getelementptr i8, ptr %arr2, i64 %tbyteoff3\n");
     out.push_str("  store i64 %tword3, ptr %taddr3\n");
     out.push_str("  ret ptr %arr2\n");
@@ -2168,29 +2240,46 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
 
     // --- array runtime ---
     //
-    // Cell layout: `{ i64 refcount, i64 len, <elemTy word> elements[len] }`
-    // — structurally identical to a `Ctor` cell (refcount + one more
-    // `i64` + N words), so `field_byte_offset`/`store_field_word`/
-    // `load_field_word` (codegen.rs) are reused UNCHANGED for arrays,
-    // just called with a runtime-variable index instead of a
-    // statically-bounded one. Kept as its own dedicated allocator
-    // (rather than reusing `@plum_alloc`, which takes a TAG) purely for
-    // readability of the generated IR — it avoids "tag" terminology
-    // leaking into array-context error messages/variable names, even
-    // though the two functions' bodies are otherwise identical in
-    // shape.
-    out.push_str(
-        "define ptr @plum_alloc_array(i64 %len) {\n\
+    // Cell layout: `{ i64 refcount, i64 len, i64 capacity, <elemTy word>
+    // elements[capacity] }` — a 3-word header, ONE word wider than a
+    // `Ctor` cell's 2-word one (`field_byte_offset`/`store_field_word`/
+    // `load_field_word`, codegen.rs, are still reused UNCHANGED for
+    // ordinary struct/enum/tuple cells — those never grow, so they have
+    // no use for a `capacity` field at all; `array_elem_byte_offset`/
+    // `store_array_elem_static`/`array_elem_addr` are arrays' own
+    // dedicated counterparts instead). The extra field exists so real
+    // amortized-growth `.push()` (`ArrayPushReuse`'s own codegen) has
+    // somewhere to remember how many element slots are ALREADY
+    // allocated, separate from how many are currently in use — without
+    // it, every single push had to `realloc` to the exact new size,
+    // making a tight accumulation loop O(n^2) instead of O(n) even when
+    // uniquely owned (a real, serious bug found and fixed together with
+    // this layout change — see DESIGN.md's "Array push scaling bug"
+    // section for the full story). `capacity` starts equal to `len`
+    // here (an exact-fit allocation, no wasted memory for a one-shot
+    // array construction) — growth headroom is only ever reserved
+    // LATER, by `.push()` itself, when a cell is actually being grown
+    // incrementally. Kept as its own dedicated allocator (rather than
+    // reusing `@plum_alloc`, which takes a TAG) purely for readability
+    // of the generated IR — it avoids "tag" terminology leaking into
+    // array-context error messages/variable names, even though the two
+    // functions' bodies are otherwise similar in shape.
+    out.push_str(&format!(
+        "define ptr @plum_alloc_array(i64 %len) {{\n\
          entry:\n\
          \x20 %elems_bytes = mul i64 %len, 8\n\
-         \x20 %size = add i64 %elems_bytes, 16\n\
+         \x20 %size = add i64 %elems_bytes, 24\n\
+         {}\
          \x20 %p = call ptr @malloc(i64 %size)\n\
          \x20 store i64 1, ptr %p\n\
          \x20 %len_addr = getelementptr i8, ptr %p, i64 8\n\
          \x20 store i64 %len, ptr %len_addr\n\
+         \x20 %cap_addr = getelementptr i8, ptr %p, i64 16\n\
+         \x20 store i64 %len, ptr %cap_addr\n\
          \x20 ret ptr %p\n\
-         }\n\n",
-    );
+         }}\n\n",
+        alloc_stat_bump("array", "%size")
+    ));
 
     // --- closure runtime ---
     //
@@ -2214,14 +2303,19 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     // narrow) purely for readability, same precedent as `@plum_alloc_
     // array` itself.
     out.push_str(
-        "define ptr @plum_alloc_closure(i64 %num_captured) {\n\
-         entry:\n\
-         \x20 %captured_bytes = mul i64 %num_captured, 8\n\
-         \x20 %size = add i64 %captured_bytes, 24\n\
-         \x20 %p = call ptr @malloc(i64 %size)\n\
-         \x20 store i64 1, ptr %p\n\
-         \x20 ret ptr %p\n\
-         }\n\n",
+        format!(
+            "define ptr @plum_alloc_closure(i64 %num_captured) {{\n\
+             entry:\n\
+             \x20 %captured_bytes = mul i64 %num_captured, 8\n\
+             \x20 %size = add i64 %captured_bytes, 24\n\
+             {}\
+             \x20 %p = call ptr @malloc(i64 %size)\n\
+             \x20 store i64 1, ptr %p\n\
+             \x20 ret ptr %p\n\
+             }}\n\n",
+            alloc_stat_bump("closure", "%size")
+        )
+        .as_str(),
     );
 
     // ONE shared dec function for EVERY closure shape — mirroring
@@ -2314,7 +2408,7 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     out.push_str("  call ptr @memcpy(ptr %dst, ptr %arg_ptr, i64 %alen)\n");
     out.push_str("  %word = ptrtoint ptr %cell to i64\n");
     out.push_str("  %off = mul i64 %i, 8\n");
-    out.push_str("  %byteoff = add i64 %off, 16\n");
+    out.push_str("  %byteoff = add i64 %off, 24\n");
     out.push_str("  %eaddr = getelementptr i8, ptr %arr, i64 %byteoff\n");
     out.push_str("  store i64 %word, ptr %eaddr\n");
     out.push_str("  %i_next = add i64 %i, 1\n");
@@ -2339,6 +2433,42 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
 /// fields`'s per-struct-tag `icmp` chain: each element type gets one
 /// small, direct function, decrementing (and, at zero, freeing) an
 /// array cell of exactly that shape.
+/// A NUL-terminated LLVM string constant with its length computed rather
+/// than hand-counted — `[7 x i8] c"C.utf8\00"`-style declarations get the
+/// array length wrong the moment the text is edited, and `clang` rejects
+/// the mismatch, so anything longer than a word or two is safer built
+/// here. Non-printable bytes (and `"`/`\`) are emitted in LLVM's `\XX`
+/// hex form.
+fn c_string_constant(name: &str, text: &str) -> String {
+    let mut bytes = text.as_bytes().to_vec();
+    bytes.push(0);
+    let escaped: String = bytes
+        .iter()
+        .map(|b| {
+            if b.is_ascii_graphic() && *b != b'"' && *b != b'\\' || *b == b' ' {
+                (*b as char).to_string()
+            } else {
+                format!("\\{b:02X}")
+            }
+        })
+        .collect();
+    format!("{name} = private unnamed_addr constant [{} x i8] c\"{escaped}\"\n", bytes.len())
+}
+
+/// Emits the counter bump for one allocator — see `emit_runtime`'s own
+/// allocation-statistics block for why these exist. `size_reg` must
+/// already hold the byte count this allocation is about to request.
+fn alloc_stat_bump(kind: &str, size_reg: &str) -> String {
+    format!(
+        "  %stat_n = load i64, ptr @plum_stat_n_{kind}\n\
+         \x20 %stat_n2 = add i64 %stat_n, 1\n\
+         \x20 store i64 %stat_n2, ptr @plum_stat_n_{kind}\n\
+         \x20 %stat_b = load i64, ptr @plum_stat_b_{kind}\n\
+         \x20 %stat_b2 = add i64 %stat_b, {size_reg}\n\
+         \x20 store i64 %stat_b2, ptr @plum_stat_b_{kind}\n"
+    )
+}
+
 fn emit_array_release_fns(needed: &HashMap<String, CgType>) -> String {
     let mut out = String::new();
     // Sorted purely for reproducible `.ll` output across runs, same
@@ -2372,7 +2502,7 @@ fn emit_array_release_fns(needed: &HashMap<String, CgType>) -> String {
                 out.push_str("  br i1 %continue, label %loop_body, label %after_loop\n");
                 out.push_str("loop_body:\n");
                 out.push_str("  %word_off = mul i64 %i, 8\n");
-                out.push_str("  %byte_off = add i64 %word_off, 16\n");
+                out.push_str("  %byte_off = add i64 %word_off, 24\n");
                 out.push_str("  %elem_addr = getelementptr i8, ptr %p, i64 %byte_off\n");
                 out.push_str("  %elem_word = load i64, ptr %elem_addr\n");
                 out.push_str("  %elem_ptr = inttoptr i64 %elem_word to ptr\n");
@@ -2425,7 +2555,7 @@ fn emit_array_eq_fns(needed: &HashMap<String, CgType>) -> String {
         out.push_str("  br i1 %continue, label %loop_body, label %equal\n");
         out.push_str("loop_body:\n");
         out.push_str("  %word_off = mul i64 %i, 8\n");
-        out.push_str("  %byte_off = add i64 %word_off, 16\n");
+        out.push_str("  %byte_off = add i64 %word_off, 24\n");
         out.push_str("  %a_elem_addr = getelementptr i8, ptr %a, i64 %byte_off\n");
         out.push_str("  %a_elem_word = load i64, ptr %a_elem_addr\n");
         out.push_str("  %b_elem_addr = getelementptr i8, ptr %b, i64 %byte_off\n");
@@ -2514,7 +2644,7 @@ fn emit_array_to_string_fns(needed: &HashMap<String, CgType>) -> String {
         body.push_str("render_elem:\n");
         body.push_str(&format!("  %acc_before_elem = phi ptr [ %acc, %loop_body ], [ {acc_with_sep}, %add_sep ]\n"));
         body.push_str("  %word_off = mul i64 %i, 8\n");
-        body.push_str("  %byte_off = add i64 %word_off, 16\n");
+        body.push_str("  %byte_off = add i64 %word_off, 24\n");
         body.push_str("  %elem_addr = getelementptr i8, ptr %p, i64 %byte_off\n");
         body.push_str("  %elem_word = load i64, ptr %elem_addr\n");
         let mut current_block = "render_elem".to_string();
@@ -2977,7 +3107,7 @@ fn emit_deepcopy_array_fns(needed: &HashMap<String, CgType>) -> String {
                 out.push_str("  br i1 %continue, label %loop_body, label %after_loop\n");
                 out.push_str("loop_body:\n");
                 out.push_str("  %word_off = mul i64 %i, 8\n");
-                out.push_str("  %byte_off = add i64 %word_off, 16\n");
+                out.push_str("  %byte_off = add i64 %word_off, 24\n");
                 out.push_str("  %elem_addr = getelementptr i8, ptr %p, i64 %byte_off\n");
                 out.push_str("  %elem_word = load i64, ptr %elem_addr\n");
                 out.push_str("  %elem_ptr = inttoptr i64 %elem_word to ptr\n");
@@ -2992,8 +3122,8 @@ fn emit_deepcopy_array_fns(needed: &HashMap<String, CgType>) -> String {
             }
             None => {
                 out.push_str("  %bytes = mul i64 %len, 8\n");
-                out.push_str("  %src = getelementptr i8, ptr %p, i64 16\n");
-                out.push_str("  %dst = getelementptr i8, ptr %new, i64 16\n");
+                out.push_str("  %src = getelementptr i8, ptr %p, i64 24\n");
+                out.push_str("  %dst = getelementptr i8, ptr %new, i64 24\n");
                 out.push_str("  call ptr @memcpy(ptr %dst, ptr %src, i64 %bytes)\n");
                 out.push_str("  ret ptr %new\n");
             }
