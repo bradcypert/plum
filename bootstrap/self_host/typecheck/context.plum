@@ -33,37 +33,121 @@ let fail_ctx (msg: String): Unit = panic_raw("self-hosted type checker: ".concat
 
 // --- Building the context from a whole program's declarations ---
 
-pub let build_context (program: parser.ProgramNode): TyContext = collect_decls_acc(program.items, 0, TyContext { structs: [], enums: [] })
+// TWO passes, not one — declaration types are mutually and
+// SELF-referential, so no single in-order pass can work. `pub enum ITy
+// { .. ITFunction(Array[ITy], ITy) .. }` (this very type checker's own
+// `types.plum`) mentions `ITy` inside `ITy`'s own payload, and a
+// single-pass build resolves each variant's payload against the context
+// as it existed BEFORE that enum was added — so the self-reference
+// failed with "unknown type: ITy". The same happened for every
+// self-hosted source (`Ty` in parser.plum, `Value` in interp.plum,
+// `InterpPiece` in lexer.plum), which is what blocked `./sh check` from
+// running on this project's own code at all.
+//
+// Pass 1 registers every declaration's NAME and its own generic
+// parameters, with empty fields/variants. Pass 2 then resolves every
+// field/payload annotation against that COMPLETE name set, so forward
+// and self references both resolve. Resolution only ever needs names
+// and arity (`resolve_named` looks up `find_struct`/`find_enum`), never
+// the field types themselves, which is exactly why the placeholder pass
+// is sufficient rather than needing a fixpoint.
+//
+// This is the same Phase-1/Phase-2 split the real compiler uses, and
+// the one `infer.plum`'s own top comment notes it could SKIP for
+// FUNCTIONS (their signatures are required to be fully annotated, so
+// they're all known before any body is checked). Types get no such
+// escape: a declaration's shape is only knowable from the declaration
+// itself, so the split is unavoidable here.
+pub let build_context (program: parser.ProgramNode): TyContext = {
+    let names_only = collect_names_acc(program.items, 0, builtin_context(()));
+    resolve_decls_acc(program.items, 0, names_only, builtin_context(()))
+}
 
-let collect_decls_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext): TyContext =
+// `Option[T]`/`Result[T, E]` are declared in the real compiler's PRELUDE
+// (see `plumc`'s `STDLIB_*_SRC`), not in any file this checker is handed
+// — but they're referenced pervasively by ordinary Plum source, so a
+// checker that doesn't know them can't check anything real. Seeded into
+// BOTH passes so their variant tags (`Some`/`None`/`Ok`/`Err`) resolve
+// through the same `find_variant` path a user-declared enum's tags do,
+// with no special-casing anywhere else.
+//
+// Deliberately NOT a general prelude import: this is the two enums whose
+// absence actually blocks checking, hand-written, rather than a
+// mechanism for loading the real prelude's ~1,500 lines. Extending this
+// list is the right move when a specific missing declaration blocks a
+// specific real program, matching how every other v1 scope decision in
+// this bootstrap has been made.
+let builtin_context (unit: Unit): TyContext = TyContext {
+    structs: [],
+    enums: [
+        EnumInfo {
+            name: "Option",
+            generics: ["T"],
+            variants: [
+                VariantInfo { tag: "Some", enum_name: "Option", payload: [ITParam("T")] },
+                VariantInfo { tag: "None", enum_name: "Option", payload: [] },
+            ],
+        },
+        EnumInfo {
+            name: "Result",
+            generics: ["T", "E"],
+            variants: [
+                VariantInfo { tag: "Ok", enum_name: "Result", payload: [ITParam("T")] },
+                VariantInfo { tag: "Err", enum_name: "Result", payload: [ITParam("E")] },
+            ],
+        },
+    ],
+}
+
+let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext): TyContext =
     if i >= items.len() { ctx }
     else {
         match items[i].kind {
-            IKStruct(decl) => collect_decls_acc(items, i + 1, add_struct(ctx, decl)),
-            IKEnum(decl) => collect_decls_acc(items, i + 1, add_enum(ctx, decl)),
-            _ => collect_decls_acc(items, i + 1, ctx),
+            IKStruct(decl) => collect_names_acc(items, i + 1, TyContext {
+                structs: ctx.structs.push(StructInfo { name: decl.name, generics: Array.map(decl.generics, |g| g.name), fields: [] }),
+                enums: ctx.enums,
+            }),
+            IKEnum(decl) => collect_names_acc(items, i + 1, TyContext {
+                structs: ctx.structs,
+                enums: ctx.enums.push(EnumInfo { name: decl.name, generics: Array.map(decl.generics, |g| g.name), variants: [] }),
+            }),
+            _ => collect_names_acc(items, i + 1, ctx),
         }
     }
 
-let add_struct (ctx: TyContext) (decl: parser.StructDeclNode): TyContext = {
+let resolve_decls_acc (items: Array[parser.ItemNode]) (i: Int) (names: TyContext) (out: TyContext): TyContext =
+    if i >= items.len() { out }
+    else {
+        match items[i].kind {
+            IKStruct(decl) => resolve_decls_acc(items, i + 1, names, add_struct(names, out, decl)),
+            IKEnum(decl) => resolve_decls_acc(items, i + 1, names, add_enum(names, out, decl)),
+            _ => resolve_decls_acc(items, i + 1, names, out),
+        }
+    }
+
+// `names` is the complete pass-1 name set that annotations resolve
+// AGAINST; `out` is the fully-resolved context being accumulated. Two
+// separate contexts on purpose — resolving against `out` would
+// reintroduce the in-order dependency this split exists to remove.
+let add_struct (names: TyContext) (out: TyContext) (decl: parser.StructDeclNode): TyContext = {
     // A struct's OWN declared generic names are already fully known
     // from its own declaration — resolving its fields' annotations
     // needs no fresh-var bootstrapping the way a mutually-recursive
     // FUNCTION signature would (see `infer.plum`'s own top comment for
     // that same reasoning, applied to functions instead of structs).
     let generic_names = Array.map(decl.generics, |g| g.name);
-    let fields = Array.map(decl.fields, |f| StructFieldTemplate { name: f.name, ty: resolve_ann(ctx, generic_names, f.ty) });
-    TyContext { structs: ctx.structs.push(StructInfo { name: decl.name, generics: generic_names, fields: fields }), enums: ctx.enums }
+    let fields = Array.map(decl.fields, |f| StructFieldTemplate { name: f.name, ty: resolve_ann(names, generic_names, f.ty) });
+    TyContext { structs: out.structs.push(StructInfo { name: decl.name, generics: generic_names, fields: fields }), enums: out.enums }
 }
 
-let add_enum (ctx: TyContext) (decl: parser.EnumDeclNode): TyContext = {
+let add_enum (names: TyContext) (out: TyContext) (decl: parser.EnumDeclNode): TyContext = {
     let generic_names = Array.map(decl.generics, |g| g.name);
     let variants = Array.map(decl.variants, |v| VariantInfo {
         tag: v.name,
         enum_name: decl.name,
-        payload: Array.map(v.payload, |t| resolve_ann(ctx, generic_names, t)),
+        payload: Array.map(v.payload, |t| resolve_ann(names, generic_names, t)),
     });
-    TyContext { structs: ctx.structs, enums: ctx.enums.push(EnumInfo { name: decl.name, generics: generic_names, variants: variants }) }
+    TyContext { structs: out.structs, enums: out.enums.push(EnumInfo { name: decl.name, generics: generic_names, variants: variants }) }
 }
 
 // --- Lookups ---

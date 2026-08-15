@@ -42,6 +42,21 @@ CLI behavior noticed several times across this project, never chased
 down — see DESIGN.md) — `head -n -1` strips it the same way on both
 sides, so the comparison is apples to apples.
 
+## Self-interpretation
+
+Since 2026-08-15 these fixtures are also run through TWO interpreter
+levels — the self-hosted interpreter interpreting the self-hosted
+interpreter interpreting the fixture:
+
+```
+./sh run bootstrap/self_host run bootstrap/exec_corpus/<name>/main.plum | head -n -1
+```
+
+14/14 pass. The same mechanism runs the whole compiler under itself
+(`./sh run bootstrap/self_host check bootstrap/self_host` -> `ok`); see
+DESIGN.md's "The self-hosted interpreter now runs the whole self-hosted
+compiler" section for the four real interpreter bugs that found.
+
 ## Scope
 
 Deliberately narrower than `corpus/`'s 98-fixture grammar breadth —

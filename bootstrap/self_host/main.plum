@@ -15,13 +15,18 @@
 //   ./sh ast <file>
 //     — tokenize + parse <file>, print `parser.render_program`'s
 //     output. Validate against bootstrap/corpus/*/*.expected.
-//   ./sh run <file>
+//   ./sh run <file-or-project-dir> [args...]
 //     — tokenize + parse + TYPE-CHECK + INTERPRET <file>'s `main()`,
 //     printing whatever the program itself prints (nothing extra — no
 //     return-value echo). Matches the real `plum run`'s own order
 //     (type-check first, only interpret a program that passes) — an
 //     ill-typed program never reaches the interpreter at all, the same
 //     `fail_tc`/`panic_raw` `./sh check` alone already produces.
+//     A project DIRECTORY works too, loaded exactly the way `check`
+//     loads one, with everything after it passed to the interpreted
+//     program as its own `args()` — which is how the self-hosted
+//     compiler gets run under the self-hosted interpreter:
+//       ./sh run bootstrap/self_host check bootstrap/self_host  -> ok
 //     Validate against bootstrap/exec_corpus/*/expected.txt (14 of 15
 //     — `tuples/` fails type-checking specifically, see `typecheck_
 //     corpus/README.md`, so it no longer reaches "run" successfully
@@ -51,12 +56,83 @@ use parser;
 use interp;
 use typecheck;
 
-let usage (): Unit = println("usage: self_host (tokens|ast|run|check) <file>")
+let usage (): Unit = println("usage: self_host (tokens|ast|run) <file> | check <file-or-project-dir>")
+
+// --- Project loading (`check` only) ---
+//
+// `check` accepts a DIRECTORY as well as a single file, because a
+// module can't be type-checked alone: `parser/parser.plum` references
+// `lexer.Token`, `interp/interp.plum` references `parser.PExpr`, and so
+// on, so checking one file in isolation fails with "unknown type"
+// through no fault of the program. Given a directory, every `.plum`
+// file under it is parsed and their items CONCATENATED into one
+// program, which is then checked as a unit.
+//
+// Concatenation is the whole mechanism — no separate module namespacing
+// is needed — because `context.plum`'s `resolve_named` already keys off
+// a path's LAST segment, so `parser.PExpr` and a bare `PExpr` resolve
+// identically once both files' declarations are present. That matches
+// the flat, globally-scoped treatment variant tags already get (see
+// DESIGN.md's module-system section, which documents that as a
+// deliberate v1 boundary rather than an oversight).
+//
+// Known consequence, stated rather than discovered later: names are
+// merged flat, so two modules declaring the SAME function name are
+// indistinguishable here and the first one wins (`find_sig` scans in
+// order). The self-hosted sources only collide on identically-typed
+// helpers (`is_capitalized_name`, `UPPERCASE_CHARS`), so this is
+// currently harmless — but it is a real limitation, not a proof of
+// correctness.
+let parse_file_items (path: String): Array[parser.ItemNode] =
+    match read_file(path) {
+        Ok(src) => parser.parse_program(lexer.tokenize(src)).items,
+        Err(e) => { panic_raw("failed to read ".concat(path).concat(": ").concat(e)); [] },
+    }
+
+let collect_path_items (path: String): Array[parser.ItemNode] =
+    if Result.unwrap_or(is_directory(path), false) {
+        collect_entries(path, Result.unwrap_or(list_dir(path), []), 0, [])
+    } else if path.ends_with(".plum") {
+        parse_file_items(path)
+    } else {
+        []
+    }
+
+// `.`/`..` are skipped explicitly — `list_dir` surfaces raw `readdir`
+// entries, so descending into them would recurse forever.
+let collect_entries (dir: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
+    if i >= entries.len() { acc }
+    else if entries[i] == "." || entries[i] == ".." { collect_entries(dir, entries, i + 1, acc) }
+    else {
+        let full = dir.concat("/").concat(entries[i]);
+        collect_entries(dir, entries, i + 1, Array.concat(acc, collect_path_items(full)))
+    }
 
 let main (): Unit = {
     let argv = args();
     if argv.len() < 2 {
         usage(());
+    } else if argv[0] == "check" {
+        // Handled before `read_file` below: the argument may be a
+        // DIRECTORY, which `read_file` can't open at all.
+        typecheck.check_program(parser.ProgramNode { items: collect_path_items(argv[1]) });
+        println("ok");
+    } else if argv[0] == "run" && Result.unwrap_or(is_directory(argv[1]), false) {
+        // Same directory-loading path `check` uses, for the same
+        // reason: a module can't be RUN alone either — `main.plum`'s
+        // `main` calls into `lexer`/`parser`/`interp`/`typecheck`, so
+        // every module's items have to be present in the one program
+        // this interpreter walks. Concatenation is again the whole
+        // mechanism (`find_fn` scans a flat list, exactly as
+        // `find_sig` does), with the same flat-namespace consequence.
+        let program = parser.ProgramNode { items: collect_path_items(argv[1]) };
+        typecheck.check_program(program);
+        // Everything after the project directory becomes the
+        // INTERPRETED program's own `args()` — so `./sh run bootstrap/
+        // self_host ast foo.plum` runs the self-hosted compiler under
+        // the self-hosted interpreter and asks IT for `foo.plum`'s AST.
+        let state = interp.build_program_state_argv(program, Array.slice(argv, 2, argv.len()));
+        interp.run_main(state);
     } else {
         match read_file(argv[1]) {
             Err(e) => println("failed to read file: ".concat(e)),
@@ -70,10 +146,6 @@ let main (): Unit = {
                     typecheck.check_program(program);
                     let state = interp.build_program_state(program);
                     interp.run_main(state);
-                } else if argv[0] == "check" {
-                    let program = parser.parse_program(lexer.tokenize(src));
-                    typecheck.check_program(program);
-                    println("ok");
                 } else {
                     usage(());
                 }

@@ -7918,3 +7918,255 @@ whose unit test passed while the real pipeline still emitted a
 per-iteration `Inc`. The allocation counters (`PLUM_ALLOC_STATS=1`) and
 reading actual generated LLVM are what turned each one from speculation
 into a specific line to change.
+
+## Self-hosted type checker checks its own lexer (2026-08-15)
+
+`./sh check` previously failed on every self-hosted source. Three fixes,
+each found by running it and reading the actual error rather than
+guessing:
+
+**1. Two-pass context building.** `build_context` resolved each
+declaration's field/payload annotations against the context as it
+existed BEFORE that declaration was added — so `pub enum ITy { ..
+ITFunction(Array[ITy], ITy) .. }` (this checker's own `types.plum`)
+failed with "unknown type: ITy" on its own self-reference. Every
+self-hosted source hit this (`Ty` in parser.plum, `Value` in
+interp.plum, `InterpPiece` in lexer.plum). Now pass 1 registers every
+declaration's NAME and generic parameters with empty fields, and pass 2
+resolves annotations against that complete set. No fixpoint is needed
+because resolution only ever consults names and arity, never field
+types. This is the same Phase-1/Phase-2 split the real compiler uses —
+and the one `infer.plum` could legitimately SKIP for functions (their
+signatures must be fully annotated, so all are known up front); types
+get no such escape, since a declaration's shape is knowable only from
+the declaration itself.
+
+**2. Builtin declarations and signatures.** `Option[T]`/`Result[T, E]`
+live in the real compiler's prelude, not in any file the checker is
+handed, so they're seeded into both context passes — their variant tags
+then resolve through the same `find_variant` path a user enum's do,
+with no special-casing. Prelude FUNCTIONS got the same treatment via a
+`builtin_sig` table written as ordinary generic `FnSig`s, so
+`infer_fn_call`'s existing instantiate-with-fresh-vars path handles
+them unchanged: `Option.unwrap_or[T](Option[T], T) -> T` checks through
+exactly the code a user's own generic function does. Only the ~16
+builtins the self-hosted sources actually call are listed (counted, not
+guessed).
+
+**3. `()` is the Unit value, not a 0-tuple.** The parser emits
+`ETuple([])` for it (there is no separate unit-literal node), so
+`usage(())` against `let usage (): Unit` failed as "() != Unit".
+`infer_tuple` now maps the empty case to `ITUnit`, matching what
+`resolve_param_ty` already did for the Unit *pattern*.
+
+**Result**: `./sh check bootstrap/self_host/lexer/lexer.plum` → `ok`.
+The self-hosted type checker fully checks its own sibling stage — 25KB
+of real Plum, including generic builtin instantiation. Verified not to
+be a vacuous pass: injecting a wrong return type yields "function
+is_digit_char: declared return type Int doesn't match body type Bool",
+and `Array.contains(PLUM_DIGIT_CHARS, 42)` yields "argument 1: Int !=
+String" (i.e. `T` correctly instantiated to `String` from the array).
+No regressions: 5/5 typecheck_corpus still rejected with unchanged
+messages, 13/13 exec_corpus check AND run, 196/196 corpus.
+
+**The remaining blocker is module resolution, and it is the only one
+for 5 of 7 files.** `./sh check` reads a single file, but `parser.plum`
+references `lexer.Token`, `interp.plum` references `parser.PExpr`, and
+`main.plum` calls `lexer.tokenize` — so they fail with "unknown type:
+Token" / "unbound variable: lexer". Note `resolve_named` already
+strips the module qualifier (it keys off the last path segment), so the
+missing piece is purely *loading* the modules a file `use`s and merging
+their public declarations, not resolving qualified names. `types.plum`
+is the one non-module failure left: a genuine field-access inference
+gap ("field access requires a struct value with a statically known
+type"), the same constraint the real compiler documents.
+
+## The self-hosted type checker now checks the whole self-hosted compiler (2026-08-15)
+
+`./sh check bootstrap/self_host` → `ok`. All 7 modules, ~250KB of Plum,
+type-checked as one program by the type checker written in Plum —
+including `typecheck/` checking itself. Four more fixes on top of the
+two-pass context work:
+
+**1. Module loading (`check` accepts a directory).** A module can't be
+checked alone — `parser.plum` references `lexer.Token`, `interp.plum`
+references `parser.PExpr` — so `check` now walks a directory, parses
+every `.plum` file under it, and CONCATENATES their items into one
+program. Concatenation is the entire mechanism: `resolve_named` already
+keys off a path's last segment, so `parser.PExpr` and a bare `PExpr`
+resolve identically once both files' declarations are present. (`.`/`..`
+are skipped explicitly — `list_dir` returns raw `readdir` entries.)
+
+**2. Module-qualified CALLS.** `lexer.tokenize(src)` parses as a field
+access on `lexer`, which isn't a value. Resolution order in `infer_call`
+is now: bound local/global (a real value → ordinary method call, so a
+local can never be shadowed by a module) → builtin namespace → merged
+top-level signature (the module-qualified case) → method call. Reached
+only when the qualifier names no value, so it cannot swallow a genuine
+record-of-closures field call.
+
+**3. Closure-param-type seeding.** `Array.filter(self_s.entries, |e| ..
+e.id ..)` (real code in `types.plum`) inferred the closure BODY before
+unifying the closure against `(ElemTy) -> Bool`, leaving `e` an
+unresolved variable at `e.id` — and field access genuinely cannot be
+deferred, since it needs a concrete struct to look the field up in. Now
+`Array.map`/`filter`/`fold` seed a closure LITERAL's parameter types
+from the already-known element type before inferring its body. This is
+the same inference-ordering problem the real compiler hit twice (see the
+language-ergonomics chunk) arriving in the self-hosted checker.
+
+**4. A real false positive from flat merging.** Merging modules into one
+namespace made `bind_params` ambiguous — `interp.plum` binds runtime
+VALUES, `infer.plum` binds parameter TYPES, same name, different
+signatures — so the checker rejected a program the real compiler accepts
+(modules scope those names properly). Renamed `infer.plum`'s to
+`bind_param_types`, which is the clearer name anyway. **This is a
+workaround, not a fix**: the self-hosted checker has a flat top-level
+namespace and will reject any valid program with same-named functions in
+different modules. Only 4 names collide across the current sources, and
+the other 3 (`quote`, `escape_str_chars`, `is_capitalized_name`) are
+identically-typed so first-wins is harmless. Proper per-module scoping
+is the real fix and is not done.
+
+**Verified not vacuous.** Against a copy of the tree, three injected
+errors were each caught: a wrong return type deep in `parser.plum`
+("function is_at_eof: declared return type Int doesn't match body type
+Bool"), a CROSS-MODULE argument error (`lexer.tokenize(42)` →
+"argument 0: Int != String", proving module resolution really does check
+across boundaries), and a bad field on a struct declared in another
+module ("struct ItemResult has no field named nonexistent_field"). The
+unmodified copy passes.
+
+No regressions: 5/5 typecheck_corpus still rejected, 13/13 exec_corpus
+check AND run, 196/196 corpus goldens, 14/14 Rust suites.
+
+**Where self-hosting stands.** Of the four stages, the front end is now
+genuinely self-applying: the lexer tokenizes itself, the parser parses
+itself, and the type checker checks all of it. What remains for true
+self-hosting is the back end — the self-hosted INTERPRETER can't yet run
+the compiler (it has no module loading of its own, and `interp.plum`'s
+own scope cuts still exclude generics), and there is no self-hosted
+codegen at all.
+
+### The self-hosted interpreter now runs the whole self-hosted compiler (2026-08-15)
+
+```
+./sh run bootstrap/self_host check bootstrap/self_host    # -> ok, 6.3s
+```
+
+That command is the self-hosted **interpreter** running the self-hosted
+**lexer**, **parser**, and **type checker** over all 7 modules of the
+self-hosted compiler — including over the interpreter's own source. All
+four stages now self-apply. The previous section listed exactly this as
+the remaining gap ("the self-hosted INTERPRETER can't yet run the
+compiler"); this closes it.
+
+**What it took.** Five changes, four of which are real bugs that only
+self-interpretation could have surfaced.
+
+*Project loading for `run`.* `./sh run <dir>` now takes a directory and
+concatenates every `.plum` file's items, exactly as `check` already did
+and for the same reason. Everything after the directory becomes the
+INTERPRETED program's own `args()` (a new `argv` field on
+`ProgramState`, threaded by `build_program_state_argv`) — that is what
+lets the inner compiler be handed `check bootstrap/self_host` as its own
+command line.
+
+*Prelude builtins.* The real `plumc` prepends a large Plum-source
+prelude that this interpreter can't parse yet (it reaches into `extern
+"C"`/`unsafe`/explicit generic instantiation). The subset the compiler
+actually uses is provided as builtins instead — `chars_of`, `chars_join`,
+`read_file`, `list_dir`, `is_directory`, `args`, `panic_raw`, plus the
+`Array`/`String`/`Option`/`Result` associated functions. Each is a
+one-liner delegating to the REAL host function of the same name, the
+same trick `VArray` already used for array primitives: the semantics are
+identical by construction rather than by re-derivation. Honestly a shim
+— it is not the prelude, it borrows it.
+
+*Module-qualified calls, `lexer.tokenize(src)`.* Resolution order is
+bound value → builtin namespace → flat top-level function → value method
+call, so a local can never be shadowed by a module and nothing can
+redefine `Array`. Same flat-namespace consequence the checker already
+documents.
+
+**Bug 1 — assignment through a nested block was silently discarded.**
+`eval_stmt_for_env` threaded the environment out of a `for` loop only;
+`if`/`match`/bare blocks in statement position evaluated their
+assignments and then threw the result away. That gap was already written
+down in this codebase as "not exercised by any exec-corpus fixture" —
+and self-interpretation exercised it in the first thirty seconds, since
+`lexer.tokenize` accumulates inside `if !done { ... }`. It produced ZERO
+tokens, silently and with no error. `if`/`match`/block now thread too,
+including a block's TAIL expression (an unterminated trailing `match`
+parses as a tail, not a statement — which is exactly the shape
+`tokenize` uses).
+
+Every threading path funnels through one new helper, `scope_out(inner,
+n)`, which cuts the environment back to the enclosing scope's length.
+That is not tidiness: `eval_stmts` only ever appends entries or `.set`s
+an existing index, so the prefix is the enclosing scope with updated
+values — and leaking an inner binding would be a genuine bug, since
+`env_assign` scans from the END and would then write a later outer
+assignment into the leaked shadow instead of the variable it names.
+
+The remaining gap is stated rather than left to be found: an assignment
+inside an expression-POSITION `if`/`match` (`let x = if c { n = n + 1; 2
+} else { 3 }`) is still lost, because `eval_expr` returns a value alone.
+Closing it means returning an (env, value) pair from every arm — a real
+refactor, not needed by anything this compiler contains.
+
+**Bug 2 — `&&`/`||` did not short-circuit.** Both operands were
+evaluated before dispatch. Every exec-corpus fixture used `&&` as a pure
+boolean combinator, where eager and lazy are indistinguishable; the
+lexer uses it as a GUARD (`int_end + 1 < chars.len() &&
+is_digit_char(chars[int_end + 1])`), where evaluating the right side
+after the left says "don't" is a real out-of-bounds index. A new
+`eval_binary_expr` takes the right operand as an unevaluated `PExpr`;
+every other operator is genuinely strict and still goes through
+`eval_binary`.
+
+**Bug 3 — `==` didn't work on compound values.** Only scalars were
+comparable, which the parser needs constantly (`tok == TokEof`).
+`values_equal` is now structural over variants, arrays, tuples, and
+structs. Closures stay excluded — function equality has no defensible
+answer and real Plum doesn't offer one.
+
+**Bug 4 — the for-loop environment grew linearly in iteration count.**
+Bindings accumulated, justified as harmless because a later iteration
+shadows an earlier one. True, but it made every `env_lookup` in a long
+loop scan the whole history. `tokenize`'s loop runs once per source
+character, so self-interpreting a 69KB file made that quadratic — the
+same accidental O(n²) this project has now hit in four separate places.
+`scope_out` fixes it and makes the loop body a real scope at the same
+time.
+
+*Checker support for the above:* `.len()` is now overloaded on the
+receiver (byte length for `Str`, element count for `Array`). This is the
+one place inference branches on an already-resolved type instead of
+unifying against one expected shape, because `Str` and `Array[?]` have
+no common unifier; an unresolved receiver still takes the array path,
+preserving every pre-existing inference exactly. `.split()`,
+`String.slice`, and `String.is_empty` were added alongside.
+
+**Verified, and verified not vacuous.**
+
+| check | result |
+| --- | --- |
+| corpus AST, self-interpreted | 98/98 |
+| corpus tokens, self-interpreted | 98/98 |
+| exec_corpus `run`, through TWO interpreter levels | 14/14 |
+| `run self_host check self_host` | ok, 6.3s |
+| corpus native | 196/196 |
+| exec_corpus native check + run | 14/14 |
+| typecheck_corpus rejections | 5/5 |
+| Rust suites | 14/14 |
+
+Injected into a copy of the tree and caught by the SELF-INTERPRETED
+checker: a wrong return type in `parser.plum`, and a cross-module
+argument error (`lexer.tokenize(42)` → "argument 0: Int != String"). The
+unmodified copy passes.
+
+**Where self-hosting stands now.** All four stages self-apply. The one
+thing still missing for true self-hosting is a self-hosted CODEGEN —
+there is no Plum-written backend at all, so the self-hosted compiler can
+check and interpret its own source but cannot produce a binary from it.

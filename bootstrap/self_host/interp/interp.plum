@@ -11,7 +11,14 @@
 //
 // Validated against bootstrap/exec_corpus/*/expected.txt — running a
 // fixture's `main()` through this interpreter must print byte-for-byte
-// what the REAL `plum run` prints for the same program.
+// what the REAL `plum run` prints for the same program. Since
+// 2026-08-15 it is also validated by SELF-INTERPRETATION: `./sh run
+// bootstrap/self_host check bootstrap/self_host` runs the whole
+// self-hosted compiler (this file included) under this interpreter.
+// That is a far harsher test than the exec corpus, and it immediately
+// found four real bugs the corpus never could — see the "Bug 1..4"
+// list in DESIGN.md's own section on it, and the `eval_stmt_for_env`/
+// `eval_binary_expr`/`values_equal` comments below.
 //
 // **Validate via the NATIVE build, not `plum run`** — same reasoning
 // as `lexer/lexer.plum`/`parser/parser.plum`'s own top comments (a
@@ -81,14 +88,26 @@ struct FnDef { name: String, params: Array[String], body: parser.PExpr }
 // enum/extern/use items are dropped entirely — nothing here needs
 // them (see this file's own top comment).
 
-struct ProgramState { fns: Array[FnDef], globals: Array[FnDef] }
+// `argv` is what the INTERPRETED program's own `args()` builtin
+// returns — NOT this process's argv. Keeping it in `ProgramState`
+// (rather than reading the host's `args()` from inside `eval_free_
+// builtin`) is what lets the interpreted program be handed its own
+// argument list, which is exactly what running the self-hosted
+// compiler under this interpreter needs: `./sh run bootstrap/self_host
+// ast foo.plum` must give the INNER `main` `["ast", "foo.plum"]`.
+struct ProgramState { fns: Array[FnDef], globals: Array[FnDef], argv: Array[String] }
 
-pub let build_program_state (program: parser.ProgramNode): ProgramState = collect_items_acc(items_of(program), 0, [], [])
+pub let build_program_state (program: parser.ProgramNode): ProgramState = build_program_state_argv(program, [])
+
+pub let build_program_state_argv (program: parser.ProgramNode) (argv: Array[String]): ProgramState = {
+    let base = collect_items_acc(items_of(program), 0, [], []);
+    ProgramState { fns: base.fns, globals: base.globals, argv: argv }
+}
 
 let items_of (program: parser.ProgramNode): Array[parser.ItemNode] = program.items
 
 let collect_items_acc (items: Array[parser.ItemNode]) (i: Int) (fns: Array[FnDef]) (globals: Array[FnDef]): ProgramState =
-    if i >= items.len() { ProgramState { fns: fns, globals: globals } }
+    if i >= items.len() { ProgramState { fns: fns, globals: globals, argv: [] } }
     else {
         match items[i].kind {
             IKLet(def) => {
@@ -205,7 +224,7 @@ pub let eval_expr (state: ProgramState) (env: Array[EnvEntry]) (e: parser.PExpr)
         EIdent(name) => eval_ident(state, env, name),
         ETuple(elems) => VTuple(eval_exprs(state, env, elems)),
         EUnary(op, inner) => eval_unary(op, eval_expr(state, env, inner)),
-        EBinary(op, lhs, rhs) => eval_binary(op, eval_expr(state, env, lhs), eval_expr(state, env, rhs)),
+        EBinary(op, lhs, rhs) => eval_binary_expr(state, env, op, lhs, rhs),
         EField(base, name) => struct_field(eval_expr(state, env, base), name),
         ECall(callee, args) => eval_call(state, env, callee, args),
         EBlock(block) => eval_block(state, env, block),
@@ -290,7 +309,13 @@ let eval_call (state: ProgramState) (env: Array[EnvEntry]) (callee: parser.PExpr
                 else if name == "__contract_require" || name == "__contract_ensure" { eval_contract_check(state, env, args) }
                 else { match find_fn(state, name) {
                     Some(def) => call_fn(state, def, eval_exprs(state, env, args)),
-                    None => if is_capitalized_name(name) { VVariant(name, eval_exprs(state, env, args)) } else { { fail_interp("unbound function: ".concat(name)); VUnit } },
+                    // A user-defined function WINS over a same-named
+                    // builtin (`find_fn` first) — the real compiler's
+                    // prelude is ordinary Plum source a program can
+                    // shadow, so a builtin standing in for a prelude
+                    // function must not be more privileged than the
+                    // prelude itself was.
+                    None => eval_free_builtin(state, env, name, args),
                 } }
             },
         },
@@ -318,7 +343,7 @@ let eval_call (state: ProgramState) (env: Array[EnvEntry]) (callee: parser.PExpr
             // `eval_ident` would otherwise happily (and wrongly)
             // construct a bogus zero-payload `VVariant("Array", [])`
             // for it, since it starts with a capital letter.
-            EIdent(ns) => if ns == "Array" { eval_array_ns_call(state, env, method_name, args) } else { eval_dot_call(state, env, base, method_name, args) },
+            EIdent(ns) => eval_qualified_call(state, env, base, ns, method_name, args),
             _ => eval_dot_call(state, env, base, method_name, args),
         },
         // General case: any other callee shape (an immediately-invoked
@@ -330,6 +355,134 @@ let eval_call (state: ProgramState) (env: Array[EnvEntry]) (callee: parser.PExpr
         },
     }
 
+// `ns.name(args)` where `ns` is a bare identifier. Four things can
+// wear that shape, and the order below is the whole point:
+//
+//   1. `reader.read(x)` — `ns` is a BOUND value holding a record of
+//      closures. Checked FIRST so a local binding can never be
+//      shadowed by a module or a builtin namespace.
+//   2. `Array.map(..)`/`String.index_of(..)`/`Option.unwrap_or(..)`/
+//      `Result.unwrap_or(..)` — a BUILTIN namespace (real Plum's
+//      `Type.func(value, ...)` associated-function convention).
+//   3. `lexer.tokenize(src)` — a MODULE-qualified call. Resolved by
+//      looking `tokenize` up in the flat top-level function list,
+//      exactly as `typecheck/context.plum`'s own `find_sig` does, and
+//      with the same documented flat-namespace consequence (see
+//      `main.plum`'s project-loading comment): two modules declaring
+//      the same function name are indistinguishable here.
+//   4. Anything else — an ordinary value method call.
+//
+// Note 2 is checked before 3 on purpose: nothing may define a module
+// named `Array`/`String`/`Option`/`Result` and expect it to win.
+let eval_qualified_call (state: ProgramState) (env: Array[EnvEntry]) (base: parser.PExpr) (ns: String) (method_name: String) (args: Array[parser.PExpr]): Value =
+    match env_lookup(env, ns) {
+        Some(_) => eval_dot_call(state, env, base, method_name, args),
+        None =>
+            if ns == "Array" { eval_array_ns_call(state, env, method_name, args) }
+            else if ns == "String" { eval_string_ns_call(state, env, method_name, eval_exprs(state, env, args)) }
+            else if ns == "Option" { eval_option_ns_call(state, env, method_name, eval_exprs(state, env, args)) }
+            else if ns == "Result" { eval_result_ns_call(state, env, method_name, eval_exprs(state, env, args)) }
+            else { match find_fn(state, method_name) {
+                Some(def) => call_fn(state, def, eval_exprs(state, env, args)),
+                None => eval_dot_call(state, env, base, method_name, args),
+            } },
+    }
+
+// --- Builtins standing in for the real compiler's PRELUDE ---
+//
+// The real `plumc` prepends a large prelude written in ordinary Plum
+// (`crates/plumc/src/lib.rs`'s `STDLIB_*_SRC`) to every program, which
+// is where `chars_of`/`String.index_of`/`Array.slice`/`read_file`/...
+// actually come from. This interpreter can't just parse that prelude
+// today — it reaches into `extern "C"`/`unsafe` blocks and explicit
+// generic instantiation, none of which this file supports (see its own
+// top comment's scope cuts). So the SUBSET the self-hosted compiler
+// itself uses is provided here as builtins instead.
+//
+// Every one of them is a one-liner delegating to the REAL host
+// function of the same name — this file is itself compiled by the real
+// compiler, so `s.index_of(n)` below is the genuine, already-tested
+// prelude implementation, not a reimplementation. Same trick `VArray`
+// already uses for array primitives. That keeps the semantics
+// identical by construction rather than by careful re-derivation, and
+// it is why this list is honestly a SHIM: it is not the prelude, it
+// just borrows it.
+let eval_free_builtin (state: ProgramState) (env: Array[EnvEntry]) (name: String) (args: Array[parser.PExpr]): Value = {
+    let vals = eval_exprs(state, env, args);
+    if name == "panic_raw" { { panic_raw(as_str(vals[0])); VUnit } }
+    else if name == "args" { VArray(Array.map(state.argv, |a| VStr(a))) }
+    else if name == "chars_of" { VArray(Array.map(chars_of(as_str(vals[0])), |c| VStr(c))) }
+    else if name == "chars_join" { VStr(chars_join(Array.map(as_array(vals[0]), |c| as_str(c)))) }
+    else if name == "string_is_ascii_ws" { VBool(string_is_ascii_ws(as_str(vals[0]))) }
+    else if name == "read_file" { match read_file(as_str(vals[0])) {
+        Ok(src) => VVariant("Ok", [VStr(src)]),
+        Err(e) => VVariant("Err", [VStr(e)]),
+    } }
+    else if name == "list_dir" { match list_dir(as_str(vals[0])) {
+        Ok(entries) => VVariant("Ok", [VArray(Array.map(entries, |e| VStr(e)))]),
+        Err(e) => VVariant("Err", [VStr(e)]),
+    } }
+    else if name == "is_directory" { match is_directory(as_str(vals[0])) {
+        Ok(b) => VVariant("Ok", [VBool(b)]),
+        Err(e) => VVariant("Err", [VStr(e)]),
+    } }
+    else if is_capitalized_name(name) { VVariant(name, vals) }
+    else { { fail_interp("unbound function: ".concat(name)); VUnit } }
+}
+
+let as_str (v: Value): String = match v { VStr(s) => s, _ => { fail_interp("expected a String"); "" } }
+let as_array (v: Value): Array[Value] = match v { VArray(elems) => elems, _ => { fail_interp("expected an Array"); [] } }
+
+let eval_string_ns_call (state: ProgramState) (env: Array[EnvEntry]) (fn_name: String) (vals: Array[Value]): Value =
+    if fn_name == "index_of" { match String.index_of(as_str(vals[0]), as_str(vals[1])) {
+        Some(i) => VVariant("Some", [VInt(i)]),
+        None => VVariant("None", []),
+    } }
+    else if fn_name == "parse_int" { match String.parse_int(as_str(vals[0])) {
+        Ok(n) => VVariant("Ok", [VInt(n)]),
+        Err(e) => VVariant("Err", [VStr(e)]),
+    } }
+    else if fn_name == "parse_float" { match String.parse_float(as_str(vals[0])) {
+        Ok(f) => VVariant("Ok", [VFloat(f)]),
+        Err(e) => VVariant("Err", [VStr(e)]),
+    } }
+    else if fn_name == "slice" { VStr(String.slice(as_str(vals[0]), as_int(vals[1]), as_int(vals[2]))) }
+    else if fn_name == "is_empty" { VBool(String.is_empty(as_str(vals[0]))) }
+    else { { fail_interp("unsupported String.".concat(fn_name).concat("(...) call")); VUnit } }
+
+// `Option`/`Result` are ordinary variant VALUES here (`VVariant("Some",
+// [v])` and friends — built by `eval_free_builtin`'s capitalized-name
+// fallback), so these unwrap/inspect them directly rather than
+// delegating to a host function: the host's own `Option[T]` can't hold
+// a `Value` without a conversion that would be strictly more code than
+// the two-line match each of these is.
+//
+// `unwrap_or`'s default is already EVALUATED by the time it gets here
+// (`eval_exprs` at the call site) — eager, matching real Plum's own
+// call-by-value semantics for a plain function argument. That is the
+// same eagerness a real `Option.unwrap_or` bug earlier in this project
+// turned on, and it is correct: `unwrap_or` is a function, not a
+// short-circuiting operator.
+let eval_option_ns_call (state: ProgramState) (env: Array[EnvEntry]) (fn_name: String) (vals: Array[Value]): Value =
+    match vals[0] {
+        VVariant(tag, payload) =>
+            if fn_name == "is_some" { VBool(tag == "Some") }
+            else if fn_name == "is_none" { VBool(tag == "None") }
+            else if fn_name == "unwrap_or" { if tag == "Some" { payload[0] } else { vals[1] } }
+            else { { fail_interp("unsupported Option.".concat(fn_name).concat("(...) call")); VUnit } },
+        _ => { fail_interp("Option.".concat(fn_name).concat("'s first argument must be an Option")); VUnit },
+    }
+
+let eval_result_ns_call (state: ProgramState) (env: Array[EnvEntry]) (fn_name: String) (vals: Array[Value]): Value =
+    match vals[0] {
+        VVariant(tag, payload) =>
+            if fn_name == "is_ok" { VBool(tag == "Ok") }
+            else if fn_name == "is_err" { VBool(tag == "Err") }
+            else if fn_name == "unwrap_or" { if tag == "Ok" { payload[0] } else { vals[1] } }
+            else { { fail_interp("unsupported Result.".concat(fn_name).concat("(...) call")); VUnit } },
+        _ => { fail_interp("Result.".concat(fn_name).concat("'s first argument must be a Result")); VUnit },
+    }
+
 // An ordinary `base.method_name(args)` call — `to_string`/`concat`
 // (any value/`String`), `len`/`push`/`set` (`Array`, arity-
 // disambiguated exactly like the real compiler's own lowering: `len`
@@ -339,7 +492,12 @@ let eval_call (state: ProgramState) (env: Array[EnvEntry]) (callee: parser.PExpr
 let eval_dot_call (state: ProgramState) (env: Array[EnvEntry]) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): Value =
     if method_name == "to_string" { VStr(value_to_display(eval_expr(state, env, base))) }
     else if method_name == "concat" { concat_strings(eval_expr(state, env, base), eval_expr(state, env, args[0])) }
-    else if method_name == "len" && Array.is_empty(args) { array_len(eval_expr(state, env, base)) }
+    else if method_name == "len" && Array.is_empty(args) { value_len(eval_expr(state, env, base)) }
+    // String predicates. `ends_with`/`starts_with`/`contains` are real
+    // builtins on the host `String`, delegated to directly.
+    else if method_name == "ends_with" && args.len() == 1 { VBool(as_str(eval_expr(state, env, base)).ends_with(as_str(eval_expr(state, env, args[0])))) }
+    else if method_name == "starts_with" && args.len() == 1 { VBool(as_str(eval_expr(state, env, base)).starts_with(as_str(eval_expr(state, env, args[0])))) }
+    else if method_name == "split" && args.len() == 1 { VArray(Array.map(as_str(eval_expr(state, env, base)).split(as_str(eval_expr(state, env, args[0]))), |p| VStr(p))) }
     else if method_name == "push" && args.len() == 1 { array_push(eval_expr(state, env, base), eval_expr(state, env, args[0])) }
     else if method_name == "set" && args.len() == 2 { array_set(eval_expr(state, env, base), eval_expr(state, env, args[0]), eval_expr(state, env, args[1])) }
     // Struct-field closure call — the record-of-closures dispatch
@@ -362,7 +520,16 @@ let eval_dot_call (state: ProgramState) (env: Array[EnvEntry]) (base: parser.PEx
 // reimplements array semantics from scratch. ---
 
 let array_index (v: Value) (idx: Value): Value = match v { VArray(elems) => elems[as_int(idx)], _ => { fail_interp("indexing requires an Array"); VUnit } }
-let array_len (v: Value): Value = match v { VArray(elems) => VInt(elems.len()), _ => { fail_interp(".len() requires an Array"); VUnit } }
+// `.len()` is overloaded on the RECEIVER's runtime shape, exactly as
+// the real compiler's own lowering overloads it on the receiver's
+// static type: BYTE length for a `String`, element count for an
+// `Array`.
+let value_len (v: Value): Value =
+    match v {
+        VArray(elems) => VInt(elems.len()),
+        VStr(s) => VInt(s.len()),
+        _ => { fail_interp(".len() requires an Array or a String"); VUnit },
+    }
 let array_push (v: Value) (item: Value): Value = match v { VArray(elems) => VArray(elems.push(item)), _ => { fail_interp(".push() requires an Array"); VUnit } }
 let array_set (v: Value) (idx: Value) (item: Value): Value = match v { VArray(elems) => VArray(elems.set(as_int(idx), item)), _ => { fail_interp(".set() requires an Array"); VUnit } }
 
@@ -379,7 +546,48 @@ let eval_array_ns_call (state: ProgramState) (env: Array[EnvEntry]) (fn_name: St
     if fn_name == "map" { array_map(state, env, eval_expr(state, env, args[0]), args[1]) }
     else if fn_name == "filter" { array_filter(state, env, eval_expr(state, env, args[0]), args[1]) }
     else if fn_name == "fold" { array_fold(state, env, eval_expr(state, env, args[0]), eval_expr(state, env, args[1]), args[2]) }
+    else if fn_name == "any" { array_any(state, env, eval_expr(state, env, args[0]), args[1]) }
+    // The remaining associated functions take no closure, so their
+    // arguments are just evaluated up front. Each delegates to the
+    // real host primitive of the same name over the wrapped
+    // `Array[Value]` — `Array.slice`'s own amortized behavior,
+    // `Array.concat`'s copying, all inherited rather than re-derived.
+    else if fn_name == "concat" { VArray(Array.concat(as_array(eval_expr(state, env, args[0])), as_array(eval_expr(state, env, args[1])))) }
+    else if fn_name == "is_empty" { VBool(Array.is_empty(as_array(eval_expr(state, env, args[0])))) }
+    else if fn_name == "len" { VInt(as_array(eval_expr(state, env, args[0])).len()) }
+    else if fn_name == "push" { VArray(as_array(eval_expr(state, env, args[0])).push(eval_expr(state, env, args[1]))) }
+    else if fn_name == "set" { VArray(as_array(eval_expr(state, env, args[0])).set(as_int(eval_expr(state, env, args[1])), eval_expr(state, env, args[2]))) }
+    else if fn_name == "slice" { VArray(Array.slice(as_array(eval_expr(state, env, args[0])), as_int(eval_expr(state, env, args[1])), as_int(eval_expr(state, env, args[2])))) }
+    // `Array.contains` can't use the host's own `Array.contains`: that
+    // compares `Value`s with `==`, which this interpreter's `Value`
+    // enum doesn't support structurally. It reuses `values_equal`
+    // instead — the SAME comparison the interpreted program's own `==`
+    // goes through, so `Array.contains` and a hand-written `==` loop
+    // can never disagree.
+    else if fn_name == "contains" { VBool(array_contains_acc(as_array(eval_expr(state, env, args[0])), eval_expr(state, env, args[1]), 0)) }
     else { { fail_interp("unsupported Array.".concat(fn_name).concat("(...) call")); VUnit } }
+
+let array_contains_acc (elems: Array[Value]) (needle: Value) (i: Int): Bool =
+    if i >= elems.len() { false }
+    else if values_equal(elems[i], needle) { true }
+    else { array_contains_acc(elems, needle, i + 1) }
+
+let array_any (state: ProgramState) (env: Array[EnvEntry]) (arr: Value) (f_expr: parser.PExpr): Value =
+    match arr {
+        VArray(elems) => match eval_expr(state, env, f_expr) {
+            VClosure(params, body, captured_env) => VBool(array_any_acc(state, params, body, captured_env, elems, 0)),
+            _ => { fail_interp("Array.any's second argument must be a closure"); VUnit },
+        },
+        _ => { fail_interp("Array.any's first argument must be an Array"); VUnit },
+    }
+
+// Short-circuits on the first `true`, matching the real `Array.any`.
+let array_any_acc (state: ProgramState) (params: Array[String]) (body: parser.PExpr) (captured_env: Array[EnvEntry]) (elems: Array[Value]) (i: Int): Bool =
+    if i >= elems.len() { false }
+    else { match call_closure(state, params, body, captured_env, [elems[i]]) {
+        VBool(b) => if b { true } else { array_any_acc(state, params, body, captured_env, elems, i + 1) },
+        _ => { fail_interp("Array.any's predicate must return a Bool"); false },
+    } }
 
 let array_map (state: ProgramState) (env: Array[EnvEntry]) (arr: Value) (f_expr: parser.PExpr): Value =
     match arr {
@@ -495,22 +703,92 @@ let eval_stmts (state: ProgramState) (env: Array[EnvEntry]) (stmts: Array[parser
     }
 
 // The env-threading counterpart to `eval_expr`'s general, value-only
-// dispatch — used ONLY here, from `eval_stmts`'s `SExpr` arm, for the
-// one shape whose OWN internal reassignment to an ALREADY-EXISTING
-// outer name needs to survive past it: a `for` loop. Every other
-// expression shape just evaluates normally (for side effects, e.g.
-// `println(..)`) and returns `env` completely unchanged — a real,
-// deliberately narrower v1 gap than fully general env-threading would
-// close: an `if`/`match`/bare `{ }` block used DIRECTLY as a statement
-// (not a `for` loop) that reassigns an outer name inside doesn't
-// propagate that reassignment to later statements in the same block.
-// Not exercised by any exec-corpus fixture; `for`-loop accumulation
-// (DESIGN.md's own "classic case" for local mutability) is the one
-// that is.
+// dispatch — used ONLY from `eval_stmts`'s `SExpr` arm, for the shapes
+// whose OWN internal reassignment to an ALREADY-EXISTING outer name
+// has to survive past them: `for`, `if`, `match`, and a bare `{ }`
+// block. Every OTHER expression shape just evaluates normally (for
+// side effects, e.g. `println(..)`) and returns `env` unchanged.
+//
+// `if`/`match`/block were added when `lexer.tokenize` — running under
+// this interpreter — silently produced ZERO tokens: its accumulator is
+// reassigned inside a nested `if !done { ... }`, so with only the
+// `for` case handled every `acc = acc.push(..)` was evaluated and then
+// thrown away. That's the exact gap this comment previously described
+// as "not exercised by any exec-corpus fixture"; self-interpretation
+// exercised it immediately, which is the whole reason for doing it.
+//
+// The REMAINING gap, stated rather than left to be discovered: an
+// assignment inside an expression-POSITION `if`/`match` (`let x = if c
+// { n = n + 1; 2 } else { 3 }`) is still lost, because `eval_expr`
+// returns a `Value` alone and nothing else. Closing that means
+// returning an (env, value) pair from every one of `eval_expr`'s arms
+// — a real refactor, deliberately not done here, and not needed by any
+// code this compiler actually contains.
 let eval_stmt_for_env (state: ProgramState) (env: Array[EnvEntry]) (e: parser.PExpr): Array[EnvEntry] =
     match e {
         EFor(pattern, iter, body) => eval_for_env(state, env, pattern, iter, body),
+        EIf(cond, then_branch, else_branch) => eval_if_env(state, env, cond, then_branch, else_branch),
+        EMatch(scrutinee, arms) => eval_match_env(state, env, eval_expr(state, env, scrutinee), arms, 0),
+        EBlock(block) => eval_block_env(state, env, block),
         _ => { eval_expr(state, env, e); env },
+    }
+
+// Every env-threading path below funnels through this. A nested block
+// may BIND new names (`let start = ...`) as well as reassign outer
+// ones, and only the reassignments may escape — so the result is cut
+// back to the enclosing scope's own length.
+//
+// That prefix is exactly the enclosing scope, unchanged in shape:
+// `eval_stmts` only ever APPENDS entries (`Array.concat`) or `.set`s
+// an existing index (`env_assign`), so entries below `n` are the
+// original names carrying any new values, and everything at or above
+// `n` is inner-scope-only. Truncating is not merely tidy — leaking an
+// inner binding would be a real BUG, since `env_assign` scans from the
+// END and would then write a later outer assignment into the leaked
+// shadow instead of the variable it names.
+let scope_out (inner: Array[EnvEntry]) (n: Int): Array[EnvEntry] = Array.slice(inner, 0, n)
+
+let eval_block_env (state: ProgramState) (env: Array[EnvEntry]) (block: parser.PBlock): Array[EnvEntry] = {
+    let inner = eval_stmts(state, env, block.stmts, 0);
+    // The TAIL goes back through `eval_stmt_for_env` too, not through
+    // a plain `eval_expr`: a block whose last form is an unterminated
+    // `match`/`if` (no trailing `;`) parses as a TAIL, not a statement,
+    // and `lexer.tokenize`'s accumulator is reassigned inside exactly
+    // that shape. Its VALUE is correctly discarded — `eval_block_env`
+    // is only ever reached in statement position — but its
+    // reassignments must not be.
+    let after_tail = match block.tail { Some(t) => eval_stmt_for_env(state, inner, t), None => inner };
+    scope_out(after_tail, env.len())
+}
+
+// `else_branch` is `Option[PExpr]` — `Some(EBlock(..))` for a plain
+// `else`, `Some(EIf(..))` for an `else if` chain — so it recurses
+// through `eval_stmt_for_env`, which handles both.
+let eval_if_env (state: ProgramState) (env: Array[EnvEntry]) (cond: parser.PExpr) (then_branch: parser.PBlock) (else_branch: Option[parser.PExpr]): Array[EnvEntry] =
+    match eval_expr(state, env, cond) {
+        VBool(c) =>
+            if c { eval_block_env(state, env, then_branch) }
+            else { match else_branch { Some(e) => eval_stmt_for_env(state, env, e), None => env } },
+        _ => { fail_interp("'if' condition must be a Bool"); env },
+    }
+
+let eval_match_env (state: ProgramState) (env: Array[EnvEntry]) (scrutinee: Value) (arms: Array[parser.MatchArmNode]) (i: Int): Array[EnvEntry] =
+    if i >= arms.len() { { fail_interp("no match arm matched"); env } }
+    else {
+        match match_pattern(arms[i].pattern, scrutinee) {
+            None => eval_match_env(state, env, scrutinee, arms, i + 1),
+            // The arm's own pattern bindings are part of the inner
+            // scope and are cut back off by `scope_out`, exactly like a
+            // block's `let`s. Guards are evaluated against those
+            // bindings and, failing, fall through to the next arm —
+            // identical to `eval_match_acc`'s own value path.
+            Some(bindings) => {
+                let arm_env = Array.concat(env, bindings);
+                let guard_ok = match arms[i].guard { Some(g) => match eval_expr(state, arm_env, g) { VBool(b) => b, _ => { fail_interp("match guard must be a Bool"); false } }, None => true };
+                if guard_ok { scope_out(eval_stmt_for_env(state, arm_env, arms[i].body), env.len()) }
+                else { eval_match_env(state, env, scrutinee, arms, i + 1) }
+            },
+        }
     }
 
 let eval_for_env (state: ProgramState) (env: Array[EnvEntry]) (pattern: parser.PPattern) (iter: parser.PExpr) (body: parser.PBlock): Array[EnvEntry] =
@@ -526,19 +804,28 @@ let eval_for_env (state: ProgramState) (env: Array[EnvEntry]) (pattern: parser.P
 // Threads the OUTER env forward across iterations (unlike `eval_for_
 // loop` below, which always re-derives from the SAME original `env`
 // each time — correct only because it's used exclusively where no
-// caller ever observes reassignment past the loop anyway): each
-// iteration's fresh loop-variable/`let` bindings simply get shadowed
-// by the next iteration's own (`env_lookup`/`env_assign` both scan
-// from the END, so the most recent binding always wins) — harmless
-// env growth, not a correctness problem, for exec-corpus-sized
-// programs.
+// caller ever observes reassignment past the loop anyway).
+//
+// Each iteration's own loop-variable/`let` bindings are cut back off
+// by `scope_out` before the next one starts. An earlier version simply
+// let them accumulate, calling the growth harmless because a later
+// iteration's binding shadows the earlier one; that was true but it
+// made the environment grow LINEARLY in the iteration count, turning
+// every `env_lookup` in a long loop into a scan over the whole
+// history. `tokenize`'s own loop runs once per source character, so
+// self-interpreting a 69KB file made that quadratic — the same class
+// of accidental O(n^2) this project has now hit in three separate
+// places. Truncating is also what makes the loop body a real scope.
 let eval_for_loop_env (state: ProgramState) (env: Array[EnvEntry]) (pattern: parser.PPattern) (body: parser.PBlock) (i: Int) (hi: Int): Array[EnvEntry] =
     if i >= hi { env }
     else {
         match match_pattern(pattern, VInt(i)) {
             Some(bindings) => {
-                let body_env = eval_stmts(state, Array.concat(env, bindings), body.stmts, 0);
-                eval_for_loop_env(state, body_env, pattern, body, i + 1, hi)
+                // `eval_block_env`, not a bare `eval_stmts`, so a loop
+                // body ending in a TAIL expression rather than a
+                // statement still gets it evaluated for side effects.
+                let body_env = eval_block_env(state, Array.concat(env, bindings), body);
+                eval_for_loop_env(state, scope_out(body_env, env.len()), pattern, body, i + 1, hi)
             },
             None => { fail_interp("'for' pattern failed to match an Int"); env },
         }
@@ -691,8 +978,63 @@ let values_equal (a: Value) (b: Value): Bool =
         VStr(x) => match b { VStr(y) => x == y, _ => false },
         VBool(x) => match b { VBool(y) => x == y, _ => false },
         VUnit => match b { VUnit => true, _ => false },
-        _ => { fail_interp("'=='/'!=' between these two value shapes isn't supported yet"); false },
+        // STRUCTURAL equality for the compound shapes — same tag, same
+        // arity, and every payload equal, recursively. Needed the
+        // moment this interpreter ran the self-hosted PARSER, which
+        // compares `lexer.Token` variants (`tok == TokEof`, `tok ==
+        // LParen`) constantly. Closures are still excluded: function
+        // equality has no defensible answer, and real Plum doesn't
+        // offer one either.
+        VVariant(tag_a, xs) => match b { VVariant(tag_b, ys) => tag_a == tag_b && values_equal_list(xs, ys, 0), _ => false },
+        VArray(xs) => match b { VArray(ys) => values_equal_list(xs, ys, 0), _ => false },
+        VTuple(xs) => match b { VTuple(ys) => values_equal_list(xs, ys, 0), _ => false },
+        VStruct(tag_a, fs) => match b { VStruct(tag_b, gs) => tag_a == tag_b && fields_equal(fs, gs, 0), _ => false },
+        VClosure(_, _, _) => { fail_interp("'=='/'!=' between closures isn't supported"); false },
     }
+
+let values_equal_list (xs: Array[Value]) (ys: Array[Value]) (i: Int): Bool =
+    if xs.len() != ys.len() { false }
+    else if i >= xs.len() { true }
+    else if values_equal(xs[i], ys[i]) { values_equal_list(xs, ys, i + 1) }
+    else { false }
+
+// Compared POSITIONALLY (field `i` against field `i`), which is sound
+// here because every `VStruct` is built by `eval_struct_lit` from one
+// declaration's own field list — two structs sharing a tag therefore
+// share a field order.
+let fields_equal (fs: Array[FieldVal]) (gs: Array[FieldVal]) (i: Int): Bool =
+    if fs.len() != gs.len() { false }
+    else if i >= fs.len() { true }
+    else if fs[i].name == gs[i].name && values_equal(fs[i].value, gs[i].value) { fields_equal(fs, gs, i + 1) }
+    else { false }
+
+// `&&`/`||` SHORT-CIRCUIT — the right operand is an unevaluated
+// `PExpr` here, not an already-computed `Value`, which is the whole
+// reason this sits between `eval_expr` and `eval_binary`.
+//
+// This was found by self-interpretation, and it is the kind of bug
+// that only shows up that way: every exec-corpus fixture used `&&`
+// purely as a boolean combinator, where eager evaluation is
+// indistinguishable from lazy. The self-hosted LEXER uses it as a
+// GUARD instead — `int_end + 1 < chars.len() && is_digit_char(chars
+// [int_end + 1])` — where evaluating the right side after the left
+// says "don't" is a real out-of-bounds index. Every other operator is
+// genuinely strict, so they all still go through `eval_binary`.
+let eval_binary_expr (state: ProgramState) (env: Array[EnvEntry]) (op: parser.BOp) (lhs: parser.PExpr) (rhs: parser.PExpr): Value =
+    match op {
+        BAnd => match eval_expr(state, env, lhs) {
+            VBool(a) => if a { as_bool_value(eval_expr(state, env, rhs), "'&&'") } else { VBool(false) },
+            _ => { fail_interp("'&&' requires two Bools"); VUnit },
+        },
+        BOr => match eval_expr(state, env, lhs) {
+            VBool(a) => if a { VBool(true) } else { as_bool_value(eval_expr(state, env, rhs), "'||'") },
+            _ => { fail_interp("'||' requires two Bools"); VUnit },
+        },
+        _ => eval_binary(op, eval_expr(state, env, lhs), eval_expr(state, env, rhs)),
+    }
+
+let as_bool_value (v: Value) (what: String): Value =
+    match v { VBool(b) => VBool(b), _ => { fail_interp(what.concat(" requires two Bools")); VUnit } }
 
 let eval_binary (op: parser.BOp) (lhs: Value) (rhs: Value): Value =
     match op {

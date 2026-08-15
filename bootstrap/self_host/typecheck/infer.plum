@@ -110,6 +110,59 @@ let resolve_param_ty (ctx: TyContext) (in_scope: Array[String]) (p: parser.Param
         },
     }
 
+// --- Builtin (prelude) signatures ---
+//
+// These live in the real compiler's PRELUDE, not in any file this
+// checker is handed, but ordinary Plum source calls them constantly —
+// a checker that doesn't know them can't check anything real. Written
+// as ordinary generic `FnSig`s so `infer_fn_call`'s EXISTING
+// instantiate-generics-with-fresh-vars path handles them with no
+// special-casing: `Option.unwrap_or[T](Option[T], T) -> T` type-checks
+// through exactly the same code a user's own generic function does.
+//
+// Deliberately only the ones the self-hosted sources actually call
+// (counted directly, not guessed) rather than a mechanism for loading
+// the real prelude's full surface — extending this list when a specific
+// missing builtin blocks a specific real program matches how every
+// other v1 scope decision in this bootstrap was made. `Array.map`/
+// `filter`/`fold` are NOT here: they already have hand-written
+// inference (`infer_array_ns_call`) that predates this table and works,
+// and rewriting working inference for uniformity alone isn't worth the
+// churn.
+let arr_of (t: ITy): ITy = ITStruct("Array", [t])
+let opt_of (t: ITy): ITy = ITEnum("Option", [t])
+let res_of (t: ITy) (e: ITy): ITy = ITEnum("Result", [t, e])
+let tp (name: String): ITy = ITParam(name)
+
+let builtin_sig (name: String): Option[FnSig] =
+    if name == "Array.is_empty" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T"))], ret: ITBool }) }
+    else if name == "Array.concat" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T")), arr_of(tp("T"))], ret: arr_of(tp("T")) }) }
+    else if name == "Array.contains" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: ITBool }) }
+    else if name == "Array.push" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) }) }
+    else if name == "Array.slice" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T")), ITInt, ITInt], ret: arr_of(tp("T")) }) }
+    else if name == "Array.any" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool }) }
+    else if name == "Option.is_some" { Some(FnSig { name: name, generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool }) }
+    else if name == "Option.unwrap_or" { Some(FnSig { name: name, generics: ["T"], params: [opt_of(tp("T")), tp("T")], ret: tp("T") }) }
+    else if name == "Result.unwrap_or" { Some(FnSig { name: name, generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), tp("T")], ret: tp("T") }) }
+    else if name == "String.index_of" { Some(FnSig { name: name, generics: [], params: [ITStr, ITStr], ret: opt_of(ITInt) }) }
+    else if name == "String.parse_int" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: res_of(ITInt, ITStr) }) }
+    else if name == "String.parse_float" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: res_of(ITFloat, ITStr) }) }
+    else if name == "String.slice" { Some(FnSig { name: name, generics: [], params: [ITStr, ITInt, ITInt], ret: ITStr }) }
+    else if name == "String.is_empty" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: ITBool }) }
+    else if name == "chars_of" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: arr_of(ITStr) }) }
+    else if name == "string_is_ascii_ws" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: ITBool }) }
+    else if name == "chars_join" { Some(FnSig { name: name, generics: [], params: [arr_of(ITStr)], ret: ITStr }) }
+    else if name == "panic_raw" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: ITUnit }) }
+    else if name == "read_file" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: res_of(ITStr, ITStr) }) }
+    else if name == "is_directory" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: res_of(ITBool, ITStr) }) }
+    else if name == "list_dir" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: res_of(arr_of(ITStr), ITStr) }) }
+    // `args()` is written with empty parentheses, which this parser
+    // turns into a ZERO-argument call (it implements no `f()`-means-
+    // `f(())` sugar — see `interp/interp.plum`'s own note), so the
+    // signature has to be zero-param to match the real call shape.
+    else if name == "args" { Some(FnSig { name: name, generics: [], params: [], ret: arr_of(ITStr) }) }
+    else { None }
+
 let find_sig (sigs: Array[FnSig]) (name: String): Option[FnSig] = find_sig_acc(sigs, name, 0)
 let find_sig_acc (sigs: Array[FnSig]) (name: String) (i: Int): Option[FnSig] =
     if i >= sigs.len() { None } else if sigs[i].name == name { Some(sigs[i]) } else { find_sig_acc(sigs, name, i + 1) }
@@ -147,7 +200,7 @@ let check_all_fns (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): Unit 
 
 let check_fn (p2: Program2) (def: parser.LetDefNode): Unit = {
     let sig = Option.unwrap_or(find_sig(p2.sigs, def.name), FnSig { name: def.name, generics: [], params: [], ret: ITUnit });
-    let env = bind_params(tyenv_empty(()), def.params, sig.params, 0);
+    let env = bind_param_types(tyenv_empty(()), def.params, sig.params, 0);
     let r = infer_expr(p2, fresh_state_new(()), env, subst_empty(()), def.body);
     let body_ty = subst_apply(r.subst, r.ty);
     let ret_ty = subst_apply(r.subst, sig.ret);
@@ -157,8 +210,8 @@ let check_fn (p2: Program2) (def: parser.LetDefNode): Unit = {
     }
 }
 
-let bind_params (env: TyEnv) (params: Array[parser.ParamNode]) (tys: Array[ITy]) (i: Int): TyEnv =
-    if i >= params.len() { env } else { bind_params(bind_param(env, params[i], tys[i]), params, tys, i + 1) }
+let bind_param_types (env: TyEnv) (params: Array[parser.ParamNode]) (tys: Array[ITy]) (i: Int): TyEnv =
+    if i >= params.len() { env } else { bind_param_types(bind_param(env, params[i], tys[i]), params, tys, i + 1) }
 
 // --- Expression inference ---
 
@@ -230,10 +283,18 @@ let UPPERCASE_CHARS: Array[String] = chars_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 let is_capitalized_name (name: String): Bool = Array.contains(UPPERCASE_CHARS, chars_of(name)[0])
 
-let infer_tuple (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (elems: Array[parser.PExpr]): InferResult = {
-    let r = infer_list(p2, state, env, acc, elems, 0, []);
-    InferResult { ty: ITTuple(r.tys), subst: r.subst, state: r.state }
-}
+// `()` is the UNIT VALUE, not a zero-element tuple — the parser
+// produces `ETuple([])` for it (there's no separate unit literal node),
+// so this is where that gets mapped back. Without it, `usage(())`
+// against `let usage (): Unit` failed as "() != Unit": the argument
+// inferred as `ITTuple([])` while the parameter resolved to `ITUnit`
+// (`resolve_param_ty` already maps the Unit PATTERN that way).
+let infer_tuple (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (elems: Array[parser.PExpr]): InferResult =
+    if Array.is_empty(elems) { InferResult { ty: ITUnit, subst: acc, state: state } }
+    else {
+        let r = infer_list(p2, state, env, acc, elems, 0, []);
+        InferResult { ty: ITTuple(r.tys), subst: r.subst, state: r.state }
+    }
 
 struct InferListResult { tys: Array[ITy], subst: Subst, state: FreshState }
 let infer_list (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (exprs: Array[parser.PExpr]) (i: Int) (tys: Array[ITy]): InferListResult =
@@ -385,8 +446,42 @@ let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cal
         // `Array.map`/`filter`/`fold` — a NAMESPACE call ("Array" is
         // never a bound value), checked the same way `interp/interp.
         // plum`'s own `eval_call` checks it, for the same reason.
+        // `Ns.func(..)` — a NAMESPACE call ("Array"/"Option"/"Result"/
+        // "String" are never bound values), checked before `base` is
+        // evaluated as an expression for the same reason `interp/interp.
+        // plum`'s `eval_call` does it: evaluating a capitalized unbound
+        // name would otherwise "succeed" as a bogus zero-payload variant
+        // construction instead of failing.
         EField(base, method_name) => match base {
-            EIdent(ns) => if ns == "Array" { infer_array_ns_call(p2, state, env, acc, method_name, args) } else { infer_method_call(p2, state, env, acc, base, method_name, args) },
+            EIdent(ns) => {
+                if ns == "Array" && (method_name == "map" || method_name == "filter" || method_name == "fold") {
+                    infer_array_ns_call(p2, state, env, acc, method_name, args)
+                } else if Option.is_some(tyenv_lookup(env, ns)) || Option.is_some(find_global_def(p2.globals, ns)) {
+                    // `ns` names a real VALUE, so this is an ordinary
+                    // method/struct-field call on it — checked BEFORE the
+                    // module and builtin cases so a local can never be
+                    // shadowed by a module or prelude name.
+                    infer_method_call(p2, state, env, acc, base, method_name, args)
+                } else {
+                    match builtin_sig(ns.concat(".").concat(method_name)) {
+                        Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
+                        // A MODULE-qualified call (`lexer.tokenize(src)`).
+                        // `main.plum` merges every module's items into one
+                        // program, so the callee is just an ordinary
+                        // top-level signature by this point — the
+                        // qualifier carries no additional meaning, exactly
+                        // as `resolve_named` already treats a qualified
+                        // TYPE path by its last segment. Reached only when
+                        // `ns` isn't a bound value and isn't a builtin
+                        // namespace, so it can't capture a genuine
+                        // record-of-closures field call.
+                        None => match find_sig(p2.sigs, method_name) {
+                            Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
+                            None => infer_method_call(p2, state, env, acc, base, method_name, args),
+                        },
+                    }
+                }
+            },
             _ => infer_method_call(p2, state, env, acc, base, method_name, args),
         },
         _ => {
@@ -401,11 +496,45 @@ let infer_array_ns_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
     else if fn_name == "fold" { infer_array_fold(p2, state, env, acc, args[0], args[1], args[2]) }
     else { { fail_tc("unsupported Array.".concat(fn_name).concat("(...) call")); InferResult { ty: ITUnit, subst: acc, state: state } } }
 
+// Infers a closure argument with its parameter types ALREADY KNOWN,
+// instead of letting them start as fresh variables the body is checked
+// against. This is the "closure-param-type-seeding" the real compiler
+// also needs (see DESIGN.md's language-ergonomics chunk, where the same
+// inference-ordering bug was found and fixed there twice).
+//
+// Why it's load-bearing: `Array.filter(self_s.entries, |e| ..e.id..)`
+// (real code, `typecheck/types.plum`) infers the closure BODY before
+// unifying the closure against `(ElemTy) -> Bool`, so without seeding,
+// `e` is still an unresolved variable at `e.id` and field access fails
+// with "requires a struct value with a statically known type". Field
+// access genuinely cannot be deferred — it needs a concrete struct to
+// look the field up in — so the param type has to arrive first.
+//
+// Only a closure LITERAL can be seeded; anything else (a bare function
+// reference, a variable holding a closure) is inferred normally and
+// then unified by the caller exactly as before.
+let infer_closure_seeded (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (f_expr: parser.PExpr) (param_tys: Array[ITy]): InferResult =
+    match f_expr {
+        EClosure(params, body) => {
+            if params.len() != param_tys.len() {
+                fail_tc("closure expects a different number of parameters here")
+            };
+            let env2 = extend_closure_params(env, params, param_tys, 0);
+            let r = infer_expr(p2, state, env2, acc, body);
+            InferResult {
+                ty: ITFunction(Array.map(param_tys, |t| subst_apply(r.subst, t)), subst_apply(r.subst, r.ty)),
+                subst: r.subst,
+                state: r.state,
+            }
+        },
+        _ => infer_expr(p2, state, env, acc, f_expr),
+    }
+
 let infer_array_map (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arr_expr: parser.PExpr) (f_expr: parser.PExpr): InferResult = {
     let ar = infer_expr(p2, state, env, acc, arr_expr);
     let elem_fresh = fresh(ar.state);
     let s1 = match unify(subst_apply(ar.subst, ar.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc("Array.map: ".concat(e)); ar.subst } };
-    let fr = infer_expr(p2, elem_fresh.state, env, s1, f_expr);
+    let fr = infer_closure_seeded(p2, elem_fresh.state, env, s1, f_expr, [subst_apply(s1, elem_fresh.ty)]);
     let out_fresh = fresh(fr.state);
     let s2 = match unify(subst_apply(fr.subst, fr.ty), ITFunction([subst_apply(s1, elem_fresh.ty)], out_fresh.ty)) { Ok(s) => subst_compose(s, fr.subst), Err(e) => { fail_tc("Array.map function argument: ".concat(e)); fr.subst } };
     InferResult { ty: ITStruct("Array", [subst_apply(s2, out_fresh.ty)]), subst: s2, state: out_fresh.state }
@@ -415,7 +544,7 @@ let infer_array_filter (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
     let ar = infer_expr(p2, state, env, acc, arr_expr);
     let elem_fresh = fresh(ar.state);
     let s1 = match unify(subst_apply(ar.subst, ar.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc("Array.filter: ".concat(e)); ar.subst } };
-    let fr = infer_expr(p2, elem_fresh.state, env, s1, f_expr);
+    let fr = infer_closure_seeded(p2, elem_fresh.state, env, s1, f_expr, [subst_apply(s1, elem_fresh.ty)]);
     let s2 = match unify(subst_apply(fr.subst, fr.ty), ITFunction([subst_apply(s1, elem_fresh.ty)], ITBool)) { Ok(s) => subst_compose(s, fr.subst), Err(e) => { fail_tc("Array.filter function argument: ".concat(e)); fr.subst } };
     InferResult { ty: ITStruct("Array", [subst_apply(s2, elem_fresh.ty)]), subst: s2, state: fr.state }
 }
@@ -425,7 +554,7 @@ let infer_array_fold (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     let elem_fresh = fresh(ar.state);
     let s1 = match unify(subst_apply(ar.subst, ar.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc("Array.fold: ".concat(e)); ar.subst } };
     let ir = infer_expr(p2, elem_fresh.state, env, s1, init_expr);
-    let fr = infer_expr(p2, ir.state, env, ir.subst, f_expr);
+    let fr = infer_closure_seeded(p2, ir.state, env, ir.subst, f_expr, [subst_apply(ir.subst, ir.ty), subst_apply(ir.subst, elem_fresh.ty)]);
     let acc_ty = subst_apply(fr.subst, ir.ty);
     let elem_ty = subst_apply(fr.subst, elem_fresh.ty);
     let s2 = match unify(subst_apply(fr.subst, fr.ty), ITFunction([acc_ty, elem_ty], acc_ty)) { Ok(s) => subst_compose(s, fr.subst), Err(e) => { fail_tc("Array.fold function argument: ".concat(e)); fr.subst } };
@@ -452,10 +581,17 @@ let infer_named_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     else {
         match find_sig(p2.sigs, name) {
             Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
-            None => {
-                let ar = infer_list(p2, state, env, acc, args, 0, []);
-                if is_capitalized_name(name) { infer_variant(p2, ar.state, ar.subst, name, ar.tys) }
-                else { { fail_tc("unbound function: ".concat(name)); InferResult { ty: ITUnit, subst: ar.subst, state: ar.state } } }
+            // A user-declared function wins over a builtin of the same
+            // name — same shadowing order the real compiler uses, where
+            // the prelude is prepended and a later declaration takes
+            // precedence.
+            None => match builtin_sig(name) {
+                Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
+                None => {
+                    let ar = infer_list(p2, state, env, acc, args, 0, []);
+                    if is_capitalized_name(name) { infer_variant(p2, ar.state, ar.subst, name, ar.tys) }
+                    else { { fail_tc("unbound function: ".concat(name)); InferResult { ty: ITUnit, subst: ar.subst, state: ar.state } } }
+                },
             },
         }
     }
@@ -511,8 +647,25 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         let ar = infer_expr(p2, br.state, env, s1, args[0]);
         let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".concat() argument: ".concat(e)); ar.subst } };
         InferResult { ty: ITStr, subst: s2, state: ar.state }
+    } else if (method_name == "ends_with" || method_name == "starts_with" || method_name == "contains") && args.len() == 1 {
+        // Compiler PRIMITIVES lowered straight to IR nodes (`StrEndsWith`
+        // and friends), not prelude functions — so they have no entry in
+        // `builtin_sig` and are recognised here, alongside the other
+        // dot-methods, by name and arity.
+        let br = infer_expr(p2, state, env, acc, base);
+        let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() receiver: ").concat(e)); br.subst } };
+        let ar = infer_expr(p2, br.state, env, s1, args[0]);
+        let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() argument: ").concat(e)); ar.subst } };
+        InferResult { ty: ITBool, subst: s2, state: ar.state }
+    } else if method_name == "split" && args.len() == 1 {
+        // Another compiler primitive, same as `ends_with` above.
+        let br = infer_expr(p2, state, env, acc, base);
+        let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".split() receiver: ".concat(e)); br.subst } };
+        let ar = infer_expr(p2, br.state, env, s1, args[0]);
+        let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".split() argument: ".concat(e)); ar.subst } };
+        InferResult { ty: arr_of(ITStr), subst: s2, state: ar.state }
     } else if method_name == "len" && Array.is_empty(args) {
-        infer_array_len(p2, state, env, acc, base)
+        infer_len(p2, state, env, acc, base)
     } else if method_name == "push" && args.len() == 1 {
         infer_array_push(p2, state, env, acc, base, args[0])
     } else if method_name == "set" && args.len() == 2 {
@@ -539,11 +692,31 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
 // `.len()`/`.push(v)`/`.set(i, v)` — arity-disambiguated (see `infer_
 // method_call`'s own call site), mirroring `interp/interp.plum`'s own
 // identically-named/-shaped runtime helpers exactly.
-let infer_array_len (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr): InferResult = {
+// `.len()` is OVERLOADED on the receiver: byte length for a `String`,
+// element count for an `Array` — matching the real compiler's own
+// lowering, which picks the IR node by the receiver's static type.
+//
+// This is the one place inference has to branch on an already-resolved
+// type rather than unify against a single expected shape: `Str` and
+// `Array[?]` have no common unifier, so committing to either up front
+// would wrongly reject the other. The receiver is inferred FIRST, and
+// only a receiver that resolves to exactly `Str` takes the string
+// path; anything still unresolved falls through to the array path,
+// which unifies as before. That means a `.len()` on a receiver whose
+// type is not yet known is read as an ARRAY length — a real, narrow
+// bias, chosen because it preserves every pre-existing array-`.len()`
+// inference exactly, and because a genuinely unresolved receiver at
+// this point can only come from an unannotated closure parameter.
+let infer_len (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr): InferResult = {
     let br = infer_expr(p2, state, env, acc, base);
-    let elem_fresh = fresh(br.state);
-    let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".len(): ".concat(e)); br.subst } };
-    InferResult { ty: ITInt, subst: s1, state: elem_fresh.state }
+    match subst_apply(br.subst, br.ty) {
+        ITStr => InferResult { ty: ITInt, subst: br.subst, state: br.state },
+        _ => {
+            let elem_fresh = fresh(br.state);
+            let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".len(): ".concat(e)); br.subst } };
+            InferResult { ty: ITInt, subst: s1, state: elem_fresh.state }
+        },
+    }
 }
 
 let infer_array_push (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (value_expr: parser.PExpr): InferResult = {
