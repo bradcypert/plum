@@ -175,18 +175,30 @@ GenericArgs ::= "[" Type { "," Type } "]"
 TupleOrFunctionType ::= "(" [ Type { "," Type } [ "," ] ] ")" [ "->" Type ]
 ```
 
-`TupleOrFunctionType` is implemented for two of its three
-possibilities: `(Int)` is just `Int` (grouping, not a tuple — matches
-the value-level rule), and any parenthesized list followed by
-`"-> Type"` is a function type (e.g. `(Int, Int) -> Int`, `() -> Int`),
-used for explicitly annotating a parameter that itself takes a closure
-— this is what `extern "C"` callback parameters are declared with (see
-DESIGN.md's "FFI and C interop" section). A tuple TYPE annotation
-(`(Int, Float)` or `(Int,)` with no `->`) is NOT implemented — Plum has
-tuple VALUES but no tuple-type annotation syntax yet; `Parser::
-parse_type` rejects a parenthesized list of 0 or 2+ types with no
-trailing arrow as an error, rather than silently treating it as
-something it isn't.
+`TupleOrFunctionType` covers all three of its possibilities, decided by
+the arrow and the element count:
+
+- **Function type** — any parenthesized list followed by `"-> Type"`
+  (e.g. `(Int, Int) -> Int`, `() -> Int`). Used to annotate a parameter
+  that takes a closure, and to declare `extern "C"` callback parameters
+  (see DESIGN.md's "FFI and C interop" section).
+- **Grouping** — `(Int)` with no arrow is just `Int`, matching the
+  value-level rule exactly.
+- **Unit** — `()` with no arrow is `Unit`, the unit VALUE's type. Not an
+  empty tuple, which would be a distinct and useless type.
+- **Tuple type** — two or more types with no arrow: `(Int, Float)`.
+
+The tuple case was added in 2026-08. Plum had tuple VALUES from the
+start but no way to write their type, which meant a tuple could only
+ever be INFERRED — fine for the real type checker, which infers
+everything, and fatal for the self-hosted one, which requires every
+top-level signature to be annotated. `bootstrap/exec_corpus/tuples/`
+was unrepresentable there for exactly that reason.
+
+Note that neither BACKEND compiles tuple values yet: `plum build`
+rejects a signature involving one, and so does the self-hosted backend.
+Tuples remain an interpreter-only value type; this change is the syntax
+half.
 
 ## Expressions
 

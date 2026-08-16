@@ -30,12 +30,15 @@ plum build bootstrap/self_host -o sh
 ```
 
 `./sh run` type-checks BEFORE interpreting (Stage 4 wired into the same
-pipeline, matching the real `plum run`'s own order) — 11 of these 12
-fixtures pass end to end; `tuples/` fails at the type-check step
-specifically (Plum has no tuple type-ANNOTATION syntax, so it can't
-satisfy Stage 4's own annotation requirement — see `typecheck_corpus/
-README.md`), a real, documented exception, not a regression. `./sh
-check`/`./sh run` both surface the identical error for it.
+pipeline, matching the real `plum run`'s own order). **All fixtures now
+pass end to end.** `tuples/` used to be a documented exception — Plum
+had no tuple type-ANNOTATION syntax, so it could not satisfy Stage 4's
+requirement that every top-level signature be annotated. Tuple types
+were added in 2026-08 and the fixture is annotated now.
+
+The one thing still not universal is the BACKENDS: neither `plum build`
+nor the self-hosted backend compiles tuple VALUES, so `tuples/` is
+check-and-interpret only.
 
 The native side used to have a trailing-artifact quirk too — "a
 pre-existing native-`main()` CLI behavior noticed several times across

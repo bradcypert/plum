@@ -996,6 +996,15 @@ impl Infer {
                 Some(name) if generic_vars.contains_key(name) => Ok(generic_vars[name].clone()),
                 _ => ast_type_to_type(ty, &self.ctx, &[]),
             },
+            // Each element resolved in the same scope, so a tuple
+            // annotation can mention the enclosing function's own
+            // generic parameters like any other type does.
+            ast::Type::Tuple(elems, _) => Ok(Type::Tuple(
+                elems
+                    .iter()
+                    .map(|e| self.resolve_annotation(e, generic_vars))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
             ast::Type::Generic { base, args, span } => {
                 let name = base.last().cloned().ok_or_else(|| {
                     plum_syntax::error::CompileError::new(*span, "type inference not yet implemented for this type annotation")
@@ -4382,6 +4391,12 @@ pub fn ast_type_to_type(
             Some(name) if ctx.is_enum(name) => Ok(Type::Enum(name.to_string(), Vec::new())),
             _ => Err(plum_syntax::error::CompileError::new(*span, "type inference not yet implemented for this type annotation")),
         },
+        ast::Type::Tuple(elems, _) => Ok(Type::Tuple(
+            elems
+                .iter()
+                .map(|e| ast_type_to_type(e, ctx, in_scope_params))
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
         // `Thing[Arg, ...]` — `base` names a generic struct/enum,
         // `args` are its type arguments at THIS use (each resolved
         // recursively, so `Wrapper[Pair[Int]]` works). Arity is

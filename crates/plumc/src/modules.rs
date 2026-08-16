@@ -382,6 +382,14 @@ impl Resolver<'_> {
                 }
                 Ok(())
             }
+            // A tuple's elements are ordinary types and get the same
+            // module-qualification pass as a generic's arguments.
+            ast::Type::Tuple(elems, _) => {
+                for e in elems.iter_mut() {
+                    self.resolve_type(e, locals)?;
+                }
+                Ok(())
+            }
             ast::Type::Generic { base, args, span } => {
                 if let Some(q) = self.resolve_segments(base, locals, *span)? {
                     *base = vec![q];

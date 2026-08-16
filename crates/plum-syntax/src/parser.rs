@@ -1198,14 +1198,13 @@ impl Parser {
             });
         }
         match params.len() {
+            // `()` as a TYPE is Unit — the type of the unit value,
+            // which the parser already spells `ETuple([])` on the value
+            // side. Not `Tuple(vec![])`, which would be a distinct and
+            // useless empty-tuple type.
+            0 => Ok(Type::Path(vec!["Unit".to_string()], open.to(close))),
             1 => Ok(params.into_iter().next().expect("just checked len == 1")),
-            _ => Err(crate::error::CompileError::new(
-                open.to(close),
-                format!(
-                    "expected a single parenthesized type or a function type ('(...) -> Type'), found {}",
-                    if params.is_empty() { "'()'" } else { "multiple types" }
-                ),
-            )),
+            _ => Ok(Type::Tuple(params, open.to(close))),
         }
     }
 
@@ -2796,9 +2795,47 @@ mod tests {
     }
 
     #[test]
-    fn multiple_types_in_parens_without_arrow_is_an_error() {
-        let tokens = Lexer::new("extern \"C\" { fn foo(x: (Int, Float)) -> Int; }").tokenize();
-        assert!(Parser::new(tokens).parse_program().is_err());
+    fn multiple_types_in_parens_without_arrow_is_a_tuple_type() {
+        // This used to be an error — Plum had tuple VALUES but no way
+        // to write their type, so a parenthesized list with no arrow
+        // had nowhere to go. It is a tuple type now.
+        assert_eq!(
+            render_program(&parse_program("let fst (p: (Int, Float)): Int = 1")),
+            "((let fst ((p:(tup Int Float))) ->Int 1))"
+        );
+    }
+
+    #[test]
+    fn a_single_parenthesized_type_is_still_just_that_type() {
+        assert_eq!(
+            render_program(&parse_program("let f (p: (Int)): Int = p")),
+            "((let f ((p:Int)) ->Int p))"
+        );
+    }
+
+    #[test]
+    fn empty_parens_as_a_type_is_unit() {
+        // `()` is the unit VALUE's type, not an empty tuple.
+        assert_eq!(
+            render_program(&parse_program("let f (p: ()): Int = 1")),
+            "((let f ((p:Unit)) ->Int 1))"
+        );
+    }
+
+    #[test]
+    fn a_function_type_is_still_a_function_type() {
+        assert_eq!(
+            render_program(&parse_program("let f (g: (Int, Float) -> Int): Int = 1")),
+            "((let f ((g:(fn (Int Float) -> Int))) ->Int 1))"
+        );
+    }
+
+    #[test]
+    fn nested_tuple_types_round_trip() {
+        assert_eq!(
+            render_program(&parse_program("let f (p: (Int, (Bool, String))): Int = 1")),
+            "((let f ((p:(tup Int (tup Bool String)))) ->Int 1))"
+        );
     }
 
     #[test]

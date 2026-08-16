@@ -1,0 +1,4 @@
+let fst (p: (Int, String)): Int = 1
+let nested (p: (Int, (Bool, String))): Unit = ()
+let unit_ty (p: ()): Int = 1
+let single (p: (Int)): Int = p

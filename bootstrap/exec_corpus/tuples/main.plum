@@ -1,4 +1,4 @@
-let swap (t) = match t { (a, b) => (b, a) }
+let swap (t: (Int, Int)): (Int, Int) = match t { (a, b) => (b, a) }
 let main (): Unit = {
   let r = swap((1, 2));
   match r { (a, b) => { println(a.to_string()); println(b.to_string()); } }

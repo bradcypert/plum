@@ -38,6 +38,20 @@ pub enum BinaryOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Path(Vec<String>, Span),
+    /// `(A, B)` — a TUPLE type annotation.
+    ///
+    /// Plum has always had tuple VALUES; until now it had no way to
+    /// write their type, which meant a tuple could never be a declared
+    /// parameter or return type and could only ever be inferred. That
+    /// is fine for the real type checker, which infers everything, and
+    /// fatal for the self-hosted one, which requires every top-level
+    /// signature to be annotated.
+    ///
+    /// Zero elements is NOT a tuple: `()` is the unit VALUE's type, and
+    /// the parser maps it to `Unit`. One element is not a tuple either
+    /// — `(T)` is just `T` parenthesized, which is what it has always
+    /// meant.
+    Tuple(Vec<Type>, Span),
     Generic {
         base: Vec<String>,
         args: Vec<Type>,
@@ -62,7 +76,7 @@ pub enum Type {
 impl Type {
     pub fn span(&self) -> Span {
         match self {
-            Type::Path(_, s) | Type::Generic { span: s, .. } | Type::Function { span: s, .. } => *s,
+            Type::Path(_, s) | Type::Tuple(_, s) | Type::Generic { span: s, .. } | Type::Function { span: s, .. } => *s,
         }
     }
 }

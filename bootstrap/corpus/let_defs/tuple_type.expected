@@ -1,0 +1,1 @@
+((let fst ((p:(tup Int String))) ->Int 1) (let nested ((p:(tup Int (tup Bool String)))) ->Unit (tuple)) (let unit_ty ((p:Unit)) ->Int 1) (let single ((p:Int)) ->Int p))

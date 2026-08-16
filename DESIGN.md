@@ -9060,3 +9060,44 @@ would catch the accumulators that are not self-rebinding (`f(acc.push(x))`
 in a tail-recursive loop, which is how the parser is written). But the
 measured upside is now small, and saying so is more useful than building
 it: the backend is fast enough that the next real work is elsewhere.
+
+### Tuple type annotations (2026-08-16)
+
+Plum had tuple VALUES from the start and no way to write their type. A
+parenthesized list of two or more types with no arrow was a parse
+error — `Parser::parse_type` rejected it rather than silently treating
+it as something it wasn't, which was the right call while there was
+nothing to build.
+
+That gap was invisible to the real type checker, which infers
+everything, and fatal to the self-hosted one, which requires every
+top-level signature to be annotated. `bootstrap/exec_corpus/tuples/` was
+literally unrepresentable there:
+
+```
+let swap (t) = match t { (a, b) => (b, a) }
+        ^ no way to annotate this
+```
+
+`Type::Tuple` now exists, and `(A, B)` parses. The decision table is
+small and each entry matches an existing rule rather than inventing one:
+
+| written | means | why |
+| --- | --- | --- |
+| `(A, B) -> C` | function type | unchanged |
+| `(T)` | `T` | grouping, matching the value-level rule exactly |
+| `()` | `Unit` | the unit VALUE's type — not an empty tuple, which would be distinct and useless |
+| `(A, B)` | tuple type | the new case |
+
+The fixture is annotated now, and **17/17 exec_corpus fixtures
+type-check and run** — the documented exception is gone.
+
+**Neither backend compiles tuple values.** `plum build` rejects a
+signature involving one ("codegen only supports Int/Float/Bool/Unit/Str/
+Array[T]/Task[T] or a non-generic struct/enum"), and so does the
+self-hosted backend. Tuples remain interpreter-only; this change is the
+syntax half, and saying so is more useful than implying the feature is
+finished.
+
+Both parsers agree on the new syntax — the self-hosted parser renders
+`(tup Int String)` identically, verified across all 99 corpus fixtures.

@@ -187,6 +187,7 @@ pub let resolve_ann (ctx: TyContext) (in_scope: Array[String]) (t: parser.Ty): I
         TyFunction(params, ret) => ITFunction(Array.map(params, |p| resolve_ann(ctx, in_scope, p)), resolve_ann(ctx, in_scope, ret)),
         TyGeneric(base, args) => resolve_named(ctx, in_scope, base[base.len() - 1], Array.map(args, |a| resolve_ann(ctx, in_scope, a))),
         TyPath(segments) => resolve_named(ctx, in_scope, segments[segments.len() - 1], []),
+        TyTuple(elems) => ITTuple(Array.map(elems, |e| resolve_ann(ctx, in_scope, e))),
     }
 
 let resolve_named (ctx: TyContext) (in_scope: Array[String]) (name: String) (args: Array[ITy]): ITy =

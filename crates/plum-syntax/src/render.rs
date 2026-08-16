@@ -115,6 +115,10 @@ pub fn render_type(ty: &Type) -> String {
             let params_str = params.iter().map(render_type).collect::<Vec<_>>().join(" ");
             format!("(fn ({params_str}) -> {})", render_type(ret))
         }
+        Type::Tuple(elems, _) => {
+            let parts = elems.iter().map(render_type).collect::<Vec<_>>().join(" ");
+            format!("(tup {parts})")
+        }
     }
 }
 

@@ -41,6 +41,11 @@ pub enum Ty {
     TyPath(Array[String]),
     TyGeneric(Array[String], Array[Ty]),
     TyFunction(Array[Ty], Ty),
+    // `(A, B)` — a tuple TYPE. Plum has always had tuple values; it
+    // gained a way to write their type in 2026-08, which is what lets a
+    // tuple be a declared parameter or return type at all. `()` is Unit
+    // and `(T)` is `T`, so only two-or-more is a tuple.
+    TyTuple(Array[Ty]),
 }
 
 pub enum UOp { UNeg, UNot }
@@ -538,10 +543,14 @@ let parse_paren_or_function_type (tokens: Array[lexer.Token]) (pos: Int): TypeRe
         let ret_r = parse_type(tokens, arrow_b.next_pos);
         TypeResult { value: TyFunction(params_r.value, ret_r.value), next_pos: ret_r.next_pos }
     } else if params_r.value.len() == 1 {
+        // `(T)` is just `T` parenthesized, which is what it has always
+        // meant.
         TypeResult { value: params_r.value[0], next_pos: close_pos }
-    } else {
-        fail("expected a single parenthesized type or a function type");
+    } else if Array.is_empty(params_r.value) {
+        // `()` as a TYPE is Unit, not an empty tuple.
         TypeResult { value: TyPath(["Unit"]), next_pos: close_pos }
+    } else {
+        TypeResult { value: TyTuple(params_r.value), next_pos: close_pos }
     }
 }
 
@@ -1184,6 +1193,7 @@ let render_type (ty: Ty): String = match ty {
     TyPath(segments) => join_dot(segments),
     TyGeneric(base, args) => sexpr(Array.concat(["gt", join_dot(base)], Array.map(args, |t| render_type(t)))),
     TyFunction(params, ret) => "(fn (".concat(join_space(Array.map(params, |t| render_type(t)))).concat(") -> ").concat(render_type(ret)).concat(")"),
+    TyTuple(elems) => "(tup ".concat(join_space(Array.map(elems, |t| render_type(t)))).concat(")"),
 }
 
 let join_dot (segments: Array[String]): String = Array.fold(segments, "", |acc, s| if acc == "" { s } else { acc.concat(".").concat(s) })
