@@ -1,0 +1,143 @@
+// Stage 5's RUNTIME — the fixed block of LLVM IR every program this
+// backend emits is prefixed with. See `codegen.plum`'s own top comment
+// for the backend as a whole.
+//
+// This is deliberately OURS, not borrowed from the real compiler.
+// `crates/plum-codegen`'s runtime is ~3,000 lines and is parameterized
+// by the program's own tag tables (it generates per-type `to_string`/
+// equality/release functions), so there is no clean "just link against
+// it" boundary to reuse — and writing this one is a few dozen lines,
+// because Stage 5 leaks.
+//
+// **Stage 5 never frees.** No refcount word, no `plum_rc_inc`/`dec`, no
+// FBIP. That is the single biggest simplification versus the real
+// backend (3,293 lines of `plum-ir/src/fbip.rs`), and it is a legitimate
+// choice for a bootstrap compiler: the workload is "start, compile one
+// program, exit," where the OS reclaims everything at once. It is a
+// scope cut, stated up front, not an oversight — and it is the first
+// thing that would have to change for this backend to be used for
+// long-running programs.
+//
+// **Cell layouts** (deliberately NOT the real backend's — those carry a
+// refcount word this one has no use for):
+//   Str:    { i64 len, i8 bytes[len], i8 0 }   — data at offset 8
+//   Struct: { field0, field1, ... }            — 8 bytes per field
+//   Enum:   { i64 tag, payload0, ... }         — payload at offset 8
+// Every string keeps a trailing NUL that `.len()` never counts, purely
+// so `printf("%s")` can be pointed straight at the bytes — the same
+// trick, and the same reasoning, as the real backend's own string cells.
+
+pub let cg_lines (lines: Array[String]): String = Array.fold(lines, "", |acc, l| acc.concat(l).concat("\n"))
+
+pub let cg_runtime (unit: Unit): String = cg_lines([
+    "; --- Stage 5 runtime (self-hosted backend) ---",
+    "declare ptr @malloc(i64)",
+    "declare i32 @printf(ptr, ...)",
+    "declare i32 @snprintf(ptr, i64, ptr, ...)",
+    "declare ptr @memcpy(ptr, ptr, i64)",
+    "declare i32 @memcmp(ptr, ptr, i64)",
+    "",
+    "@.plum_fmt_int = private constant [5 x i8] c\"%lld\\00\"",
+    "@.plum_fmt_float = private constant [6 x i8] c\"%.15g\\00\"",
+    "@.plum_fmt_line = private constant [4 x i8] c\"%s\\0A\\00\"",
+    "@.plum_true = private constant [5 x i8] c\"true\\00\"",
+    "@.plum_false = private constant [6 x i8] c\"false\\00\"",
+    "",
+    "; A string cell from raw bytes + a byte length.",
+    "define ptr @plum_str_new(ptr %bytes, i64 %len) {",
+    "entry:",
+    "  %size = add i64 %len, 9",
+    "  %cell = call ptr @malloc(i64 %size)",
+    "  store i64 %len, ptr %cell",
+    "  %data = getelementptr i8, ptr %cell, i64 8",
+    "  %ignore = call ptr @memcpy(ptr %data, ptr %bytes, i64 %len)",
+    "  %endp = getelementptr i8, ptr %data, i64 %len",
+    "  store i8 0, ptr %endp",
+    "  ret ptr %cell",
+    "}",
+    "",
+    "define ptr @plum_str_concat(ptr %a, ptr %b) {",
+    "entry:",
+    "  %la = load i64, ptr %a",
+    "  %lb = load i64, ptr %b",
+    "  %lt = add i64 %la, %lb",
+    "  %size = add i64 %lt, 9",
+    "  %cell = call ptr @malloc(i64 %size)",
+    "  store i64 %lt, ptr %cell",
+    "  %data = getelementptr i8, ptr %cell, i64 8",
+    "  %da = getelementptr i8, ptr %a, i64 8",
+    "  %db = getelementptr i8, ptr %b, i64 8",
+    "  %i1 = call ptr @memcpy(ptr %data, ptr %da, i64 %la)",
+    "  %d2 = getelementptr i8, ptr %data, i64 %la",
+    "  %i2 = call ptr @memcpy(ptr %d2, ptr %db, i64 %lb)",
+    "  %endp = getelementptr i8, ptr %data, i64 %lt",
+    "  store i8 0, ptr %endp",
+    "  ret ptr %cell",
+    "}",
+    "",
+    "define i64 @plum_str_len(ptr %s) {",
+    "entry:",
+    "  %l = load i64, ptr %s",
+    "  ret i64 %l",
+    "}",
+    "",
+    "; Byte-exact equality: same length, then memcmp. Not a collation",
+    "; comparison -- Plum's own `==` on String is byte equality too.",
+    "define i1 @plum_str_eq(ptr %a, ptr %b) {",
+    "entry:",
+    "  %la = load i64, ptr %a",
+    "  %lb = load i64, ptr %b",
+    "  %same_len = icmp eq i64 %la, %lb",
+    "  br i1 %same_len, label %cmp, label %no",
+    "cmp:",
+    "  %da = getelementptr i8, ptr %a, i64 8",
+    "  %db = getelementptr i8, ptr %b, i64 8",
+    "  %c = call i32 @memcmp(ptr %da, ptr %db, i64 %la)",
+    "  %eq = icmp eq i32 %c, 0",
+    "  ret i1 %eq",
+    "no:",
+    "  ret i1 0",
+    "}",
+    "",
+    "define ptr @plum_int_to_string(i64 %n) {",
+    "entry:",
+    "  %buf = call ptr @malloc(i64 32)",
+    "  %len32 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 32, ptr @.plum_fmt_int, i64 %n)",
+    "  %len = sext i32 %len32 to i64",
+    "  %s = call ptr @plum_str_new(ptr %buf, i64 %len)",
+    "  ret ptr %s",
+    "}",
+    "",
+    "; `%.15g` matches the real backend's own float formatting exactly",
+    "; (crates/plum-codegen's @plum_tostr_fmt_float) -- chosen so both",
+    "; backends print a Float identically and exec_corpus goldens can be",
+    "; shared between them without a second set of expectations.",
+    "define ptr @plum_float_to_string(double %f) {",
+    "entry:",
+    "  %buf = call ptr @malloc(i64 64)",
+    "  %len32 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 64, ptr @.plum_fmt_float, double %f)",
+    "  %len = sext i32 %len32 to i64",
+    "  %s = call ptr @plum_str_new(ptr %buf, i64 %len)",
+    "  ret ptr %s",
+    "}",
+    "",
+    "define ptr @plum_bool_to_string(i1 %b) {",
+    "entry:",
+    "  br i1 %b, label %t, label %f",
+    "t:",
+    "  %st = call ptr @plum_str_new(ptr @.plum_true, i64 4)",
+    "  ret ptr %st",
+    "f:",
+    "  %sf = call ptr @plum_str_new(ptr @.plum_false, i64 5)",
+    "  ret ptr %sf",
+    "}",
+    "",
+    "define i1 @plum_println(ptr %s) {",
+    "entry:",
+    "  %d = getelementptr i8, ptr %s, i64 8",
+    "  %r = call i32 (ptr, ...) @printf(ptr @.plum_fmt_line, ptr %d)",
+    "  ret i1 0",
+    "}",
+    "; --- end runtime ---",
+    "",
+])

@@ -8170,3 +8170,121 @@ unmodified copy passes.
 thing still missing for true self-hosting is a self-hosted CODEGEN —
 there is no Plum-written backend at all, so the self-hosted compiler can
 check and interpret its own source but cannot produce a binary from it.
+
+### Stage 5: a self-hosted CODE GENERATOR (2026-08-15)
+
+```
+bootstrap/shbuild bootstrap/exec_corpus/enums_and_match/main.plum /tmp/prog
+/tmp/prog          # -> 12 / 9, byte-identical to `plum build`'s own binary
+```
+
+A Plum-written compiler now produces native binaries. `bootstrap/
+self_host/codegen/` emits LLVM IR text; `plum compile-ir` hands it to
+`clang`. **11 of the 14 runnable exec_corpus fixtures compile and run,
+and all 11 produce output byte-identical to the REAL backend's binary
+for the same program** — not merely matching `expected.txt`, but
+agreeing with the other implementation, which is the stronger claim.
+
+**The decision that shaped it: unboxed, not boxed.** The cheap route was
+one uniform tagged representation for every value — no type information
+needed anywhere, generics erasing for free, a far smaller emitter. It
+was rejected deliberately: boxing costs a tag check on every operation
+and, more importantly, produces a backend that would eventually be
+thrown away rather than grown. So an `Int` is an `i64` in a register, a
+`Float` is a `double`, a `Bool`/`Unit` is an `i1`, and everything else
+is a `ptr` to a heap cell.
+
+**What makes unboxed tractable here: Stage 5 never frees.** No
+refcounting, no FBIP, no `plum_rc_inc`/`dec`. That is 3,293 lines of
+`plum-ir/src/fbip.rs` skipped, and it is a legitimate bootstrap choice —
+the workload is "start, compile one program, exit," where the OS
+reclaims everything at once. It is the first thing that would have to
+change for this backend to compile long-running programs, and it is
+stated in `runtime.plum` rather than left to be discovered.
+
+#### Where the types come from
+
+`typecheck/infer.plum` computes the type of every expression and
+discards it — nothing writes inferred types back onto the AST, and
+`parser.PExpr` has no field to write them into. So the emitter
+re-derives what it needs, bottom-up, as it emits.
+
+That is duplication and worth naming as such. Two things keep it small:
+it runs AFTER `check_program` on a program already known well-typed, so
+it needs no unification, substitutions, fresh variables, or error
+recovery — most of what `infer.plum`'s 931 lines are; and it needs only
+the REPRESENTATION of a type, not its identity, so `CgTy` has eight
+cases where `ITy` is a full type language.
+
+The alternative was threading a typed node through `InferResult`'s 54
+construction sites — a rewrite of the one component that currently
+type-checks the entire self-hosted compiler. Not worth destabilizing for
+a Stage 5 that didn't exist yet. **If Stage 5 grows to need real
+inference — closures are exactly where that starts, since an unannotated
+`|x| ...` parameter cannot be synthesized bottom-up — the right move is
+to make `infer.plum` produce a typed tree, not to grow a second
+inference engine in the backend.**
+
+#### Two techniques worth recording
+
+**Every local is an `alloca` slot, never a bare SSA register.** Loaded
+on read, stored on write. This means the backend never constructs a phi
+node and never reasons about dominance: an `if` that produces a value
+stores into one slot from both arms; a `match` does the same across N
+arms; `let mut` and `let` need no distinction at all; and a `for` body's
+assignment to an outer local is just a store — the exact thing the
+self-hosted INTERPRETER needed a whole env-threading mechanism
+(`scope_out`) to get right. LLVM's mem2reg turns all of it back into
+registers with correct phis, so it costs nothing.
+
+The one catch is that allocas must be **hoisted to the entry block**.
+An `alloca` executed inside a loop body allocates afresh every iteration
+and is not reclaimed until the function returns — a real stack leak —
+and mem2reg only promotes entry-block allocas anyway. So `Emit` carries
+`allocas` as a field separate from `code`, and `cg_fn` splices it in
+after `entry:`.
+
+**Enum cells are sized for the enum's widest variant, never for the
+variant being built.** That is a correctness requirement, not a
+convenience: a `match` arm loads a payload slot *before* it knows the
+tag matched, so per-variant sizing would let that load run off the end
+of the allocation. Over-allocating means such a load reads garbage it
+then discards. It is what allows pattern bindings to be computed
+unconditionally, which in turn is what keeps nested patterns from
+needing a second layer of control flow.
+
+#### Toolchain additions
+
+- `plum emit-llvm <project> [-o f.ll]` — print the IR `plum build` would
+  compile. Written as the reference for what correct IR looks like, and
+  useful on its own for debugging generated code. It shares `build_ir`
+  with `plum build`, so the two cannot drift.
+- `plum compile-ir <f.ll> -o <bin>` — assemble and link. The self-hosted
+  compiler needs this because Plum has no process-spawn builtin; even a
+  finished self-hosted compiler would delegate this step, so it is a
+  division of labor rather than a bootstrapping cheat.
+- `bootstrap/shbuild <file.plum> <out>` — the two steps together.
+
+#### The stray trailing `0`, finally chased down
+
+Every compiled Plum program has ended with a spurious `0` line for as
+long as this project has had a native backend — "a pre-existing
+native-`main()` CLI behavior noticed several times, never chased down."
+It was `emit_main`: it echoes the entry function's return value, and
+`Unit` shared `Bool`'s `%d\n` print path, so a `Unit`-returning `main`
+printed `0`. `Unit` carries no information, so echoing it was pure
+noise. A `Unit` entry point now prints nothing, `bootstrap/exec_corpus`
+no longer needs `head -n -1` on the native side, and exactly one test
+asserted the artifact (it now asserts its absence).
+
+#### Verified
+
+| check | result |
+| --- | --- |
+| exec_corpus compiled by the self-hosted backend | 11/14 (arrays, closures, `tuples` unsupported) |
+| those 11 vs. the REAL backend's binaries | byte-identical, 11/11 |
+| `sh run self_host emit-llvm` (codegen under the interpreter) | byte-identical IR, compiles and runs |
+| `sh check bootstrap/self_host` (now 9 modules) | ok |
+| `sh run self_host check self_host` | ok |
+| exec_corpus native check + run | 14/14 |
+| Rust suites | 14/14 |

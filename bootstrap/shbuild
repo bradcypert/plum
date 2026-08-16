@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Compile a Plum file with the SELF-HOSTED backend (Stage 5).
+#
+#   bootstrap/shbuild <file.plum> <out-binary>
+#
+# Three steps, and the middle one is the whole point:
+#   1. ./sh emit-llvm <file>   -- the Plum-written compiler emits LLVM IR
+#   2. plum compile-ir         -- clang assembles + links it
+#   3. (caller runs the binary)
+#
+# Step 2 shells out to the system toolchain because Plum has no
+# process-spawn builtin; the real compiler delegates the same step
+# internally, so this is a division of labor, not a bootstrapping cheat.
+#
+# `./sh` is the guard wrapper (cgroup MemoryMax) -- never invoke
+# `./sh.real` directly, see that script's own comment for why.
+set -euo pipefail
+
+if [ $# -lt 2 ]; then
+    echo "usage: bootstrap/shbuild <file.plum> <out-binary>" >&2
+    exit 1
+fi
+
+src="$1"
+out="$2"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ll="$(mktemp -t plum-shbuild-XXXXXX.ll)"
+trap 'rm -f "$ll"' EXIT
+
+SH_TIMEOUT="${SH_TIMEOUT:-60}" SH_MEM="${SH_MEM:-2G}" "$root/sh" emit-llvm "$src" > "$ll"
+
+# The self-hosted compiler reports errors via `panic_raw`, which writes
+# to STDOUT -- so a failure lands in the .ll file rather than on stderr,
+# and clang would then report a confusing parse error instead of the
+# real message. Detect it by the runtime banner every successful emit
+# starts with, and surface the actual error.
+if ! head -n 1 "$ll" | grep -q "Stage 5 runtime"; then
+    echo "self-hosted codegen failed on $src:" >&2
+    grep -m 1 "self-hosted" "$ll" >&2 || head -n 3 "$ll" >&2
+    exit 1
+fi
+
+"$root/target/release/plum" compile-ir "$ll" -o "$out" > /dev/null

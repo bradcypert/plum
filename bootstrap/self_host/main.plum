@@ -55,8 +55,9 @@ use lexer;
 use parser;
 use interp;
 use typecheck;
+use codegen;
 
-let usage (): Unit = println("usage: self_host (tokens|ast|run) <file> | check <file-or-project-dir>")
+let usage (): Unit = println("usage: self_host (tokens|ast|run|emit-llvm) <file> | check <file-or-project-dir>")
 
 // --- Project loading (`check` only) ---
 //
@@ -141,6 +142,15 @@ let main (): Unit = {
                     println(lexer.render_tokens(lexer.tokenize(src)));
                 } else if argv[0] == "ast" {
                     println(parser.render_program(parser.parse_program(lexer.tokenize(src))));
+                } else if argv[0] == "emit-llvm" {
+                    // Stage 5. Type-checks first, exactly as `run`
+                    // does — this backend re-derives representations
+                    // bottom-up and assumes a well-typed program (see
+                    // `codegen/codegen.plum`'s own top comment), so
+                    // handing it an unchecked one is not defined.
+                    let program = parser.parse_program(lexer.tokenize(src));
+                    typecheck.check_program(program);
+                    println(codegen.cg_emit_program(program));
                 } else if argv[0] == "run" {
                     let program = parser.parse_program(lexer.tokenize(src));
                     typecheck.check_program(program);

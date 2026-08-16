@@ -790,12 +790,28 @@ pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue], has_globals: 
             4,
             format!("  %r = call double @{entry_fn}({args_ir})\n  call i32 (ptr, ...) @printf(ptr @fmt, double %r)\n"),
         ),
-        CgType::Bool | CgType::Unit => (
+        CgType::Bool => (
             "%d\\0A\\00",
             4,
             format!(
                 "  %r = call i1 @{entry_fn}({args_ir})\n  %rz = zext i1 %r to i32\n  call i32 (ptr, ...) @printf(ptr @fmt, i32 %rz)\n"
             ),
+        ),
+        // A `Unit`-returning entry point prints NOTHING. `Unit` shares
+        // `Bool`'s `i1` representation, so it used to share this print
+        // path too and every compiled program ended with a stray `0`
+        // line — the "pre-existing native-`main()` CLI behavior noticed
+        // several times across this project, never chased down" that
+        // `bootstrap/exec_corpus/README.md` documents and works around
+        // with `head -n -1`. It is this branch, and there was never a
+        // reason for it: `Unit` carries no information, so echoing its
+        // representation is pure noise appended to the real program's
+        // own output. `plum build`'s output is now exactly what the
+        // program printed.
+        CgType::Unit => (
+            "\\00",
+            1,
+            format!("  call i1 @{entry_fn}({args_ir})\n"),
         ),
         // Plum strings are length-prefixed, not NUL-terminated on their
         // own — `printf`-ing one directly via `%s` would read past the
@@ -1418,10 +1434,11 @@ mod tests {
         assert!(run.status.success(), "stderr: {}", String::from_utf8_lossy(&run.stderr));
         let stdout = String::from_utf8_lossy(&run.stdout);
         let lines: Vec<&str> = stdout.lines().collect();
-        // `go`'s own `Unit` return prints last, via `emit_main`'s own
-        // `%d\n` — see `println`'s doc comment on why THAT print (not
-        // this test's own `println` calls) is the trailing `0`.
-        assert_eq!(lines, vec!["3", "foo", "bar", "baz qux", "0"]);
+        // Nothing trails the program's own output: a `Unit`-returning
+        // entry point prints nothing at all (see `emit_main`'s own
+        // `CgType::Unit` arm). This assertion used to end in a stray
+        // `"0"` — `Unit` echoed through `Bool`'s `%d\n` print path.
+        assert_eq!(lines, vec!["3", "foo", "bar", "baz qux"]);
     }
 
     // --- testing framework: `panic_raw` (see `ir::Expr::PanicRaw`) ---

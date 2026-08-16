@@ -84,6 +84,8 @@ plum build bootstrap/self_host -o sh
 ./sh tokens bootstrap/corpus/<topic>/<name>.plum          # lexer only
 ./sh ast    bootstrap/corpus/<topic>/<name>.plum          # lexer + parser
 ./sh run    bootstrap/exec_corpus/<name>/main.plum        # lexer + parser + interpreter
+./sh emit-llvm bootstrap/exec_corpus/<name>/main.plum      # Stage 5: LLVM IR text
+bootstrap/shbuild <file.plum> <out-binary>                # emit-llvm + plum compile-ir
 ./sh check  bootstrap/typecheck_corpus/<name>/main.plum   # lexer + parser + type checker
 ```
 

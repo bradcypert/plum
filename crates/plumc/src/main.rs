@@ -86,6 +86,14 @@ fn main() {
             let rest: Vec<String> = cli_args.collect();
             run_dump_tokens(&rest);
         }
+        Some(first) if first == "emit-llvm" => {
+            let rest: Vec<String> = cli_args.collect();
+            run_emit_llvm(&rest);
+        }
+        Some(first) if first == "compile-ir" => {
+            let rest: Vec<String> = cli_args.collect();
+            run_compile_ir(&rest);
+        }
         Some(first) if first == "lsp" => {
             plumc::lsp::run();
         }
@@ -360,6 +368,15 @@ fn discover_native_c_files(root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn build(root: &Path, out_path: &Path, link_c: &[PathBuf], link_lib: &[String]) -> Result<(), plum_syntax::error::CompileError> {
+    let full_ir = build_ir(root)?;
+    compile_ir_to_binary_with_native(&full_ir, out_path, link_c, link_lib).map_err(plum_syntax::error::CompileError::spanless)
+}
+
+/// The front half of `build` — everything up to and including the
+/// `main` wrapper, stopping short of `clang`. Split out so `plum
+/// emit-llvm` can print exactly the IR `plum build` would have
+/// compiled, with no risk of the two drifting apart.
+fn build_ir(root: &Path) -> Result<String, plum_syntax::error::CompileError> {
     let program = resolve_project_diag(root)?;
     let (body_ir, signatures, resolved_entry, has_globals) = compile_program_to_ir_diag(&program, "main")?;
     let sig = signatures
@@ -383,8 +400,87 @@ fn build(root: &Path, out_path: &Path, link_c: &[PathBuf], link_lib: &[String]) 
     }
     reject_unprintable_return("main", sig.ret.clone()).map_err(plum_syntax::error::CompileError::spanless)?;
     let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit], has_globals);
-    let full_ir = format!("{body_ir}\n{main_ir}");
-    compile_ir_to_binary_with_native(&full_ir, out_path, link_c, link_lib).map_err(plum_syntax::error::CompileError::spanless)
+    Ok(format!("{body_ir}\n{main_ir}"))
+}
+
+/// `plum emit-llvm <project-dir> [-o <file.ll>]`: print the LLVM IR
+/// `plum build` would compile, without compiling it.
+///
+/// Added for self-hosting: the Plum-written backend (`bootstrap/
+/// self_host/codegen/`) needs a reference for what correct IR looks
+/// like for a given program, and diffing against the real compiler's
+/// own output is the most direct form that reference can take. Useful
+/// on its own for anyone debugging generated code.
+fn run_emit_llvm(args: &[String]) {
+    let Some(project_dir) = args.first() else {
+        eprintln!("usage: plum emit-llvm <project-dir> [-o <file.ll>]");
+        std::process::exit(1);
+    };
+    let out = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1));
+    let ir = match build_ir(Path::new(project_dir)) {
+        Ok(ir) => ir,
+        Err(e) => {
+            match module_sources(Path::new(project_dir)) {
+                Ok(sources) => eprintln!("{}", sources.render(&e)),
+                Err(_) => eprintln!("{}", e.message),
+            }
+            std::process::exit(1);
+        }
+    };
+    match out {
+        Some(path) => {
+            if let Err(e) = std::fs::write(path, &ir) {
+                eprintln!("failed to write {path:?}: {e}");
+                std::process::exit(1);
+            }
+            println!("wrote {path:?}");
+        }
+        None => print!("{ir}"),
+    }
+}
+
+/// `plum compile-ir <file.ll> -o <binary> [--link-c f.c] [--link-lib m]`:
+/// compile and link an already-generated LLVM IR file into an
+/// executable.
+///
+/// This is the assemble-and-link step, and it is deliberately a
+/// separate command because the SELF-HOSTED backend needs it: Plum has
+/// no process-spawn builtin, so `bootstrap/self_host` writes a `.ll`
+/// with `write_file` and something else has to invoke `clang`. Even a
+/// finished self-hosted compiler would delegate this step to the
+/// system toolchain, so handing it off is not a bootstrapping cheat —
+/// it's the same division of labor `plum build` already has internally.
+fn run_compile_ir(args: &[String]) {
+    let Some(ir_path) = args.first() else {
+        eprintln!("usage: plum compile-ir <file.ll> -o <binary>");
+        std::process::exit(1);
+    };
+    let Some(out) = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)) else {
+        eprintln!("usage: plum compile-ir <file.ll> -o <binary>");
+        std::process::exit(1);
+    };
+    let ir = match std::fs::read_to_string(ir_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("failed to read {ir_path:?}: {e}");
+            std::process::exit(1);
+        }
+    };
+    let link_c: Vec<PathBuf> = collect_flag(args, "--link-c").into_iter().map(PathBuf::from).collect();
+    let link_lib: Vec<String> = collect_flag(args, "--link-lib");
+    if let Err(e) = compile_ir_to_binary_with_native(&ir, Path::new(out), &link_c, &link_lib) {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+    println!("compiled {ir_path:?} -> {out:?}");
+}
+
+fn collect_flag(args: &[String], flag: &str) -> Vec<String> {
+    args.iter()
+        .enumerate()
+        .filter(|(_, a)| a.as_str() == flag)
+        .filter_map(|(i, _)| args.get(i + 1).cloned())
+        .collect()
 }
 
 /// `plum new <name>`: scaffolds a minimal starter project — a new

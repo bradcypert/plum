@@ -16,16 +16,17 @@ plum run bootstrap/exec_corpus/<name> | head -n -1
 ```
 
 (`head -n -1` drops the CLI's own trailing return-value echo —
-`plum run` always prints `{value:?}` of `main`'s own return after the
-program's own output; since `main` always returns `Unit`, that's
-always a literal `Unit` line, not real program output.)
+`plum run` (the INTERPRETER) always prints `{value:?}` of `main`'s own
+return after the program's own output; since `main` always returns
+`Unit`, that's always a literal `Unit` line, not real program output.
+The NATIVE build no longer needs this — see below.)
 
 **Validating the self-hosted interpreter** (`bootstrap/self_host`,
 native build — see `lexer/lexer.plum`'s own top comment for why):
 
 ```
 plum build bootstrap/self_host -o sh
-./sh run bootstrap/exec_corpus/<name>/main.plum | head -n -1
+./sh run bootstrap/exec_corpus/<name>/main.plum
 ```
 
 `./sh run` type-checks BEFORE interpreting (Stage 4 wired into the same
@@ -36,11 +37,14 @@ satisfy Stage 4's own annotation requirement — see `typecheck_corpus/
 README.md`), a real, documented exception, not a regression. `./sh
 check`/`./sh run` both surface the identical error for it.
 
-The self-hosted CLI's own `run` mode has the SAME trailing-artifact
-quirk for a different, unrelated reason (a pre-existing native-`main()`
-CLI behavior noticed several times across this project, never chased
-down — see DESIGN.md) — `head -n -1` strips it the same way on both
-sides, so the comparison is apples to apples.
+The native side used to have a trailing-artifact quirk too — "a
+pre-existing native-`main()` CLI behavior noticed several times across
+this project, never chased down." It was chased down on 2026-08-15 while
+starting Stage 5: `emit_main` echoed the entry function's return value,
+and `Unit` shared `Bool`'s `%d\n` print path, so every compiled program
+ended with a stray `0`. A `Unit`-returning entry now prints nothing, and
+a compiled binary's output is exactly what the program printed. No
+`head -n -1` on the native side.
 
 ## Self-interpretation
 
@@ -49,7 +53,7 @@ levels — the self-hosted interpreter interpreting the self-hosted
 interpreter interpreting the fixture:
 
 ```
-./sh run bootstrap/self_host run bootstrap/exec_corpus/<name>/main.plum | head -n -1
+./sh run bootstrap/self_host run bootstrap/exec_corpus/<name>/main.plum
 ```
 
 14/14 pass. The same mechanism runs the whole compiler under itself
