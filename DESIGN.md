@@ -9016,3 +9016,47 @@ would catch the accumulator patterns that are NOT self-rebinding, like
 `f(acc.push(x))` in a tail-recursive loop, which is how the parser is
 written. That is now a smaller and much better-understood piece of work
 than it looked.
+
+### The fixed point is now a test (2026-08-16)
+
+`crates/plumc/tests/bootstrap_fixed_point.rs` runs the whole bootstrap
+chain — stage 1 built by the Rust compiler, stage 2 built by stage 1,
+stage 3 built by stage 2 — and asserts the stage-2 and stage-3 IR are
+byte-identical. It also asserts stage 2 is a *working* compiler (a
+fixed point that produces a broken compiler is still a fixed point), by
+having it parse a corpus fixture and type-check the whole compiler.
+
+This was overdue. The project's strongest invariant had no automated
+guard, and the evidence that it needs one is not hypothetical:
+
+- During the refcount **layout** change, two offset edits silently
+  failed to apply. 16 of 17 exec_corpus fixtures still passed.
+  `bootstrap-check` caught it immediately.
+- Every one of the **three ownership bugs** in the reference-counting
+  work showed up here first. None was visible in the corpus.
+
+It costs about 65 seconds, most of it building stage 1, which roughly
+doubles `cargo test --release`. That is a fair price for the one test
+that can tell you the compiler compiled by itself is the same compiler.
+
+It deliberately does not go through `./sh`: that wrapper caps an
+interactive runaway's memory, and a test should fail by asserting rather
+than by being killed.
+
+### Where the self-hosted backend actually lands
+
+| | time to type-check the whole compiler |
+| --- | --- |
+| `sh` — built by the Rust compiler, full FBIP | 0.168s |
+| `sh_fin` — built by the self-hosted backend | 0.229s |
+
+**Within 1.36x of the real compiler**, from a backend that leaks nothing,
+has no liveness analysis, and whose entire reuse story is one
+syntactic special case. The average allocation is now 34 bytes — the
+O(n²) copying that dominated everything is gone.
+
+A general last-use analysis remains the right long-term answer, and
+would catch the accumulators that are not self-rebinding (`f(acc.push(x))`
+in a tail-recursive loop, which is how the parser is written). But the
+measured upside is now small, and saying so is more useful than building
+it: the backend is fast enough that the next real work is elsewhere.
