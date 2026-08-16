@@ -8965,26 +8965,54 @@ result holding heap elements needs its own reference to each and one
 holding `Int`s must not touch them. That kind of type-directed choice is
 something only a backend with the typed tree can make.
 
-#### Where it stands, and what is left
+#### Reuse, without a last-use analysis
 
-| | allocations | peak RSS | time |
+The remaining bytes were one shape: `acc = acc.push(x)` in an
+accumulator loop, where every push copied the whole array — the same
+accidental O(n²) this project has now hit in five separate places.
+
+Reuse needs to know the receiver is dead, and in general that needs a
+last-use analysis: a dynamic `rc == 1` check is NOT sufficient, because
+under borrowing the slot's own reference IS the 1, so a unique count
+does not mean the value is unobserved.
+
+But there is one shape where deadness is SYNTACTIC: a self-rebinding
+assignment. In `acc = acc.push(x)` the slot is overwritten with the
+result, so nothing can observe a mutation of the old value. That makes
+it sound to hand the slot's reference straight into the operation and
+let it grow the array in place when the cell turns out to be uniquely
+referenced and malloc already gave it the room — `malloc_usable_size`
+again, no capacity word.
+
+Two details decide whether this is a win or a disaster:
+
+- **The copy path must release the old array.** Its release function is
+  passed IN, because the runtime cannot name it — it depends on the
+  element type. Forgetting it leaked every intermediate and cost 3.1 GB
+  of peak RSS, which is how it was found.
+- **The copy path must over-allocate.** Growing by doubling is what
+  makes the next pushes hit the in-place path and the whole
+  accumulation amortized O(1), rather than accidentally so. The slack
+  is invisible: `len` is still the true element count.
+
+The same treatment applies to `acc = acc.concat(x)` for strings.
+
+#### Where it stands
+
+| | allocated | peak RSS | time |
 | --- | --- | --- | --- |
-| leaking | 21.4M | 6,595 MB | 1.35s |
-| counted | 21.4M | 63.8 MB | 2.95s |
-| + static literals, global slots, `Array.concat` | **2.8M** | **46.6 MB** | **2.58s** |
+| leaking | 6.78 GB | 7,155 MB | 1.41s |
+| counted, unoptimised | 6.78 GB | 65 MB | 3.07s |
+| **counted + all of the above** | **94.7 MB** | **47.9 MB** | **0.24s** |
 
-**The remaining 6.5 GB of allocated bytes is one shape:** `acc =
-acc.push(x)` in an accumulator loop, where every push copies the whole
-array. 680,784 array allocations averaging 9.6 KB. That is the same
-accidental O(n²) this project has now hit in four separate places.
+**Six times faster than the leaking build it started from, on 1/150th
+the memory.** The counting was never the cost; the O(n²) copying was,
+and it was there in the leaking build too — reference counting is what
+made it visible and what made fixing it possible, because reuse needs to
+know a value is dying.
 
-Fixing it needs REUSE — appending in place when the array is dying —
-and reuse needs to know the receiver is dead. A dynamic `rc == 1` check
-is not enough, and the reason is worth stating: under borrowing, the
-slot's own reference IS the 1, so a unique count does not mean the value
-is unobserved. Only a last-use analysis can distinguish "the only
-reference" from "the last use of the only reference".
-
-So the earlier conclusion stands but for a sharper reason. Last-use
-analysis is worth building — not to remove increments, which measurement
-showed is worth 3%, but to enable reuse, which is worth the 6.5 GB.
+A general last-use analysis is still the right long-term answer — it
+would catch the accumulator patterns that are NOT self-rebinding, like
+`f(acc.push(x))` in a tail-recursive loop, which is how the parser is
+written. That is now a smaller and much better-understood piece of work
+than it looked.

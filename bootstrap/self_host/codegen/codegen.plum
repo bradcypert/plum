@@ -853,9 +853,10 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
             // `Array.push` accumulation, `String.index_of`), so it is
             // worth special-casing even though a general last-use
             // analysis would subsume it.
-            TSAssign(name, value) => if cg_is_self_concat(name, value) {
-                let rest0 = cg_self_concat(p, env, n, name, value, stmts, i);
-                rest0
+            TSAssign(name, value) => if cg_is_self_method(name, value, "concat") {
+                cg_self_concat(p, env, n, name, value, stmts, i)
+            } else if cg_is_self_method(name, value, "push") {
+                cg_self_push(p, env, n, name, value, stmts, i)
             } else {
                 let r = cg_expr(p, env, n, value);
                 let store = match cg_lookup(env, name) {
@@ -874,11 +875,13 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
         }
     }
 
-// Is this assignment `x = x.concat(<something>)`?
-let cg_is_self_concat (name: String) (value: typecheck.TExpr): Bool =
+// Is this assignment `x = x.<method>(<one argument>)`? That shape — and
+// only that shape — makes the slot's current value provably dead: it is
+// overwritten with the result, so nothing can observe a mutation.
+let cg_is_self_method (name: String) (value: typecheck.TExpr) (method: String): Bool =
     match value.node {
         TMethodCall(m, base, args) =>
-            if m == "concat" && args.len() == 1 { match base.node { TIdent(b) => b == name, _ => false } } else { false },
+            if m == method && args.len() == 1 { match base.node { TIdent(b) => b == name, _ => false } } else { false },
         _ => false,
     }
 
@@ -904,6 +907,37 @@ let cg_self_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
             },
         },
         _ => { cg_fail("internal: cg_self_concat on a non-concat"); cg_stmts(p, env, n, stmts, i + 1) },
+    }
+
+// `acc = acc.push(x)` — an accumulator loop, and the single largest
+// remaining source of allocated bytes before this: every `push` copied
+// the whole array, making an n-element accumulation cost O(n^2). Here
+// the old array is dead, so it can grow in place whenever malloc
+// already gave it the room.
+let cg_self_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (value: typecheck.TExpr) (stmts: Array[typecheck.TStmt]) (i: Int): BlockEmit =
+    match value.node {
+        TMethodCall(_, base, args) => match cg_lookup(env, name) {
+            None => { cg_fail("assignment to an unbound name: ".concat(name)); cg_stmts(p, env, n, stmts, i + 1) },
+            Some(slot) => {
+                let elem = cg_elem_ty(slot.ty);
+                let recv = cg_reg(n);
+                let v = cg_expr(p, env, n + 1, args[0]);
+                let cell = cg_reg(v.n);
+                let len = cg_reg(v.n + 1);
+                let idx = cg_reg(v.n + 2);
+                let code = "  ".concat(recv).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
+                    .concat(v.code)
+                    .concat("  ").concat(cell).concat(" = call ptr @plum_array_push_grow(ptr ").concat(recv).concat(", i1 ").concat(if cg_is_heap(elem) { "1" } else { "0" }).concat(", ptr ").concat(cg_rel_sym(slot.ity)).concat(")\n")
+                    .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(cell).concat(")\n")
+                    .concat("  ").concat(idx).concat(" = sub i64 ").concat(len).concat(", 1\n")
+                    .concat(cg_elem_ptr_lines(cell, idx, v.n + 3))
+                    .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 3)).concat("\n")
+                    .concat("  store ptr ").concat(cell).concat(", ptr ").concat(slot.ptr).concat("\n");
+                let rest = cg_stmts(p, env, v.n + 6, stmts, i + 1);
+                BlockEmit { code: code.concat(rest.code), allocas: v.allocas.concat(rest.allocas), releases: v.releases.concat(rest.releases), globals: v.globals.concat(rest.globals), env: rest.env, n: rest.n }
+            },
+        },
+        _ => { cg_fail("internal: cg_self_push on a non-push"); cg_stmts(p, env, n, stmts, i + 1) },
     }
 
 let cg_let_name (pattern: parser.PPattern): String =
