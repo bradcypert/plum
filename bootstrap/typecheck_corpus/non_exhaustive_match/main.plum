@@ -1,0 +1,10 @@
+enum Shape { Circle(Int), Square(Int), Triangle(Int) }
+
+// `Triangle` has no arm and there is no catch-all, so this must be
+// rejected by BOTH checkers with the same reasoning.
+let area (s: Shape): Int = match s {
+    Circle(r) => r * r,
+    Square(x) => x * x,
+}
+
+let main (): Unit = println(area(Circle(2)).to_string())

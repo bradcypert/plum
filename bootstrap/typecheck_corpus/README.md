@@ -38,3 +38,20 @@ top-level function must be fully annotated) for this specific fixture.
 A real, expected, documented exclusion — not a bug — see `typecheck/
 infer.plum`'s own top comment for the full reasoning behind requiring
 annotations in the first place.
+
+## `non_exhaustive_match/`
+
+An enum `match` with a variant that has no arm and no catch-all. Both
+checkers reject it with the *same* message — that agreement is the
+point of the fixture, not the rejection on its own. The self-hosted
+checker deliberately implements the real compiler's rule rather than a
+stricter or cleverer one: two checkers that disagree about which
+programs are valid is a worse outcome than either rule alone.
+
+The rule, in both: only ENUM scrutinees are checked; a trailing
+wildcard or bare binding exempts the match; only TOP-LEVEL variant tags
+count (`Some(Ok(x))` covers `Some`, not "`Some` whose payload is
+`Ok`"); an or-pattern covers every tag it names; and a GUARDED arm still
+counts as covering its tag. The last two make the check incomplete
+rather than unsound — it never rejects a match that does cover
+everything.

@@ -267,3 +267,13 @@ pub let ctx_variant_generics (ctx: TyContext) (tag: String): Array[String] =
         Some(v) => v.enum_generics,
         None => { fail_ctx("unknown variant: ".concat(tag)); [] },
     }
+
+// Every variant tag of an enum, in declaration order — what
+// exhaustiveness checking needs to know what a `match` has to cover.
+// `None` for an unknown name, which is not an error here: the caller
+// only asks about a scrutinee whose type already resolved to an enum.
+pub let ctx_enum_tags (ctx: TyContext) (name: String): Option[Array[String]] =
+    match find_enum(ctx, name) {
+        Some(info) => Some(Array.map(info.variants, |v| v.tag)),
+        None => None,
+    }

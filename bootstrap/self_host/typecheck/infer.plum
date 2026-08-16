@@ -963,10 +963,88 @@ let infer_struct_fields (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
 let infer_match (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee: parser.PExpr) (arms: Array[parser.MatchArmNode]): InferResult = {
     let sr = infer_expr(p2, state, env, acc, scrutinee);
     let ar = infer_match_arms(p2, sr.state, env, sr.subst, subst_apply(sr.subst, sr.ty), arms, 0, None, []);
+    check_exhaustive(p2, subst_apply(ar.subst, sr.ty), arms);
     ir_leaf(ar.ty, ar.subst, ar.state, TMatch(sr.texpr, ar.tarms))
 }
 
 struct ArmsResult { ty: ITy, subst: Subst, state: FreshState, tarms: Array[TArm] }
+
+// --- Exhaustiveness ---
+//
+// The SAME rule the real compiler applies (`plum-types::infer`'s own
+// exhaustiveness block), deliberately, not a stricter or cleverer one:
+// two checkers that disagree about which programs are valid is a worse
+// outcome than either rule on its own.
+//
+// Only an ENUM scrutinee is checked. A struct or tuple has a single
+// shape, trivially covered by any arm that type-checks against it at
+// all, and an `Int`/`String` scrutinee has no finite set of values to
+// enumerate.
+//
+// A trailing catch-all — a wildcard or a bare binding — exempts the
+// match, because it accepts anything by construction.
+//
+// Only TOP-LEVEL variant tags count. `Some(Ok(x))` covers `Some`, not
+// "`Some` when its payload is `Ok`". That makes the check INCOMPLETE
+// (it accepts some matches that can still fail at runtime on a nested
+// shape) rather than unsound (it never rejects a match that does cover
+// everything), which is the direction this project consistently
+// chooses — the same reasoning `movecheck.rs`'s permissiveness records.
+//
+// A GUARDED arm still counts as covering its tag. That is the real
+// compiler's documented choice too: a variant reachable only through a
+// guard that fails hits the existing runtime error unchanged, and this
+// check exists to catch the far more common case of a variant with no
+// arm at all, without reasoning about guard truth at compile time.
+let check_exhaustive (p2: Program2) (scrutinee_ty: ITy) (arms: Array[parser.MatchArmNode]): Unit =
+    match scrutinee_ty {
+        ITEnum(enum_name, _) => match ctx_enum_tags(p2.ctx, enum_name) {
+            None => (),
+            Some(all_tags) =>
+                if has_catchall_arm(arms) { () }
+                else {
+                    let missing = missing_tags(all_tags, covered_tags(arms, 0, []), 0, []);
+                    if Array.is_empty(missing) { () }
+                    else { fail_tc("match is not exhaustive — missing variant(s): ".concat(join_tags(missing, 0, ""))) }
+                },
+        },
+        _ => (),
+    }
+
+// Only the LAST arm can exempt the match: an earlier catch-all would
+// make every arm after it dead, which is a different problem and not
+// this check's business.
+let has_catchall_arm (arms: Array[parser.MatchArmNode]): Bool =
+    if Array.is_empty(arms) { false } else { is_catchall_pattern(arms[arms.len() - 1].pattern) }
+
+let is_catchall_pattern (pattern: parser.PPattern): Bool =
+    match pattern { PWildcard => true, PIdent(_) => true, _ => false }
+
+let covered_tags (arms: Array[parser.MatchArmNode]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= arms.len() { acc }
+    else { covered_tags(arms, i + 1, Array.concat(acc, tags_of_pattern(arms[i].pattern))) }
+
+// An or-pattern covers every tag its alternatives name.
+let tags_of_pattern (pattern: parser.PPattern): Array[String] =
+    match pattern {
+        PVariant(path, _) => [path[path.len() - 1]],
+        POr(alts) => or_alt_tags(alts, 0, []),
+        _ => [],
+    }
+
+let or_alt_tags (alts: Array[parser.PPattern]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= alts.len() { acc }
+    else { or_alt_tags(alts, i + 1, Array.concat(acc, tags_of_pattern(alts[i]))) }
+
+let missing_tags (all_tags: Array[String]) (covered: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= all_tags.len() { acc }
+    else if Array.contains(covered, all_tags[i]) { missing_tags(all_tags, covered, i + 1, acc) }
+    else { missing_tags(all_tags, covered, i + 1, acc.push(all_tags[i])) }
+
+let join_tags (tags: Array[String]) (i: Int) (acc: String): String =
+    if i >= tags.len() { acc }
+    else if acc == "" { join_tags(tags, i + 1, tags[i]) }
+    else { join_tags(tags, i + 1, acc.concat(", ").concat(tags[i])) }
 
 let infer_match_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee_ty: ITy) (arms: Array[parser.MatchArmNode]) (i: Int) (result_ty: Option[ITy]) (tarms: Array[TArm]): ArmsResult =
     if i >= arms.len() { ArmsResult { ty: Option.unwrap_or(result_ty, ITUnit), subst: acc, state: state, tarms: tarms } }

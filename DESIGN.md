@@ -9101,3 +9101,40 @@ finished.
 
 Both parsers agree on the new syntax — the self-hosted parser renders
 `(tup Int String)` identically, verified across all 99 corpus fixtures.
+
+### `match` exhaustiveness in the self-hosted checker (2026-08-16)
+
+The self-hosted checker now rejects a `match` on an enum that leaves a
+variant uncovered, with the same message the real compiler produces:
+
+```
+match is not exhaustive — missing variant(s): Triangle
+```
+
+**It implements the real compiler's rule deliberately, rather than a
+stricter or cleverer one.** Two checkers that disagree about which
+programs are valid is a worse outcome than either rule on its own, and
+the real compiler's rule is already reasoned through in its own source:
+
+- Only an ENUM scrutinee is checked. A struct or tuple has a single
+  shape, trivially covered by any arm that type-checks against it; an
+  `Int` or `String` scrutinee has no finite set of values to enumerate.
+- A trailing catch-all — wildcard or bare binding — exempts the match,
+  because it accepts anything by construction.
+- Only TOP-LEVEL tags count. `Some(Ok(x))` covers `Some`, not "`Some`
+  whose payload is `Ok`".
+- An or-pattern covers every tag its alternatives name.
+- A GUARDED arm still counts as covering its tag.
+
+The last two points make the check **incomplete rather than unsound**:
+it never rejects a match that genuinely covers everything, and it can
+accept one that still fails at runtime on a nested shape or a failed
+guard. That is the direction this project consistently chooses, and it
+is the same reasoning `movecheck.rs`'s permissiveness records.
+
+The self-hosted compiler's own sources needed no changes — every `match`
+in them was already exhaustive, which is a mildly reassuring thing to
+learn from turning a check on.
+
+`bootstrap/typecheck_corpus/non_exhaustive_match/` pins the agreement
+between the two checkers, not just the rejection.
