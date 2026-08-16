@@ -99,6 +99,11 @@ pub enum CgTy {
     // The VALUE is a `ptr` to `{ ptr code, captures... }` — see
     // `cg_closure`.
     CgClosure(Array[CgTy], CgTy),
+    // A tuple is an anonymous struct: `{ i64 rc, elem0, elem1, ... }`,
+    // laid out by `cg_field_offset` exactly as a named struct's fields
+    // are. Nothing about it needs a declaration, which is the whole
+    // difference — the element types come from the type itself.
+    CgTuple(Array[CgTy]),
 }
 
 // `Unit` is an `i1` rather than LLVM's own `void` so that every Plum
@@ -116,6 +121,7 @@ let cg_llvm_ty (t: CgTy): String =
         CgEnum(_) => "ptr",
         CgArray(_) => "ptr",
         CgClosure(_, _) => "ptr",
+        CgTuple(_) => "ptr",
     }
 
 let cg_ty_name (t: CgTy): String =
@@ -129,7 +135,13 @@ let cg_ty_name (t: CgTy): String =
         CgEnum(name) => name,
         CgArray(elem) => "Array[".concat(cg_ty_name(elem)).concat("]"),
         CgClosure(_, ret) => "(..) -> ".concat(cg_ty_name(ret)),
+        CgTuple(elems) => "(".concat(cg_ty_name_list(elems, 0, "")).concat(")"),
     }
+
+let cg_ty_name_list (ts: Array[CgTy]) (i: Int) (acc: String): String =
+    if i >= ts.len() { acc }
+    else if acc == "" { cg_ty_name_list(ts, i + 1, cg_ty_name(ts[i])) }
+    else { cg_ty_name_list(ts, i + 1, acc.concat(", ").concat(cg_ty_name(ts[i]))) }
 
 let cg_ty_eq (a: CgTy) (b: CgTy): Bool = cg_ty_name(a) == cg_ty_name(b)
 
@@ -507,7 +519,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
         TArrayNs(name, args) => cg_array_ns_call(p, env, n, name, args),
         TPrintln(arg) => cg_println(p, env, n, arg),
-        TTupleLit(_) => { cg_fail("tuples aren't supported yet"); cg_unit_emit(n) },
+        TTupleLit(elems) => cg_tuple_lit(p, env, n, elems, cg_ty(p, e)),
         TUnsupported(what) => { cg_fail(what.concat(" isn't supported by this backend")); cg_unit_emit(n) },
     }
 
@@ -548,7 +560,7 @@ let cg_of_ity (t: typecheck.ITy): CgTy =
         ITStruct(name, args) => if name == "Array" { CgArray(cg_of_ity(args[0])) } else { CgStruct(name) },
         ITEnum(name, _) => CgEnum(name),
         ITFunction(ptys, ret) => CgClosure(Array.map(ptys, |q| cg_of_ity(q)), cg_of_ity(ret)),
-        ITTuple(_) => { cg_fail("tuples aren't supported yet"); CgUnit },
+        ITTuple(elems) => CgTuple(Array.map(elems, |q| cg_of_ity(q))),
         // DEFAULTING. A type variable still free after a function's
         // inference is one nothing in that function constrained — the
         // program never depends on which type it is, or unification
@@ -1094,6 +1106,7 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         CgEnum(name) => { cg_fail(".to_string() on an enum isn't supported yet: ".concat(name)); cg_unit_emit(b.n) },
         CgArray(_) => { cg_fail(".to_string() on an Array isn't supported yet"); cg_unit_emit(b.n) },
         CgClosure(_, _) => { cg_fail("a closure has no .to_string()"); cg_unit_emit(b.n) },
+        CgTuple(_) => { cg_fail(".to_string() on a tuple isn't supported yet"); cg_unit_emit(b.n) },
     }
 }
 
@@ -1188,18 +1201,39 @@ let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: Str
         cg_array_store_elems(p, env, r.n + 1, cell, elems, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
     }
 
-// No bounds check. The real backend emits one; this one does not, which
-// is a deliberate v1 cut and a genuinely unsafe one — an out-of-range
-// index reads whatever follows the cell.
+// BOUNDS-CHECKED, like the real backend. An unchecked index was a
+// deliberate v1 cut and a genuinely unsafe one — an out-of-range read
+// returned whatever followed the cell, which with reference counting
+// then got INCREMENTED, writing through a pointer made of arbitrary
+// bytes. The check costs a compare and a never-taken branch.
+//
+// The failure message is the real backend's, verbatim, so a program
+// that indexes past the end behaves identically under both.
 let cg_index (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (idx: typecheck.TExpr) (elem: CgTy): Emit = {
     let b = cg_borrow(p, env, n, base);
     let i = cg_expr(p, env, b.n, idx);
-    let out = cg_reg(i.n + 3);
-    let code = b.code.concat(i.code).concat(cg_elem_ptr_lines(b.val, i.val, i.n))
-        .concat("  ").concat(out).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(i.n)).concat("\n")
+    let len = cg_reg(i.n);
+    let lo = cg_reg(i.n + 1);
+    let hi = cg_reg(i.n + 2);
+    let ok = cg_reg(i.n + 3);
+    let ok_label = cg_label(i.n + 4);
+    let fail_label = cg_label(i.n + 5);
+    let out = cg_reg(i.n + 9);
+    let code = b.code.concat(i.code)
+        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(b.val).concat(")\n")
+        .concat("  ").concat(lo).concat(" = icmp sge i64 ").concat(i.val).concat(", 0\n")
+        .concat("  ").concat(hi).concat(" = icmp slt i64 ").concat(i.val).concat(", ").concat(len).concat("\n")
+        .concat("  ").concat(ok).concat(" = and i1 ").concat(lo).concat(", ").concat(hi).concat("\n")
+        .concat("  br i1 ").concat(ok).concat(", label %").concat(ok_label).concat(", label %").concat(fail_label).concat("\n")
+        .concat(fail_label).concat(":\n")
+        .concat("  call void @plum_bounds_fail()\n")
+        .concat("  br label %").concat(ok_label).concat("\n")
+        .concat(ok_label).concat(":\n")
+        .concat(cg_elem_ptr_lines(b.val, i.val, i.n + 6))
+        .concat("  ").concat(out).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(i.n + 6)).concat("\n")
         .concat(cg_inc(elem, out))
         .concat(b.drop);
-    Emit { code: code, allocas: b.allocas.concat(i.allocas), releases: b.releases.concat(i.releases), globals: b.globals.concat(i.globals), val: out, ty: elem, n: i.n + 4 }
+    Emit { code: code, allocas: b.allocas.concat(i.allocas), releases: b.releases.concat(i.releases), globals: b.globals.concat(i.globals), val: out, ty: elem, n: i.n + 10 }
 }
 
 let cg_array_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (value: typecheck.TExpr) (ty: CgTy): Emit = {
@@ -1565,6 +1599,25 @@ let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck
 
 // --- Structs, enums, and pattern matching ---
 
+// A tuple literal. Identical to a struct literal minus the declaration
+// lookup: elements are already in order, so their index IS their slot.
+let cg_tuple_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[typecheck.TExpr]) (ty: CgTy): Emit = {
+    let cell = cg_reg(n);
+    let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((8 + 8 * elems.len()).to_string()).concat(")\n");
+    let f = cg_store_tuple(p, env, n + 1, cell, elems, 0, "", "", "", "");
+    Emit { code: head.concat(f.code), allocas: f.allocas, releases: f.releases, globals: f.globals, val: cell, ty: ty, n: f.n }
+}
+
+let cg_store_tuple (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (elems: Array[typecheck.TExpr]) (i: Int) (code: String) (allocas: String) (releases: String) (globals: String): FieldsEmit =
+    if i >= elems.len() { FieldsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
+    else {
+        let r = cg_expr(p, env, n, elems[i]);
+        let fp = cg_reg(r.n);
+        let line = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(i).to_string()).concat("\n")
+            .concat("  store ").concat(cg_llvm_ty(r.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(fp).concat("\n");
+        cg_store_tuple(p, env, r.n + 1, cell, elems, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
+    }
+
 // A struct literal: allocate the cell, then store each field at its
 // declared index. Fields are stored in DECLARATION order regardless of
 // the order they were written in the literal, which is what makes a
@@ -1702,6 +1755,7 @@ let cg_zero_of (t: CgTy): String =
         CgEnum(_) => "null",
         CgArray(_) => "null",
         CgClosure(_, _) => "null",
+        CgTuple(_) => "null",
     }
 
 struct ArmsEmit { code: String, allocas: String, releases: String,globals: String, n: Int }
@@ -1797,7 +1851,10 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
         PStr(v) => cg_pat_str(env, n, sval, v),
         PVariant(path, arg_pats) => cg_pat_variant(p, env, n, path[path.len() - 1], arg_pats, sval, sity),
         PStruct(path, field_pats, _) => cg_pat_struct(p, env, n, path[path.len() - 1], field_pats, sval, sity),
-        PTuple(_) => { cg_fail("tuple patterns aren't supported yet"); PatEmit { code: "", binds: "", allocas: "", releases: "",globals: "", test: "0", env: env, n: n } },
+        // A tuple pattern always matches its own type — there is only
+        // one shape — so it contributes no test of its own, only the
+        // sub-patterns'.
+        PTuple(pats) => cg_pat_fields(p, env, n, cg_tuple_index_names(pats, 0, []), cg_tuple_elem_itys(sity), cg_tuple_field_pats(pats, 0, []), 0, sval, "1", "", "", "", "", ""),
         POr(_) => { cg_fail("or-patterns aren't supported yet"); PatEmit { code: "", binds: "", allocas: "", releases: "",globals: "", test: "0", env: env, n: n } },
     }
 
@@ -1864,6 +1921,20 @@ let cg_pat_struct (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (f
     cg_pat_fields(p, env, n, typecheck.ctx_field_names(p.ctx, name),
         Array.map(typecheck.ctx_field_types(p.ctx, name), |t| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), cg_ity_args(sity), t)),
         field_pats, 0, sval, "1", "", "", "", "", "")
+
+// A tuple pattern is destructured POSITIONALLY, but `cg_pat_fields`
+// works by field name — so each position is given its index as a name.
+// Reusing the struct path is the point: a tuple is an anonymous struct,
+// and the emitter should not have a second copy of the same loop.
+let cg_tuple_index_names (pats: Array[parser.PPattern]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= pats.len() { acc } else { cg_tuple_index_names(pats, i + 1, acc.push(i.to_string())) }
+
+let cg_tuple_field_pats (pats: Array[parser.PPattern]) (i: Int) (acc: Array[parser.FieldPatternNode]): Array[parser.FieldPatternNode] =
+    if i >= pats.len() { acc }
+    else { cg_tuple_field_pats(pats, i + 1, acc.push(parser.FieldPatternNode { name: i.to_string(), pattern: pats[i] })) }
+
+let cg_tuple_elem_itys (t: typecheck.ITy): Array[typecheck.ITy] =
+    match t { ITTuple(elems) => elems, _ => { cg_fail("expected a tuple"); [] } }
 
 // A struct's or enum's type ARGUMENTS at a use site. Anything else has
 // none, which is the right answer for a primitive scrutinee.
@@ -2050,6 +2121,7 @@ let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): A
                 if name == "Array" { cg_eq_close(p, args[0], acc2) }
                 else { cg_eq_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2) },
             ITEnum(name, args) => cg_eq_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2),
+            ITTuple(elems) => cg_eq_close_list(p, elems, 0, acc2),
             _ => acc2,
         }
     }
@@ -2076,6 +2148,7 @@ let cg_emit_eq_fn (p: CgProgram) (t: typecheck.ITy): String =
             if name == "Array" { cg_emit_array_eq(t, args[0]) }
             else { cg_emit_struct_eq(t, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
         ITEnum(name, args) => cg_emit_enum_eq(p, t, cg_find_enum(p, name).variants, args),
+        ITTuple(elems) => cg_emit_struct_eq(t, elems),
         _ => "",
     }
 
@@ -2282,6 +2355,7 @@ let cg_is_heap (t: CgTy): Bool =
     match t {
         CgInt => false, CgFloat => false, CgBool => false, CgUnit => false,
         CgStr => true, CgStruct(_) => true, CgEnum(_) => true, CgArray(_) => true, CgClosure(_, _) => true,
+        CgTuple(_) => true,
     }
 
 // After `memcpy`ing %n elements into a new array cell: the copy needs
@@ -2398,6 +2472,7 @@ let cg_rel_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): 
                         if name == "Array" { cg_rel_close(p, args[0], acc2) }
                         else { cg_rel_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2) },
                     ITEnum(name, args) => cg_rel_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2),
+                    ITTuple(elems) => cg_rel_close_list(p, elems, 0, acc2),
                     // A closure's captures are not visible from its
                     // type, so its cell cannot be walked structurally.
                     // Releasing one frees the cell and LEAKS whatever it
@@ -2448,6 +2523,7 @@ let cg_emit_rel_fn (p: CgProgram) (t: typecheck.ITy): String =
             if name == "Array" { cg_emit_array_rel(t, args[0]) }
             else { cg_emit_struct_rel(t, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
         ITEnum(name, args) => cg_emit_enum_rel(p, t, cg_find_enum(p, name).variants, args),
+        ITTuple(elems) => cg_emit_struct_rel(t, elems),
         ITFunction(_, _) => cg_rel_head(t).concat(cg_rel_tail(())),
         _ => "",
     }

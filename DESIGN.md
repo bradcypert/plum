@@ -9200,3 +9200,47 @@ checkers reject reaching into a sibling module unqualified.
 
 `bind_param_types` is `bind_params` again — the workaround is undone,
 and the compiler type-checks itself with both modules using the name.
+
+### Bounds checks, and tuple values in the self-hosted backend (2026-08-16)
+
+**Array indexing is bounds-checked.** It was an unchecked read before —
+a deliberate v1 cut, and a genuinely unsafe one that got worse when
+reference counting arrived: an out-of-range read returned whatever
+followed the cell, and that value was then INCREMENTED, writing through
+a pointer made of arbitrary bytes. The check is a compare and a
+never-taken branch, and the failure message is the real backend's
+verbatim ("array index out of bounds"), so a program that indexes past
+the end behaves identically under both. Negative indices are caught too.
+
+**Tuples are compiled.** A tuple is an anonymous struct — `{ i64 rc,
+elem0, elem1, ... }`, laid out by the same `cg_field_offset` a named
+struct's fields use. Construction, positional destructuring, structural
+equality and release all reuse the struct paths rather than growing a
+second copy of the same loops: a tuple pattern is handed its element
+INDEX as a field name and goes through `cg_pat_fields` unchanged.
+
+**The self-hosted backend now compiles all 17 exec_corpus fixtures.**
+
+#### The real backend still cannot, and the reason is interesting
+
+`plum build` rejects a signature involving a tuple. The obstacle is
+documented at length in `codegen_cli.rs` already: `lower.rs` tags every
+tuple by ARITY alone (`tuple_tag(2)` → `"2Tuple"`), and `tag_fields` is
+a flat map from tag to field types — so `(Int, String)` and
+`(Bool, Bool)` would need one tag to carry two different layouts
+simultaneously. Fixing it means type-specialized tuple tags threaded
+through `plum_types::Infer` and `lower.rs`, which that comment calls
+"real, cross-crate work".
+
+**The self-hosted backend never had this problem, and it is worth saying
+why.** It has no tag table for tuples to collide in: a tuple's element
+types come from the TYPE at each use site, read off the typed tree.
+`ITTuple([Int, Str])` and `ITTuple([Bool, Bool])` are simply different
+types, and `cg_of_ity` turns each into its own `CgTuple`. The tag-table
+design made tuples hard; the typed tree made them fall out.
+
+So the bootstrap backend now compiles three things the real one can't:
+`let empty = []` (uninferable there), a closure-typed struct field, and
+tuples. Not a claim of superiority — the first two are deliberate
+rejections — but the third is a genuine capability the older design
+made expensive.
