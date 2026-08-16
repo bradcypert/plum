@@ -523,7 +523,19 @@ let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cal
                     // shadowed by a module or prelude name.
                     infer_method_call(p2, state, env, acc, base, method_name, args)
                 } else {
-                    match builtin_sig(ns.concat(".").concat(method_name)) {
+                    // An ASSOCIATED function declared in source (`let
+                    // Array.reverse[T] (..)`) is checked before the
+                    // builtin of the same name, matching the shadowing
+                    // order everywhere else here: a real declaration
+                    // wins over a prelude signature, because in the
+                    // real compiler the prelude IS a declaration and a
+                    // later one shadows it. Without this, prelude
+                    // source could declare `Array.reverse` and no call
+                    // site could reach it — the qualified name was only
+                    // ever looked up in `builtin_sig`.
+                    match find_sig(p2.sigs, ns.concat(".").concat(method_name)) {
+                        Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
+                        None => match builtin_sig(ns.concat(".").concat(method_name)) {
                         Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
                         // A MODULE-qualified call (`lexer.tokenize(src)`).
                         // `main.plum` merges every module's items into one
@@ -539,7 +551,7 @@ let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cal
                             Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
                             None => infer_method_call(p2, state, env, acc, base, method_name, args),
                         },
-                    }
+                    } }
                 }
             },
             _ => infer_method_call(p2, state, env, acc, base, method_name, args),
@@ -726,6 +738,13 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         let ar = infer_expr(p2, br.state, env, s1, args[0]);
         let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".split() argument: ".concat(e)); ar.subst } };
         ir_leaf(arr_of(ITStr), s2, ar.state, TMethodCall("split", br.texpr, [ar.texpr]))
+    } else if method_name == "to_float" && Array.is_empty(args) {
+        // `Int.to_float()` — a compiler primitive (`ir::Expr::ToFloat`),
+        // like `ends_with`/`split` above, so it has no `builtin_sig`
+        // entry and is recognised here by name and arity.
+        let r = infer_expr(p2, state, env, acc, base);
+        let s1 = match unify(subst_apply(r.subst, r.ty), ITInt) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc(".to_float() receiver: ".concat(e)); r.subst } };
+        ir_leaf(ITFloat, s1, r.state, TMethodCall("to_float", r.texpr, []))
     } else if method_name == "len" && Array.is_empty(args) {
         infer_len(p2, state, env, acc, base)
     } else if method_name == "push" && args.len() == 1 {

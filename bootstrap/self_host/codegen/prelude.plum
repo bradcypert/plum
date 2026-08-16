@@ -1,0 +1,163 @@
+// The PRELUDE, in Plum — prepended to every program this backend
+// compiles, exactly as `crates/plumc`'s own `STDLIB_*_SRC` constants
+// are prepended by the real compiler.
+//
+// Carried as source text rather than loaded from a file so a compiled
+// `sh` needs nothing beside it on disk, which is the same reason the
+// real compiler embeds its own.
+//
+// **These are compiled by this backend, not special-cased in it.**
+// That is the point: a prelude written in Plum is a prelude that
+// proves the backend can handle real Plum. Every function here goes
+// through the same type checker, the same monomorphizer and the same
+// emitter as user code — `Array.slice[T]` is a genuine generic function
+// that gets specialized per element type, not a builtin pretending to
+// be one.
+//
+// Only what CANNOT be written in Plum lives in `runtime.plum` instead:
+// today that is `chars_of` alone, because codepoint awareness has to
+// bottom out somewhere. Everything else here is ordinary source.
+//
+// The definitions mirror `crates/plumc/src/lib.rs`'s own prelude
+// closely enough to be recognisable, but they are not copied
+// mechanically: a few are rewritten to avoid prelude functions this
+// backend doesn't have yet (`Array.take`/`Array.drop`), and the JSON
+// number parser `String.parse_float` delegates to in the real compiler
+// is replaced by a direct one, since dragging in a JSON parser to read
+// a float would be absurd here.
+//
+// `Option`/`Result` are DECLARED here. The type checker seeds them
+// itself (`context.plum`'s `builtin_context`), but the backend needs
+// real declarations to assign variant tags and payload slots — a tag is
+// a layout decision, and nothing in the checker makes it.
+
+pub let cg_prelude_src (unit: Unit): String = cg_lines([
+    "pub enum Option[T] { Some(T), None }",
+    "pub enum Result[T, E] { Ok(T), Err(E) }",
+    "",
+    "pub let Option.is_some[T] (o: Option[T]): Bool = match o { Some(_) => true, None => false }",
+    "pub let Option.is_none[T] (o: Option[T]): Bool = match o { Some(_) => false, None => true }",
+    "pub let Option.unwrap_or[T] (o: Option[T]) (fallback: T): T = match o { Some(v) => v, None => fallback }",
+    "",
+    "pub let Result.is_ok[T, E] (r: Result[T, E]): Bool = match r { Ok(_) => true, Err(_) => false }",
+    "pub let Result.unwrap_or[T, E] (r: Result[T, E]) (fallback: T): T = match r { Ok(v) => v, Err(_) => fallback }",
+    "",
+    "pub let Array.is_empty[T] (xs: Array[T]): Bool = xs.len() == 0",
+    "",
+    "let array_concat_acc[T] (a: Array[T]) (b: Array[T]) (i: Int): Array[T] =",
+    "    if i >= b.len() { a } else { array_concat_acc(a.push(b[i]), b, i + 1) }",
+    "pub let Array.concat[T] (a: Array[T]) (b: Array[T]): Array[T] = array_concat_acc(a, b, 0)",
+    "",
+    "let array_contains_acc[T] (xs: Array[T]) (needle: T) (i: Int): Bool =",
+    "    if i >= xs.len() { false } else if xs[i] == needle { true } else { array_contains_acc(xs, needle, i + 1) }",
+    "pub let Array.contains[T] (xs: Array[T]) (needle: T): Bool = array_contains_acc(xs, needle, 0)",
+    "",
+    "let array_any_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =",
+    "    if i >= xs.len() { false } else if f(xs[i]) { true } else { array_any_acc(xs, f, i + 1) }",
+    "pub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool = array_any_acc(xs, f, 0)",
+    "",
+    "// Clamped at both ends, like the real prelude's own: a slice past",
+    "// the end is the tail, not a crash -- which matters because this",
+    "// backend emits no bounds check of its own.",
+    "let array_slice_acc[T] (xs: Array[T]) (i: Int) (end: Int) (acc: Array[T]): Array[T] =",
+    "    if i >= end { acc } else if i >= xs.len() { acc } else { array_slice_acc(xs, i + 1, end, acc.push(xs[i])) }",
+    "pub let Array.slice[T] (xs: Array[T]) (start: Int) (end: Int): Array[T] =",
+    "    array_slice_acc(xs, if start < 0 { 0 } else { start }, end, [])",
+    "",
+    "let array_reverse_acc[T] (xs: Array[T]) (i: Int) (acc: Array[T]): Array[T] =",
+    "    if i < 0 { acc } else { array_reverse_acc(xs, i - 1, acc.push(xs[i])) }",
+    "pub let Array.reverse[T] (xs: Array[T]): Array[T] = array_reverse_acc(xs, xs.len() - 1, [])",
+    "",
+    "// --- Strings ---",
+    "//",
+    "// All of these are built on `chars_of`, which is the one primitive",
+    "// in `runtime.plum`. That is what makes them codepoint-safe rather",
+    "// than byte-indexed -- `String.slice` can never split a multi-byte",
+    "// character in half, because it never sees bytes at all.",
+    "let chars_join_acc (cs: Array[String]) (i: Int) (acc: String): String =",
+    "    if i >= cs.len() { acc } else { chars_join_acc(cs, i + 1, acc.concat(cs[i])) }",
+    "pub let chars_join (cs: Array[String]): String = chars_join_acc(cs, 0, \"\")",
+    "",
+    "pub let string_reverse (s: String): String = chars_join(Array.reverse(chars_of(s)))",
+    "pub let String.is_empty (s: String): Bool = s.len() == 0",
+    "pub let String.slice (s: String) (start: Int) (end: Int): String = chars_join(Array.slice(chars_of(s), start, end))",
+    "pub let String.repeat (s: String) (n: Int): String = if n <= 0 { \"\" } else { s.concat(String.repeat(s, n - 1)) }",
+    "",
+    "// File I/O. `read_file_raw` is a runtime primitive returning an",
+    "// array -- empty for failure, one element for success -- because",
+    "// hand-written runtime IR cannot construct a `Result` without",
+    "// hard-coding tag numbers the backend assigns per program. The",
+    "// wrapping happens here, where `Ok`/`Err` are ordinary variants.",
+    "let read_file_raw (path: String): Array[String] = []",
+    "pub let read_file (path: String): Result[String, String] = {",
+    "    let r = read_file_raw(path);",
+    "    if Array.is_empty(r) { Err(\"could not read \".concat(path)) } else { Ok(r[0]) }",
+    "}",
+    "",
+    "pub let string_is_ascii_ws (c: String): Bool = c == \" \" || c == \"\\t\" || c == \"\\n\" || c == \"\\r\"",
+    "",
+    "let string_matches_at (cs: Array[String]) (needle: Array[String]) (base: Int) (j: Int): Bool =",
+    "    if j >= needle.len() { true }",
+    "    else if cs[base + j] != needle[j] { false }",
+    "    else { string_matches_at(cs, needle, base, j + 1) }",
+    "",
+    "let string_index_of_acc (cs: Array[String]) (needle: Array[String]) (i: Int): Option[Int] =",
+    "    if i + needle.len() > cs.len() { None }",
+    "    else if string_matches_at(cs, needle, i, 0) { Some(i) }",
+    "    else { string_index_of_acc(cs, needle, i + 1) }",
+    "pub let String.index_of (s: String) (needle: String): Option[Int] = string_index_of_acc(chars_of(s), chars_of(needle), 0)",
+    "",
+    "pub let String.contains (s: String) (needle: String): Bool = Option.is_some(String.index_of(s, needle))",
+    "",
+    "let string_digit_value (c: String): Result[Int, String] = match c {",
+    "    \"0\" => Ok(0), \"1\" => Ok(1), \"2\" => Ok(2), \"3\" => Ok(3), \"4\" => Ok(4),",
+    "    \"5\" => Ok(5), \"6\" => Ok(6), \"7\" => Ok(7), \"8\" => Ok(8), \"9\" => Ok(9),",
+    "    _ => Err(\"expected a digit, found \".concat(c)),",
+    "}",
+    "",
+    "let string_parse_int_acc (cs: Array[String]) (i: Int) (acc: Int) (any: Bool): Result[Int, String] =",
+    "    if i >= cs.len() { if any { Ok(acc) } else { Err(\"expected at least one digit\") } }",
+    "    else { match string_digit_value(cs[i]) {",
+    "        Ok(d) => string_parse_int_acc(cs, i + 1, acc * 10 + d, true),",
+    "        Err(e) => Err(e),",
+    "    } }",
+    "",
+    "pub let String.parse_int (s: String): Result[Int, String] = {",
+    "    let cs = chars_of(s);",
+    "    if Array.is_empty(cs) { Err(\"empty string\") }",
+    "    else if cs[0] == \"-\" { match string_parse_int_acc(Array.slice(cs, 1, cs.len()), 0, 0, false) { Ok(n) => Ok(0 - n), Err(e) => Err(e) } }",
+    "    else { string_parse_int_acc(cs, 0, 0, false) }",
+    "}",
+    "",
+    "// A direct float parser. The real prelude reuses the JSON number",
+    "// parser here, which is the right call THERE (it already exists and",
+    "// is tested) and the wrong one here -- dragging a JSON parser in to",
+    "// read a float would be absurd. Sign, integer part, optional",
+    "// fraction; no exponent, which is a real narrowing, stated rather",
+    "// than discovered.",
+    "let string_parse_frac (cs: Array[String]) (i: Int) (acc: Float) (scale: Float): Result[Float, String] =",
+    "    if i >= cs.len() { Ok(acc) }",
+    "    else { match string_digit_value(cs[i]) {",
+    "        Ok(d) => string_parse_frac(cs, i + 1, acc + d.to_float() * scale, scale / 10.0),",
+    "        Err(e) => Err(e),",
+    "    } }",
+    "",
+    "let string_parse_float_body (cs: Array[String]): Result[Float, String] =",
+    "    match String.index_of(chars_join(cs), \".\") {",
+    "        None => match string_parse_int_acc(cs, 0, 0, false) { Ok(n) => Ok(n.to_float()), Err(e) => Err(e) },",
+    "        Some(dot) => match string_parse_int_acc(Array.slice(cs, 0, dot), 0, 0, false) {",
+    "            Err(e) => Err(e),",
+    "            Ok(whole) => match string_parse_frac(Array.slice(cs, dot + 1, cs.len()), 0, 0.0, 0.1) {",
+    "                Err(e) => Err(e),",
+    "                Ok(frac) => Ok(whole.to_float() + frac),",
+    "            },",
+    "        },",
+    "    }",
+    "",
+    "pub let String.parse_float (s: String): Result[Float, String] = {",
+    "    let cs = chars_of(s);",
+    "    if Array.is_empty(cs) { Err(\"empty string\") }",
+    "    else if cs[0] == \"-\" { match string_parse_float_body(Array.slice(cs, 1, cs.len())) { Ok(f) => Ok(0.0 - f), Err(e) => Err(e) } }",
+    "    else { string_parse_float_body(cs) }",
+    "}",
+])

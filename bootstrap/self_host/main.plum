@@ -118,6 +118,11 @@ let main (): Unit = {
         // DIRECTORY, which `read_file` can't open at all.
         typecheck.check_program(parser.ProgramNode { items: collect_path_items(argv[1]) });
         println("ok");
+    } else if argv[0] == "emit-llvm" && Result.unwrap_or(is_directory(argv[1]), false) {
+        // Same directory loading `check` and `run` use. A real Plum
+        // project is several modules, so a backend that only accepted
+        // one file could never compile one.
+        println(codegen.cg_emit_program(parser.ProgramNode { items: collect_path_items(argv[1]) }));
     } else if argv[0] == "run" && Result.unwrap_or(is_directory(argv[1]), false) {
         // Same directory-loading path `check` uses, for the same
         // reason: a module can't be RUN alone either — `main.plum`'s
@@ -143,14 +148,15 @@ let main (): Unit = {
                 } else if argv[0] == "ast" {
                     println(parser.render_program(parser.parse_program(lexer.tokenize(src))));
                 } else if argv[0] == "emit-llvm" {
-                    // Stage 5. Type-checks first, exactly as `run`
-                    // does — this backend re-derives representations
-                    // bottom-up and assumes a well-typed program (see
-                    // `codegen/codegen.plum`'s own top comment), so
-                    // handing it an unchecked one is not defined.
-                    let program = parser.parse_program(lexer.tokenize(src));
-                    typecheck.check_program(program);
-                    println(codegen.cg_emit_program(program));
+                    // Stage 5. NO separate `check_program` call: the
+                    // backend prepends the prelude and then type-checks
+                    // the combined program itself (`typed_program` IS
+                    // `check_program` with the results kept). Checking
+                    // here as well would check the WRONG program — the
+                    // user's items without the prelude — and reject any
+                    // call to a prelude function that has no
+                    // `builtin_sig` entry.
+                    println(codegen.cg_emit_program(parser.parse_program(lexer.tokenize(src))));
                 } else if argv[0] == "run" {
                     let program = parser.parse_program(lexer.tokenize(src));
                     typecheck.check_program(program);

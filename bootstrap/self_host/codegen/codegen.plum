@@ -67,6 +67,7 @@
 // for it — not merely match `expected.txt`, but agree with the other
 // backend, which is the stronger claim.
 
+use lexer;
 use parser;
 use typecheck;
 
@@ -561,13 +562,17 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
     let code = a.code.concat(b.code);
     let globals = a.globals.concat(b.globals);
     let allocas = a.allocas.concat(b.allocas);
-    if cg_is_string_eq(op, a.ty) {
-        let call = "  ".concat(reg).concat(" = call i1 @plum_str_eq(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n");
+    if cg_is_equality(op) {
+        // Structural, via `cg_eq_code` — which is one instruction for a
+        // primitive and a call to a generated function for anything
+        // else. Address comparison would be wrong for every aggregate.
+        let opnd = cg_concrete(p, typecheck.texpr_ty(p.subst, lhs));
+        let cmp = cg_eq_code(opnd, a.val, b.val, b.n);
         match op {
-            BEq => Emit { code: code.concat(call), allocas: allocas, globals: globals, val: reg, ty: CgBool, n: b.n + 1 },
+            BEq => Emit { code: code.concat(cmp.code), allocas: allocas, globals: globals, val: cmp.val, ty: CgBool, n: cmp.n },
             _ => {
-                let neg = cg_reg(b.n + 1);
-                Emit { code: code.concat(call).concat("  ").concat(neg).concat(" = xor i1 ").concat(reg).concat(", true\n"), allocas: allocas, globals: globals, val: neg, ty: CgBool, n: b.n + 2 }
+                let neg = cg_reg(cmp.n);
+                Emit { code: code.concat(cmp.code).concat("  ").concat(neg).concat(" = xor i1 ").concat(cmp.val).concat(", true\n"), allocas: allocas, globals: globals, val: neg, ty: CgBool, n: cmp.n + 1 }
             },
         }
     } else {
@@ -576,8 +581,7 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
     }
 }
 
-let cg_is_string_eq (op: parser.BOp) (t: CgTy): Bool =
-    match t { CgStr => match op { BEq => true, BNe => true, _ => false }, _ => false }
+let cg_is_equality (op: parser.BOp): Bool = match op { BEq => true, BNe => true, _ => false }
 
 // LLVM spells the same Plum operator differently for integers and
 // floats (`add`/`fadd`, `icmp slt`/`fcmp olt`), so the operand's
@@ -805,16 +809,35 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExp
 // concrete type arguments into it — so a call site needs no knowledge
 // of monomorphization beyond resolving those arguments through the
 // enclosing specialization.
-let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy): Emit =
-    if cg_has_fn(p, name) {
-        let a = cg_args(p, env, n, args, 0, "", "", "", []);
-        let reg = cg_reg(a.n);
-        let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" @").concat(cg_sym(name, cg_concrete_list(p, targs, 0, []))).concat("(").concat(cg_join_commas(a.vals)).concat(")\n");
-        Emit { code: a.code.concat(call), allocas: a.allocas, globals: a.globals, val: reg, ty: ret, n: a.n + 1 }
-    } else {
-        cg_fail("prelude function ".concat(name).concat(" isn't implemented by this backend's runtime yet"));
-        cg_unit_emit(n)
-    }
+let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy): Emit = {
+    let sym = match cg_runtime_fn(name) {
+        Some(rt) => rt,
+        None =>
+            if cg_has_fn(p, name) { "@".concat(cg_sym(name, cg_concrete_list(p, targs, 0, []))) }
+            else { { cg_fail("prelude function ".concat(name).concat(" has no implementation in this backend's runtime yet")); "@plum_missing" } },
+    };
+    let a = cg_args(p, env, n, args, 0, "", "", "", []);
+    let reg = cg_reg(a.n);
+    let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(sym).concat("(").concat(cg_join_commas(a.vals)).concat(")\n");
+    Emit { code: a.code.concat(call), allocas: a.allocas, globals: a.globals, val: reg, ty: ret, n: a.n + 1 }
+}
+
+// Prelude functions the RUNTIME implements directly, rather than as
+// prelude Plum source. Deliberately a very short list: each entry is a
+// place where Plum can't express the operation at all, not merely a
+// place where C would be faster.
+//
+// `chars_of` is here because codepoint awareness has to bottom out
+// somewhere — every other string routine is written in Plum on top of
+// it. Anything that CAN be written in Plum is, in `cg_prelude_src`,
+// because prelude source this backend compiles is prelude source it
+// also proves it can handle.
+let cg_runtime_fn (name: String): Option[String] =
+    if name == "chars_of" { Some("@plum_chars_of") }
+    else if name == "panic_raw" { Some("@plum_panic") }
+    else if name == "args" { Some("@plum_args") }
+    else if name == "read_file_raw" { Some("@plum_read_file_raw") }
+    else { None }
 
 let cg_concrete_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= ts.len() { acc } else { cg_concrete_list(p, ts, i + 1, acc.push(cg_concrete(p, ts[i]))) }
@@ -846,6 +869,7 @@ let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (method_name: St
     else if method_name == "len" { cg_len(p, env, n, base) }
     else if method_name == "push" { cg_array_push(p, env, n, base, args[0], ty) }
     else if method_name == "set" { cg_array_set(p, env, n, base, args[0], args[1], ty) }
+    else if method_name == "to_float" { cg_to_float(p, env, n, base) }
     else { { cg_fail("method .".concat(method_name).concat("() isn't supported by this backend yet")); cg_unit_emit(n) } }
 
 let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
@@ -867,6 +891,18 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         CgEnum(name) => { cg_fail(".to_string() on an enum isn't supported yet: ".concat(name)); cg_unit_emit(b.n) },
         CgArray(_) => { cg_fail(".to_string() on an Array isn't supported yet"); cg_unit_emit(b.n) },
         CgClosure(_, _) => { cg_fail("a closure has no .to_string()"); cg_unit_emit(b.n) },
+    }
+}
+
+// `sitofp` — a SIGNED integer widened to a double, which is exact for
+// every value a 53-bit mantissa can hold and rounds beyond that,
+// matching the real backend's own `ToFloat` lowering.
+let cg_to_float (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
+    let b = cg_expr(p, env, n, base);
+    let reg = cg_reg(b.n);
+    Emit {
+        code: b.code.concat("  ").concat(reg).concat(" = sitofp i64 ").concat(b.val).concat(" to double\n"),
+        allocas: b.allocas, globals: b.globals, val: reg, ty: CgFloat, n: b.n + 1,
     }
 }
 
@@ -1625,12 +1661,213 @@ let cg_param_slots (params: Array[CgParam]) (i: Int) (env: Array[CgSlot]) (code:
 // program's stray trailing `0` came from; that was fixed the same day
 // this file was started.)
 let cg_entry (unit: Unit): String = cg_lines([
-    "define i32 @main() {",
+    "define i32 @main(i32 %argc, ptr %argv) {",
     "entry:",
+    "  store i32 %argc, ptr @plum_argc",
+    "  store ptr %argv, ptr @plum_argv",
     "  %r = call i1 @plum_main()",
     "  ret i32 0",
     "}",
 ])
+
+// --- Structural equality ---
+//
+// `==` on an aggregate must compare CONTENTS, not addresses. Emitting
+// `icmp eq ptr` was silently wrong: two separately-built `TokLet`s are
+// equal values at different addresses, so the self-hosted parser's own
+// `tokens[pos] == expected` was always false and every parse failed
+// with "expected 'let'". Found by compiling the parser, not by reading
+// the code.
+//
+// The real backend generates one equality function per type from its
+// tag tables; this does the same, discovered by the same worklist that
+// discovers specializations. Comparing TAGS alone would have been
+// enough for the parser — its expected tokens are all nullary — and
+// would have been quietly wrong for `Ident("a") == Ident("b")`, so it
+// isn't done that way.
+
+let cg_eq_sym (t: typecheck.ITy): String = "@plum_eq_".concat(cg_ity_mangle(t))
+
+// Is this type compared by VALUE inline, or does it need a function?
+let cg_eq_is_primitive (t: typecheck.ITy): Bool =
+    match t {
+        ITInt => true, ITFloat => true, ITBool => true, ITUnit => true, ITStr => true,
+        ITVar(_) => true,
+        _ => false,
+    }
+
+struct EqEmit { code: String, val: String, n: Int }
+
+// Comparing two already-emitted operands of type `t`.
+let cg_eq_code (t: typecheck.ITy) (av: String) (bv: String) (n: Int): EqEmit = {
+    let reg = cg_reg(n);
+    let lty = cg_llvm_ty(cg_of_ity(t));
+    let line = match t {
+        ITStr => "  ".concat(reg).concat(" = call i1 @plum_str_eq(ptr ").concat(av).concat(", ptr ").concat(bv).concat(")\n"),
+        ITFloat => "  ".concat(reg).concat(" = fcmp oeq double ").concat(av).concat(", ").concat(bv).concat("\n"),
+        ITInt => "  ".concat(reg).concat(" = icmp eq i64 ").concat(av).concat(", ").concat(bv).concat("\n"),
+        ITBool => "  ".concat(reg).concat(" = icmp eq i1 ").concat(av).concat(", ").concat(bv).concat("\n"),
+        ITUnit => "  ".concat(reg).concat(" = icmp eq i1 ").concat(av).concat(", ").concat(bv).concat("\n"),
+        // A defaulted (unconstrained) type is compared as its defaulted
+        // representation, which is `Unit` — see `cg_of_ity`.
+        ITVar(_) => "  ".concat(reg).concat(" = icmp eq i1 ").concat(av).concat(", ").concat(bv).concat("\n"),
+        _ => "  ".concat(reg).concat(" = call i1 ").concat(cg_eq_sym(t)).concat("(").concat(lty).concat(" ").concat(av).concat(", ").concat(lty).concat(" ").concat(bv).concat(")\n"),
+    };
+    EqEmit { code: line, val: reg, n: n + 1 }
+}
+
+// Every aggregate type needing an equality function, transitively. The
+// `seen` check is what makes a RECURSIVE type (`PExpr` whose payload is
+// a `PExpr`) terminate — it needs exactly one function, which calls
+// itself.
+let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if cg_eq_is_primitive(t) { acc }
+    else if cg_ty_in(acc, t, 0) { acc }
+    else {
+        let acc2 = acc.push(t);
+        match t {
+            ITStruct(name, args) =>
+                if name == "Array" { cg_eq_close(p, args[0], acc2) }
+                else { cg_eq_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2) },
+            ITEnum(name, args) => cg_eq_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2),
+            _ => acc2,
+        }
+    }
+
+let cg_ty_in (acc: Array[typecheck.ITy]) (t: typecheck.ITy) (i: Int): Bool =
+    if i >= acc.len() { false } else if cg_ity_mangle(acc[i]) == cg_ity_mangle(t) { true } else { cg_ty_in(acc, t, i + 1) }
+
+let cg_eq_close_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= ts.len() { acc } else { cg_eq_close_list(p, ts, i + 1, cg_eq_close(p, ts[i], acc)) }
+
+let cg_eq_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= vs.len() { acc }
+    else {
+        let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].name), args, t));
+        cg_eq_close_variants(p, vs, args, i + 1, cg_eq_close_list(p, payload, 0, acc))
+    }
+
+let cg_emit_eq_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: String): String =
+    if i >= ts.len() { acc } else { cg_emit_eq_fns(p, ts, i + 1, acc.concat(cg_emit_eq_fn(p, ts[i]))) }
+
+let cg_emit_eq_fn (p: CgProgram) (t: typecheck.ITy): String =
+    match t {
+        ITStruct(name, args) =>
+            if name == "Array" { cg_emit_array_eq(t, args[0]) }
+            else { cg_emit_struct_eq(t, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
+        ITEnum(name, args) => cg_emit_enum_eq(p, t, cg_find_enum(p, name).variants, args),
+        _ => "",
+    }
+
+// Fields compared in declared order, AND-ed together. No
+// short-circuiting: every field is loaded anyway, and a branch per
+// field would be more code for no saved work.
+let cg_emit_struct_eq (t: typecheck.ITy) (field_tys: Array[typecheck.ITy]): String = {
+    let body = cg_eq_fields(field_tys, 0, "%a", "%b", 0, "1", "");
+    "define i1 ".concat(cg_eq_sym(t)).concat("(ptr %a, ptr %b) {\nentry:\n").concat(body.code)
+        .concat("  ret i1 ").concat(body.val).concat("\n}\n\n")
+}
+
+let cg_eq_fields (field_tys: Array[typecheck.ITy]) (i: Int) (av: String) (bv: String) (n: Int) (running: String) (acc: String): EqEmit =
+    if i >= field_tys.len() { EqEmit { code: acc, val: running, n: n } }
+    else {
+        let lty = cg_llvm_ty(cg_of_ity(field_tys[i]));
+        let off = cg_field_offset(i).to_string();
+        let ap = cg_reg(n);
+        let bp = cg_reg(n + 1);
+        let axv = cg_reg(n + 2);
+        let bxv = cg_reg(n + 3);
+        let loads = "  ".concat(ap).concat(" = getelementptr i8, ptr ").concat(av).concat(", i64 ").concat(off).concat("\n")
+            .concat("  ").concat(bp).concat(" = getelementptr i8, ptr ").concat(bv).concat(", i64 ").concat(off).concat("\n")
+            .concat("  ").concat(axv).concat(" = load ").concat(lty).concat(", ptr ").concat(ap).concat("\n")
+            .concat("  ").concat(bxv).concat(" = load ").concat(lty).concat(", ptr ").concat(bp).concat("\n");
+        let cmp = cg_eq_code(field_tys[i], axv, bxv, n + 4);
+        let joined = cg_reg(cmp.n);
+        let join = "  ".concat(joined).concat(" = and i1 ").concat(running).concat(", ").concat(cmp.val).concat("\n");
+        cg_eq_fields(field_tys, i + 1, av, bv, cmp.n + 1, joined, acc.concat(loads).concat(cmp.code).concat(join))
+    }
+
+// Tags first; equal tags then dispatch to a per-variant payload
+// comparison. A nullary variant needs no block of its own — it falls
+// through to `yes`, which is also the `switch` default, so the common
+// case (`tok == TokEof`) is one integer compare and a jump.
+let cg_emit_enum_eq (p: CgProgram) (t: typecheck.ITy) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]): String = {
+    let head = "define i1 ".concat(cg_eq_sym(t)).concat("(ptr %a, ptr %b) {\nentry:\n")
+        .concat("  %ta = load i64, ptr %a\n")
+        .concat("  %tb = load i64, ptr %b\n")
+        .concat("  %same = icmp eq i64 %ta, %tb\n")
+        .concat("  br i1 %same, label %payload, label %no\n")
+        .concat("payload:\n")
+        .concat("  switch i64 %ta, label %yes [\n").concat(cg_enum_eq_cases(vs, 0, "")).concat("  ]\n");
+    head.concat(cg_enum_eq_blocks(p, vs, args, 0, 0, ""))
+        .concat("yes:\n  ret i1 1\nno:\n  ret i1 0\n}\n\n")
+}
+
+let cg_enum_eq_cases (vs: Array[CgVariant]) (i: Int) (acc: String): String =
+    if i >= vs.len() { acc }
+    else if vs[i].arity == 0 { cg_enum_eq_cases(vs, i + 1, acc) }
+    else { cg_enum_eq_cases(vs, i + 1, acc.concat("    i64 ").concat(vs[i].tag.to_string()).concat(", label %V").concat(vs[i].tag.to_string()).concat("\n")) }
+
+let cg_enum_eq_blocks (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (n: Int) (acc: String): String =
+    if i >= vs.len() { acc }
+    else if vs[i].arity == 0 { cg_enum_eq_blocks(p, vs, args, i + 1, n, acc) }
+    else {
+        let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].name), |q| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].name), args, q));
+        let body = cg_eq_payloads(payload, 0, n, "1", "");
+        let block = "V".concat(vs[i].tag.to_string()).concat(":\n").concat(body.code).concat("  ret i1 ").concat(body.val).concat("\n");
+        cg_enum_eq_blocks(p, vs, args, i + 1, body.n, acc.concat(block))
+    }
+
+let cg_eq_payloads (payload: Array[typecheck.ITy]) (i: Int) (n: Int) (running: String) (acc: String): EqEmit =
+    if i >= payload.len() { EqEmit { code: acc, val: running, n: n } }
+    else {
+        let lty = cg_llvm_ty(cg_of_ity(payload[i]));
+        let off = cg_payload_offset(i).to_string();
+        let ap = cg_reg(n);
+        let bp = cg_reg(n + 1);
+        let axv = cg_reg(n + 2);
+        let bxv = cg_reg(n + 3);
+        let loads = "  ".concat(ap).concat(" = getelementptr i8, ptr %a, i64 ").concat(off).concat("\n")
+            .concat("  ").concat(bp).concat(" = getelementptr i8, ptr %b, i64 ").concat(off).concat("\n")
+            .concat("  ").concat(axv).concat(" = load ").concat(lty).concat(", ptr ").concat(ap).concat("\n")
+            .concat("  ").concat(bxv).concat(" = load ").concat(lty).concat(", ptr ").concat(bp).concat("\n");
+        let cmp = cg_eq_code(payload[i], axv, bxv, n + 4);
+        let joined = cg_reg(cmp.n);
+        let join = "  ".concat(joined).concat(" = and i1 ").concat(running).concat(", ").concat(cmp.val).concat("\n");
+        cg_eq_payloads(payload, i + 1, cmp.n + 1, joined, acc.concat(loads).concat(cmp.code).concat(join))
+    }
+
+// Lengths, then element by element, bailing on the first difference.
+let cg_emit_array_eq (t: typecheck.ITy) (elem: typecheck.ITy): String = {
+    let lty = cg_llvm_ty(cg_of_ity(elem));
+    let cmp = cg_eq_code(elem, "%av", "%bv", 0);
+    "define i1 ".concat(cg_eq_sym(t)).concat("(ptr %a, ptr %b) {\nentry:\n")
+        .concat("  %la = load i64, ptr %a\n")
+        .concat("  %lb = load i64, ptr %b\n")
+        .concat("  %samelen = icmp eq i64 %la, %lb\n")
+        .concat("  %ip = alloca i64\n")
+        .concat("  store i64 0, ptr %ip\n")
+        .concat("  br i1 %samelen, label %loop, label %no\n")
+        .concat("loop:\n")
+        .concat("  %i = load i64, ptr %ip\n")
+        .concat("  %more = icmp slt i64 %i, %la\n")
+        .concat("  br i1 %more, label %body, label %yes\n")
+        .concat("body:\n")
+        .concat("  %off = mul i64 %i, 8\n")
+        .concat("  %ap0 = getelementptr i8, ptr %a, i64 %off\n")
+        .concat("  %ap = getelementptr i8, ptr %ap0, i64 8\n")
+        .concat("  %bp0 = getelementptr i8, ptr %b, i64 %off\n")
+        .concat("  %bp = getelementptr i8, ptr %bp0, i64 8\n")
+        .concat("  %av = load ").concat(lty).concat(", ptr %ap\n")
+        .concat("  %bv = load ").concat(lty).concat(", ptr %bp\n")
+        .concat(cmp.code)
+        .concat("  br i1 ").concat(cmp.val).concat(", label %next, label %no\n")
+        .concat("next:\n")
+        .concat("  %i1 = add i64 %i, 1\n")
+        .concat("  store i64 %i1, ptr %ip\n")
+        .concat("  br label %loop\n")
+        .concat("yes:\n  ret i1 1\nno:\n  ret i1 0\n}\n\n")
+}
 
 // --- Emitting the whole program ---
 //
@@ -1639,11 +1876,24 @@ let cg_entry (unit: Unit): String = cg_lines([
 // generic function has no single symbol to emit until a call site says
 // which instantiation it needs, so the worklist has to start from the
 // entry point anyway. Monomorphic functions come along the same way.
-pub let cg_emit_program (program: parser.ProgramNode): String = {
+// The PRELUDE is prepended to the user's items before anything is
+// checked or compiled, exactly as the real compiler prepends its own.
+// Prepending (rather than appending) is what makes a user definition of
+// the same name WIN — `find_sig` scans in order, so a later declaration
+// shadows the prelude's, which is the real compiler's behaviour too.
+pub let cg_with_prelude (program: parser.ProgramNode): parser.ProgramNode =
+    parser.ProgramNode { items: Array.concat(parser.parse_program(lexer.tokenize(cg_prelude_src(()))).items, program.items) }
+
+pub let cg_emit_program (program0: parser.ProgramNode): String = {
+    let program = cg_with_prelude(program0);
     let p = cg_build_program(program);
     if !cg_has_fn(p, "main") { cg_fail("no top-level 'main' function to compile") };
     let insts = cg_reachable(p, [CgInst { name: "main", targs: [] }], [], 0);
-    cg_runtime(()).concat(cg_emit_insts(p, insts, 0, 0, "")).concat(cg_entry(()))
+    // Equality functions are discovered from the SAME reachable set —
+    // an aggregate compared inside an unreachable function needs no
+    // function emitted for it.
+    let eqs = cg_eq_types_of(p, insts, 0, []);
+    cg_runtime(()).concat(cg_emit_eq_fns(p, eqs, 0, "")).concat(cg_emit_insts(p, insts, 0, 0, "")).concat(cg_entry(()))
 }
 
 // Worklist closure: pop an instantiation, record it, and push every
@@ -1659,16 +1909,21 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
     else {
         let head = pending[0];
         let rest = Array.slice(pending, 1, pending.len());
-        if cg_inst_seen(done, head, 0) { cg_reachable(p, rest, done, fuel + 1) }
+        // A runtime-implemented name is already a symbol: it has no
+        // Plum body to walk, and emitting one would COLLIDE with the
+        // runtime's own definition. `read_file_raw` has a stub body in
+        // the prelude purely so the checker has a signature for it —
+        // this is what stops that stub from being compiled.
+        if Option.is_some(cg_runtime_fn(head.name)) { cg_reachable(p, rest, done, fuel + 1) }
+        else if cg_inst_seen(done, head, 0) { cg_reachable(p, rest, done, fuel + 1) }
         else {
             match cg_find_tfn(p, head.name, 0) {
-                // The program type-checked, so an unknown callee here
-                // is a PRELUDE function — one the checker knows a
-                // signature for (`builtin_sig`) but that has no body in
-                // this program and no implementation in this backend's
-                // runtime. That is now the usual reason real Plum code
-                // fails to compile here, so it says so.
-                None => { cg_fail("prelude function ".concat(head.name).concat(" has no implementation in this backend's runtime yet")); done },
+                // A runtime-implemented prelude function has no Plum
+                // body to walk or specialize — it is already a symbol.
+                None => if Option.is_some(cg_runtime_fn(head.name)) { cg_reachable(p, rest, done, fuel + 1) } else {
+                    cg_fail("prelude function ".concat(head.name).concat(" has no implementation in this backend's runtime yet"));
+                    done
+                },
                 Some(def) => {
                     let inner = CgProgram { fns: p.fns, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs };
                     cg_reachable(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), done.push(head), fuel + 1)
@@ -1676,6 +1931,82 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
             }
         }
     }
+
+// Every aggregate type compared with `==`/`!=` anywhere in the
+// reachable program, closed over its own components.
+let cg_eq_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= insts.len() { acc }
+    else {
+        match cg_find_tfn(p, insts[i].name, 0) {
+            None => cg_eq_types_of(p, insts, i + 1, acc),
+            Some(def) => {
+                let inner = CgProgram { fns: p.fns, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs };
+                cg_eq_types_of(p, insts, i + 1, cg_eq_in(inner, def.body, acc))
+            },
+        }
+    }
+
+let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    match e.node {
+        TBinary(op, l, r) => {
+            let inner = cg_eq_in(p, r, cg_eq_in(p, l, acc));
+            if cg_is_equality(op) { cg_eq_close(p, cg_concrete(p, typecheck.texpr_ty(p.subst, l)), inner) } else { inner }
+        },
+        TFnCall(_, args, _) => cg_eq_in_list(p, args, 0, acc),
+        TClosureCall(callee, args) => cg_eq_in_list(p, args, 0, cg_eq_in(p, callee, acc)),
+        TMethodCall(_, base, args) => cg_eq_in_list(p, args, 0, cg_eq_in(p, base, acc)),
+        TArrayNs(_, args) => cg_eq_in_list(p, args, 0, acc),
+        TVariantNew(_, args) => cg_eq_in_list(p, args, 0, acc),
+        TPrintln(a) => cg_eq_in(p, a, acc),
+        TUnary(_, a) => cg_eq_in(p, a, acc),
+        TFieldGet(a, _) => cg_eq_in(p, a, acc),
+        TIndex(a, b) => cg_eq_in(p, b, cg_eq_in(p, a, acc)),
+        TArrayLit(elems) => cg_eq_in_list(p, elems, 0, acc),
+        TTupleLit(elems) => cg_eq_in_list(p, elems, 0, acc),
+        TBlockE(block) => cg_eq_in_block(p, block, acc),
+        TIf(c, t, e2) => match e2 {
+            Some(x) => cg_eq_in(p, x, cg_eq_in(p, t, cg_eq_in(p, c, acc))),
+            None => cg_eq_in(p, t, cg_eq_in(p, c, acc)),
+        },
+        // A literal PATTERN compares too (`match c { "0" => .. }`), and
+        // it compares against the SCRUTINEE's type, so the scrutinee is
+        // closed over here rather than only at explicit `==` sites.
+        TMatch(sc, arms) => cg_eq_in_arms(p, arms, 0, cg_eq_close(p, cg_concrete(p, typecheck.texpr_ty(p.subst, sc)), cg_eq_in(p, sc, acc))),
+        TFor(_, lo, hi, body) => cg_eq_in(p, body, cg_eq_in(p, hi, cg_eq_in(p, lo, acc))),
+        TClosure(_, body) => cg_eq_in(p, body, acc),
+        TStructLit(_, fields) => cg_eq_in_fields(p, fields, 0, acc),
+        TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
+        TUnitLit => acc, TIdent(_) => acc, TUnsupported(_) => acc,
+    }
+
+let cg_eq_in_list (p: CgProgram) (es: Array[typecheck.TExpr]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= es.len() { acc } else { cg_eq_in_list(p, es, i + 1, cg_eq_in(p, es[i], acc)) }
+
+let cg_eq_in_block (p: CgProgram) (block: typecheck.TBlock) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] = {
+    let after = cg_eq_in_stmts(p, block.stmts, 0, acc);
+    match block.tail { Some(t) => cg_eq_in(p, t, after), None => after }
+}
+
+let cg_eq_in_stmts (p: CgProgram) (stmts: Array[typecheck.TStmt]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= stmts.len() { acc }
+    else {
+        let next = match stmts[i] {
+            TSLet(_, v) => cg_eq_in(p, v, acc),
+            TSAssign(_, v) => cg_eq_in(p, v, acc),
+            TSExpr(v) => cg_eq_in(p, v, acc),
+        };
+        cg_eq_in_stmts(p, stmts, i + 1, next)
+    }
+
+let cg_eq_in_arms (p: CgProgram) (arms: Array[typecheck.TArm]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= arms.len() { acc }
+    else {
+        let g = match arms[i].guard { Some(x) => cg_eq_in(p, x, acc), None => acc };
+        cg_eq_in_arms(p, arms, i + 1, cg_eq_in(p, arms[i].body, g))
+    }
+
+let cg_eq_in_fields (p: CgProgram) (fields: Array[typecheck.TFieldInit]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= fields.len() { acc } else { cg_eq_in_fields(p, fields, i + 1, cg_eq_in(p, fields[i].value, acc)) }
 
 let cg_find_tfn (p: CgProgram) (name: String) (i: Int): Option[typecheck.TFn] =
     if i >= p.fns.len() { None } else if p.fns[i].name == name { Some(p.fns[i]) } else { cg_find_tfn(p, name, i + 1) }
@@ -1746,7 +2077,7 @@ let cg_emit_insts (p: CgProgram) (insts: Array[CgInst]) (i: Int) (n: Int) (acc: 
     if i >= insts.len() { acc }
     else {
         match cg_find_tfn(p, insts[i].name, 0) {
-            None => { cg_fail("prelude function ".concat(insts[i].name).concat(" has no implementation in this backend's runtime yet")); acc },
+            None => cg_emit_insts(p, insts, i + 1, n, acc),
             Some(def) => {
                 let f = cg_fn(p, def, insts[i].targs, n);
                 cg_emit_insts(p, insts, i + 1, f.next, acc.concat(f.text))

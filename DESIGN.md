@@ -8566,3 +8566,99 @@ it were handed it.
 | typecheck_corpus rejections | 5/5 |
 | corpus goldens | 98/98 |
 | Rust suites | 14/14 |
+
+### The prelude, in Plum — and the backend compiles the front end (2026-08-16)
+
+```
+./sh emit-llvm <lexer+parser project> | plum compile-ir -o parse
+./parse bootstrap/corpus/let_defs/associated_function.plum
+  -> ((let Point.add ((a:Point) (b:Point)) ->Point a))
+```
+
+**The self-hosted lexer and parser, compiled to a native binary by the
+self-hosted backend, produce byte-identical ASTs to the real Rust
+compiler on all 98 corpus fixtures.** That is ~1,800 lines of real Plum
+— enums, arrays, closures, generics, recursion, string handling —
+compiled by a compiler written in Plum.
+
+#### The prelude is Plum source, compiled like anything else
+
+`codegen/prelude.plum` carries the prelude as source text and prepends
+it to every program, exactly as `crates/plumc`'s `STDLIB_*_SRC`
+constants do. **These are compiled by the backend, not special-cased in
+it**: `Array.slice[T]` is a genuine generic function that gets
+monomorphized per element type, and a prelude written in Plum is a
+prelude that proves the backend handles real Plum.
+
+Prepending (not appending) is what makes a user definition of the same
+name win — `find_sig` scans in order — which is the real compiler's
+behaviour too.
+
+Only what CANNOT be written in Plum lives in the runtime. Today that is
+four things:
+
+- `chars_of` — codepoint awareness has to bottom out somewhere. Every
+  other string routine (`String.slice`, `String.index_of`,
+  `String.parse_int`) is built on it in Plum, which is what makes them
+  all multi-byte-safe instead of each needing its own care.
+- `panic_raw`, `args` — no Plum expression denotes them.
+- `read_file_raw` — returns an ARRAY (empty = failure, one element =
+  success) rather than a `Result`. A `Result` is an ordinary enum whose
+  tags the backend assigns per program, so hand-written runtime IR
+  cannot build one without hard-coding a layout decision made
+  elsewhere. The prelude wraps it in Plum, where `Ok`/`Err` mean what
+  the program says they mean.
+
+#### Two real bugs this found
+
+**`==` on aggregates compared ADDRESSES.** `icmp eq ptr` — so the
+parser's own `tokens[pos] == expected` was always false and every parse
+died with "expected 'let'". Found by compiling the parser, not by
+reading the code.
+
+Fixed with per-type equality functions, discovered by the same worklist
+that discovers specializations and closed over component types (the
+`seen` check is what makes a recursive type like `PExpr` terminate: it
+needs exactly one function, which calls itself). **Comparing tags alone
+would have been enough for the parser** — its expected tokens are all
+nullary — **and quietly wrong for `Ident("a") == Ident("b")`**, so it
+isn't done that way.
+
+**The checker couldn't resolve source-declared associated functions.**
+`Array.reverse(xs)` was only ever looked up in `builtin_sig`, never in
+the program's own signatures, so prelude source could declare
+`Array.reverse` and no call site could reach it. Now a real declaration
+is checked first — the same shadowing order used everywhere else, and
+the real compiler's, where the prelude IS a declaration.
+
+Also: `emit-llvm` on a single file used to type-check the user's
+program BEFORE the backend prepended the prelude, which checked the
+wrong program and rejected every call to a prelude function without a
+`builtin_sig` entry. `typed_program` already checks; the duplicate call
+is gone.
+
+#### Also added
+
+`emit-llvm` accepts a project DIRECTORY (a real Plum project is several
+modules); `Int.to_float()` in checker and backend (`sitofp`); and
+`String.parse_float` is written directly rather than delegating to a
+JSON number parser as the real prelude does — right there, absurd here.
+
+#### Verified
+
+| check | result |
+| --- | --- |
+| self-hosted lexer+parser compiled by the self-hosted backend, vs corpus goldens | **98/98** |
+| exec_corpus via the self-hosted backend | 16/17 (only `tuples`) |
+| those vs. the real backend | 14/14 identical |
+| `sh check bootstrap/self_host` | ok |
+| typecheck_corpus rejections | 5/5 |
+| exec_corpus check + interpreter run | 16/16 |
+| corpus goldens (native `sh`) | 98/98 |
+| Rust suites | 14/14 |
+
+**What is left.** The backend does not yet compile the compiler's own
+`typecheck/` or `codegen/` modules — those need `list_dir`/`is_directory`
+and a few more prelude functions, and `interp.plum` needs tuples. The
+front end compiling itself is the milestone; the whole compiler
+compiling itself is the next one.
