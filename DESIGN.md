@@ -8874,3 +8874,42 @@ ownership bugs was found the same way — by compiling the compiler, whose
 own source exercises wide matches, nested enums and array plumbing far
 harder than any fixture does. **The fixed point is not a milestone, it
 is the test.**
+
+#### Borrowing, and a measurement that redirected the work
+
+The obvious next step after precise counting is removing redundant
+inc/dec pairs. The biggest class is BORROWS: reading a variable,
+using it, releasing it again — when the slot holds a reference for the
+whole of a straight-line operation, so the object cannot be freed
+underneath it. `cg_borrow` skips both the increment and the release
+when the operand is a plain variable read, which covers `xs[i]`,
+`p.field`, `s.len()`, `println(msg)`, `a.concat(b)`, `a == b` and
+`match tok { .. }`.
+
+That is the first step of what FBIP does properly: Perceus decides it
+with a liveness analysis (`plum-ir/src/fbip.rs`'s `mark_last_uses`),
+this decides it syntactically — weaker, but needs no analysis and covers
+the overwhelmingly common shapes.
+
+**It removed 30% of the reference-counting operations and bought 3% of
+wall clock:**
+
+| | RC ops | time |
+| --- | --- | --- |
+| leaking | 0 | 1.32s |
+| counted | 23,155 | 2.88s |
+| counted + borrows | 16,288 | 2.80s |
+
+That is the useful result, and it is not the one expected. **The
+counting is not what costs 2x — the freeing is.** The leaking version
+never calls `free` at all, and that is the entire difference. So
+eliminating more inc/dec pairs, including via a real last-use analysis,
+has low expected value here.
+
+The win that is left is FBIP's OTHER half: **reuse**. When a cell dies
+at a point where a cell of the same shape is about to be allocated,
+Perceus writes into the corpse instead of calling `free` and then
+`malloc`. That removes the traffic this measurement says is dominant,
+rather than the traffic it says is cheap. It also needs last-use
+analysis as a prerequisite — so the analysis is still worth building,
+just for reuse rather than for skipping increments.

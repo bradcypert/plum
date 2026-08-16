@@ -594,8 +594,10 @@ let cg_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BOp) (lhs
     }
 
 let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BOp) (lhs: typecheck.TExpr) (rhs: typecheck.TExpr) (ty: CgTy): Emit = {
-    let a = cg_expr(p, env, n, lhs);
-    let b = cg_expr(p, env, a.n, rhs);
+    // Comparison BORROWS both sides — `==` reads them and produces a
+    // Bool, so neither operand's ownership is needed.
+    let a = cg_borrow(p, env, n, lhs);
+    let b = cg_borrow(p, env, a.n, rhs);
     let reg = cg_reg(b.n);
     let code = a.code.concat(b.code);
     let globals = a.globals.concat(b.globals);
@@ -609,7 +611,7 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
         let cmp = cg_eq_code(opnd, a.val, b.val, b.n);
         // Both operands were owned temporaries and the comparison
         // borrowed them.
-        let drop_operands = cg_dec(opnd, a.val).concat(cg_dec(opnd, b.val));
+        let drop_operands = a.drop.concat(b.drop);
         match op {
             BEq => Emit { code: code.concat(cmp.code).concat(drop_operands), allocas: allocas, releases: releases, globals: globals, val: cmp.val, ty: CgBool, n: cmp.n },
             _ => {
@@ -849,11 +851,11 @@ let cg_let_name (pattern: parser.PPattern): String =
 // the checker, stated once for both backends.
 
 let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExpr): Emit = {
-    let a = cg_expr(p, env, n, arg);
+    let a = cg_borrow(p, env, n, arg);
     let reg = cg_reg(a.n);
     if !cg_ty_eq(a.ty, CgStr) { cg_fail("println expects a String, found ".concat(cg_ty_name(a.ty))) };
     Emit {
-        code: a.code.concat("  ").concat(reg).concat(" = call i1 @plum_println(ptr ").concat(a.val).concat(")\n").concat(cg_dec(ITStr, a.val)),
+        code: a.code.concat("  ").concat(reg).concat(" = call i1 @plum_println(ptr ").concat(a.val).concat(")\n").concat(a.drop),
         allocas: a.allocas, releases: a.releases,globals: a.globals, val: reg, ty: CgUnit, n: a.n + 1,
     }
 }
@@ -980,23 +982,23 @@ let cg_to_float (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TE
 // slower, and for `starts_with`/`ends_with` observably different
 // function.
 let cg_str_binop (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (arg: typecheck.TExpr) (fn_name: String) (ret: CgTy): Emit = {
-    let a = cg_expr(p, env, n, base);
-    let b = cg_expr(p, env, a.n, arg);
+    let a = cg_borrow(p, env, n, base);
+    let b = cg_borrow(p, env, a.n, arg);
     let reg = cg_reg(b.n);
     Emit {
         code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(fn_name).concat("(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n")
-            .concat(cg_dec(ITStr, a.val)).concat(cg_dec(ITStr, b.val)),
+            .concat(a.drop).concat(b.drop),
         allocas: a.allocas.concat(b.allocas), releases: a.releases.concat(b.releases),globals: a.globals.concat(b.globals), val: reg, ty: ret, n: b.n + 1,
     }
 }
 
 let cg_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (arg: typecheck.TExpr): Emit = {
-    let a = cg_expr(p, env, n, base);
-    let b = cg_expr(p, env, a.n, arg);
+    let a = cg_borrow(p, env, n, base);
+    let b = cg_borrow(p, env, a.n, arg);
     let reg = cg_reg(b.n);
     Emit {
         code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ptr @plum_str_concat(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n")
-            .concat(cg_dec(ITStr, a.val)).concat(cg_dec(ITStr, b.val)),
+            .concat(a.drop).concat(b.drop),
         allocas: a.allocas.concat(b.allocas), releases: a.releases.concat(b.releases),globals: a.globals.concat(b.globals), val: reg, ty: CgStr, n: b.n + 1,
     }
 }
@@ -1008,7 +1010,7 @@ let cg_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExp
 // backend overloads it on the receiver's static type. The checker
 // already resolved which; this just reads it off the receiver.
 let cg_len (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
-    let b = cg_expr(p, env, n, base);
+    let b = cg_borrow(p, env, n, base);
     let reg = cg_reg(b.n);
     let fn_name = match b.ty {
         CgStr => "@plum_str_len",
@@ -1016,8 +1018,7 @@ let cg_len (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr):
         _ => { cg_fail(".len() requires a String or an Array, found ".concat(cg_ty_name(b.ty))); "@plum_str_len" },
     };
     Emit {
-        code: b.code.concat("  ").concat(reg).concat(" = call i64 ").concat(fn_name).concat("(ptr ").concat(b.val).concat(")\n")
-            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, base)), b.val)),
+        code: b.code.concat("  ").concat(reg).concat(" = call i64 ").concat(fn_name).concat("(ptr ").concat(b.val).concat(")\n").concat(b.drop),
         allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgInt, n: b.n + 1 }
 }
 
@@ -1056,15 +1057,13 @@ let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: Str
 // is a deliberate v1 cut and a genuinely unsafe one — an out-of-range
 // index reads whatever follows the cell.
 let cg_index (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (idx: typecheck.TExpr) (elem: CgTy): Emit = {
-    let b = cg_expr(p, env, n, base);
+    let b = cg_borrow(p, env, n, base);
     let i = cg_expr(p, env, b.n, idx);
     let out = cg_reg(i.n + 3);
     let code = b.code.concat(i.code).concat(cg_elem_ptr_lines(b.val, i.val, i.n))
         .concat("  ").concat(out).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(i.n)).concat("\n")
         .concat(cg_inc(elem, out))
-        // Same as a field read: the element becomes owned, the array
-        // temporary is done.
-        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, base)), b.val));
+        .concat(b.drop);
     Emit { code: code, allocas: b.allocas.concat(i.allocas), releases: b.releases.concat(i.releases), globals: b.globals.concat(i.globals), val: out, ty: elem, n: i.n + 4 }
 }
 
@@ -1459,7 +1458,7 @@ let cg_store_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (field_names: A
     }
 
 let cg_field_read (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (name: String) (fty: CgTy): Emit = {
-    let b = cg_expr(p, env, n, base);
+    let b = cg_borrow(p, env, n, base);
     match b.ty {
         CgStruct(sname) => {
             let base_ity = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
@@ -1471,10 +1470,7 @@ let cg_field_read (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.
 ")
                 .concat("  ").concat(out).concat(" = load ").concat(cg_llvm_ty(fty)).concat(", ptr ").concat(fp).concat("\n")
                 .concat(cg_inc(fty, out))
-                // The base was an owned temporary; reading a field out
-                // of it hands ownership of the FIELD to the caller, so
-                // the base itself is done here.
-                .concat(cg_dec(base_ity, b.val));
+                .concat(b.drop);
             Emit { code: code, allocas: b.allocas, releases: b.releases, globals: b.globals, val: out, ty: fty, n: b.n + 2 }
         },
         _ => { cg_fail("field access on a non-struct value: .".concat(name)); cg_unit_emit(b.n) },
@@ -1528,7 +1524,9 @@ let cg_store_payload (cell: String) (vals: Array[String]) (i: Int) (n: Int) (acc
 // produces a defined-but-meaningless value instead of a diagnostic.
 let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.TExpr) (arms: Array[typecheck.TArm]) (body_ty: CgTy): Emit = {
     let sity = cg_concrete(p, typecheck.texpr_ty(p.subst, scrutinee));
-    let sc = cg_expr(p, env, n, scrutinee);
+    // The arms only READ the scrutinee — every binding takes its own
+    // reference in the arm body — so matching on a variable borrows it.
+    let sc = cg_borrow(p, env, n, scrutinee);
     let slot = cg_reg(sc.n);
     let end_label = cg_label(sc.n + 1);
     let fail_label = cg_label(sc.n + 2);
@@ -1550,7 +1548,7 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
         .concat("  ").concat(res).concat(" = load ").concat(lty).concat(", ptr ").concat(slot).concat("\n")
         // The scrutinee was an owned temporary; the arms borrowed from
         // it and any bindings took their own references, so it is done.
-        .concat(cg_dec(sity, sc.val));
+        .concat(sc.drop);
     Emit {
         code: code,
         allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(sc.allocas).concat(a.allocas), releases: sc.releases.concat(a.releases),
@@ -2186,6 +2184,49 @@ let cg_dec_args (p: CgProgram) (args: Array[typecheck.TExpr]) (vals: Array[Strin
 
 let cg_dec_op (t: typecheck.ITy) (operand: String): String =
     if cg_rc_enabled(()) && cg_is_heap(cg_of_ity(t)) { "  call void ".concat(cg_rel_sym(t)).concat("(").concat(operand).concat(")\n") } else { "" }
+
+// --- Borrowing ---
+//
+// The single biggest source of redundant traffic: reading a variable
+// increments, the operation uses it, and then it is released again.
+// When the operand is a plain variable read, that pair is provably
+// redundant — the SLOT holds a reference for the whole of a
+// straight-line primitive operation, so the object cannot be freed
+// underneath it. Skipping both is sound and removes the inc/dec pair
+// entirely.
+//
+// This is the first step of what FBIP does properly. Perceus decides it
+// with a liveness analysis (`plum-ir/src/fbip.rs`'s `mark_last_uses`);
+// this decides it syntactically, which is weaker but needs no analysis
+// and covers the overwhelmingly common shapes — `xs[i]`, `p.field`,
+// `s.len()`, `println(msg)`, `a.concat(b)`, `match tok { .. }`.
+//
+// `drop` is what the caller must emit after the operand is finished
+// with: empty for a borrow, a release for an owned temporary.
+struct BorrowEmit { code: String, allocas: String, releases: String, globals: String, val: String, ty: CgTy, drop: String, n: Int }
+
+let cg_borrow (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): BorrowEmit =
+    match e.node {
+        TIdent(name) => match cg_lookup(env, name) {
+            Some(slot) => {
+                let reg = cg_reg(n);
+                BorrowEmit {
+                    code: "  ".concat(reg).concat(" = load ").concat(cg_llvm_ty(slot.ty)).concat(", ptr ").concat(slot.ptr).concat("\n"),
+                    allocas: "", releases: "", globals: "", val: reg, ty: slot.ty, drop: "", n: n + 1,
+                }
+            },
+            None => cg_borrow_owned(p, env, n, e),
+        },
+        _ => cg_borrow_owned(p, env, n, e),
+    }
+
+let cg_borrow_owned (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): BorrowEmit = {
+    let r = cg_expr(p, env, n, e);
+    BorrowEmit {
+        code: r.code, allocas: r.allocas, releases: r.releases, globals: r.globals,
+        val: r.val, ty: r.ty, drop: cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, e)), r.val), n: r.n,
+    }
+}
 
 let cg_inc (t: CgTy) (val: String): String =
     if cg_rc_enabled(()) && cg_is_heap(t) { "  call void @plum_rc_inc(ptr ".concat(val).concat(")\n") } else { "" }
