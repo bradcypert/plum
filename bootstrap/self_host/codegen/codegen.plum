@@ -63,15 +63,25 @@
 // arithmetic and comparison, short-circuiting `&&`/`||`, `if`/`else`,
 // `for` over a literal range, blocks with `let`/`let mut`/assignment,
 // calls (including recursion), `println`, `.to_string()`, `.concat()`,
-// `.len()`.
+// `.len()`, arrays (literals, indexing, `.len()`/`.push()`/`.set()`,
+// `Array.map`/`filter`/`fold`), and closures wherever their parameter
+// types come from context.
 //
-// NOT yet: arrays, closures, generics, tuples, top-level globals,
-// or-patterns, `match` exhaustiveness checking, `.to_string()` on a
-// struct/enum. Each fails with a clear `cg_fail`, never silently wrong
-// code. Arrays are the next one to add — they're what the compiler's
-// own source is mostly made of, and they're also what closures need,
-// since every closure in these sources is an `Array.map`/`filter`/
-// `fold` argument.
+// NOT yet: a STANDALONE closure binding (`let f = |n| n + 1`),
+// generics, tuples, top-level globals, or-patterns, `match`
+// exhaustiveness checking, array bounds checks, `.to_string()` on a
+// struct/enum/array. Each fails with a clear `cg_fail`, never silently
+// wrong code.
+//
+// The standalone closure binding is the interesting one, because it is
+// the exact point this file's bottom-up type synthesis runs out. Every
+// OTHER closure position — a call argument, a struct field, an
+// `Array.map` element — has an expected parameter type sitting right
+// there to push down, and `cg_expr_params` does. `let f = |n| n + 1`
+// has none: `n`'s representation is only pinned by unifying the body's
+// use of it, which is inference, not synthesis. `infer.plum` already
+// does exactly that and throws the answer away. **The fix is to make
+// `infer.plum` produce a typed tree, not to grow a unifier here.**
 //
 // Validated against bootstrap/exec_corpus: a fixture compiled by THIS
 // backend must print byte-for-byte what the real `plum build` produces
@@ -98,6 +108,16 @@ pub enum CgTy {
     // see this file's "coarse on purpose" note above.
     CgStruct(String),
     CgEnum(String),
+    // The element type is carried because an element load/store needs
+    // its machine type, and `.push()` needs to report the same array
+    // type back. `CgArray(CgUnit)` is the ONE special value: it means
+    // "empty literal, element type never determined" — see
+    // `cg_array_lit`.
+    CgArray(CgTy),
+    // A closure: parameter representations and result representation.
+    // The VALUE is a `ptr` to `{ ptr code, captures... }` — see
+    // `cg_closure`.
+    CgClosure(Array[CgTy], CgTy),
 }
 
 // `Unit` is an `i1` rather than LLVM's own `void` so that every Plum
@@ -113,6 +133,8 @@ let cg_llvm_ty (t: CgTy): String =
         CgStr => "ptr",
         CgStruct(_) => "ptr",
         CgEnum(_) => "ptr",
+        CgArray(_) => "ptr",
+        CgClosure(_, _) => "ptr",
     }
 
 let cg_ty_name (t: CgTy): String =
@@ -124,6 +146,8 @@ let cg_ty_name (t: CgTy): String =
         CgStr => "String",
         CgStruct(name) => name,
         CgEnum(name) => name,
+        CgArray(elem) => "Array[".concat(cg_ty_name(elem)).concat("]"),
+        CgClosure(_, ret) => "(..) -> ".concat(cg_ty_name(ret)),
     }
 
 let cg_ty_eq (a: CgTy) (b: CgTy): Bool = cg_ty_name(a) == cg_ty_name(b)
@@ -152,8 +176,10 @@ pub struct CgEnumDecl { name: String, variants: Array[CgVariant] }
 let cg_resolve_ty (names: Array[CgTyName]) (t: parser.Ty): CgTy =
     match t {
         TyPath(path) => cg_resolve_named(names, path[path.len() - 1]),
-        TyGeneric(path, _) => { cg_fail("generic type ".concat(path[path.len() - 1]).concat(" isn't supported yet")); CgUnit },
-        TyFunction(_, _) => { cg_fail("function types aren't supported yet"); CgUnit },
+        TyGeneric(path, args) =>
+            if path[path.len() - 1] == "Array" { CgArray(cg_resolve_ty(names, args[0])) }
+            else { { cg_fail("generic type ".concat(path[path.len() - 1]).concat(" isn't supported yet")); CgUnit } },
+        TyFunction(ptys, ret) => CgClosure(Array.map(ptys, |t| cg_resolve_ty(names, t)), cg_resolve_ty(names, ret)),
     }
 
 let cg_resolve_named (names: Array[CgTyName]) (name: String): CgTy =
@@ -430,9 +456,20 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: parser.PExpr): Emit
         EField(base, name) => cg_field_read(p, env, n, base, name),
         EMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms),
         EFor(pattern, iter, body) => cg_for(p, env, n, pattern, iter, body),
-        EArray(_) => { cg_fail("arrays aren't supported yet"); cg_unit_emit(n) },
-        EIndex(_, _) => { cg_fail("indexing isn't supported yet"); cg_unit_emit(n) },
-        EClosure(_, _) => { cg_fail("closures aren't supported yet"); cg_unit_emit(n) },
+        EArray(elems) => cg_array_lit(p, env, n, elems),
+        EIndex(base, idx) => cg_index(p, env, n, base, idx),
+        // A closure literal reached through the ORDINARY path has no
+        // expected parameter types, and this backend cannot invent
+        // them: `|n| n + 1` says nothing about `n`'s representation
+        // until something uses the closure. Every position that DOES
+        // know them (a call argument, a struct field, an `Array.map`
+        // element) routes through `cg_expr_params` instead. See this
+        // file's own top comment on why solving the general case means
+        // making `infer.plum` produce a typed tree, not guessing here.
+        EClosure(params, _) => {
+            cg_fail("a closure needs its parameter types from context (a call argument, a struct field, or Array.map/filter/fold); a standalone `let f = |".concat(if Array.is_empty(params) { "" } else { params[0] }).concat("| ...` isn't supported yet"));
+            cg_unit_emit(n)
+        },
         EStructLit(path, fields, spread) => cg_struct_lit(p, env, n, path[path.len() - 1], fields, spread),
         EGenericInst(_, _) => { cg_fail("generic instantiation isn't supported yet"); cg_unit_emit(n) },
         EUnsafe(_) => { cg_fail("unsafe/extern FFI isn't supported"); cg_unit_emit(n) },
@@ -740,13 +777,27 @@ let cg_let_name (pattern: parser.PPattern): String =
 
 let cg_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (callee: parser.PExpr) (args: Array[parser.PExpr]): Emit =
     match callee {
-        EIdent(name) =>
-            if name == "println" { cg_println(p, env, n, args) }
-            else { match cg_find_variant(p, name) {
-                Some(v) => cg_variant_call(p, env, n, v, args),
-                None => cg_fn_call(p, env, n, name, args),
-            } },
-        EField(base, method_name) => cg_method_call(p, env, n, base, method_name, args),
+        // A bound local WINS: `f(x)` where `f` is a closure-valued
+        // local is a closure call, and no top-level function or
+        // variant may shadow it. Same resolution order the self-hosted
+        // interpreter's `eval_call` uses.
+        EIdent(name) => match cg_lookup(env, name) {
+            Some(_) => cg_call_closure_value(p, env, n, cg_ident(p, env, n, name), args),
+            None =>
+                if name == "println" { cg_println(p, env, n, args) }
+                else { match cg_find_variant(p, name) {
+                    Some(v) => cg_variant_call(p, env, n, v, args),
+                    None => cg_fn_call(p, env, n, name, args),
+                } },
+        },
+        EField(base, method_name) => match base {
+            // `Array.map(..)` — a NAMESPACE call, not a method call.
+            // Checked before evaluating `base`, exactly as the
+            // interpreter and type checker both do: "Array" is never a
+            // bound value.
+            EIdent(ns) => if ns == "Array" { cg_array_ns_call(p, env, n, method_name, args) } else { cg_method_call(p, env, n, base, method_name, args) },
+            _ => cg_method_call(p, env, n, base, method_name, args),
+        },
         _ => { cg_fail("only named calls and .to_string()/.concat() are supported yet"); cg_unit_emit(n) },
     }
 
@@ -763,9 +814,13 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (args: Array[parser.
 let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[parser.PExpr]): Emit =
     match cg_find_fn(p, name) {
         Some(def) => {
-            let a = cg_args(p, env, n, args, 0, "", "", "", []);
+            // Declared parameter types are pushed DOWN into the
+            // arguments, which is what lets `apply_twice(|n| n + 1, 3)`
+            // work: the literal's parameter representation comes from
+            // the signature it is being passed to.
+            let a = cg_call_args_typed(p, env, n, args, Array.map(def.params, |q| q.ty), 0, "", "", "", []);
             let reg = cg_reg(a.n);
-            let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(def.ret)).concat(" @").concat(cg_mangle(name)).concat("(").concat(a.val).concat(")\n");
+            let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(def.ret)).concat(" @").concat(cg_mangle(name)).concat("(").concat(cg_join_commas(a.vals)).concat(")\n");
             Emit { code: a.code.concat(call), allocas: a.allocas, globals: a.globals, val: reg, ty: def.ret, n: a.n + 1 }
         },
         None => { cg_fail("unknown function: ".concat(name)); cg_unit_emit(n) },
@@ -787,8 +842,15 @@ let cg_join_acc (parts: Array[String]) (i: Int) (acc: String): String =
 let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): Emit =
     if method_name == "to_string" { cg_to_string(p, env, n, base) }
     else if method_name == "concat" { cg_concat(p, env, n, base, args) }
-    else if method_name == "len" { cg_str_len(p, env, n, base) }
-    else { { cg_fail("method .".concat(method_name).concat("() isn't supported yet")); cg_unit_emit(n) } }
+    else if method_name == "len" && Array.is_empty(args) { cg_len(p, env, n, base) }
+    else if method_name == "push" && args.len() == 1 { cg_array_push(p, env, n, base, args[0]) }
+    else if method_name == "set" && args.len() == 2 { cg_array_set(p, env, n, base, args[0], args[1]) }
+    // Not a builtin method: a struct FIELD holding a closure, called
+    // directly (`ops.add(3, 4)`) — the record-of-closures dispatch
+    // pattern DESIGN.md settled on for Plum's higher-order polymorphism
+    // story, and the same fallback the interpreter and type checker
+    // both end with.
+    else { cg_call_closure_value(p, env, n, cg_field_read(p, env, n, base, method_name), args) }
 
 let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr): Emit = {
     let b = cg_expr(p, env, n, base);
@@ -807,6 +869,8 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExp
         // yet, so it fails loudly rather than printing a pointer.
         CgStruct(name) => { cg_fail(".to_string() on a struct isn't supported yet: ".concat(name)); cg_unit_emit(b.n) },
         CgEnum(name) => { cg_fail(".to_string() on an enum isn't supported yet: ".concat(name)); cg_unit_emit(b.n) },
+        CgArray(_) => { cg_fail(".to_string() on an Array isn't supported yet"); cg_unit_emit(b.n) },
+        CgClosure(_, _) => { cg_fail("a closure has no .to_string()"); cg_unit_emit(b.n) },
     }
 }
 
@@ -820,11 +884,440 @@ let cg_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) 
     }
 }
 
-let cg_str_len (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr): Emit = {
+// `.len()` is overloaded on the receiver's representation — byte length
+// for a `String`, element count for an `Array` — exactly as the real
+// backend overloads it on the receiver's static type, and exactly as
+// the self-hosted interpreter's `value_len` overloads it on the
+// receiver's runtime shape.
+let cg_len (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr): Emit = {
     let b = cg_expr(p, env, n, base);
     let reg = cg_reg(b.n);
-    if !cg_ty_eq(b.ty, CgStr) { cg_fail(".len() on a non-String isn't supported yet") };
-    Emit { code: b.code.concat("  ").concat(reg).concat(" = call i64 @plum_str_len(ptr ").concat(b.val).concat(")\n"), allocas: b.allocas, globals: b.globals, val: reg, ty: CgInt, n: b.n + 1 }
+    let fn_name = match b.ty {
+        CgStr => "@plum_str_len",
+        CgArray(_) => "@plum_array_len",
+        _ => { cg_fail(".len() requires a String or an Array, found ".concat(cg_ty_name(b.ty))); "@plum_str_len" },
+    };
+    Emit { code: b.code.concat("  ").concat(reg).concat(" = call i64 ").concat(fn_name).concat("(ptr ").concat(b.val).concat(")\n"), allocas: b.allocas, globals: b.globals, val: reg, ty: CgInt, n: b.n + 1 }
+}
+
+// --- Arrays ---
+//
+// Cell layout is in `runtime.plum`: an `i64` length then one 8-byte
+// slot per element. `push`/`set` build a NEW cell and copy, never
+// mutate — Plum arrays are values, and this backend has no ownership
+// analysis that could prove an in-place update safe. That is the same
+// starting point the real backend had before FBIP; the difference is
+// the real one now has `ArrayPushReuse` and this one does not, so a
+// `push` in a loop here is quadratic. Real, and the most likely first
+// performance cliff if this backend is ever pointed at a big program.
+
+// An array literal's element type comes from its FIRST element. An
+// EMPTY literal has nothing to derive one from — `CgArray(CgUnit)`
+// records exactly that, and any operation that would actually need the
+// element type (indexing, `push`) fails with a clear message. `.len()`
+// works fine on one, which is all `let empty = []` in the corpus ever
+// asks of it. Closing this properly needs an expected type pushed DOWN
+// from the binding, which is the same bidirectional machinery closures
+// will need.
+let cg_array_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[parser.PExpr]): Emit =
+    if Array.is_empty(elems) {
+        let cell = cg_reg(n);
+        Emit { code: "  ".concat(cell).concat(" = call ptr @plum_array_new(i64 0)\n"), allocas: "", globals: "", val: cell, ty: CgArray(CgUnit), n: n + 1 }
+    } else {
+        let first = cg_expr(p, env, n, elems[0]);
+        let cell = cg_reg(first.n);
+        let head = "  ".concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(elems.len().to_string()).concat(")\n");
+        let st = cg_array_store_elems(p, env, first.n + 1, cell, elems, 0, "", "", "");
+        Emit { code: head.concat(st.code), allocas: st.allocas, globals: st.globals, val: cell, ty: CgArray(first.ty), n: st.n }
+    }
+
+// The first element is emitted TWICE — once by `cg_array_lit` to learn
+// the element type, then again here as part of the ordinary store loop.
+// The first emission's code is discarded. Harmless for a pure literal
+// and it keeps the loop uniform; it would be a real bug if element
+// expressions could have side effects, which is the reason this note
+// exists rather than being left implicit.
+let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (elems: Array[parser.PExpr]) (i: Int) (code: String) (allocas: String) (globals: String): FieldsEmit =
+    if i >= elems.len() { FieldsEmit { code: code, allocas: allocas, globals: globals, n: n } }
+    else {
+        let r = cg_expr(p, env, n, elems[i]);
+        let ep = cg_reg(r.n);
+        let line = "  ".concat(ep).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat((8 + 8 * i).to_string()).concat("\n")
+            .concat("  store ").concat(cg_llvm_ty(r.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(ep).concat("\n");
+        cg_array_store_elems(p, env, r.n + 1, cell, elems, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), globals.concat(r.globals))
+    }
+
+let cg_elem_ty (t: CgTy): CgTy =
+    match t {
+        CgArray(elem) => match elem {
+            CgUnit => { cg_fail("this Array's element type was never determined (it came from an empty literal)"); CgUnit },
+            _ => elem,
+        },
+        _ => { cg_fail("expected an Array, found ".concat(cg_ty_name(t))); CgUnit },
+    }
+
+// No bounds check. The real backend emits one; this one does not, which
+// is a deliberate v1 cut and a genuinely unsafe one — an out-of-range
+// index reads whatever follows the cell. Stated here rather than
+// discovered by a corrupted value later.
+let cg_index (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) (idx: parser.PExpr): Emit = {
+    let b = cg_expr(p, env, n, base);
+    let i = cg_expr(p, env, b.n, idx);
+    let elem = cg_elem_ty(b.ty);
+    let addr = cg_array_elem_addr(b.val, i.val, i.n);
+    let out = cg_reg(i.n + 2);
+    let code = b.code.concat(i.code).concat(addr)
+        .concat("  ").concat(out).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_reg(i.n + 1)).concat("_d\n");
+    Emit { code: code, allocas: b.allocas.concat(i.allocas), globals: b.globals.concat(i.globals), val: out, ty: elem, n: i.n + 3 }
+}
+
+// Element address = base + 8 + 8*index, in two instructions starting at
+// register `n` (byte offset) and `n + 1` (the pointer).
+let cg_array_elem_addr (arr: String) (idx: String) (n: Int): String = {
+    let off = cg_reg(n);
+    let ptr = cg_reg(n + 1);
+    "  ".concat(off).concat(" = mul i64 ").concat(idx).concat(", 8\n")
+        .concat("  ").concat(ptr).concat(" = getelementptr i8, ptr ").concat(arr).concat(", i64 ").concat(off).concat("\n")
+        .concat("  ").concat(ptr).concat("_d = getelementptr i8, ptr ").concat(ptr).concat(", i64 8\n")
+}
+
+let cg_array_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) (value: parser.PExpr): Emit = {
+    let b = cg_expr(p, env, n, base);
+    let v = cg_expr(p, env, b.n, value);
+    let old_len = cg_reg(v.n);
+    let new_len = cg_reg(v.n + 1);
+    let cell = cg_reg(v.n + 2);
+    let copied = cg_reg(v.n + 3);
+    let off = cg_reg(v.n + 4);
+    let ep = cg_reg(v.n + 5);
+    let code = b.code.concat(v.code)
+        .concat("  ").concat(old_len).concat(" = call i64 @plum_array_len(ptr ").concat(b.val).concat(")\n")
+        .concat("  ").concat(new_len).concat(" = add i64 ").concat(old_len).concat(", 1\n")
+        .concat("  ").concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(new_len).concat(")\n")
+        .concat("  ").concat(copied).concat(" = call i1 @plum_array_copy(ptr ").concat(cell).concat(", ptr ").concat(b.val).concat(", i64 ").concat(old_len).concat(")\n")
+        .concat("  ").concat(off).concat(" = mul i64 ").concat(old_len).concat(", 8\n")
+        .concat("  ").concat(ep).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(off).concat("\n")
+        .concat("  ").concat(ep).concat("_d = getelementptr i8, ptr ").concat(ep).concat(", i64 8\n")
+        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(ep).concat("_d\n");
+    Emit { code: code, allocas: b.allocas.concat(v.allocas), globals: b.globals.concat(v.globals), val: cell, ty: CgArray(v.ty), n: v.n + 6 }
+}
+
+let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) (idx: parser.PExpr) (value: parser.PExpr): Emit = {
+    let b = cg_expr(p, env, n, base);
+    let i = cg_expr(p, env, b.n, idx);
+    let v = cg_expr(p, env, i.n, value);
+    let len = cg_reg(v.n);
+    let cell = cg_reg(v.n + 1);
+    let copied = cg_reg(v.n + 2);
+    let addr = cg_array_elem_addr(cell, i.val, v.n + 3);
+    let code = b.code.concat(i.code).concat(v.code)
+        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(b.val).concat(")\n")
+        .concat("  ").concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(len).concat(")\n")
+        .concat("  ").concat(copied).concat(" = call i1 @plum_array_copy(ptr ").concat(cell).concat(", ptr ").concat(b.val).concat(", i64 ").concat(len).concat(")\n")
+        .concat(addr)
+        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_reg(v.n + 4)).concat("_d\n");
+    Emit { code: code, allocas: b.allocas.concat(i.allocas).concat(v.allocas), globals: b.globals.concat(i.globals).concat(v.globals), val: cell, ty: b.ty, n: v.n + 5 }
+}
+
+// --- Closures ---
+//
+// A closure value is `{ ptr code, capture0, capture1, ... }`. Calling
+// one loads the code pointer and passes the cell itself back in as the
+// first argument, so the lifted function can read its own captures.
+//
+// **Captures are the WHOLE enclosing environment**, not the closure's
+// free variables. Computing free variables means a shadowing-aware scan
+// of the body — the exact analysis that produced a real, crash-causing
+// bug in `plum-ir/src/fbip.rs` earlier in this project when it got
+// shadowing wrong. Capturing everything is trivially correct instead,
+// and costs one word per in-scope local at the creation site. A
+// deliberate trade of space for the absence of a subtle analysis.
+//
+// Captures are by VALUE, snapshotted at the literal's own creation
+// site — matching real Plum semantics and the self-hosted interpreter's
+// `VClosure` exactly.
+//
+// The lifted function is emitted into `globals`, which is already the
+// module-level text channel string constants use.
+let cg_expr_params (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: parser.PExpr) (param_tys: Array[CgTy]): Emit =
+    match e {
+        EClosure(params, body) => cg_closure(p, env, n, params, body, param_tys),
+        _ => cg_expr(p, env, n, e),
+    }
+
+let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[String]) (body: parser.PExpr) (param_tys: Array[CgTy]): Emit = {
+    if params.len() != param_tys.len() { cg_fail("closure takes ".concat(params.len().to_string()).concat(" parameter(s) but its context expects ").concat(param_tys.len().to_string())) };
+    let fn_name = "@plum_lambda".concat(n.to_string());
+    // The lifted function's own body is emitted against a FRESH
+    // environment built from the captures and parameters, never the
+    // creation site's slots directly — those are `alloca`s in a
+    // different function.
+    let inner_env = cg_closure_inner_env(env, params, param_tys, 0, []);
+    let inner = cg_expr(p, inner_env, n + 1, body);
+    let lifted = "define ".concat(cg_llvm_ty(inner.ty)).concat(" ").concat(fn_name).concat("(ptr %env").concat(cg_closure_param_decls(param_tys, 0, "")).concat(") {\nentry:\n")
+        .concat(cg_closure_prologue(env, params, param_tys))
+        .concat(inner.allocas)
+        .concat(inner.code)
+        .concat("  ret ").concat(cg_llvm_ty(inner.ty)).concat(" ").concat(inner.val).concat("\n}\n\n");
+    let cell = cg_reg(inner.n);
+    let head = "  ".concat(cell).concat(" = call ptr @malloc(i64 ").concat((8 + 8 * env.len()).to_string()).concat(")\n")
+        .concat("  store ptr ").concat(fn_name).concat(", ptr ").concat(cell).concat("\n");
+    let caps = cg_capture_stores(env, 0, cell, inner.n + 1, "");
+    Emit {
+        code: head.concat(caps.code), allocas: "", globals: inner.globals.concat(lifted),
+        val: cell, ty: CgClosure(param_tys, inner.ty), n: caps.n,
+    }
+}
+
+// Capture slots keep the creation site's NAMES and order, so a name
+// resolves inside the lifted function exactly as it did outside — and
+// shadowing keeps working for free, because `cg_lookup` scans from the
+// end of the list either way.
+let cg_closure_inner_env (env: Array[CgSlot]) (params: Array[String]) (param_tys: Array[CgTy]) (i: Int) (acc: Array[CgSlot]): Array[CgSlot] =
+    if i < env.len() { cg_closure_inner_env(env, params, param_tys, i + 1, acc.push(CgSlot { name: env[i].name, ptr: "%c".concat(i.to_string()), ty: env[i].ty })) }
+    else if i - env.len() < params.len() {
+        let j = i - env.len();
+        cg_closure_inner_env(env, params, param_tys, i + 1, acc.push(CgSlot { name: params[j], ptr: "%a".concat(j.to_string()), ty: param_tys[j] }))
+    }
+    else { acc }
+
+let cg_closure_param_decls (param_tys: Array[CgTy]) (i: Int) (acc: String): String =
+    if i >= param_tys.len() { acc }
+    else { cg_closure_param_decls(param_tys, i + 1, acc.concat(", ").concat(cg_llvm_ty(param_tys[i])).concat(" %p").concat(i.to_string())) }
+
+let cg_closure_prologue (env: Array[CgSlot]) (params: Array[String]) (param_tys: Array[CgTy]): String =
+    cg_capture_loads(env, 0, "").concat(cg_closure_param_slots(param_tys, 0, ""))
+
+let cg_capture_loads (env: Array[CgSlot]) (i: Int) (acc: String): String =
+    if i >= env.len() { acc }
+    else {
+        let lty = cg_llvm_ty(env[i].ty);
+        let line = "  %cp".concat(i.to_string()).concat(" = getelementptr i8, ptr %env, i64 ").concat((8 + 8 * i).to_string()).concat("\n")
+            .concat("  %cv").concat(i.to_string()).concat(" = load ").concat(lty).concat(", ptr %cp").concat(i.to_string()).concat("\n")
+            .concat("  %c").concat(i.to_string()).concat(" = alloca ").concat(lty).concat("\n")
+            .concat("  store ").concat(lty).concat(" %cv").concat(i.to_string()).concat(", ptr %c").concat(i.to_string()).concat("\n");
+        cg_capture_loads(env, i + 1, acc.concat(line))
+    }
+
+let cg_closure_param_slots (param_tys: Array[CgTy]) (i: Int) (acc: String): String =
+    if i >= param_tys.len() { acc }
+    else {
+        let lty = cg_llvm_ty(param_tys[i]);
+        let line = "  %a".concat(i.to_string()).concat(" = alloca ").concat(lty).concat("\n")
+            .concat("  store ").concat(lty).concat(" %p").concat(i.to_string()).concat(", ptr %a").concat(i.to_string()).concat("\n");
+        cg_closure_param_slots(param_tys, i + 1, acc.concat(line))
+    }
+
+let cg_capture_stores (env: Array[CgSlot]) (i: Int) (cell: String) (n: Int) (acc: String): StoreEmit =
+    if i >= env.len() { StoreEmit { code: acc, n: n } }
+    else {
+        let lty = cg_llvm_ty(env[i].ty);
+        let v = cg_reg(n);
+        let slot = cg_reg(n + 1);
+        let line = "  ".concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(env[i].ptr).concat("\n")
+            .concat("  ").concat(slot).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat((8 + 8 * i).to_string()).concat("\n")
+            .concat("  store ").concat(lty).concat(" ").concat(v).concat(", ptr ").concat(slot).concat("\n");
+        cg_capture_stores(env, i + 1, cell, n + 2, acc.concat(line))
+    }
+
+// Calling a closure VALUE: load the code pointer, pass the cell itself
+// back as the environment argument.
+let cg_call_closure_value (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: Emit) (args: Array[parser.PExpr]): Emit =
+    match clo.ty {
+        CgClosure(ptys, ret) => {
+            let a = cg_call_args_typed(p, env, clo.n, args, ptys, 0, "", "", "", []);
+            let fp = cg_reg(a.n);
+            let out = cg_reg(a.n + 1);
+            let code = clo.code.concat(a.code)
+                .concat("  ").concat(fp).concat(" = load ptr, ptr ").concat(clo.val).concat("\n")
+                .concat("  ").concat(out).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(fp).concat("(ptr ").concat(clo.val).concat(cg_prefix_commas(a.vals)).concat(")\n");
+            Emit { code: code, allocas: clo.allocas.concat(a.allocas), globals: clo.globals.concat(a.globals), val: out, ty: ret, n: a.n + 2 }
+        },
+        _ => { cg_fail("called a non-closure value of type ".concat(cg_ty_name(clo.ty))); cg_unit_emit(clo.n) },
+    }
+
+let cg_prefix_commas (vals: Array[String]): String = cg_prefix_acc(vals, 0, "")
+let cg_prefix_acc (vals: Array[String]) (i: Int) (acc: String): String =
+    if i >= vals.len() { acc } else { cg_prefix_acc(vals, i + 1, acc.concat(", ").concat(vals[i])) }
+
+// Arguments emitted against KNOWN parameter types, so a closure literal
+// in argument position gets the types it can't derive on its own.
+let cg_call_args_typed (p: CgProgram) (env: Array[CgSlot]) (n: Int) (args: Array[parser.PExpr]) (ptys: Array[CgTy]) (i: Int) (code: String) (allocas: String) (globals: String) (vals: Array[String]): ArgVals =
+    if i >= args.len() { ArgVals { code: code, allocas: allocas, globals: globals, vals: vals, tys: [], n: n } }
+    else {
+        let r = if i < ptys.len() { cg_expr_params(p, env, n, args[i], cg_param_tys_of(ptys[i])) } else { cg_expr(p, env, n, args[i]) };
+        cg_call_args_typed(p, env, r.n, args, ptys, i + 1, code.concat(r.code), allocas.concat(r.allocas), globals.concat(r.globals), vals.push(cg_llvm_ty(r.ty).concat(" ").concat(r.val)))
+    }
+
+// A non-closure expected type pushes nothing down; only the parameter
+// list of an expected CLOSURE type is information a literal can't
+// derive for itself.
+let cg_param_tys_of (t: CgTy): Array[CgTy] =
+    match t { CgClosure(ptys, _) => ptys, _ => [] }
+
+// --- Array.map / Array.filter / Array.fold ---
+//
+// These are PRELUDE functions in the real compiler — ordinary generic
+// Plum source. This backend has neither a prelude nor generics, so they
+// are emitted inline as loops instead. That is not a workaround: an
+// inlined loop is what a monomorphizing backend would produce for them
+// anyway, and it means the closure argument's parameter type is derived
+// from the array's own element type right here, which is exactly the
+// context a closure literal needs.
+let cg_array_ns_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (fn_name: String) (args: Array[parser.PExpr]): Emit =
+    if fn_name == "map" { cg_array_map(p, env, n, args[0], args[1]) }
+    else if fn_name == "filter" { cg_array_filter(p, env, n, args[0], args[1]) }
+    else if fn_name == "fold" { cg_array_fold(p, env, n, args[0], args[1], args[2]) }
+    else { { cg_fail("Array.".concat(fn_name).concat("(..) isn't supported yet")); cg_unit_emit(n) } }
+
+// `base + 8 + 8*index`, as three real instructions. The resulting
+// pointer is `cg_reg(n + 2)`; three registers are consumed.
+let cg_elem_ptr_lines (arr: String) (idx: String) (n: Int): String =
+    "  ".concat(cg_reg(n)).concat(" = mul i64 ").concat(idx).concat(", 8\n")
+        .concat("  ").concat(cg_reg(n + 1)).concat(" = getelementptr i8, ptr ").concat(arr).concat(", i64 ").concat(cg_reg(n)).concat("\n")
+        .concat("  ").concat(cg_reg(n + 2)).concat(" = getelementptr i8, ptr ").concat(cg_reg(n + 1)).concat(", i64 8\n")
+
+let cg_elem_ptr_reg (n: Int): String = cg_reg(n + 2)
+
+// A counted loop over `0..len`, shared by map/filter/fold. `pre` opens
+// it (through the body label), `post` closes it (increment, back-edge,
+// end label); `idx_reg` holds the current index inside the body. The
+// induction variable's `alloca` is the CALLER's to hoist — see `Emit`'s
+// own comment on why an alloca must never sit inside a loop.
+struct LoopParts { pre: String, post: String, idx_reg: String, body_n: Int }
+
+let cg_array_loop (iv: String) (len: String) (n: Int): LoopParts = {
+    let cond_label = cg_label(n);
+    let body_label = cg_label(n + 1);
+    let end_label = cg_label(n + 2);
+    let cur = cg_reg(n + 3);
+    let test = cg_reg(n + 4);
+    let step = cg_reg(n + 5);
+    let pre = "  store i64 0, ptr ".concat(iv).concat("\n")
+        .concat("  br label %").concat(cond_label).concat("\n")
+        .concat(cond_label).concat(":\n")
+        .concat("  ").concat(cur).concat(" = load i64, ptr ").concat(iv).concat("\n")
+        .concat("  ").concat(test).concat(" = icmp slt i64 ").concat(cur).concat(", ").concat(len).concat("\n")
+        .concat("  br i1 ").concat(test).concat(", label %").concat(body_label).concat(", label %").concat(end_label).concat("\n")
+        .concat(body_label).concat(":\n");
+    let post = "  ".concat(step).concat(" = add i64 ").concat(cur).concat(", 1\n")
+        .concat("  store i64 ").concat(step).concat(", ptr ").concat(iv).concat("\n")
+        .concat("  br label %").concat(cond_label).concat("\n")
+        .concat(end_label).concat(":\n");
+    LoopParts { pre: pre, post: post, idx_reg: cur, body_n: n + 6 }
+}
+
+let cg_closure_ret (t: CgTy): CgTy =
+    match t { CgClosure(_, ret) => ret, _ => { cg_fail("expected a closure, found ".concat(cg_ty_name(t))); CgUnit } }
+
+// Loading the code pointer and calling it, given an already-emitted
+// closure operand and already-emitted argument operands.
+let cg_invoke (clo_val: String) (ret: CgTy) (arg_ops: String) (n: Int): String =
+    "  ".concat(cg_reg(n)).concat(" = load ptr, ptr ").concat(clo_val).concat("\n")
+        .concat("  ").concat(cg_reg(n + 1)).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(n)).concat("(ptr ").concat(clo_val).concat(arg_ops).concat(")\n")
+
+let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: parser.PExpr) (f_e: parser.PExpr): Emit = {
+    let a = cg_expr(p, env, n, arr_e);
+    let elem = cg_elem_ty(a.ty);
+    let f = cg_expr_params(p, env, a.n, f_e, [elem]);
+    let ret = cg_closure_ret(f.ty);
+    let len = cg_reg(f.n);
+    let out = cg_reg(f.n + 1);
+    let iv = cg_reg(f.n + 2);
+    let lp = cg_array_loop(iv, len, f.n + 3);
+    let b = lp.body_n;
+    let ev = cg_reg(b + 3);
+    let body = cg_elem_ptr_lines(a.val, lp.idx_reg, b)
+        .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
+        .concat(cg_invoke(f.val, ret, ", ".concat(cg_llvm_ty(elem)).concat(" ").concat(ev), b + 4))
+        .concat(cg_elem_ptr_lines(out, lp.idx_reg, b + 6))
+        .concat("  store ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(b + 5)).concat(", ptr ").concat(cg_elem_ptr_reg(b + 6)).concat("\n");
+    let code = a.code.concat(f.code)
+        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val).concat(")\n")
+        .concat("  ").concat(out).concat(" = call ptr @plum_array_new(i64 ").concat(len).concat(")\n")
+        .concat(lp.pre).concat(body).concat(lp.post);
+    Emit { code: code, allocas: "  ".concat(iv).concat(" = alloca i64\n").concat(a.allocas).concat(f.allocas), globals: a.globals.concat(f.globals), val: out, ty: CgArray(ret), n: b + 9 }
+}
+
+// The output array is allocated at the INPUT's length and its length
+// header is patched down afterwards to however many elements were
+// actually kept. Over-allocating and shrinking is one pass; counting
+// first would be two, and would call the predicate twice per element,
+// which is observably different for a predicate with effects.
+let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: parser.PExpr) (f_e: parser.PExpr): Emit = {
+    let a = cg_expr(p, env, n, arr_e);
+    let elem = cg_elem_ty(a.ty);
+    let f = cg_expr_params(p, env, a.n, f_e, [elem]);
+    let len = cg_reg(f.n);
+    let out = cg_reg(f.n + 1);
+    let iv = cg_reg(f.n + 2);
+    let cnt = cg_reg(f.n + 3);
+    let lp = cg_array_loop(iv, len, f.n + 4);
+    let b = lp.body_n;
+    let ev = cg_reg(b + 3);
+    let keep_label = cg_label(b + 6);
+    let skip_label = cg_label(b + 7);
+    let cur_cnt = cg_reg(b + 8);
+    let next_cnt = cg_reg(b + 9);
+    let body = cg_elem_ptr_lines(a.val, lp.idx_reg, b)
+        .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
+        .concat(cg_invoke(f.val, CgBool, ", ".concat(cg_llvm_ty(elem)).concat(" ").concat(ev), b + 4))
+        .concat("  br i1 ").concat(cg_reg(b + 5)).concat(", label %").concat(keep_label).concat(", label %").concat(skip_label).concat("\n")
+        .concat(keep_label).concat(":\n")
+        .concat("  ").concat(cur_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
+        .concat(cg_elem_ptr_lines(out, cur_cnt, b + 10))
+        .concat("  store ").concat(cg_llvm_ty(elem)).concat(" ").concat(ev).concat(", ptr ").concat(cg_elem_ptr_reg(b + 10)).concat("\n")
+        .concat("  ").concat(next_cnt).concat(" = add i64 ").concat(cur_cnt).concat(", 1\n")
+        .concat("  store i64 ").concat(next_cnt).concat(", ptr ").concat(cnt).concat("\n")
+        .concat("  br label %").concat(skip_label).concat("\n")
+        .concat(skip_label).concat(":\n");
+    let final_cnt = cg_reg(b + 13);
+    let code = a.code.concat(f.code)
+        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val).concat(")\n")
+        .concat("  ").concat(out).concat(" = call ptr @plum_array_new(i64 ").concat(len).concat(")\n")
+        .concat("  store i64 0, ptr ").concat(cnt).concat("\n")
+        .concat(lp.pre).concat(body).concat(lp.post)
+        .concat("  ").concat(final_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
+        .concat("  store i64 ").concat(final_cnt).concat(", ptr ").concat(out).concat("\n");
+    Emit {
+        code: code,
+        allocas: "  ".concat(iv).concat(" = alloca i64\n").concat("  ").concat(cnt).concat(" = alloca i64\n").concat(a.allocas).concat(f.allocas),
+        globals: a.globals.concat(f.globals), val: out, ty: CgArray(elem), n: b + 14,
+    }
+}
+
+// The accumulator's representation comes from the INIT expression, and
+// the closure is given `(acc, elem)` as its parameter types — which is
+// the whole reason `Array.fold`'s closure literal needs no annotation.
+let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: parser.PExpr) (init_e: parser.PExpr) (f_e: parser.PExpr): Emit = {
+    let a = cg_expr(p, env, n, arr_e);
+    let elem = cg_elem_ty(a.ty);
+    let init = cg_expr(p, env, a.n, init_e);
+    let f = cg_expr_params(p, env, init.n, f_e, [init.ty, elem]);
+    let acc_ty = cg_llvm_ty(init.ty);
+    let len = cg_reg(f.n);
+    let acc = cg_reg(f.n + 1);
+    let iv = cg_reg(f.n + 2);
+    let lp = cg_array_loop(iv, len, f.n + 3);
+    let b = lp.body_n;
+    let ev = cg_reg(b + 3);
+    let cur_acc = cg_reg(b + 4);
+    let body = cg_elem_ptr_lines(a.val, lp.idx_reg, b)
+        .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
+        .concat("  ").concat(cur_acc).concat(" = load ").concat(acc_ty).concat(", ptr ").concat(acc).concat("\n")
+        .concat(cg_invoke(f.val, init.ty, ", ".concat(acc_ty).concat(" ").concat(cur_acc).concat(", ").concat(cg_llvm_ty(elem)).concat(" ").concat(ev), b + 5))
+        .concat("  store ").concat(acc_ty).concat(" ").concat(cg_reg(b + 6)).concat(", ptr ").concat(acc).concat("\n");
+    let out = cg_reg(b + 7);
+    let code = a.code.concat(init.code).concat(f.code)
+        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val).concat(")\n")
+        .concat("  store ").concat(acc_ty).concat(" ").concat(init.val).concat(", ptr ").concat(acc).concat("\n")
+        .concat(lp.pre).concat(body).concat(lp.post)
+        .concat("  ").concat(out).concat(" = load ").concat(acc_ty).concat(", ptr ").concat(acc).concat("\n");
+    Emit {
+        code: code,
+        allocas: "  ".concat(iv).concat(" = alloca i64\n").concat("  ").concat(acc).concat(" = alloca ").concat(acc_ty).concat("\n").concat(a.allocas).concat(init.allocas).concat(f.allocas),
+        globals: a.globals.concat(init.globals).concat(f.globals), val: out, ty: init.ty, n: b + 8,
+    }
 }
 
 // --- Structs, enums, and pattern matching ---
@@ -849,7 +1342,11 @@ let cg_store_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (decl: CgStruct
     if i >= fields.len() { FieldsEmit { code: code, allocas: allocas, globals: globals, n: n } }
     else {
         let idx = cg_field_index(decl.fields, fields[i].name, 0);
-        let r = cg_expr(p, env, n, fields[i].value);
+        // The field's DECLARED type is pushed down, which is what makes
+        // `Ops { add: |a, b| a + b }` work — a closure literal in field
+        // position gets its parameter representations from the struct
+        // declaration.
+        let r = cg_expr_params(p, env, n, fields[i].value, cg_param_tys_of(decl.fields[idx].ty));
         let fp = cg_reg(r.n);
         let line = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(idx).to_string()).concat("
 ")
@@ -880,13 +1377,11 @@ let cg_field_read (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PEx
 
 // A variant constructor call, `Circle(2)`. The cell is sized for the
 // enum's WIDEST variant, not this one — see `cg_payload_offset`.
-let cg_variant_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (v: CgVariant) (args: Array[parser.PExpr]): Emit = {
-    let a = cg_arg_values(p, env, n, args, 0, "", "", "", []);
-    cg_variant_build(p, v, a)
-}
+let cg_variant_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (v: CgVariant) (args: Array[parser.PExpr]): Emit =
+    cg_variant_build(p, v, cg_call_args_typed(p, env, n, args, v.payload, 0, "", "", "", []))
 
 let cg_variant_new (p: CgProgram) (env: Array[CgSlot]) (n: Int) (v: CgVariant) (args: Array[parser.PExpr]): Emit =
-    cg_variant_build(p, v, cg_arg_values(p, env, n, args, 0, "", "", "", []))
+    cg_variant_build(p, v, cg_call_args_typed(p, env, n, args, v.payload, 0, "", "", "", []))
 
 struct ArgVals { code: String, allocas: String, globals: String, vals: Array[String], tys: Array[CgTy], n: Int }
 
@@ -986,6 +1481,8 @@ let cg_zero_of (t: CgTy): String =
         CgStr => "null",
         CgStruct(_) => "null",
         CgEnum(_) => "null",
+        CgArray(_) => "null",
+        CgClosure(_, _) => "null",
     }
 
 struct ArmsEmit { code: String, allocas: String, globals: String, n: Int }

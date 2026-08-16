@@ -8288,3 +8288,93 @@ asserted the artifact (it now asserts its absence).
 | `sh run self_host check self_host` | ok |
 | exec_corpus native check + run | 14/14 |
 | Rust suites | 14/14 |
+
+### Stage 5b: arrays and closures (2026-08-15)
+
+**13 of the 14 runnable exec_corpus fixtures now compile and run** with
+the self-hosted backend, up from 11.
+
+**Arrays** are `{ i64 len, elem0, ... }` with an 8-byte slot per element
+regardless of the element's own width — the same trade the struct layout
+makes, space for an offset rule that fits on one line. `push`/`set`
+build a new cell and copy rather than mutating, because Plum arrays are
+values and this backend has no ownership analysis that could prove an
+in-place update safe. That is where the real backend was before FBIP;
+the difference is it now has `ArrayPushReuse` and this one does not, so
+**a `push` in a loop here is quadratic** — the most likely first
+performance cliff if this backend is ever pointed at a big program.
+
+An empty literal `[]` has no element to derive a type from.
+`CgArray(CgUnit)` records exactly that, `.len()` works on one, and any
+operation that would genuinely need the element type fails with a clear
+message. That is the same gap closures have, from the same cause.
+
+**Closures** are `{ ptr code, capture0, ... }`; calling one loads the
+code pointer and passes the cell back in as the first argument. Two
+decisions worth recording:
+
+*Captures are the whole enclosing environment, not the free variables.*
+Computing free variables means a shadowing-aware scan of the body — the
+exact analysis that produced a crash-causing bug in `plum-ir/src/
+fbip.rs` earlier in this project when it got shadowing wrong. Capturing
+everything is trivially correct and costs one word per in-scope local at
+the creation site. A deliberate trade of space for the absence of a
+subtle analysis.
+
+*`Array.map`/`filter`/`fold` are emitted as inline loops.* They are
+prelude functions in the real compiler — ordinary generic Plum — and
+this backend has neither a prelude nor generics. Inlining is not a
+workaround: it is what a monomorphizing backend would produce for them
+anyway, and it puts the array's element type right where the closure
+argument needs it.
+
+#### Where bottom-up synthesis runs out, precisely
+
+Closure literals get their parameter types pushed DOWN from context
+(`cg_expr_params`), which covers call arguments, struct fields, variant
+payloads, and `Array.map`/`filter`/`fold`. It does not cover `let f =
+|n| n + 1`, where nothing in the surrounding context says what `n` is —
+only unifying the body's use of it does. That is inference, not
+synthesis, and `infer.plum` already performs it and discards the result.
+
+So the boundary predicted when Stage 5 started has been reached exactly
+where predicted. **The fix is to make `infer.plum` produce a typed tree,
+not to grow a second unifier in the backend.** The `closures` fixture is
+the one remaining failure and it fails for this reason alone.
+
+#### Two fixtures the REAL backend cannot compile
+
+`arrays` and `closures_in_structs` both compile and run correctly here,
+and both are rejected by `plum build`: the real compiler cannot infer
+`let empty = []`, and it refuses a closure-typed struct field. Their
+`expected.txt` goldens come from `plum run` (the interpreter), and the
+self-hosted backend's binaries match those goldens byte for byte. This
+is not a claim of superiority — the real backend's rejections are
+deliberate — but it does mean the "identical to the real backend" check
+covers 11 of the 13, with the other two checked against the interpreter.
+
+#### A real regression: self-interpretation now needs 16GB
+
+`./sh run bootstrap/self_host check bootstrap/self_host` still returns
+`ok`, but the memory it needs went from 6–8GB (7 modules) to 12–16GB
+(9 modules). Roughly 20% more source, roughly double the memory: the
+self-hosted interpreter's memory is **superlinear in the size of the
+program it is interpreting**.
+
+`PLUM_ALLOC_STATS=1` puts 3.0GB of the 6.3GB total in array allocation —
+the environment, which is threaded by value and copied with
+`Array.concat(env, bindings)` at every binding site.
+
+The obvious fix, `.push()` instead of `Array.concat` for the
+single-binding case, was tried and **made it worse** — slow enough to
+time out. The reason is worth recording: `env` is a function PARAMETER,
+and parameters are still not tracked in `plum-ir/src/fbip.rs`'s
+`known_heap` (the gap-1 work reverted earlier in this project). So the
+`.push()` is not an in-place append at all; it is a copy that ALSO
+applies capacity doubling, allocating roughly twice what `Array.concat`
+allocated. That is a concrete, measured cost for gap 1 still being open,
+and the first time this project has been able to name one.
+
+Fixing it properly means either closing gap 1 or changing the
+interpreter away from value-threaded environments. Neither was done
+here; the change was reverted.
