@@ -215,7 +215,7 @@ let check_fn_typed (p2: Program2) (def: parser.LetDefNode): TFn = {
         Ok(_) => (),
         Err(e) => fail_tc("function ".concat(def.name).concat(": declared return type ").concat(render_ty(ret_ty)).concat(" doesn't match body type ").concat(render_ty(body_ty)).concat(" (").concat(e).concat(")")),
     };
-    TFn { name: def.name, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
+    TFn { name: def.name, generics: sig.generics, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
 }
 
 // Parameter names paired with their (now resolved) declared types.
@@ -684,7 +684,7 @@ let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
     let inst_params = Array.map(sig.params, |t| instantiate_template(sig.generics, fr.tys, t));
     let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
     let ar = infer_call_args(p2, fr.state, env, acc, args, inst_params, 0, []);
-    ir_leaf(subst_apply(ar.subst, inst_ret), ar.subst, ar.state, TFnCall(sig.name, ar.texprs))
+    ir_leaf(subst_apply(ar.subst, inst_ret), ar.subst, ar.state, TFnCall(sig.name, ar.texprs, fr.tys))
 }
 
 struct CallArgsResult { subst: Subst, state: FreshState, texprs: Array[TExpr] }

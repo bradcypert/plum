@@ -1,0 +1,18 @@
+let identity[T] (x: T): T = x
+
+let pair_sum[T] (a: T) (b: T) (combine: (T, T) -> T): T = combine(a, b)
+
+let first_or[T] (xs: Array[T]) (fallback: T): T = if xs.len() > 0 { xs[0] } else { fallback }
+
+let twice[T] (f: (T) -> T) (x: T): T = f(f(x))
+
+let main (): Unit = {
+    println(identity(42).to_string());
+    println(identity("hello"));
+    println(identity(true).to_string());
+    println(pair_sum(3, 4, |a, b| a + b).to_string());
+    println(pair_sum("ab", "cd", |a, b| a.concat(b)));
+    println(first_or([7, 8, 9], 0).to_string());
+    println(first_or(["x"], "none"));
+    println(twice(|n| n * 3, 2).to_string());
+}

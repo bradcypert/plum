@@ -249,3 +249,20 @@ pub let ctx_variant_payload (ctx: TyContext) (tag: String): Array[ITy] =
         Some(v) => v.payload,
         None => { fail_ctx("unknown variant: ".concat(tag)); [] },
     }
+
+// The declared type-parameter names of a struct, and of the enum a
+// variant belongs to. A backend that leaves generic AGGREGATES
+// unspecialized (correct when every field occupies a uniform slot)
+// still needs these to instantiate a field or payload TEMPLATE against
+// the type arguments at a particular use site.
+pub let ctx_struct_generics (ctx: TyContext) (name: String): Array[String] =
+    match find_struct(ctx, name) {
+        Some(info) => info.generics,
+        None => { fail_ctx("unknown struct: ".concat(name)); [] },
+    }
+
+pub let ctx_variant_generics (ctx: TyContext) (tag: String): Array[String] =
+    match find_variant(ctx, tag) {
+        Some(v) => v.enum_generics,
+        None => { fail_ctx("unknown variant: ".concat(tag)); [] },
+    }

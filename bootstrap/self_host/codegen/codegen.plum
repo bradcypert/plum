@@ -160,7 +160,13 @@ pub struct CgEnumDecl { name: String, variants: Array[CgVariant] }
 // by `cg_fn` — it is what `cg_ty` needs to resolve a recorded type. It
 // lives here rather than as a parameter on thirty emitters purely to
 // keep those signatures unchanged.
-pub struct CgProgram { fns: Array[typecheck.TFn], ctx: typecheck.TyContext, enums: Array[CgEnumDecl], subst: typecheck.Subst }
+// `generics`/`targs` are the SPECIALIZATION currently being emitted:
+// the type-parameter names of the function whose body this is, and the
+// concrete types they stand for. Every type read goes through them
+// (`cg_concrete`), which is the whole of monomorphization's effect on
+// emission — there is no rewritten copy of the body anywhere, only a
+// different mapping applied while walking the same one.
+pub struct CgProgram { fns: Array[typecheck.TFn], ctx: typecheck.TyContext, enums: Array[CgEnumDecl], subst: typecheck.Subst, generics: Array[String], targs: Array[typecheck.ITy] }
 
 // --- Cell layouts ---
 //
@@ -186,6 +192,66 @@ let cg_payload_offset (index: Int): Int = 8 + 8 * index
 // emitted symbol a plain identifier.
 let cg_mangle (name: String): String = "plum_".concat(chars_join(Array.map(chars_of(name), |c| if c == "." { "_" } else { c })))
 
+// --- Monomorphization ---
+//
+// A generic function is emitted once PER DISTINCT set of type
+// arguments, and the arguments are folded into the symbol name. That is
+// the whole scheme: `Array.map[Int, String]` and `Array.map[String,
+// Int]` become two different LLVM functions, each with concrete machine
+// types throughout.
+//
+// This is forced by the choice to be UNBOXED. A boxed backend needs
+// none of it — every value is a `ptr`, so one copy serves every
+// instantiation — which was exactly the tradeoff weighed when Stage 5
+// started. Monomorphization is the bill for that decision, and it is
+// the last major subsystem the real backend has that this one lacked.
+//
+// The specialized body is never rewritten. Emission walks the SAME
+// typed tree with a different generic mapping in `CgProgram` — see
+// `cg_concrete`. That is only sound because nothing about a body's
+// SHAPE depends on its type arguments, which is true here and would
+// stop being true if this backend ever specialized on values.
+pub struct CgInst { name: String, targs: Array[typecheck.ITy] }
+
+// A symbol name that is unique per instantiation. Monomorphic functions
+// keep their plain mangled name, so the entry point stays `@plum_main`
+// and the generated IR stays readable for the common case.
+let cg_sym (name: String) (targs: Array[typecheck.ITy]): String =
+    if Array.is_empty(targs) { cg_mangle(name) }
+    else { cg_mangle(name).concat("__").concat(cg_targ_suffix(targs, 0, "")) }
+
+let cg_targ_suffix (targs: Array[typecheck.ITy]) (i: Int) (acc: String): String =
+    if i >= targs.len() { acc }
+    else { cg_targ_suffix(targs, i + 1, if acc == "" { cg_ity_mangle(targs[i]) } else { acc.concat("_").concat(cg_ity_mangle(targs[i])) }) }
+
+// A type rendered as an identifier-safe string. It must be INJECTIVE
+// enough that two different types never collide, since a collision
+// would silently merge two specializations into one — so nested type
+// arguments are included rather than elided.
+let cg_ity_mangle (t: typecheck.ITy): String =
+    match t {
+        ITInt => "Int",
+        ITFloat => "Float",
+        ITBool => "Bool",
+        ITStr => "Str",
+        ITUnit => "Unit",
+        ITStruct(name, args) => if Array.is_empty(args) { name } else { name.concat("_").concat(cg_targ_suffix(args, 0, "")) },
+        ITEnum(name, args) => if Array.is_empty(args) { name } else { name.concat("_").concat(cg_targ_suffix(args, 0, "")) },
+        ITFunction(ptys, ret) => "fn".concat(cg_targ_suffix(ptys, 0, "")).concat("_to_").concat(cg_ity_mangle(ret)),
+        ITTuple(elems) => "tup".concat(cg_targ_suffix(elems, 0, "")),
+        // An unconstrained type variable DEFAULTS, exactly as it does in
+        // `cg_of_ity` — and it must default to the same thing here, or
+        // a call site and its callee would disagree about the symbol.
+        ITVar(_) => "Unit",
+        ITParam(name) => { cg_fail("internal: generic parameter ".concat(name).concat(" was not substituted before mangling")); "T" },
+    }
+
+let cg_inst_eq (a: CgInst) (b: CgInst): Bool =
+    a.name == b.name && cg_sym(a.name, a.targs) == cg_sym(b.name, b.targs)
+
+let cg_inst_seen (done: Array[CgInst]) (x: CgInst) (i: Int): Bool =
+    if i >= done.len() { false } else if cg_inst_eq(done[i], x) { true } else { cg_inst_seen(done, x, i + 1) }
+
 pub let cg_build_program (program: parser.ProgramNode): CgProgram =
     CgProgram {
         // Type-checking and typed-tree construction are one pass —
@@ -199,6 +265,8 @@ pub let cg_build_program (program: parser.ProgramNode): CgProgram =
         ctx: typecheck.build_context(program),
         enums: cg_collect_enums(program.items, 0, 0, []),
         subst: typecheck.subst_empty(()),
+        generics: [],
+        targs: [],
     }
 
 // `next_tag` runs across the whole program, so every variant in every
@@ -208,7 +276,12 @@ let cg_collect_enums (items: Array[parser.ItemNode]) (i: Int) (next_tag: Int) (a
     else {
         match items[i].kind {
             IKEnum(decl) => {
-                if !Array.is_empty(decl.generics) { cg_fail("generic enums aren't supported yet: ".concat(decl.name)) };
+                // Generic enums need NO specialization: every payload
+                // occupies the same 8-byte slot whatever `T` is, and a
+                // variant's tag doesn't depend on it either. Only the
+                // machine type of a payload LOAD varies, and that comes
+                // from the scrutinee's own type arguments at the use
+                // site (`cg_pat_variant`).
                 let vs = cg_variants_of(decl.variants, 0, next_tag, []);
                 cg_collect_enums(items, i + 1, next_tag + decl.variants.len(), acc.push(CgEnumDecl { name: decl.name, variants: vs }))
             },
@@ -357,7 +430,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TClosure(params, body) => cg_closure(p, env, n, params, body, cg_ty(p, e)),
         TStructLit(name, fields) => cg_struct_lit(p, env, n, name, fields),
         TVariantNew(tag, args) => cg_variant_call(p, env, n, tag, args),
-        TFnCall(name, args) => cg_fn_call(p, env, n, name, args, cg_ty(p, e)),
+        TFnCall(name, args, targs) => cg_fn_call(p, env, n, name, args, targs, cg_ty(p, e)),
         TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
         TArrayNs(name, args) => cg_array_ns_call(p, env, n, name, args),
@@ -372,7 +445,17 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
 // swaps it per function. A type recorded during inference may still
 // hold unresolved variables; applying the substitution is what turns
 // `?3` into `Int`.
-let cg_ty (p: CgProgram) (e: typecheck.TExpr): CgTy = cg_of_ity(typecheck.texpr_ty(p.subst, e))
+let cg_ty (p: CgProgram) (e: typecheck.TExpr): CgTy = cg_of_ity(cg_concrete(p, typecheck.texpr_ty(p.subst, e)))
+
+// Resolve a recorded type all the way to a concrete one: the function's
+// own substitution first (which kills inference variables), then the
+// current specialization's generic mapping (which kills `ITParam`s).
+// Both are needed, and in that order — a type argument may itself be
+// the enclosing function's own type parameter, as in `let outer[T] (x:
+// T) = inner(x)`, where `inner`'s recorded argument resolves to
+// `ITParam("T")` and only the specialization says what that is.
+let cg_concrete (p: CgProgram) (t: typecheck.ITy): typecheck.ITy =
+    typecheck.instantiate_template(p.generics, p.targs, typecheck.subst_apply(p.subst, t))
 
 // `ITy` (the checker's full type language) to `CgTy` (a machine
 // representation). This is the ONLY place the backend interprets types,
@@ -718,16 +801,23 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExp
 // the former has a body to call — a builtin needs a real
 // implementation, and this backend has only the handful its runtime
 // provides, so anything else fails by name.
-let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (ret: CgTy): Emit =
+// The callee's symbol is its SPECIALIZED name — `cg_sym` folds the
+// concrete type arguments into it — so a call site needs no knowledge
+// of monomorphization beyond resolving those arguments through the
+// enclosing specialization.
+let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy): Emit =
     if cg_has_fn(p, name) {
         let a = cg_args(p, env, n, args, 0, "", "", "", []);
         let reg = cg_reg(a.n);
-        let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" @").concat(cg_mangle(name)).concat("(").concat(cg_join_commas(a.vals)).concat(")\n");
+        let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" @").concat(cg_sym(name, cg_concrete_list(p, targs, 0, []))).concat("(").concat(cg_join_commas(a.vals)).concat(")\n");
         Emit { code: a.code.concat(call), allocas: a.allocas, globals: a.globals, val: reg, ty: ret, n: a.n + 1 }
     } else {
         cg_fail("prelude function ".concat(name).concat(" isn't implemented by this backend's runtime yet"));
         cg_unit_emit(n)
     }
+
+let cg_concrete_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= ts.len() { acc } else { cg_concrete_list(p, ts, i + 1, acc.push(cg_concrete(p, ts[i]))) }
 
 let cg_has_fn (p: CgProgram) (name: String): Bool = cg_has_fn_acc(p.fns, name, 0)
 let cg_has_fn_acc (fns: Array[typecheck.TFn]) (name: String) (i: Int): Bool =
@@ -1250,12 +1340,13 @@ let cg_store_payload (cell: String) (vals: Array[String]) (i: Int) (n: Int) (acc
 // documented v1 gap rather than a silent one: an inexhaustive `match`
 // produces a defined-but-meaningless value instead of a diagnostic.
 let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.TExpr) (arms: Array[typecheck.TArm]) (body_ty: CgTy): Emit = {
+    let sity = cg_concrete(p, typecheck.texpr_ty(p.subst, scrutinee));
     let sc = cg_expr(p, env, n, scrutinee);
     let slot = cg_reg(sc.n);
     let end_label = cg_label(sc.n + 1);
     let fail_label = cg_label(sc.n + 2);
     let lty = cg_llvm_ty(body_ty);
-    let a = cg_match_arms(p, env, sc.n + 3, arms, 0, sc.val, sc.ty, slot, lty, end_label, fail_label, "", "", "");
+    let a = cg_match_arms(p, env, sc.n + 3, arms, 0, sc.val, sity, slot, lty, end_label, fail_label, "", "", "");
     let res = cg_reg(a.n);
     let code = sc.code
         .concat("  br label %").concat(cg_label(sc.n + 3)).concat("
@@ -1294,11 +1385,11 @@ let cg_zero_of (t: CgTy): String =
 
 struct ArmsEmit { code: String, allocas: String, globals: String, n: Int }
 
-let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TArm]) (i: Int) (sval: String) (sty: CgTy) (slot: String) (lty: String) (end_label: String) (fail_label: String) (code: String) (allocas: String) (globals: String): ArmsEmit =
+let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TArm]) (i: Int) (sval: String) (sity: typecheck.ITy) (slot: String) (lty: String) (end_label: String) (fail_label: String) (code: String) (allocas: String) (globals: String): ArmsEmit =
     if i >= arms.len() { ArmsEmit { code: code, allocas: allocas, globals: globals, n: n } }
     else {
         let test_label = cg_label(n);
-        let pat = cg_pattern(p, env, n + 1, arms[i].pattern, sval, sty);
+        let pat = cg_pattern(p, env, n + 1, arms[i].pattern, sval, sity);
         let body_label = cg_label(pat.n);
         let b = cg_expr(p, pat.env, pat.n + 1, arms[i].body);
         // The NEXT arm's test label, or the fail block if this is the
@@ -1318,7 +1409,7 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
 ")
             .concat("  br label %").concat(end_label).concat("
 ");
-        cg_match_arms(p, env, b.n, arms, i + 1, sval, sty, slot, lty, end_label, fail_label,
+        cg_match_arms(p, env, b.n, arms, i + 1, sval, sity, slot, lty, end_label, fail_label,
             code.concat(this_code), allocas.concat(pat.allocas).concat(b.allocas), globals.concat(pat.globals).concat(b.globals))
     }
 
@@ -1332,13 +1423,20 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
 // through nested patterns.
 struct PatEmit { code: String, allocas: String, globals: String, test: String, env: Array[CgSlot], n: Int }
 
-let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPattern) (sval: String) (sty: CgTy): PatEmit =
+// The scrutinee's type is passed as an `ITy`, not a `CgTy`: a generic
+// aggregate's field and payload types are TEMPLATES (`T`), and
+// instantiating them needs the type ARGUMENTS, which a representation
+// has already thrown away. `CgStruct("Box")` cannot tell you whether
+// its `item` loads as an `i64` or a `ptr`; `ITStruct("Box", [Int])`
+// can.
+let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPattern) (sval: String) (sity: typecheck.ITy): PatEmit =
     match pattern {
         PWildcard => PatEmit { code: "", allocas: "", globals: "", test: "1", env: env, n: n },
         // A binding always matches; the slot it introduces is what the
         // arm body reads.
         PIdent(name) => {
             let slot = cg_reg(n);
+            let sty = cg_of_ity(sity);
             let lty = cg_llvm_ty(sty);
             PatEmit {
                 code: "  store ".concat(lty).concat(" ").concat(sval).concat(", ptr ").concat(slot).concat("
@@ -1352,8 +1450,8 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
         PFloat(v) => cg_pat_cmp(env, n, "fcmp oeq double ", sval, cg_float_text(v)),
         PBool(v) => cg_pat_cmp(env, n, "icmp eq i1 ", sval, if v { "1" } else { "0" }),
         PStr(v) => cg_pat_str(env, n, sval, v),
-        PVariant(path, arg_pats) => cg_pat_variant(p, env, n, path[path.len() - 1], arg_pats, sval),
-        PStruct(path, field_pats, _) => cg_pat_struct(p, env, n, path[path.len() - 1], field_pats, sval),
+        PVariant(path, arg_pats) => cg_pat_variant(p, env, n, path[path.len() - 1], arg_pats, sval, sity),
+        PStruct(path, field_pats, _) => cg_pat_struct(p, env, n, path[path.len() - 1], field_pats, sval, sity),
         PTuple(_) => { cg_fail("tuple patterns aren't supported yet"); PatEmit { code: "", allocas: "", globals: "", test: "0", env: env, n: n } },
         POr(_) => { cg_fail("or-patterns aren't supported yet"); PatEmit { code: "", allocas: "", globals: "", test: "0", env: env, n: n } },
     }
@@ -1375,7 +1473,7 @@ let cg_pat_str (env: Array[CgSlot]) (n: Int) (sval: String) (lit: String): PatEm
     PatEmit { code: code, allocas: "", globals: cg_str_constant(n, lit), test: test, env: env, n: n + 3 }
 }
 
-let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (arg_pats: Array[parser.PPattern]) (sval: String): PatEmit =
+let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (arg_pats: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy): PatEmit =
     match cg_find_variant(p, name) {
         None => { cg_fail("unknown variant in pattern: ".concat(name)); PatEmit { code: "", allocas: "", globals: "", test: "0", env: env, n: n } },
         Some(v) => {
@@ -1385,7 +1483,12 @@ let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
 ")
                 .concat("  ").concat(tag_ok).concat(" = icmp eq i64 ").concat(tag).concat(", ").concat(v.tag.to_string()).concat("
 ");
-            let sub = cg_pat_payloads(p, env, n + 2, Array.map(typecheck.ctx_variant_payload(p.ctx, name), |t| cg_of_ity(t)), arg_pats, 0, sval, tag_ok, "", "", "");
+            // Payload templates instantiated against the SCRUTINEE's
+            // own type arguments — `Yes(v)` matched on a `Maybe[Int]`
+            // binds `v` as an `Int`, and on a `Maybe[String]` as a
+            // pointer, from one unspecialized enum declaration.
+            let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, name), cg_ity_args(sity), t));
+            let sub = cg_pat_payloads(p, env, n + 2, payload, arg_pats, 0, sval, tag_ok, "", "", "");
             PatEmit { code: head.concat(sub.code), allocas: sub.allocas, globals: sub.globals, test: sub.test, env: sub.env, n: sub.n }
         },
     }
@@ -1393,16 +1496,14 @@ let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
 // Each payload's own sub-pattern is tested and AND-ed into the running
 // result. Plain `and`, not a short-circuit branch: every operand is
 // already computed and side-effect-free, so there is nothing to skip.
-let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (payload: Array[CgTy]) (pats: Array[parser.PPattern]) (i: Int) (sval: String) (test: String) (code: String) (allocas: String) (globals: String): PatEmit =
+let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (payload: Array[typecheck.ITy]) (pats: Array[parser.PPattern]) (i: Int) (sval: String) (test: String) (code: String) (allocas: String) (globals: String): PatEmit =
     if i >= pats.len() { PatEmit { code: code, allocas: allocas, globals: globals, test: test, env: env, n: n } }
     else {
         let pp = cg_reg(n);
         let pv = cg_reg(n + 1);
-        let pty = payload[i];
-        let load = "  ".concat(pp).concat(" = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_payload_offset(i).to_string()).concat("
-")
-            .concat("  ").concat(pv).concat(" = load ").concat(cg_llvm_ty(pty)).concat(", ptr ").concat(pp).concat("
-");
+        let pty = cg_concrete(p, payload[i]);
+        let load = "  ".concat(pp).concat(" = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_payload_offset(i).to_string()).concat("\n")
+            .concat("  ").concat(pv).concat(" = load ").concat(cg_llvm_ty(cg_of_ity(pty))).concat(", ptr ").concat(pp).concat("\n");
         let sub = cg_pattern(p, env, n + 2, pats[i], pv, pty);
         let combined = cg_reg(sub.n);
         let join = "  ".concat(combined).concat(" = and i1 ").concat(test).concat(", ").concat(sub.test).concat("
@@ -1415,20 +1516,29 @@ let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (payload: Array
 // type — so the running test starts at `1` and only sub-patterns can
 // falsify it. `Point { x, y }` binds shorthand fields, which the parser
 // already expands into `x: x` field patterns.
-let cg_pat_struct (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (field_pats: Array[parser.FieldPatternNode]) (sval: String): PatEmit =
-    cg_pat_fields(p, env, n, typecheck.ctx_field_names(p.ctx, name), Array.map(typecheck.ctx_field_types(p.ctx, name), |t| cg_of_ity(t)), field_pats, 0, sval, "1", "", "", "")
+let cg_pat_struct (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (field_pats: Array[parser.FieldPatternNode]) (sval: String) (sity: typecheck.ITy): PatEmit =
+    cg_pat_fields(p, env, n, typecheck.ctx_field_names(p.ctx, name),
+        Array.map(typecheck.ctx_field_types(p.ctx, name), |t| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), cg_ity_args(sity), t)),
+        field_pats, 0, sval, "1", "", "", "")
 
-let cg_pat_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (field_names: Array[String]) (field_tys: Array[CgTy]) (pats: Array[parser.FieldPatternNode]) (i: Int) (sval: String) (test: String) (code: String) (allocas: String) (globals: String): PatEmit =
+// A struct's or enum's type ARGUMENTS at a use site. Anything else has
+// none, which is the right answer for a primitive scrutinee.
+let cg_ity_args (t: typecheck.ITy): Array[typecheck.ITy] =
+    match t {
+        ITStruct(_, args) => args,
+        ITEnum(_, args) => args,
+        _ => [],
+    }
+
+let cg_pat_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (field_names: Array[String]) (field_tys: Array[typecheck.ITy]) (pats: Array[parser.FieldPatternNode]) (i: Int) (sval: String) (test: String) (code: String) (allocas: String) (globals: String): PatEmit =
     if i >= pats.len() { PatEmit { code: code, allocas: allocas, globals: globals, test: test, env: env, n: n } }
     else {
         let idx = cg_field_index(field_names, pats[i].name, 0);
-        let fty = field_tys[idx];
+        let fty = cg_concrete(p, field_tys[idx]);
         let fp = cg_reg(n);
         let fv = cg_reg(n + 1);
-        let load = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_field_offset(idx).to_string()).concat("
-")
-            .concat("  ").concat(fv).concat(" = load ").concat(cg_llvm_ty(fty)).concat(", ptr ").concat(fp).concat("
-");
+        let load = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_field_offset(idx).to_string()).concat("\n")
+            .concat("  ").concat(fv).concat(" = load ").concat(cg_llvm_ty(cg_of_ity(fty))).concat(", ptr ").concat(fp).concat("\n");
         let sub = cg_pattern(p, env, n + 2, pats[i].pattern, fv, fty);
         let combined = cg_reg(sub.n);
         let join = "  ".concat(combined).concat(" = and i1 ").concat(test).concat(", ").concat(sub.test).concat("
@@ -1456,13 +1566,13 @@ struct FnEmit { text: String, next: Int }
 // is emitted — that is what lets `cg_ty` resolve any type recorded
 // during its inference. Each function was inferred independently, so
 // each has its own.
-let cg_fn (p0: CgProgram) (def: typecheck.TFn) (n0: Int): FnEmit = {
-    let p = CgProgram { fns: p0.fns, ctx: p0.ctx, enums: p0.enums, subst: def.subst };
-    let params = cg_params_of(def.params, 0, []);
+let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0: Int): FnEmit = {
+    let p = CgProgram { fns: p0.fns, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs };
+    let params = cg_params_of(p, def.params, 0, []);
     let entry = cg_param_slots(params, 0, [], "");
-    let ret = cg_of_ity(def.ret);
+    let ret = cg_of_ity(cg_concrete(p, def.ret));
     let body = cg_expr(p, entry.env, n0, def.body);
-    let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(cg_mangle(def.name)).concat("(").concat(cg_param_decls(params)).concat(") {\nentry:\n");
+    let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(cg_sym(def.name, targs)).concat("(").concat(cg_param_decls(params)).concat(") {\nentry:\n");
     // Every `alloca` is hoisted here, at the top of the entry block,
     // ahead of any instruction that could branch — see `Emit`'s own
     // comment for why that is a correctness requirement inside loops
@@ -1483,9 +1593,9 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (n0: Int): FnEmit = {
 // zero-argument LLVM function.
 struct CgParam { name: String, ty: CgTy }
 
-let cg_params_of (params: Array[typecheck.TParam]) (i: Int) (acc: Array[CgParam]): Array[CgParam] =
+let cg_params_of (p: CgProgram) (params: Array[typecheck.TParam]) (i: Int) (acc: Array[CgParam]): Array[CgParam] =
     if i >= params.len() { acc }
-    else { cg_params_of(params, i + 1, acc.push(CgParam { name: params[i].name, ty: cg_of_ity(params[i].ty) })) }
+    else { cg_params_of(p, params, i + 1, acc.push(CgParam { name: params[i].name, ty: cg_of_ity(cg_concrete(p, params[i].ty)) })) }
 
 let cg_param_decls (params: Array[CgParam]): String =
     cg_join_commas(cg_param_decl_list(params, 0, []))
@@ -1522,15 +1632,124 @@ let cg_entry (unit: Unit): String = cg_lines([
     "}",
 ])
 
+// --- Emitting the whole program ---
+//
+// Only what is REACHABLE from `main` is emitted, which falls out of
+// monomorphization rather than being a separate dead-code pass: a
+// generic function has no single symbol to emit until a call site says
+// which instantiation it needs, so the worklist has to start from the
+// entry point anyway. Monomorphic functions come along the same way.
 pub let cg_emit_program (program: parser.ProgramNode): String = {
     let p = cg_build_program(program);
     if !cg_has_fn(p, "main") { cg_fail("no top-level 'main' function to compile") };
-    cg_runtime(()).concat(cg_emit_fns(p, p.fns, 0, 0, "")).concat(cg_entry(()))
+    let insts = cg_reachable(p, [CgInst { name: "main", targs: [] }], [], 0);
+    cg_runtime(()).concat(cg_emit_insts(p, insts, 0, 0, "")).concat(cg_entry(()))
 }
 
-let cg_emit_fns (p: CgProgram) (fns: Array[typecheck.TFn]) (i: Int) (n: Int) (acc: String): String =
-    if i >= fns.len() { acc }
+// Worklist closure: pop an instantiation, record it, and push every
+// instantiation its body calls. The `fuel` counter is not decoration —
+// POLYMORPHIC RECURSION (`f[T]` calling `f[Array[T]]`) generates
+// infinitely many specializations, and monomorphization is undecidable
+// in general for it. Plum's own generics can't express it today, so
+// this should never fire; if it ever does, it stops with an
+// explanation rather than looping until memory runs out.
+let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (fuel: Int): Array[CgInst] =
+    if Array.is_empty(pending) { done }
+    else if fuel > 10000 { { cg_fail("monomorphization did not terminate after 10000 instantiations — polymorphic recursion?"); done } }
     else {
-        let f = cg_fn(p, fns[i], n);
-        cg_emit_fns(p, fns, i + 1, f.next, acc.concat(f.text))
+        let head = pending[0];
+        let rest = Array.slice(pending, 1, pending.len());
+        if cg_inst_seen(done, head, 0) { cg_reachable(p, rest, done, fuel + 1) }
+        else {
+            match cg_find_tfn(p, head.name, 0) {
+                // The program type-checked, so an unknown callee here
+                // is a PRELUDE function — one the checker knows a
+                // signature for (`builtin_sig`) but that has no body in
+                // this program and no implementation in this backend's
+                // runtime. That is now the usual reason real Plum code
+                // fails to compile here, so it says so.
+                None => { cg_fail("prelude function ".concat(head.name).concat(" has no implementation in this backend's runtime yet")); done },
+                Some(def) => {
+                    let inner = CgProgram { fns: p.fns, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs };
+                    cg_reachable(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), done.push(head), fuel + 1)
+                },
+            }
+        }
+    }
+
+let cg_find_tfn (p: CgProgram) (name: String) (i: Int): Option[typecheck.TFn] =
+    if i >= p.fns.len() { None } else if p.fns[i].name == name { Some(p.fns[i]) } else { cg_find_tfn(p, name, i + 1) }
+
+// Every `TFnCall` in a body, with its type arguments resolved through
+// the enclosing specialization. A separate traversal from emission on
+// purpose: discovery must complete for the WHOLE program before any
+// function is emitted, since a call may be the first mention of an
+// instantiation that appears earlier in the output.
+let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[CgInst] =
+    match e.node {
+        TFnCall(name, args, targs) => cg_calls_in_list(p, args, acc.push(CgInst { name: name, targs: cg_concrete_list(p, targs, 0, []) })),
+        TClosureCall(callee, args) => cg_calls_in_list(p, args, cg_calls_in(p, callee, acc)),
+        TMethodCall(_, base, args) => cg_calls_in_list(p, args, cg_calls_in(p, base, acc)),
+        TArrayNs(_, args) => cg_calls_in_list(p, args, acc),
+        TVariantNew(_, args) => cg_calls_in_list(p, args, acc),
+        TPrintln(a) => cg_calls_in(p, a, acc),
+        TUnary(_, a) => cg_calls_in(p, a, acc),
+        TBinary(_, a, b) => cg_calls_in(p, b, cg_calls_in(p, a, acc)),
+        TFieldGet(a, _) => cg_calls_in(p, a, acc),
+        TIndex(a, b) => cg_calls_in(p, b, cg_calls_in(p, a, acc)),
+        TArrayLit(elems) => cg_calls_in_list(p, elems, acc),
+        TTupleLit(elems) => cg_calls_in_list(p, elems, acc),
+        TBlockE(block) => cg_calls_in_block(p, block, acc),
+        TIf(c, t, e2) => match e2 {
+            Some(x) => cg_calls_in(p, x, cg_calls_in(p, t, cg_calls_in(p, c, acc))),
+            None => cg_calls_in(p, t, cg_calls_in(p, c, acc)),
+        },
+        TMatch(sc, arms) => cg_calls_in_arms(p, arms, 0, cg_calls_in(p, sc, acc)),
+        TFor(_, lo, hi, body) => cg_calls_in(p, body, cg_calls_in(p, hi, cg_calls_in(p, lo, acc))),
+        TClosure(_, body) => cg_calls_in(p, body, acc),
+        TStructLit(_, fields) => cg_calls_in_fields(p, fields, 0, acc),
+        TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
+        TUnitLit => acc, TIdent(_) => acc, TUnsupported(_) => acc,
+    }
+
+let cg_calls_in_list (p: CgProgram) (es: Array[typecheck.TExpr]) (acc: Array[CgInst]): Array[CgInst] = cg_calls_in_list_acc(p, es, 0, acc)
+let cg_calls_in_list_acc (p: CgProgram) (es: Array[typecheck.TExpr]) (i: Int) (acc: Array[CgInst]): Array[CgInst] =
+    if i >= es.len() { acc } else { cg_calls_in_list_acc(p, es, i + 1, cg_calls_in(p, es[i], acc)) }
+
+let cg_calls_in_block (p: CgProgram) (block: typecheck.TBlock) (acc: Array[CgInst]): Array[CgInst] = {
+    let after = cg_calls_in_stmts(p, block.stmts, 0, acc);
+    match block.tail { Some(t) => cg_calls_in(p, t, after), None => after }
+}
+
+let cg_calls_in_stmts (p: CgProgram) (stmts: Array[typecheck.TStmt]) (i: Int) (acc: Array[CgInst]): Array[CgInst] =
+    if i >= stmts.len() { acc }
+    else {
+        let next = match stmts[i] {
+            TSLet(_, v) => cg_calls_in(p, v, acc),
+            TSAssign(_, v) => cg_calls_in(p, v, acc),
+            TSExpr(v) => cg_calls_in(p, v, acc),
+        };
+        cg_calls_in_stmts(p, stmts, i + 1, next)
+    }
+
+let cg_calls_in_arms (p: CgProgram) (arms: Array[typecheck.TArm]) (i: Int) (acc: Array[CgInst]): Array[CgInst] =
+    if i >= arms.len() { acc }
+    else {
+        let g = match arms[i].guard { Some(x) => cg_calls_in(p, x, acc), None => acc };
+        cg_calls_in_arms(p, arms, i + 1, cg_calls_in(p, arms[i].body, g))
+    }
+
+let cg_calls_in_fields (p: CgProgram) (fields: Array[typecheck.TFieldInit]) (i: Int) (acc: Array[CgInst]): Array[CgInst] =
+    if i >= fields.len() { acc } else { cg_calls_in_fields(p, fields, i + 1, cg_calls_in(p, fields[i].value, acc)) }
+
+let cg_emit_insts (p: CgProgram) (insts: Array[CgInst]) (i: Int) (n: Int) (acc: String): String =
+    if i >= insts.len() { acc }
+    else {
+        match cg_find_tfn(p, insts[i].name, 0) {
+            None => { cg_fail("prelude function ".concat(insts[i].name).concat(" has no implementation in this backend's runtime yet")); acc },
+            Some(def) => {
+                let f = cg_fn(p, def, insts[i].targs, n);
+                cg_emit_insts(p, insts, i + 1, f.next, acc.concat(f.text))
+            },
+        }
     }

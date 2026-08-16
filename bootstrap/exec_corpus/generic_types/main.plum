@@ -1,0 +1,17 @@
+struct Box[T] { item: T }
+enum Maybe[T] { Yes(T), Nope }
+
+let unwrap_or[T] (m: Maybe[T]) (fallback: T): T = match m { Yes(v) => v, Nope => fallback }
+
+let boxed_of[T] (x: T): Box[T] = Box { item: x }
+
+let main (): Unit = {
+    let bi = boxed_of(5);
+    println(bi.item.to_string());
+    let bs = boxed_of("hi");
+    println(bs.item);
+    println(unwrap_or(Yes(9), 0).to_string());
+    println(unwrap_or(Nope, 3).to_string());
+    println(unwrap_or(Yes("a"), "z"));
+    match bi { Box { item } => println(item.to_string()) };
+}

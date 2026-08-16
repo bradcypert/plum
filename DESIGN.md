@@ -8471,3 +8471,98 @@ substitution, swapped per function by `cg_fn`.
 
 **Next: generics.** They need monomorphization — the last major
 subsystem the real backend has and this one doesn't.
+
+### Generics, by monomorphization (2026-08-16)
+
+The self-hosted backend compiles generic functions, structs and enums.
+Two new exec_corpus fixtures (`generics/`, `generic_types/`) pin it, and
+both produce output byte-identical to the real compiler's.
+
+```
+define i64 @plum_identity__Int(i64 %p0)
+define ptr @plum_identity__Str(ptr %p0)
+define i1  @plum_identity__Bool(i1 %p0)
+```
+
+Three real functions with three different machine types, from one
+declaration.
+
+**Monomorphization is the bill for being UNBOXED.** A boxed backend
+needs none of it — every value is a `ptr`, so one copy serves every
+instantiation. That tradeoff was weighed when Stage 5 started and
+decided in favour of unboxed; this is the cost coming due, and it was
+the last major subsystem the real backend had that this one lacked.
+
+#### What made it tractable
+
+The typed tree, again. `infer_fn_call` instantiates a generic signature
+with fresh variables and then unifies them away, so by the end of
+inference the type arguments at each call site are recoverable but
+nowhere recorded. `TFnCall` now carries them. **That is information a
+backend cannot reconstruct** — it is the one thing monomorphization
+needs and the one thing the old bottom-up synthesis could never have
+produced.
+
+**No specialized body is ever built.** Emission walks the same typed
+tree with a different generic mapping in `CgProgram`, applied at
+type-read time (`cg_concrete`) exactly as the substitution already was.
+That is sound only because nothing about a body's SHAPE depends on its
+type arguments — true here, and it would stop being true if this backend
+ever specialized on values.
+
+#### Reachability falls out for free
+
+A generic function has no single symbol to emit until a call site says
+which instantiation it needs, so the worklist has to start from `main`
+anyway. Monomorphic functions come along the same way, which means the
+backend now emits only what is reachable — dead-code elimination as a
+consequence of the design rather than a separate pass.
+
+The worklist carries a fuel counter. It is not decoration:
+**polymorphic recursion** (`f[T]` calling `f[Array[T]]`) generates
+infinitely many specializations, and monomorphization is undecidable for
+it in general. Plum can't express it today; if that changes, this stops
+with an explanation instead of exhausting memory.
+
+#### Generic aggregates need no specialization
+
+`struct Box[T]` and `enum Maybe[T]` are emitted once. Every field
+occupies the same 8-byte slot whatever `T` is, and a variant's tag
+doesn't depend on it either — only the machine type of a field or
+payload LOAD varies. So pattern matching instantiates the declared
+template against the SCRUTINEE's own type arguments, which meant
+patterns had to start carrying the scrutinee's `ITy` rather than its
+`CgTy`: `CgStruct("Box")` cannot tell you whether `item` loads as an
+`i64` or a `ptr`, and `ITStruct("Box", [Int])` can.
+
+#### A checker fix this forced
+
+`unify` rejected `ITParam` outright as "internal error: unresolved
+generic parameter reached unification" — correct while no generic
+function body was ever checked, and wrong the moment one was. A generic
+parameter is **rigid** inside its own body: `T` unifies with itself and
+nothing else. That distinction matters — if `T` could unify with `Int`,
+the checker would accept `let f[T] (x: T): T = 1`, which no
+instantiation can satisfy.
+
+#### Where this leaves real code
+
+**The self-hosted lexer — 500 lines with enums, arrays, closures and
+generics — now type-checks and reaches codegen.** It stops at
+`chars_of`: a PRELUDE function this backend's runtime doesn't implement.
+The blocker for compiling real Plum is no longer a missing language
+feature, it is a finite list of library functions — and most of the real
+prelude is ordinary Plum source that this backend could now compile if
+it were handed it.
+
+#### Verified
+
+| check | result |
+| --- | --- |
+| exec_corpus via the self-hosted backend | **16/17** (only `tuples`, the documented exception) |
+| those vs. the real backend | 14/14 identical (it can't build `arrays` or `closures_in_structs`) |
+| new `generics`/`generic_types` fixtures | checker ok, interpreter ok, backend ok |
+| `sh check bootstrap/self_host` | ok |
+| typecheck_corpus rejections | 5/5 |
+| corpus goldens | 98/98 |
+| Rust suites | 14/14 |

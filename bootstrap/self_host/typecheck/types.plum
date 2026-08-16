@@ -134,7 +134,23 @@ let unify_non_var (a: ITy) (b: ITy): Result[Subst, String] =
             ITEnum(b_name, b_args) => if a_name == b_name { unify_arg_lists(a_args, b_args) } else { type_mismatch(a, b) },
             _ => type_mismatch(a, b),
         },
-        ITParam(name) => Err("internal error: unresolved generic parameter ".concat(name).concat(" reached unification")),
+        // A generic parameter is RIGID inside its own function's body:
+        // while checking `let identity[T] (x: T): T = x`, `T` stands for
+        // one specific-but-unknown type, so it unifies with itself and
+        // with nothing else. That is what makes the body's check a real
+        // proof — if `T` could unify with `Int`, the checker would
+        // accept `let f[T] (x: T): T = 1`, which no instantiation can
+        // satisfy.
+        //
+        // Distinct from `ITVar`, which is an inference variable the
+        // checker is free to SOLVE. `ITParam` is one it must not touch.
+        // Before generic function bodies were checked at all, reaching
+        // here could only mean a bug, and this returned an internal
+        // error saying so.
+        ITParam(name) => match b {
+            ITParam(other) => if name == other { Ok(subst_empty(())) } else { type_mismatch(a, b) },
+            _ => type_mismatch(a, b),
+        },
         ITFunction(p1, r1) => match b {
             ITFunction(p2, r2) => unify_fn_types(p1, r1, p2, r2),
             _ => type_mismatch(a, b),

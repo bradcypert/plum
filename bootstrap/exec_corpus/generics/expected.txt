@@ -1,0 +1,8 @@
+42
+hello
+true
+7
+abcd
+7
+x
+18

@@ -72,7 +72,17 @@ pub enum TNode {
     // `builtin_sig`. The name is the SIGNATURE's name, so a
     // module-qualified call (`lexer.tokenize`) has already been
     // resolved to the plain one.
-    TFnCall(String, Array[TExpr]),
+    //
+    // The third field is the call's own TYPE ARGUMENTS — one per
+    // declared generic parameter, in declared order, empty for a
+    // monomorphic function. Inference instantiates a generic
+    // signature with fresh variables and then unifies them away;
+    // recording those variables here is what lets a backend recover
+    // "this call site is `f[Int]`" afterwards, which is exactly the
+    // information monomorphization needs and cannot reconstruct.
+    // Read them through the function's substitution, like any other
+    // recorded type.
+    TFnCall(String, Array[TExpr], Array[ITy]),
     // Calling a closure VALUE — a local, a parameter, or anything else
     // whose type turned out to be a function.
     TClosureCall(TExpr, Array[TExpr]),
@@ -100,4 +110,8 @@ pub let texpr_ty (subst: Subst) (e: TExpr): ITy = subst_apply(subst, e.ty)
 // A checked top-level function, with its body typed and the
 // substitution needed to read those types.
 pub struct TParam { name: String, ty: ITy }
-pub struct TFn { name: String, params: Array[TParam], ret: ITy, body: TExpr, subst: Subst }
+// `generics` are the function's own declared type parameters, by name
+// and in declared order. A backend that monomorphizes needs them to
+// know WHAT to substitute; `TFnCall`'s type arguments say what to
+// substitute IN.
+pub struct TFn { name: String, generics: Array[String], params: Array[TParam], ret: ITy, body: TExpr, subst: Subst }
