@@ -8745,9 +8745,17 @@ this and a backend anyone would use for a long-running program.
 
 ### The self-hosted backend frees memory (2026-08-16)
 
-**`sh2` no longer leaks.** Peak RSS type-checking the whole compiler
-went from **6,415 MB to 755 MB — 8.5x less** — and the bootstrap fixed
-point still holds, byte-identical.
+**`sh2` no longer leaks.** Type-checking the whole compiler:
+
+| | peak RSS | time |
+| --- | --- | --- |
+| leaking (`cg_rc_enabled = false`) | 6,595 MB | 1.40s |
+| reference counted | **63.8 MB** | 2.97s |
+
+**101x less memory, about 2x slower** — and the bootstrap fixed point
+still holds, byte-identical. That trade is exactly what precise
+reference counting without reuse costs, and it is exactly what Perceus
+exists to buy back.
 
 #### Layout
 
@@ -8822,14 +8830,36 @@ correct while reads were passive became wrong the moment reads acquired
 ownership. Over-allocating so that speculative loads are safe was a good
 decision; it just does not extend to speculative *writes*.
 
-#### Known and bounded
+#### Closures, and where the last 99% went
 
-A closure cell's captures are incremented when stored but never
-released, because a closure's captures are not visible from its type and
-its release cannot walk them. That is a leak, not a crash, and it is
-precisely why the real backend spends a word per closure cell on a
-release-function pointer. Arguments to runtime primitives are likewise
-not released. Both are why 755 MB is not 100 MB.
+A closure's captures are invisible from its TYPE — `(Int) -> Int` says
+nothing about what was captured — so nothing generated per-type can walk
+them. Only the literal's own creation site knows, so that is where the
+walker is generated, and every closure cell carries a pointer to it:
+
+```
+Closure: { i64 rc, ptr code, ptr release, capture0, ... }
+```
+
+The real backend spends this same word for this same reason. `CgSlot`
+had to start carrying each slot's full `ITy` alongside its
+representation, because a release function is named after the full type
+(`@plum_rel_Box_Int`) and a `CgTy` has already thrown the argument away.
+
+That took peak RSS from 6,595 MB to 760 MB. **The remaining 92% was
+somewhere much less interesting**: rule 4 says a call consumes its
+arguments, but that rule is about PLUM functions, which release their
+parameter slots on the way out. The runtime's own functions are
+hand-written IR that does no counting, so they BORROW — and every
+`.concat()`, `.to_string()`, `.len()`, `println()`, `==` and
+`chars_of()` was dropping two references on the floor. The compiler
+concatenates strings constantly. Releasing those arguments at the call
+site took 760 MB to 63.8 MB.
+
+Worth naming as a lesson: the interesting-looking leak (closures, needing
+a new word in the layout and a new kind of generated function) was worth
+8.5x. The boring one — a convention mismatch at the boundary between
+counted and uncounted code — was worth another 12x on top.
 
 `cg_rc_enabled` still gates every inc, dec, null-init and slot release.
 Flipping it to `false` emits the leaking version, which is a one-line

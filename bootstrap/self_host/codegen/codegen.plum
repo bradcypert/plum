@@ -205,7 +205,15 @@ let cg_tag_offset (unit: Unit): Int = 8
 let cg_payload_offset (index: Int): Int = 16 + 8 * index
 let cg_array_elem_offset (index: Int): Int = 16 + 8 * index
 let cg_closure_code_offset (unit: Unit): Int = 8
-let cg_capture_offset (index: Int): Int = 16 + 8 * index
+// A closure cell carries a RELEASE-FUNCTION pointer as well as a code
+// pointer. It has to: a closure's captures are not visible from its
+// TYPE — `(Int) -> Int` says nothing about what was captured — so
+// nothing generated per-type can walk them. Only the literal's own
+// creation site knows, so that is where the walker is generated, and
+// the cell carries a pointer to it. The real backend spends this same
+// word for this same reason.
+let cg_closure_rel_offset (unit: Unit): Int = 16
+let cg_capture_offset (index: Int): Int = 24 + 8 * index
 
 // A Plum name may contain a `.` (`Point.add`, an associated function),
 // which LLVM would accept only inside quotes; mangling keeps every
@@ -383,7 +391,11 @@ struct Emit { code: String, allocas: String, releases: String, globals: String, 
 // turns all of it back into registers with correct phis, so the
 // generated code is not actually slower for it. Same reason `let mut`
 // and plain `let` need no distinction here at all.
-struct CgSlot { name: String, ptr: String, ty: CgTy }
+// `ity` is the slot's full type, not just its representation. A
+// release function is named after the full type (`@plum_rel_Box_Int`),
+// which a `CgTy` cannot reconstruct — `CgStruct("Box")` has already
+// thrown the argument away.
+struct CgSlot { name: String, ptr: String, ty: CgTy, ity: typecheck.ITy }
 
 let cg_lookup (env: Array[CgSlot]) (name: String): Option[CgSlot] = cg_lookup_acc(env, name, env.len() - 1)
 let cg_lookup_acc (env: Array[CgSlot]) (name: String) (i: Int): Option[CgSlot] =
@@ -451,7 +463,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TFor(pattern, lo, hi, body) => cg_for(p, env, n, pattern, lo, hi, body),
         TArrayLit(elems) => cg_array_lit(p, env, n, elems, cg_ty(p, e)),
         TIndex(base, idx) => cg_index(p, env, n, base, idx, cg_ty(p, e)),
-        TClosure(params, body) => cg_closure(p, env, n, params, body, cg_ty(p, e)),
+        TClosure(params, body) => cg_closure(p, env, n, params, body, cg_concrete(p, typecheck.texpr_ty(p.subst, e))),
         TStructLit(name, fields) => cg_struct_lit(p, env, n, name, fields),
         TVariantNew(tag, args) => cg_variant_call(p, env, n, tag, args),
         TFnCall(name, args, targs) => cg_fn_call(p, env, n, name, args, targs, cg_ty(p, e)),
@@ -595,11 +607,14 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
         // else. Address comparison would be wrong for every aggregate.
         let opnd = cg_concrete(p, typecheck.texpr_ty(p.subst, lhs));
         let cmp = cg_eq_code(opnd, a.val, b.val, b.n);
+        // Both operands were owned temporaries and the comparison
+        // borrowed them.
+        let drop_operands = cg_dec(opnd, a.val).concat(cg_dec(opnd, b.val));
         match op {
-            BEq => Emit { code: code.concat(cmp.code), allocas: allocas, releases: releases, globals: globals, val: cmp.val, ty: CgBool, n: cmp.n },
+            BEq => Emit { code: code.concat(cmp.code).concat(drop_operands), allocas: allocas, releases: releases, globals: globals, val: cmp.val, ty: CgBool, n: cmp.n },
             _ => {
                 let neg = cg_reg(cmp.n);
-                Emit { code: code.concat(cmp.code).concat("  ").concat(neg).concat(" = xor i1 ").concat(cmp.val).concat(", true\n"), allocas: allocas, releases: releases, globals: globals, val: neg, ty: CgBool, n: cmp.n + 1 }
+                Emit { code: code.concat(cmp.code).concat(drop_operands).concat("  ").concat(neg).concat(" = xor i1 ").concat(cmp.val).concat(", true\n"), allocas: allocas, releases: releases, globals: globals, val: neg, ty: CgBool, n: cmp.n + 1 }
             },
         }
     } else {
@@ -727,7 +742,7 @@ let cg_for (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPatter
     let cur = cg_reg(hi.n + 5);
     let bound = cg_reg(hi.n + 6);
     let test = cg_reg(hi.n + 7);
-    let b = cg_expr(p, env.push(CgSlot { name: cg_let_name(pattern), ptr: iv, ty: CgInt }), hi.n + 8, body);
+    let b = cg_expr(p, env.push(CgSlot { name: cg_let_name(pattern), ptr: iv, ty: CgInt, ity: ITInt }), hi.n + 8, body);
     let step_cur = cg_reg(b.n);
     let step_next = cg_reg(b.n + 1);
     let code = lo.code.concat(hi.code)
@@ -786,7 +801,7 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
                 let head = r.code
                     .concat(cg_release_slot(vty, slot, "_pre"))
                     .concat("  store ").concat(lty).concat(" ").concat(r.val).concat(", ptr ").concat(slot).concat("\n");
-                let rest = cg_stmts(p, env.push(CgSlot { name: name, ptr: slot, ty: r.ty }), r.n + 1, stmts, i + 1);
+                let rest = cg_stmts(p, env.push(CgSlot { name: name, ptr: slot, ty: r.ty, ity: vty }), r.n + 1, stmts, i + 1);
                 BlockEmit {
                     code: head.concat(rest.code),
                     // The null-init and the exit release are as much a
@@ -838,7 +853,7 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExp
     let reg = cg_reg(a.n);
     if !cg_ty_eq(a.ty, CgStr) { cg_fail("println expects a String, found ".concat(cg_ty_name(a.ty))) };
     Emit {
-        code: a.code.concat("  ").concat(reg).concat(" = call i1 @plum_println(ptr ").concat(a.val).concat(")\n"),
+        code: a.code.concat("  ").concat(reg).concat(" = call i1 @plum_println(ptr ").concat(a.val).concat(")\n").concat(cg_dec(ITStr, a.val)),
         allocas: a.allocas, releases: a.releases,globals: a.globals, val: reg, ty: CgUnit, n: a.n + 1,
     }
 }
@@ -860,8 +875,9 @@ let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args
     };
     let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
     let reg = cg_reg(a.n);
-    let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(sym).concat("(").concat(cg_join_commas(a.vals)).concat(")\n");
-    Emit { code: a.code.concat(call), allocas: a.allocas, releases: a.releases,globals: a.globals, val: reg, ty: ret, n: a.n + 1 }
+    let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(sym).concat("(").concat(cg_join_commas(a.vals)).concat(")\n")
+        .concat(if Option.is_some(cg_runtime_fn(name)) { cg_dec_args(p, args, a.vals, 0, "") } else { "" });
+    Emit { code: a.code.concat(call), allocas: a.allocas, releases: a.releases, globals: a.globals, val: reg, ty: ret, n: a.n + 1 }
 }
 
 // Prelude functions the RUNTIME implements directly, rather than as
@@ -929,9 +945,9 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         // Already a String — `.to_string()` on one is the identity, and
         // emitting a copy would be pure waste.
         CgStr => b,
-        CgInt => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_int_to_string(i64 ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases,globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
-        CgFloat => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_float_to_string(double ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases,globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
-        CgBool => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_bool_to_string(i1 ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases,globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
+        CgInt => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_int_to_string(i64 ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
+        CgFloat => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_float_to_string(double ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
+        CgBool => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_bool_to_string(i1 ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
         CgUnit => { cg_fail("Unit has no .to_string()"); cg_unit_emit(b.n) },
         // The real backend generates a per-type `to_string` for these,
         // driven by its tag tables. Doing the same here is real work and
@@ -968,7 +984,8 @@ let cg_str_binop (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
     let b = cg_expr(p, env, a.n, arg);
     let reg = cg_reg(b.n);
     Emit {
-        code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(fn_name).concat("(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n"),
+        code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(fn_name).concat("(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n")
+            .concat(cg_dec(ITStr, a.val)).concat(cg_dec(ITStr, b.val)),
         allocas: a.allocas.concat(b.allocas), releases: a.releases.concat(b.releases),globals: a.globals.concat(b.globals), val: reg, ty: ret, n: b.n + 1,
     }
 }
@@ -978,7 +995,8 @@ let cg_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExp
     let b = cg_expr(p, env, a.n, arg);
     let reg = cg_reg(b.n);
     Emit {
-        code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ptr @plum_str_concat(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n"),
+        code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ptr @plum_str_concat(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n")
+            .concat(cg_dec(ITStr, a.val)).concat(cg_dec(ITStr, b.val)),
         allocas: a.allocas.concat(b.allocas), releases: a.releases.concat(b.releases),globals: a.globals.concat(b.globals), val: reg, ty: CgStr, n: b.n + 1,
     }
 }
@@ -997,7 +1015,10 @@ let cg_len (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr):
         CgArray(_) => "@plum_array_len",
         _ => { cg_fail(".len() requires a String or an Array, found ".concat(cg_ty_name(b.ty))); "@plum_str_len" },
     };
-    Emit { code: b.code.concat("  ").concat(reg).concat(" = call i64 ").concat(fn_name).concat("(ptr ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases,globals: b.globals, val: reg, ty: CgInt, n: b.n + 1 }
+    Emit {
+        code: b.code.concat("  ").concat(reg).concat(" = call i64 ").concat(fn_name).concat("(ptr ").concat(b.val).concat(")\n")
+            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, base)), b.val)),
+        allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgInt, n: b.n + 1 }
 }
 
 // Cell layout is in `runtime.plum`: an `i64` length then one 8-byte
@@ -1110,14 +1131,16 @@ let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
 // bought: `let f = |n| n + 1` compiles now, because `n`'s
 // representation was determined by unifying the body's use of it —
 // inference this backend neither performs nor duplicates.
-let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[String]) (body: typecheck.TExpr) (fn_ty: CgTy): Emit = {
+let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[String]) (body: typecheck.TExpr) (fn_ity: typecheck.ITy): Emit = {
+    let fn_ty = cg_of_ity(fn_ity);
     let param_tys = cg_closure_params(fn_ty);
+    let param_itys = cg_closure_param_itys(fn_ity);
     if params.len() != param_tys.len() { cg_fail("closure takes ".concat(params.len().to_string()).concat(" parameter(s) but its type says ").concat(param_tys.len().to_string())) };
     let fn_name = "@plum_lambda".concat(n.to_string());
     // The lifted function's body is emitted against a FRESH environment
     // built from the captures and parameters, never the creation site's
     // slots directly — those are `alloca`s in a different function.
-    let inner_env = cg_closure_inner_env(env, params, param_tys, 0, []);
+    let inner_env = cg_closure_inner_env(env, params, param_tys, param_itys, 0, []);
     let inner = cg_expr(p, inner_env, n + 1, body);
     let lifted = "define ".concat(cg_llvm_ty(inner.ty)).concat(" ").concat(fn_name).concat("(ptr %env").concat(cg_closure_param_decls(param_tys, 0, "")).concat(") {\nentry:\n")
         .concat(cg_capture_loads(env, 0, ""))
@@ -1126,15 +1149,27 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
         .concat(inner.code)
         .concat("  ret ").concat(cg_llvm_ty(inner.ty)).concat(" ").concat(inner.val).concat("\n}\n\n");
     let cell = cg_reg(inner.n);
-    let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((16 + 8 * env.len()).to_string()).concat(")\n")
+    let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((24 + 8 * env.len()).to_string()).concat(")\n")
         .concat("  ").concat(cell).concat("_c = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_closure_code_offset(()).to_string()).concat("\n")
-        .concat("  store ptr ").concat(fn_name).concat(", ptr ").concat(cell).concat("_c\n");
+        .concat("  store ptr ").concat(fn_name).concat(", ptr ").concat(cell).concat("_c\n")
+        .concat("  ").concat(cell).concat("_r = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_closure_rel_offset(()).to_string()).concat("\n")
+        .concat("  store ptr ").concat(fn_name).concat("_rel, ptr ").concat(cell).concat("_r\n");
     let caps = cg_capture_stores(env, 0, cell, inner.n + 1, "");
-    Emit { code: head.concat(caps.code), allocas: "", releases: "",globals: inner.globals.concat(lifted), val: cell, ty: fn_ty, n: caps.n }
+    // The companion release function walks exactly the captures this
+    // literal took, by name and type, and is emitted alongside the
+    // lifted function itself — the two are generated together because
+    // only here is it known what was captured.
+    let rel_fn = "define void ".concat(fn_name).concat("_rel(ptr %p) {\nentry:\n")
+        .concat(cg_capture_releases(env, 0, ""))
+        .concat("  ret void\n}\n\n");
+    Emit { code: head.concat(caps.code), allocas: "", releases: "", globals: inner.globals.concat(lifted).concat(rel_fn), val: cell, ty: fn_ty, n: caps.n }
 }
 
 let cg_closure_ret (t: CgTy): CgTy =
     match t { CgClosure(_, ret) => ret, _ => { cg_fail("expected a closure, found ".concat(cg_ty_name(t))); CgUnit } }
+
+let cg_closure_param_itys (t: typecheck.ITy): Array[typecheck.ITy] =
+    match t { ITFunction(ptys, _) => ptys, _ => { cg_fail("expected a closure type"); [] } }
 
 let cg_closure_params (t: CgTy): Array[CgTy] =
     match t { CgClosure(ptys, _) => ptys, _ => { cg_fail("expected a closure, found ".concat(cg_ty_name(t))); [] } }
@@ -1143,11 +1178,11 @@ let cg_closure_params (t: CgTy): Array[CgTy] =
 // resolves inside the lifted function exactly as it did outside — and
 // shadowing keeps working for free, because `cg_lookup` scans from the
 // end of the list either way.
-let cg_closure_inner_env (env: Array[CgSlot]) (params: Array[String]) (param_tys: Array[CgTy]) (i: Int) (acc: Array[CgSlot]): Array[CgSlot] =
-    if i < env.len() { cg_closure_inner_env(env, params, param_tys, i + 1, acc.push(CgSlot { name: env[i].name, ptr: "%c".concat(i.to_string()), ty: env[i].ty })) }
+let cg_closure_inner_env (env: Array[CgSlot]) (params: Array[String]) (param_tys: Array[CgTy]) (param_itys: Array[typecheck.ITy]) (i: Int) (acc: Array[CgSlot]): Array[CgSlot] =
+    if i < env.len() { cg_closure_inner_env(env, params, param_tys, param_itys, i + 1, acc.push(CgSlot { name: env[i].name, ptr: "%c".concat(i.to_string()), ty: env[i].ty, ity: env[i].ity })) }
     else if i - env.len() < params.len() {
         let j = i - env.len();
-        cg_closure_inner_env(env, params, param_tys, i + 1, acc.push(CgSlot { name: params[j], ptr: "%a".concat(j.to_string()), ty: param_tys[j] }))
+        cg_closure_inner_env(env, params, param_tys, param_itys, i + 1, acc.push(CgSlot { name: params[j], ptr: "%a".concat(j.to_string()), ty: param_tys[j], ity: param_itys[j] }))
     }
     else { acc }
 
@@ -1173,6 +1208,21 @@ let cg_closure_param_slots (param_tys: Array[CgTy]) (i: Int) (acc: String): Stri
         let line = "  %a".concat(i.to_string()).concat(" = alloca ").concat(lty).concat("\n")
             .concat("  store ").concat(lty).concat(" %p").concat(i.to_string()).concat(", ptr %a").concat(i.to_string()).concat("\n");
         cg_closure_param_slots(param_tys, i + 1, acc.concat(line))
+    }
+
+// One release per captured slot, at its own offset, using its own
+// type's release function. `cg_rel_sym` needs an `ITy`, and a capture
+// slot only carries a `CgTy` — but a closure's captures are always
+// released through the representation-level path, which is exactly what
+// `cg_rel_sym_cg` provides.
+let cg_capture_releases (env: Array[CgSlot]) (i: Int) (acc: String): String =
+    if i >= env.len() { acc }
+    else if !cg_is_heap(env[i].ty) { cg_capture_releases(env, i + 1, acc) }
+    else {
+        let line = "  %kp".concat(i.to_string()).concat(" = getelementptr i8, ptr %p, i64 ").concat(cg_capture_offset(i).to_string()).concat("\n")
+            .concat("  %kv").concat(i.to_string()).concat(" = load ptr, ptr %kp").concat(i.to_string()).concat("\n")
+            .concat("  call void ").concat(cg_rel_sym(env[i].ity)).concat("(ptr %kv").concat(i.to_string()).concat(")\n");
+        cg_capture_releases(env, i + 1, acc.concat(line))
     }
 
 let cg_capture_stores (env: Array[CgSlot]) (i: Int) (cell: String) (n: Int) (acc: String): StoreEmit =
@@ -1605,7 +1655,7 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
                 binds: cg_inc(sty, sval).concat("  store ").concat(lty).concat(" ").concat(sval).concat(", ptr ").concat(slot).concat("\n"),
                 allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(cg_null_init(sity, slot)),
                 releases: cg_release_slot(sity, slot, "_end"),
-                globals: "", test: "1", env: env.push(CgSlot { name: name, ptr: slot, ty: sty }), n: n + 1,
+                globals: "", test: "1", env: env.push(CgSlot { name: name, ptr: slot, ty: sty, ity: sity }), n: n + 1,
             }
         },
         PInt(v) => cg_pat_cmp(env, n, "icmp eq i64 ", sval, v.to_string()),
@@ -1787,7 +1837,7 @@ let cg_param_slots (params: Array[CgParam]) (ptys: Array[typecheck.ITy]) (i: Int
         let slot = "%s".concat(i.to_string());
         let line = "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n")
             .concat("  store ").concat(lty).concat(" %p").concat(i.to_string()).concat(", ptr ").concat(slot).concat("\n");
-        cg_param_slots(params, ptys, i + 1, env.push(CgSlot { name: params[i].name, ptr: slot, ty: params[i].ty }), code.concat(line), releases.concat(cg_release_slot(ptys[i], slot, "_end")))
+        cg_param_slots(params, ptys, i + 1, env.push(CgSlot { name: params[i].name, ptr: slot, ty: params[i].ty, ity: ptys[i] }), code.concat(line), releases.concat(cg_release_slot(ptys[i], slot, "_end")))
     }
 
 // The C entry point. Calls Plum's own `main` and discards its result —
@@ -2115,6 +2165,27 @@ let cg_dec_cg (t: CgTy) (val: String): String =
         CgClosure(ptys, ret) => if cg_rc_enabled(()) { "  call void @plum_rel_closure(ptr ".concat(val).concat(")\n") } else { "" },
         _ => "",
     }
+
+// Releasing the ARGUMENTS of a call into the runtime.
+//
+// Rule 4 says a call consumes its arguments — but that rule is about
+// PLUM functions, which release their parameter slots on the way out.
+// The runtime's own functions are hand-written IR that does no
+// counting, so they BORROW instead, and the caller has to release.
+//
+// Getting this wrong is only ever a leak, and it was the dominant one:
+// the compiler concatenates strings constantly, and every `.concat()`,
+// `.to_string()`, `.len()` and `println()` was dropping both a +1 on
+// the floor.
+let cg_dec_args (p: CgProgram) (args: Array[typecheck.TExpr]) (vals: Array[String]) (i: Int) (acc: String): String =
+    if i >= args.len() || i >= vals.len() { acc }
+    // `vals` are already `<ty> <operand>` pairs, as a call needs them,
+    // so the release is written with the operand as given rather than
+    // re-prefixing a type.
+    else { cg_dec_args(p, args, vals, i + 1, acc.concat(cg_dec_op(cg_concrete(p, typecheck.texpr_ty(p.subst, args[i])), vals[i]))) }
+
+let cg_dec_op (t: typecheck.ITy) (operand: String): String =
+    if cg_rc_enabled(()) && cg_is_heap(cg_of_ity(t)) { "  call void ".concat(cg_rel_sym(t)).concat("(").concat(operand).concat(")\n") } else { "" }
 
 let cg_inc (t: CgTy) (val: String): String =
     if cg_rc_enabled(()) && cg_is_heap(t) { "  call void @plum_rc_inc(ptr ".concat(val).concat(")\n") } else { "" }
