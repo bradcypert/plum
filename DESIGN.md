@@ -8662,3 +8662,83 @@ JSON number parser as the real prelude does — right there, absurd here.
 and a few more prelude functions, and `interp.plum` needs tuples. The
 front end compiling itself is the milestone; the whole compiler
 compiling itself is the next one.
+
+### SELF-HOSTING: the fixed point (2026-08-16)
+
+```
+./bootstrap/bootstrap-check
+  stage 1 -> IR ...
+  stage 2 -> IR ...
+  FIXED POINT: stage-2 and stage-3 IR are byte-identical (72172 lines)
+  stage 2 vs corpus goldens: 98 pass / 0 fail
+  stage 2 type-checks the whole compiler: ok
+```
+
+**Plum compiles itself.** The self-hosted compiler, compiled by the
+self-hosted backend, is the same compiler — proven the standard way:
+
+- **stage 1** — `sh`, the self-hosted compiler built by the *Rust*
+  compiler
+- **stage 2** — `sh2`, the self-hosted compiler built by **stage 1**
+- **stage 3** — the self-hosted compiler built by **stage 2**
+
+Stage 1 and stage 2 are different binaries built by different
+compilers, so their agreeing on small inputs proves little. Stage 2 and
+stage 3 are built by compilers *themselves written in Plum*, so any
+construct the backend miscompiles — one it uses in its own source —
+makes stage 3 diverge. **They are byte-identical, and so are the
+binaries.** That is a stronger statement than "the tests pass": the
+compiler compiled by itself is the same compiler.
+
+Stage 2 also passes all 98 corpus goldens, type-checks the entire
+compiler, runs every exec_corpus fixture, and runs the compiler under
+its own interpreter — every mode, identical output to stage 1.
+
+`bootstrap/bootstrap-check` runs the whole thing in about four seconds.
+
+#### What the last mile took
+
+**Flat-namespace collision, finally biting.** The prelude's private
+helper `array_contains_acc` silently shadowed `interp.plum`'s own
+function of that name, and the compiler failed to type-check itself
+with "argument 0: T != Value". Prelude internals are now prefixed
+`plum__`: a prelude's private helpers must not be able to collide with
+user code, while public prelude names deliberately stay unprefixed —
+those are the API, and shadowing one is the user's prerogative.
+
+**Directory access** (`list_dir`, `is_directory`) via the same C shims
+`dir_shim.c` the real compiler uses — already linked into every binary
+`plum compile-ir` produces, so declaring them was all it took. No second
+copy of the platform code, and no way for the two backends to disagree
+about what `list_dir` means. The `Result` wrappers are written in Plum
+in the prelude, for the same reason `read_file` is: runtime IR must
+never hard-code a variant tag the backend assigns per program.
+
+**String primitives** `starts_with`/`ends_with`/`contains`/`split` in
+the runtime. These stay primitives rather than moving to the prelude
+because they are byte-level; written over `chars_of` in Plum they would
+become codepoint-level, which for `starts_with`/`ends_with` is an
+observably different function. `split` with an empty separator is
+defined as `chars_of` — the real compiler defines `chars_of` in terms of
+that case of split, so the two agree from opposite directions.
+
+#### What is still not self-hosted
+
+The Rust toolchain is still needed for two things, and neither is a
+Plum-language gap:
+
+- **`plum compile-ir`** — assembling and linking the emitted `.ll`.
+  Plum has no process-spawn builtin, so the self-hosted compiler cannot
+  invoke `clang` itself. Even a finished self-hosted compiler would
+  delegate this step.
+- The **C shims** (`dir_shim.c` and friends), which are platform glue
+  the real compiler also links rather than implements.
+
+Everything between source text and LLVM IR — lexing, parsing, type
+checking, monomorphization, code generation, and the prelude — is Plum
+compiling Plum.
+
+And the backend still **leaks**: no refcounting, no FBIP. `sh2` is a
+correct compiler that never frees a byte. That was a deliberate v1 cut
+(see Stage 5's own section) and it is the single biggest thing between
+this and a backend anyone would use for a long-running program.

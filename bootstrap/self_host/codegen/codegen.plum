@@ -837,6 +837,10 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "panic_raw" { Some("@plum_panic") }
     else if name == "args" { Some("@plum_args") }
     else if name == "read_file_raw" { Some("@plum_read_file_raw") }
+    else if name == "path_is_dir_raw" { Some("@plum_path_is_dir") }
+    else if name == "dir_open_handle" { Some("@plum_dir_open") }
+    else if name == "dir_next_entry" { Some("@plum_dir_next") }
+    else if name == "dir_close_handle" { Some("@plum_dir_close") }
     else { None }
 
 let cg_concrete_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
@@ -870,6 +874,10 @@ let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (method_name: St
     else if method_name == "push" { cg_array_push(p, env, n, base, args[0], ty) }
     else if method_name == "set" { cg_array_set(p, env, n, base, args[0], args[1], ty) }
     else if method_name == "to_float" { cg_to_float(p, env, n, base) }
+    else if method_name == "ends_with" { cg_str_binop(p, env, n, base, args[0], "@plum_str_ends_with", CgBool) }
+    else if method_name == "starts_with" { cg_str_binop(p, env, n, base, args[0], "@plum_str_starts_with", CgBool) }
+    else if method_name == "contains" { cg_str_binop(p, env, n, base, args[0], "@plum_str_contains", CgBool) }
+    else if method_name == "split" { cg_str_binop(p, env, n, base, args[0], "@plum_str_split", CgArray(CgStr)) }
     else { { cg_fail("method .".concat(method_name).concat("() isn't supported by this backend yet")); cg_unit_emit(n) } }
 
 let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
@@ -903,6 +911,23 @@ let cg_to_float (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TE
     Emit {
         code: b.code.concat("  ").concat(reg).concat(" = sitofp i64 ").concat(b.val).concat(" to double\n"),
         allocas: b.allocas, globals: b.globals, val: reg, ty: CgFloat, n: b.n + 1,
+    }
+}
+
+// The string PRIMITIVES that take a receiver and one argument and are
+// implemented in the runtime rather than the prelude. They stay
+// primitives (as they are in the real compiler, lowered to IR nodes)
+// because they are byte-level operations, and writing them over
+// `chars_of` in Plum would make them codepoint-level -- a different,
+// slower, and for `starts_with`/`ends_with` observably different
+// function.
+let cg_str_binop (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (arg: typecheck.TExpr) (fn_name: String) (ret: CgTy): Emit = {
+    let a = cg_expr(p, env, n, base);
+    let b = cg_expr(p, env, a.n, arg);
+    let reg = cg_reg(b.n);
+    Emit {
+        code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(fn_name).concat("(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n"),
+        allocas: a.allocas.concat(b.allocas), globals: a.globals.concat(b.globals), val: reg, ty: ret, n: b.n + 1,
     }
 }
 

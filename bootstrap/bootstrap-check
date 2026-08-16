@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# THE BOOTSTRAP FIXED-POINT CHECK.
+#
+# The standard way to validate a self-hosting compiler, and the only
+# check that actually proves it:
+#
+#   stage 1  sh   -- the self-hosted compiler, built by the RUST compiler
+#   stage 2  sh2  -- the self-hosted compiler, built by stage 1
+#   stage 3  ---  -- the self-hosted compiler, built by stage 2
+#
+# Stage 1 and stage 2 are different BINARIES (different compilers built
+# them), so they prove nothing by agreeing on small inputs. Stage 2 and
+# stage 3 are built by compilers that are themselves written in Plum, so
+# if the backend miscompiles any construct it uses itself, stage 3 will
+# differ from stage 2. **They must be byte-identical.**
+#
+# That is a much stronger statement than "the test suite passes": it
+# says the compiler compiled by itself is the same compiler.
+#
+# Run from the repo root, after `cargo build --release` and
+# `plum build bootstrap/self_host -o sh.real`.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+work="$(mktemp -d -t plum-bootstrap-XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+
+echo "stage 1 -> IR ..."
+SH_TIMEOUT="${SH_TIMEOUT:-300}" SH_MEM="${SH_MEM:-8G}" ./sh emit-llvm bootstrap/self_host > "$work/stage2.ll"
+if ! head -n 1 "$work/stage2.ll" | grep -q "Stage 5 runtime"; then
+    echo "stage 1 failed to emit:" >&2
+    grep -m 1 "self-hosted" "$work/stage2.ll" >&2 || head -n 3 "$work/stage2.ll" >&2
+    exit 1
+fi
+./target/release/plum compile-ir "$work/stage2.ll" -o "$work/sh2" > /dev/null
+
+echo "stage 2 -> IR ..."
+"$work/sh2" emit-llvm bootstrap/self_host > "$work/stage3.ll"
+
+if cmp -s "$work/stage2.ll" "$work/stage3.ll"; then
+    echo "FIXED POINT: stage-2 and stage-3 IR are byte-identical ($(wc -l < "$work/stage2.ll") lines)"
+else
+    echo "NOT A FIXED POINT -- stage 3 differs from stage 2:" >&2
+    diff "$work/stage2.ll" "$work/stage3.ll" | head -20 >&2
+    exit 1
+fi
+
+# The self-compiled compiler must also still be a working compiler.
+echo "stage 2 -> corpus ..."
+pass=0
+fail=0
+for f in bootstrap/corpus/*/*.plum; do
+    if [ "$("$work/sh2" ast "$f")" = "$(cat "${f%.plum}.expected")" ] &&
+       [ "$("$work/sh2" tokens "$f")" = "$(cat "${f%.plum}.tokens")" ]; then
+        pass=$((pass + 1))
+    else
+        fail=$((fail + 1))
+        echo "  golden mismatch: $f" >&2
+    fi
+done
+echo "stage 2 vs corpus goldens: $pass pass / $fail fail"
+[ "$fail" -eq 0 ] || exit 1
+
+echo "stage 2 -> check ..."
+[ "$("$work/sh2" check bootstrap/self_host)" = "ok" ] || { echo "stage 2 failed to check the compiler" >&2; exit 1; }
+echo "stage 2 type-checks the whole compiler: ok"
