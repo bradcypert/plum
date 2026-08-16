@@ -8378,3 +8378,96 @@ and the first time this project has been able to name one.
 Fixing it properly means either closing gap 1 or changing the
 interpreter away from value-threaded environments. Neither was done
 here; the change was reverted.
+
+### The checker now publishes a typed tree (2026-08-16)
+
+**Every runnable exec_corpus fixture — 14 of 14 — now compiles and runs
+under the self-hosted backend.** The last one, `closures`, was blocked
+on `let f = |n| n + 1`: a closure literal with no expected type, whose
+parameter representation is only pinned by UNIFYING the body's use of
+it. That is inference, and the backend had none.
+
+The fix was the one predicted when Stage 5 started: `typecheck/
+infer.plum` already computed that type and discarded it, so it now
+publishes it instead. `typecheck/texpr.plum` defines a `TExpr` — a
+`PExpr` with a type on every node — and `infer_expr` builds one as it
+goes. `check_program` throws it away; the new `typed_program` keeps it.
+**There is still exactly one traversal**: checking a function and
+producing its typed body are the same operation, so nothing can drift
+between what the checker proved and what the backend compiles.
+
+#### It paid twice, as expected
+
+The backend shrank from 1,717 to 1,557 lines while gaining a feature,
+and the deletions are the interesting part — these were not moved, they
+ceased to exist:
+
+- the operator result-type table (`cg_binary_result_ty`)
+- the "a `match`'s type is its first arm's type" rule, which emitted an
+  arm speculatively into a scratch buffer purely to read its type back
+- the empty-array `CgArray(CgUnit)` "element type never determined"
+  marker, and the double-emission of an array literal's first element
+  to discover the element type
+- `cg_expr_params`/`cg_call_args_typed`/`cg_param_tys_of` — the whole
+  mechanism for pushing expected parameter types down into closure
+  literals from call arguments, struct fields, and `Array.map`
+- `cg_resolve_ty`/`cg_resolve_named`/`CgTyName` — annotation resolution,
+  replaced by reading the checker's own declaration tables through three
+  new accessors (`ctx_field_names`/`ctx_field_types`/
+  `ctx_variant_payload`)
+
+Each existed only to reconstruct something inference already knew.
+
+#### Calls arrive classified
+
+`parser.PExpr` has one `ECall` covering user functions, prelude
+functions, variant constructors, closure values, methods, `Array.map`
+and `println`. Telling them apart takes scope information the parser
+doesn't have, and the backend used to redo that resolution with its own
+copy of the precedence rules — bound local beats builtin namespace beats
+top-level function beats method. `infer_call` already did it; now the
+typed node records the answer (`TFnCall`, `TClosureCall`,
+`TVariantNew`, `TMethodCall`, `TArrayNs`, `TPrintln`).
+
+**The backend can no longer disagree with the checker about what a call
+is.** That is a whole class of bug removed rather than tested for, and
+it is worth more than the line count.
+
+#### One genuinely new rule: defaulting
+
+`let empty = []` has an element type nothing constrains — no element is
+ever stored or read — so it survives inference as a free variable.
+Reaching codegen, it is not an error: the program provably does not
+depend on which type it is, or unification would have pinned it. So an
+unresolved variable DEFAULTS (to `Unit`), which is the standard
+resolution for an ambiguous type rather than a fallback for a missing
+case.
+
+That is also why this backend compiles `let empty = []` while the real
+compiler rejects it as uninferable — a real behavioural difference,
+noted rather than smoothed over.
+
+#### Reading types
+
+A type recorded during inference may still hold unresolved variables;
+the function's final substitution resolves them. Rather than rewriting
+the whole tree once inference finishes — another full mirror of the enum
+to maintain — the substitution is applied at the point of USE
+(`texpr_ty`), and `CgProgram` carries the current function's
+substitution, swapped per function by `cg_fn`.
+
+#### Verified
+
+| check | result |
+| --- | --- |
+| exec_corpus via the self-hosted backend | **14/14 runnable** (only `tuples`, the documented annotation exception, is left) |
+| those vs. the real backend's binaries | 12/12 identical (it can't build `arrays` or `closures_in_structs` at all) |
+| `sh check bootstrap/self_host` (10 modules) | ok |
+| `sh run self_host check self_host` | ok |
+| typecheck_corpus rejections | 5/5 |
+| corpus goldens | 98/98 |
+| exec_corpus check + interpreter run | 14/14 |
+| Rust suites | 14/14 |
+
+**Next: generics.** They need monomorphization — the last major
+subsystem the real backend has and this one doesn't.

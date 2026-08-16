@@ -198,7 +198,14 @@ let check_all_fns (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): Unit 
         }
     }
 
-let check_fn (p2: Program2) (def: parser.LetDefNode): Unit = {
+let check_fn (p2: Program2) (def: parser.LetDefNode): Unit = { check_fn_typed(p2, def); () }
+
+// Checking a function and PRODUCING its typed body are the same
+// operation — the typed tree falls out of inference rather than needing
+// a second pass. `check_program` throws the result away; `typed_program`
+// keeps it. Nothing can drift between "what the checker proved" and
+// "what the backend compiles", because there is only one traversal.
+let check_fn_typed (p2: Program2) (def: parser.LetDefNode): TFn = {
     let sig = Option.unwrap_or(find_sig(p2.sigs, def.name), FnSig { name: def.name, generics: [], params: [], ret: ITUnit });
     let env = bind_param_types(tyenv_empty(()), def.params, sig.params, 0);
     let r = infer_expr(p2, fresh_state_new(()), env, subst_empty(()), def.body);
@@ -207,22 +214,71 @@ let check_fn (p2: Program2) (def: parser.LetDefNode): Unit = {
     match unify(body_ty, ret_ty) {
         Ok(_) => (),
         Err(e) => fail_tc("function ".concat(def.name).concat(": declared return type ").concat(render_ty(ret_ty)).concat(" doesn't match body type ").concat(render_ty(body_ty)).concat(" (").concat(e).concat(")")),
-    }
+    };
+    TFn { name: def.name, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
 }
+
+// Parameter names paired with their (now resolved) declared types.
+// `()` — the Unit pattern — binds no name and contributes no entry, the
+// same treatment it gets in `bind_param`, the interpreter, and the
+// backend.
+let typed_params (params: Array[parser.ParamNode]) (tys: Array[ITy]) (subst: Subst) (i: Int) (acc: Array[TParam]): Array[TParam] =
+    if i >= params.len() || i >= tys.len() { acc }
+    else {
+        match params[i] {
+            ParamIdent(name) => typed_params(params, tys, subst, i + 1, acc.push(TParam { name: name, ty: subst_apply(subst, tys[i]) })),
+            ParamPatternTy(pattern, _) => match pattern {
+                PIdent(name) => typed_params(params, tys, subst, i + 1, acc.push(TParam { name: name, ty: subst_apply(subst, tys[i]) })),
+                _ => typed_params(params, tys, subst, i + 1, acc),
+            },
+        }
+    }
+
+// The whole program, type-checked, with every function's body typed —
+// the backend's entry point. Fails loudly (`fail_tc`) on any type
+// error, exactly as `check_program` does, because it IS `check_program`
+// with the results kept.
+pub let typed_program (program: parser.ProgramNode): Array[TFn] = {
+    let ctx = build_context(program);
+    let p2 = build_sigs(ctx, program);
+    typed_fns_acc(p2, program.items, 0, [])
+}
+
+let typed_fns_acc (p2: Program2) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[TFn]): Array[TFn] =
+    if i >= items.len() { acc }
+    else {
+        match items[i].kind {
+            IKLet(def) => if Array.is_empty(def.params) { typed_fns_acc(p2, items, i + 1, acc) } else { typed_fns_acc(p2, items, i + 1, acc.push(check_fn_typed(p2, def))) },
+            _ => typed_fns_acc(p2, items, i + 1, acc),
+        }
+    }
 
 let bind_param_types (env: TyEnv) (params: Array[parser.ParamNode]) (tys: Array[ITy]) (i: Int): TyEnv =
     if i >= params.len() { env } else { bind_param_types(bind_param(env, params[i], tys[i]), params, tys, i + 1) }
 
 // --- Expression inference ---
 
-pub struct InferResult { ty: ITy, subst: Subst, state: FreshState }
+// `texpr` is the TYPED tree for the expression just inferred — see
+// `texpr.plum` for what it is and why the checker publishes it. Every
+// arm of `infer_expr` builds one; nothing else about inference changed.
+pub struct InferResult { ty: ITy, subst: Subst, state: FreshState, texpr: TExpr }
+
+// Building an `InferResult` whose node needs no children.
+let ir_leaf (ty: ITy) (subst: Subst) (state: FreshState) (node: TNode): InferResult =
+    InferResult { ty: ty, subst: subst, state: state, texpr: TExpr { ty: ty, node: node } }
+
+// The `TUnsupported` shape every "isn't supported yet" arm returns, so
+// the backend's own failure names the construct rather than falling off
+// a match.
+let ir_unsupported (subst: Subst) (state: FreshState) (what: String): InferResult =
+    ir_leaf(ITUnit, subst, state, TUnsupported(what))
 
 pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (e: parser.PExpr): InferResult =
     match e {
-        EInt(_) => InferResult { ty: ITInt, subst: acc, state: state },
-        EFloat(_) => InferResult { ty: ITFloat, subst: acc, state: state },
-        EStr(_) => InferResult { ty: ITStr, subst: acc, state: state },
-        EBool(_) => InferResult { ty: ITBool, subst: acc, state: state },
+        EInt(v) => ir_leaf(ITInt, acc, state, TInt(v)),
+        EFloat(v) => ir_leaf(ITFloat, acc, state, TFloat(v)),
+        EStr(v) => ir_leaf(ITStr, acc, state, TStr(v)),
+        EBool(v) => ir_leaf(ITBool, acc, state, TBool(v)),
         EIdent(name) => infer_ident(p2, state, env, acc, name),
         ETuple(elems) => infer_tuple(p2, state, env, acc, elems),
         EUnary(op, inner) => infer_unary(p2, state, env, acc, op, inner),
@@ -234,13 +290,13 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
         EMatch(scrutinee, arms) => infer_match(p2, state, env, acc, scrutinee, arms),
         EFor(pattern, iter, body) => infer_for(p2, state, env, acc, pattern, iter, body),
         EStructLit(path, fields, spread) => infer_struct_lit(p2, state, env, acc, path, fields, spread),
-        EGenericInst(_, _) => { fail_tc("generic instantiation syntax isn't supported yet"); InferResult { ty: ITUnit, subst: acc, state: state } },
+        EGenericInst(_, _) => { fail_tc("generic instantiation syntax isn't supported yet"); ir_unsupported(acc, state, "generic instantiation") },
         EIndex(base, idx) => infer_index(p2, state, env, acc, base, idx),
         EArray(elems) => infer_array_lit(p2, state, env, acc, elems),
         EClosure(params, body) => infer_closure(p2, state, env, acc, params, body),
-        EUnsafe(_) => { fail_tc("unsafe/extern FFI isn't supported yet"); InferResult { ty: ITUnit, subst: acc, state: state } },
-        ESpawn(_) => { fail_tc("spawn/concurrency isn't supported yet"); InferResult { ty: ITUnit, subst: acc, state: state } },
-        ESelect(_) => { fail_tc("select/channels aren't supported yet"); InferResult { ty: ITUnit, subst: acc, state: state } },
+        EUnsafe(_) => { fail_tc("unsafe/extern FFI isn't supported yet"); ir_unsupported(acc, state, "unsafe/extern FFI") },
+        ESpawn(_) => { fail_tc("spawn/concurrency isn't supported yet"); ir_unsupported(acc, state, "spawn") },
+        ESelect(_) => { fail_tc("select/channels aren't supported yet"); ir_unsupported(acc, state, "select") },
     }
 
 // A closure literal's params get FRESH type variables (no annotations
@@ -255,7 +311,8 @@ let infer_closure (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
     let fr = fresh_list(state, params.len());
     let env2 = extend_closure_params(env, params, fr.tys, 0);
     let r = infer_expr(p2, fr.state, env2, acc, body);
-    InferResult { ty: ITFunction(Array.map(fr.tys, |t| subst_apply(r.subst, t)), subst_apply(r.subst, r.ty)), subst: r.subst, state: r.state }
+    let fn_ty = ITFunction(Array.map(fr.tys, |t| subst_apply(r.subst, t)), subst_apply(r.subst, r.ty));
+    InferResult { ty: fn_ty, subst: r.subst, state: r.state, texpr: TExpr { ty: fn_ty, node: TClosure(params, r.texpr) } }
 }
 
 let extend_closure_params (env: TyEnv) (params: Array[String]) (tys: Array[ITy]) (i: Int): TyEnv =
@@ -263,10 +320,13 @@ let extend_closure_params (env: TyEnv) (params: Array[String]) (tys: Array[ITy])
 
 let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (name: String): InferResult =
     match tyenv_lookup(env, name) {
-        Some(ty) => InferResult { ty: ty, subst: acc, state: state },
+        Some(ty) => ir_leaf(ty, acc, state, TIdent(name)),
+        // A top-level 0-parameter binding is inlined by inference. The
+        // typed tree records the INLINED body, not a reference, which
+        // is exactly what a backend with no global slots needs.
         None => match find_global_def(p2.globals, name) {
             Some(def) => infer_expr(p2, state, tyenv_empty(()), acc, def.body),
-            None => if is_capitalized_name(name) { infer_variant(p2, state, acc, name, []) } else { { fail_tc("unbound variable: ".concat(name)); InferResult { ty: ITUnit, subst: acc, state: state } } },
+            None => if is_capitalized_name(name) { infer_variant(p2, state, acc, name, [], []) } else { { fail_tc("unbound variable: ".concat(name)); ir_unsupported(acc, state, "unbound variable ".concat(name)) } },
         },
     }
 
@@ -290,18 +350,18 @@ let is_capitalized_name (name: String): Bool = Array.contains(UPPERCASE_CHARS, c
 // inferred as `ITTuple([])` while the parameter resolved to `ITUnit`
 // (`resolve_param_ty` already maps the Unit PATTERN that way).
 let infer_tuple (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (elems: Array[parser.PExpr]): InferResult =
-    if Array.is_empty(elems) { InferResult { ty: ITUnit, subst: acc, state: state } }
+    if Array.is_empty(elems) { ir_leaf(ITUnit, acc, state, TUnitLit) }
     else {
-        let r = infer_list(p2, state, env, acc, elems, 0, []);
-        InferResult { ty: ITTuple(r.tys), subst: r.subst, state: r.state }
+        let r = infer_list(p2, state, env, acc, elems, 0, [], []);
+        ir_leaf(ITTuple(r.tys), r.subst, r.state, TTupleLit(r.texprs))
     }
 
-struct InferListResult { tys: Array[ITy], subst: Subst, state: FreshState }
-let infer_list (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (exprs: Array[parser.PExpr]) (i: Int) (tys: Array[ITy]): InferListResult =
-    if i >= exprs.len() { InferListResult { tys: tys, subst: acc, state: state } }
+struct InferListResult { tys: Array[ITy], subst: Subst, state: FreshState, texprs: Array[TExpr] }
+let infer_list (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (exprs: Array[parser.PExpr]) (i: Int) (tys: Array[ITy]) (texprs: Array[TExpr]): InferListResult =
+    if i >= exprs.len() { InferListResult { tys: tys, subst: acc, state: state, texprs: texprs } }
     else {
         let r = infer_expr(p2, state, env, acc, exprs[i]);
-        infer_list(p2, r.state, env, r.subst, exprs, i + 1, tys.push(r.ty))
+        infer_list(p2, r.state, env, r.subst, exprs, i + 1, tys.push(r.ty), texprs.push(r.texpr))
     }
 
 // `Array[T]` is represented as `ITStruct("Array", [T])` — see `context.
@@ -311,11 +371,11 @@ let infer_list (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (exp
 let infer_array_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (elems: Array[parser.PExpr]): InferResult =
     if Array.is_empty(elems) {
         let f = fresh(state);
-        InferResult { ty: ITStruct("Array", [f.ty]), subst: acc, state: f.state }
+        ir_leaf(ITStruct("Array", [f.ty]), acc, f.state, TArrayLit([]))
     } else {
-        let r = infer_list(p2, state, env, acc, elems, 0, []);
+        let r = infer_list(p2, state, env, acc, elems, 0, [], []);
         let u = unify_all_same(r.tys, r.subst);
-        InferResult { ty: ITStruct("Array", [u.ty]), subst: u.subst, state: r.state }
+        ir_leaf(ITStruct("Array", [u.ty]), u.subst, r.state, TArrayLit(r.texprs))
     }
 
 // Unifies every entry of `tys` against the FIRST one — the array-
@@ -336,14 +396,14 @@ let infer_index (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
     let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc("indexing: ".concat(e)); br.subst } };
     let ir = infer_expr(p2, elem_fresh.state, env, s1, idx);
     let s2 = match unify(subst_apply(ir.subst, ir.ty), ITInt) { Ok(s) => subst_compose(s, ir.subst), Err(e) => { fail_tc("index must be an Int: ".concat(e)); ir.subst } };
-    InferResult { ty: subst_apply(s2, elem_fresh.ty), subst: s2, state: ir.state }
+    ir_leaf(subst_apply(s2, elem_fresh.ty), s2, ir.state, TIndex(br.texpr, ir.texpr))
 }
 
 let infer_unary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op: parser.UOp) (inner: parser.PExpr): InferResult = {
     let r = infer_expr(p2, state, env, acc, inner);
     match op {
-        UNot => InferResult { ty: unify_or_fail(r.ty, ITBool), subst: r.subst, state: r.state },
-        UNeg => InferResult { ty: r.ty, subst: r.subst, state: r.state },
+        UNot => ir_leaf(unify_or_fail(r.ty, ITBool), r.subst, r.state, TUnary(op, r.texpr)),
+        UNeg => ir_leaf(r.ty, r.subst, r.state, TUnary(op, r.texpr)),
     }
 }
 
@@ -357,7 +417,7 @@ let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (o
         Err(e) => { fail_tc("'".concat(op_name(op)).concat("': ").concat(e)); rr.subst },
     };
     let operand_ty = subst_apply(combined, lr.ty);
-    InferResult { ty: binary_result_ty(op, operand_ty), subst: combined, state: rr.state }
+    ir_leaf(binary_result_ty(op, operand_ty), combined, rr.state, TBinary(op, lr.texpr, rr.texpr))
 }
 
 let op_name (op: parser.BOp): String = match op {
@@ -391,12 +451,12 @@ let infer_field (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
     match base_ty {
         ITStruct(struct_name, args) => match find_struct(p2.ctx, struct_name) {
             Some(info) => match find_field_template(info.fields, name) {
-                Some(field_ty) => InferResult { ty: instantiate_template(info.generics, args, field_ty), subst: r.subst, state: r.state },
-                None => { fail_tc("struct ".concat(struct_name).concat(" has no field named ").concat(name)); InferResult { ty: ITUnit, subst: r.subst, state: r.state } },
+                Some(field_ty) => ir_leaf(instantiate_template(info.generics, args, field_ty), r.subst, r.state, TFieldGet(r.texpr, name)),
+                None => { fail_tc("struct ".concat(struct_name).concat(" has no field named ").concat(name)); ir_unsupported(r.subst, r.state, "bad field access") },
             },
-            None => { fail_tc("unknown struct: ".concat(struct_name)); InferResult { ty: ITUnit, subst: r.subst, state: r.state } },
+            None => { fail_tc("unknown struct: ".concat(struct_name)); ir_unsupported(r.subst, r.state, "unknown struct") },
         },
-        _ => { fail_tc("field access requires a struct value with a statically known type, found ".concat(render_ty(base_ty))); InferResult { ty: ITUnit, subst: r.subst, state: r.state } },
+        _ => { fail_tc("field access requires a struct value with a statically known type, found ".concat(render_ty(base_ty))); ir_unsupported(r.subst, r.state, "field access on a non-struct") },
     }
 }
 
@@ -404,15 +464,15 @@ let find_field_template (fields: Array[StructFieldTemplate]) (name: String): Opt
 let find_field_template_acc (fields: Array[StructFieldTemplate]) (name: String) (i: Int): Option[ITy] =
     if i >= fields.len() { None } else if fields[i].name == name { Some(fields[i].ty) } else { find_field_template_acc(fields, name, i + 1) }
 
-let infer_variant (p2: Program2) (state: FreshState) (acc: Subst) (tag: String) (arg_tys: Array[ITy]): InferResult =
+let infer_variant (p2: Program2) (state: FreshState) (acc: Subst) (tag: String) (arg_tys: Array[ITy]) (arg_texprs: Array[TExpr]): InferResult =
     match find_variant(p2.ctx, tag) {
         Some(v) => {
             let fr = fresh_list(state, v.enum_generics.len());
             let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
             let subst2 = unify_variant_args(payload, arg_tys, acc);
-            InferResult { ty: ITEnum(v.enum_name, fr.tys), subst: subst2, state: fr.state }
+            ir_leaf(ITEnum(v.enum_name, fr.tys), subst2, fr.state, TVariantNew(tag, arg_texprs))
         },
-        None => { fail_tc("unbound variant/function: ".concat(tag)); InferResult { ty: ITUnit, subst: acc, state: state } },
+        None => { fail_tc("unbound variant/function: ".concat(tag)); ir_unsupported(acc, state, "unbound variant ".concat(tag)) },
     }
 
 let unify_variant_args (payload: Array[ITy]) (args: Array[ITy]) (acc: Subst): Subst =
@@ -440,7 +500,7 @@ let unify_variant_args_acc (payload: Array[ITy]) (args: Array[ITy]) (i: Int) (ac
 let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (callee: parser.PExpr) (args: Array[parser.PExpr]): InferResult =
     match callee {
         EIdent(name) => match tyenv_lookup(env, name) {
-            Some(ty) => infer_closure_call(p2, state, env, acc, ty, args),
+            Some(ty) => infer_closure_call(p2, state, env, acc, ty, args, TExpr { ty: ty, node: TIdent(name) }),
             None => infer_named_call(p2, state, env, acc, name, args),
         },
         // `Array.map`/`filter`/`fold` — a NAMESPACE call ("Array" is
@@ -486,7 +546,7 @@ let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cal
         },
         _ => {
             let r = infer_expr(p2, state, env, acc, callee);
-            infer_closure_call(p2, r.state, env, r.subst, subst_apply(r.subst, r.ty), args)
+            infer_closure_call(p2, r.state, env, r.subst, subst_apply(r.subst, r.ty), args, r.texpr)
         },
     }
 
@@ -494,7 +554,7 @@ let infer_array_ns_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
     if fn_name == "map" { infer_array_map(p2, state, env, acc, args[0], args[1]) }
     else if fn_name == "filter" { infer_array_filter(p2, state, env, acc, args[0], args[1]) }
     else if fn_name == "fold" { infer_array_fold(p2, state, env, acc, args[0], args[1], args[2]) }
-    else { { fail_tc("unsupported Array.".concat(fn_name).concat("(...) call")); InferResult { ty: ITUnit, subst: acc, state: state } } }
+    else { { fail_tc("unsupported Array.".concat(fn_name).concat("(...) call")); ir_unsupported(acc, state, "Array.".concat(fn_name)) } }
 
 // Infers a closure argument with its parameter types ALREADY KNOWN,
 // instead of letting them start as fresh variables the body is checked
@@ -521,11 +581,8 @@ let infer_closure_seeded (p2: Program2) (state: FreshState) (env: TyEnv) (acc: S
             };
             let env2 = extend_closure_params(env, params, param_tys, 0);
             let r = infer_expr(p2, state, env2, acc, body);
-            InferResult {
-                ty: ITFunction(Array.map(param_tys, |t| subst_apply(r.subst, t)), subst_apply(r.subst, r.ty)),
-                subst: r.subst,
-                state: r.state,
-            }
+            let fn_ty = ITFunction(Array.map(param_tys, |t| subst_apply(r.subst, t)), subst_apply(r.subst, r.ty));
+            InferResult { ty: fn_ty, subst: r.subst, state: r.state, texpr: TExpr { ty: fn_ty, node: TClosure(params, r.texpr) } }
         },
         _ => infer_expr(p2, state, env, acc, f_expr),
     }
@@ -537,7 +594,7 @@ let infer_array_map (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst)
     let fr = infer_closure_seeded(p2, elem_fresh.state, env, s1, f_expr, [subst_apply(s1, elem_fresh.ty)]);
     let out_fresh = fresh(fr.state);
     let s2 = match unify(subst_apply(fr.subst, fr.ty), ITFunction([subst_apply(s1, elem_fresh.ty)], out_fresh.ty)) { Ok(s) => subst_compose(s, fr.subst), Err(e) => { fail_tc("Array.map function argument: ".concat(e)); fr.subst } };
-    InferResult { ty: ITStruct("Array", [subst_apply(s2, out_fresh.ty)]), subst: s2, state: out_fresh.state }
+    ir_leaf(ITStruct("Array", [subst_apply(s2, out_fresh.ty)]), s2, out_fresh.state, TArrayNs("map", [ar.texpr, fr.texpr]))
 }
 
 let infer_array_filter (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arr_expr: parser.PExpr) (f_expr: parser.PExpr): InferResult = {
@@ -546,7 +603,7 @@ let infer_array_filter (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
     let s1 = match unify(subst_apply(ar.subst, ar.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc("Array.filter: ".concat(e)); ar.subst } };
     let fr = infer_closure_seeded(p2, elem_fresh.state, env, s1, f_expr, [subst_apply(s1, elem_fresh.ty)]);
     let s2 = match unify(subst_apply(fr.subst, fr.ty), ITFunction([subst_apply(s1, elem_fresh.ty)], ITBool)) { Ok(s) => subst_compose(s, fr.subst), Err(e) => { fail_tc("Array.filter function argument: ".concat(e)); fr.subst } };
-    InferResult { ty: ITStruct("Array", [subst_apply(s2, elem_fresh.ty)]), subst: s2, state: fr.state }
+    ir_leaf(ITStruct("Array", [subst_apply(s2, elem_fresh.ty)]), s2, fr.state, TArrayNs("filter", [ar.texpr, fr.texpr]))
 }
 
 let infer_array_fold (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arr_expr: parser.PExpr) (init_expr: parser.PExpr) (f_expr: parser.PExpr): InferResult = {
@@ -558,7 +615,7 @@ let infer_array_fold (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     let acc_ty = subst_apply(fr.subst, ir.ty);
     let elem_ty = subst_apply(fr.subst, elem_fresh.ty);
     let s2 = match unify(subst_apply(fr.subst, fr.ty), ITFunction([acc_ty, elem_ty], acc_ty)) { Ok(s) => subst_compose(s, fr.subst), Err(e) => { fail_tc("Array.fold function argument: ".concat(e)); fr.subst } };
-    InferResult { ty: subst_apply(s2, acc_ty), subst: s2, state: fr.state }
+    ir_leaf(subst_apply(s2, acc_ty), s2, fr.state, TArrayNs("fold", [ar.texpr, ir.texpr, fr.texpr]))
 }
 
 // Unifies `fn_ty` against a freshly-built `ITFunction(<one fresh var
@@ -567,12 +624,16 @@ let infer_array_fold (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
 // counterpart to `infer_fn_call`'s named-function version just below,
 // which instead already knows its param types up front from a real
 // declared signature.
-let infer_closure_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_ty: ITy) (args: Array[parser.PExpr]): InferResult = {
+// `callee_texpr` is the already-typed callee — a local holding a
+// closure, or a struct field read. It becomes the `TClosureCall`'s own
+// callee, which is how the backend knows to load a code pointer rather
+// than emit a direct call.
+let infer_closure_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_ty: ITy) (args: Array[parser.PExpr]) (callee_texpr: TExpr): InferResult = {
     let fr = fresh_list(state, args.len());
     let retf = fresh(fr.state);
     let s1 = match unify(subst_apply(acc, fn_ty), ITFunction(fr.tys, retf.ty)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc("call: ".concat(e)); acc } };
-    let ar = infer_call_args(p2, retf.state, env, s1, args, Array.map(fr.tys, |t| subst_apply(s1, t)), 0);
-    InferResult { ty: subst_apply(ar.subst, retf.ty), subst: ar.subst, state: ar.state }
+    let ar = infer_call_args(p2, retf.state, env, s1, args, Array.map(fr.tys, |t| subst_apply(s1, t)), 0, []);
+    ir_leaf(subst_apply(ar.subst, retf.ty), ar.subst, ar.state, TClosureCall(callee_texpr, ar.texprs))
 }
 
 let infer_named_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (name: String) (args: Array[parser.PExpr]): InferResult =
@@ -588,9 +649,9 @@ let infer_named_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
             None => match builtin_sig(name) {
                 Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
                 None => {
-                    let ar = infer_list(p2, state, env, acc, args, 0, []);
-                    if is_capitalized_name(name) { infer_variant(p2, ar.state, ar.subst, name, ar.tys) }
-                    else { { fail_tc("unbound function: ".concat(name)); InferResult { ty: ITUnit, subst: ar.subst, state: ar.state } } }
+                    let ar = infer_list(p2, state, env, acc, args, 0, [], []);
+                    if is_capitalized_name(name) { infer_variant(p2, ar.state, ar.subst, name, ar.tys, ar.texprs) }
+                    else { { fail_tc("unbound function: ".concat(name)); ir_unsupported(ar.subst, ar.state, "unbound function ".concat(name)) } }
                 },
             },
         }
@@ -598,7 +659,7 @@ let infer_named_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
 
 let infer_println_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (args: Array[parser.PExpr]): InferResult = {
     let r = infer_expr(p2, state, env, acc, args[0]);
-    InferResult { ty: ITUnit, subst: r.subst, state: r.state }
+    ir_leaf(ITUnit, r.subst, r.state, TPrintln(r.texpr))
 }
 
 let infer_contract_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (args: Array[parser.PExpr]): InferResult = {
@@ -606,7 +667,8 @@ let infer_contract_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
     let cond_subst = match unify(subst_apply(cr.subst, cr.ty), ITBool) { Ok(s) => subst_compose(s, cr.subst), Err(e) => { fail_tc(e); cr.subst } };
     let mr = infer_expr(p2, cr.state, env, cond_subst, args[1]);
     let msg_subst = match unify(subst_apply(mr.subst, mr.ty), ITStr) { Ok(s) => subst_compose(s, mr.subst), Err(e) => { fail_tc(e); mr.subst } };
-    InferResult { ty: ITUnit, subst: msg_subst, state: mr.state }
+    // Contracts type-check but the backend doesn't compile them yet.
+    ir_leaf(ITUnit, msg_subst, mr.state, TUnsupported("require/ensure contract"))
 }
 
 // Instantiates `sig`'s own declared generics as fresh vars (a no-op
@@ -621,32 +683,32 @@ let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
     let fr = fresh_list(state, sig.generics.len());
     let inst_params = Array.map(sig.params, |t| instantiate_template(sig.generics, fr.tys, t));
     let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
-    let ar = infer_call_args(p2, fr.state, env, acc, args, inst_params, 0);
-    InferResult { ty: subst_apply(ar.subst, inst_ret), subst: ar.subst, state: ar.state }
+    let ar = infer_call_args(p2, fr.state, env, acc, args, inst_params, 0, []);
+    ir_leaf(subst_apply(ar.subst, inst_ret), ar.subst, ar.state, TFnCall(sig.name, ar.texprs))
 }
 
-struct CallArgsResult { subst: Subst, state: FreshState }
-let infer_call_args (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (args: Array[parser.PExpr]) (param_tys: Array[ITy]) (i: Int): CallArgsResult =
-    if i >= args.len() || i >= param_tys.len() { CallArgsResult { subst: acc, state: state } }
+struct CallArgsResult { subst: Subst, state: FreshState, texprs: Array[TExpr] }
+let infer_call_args (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (args: Array[parser.PExpr]) (param_tys: Array[ITy]) (i: Int) (texprs: Array[TExpr]): CallArgsResult =
+    if i >= args.len() || i >= param_tys.len() { CallArgsResult { subst: acc, state: state, texprs: texprs } }
     else {
         let r = infer_expr(p2, state, env, acc, args[i]);
         let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, param_tys[i])) {
             Ok(s) => subst_compose(s, r.subst),
             Err(e) => { fail_tc("argument ".concat(i.to_string()).concat(": ").concat(e)); r.subst },
         };
-        infer_call_args(p2, r.state, env, s2, args, param_tys, i + 1)
+        infer_call_args(p2, r.state, env, s2, args, param_tys, i + 1, texprs.push(r.texpr))
     }
 
 let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): InferResult =
     if method_name == "to_string" {
         let r = infer_expr(p2, state, env, acc, base);
-        InferResult { ty: ITStr, subst: r.subst, state: r.state }
+        ir_leaf(ITStr, r.subst, r.state, TMethodCall("to_string", r.texpr, []))
     } else if method_name == "concat" {
         let br = infer_expr(p2, state, env, acc, base);
         let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".concat() receiver: ".concat(e)); br.subst } };
         let ar = infer_expr(p2, br.state, env, s1, args[0]);
         let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".concat() argument: ".concat(e)); ar.subst } };
-        InferResult { ty: ITStr, subst: s2, state: ar.state }
+        ir_leaf(ITStr, s2, ar.state, TMethodCall("concat", br.texpr, [ar.texpr]))
     } else if (method_name == "ends_with" || method_name == "starts_with" || method_name == "contains") && args.len() == 1 {
         // Compiler PRIMITIVES lowered straight to IR nodes (`StrEndsWith`
         // and friends), not prelude functions — so they have no entry in
@@ -656,14 +718,14 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() receiver: ").concat(e)); br.subst } };
         let ar = infer_expr(p2, br.state, env, s1, args[0]);
         let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() argument: ").concat(e)); ar.subst } };
-        InferResult { ty: ITBool, subst: s2, state: ar.state }
+        ir_leaf(ITBool, s2, ar.state, TMethodCall(method_name, br.texpr, [ar.texpr]))
     } else if method_name == "split" && args.len() == 1 {
         // Another compiler primitive, same as `ends_with` above.
         let br = infer_expr(p2, state, env, acc, base);
         let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".split() receiver: ".concat(e)); br.subst } };
         let ar = infer_expr(p2, br.state, env, s1, args[0]);
         let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".split() argument: ".concat(e)); ar.subst } };
-        InferResult { ty: arr_of(ITStr), subst: s2, state: ar.state }
+        ir_leaf(arr_of(ITStr), s2, ar.state, TMethodCall("split", br.texpr, [ar.texpr]))
     } else if method_name == "len" && Array.is_empty(args) {
         infer_len(p2, state, env, acc, base)
     } else if method_name == "push" && args.len() == 1 {
@@ -680,12 +742,15 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         match base_ty {
             ITStruct(struct_name, gen_args) => match find_struct(p2.ctx, struct_name) {
                 Some(info) => match find_field_template(info.fields, method_name) {
-                    Some(field_ty) => infer_closure_call(p2, br.state, env, br.subst, instantiate_template(info.generics, gen_args, field_ty), args),
-                    None => { fail_tc("struct ".concat(struct_name).concat(" has no field named ").concat(method_name)); InferResult { ty: ITUnit, subst: br.subst, state: br.state } },
+                    Some(field_ty) => {
+                        let ft = instantiate_template(info.generics, gen_args, field_ty);
+                        infer_closure_call(p2, br.state, env, br.subst, ft, args, TExpr { ty: ft, node: TFieldGet(br.texpr, method_name) })
+                    },
+                    None => { fail_tc("struct ".concat(struct_name).concat(" has no field named ").concat(method_name)); ir_unsupported(br.subst, br.state, "bad method call") },
                 },
-                None => { fail_tc("unknown struct: ".concat(struct_name)); InferResult { ty: ITUnit, subst: br.subst, state: br.state } },
+                None => { fail_tc("unknown struct: ".concat(struct_name)); ir_unsupported(br.subst, br.state, "unknown struct") },
             },
-            _ => { fail_tc("only .to_string()/.concat() and struct-field closure calls are supported"); InferResult { ty: ITUnit, subst: br.subst, state: br.state } },
+            _ => { fail_tc("only .to_string()/.concat() and struct-field closure calls are supported"); ir_unsupported(br.subst, br.state, "unsupported method call") },
         }
     }
 
@@ -710,11 +775,11 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
 let infer_len (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr): InferResult = {
     let br = infer_expr(p2, state, env, acc, base);
     match subst_apply(br.subst, br.ty) {
-        ITStr => InferResult { ty: ITInt, subst: br.subst, state: br.state },
+        ITStr => ir_leaf(ITInt, br.subst, br.state, TMethodCall("len", br.texpr, [])),
         _ => {
             let elem_fresh = fresh(br.state);
             let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".len(): ".concat(e)); br.subst } };
-            InferResult { ty: ITInt, subst: s1, state: elem_fresh.state }
+            ir_leaf(ITInt, s1, elem_fresh.state, TMethodCall("len", br.texpr, []))
         },
     }
 }
@@ -725,7 +790,7 @@ let infer_array_push (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".push(): ".concat(e)); br.subst } };
     let vr = infer_expr(p2, elem_fresh.state, env, s1, value_expr);
     let s2 = match unify(subst_apply(vr.subst, vr.ty), subst_apply(vr.subst, elem_fresh.ty)) { Ok(s) => subst_compose(s, vr.subst), Err(e) => { fail_tc(".push() argument: ".concat(e)); vr.subst } };
-    InferResult { ty: ITStruct("Array", [subst_apply(s2, elem_fresh.ty)]), subst: s2, state: vr.state }
+    ir_leaf(ITStruct("Array", [subst_apply(s2, elem_fresh.ty)]), s2, vr.state, TMethodCall("push", br.texpr, [vr.texpr]))
 }
 
 let infer_array_set (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (idx_expr: parser.PExpr) (value_expr: parser.PExpr): InferResult = {
@@ -736,26 +801,29 @@ let infer_array_set (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst)
     let s2 = match unify(subst_apply(ir.subst, ir.ty), ITInt) { Ok(s) => subst_compose(s, ir.subst), Err(e) => { fail_tc(".set() index: ".concat(e)); ir.subst } };
     let vr = infer_expr(p2, ir.state, env, s2, value_expr);
     let s3 = match unify(subst_apply(vr.subst, vr.ty), subst_apply(vr.subst, elem_fresh.ty)) { Ok(s) => subst_compose(s, vr.subst), Err(e) => { fail_tc(".set() value: ".concat(e)); vr.subst } };
-    InferResult { ty: ITStruct("Array", [subst_apply(s3, elem_fresh.ty)]), subst: s3, state: vr.state }
+    ir_leaf(ITStruct("Array", [subst_apply(s3, elem_fresh.ty)]), s3, vr.state, TMethodCall("set", br.texpr, [ir.texpr, vr.texpr]))
 }
 
 let infer_block (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (block: parser.PBlock): InferResult = {
-    let r = infer_stmts(p2, state, env, acc, block.stmts, 0);
+    let r = infer_stmts(p2, state, env, acc, block.stmts, 0, []);
     match block.tail {
-        Some(t) => infer_expr(p2, r.state, r.env, r.subst, t),
-        None => InferResult { ty: ITUnit, subst: r.subst, state: r.state },
+        Some(t) => {
+            let tr = infer_expr(p2, r.state, r.env, r.subst, t);
+            ir_leaf(tr.ty, tr.subst, tr.state, TBlockE(TBlock { stmts: r.tstmts, tail: Some(tr.texpr) }))
+        },
+        None => ir_leaf(ITUnit, r.subst, r.state, TBlockE(TBlock { stmts: r.tstmts, tail: None })),
     }
 }
 
-struct StmtsResult { env: TyEnv, subst: Subst, state: FreshState }
-let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (stmts: Array[parser.PStmt]) (i: Int): StmtsResult =
-    if i >= stmts.len() { StmtsResult { env: env, subst: acc, state: state } }
+struct StmtsResult { env: TyEnv, subst: Subst, state: FreshState, tstmts: Array[TStmt] }
+let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (stmts: Array[parser.PStmt]) (i: Int) (tstmts: Array[TStmt]): StmtsResult =
+    if i >= stmts.len() { StmtsResult { env: env, subst: acc, state: state, tstmts: tstmts } }
     else {
         match stmts[i] {
             SLet(_, pattern, value) => {
                 let r = infer_expr(p2, state, env, acc, value);
                 let br = bind_pattern_ty(p2, r.state, r.subst, env, pattern, subst_apply(r.subst, r.ty));
-                infer_stmts(p2, br.state, br.env, br.subst, stmts, i + 1)
+                infer_stmts(p2, br.state, br.env, br.subst, stmts, i + 1, tstmts.push(TSLet(pattern, r.texpr)))
             },
             SAssign(name, value) => {
                 let r = infer_expr(p2, state, env, acc, value);
@@ -774,9 +842,9 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
                     None => { fail_tc("assignment to an unbound name: ".concat(name)); ITUnit },
                 };
                 let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, target_ty)) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc("assignment to ".concat(name).concat(": ").concat(e)); r.subst } };
-                infer_stmts(p2, r.state, env, s2, stmts, i + 1)
+                infer_stmts(p2, r.state, env, s2, stmts, i + 1, tstmts.push(TSAssign(name, r.texpr)))
             },
-            SExpr(e) => { let r = infer_expr(p2, state, env, acc, e); infer_stmts(p2, r.state, env, r.subst, stmts, i + 1) },
+            SExpr(e) => { let r = infer_expr(p2, state, env, acc, e); infer_stmts(p2, r.state, env, r.subst, stmts, i + 1, tstmts.push(TSExpr(r.texpr))) },
         }
     }
 
@@ -788,9 +856,9 @@ let infer_if (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cond:
         Some(e) => {
             let er = infer_expr(p2, tr.state, env, tr.subst, e);
             let s2 = match unify(subst_apply(er.subst, tr.ty), subst_apply(er.subst, er.ty)) { Ok(s) => subst_compose(s, er.subst), Err(err) => { fail_tc("'if'/'else' branches: ".concat(err)); er.subst } };
-            InferResult { ty: subst_apply(s2, tr.ty), subst: s2, state: er.state }
+            ir_leaf(subst_apply(s2, tr.ty), s2, er.state, TIf(cr.texpr, tr.texpr, Some(er.texpr)))
         },
-        None => tr,
+        None => ir_leaf(tr.ty, tr.subst, tr.state, TIf(cr.texpr, tr.texpr, None)),
     }
 }
 
@@ -803,9 +871,9 @@ let infer_for (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (patt
             let s2 = match unify(subst_apply(hr.subst, hr.ty), ITInt) { Ok(s) => subst_compose(s, hr.subst), Err(e) => { fail_tc("'for' range end: ".concat(e)); hr.subst } };
             let br = bind_pattern_ty(p2, hr.state, s2, env, pattern, ITInt);
             let bodyr = infer_block(p2, br.state, br.env, br.subst, body);
-            InferResult { ty: ITUnit, subst: bodyr.subst, state: bodyr.state }
+            ir_leaf(ITUnit, bodyr.subst, bodyr.state, TFor(pattern, lr.texpr, hr.texpr, bodyr.texpr))
         },
-        _ => { fail_tc("'for' only supports a literal range (lo..hi) as its iterand"); InferResult { ty: ITUnit, subst: acc, state: state } },
+        _ => { fail_tc("'for' only supports a literal range (lo..hi) as its iterand"); ir_unsupported(acc, state, "non-range 'for'") },
     }
 
 let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): InferResult = {
@@ -814,41 +882,62 @@ let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     match find_struct(p2.ctx, name) {
         Some(info) => {
             let fr = fresh_list(state, info.generics.len());
-            let r = infer_struct_fields(p2, fr.state, env, acc, info, fr.tys, fields, 0);
-            InferResult { ty: ITStruct(name, Array.map(fr.tys, |t| subst_apply(r.subst, t))), subst: r.subst, state: r.state }
+            let r = infer_struct_fields(p2, fr.state, env, acc, info, fr.tys, fields, 0, []);
+            ir_leaf(ITStruct(name, Array.map(fr.tys, |t| subst_apply(r.subst, t))), r.subst, r.state,
+                TStructLit(name, cg_zip_field_inits(fields, r.texprs, 0, [])))
         },
-        None => { fail_tc("unknown struct: ".concat(name)); InferResult { ty: ITUnit, subst: acc, state: state } },
+        None => { fail_tc("unknown struct: ".concat(name)); ir_unsupported(acc, state, "unknown struct ".concat(name)) },
     }
 }
 
-let infer_struct_fields (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (info: StructInfo) (gen_args: Array[ITy]) (fields: Array[parser.FieldInitNode]) (i: Int): CallArgsResult =
-    if i >= fields.len() { CallArgsResult { subst: acc, state: state } }
+// Pairs each field-init's NAME with its typed value, in the order the
+// literal wrote them. The backend reorders to declaration order itself,
+// using the struct's own declared field list.
+let cg_zip_field_inits (fields: Array[parser.FieldInitNode]) (texprs: Array[TExpr]) (i: Int) (acc: Array[TFieldInit]): Array[TFieldInit] =
+    if i >= fields.len() || i >= texprs.len() { acc }
+    else { cg_zip_field_inits(fields, texprs, i + 1, acc.push(TFieldInit { name: fields[i].name, value: texprs[i] })) }
+
+let infer_struct_fields (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (info: StructInfo) (gen_args: Array[ITy]) (fields: Array[parser.FieldInitNode]) (i: Int) (texprs: Array[TExpr]): CallArgsResult =
+    if i >= fields.len() { CallArgsResult { subst: acc, state: state, texprs: texprs } }
     else {
-        let r = infer_expr(p2, state, env, acc, fields[i].value);
+        // A field's DECLARED type seeds a closure literal's parameters,
+        // the same way a call argument's does — which is what makes
+        // `Ops { add: |a, b| a + b }` infer.
+        let field_ty0 = match find_field_template(info.fields, fields[i].name) {
+            Some(t) => instantiate_template(info.generics, gen_args, t),
+            None => ITUnit,
+        };
+        let r = match subst_apply(acc, field_ty0) {
+            ITFunction(ptys, _) => infer_closure_seeded(p2, state, env, acc, fields[i].value, ptys),
+            _ => infer_expr(p2, state, env, acc, fields[i].value),
+        };
         let field_ty = match find_field_template(info.fields, fields[i].name) {
             Some(t) => instantiate_template(info.generics, gen_args, t),
             None => { fail_tc("struct ".concat(info.name).concat(" has no field named ").concat(fields[i].name)); ITUnit },
         };
         let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, field_ty)) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc("field ".concat(fields[i].name).concat(": ").concat(e)); r.subst } };
-        infer_struct_fields(p2, r.state, env, s2, info, gen_args, fields, i + 1)
+        infer_struct_fields(p2, r.state, env, s2, info, gen_args, fields, i + 1, texprs.push(r.texpr))
     }
 
 let infer_match (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee: parser.PExpr) (arms: Array[parser.MatchArmNode]): InferResult = {
     let sr = infer_expr(p2, state, env, acc, scrutinee);
-    infer_match_arms(p2, sr.state, env, sr.subst, subst_apply(sr.subst, sr.ty), arms, 0, None)
+    let ar = infer_match_arms(p2, sr.state, env, sr.subst, subst_apply(sr.subst, sr.ty), arms, 0, None, []);
+    ir_leaf(ar.ty, ar.subst, ar.state, TMatch(sr.texpr, ar.tarms))
 }
 
-let infer_match_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee_ty: ITy) (arms: Array[parser.MatchArmNode]) (i: Int) (result_ty: Option[ITy]): InferResult =
-    if i >= arms.len() { InferResult { ty: Option.unwrap_or(result_ty, ITUnit), subst: acc, state: state } }
+struct ArmsResult { ty: ITy, subst: Subst, state: FreshState, tarms: Array[TArm] }
+
+let infer_match_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee_ty: ITy) (arms: Array[parser.MatchArmNode]) (i: Int) (result_ty: Option[ITy]) (tarms: Array[TArm]): ArmsResult =
+    if i >= arms.len() { ArmsResult { ty: Option.unwrap_or(result_ty, ITUnit), subst: acc, state: state, tarms: tarms } }
     else {
         let br = bind_pattern_ty(p2, state, acc, env, arms[i].pattern, scrutinee_ty);
         let gr = match arms[i].guard {
             Some(g) => {
                 let r = infer_expr(p2, br.state, br.env, br.subst, g);
                 let s = match unify(subst_apply(r.subst, r.ty), ITBool) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc("match guard: ".concat(e)); r.subst } };
-                GuardCheckResult { subst: s, state: r.state }
+                GuardCheckResult { subst: s, state: r.state, tguard: Some(r.texpr) }
             },
-            None => GuardCheckResult { subst: br.subst, state: br.state },
+            None => GuardCheckResult { subst: br.subst, state: br.state, tguard: None },
         };
         let bodyr = infer_expr(p2, gr.state, br.env, gr.subst, arms[i].body);
         let new_result = match result_ty {
@@ -858,10 +947,11 @@ let infer_match_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
                 Err(e) => { fail_tc("match arms: ".concat(e)); bodyr.ty },
             },
         };
-        infer_match_arms(p2, bodyr.state, env, bodyr.subst, scrutinee_ty, arms, i + 1, Some(new_result))
+        infer_match_arms(p2, bodyr.state, env, bodyr.subst, scrutinee_ty, arms, i + 1, Some(new_result),
+            tarms.push(TArm { pattern: arms[i].pattern, guard: gr.tguard, body: bodyr.texpr }))
     }
 
-struct GuardCheckResult { subst: Subst, state: FreshState }
+struct GuardCheckResult { subst: Subst, state: FreshState, tguard: Option[TExpr] }
 
 // --- Pattern typing: binds pattern-introduced names into `env`,
 // unifying the pattern's own shape against `scrutinee_ty` ---

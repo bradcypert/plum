@@ -222,3 +222,30 @@ pub let instantiate_template (generics: Array[String]) (args: Array[ITy]) (templ
 
 let lookup_generic_arg (generics: Array[String]) (args: Array[ITy]) (name: String) (i: Int): Option[ITy] =
     if i >= generics.len() { None } else if generics[i] == name { Some(args[i]) } else { lookup_generic_arg(generics, args, name, i + 1) }
+
+// --- Layout accessors for the backend ---
+//
+// `codegen/` needs a struct's field NAMES (for slot order) and a
+// struct's/variant's declared field/payload TYPES (to pick a load's
+// machine type). Those already live here, fully resolved, so the
+// backend reads them rather than re-resolving the annotations — the
+// same reason it reads expression types off the typed tree instead of
+// synthesizing them. Exposed as functions rather than by making the
+// info structs public, so the representation stays private.
+pub let ctx_field_names (ctx: TyContext) (name: String): Array[String] =
+    match find_struct(ctx, name) {
+        Some(info) => Array.map(info.fields, |f| f.name),
+        None => { fail_ctx("unknown struct: ".concat(name)); [] },
+    }
+
+pub let ctx_field_types (ctx: TyContext) (name: String): Array[ITy] =
+    match find_struct(ctx, name) {
+        Some(info) => Array.map(info.fields, |f| f.ty),
+        None => { fail_ctx("unknown struct: ".concat(name)); [] },
+    }
+
+pub let ctx_variant_payload (ctx: TyContext) (tag: String): Array[ITy] =
+    match find_variant(ctx, tag) {
+        Some(v) => v.payload,
+        None => { fail_ctx("unknown variant: ".concat(tag)); [] },
+    }

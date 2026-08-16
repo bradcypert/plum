@@ -30,58 +30,37 @@
 //
 // --- Where the types come from ---
 //
-// `typecheck/infer.plum` computes the type of every expression and then
-// DISCARDS it — nothing writes inferred types back onto the AST, and
-// `parser.PExpr` has no field to write them into. So this file
-// re-derives what it needs, bottom-up, as it emits.
+// **The checker.** `typecheck/infer.plum` computes the type of every
+// expression and now PUBLISHES it, as a typed tree (`typecheck/
+// texpr.plum`). This file reads types; it does not derive them.
 //
-// That is duplication, and worth being honest about rather than
-// dressing up. Two things make it a much smaller duplication than it
-// sounds:
+// It used to derive them, bottom-up, because inference threw its
+// results away. That worked for everything except a closure literal
+// with no expected type — `let f = |n| n + 1`, where `n`'s
+// representation is only pinned by UNIFYING the body's use of it. The
+// fix was to make the checker hand over what it already knew, not to
+// grow a second unifier here.
 //
-//   - It runs AFTER `check_program`, on a program already known to be
-//     well-typed, so it needs no unification, no substitutions, no
-//     fresh variables, and no error recovery — the three things
-//     `infer.plum` spends most of its 931 lines on.
-//   - It only needs the REPRESENTATION of a type (which machine type,
-//     which layout), not its full identity. `CgTy` is a handful of
-//     cases where `ITy` is a full type language.
+// Two things came with it, both worth more than the one fixture:
 //
-// The alternative was threading a typed node through `InferResult`'s 54
-// construction sites, which is a rewrite of the one component that
-// currently type-checks the entire self-hosted compiler. Not worth
-// destabilizing it for a Stage 5 that doesn't exist yet. If Stage 5
-// grows to need real inference (closures are where that starts), the
-// right move is to make `infer.plum` produce a typed tree, not to grow
-// a second inference engine here.
+//   - **Calls arrive classified.** `parser.PExpr` has one `ECall`
+//     covering user functions, prelude functions, variant
+//     constructors, closure values, methods, `Array.map` and
+//     `println`. Telling them apart needs scope information, and this
+//     file used to redo that resolution itself — with its own copy of
+//     the precedence rules. Now `infer_call` decides once and the node
+//     says which. The backend cannot disagree with the checker about
+//     what a call IS.
+//   - **Whole rules disappeared** rather than moving: the operator
+//     result-type table, the "a match's type is its first arm's type"
+//     rule (which emitted an arm speculatively just to read its type
+//     back), the empty-array "element type undetermined" marker, and
+//     the machinery that pushed expected parameter types down into
+//     closure literals. Each existed only to reconstruct something
+//     inference already knew.
 //
-// --- Deliberate v1 scope, stated up front ---
-//
-// Supported: top-level functions with fully annotated signatures,
-// `Int`/`Float`/`Bool`/`Unit`/`String`, structs, enums and `match`
-// (variant, struct, literal, binding and wildcard patterns, nested),
-// arithmetic and comparison, short-circuiting `&&`/`||`, `if`/`else`,
-// `for` over a literal range, blocks with `let`/`let mut`/assignment,
-// calls (including recursion), `println`, `.to_string()`, `.concat()`,
-// `.len()`, arrays (literals, indexing, `.len()`/`.push()`/`.set()`,
-// `Array.map`/`filter`/`fold`), and closures wherever their parameter
-// types come from context.
-//
-// NOT yet: a STANDALONE closure binding (`let f = |n| n + 1`),
-// generics, tuples, top-level globals, or-patterns, `match`
-// exhaustiveness checking, array bounds checks, `.to_string()` on a
-// struct/enum/array. Each fails with a clear `cg_fail`, never silently
-// wrong code.
-//
-// The standalone closure binding is the interesting one, because it is
-// the exact point this file's bottom-up type synthesis runs out. Every
-// OTHER closure position — a call argument, a struct field, an
-// `Array.map` element — has an expected parameter type sitting right
-// there to push down, and `cg_expr_params` does. `let f = |n| n + 1`
-// has none: `n`'s representation is only pinned by unifying the body's
-// use of it, which is inference, not synthesis. `infer.plum` already
-// does exactly that and throws the answer away. **The fix is to make
-// `infer.plum` produce a typed tree, not to grow a unifier here.**
+// One genuinely new rule lives here: DEFAULTING an unconstrained type
+// variable — see `cg_of_ity`.
 //
 // Validated against bootstrap/exec_corpus: a fixture compiled by THIS
 // backend must print byte-for-byte what the real `plum build` produces
@@ -89,6 +68,7 @@
 // backend, which is the stronger claim.
 
 use parser;
+use typecheck;
 
 let cg_fail (msg: String): Unit = panic_raw("self-hosted codegen: ".concat(msg))
 
@@ -161,46 +141,26 @@ let cg_ty_eq (a: CgTy) (b: CgTy): Bool = cg_ty_name(a) == cg_ty_name(b)
 // resolution at all), then resolving everything else against that. The
 // same two-pass shape `typecheck/context.plum` uses, for the same
 // reason.
-pub struct CgTyName { name: String, is_enum: Bool }
-pub struct CgField { name: String, ty: CgTy }
-pub struct CgStructDecl { name: String, fields: Array[CgField] }
 // `tag` is assigned in declaration order across the WHOLE program, not
 // per enum — matching the flat, globally-scoped treatment variant tags
 // already get everywhere else in this bootstrap (see DESIGN.md's
 // module-system section, which documents that as a deliberate v1
 // boundary).
-pub struct CgVariant { name: String, tag: Int, payload: Array[CgTy] }
+pub struct CgVariant { name: String, tag: Int, arity: Int }
 pub struct CgEnumDecl { name: String, variants: Array[CgVariant] }
 
-// A type ANNOTATION (`parser.Ty`) resolved to a representation.
-let cg_resolve_ty (names: Array[CgTyName]) (t: parser.Ty): CgTy =
-    match t {
-        TyPath(path) => cg_resolve_named(names, path[path.len() - 1]),
-        TyGeneric(path, args) =>
-            if path[path.len() - 1] == "Array" { CgArray(cg_resolve_ty(names, args[0])) }
-            else { { cg_fail("generic type ".concat(path[path.len() - 1]).concat(" isn't supported yet")); CgUnit } },
-        TyFunction(ptys, ret) => CgClosure(Array.map(ptys, |t| cg_resolve_ty(names, t)), cg_resolve_ty(names, ret)),
-    }
-
-let cg_resolve_named (names: Array[CgTyName]) (name: String): CgTy =
-    if name == "Int" { CgInt }
-    else if name == "Float" { CgFloat }
-    else if name == "Bool" { CgBool }
-    else if name == "Unit" { CgUnit }
-    else if name == "String" { CgStr }
-    else { match cg_find_ty_name(names, name, 0) {
-        Some(entry) => if entry.is_enum { CgEnum(name) } else { CgStruct(name) },
-        None => { cg_fail("type ".concat(name).concat(" isn't supported yet")); CgUnit },
-    } }
-
-let cg_find_ty_name (names: Array[CgTyName]) (name: String) (i: Int): Option[CgTyName] =
-    if i >= names.len() { None } else if names[i].name == name { Some(names[i]) } else { cg_find_ty_name(names, name, i + 1) }
-
+// Field and payload TYPES are no longer resolved here at all: every
+// use site reads its own type off the typed tree instead. What the
+// declarations are still needed for is LAYOUT — which slot a field
+// lives in, and which tag a variant carries — and neither of those
+// needs a resolved type, only an order.
 // --- Program shape ---
 
-pub struct CgParam { name: String, ty: CgTy }
-pub struct CgFn { name: String, params: Array[CgParam], ret: CgTy, body: parser.PExpr }
-pub struct CgProgram { fns: Array[CgFn], structs: Array[CgStructDecl], enums: Array[CgEnumDecl] }
+// `subst` is the CURRENT function's substitution, swapped per function
+// by `cg_fn` — it is what `cg_ty` needs to resolve a recorded type. It
+// lives here rather than as a parameter on thirty emitters purely to
+// keep those signatures unchanged.
+pub struct CgProgram { fns: Array[typecheck.TFn], ctx: typecheck.TyContext, enums: Array[CgEnumDecl], subst: typecheck.Subst }
 
 // --- Cell layouts ---
 //
@@ -226,90 +186,48 @@ let cg_payload_offset (index: Int): Int = 8 + 8 * index
 // emitted symbol a plain identifier.
 let cg_mangle (name: String): String = "plum_".concat(chars_join(Array.map(chars_of(name), |c| if c == "." { "_" } else { c })))
 
-pub let cg_build_program (program: parser.ProgramNode): CgProgram = {
-    let names = cg_collect_ty_names(program.items, 0, []);
+pub let cg_build_program (program: parser.ProgramNode): CgProgram =
     CgProgram {
-        fns: cg_collect_fns(names, program.items, 0, []),
-        structs: cg_collect_structs(names, program.items, 0, []),
-        enums: cg_collect_enums(names, program.items, 0, 0, []),
-    }
-}
-
-let cg_collect_ty_names (items: Array[parser.ItemNode]) (i: Int) (acc: Array[CgTyName]): Array[CgTyName] =
-    if i >= items.len() { acc }
-    else {
-        match items[i].kind {
-            IKStruct(decl) => cg_collect_ty_names(items, i + 1, acc.push(CgTyName { name: decl.name, is_enum: false })),
-            IKEnum(decl) => cg_collect_ty_names(items, i + 1, acc.push(CgTyName { name: decl.name, is_enum: true })),
-            _ => cg_collect_ty_names(items, i + 1, acc),
-        }
-    }
-
-let cg_collect_structs (names: Array[CgTyName]) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[CgStructDecl]): Array[CgStructDecl] =
-    if i >= items.len() { acc }
-    else {
-        match items[i].kind {
-            IKStruct(decl) => {
-                if !Array.is_empty(decl.generics) { cg_fail("generic structs aren't supported yet: ".concat(decl.name)) };
-                cg_collect_structs(names, items, i + 1, acc.push(CgStructDecl { name: decl.name, fields: Array.map(decl.fields, |f| CgField { name: f.name, ty: cg_resolve_ty(names, f.ty) }) }))
-            },
-            _ => cg_collect_structs(names, items, i + 1, acc),
-        }
+        // Type-checking and typed-tree construction are one pass —
+        // `typed_program` IS `check_program` with the results kept, so
+        // the backend cannot compile anything the checker didn't prove.
+        fns: typecheck.typed_program(program),
+        // Field names and field/payload TYPES come straight from the
+        // checker's own declaration tables — the backend re-resolves
+        // nothing. Only variant TAGS are assigned here, because tag
+        // numbering is a layout decision the checker has no opinion on.
+        ctx: typecheck.build_context(program),
+        enums: cg_collect_enums(program.items, 0, 0, []),
+        subst: typecheck.subst_empty(()),
     }
 
 // `next_tag` runs across the whole program, so every variant in every
 // enum has a distinct id — see `CgVariant`'s own comment.
-let cg_collect_enums (names: Array[CgTyName]) (items: Array[parser.ItemNode]) (i: Int) (next_tag: Int) (acc: Array[CgEnumDecl]): Array[CgEnumDecl] =
+let cg_collect_enums (items: Array[parser.ItemNode]) (i: Int) (next_tag: Int) (acc: Array[CgEnumDecl]): Array[CgEnumDecl] =
     if i >= items.len() { acc }
     else {
         match items[i].kind {
             IKEnum(decl) => {
                 if !Array.is_empty(decl.generics) { cg_fail("generic enums aren't supported yet: ".concat(decl.name)) };
-                let vs = cg_variants_of(names, decl.variants, 0, next_tag, []);
-                cg_collect_enums(names, items, i + 1, next_tag + decl.variants.len(), acc.push(CgEnumDecl { name: decl.name, variants: vs }))
+                let vs = cg_variants_of(decl.variants, 0, next_tag, []);
+                cg_collect_enums(items, i + 1, next_tag + decl.variants.len(), acc.push(CgEnumDecl { name: decl.name, variants: vs }))
             },
-            _ => cg_collect_enums(names, items, i + 1, next_tag, acc),
+            _ => cg_collect_enums(items, i + 1, next_tag, acc),
         }
     }
 
-let cg_variants_of (names: Array[CgTyName]) (variants: Array[parser.EnumVariantNode]) (i: Int) (next_tag: Int) (acc: Array[CgVariant]): Array[CgVariant] =
+let cg_variants_of (variants: Array[parser.EnumVariantNode]) (i: Int) (next_tag: Int) (acc: Array[CgVariant]): Array[CgVariant] =
     if i >= variants.len() { acc }
     else {
-        cg_variants_of(names, variants, i + 1, next_tag + 1,
-            acc.push(CgVariant { name: variants[i].name, tag: next_tag, payload: Array.map(variants[i].payload, |t| cg_resolve_ty(names, t)) }))
+        cg_variants_of(variants, i + 1, next_tag + 1,
+            acc.push(CgVariant { name: variants[i].name, tag: next_tag, arity: variants[i].payload.len() }))
     }
-
-let cg_collect_fns (names: Array[CgTyName]) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[CgFn]): Array[CgFn] =
-    if i >= items.len() { acc }
-    else {
-        match items[i].kind {
-            IKLet(def) =>
-                if Array.is_empty(def.params) { { cg_fail("top-level value bindings (globals) aren't supported yet: ".concat(def.name)); acc } }
-                else { cg_collect_fns(names, items, i + 1, acc.push(cg_fn_of(names, def))) },
-            _ => cg_collect_fns(names, items, i + 1, acc),
-        }
-    }
-
-let cg_fn_of (names: Array[CgTyName]) (def: parser.LetDefNode): CgFn = {
-    if !Array.is_empty(def.generics) { cg_fail("generic functions aren't supported yet: ".concat(def.name)) };
-    let ret = match def.ret_ty {
-        Some(t) => cg_resolve_ty(names, t),
-        None => { cg_fail("function ".concat(def.name).concat(" needs a return type annotation")); CgUnit },
-    };
-    CgFn { name: def.name, params: cg_params_of(names, def.params, 0, []), ret: ret, body: def.body }
-}
 
 // --- Declaration lookup ---
 
-let cg_find_struct (p: CgProgram) (name: String): CgStructDecl = cg_find_struct_acc(p.structs, name, 0)
-let cg_find_struct_acc (ds: Array[CgStructDecl]) (name: String) (i: Int): CgStructDecl =
-    if i >= ds.len() { { cg_fail("unknown struct: ".concat(name)); CgStructDecl { name: name, fields: [] } } }
-    else if ds[i].name == name { ds[i] }
-    else { cg_find_struct_acc(ds, name, i + 1) }
-
-let cg_field_index (fields: Array[CgField]) (name: String) (i: Int): Int =
+let cg_field_index (fields: Array[String]) (name: String) (i: Int): Int =
     if i >= fields.len() { { cg_fail("no such field: ".concat(name)); 0 } }
-    else if fields[i].name == name { i }
+    else if fields[i] == name { i }
     else { cg_field_index(fields, name, i + 1) }
 
 // The enum a variant NAME belongs to, found by scanning every enum —
@@ -340,33 +258,8 @@ let cg_find_enum_acc (es: Array[CgEnumDecl]) (name: String) (i: Int): CgEnumDecl
 
 let cg_widest_variant (vs: Array[CgVariant]) (i: Int) (best: Int): Int =
     if i >= vs.len() { best }
-    else if vs[i].payload.len() > best { cg_widest_variant(vs, i + 1, vs[i].payload.len()) }
+    else if vs[i].arity > best { cg_widest_variant(vs, i + 1, vs[i].arity) }
     else { cg_widest_variant(vs, i + 1, best) }
-
-// `()` — the Unit pattern — is one real parameter that binds no name,
-// exactly as `interp/interp.plum` and `typecheck/infer.plum` both
-// already treat it. It's dropped here: a `Unit` argument carries no
-// information, so an entry point declared `let main (): Unit` emits as
-// a genuinely zero-argument LLVM function.
-let cg_params_of (names: Array[CgTyName]) (params: Array[parser.ParamNode]) (i: Int) (acc: Array[CgParam]): Array[CgParam] =
-    if i >= params.len() { acc }
-    else {
-        match params[i] {
-            ParamIdent(name) => { cg_fail("parameter ".concat(name).concat(" needs a type annotation")); acc },
-            ParamPatternTy(pattern, ann) => match pattern {
-                PIdent(name) => match ann {
-                    Some(t) => cg_params_of(names, params, i + 1, acc.push(CgParam { name: name, ty: cg_resolve_ty(names, t) })),
-                    None => { cg_fail("parameter ".concat(name).concat(" needs a type annotation")); acc },
-                },
-                PTuple(elems) => if Array.is_empty(elems) { cg_params_of(names, params, i + 1, acc) } else { { cg_fail("destructuring parameters aren't supported yet"); acc } },
-                _ => { cg_fail("destructuring parameters aren't supported yet"); acc },
-            },
-        }
-    }
-
-let cg_find_fn (p: CgProgram) (name: String): Option[CgFn] = cg_find_fn_acc(p.fns, name, 0)
-let cg_find_fn_acc (fns: Array[CgFn]) (name: String) (i: Int): Option[CgFn] =
-    if i >= fns.len() { None } else if fns[i].name == name { Some(fns[i]) } else { cg_find_fn_acc(fns, name, i + 1) }
 
 // --- Emission state ---
 //
@@ -430,12 +323,19 @@ let cg_str_constant (n: Int) (s: String): String = {
 
 // --- Expression emission ---
 
-let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: parser.PExpr): Emit =
-    match e {
-        EInt(v) => Emit { code: "", allocas: "", globals: "", val: v.to_string(), ty: CgInt, n: n },
-        EFloat(v) => cg_float_literal(v, n),
-        EBool(v) => Emit { code: "", allocas: "", globals: "", val: if v { "1" } else { "0" }, ty: CgBool, n: n },
-        EStr(v) => {
+// The backend's single dispatch. Every case reads the node's own TYPE
+// from the checker (`cg_ty(p, e)`) rather than re-deriving it, and
+// every CALL arrives already classified — `infer_call` decided whether
+// `f(x)` was a function, a closure, a variant, a method or a namespace
+// call, and the node says which. This file no longer makes either kind
+// of decision for itself.
+let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): Emit =
+    match e.node {
+        TInt(v) => Emit { code: "", allocas: "", globals: "", val: v.to_string(), ty: CgInt, n: n },
+        TFloat(v) => cg_float_literal(v, n),
+        TBool(v) => Emit { code: "", allocas: "", globals: "", val: if v { "1" } else { "0" }, ty: CgBool, n: n },
+        TUnitLit => cg_unit_emit(n),
+        TStr(v) => {
             let gname = "@.str".concat(n.to_string());
             let reg = cg_reg(n + 1);
             Emit {
@@ -444,37 +344,71 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: parser.PExpr): Emit
                 val: reg, ty: CgStr, n: n + 2,
             }
         },
-        EIdent(name) => cg_ident(p, env, n, name),
-        // `()` — the parser produces `ETuple([])` for the unit value;
-        // there is no separate literal node.
-        ETuple(elems) => if Array.is_empty(elems) { Emit { code: "", allocas: "", globals: "", val: "0", ty: CgUnit, n: n } } else { { cg_fail("tuples aren't supported yet"); cg_unit_emit(n) } },
-        EUnary(op, inner) => cg_unary(p, env, n, op, inner),
-        EBinary(op, lhs, rhs) => cg_binary(p, env, n, op, lhs, rhs),
-        ECall(callee, args) => cg_call(p, env, n, callee, args),
-        EIf(cond, then_branch, else_branch) => cg_if(p, env, n, cond, then_branch, else_branch),
-        EBlock(block) => cg_block(p, env, n, block),
-        EField(base, name) => cg_field_read(p, env, n, base, name),
-        EMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms),
-        EFor(pattern, iter, body) => cg_for(p, env, n, pattern, iter, body),
-        EArray(elems) => cg_array_lit(p, env, n, elems),
-        EIndex(base, idx) => cg_index(p, env, n, base, idx),
-        // A closure literal reached through the ORDINARY path has no
-        // expected parameter types, and this backend cannot invent
-        // them: `|n| n + 1` says nothing about `n`'s representation
-        // until something uses the closure. Every position that DOES
-        // know them (a call argument, a struct field, an `Array.map`
-        // element) routes through `cg_expr_params` instead. See this
-        // file's own top comment on why solving the general case means
-        // making `infer.plum` produce a typed tree, not guessing here.
-        EClosure(params, _) => {
-            cg_fail("a closure needs its parameter types from context (a call argument, a struct field, or Array.map/filter/fold); a standalone `let f = |".concat(if Array.is_empty(params) { "" } else { params[0] }).concat("| ...` isn't supported yet"));
-            cg_unit_emit(n)
-        },
-        EStructLit(path, fields, spread) => cg_struct_lit(p, env, n, path[path.len() - 1], fields, spread),
-        EGenericInst(_, _) => { cg_fail("generic instantiation isn't supported yet"); cg_unit_emit(n) },
-        EUnsafe(_) => { cg_fail("unsafe/extern FFI isn't supported"); cg_unit_emit(n) },
-        ESpawn(_) => { cg_fail("spawn/concurrency isn't supported"); cg_unit_emit(n) },
-        ESelect(_) => { cg_fail("select/channels aren't supported"); cg_unit_emit(n) },
+        TIdent(name) => cg_ident(p, env, n, name, cg_ty(p, e)),
+        TUnary(op, inner) => cg_unary(p, env, n, op, inner),
+        TBinary(op, lhs, rhs) => cg_binary(p, env, n, op, lhs, rhs, cg_ty(p, e)),
+        TIf(cond, then_branch, else_branch) => cg_if(p, env, n, cond, then_branch, else_branch, cg_ty(p, e)),
+        TBlockE(block) => cg_block_ty(p, env, n, block, cg_ty(p, e)),
+        TFieldGet(base, name) => cg_field_read(p, env, n, base, name, cg_ty(p, e)),
+        TMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms, cg_ty(p, e)),
+        TFor(pattern, lo, hi, body) => cg_for(p, env, n, pattern, lo, hi, body),
+        TArrayLit(elems) => cg_array_lit(p, env, n, elems, cg_ty(p, e)),
+        TIndex(base, idx) => cg_index(p, env, n, base, idx, cg_ty(p, e)),
+        TClosure(params, body) => cg_closure(p, env, n, params, body, cg_ty(p, e)),
+        TStructLit(name, fields) => cg_struct_lit(p, env, n, name, fields),
+        TVariantNew(tag, args) => cg_variant_call(p, env, n, tag, args),
+        TFnCall(name, args) => cg_fn_call(p, env, n, name, args, cg_ty(p, e)),
+        TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
+        TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
+        TArrayNs(name, args) => cg_array_ns_call(p, env, n, name, args),
+        TPrintln(arg) => cg_println(p, env, n, arg),
+        TTupleLit(_) => { cg_fail("tuples aren't supported yet"); cg_unit_emit(n) },
+        TUnsupported(what) => { cg_fail(what.concat(" isn't supported by this backend")); cg_unit_emit(n) },
+    }
+
+// --- Reading a node's type ---
+//
+// `p.subst` is the CURRENT FUNCTION's substitution — see `cg_fn`, which
+// swaps it per function. A type recorded during inference may still
+// hold unresolved variables; applying the substitution is what turns
+// `?3` into `Int`.
+let cg_ty (p: CgProgram) (e: typecheck.TExpr): CgTy = cg_of_ity(typecheck.texpr_ty(p.subst, e))
+
+// `ITy` (the checker's full type language) to `CgTy` (a machine
+// representation). This is the ONLY place the backend interprets types,
+// and it replaces every bottom-up synthesis rule this file used to
+// carry.
+//
+// An unresolved `ITVar` reaching here is a real bug rather than a user
+// error: the checker accepted the program, so every type in it is
+// determined. It fails loudly with the node's own rendered type instead
+// of silently picking a representation.
+let cg_of_ity (t: typecheck.ITy): CgTy =
+    match t {
+        ITInt => CgInt,
+        ITFloat => CgFloat,
+        ITBool => CgBool,
+        ITStr => CgStr,
+        ITUnit => CgUnit,
+        ITStruct(name, args) => if name == "Array" { CgArray(cg_of_ity(args[0])) } else { CgStruct(name) },
+        ITEnum(name, _) => CgEnum(name),
+        ITFunction(ptys, ret) => CgClosure(Array.map(ptys, |q| cg_of_ity(q)), cg_of_ity(ret)),
+        ITTuple(_) => { cg_fail("tuples aren't supported yet"); CgUnit },
+        // DEFAULTING. A type variable still free after a function's
+        // inference is one nothing in that function constrained — the
+        // program never depends on which type it is, or unification
+        // would have pinned it. `let empty = []` is the honest example:
+        // its element type is unconstrained precisely because no
+        // element is ever stored or read.
+        //
+        // Any choice is therefore sound, and `Unit` is chosen because
+        // it is the one that cannot be mistaken for a real answer if it
+        // ever shows up in generated code. This is not a fallback for a
+        // missing case — it is the standard resolution for an ambiguous
+        // type, and it is why this backend compiles `let empty = []`
+        // while the REAL compiler rejects it as uninferable.
+        ITVar(_) => CgUnit,
+        ITParam(name) => { cg_fail("internal: generic parameter ".concat(name).concat(" reached codegen — generics aren't supported")); CgUnit },
     }
 
 let cg_unit_emit (n: Int): Emit = Emit { code: "", allocas: "", globals: "", val: "0", ty: CgUnit, n: n }
@@ -492,7 +426,7 @@ let cg_float_text (v: Float): String = {
     if Option.is_some(String.index_of(s, ".")) { s } else { s.concat(".0") }
 }
 
-let cg_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String): Emit =
+let cg_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (ty: CgTy): Emit =
     match cg_lookup(env, name) {
         Some(slot) => {
             let reg = cg_reg(n);
@@ -501,16 +435,14 @@ let cg_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String): Emit =
                 allocas: "", globals: "", val: reg, ty: slot.ty, n: n + 1,
             }
         },
-        // Not a local: a bare capitalized name is a NULLARY variant
-        // (`None`, `TokEof`), constructed here exactly as `Some(x)`
-        // would be through `cg_call`, just with no payload.
-        None => match cg_find_variant(p, name) {
-            Some(v) => cg_variant_new(p, env, n, v, []),
-            None => { cg_fail("unbound variable: ".concat(name)); cg_unit_emit(n) },
-        },
+        // Every nullary variant (`None`, `TokEof`) now arrives as a
+        // `TVariantNew` node instead, because the CHECKER resolved it —
+        // so an unbound name reaching here is an internal error, not a
+        // user one.
+        None => { cg_fail("internal: unbound variable reached codegen: ".concat(name)); cg_unit_emit(n) },
     }
 
-let cg_unary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.UOp) (inner: parser.PExpr): Emit = {
+let cg_unary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.UOp) (inner: typecheck.TExpr): Emit = {
     let r = cg_expr(p, env, n, inner);
     let reg = cg_reg(r.n);
     let line = match op {
@@ -530,16 +462,16 @@ let cg_unary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.UOp) (inne
 // compile to real branches, through the same slot-and-merge shape `if`
 // uses. (The self-hosted INTERPRETER had this exact bug until
 // self-interpretation found it — see `interp.plum`'s `eval_binary_expr`.)
-let cg_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BOp) (lhs: parser.PExpr) (rhs: parser.PExpr): Emit =
+let cg_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BOp) (lhs: typecheck.TExpr) (rhs: typecheck.TExpr) (ty: CgTy): Emit =
     match op {
         BAnd => cg_shortcircuit(p, env, n, lhs, rhs, true),
         BOr => cg_shortcircuit(p, env, n, lhs, rhs, false),
         BRange => { cg_fail("'..' is only supported as a 'for' iterand"); cg_unit_emit(n) },
         BPipe => { cg_fail("'|>' isn't supported yet"); cg_unit_emit(n) },
-        _ => cg_strict_binary(p, env, n, op, lhs, rhs),
+        _ => cg_strict_binary(p, env, n, op, lhs, rhs, ty),
     }
 
-let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BOp) (lhs: parser.PExpr) (rhs: parser.PExpr): Emit = {
+let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BOp) (lhs: typecheck.TExpr) (rhs: typecheck.TExpr) (ty: CgTy): Emit = {
     let a = cg_expr(p, env, n, lhs);
     let b = cg_expr(p, env, a.n, rhs);
     let reg = cg_reg(b.n);
@@ -557,7 +489,7 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
         }
     } else {
         let line = "  ".concat(reg).concat(" = ").concat(cg_binary_op_text(op, a.ty)).concat(" ").concat(cg_llvm_ty(a.ty)).concat(" ").concat(a.val).concat(", ").concat(b.val).concat("\n");
-        Emit { code: code.concat(line), allocas: allocas, globals: globals, val: reg, ty: cg_binary_result_ty(op, a.ty), n: b.n + 1 }
+        Emit { code: code.concat(line), allocas: allocas, globals: globals, val: reg, ty: ty, n: b.n + 1 }
     }
 }
 
@@ -589,17 +521,11 @@ let cg_binary_op_text (op: parser.BOp) (t: CgTy): String = {
     }
 }
 
-let cg_binary_result_ty (op: parser.BOp) (operand: CgTy): CgTy =
-    match op {
-        BEq => CgBool, BNe => CgBool, BLt => CgBool, BGt => CgBool, BLe => CgBool, BGe => CgBool,
-        _ => operand,
-    }
-
 // `a && b` is `if a { b } else { false }`, and `a || b` is `if a { true
 // } else { b }` — one slot, two blocks, a merge. Written directly
 // rather than by rewriting to an `EIf` so the emitted labels stay
 // readable and no synthetic AST node is needed.
-let cg_shortcircuit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (lhs: parser.PExpr) (rhs: parser.PExpr) (is_and: Bool): Emit = {
+let cg_shortcircuit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (lhs: typecheck.TExpr) (rhs: typecheck.TExpr) (is_and: Bool): Emit = {
     let a = cg_expr(p, env, n, lhs);
     let slot = cg_reg(a.n);
     let rhs_label = cg_label(a.n + 1);
@@ -629,19 +555,19 @@ let cg_shortcircuit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (lhs: parser.PE
 // Both arms store into one slot; the merge block loads it. An `else`-
 // less `if` is `Unit`-typed and stores the unit value in the implicit
 // else, so the slot is always initialized on every path.
-let cg_if (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cond: parser.PExpr) (then_branch: parser.PBlock) (else_branch: Option[parser.PExpr]): Emit = {
+let cg_if (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cond: typecheck.TExpr) (then_branch: typecheck.TExpr) (else_branch: Option[typecheck.TExpr]) (ty: CgTy): Emit = {
     let c = cg_expr(p, env, n, cond);
     let slot = cg_reg(c.n);
     let then_label = cg_label(c.n + 1);
     let else_label = cg_label(c.n + 2);
     let end_label = cg_label(c.n + 3);
-    let t = cg_block(p, env, c.n + 4, then_branch);
+    let t = cg_expr(p, env, c.n + 4, then_branch);
     let e = match else_branch {
         Some(x) => cg_expr(p, env, t.n, x),
         None => cg_unit_emit(t.n),
     };
     let res = cg_reg(e.n);
-    let lty = cg_llvm_ty(t.ty);
+    let lty = cg_llvm_ty(ty);
     let code = c.code
         .concat("  br i1 ").concat(c.val).concat(", label %").concat(then_label).concat(", label %").concat(else_label).concat("\n")
         .concat(then_label).concat(":\n")
@@ -654,7 +580,7 @@ let cg_if (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cond: parser.PExpr) (the
         .concat("  br label %").concat(end_label).concat("\n")
         .concat(end_label).concat(":\n")
         .concat("  ").concat(res).concat(" = load ").concat(lty).concat(", ptr ").concat(slot).concat("\n");
-    Emit { code: code, allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(c.allocas).concat(t.allocas).concat(e.allocas), globals: c.globals.concat(t.globals).concat(e.globals), val: res, ty: t.ty, n: e.n + 1 }
+    Emit { code: code, allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(c.allocas).concat(t.allocas).concat(e.allocas), globals: c.globals.concat(t.globals).concat(e.globals), val: res, ty: ty, n: e.n + 1 }
 }
 
 // --- for loops ---
@@ -673,13 +599,10 @@ let cg_if (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cond: parser.PExpr) (the
 // take effect with no extra machinery, because those locals are slots
 // and a store is a store — the exact thing the self-hosted interpreter
 // needed a whole env-threading mechanism (`scope_out`) to get right.
-let cg_for (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPattern) (iter: parser.PExpr) (body: parser.PBlock): Emit =
-    match iter {
-        EBinary(BRange, lo_e, hi_e) => cg_for_range(p, env, n, pattern, lo_e, hi_e, body),
-        _ => { cg_fail("'for' only supports a literal range (lo..hi) as its iterand"); cg_unit_emit(n) },
-    }
-
-let cg_for_range (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPattern) (lo_e: parser.PExpr) (hi_e: parser.PExpr) (body: parser.PBlock): Emit = {
+// The range's two ends arrive as separate typed children — the checker
+// already destructured `lo..hi`, so there is no `BRange` node left to
+// pattern-match on here.
+let cg_for (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPattern) (lo_e: typecheck.TExpr) (hi_e: typecheck.TExpr) (body: typecheck.TExpr): Emit = {
     let lo = cg_expr(p, env, n, lo_e);
     let hi = cg_expr(p, env, lo.n, hi_e);
     let iv = cg_reg(hi.n);
@@ -690,7 +613,7 @@ let cg_for_range (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.P
     let cur = cg_reg(hi.n + 5);
     let bound = cg_reg(hi.n + 6);
     let test = cg_reg(hi.n + 7);
-    let b = cg_block(p, env.push(CgSlot { name: cg_let_name(pattern), ptr: iv, ty: CgInt }), hi.n + 8, body);
+    let b = cg_expr(p, env.push(CgSlot { name: cg_let_name(pattern), ptr: iv, ty: CgInt }), hi.n + 8, body);
     let step_cur = cg_reg(b.n);
     let step_next = cg_reg(b.n + 1);
     let code = lo.code.concat(hi.code)
@@ -722,22 +645,22 @@ let cg_for_range (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.P
 // environment by value: `cg_block` never returns its inner `env`.
 struct BlockEmit { code: String, allocas: String, globals: String, env: Array[CgSlot], n: Int }
 
-let cg_block (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: parser.PBlock): Emit = {
+let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.TBlock) (ty: CgTy): Emit = {
     let s = cg_stmts(p, env, n, block.stmts, 0);
     match block.tail {
         Some(t) => {
             let r = cg_expr(p, s.env, s.n, t);
-            Emit { code: s.code.concat(r.code), allocas: s.allocas.concat(r.allocas), globals: s.globals.concat(r.globals), val: r.val, ty: r.ty, n: r.n }
+            Emit { code: s.code.concat(r.code), allocas: s.allocas.concat(r.allocas), globals: s.globals.concat(r.globals), val: r.val, ty: ty, n: r.n }
         },
         None => Emit { code: s.code, allocas: s.allocas, globals: s.globals, val: "0", ty: CgUnit, n: s.n },
     }
 }
 
-let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[parser.PStmt]) (i: Int): BlockEmit =
+let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int): BlockEmit =
     if i >= stmts.len() { BlockEmit { code: "", allocas: "", globals: "", env: env, n: n } }
     else {
         match stmts[i] {
-            SLet(_, pattern, value) => {
+            TSLet(pattern, value) => {
                 let r = cg_expr(p, env, n, value);
                 let name = cg_let_name(pattern);
                 let slot = cg_reg(r.n);
@@ -750,7 +673,7 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[parser.P
             // Assignment needs no new slot — that is the whole payoff of
             // every local being an `alloca`: `let mut` and `let` are the
             // same thing here, and a reassignment is one `store`.
-            SAssign(name, value) => {
+            TSAssign(name, value) => {
                 let r = cg_expr(p, env, n, value);
                 let store = match cg_lookup(env, name) {
                     Some(slot) => "  store ".concat(cg_llvm_ty(slot.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(slot.ptr).concat("\n"),
@@ -759,7 +682,7 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[parser.P
                 let rest = cg_stmts(p, env, r.n, stmts, i + 1);
                 BlockEmit { code: r.code.concat(store).concat(rest.code), allocas: r.allocas.concat(rest.allocas), globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
             },
-            SExpr(e) => {
+            TSExpr(e) => {
                 let r = cg_expr(p, env, n, e);
                 let rest = cg_stmts(p, env, r.n, stmts, i + 1);
                 BlockEmit { code: r.code.concat(rest.code), allocas: r.allocas.concat(rest.allocas), globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
@@ -774,35 +697,15 @@ let cg_let_name (pattern: parser.PPattern): String =
     }
 
 // --- Calls ---
+//
+// There is no dispatch left to do: `infer_call` already decided which
+// of the five call shapes this is, and `cg_expr` routed accordingly.
+// What used to be a resolution-order comment here (bound local beats
+// builtin namespace beats top-level function beats method) now lives in
+// the checker, stated once for both backends.
 
-let cg_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (callee: parser.PExpr) (args: Array[parser.PExpr]): Emit =
-    match callee {
-        // A bound local WINS: `f(x)` where `f` is a closure-valued
-        // local is a closure call, and no top-level function or
-        // variant may shadow it. Same resolution order the self-hosted
-        // interpreter's `eval_call` uses.
-        EIdent(name) => match cg_lookup(env, name) {
-            Some(_) => cg_call_closure_value(p, env, n, cg_ident(p, env, n, name), args),
-            None =>
-                if name == "println" { cg_println(p, env, n, args) }
-                else { match cg_find_variant(p, name) {
-                    Some(v) => cg_variant_call(p, env, n, v, args),
-                    None => cg_fn_call(p, env, n, name, args),
-                } },
-        },
-        EField(base, method_name) => match base {
-            // `Array.map(..)` — a NAMESPACE call, not a method call.
-            // Checked before evaluating `base`, exactly as the
-            // interpreter and type checker both do: "Array" is never a
-            // bound value.
-            EIdent(ns) => if ns == "Array" { cg_array_ns_call(p, env, n, method_name, args) } else { cg_method_call(p, env, n, base, method_name, args) },
-            _ => cg_method_call(p, env, n, base, method_name, args),
-        },
-        _ => { cg_fail("only named calls and .to_string()/.concat() are supported yet"); cg_unit_emit(n) },
-    }
-
-let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (args: Array[parser.PExpr]): Emit = {
-    let a = cg_expr(p, env, n, args[0]);
+let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExpr): Emit = {
+    let a = cg_expr(p, env, n, arg);
     let reg = cg_reg(a.n);
     if !cg_ty_eq(a.ty, CgStr) { cg_fail("println expects a String, found ".concat(cg_ty_name(a.ty))) };
     Emit {
@@ -811,48 +714,51 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (args: Array[parser.
     }
 }
 
-let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[parser.PExpr]): Emit =
-    match cg_find_fn(p, name) {
-        Some(def) => {
-            // Declared parameter types are pushed DOWN into the
-            // arguments, which is what lets `apply_twice(|n| n + 1, 3)`
-            // work: the literal's parameter representation comes from
-            // the signature it is being passed to.
-            let a = cg_call_args_typed(p, env, n, args, Array.map(def.params, |q| q.ty), 0, "", "", "", []);
-            let reg = cg_reg(a.n);
-            let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(def.ret)).concat(" @").concat(cg_mangle(name)).concat("(").concat(cg_join_commas(a.vals)).concat(")\n");
-            Emit { code: a.code.concat(call), allocas: a.allocas, globals: a.globals, val: reg, ty: def.ret, n: a.n + 1 }
-        },
-        None => { cg_fail("unknown function: ".concat(name)); cg_unit_emit(n) },
+// A named call: the user's own function, or a prelude signature. Only
+// the former has a body to call — a builtin needs a real
+// implementation, and this backend has only the handful its runtime
+// provides, so anything else fails by name.
+let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (ret: CgTy): Emit =
+    if cg_has_fn(p, name) {
+        let a = cg_args(p, env, n, args, 0, "", "", "", []);
+        let reg = cg_reg(a.n);
+        let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" @").concat(cg_mangle(name)).concat("(").concat(cg_join_commas(a.vals)).concat(")\n");
+        Emit { code: a.code.concat(call), allocas: a.allocas, globals: a.globals, val: reg, ty: ret, n: a.n + 1 }
+    } else {
+        cg_fail("prelude function ".concat(name).concat(" isn't implemented by this backend's runtime yet"));
+        cg_unit_emit(n)
     }
 
+let cg_has_fn (p: CgProgram) (name: String): Bool = cg_has_fn_acc(p.fns, name, 0)
+let cg_has_fn_acc (fns: Array[typecheck.TFn]) (name: String) (i: Int): Bool =
+    if i >= fns.len() { false } else if fns[i].name == name { true } else { cg_has_fn_acc(fns, name, i + 1) }
+
+struct ArgVals { code: String, allocas: String, globals: String, vals: Array[String], n: Int }
+
 // Arguments are emitted left to right, accumulating both their code and
-// the comma-separated `<ty> <val>` operand list the call needs.
-let cg_args (p: CgProgram) (env: Array[CgSlot]) (n: Int) (args: Array[parser.PExpr]) (i: Int) (code: String) (allocas: String) (globals: String) (parts: Array[String]): Emit =
-    if i >= args.len() { Emit { code: code, allocas: allocas, globals: globals, val: cg_join_commas(parts), ty: CgUnit, n: n } }
+// the `<ty> <val>` operand list the call needs. No parameter types are
+// pushed down any more — a closure argument already carries its own
+// resolved type from the checker.
+let cg_args (p: CgProgram) (env: Array[CgSlot]) (n: Int) (args: Array[typecheck.TExpr]) (i: Int) (code: String) (allocas: String) (globals: String) (vals: Array[String]): ArgVals =
+    if i >= args.len() { ArgVals { code: code, allocas: allocas, globals: globals, vals: vals, n: n } }
     else {
         let r = cg_expr(p, env, n, args[i]);
-        cg_args(p, env, r.n, args, i + 1, code.concat(r.code), allocas.concat(r.allocas), globals.concat(r.globals), parts.push(cg_llvm_ty(r.ty).concat(" ").concat(r.val)))
+        cg_args(p, env, r.n, args, i + 1, code.concat(r.code), allocas.concat(r.allocas), globals.concat(r.globals), vals.push(cg_llvm_ty(r.ty).concat(" ").concat(r.val)))
     }
 
 let cg_join_commas (parts: Array[String]): String = cg_join_acc(parts, 1, if Array.is_empty(parts) { "" } else { parts[0] })
 let cg_join_acc (parts: Array[String]) (i: Int) (acc: String): String =
     if i >= parts.len() { acc } else { cg_join_acc(parts, i + 1, acc.concat(", ").concat(parts[i])) }
 
-let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): Emit =
+let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (method_name: String) (base: typecheck.TExpr) (args: Array[typecheck.TExpr]) (ty: CgTy): Emit =
     if method_name == "to_string" { cg_to_string(p, env, n, base) }
-    else if method_name == "concat" { cg_concat(p, env, n, base, args) }
-    else if method_name == "len" && Array.is_empty(args) { cg_len(p, env, n, base) }
-    else if method_name == "push" && args.len() == 1 { cg_array_push(p, env, n, base, args[0]) }
-    else if method_name == "set" && args.len() == 2 { cg_array_set(p, env, n, base, args[0], args[1]) }
-    // Not a builtin method: a struct FIELD holding a closure, called
-    // directly (`ops.add(3, 4)`) — the record-of-closures dispatch
-    // pattern DESIGN.md settled on for Plum's higher-order polymorphism
-    // story, and the same fallback the interpreter and type checker
-    // both end with.
-    else { cg_call_closure_value(p, env, n, cg_field_read(p, env, n, base, method_name), args) }
+    else if method_name == "concat" { cg_concat(p, env, n, base, args[0]) }
+    else if method_name == "len" { cg_len(p, env, n, base) }
+    else if method_name == "push" { cg_array_push(p, env, n, base, args[0], ty) }
+    else if method_name == "set" { cg_array_set(p, env, n, base, args[0], args[1], ty) }
+    else { { cg_fail("method .".concat(method_name).concat("() isn't supported by this backend yet")); cg_unit_emit(n) } }
 
-let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr): Emit = {
+let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
     let b = cg_expr(p, env, n, base);
     let reg = cg_reg(b.n);
     match b.ty {
@@ -863,10 +769,10 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExp
         CgFloat => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_float_to_string(double ").concat(b.val).concat(")\n"), allocas: b.allocas, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
         CgBool => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_bool_to_string(i1 ").concat(b.val).concat(")\n"), allocas: b.allocas, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
         CgUnit => { cg_fail("Unit has no .to_string()"); cg_unit_emit(b.n) },
-        // The real backend generates a per-type `to_string` for structs
-        // and enums (field-by-field, driven by its tag tables). Doing
-        // the same here is real work and nothing in the corpus needs it
-        // yet, so it fails loudly rather than printing a pointer.
+        // The real backend generates a per-type `to_string` for these,
+        // driven by its tag tables. Doing the same here is real work and
+        // nothing in the corpus needs it yet, so it fails loudly rather
+        // than printing a pointer.
         CgStruct(name) => { cg_fail(".to_string() on a struct isn't supported yet: ".concat(name)); cg_unit_emit(b.n) },
         CgEnum(name) => { cg_fail(".to_string() on an enum isn't supported yet: ".concat(name)); cg_unit_emit(b.n) },
         CgArray(_) => { cg_fail(".to_string() on an Array isn't supported yet"); cg_unit_emit(b.n) },
@@ -874,9 +780,9 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExp
     }
 }
 
-let cg_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) (args: Array[parser.PExpr]): Emit = {
+let cg_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (arg: typecheck.TExpr): Emit = {
     let a = cg_expr(p, env, n, base);
-    let b = cg_expr(p, env, a.n, args[0]);
+    let b = cg_expr(p, env, a.n, arg);
     let reg = cg_reg(b.n);
     Emit {
         code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ptr @plum_str_concat(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n"),
@@ -884,12 +790,13 @@ let cg_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) 
     }
 }
 
+// --- Strings and arrays ---
+
 // `.len()` is overloaded on the receiver's representation — byte length
 // for a `String`, element count for an `Array` — exactly as the real
-// backend overloads it on the receiver's static type, and exactly as
-// the self-hosted interpreter's `value_len` overloads it on the
-// receiver's runtime shape.
-let cg_len (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr): Emit = {
+// backend overloads it on the receiver's static type. The checker
+// already resolved which; this just reads it off the receiver.
+let cg_len (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
     let b = cg_expr(p, env, n, base);
     let reg = cg_reg(b.n);
     let fn_name = match b.ty {
@@ -900,44 +807,28 @@ let cg_len (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr): Em
     Emit { code: b.code.concat("  ").concat(reg).concat(" = call i64 ").concat(fn_name).concat("(ptr ").concat(b.val).concat(")\n"), allocas: b.allocas, globals: b.globals, val: reg, ty: CgInt, n: b.n + 1 }
 }
 
-// --- Arrays ---
-//
 // Cell layout is in `runtime.plum`: an `i64` length then one 8-byte
 // slot per element. `push`/`set` build a NEW cell and copy, never
 // mutate — Plum arrays are values, and this backend has no ownership
-// analysis that could prove an in-place update safe. That is the same
-// starting point the real backend had before FBIP; the difference is
-// the real one now has `ArrayPushReuse` and this one does not, so a
-// `push` in a loop here is quadratic. Real, and the most likely first
-// performance cliff if this backend is ever pointed at a big program.
+// analysis that could prove an in-place update safe. That is where the
+// real backend was before FBIP; the difference is it now has
+// `ArrayPushReuse` and this one does not, so a `push` in a loop here is
+// quadratic. Real, and the most likely first performance cliff.
 
-// An array literal's element type comes from its FIRST element. An
-// EMPTY literal has nothing to derive one from — `CgArray(CgUnit)`
-// records exactly that, and any operation that would actually need the
-// element type (indexing, `push`) fails with a clear message. `.len()`
-// works fine on one, which is all `let empty = []` in the corpus ever
-// asks of it. Closing this properly needs an expected type pushed DOWN
-// from the binding, which is the same bidirectional machinery closures
-// will need.
-let cg_array_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[parser.PExpr]): Emit =
-    if Array.is_empty(elems) {
-        let cell = cg_reg(n);
-        Emit { code: "  ".concat(cell).concat(" = call ptr @plum_array_new(i64 0)\n"), allocas: "", globals: "", val: cell, ty: CgArray(CgUnit), n: n + 1 }
-    } else {
-        let first = cg_expr(p, env, n, elems[0]);
-        let cell = cg_reg(first.n);
-        let head = "  ".concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(elems.len().to_string()).concat(")\n");
-        let st = cg_array_store_elems(p, env, first.n + 1, cell, elems, 0, "", "", "");
-        Emit { code: head.concat(st.code), allocas: st.allocas, globals: st.globals, val: cell, ty: CgArray(first.ty), n: st.n }
-    }
+// The element type comes from the checker, so an EMPTY literal is no
+// longer a special case: `let empty = []` has a real element type
+// (whatever unification determined), and nothing has to record
+// "undetermined". The first element is also no longer emitted twice
+// just to discover a type — both of those were consequences of
+// synthesizing types here instead of reading them.
+let cg_array_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[typecheck.TExpr]) (ty: CgTy): Emit = {
+    let cell = cg_reg(n);
+    let head = "  ".concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(elems.len().to_string()).concat(")\n");
+    let st = cg_array_store_elems(p, env, n + 1, cell, elems, 0, "", "", "");
+    Emit { code: head.concat(st.code), allocas: st.allocas, globals: st.globals, val: cell, ty: ty, n: st.n }
+}
 
-// The first element is emitted TWICE — once by `cg_array_lit` to learn
-// the element type, then again here as part of the ordinary store loop.
-// The first emission's code is discarded. Harmless for a pure literal
-// and it keeps the loop uniform; it would be a real bug if element
-// expressions could have side effects, which is the reason this note
-// exists rather than being left implicit.
-let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (elems: Array[parser.PExpr]) (i: Int) (code: String) (allocas: String) (globals: String): FieldsEmit =
+let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (elems: Array[typecheck.TExpr]) (i: Int) (code: String) (allocas: String) (globals: String): FieldsEmit =
     if i >= elems.len() { FieldsEmit { code: code, allocas: allocas, globals: globals, n: n } }
     else {
         let r = cg_expr(p, env, n, elems[i]);
@@ -947,76 +838,49 @@ let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: Str
         cg_array_store_elems(p, env, r.n + 1, cell, elems, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), globals.concat(r.globals))
     }
 
-let cg_elem_ty (t: CgTy): CgTy =
-    match t {
-        CgArray(elem) => match elem {
-            CgUnit => { cg_fail("this Array's element type was never determined (it came from an empty literal)"); CgUnit },
-            _ => elem,
-        },
-        _ => { cg_fail("expected an Array, found ".concat(cg_ty_name(t))); CgUnit },
-    }
-
 // No bounds check. The real backend emits one; this one does not, which
 // is a deliberate v1 cut and a genuinely unsafe one — an out-of-range
-// index reads whatever follows the cell. Stated here rather than
-// discovered by a corrupted value later.
-let cg_index (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) (idx: parser.PExpr): Emit = {
+// index reads whatever follows the cell.
+let cg_index (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (idx: typecheck.TExpr) (elem: CgTy): Emit = {
     let b = cg_expr(p, env, n, base);
     let i = cg_expr(p, env, b.n, idx);
-    let elem = cg_elem_ty(b.ty);
-    let addr = cg_array_elem_addr(b.val, i.val, i.n);
-    let out = cg_reg(i.n + 2);
-    let code = b.code.concat(i.code).concat(addr)
-        .concat("  ").concat(out).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_reg(i.n + 1)).concat("_d\n");
-    Emit { code: code, allocas: b.allocas.concat(i.allocas), globals: b.globals.concat(i.globals), val: out, ty: elem, n: i.n + 3 }
+    let out = cg_reg(i.n + 3);
+    let code = b.code.concat(i.code).concat(cg_elem_ptr_lines(b.val, i.val, i.n))
+        .concat("  ").concat(out).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(i.n)).concat("\n");
+    Emit { code: code, allocas: b.allocas.concat(i.allocas), globals: b.globals.concat(i.globals), val: out, ty: elem, n: i.n + 4 }
 }
 
-// Element address = base + 8 + 8*index, in two instructions starting at
-// register `n` (byte offset) and `n + 1` (the pointer).
-let cg_array_elem_addr (arr: String) (idx: String) (n: Int): String = {
-    let off = cg_reg(n);
-    let ptr = cg_reg(n + 1);
-    "  ".concat(off).concat(" = mul i64 ").concat(idx).concat(", 8\n")
-        .concat("  ").concat(ptr).concat(" = getelementptr i8, ptr ").concat(arr).concat(", i64 ").concat(off).concat("\n")
-        .concat("  ").concat(ptr).concat("_d = getelementptr i8, ptr ").concat(ptr).concat(", i64 8\n")
-}
-
-let cg_array_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) (value: parser.PExpr): Emit = {
+let cg_array_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (value: typecheck.TExpr) (ty: CgTy): Emit = {
     let b = cg_expr(p, env, n, base);
     let v = cg_expr(p, env, b.n, value);
     let old_len = cg_reg(v.n);
     let new_len = cg_reg(v.n + 1);
     let cell = cg_reg(v.n + 2);
     let copied = cg_reg(v.n + 3);
-    let off = cg_reg(v.n + 4);
-    let ep = cg_reg(v.n + 5);
     let code = b.code.concat(v.code)
         .concat("  ").concat(old_len).concat(" = call i64 @plum_array_len(ptr ").concat(b.val).concat(")\n")
         .concat("  ").concat(new_len).concat(" = add i64 ").concat(old_len).concat(", 1\n")
         .concat("  ").concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(new_len).concat(")\n")
         .concat("  ").concat(copied).concat(" = call i1 @plum_array_copy(ptr ").concat(cell).concat(", ptr ").concat(b.val).concat(", i64 ").concat(old_len).concat(")\n")
-        .concat("  ").concat(off).concat(" = mul i64 ").concat(old_len).concat(", 8\n")
-        .concat("  ").concat(ep).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(off).concat("\n")
-        .concat("  ").concat(ep).concat("_d = getelementptr i8, ptr ").concat(ep).concat(", i64 8\n")
-        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(ep).concat("_d\n");
-    Emit { code: code, allocas: b.allocas.concat(v.allocas), globals: b.globals.concat(v.globals), val: cell, ty: CgArray(v.ty), n: v.n + 6 }
+        .concat(cg_elem_ptr_lines(cell, old_len, v.n + 4))
+        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 4)).concat("\n");
+    Emit { code: code, allocas: b.allocas.concat(v.allocas), globals: b.globals.concat(v.globals), val: cell, ty: ty, n: v.n + 7 }
 }
 
-let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) (idx: parser.PExpr) (value: parser.PExpr): Emit = {
+let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (idx: typecheck.TExpr) (value: typecheck.TExpr) (ty: CgTy): Emit = {
     let b = cg_expr(p, env, n, base);
     let i = cg_expr(p, env, b.n, idx);
     let v = cg_expr(p, env, i.n, value);
     let len = cg_reg(v.n);
     let cell = cg_reg(v.n + 1);
     let copied = cg_reg(v.n + 2);
-    let addr = cg_array_elem_addr(cell, i.val, v.n + 3);
     let code = b.code.concat(i.code).concat(v.code)
         .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(b.val).concat(")\n")
         .concat("  ").concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(len).concat(")\n")
         .concat("  ").concat(copied).concat(" = call i1 @plum_array_copy(ptr ").concat(cell).concat(", ptr ").concat(b.val).concat(", i64 ").concat(len).concat(")\n")
-        .concat(addr)
-        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_reg(v.n + 4)).concat("_d\n");
-    Emit { code: code, allocas: b.allocas.concat(i.allocas).concat(v.allocas), globals: b.globals.concat(i.globals).concat(v.globals), val: cell, ty: b.ty, n: v.n + 5 }
+        .concat(cg_elem_ptr_lines(cell, i.val, v.n + 3))
+        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 3)).concat("\n");
+    Emit { code: code, allocas: b.allocas.concat(i.allocas).concat(v.allocas), globals: b.globals.concat(i.globals).concat(v.globals), val: cell, ty: ty, n: v.n + 6 }
 }
 
 // --- Closures ---
@@ -1030,32 +894,28 @@ let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExp
 // of the body — the exact analysis that produced a real, crash-causing
 // bug in `plum-ir/src/fbip.rs` earlier in this project when it got
 // shadowing wrong. Capturing everything is trivially correct instead,
-// and costs one word per in-scope local at the creation site. A
-// deliberate trade of space for the absence of a subtle analysis.
+// and costs one word per in-scope local at the creation site.
 //
 // Captures are by VALUE, snapshotted at the literal's own creation
 // site — matching real Plum semantics and the self-hosted interpreter's
 // `VClosure` exactly.
 //
-// The lifted function is emitted into `globals`, which is already the
-// module-level text channel string constants use.
-let cg_expr_params (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: parser.PExpr) (param_tys: Array[CgTy]): Emit =
-    match e {
-        EClosure(params, body) => cg_closure(p, env, n, params, body, param_tys),
-        _ => cg_expr(p, env, n, e),
-    }
-
-let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[String]) (body: parser.PExpr) (param_tys: Array[CgTy]): Emit = {
-    if params.len() != param_tys.len() { cg_fail("closure takes ".concat(params.len().to_string()).concat(" parameter(s) but its context expects ").concat(param_tys.len().to_string())) };
+// The closure's TYPE comes from the checker. That is what this stage
+// bought: `let f = |n| n + 1` compiles now, because `n`'s
+// representation was determined by unifying the body's use of it —
+// inference this backend neither performs nor duplicates.
+let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[String]) (body: typecheck.TExpr) (fn_ty: CgTy): Emit = {
+    let param_tys = cg_closure_params(fn_ty);
+    if params.len() != param_tys.len() { cg_fail("closure takes ".concat(params.len().to_string()).concat(" parameter(s) but its type says ").concat(param_tys.len().to_string())) };
     let fn_name = "@plum_lambda".concat(n.to_string());
-    // The lifted function's own body is emitted against a FRESH
-    // environment built from the captures and parameters, never the
-    // creation site's slots directly — those are `alloca`s in a
-    // different function.
+    // The lifted function's body is emitted against a FRESH environment
+    // built from the captures and parameters, never the creation site's
+    // slots directly — those are `alloca`s in a different function.
     let inner_env = cg_closure_inner_env(env, params, param_tys, 0, []);
     let inner = cg_expr(p, inner_env, n + 1, body);
     let lifted = "define ".concat(cg_llvm_ty(inner.ty)).concat(" ").concat(fn_name).concat("(ptr %env").concat(cg_closure_param_decls(param_tys, 0, "")).concat(") {\nentry:\n")
-        .concat(cg_closure_prologue(env, params, param_tys))
+        .concat(cg_capture_loads(env, 0, ""))
+        .concat(cg_closure_param_slots(param_tys, 0, ""))
         .concat(inner.allocas)
         .concat(inner.code)
         .concat("  ret ").concat(cg_llvm_ty(inner.ty)).concat(" ").concat(inner.val).concat("\n}\n\n");
@@ -1063,11 +923,14 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
     let head = "  ".concat(cell).concat(" = call ptr @malloc(i64 ").concat((8 + 8 * env.len()).to_string()).concat(")\n")
         .concat("  store ptr ").concat(fn_name).concat(", ptr ").concat(cell).concat("\n");
     let caps = cg_capture_stores(env, 0, cell, inner.n + 1, "");
-    Emit {
-        code: head.concat(caps.code), allocas: "", globals: inner.globals.concat(lifted),
-        val: cell, ty: CgClosure(param_tys, inner.ty), n: caps.n,
-    }
+    Emit { code: head.concat(caps.code), allocas: "", globals: inner.globals.concat(lifted), val: cell, ty: fn_ty, n: caps.n }
 }
+
+let cg_closure_ret (t: CgTy): CgTy =
+    match t { CgClosure(_, ret) => ret, _ => { cg_fail("expected a closure, found ".concat(cg_ty_name(t))); CgUnit } }
+
+let cg_closure_params (t: CgTy): Array[CgTy] =
+    match t { CgClosure(ptys, _) => ptys, _ => { cg_fail("expected a closure, found ".concat(cg_ty_name(t))); [] } }
 
 // Capture slots keep the creation site's NAMES and order, so a name
 // resolves inside the lifted function exactly as it did outside — and
@@ -1084,9 +947,6 @@ let cg_closure_inner_env (env: Array[CgSlot]) (params: Array[String]) (param_tys
 let cg_closure_param_decls (param_tys: Array[CgTy]) (i: Int) (acc: String): String =
     if i >= param_tys.len() { acc }
     else { cg_closure_param_decls(param_tys, i + 1, acc.concat(", ").concat(cg_llvm_ty(param_tys[i])).concat(" %p").concat(i.to_string())) }
-
-let cg_closure_prologue (env: Array[CgSlot]) (params: Array[String]) (param_tys: Array[CgTy]): String =
-    cg_capture_loads(env, 0, "").concat(cg_closure_param_slots(param_tys, 0, ""))
 
 let cg_capture_loads (env: Array[CgSlot]) (i: Int) (acc: String): String =
     if i >= env.len() { acc }
@@ -1122,38 +982,20 @@ let cg_capture_stores (env: Array[CgSlot]) (i: Int) (cell: String) (n: Int) (acc
 
 // Calling a closure VALUE: load the code pointer, pass the cell itself
 // back as the environment argument.
-let cg_call_closure_value (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: Emit) (args: Array[parser.PExpr]): Emit =
-    match clo.ty {
-        CgClosure(ptys, ret) => {
-            let a = cg_call_args_typed(p, env, clo.n, args, ptys, 0, "", "", "", []);
-            let fp = cg_reg(a.n);
-            let out = cg_reg(a.n + 1);
-            let code = clo.code.concat(a.code)
-                .concat("  ").concat(fp).concat(" = load ptr, ptr ").concat(clo.val).concat("\n")
-                .concat("  ").concat(out).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(fp).concat("(ptr ").concat(clo.val).concat(cg_prefix_commas(a.vals)).concat(")\n");
-            Emit { code: code, allocas: clo.allocas.concat(a.allocas), globals: clo.globals.concat(a.globals), val: out, ty: ret, n: a.n + 2 }
-        },
-        _ => { cg_fail("called a non-closure value of type ".concat(cg_ty_name(clo.ty))); cg_unit_emit(clo.n) },
-    }
+let cg_call_closure_value (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: Emit) (args: Array[typecheck.TExpr]): Emit = {
+    let ret = cg_closure_ret(clo.ty);
+    let a = cg_args(p, env, clo.n, args, 0, "", "", "", []);
+    let fp = cg_reg(a.n);
+    let out = cg_reg(a.n + 1);
+    let code = clo.code.concat(a.code)
+        .concat("  ").concat(fp).concat(" = load ptr, ptr ").concat(clo.val).concat("\n")
+        .concat("  ").concat(out).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(fp).concat("(ptr ").concat(clo.val).concat(cg_prefix_commas(a.vals)).concat(")\n");
+    Emit { code: code, allocas: clo.allocas.concat(a.allocas), globals: clo.globals.concat(a.globals), val: out, ty: ret, n: a.n + 2 }
+}
 
 let cg_prefix_commas (vals: Array[String]): String = cg_prefix_acc(vals, 0, "")
 let cg_prefix_acc (vals: Array[String]) (i: Int) (acc: String): String =
     if i >= vals.len() { acc } else { cg_prefix_acc(vals, i + 1, acc.concat(", ").concat(vals[i])) }
-
-// Arguments emitted against KNOWN parameter types, so a closure literal
-// in argument position gets the types it can't derive on its own.
-let cg_call_args_typed (p: CgProgram) (env: Array[CgSlot]) (n: Int) (args: Array[parser.PExpr]) (ptys: Array[CgTy]) (i: Int) (code: String) (allocas: String) (globals: String) (vals: Array[String]): ArgVals =
-    if i >= args.len() { ArgVals { code: code, allocas: allocas, globals: globals, vals: vals, tys: [], n: n } }
-    else {
-        let r = if i < ptys.len() { cg_expr_params(p, env, n, args[i], cg_param_tys_of(ptys[i])) } else { cg_expr(p, env, n, args[i]) };
-        cg_call_args_typed(p, env, r.n, args, ptys, i + 1, code.concat(r.code), allocas.concat(r.allocas), globals.concat(r.globals), vals.push(cg_llvm_ty(r.ty).concat(" ").concat(r.val)))
-    }
-
-// A non-closure expected type pushes nothing down; only the parameter
-// list of an expected CLOSURE type is information a literal can't
-// derive for itself.
-let cg_param_tys_of (t: CgTy): Array[CgTy] =
-    match t { CgClosure(ptys, _) => ptys, _ => [] }
 
 // --- Array.map / Array.filter / Array.fold ---
 //
@@ -1161,14 +1003,13 @@ let cg_param_tys_of (t: CgTy): Array[CgTy] =
 // Plum source. This backend has neither a prelude nor generics, so they
 // are emitted inline as loops instead. That is not a workaround: an
 // inlined loop is what a monomorphizing backend would produce for them
-// anyway, and it means the closure argument's parameter type is derived
-// from the array's own element type right here, which is exactly the
-// context a closure literal needs.
-let cg_array_ns_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (fn_name: String) (args: Array[parser.PExpr]): Emit =
-    if fn_name == "map" { cg_array_map(p, env, n, args[0], args[1]) }
-    else if fn_name == "filter" { cg_array_filter(p, env, n, args[0], args[1]) }
-    else if fn_name == "fold" { cg_array_fold(p, env, n, args[0], args[1], args[2]) }
-    else { { cg_fail("Array.".concat(fn_name).concat("(..) isn't supported yet")); cg_unit_emit(n) } }
+// anyway.
+
+let cg_elem_ty (t: CgTy): CgTy =
+    match t {
+        CgArray(elem) => elem,
+        _ => { cg_fail("expected an Array, found ".concat(cg_ty_name(t))); CgUnit },
+    }
 
 // `base + 8 + 8*index`, as three real instructions. The resulting
 // pointer is `cg_reg(n + 2)`; three registers are consumed.
@@ -1179,11 +1020,9 @@ let cg_elem_ptr_lines (arr: String) (idx: String) (n: Int): String =
 
 let cg_elem_ptr_reg (n: Int): String = cg_reg(n + 2)
 
-// A counted loop over `0..len`, shared by map/filter/fold. `pre` opens
-// it (through the body label), `post` closes it (increment, back-edge,
-// end label); `idx_reg` holds the current index inside the body. The
-// induction variable's `alloca` is the CALLER's to hoist — see `Emit`'s
-// own comment on why an alloca must never sit inside a loop.
+// A counted loop over `0..len`. `pre` opens it (through the body
+// label), `post` closes it; `idx_reg` holds the current index inside
+// the body. The induction variable's `alloca` is the CALLER's to hoist.
 struct LoopParts { pre: String, post: String, idx_reg: String, body_n: Int }
 
 let cg_array_loop (iv: String) (len: String) (n: Int): LoopParts = {
@@ -1207,19 +1046,20 @@ let cg_array_loop (iv: String) (len: String) (n: Int): LoopParts = {
     LoopParts { pre: pre, post: post, idx_reg: cur, body_n: n + 6 }
 }
 
-let cg_closure_ret (t: CgTy): CgTy =
-    match t { CgClosure(_, ret) => ret, _ => { cg_fail("expected a closure, found ".concat(cg_ty_name(t))); CgUnit } }
-
-// Loading the code pointer and calling it, given an already-emitted
-// closure operand and already-emitted argument operands.
 let cg_invoke (clo_val: String) (ret: CgTy) (arg_ops: String) (n: Int): String =
     "  ".concat(cg_reg(n)).concat(" = load ptr, ptr ").concat(clo_val).concat("\n")
         .concat("  ").concat(cg_reg(n + 1)).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(n)).concat("(ptr ").concat(clo_val).concat(arg_ops).concat(")\n")
 
-let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: parser.PExpr) (f_e: parser.PExpr): Emit = {
+let cg_array_ns_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (fn_name: String) (args: Array[typecheck.TExpr]): Emit =
+    if fn_name == "map" { cg_array_map(p, env, n, args[0], args[1]) }
+    else if fn_name == "filter" { cg_array_filter(p, env, n, args[0], args[1]) }
+    else if fn_name == "fold" { cg_array_fold(p, env, n, args[0], args[1], args[2]) }
+    else { { cg_fail("Array.".concat(fn_name).concat("(..) isn't supported yet")); cg_unit_emit(n) } }
+
+let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit = {
     let a = cg_expr(p, env, n, arr_e);
     let elem = cg_elem_ty(a.ty);
-    let f = cg_expr_params(p, env, a.n, f_e, [elem]);
+    let f = cg_expr(p, env, a.n, f_e);
     let ret = cg_closure_ret(f.ty);
     let len = cg_reg(f.n);
     let out = cg_reg(f.n + 1);
@@ -1240,14 +1080,13 @@ let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: parser.PEx
 }
 
 // The output array is allocated at the INPUT's length and its length
-// header is patched down afterwards to however many elements were
-// actually kept. Over-allocating and shrinking is one pass; counting
-// first would be two, and would call the predicate twice per element,
+// header is patched down afterwards to however many elements were kept.
+// One pass; counting first would call the predicate twice per element,
 // which is observably different for a predicate with effects.
-let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: parser.PExpr) (f_e: parser.PExpr): Emit = {
+let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit = {
     let a = cg_expr(p, env, n, arr_e);
     let elem = cg_elem_ty(a.ty);
-    let f = cg_expr_params(p, env, a.n, f_e, [elem]);
+    let f = cg_expr(p, env, a.n, f_e);
     let len = cg_reg(f.n);
     let out = cg_reg(f.n + 1);
     let iv = cg_reg(f.n + 2);
@@ -1286,14 +1125,11 @@ let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: parser.
     }
 }
 
-// The accumulator's representation comes from the INIT expression, and
-// the closure is given `(acc, elem)` as its parameter types — which is
-// the whole reason `Array.fold`'s closure literal needs no annotation.
-let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: parser.PExpr) (init_e: parser.PExpr) (f_e: parser.PExpr): Emit = {
+let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (init_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit = {
     let a = cg_expr(p, env, n, arr_e);
     let elem = cg_elem_ty(a.ty);
     let init = cg_expr(p, env, a.n, init_e);
-    let f = cg_expr_params(p, env, init.n, f_e, [init.ty, elem]);
+    let f = cg_expr(p, env, init.n, f_e);
     let acc_ty = cg_llvm_ty(init.ty);
     let len = cg_reg(f.n);
     let acc = cg_reg(f.n + 1);
@@ -1326,44 +1162,36 @@ let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: parser.PE
 // declared index. Fields are stored in DECLARATION order regardless of
 // the order they were written in the literal, which is what makes a
 // field read a fixed offset.
-let cg_struct_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (fields: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): Emit = {
-    if Option.is_some(spread) { cg_fail("struct-literal ..spread isn't supported yet") };
-    let decl = cg_find_struct(p, name);
+let cg_struct_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (fields: Array[typecheck.TFieldInit]): Emit = {
+    let field_names = typecheck.ctx_field_names(p.ctx, name);
     let cell = cg_reg(n);
-    let head = "  ".concat(cell).concat(" = call ptr @malloc(i64 ").concat((8 * decl.fields.len()).to_string()).concat(")
-");
-    let f = cg_store_fields(p, env, n + 1, decl, cell, fields, 0, "", "", "");
+    let head = "  ".concat(cell).concat(" = call ptr @malloc(i64 ").concat((8 * field_names.len()).to_string()).concat(")\n");
+    let f = cg_store_fields(p, env, n + 1, field_names, cell, fields, 0, "", "", "");
     Emit { code: head.concat(f.code), allocas: f.allocas, globals: f.globals, val: cell, ty: CgStruct(name), n: f.n }
 }
 
 struct FieldsEmit { code: String, allocas: String, globals: String, n: Int }
 
-let cg_store_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (decl: CgStructDecl) (cell: String) (fields: Array[parser.FieldInitNode]) (i: Int) (code: String) (allocas: String) (globals: String): FieldsEmit =
+let cg_store_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (field_names: Array[String]) (cell: String) (fields: Array[typecheck.TFieldInit]) (i: Int) (code: String) (allocas: String) (globals: String): FieldsEmit =
     if i >= fields.len() { FieldsEmit { code: code, allocas: allocas, globals: globals, n: n } }
     else {
-        let idx = cg_field_index(decl.fields, fields[i].name, 0);
-        // The field's DECLARED type is pushed down, which is what makes
-        // `Ops { add: |a, b| a + b }` work — a closure literal in field
-        // position gets its parameter representations from the struct
-        // declaration.
-        let r = cg_expr_params(p, env, n, fields[i].value, cg_param_tys_of(decl.fields[idx].ty));
+        let idx = cg_field_index(field_names, fields[i].name, 0);
+        let r = cg_expr(p, env, n, fields[i].value);
         let fp = cg_reg(r.n);
         let line = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(idx).to_string()).concat("
 ")
             .concat("  store ").concat(cg_llvm_ty(r.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(fp).concat("
 ");
-        cg_store_fields(p, env, r.n + 1, decl, cell, fields, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), globals.concat(r.globals))
+        cg_store_fields(p, env, r.n + 1, field_names, cell, fields, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), globals.concat(r.globals))
     }
 
-let cg_field_read (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PExpr) (name: String): Emit = {
+let cg_field_read (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (name: String) (fty: CgTy): Emit = {
     let b = cg_expr(p, env, n, base);
     match b.ty {
         CgStruct(sname) => {
-            let decl = cg_find_struct(p, sname);
-            let idx = cg_field_index(decl.fields, name, 0);
+            let idx = cg_field_index(typecheck.ctx_field_names(p.ctx, sname), name, 0);
             let fp = cg_reg(b.n);
             let out = cg_reg(b.n + 1);
-            let fty = decl.fields[idx].ty;
             let code = b.code
                 .concat("  ").concat(fp).concat(" = getelementptr i8, ptr ").concat(b.val).concat(", i64 ").concat(cg_field_offset(idx).to_string()).concat("
 ")
@@ -1377,19 +1205,10 @@ let cg_field_read (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: parser.PEx
 
 // A variant constructor call, `Circle(2)`. The cell is sized for the
 // enum's WIDEST variant, not this one — see `cg_payload_offset`.
-let cg_variant_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (v: CgVariant) (args: Array[parser.PExpr]): Emit =
-    cg_variant_build(p, v, cg_call_args_typed(p, env, n, args, v.payload, 0, "", "", "", []))
-
-let cg_variant_new (p: CgProgram) (env: Array[CgSlot]) (n: Int) (v: CgVariant) (args: Array[parser.PExpr]): Emit =
-    cg_variant_build(p, v, cg_call_args_typed(p, env, n, args, v.payload, 0, "", "", "", []))
-
-struct ArgVals { code: String, allocas: String, globals: String, vals: Array[String], tys: Array[CgTy], n: Int }
-
-let cg_arg_values (p: CgProgram) (env: Array[CgSlot]) (n: Int) (args: Array[parser.PExpr]) (i: Int) (code: String) (allocas: String) (globals: String) (vals: Array[String]): ArgVals =
-    if i >= args.len() { ArgVals { code: code, allocas: allocas, globals: globals, vals: vals, tys: [], n: n } }
-    else {
-        let r = cg_expr(p, env, n, args[i]);
-        cg_arg_values(p, env, r.n, args, i + 1, code.concat(r.code), allocas.concat(r.allocas), globals.concat(r.globals), vals.push(cg_llvm_ty(r.ty).concat(" ").concat(r.val)))
+let cg_variant_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (tag: String) (args: Array[typecheck.TExpr]): Emit =
+    match cg_find_variant(p, tag) {
+        Some(v) => cg_variant_build(p, v, cg_args(p, env, n, args, 0, "", "", "", [])),
+        None => { cg_fail("internal: unknown variant reached codegen: ".concat(tag)); cg_unit_emit(n) },
     }
 
 let cg_variant_build (p: CgProgram) (v: CgVariant) (a: ArgVals): Emit = {
@@ -1430,12 +1249,11 @@ let cg_store_payload (cell: String) (vals: Array[String]) (i: Int) (n: Int) (acc
 // exhaustiveness and this one does not, so this is a deliberate,
 // documented v1 gap rather than a silent one: an inexhaustive `match`
 // produces a defined-but-meaningless value instead of a diagnostic.
-let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: parser.PExpr) (arms: Array[parser.MatchArmNode]): Emit = {
+let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.TExpr) (arms: Array[typecheck.TArm]) (body_ty: CgTy): Emit = {
     let sc = cg_expr(p, env, n, scrutinee);
     let slot = cg_reg(sc.n);
     let end_label = cg_label(sc.n + 1);
     let fail_label = cg_label(sc.n + 2);
-    let body_ty = cg_arm_result_ty(p, env, sc.n + 3, arms, sc.ty, sc.val);
     let lty = cg_llvm_ty(body_ty);
     let a = cg_match_arms(p, env, sc.n + 3, arms, 0, sc.val, sc.ty, slot, lty, end_label, fail_label, "", "", "");
     let res = cg_reg(a.n);
@@ -1461,17 +1279,6 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: parser.PEx
     }
 }
 
-// The result type of the whole `match` is the FIRST arm's body type.
-// Every arm has the same type in a well-typed program (which this
-// backend may assume — see the top comment), so the first is
-// representative. It is computed by emitting that arm's body into a
-// scratch buffer and keeping only its type; wasteful, and the honest
-// cost of not having a typed AST to read the answer off.
-let cg_arm_result_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[parser.MatchArmNode]) (sty: CgTy) (sval: String): CgTy = {
-    let pat = cg_pattern(p, env, n, arms[0].pattern, sval, sty);
-    cg_expr(p, pat.env, pat.n, arms[0].body).ty
-}
-
 let cg_zero_of (t: CgTy): String =
     match t {
         CgInt => "0",
@@ -1487,7 +1294,7 @@ let cg_zero_of (t: CgTy): String =
 
 struct ArmsEmit { code: String, allocas: String, globals: String, n: Int }
 
-let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[parser.MatchArmNode]) (i: Int) (sval: String) (sty: CgTy) (slot: String) (lty: String) (end_label: String) (fail_label: String) (code: String) (allocas: String) (globals: String): ArmsEmit =
+let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TArm]) (i: Int) (sval: String) (sty: CgTy) (slot: String) (lty: String) (end_label: String) (fail_label: String) (code: String) (allocas: String) (globals: String): ArmsEmit =
     if i >= arms.len() { ArmsEmit { code: code, allocas: allocas, globals: globals, n: n } }
     else {
         let test_label = cg_label(n);
@@ -1578,7 +1385,7 @@ let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
 ")
                 .concat("  ").concat(tag_ok).concat(" = icmp eq i64 ").concat(tag).concat(", ").concat(v.tag.to_string()).concat("
 ");
-            let sub = cg_pat_payloads(p, env, n + 2, v, arg_pats, 0, sval, tag_ok, "", "", "");
+            let sub = cg_pat_payloads(p, env, n + 2, Array.map(typecheck.ctx_variant_payload(p.ctx, name), |t| cg_of_ity(t)), arg_pats, 0, sval, tag_ok, "", "", "");
             PatEmit { code: head.concat(sub.code), allocas: sub.allocas, globals: sub.globals, test: sub.test, env: sub.env, n: sub.n }
         },
     }
@@ -1586,12 +1393,12 @@ let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
 // Each payload's own sub-pattern is tested and AND-ed into the running
 // result. Plain `and`, not a short-circuit branch: every operand is
 // already computed and side-effect-free, so there is nothing to skip.
-let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (v: CgVariant) (pats: Array[parser.PPattern]) (i: Int) (sval: String) (test: String) (code: String) (allocas: String) (globals: String): PatEmit =
+let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (payload: Array[CgTy]) (pats: Array[parser.PPattern]) (i: Int) (sval: String) (test: String) (code: String) (allocas: String) (globals: String): PatEmit =
     if i >= pats.len() { PatEmit { code: code, allocas: allocas, globals: globals, test: test, env: env, n: n } }
     else {
         let pp = cg_reg(n);
         let pv = cg_reg(n + 1);
-        let pty = v.payload[i];
+        let pty = payload[i];
         let load = "  ".concat(pp).concat(" = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_payload_offset(i).to_string()).concat("
 ")
             .concat("  ").concat(pv).concat(" = load ").concat(cg_llvm_ty(pty)).concat(", ptr ").concat(pp).concat("
@@ -1600,7 +1407,7 @@ let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (v: CgVariant) 
         let combined = cg_reg(sub.n);
         let join = "  ".concat(combined).concat(" = and i1 ").concat(test).concat(", ").concat(sub.test).concat("
 ");
-        cg_pat_payloads(p, sub.env, sub.n + 1, v, pats, i + 1, sval, combined,
+        cg_pat_payloads(p, sub.env, sub.n + 1, payload, pats, i + 1, sval, combined,
             code.concat(load).concat(sub.code).concat(join), allocas.concat(sub.allocas), globals.concat(sub.globals))
     }
 
@@ -1608,16 +1415,14 @@ let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (v: CgVariant) 
 // type — so the running test starts at `1` and only sub-patterns can
 // falsify it. `Point { x, y }` binds shorthand fields, which the parser
 // already expands into `x: x` field patterns.
-let cg_pat_struct (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (field_pats: Array[parser.FieldPatternNode]) (sval: String): PatEmit = {
-    let decl = cg_find_struct(p, name);
-    cg_pat_fields(p, env, n, decl, field_pats, 0, sval, "1", "", "", "")
-}
+let cg_pat_struct (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (field_pats: Array[parser.FieldPatternNode]) (sval: String): PatEmit =
+    cg_pat_fields(p, env, n, typecheck.ctx_field_names(p.ctx, name), Array.map(typecheck.ctx_field_types(p.ctx, name), |t| cg_of_ity(t)), field_pats, 0, sval, "1", "", "", "")
 
-let cg_pat_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (decl: CgStructDecl) (pats: Array[parser.FieldPatternNode]) (i: Int) (sval: String) (test: String) (code: String) (allocas: String) (globals: String): PatEmit =
+let cg_pat_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (field_names: Array[String]) (field_tys: Array[CgTy]) (pats: Array[parser.FieldPatternNode]) (i: Int) (sval: String) (test: String) (code: String) (allocas: String) (globals: String): PatEmit =
     if i >= pats.len() { PatEmit { code: code, allocas: allocas, globals: globals, test: test, env: env, n: n } }
     else {
-        let idx = cg_field_index(decl.fields, pats[i].name, 0);
-        let fty = decl.fields[idx].ty;
+        let idx = cg_field_index(field_names, pats[i].name, 0);
+        let fty = field_tys[idx];
         let fp = cg_reg(n);
         let fv = cg_reg(n + 1);
         let load = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_field_offset(idx).to_string()).concat("
@@ -1628,7 +1433,7 @@ let cg_pat_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (decl: CgStructDe
         let combined = cg_reg(sub.n);
         let join = "  ".concat(combined).concat(" = and i1 ").concat(test).concat(", ").concat(sub.test).concat("
 ");
-        cg_pat_fields(p, sub.env, sub.n + 1, decl, pats, i + 1, sval, combined,
+        cg_pat_fields(p, sub.env, sub.n + 1, field_names, field_tys, pats, i + 1, sval, combined,
             code.concat(load).concat(sub.code).concat(join), allocas.concat(sub.allocas), globals.concat(sub.globals))
     }
 
@@ -1647,10 +1452,17 @@ let cg_pat_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (decl: CgStructDe
 // one name that escapes the function.
 struct FnEmit { text: String, next: Int }
 
-let cg_fn (p: CgProgram) (def: CgFn) (n0: Int): FnEmit = {
-    let entry = cg_param_slots(def.params, 0, [], "");
+// `p.subst` is swapped to THIS function's substitution before its body
+// is emitted — that is what lets `cg_ty` resolve any type recorded
+// during its inference. Each function was inferred independently, so
+// each has its own.
+let cg_fn (p0: CgProgram) (def: typecheck.TFn) (n0: Int): FnEmit = {
+    let p = CgProgram { fns: p0.fns, ctx: p0.ctx, enums: p0.enums, subst: def.subst };
+    let params = cg_params_of(def.params, 0, []);
+    let entry = cg_param_slots(params, 0, [], "");
+    let ret = cg_of_ity(def.ret);
     let body = cg_expr(p, entry.env, n0, def.body);
-    let header = "define ".concat(cg_llvm_ty(def.ret)).concat(" @").concat(cg_mangle(def.name)).concat("(").concat(cg_param_decls(def.params)).concat(") {\nentry:\n");
+    let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(cg_mangle(def.name)).concat("(").concat(cg_param_decls(params)).concat(") {\nentry:\n");
     // Every `alloca` is hoisted here, at the top of the entry block,
     // ahead of any instruction that could branch — see `Emit`'s own
     // comment for why that is a correctness requirement inside loops
@@ -1660,10 +1472,20 @@ let cg_fn (p: CgProgram) (def: CgFn) (n0: Int): FnEmit = {
         .concat(entry.code)
         .concat(body.allocas)
         .concat(body.code)
-        .concat("  ret ").concat(cg_llvm_ty(def.ret)).concat(" ").concat(body.val).concat("\n")
+        .concat("  ret ").concat(cg_llvm_ty(ret)).concat(" ").concat(body.val).concat("\n")
         .concat("}\n\n");
     FnEmit { text: text, next: body.n }
 }
+
+// The checker's `TParam`s carry resolved types already; this only maps
+// them to representations. `()` — the Unit pattern — contributed no
+// entry there, so a `let main (): Unit` really does emit as a
+// zero-argument LLVM function.
+struct CgParam { name: String, ty: CgTy }
+
+let cg_params_of (params: Array[typecheck.TParam]) (i: Int) (acc: Array[CgParam]): Array[CgParam] =
+    if i >= params.len() { acc }
+    else { cg_params_of(params, i + 1, acc.push(CgParam { name: params[i].name, ty: cg_of_ity(params[i].ty) })) }
 
 let cg_param_decls (params: Array[CgParam]): String =
     cg_join_commas(cg_param_decl_list(params, 0, []))
@@ -1673,8 +1495,8 @@ let cg_param_decl_list (params: Array[CgParam]) (i: Int) (acc: Array[String]): A
     else { cg_param_decl_list(params, i + 1, acc.push(cg_llvm_ty(params[i].ty).concat(" %p").concat(i.to_string()))) }
 
 // Parameter slots use `%s<i>` names rather than the `%t<n>` counter, so
-// the counter can start at 0 for every function body regardless of how
-// many parameters preceded it.
+// the counter can start wherever the module-level string-constant
+// numbering left off without colliding.
 struct ParamSlots { env: Array[CgSlot], code: String }
 
 let cg_param_slots (params: Array[CgParam]) (i: Int) (env: Array[CgSlot]) (code: String): ParamSlots =
@@ -1702,14 +1524,11 @@ let cg_entry (unit: Unit): String = cg_lines([
 
 pub let cg_emit_program (program: parser.ProgramNode): String = {
     let p = cg_build_program(program);
-    match cg_find_fn(p, "main") {
-        Some(_) => (),
-        None => cg_fail("no top-level 'main' function to compile"),
-    };
+    if !cg_has_fn(p, "main") { cg_fail("no top-level 'main' function to compile") };
     cg_runtime(()).concat(cg_emit_fns(p, p.fns, 0, 0, "")).concat(cg_entry(()))
 }
 
-let cg_emit_fns (p: CgProgram) (fns: Array[CgFn]) (i: Int) (n: Int) (acc: String): String =
+let cg_emit_fns (p: CgProgram) (fns: Array[typecheck.TFn]) (i: Int) (n: Int) (acc: String): String =
     if i >= fns.len() { acc }
     else {
         let f = cg_fn(p, fns[i], n);

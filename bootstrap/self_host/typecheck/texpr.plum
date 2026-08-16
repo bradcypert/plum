@@ -1,0 +1,103 @@
+// The TYPED tree the checker produces and the backend consumes.
+//
+// `infer.plum` used to compute the type of every expression and throw
+// it away, which forced `codegen/codegen.plum` to re-derive
+// representations bottom-up as it emitted. That worked for everything
+// except a closure literal with no expected type (`let f = |n| n + 1`),
+// where the parameter's representation is only pinned by UNIFYING the
+// body's use of it — inference, not synthesis. Rather than grow a
+// second unifier in the backend, the checker now publishes what it
+// already knew.
+//
+// A `TExpr` is a `PExpr` with two things added:
+//
+//   1. **A type on every node.** Read it through `texpr_ty` below, not
+//      directly — see that function's own comment.
+//   2. **A resolved CLASSIFICATION for every call.** `parser.PExpr` has
+//      one `ECall` covering user functions, builtins, variant
+//      constructors, closure values, methods, `Array.map`, and
+//      `println`; telling them apart takes scope information the parser
+//      doesn't have. `infer_call` already does that work, and the
+//      distinct `TNode` cases below record the answer. That means the
+//      backend can never disagree with the checker about what a call
+//      IS — a whole class of bug removed rather than tested for.
+//
+// Cases the checker accepts but the backend doesn't compile (tuples,
+// generic instantiation, `unsafe`, `spawn`, `select`) become
+// `TUnsupported`, carrying the reason, so the backend's failure names
+// the real construct instead of a missing match arm.
+
+use parser;
+
+pub struct TExpr { ty: ITy, node: TNode }
+
+pub struct TBlock { stmts: Array[TStmt], tail: Option[TExpr] }
+
+pub enum TStmt {
+    TSLet(parser.PPattern, TExpr),
+    TSAssign(String, TExpr),
+    TSExpr(TExpr),
+}
+
+pub struct TArm { pattern: parser.PPattern, guard: Option[TExpr], body: TExpr }
+pub struct TFieldInit { name: String, value: TExpr }
+
+pub enum TNode {
+    TInt(Int),
+    TFloat(Float),
+    TStr(String),
+    TBool(Bool),
+    // `()` — the unit VALUE. The parser spells it `ETuple([])`; this is
+    // where that stops being a tuple.
+    TUnitLit,
+    TIdent(String),
+    TArrayLit(Array[TExpr]),
+    TTupleLit(Array[TExpr]),
+    TUnary(parser.UOp, TExpr),
+    TBinary(parser.BOp, TExpr, TExpr),
+    TFieldGet(TExpr, String),
+    TIndex(TExpr, TExpr),
+    TBlockE(TBlock),
+    // then/else are `TExpr`s (a block is just a `TBlockE`), which keeps
+    // `TBlock` out of every node that contains a body.
+    TIf(TExpr, TExpr, Option[TExpr]),
+    TMatch(TExpr, Array[TArm]),
+    // pattern, range start, range end, body
+    TFor(parser.PPattern, TExpr, TExpr, TExpr),
+    TClosure(Array[String], TExpr),
+    TStructLit(String, Array[TFieldInit]),
+    TVariantNew(String, Array[TExpr]),
+    // --- The five resolved call shapes ---
+    // A named function: a user's own, or a prelude signature from
+    // `builtin_sig`. The name is the SIGNATURE's name, so a
+    // module-qualified call (`lexer.tokenize`) has already been
+    // resolved to the plain one.
+    TFnCall(String, Array[TExpr]),
+    // Calling a closure VALUE — a local, a parameter, or anything else
+    // whose type turned out to be a function.
+    TClosureCall(TExpr, Array[TExpr]),
+    // `base.method(args)`: the builtin methods (`to_string`, `concat`,
+    // `len`, `push`, `set`, `split`, `ends_with`, ...).
+    TMethodCall(String, TExpr, Array[TExpr]),
+    // `Array.map`/`filter`/`fold` — a namespace call, not a method.
+    TArrayNs(String, Array[TExpr]),
+    TPrintln(TExpr),
+    TUnsupported(String),
+}
+
+// A node's type as recorded DURING inference may still contain
+// unresolved variables — `?3` only becomes `Int` once something later
+// in the same function body unifies it. Applying the function's final
+// substitution is what resolves them, so every consumer must read a
+// type through here rather than touching `.ty`.
+//
+// Doing it at the point of USE, rather than rewriting the whole tree
+// once inference finishes, is deliberate: a rewrite pass would be
+// another full mirror of this enum to maintain, for no benefit — the
+// substitution is idempotent and `subst_apply` is cheap.
+pub let texpr_ty (subst: Subst) (e: TExpr): ITy = subst_apply(subst, e.ty)
+
+// A checked top-level function, with its body typed and the
+// substitution needed to read those types.
+pub struct TParam { name: String, ty: ITy }
+pub struct TFn { name: String, params: Array[TParam], ret: ITy, body: TExpr, subst: Subst }
