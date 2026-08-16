@@ -9138,3 +9138,65 @@ learn from turning a check on.
 
 `bootstrap/typecheck_corpus/non_exhaustive_match/` pins the agreement
 between the two checkers, not just the rejection.
+
+### Real module scoping in the self-hosted checker (2026-08-16)
+
+Two modules can now declare the same function name. That sounds small;
+it was the project's longest-running papered-over limitation.
+
+Before, `check`/`run`/`emit-llvm` concatenated every module's items into
+one flat program and `find_sig` scanned it in order, first-wins. The
+consequences were not theoretical:
+
+- `interp.plum` and `typecheck/infer.plum` both wanted a `bind_params`
+  — one binding runtime VALUES, one binding parameter TYPES. The
+  checker resolved both to whichever came first and rejected the
+  compiler's own source. Fixed at the time by renaming one, and
+  recorded as a workaround.
+- The prelude's private helper `array_contains_acc` silently shadowed
+  `interp.plum`'s own function of that name, and the compiler failed to
+  type-check itself with "argument 0: T != Value".
+- Global slots needed a dedupe pass because two modules both declared
+  `UPPERCASE_CHARS`.
+
+#### The rule
+
+Every item now carries the MODULE it was declared in — the name of the
+directory holding its file, or `""` for a file at the project root. The
+parser writes `""` and knows nothing about it; the project loader stamps
+the real name on afterwards, which keeps module identity out of the
+grammar where it does not belong.
+
+**Functions and globals are scoped.** An unqualified name resolves in
+its own module, then in the root module (where the prelude lives), and
+never in a sibling. Crossing a boundary means naming it —
+`lexer.tokenize` resolves IN `lexer`, rather than looking `tokenize` up
+in one flat table as it used to.
+
+**Types and variant tags remain flat, deliberately.** `parser.PExpr` and
+a bare `PExpr` resolve identically, and `parser.plum` matches on
+`TokLet` — a tag declared in `lexer` — without qualifying it. Scoping
+those would be a language change rather than a checker change, and the
+sources depend on the current rule. DESIGN.md's module-system section
+already documents the flat tag namespace as a deliberate boundary.
+
+#### The backend had to keep up
+
+A `TFnCall` now records the module the checker RESOLVED to, not just the
+name. That is not recoverable afterwards: an early attempt had the
+backend look the module up by name, which picked whichever module came
+first — reintroducing exactly the ambiguity the change removes. It
+emitted one `helper` for a program with two.
+
+Symbols are module-qualified (`@plum_alpha_helper`, `@plum_beta_helper`),
+as are global slots.
+
+#### Verified
+
+A two-module program where both modules declare `helper` and
+`describe` with DIFFERENT types compiles and runs correctly, producing
+four distinct symbols and output identical to the real compiler. Both
+checkers reject reaching into a sibling module unqualified.
+
+`bind_param_types` is `bind_params` again — the workaround is undone,
+and the compiler type-checks itself with both modules using the name.

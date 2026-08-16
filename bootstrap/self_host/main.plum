@@ -69,44 +69,73 @@ let usage (): Unit = println("usage: self_host (tokens|ast|run|emit-llvm) <file>
 // file under it is parsed and their items CONCATENATED into one
 // program, which is then checked as a unit.
 //
-// Concatenation is the whole mechanism — no separate module namespacing
-// is needed — because `context.plum`'s `resolve_named` already keys off
-// a path's LAST segment, so `parser.PExpr` and a bare `PExpr` resolve
-// identically once both files' declarations are present. That matches
-// the flat, globally-scoped treatment variant tags already get (see
-// DESIGN.md's module-system section, which documents that as a
-// deliberate v1 boundary rather than an oversight).
+// Items are still concatenated into one program, but each one now
+// carries the MODULE it came from — the name of the directory holding
+// its file, or "" for a file at the project root. `collect_project`
+// assigns those; the parser writes "" and knows nothing about it.
 //
-// Known consequence, stated rather than discovered later: names are
-// merged flat, so two modules declaring the SAME function name are
-// indistinguishable here and the first one wins (`find_sig` scans in
-// order). The self-hosted sources only collide on identically-typed
-// helpers (`is_capitalized_name`, `UPPERCASE_CHARS`), so this is
-// currently harmless — but it is a real limitation, not a proof of
-// correctness.
-let parse_file_items (path: String): Array[parser.ItemNode] =
+// FUNCTIONS and GLOBALS are scoped by module: an unqualified name
+// resolves in its own module, then in the root module (where the
+// prelude lives), and never in a sibling. Crossing a module boundary
+// means naming it — `lexer.tokenize` resolves IN `lexer`. Two modules
+// can therefore declare the same function name with different types,
+// which is exactly what `interp.plum` and `typecheck/infer.plum` both
+// wanting a `bind_params` needed, and what forced a rename before.
+//
+// TYPES and VARIANT TAGS remain flat, deliberately: `parser.PExpr` and
+// a bare `PExpr` resolve identically because `resolve_named` keys off a
+// path's last segment, and `parser.plum` matches on `TokLet` — a tag
+// declared in `lexer` — without qualifying it. Scoping those would be a
+// language change, not a checker change, and the sources depend on the
+// current rule. DESIGN.md's module-system section documents the flat
+// tag namespace as a deliberate boundary.
+let parse_file_items (path: String) (module_name: String): Array[parser.ItemNode] =
     match read_file(path) {
-        Ok(src) => parser.parse_program(lexer.tokenize(src)).items,
+        Ok(src) => parser.with_module(parser.parse_program(lexer.tokenize(src)).items, module_name),
         Err(e) => { panic_raw("failed to read ".concat(path).concat(": ").concat(e)); [] },
     }
 
-let collect_path_items (path: String): Array[parser.ItemNode] =
+// A project's MODULES are its immediate subdirectories, Go-style: every
+// `.plum` file under `lexer/` belongs to module `lexer`, and a file at
+// the project root belongs to the root module `""`. Nesting deeper does
+// not create a deeper module — a file in `a/b/` is still in module `a`,
+// which matches how the sources are actually laid out and avoids
+// inventing a path syntax nothing writes.
+let collect_path_items (path: String) (module_name: String): Array[parser.ItemNode] =
     if Result.unwrap_or(is_directory(path), false) {
-        collect_entries(path, Result.unwrap_or(list_dir(path), []), 0, [])
+        collect_entries(path, module_name, Result.unwrap_or(list_dir(path), []), 0, [])
     } else if path.ends_with(".plum") {
-        parse_file_items(path)
+        parse_file_items(path, module_name)
     } else {
         []
     }
 
+// The project ROOT: each subdirectory names a module, each root-level
+// file belongs to `""`.
+let collect_project (root: String): Array[parser.ItemNode] =
+    if Result.unwrap_or(is_directory(root), false) {
+        collect_root_entries(root, Result.unwrap_or(list_dir(root), []), 0, [])
+    } else {
+        collect_path_items(root, "")
+    }
+
+let collect_root_entries (root: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
+    if i >= entries.len() { acc }
+    else if entries[i] == "." || entries[i] == ".." { collect_root_entries(root, entries, i + 1, acc) }
+    else {
+        let full = root.concat("/").concat(entries[i]);
+        let m = if Result.unwrap_or(is_directory(full), false) { entries[i] } else { "" };
+        collect_root_entries(root, entries, i + 1, Array.concat(acc, collect_path_items(full, m)))
+    }
+
 // `.`/`..` are skipped explicitly — `list_dir` surfaces raw `readdir`
 // entries, so descending into them would recurse forever.
-let collect_entries (dir: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
+let collect_entries (dir: String) (module_name: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
     if i >= entries.len() { acc }
-    else if entries[i] == "." || entries[i] == ".." { collect_entries(dir, entries, i + 1, acc) }
+    else if entries[i] == "." || entries[i] == ".." { collect_entries(dir, module_name, entries, i + 1, acc) }
     else {
         let full = dir.concat("/").concat(entries[i]);
-        collect_entries(dir, entries, i + 1, Array.concat(acc, collect_path_items(full)))
+        collect_entries(dir, module_name, entries, i + 1, Array.concat(acc, collect_path_items(full, module_name)))
     }
 
 let main (): Unit = {
@@ -116,13 +145,13 @@ let main (): Unit = {
     } else if argv[0] == "check" {
         // Handled before `read_file` below: the argument may be a
         // DIRECTORY, which `read_file` can't open at all.
-        typecheck.check_program(parser.ProgramNode { items: collect_path_items(argv[1]) });
+        typecheck.check_program(parser.ProgramNode { items: collect_project(argv[1]) });
         println("ok");
     } else if argv[0] == "emit-llvm" && Result.unwrap_or(is_directory(argv[1]), false) {
         // Same directory loading `check` and `run` use. A real Plum
         // project is several modules, so a backend that only accepted
         // one file could never compile one.
-        println(codegen.cg_emit_program(parser.ProgramNode { items: collect_path_items(argv[1]) }));
+        println(codegen.cg_emit_program(parser.ProgramNode { items: collect_project(argv[1]) }));
     } else if argv[0] == "run" && Result.unwrap_or(is_directory(argv[1]), false) {
         // Same directory-loading path `check` uses, for the same
         // reason: a module can't be RUN alone either — `main.plum`'s
@@ -131,7 +160,7 @@ let main (): Unit = {
         // this interpreter walks. Concatenation is again the whole
         // mechanism (`find_fn` scans a flat list, exactly as
         // `find_sig` does), with the same flat-namespace consequence.
-        let program = parser.ProgramNode { items: collect_path_items(argv[1]) };
+        let program = parser.ProgramNode { items: collect_project(argv[1]) };
         typecheck.check_program(program);
         // Everything after the project directory becomes the
         // INTERPRETED program's own `args()` — so `./sh run bootstrap/

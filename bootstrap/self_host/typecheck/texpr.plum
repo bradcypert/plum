@@ -51,14 +51,14 @@ pub enum TNode {
     // where that stops being a tuple.
     TUnitLit,
     TIdent(String),
-    // A reference to a top-level 0-parameter binding. Inference used to
+    // MODULE and name of a top-level 0-parameter binding. Inference used to
     // INLINE these — it returned the global's body in place of the
     // reference — which is correct but makes the backend re-evaluate
     // the body at every mention. `PLUM_DIGIT_CHARS = chars_of(..)` in
     // the lexer was being recomputed once per character classified.
     // Recording a reference instead lets a backend evaluate each global
     // once, into a slot.
-    TGlobalRef(String),
+    TGlobalRef(String, String),
     TArrayLit(Array[TExpr]),
     TTupleLit(Array[TExpr]),
     TUnary(parser.UOp, TExpr),
@@ -90,7 +90,13 @@ pub enum TNode {
     // information monomorphization needs and cannot reconstruct.
     // Read them through the function's substitution, like any other
     // recorded type.
-    TFnCall(String, Array[TExpr], Array[ITy]),
+    // MODULE, name, arguments, type arguments.
+    //
+    // The module is recorded, not recoverable: two modules may declare
+    // the same function name, so a backend that looked one up by name
+    // alone would pick whichever came first. `infer_call` already knows
+    // which it resolved to — this is that answer, written down.
+    TFnCall(String, String, Array[TExpr], Array[ITy]),
     // Calling a closure VALUE — a local, a parameter, or anything else
     // whose type turned out to be a function.
     TClosureCall(TExpr, Array[TExpr]),
@@ -122,4 +128,6 @@ pub struct TParam { name: String, ty: ITy }
 // and in declared order. A backend that monomorphizes needs them to
 // know WHAT to substitute; `TFnCall`'s type arguments say what to
 // substitute IN.
-pub struct TFn { name: String, generics: Array[String], params: Array[TParam], ret: ITy, body: TExpr, subst: Subst }
+// `module` is where the function was declared — needed by a backend so
+// that two modules' same-named functions get distinct SYMBOLS.
+pub struct TFn { name: String, module: String, generics: Array[String], params: Array[TParam], ret: ITy, body: TExpr, subst: Subst }

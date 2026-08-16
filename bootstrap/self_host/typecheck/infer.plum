@@ -67,17 +67,28 @@ let tyenv_lookup_acc (bindings: Array[EnvBinding]) (name: String) (i: Int): Opti
 
 // --- Top-level function signatures ---
 
-pub struct FnSig { name: String, generics: Array[String], params: Array[ITy], ret: ITy }
-pub struct Program2 { sigs: Array[FnSig], globals: Array[parser.LetDefNode], ctx: TyContext }
+// `module` is where the function was DECLARED. The PRELUDE and the
+// builtin signature table both use "" — the root module — which is also
+// what a project's root-level files use, so a program can shadow a
+// prelude name exactly as it always could.
+pub struct FnSig { name: String, module: String, generics: Array[String], params: Array[ITy], ret: ITy }
+// `current` is the module whose body is being checked right now. It is
+// swapped per function rather than threaded as a parameter, for the
+// same reason `CgProgram` carries the current substitution: it would
+// otherwise have to be added to thirty signatures that do not otherwise
+// care.
+pub struct Program2 { sigs: Array[FnSig], globals: Array[GlobalDef], ctx: TyContext, current: String }
+
+pub struct GlobalDef { module: String, def: parser.LetDefNode }
 
 pub let build_sigs (ctx: TyContext) (program: parser.ProgramNode): Program2 = collect_sigs_acc(ctx, program.items, 0, [], [])
 
-let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (sigs: Array[FnSig]) (globals: Array[parser.LetDefNode]): Program2 =
-    if i >= items.len() { Program2 { sigs: sigs, globals: globals, ctx: ctx } }
+let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (sigs: Array[FnSig]) (globals: Array[GlobalDef]): Program2 =
+    if i >= items.len() { Program2 { sigs: sigs, globals: globals, ctx: ctx, current: "" } }
     else {
         match items[i].kind {
             IKLet(def) => {
-                if Array.is_empty(def.params) { collect_sigs_acc(ctx, items, i + 1, sigs, globals.push(def)) }
+                if Array.is_empty(def.params) { collect_sigs_acc(ctx, items, i + 1, sigs, globals.push(GlobalDef { module: items[i].module, def: def })) }
                 else {
                     let generic_names = Array.map(def.generics, |g| g.name);
                     let params = Array.map(def.params, |p| resolve_param_ty(ctx, generic_names, p));
@@ -85,7 +96,7 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
                         Some(t) => resolve_ann(ctx, generic_names, t),
                         None => { fail_tc("top-level function ".concat(def.name).concat(" needs an explicit return type annotation")); ITUnit },
                     };
-                    collect_sigs_acc(ctx, items, i + 1, sigs.push(FnSig { name: def.name, generics: generic_names, params: params, ret: ret }), globals)
+                    collect_sigs_acc(ctx, items, i + 1, sigs.push(FnSig { name: def.name, module: items[i].module, generics: generic_names, params: params, ret: ret }), globals)
                 }
             },
             _ => collect_sigs_acc(ctx, items, i + 1, sigs, globals),
@@ -135,37 +146,53 @@ let res_of (t: ITy) (e: ITy): ITy = ITEnum("Result", [t, e])
 let tp (name: String): ITy = ITParam(name)
 
 let builtin_sig (name: String): Option[FnSig] =
-    if name == "Array.is_empty" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T"))], ret: ITBool }) }
-    else if name == "Array.concat" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T")), arr_of(tp("T"))], ret: arr_of(tp("T")) }) }
-    else if name == "Array.contains" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: ITBool }) }
-    else if name == "Array.push" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) }) }
-    else if name == "Array.slice" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T")), ITInt, ITInt], ret: arr_of(tp("T")) }) }
-    else if name == "Array.any" { Some(FnSig { name: name, generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool }) }
-    else if name == "Option.is_some" { Some(FnSig { name: name, generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool }) }
-    else if name == "Option.unwrap_or" { Some(FnSig { name: name, generics: ["T"], params: [opt_of(tp("T")), tp("T")], ret: tp("T") }) }
-    else if name == "Result.unwrap_or" { Some(FnSig { name: name, generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), tp("T")], ret: tp("T") }) }
-    else if name == "String.index_of" { Some(FnSig { name: name, generics: [], params: [ITStr, ITStr], ret: opt_of(ITInt) }) }
-    else if name == "String.parse_int" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: res_of(ITInt, ITStr) }) }
-    else if name == "String.parse_float" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: res_of(ITFloat, ITStr) }) }
-    else if name == "String.slice" { Some(FnSig { name: name, generics: [], params: [ITStr, ITInt, ITInt], ret: ITStr }) }
-    else if name == "String.is_empty" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: ITBool }) }
-    else if name == "chars_of" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: arr_of(ITStr) }) }
-    else if name == "string_is_ascii_ws" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: ITBool }) }
-    else if name == "chars_join" { Some(FnSig { name: name, generics: [], params: [arr_of(ITStr)], ret: ITStr }) }
-    else if name == "panic_raw" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: ITUnit }) }
-    else if name == "read_file" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: res_of(ITStr, ITStr) }) }
-    else if name == "is_directory" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: res_of(ITBool, ITStr) }) }
-    else if name == "list_dir" { Some(FnSig { name: name, generics: [], params: [ITStr], ret: res_of(arr_of(ITStr), ITStr) }) }
+    if name == "Array.is_empty" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: ITBool }) }
+    else if name == "Array.concat" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), arr_of(tp("T"))], ret: arr_of(tp("T")) }) }
+    else if name == "Array.contains" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: ITBool }) }
+    else if name == "Array.push" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) }) }
+    else if name == "Array.slice" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt, ITInt], ret: arr_of(tp("T")) }) }
+    else if name == "Array.any" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool }) }
+    else if name == "Option.is_some" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool }) }
+    else if name == "Option.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), tp("T")], ret: tp("T") }) }
+    else if name == "Result.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), tp("T")], ret: tp("T") }) }
+    else if name == "String.index_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITStr], ret: opt_of(ITInt) }) }
+    else if name == "String.parse_int" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITInt, ITStr) }) }
+    else if name == "String.parse_float" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITFloat, ITStr) }) }
+    else if name == "String.slice" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITInt, ITInt], ret: ITStr }) }
+    else if name == "String.is_empty" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITBool }) }
+    else if name == "chars_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) }) }
+    else if name == "string_is_ascii_ws" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITBool }) }
+    else if name == "chars_join" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITStr)], ret: ITStr }) }
+    else if name == "panic_raw" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITUnit }) }
+    else if name == "read_file" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITStr, ITStr) }) }
+    else if name == "is_directory" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITBool, ITStr) }) }
+    else if name == "list_dir" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(arr_of(ITStr), ITStr) }) }
     // `args()` is written with empty parentheses, which this parser
     // turns into a ZERO-argument call (it implements no `f()`-means-
     // `f(())` sugar — see `interp/interp.plum`'s own note), so the
     // signature has to be zero-param to match the real call shape.
-    else if name == "args" { Some(FnSig { name: name, generics: [], params: [], ret: arr_of(ITStr) }) }
+    else if name == "args" { Some(FnSig { name: name, module: "", generics: [], params: [], ret: arr_of(ITStr) }) }
     else { None }
 
-let find_sig (sigs: Array[FnSig]) (name: String): Option[FnSig] = find_sig_acc(sigs, name, 0)
-let find_sig_acc (sigs: Array[FnSig]) (name: String) (i: Int): Option[FnSig] =
-    if i >= sigs.len() { None } else if sigs[i].name == name { Some(sigs[i]) } else { find_sig_acc(sigs, name, i + 1) }
+// An UNQUALIFIED name resolves in the CURRENT module first, then in the
+// root module `""` — which is where the prelude and any root-level file
+// live. It never reaches into a sibling module: crossing a module
+// boundary requires naming it, which is the whole point.
+//
+// This is what makes two modules able to declare the same function.
+// Before it, `interp.plum` and `infer.plum` could not both have a
+// `bind_params`, and the prelude's private helpers had to be prefixed
+// to stay out of the way.
+let find_sig (p2: Program2) (name: String): Option[FnSig] =
+    match find_sig_in(p2.sigs, p2.current, name, 0) {
+        Some(sig) => Some(sig),
+        None => find_sig_in(p2.sigs, "", name, 0),
+    }
+
+let find_sig_in (sigs: Array[FnSig]) (module_name: String) (name: String) (i: Int): Option[FnSig] =
+    if i >= sigs.len() { None }
+    else if sigs[i].name == name && sigs[i].module == module_name { Some(sigs[i]) }
+    else { find_sig_in(sigs, module_name, name, i + 1) }
 
 // --- Binding a parameter pattern (only plain-ident/Unit shapes — same
 // v1 scope as `interp/interp.plum` and `resolve_param_ty` above) ---
@@ -193,21 +220,24 @@ let check_all_fns (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): Unit 
     if i >= items.len() { () }
     else {
         match items[i].kind {
-            IKLet(def) => if Array.is_empty(def.params) { check_all_fns(p2, items, i + 1) } else { { check_fn(p2, def); check_all_fns(p2, items, i + 1) } },
+            IKLet(def) => if Array.is_empty(def.params) { check_all_fns(p2, items, i + 1) } else { { check_fn(p2, def, items[i].module); check_all_fns(p2, items, i + 1) } },
             _ => check_all_fns(p2, items, i + 1),
         }
     }
 
-let check_fn (p2: Program2) (def: parser.LetDefNode): Unit = { check_fn_typed(p2, def); () }
+let check_fn (p2: Program2) (def: parser.LetDefNode) (module_name: String): Unit = { check_fn_typed(p2, def, module_name); () }
 
 // Checking a function and PRODUCING its typed body are the same
 // operation — the typed tree falls out of inference rather than needing
 // a second pass. `check_program` throws the result away; `typed_program`
 // keeps it. Nothing can drift between "what the checker proved" and
 // "what the backend compiles", because there is only one traversal.
-let check_fn_typed (p2: Program2) (def: parser.LetDefNode): TFn = {
-    let sig = Option.unwrap_or(find_sig(p2.sigs, def.name), FnSig { name: def.name, generics: [], params: [], ret: ITUnit });
-    let env = bind_param_types(tyenv_empty(()), def.params, sig.params, 0);
+let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String): TFn = {
+    // Swapped in for the duration of this body: every unqualified name
+    // it mentions resolves in ITS module.
+    let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name };
+    let sig = Option.unwrap_or(find_sig(p2, def.name), FnSig { name: def.name, module: p2.current, generics: [], params: [], ret: ITUnit });
+    let env = bind_params(tyenv_empty(()), def.params, sig.params, 0);
     let r = infer_expr(p2, fresh_state_new(()), env, subst_empty(()), def.body);
     let body_ty = subst_apply(r.subst, r.ty);
     let ret_ty = subst_apply(r.subst, sig.ret);
@@ -215,7 +245,7 @@ let check_fn_typed (p2: Program2) (def: parser.LetDefNode): TFn = {
         Ok(_) => (),
         Err(e) => fail_tc("function ".concat(def.name).concat(": declared return type ").concat(render_ty(ret_ty)).concat(" doesn't match body type ").concat(render_ty(body_ty)).concat(" (").concat(e).concat(")")),
     };
-    TFn { name: def.name, generics: sig.generics, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
+    TFn { name: def.name, module: module_name, generics: sig.generics, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
 }
 
 // Parameter names paired with their (now resolved) declared types.
@@ -253,25 +283,26 @@ pub let typed_globals (program: parser.ProgramNode): Array[TFn] = {
     typed_globals_acc(p2, p2.globals, 0, [])
 }
 
-let typed_globals_acc (p2: Program2) (globals: Array[parser.LetDefNode]) (i: Int) (acc: Array[TFn]): Array[TFn] =
+let typed_globals_acc (p20: Program2) (globals: Array[GlobalDef]) (i: Int) (acc: Array[TFn]): Array[TFn] =
     if i >= globals.len() { acc }
     else {
-        let r = infer_expr(p2, fresh_state_new(()), tyenv_empty(()), subst_empty(()), globals[i].body);
-        typed_globals_acc(p2, globals, i + 1,
-            acc.push(TFn { name: globals[i].name, generics: [], params: [], ret: subst_apply(r.subst, r.ty), body: r.texpr, subst: r.subst }))
+        let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: globals[i].module };
+        let r = infer_expr(p2, fresh_state_new(()), tyenv_empty(()), subst_empty(()), globals[i].def.body);
+        typed_globals_acc(p20, globals, i + 1,
+            acc.push(TFn { name: globals[i].def.name, module: globals[i].module, generics: [], params: [], ret: subst_apply(r.subst, r.ty), body: r.texpr, subst: r.subst }))
     }
 
 let typed_fns_acc (p2: Program2) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[TFn]): Array[TFn] =
     if i >= items.len() { acc }
     else {
         match items[i].kind {
-            IKLet(def) => if Array.is_empty(def.params) { typed_fns_acc(p2, items, i + 1, acc) } else { typed_fns_acc(p2, items, i + 1, acc.push(check_fn_typed(p2, def))) },
+            IKLet(def) => if Array.is_empty(def.params) { typed_fns_acc(p2, items, i + 1, acc) } else { typed_fns_acc(p2, items, i + 1, acc.push(check_fn_typed(p2, def, items[i].module))) },
             _ => typed_fns_acc(p2, items, i + 1, acc),
         }
     }
 
-let bind_param_types (env: TyEnv) (params: Array[parser.ParamNode]) (tys: Array[ITy]) (i: Int): TyEnv =
-    if i >= params.len() { env } else { bind_param_types(bind_param(env, params[i], tys[i]), params, tys, i + 1) }
+let bind_params (env: TyEnv) (params: Array[parser.ParamNode]) (tys: Array[ITy]) (i: Int): TyEnv =
+    if i >= params.len() { env } else { bind_params(bind_param(env, params[i], tys[i]), params, tys, i + 1) }
 
 // --- Expression inference ---
 
@@ -343,16 +374,33 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
         // anyway — but the node records a REFERENCE rather than the
         // inlined body, so a backend can evaluate it once into a slot
         // instead of at every mention.
-        None => match find_global_def(p2.globals, name) {
+        None => match find_global_def(p2, name) {
             Some(def) => {
                 let r = infer_expr(p2, state, tyenv_empty(()), acc, def.body);
-                ir_leaf(r.ty, r.subst, r.state, TGlobalRef(name))
+                ir_leaf(r.ty, r.subst, r.state, TGlobalRef(global_module_of(p2, name), name))
             },
             None => if is_capitalized_name(name) { infer_variant(p2, state, acc, name, [], []) } else { { fail_tc("unbound variable: ".concat(name)); ir_unsupported(acc, state, "unbound variable ".concat(name)) } },
         },
     }
 
-let find_global_def (globals: Array[parser.LetDefNode]) (name: String): Option[parser.LetDefNode] = find_global_acc(globals, name, 0)
+// Same rule as `find_sig`: current module, then the root.
+// Which module a resolved global came from — the same current-then-root
+// order `find_global_def` uses, so the two always agree.
+let global_module_of (p2: Program2) (name: String): String =
+    match find_global_in(p2.globals, p2.current, name, 0) { Some(_) => p2.current, None => "" }
+
+let find_global_def (p2: Program2) (name: String): Option[parser.LetDefNode] =
+    match find_global_in(p2.globals, p2.current, name, 0) {
+        Some(d) => Some(d),
+        None => find_global_in(p2.globals, "", name, 0),
+    }
+
+let find_global_in (globals: Array[GlobalDef]) (module_name: String) (name: String) (i: Int): Option[parser.LetDefNode] =
+    if i >= globals.len() { None }
+    else if globals[i].def.name == name && globals[i].module == module_name { Some(globals[i].def) }
+    else { find_global_in(globals, module_name, name, i + 1) }
+
+let find_global_def_unused (globals: Array[parser.LetDefNode]) (name: String): Option[parser.LetDefNode] = find_global_acc(globals, name, 0)
 let find_global_acc (globals: Array[parser.LetDefNode]) (name: String) (i: Int): Option[parser.LetDefNode] =
     if i >= globals.len() { None } else if globals[i].name == name { Some(globals[i]) } else { find_global_acc(globals, name, i + 1) }
 
@@ -538,7 +586,7 @@ let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cal
             EIdent(ns) => {
                 if ns == "Array" && (method_name == "map" || method_name == "filter" || method_name == "fold") {
                     infer_array_ns_call(p2, state, env, acc, method_name, args)
-                } else if Option.is_some(tyenv_lookup(env, ns)) || Option.is_some(find_global_def(p2.globals, ns)) {
+                } else if Option.is_some(tyenv_lookup(env, ns)) || Option.is_some(find_global_def(p2, ns)) {
                     // `ns` names a real VALUE, so this is an ordinary
                     // method/struct-field call on it — checked BEFORE the
                     // module and builtin cases so a local can never be
@@ -555,7 +603,11 @@ let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cal
                     // source could declare `Array.reverse` and no call
                     // site could reach it — the qualified name was only
                     // ever looked up in `builtin_sig`.
-                    match find_sig(p2.sigs, ns.concat(".").concat(method_name)) {
+                    // An associated function declared in source
+                    // (`let Array.reverse[T] (..)`), looked up by its
+                    // qualified name in the current module then the
+                    // root.
+                    match find_sig(p2, ns.concat(".").concat(method_name)) {
                         Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
                         None => match builtin_sig(ns.concat(".").concat(method_name)) {
                         Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
@@ -569,7 +621,13 @@ let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cal
                         // `ns` isn't a bound value and isn't a builtin
                         // namespace, so it can't capture a genuine
                         // record-of-closures field call.
-                        None => match find_sig(p2.sigs, method_name) {
+                        // A MODULE-qualified call, `lexer.tokenize(src)`:
+                        // resolved IN module `ns`, not by ignoring the
+                        // qualifier. Before modules existed this looked
+                        // the bare name up in one flat table, so
+                        // `lexer.tokenize` and `parser.tokenize` were
+                        // the same function.
+                        None => match find_sig_in(p2.sigs, ns, method_name, 0) {
                             Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
                             None => infer_method_call(p2, state, env, acc, base, method_name, args),
                         },
@@ -674,7 +732,7 @@ let infer_named_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     if name == "println" { infer_println_call(p2, state, env, acc, args) }
     else if name == "__contract_require" || name == "__contract_ensure" { infer_contract_call(p2, state, env, acc, args) }
     else {
-        match find_sig(p2.sigs, name) {
+        match find_sig(p2, name) {
             Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
             // A user-declared function wins over a builtin of the same
             // name — same shadowing order the real compiler uses, where
@@ -718,7 +776,7 @@ let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
     let inst_params = Array.map(sig.params, |t| instantiate_template(sig.generics, fr.tys, t));
     let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
     let ar = infer_call_args(p2, fr.state, env, acc, args, inst_params, 0, []);
-    ir_leaf(subst_apply(ar.subst, inst_ret), ar.subst, ar.state, TFnCall(sig.name, ar.texprs, fr.tys))
+    ir_leaf(subst_apply(ar.subst, inst_ret), ar.subst, ar.state, TFnCall(sig.module, sig.name, ar.texprs, fr.tys))
 }
 
 struct CallArgsResult { subst: Subst, state: FreshState, texprs: Array[TExpr] }

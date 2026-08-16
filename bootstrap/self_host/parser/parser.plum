@@ -128,7 +128,19 @@ pub enum ItemKindNode {
     IKUse(UseDeclNode),
 }
 
-pub struct ItemNode { is_pub: Bool, kind: ItemKindNode }
+// `module` is the MODULE this item was declared in — the name of the
+// directory holding its file, or "" for a file at the project root.
+//
+// The parser cannot know it (it sees one file's tokens and nothing
+// about where they came from), so it writes "" and the project loader
+// stamps the real name on afterwards, via `with_module`. That keeps
+// module identity out of the grammar, where it does not belong, while
+// still making it part of the AST, where every later pass needs it.
+pub struct ItemNode { is_pub: Bool, module: String, kind: ItemKindNode }
+
+// Stamps a module name onto every item parsed from one file.
+pub let with_module (items: Array[ItemNode]) (m: String): Array[ItemNode] =
+    Array.map(items, |it| ItemNode { is_pub: it.is_pub, module: m, kind: it.kind })
 pub struct ProgramNode { items: Array[ItemNode] }
 
 // --- lexer.Token-stream helpers (the `(tokens, pos) -> (value, next_pos)`
@@ -187,12 +199,12 @@ let parse_item (tokens: Array[lexer.Token]) (pos: Int): ItemResult = {
     let pub_bump = bump_if(tokens, pos, TokPub);
     let start = pub_bump.next_pos;
     match tokens[start] {
-        TokLet => { let r = parse_let_def(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, kind: IKLet(r.value) }, next_pos: r.next_pos } },
-        TokStruct => { let r = parse_struct_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, kind: IKStruct(r.value) }, next_pos: r.next_pos } },
-        TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, kind: IKEnum(r.value) }, next_pos: r.next_pos } },
-        TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, kind: IKExtern(r.value) }, next_pos: r.next_pos } },
-        TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, kind: IKUse(r.value) }, next_pos: r.next_pos } },
-        _ => { fail("expected an item (let/struct/enum/extern/use)"); ItemResult { value: ItemNode { is_pub: false, kind: IKUse(UseDeclNode { path: [] }) }, next_pos: start } },
+        TokLet => { let r = parse_let_def(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKLet(r.value) }, next_pos: r.next_pos } },
+        TokStruct => { let r = parse_struct_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKStruct(r.value) }, next_pos: r.next_pos } },
+        TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKEnum(r.value) }, next_pos: r.next_pos } },
+        TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKExtern(r.value) }, next_pos: r.next_pos } },
+        TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKUse(r.value) }, next_pos: r.next_pos } },
+        _ => { fail("expected an item (let/struct/enum/extern/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }) }, next_pos: start } },
     }
 }
 

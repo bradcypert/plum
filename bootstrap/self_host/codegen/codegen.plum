@@ -218,7 +218,14 @@ let cg_capture_offset (index: Int): Int = 24 + 8 * index
 // A Plum name may contain a `.` (`Point.add`, an associated function),
 // which LLVM would accept only inside quotes; mangling keeps every
 // emitted symbol a plain identifier.
-let cg_global_slot (name: String): String = "@g.".concat(cg_mangle(name))
+// A global reference has the same module question as a function call,
+// and the same answer: the checker already resolved which global this
+// is, so recovering its module by name is enough.
+let cg_global_module_of (p: CgProgram) (name: String): String = cg_global_module_acc(p.globals, name, 0)
+let cg_global_module_acc (gs: Array[typecheck.TFn]) (name: String) (i: Int): String =
+    if i >= gs.len() { "" } else if gs[i].name == name { gs[i].module } else { cg_global_module_acc(gs, name, i + 1) }
+
+let cg_global_slot (module_name: String) (name: String): String = "@g.".concat(cg_sym(module_name, name, []))
 
 let cg_mangle (name: String): String = "plum_".concat(chars_join(Array.map(chars_of(name), |c| if c == "." { "_" } else { c })))
 
@@ -241,14 +248,20 @@ let cg_mangle (name: String): String = "plum_".concat(chars_join(Array.map(chars
 // `cg_concrete`. That is only sound because nothing about a body's
 // SHAPE depends on its type arguments, which is true here and would
 // stop being true if this backend ever specialized on values.
-pub struct CgInst { name: String, targs: Array[typecheck.ITy] }
+// A function is identified by MODULE and name: two modules may declare
+// the same name, and they must not share a symbol.
+pub struct CgInst { module: String, name: String, targs: Array[typecheck.ITy] }
 
 // A symbol name that is unique per instantiation. Monomorphic functions
 // keep their plain mangled name, so the entry point stays `@plum_main`
 // and the generated IR stays readable for the common case.
-let cg_sym (name: String) (targs: Array[typecheck.ITy]): String =
-    if Array.is_empty(targs) { cg_mangle(name) }
-    else { cg_mangle(name).concat("__").concat(cg_targ_suffix(targs, 0, "")) }
+// The module is part of the symbol. Without it `alpha.helper` and
+// `beta.helper` collide in LLVM — the checker would accept the program
+// and the backend would silently emit one function for both.
+let cg_sym (module_name: String) (name: String) (targs: Array[typecheck.ITy]): String = {
+    let base = if module_name == "" { cg_mangle(name) } else { cg_mangle(module_name.concat(".").concat(name)) };
+    if Array.is_empty(targs) { base } else { base.concat("__").concat(cg_targ_suffix(targs, 0, "")) }
+}
 
 let cg_targ_suffix (targs: Array[typecheck.ITy]) (i: Int) (acc: String): String =
     if i >= targs.len() { acc }
@@ -277,7 +290,7 @@ let cg_ity_mangle (t: typecheck.ITy): String =
     }
 
 let cg_inst_eq (a: CgInst) (b: CgInst): Bool =
-    a.name == b.name && cg_sym(a.name, a.targs) == cg_sym(b.name, b.targs)
+    a.module == b.module && a.name == b.name && cg_sym(a.module, a.name, a.targs) == cg_sym(b.module, b.name, b.targs)
 
 let cg_inst_seen (done: Array[CgInst]) (x: CgInst) (i: Int): Bool =
     if i >= done.len() { false } else if cg_inst_eq(done[i], x) { true } else { cg_inst_seen(done, x, i + 1) }
@@ -469,11 +482,11 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TIdent(name) => cg_ident(p, env, n, name, cg_ty(p, e)),
         // A global's slot owns its value for the whole program, so a
         // read borrows a reference the same way a local's does.
-        TGlobalRef(name) => {
+        TGlobalRef(gm, name) => {
             let ty = cg_ty(p, e);
             let reg = cg_reg(n);
             Emit {
-                code: "  ".concat(reg).concat(" = load ").concat(cg_llvm_ty(ty)).concat(", ptr ").concat(cg_global_slot(name)).concat("\n").concat(cg_inc(ty, reg)),
+                code: "  ".concat(reg).concat(" = load ").concat(cg_llvm_ty(ty)).concat(", ptr ").concat(cg_global_slot(gm, name)).concat("\n").concat(cg_inc(ty, reg)),
                 allocas: "", releases: "", globals: "", val: reg, ty: ty, n: n + 1,
             }
         },
@@ -489,7 +502,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TClosure(params, body) => cg_closure(p, env, n, params, body, cg_concrete(p, typecheck.texpr_ty(p.subst, e))),
         TStructLit(name, fields) => cg_struct_lit(p, env, n, name, fields),
         TVariantNew(tag, args) => cg_variant_call(p, env, n, tag, args),
-        TFnCall(name, args, targs) => cg_fn_call(p, env, n, name, args, targs, cg_ty(p, e)),
+        TFnCall(m, name, args, targs) => cg_fn_call(p, env, n, m, name, args, targs, cg_ty(p, e)),
         TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
         TArrayNs(name, args) => cg_array_ns_call(p, env, n, name, args),
@@ -972,13 +985,14 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExp
 // concrete type arguments into it — so a call site needs no knowledge
 // of monomorphization beyond resolving those arguments through the
 // enclosing specialization.
-let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy): Emit = {
+let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy): Emit = {
     let sym = match cg_array_concat_sym(p, name, targs) {
         Some(rt) => rt,
         None => match cg_runtime_fn(name) {
         Some(rt) => rt,
         None =>
-            if cg_has_fn(p, name) { "@".concat(cg_sym(name, cg_concrete_list(p, targs, 0, []))) }
+            if false { "" }
+            else if cg_has_fn_in(p, module_name, name, 0) { "@".concat(cg_sym(module_name, name, cg_concrete_list(p, targs, 0, []))) }
             else { { cg_fail("prelude function ".concat(name).concat(" has no implementation in this backend's runtime yet")); "@plum_missing" } },
     } };
     let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
@@ -1022,9 +1036,14 @@ let cg_runtime_fn (name: String): Option[String] =
 let cg_concrete_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= ts.len() { acc } else { cg_concrete_list(p, ts, i + 1, acc.push(cg_concrete(p, ts[i]))) }
 
-let cg_has_fn (p: CgProgram) (name: String): Bool = cg_has_fn_acc(p.fns, name, 0)
-let cg_has_fn_acc (fns: Array[typecheck.TFn]) (name: String) (i: Int): Bool =
-    if i >= fns.len() { false } else if fns[i].name == name { true } else { cg_has_fn_acc(fns, name, i + 1) }
+let cg_has_fn (p: CgProgram) (name: String): Bool = Option.is_some(cg_find_fn_any(p, name, 0))
+
+// The checker has already resolved which function a call means, so a
+// name reaching the backend is unambiguous in context; scanning for it
+// by name alone is enough to recover its MODULE, which is what the
+// symbol needs.
+let cg_find_fn_any (p: CgProgram) (name: String) (i: Int): Option[typecheck.TFn] =
+    if i >= p.fns.len() { None } else if p.fns[i].name == name { Some(p.fns[i]) } else { cg_find_fn_any(p, name, i + 1) }
 
 struct ArgVals { code: String, allocas: String, releases: String, globals: String, vals: Array[String], n: Int }
 
@@ -1897,7 +1916,7 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     let entry = cg_param_slots(params, Array.map(def.params, |q| cg_concrete(p, q.ty)), 0, [], "", "");
     let ret = cg_of_ity(cg_concrete(p, def.ret));
     let body = cg_expr(p, entry.env, n0, def.body);
-    let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(cg_sym(def.name, targs)).concat("(").concat(cg_param_decls(params)).concat(") {\nentry:\n");
+    let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(cg_sym(def.module, def.name, targs)).concat("(").concat(cg_param_decls(params)).concat(") {\nentry:\n");
     // Every `alloca` is hoisted here, at the top of the entry block,
     // ahead of any instruction that could branch — see `Emit`'s own
     // comment for why that is a correctness requirement inside loops
@@ -2530,7 +2549,7 @@ pub let cg_emit_program (program0: parser.ProgramNode): String = {
     if !cg_has_fn(p, "main") { cg_fail("no top-level 'main' function to compile") };
     // Globals are roots too: their bodies can call functions that
     // nothing else reaches.
-    let insts = cg_reachable(p, cg_global_roots(p, 0, [CgInst { name: "main", targs: [] }]), [], 0);
+    let insts = cg_reachable(p, cg_global_roots(p, 0, [CgInst { module: "", name: "main", targs: [] }]), [], 0);
     // Equality functions are discovered from the SAME reachable set —
     // an aggregate compared inside an unreachable function needs no
     // function emitted for it.
@@ -2561,13 +2580,15 @@ pub let cg_emit_program (program0: parser.ProgramNode): String = {
 // emission passes for no other benefit.
 struct GlobalsEmit { slots: String, init: String }
 
-let cg_global_dup (gs: Array[typecheck.TFn]) (name: String) (j: Int) (upto: Int): Bool =
-    if j >= upto { false } else if gs[j].name == name { true } else { cg_global_dup(gs, name, j + 1, upto) }
+let cg_global_dup (gs: Array[typecheck.TFn]) (module_name: String) (name: String) (j: Int) (upto: Int): Bool =
+    if j >= upto { false }
+    else if gs[j].name == name && gs[j].module == module_name { true }
+    else { cg_global_dup(gs, module_name, name, j + 1, upto) }
 
 let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: String): GlobalsEmit =
     if i >= p.globals.len() {
         GlobalsEmit { slots: slots, init: "define void @plum_init_globals() {\nentry:\n".concat(body).concat("  ret void\n}\n\n") }
-    } else if cg_global_dup(p.globals, p.globals[i].name, 0, i) {
+    } else if cg_global_dup(p.globals, p.globals[i].module, p.globals[i].name, 0, i) {
         // The flat module namespace lets two modules declare the same
         // global — `UPPERCASE_CHARS` exists in both `interp.plum` and
         // `infer.plum`. `find_global_def` resolves every reference to
@@ -2579,9 +2600,9 @@ let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: Stri
         let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [] };
         let ty = cg_of_ity(cg_concrete(gp, g.ret));
         let r = cg_expr(gp, [], n, g.body);
-        let slot = "@g.".concat(cg_mangle(g.name)).concat(" = global ").concat(cg_llvm_ty(ty)).concat(" ").concat(cg_zero_of(ty)).concat("\n");
+        let slot = cg_global_slot(g.module, g.name).concat(" = global ").concat(cg_llvm_ty(ty)).concat(" ").concat(cg_zero_of(ty)).concat("\n");
         let init = r.allocas.concat(r.code)
-            .concat("  store ").concat(cg_llvm_ty(ty)).concat(" ").concat(r.val).concat(", ptr ").concat(cg_global_slot(g.name)).concat("\n")
+            .concat("  store ").concat(cg_llvm_ty(ty)).concat(" ").concat(r.val).concat(", ptr ").concat(cg_global_slot(g.module, g.name)).concat("\n")
             .concat(r.releases);
         cg_emit_globals(p, i + 1, r.n, slots.concat(r.globals).concat(slot), body.concat(init))
     }
@@ -2607,7 +2628,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
         if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" { cg_reachable(p, rest, done, fuel + 1) }
         else if cg_inst_seen(done, head, 0) { cg_reachable(p, rest, done, fuel + 1) }
         else {
-            match cg_find_tfn(p, head.name, 0) {
+            match cg_find_tfn(p, head.module, head.name, 0) {
                 // A runtime-implemented prelude function has no Plum
                 // body to walk or specialize — it is already a symbol.
                 None => if Option.is_some(cg_runtime_fn(head.name)) { cg_reachable(p, rest, done, fuel + 1) } else {
@@ -2630,7 +2651,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
 let cg_rel_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= insts.len() { acc }
     else {
-        match cg_find_tfn(p, insts[i].name, 0) {
+        match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_rel_types_of(p, insts, i + 1, acc),
             Some(def) => {
                 let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs };
@@ -2646,7 +2667,7 @@ let cg_rel_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[t
 let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] = {
     let here = cg_rel_close(p, cg_concrete(p, typecheck.texpr_ty(p.subst, e)), acc);
     match e.node {
-        TFnCall(_, args, _) => cg_rel_in_list(p, args, 0, here),
+        TFnCall(_, _, args, _) => cg_rel_in_list(p, args, 0, here),
         TClosureCall(callee, args) => cg_rel_in_list(p, args, 0, cg_rel_in(p, callee, here)),
         TMethodCall(_, base, args) => cg_rel_in_list(p, args, 0, cg_rel_in(p, base, here)),
         TArrayNs(_, args) => cg_rel_in_list(p, args, 0, here),
@@ -2668,7 +2689,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TClosure(_, body) => cg_rel_in(p, body, here),
         TStructLit(_, fields) => cg_rel_in_fields(p, fields, 0, here),
         TInt(_) => here, TFloat(_) => here, TStr(_) => here, TBool(_) => here,
-        TUnitLit => here, TIdent(_) => here, TGlobalRef(_) => here, TUnsupported(_) => here,
+        TUnitLit => here, TIdent(_) => here, TGlobalRef(_, _) => here, TUnsupported(_) => here,
     }
 }
 
@@ -2704,7 +2725,7 @@ let cg_rel_in_fields (p: CgProgram) (fields: Array[typecheck.TFieldInit]) (i: In
 let cg_eq_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= insts.len() { acc }
     else {
-        match cg_find_tfn(p, insts[i].name, 0) {
+        match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_eq_types_of(p, insts, i + 1, acc),
             Some(def) => {
                 let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs };
@@ -2719,7 +2740,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
             let inner = cg_eq_in(p, r, cg_eq_in(p, l, acc));
             if cg_is_equality(op) { cg_eq_close(p, cg_concrete(p, typecheck.texpr_ty(p.subst, l)), inner) } else { inner }
         },
-        TFnCall(_, args, _) => cg_eq_in_list(p, args, 0, acc),
+        TFnCall(_, _, args, _) => cg_eq_in_list(p, args, 0, acc),
         TClosureCall(callee, args) => cg_eq_in_list(p, args, 0, cg_eq_in(p, callee, acc)),
         TMethodCall(_, base, args) => cg_eq_in_list(p, args, 0, cg_eq_in(p, base, acc)),
         TArrayNs(_, args) => cg_eq_in_list(p, args, 0, acc),
@@ -2743,7 +2764,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TClosure(_, body) => cg_eq_in(p, body, acc),
         TStructLit(_, fields) => cg_eq_in_fields(p, fields, 0, acc),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
-        TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_) => acc, TUnsupported(_) => acc,
+        TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
     }
 
 let cg_eq_in_list (p: CgProgram) (es: Array[typecheck.TExpr]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
@@ -2783,8 +2804,15 @@ let cg_global_roots (p: CgProgram) (i: Int) (acc: Array[CgInst]): Array[CgInst] 
         cg_global_roots(p, i + 1, Array.concat(acc, cg_calls_in(gp, g.body, [])))
     }
 
-let cg_find_tfn (p: CgProgram) (name: String) (i: Int): Option[typecheck.TFn] =
-    if i >= p.fns.len() { None } else if p.fns[i].name == name { Some(p.fns[i]) } else { cg_find_tfn(p, name, i + 1) }
+let cg_has_fn_in (p: CgProgram) (module_name: String) (name: String) (i: Int): Bool =
+    if i >= p.fns.len() { false }
+    else if p.fns[i].name == name && p.fns[i].module == module_name { true }
+    else { cg_has_fn_in(p, module_name, name, i + 1) }
+
+let cg_find_tfn (p: CgProgram) (module_name: String) (name: String) (i: Int): Option[typecheck.TFn] =
+    if i >= p.fns.len() { None }
+    else if p.fns[i].name == name && p.fns[i].module == module_name { Some(p.fns[i]) }
+    else { cg_find_tfn(p, module_name, name, i + 1) }
 
 // Every `TFnCall` in a body, with its type arguments resolved through
 // the enclosing specialization. A separate traversal from emission on
@@ -2793,7 +2821,7 @@ let cg_find_tfn (p: CgProgram) (name: String) (i: Int): Option[typecheck.TFn] =
 // instantiation that appears earlier in the output.
 let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[CgInst] =
     match e.node {
-        TFnCall(name, args, targs) => cg_calls_in_list(p, args, acc.push(CgInst { name: name, targs: cg_concrete_list(p, targs, 0, []) })),
+        TFnCall(m, name, args, targs) => cg_calls_in_list(p, args, acc.push(CgInst { module: m, name: name, targs: cg_concrete_list(p, targs, 0, []) })),
         TClosureCall(callee, args) => cg_calls_in_list(p, args, cg_calls_in(p, callee, acc)),
         TMethodCall(_, base, args) => cg_calls_in_list(p, args, cg_calls_in(p, base, acc)),
         TArrayNs(_, args) => cg_calls_in_list(p, args, acc),
@@ -2815,7 +2843,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TClosure(_, body) => cg_calls_in(p, body, acc),
         TStructLit(_, fields) => cg_calls_in_fields(p, fields, 0, acc),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
-        TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_) => acc, TUnsupported(_) => acc,
+        TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
     }
 
 let cg_calls_in_list (p: CgProgram) (es: Array[typecheck.TExpr]) (acc: Array[CgInst]): Array[CgInst] = cg_calls_in_list_acc(p, es, 0, acc)
@@ -2851,7 +2879,7 @@ let cg_calls_in_fields (p: CgProgram) (fields: Array[typecheck.TFieldInit]) (i: 
 let cg_emit_insts (p: CgProgram) (insts: Array[CgInst]) (i: Int) (n: Int) (acc: String): String =
     if i >= insts.len() { acc }
     else {
-        match cg_find_tfn(p, insts[i].name, 0) {
+        match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_emit_insts(p, insts, i + 1, n, acc),
             Some(def) => {
                 let f = cg_fn(p, def, insts[i].targs, n);
