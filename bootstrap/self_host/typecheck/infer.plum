@@ -244,6 +244,23 @@ pub let typed_program (program: parser.ProgramNode): Array[TFn] = {
     typed_fns_acc(p2, program.items, 0, [])
 }
 
+// Every top-level 0-parameter binding, typed, in declaration order —
+// which is the order they have to be initialised in, since one may
+// reference another.
+pub let typed_globals (program: parser.ProgramNode): Array[TFn] = {
+    let ctx = build_context(program);
+    let p2 = build_sigs(ctx, program);
+    typed_globals_acc(p2, p2.globals, 0, [])
+}
+
+let typed_globals_acc (p2: Program2) (globals: Array[parser.LetDefNode]) (i: Int) (acc: Array[TFn]): Array[TFn] =
+    if i >= globals.len() { acc }
+    else {
+        let r = infer_expr(p2, fresh_state_new(()), tyenv_empty(()), subst_empty(()), globals[i].body);
+        typed_globals_acc(p2, globals, i + 1,
+            acc.push(TFn { name: globals[i].name, generics: [], params: [], ret: subst_apply(r.subst, r.ty), body: r.texpr, subst: r.subst }))
+    }
+
 let typed_fns_acc (p2: Program2) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[TFn]): Array[TFn] =
     if i >= items.len() { acc }
     else {
@@ -321,11 +338,16 @@ let extend_closure_params (env: TyEnv) (params: Array[String]) (tys: Array[ITy])
 let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (name: String): InferResult =
     match tyenv_lookup(env, name) {
         Some(ty) => ir_leaf(ty, acc, state, TIdent(name)),
-        // A top-level 0-parameter binding is inlined by inference. The
-        // typed tree records the INLINED body, not a reference, which
-        // is exactly what a backend with no global slots needs.
+        // A top-level 0-parameter binding. Its BODY is still inferred —
+        // that is where its type comes from, and it has to be checked
+        // anyway — but the node records a REFERENCE rather than the
+        // inlined body, so a backend can evaluate it once into a slot
+        // instead of at every mention.
         None => match find_global_def(p2.globals, name) {
-            Some(def) => infer_expr(p2, state, tyenv_empty(()), acc, def.body),
+            Some(def) => {
+                let r = infer_expr(p2, state, tyenv_empty(()), acc, def.body);
+                ir_leaf(r.ty, r.subst, r.state, TGlobalRef(name))
+            },
             None => if is_capitalized_name(name) { infer_variant(p2, state, acc, name, [], []) } else { { fail_tc("unbound variable: ".concat(name)); ir_unsupported(acc, state, "unbound variable ".concat(name)) } },
         },
     }

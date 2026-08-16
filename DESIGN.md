@@ -8913,3 +8913,78 @@ Perceus writes into the corpse instead of calling `free` and then
 rather than the traffic it says is cheap. It also needs last-use
 analysis as a prerequisite — so the analysis is still worth building,
 just for reuse rather than for skipping increments.
+
+### Profiling the backend, and what it found (2026-08-16)
+
+The borrow measurement said the counting was not the cost. Rather than
+guess again, the backend grew allocation counters — `PLUM_RT_STATS=1`,
+the same instrument the real backend has as `PLUM_ALLOC_STATS`, and
+added here *before* guessing rather than after.
+
+The first reading:
+
+```
+[plum-rt] alloc n=21351500 bytes=6779281738 | str=18681380 concat=219002 array=1055684
+```
+
+**21.4 million allocations, and 87% of them were `plum_str_new`.** Two
+causes, one obvious and one not.
+
+**String literals allocated on every evaluation.** A literal emitted raw
+bytes to be copied into a fresh cell each time it was reached. They are
+now complete STATIC cells — refcount, length and bytes — used directly,
+with a refcount of `-1` marking them IMMORTAL: `plum_rc_inc` and every
+release skip a negative count. A sentinel rather than a large positive
+number, because "negative means static" cannot be reached by counting.
+Worth 2.3 million allocations, and less than expected.
+
+**The checker was inlining every top-level 0-parameter binding.** This
+was the real one. `infer_ident` returned the global's BODY in place of
+the reference, so `PLUM_DIGIT_CHARS = chars_of(PLUM_DIGITS)` in the
+lexer was re-split into 10 fresh string cells *for every character
+classified*. The typed tree now records a `TGlobalRef`, and the backend
+gives each global a module-level slot filled once by
+`@plum_init_globals` — which is exactly what the real backend does, and
+what this one had no equivalent of.
+
+```
+before: alloc n=19018023  str=16348552
+after:  alloc n= 2797519  str=  503962
+```
+
+**A 32x reduction in string allocations from one checker change.** It is
+also the second time in this project that character-classification
+globals have been the hot spot — the same finding, arrived at
+independently, in two different implementations.
+
+`Array.concat` was also given a single-allocation implementation (the
+prelude's is `array_concat_acc(a.push(b[i]), b, i + 1)`, one push per
+element, each copying the whole array — O(n²) bytes). The call site picks
+between two runtime variants by the instantiated type argument, since a
+result holding heap elements needs its own reference to each and one
+holding `Int`s must not touch them. That kind of type-directed choice is
+something only a backend with the typed tree can make.
+
+#### Where it stands, and what is left
+
+| | allocations | peak RSS | time |
+| --- | --- | --- | --- |
+| leaking | 21.4M | 6,595 MB | 1.35s |
+| counted | 21.4M | 63.8 MB | 2.95s |
+| + static literals, global slots, `Array.concat` | **2.8M** | **46.6 MB** | **2.58s** |
+
+**The remaining 6.5 GB of allocated bytes is one shape:** `acc =
+acc.push(x)` in an accumulator loop, where every push copies the whole
+array. 680,784 array allocations averaging 9.6 KB. That is the same
+accidental O(n²) this project has now hit in four separate places.
+
+Fixing it needs REUSE — appending in place when the array is dying —
+and reuse needs to know the receiver is dead. A dynamic `rc == 1` check
+is not enough, and the reason is worth stating: under borrowing, the
+slot's own reference IS the 1, so a unique count does not mean the value
+is unobserved. Only a last-use analysis can distinguish "the only
+reference" from "the last use of the only reference".
+
+So the earlier conclusion stands but for a sharper reason. Last-use
+analysis is worth building — not to remove increments, which measurement
+showed is worth 3%, but to enable reuse, which is worth the 6.5 GB.

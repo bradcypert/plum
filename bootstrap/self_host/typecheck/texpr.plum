@@ -51,6 +51,14 @@ pub enum TNode {
     // where that stops being a tuple.
     TUnitLit,
     TIdent(String),
+    // A reference to a top-level 0-parameter binding. Inference used to
+    // INLINE these — it returned the global's body in place of the
+    // reference — which is correct but makes the backend re-evaluate
+    // the body at every mention. `PLUM_DIGIT_CHARS = chars_of(..)` in
+    // the lexer was being recomputed once per character classified.
+    // Recording a reference instead lets a backend evaluate each global
+    // once, into a slot.
+    TGlobalRef(String),
     TArrayLit(Array[TExpr]),
     TTupleLit(Array[TExpr]),
     TUnary(parser.UOp, TExpr),

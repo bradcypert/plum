@@ -167,7 +167,7 @@ pub struct CgEnumDecl { name: String, variants: Array[CgVariant] }
 // (`cg_concrete`), which is the whole of monomorphization's effect on
 // emission — there is no rewritten copy of the body anywhere, only a
 // different mapping applied while walking the same one.
-pub struct CgProgram { fns: Array[typecheck.TFn], ctx: typecheck.TyContext, enums: Array[CgEnumDecl], subst: typecheck.Subst, generics: Array[String], targs: Array[typecheck.ITy] }
+pub struct CgProgram { fns: Array[typecheck.TFn], globals: Array[typecheck.TFn], ctx: typecheck.TyContext, enums: Array[CgEnumDecl], subst: typecheck.Subst, generics: Array[String], targs: Array[typecheck.ITy] }
 
 // --- Cell layouts ---
 //
@@ -218,6 +218,8 @@ let cg_capture_offset (index: Int): Int = 24 + 8 * index
 // A Plum name may contain a `.` (`Point.add`, an associated function),
 // which LLVM would accept only inside quotes; mangling keeps every
 // emitted symbol a plain identifier.
+let cg_global_slot (name: String): String = "@g.".concat(cg_mangle(name))
+
 let cg_mangle (name: String): String = "plum_".concat(chars_join(Array.map(chars_of(name), |c| if c == "." { "_" } else { c })))
 
 // --- Monomorphization ---
@@ -286,6 +288,7 @@ pub let cg_build_program (program: parser.ProgramNode): CgProgram =
         // `typed_program` IS `check_program` with the results kept, so
         // the backend cannot compile anything the checker didn't prove.
         fns: typecheck.typed_program(program),
+        globals: typecheck.typed_globals(program),
         // Field names and field/payload TYPES come straight from the
         // checker's own declaration tables — the backend re-resolves
         // nothing. Only variant TAGS are assigned here, because tag
@@ -425,9 +428,23 @@ let cg_escape_char (c: String): String =
     else if c == "\r" { "\\0D" }
     else { c }
 
+// A string literal is emitted as a COMPLETE, STATIC cell — refcount,
+// length and bytes — not as raw bytes to be copied into a fresh cell at
+// runtime. Copying was costing an allocation every time the literal was
+// evaluated, and the compiler evaluates thousands of them constantly:
+// 18.7 of 21.4 million allocations were `plum_str_new`, measured with
+// PLUM_RT_STATS.
+//
+// The refcount is -1, which marks the cell IMMORTAL: `plum_rc_inc` and
+// every release skip a negative count, so a static cell is never
+// touched and never freed. A sentinel rather than a huge positive
+// number, because "negative means static" cannot be reached by
+// counting.
 let cg_str_constant (n: Int) (s: String): String = {
-    let len = s.len() + 1;
-    "@.str".concat(n.to_string()).concat(" = private constant [").concat(len.to_string()).concat(" x i8] c\"").concat(cg_escape_llvm(s)).concat("\\00\"\n")
+    let bytes = s.len();
+    let arr = bytes + 1;
+    "@.str".concat(n.to_string()).concat(" = private global { i64, i64, [").concat(arr.to_string()).concat(" x i8] } { i64 -1, i64 ")
+        .concat(bytes.to_string()).concat(", [").concat(arr.to_string()).concat(" x i8] c\"").concat(cg_escape_llvm(s)).concat("\\00\" }\n")
 }
 
 // --- Expression emission ---
@@ -444,16 +461,22 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TFloat(v) => cg_float_literal(v, n),
         TBool(v) => Emit { code: "", allocas: "", releases: "",globals: "", val: if v { "1" } else { "0" }, ty: CgBool, n: n },
         TUnitLit => cg_unit_emit(n),
-        TStr(v) => {
-            let gname = "@.str".concat(n.to_string());
-            let reg = cg_reg(n + 1);
-            Emit {
-                code: "  ".concat(reg).concat(" = call ptr @plum_str_new(ptr ").concat(gname).concat(", i64 ").concat(v.len().to_string()).concat(")\n"),
-                allocas: "", releases: "",globals: cg_str_constant(n, v),
-                val: reg, ty: CgStr, n: n + 2,
-            }
+        // No allocation and no copy: the literal IS the cell.
+        TStr(v) => Emit {
+            code: "", allocas: "", releases: "", globals: cg_str_constant(n, v),
+            val: "@.str".concat(n.to_string()), ty: CgStr, n: n + 2,
         },
         TIdent(name) => cg_ident(p, env, n, name, cg_ty(p, e)),
+        // A global's slot owns its value for the whole program, so a
+        // read borrows a reference the same way a local's does.
+        TGlobalRef(name) => {
+            let ty = cg_ty(p, e);
+            let reg = cg_reg(n);
+            Emit {
+                code: "  ".concat(reg).concat(" = load ").concat(cg_llvm_ty(ty)).concat(", ptr ").concat(cg_global_slot(name)).concat("\n").concat(cg_inc(ty, reg)),
+                allocas: "", releases: "", globals: "", val: reg, ty: ty, n: n + 1,
+            }
+        },
         TUnary(op, inner) => cg_unary(p, env, n, op, inner),
         TBinary(op, lhs, rhs) => cg_binary(p, env, n, op, lhs, rhs, cg_ty(p, e)),
         TIf(cond, then_branch, else_branch) => cg_if(p, env, n, cond, then_branch, else_branch, cg_ty(p, e)),
@@ -818,14 +841,29 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
             // Assignment needs no new slot — that is the whole payoff of
             // every local being an `alloca`: `let mut` and `let` are the
             // same thing here, and a reassignment is one `store`.
-            TSAssign(name, value) => {
+            // `acc = acc.concat(x)` — the slot's current value is dead
+            // the instant the slot is overwritten, which is the one
+            // place ownership can be transferred into an operation
+            // without any liveness analysis. That makes it eligible for
+            // REUSE: appending in place when the cell turns out to be
+            // uniquely referenced, instead of allocating a copy.
+            //
+            // This exact shape is what caused three separate accidental
+            // O(n^2) blowups earlier in this project (string joins,
+            // `Array.push` accumulation, `String.index_of`), so it is
+            // worth special-casing even though a general last-use
+            // analysis would subsume it.
+            TSAssign(name, value) => if cg_is_self_concat(name, value) {
+                let rest0 = cg_self_concat(p, env, n, name, value, stmts, i);
+                rest0
+            } else {
                 let r = cg_expr(p, env, n, value);
                 let store = match cg_lookup(env, name) {
                     Some(slot) => cg_release_slot(cg_concrete(p, typecheck.texpr_ty(p.subst, value)), slot.ptr, "_a".concat(r.n.to_string())).concat("  store ").concat(cg_llvm_ty(slot.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(slot.ptr).concat("\n"),
                     None => { cg_fail("assignment to an unbound name: ".concat(name)); "" },
                 };
                 let rest = cg_stmts(p, env, r.n + 1, stmts, i + 1);
-                BlockEmit { code: r.code.concat(store).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: r.releases.concat(rest.releases),globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
+                BlockEmit { code: r.code.concat(store).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: r.releases.concat(rest.releases), globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
             },
             TSExpr(e) => {
                 let r = cg_expr(p, env, n, e);
@@ -834,6 +872,38 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
                 BlockEmit { code: r.code.concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, e)), r.val)).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: r.releases.concat(rest.releases),globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
             },
         }
+    }
+
+// Is this assignment `x = x.concat(<something>)`?
+let cg_is_self_concat (name: String) (value: typecheck.TExpr): Bool =
+    match value.node {
+        TMethodCall(m, base, args) =>
+            if m == "concat" && args.len() == 1 { match base.node { TIdent(b) => b == name, _ => false } } else { false },
+        _ => false,
+    }
+
+let cg_self_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (value: typecheck.TExpr) (stmts: Array[typecheck.TStmt]) (i: Int): BlockEmit =
+    match value.node {
+        TMethodCall(_, base, args) => match cg_lookup(env, name) {
+            None => { cg_fail("assignment to an unbound name: ".concat(name)); cg_stmts(p, env, n, stmts, i + 1) },
+            Some(slot) => {
+                // The receiver is loaded WITHOUT incrementing and
+                // handed to the reusing concat, which consumes it. No
+                // `_pre` release either: the slot's reference moved
+                // into the call rather than being dropped.
+                let recv = cg_reg(n);
+                let arg = cg_borrow(p, env, n + 1, args[0]);
+                let out = cg_reg(arg.n);
+                let code = "  ".concat(recv).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
+                    .concat(arg.code)
+                    .concat("  ").concat(out).concat(" = call ptr @plum_str_concat_reuse(ptr ").concat(recv).concat(", ptr ").concat(arg.val).concat(")\n")
+                    .concat(arg.drop)
+                    .concat("  store ptr ").concat(out).concat(", ptr ").concat(slot.ptr).concat("\n");
+                let rest = cg_stmts(p, env, arg.n + 1, stmts, i + 1);
+                BlockEmit { code: code.concat(rest.code), allocas: arg.allocas.concat(rest.allocas), releases: arg.releases.concat(rest.releases), globals: arg.globals.concat(rest.globals), env: rest.env, n: rest.n }
+            },
+        },
+        _ => { cg_fail("internal: cg_self_concat on a non-concat"); cg_stmts(p, env, n, stmts, i + 1) },
     }
 
 let cg_let_name (pattern: parser.PPattern): String =
@@ -869,16 +939,18 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExp
 // of monomorphization beyond resolving those arguments through the
 // enclosing specialization.
 let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy): Emit = {
-    let sym = match cg_runtime_fn(name) {
+    let sym = match cg_array_concat_sym(p, name, targs) {
+        Some(rt) => rt,
+        None => match cg_runtime_fn(name) {
         Some(rt) => rt,
         None =>
             if cg_has_fn(p, name) { "@".concat(cg_sym(name, cg_concrete_list(p, targs, 0, []))) }
             else { { cg_fail("prelude function ".concat(name).concat(" has no implementation in this backend's runtime yet")); "@plum_missing" } },
-    };
+    } };
     let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
     let reg = cg_reg(a.n);
     let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(sym).concat("(").concat(cg_join_commas(a.vals)).concat(")\n")
-        .concat(if Option.is_some(cg_runtime_fn(name)) { cg_dec_args(p, args, a.vals, 0, "") } else { "" });
+        .concat(if Option.is_some(cg_runtime_fn(name)) || name == "Array.concat" { cg_dec_args(p, args, a.vals, 0, "") } else { "" });
     Emit { code: a.code.concat(call), allocas: a.allocas, releases: a.releases, globals: a.globals, val: reg, ty: ret, n: a.n + 1 }
 }
 
@@ -892,6 +964,16 @@ let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args
 // it. Anything that CAN be written in Plum is, in `cg_prelude_src`,
 // because prelude source this backend compiles is prelude source it
 // also proves it can handle.
+// `Array.concat[T]` is intercepted and given a single-allocation
+// implementation, with the variant chosen by T: a result holding heap
+// elements needs its own reference to each, one holding `Int`s must not
+// touch them. Choosing by the CALL SITE's instantiated type argument is
+// something only a backend with the typed tree can do.
+let cg_array_concat_sym (p: CgProgram) (name: String) (targs: Array[typecheck.ITy]): Option[String] =
+    if name == "Array.concat" && targs.len() == 1 {
+        if cg_is_heap(cg_of_ity(cg_concrete(p, targs[0]))) { Some("@plum_array_concat_heap") } else { Some("@plum_array_concat") }
+    } else { None }
+
 let cg_runtime_fn (name: String): Option[String] =
     if name == "chars_of" { Some("@plum_chars_of") }
     else if name == "panic_raw" { Some("@plum_panic") }
@@ -1673,13 +1755,13 @@ let cg_pat_cmp (env: Array[CgSlot]) (n: Int) (op: String) (sval: String) (lit: S
 }
 
 let cg_pat_str (env: Array[CgSlot]) (n: Int) (sval: String) (lit: String): PatEmit = {
+    // Compared directly against the STATIC cell — no copy. The literal
+    // global IS a complete string cell now, so building a fresh one to
+    // compare against would both allocate and, worse, copy from the
+    // cell's refcount word as if it were the first byte of text.
     let gname = "@.str".concat(n.to_string());
-    let sreg = cg_reg(n + 1);
     let test = cg_reg(n + 2);
-    let code = "  ".concat(sreg).concat(" = call ptr @plum_str_new(ptr ").concat(gname).concat(", i64 ").concat(lit.len().to_string()).concat(")
-")
-        .concat("  ").concat(test).concat(" = call i1 @plum_str_eq(ptr ").concat(sval).concat(", ptr ").concat(sreg).concat(")
-");
+    let code = "  ".concat(test).concat(" = call i1 @plum_str_eq(ptr ").concat(sval).concat(", ptr ").concat(gname).concat(")\n");
     PatEmit { code: code, binds: "", allocas: "", releases: "",globals: cg_str_constant(n, lit), test: test, env: env, n: n + 3 }
 }
 
@@ -1776,7 +1858,7 @@ struct FnEmit { text: String, next: Int }
 // during its inference. Each function was inferred independently, so
 // each has its own.
 let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0: Int): FnEmit = {
-    let p = CgProgram { fns: p0.fns, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs };
+    let p = CgProgram { fns: p0.fns, globals: p0.globals, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs };
     let params = cg_params_of(p, def.params, 0, []);
     let entry = cg_param_slots(params, Array.map(def.params, |q| cg_concrete(p, q.ty)), 0, [], "", "");
     let ret = cg_of_ity(cg_concrete(p, def.ret));
@@ -1848,6 +1930,8 @@ let cg_entry (unit: Unit): String = cg_lines([
     "entry:",
     "  store i32 %argc, ptr @plum_argc",
     "  store ptr %argv, ptr @plum_argv",
+    "  %reg = call i32 @atexit(ptr @plum_dump_stats)",
+    "  call void @plum_init_globals()",
     "  %r = call i1 @plum_main()",
     "  ret i32 0",
     "}",
@@ -2291,9 +2375,12 @@ let cg_emit_rel_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Str
 let cg_rel_head (t: typecheck.ITy): String =
     "define void ".concat(cg_rel_sym(t)).concat("(ptr %p) {\nentry:\n")
         .concat("  %isnull = icmp eq ptr %p, null\n")
-        .concat("  br i1 %isnull, label %skip, label %dec\n")
-        .concat("skip:\n  ret void\ndec:\n")
+        .concat("  br i1 %isnull, label %skip, label %live\n")
+        .concat("skip:\n  ret void\nlive:\n")
         .concat("  %rc = load i64, ptr %p\n")
+        .concat("  %static = icmp slt i64 %rc, 0\n")
+        .concat("  br i1 %static, label %skip, label %dec\n")
+        .concat("dec:\n")
         .concat("  %rc1 = sub i64 %rc, 1\n")
         .concat("  store i64 %rc1, ptr %p\n")
         .concat("  %dead = icmp sle i64 %rc1, 0\n")
@@ -2407,7 +2494,9 @@ pub let cg_emit_program (program0: parser.ProgramNode): String = {
     let program = cg_with_prelude(program0);
     let p = cg_build_program(program);
     if !cg_has_fn(p, "main") { cg_fail("no top-level 'main' function to compile") };
-    let insts = cg_reachable(p, [CgInst { name: "main", targs: [] }], [], 0);
+    // Globals are roots too: their bodies can call functions that
+    // nothing else reaches.
+    let insts = cg_reachable(p, cg_global_roots(p, 0, [CgInst { name: "main", targs: [] }]), [], 0);
     // Equality functions are discovered from the SAME reachable set —
     // an aggregate compared inside an unreachable function needs no
     // function emitted for it.
@@ -2417,8 +2506,51 @@ pub let cg_emit_program (program0: parser.ProgramNode): String = {
     // starts from every function's parameter and return types and from
     // every equality type already found.
     let rels = cg_rel_types_of(p, insts, 0, cg_rel_close_list(p, eqs, 0, []));
-    cg_runtime(()).concat(cg_emit_eq_fns(p, eqs, 0, "")).concat(cg_emit_rel_fns(p, rels, 0, "")).concat(cg_emit_insts(p, insts, 0, 0, "")).concat(cg_entry(()))
+    let gl = cg_emit_globals(p, 0, 1000000, "", "");
+    cg_runtime(())
+        .concat(cg_emit_eq_fns(p, eqs, 0, ""))
+        .concat(cg_emit_rel_fns(p, rels, 0, ""))
+        .concat(gl.slots)
+        .concat(cg_emit_insts(p, insts, 0, 0, ""))
+        .concat(gl.init)
+        .concat(cg_entry(()))
 }
+
+// Each top-level 0-parameter binding gets a module-level SLOT and one
+// line in `@plum_init_globals`, which runs before `main`. Evaluating
+// them once, in declaration order, is the whole point — a global
+// referencing an earlier global sees an initialised slot.
+//
+// The register counter starts at 1,000,000 so a global's body cannot
+// collide with a function's `@.str` constants. Crude, and honest about
+// it: the alternative is threading the counter through two independent
+// emission passes for no other benefit.
+struct GlobalsEmit { slots: String, init: String }
+
+let cg_global_dup (gs: Array[typecheck.TFn]) (name: String) (j: Int) (upto: Int): Bool =
+    if j >= upto { false } else if gs[j].name == name { true } else { cg_global_dup(gs, name, j + 1, upto) }
+
+let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: String): GlobalsEmit =
+    if i >= p.globals.len() {
+        GlobalsEmit { slots: slots, init: "define void @plum_init_globals() {\nentry:\n".concat(body).concat("  ret void\n}\n\n") }
+    } else if cg_global_dup(p.globals, p.globals[i].name, 0, i) {
+        // The flat module namespace lets two modules declare the same
+        // global — `UPPERCASE_CHARS` exists in both `interp.plum` and
+        // `infer.plum`. `find_global_def` resolves every reference to
+        // the FIRST, so only the first gets a slot; emitting the second
+        // would be a duplicate symbol for a slot nothing reads.
+        cg_emit_globals(p, i + 1, n, slots, body)
+    } else {
+        let g = p.globals[i];
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [] };
+        let ty = cg_of_ity(cg_concrete(gp, g.ret));
+        let r = cg_expr(gp, [], n, g.body);
+        let slot = "@g.".concat(cg_mangle(g.name)).concat(" = global ").concat(cg_llvm_ty(ty)).concat(" ").concat(cg_zero_of(ty)).concat("\n");
+        let init = r.allocas.concat(r.code)
+            .concat("  store ").concat(cg_llvm_ty(ty)).concat(" ").concat(r.val).concat(", ptr ").concat(cg_global_slot(g.name)).concat("\n")
+            .concat(r.releases);
+        cg_emit_globals(p, i + 1, r.n, slots.concat(r.globals).concat(slot), body.concat(init))
+    }
 
 // Worklist closure: pop an instantiation, record it, and push every
 // instantiation its body calls. The `fuel` counter is not decoration —
@@ -2438,7 +2570,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
         // runtime's own definition. `read_file_raw` has a stub body in
         // the prelude purely so the checker has a signature for it —
         // this is what stops that stub from being compiled.
-        if Option.is_some(cg_runtime_fn(head.name)) { cg_reachable(p, rest, done, fuel + 1) }
+        if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" { cg_reachable(p, rest, done, fuel + 1) }
         else if cg_inst_seen(done, head, 0) { cg_reachable(p, rest, done, fuel + 1) }
         else {
             match cg_find_tfn(p, head.name, 0) {
@@ -2449,7 +2581,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
                     done
                 },
                 Some(def) => {
-                    let inner = CgProgram { fns: p.fns, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs };
+                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs };
                     cg_reachable(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), done.push(head), fuel + 1)
                 },
             }
@@ -2467,7 +2599,7 @@ let cg_rel_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[t
         match cg_find_tfn(p, insts[i].name, 0) {
             None => cg_rel_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs };
                 let withparams = cg_rel_close_list(inner, Array.map(def.params, |q| cg_concrete(inner, q.ty)), 0, acc);
                 let withret = cg_rel_close(inner, cg_concrete(inner, def.ret), withparams);
                 cg_rel_types_of(p, insts, i + 1, cg_rel_in(inner, def.body, withret))
@@ -2502,7 +2634,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TClosure(_, body) => cg_rel_in(p, body, here),
         TStructLit(_, fields) => cg_rel_in_fields(p, fields, 0, here),
         TInt(_) => here, TFloat(_) => here, TStr(_) => here, TBool(_) => here,
-        TUnitLit => here, TIdent(_) => here, TUnsupported(_) => here,
+        TUnitLit => here, TIdent(_) => here, TGlobalRef(_) => here, TUnsupported(_) => here,
     }
 }
 
@@ -2541,7 +2673,7 @@ let cg_eq_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[ty
         match cg_find_tfn(p, insts[i].name, 0) {
             None => cg_eq_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs };
                 cg_eq_types_of(p, insts, i + 1, cg_eq_in(inner, def.body, acc))
             },
         }
@@ -2577,7 +2709,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TClosure(_, body) => cg_eq_in(p, body, acc),
         TStructLit(_, fields) => cg_eq_in_fields(p, fields, 0, acc),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
-        TUnitLit => acc, TIdent(_) => acc, TUnsupported(_) => acc,
+        TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_) => acc, TUnsupported(_) => acc,
     }
 
 let cg_eq_in_list (p: CgProgram) (es: Array[typecheck.TExpr]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
@@ -2608,6 +2740,14 @@ let cg_eq_in_arms (p: CgProgram) (arms: Array[typecheck.TArm]) (i: Int) (acc: Ar
 
 let cg_eq_in_fields (p: CgProgram) (fields: Array[typecheck.TFieldInit]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= fields.len() { acc } else { cg_eq_in_fields(p, fields, i + 1, cg_eq_in(p, fields[i].value, acc)) }
+
+let cg_global_roots (p: CgProgram) (i: Int) (acc: Array[CgInst]): Array[CgInst] =
+    if i >= p.globals.len() { acc }
+    else {
+        let g = p.globals[i];
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [] };
+        cg_global_roots(p, i + 1, Array.concat(acc, cg_calls_in(gp, g.body, [])))
+    }
 
 let cg_find_tfn (p: CgProgram) (name: String) (i: Int): Option[typecheck.TFn] =
     if i >= p.fns.len() { None } else if p.fns[i].name == name { Some(p.fns[i]) } else { cg_find_tfn(p, name, i + 1) }
@@ -2641,7 +2781,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TClosure(_, body) => cg_calls_in(p, body, acc),
         TStructLit(_, fields) => cg_calls_in_fields(p, fields, 0, acc),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
-        TUnitLit => acc, TIdent(_) => acc, TUnsupported(_) => acc,
+        TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_) => acc, TUnsupported(_) => acc,
     }
 
 let cg_calls_in_list (p: CgProgram) (es: Array[typecheck.TExpr]) (acc: Array[CgInst]): Array[CgInst] = cg_calls_in_list_acc(p, es, 0, acc)
