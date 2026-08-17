@@ -9291,5 +9291,80 @@ element types in one program, and a tuple as a declared parameter and
 return type.
 
 The two backends now agree on 15 of 17 fixtures; the remaining two are
-`plum build`'s own deliberate rejections (`let empty = []` is
-uninferable there, and it refuses a closure-typed struct field).
+`plum build`'s own rejections (`let empty = []` is uninferable there,
+and it refuses a closure-typed struct field). Both were fixed the next
+day — see below — and the backends agree on all 17.
+
+## Dead-function elimination, and a gate that never gated (2026-08-16)
+
+The two remaining `plum build` rejections were assumed to be deliberate
+design limits. Exactly one of them was.
+
+**`let empty = []`.** Rejected with "cannot determine the element type
+of the empty array literal — it's never used anywhere that would pin its
+element type to something concrete". An accurate description of the
+situation, wrongly treated as a failure. Every operation that could
+observe an element — `push`, indexing, `map`/`filter`/`fold`, iteration,
+comparison against a non-empty array, concatenation — unifies the
+element variable with something during type-checking. So a variable
+still free once the whole program is solved proves that no element ever
+enters or leaves that array, and every choice of element type is
+observationally identical: `len()` is 0 and `to_string()` is `"[]"`
+whatever we pick. `resolve_empty_array_elem_types` defaults it to `Unit`
+now.
+
+The asymmetry with its two siblings is load-bearing and worth stating:
+`resolve_closure_types` and `resolve_tuple_elem_types` still ERROR on an
+unpinned component, because a closure's parameter or a tuple's element
+genuinely is consumed somewhere, and picking a type for it would change
+what the program computes.
+
+**The closure-typed struct field.** This one was not a design limit at
+all — it was a bug that had been shipping since concurrency landed, and
+its own doc comment described the correct behavior the whole time.
+
+`check_no_closure_or_task_fields` is a whole-program rejection gated on
+"does this program use `spawn` or a channel anywhere", and it promises
+that "a program that never actually spawns anything is completely
+unaffected". But the gate is computed by walking the functions that
+reach codegen, and `monomorphize::plan` deliberately seeds EVERY
+non-generic function into the program unconditionally (it must —
+`MonoPlan::functions` fully replaces the lowered function list). Only
+GENERIC prelude functions were ever dropped. The prelude's
+`http_serve_loop` is not generic, and it contains a `spawn`.
+
+So every program ever compiled set `needs_spawn_runtime`, the gate was
+permanently open, and the restriction applied universally. A hello-world
+program was emitting 256 functions, including the entire HTTP server and
+a `pthread_create`.
+
+The fix is a real one rather than a special case for prelude code:
+`plum_ir::prune::prune_unreachable`, run by `plumc` between
+monomorphization and codegen, drops every function no root can reach.
+Hello-world goes from 256 emitted functions to 52 (all runtime helpers,
+no Plum functions), the gate means what it always claimed, and a program
+that genuinely calls `http_serve_loop` still pulls the `spawn` in and is
+still correctly subject to the check.
+
+Two things the pass has to get right:
+
+- **Conservative in the retaining direction.** The only thing that makes
+  a function live is its name appearing syntactically in a live body,
+  with no scope analysis — a local shadowing a top-level function's name
+  keeps that function alive. Wasteful, never wrong. Erring the other way
+  drops a function codegen still calls: a link failure at best. The
+  `Expr` walk is exhaustive with no `_` arm so a new variant carrying a
+  sub-expression fails to compile rather than silently making what it
+  references look dead.
+- **`plum test` has more than one entry point.** `run_tests_native`
+  compiles the shared IR body once and appends a separate `emit_main`
+  per discovered test; each test is an entry point reachable from `main`
+  in no way at all. Its doc comment explicitly relied on "the `entry_fn`
+  passed in doesn't affect WHICH functions end up in the body" — an
+  invariant this pass invalidates. Test names are passed as extra
+  reachability roots (`compile_program_to_ir_roots`). This was caught by
+  three failing tests, not by reading.
+
+The pass runs only on the codegen path. `plum-interp` can be asked to
+invoke any top-level function by name, so it has no single entry point
+to root a walk at.

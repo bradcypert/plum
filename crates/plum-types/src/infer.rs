@@ -673,6 +673,34 @@ impl Infer {
         Ok(out)
     }
 
+    /// Resolves every empty-array LITERAL's element type against the
+    /// whole program's final substitution — the base case
+    /// `resolve_closure_types`/`resolve_tuple_elem_types` are both
+    /// modeled on, including the `Type::Param` template fallback for a
+    /// literal written inside a still-generic function's own body.
+    ///
+    /// Unlike those two, a still-unresolved element type here is NOT an
+    /// error: it DEFAULTS to `Type::Unit`.
+    ///
+    /// The asymmetry is real, not a convenience. A closure's unpinned
+    /// param type or a tuple's unpinned element type is genuinely
+    /// ambiguous — that component is actually consumed somewhere, and
+    /// picking a type for it would change what the program computes. An
+    /// empty array literal whose element type survives inference
+    /// unconstrained is the opposite: every operation that could
+    /// observe an element (`push`, indexing, `map`/`filter`/`fold`,
+    /// iteration, comparison against a non-empty array, concatenation)
+    /// unifies that variable with something in the course of type-
+    /// checking. So if it is STILL a free variable once the whole
+    /// program is solved, no element ever enters or leaves this array,
+    /// and every choice of element type is observationally identical —
+    /// `len()` is 0 and `to_string()` is `"[]"` whatever we pick. `Unit`
+    /// is chosen as the honest one: "no element type was ever needed".
+    ///
+    /// This is what makes `let empty = []; println(empty.len()...)`
+    /// compile. It used to be rejected with "never used anywhere that
+    /// would pin its element type to something concrete" — an accurate
+    /// description of the situation, wrongly treated as a failure.
     pub fn resolve_empty_array_elem_types(&self) -> Result<HashMap<Span, Type>, plum_syntax::error::CompileError> {
         let subst = self
             .final_subst
@@ -680,13 +708,9 @@ impl Infer {
             .ok_or_else(|| "internal error: resolve_empty_array_elem_types called before infer_program completed".to_string())?;
         let mut out = HashMap::with_capacity(self.empty_array_elem_types.len());
         for (span, (ty, enclosing_fn)) in &self.empty_array_elem_types {
-            let resolved = self.resolve_closure_component(ty, enclosing_fn, subst, *span).map_err(|_| {
-                plum_syntax::error::CompileError::new(
-                    *span,
-                    "cannot determine the element type of the empty array literal — it's never \
-                     used anywhere that would pin its element type to something concrete",
-                )
-            })?;
+            let resolved = self
+                .resolve_closure_component(ty, enclosing_fn, subst, *span)
+                .unwrap_or(Type::Unit);
             out.insert(*span, resolved);
         }
         Ok(out)

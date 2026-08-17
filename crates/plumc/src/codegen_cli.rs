@@ -569,6 +569,27 @@ pub fn compile_program_to_ir_diag(
     program: &ast::Program,
     entry_fn: &str,
 ) -> Result<(String, HashMap<String, FnSig>, String, bool), plum_syntax::error::CompileError> {
+    compile_program_to_ir_roots(program, entry_fn, &[])
+}
+
+/// `compile_program_to_ir_diag` plus additional reachability roots —
+/// every name in `extra_roots` is kept (along with everything it
+/// reaches) by the dead-function prune below, on top of `entry_fn` and
+/// the globals.
+///
+/// Exists for `testing::run_tests_native`, which compiles the shared IR
+/// body ONCE and then appends a separate `emit_main` wrapper per
+/// discovered test. Each test function is a genuine entry point of that
+/// body, but none is reachable from `main` — without naming them here
+/// the prune would drop every one, and each per-test wrapper would fail
+/// to link against a function that no longer exists. A name that
+/// doesn't resolve to a real function is ignored, so a caller may pass
+/// candidate names freely.
+pub fn compile_program_to_ir_roots(
+    program: &ast::Program,
+    entry_fn: &str,
+    extra_roots: &[String],
+) -> Result<(String, HashMap<String, FnSig>, String, bool), plum_syntax::error::CompileError> {
     // Cloned rather than taken as `&mut` — this fn's own signature is
     // `pub` and already has several callers (`compile_to_ir`, the CLI's
     // own `plumc build`), none of which have a `&mut ast::Program` to
@@ -663,7 +684,45 @@ pub fn compile_program_to_ir_diag(
     // declaration has no body, so generics can't reach into it.
     ir_program.functions = mono_plan.functions;
     ir_program.globals = mono_plan.globals;
-    let ir_program = optimize_program(ir_program);
+    let mut ir_program = optimize_program(ir_program);
+
+    // Dead-function elimination, rooted at the entry point plus every
+    // global's initializer — see `plum_ir::prune`'s module doc comment
+    // for the full "why", but in short: `monomorphize::plan` seeds its
+    // worklist with every NON-generic function unconditionally, so only
+    // generic prelude functions were ever dropped and a hello-world
+    // program emitted 256 functions including the whole HTTP server.
+    // Beyond the obvious waste, that unreachable `spawn` inside
+    // `http_serve_loop` silently held `plum-codegen`'s whole-program
+    // closure/task-field gate open for EVERY program, which is why a
+    // struct with a closure-typed field was rejected universally rather
+    // than only in genuinely concurrent ones.
+    //
+    // Rooted at both the unmangled `entry_fn` and any mangled
+    // instantiations of it, since which of the two exists depends on
+    // whether the entry point is generic — `prune_unreachable` ignores
+    // a root that names no actual function, so passing both is correct
+    // either way. Runs BEFORE signatures/`function_names` are derived
+    // below so those reflect the pruned program too; `tag_fields` is
+    // built from `mono_plan` rather than from the function list, so a
+    // now-unreferenced tag simply lingers there harmlessly.
+    //
+    // Deliberately NOT part of `optimize_program`: that runs on the
+    // interpreter's path too, and `plum-interp` can be asked to invoke
+    // any top-level function by name, so it has no single entry point
+    // to root a reachability walk at.
+    let mut entry_roots = vec![entry_fn.to_string()];
+    if let Some(names) = mono_plan.entry_rename.get(entry_fn) {
+        entry_roots.extend(names.iter().cloned());
+    }
+    for r in extra_roots {
+        entry_roots.push(r.clone());
+        if let Some(names) = mono_plan.entry_rename.get(r) {
+            entry_roots.extend(names.iter().cloned());
+        }
+    }
+    plum_ir::prune::prune_unreachable(&mut ir_program, &entry_roots);
+    let ir_program = ir_program;
 
     for (mangled, field_types) in &mono_plan.tag_fields {
         let cg_fields = field_types.iter().map(plum_type_to_cg_type).collect::<Result<Vec<_>, _>>()?;
@@ -1502,6 +1561,67 @@ mod tests {
         let src = "let swap (t: (Int, Bool)): (Bool, Int) = match t { (n, p) => (p, n) } \
                    let go (): Int = match swap((7, true)) { (p, n) => if p { n } else { 0 } }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("7".to_string()));
+    }
+
+    // --- dead-function elimination (see `plum_ir::prune`) ---
+
+    #[test]
+    fn a_struct_with_a_closure_typed_field_compiles_in_a_program_that_never_spawns() {
+        // Rejected until the prune landed, and for a reason entirely
+        // invisible from this source: the PRELUDE's `http_serve_loop`
+        // contains a `spawn`, every non-generic prelude function was
+        // emitted whether or not anything reached it, so `plum-codegen`'s
+        // whole-program closure/task-field gate — documented as firing
+        // only for programs that actually spawn — was open for every
+        // program ever compiled.
+        let src = "struct Ops { add: (Int, Int) -> Int } \
+                   let go (): Int = { let ops = Ops { add: |a, b| a + b }; ops.add(3, 4) }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("7".to_string()));
+    }
+
+    #[test]
+    fn a_struct_with_a_closure_typed_field_is_still_rejected_when_the_program_does_spawn() {
+        // The other half of the above: the gate must still CLOSE. If the
+        // prune had been overzealous (or the check simply weakened to
+        // ignore prelude code), this would compile — and a closure could
+        // reach a `spawn` capture through an opaque heap pointer.
+        let src = "struct Ops { add: (Int, Int) -> Int } \
+                   let go (): Int = { let ops = Ops { add: |a, b| a + b }; spawn { 1 }.join() + ops.add(3, 4) }";
+        let err = compile_and_run(src, "go", &[CgValue::Unit]).unwrap_err();
+        assert!(err.contains("closure/task/CStr-shaped"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn an_unreachable_prelude_function_is_not_emitted() {
+        let src = "let go (): Int = 1";
+        let tokens = Lexer::with_base_offset(src, crate::PRELUDE_TOTAL_LEN).tokenize();
+        let program = Parser::new(tokens).parse_program().unwrap_or_else(|e| panic!("parse error: {e}"));
+        let program = with_prelude(program);
+        let (body_ir, _sigs, _entry, _globals) = compile_program_to_ir(&program, "go").expect("compiles");
+        assert!(
+            !body_ir.contains("define ptr @http_serve_loop("),
+            "the HTTP server reached the output of a program that never mentions it"
+        );
+    }
+
+    // --- an empty array literal whose element type is never pinned ---
+
+    #[test]
+    fn an_empty_array_literal_that_pins_nothing_defaults_to_unit_elements() {
+        // Nothing here ever observes an element, so no element type is
+        // needed and any choice is observationally identical — see
+        // `Infer::resolve_empty_array_elem_types`.
+        let src = "let go (): Int = { let empty = []; empty.len() }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("0".to_string()));
+    }
+
+    #[test]
+    fn an_empty_array_literal_still_takes_its_element_type_from_a_later_use() {
+        // Guards against the defaulting above swallowing a genuine
+        // inference result: `push` pins the element type to `Int`, and
+        // `Unit` must NOT win.
+        let src = "let go (): Int = { let empty = []; let one = empty.push(41); one[0] + 1 }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("42".to_string()));
     }
 
     // --- testing framework: `panic_raw` (see `ir::Expr::PanicRaw`) ---

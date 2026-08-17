@@ -36,9 +36,26 @@ had no tuple type-ANNOTATION syntax, so it could not satisfy Stage 4's
 requirement that every top-level signature be annotated. Tuple types
 were added in 2026-08 and the fixture is annotated now.
 
-The one thing still not universal is the BACKENDS: neither `plum build`
-nor the self-hosted backend compiles tuple VALUES, so `tuples/` is
-check-and-interpret only.
+The BACKENDS are universal too now. Both the self-hosted backend and
+`plum build` compile tuple VALUES (type-specialized tags — see
+DESIGN.md), and the last two fixtures `plum build` rejected were fixed
+on 2026-08-16:
+
+- `arrays/` — `let empty = []` used to be a type error ("never used
+  anywhere that would pin its element type"). An empty array whose
+  element type survives inference unconstrained provably never has an
+  element enter or leave it, so every choice is observationally
+  identical; it defaults to `Unit` now. See
+  `Infer::resolve_empty_array_elem_types`.
+- `closures_in_structs/` — a struct with a closure-typed field was
+  rejected in EVERY program, because the prelude's own `http_serve_loop`
+  contains a `spawn` and every non-generic prelude function was emitted
+  whether or not anything reached it. That held codegen's whole-program
+  closure/task-field gate open universally. Dead-function elimination
+  (`plum_ir::prune`) fixed it at the root: the gate now means what its
+  doc comment always claimed.
+
+So all 17 fixtures build and run identically under both backends.
 
 The native side used to have a trailing-artifact quirk too — "a
 pre-existing native-`main()` CLI behavior noticed several times across

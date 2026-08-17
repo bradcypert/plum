@@ -3147,6 +3147,21 @@ fn emit_deepcopy_array_fns(needed: &HashMap<String, CgType>) -> String {
 /// over `tag_fields`), and correct in the safe direction: a program that
 /// never actually spawns anything is completely unaffected, no matter
 /// what its struct/enum fields look like.
+///
+/// That last sentence was FALSE for every program compiled before
+/// 2026-08-16, and nothing in this module was to blame. The gate
+/// `emit_program` puts in front of this check (`needs_spawn_runtime ||
+/// needs_channel_runtime`) is set by walking the emitted functions — and
+/// the PRELUDE's own `http_serve_loop` contains a `spawn`, while
+/// `monomorphize::plan` seeds every non-generic function into the
+/// program unconditionally. So the flag was set for every program ever
+/// compiled, the gate never actually gated, and a struct with a
+/// closure-typed field was rejected universally rather than only in
+/// genuinely concurrent programs. The fix is `plum_ir::prune`, run by
+/// `plumc` between monomorphization and codegen: unreachable functions
+/// are dropped before any of this runs, so the flag once again means
+/// what it says. A program that really does reach `http_serve_loop`
+/// keeps the `spawn` and is still correctly subject to this check.
 fn check_no_closure_or_task_fields(tag_fields: &TagFields) -> Result<(), String> {
     let mut names: Vec<&String> = tag_fields.keys().collect();
     names.sort();

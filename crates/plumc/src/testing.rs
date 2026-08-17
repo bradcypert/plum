@@ -103,12 +103,9 @@ pub fn run_tests_interpreted(program: ast::Program, names: &[String]) -> Result<
 /// still observe every test's own outcome.
 ///
 /// Compiles `program`'s IR body exactly ONCE (`compile_program_to_ir_
-/// diag` — the `entry_fn` passed to it doesn't affect WHICH functions
-/// end up in the shared IR body at all: `plum_ir::monomorphize::plan`'s
-/// own doc comment confirms it re-lowers EVERY top-level function
-/// regardless of entry point; `entry_fn` only affects the final entry-
-/// point RESOLUTION/rename step, irrelevant here since a real test
-/// function is never named `"main"`). For each discovered test, builds
+/// roots`, passing every discovered test name as an extra reachability
+/// root — see the call site for why that's load-bearing). For each
+/// discovered test, builds
 /// its OWN native entry point by appending a fresh `emit_main` wrapper
 /// to that SAME shared IR body (identical to what `plum build` does
 /// for `"main"` specifically, just looped over every test name
@@ -139,7 +136,13 @@ pub fn run_tests_native(program: &ast::Program, names: &[String]) -> Result<Vec<
     // project has no `main` at all (confirmed: `compile_program_to_ir_
     // diag`'s own entry resolution doesn't require the name to exist,
     // only errors on an AMBIGUOUS generic entry).
-    let (body_ir, signatures, _resolved_entry, has_globals) = crate::compile_program_to_ir_diag(program, "main")?;
+    //
+    // `names` is passed as EXTRA REACHABILITY ROOTS: the dead-function
+    // prune (`plum_ir::prune`) keeps only what the entry point and the
+    // globals can reach, and a test function is reachable from neither.
+    // Left unnamed here, every test would be pruned out of the shared
+    // body and each per-test `emit_main` wrapper would fail to link.
+    let (body_ir, signatures, _resolved_entry, has_globals) = crate::codegen_cli::compile_program_to_ir_roots(program, "main", names)?;
 
     let mut outcomes = Vec::with_capacity(names.len());
     for name in names {
