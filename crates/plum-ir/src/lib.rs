@@ -1,3 +1,4 @@
+pub mod liftassign;
 pub mod anf;
 pub mod fbip;
 pub mod ir;

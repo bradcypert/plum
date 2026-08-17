@@ -719,6 +719,11 @@ pub fn compile_program_to_ir_roots(
     // `plum_ir::fbip::reusable_params`' own ordering note. `anf` hoists a
     // fresh-allocation argument into a temporary, which would leave a bare
     // `Var` where the analysis needs to see the allocation.
+    // Move value-position assignments into statement position, where
+    // `codegen_expr` already handles them — see `plum_ir::liftassign`. Run
+    // before every analysis below so none of them sees the odd shape.
+    let ir_program = plum_ir::liftassign::lift_value_assigns(ir_program);
+
     let reusable = plum_ir::fbip::reusable_params(&ir_program);
 
     // Release a matched scrutinee that nothing else needs, so its
@@ -1898,6 +1903,63 @@ mod tests {
                    let loop2 (c: Cell) (n: Int): Int = if n == 0 { match c { Cell(s) => s.len() } } else { loop2(c, n - 1) }\n\
                    let go (): Int = loop2(Cell { s: \"abcd\" }, 300000)";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("4".to_string()));
+    }
+
+    // --- value-position Assign (see `plum_ir::liftassign`) ---
+
+    #[test]
+    fn an_assign_as_a_call_argument_runs_correctly() {
+        let src = "let twice (n: Int): Int = n * 2\n\
+                   let go (): Int = { let mut sum = 0; twice({ sum = sum + 1; sum }) }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("2".to_string()));
+    }
+
+    #[test]
+    fn an_assign_as_a_lets_value_runs_correctly() {
+        let src = "let go (): Int = { let mut sum = 1; let y = { sum = sum + 10; sum }; y }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("11".to_string()));
+    }
+
+    #[test]
+    fn an_operand_evaluated_before_an_assign_still_sees_the_old_value() {
+        // `sum + { sum = sum + 10; sum }` with `sum` at 1 is 1 + 11. Lifting
+        // the assignment directly would make the left operand read 11 and
+        // give 22, so the left operand is bound to a temporary first.
+        let src = "let go (): Int = { let mut sum = 1; sum + { sum = sum + 10; sum } }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("12".to_string()));
+    }
+
+    #[test]
+    fn a_call_evaluated_before_an_assign_is_not_reordered_across_it() {
+        let src = "let side (n: Int): Int = n + 1000\n\
+                   let go (): Int = { let mut b = 0; side(b) + { b = b + 5; b } }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("1005".to_string()));
+    }
+
+    #[test]
+    fn two_assigns_in_one_expression_keep_their_order() {
+        // `{ d = d + 1; d } + { d = d + 1; d }` is 1 + 2, not 2 + 2 or 1 + 1.
+        let src = "let go (): Int = { let mut d = 0; { d = d + 1; d } + { d = d + 1; d } }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("3".to_string()));
+    }
+
+    #[test]
+    fn an_assign_in_an_if_condition_runs_once_and_before_the_branches() {
+        let src = "let go (): Int = { let mut sum = 0; if { sum = sum + 1; sum } > 0 { 7 } else { 8 } }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("7".to_string()));
+    }
+
+    #[test]
+    fn an_assign_in_a_loop_bound_runs_once_not_per_iteration() {
+        // The bound is evaluated once before the loop; if the assignment
+        // were lifted into the body `k` would grow every iteration.
+        let src = "let go (): Int = { \
+                       let mut k = 0; \
+                       let mut acc = 0; \
+                       for i in 0..{ k = k + 3; k } { acc = acc + i; }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("3".to_string()));
     }
 
     // --- reuse-in-place on parameters (see `fbip::reusable_params`) ---
@@ -4101,21 +4163,23 @@ mod tests {
     }
 
     #[test]
-    fn a_construct_outside_codegen_scope_is_a_clear_error() {
-        // `go`'s own DECLARED signature is Int -> Int (fully within
-        // supported scope), but its BODY uses an `Assign` in VALUE
-        // position (as a call argument) — statement-position assignment
-        // has real codegen, this shape does not, and it is listed as a
-        // known gap in DESIGN.md. Exercises `plum_codegen`'s own
-        // per-expression rejection, not just `plumc`'s
-        // signature-conversion gate (see the next test for that one).
+    fn an_assign_in_value_position_compiles_now() {
+        // This test has twice been repointed at whatever was still
+        // unsupported, and has now run out of subjects. `ref(1)` was
+        // supported on 2026-08-16; value-position `Assign` — the last
+        // construct DESIGN.md listed as reaching codegen's
+        // "does not yet support this construct" catch-all — on 2026-08-17,
+        // by `plum_ir::liftassign`.
         //
-        // Used to be `ref(1)` here, which is supported as of 2026-08-16
-        // — see the `Ref` tests further down this file.
+        // Nothing writable in Plum is known to reach that catch-all any
+        // more. It is still worth keeping reachable-in-principle and
+        // tested: `plum_codegen`'s own
+        // `unsupported_construct_is_a_clear_error_not_a_panic` builds the
+        // IR directly, so it bypasses `liftassign` and still exercises the
+        // error path.
         let src = "let twice (n: Int): Int = n * 2\n\
                    let go (n: Int): Int = { let mut sum = 0; twice({ sum = sum + 1; sum }) }";
-        let err = compile_and_run(src, "go", &[CgValue::Int(1)]).expect_err("expected a codegen scope error");
-        assert!(err.contains("does not yet support"), "unexpected error: {err}");
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Int(1)]), Ok("2".to_string()));
     }
 
     #[test]

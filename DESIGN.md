@@ -3760,14 +3760,16 @@ codegen error — a silent, documented pass-through instead (see
 expansions (e.g. German `ß`→`"SS"`) leave the input unchanged, since
 `towupper`/`towlower`'s 1-in-1-out C signature cannot produce them.
 Still out of scope and producing a clear codegen error, never a panic:
-an `Assign` inside a closure body writing back into an enclosing
-loop's carried variable (structurally out of reach of this backend's
-closure design, not merely unimplemented), an `Assign` reachable only
-through a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value
-position (e.g. `f({ sum = sum + 1; sum })` as a `Call` argument),
-disconnect detection on channels — and a generic instantiated at any of these
-still-unsupported types (e.g. `Box[Array[Str]]` once `.split()` is
+disconnect detection on channels — and a generic instantiated at any
+still-unsupported type (e.g. `Box[Array[Str]]` once `.split()` is
 needed).
+
+Two entries were removed from this list on 2026-08-17. Value-position
+`Assign` is supported (see "Value-position `Assign`" below). And an
+`Assign` inside a closure writing back into an enclosing loop's carried
+variable was checked directly rather than trusted: it compiles, and agrees
+with the interpreter. It also compiled BEFORE that day's work, so the
+claim was simply stale.
 
 **Guaranteed tail calls**: any call in tail position (the function's
 own body; both branches of a tail-positioned `If`/arms of a tail-
@@ -10412,3 +10414,66 @@ point byte-identical, corpus 99/99, exec_corpus 18/18, zero ASan errors,
 and the compiler builds and checks itself. Its allocation numbers are
 unchanged — the shape this targets is reachable in ordinary Plum code but
 not, without merging, in the compiler's own source.
+
+## Value-position `Assign` (2026-08-17)
+
+The last construct DESIGN.md listed as reaching codegen's
+"does not yet support this construct" catch-all:
+
+```
+twice({ sum = sum + 1; sum })      // as a call argument
+let y = { sum = sum + 1; sum };    // as a Let's value
+1 + { sum = sum + 1; sum }         // as an operand
+```
+
+Assignment is a STATEMENT in this backend. `codegen_expr`'s `Assign` arm
+threads an updated `Env` into whatever follows, because a `let mut`
+variable is an SSA register rather than a stack slot — and `codegen_value`
+returns a register and a type, with no way to hand an environment back to
+its caller.
+
+Rather than teach it to, `plum_ir::liftassign` moves the assignment to
+where the existing machinery already handles it:
+
+```text
+N(.., Assign { n, v, rest }, ..)  =>  Assign { n, v, N(.., rest, ..) }
+```
+
+### Order is the whole problem
+
+The rewrite moves the assignment EARLIER — ahead of everything the node
+evaluated before that slot. Where a preceding slot does not commute with
+it, that slot is bound to a temporary first, which pins it where it stood:
+
+```text
+sum + { sum = sum + 10; sum }   =>   let t = sum; { sum = sum + 10; t + sum }
+```
+
+With `sum` at 1 that is 1 + 11 = 12. Lifting directly would have given
+22, and a test pins the difference. Same for a preceding CALL, which may
+read or write the variable: bound first, so it still runs first. Two
+assignments in one expression each lift in turn, and
+`{ d = d + 1; d } + { d = d + 1; d }` is 3 — not 4, not 2.
+
+Only slots evaluated UNCONDITIONALLY are eligible: an `If`'s condition and
+a loop's BOUNDS qualify; its branches and body do not. Lifting from a
+branch would perform an assignment the program does not; lifting from a
+loop body would perform it once instead of per iteration. Both have tests.
+
+### The catch-all is now unreachable from Plum source
+
+No writable Plum program is known to reach it. It is kept and still
+tested: `plum_codegen`'s own
+`unsupported_construct_is_a_clear_error_not_a_panic` builds IR directly, so
+it bypasses this pass and exercises the error path.
+
+The `plumc`-level test that used to cover this had been repointed twice as
+its subject kept getting implemented — first off a Unicode string op, then
+off `ref(1)`, and now off value-position `Assign`. It asserts the construct
+WORKS now, and says so.
+
+### Verified
+
+560 plumc tests (7 new) + 363 in plum-ir (10 new), all 15 suites, fixed
+point byte-identical, corpus 99/99, exec_corpus 18/18, zero ASan errors,
+and every new case checked against the interpreter output for output.
