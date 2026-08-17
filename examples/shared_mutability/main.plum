@@ -6,11 +6,9 @@
 //
 // Run: `plum run examples/shared_mutability`
 //
-// `Ref[T]` is currently INTERPRETER-ONLY — native codegen has no
-// representation for it yet (a documented, deliberate v1 scope
-// boundary, not a bug: see DESIGN.md's "Mutability and cycles"
-// section), so `plum build examples/shared_mutability` doesn't work
-// yet the way every other example here does.
+// Runs under BOTH backends as of 2026-08-16 — `plum build
+// examples/shared_mutability` works the same way every other example
+// here does. It used to be interpreter-only.
 
 struct Point {
     x: Int,

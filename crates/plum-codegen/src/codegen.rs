@@ -139,6 +139,13 @@ pub(crate) struct Ctx<'a> {
     /// emit_program`'s own doc comment on why this is the least
     /// invasive way to thread that discovery through.
     pub(crate) needed_arrays: &'a std::cell::RefCell<HashMap<String, CgType>>,
+    /// The `Ref[T]` counterpart to `needed_arrays`, in every respect —
+    /// every INNER `CgType` needing its own `@plum_rc_dec_ref_<mangled>`
+    /// release function, discovered as codegen walks each body (a
+    /// `ref(v)` can reveal an inner type no signature or struct field
+    /// ever mentioned). See `crate::register_ref_inner_type`/
+    /// `emit_ref_release_fns`.
+    pub(crate) needed_refs: &'a std::cell::RefCell<HashMap<String, CgType>>,
     /// A per-PROGRAM (not per-function) monotonic counter used to name
     /// every closure-literal-site-generated function uniquely
     /// (`@closure$<fn_name>$<K>`) — see `codegen_closure_literal`'s doc
@@ -248,6 +255,20 @@ pub(crate) struct Ctx<'a> {
 /// registered the same type.
 fn register_array_elem(ctx: &Ctx, elem: &CgType) {
     crate::register_array_elem_type(&mut ctx.needed_arrays.borrow_mut(), &CgType::Array(Box::new(elem.clone())));
+}
+
+/// Records `inner` as needing a `Ref` release function — the codegen.rs-
+/// side counterpart to `crate::register_ref_inner_type`, exactly
+/// mirroring `register_array_elem` above.
+///
+/// Also runs the ARRAY registrar on the same type: a `Ref[Array[Int]]`'s
+/// release function calls `@plum_rc_dec_array_Int`, which only exists if
+/// something registered it. Registering both here means a single
+/// `ref(v)` site pulls in everything its own release path can reach.
+fn register_ref_inner(ctx: &Ctx, inner: &CgType) {
+    let wrapped = CgType::Ref(Box::new(inner.clone()));
+    crate::register_ref_inner_type(&mut ctx.needed_refs.borrow_mut(), &wrapped);
+    crate::register_array_elem_type(&mut ctx.needed_arrays.borrow_mut(), &wrapped);
 }
 
 /// Accumulates a function body's instructions as flat text lines (each
@@ -451,6 +472,18 @@ fn codegen_binop(op: BinOp, l: String, r: String, ty: CgType, em: &mut Emitter) 
             return Ok((reg, CgType::Bool));
         }
     }
+    // `Ref` equality is IDENTITY, not contents — two distinct cells
+    // holding equal values are deliberately NOT `==` (DESIGN.md's
+    // "Mutability and cycles"; the interpreter uses `Rc::ptr_eq` for
+    // exactly this). So it is a raw pointer comparison, with no runtime
+    // function to call, which is why `crate::eq_fn_for` returns `None`
+    // for `Ref` and the structural branch above skips it.
+    if matches!(ty, CgType::Ref(_)) && (op == BinOp::Eq || op == BinOp::Ne) {
+        let instr = if op == BinOp::Eq { "icmp eq ptr" } else { "icmp ne ptr" };
+        let reg = em.fresh_reg();
+        em.push(format!("  {reg} = {instr} {l}, {r}"));
+        return Ok((reg, CgType::Bool));
+    }
     let (instr, result_ty) = match (op, ty) {
         (BinOp::Add, CgType::Int) => ("add i64", CgType::Int),
         (BinOp::Sub, CgType::Int) => ("sub i64", CgType::Int),
@@ -603,7 +636,7 @@ fn store_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, value: &str,
         // `Heap` — see `CgType::Str`/`Array`'s own doc comment for why
         // they're still distinct at the `CgType` level despite sharing
         // this exact store/load mechanism.
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr | CgType::Ref(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -635,7 +668,7 @@ fn store_array_elem_static(em: &mut Emitter, cell_ptr: &str, index: usize, value
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr | CgType::Ref(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -664,7 +697,7 @@ fn load_field_word(em: &mut Emitter, cell_ptr: &str, index: usize, expected_ty: 
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr | CgType::Ref(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -704,7 +737,7 @@ fn store_closure_capture(em: &mut Emitter, cell_ptr: &str, index: usize, value: 
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr | CgType::Ref(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -732,7 +765,7 @@ fn load_closure_capture(em: &mut Emitter, cell_ptr: &str, index: usize, expected
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr | CgType::Ref(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -903,7 +936,7 @@ fn store_array_elem(em: &mut Emitter, array_ptr: &str, index_reg: &str, value: &
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr | CgType::Ref(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -930,7 +963,7 @@ fn load_array_elem(em: &mut Emitter, array_ptr: &str, index_reg: &str, expected_
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr | CgType::Ref(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -1667,6 +1700,7 @@ fn emit_closure_body_fn(
         tag_fields: ctx.tag_fields,
         fn_name,
         needed_arrays: ctx.needed_arrays,
+        needed_refs: ctx.needed_refs,
         closure_counter: ctx.closure_counter,
         closure_defs: ctx.closure_defs,
         trampolines: ctx.trampolines,
@@ -2918,7 +2952,7 @@ fn value_to_word(em: &mut Emitter, value: &str, ty: CgType) -> String {
             em.push(format!("  {r} = bitcast double {value} to i64"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr | CgType::Ref(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = ptrtoint ptr {value} to i64"));
             r
@@ -2952,7 +2986,7 @@ fn word_to_value(em: &mut Emitter, word: &str, expected_ty: CgType) -> String {
             em.push(format!("  {r} = bitcast i64 {word} to double"));
             r
         }
-        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => {
+        CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr | CgType::Ref(_) => {
             let r = em.fresh_reg();
             em.push(format!("  {r} = inttoptr i64 {word} to ptr"));
             r
@@ -2985,7 +3019,19 @@ fn crosses_thread_boundary(ty: &CgType) -> bool {
         // unsynchronized C pointer aliased across two threads is
         // strictly worse than either of those, not merely equally bad —
         // there's no shared-ownership protocol backing it at all.
-        CgType::Closure(..) | CgType::Task(_) | CgType::CStr => true,
+        // `Ref` joins them for the sharpest version of the reason, and
+        // it is the one case where BOTH available crossing mechanisms
+        // are wrong rather than just one: a deep copy would silently
+        // split one shared cell into two independent ones, which is
+        // precisely the semantics `Ref` exists to provide and so a
+        // silent, invisible bug; a verbatim pointer copy (what
+        // `Sender`/`Receiver` legitimately get) would leave two threads
+        // racing on a non-atomic refcount word. Real cross-thread shared
+        // mutation needs atomics and a lock — deliberately deferred, see
+        // DESIGN.md's "Mutability and cycles" concurrency note — so this
+        // fails loudly instead, exactly as the interpreter's own
+        // `to_portable` already rejects `Value::Ref`.
+        CgType::Closure(..) | CgType::Task(_) | CgType::CStr | CgType::Ref(_) => true,
         CgType::Array(elem) => crosses_thread_boundary(elem),
         // A `Sender`/`Receiver` explicitly CAN cross a thread boundary
         // (that's the whole point of a channel) — unlike a closure's
@@ -3070,7 +3116,7 @@ fn deep_copy_capture(em: &mut Emitter, ctx: &Ctx, reg: &str, ty: &CgType) -> Str
         // Guaranteed unreachable — `crosses_thread_boundary` already
         // rejected any `Task`/`CStr` capture that could get here — but
         // the match still needs to be total.
-        CgType::Task(_) | CgType::CStr => reg.to_string(),
+        CgType::Task(_) | CgType::CStr | CgType::Ref(_) => reg.to_string(),
         // A `Sender`/`Receiver` crosses VERBATIM — never a deep copy.
         // Both ends must keep pointing at the SAME shared queue struct,
         // or the channel would silently split into two mutually-
@@ -3083,6 +3129,103 @@ fn deep_copy_capture(em: &mut Emitter, ctx: &Ctx, reg: &str, ty: &CgType) -> Str
         CgType::Sender(_) | CgType::Receiver(_) => reg.to_string(),
         CgType::Int | CgType::Float | CgType::Bool | CgType::Unit => reg.to_string(),
     }
+}
+
+/// `ref(v)` — allocates a fresh `{ i64 refcount, i64 value }` cell
+/// (`@plum_alloc_ref`) holding `v`, and evaluates to `Ref[T]`.
+///
+/// The cell TAKES OVER whatever ownership `codegen_value` handed back
+/// for `v`, exactly like a `Ctor` field does — no extra increment here,
+/// because `plum_ir::fbip` has already placed whatever `Inc` the value
+/// needed at its own use site.
+///
+/// The inner `CgType` is learned from `v` itself rather than from any
+/// annotation, which is why `Ref` needs no type-specialized tag and no
+/// span-keyed side channel the way tuples and channels each did: the
+/// construction site is the one place the type is already in hand.
+fn codegen_ref_new(value: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (val_reg, val_ty) = codegen_value(value, env, em, ctx)?;
+    register_ref_inner(ctx, &val_ty);
+    let word = value_to_word(em, &val_reg, val_ty.clone());
+    let cell = em.fresh_reg();
+    em.push(format!("  {cell} = call ptr @plum_alloc_ref(i64 {word})"));
+    Ok((cell, CgType::Ref(Box::new(val_ty))))
+}
+
+/// `r.get()` — reads the cell's single slot and evaluates to a COPY of
+/// its contents (DESIGN.md's "Mutability and cycles": `.get()` returns a
+/// copy, `.set()` overwrites unconditionally).
+///
+/// "A copy" of a heap-shaped value means a new owning reference, so this
+/// increments. That is not optional: without it,
+///
+/// ```text
+/// let p = r.get();
+/// r.set(other);      // releases the value `p` still points at
+/// ```
+///
+/// would leave `p` dangling — a use-after-free, not a leak. The
+/// increment is unbalanced, because `fbip` deliberately has no
+/// `is_syntactically_heap` case for `RefGet` and so never emits a
+/// matching `Dec` (see this module's `Ref` notes and `CgType::Ref`).
+/// Leaking is the correct side to err on here, and it is consistent with
+/// `Ref`'s already-accepted leak story: a cell in a reference cycle
+/// never reaches refcount 0 either.
+fn codegen_ref_get(base: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (base_reg, base_ty) = codegen_value(base, env, em, ctx)?;
+    let CgType::Ref(inner) = base_ty else {
+        return Err(format!("codegen: `.get()` requires a Ref value, found {base_ty:?}"));
+    };
+    register_ref_inner(ctx, &inner);
+    let addr = em.fresh_reg();
+    em.push(format!("  {addr} = getelementptr i8, ptr {base_reg}, i64 8"));
+    let val = load_word(em, &addr, (*inner).clone());
+    // `dec_fn_for(..).is_some()` is precisely "this shape has a refcount
+    // word at offset 0" — the same test that decides whether releasing
+    // it later means anything. `Task`/`Sender`/`Receiver`/`CStr` have no
+    // such word and must NOT be touched here.
+    if crate::dec_fn_for(&inner).is_some() {
+        em.push(format!("  call void @plum_rc_inc(ptr {val})"));
+    }
+    Ok((val, *inner))
+}
+
+/// `r.set(v)` — overwrites the cell's slot UNCONDITIONALLY, visible
+/// through every other handle to the same cell, and evaluates to `Unit`.
+///
+/// No refcount-based branch anywhere: there is deliberately no "count is
+/// 1, safe to mutate" fast path and no copy-on-write slow path, because
+/// unconditional in-place mutation IS the semantics of this type. That
+/// is the same reason `fbip` must never mark a `Ref` for reuse.
+///
+/// Order matters. The old value is released AFTER the new one is
+/// stored, never before — otherwise `r.set(r.get())` (or any aliasing
+/// path that reaches the same cell) would free the value in between and
+/// store a dangling pointer.
+fn codegen_ref_set(base: &Expr, value: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+    let (base_reg, base_ty) = codegen_value(base, env, em, ctx)?;
+    let CgType::Ref(inner) = base_ty else {
+        return Err(format!("codegen: `.set()` requires a Ref value, found {base_ty:?}"));
+    };
+    let (val_reg, val_ty) = codegen_value(value, env, em, ctx)?;
+    if val_ty != *inner {
+        return Err(format!(
+            "codegen: `.set()` argument type mismatch — this Ref holds {inner:?}, found {val_ty:?}"
+        ));
+    }
+    register_ref_inner(ctx, &inner);
+    let addr = em.fresh_reg();
+    em.push(format!("  {addr} = getelementptr i8, ptr {base_reg}, i64 8"));
+    let old_word = em.fresh_reg();
+    em.push(format!("  {old_word} = load i64, ptr {addr}"));
+    let new_word = value_to_word(em, &val_reg, val_ty);
+    em.push(format!("  store i64 {new_word}, ptr {addr}"));
+    if let Some(dec) = crate::dec_fn_for(&inner) {
+        let old_ptr = em.fresh_reg();
+        em.push(format!("  {old_ptr} = inttoptr i64 {old_word} to ptr"));
+        em.push(format!("  call void {dec}(ptr {old_ptr})"));
+    }
+    Ok(("0".to_string(), CgType::Unit))
 }
 
 /// Generates the per-`spawn`-literal-site thread-entry function
@@ -3161,6 +3304,7 @@ fn emit_spawn_entry_fn(fn_name: &str, captures: &[(String, CgType)], block: &Exp
         tag_fields: ctx.tag_fields,
         fn_name,
         needed_arrays: ctx.needed_arrays,
+        needed_refs: ctx.needed_refs,
         closure_counter: ctx.closure_counter,
         closure_defs: ctx.closure_defs,
         trampolines: ctx.trampolines,
@@ -3265,10 +3409,23 @@ fn codegen_spawn_literal(block: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -
                 ),
             );
         } else if crosses_thread_boundary(&ty) {
+            // The "why" genuinely differs per type, and a message that
+            // explains the wrong one is worse than a vague one — a `Ref`
+            // is not "nothing meaningful to deep-copy", it is the exact
+            // opposite: deep-copying it would be meaningful and WRONG.
+            let why = match &ty {
+                CgType::Ref(_) => "a `Ref` is a SHARED mutable cell — deep-copying it would silently split it \
+                                   into two independent cells (defeating the point of the type), and sharing the \
+                                   pointer would race on its non-atomic refcount; cross-thread shared mutation \
+                                   needs atomics and a lock, which Plum doesn't have yet",
+                CgType::CStr => "a raw C string pointer is unowned and unsynchronized, with no shared-ownership \
+                                 protocol backing it at all",
+                _ => "a closure's captured environment and a task handle are both tied to the thread that \
+                      created them, so there's nothing meaningful to deep-copy",
+            };
             return Err(format!(
                 "codegen: `spawn` cannot capture {name:?} — its type ({ty:?}) can't cross a thread boundary \
-                 (a task handle is tied to the thread that created it, so there's nothing meaningful to \
-                 deep-copy), matching the interpreter's own restriction (see `plum_interp::Interpreter::to_portable`)"
+                 ({why}), matching the interpreter's own restriction (see `plum_interp::Interpreter::to_portable`)"
             ));
         }
         captures.push((name, ty, reg));
@@ -5053,6 +5210,9 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         Expr::EnvVarRaw { name } => codegen_env_var_raw(name, env, em, ctx),
         Expr::ArgsRaw => codegen_args_raw(em),
         Expr::RandomRaw => codegen_random_raw(em),
+        Expr::RefNew { value } => codegen_ref_new(value, env, em, ctx),
+        Expr::RefGet { base } => codegen_ref_get(base, env, em, ctx),
+        Expr::RefSet { base, value } => codegen_ref_set(base, value, env, em, ctx),
         Expr::PanicRaw { message } => codegen_panic_raw(message, env, em, ctx),
         other => Err(format!("codegen does not yet support this construct: {other:?}")),
     }

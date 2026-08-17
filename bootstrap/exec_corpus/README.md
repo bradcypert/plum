@@ -30,11 +30,19 @@ plum build bootstrap/self_host -o sh
 ```
 
 `./sh run` type-checks BEFORE interpreting (Stage 4 wired into the same
-pipeline, matching the real `plum run`'s own order). **All fixtures now
+pipeline, matching the real `plum run`'s own order). **17 of 18 fixtures
 pass end to end.** `tuples/` used to be a documented exception — Plum
 had no tuple type-ANNOTATION syntax, so it could not satisfy Stage 4's
 requirement that every top-level signature be annotated. Tuple types
 were added in 2026-08 and the fixture is annotated now.
+
+`refs/` is the current exception, and a plain scope gap rather than a
+bug: the self-hosted compiler doesn't know `ref` at all
+(`unbound function: ref` from Stage 4), because `Ref[T]` isn't part of
+the bounded subset Stages 3/4 were written against — same category as
+explicit generic instantiation and concurrency, which they also don't
+implement. It is check-and-build only, under the REAL compiler, where
+both backends agree on it.
 
 The BACKENDS are universal too now. Both the self-hosted backend and
 `plum build` compile tuple VALUES (type-specialized tags — see
@@ -55,7 +63,10 @@ on 2026-08-16:
   (`plum_ir::prune`) fixed it at the root: the gate now means what its
   doc comment always claimed.
 
-So all 17 fixtures build and run identically under both backends.
+So all 18 fixtures build and run identically under both backends —
+including `refs/`, added on 2026-08-16 when `Ref[T]` (`ref(v)`/`.get()`/
+`.set(v)`, the shared mutable cell) stopped being interpreter-only. See
+DESIGN.md's "`Ref[T]` in native codegen".
 
 The native side used to have a trailing-artifact quirk too — "a
 pre-existing native-`main()` CLI behavior noticed several times across
@@ -87,7 +98,8 @@ Deliberately narrower than `corpus/`'s 98-fixture grammar breadth —
 Stage 3 is scoped to a real but bounded subset (see `interp/interp.plum`'s
 own top comment for the exact list: closures-as-values and arrays ARE
 supported now, but explicit generic instantiation (`EGenericInst`) and
-concurrency/FFI still aren't). Fixtures here are chosen to exercise
+concurrency/FFI still aren't; `Ref[T]` isn't either — see `refs/`
+above). Fixtures here are chosen to exercise
 exactly what that subset supports: arithmetic, comparisons/logic, `if`/
 `else`, recursion, `struct`/`enum`/`match` (including tuple and nested-
 struct patterns), `for` loops with `let mut` accumulation, string
@@ -109,4 +121,7 @@ Writer story) — a struct whose fields are closures, called via
 `instance.field(args)`. `arrays/` exercises literal construction,
 indexing, `.len()`/`.push()`/`.set()`, `Array.map`/`filter`/`fold` (the
 namespace-call convention, not dot-call sugar), and an empty-array
-literal.
+literal. `refs/` exercises `Ref[T]` — `ref(v)`/`.get()`/`.set(v)`, two
+names aliasing one cell, identity (not structural) equality, a `Ref`
+holding a heap value whose old contents get released on `.set()`, and a
+closure capturing a `Ref` as a running total.

@@ -9426,3 +9426,110 @@ only defense that works here, because a mismatch produces no error.
 rejection is gone. Verified with four element types at once (`Int`,
 `String`, `Bool`, and a struct), across real spawned threads, with the
 native build and the interpreter agreeing.
+
+## `Ref[T]` in native codegen (2026-08-16)
+
+The last interpreter-only language feature. `ref(v)`/`.get()`/`.set(v)`
+worked under `plum run` and had no native representation at all, so
+`examples/shared_mutability` was the one example that could not be
+built. Both backends now agree on it, output for output.
+
+### Representation: closer to `Array` than to `Task`
+
+The interpreter implements `Ref` as `Rc<RefCell<Value>>`, deliberately
+outside its own toy refcounted heap. That decision doesn't port — native
+codegen has no `Rc` to borrow. The question was which existing shape
+`Ref` belongs to.
+
+It is `{ i64 refcount, i64 value }` — a real, Plum-managed, refcounted
+cell, so `dec_fn_for` returns a real release function for it, unlike
+`Task`/`Sender`/`Receiver`/`CStr`, which all return `None` because they
+have no refcount word to touch. The right analogue is `Array`: one
+`@plum_rc_dec_ref_<mangled>` per distinct inner `CgType`, discovered as
+codegen walks each body, exactly the way array element types already
+are.
+
+That also means **no tag**, and therefore none of the type-specialized
+tagging work that tuples and channels each needed. A `Ref`'s layout is
+pinned at compile time by `CgType::Ref(inner)`, so nothing ever recovers
+it from a runtime tag word, so there is no flat-`tag_fields` collision
+to escape. Better still, the inner type is available at the one place it
+is needed: `ref(v)` learns it from `v` itself. No span-keyed side channel
+through `Infer`, no new `ir::Expr` field. The construction site is the
+one place the type was already in hand — the exact opposite of
+`channel[T]()`, whose tuple has no construction site in the source at
+all.
+
+### What FBIP must not do
+
+`Ref` must ALWAYS mutate in place and ALWAYS stay visible through every
+alias. "Maybe reuse, maybe copy depending on refcount" is exactly
+backwards for it, so `.set()` has no refcount branch of any kind.
+
+DESIGN.md decided in 2026-07 that `fbip` gets only exhaustive-match
+passthrough for `RefNew`/`RefGet`/`RefSet` — no `is_syntactically_heap`
+case, `mark_reuse` never touches them. That still holds, and it is
+load-bearing rather than incidental: `is_syntactically_heap` feeds
+`known_heap`, which is what makes a binding a reuse candidate. Adding
+`RefNew` to it to get automatic release would also have made every `Ref`
+eligible for reuse-in-place — and a `match` could then try to reuse a
+`Ref` cell as a `Ctor` cell, which have different layouts.
+
+### The consequence, stated plainly
+
+Because `fbip` never tracks these nodes, it never emits a `Dec` for them.
+So:
+
+- A `Ref` cell is never released by scope exit.
+- `.get()` increments the value it hands back, and nothing balances it.
+
+The increment is not optional. Without it,
+`let p = r.get(); r.set(other)` leaves `p` dangling — a use-after-free.
+With it, the cost is a leak. Leaking is the correct side to err on, and
+it is consistent with what `Ref` already accepted: DESIGN.md's "Cycle
+collection" section chose Swift's answer (no collector), and a cell in a
+reference cycle never reaches refcount 0 either.
+
+What DOES work is the release that matters most in practice: `.set()`
+releases the value it overwrites. Measured — 2,000,000 `.set()` calls
+each allocating a fresh `Point`, flat at 5.0MB peak RSS, and under ASan
+a 50,000-iteration version leaks 100 bytes in 5 allocations (constant,
+not proportional). No use-after-free, no double-free.
+
+Ordering is what makes that safe: load the old word, store the new one,
+release the old **after**. Release-before-store would free the value in
+between and store a dangling pointer whenever the two alias —
+`r.set(r.get())` being the obvious case, pinned by a test.
+
+### Thread boundary
+
+`Ref` is rejected from crossing `spawn`/`channel`, matching the
+interpreter's `to_portable` exactly, and it is the sharpest case in that
+family because BOTH available crossing mechanisms are wrong rather than
+just one: a deep copy silently splits one shared cell into two
+independent ones — precisely the semantics `Ref` exists to provide, so a
+silent and invisible bug — while the verbatim pointer copy that
+`Sender`/`Receiver` legitimately get would leave two threads racing on a
+non-atomic refcount. Real cross-thread shared mutation needs atomics and
+a lock, still deliberately deferred.
+
+Both holes are closed: a directly `Ref`-typed capture by
+`crosses_thread_boundary`, and a `Ref` hidden inside a struct field by
+the whole-program `check_no_closure_or_task_fields` — which only started
+meaning anything the same day, once dead-function elimination stopped
+the prelude's unreachable `spawn` from holding its gate permanently open.
+
+The spawn-rejection message now explains the reason specific to the type
+it rejected. It previously told every case that "a task handle is tied to
+the thread that created it, so there's nothing meaningful to deep-copy",
+which for a `Ref` is not merely unhelpful but false — deep-copying a
+`Ref` would be entirely meaningful, and wrong.
+
+### `==` is identity
+
+Two distinct cells holding equal contents are NOT `==`. That is what
+makes `Ref` useful for aliasing at all, so `eq_fn_for` returns `None`
+(there is no structural comparison to call) and equality lowers to a raw
+pointer compare — the direct analogue of the interpreter's `Rc::ptr_eq`.
+`.to_string()` is likewise unsupported: printing contents would render
+two genuinely distinct cells identically.

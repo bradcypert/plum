@@ -127,6 +127,18 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
         PlumType::Struct(name, args) if name == "Receiver" && args.len() == 1 => {
             Ok(CgType::Receiver(Box::new(plum_type_to_cg_type(&args[0])?)))
         }
+        // `Ref[T]` — the same builtin pseudo-generic `Type::Struct`
+        // mechanism as the four above, and needed for the same reason:
+        // collapsing to plain `CgType::Heap` would be actively wrong.
+        // A `Ref` cell's layout is `{ i64 refcount, i64 value }` with NO
+        // tag word, so every tag-dispatched operation (`@plum_rc_dec`,
+        // field release, struct equality/to_string) would read the
+        // stored value as a tag id. It also needs the inner type
+        // recoverable for `.get()`/`.set()` to know what shape the slot
+        // holds. See `CgType::Ref`'s own doc comment in plum-codegen.
+        PlumType::Struct(name, args) if name == "Ref" && args.len() == 1 => {
+            Ok(CgType::Ref(Box::new(plum_type_to_cg_type(&args[0])?)))
+        }
         PlumType::Struct(..) | PlumType::Enum(..) => Ok(CgType::Heap),
         // A closure/function-typed signature position (a higher-order
         // function's parameter, most commonly) — `CgType::Closure`
@@ -471,6 +483,16 @@ pub fn reject_unprintable_return(entry_fn: &str, ret: CgType) -> Result<(), Stri
     if matches!(ret, CgType::CStr) {
         return Err(format!(
             "codegen: {entry_fn:?} returns a bare CStr value, which the compiled entry point can't print yet"
+        ));
+    }
+    // Not a "can't print YET" the way the others are — a `Ref`'s
+    // meaningful identity is the CELL, so printing its contents would
+    // render two genuinely distinct cells identically (`==` on `Ref` is
+    // identity, deliberately; see DESIGN.md's "Mutability and cycles").
+    // `r.get()` is how you get at something printable.
+    if matches!(ret, CgType::Ref(_)) {
+        return Err(format!(
+            "codegen: {entry_fn:?} returns a `Ref` cell, which has no printable representation —              return `.get()`'s contents instead"
         ));
     }
     Ok(())
@@ -930,8 +952,9 @@ pub fn emit_main(entry_fn: &str, ret_ty: CgType, args: &[CgValue], has_globals: 
         | CgType::Task(_)
         | CgType::Sender(_)
         | CgType::Receiver(_)
-        | CgType::CStr => {
-            return "; unreachable: compile_and_run rejects a Heap/Array/Closure/Task/Sender/Receiver/CStr-returning \
+        | CgType::CStr
+        | CgType::Ref(_) => {
+            return "; unreachable: compile_and_run rejects a Heap/Array/Closure/Task/Sender/Receiver/CStr/Ref-returning \
                      entry point before this point"
                 .to_string()
         }
@@ -1591,7 +1614,7 @@ mod tests {
         let src = "struct Ops { add: (Int, Int) -> Int } \
                    let go (): Int = { let ops = Ops { add: |a, b| a + b }; spawn { 1 }.join() + ops.add(3, 4) }";
         let err = compile_and_run(src, "go", &[CgValue::Unit]).unwrap_err();
-        assert!(err.contains("closure/task/CStr-shaped"), "unexpected error: {err}");
+        assert!(err.contains("closure/task/CStr/Ref-shaped"), "unexpected error: {err}");
     }
 
     #[test]
@@ -1625,6 +1648,116 @@ mod tests {
         // `Unit` must NOT win.
         let src = "let go (): Int = { let empty = []; let one = empty.push(41); one[0] + 1 }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("42".to_string()));
+    }
+
+    // --- Ref[T]: the shared mutable cell (see `CgType::Ref`) ---
+
+    #[test]
+    fn a_ref_round_trips_through_get_and_set() {
+        let src = "let go (): Int = { let r = ref(1); r.set(r.get() + 41); r.get() }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("42".to_string()));
+    }
+
+    #[test]
+    fn two_names_for_one_ref_cell_see_each_others_writes() {
+        // The entire point of the type: `b` is not a copy of `a`, it is
+        // the same cell, so a write through either is visible via both.
+        let src = "let go (): Int = { let a = ref(0); let b = a; b.set(7); a.get() }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("7".to_string()));
+    }
+
+    #[test]
+    fn ref_equality_is_identity_not_contents() {
+        // Two distinct cells holding equal contents are NOT `==`
+        // (DESIGN.md's "Mutability and cycles"), which is exactly what
+        // makes `Ref` usable for aliasing. A structural comparison would
+        // return true here.
+        let src = "let go (): Bool = { let a = ref(5); let b = ref(5); a == b }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("0".to_string()));
+        let same = "let go (): Bool = { let a = ref(5); let b = a; a == b }";
+        assert_eq!(compile_and_run(same, "go", &[CgValue::Unit]), Ok("1".to_string()));
+    }
+
+    #[test]
+    fn a_ref_holding_a_heap_value_releases_the_old_one_on_set() {
+        // `.set()` must release what it overwrites, or a loop like this
+        // grows without bound. Verified separately (2M iterations, flat
+        // at 5MB); this pins the correctness half — the load of the OLD
+        // word happens before the store of the new one, and the release
+        // happens after, so `r.set(r.get())`-shaped aliasing can't free
+        // the value being stored.
+        let src = "struct P { x: Int }\n\
+                   let go (): Int = { \
+                       let r = ref(P { x: 0 }); \
+                       for i in 0..100 { r.set(P { x: i }) }; \
+                       match r.get() { P(v) => v } \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("99".to_string()));
+    }
+
+    #[test]
+    fn setting_a_ref_to_its_own_contents_does_not_free_the_value() {
+        // The aliasing case the store-then-release ordering exists for.
+        // Release-before-store would drop the last reference to the
+        // Point and then store a dangling pointer.
+        let src = "struct P { x: Int }\n\
+                   let go (): Int = { let r = ref(P { x: 9 }); r.set(r.get()); match r.get() { P(v) => v } }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("9".to_string()));
+    }
+
+    #[test]
+    fn a_closure_can_capture_and_mutate_a_ref() {
+        // The "running total shared across calls" pattern — a `Ref` in a
+        // closure's captured environment, mutated across several calls.
+        let src = "let go (): Int = { \
+                       let total = ref(0); \
+                       let add = |n: Int| total.set(total.get() + n); \
+                       add(10); add(20); add(12); \
+                       total.get() \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("42".to_string()));
+    }
+
+    #[test]
+    fn a_ref_cannot_be_captured_by_spawn() {
+        // Both crossing mechanisms are wrong for a `Ref`: a deep copy
+        // splits the cell, a verbatim pointer copy races on a non-atomic
+        // refcount. Matches the interpreter's own `to_portable`.
+        let src = "let go (): Int = { let r = ref(1); spawn { r.get() }.join() }";
+        let err = compile_and_run(src, "go", &[CgValue::Unit]).unwrap_err();
+        assert!(err.contains("can't cross a thread boundary"), "unexpected error: {err}");
+        assert!(err.contains("SHARED mutable cell"), "message should explain Ref's own reason: {err}");
+    }
+
+    #[test]
+    fn a_ref_hidden_in_a_struct_field_is_rejected_when_the_program_spawns() {
+        // `crosses_thread_boundary` can only see a DIRECTLY Ref-typed
+        // capture; behind an opaque `Heap` pointer it sees nothing,
+        // which is what the whole-program check exists for.
+        let src = "struct Holder { cell: Ref[Int] }\n\
+                   let go (): Int = { let h = Holder { cell: ref(1) }; spawn { 5 }.join() }";
+        let err = compile_and_run(src, "go", &[CgValue::Unit]).unwrap_err();
+        assert!(err.contains("Ref-shaped"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn a_ref_in_a_struct_field_is_fine_when_the_program_never_spawns() {
+        // The other half: the whole-program rejection is gated on the
+        // program actually spawning (see `plum_ir::prune`), so an
+        // ordinary single-threaded program may hold `Ref` fields freely.
+        let src = "struct Counter { value: Ref[Int] }\n\
+                   let go (): Int = { \
+                       let c = Counter { value: ref(0) }; \
+                       match c { Counter(v) => { v.set(v.get() + 5); v.get() } } \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("5".to_string()));
+    }
+
+    #[test]
+    fn returning_a_ref_from_the_entry_point_is_a_clear_error() {
+        let src = "let go (): Ref[Int] = ref(1)";
+        let err = compile_and_run(src, "go", &[CgValue::Unit]).unwrap_err();
+        assert!(err.contains("no printable representation"), "unexpected error: {err}");
     }
 
     // --- testing framework: `panic_raw` (see `ir::Expr::PanicRaw`) ---
@@ -3367,15 +3500,17 @@ mod tests {
     #[test]
     fn a_construct_outside_codegen_scope_is_a_clear_error() {
         // `go`'s own DECLARED signature is Int -> Int (fully within
-        // supported scope), but its BODY calls `ref(v)` — `Ref`'s whole
-        // shared-mutable-cell runtime has no codegen at all yet (a
-        // genuinely separate, still-unimplemented feature; ALL SIX
-        // Unicode-aware string ops, including `.runes()`, are supported
-        // as of this chunk — see the string tests below) — exercising
-        // `plum_codegen`'s own per-expression rejection, not just
-        // `plumc`'s signature-conversion gate (see the next test for
-        // that one).
-        let src = "let go (n: Int): Int = { let r = ref(1); 5 }";
+        // supported scope), but its BODY uses an `Assign` in VALUE
+        // position (as a call argument) — statement-position assignment
+        // has real codegen, this shape does not, and it is listed as a
+        // known gap in DESIGN.md. Exercises `plum_codegen`'s own
+        // per-expression rejection, not just `plumc`'s
+        // signature-conversion gate (see the next test for that one).
+        //
+        // Used to be `ref(1)` here, which is supported as of 2026-08-16
+        // — see the `Ref` tests further down this file.
+        let src = "let twice (n: Int): Int = n * 2\n\
+                   let go (n: Int): Int = { let mut sum = 0; twice({ sum = sum + 1; sum }) }";
         let err = compile_and_run(src, "go", &[CgValue::Int(1)]).expect_err("expected a codegen scope error");
         assert!(err.contains("does not yet support"), "unexpected error: {err}");
     }

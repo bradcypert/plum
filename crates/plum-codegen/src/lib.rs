@@ -111,6 +111,40 @@ pub enum CgType {
     /// cell) — a genuine soundness requirement, not a missed
     /// optimization.
     CStr,
+    /// `Ref[T]` — the explicit, opt-in shared-mutable cell (surface
+    /// syntax `ref(v)`/`.get()`/`.set(v)`; see DESIGN.md's "Mutability
+    /// and cycles"). A REFCOUNTED two-word heap cell, `{ i64 refcount,
+    /// i64 value }`, allocated by `@plum_alloc_ref` — the closest
+    /// analogue in this backend is `Array`, not `Task`/`Sender`: it is
+    /// genuinely Plum-managed memory with a real refcount word at offset
+    /// 0, so `dec_fn_for` returns a real per-inner-type release function
+    /// (`@plum_rc_dec_ref_<mangled>`, one per inner `CgType` actually
+    /// used, discovered exactly the way array element types are — see
+    /// `register_ref_inner_type`).
+    ///
+    /// It carries no tag, unlike an ordinary struct/enum cell, for the
+    /// same reason `Array` doesn't: its shape is fully determined by
+    /// this `CgType`, so nothing ever needs to recover the layout from a
+    /// runtime tag word. That also sidesteps the flat-`tag_fields`
+    /// collision that tuples and channels each had to be
+    /// type-specialized to escape.
+    ///
+    /// What makes it NOT an ordinary heap cell is that FBIP must never
+    /// touch it: `Ref` must ALWAYS mutate in place and ALWAYS stay
+    /// visible through every alias, so the "maybe reuse, maybe copy
+    /// depending on refcount" logic is exactly backwards for it. That is
+    /// enforced upstream — `plum_ir::fbip` has no `is_syntactically_
+    /// heap` case for `RefNew`/`RefGet`/`RefSet` and `mark_reuse` never
+    /// touches them — so nothing here needs to defend against it.
+    ///
+    /// REJECTED from crossing a spawn/channel boundary, like `Closure`/
+    /// `Task`/`CStr` and for the sharpest version of their reason: a
+    /// deep copy would silently split one shared cell into two
+    /// independent ones, defeating the entire point of the type, and a
+    /// verbatim pointer copy would race on a non-atomic refcount. This
+    /// matches the interpreter's own restriction exactly (`to_portable`
+    /// rejects `Value::Ref`).
+    Ref(Box<CgType>),
 }
 
 impl CgType {
@@ -126,7 +160,8 @@ impl CgType {
             | CgType::Task(_)
             | CgType::Sender(_)
             | CgType::Receiver(_)
-            | CgType::CStr => "ptr",
+            | CgType::CStr
+            | CgType::Ref(_) => "ptr",
         }
     }
 
@@ -146,6 +181,7 @@ impl CgType {
             CgType::Heap => "Heap".to_string(),
             CgType::Str => "Str".to_string(),
             CgType::Array(elem) => format!("Array_{}", elem.mangled()),
+            CgType::Ref(inner) => format!("Ref_{}", inner.mangled()),
             // Every closure shape shares ONE mangled name regardless of
             // its actual param/return types — the only consumer of
             // `mangled()` is array-element-release-function naming
@@ -270,6 +306,12 @@ fn dec_fn_for(ty: &CgType) -> Option<String> {
         // `codegen_as_cstr`), never bound into a heap cell's field or
         // otherwise kept alive past its one use site.
         CgType::CStr => None,
+        // A REAL release function, unlike every other `None` above: a
+        // `Ref` cell is genuinely Plum-managed refcounted memory with a
+        // refcount word at offset 0, so it is much closer to `Array`
+        // than to `Task`/`Sender`/`CStr` here. One per inner `CgType`
+        // actually used in the program — see `emit_ref_release_fns`.
+        CgType::Ref(inner) => Some(format!("@plum_rc_dec_ref_{}", inner.mangled())),
     }
 }
 
@@ -292,6 +334,14 @@ fn eq_fn_for(ty: &CgType) -> Option<String> {
         CgType::Str => Some("@plum_str_eq".to_string()),
         CgType::Array(elem) => Some(format!("@plum_array_eq_{}", elem.mangled())),
         CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => None,
+        // `Ref` equality is IDENTITY, not contents (DESIGN.md's
+        // "Mutability and cycles": two different cells holding equal
+        // contents are NOT `==`, which is what makes `Ref` useful for
+        // aliasing at all). Identity is a plain pointer comparison, so
+        // there is no runtime function to call — `None` here, and
+        // `codegen.rs`'s equality lowering compares the pointers
+        // directly, matching how the interpreter uses `Rc::ptr_eq`.
+        CgType::Ref(_) => None,
     }
 }
 
@@ -313,7 +363,12 @@ fn to_string_fn_for(ty: &CgType) -> Option<String> {
         CgType::Heap => Some("@plum_struct_to_string".to_string()),
         CgType::Str => Some("@plum_str_quote".to_string()),
         CgType::Array(elem) => Some(format!("@plum_array_to_string_{}", elem.mangled())),
-        CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr => None,
+        // Deliberately not stringifiable, matching the interpreter: a
+        // `Ref`'s useful identity is its CELL, and printing its contents
+        // would render two distinct cells identically. `match r.get()
+        // { ... }` (or `r.get().to_string()`) is how you look inside
+        // one — see DESIGN.md's "Mutability and cycles".
+        CgType::Closure(..) | CgType::Task(_) | CgType::Sender(_) | CgType::Receiver(_) | CgType::CStr | CgType::Ref(_) => None,
     }
 }
 
@@ -337,9 +392,42 @@ fn intern_tags(tag_fields: &TagFields) -> HashMap<String, i64> {
 /// same element type discovered from two different sources (a struct
 /// field AND a function signature, say) only ever gets ONE definition.
 fn register_array_elem_type(needed: &mut HashMap<String, CgType>, ty: &CgType) {
-    if let CgType::Array(elem) = ty {
-        needed.entry(elem.mangled()).or_insert_with(|| (**elem).clone());
-        register_array_elem_type(needed, elem);
+    match ty {
+        CgType::Array(elem) => {
+            needed.entry(elem.mangled()).or_insert_with(|| (**elem).clone());
+            register_array_elem_type(needed, elem);
+        }
+        // Descends through `Ref` as well: a `Ref[Array[Int]]`'s own
+        // release function calls `dec_fn_for(Array(Int))`, i.e.
+        // `@plum_rc_dec_array_Int` — so that array release function has
+        // to be emitted even though no array of arrays appears anywhere
+        // in the program. See `register_ref_inner_type` for the mirror
+        // of this argument in the other direction.
+        CgType::Ref(inner) => register_array_elem_type(needed, inner),
+        _ => {}
+    }
+}
+
+/// `register_array_elem_type`'s exact counterpart for `Ref[T]`: records
+/// every INNER `CgType` needing its own `@plum_rc_dec_ref_<mangled>`
+/// release function (see `emit_ref_release_fns`).
+///
+/// Recurses through `Array` and `Ref` alike, so a `Ref[Array[Ref[Int]]]`
+/// registers `Array_Ref_Int` and `Int`. Note the asymmetry with
+/// `register_array_elem_type`, which does NOT look inside a `Ref`: an
+/// array whose elements are `Ref` cells needs an
+/// `@plum_rc_dec_array_Ref_Int`, and that function's own body calls
+/// `dec_fn_for(Ref(Int))` — so the `Ref` release function it names must
+/// exist too. That is why both registrars are called on the same seed
+/// types, and why this one descends through arrays.
+fn register_ref_inner_type(needed: &mut HashMap<String, CgType>, ty: &CgType) {
+    match ty {
+        CgType::Ref(inner) => {
+            needed.entry(inner.mangled()).or_insert_with(|| (**inner).clone());
+            register_ref_inner_type(needed, inner);
+        }
+        CgType::Array(elem) => register_ref_inner_type(needed, elem),
+        _ => {}
     }
 }
 
@@ -2281,6 +2369,37 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
         alloc_stat_bump("array", "%size")
     ));
 
+    // --- Ref runtime ---
+    //
+    // Cell layout: `{ i64 refcount, i64 value }` — the smallest heap
+    // cell in the backend. No tag word (its shape is pinned at compile
+    // time by `CgType::Ref(inner)`, same as an array's), no length, no
+    // capacity: exactly one slot, written unconditionally by `.set()`
+    // and read by `.get()`.
+    //
+    // Allocated fresh at every `ref(v)`, and NEVER reused in place by
+    // FBIP even when its refcount is 1 — see `CgType::Ref`'s doc comment
+    // for why reuse is precisely backwards for this one type. Its
+    // release function is per-inner-type (`emit_ref_release_fns`), like
+    // an array's, not tag-dispatched.
+    //
+    // Counted under the "ctor" statistic rather than getting its own:
+    // `PLUM_RT_STATS` buckets exist to find allocation blowups, and a
+    // `Ref` is an ordinary small cell for that purpose.
+    out.push_str(&format!(
+        "define ptr @plum_alloc_ref(i64 %value) {{\n\
+         entry:\n\
+         \x20 %size = add i64 16, 0\n\
+         {}\
+         \x20 %p = call ptr @malloc(i64 %size)\n\
+         \x20 store i64 1, ptr %p\n\
+         \x20 %val_addr = getelementptr i8, ptr %p, i64 8\n\
+         \x20 store i64 %value, ptr %val_addr\n\
+         \x20 ret ptr %p\n\
+         }}\n\n",
+        alloc_stat_bump("ctor", "%size")
+    ));
+
     // --- closure runtime ---
     //
     // Cell layout: `{ i64 refcount, i64 code_ptr, i64 release_fn_ptr,
@@ -2525,6 +2644,59 @@ fn emit_array_release_fns(needed: &HashMap<String, CgType>) -> String {
     out
 }
 
+/// Release functions for `Ref[T]` cells — one `@plum_rc_dec_ref_
+/// <mangled>` per distinct INNER `CgType` actually used in the program,
+/// mirroring `emit_array_release_fns`' exact "per-inner-type, not a
+/// generic dispatcher" shape and for the same reason: a `Ref` cell
+/// carries no tag word to dispatch on at runtime, its shape is pinned at
+/// compile time by `CgType::Ref(inner)` itself.
+///
+/// The cell is `{ i64 refcount, i64 value }` (`@plum_alloc_ref`), so
+/// this is the simplest release function in the backend: decrement, and
+/// at zero release the single contained value (if it is heap-shaped at
+/// all) before freeing the cell.
+///
+/// Note what is NOT here, and deliberately: no reuse-in-place branch, no
+/// "refcount is 1 so we can mutate" fast path. `.set()` ALWAYS writes
+/// through, whatever the count — that is the entire semantics of the
+/// type. See `CgType::Ref`'s own doc comment.
+///
+/// Reference CYCLES through `Ref` are the one case this cannot handle:
+/// a cell reachable only from itself never reaches refcount 0 and is
+/// never freed. That is a known, accepted leak, not an oversight —
+/// `Ref` is the only way to build a cycle in Plum at all, and
+/// DESIGN.md's "Cycle collection" section decided to ship Swift's answer
+/// (no collector, leaks accepted) and revisit only if real programs
+/// prove it painful.
+fn emit_ref_release_fns(needed: &HashMap<String, CgType>) -> String {
+    let mut out = String::new();
+    // Sorted purely for reproducible `.ll` output across runs, same
+    // reasoning as `emit_array_release_fns`/`intern_tags`.
+    let mut names: Vec<&String> = needed.keys().collect();
+    names.sort();
+    for mangled in names {
+        let inner = &needed[mangled];
+        out.push_str(&format!("define void @plum_rc_dec_ref_{mangled}(ptr %p) {{\n"));
+        out.push_str("entry:\n");
+        out.push_str("  %rc = load i64, ptr %p\n");
+        out.push_str("  %rc2 = sub i64 %rc, 1\n");
+        out.push_str("  store i64 %rc2, ptr %p\n");
+        out.push_str("  %is_zero = icmp eq i64 %rc2, 0\n");
+        out.push_str("  br i1 %is_zero, label %free_block, label %done\n");
+        out.push_str("free_block:\n");
+        if let Some(inner_dec_fn) = dec_fn_for(inner) {
+            out.push_str("  %val_addr = getelementptr i8, ptr %p, i64 8\n");
+            out.push_str("  %val_word = load i64, ptr %val_addr\n");
+            out.push_str("  %val_ptr = inttoptr i64 %val_word to ptr\n");
+            out.push_str(&format!("  call void {inner_dec_fn}(ptr %val_ptr)\n"));
+        }
+        out.push_str("  call void @free(ptr %p)\n");
+        out.push_str("  br label %done\n");
+        out.push_str("done:\n  ret void\n}\n\n");
+    }
+    out
+}
+
 /// Structural equality for arrays — one `@plum_array_eq_<mangled>`
 /// function per distinct element `CgType` actually used in the program
 /// (mirroring `emit_array_release_fns`'s exact "per-element-type, not
@@ -2698,7 +2870,17 @@ fn deepcopy_fn_for(ty: &CgType) -> Option<String> {
         CgType::Heap => Some("@plum_deepcopy_heap".to_string()),
         CgType::Str => Some("@plum_deepcopy_str".to_string()),
         CgType::Array(elem) => Some(format!("@plum_deepcopy_array_{}", elem.mangled())),
-        CgType::Closure(..) | CgType::Task(_) => None,
+        // `Ref` joins `Closure`/`Task` rather than `Sender`/`Receiver`,
+        // and it is the sharpest case of the three: a deep copy would
+        // silently split one shared cell into two independent ones —
+        // defeating the entire point of the type — while a verbatim
+        // pointer copy would race on a non-atomic refcount. Neither is
+        // acceptable, so a `Ref` is rejected from crossing the boundary
+        // outright (`crosses_thread_boundary`, and the whole-program
+        // `check_no_closure_or_task_fields` for one hidden in a
+        // struct/enum field), and this arm is dead for the same reason
+        // `Closure`/`Task`'s is.
+        CgType::Closure(..) | CgType::Task(_) | CgType::Ref(_) => None,
         // A `Sender`/`Receiver` crosses a thread boundary as a VERBATIM
         // pointer copy, never a deep copy — see `codegen.rs`'s
         // `deep_copy_capture` `Sender`/`Receiver` arm for the exact
@@ -3184,15 +3366,23 @@ fn check_no_closure_or_task_fields(tag_fields: &TagFields) -> Result<(), String>
             // `CgType`, even where a live call is impossible" precedent
             // elsewhere in this module (see e.g. `CgType::mangled`'s
             // `Task`/`Sender` arms).
-            if matches!(field_ty, CgType::Closure(..) | CgType::Task(_) | CgType::CStr) {
+            // `Ref` is included for the same reason and with the
+            // sharpest justification of the four: `crosses_thread_
+            // boundary` can reject a DIRECTLY `Ref`-typed capture, but a
+            // `Ref` sitting inside a struct is invisible behind an
+            // opaque `Heap` pointer at the capture site. Letting one
+            // through would mean either silently splitting a shared cell
+            // in two (deep copy) or racing on a non-atomic refcount
+            // (verbatim copy) — see `CgType::Ref`'s own doc comment.
+            if matches!(field_ty, CgType::Closure(..) | CgType::Task(_) | CgType::CStr | CgType::Ref(_)) {
                 return Err(format!(
-                    "codegen: struct/enum {tag:?}'s field {i} is closure/task/CStr-shaped ({field_ty:?}) — a \
-                     program that uses `spawn` anywhere cannot declare a struct/enum with a closure-, task-, or \
-                     CStr-typed field anywhere else either, since such a value could reach a `spawn` \
-                     capture through an opaque heap pointer and none of a closure's captured environment, a \
-                     task handle, or a raw C string pointer can cross a thread boundary safely (matching the \
-                     interpreter's own closure/task restriction — see `plum_interp::Interpreter::to_portable` \
-                     — and extending it to `CStr` for the same reason)"
+                    "codegen: struct/enum {tag:?}'s field {i} is closure/task/CStr/Ref-shaped ({field_ty:?}) — a \
+                     program that uses `spawn` anywhere cannot declare a struct/enum with a closure-, task-, \
+                     CStr-, or Ref-typed field anywhere else either, since such a value could reach a `spawn` \
+                     capture through an opaque heap pointer, and none of a closure's captured environment, a \
+                     task handle, a raw C string pointer, or a shared mutable cell can cross a thread boundary \
+                     safely (matching the interpreter's own closure/task restriction — see `plum_interp::\
+                     Interpreter::to_portable` — and extending it to `CStr` and `Ref` for the same reason)"
                 ));
             }
         }
@@ -3560,23 +3750,33 @@ pub fn emit_program(
     // making every codegen function take an extra `&mut` parameter
     // just for this.
     let needed_arrays = std::cell::RefCell::new(HashMap::new());
+    // The identical table for `Ref[T]` inner types (`emit_ref_release_
+    // fns`), seeded from exactly the same three sources and for exactly
+    // the same reasons — a `Ref`-typed struct field, function parameter,
+    // or global all need a release function whether or not any function
+    // body in the program constructs one of that shape.
+    let needed_refs = std::cell::RefCell::new(HashMap::new());
+    let seed = |ty: &CgType| {
+        register_array_elem_type(&mut needed_arrays.borrow_mut(), ty);
+        register_ref_inner_type(&mut needed_refs.borrow_mut(), ty);
+    };
     for field_types in tag_fields.values() {
         for ty in field_types {
-            register_array_elem_type(&mut needed_arrays.borrow_mut(), ty);
+            seed(ty);
         }
     }
     for sig in signatures.values() {
         for p in &sig.params {
-            register_array_elem_type(&mut needed_arrays.borrow_mut(), p);
+            seed(p);
         }
-        register_array_elem_type(&mut needed_arrays.borrow_mut(), &sig.ret);
+        seed(&sig.ret);
     }
     // Same reasoning as the two loops above, applied to globals: an
     // Array-typed global needs its own element-release function even if
     // no function signature/struct field happens to mention that exact
     // element type either.
     for ty in global_types.values() {
-        register_array_elem_type(&mut needed_arrays.borrow_mut(), ty);
+        seed(ty);
     }
 
     // Function bodies are emitted BEFORE the runtime preamble text is
@@ -3645,6 +3845,7 @@ pub fn emit_program(
             &tag_ids,
             tag_fields,
             &needed_arrays,
+            &needed_refs,
             &closure_counter,
             &closure_defs,
             &trampolines,
@@ -3673,7 +3874,7 @@ pub fn emit_program(
     // globals` is non-empty, matching the "pay only for what's used"
     // convention already established for the spawn/channel runtime.
     let (global_slots, init_globals_fn) =
-        emit_init_globals(&program.globals, global_types, signatures, &tag_ids, tag_fields, &needed_arrays, &closure_counter, &closure_defs, &trampolines, &needs_spawn_runtime, &needs_channel_runtime, &needs_file_io_runtime, &externs, &c_callback_trampolines)?;
+        emit_init_globals(&program.globals, global_types, signatures, &tag_ids, tag_fields, &needed_arrays, &needed_refs, &closure_counter, &closure_defs, &trampolines, &needs_spawn_runtime, &needs_channel_runtime, &needs_file_io_runtime, &externs, &c_callback_trampolines)?;
 
     // The whole-program closure/task-field rejection fires whenever
     // EITHER spawn OR channels are used — a channel send can smuggle a
@@ -3685,9 +3886,13 @@ pub fn emit_program(
     }
 
     let needed_arrays = needed_arrays.into_inner();
+    let needed_refs = needed_refs.into_inner();
     let mut out = emit_runtime(tag_fields, &tag_ids, struct_field_names);
     out.push_str(&extern_struct_type_decls);
     out.push_str(&extern_declares);
+    // BEFORE the array release functions purely for readable output;
+    // LLVM has no ordering requirement between top-level `define`s.
+    out.push_str(&emit_ref_release_fns(&needed_refs));
     out.push_str(&emit_array_release_fns(&needed_arrays));
     out.push_str(&emit_array_eq_fns(&needed_arrays));
     out.push_str(&emit_array_to_string_fns(&needed_arrays));
@@ -3735,6 +3940,7 @@ fn emit_function(
     tag_ids: &HashMap<String, i64>,
     tag_fields: &TagFields,
     needed_arrays: &std::cell::RefCell<HashMap<String, CgType>>,
+    needed_refs: &std::cell::RefCell<HashMap<String, CgType>>,
     closure_counter: &std::cell::RefCell<usize>,
     closure_defs: &std::cell::RefCell<Vec<String>>,
     trampolines: &std::cell::RefCell<HashMap<String, String>>,
@@ -3765,6 +3971,7 @@ fn emit_function(
         tag_fields,
         fn_name: &f.name,
         needed_arrays,
+        needed_refs,
         closure_counter,
         closure_defs,
         trampolines,
@@ -3841,6 +4048,7 @@ fn emit_init_globals(
     tag_ids: &HashMap<String, i64>,
     tag_fields: &TagFields,
     needed_arrays: &std::cell::RefCell<HashMap<String, CgType>>,
+    needed_refs: &std::cell::RefCell<HashMap<String, CgType>>,
     closure_counter: &std::cell::RefCell<usize>,
     closure_defs: &std::cell::RefCell<Vec<String>>,
     trampolines: &std::cell::RefCell<HashMap<String, String>>,
@@ -3877,6 +4085,7 @@ fn emit_init_globals(
         tag_fields,
         fn_name: "plum_init_globals",
         needed_arrays,
+        needed_refs,
         closure_counter,
         closure_defs,
         trampolines,
@@ -4151,19 +4360,29 @@ mod tests {
 
     #[test]
     fn unsupported_construct_is_a_clear_error_not_a_panic() {
-        // All six Unicode-aware string ops (`.runes()`/`.trim()`/
-        // `.split()`/`.to_upper()`/`.to_lower()`/`.replace()`) are
-        // supported as of this chunk (see the dedicated tests for each
-        // below) — `RefNew` (a genuinely separate, still-unimplemented
-        // feature: `ref(v)`'s shared-mutable-cell runtime has no
-        // codegen at all yet) is still a clear, unsupported-construct
-        // error instead.
+        // This test's subject has moved twice as features landed: first
+        // from a Unicode string op, then from `RefNew` (both supported
+        // now — see the `Ref` tests in `plumc::codegen_cli`). What
+        // remains genuinely unsupported is an `Assign` in VALUE
+        // position — statement position has real codegen, but a `sum =
+        // ...` reached as an ordinary value (e.g. as a call argument) is
+        // still a documented gap, listed as such in DESIGN.md. The point
+        // of the test is the catch-all path itself: a clear error, never
+        // a panic.
         let prog = program(vec![Function {
             name: "go".to_string(),
             params: vec![],
-            body: Expr::RefNew { value: Box::new(Expr::Int(1)) },
+            body: Expr::Binary(
+                BinOp::Add,
+                Box::new(Expr::Assign {
+                    name: "x".to_string(),
+                    value: Box::new(Expr::Int(1)),
+                    rest: Box::new(Expr::Int(2)),
+                }),
+                Box::new(Expr::Int(3)),
+            ),
         }]);
-        let err = emit(&prog, &sigs(&[("go", vec![], CgType::Unit)]), &TagFields::new()).expect_err("expected a clear error");
+        let err = emit(&prog, &sigs(&[("go", vec![], CgType::Int)]), &TagFields::new()).expect_err("expected a clear error");
         assert!(err.contains("does not yet support"), "unexpected error: {err}");
     }
 
@@ -4587,12 +4806,14 @@ mod tests {
     }
 
     #[test]
-    fn a_still_unsupported_construct_is_a_clear_error() {
-        // `RefGet`/`RefSet` are the other two thirds of the still-
-        // wholly-unimplemented `ref`/`.get()`/`.set()` feature (see
-        // `unsupported_construct_is_a_clear_error_not_a_panic`'s own
-        // updated doc comment for why `RefNew` moved here from a
-        // now-supported string op).
+    fn a_ref_op_on_a_non_ref_value_is_a_clear_error() {
+        // `RefGet`/`RefSet` have real codegen now, so this no longer
+        // exercises the catch-all (see
+        // `unsupported_construct_is_a_clear_error_not_a_panic` for what
+        // does). What it pins instead is the type check every `Ref`
+        // operation starts with: `.get()` on something that isn't a
+        // `Ref` must be a clear, specific error rather than reading
+        // offset 8 of an arbitrary heap cell as if it were a Ref slot.
         let prog = program(vec![Function {
             name: "go".to_string(),
             params: vec!["s".to_string()],
@@ -4600,7 +4821,7 @@ mod tests {
         }]);
         let err = emit(&prog, &sigs(&[("go", vec![CgType::Heap], CgType::Int)]), &TagFields::new())
             .expect_err("expected a clear error");
-        assert!(err.contains("does not yet support"), "unexpected error: {err}");
+        assert!(err.contains("`.get()` requires a Ref value"), "unexpected error: {err}");
     }
 
     #[test]
