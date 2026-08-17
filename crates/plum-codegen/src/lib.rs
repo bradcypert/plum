@@ -315,6 +315,18 @@ fn dec_fn_for(ty: &CgType) -> Option<String> {
     }
 }
 
+/// Whether a value of `ty` carries a refcount word this backend
+/// manages — precisely "`dec_fn_for` has something to call".
+///
+/// Public so `plumc` can hand `plum_ir::fbip` a tag-to-field-heap-ness
+/// table without re-deriving the judgement. Deriving it twice is exactly
+/// how a release and an increment come to disagree, and the consequence
+/// of disagreeing here is a leak or a dangling pointer — so there is one
+/// answer, and this is it.
+pub fn is_refcounted(ty: &CgType) -> bool {
+    dec_fn_for(ty).is_some()
+}
+
 /// The runtime equality function to call for a value of `ty`, or `None`
 /// for a type that either needs no call at all (a scalar, compared
 /// inline via `icmp`/`fcmp` at the call site) or isn't equality-

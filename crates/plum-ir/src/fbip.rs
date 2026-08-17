@@ -1386,6 +1386,232 @@ fn drop_at_scope_end(body: Expr, name: &str) -> Expr {
     }
 }
 
+/// Releases MATCH-EXTRACTED bindings whose every use is a borrow — the
+/// third and last place a heap value could be owned without ever being
+/// released.
+///
+/// # Why this is a separate pass
+///
+/// A match arm's binding is already an OWNED reference: codegen
+/// increments every refcounted field as it extracts it
+/// (`bind_arm_env`), transferring one reference from the scrutinee to the
+/// binding. Nothing ever released it, so extracting a heap field leaked
+/// it — measured per 1M iterations of a loop: 32.5 MB for a `String`
+/// field, 63.1 MB for an `Array[Int]` field, 32.6 MB for a nested struct
+/// field.
+///
+/// It is separate from `insert_refcount_ops` for one reason: this needs
+/// to know which fields are refcounted, and the IR carries no types. The
+/// judgement is made by `plum_codegen::is_refcounted` — the same function
+/// codegen's own increment is gated on, handed in as `tag_heap` rather
+/// than re-derived, because deriving it twice is exactly how an increment
+/// and a release come to disagree.
+///
+/// Runs AFTER `optimize`, so reuse decisions and refcount annotations are
+/// already in the tree and this only ever adds to them.
+///
+/// # The rule
+///
+/// Identical to `insert_refcount_ops`' own: exactly ONE use, and that use
+/// in a borrow position. Single-use for the same sharp reason — a
+/// multi-use binding's increments are what keep reuse-in-place honest —
+/// and borrow-only so a binding that ESCAPES (returned from the arm,
+/// stored into a `Ctor`) keeps the reference it was given. That escape
+/// case is the whole point of the extraction increment, so breaking it
+/// would be worse than the leak.
+///
+/// A catch-all arm binds the WHOLE scrutinee rather than a field, and
+/// codegen does not increment it (`DEFAULT_ARM_TAG` in `bind_arm_env`) —
+/// it is a pure borrow. Such an arm has no `tag_heap` entry, so it is
+/// skipped, and the `is_empty` guard below makes that explicit rather
+/// than incidental.
+pub fn release_match_bindings(expr: Expr, tag_heap: &std::collections::HashMap<String, Vec<bool>>) -> Expr {
+    match expr {
+        Expr::Match { scrutinee, arms } => Expr::Match {
+            scrutinee: Box::new(release_match_bindings(*scrutinee, tag_heap)),
+            arms: arms
+                .into_iter()
+                .map(|arm| {
+                    let guard = arm.guard.map(|g| Box::new(release_match_bindings(*g, tag_heap)));
+                    let mut body = release_match_bindings(arm.body, tag_heap);
+                    let heap = tag_heap.get(&arm.tag).cloned().unwrap_or_default();
+                    if !heap.is_empty() {
+                        for (i, name) in arm.bindings.iter().enumerate() {
+                            if heap.get(i).copied() != Some(true) {
+                                continue;
+                            }
+                            // A use in the GUARD is a second use this
+                            // analysis does not model, so skip rather
+                            // than guess.
+                            if guard.as_ref().map(|g| expr_mentions_var(g, name)).unwrap_or(false) {
+                                continue;
+                            }
+                            // `mark_last_uses`' own answer for "exactly
+                            // one use", reused rather than re-counted:
+                            // `used` with no `Inc` inserted means the
+                            // single use WAS the last use. The marked
+                            // tree is discarded — the increments it would
+                            // add are precisely what this avoids needing.
+                            let (marked, used) = mark_last_uses(body.clone(), name, false);
+                            if used && !incs_name(&marked, name) && all_uses_are_borrows(&body, name) {
+                                body = drop_at_scope_end(body, name);
+                            }
+                        }
+                    }
+                    MatchArm {
+                        tag: arm.tag,
+                        bindings: arm.bindings,
+                        guard,
+                        body,
+                    }
+                })
+                .collect(),
+        },
+        other => map_children_owned(other, &mut |c| release_match_bindings(c, tag_heap)),
+    }
+}
+
+/// Rebuilds `expr` with `f` applied to every direct child — the owned
+/// counterpart of `for_each_child`, used only by
+/// `release_match_bindings`. Exhaustive with no `_` arm so a new variant
+/// carrying a subexpression cannot silently have its match arms skipped.
+fn map_children_owned(expr: Expr, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
+    let mut b = |e: Box<Expr>| Box::new(f(*e));
+    match expr {
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Bool(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::EmptyArray(_)
+        | Expr::Channel { .. }
+        | Expr::ArgsRaw
+        | Expr::RandomRaw
+        | Expr::ArrayPopReuse { .. }
+        | Expr::StrTrimReuse { .. }
+        | Expr::StrToUpperReuse { .. }
+        | Expr::StrToLowerReuse { .. } => expr,
+
+        Expr::Unary(op, e) => Expr::Unary(op, b(e)),
+        Expr::AsCStr(e) => Expr::AsCStr(b(e)),
+        Expr::AsString(e) => Expr::AsString(b(e)),
+        Expr::ToIntTrunc(e) => Expr::ToIntTrunc(b(e)),
+        Expr::ToIntRound(e) => Expr::ToIntRound(b(e)),
+        Expr::ToFloat(e) => Expr::ToFloat(b(e)),
+        Expr::Binary(op, l, r) => Expr::Binary(op, b(l), b(r)),
+        Expr::Let { name, value, body } => Expr::Let { name, value: b(value), body: b(body) },
+        Expr::If { cond, then_branch, else_branch } => Expr::If {
+            cond: b(cond),
+            then_branch: b(then_branch),
+            else_branch: b(else_branch),
+        },
+        Expr::Call { callee, args } => Expr::Call {
+            callee: b(callee),
+            args: args.into_iter().map(&mut *f).collect(),
+        },
+        Expr::ExternCall { name, args } => Expr::ExternCall {
+            name,
+            args: args.into_iter().map(&mut *f).collect(),
+        },
+        Expr::Ctor { tag, fields } => Expr::Ctor {
+            tag,
+            fields: fields.into_iter().map(&mut *f).collect(),
+        },
+        Expr::CtorReuse { reuse_of, tag, fields } => Expr::CtorReuse {
+            reuse_of,
+            tag,
+            fields: fields.into_iter().map(&mut *f).collect(),
+        },
+        // Handled by `release_match_bindings` itself, never routed here.
+        Expr::Match { scrutinee, arms } => Expr::Match {
+            scrutinee: b(scrutinee),
+            arms: arms
+                .into_iter()
+                .map(|arm| MatchArm {
+                    tag: arm.tag,
+                    bindings: arm.bindings,
+                    guard: arm.guard.map(|g| Box::new(f(*g))),
+                    body: f(arm.body),
+                })
+                .collect(),
+        },
+        Expr::RcAnnotated { op, target, rest } => Expr::RcAnnotated { op, target, rest: b(rest) },
+        Expr::For { var, start, end, body } => Expr::For {
+            var,
+            start: b(start),
+            end: b(end),
+            body: b(body),
+        },
+        Expr::Closure { params, param_types, ret_type, body } => Expr::Closure {
+            params,
+            param_types,
+            ret_type,
+            body: b(body),
+        },
+        Expr::Assign { name, value, rest } => Expr::Assign { name, value: b(value), rest: b(rest) },
+        Expr::Spawn { block } => Expr::Spawn { block: b(block) },
+        Expr::TaskJoin { task } => Expr::TaskJoin { task: b(task) },
+        Expr::ChannelSend { sender, value } => Expr::ChannelSend { sender: b(sender), value: b(value) },
+        Expr::ChannelRecv { receiver } => Expr::ChannelRecv { receiver: b(receiver) },
+        Expr::Select { arms } => Expr::Select {
+            arms: arms
+                .into_iter()
+                .map(|arm| SelectArm {
+                    receiver: f(arm.receiver),
+                    body: f(arm.body),
+                })
+                .collect(),
+        },
+
+        Expr::Index { base, index } => Expr::Index { base: b(base), index: b(index) },
+        Expr::ArrayLen { array } => Expr::ArrayLen { array: b(array) },
+        Expr::ArrayPop { array } => Expr::ArrayPop { array: b(array) },
+        Expr::ArrayPush { array, value } => Expr::ArrayPush { array: b(array), value: b(value) },
+        Expr::ArraySet { array, index, value } => Expr::ArraySet {
+            array: b(array),
+            index: b(index),
+            value: b(value),
+        },
+        Expr::ArrayRemove { array, index } => Expr::ArrayRemove { array: b(array), index: b(index) },
+        Expr::ArrayPushReuse { reuse_of, value } => Expr::ArrayPushReuse { reuse_of, value: b(value) },
+        Expr::ArraySetReuse { reuse_of, index, value } => Expr::ArraySetReuse {
+            reuse_of,
+            index: b(index),
+            value: b(value),
+        },
+        Expr::ArrayRemoveReuse { reuse_of, index } => Expr::ArrayRemoveReuse { reuse_of, index: b(index) },
+
+        Expr::StrConcat { base, other } => Expr::StrConcat { base: b(base), other: b(other) },
+        Expr::StrConcatReuse { reuse_of, other } => Expr::StrConcatReuse { reuse_of, other: b(other) },
+        Expr::StrRunes { base } => Expr::StrRunes { base: b(base) },
+        Expr::StrTrim { base } => Expr::StrTrim { base: b(base) },
+        Expr::StrToUpper { base } => Expr::StrToUpper { base: b(base) },
+        Expr::StrToLower { base } => Expr::StrToLower { base: b(base) },
+        Expr::ToString { base } => Expr::ToString { base: b(base) },
+        Expr::StrHash { base } => Expr::StrHash { base: b(base) },
+        Expr::StrSplit { base, sep } => Expr::StrSplit { base: b(base), sep: b(sep) },
+        Expr::StrContains { base, needle } => Expr::StrContains { base: b(base), needle: b(needle) },
+        Expr::StrStartsWith { base, prefix } => Expr::StrStartsWith { base: b(base), prefix: b(prefix) },
+        Expr::StrEndsWith { base, suffix } => Expr::StrEndsWith { base: b(base), suffix: b(suffix) },
+        Expr::StrReplace { base, from, to } => Expr::StrReplace { base: b(base), from: b(from), to: b(to) },
+        Expr::StrReplaceReuse { reuse_of, from, to } => Expr::StrReplaceReuse {
+            reuse_of,
+            from: b(from),
+            to: b(to),
+        },
+
+        Expr::RefNew { value } => Expr::RefNew { value: b(value) },
+        Expr::RefGet { base } => Expr::RefGet { base: b(base) },
+        Expr::RefSet { base, value } => Expr::RefSet { base: b(base), value: b(value) },
+
+        Expr::ReadFileRaw { path } => Expr::ReadFileRaw { path: b(path) },
+        Expr::WriteFileRaw { path, contents } => Expr::WriteFileRaw { path: b(path), contents: b(contents) },
+        Expr::EnvVarRaw { name } => Expr::EnvVarRaw { name: b(name) },
+        Expr::PanicRaw { message } => Expr::PanicRaw { message: b(message) },
+    }
+}
+
 /// A coarse (shadowing-unaware, over-approximating is fine — see the
 /// `For` arm of `mark_last_uses`) check for whether `name` appears
 /// anywhere inside `expr` at all.
@@ -2789,6 +3015,118 @@ mod tests {
             value: Box::new(value),
             rest: Box::new(rest),
         }
+    }
+
+    // --- release for match-extracted bindings ---
+
+    fn heap_tags(pairs: &[(&str, Vec<bool>)]) -> std::collections::HashMap<String, Vec<bool>> {
+        pairs.iter().map(|(t, v)| (t.to_string(), v.clone())).collect()
+    }
+
+    #[test]
+    fn a_heap_shaped_match_binding_is_released_at_the_end_of_its_arm() {
+        // Codegen already increments a refcounted field as it extracts it,
+        // transferring one reference from the scrutinee to the binding.
+        // Nothing released it — 32.5MB per 1M iterations for a `String`
+        // field.
+        let e = match_(
+            var("s"),
+            vec![arm("Named", vec!["nm"], Expr::ArrayLen { array: Box::new(var("nm")) })],
+        );
+        let out = release_match_bindings(e, &heap_tags(&[("Named", vec![true])]));
+        let Expr::Match { arms, .. } = &out else { panic!("expected a Match") };
+        assert!(expr_mentions_dec(&arms[0].body, "nm"), "got {:?}", arms[0].body);
+    }
+
+    #[test]
+    fn a_scalar_match_binding_is_left_alone() {
+        // An `Int` field carries no refcount, so `RcAnnotated` on it is a
+        // hard codegen error rather than a no-op.
+        let e = match_(var("s"), vec![arm("Named", vec!["k"], var("k"))]);
+        let out = release_match_bindings(e, &heap_tags(&[("Named", vec![false])]));
+        let Expr::Match { arms, .. } = &out else { panic!("expected a Match") };
+        assert!(!expr_mentions_dec(&arms[0].body, "k"));
+    }
+
+    #[test]
+    fn an_escaping_match_binding_is_not_released() {
+        // The arm's own result IS the binding, so releasing it would hand
+        // the caller a freed cell. Keeping the extraction increment for
+        // exactly this case is the whole reason it exists.
+        let e = match_(var("s"), vec![arm("Named", vec!["nm"], var("nm"))]);
+        let out = release_match_bindings(e, &heap_tags(&[("Named", vec![true])]));
+        let Expr::Match { arms, .. } = &out else { panic!("expected a Match") };
+        assert!(!expr_mentions_dec(&arms[0].body, "nm"));
+    }
+
+    #[test]
+    fn a_match_binding_stored_into_a_ctor_is_not_released() {
+        let e = match_(
+            var("s"),
+            vec![arm("Named", vec!["nm"], ctor("Wrapper", vec![var("nm")]))],
+        );
+        let out = release_match_bindings(e, &heap_tags(&[("Named", vec![true])]));
+        let Expr::Match { arms, .. } = &out else { panic!("expected a Match") };
+        assert!(!expr_mentions_dec(&arms[0].body, "nm"));
+    }
+
+    #[test]
+    fn a_match_binding_used_twice_is_not_released() {
+        // Same reason as `Let` bindings: the increments a multi-use
+        // binding needs are what keep reuse-in-place honest, and this pass
+        // deliberately adds none.
+        let e = match_(
+            var("s"),
+            vec![arm(
+                "Named",
+                vec!["nm"],
+                Expr::Binary(
+                    BinOp::Add,
+                    Box::new(Expr::ArrayLen { array: Box::new(var("nm")) }),
+                    Box::new(Expr::ArrayLen { array: Box::new(var("nm")) }),
+                ),
+            )],
+        );
+        let out = release_match_bindings(e, &heap_tags(&[("Named", vec![true])]));
+        let Expr::Match { arms, .. } = &out else { panic!("expected a Match") };
+        assert!(!expr_mentions_dec(&arms[0].body, "nm"));
+    }
+
+    #[test]
+    fn a_catch_all_arm_binding_is_never_released() {
+        // A catch-all binds the WHOLE scrutinee, not a field, and codegen
+        // does not increment it — it is a pure borrow. Releasing it would
+        // free the scrutinee from under its owner. Such an arm has no
+        // `tag_heap` entry at all, which is what makes this safe.
+        let e = match_(
+            var("s"),
+            vec![arm("0Default", vec!["whole"], Expr::ArrayLen { array: Box::new(var("whole")) })],
+        );
+        let out = release_match_bindings(e.clone(), &heap_tags(&[("Named", vec![true])]));
+        assert_eq!(out, e);
+    }
+
+    #[test]
+    fn a_binding_used_in_the_arms_guard_is_not_released() {
+        // A guard use is a second use this analysis does not model.
+        let mut a = arm("Named", vec!["nm"], Expr::ArrayLen { array: Box::new(var("nm")) });
+        a.guard = Some(Box::new(Expr::ArrayLen { array: Box::new(var("nm")) }));
+        let out = release_match_bindings(match_(var("s"), vec![a]), &heap_tags(&[("Named", vec![true])]));
+        let Expr::Match { arms, .. } = &out else { panic!("expected a Match") };
+        assert!(!expr_mentions_dec(&arms[0].body, "nm"));
+    }
+
+    #[test]
+    fn a_match_nested_inside_another_expression_is_still_visited() {
+        // The pass has to reach every `Match` in the tree, not just one at
+        // the root.
+        let inner = match_(
+            var("s"),
+            vec![arm("Named", vec!["nm"], Expr::ArrayLen { array: Box::new(var("nm")) })],
+        );
+        let e = let_("x", int(1), Expr::Binary(BinOp::Add, Box::new(var("x")), Box::new(inner)));
+        let out = release_match_bindings(e, &heap_tags(&[("Named", vec![true])]));
+        assert!(expr_mentions_dec(&out, "nm"), "got {out:?}");
     }
 
     // --- scope-end release for borrow-only bindings ---

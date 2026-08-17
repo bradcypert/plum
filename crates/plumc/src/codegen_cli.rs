@@ -783,6 +783,35 @@ pub fn compile_program_to_ir_roots(
         struct_field_names.insert(mangled.clone(), names.clone());
     }
 
+    // Release for MATCH-EXTRACTED bindings — the third and last place a
+    // heap value could be owned and never released. See
+    // `plum_ir::fbip::release_match_bindings`.
+    //
+    // Placed HERE, after the loops above, because it is the first point
+    // where `tag_fields` is complete: it needs to know which of an arm's
+    // fields are refcounted, and the IR carries no types. The judgement
+    // comes from `plum_codegen::is_refcounted` — the very function
+    // codegen's own extraction increment is gated on, so the increment and
+    // the release cannot disagree about which fields are involved.
+    let tag_heap: HashMap<String, Vec<bool>> = tag_fields
+        .iter()
+        .map(|(tag, fields)| (tag.clone(), fields.iter().map(plum_codegen::is_refcounted).collect()))
+        .collect();
+    let mut ir_program = ir_program;
+    for f in &mut ir_program.functions {
+        f.body = plum_ir::fbip::release_match_bindings(
+            std::mem::replace(&mut f.body, plum_ir::ir::Expr::Unit),
+            &tag_heap,
+        );
+    }
+    for g in &mut ir_program.globals {
+        g.value = plum_ir::fbip::release_match_bindings(
+            std::mem::replace(&mut g.value, plum_ir::ir::Expr::Unit),
+            &tag_heap,
+        );
+    }
+    let ir_program = ir_program;
+
     // Every top-level FUNCTION's signature — a global's `types` entry is
     // filtered out here (rather than accidentally treated as a
     // function's) because it's just its VALUE's type directly, not a
@@ -1776,6 +1805,71 @@ mod tests {
                        acc \
                    }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("8000".to_string()));
+    }
+
+    // --- release for match-extracted bindings ---
+    //
+    // See `plum_ir::fbip::release_match_bindings`. A refcounted field is
+    // incremented as it is extracted, and nothing released it: 32.5MB
+    // (`String` field), 63.1MB (`Array[Int]` field), 32.6MB (nested
+    // struct field) per 1M iterations. All flat at 5.2MB now.
+
+    #[test]
+    fn an_extracted_string_field_is_released_when_only_measured() {
+        let src = "struct Named { name: String, n: Int }\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { let p = Named { name: \"abcd\", n: i }; acc = acc + match p { Named(nm, k) => nm.len() + k }; }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("503500".to_string()));
+    }
+
+    #[test]
+    fn an_extracted_array_field_is_released_when_only_measured() {
+        let src = "struct Bag { items: Array[Int], n: Int }\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { let b = Bag { items: [1, 2, 3], n: i }; acc = acc + match b { Bag(xs, k) => xs.len() + k }; }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("502500".to_string()));
+    }
+
+    #[test]
+    fn an_extracted_nested_struct_field_is_released_when_only_measured() {
+        let src = "struct Inner { v: Int }\n\
+                   struct Outer { inner: Inner, n: Int }\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { \
+                           let o = Outer { inner: Inner { v: i }, n: i }; \
+                           acc = acc + match o { Outer(x, k) => match x { Inner(v) => v } + k }; \
+                       }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("999000".to_string()));
+    }
+
+    #[test]
+    fn an_extracted_field_used_twice_in_its_arm_stays_correct() {
+        // Not released (the increments a multi-use binding needs are what
+        // keep reuse-in-place honest), but it must still compute the right
+        // answer.
+        let src = "struct Named { name: String }\n\
+                   let go (): Int = { let p = Named { name: \"abcd\" }; match p { Named(nm) => nm.len() + nm.len() } }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("8".to_string()));
+    }
+
+    #[test]
+    fn a_catch_all_arms_binding_is_not_released_from_under_its_owner() {
+        // A catch-all binds the WHOLE scrutinee rather than a field, and
+        // codegen does not increment it — it is a pure borrow. Releasing it
+        // would free the scrutinee while its owner still holds it.
+        let src = "enum Shape { Circle(Int), Square(Int) }\n\
+                   let describe (s: Shape): Int = match s { Circle(r) => r, _ => 0 }\n\
+                   let go (): Int = { let mut acc = 0; for i in 0..100 { acc = acc + describe(Square(i)); }; acc }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("0".to_string()));
     }
 
     // --- A-normalisation: unnamed intermediates (see `plum_ir::anf`) ---

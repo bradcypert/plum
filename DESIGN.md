@@ -9775,7 +9775,8 @@ on a bare runtime refcount check for its safety.
 
 **Owned parameters and match-extracted bindings**, which need heap-ness
 information the IR does not carry — the same blocker recorded in the
-"gap 1" entry above.
+"gap 1" entry above. **Match-extracted bindings were done on 2026-08-17
+— see below;** owned parameters remain open.
 
 ## A-normalisation: naming the intermediates (2026-08-17)
 
@@ -9855,3 +9856,64 @@ workload, but it is a real trade rather than a free win.
 527 plumc tests + 310 in plum-ir, all 15 suites, fixed point
 byte-identical, corpus 99/99, exec_corpus 18/18, zero ASan errors across
 the corpus and the concurrency/shared-mutability examples.
+
+## Releasing match-extracted bindings (2026-08-17)
+
+The third and last place a heap value could be owned and never released.
+A match arm's binding is ALREADY an owned reference — codegen increments
+every refcounted field as it extracts it, transferring one reference from
+the scrutinee to the binding — and nothing ever gave it back:
+
+| 1M-iteration loop, arm binds a... | before | after |
+| --- | --- | --- |
+| `String` field | 32.5 MB | **5.2 MB** |
+| `Array[Int]` field | 63.1 MB | **5.2 MB** |
+| nested struct field | 32.6 MB | **5.2 MB** |
+
+### How the heap-ness blocker got around
+
+This is the gap that had been recorded three times as blocked on "the IR
+carries no types". It still doesn't — but it turns out it doesn't need to.
+
+`plumc` already knows every tag's field types (`tag_fields`, complete once
+monomorphization's entries are merged in), so the judgement is made THERE
+and handed to the pass as a `tag -> Vec<bool>` table. Crucially the bools
+come from `plum_codegen::is_refcounted`, which is the very function
+codegen's own extraction increment is gated on — added as a public
+one-liner over `dec_fn_for` specifically so the two cannot be derived
+separately. Deriving that judgement twice is exactly how an increment and
+a release come to disagree, and here disagreeing means a leak or a
+dangling pointer.
+
+So no IR change, no threading through `transform`'s seventy recursion
+sites: a separate pass (`fbip::release_match_bindings`) run after
+`optimize`, at the point in `plumc` where the table is complete.
+
+### The rule, and the four things it declines to do
+
+Same as the `Let` case: exactly ONE use, in a borrow position. Beyond
+that, four explicit refusals, each with a test:
+
+- **An escaping binding** (the arm's own result, or stored into a `Ctor`)
+  keeps its reference. Supporting that escape is the entire reason the
+  extraction increment exists, so breaking it would be worse than the leak.
+- **A multi-use binding** is left alone, because the increments it would
+  need are what keep reuse-in-place honest.
+- **A scalar field** is skipped — `RcAnnotated` on an `Int` is a hard
+  codegen error, not a no-op.
+- **A catch-all arm's binding** is never released. It binds the WHOLE
+  scrutinee rather than a field and codegen does not increment it, so it is
+  a pure borrow; releasing it would free the scrutinee from under its
+  owner. Such an arm has no `tag_heap` entry at all, which is what makes
+  this safe by construction rather than by remembering.
+
+### Verified
+
+532 plumc tests + 318 in plum-ir (8 new unit + 5 new end-to-end), all 15
+suites green on the first run, fixed point byte-identical, corpus 99/99,
+exec_corpus 18/18, zero ASan errors across the corpus and the
+concurrency/shared-mutability examples.
+
+The self-hosted compiler's own numbers are unchanged by this increment
+(271.7 MB, 0.192s to check itself) — its matches mostly bind values that
+escape or are used more than once, which this deliberately leaves alone.
