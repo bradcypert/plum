@@ -473,14 +473,44 @@ fn mark_reuse_scoped(expr: Expr, known_heap: &HashSet<String>) -> Expr {
                 Expr::Var(name) if known_heap.contains(name) => Some(name.clone()),
                 _ => None,
             };
+            // A scrutinee the arm RELEASES has already been consumed —
+            // `consume_matched_scrutinees` put that decrement there
+            // precisely so the extracted fields become uniquely owned and
+            // can be reused themselves. Reusing the container's cell too
+            // would consume it twice.
+            //
+            // The arbitration goes this way round because releasing the
+            // container is worth far more: it unlocks in-place growth of
+            // the FIELD (2154 MB of the compiler's string traffic) where
+            // reusing the container saves only its own cell (~59 MB).
+            let reuse_target = match &reuse_target {
+                Some(name) if arms.iter().any(|a| decs_name(&a.body, name)) => None,
+                other => other.clone(),
+            };
             let new_arms = arms
                 .into_iter()
                 .map(|arm| {
                     let arity = arm.bindings.len();
-                    // Arm bindings aren't added to `known_heap` here
-                    // either — same conservative limitation `transform`
-                    // documents for its own `Match` arm.
-                    let body = mark_reuse_scoped(arm.body, known_heap);
+                    // Arm bindings ARE reuse candidates, provided each is
+                    // used at most once on any path through the arm.
+                    //
+                    // Safe without any further condition, because codegen
+                    // increments a refcounted field as it extracts it: the
+                    // cell's count is at least 2 while the scrutinee lives,
+                    // so the runtime `rc == 1` test declines. It only ever
+                    // reaches 1 once the scrutinee itself has been released
+                    // — which is exactly when the field is genuinely ours.
+                    // The single-use condition is what rules out a later
+                    // use reading a cell an earlier reuse destroyed.
+                    let mut arm_heap = known_heap.clone();
+                    for b in &arm.bindings {
+                        if max_uses_on_path(&arm.body, b) <= 1 {
+                            arm_heap.insert(b.clone());
+                        } else {
+                            arm_heap.remove(b);
+                        }
+                    }
+                    let body = mark_reuse_scoped(arm.body, &arm_heap);
                     // 0-field constructions (e.g. `Nil`) have nothing
                     // worth reusing.
                     let body = match &reuse_target {
@@ -851,7 +881,12 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             // today's behaviour byte for byte. Every case measured for
             // this change is single-use anyway — `let p = Point { .. };
             // match p { .. }` and friends.
-            if releasable && used && !incs_name(&marked, &name) && all_uses_are_borrows(&body_t, &name) {
+            if releasable
+                && used
+                && !incs_name(&marked, &name)
+                && !ends_in_call(&body_t)
+                && all_uses_are_borrows(&body_t, &name)
+            {
                 return Expr::Let {
                     name: name.clone(),
                     value: Box::new(value_t),
@@ -1010,7 +1045,7 @@ fn strip_scope_end_release(expr: Expr, name: &str) -> Expr {
 /// value still needed later. That surfaced as `let s = "ab"; let t =
 /// s.concat("cd"); s.len() + t.len()` returning 8 instead of 6. A missing
 /// arm here is a wrong-answer bug, so it must fail to compile instead.
-fn for_each_child<'a>(expr: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
+pub(crate) fn for_each_child<'a>(expr: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
     match expr {
         Expr::Int(_)
         | Expr::Float(_)
@@ -1393,6 +1428,35 @@ fn borrowed_slot(expr: &Expr, name: &str) -> bool {
 /// a call at the end of it is no longer a `musttail` candidate. That is
 /// a correctness requirement rather than a lost optimization — a scope
 /// with a value still to release cannot hand its frame away.
+/// Whether `expr` ends in a CALL — i.e. whether wrapping it in a
+/// scope-end release would demote a tail call.
+///
+/// Guaranteed tail calls are a language promise (see DESIGN.md's
+/// "Guaranteed tail calls"), not an optimization, so a release must never
+/// cost one. `drop_at_scope_end` binds the body's result to a temporary,
+/// which puts the body in a `Let`'s VALUE position and takes `musttail`
+/// away from whatever ended it.
+///
+/// Found the hard way: the self-hosted lexer is one tail-recursive call per
+/// token, and once enough of its bindings became releasable it overflowed
+/// the stack on its own source. The corpus never caught it — those programs
+/// do not recurse deeply enough.
+///
+/// The cost of declining is a leak, which is what the code did before any
+/// of this existed.
+pub(crate) fn ends_in_call(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call { .. } => true,
+        Expr::Let { body, .. } => ends_in_call(body),
+        Expr::RcAnnotated { rest, .. } => ends_in_call(rest),
+        Expr::If { then_branch, else_branch, .. } => {
+            ends_in_call(then_branch) || ends_in_call(else_branch)
+        }
+        Expr::Match { arms, .. } => arms.iter().any(|a| ends_in_call(&a.body)),
+        _ => false,
+    }
+}
+
 pub(crate) fn drop_at_scope_end(body: Expr, name: &str) -> Expr {
     let tmp = format!("drop${name}");
     Expr::Let {
@@ -1404,6 +1468,128 @@ pub(crate) fn drop_at_scope_end(body: Expr, name: &str) -> Expr {
             rest: Box::new(Expr::Var(tmp)),
         }),
     }
+}
+
+/// Releases the SCRUTINEE at the top of each arm of a match whose
+/// scrutinee is a parameter nothing else needs.
+///
+/// # Why
+///
+/// Codegen increments a refcounted field as it extracts it, transferring
+/// one reference from the scrutinee to the binding. While the scrutinee
+/// lives, that field's count is at least 2, so nothing can ever reuse it
+/// in place — which is why a struct-field accumulator
+/// (`Emit { code: r.code.concat(x), .. }`) copies the whole string every
+/// iteration: 200.7 MB per 20,000 items, and 2154 MB of the compiler's own
+/// allocation.
+///
+/// Releasing the container right after extraction drops it to 1, and the
+/// field becomes genuinely ours — `StrConcatReuse` then grows it in place.
+///
+/// # Why this shape and not a new IR node
+///
+/// `RcAnnotated { Dec, .. }` runs its decrement BEFORE `rest`, and
+/// extraction happens before the arm body, so wrapping the body is exactly
+/// "after extraction, before use". No new node, no codegen change, and no
+/// conditional logic: if the scrutinee's count is greater than 1 the
+/// decrement simply leaves it alive, the fields stay at 2, and everything
+/// falls back to copying — correct, just not fast.
+///
+/// # Safety
+///
+/// Releasing a parameter frees the CALLER's value if the caller still
+/// needs it, which is the same hazard as reusing one — so it takes the
+/// same eligibility (`reusable_params`): every call site passes a uniquely
+/// owned value, and the parameter is used at most once on any path, which
+/// makes this match its last use.
+pub fn consume_matched_scrutinees(
+    expr: Expr,
+    eligible: &HashSet<String>,
+    owned_returning: &HashSet<String>,
+) -> Expr {
+    match expr {
+        // A LOCAL bound to a uniquely-owned value and matched at most once
+        // is eligible too, and in practice matters more than parameters do:
+        // the compiler's own emitters are written as
+        // `let r = cg_expr(..); .. r.code .. r.n ..`, so the accumulator is
+        // a local holding a call result, not a parameter.
+        //
+        // Safety is simpler here than for a parameter. The local OWNS its
+        // value outright, so releasing it at its last use needs no
+        // whole-program argument — and if the value escaped (returned, or
+        // stored into a `Ctor`) that would be a second use, which
+        // `max_uses_on_path` counts and rejects.
+        Expr::Let { name, value, body } => {
+            let owns = is_uniquely_owned(&value, owned_returning);
+            let single_use = max_uses_on_path(&body, &name) <= 1;
+            let mut inner = eligible.clone();
+            if owns && single_use {
+                inner.insert(name.clone());
+            } else {
+                inner.remove(&name);
+            }
+            Expr::Let {
+                name,
+                value: Box::new(consume_matched_scrutinees(*value, eligible, owned_returning)),
+                body: Box::new(consume_matched_scrutinees(*body, &inner, owned_returning)),
+            }
+        }
+        Expr::Match { scrutinee, arms } => {
+            let target = match scrutinee.as_ref() {
+                Expr::Var(name) if eligible.contains(name) => Some(name.clone()),
+                _ => None,
+            };
+            Expr::Match {
+                scrutinee: Box::new(consume_matched_scrutinees(*scrutinee, eligible, owned_returning)),
+                arms: arms
+                    .into_iter()
+                    .map(|arm| {
+                        let guard = arm
+                            .guard
+                            .map(|g| Box::new(consume_matched_scrutinees(*g, eligible, owned_returning)));
+                        let body = consume_matched_scrutinees(arm.body, eligible, owned_returning);
+                        // A binding that SHADOWS the scrutinee's name would
+                        // make the decrement target the wrong value.
+                        let shadows = arm.bindings.iter().any(|b| Some(b) == target.as_ref());
+                        let body = match &target {
+                            Some(name) if !shadows => Expr::RcAnnotated {
+                                op: RcOp::Dec,
+                                target: name.clone(),
+                                rest: Box::new(body),
+                            },
+                            _ => body,
+                        };
+                        MatchArm {
+                            tag: arm.tag,
+                            bindings: arm.bindings,
+                            guard,
+                            body,
+                        }
+                    })
+                    .collect(),
+            }
+        }
+        other => map_children_owned(other, &mut |c| {
+            consume_matched_scrutinees(c, eligible, owned_returning)
+        }),
+    }
+}
+
+/// Whether `expr` contains an explicit `Dec` of `name`. See
+/// `mark_reuse_scoped`'s `Match` arm for what it arbitrates.
+fn decs_name(expr: &Expr, name: &str) -> bool {
+    if let Expr::RcAnnotated { op: RcOp::Dec, target, .. } = expr {
+        if target == name {
+            return true;
+        }
+    }
+    let mut found = false;
+    for_each_child(expr, &mut |c| {
+        if !found && decs_name(c, name) {
+            found = true;
+        }
+    });
+    found
 }
 
 /// Rewrites a `Ctor` in `body`'s TAIL position into a `CtorReuse` of
@@ -1908,7 +2094,11 @@ pub fn release_match_bindings(expr: Expr, tag_heap: &HashMap<String, Vec<bool>>)
                             // tree is discarded — the increments it would
                             // add are precisely what this avoids needing.
                             let (marked, used) = mark_last_uses(body.clone(), name, false);
-                            if used && !incs_name(&marked, name) && all_uses_are_borrows(&body, name) {
+                            if used
+                                && !incs_name(&marked, name)
+                                && !ends_in_call(&body)
+                                && all_uses_are_borrows(&body, name)
+                            {
                                 body = drop_at_scope_end(body, name);
                             }
                         }
@@ -1930,7 +2120,7 @@ pub fn release_match_bindings(expr: Expr, tag_heap: &HashMap<String, Vec<bool>>)
 /// counterpart of `for_each_child`, used only by
 /// `release_match_bindings`. Exhaustive with no `_` arm so a new variant
 /// carrying a subexpression cannot silently have its match arms skipped.
-fn map_children_owned(expr: Expr, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
+pub(crate) fn map_children_owned(expr: Expr, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
     let mut b = |e: Box<Expr>| Box::new(f(*e));
     match expr {
         Expr::Int(_)
@@ -2070,6 +2260,14 @@ fn map_children_owned(expr: Expr, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
 /// A coarse (shadowing-unaware, over-approximating is fine — see the
 /// `For` arm of `mark_last_uses`) check for whether `name` appears
 /// anywhere inside `expr` at all.
+/// Every `*Reuse` node's `reuse_of` counts as a mention: that node
+/// CONSUMES the named cell, which is as real a reference as reading it.
+/// These arms used to ignore it, and once codegen started skipping the
+/// extraction increment for an unmentioned binding, a `StrConcat` that
+/// `mark_reuse` had rewritten into a `StrConcatReuse` made its own operand
+/// look unused — the increment vanished, the scrutinee's release then
+/// freed the cell, and the reuse read freed memory. A segfault, found by
+/// running it.
 pub fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
     match expr {
         Expr::Var(n) => n == name,
@@ -2092,7 +2290,7 @@ pub fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         }
         Expr::ExternCall { args, .. } => args.iter().any(|a| expr_mentions_var(a, name)),
         Expr::Ctor { fields, .. } => fields.iter().any(|f| expr_mentions_var(f, name)),
-        Expr::CtorReuse { fields, .. } => fields.iter().any(|f| expr_mentions_var(f, name)),
+        Expr::CtorReuse { reuse_of, fields, .. } => reuse_of == name || fields.iter().any(|f| expr_mentions_var(f, name)),
         Expr::RcAnnotated { rest, .. } => expr_mentions_var(rest, name),
         Expr::Match { scrutinee, arms } => {
             expr_mentions_var(scrutinee, name)
@@ -2136,27 +2334,27 @@ pub fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         // `reuse_of` isn't checked against `name` here, same as
         // `CtorReuse`'s `reuse_of` isn't — see that precedent's own
         // comment above.
-        Expr::ArrayPushReuse { value, .. } => expr_mentions_var(value, name),
-        Expr::ArrayPopReuse { .. } => false,
-        Expr::ArraySetReuse { index, value, .. } => expr_mentions_var(index, name) || expr_mentions_var(value, name),
-        Expr::ArrayRemoveReuse { index, .. } => expr_mentions_var(index, name),
+        Expr::ArrayPushReuse { reuse_of, value } => reuse_of == name || expr_mentions_var(value, name),
+        Expr::ArrayPopReuse { reuse_of } => reuse_of == name,
+        Expr::ArraySetReuse { reuse_of, index, value } => reuse_of == name || expr_mentions_var(index, name) || expr_mentions_var(value, name),
+        Expr::ArrayRemoveReuse { reuse_of, index } => reuse_of == name || expr_mentions_var(index, name),
         Expr::StrConcat { base, other } => expr_mentions_var(base, name) || expr_mentions_var(other, name),
-        Expr::StrConcatReuse { other, .. } => expr_mentions_var(other, name),
+        Expr::StrConcatReuse { reuse_of, other } => reuse_of == name || expr_mentions_var(other, name),
         Expr::StrRunes { base } => expr_mentions_var(base, name),
         Expr::StrTrim { base } => expr_mentions_var(base, name),
-        Expr::StrTrimReuse { .. } => false,
+        Expr::StrTrimReuse { reuse_of } => reuse_of == name,
         Expr::StrSplit { base, sep } => expr_mentions_var(base, name) || expr_mentions_var(sep, name),
         Expr::StrToUpper { base } => expr_mentions_var(base, name),
-        Expr::StrToUpperReuse { .. } => false,
+        Expr::StrToUpperReuse { reuse_of } => reuse_of == name,
         Expr::StrToLower { base } => expr_mentions_var(base, name),
-        Expr::StrToLowerReuse { .. } => false,
+        Expr::StrToLowerReuse { reuse_of } => reuse_of == name,
         Expr::StrContains { base, needle } => expr_mentions_var(base, name) || expr_mentions_var(needle, name),
         Expr::StrStartsWith { base, prefix } => expr_mentions_var(base, name) || expr_mentions_var(prefix, name),
         Expr::StrEndsWith { base, suffix } => expr_mentions_var(base, name) || expr_mentions_var(suffix, name),
         Expr::StrReplace { base, from, to } => {
             expr_mentions_var(base, name) || expr_mentions_var(from, name) || expr_mentions_var(to, name)
         }
-        Expr::StrReplaceReuse { from, to, .. } => expr_mentions_var(from, name) || expr_mentions_var(to, name),
+        Expr::StrReplaceReuse { reuse_of, from, to } => reuse_of == name || expr_mentions_var(from, name) || expr_mentions_var(to, name),
         Expr::ToString { base } => expr_mentions_var(base, name),
         Expr::StrHash { base } => expr_mentions_var(base, name),
     }
@@ -3470,6 +3668,134 @@ mod tests {
             value: Box::new(value),
             rest: Box::new(rest),
         }
+    }
+
+    // --- a scope-end release must never cost a tail call ---
+
+    #[test]
+    fn a_binding_whose_scope_ends_in_a_call_is_not_released() {
+        // Guaranteed tail calls are a language promise, and
+        // `drop_at_scope_end` binds the body's result to a temporary —
+        // which puts the body in a `Let`'s VALUE position and takes
+        // `musttail` away. The self-hosted lexer is one tail call per
+        // token; once enough of its bindings became releasable it
+        // overflowed the stack on its own source.
+        let input = let_(
+            "p",
+            ctor("Point", vec![int(1)]),
+            call(var("f"), vec![Expr::ArrayLen { array: Box::new(var("p")) }]),
+        );
+        let out = insert_refcount_ops(input);
+        assert!(!expr_mentions_dec(&out, "p"), "a leak beats losing a tail call: {out:?}");
+    }
+
+    #[test]
+    fn a_binding_whose_scope_ends_in_a_value_is_still_released() {
+        // The guard must be narrow: an ordinary tail is unaffected.
+        let input = let_(
+            "p",
+            ctor("Point", vec![int(1)]),
+            Expr::ArrayLen { array: Box::new(var("p")) },
+        );
+        assert!(expr_mentions_dec(&insert_refcount_ops(input), "p"));
+    }
+
+    #[test]
+    fn ends_in_call_looks_through_branches_and_lets() {
+        assert!(ends_in_call(&call(var("f"), vec![])));
+        assert!(ends_in_call(&let_("x", int(1), call(var("f"), vec![]))));
+        assert!(ends_in_call(&if_(int(0), call(var("f"), vec![]), int(2))));
+        assert!(ends_in_call(&match_(
+            var("s"),
+            vec![arm("T", vec![], call(var("f"), vec![]))]
+        )));
+        assert!(!ends_in_call(&let_("x", call(var("f"), vec![]), int(1))));
+    }
+
+    // --- releasing a matched scrutinee (see `consume_matched_scrutinees`) ---
+
+    #[test]
+    fn a_matched_eligible_scrutinee_is_released_after_extraction() {
+        // The release drops the container so its extracted fields become
+        // uniquely owned and can be reused in place. Measured: 200.7 MB ->
+        // 0.36 MB on a 20,000-item struct-field accumulation.
+        let e = match_(var("r"), vec![arm("Emit", vec!["code", "n"], var("code"))]);
+        let eligible: HashSet<String> = ["r".to_string()].into_iter().collect();
+        let out = consume_matched_scrutinees(e, &eligible, &HashSet::new());
+        let Expr::Match { arms, .. } = &out else { panic!("expected a Match") };
+        assert!(
+            matches!(&arms[0].body, Expr::RcAnnotated { op: RcOp::Dec, target, .. } if target == "r"),
+            "the release must run after extraction, before the body: {:?}",
+            arms[0].body
+        );
+    }
+
+    #[test]
+    fn an_ineligible_scrutinee_is_left_alone() {
+        let e = match_(var("r"), vec![arm("Emit", vec!["code", "n"], var("code"))]);
+        let out = consume_matched_scrutinees(e.clone(), &HashSet::new(), &HashSet::new());
+        assert_eq!(out, e);
+    }
+
+    #[test]
+    fn a_local_bound_to_a_uniquely_owned_value_and_matched_once_is_released() {
+        // The shape that matters in practice: the compiler's emitters are
+        // `let r = cg_expr(..); .. r.code ..`, so the accumulator is a local
+        // holding a call result rather than a parameter.
+        let owned: HashSet<String> = ["mk".to_string()].into_iter().collect();
+        let e = let_(
+            "r",
+            call(var("mk"), vec![int(1)]),
+            match_(var("r"), vec![arm("Emit", vec!["code", "n"], var("code"))]),
+        );
+        let out = consume_matched_scrutinees(e, &HashSet::new(), &owned);
+        assert!(expr_mentions_dec(&out, "r"), "got {out:?}");
+    }
+
+    #[test]
+    fn a_local_used_more_than_once_is_not_released() {
+        // A second use means the match is not its last, so the value would
+        // be freed from under it.
+        let owned: HashSet<String> = ["mk".to_string()].into_iter().collect();
+        let e = let_(
+            "r",
+            call(var("mk"), vec![int(1)]),
+            Expr::Binary(
+                BinOp::Add,
+                Box::new(match_(var("r"), vec![arm("E", vec!["a"], var("a"))])),
+                Box::new(Expr::ArrayLen { array: Box::new(var("r")) }),
+            ),
+        );
+        let out = consume_matched_scrutinees(e, &HashSet::new(), &owned);
+        assert!(!expr_mentions_dec(&out, "r"), "got {out:?}");
+    }
+
+    #[test]
+    fn a_local_bound_to_a_non_owned_call_is_not_released() {
+        // Nothing establishes that the caller owns the result, so releasing
+        // it could free a value its real owner still holds.
+        let e = let_(
+            "r",
+            call(var("borrowy"), vec![int(1)]),
+            match_(var("r"), vec![arm("E", vec!["a"], var("a"))]),
+        );
+        let out = consume_matched_scrutinees(e, &HashSet::new(), &HashSet::new());
+        assert!(!expr_mentions_dec(&out, "r"), "got {out:?}");
+    }
+
+    #[test]
+    fn reuse_stands_down_when_the_arm_releases_the_scrutinee() {
+        // Both consume the same reference; doing both is a double free.
+        // Releasing wins because it unlocks in-place growth of the FIELD.
+        let e = let_(
+            "e",
+            ctor("Emit", vec![int(0), int(0)]),
+            match_(var("e"), vec![arm("Emit", vec!["a", "b"], ctor("Emit", vec![var("a"), var("b")]))]),
+        );
+        let eligible: HashSet<String> = ["e".to_string()].into_iter().collect();
+        let consumed = consume_matched_scrutinees(e, &eligible, &HashSet::new());
+        let out = optimize(consumed);
+        assert!(!expr_mentions_ctor_reuse(&out, "e"), "reuse must stand down: {out:?}");
     }
 
     // --- reuse must look through ANF's hoisted temporaries ---

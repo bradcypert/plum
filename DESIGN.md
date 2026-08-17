@@ -10309,3 +10309,106 @@ earlier. Both are real changes to that node's shape.
 548 plumc tests + 344 in plum-ir (4 new), all 15 suites, fixed point
 byte-identical, corpus 99/99, exec_corpus 18/18, zero ASan errors across
 the corpus, the examples, and the `rep`/`hold`/ownership fixtures.
+
+## Consuming pattern match: what landed, and one pass built and removed (2026-08-17)
+
+Releasing a matched scrutinee works, and is worth 200x on the shape it
+targets. Merging field reads to reach the compiler's own version of that
+shape was built, measured, found to be a net negative, and removed.
+
+### What landed: `consume_matched_scrutinees`
+
+Codegen increments a refcounted field as it extracts it, transferring one
+reference from the scrutinee to the binding — so while the scrutinee
+lives, that field's count is at least 2 and nothing can reuse it. Releasing
+the container right after extraction drops it to 1, and the field becomes
+genuinely ours.
+
+| 20,000-item struct-field accumulation | before | after |
+| --- | --- | --- |
+| `Emit { code: r.code.concat(x), .. }` | 200.7 MB | **0.36 MB** |
+
+No new IR node and no codegen change. `RcAnnotated { Dec, .. }` runs its
+decrement BEFORE `rest`, and extraction happens before the arm body, so
+wrapping the body is exactly "after extraction, before use". There is no
+conditional logic either: if the count is greater than 1 the decrement
+leaves it alive, the fields stay at 2, and everything falls back to
+copying — correct, just not fast.
+
+Eligibility covers PARAMETERS (via `reusable_params` — releasing one and
+reusing one carry the identical hazard) and LOCALS bound to a uniquely
+owned value and matched at most once. Locals matter more in practice: the
+compiler's emitters are written `let r = cg_expr(..); .. r.code ..`.
+
+Reuse-in-place stands down for a scrutinee an arm releases: both consume
+the same reference, and releasing wins because it unlocks in-place growth
+of the FIELD rather than saving only the container's own cell.
+
+### Three bugs found on the way, two of them mine
+
+**An unused extracted field was still incremented.** `let second (p: Pair):
+Int = p.n` incremented the `String` field it never touches, with nothing to
+balance it. Mine, from widening the extraction increment to every
+refcounted shape.
+
+**`anf` had silently disabled `CtorReuse`.** It hoists a `Ctor`'s fields
+into `Let` temporaries, so a match arm body stopped being a bare `Ctor` and
+`mark_reuse`'s pattern stopped matching. Reuse quietly stopped firing for
+every such arm, with no failing test — the interpreter's path has no `anf`
+stage and the unit tests build IR directly. Also mine. Fixed by looking
+through `Let`/`RcAnnotated` chains: 20,001 ctor allocations -> 1.
+
+**`expr_mentions_var` ignored `reuse_of`.** A `*Reuse` node consumes the
+cell it names, which is as real a reference as reading it. Once codegen
+began skipping the extraction increment for an unmentioned binding, a
+`StrConcat` that `mark_reuse` had rewritten into a `StrConcatReuse` made
+its own operand look unused — the increment vanished, the scrutinee's
+release freed the cell, and the reuse read freed memory. A segfault.
+
+### A release must never cost a tail call
+
+`drop_at_scope_end` binds the body's result to a temporary, which puts the
+body in a `Let`'s VALUE position and takes `musttail` away from whatever
+ended it. Guaranteed tail calls are a language promise, not an
+optimization.
+
+The self-hosted lexer is one tail-recursive call per token; once enough of
+its bindings became releasable it overflowed the stack on its own source.
+Every release site now declines when the scope ends in a call. The cost is
+a leak, which is what the code did before any of this existed. The corpus
+never caught it — those programs do not recurse deeply enough — so there is
+a dedicated 300,000-deep test now.
+
+### The pass that was removed
+
+Merging repeated field reads was the named prerequisite: `p.x` lowers to a
+whole `Match`, so `Emit { code: r.code.concat(line), allocas: r.allocas, .. }`
+reads `r` seven times, which makes it look multi-use to every analysis and
+leaves the construction outside every match.
+
+It was built, and it worked — 1352 merges across the compiler, and the
+compiler's exact accumulator shape went 200.7 MB -> 0.36 MB in isolation.
+It was removed anyway, for two measured reasons:
+
+1. **No effect on the compiler.** Allocation stats byte-identical, in every
+   bucket.
+2. **It broke the compiler.** Hoisting one destructuring to dominate a whole
+   scope extends every field's live range across the function, and the
+   frames grew enough to overflow the stack — `emit-llvm` segfaulted even
+   with 512 MB of stack, so not merely depth.
+
+Shipping it would have been shipping a regression for no measured gain.
+Recorded here so the idea is not rebuilt from the same reasoning: the
+obstacle is not that the merge is hard, it is that whole-scope
+destructuring trades allocation for stack, and on this workload that trade
+is bad. A version restricted to unconditionally-evaluated positions avoids
+the live-range blowup but cannot reach the compiler's shape, where the
+reads sit in separate statements and inside `match` arms.
+
+### Verified
+
+550 plumc tests (3 new) + 353 in plum-ir (10 new), all 15 suites, fixed
+point byte-identical, corpus 99/99, exec_corpus 18/18, zero ASan errors,
+and the compiler builds and checks itself. Its allocation numbers are
+unchanged — the shape this targets is reachable in ordinary Plum code but
+not, without merging, in the compiler's own source.

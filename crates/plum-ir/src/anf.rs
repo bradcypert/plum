@@ -263,7 +263,10 @@ fn region(expr: Expr, counter: &mut usize, owned: &std::collections::HashSet<Str
         // Two passes deciding "is this use a borrow" separately is how
         // they come to disagree, and disagreeing means a double free.
         // Single-use is automatic: this pass created the one use itself.
-        let body = if is_owned_call && crate::fbip::all_uses_are_borrows(&out, &name) {
+        let body = if is_owned_call
+            && !crate::fbip::ends_in_call(&out)
+            && crate::fbip::all_uses_are_borrows(&out, &name)
+        {
             crate::fbip::drop_at_scope_end(out, &name)
         } else {
             out

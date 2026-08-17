@@ -116,6 +116,16 @@ fn rewrite(expr: Expr, refs: &HashSet<String>, counter: &mut usize) -> Expr {
                     body: Box::new(body_t),
                 };
             }
+            // Never at the cost of a tail call — see
+            // `fbip::ends_in_call`. Guaranteed tail calls are a language
+            // promise; a leak is not.
+            if crate::fbip::ends_in_call(&body_t) {
+                return Expr::Let {
+                    name,
+                    value: Box::new(value_t),
+                    body: Box::new(body_t),
+                };
+            }
             let body_m = mark(body_t, &name);
             *counter += 1;
             // `$` can't appear in a Plum identifier, so this can never
