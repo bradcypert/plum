@@ -291,6 +291,7 @@ pub fn plan(
     // `MonoPlan::functions` re-lowers EVERY function through this
     // module's OWN `base_lctx`, not the caller's already-lowered one.
     empty_array_elem_types: &HashMap<Span, Type>,
+    tuple_elem_types: &HashMap<Span, Vec<Type>>,
     variant_payload_types: &HashMap<String, Vec<Type>>,
 ) -> Result<MonoPlan, String> {
     let mut struct_decls: HashMap<String, &ast::StructDecl> = HashMap::new();
@@ -352,6 +353,7 @@ pub fn plan(
         .with_partial_calls(partial_calls.clone())
         .with_closure_types(closure_types.clone())
         .with_empty_array_elem_types(empty_array_elem_types.clone())
+        .with_tuple_elem_types(tuple_elem_types.clone())
         .with_variant_payload_types(variant_payload_types.clone());
 
     let mut worklist: Vec<(Task, Vec<Type>)> = Vec::new();
@@ -503,7 +505,8 @@ pub fn plan(
                     .with_extra_variants(extra_variants)
                     .with_extra_struct_fields(extra_struct_fields)
                     .with_closure_types(merged_closure_types)
-                    .with_empty_array_elem_types(merged_empty_array_elem_types);
+                    .with_empty_array_elem_types(merged_empty_array_elem_types)
+                    .with_tuple_elem_types(tuple_elem_types.clone());
                 let (params, destructures) = lower_params(&def_clone.params).map_err(|e| e.to_string())?;
                 let mut body = lower_expr(&def_clone.body, &lctx).map_err(|e| e.to_string())?;
                 for (synthetic, pattern) in destructures.into_iter().rev() {
@@ -588,7 +591,8 @@ pub fn plan(
                     .with_extra_variants(extra_variants)
                     .with_extra_struct_fields(extra_struct_fields)
                     .with_closure_types(merged_closure_types)
-                    .with_empty_array_elem_types(merged_empty_array_elem_types);
+                    .with_empty_array_elem_types(merged_empty_array_elem_types)
+                    .with_tuple_elem_types(tuple_elem_types.clone());
                 let body = lower_expr(&body_clone, &lctx).map_err(|e| e.to_string())?;
                 globals_by_name.insert(name.clone(), ir::Global { name, value: body });
             }
@@ -1093,6 +1097,7 @@ mod tests {
         let closure_types = infer.resolve_closure_types().unwrap_or_else(|e| panic!("closure type error: {e}"));
         let empty_array_elem_types =
             infer.resolve_empty_array_elem_types().unwrap_or_else(|e| panic!("empty array elem type error: {e}"));
+        let tuple_elem_types = infer.resolve_tuple_elem_types().unwrap_or_else(|e| panic!("tuple elem type error: {e}"));
         plan(
             &program,
             &type_ctx2,
@@ -1105,6 +1110,7 @@ mod tests {
             &closure_types,
             infer.partial_calls(),
             &empty_array_elem_types,
+            &tuple_elem_types,
             &HashMap::new(),
         )
         .unwrap_or_else(|e| panic!("plan error: {e}"))

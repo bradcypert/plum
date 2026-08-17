@@ -71,6 +71,12 @@ pub struct LoweringContext {
     // unaffected — see `lower_expr`'s `ArrayLiteral` arm for the clear
     // error an unpopulated lookup produces instead of guessing.
     empty_array_elem_types: HashMap<plum_syntax::span::Span, plum_types::types::Type>,
+    /// Every tuple expression's and tuple pattern's resolved element
+    /// types, keyed by span — see `Infer::resolve_tuple_elem_types`.
+    /// A tuple's Ctor tag is specialized by these, so that
+    /// `(Int, String)` and `(Bool, Bool)` do not share one entry in
+    /// codegen's flat `tag_fields` map.
+    tuple_elem_types: HashMap<plum_syntax::span::Span, Vec<plum_types::types::Type>>,
     // `Expr::Closure` span -> its resolved (param types, return type),
     // exactly as `plum_types::Infer::resolve_closure_types` computed
     // it — the closure-literal counterpart to `empty_array_elem_types`
@@ -140,6 +146,7 @@ impl LoweringContext {
             array_for_loops: std::collections::HashSet::new(),
             unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
+            tuple_elem_types: HashMap::new(),
             closure_types: HashMap::new(),
             partial_calls: HashMap::new(),
             variant_payload_types: HashMap::new(),
@@ -173,6 +180,14 @@ impl LoweringContext {
     /// Attaches the span -> resolved-element-type map for EMPTY array
     /// literals `plum-types` computed during inference — see
     /// `empty_array_elem_types`'s doc comment.
+    pub fn with_tuple_elem_types(
+        mut self,
+        tuple_elem_types: HashMap<plum_syntax::span::Span, Vec<plum_types::types::Type>>,
+    ) -> Self {
+        self.tuple_elem_types = tuple_elem_types;
+        self
+    }
+
     pub fn with_empty_array_elem_types(
         mut self,
         empty_array_elem_types: HashMap<plum_syntax::span::Span, plum_types::types::Type>,
@@ -489,6 +504,81 @@ fn tuple_tag(arity: usize) -> String {
     format!("{arity}Tuple")
 }
 
+/// A tuple's tag, SPECIALIZED by its element types when they are known.
+///
+/// The bare arity form (`"2Tuple"`) is kept as the fallback for a tuple
+/// whose element types inference did not record — which today means a
+/// `channel[T]()` result, whose tuple is synthesized rather than
+/// written, and which has its own separate handling in codegen.
+///
+/// Specializing matters because codegen's `tag_fields` is a flat map
+/// from tag to field types: with one tag per arity, `(Int, String)` and
+/// `(Bool, Bool)` would need the same entry to describe two different
+/// layouts. With the element types folded in they are simply different
+/// tags.
+///
+/// A leading digit still makes every form unreachable by a real
+/// identifier, so none of these can collide with a user's own type name.
+pub fn specialized_tuple_tag(
+    elem_types: Option<&Vec<plum_types::types::Type>>,
+    arity: usize,
+) -> String {
+    // A `channel[T]()` result is a `(Sender[T], Receiver[T])` that
+    // codegen BUILDS itself (`ir::Expr::Channel`, which carries no type)
+    // and registers its own `tag_fields` entry for, under the legacy
+    // arity tag. Specializing the DESTRUCTURING pattern would give it a
+    // tag the construction never produces, and the match would silently
+    // find no arm — which is exactly what happened the first time this
+    // was written.
+    //
+    // So channels keep the legacy tag. That also keeps their existing
+    // one-element-type-per-program limitation exactly as it was, rather
+    // than half-lifting it: see `register_channel_tag`.
+    if elem_types.map(|tys| tys.iter().any(is_channel_end)).unwrap_or(false) {
+        return tuple_tag(arity);
+    }
+    match elem_types {
+        Some(tys) if tys.len() == arity => {
+            let parts: Vec<String> = tys.iter().map(plum_ir_type_tag_part).collect();
+            format!("{arity}Tuple${}", parts.join("$"))
+        }
+        _ => tuple_tag(arity),
+    }
+}
+
+// `Sender[T]`/`Receiver[T]` are opaque pseudo-generic BUILTINS,
+// represented as `Type::Struct("Sender", ..)` rather than dedicated
+// variants — see `ast_type_to_type`'s own note on why they are never
+// registered as real declarations.
+fn is_channel_end(ty: &plum_types::types::Type) -> bool {
+    matches!(ty, plum_types::types::Type::Struct(n, _) if n == "Sender" || n == "Receiver")
+}
+
+/// One element type rendered into a tag. Deliberately the same shape
+/// `monomorphize::mangle_type` produces, so a tuple inside a generic
+/// function keeps a tag monomorphization can rewrite consistently.
+pub fn plum_ir_type_tag_part(ty: &plum_types::types::Type) -> String {
+    use plum_types::types::Type as T;
+    match ty {
+        T::Int => "Int".to_string(),
+        T::Float => "Float".to_string(),
+        T::Bool => "Bool".to_string(),
+        T::Str => "Str".to_string(),
+        T::Unit => "Unit".to_string(),
+        T::CStr => "CStr".to_string(),
+        T::Param(p) => p.clone(),
+        T::Struct(n, args) | T::Enum(n, args) => {
+            if args.is_empty() {
+                n.clone()
+            } else {
+                format!("{n}_{}", args.iter().map(plum_ir_type_tag_part).collect::<Vec<_>>().join("_"))
+            }
+        }
+        T::Tuple(elems) => format!("tup_{}", elems.iter().map(plum_ir_type_tag_part).collect::<Vec<_>>().join("_")),
+        other => format!("{other:?}").replace(['(', ')', ' ', ',', '[', ']', '"'], "_"),
+    }
+}
+
 // A `start..end` Range's synthetic tag, used the same way `tuple_tag`
 // is: a leading digit makes it unreachable by any real identifier
 // (`is_ident_start` forbids one), so it can never collide with a
@@ -735,7 +825,10 @@ fn lower_tag_pattern(
             for e in elems {
                 classify_subpattern(e, &mut next_synthetic, &mut bindings, &mut nested)?;
             }
-            Ok((tuple_tag(bindings.len()), bindings, nested))
+            // The pattern's tag must match the tag the CONSTRUCTION
+            // site produced, so it is specialized from the same
+            // span-keyed element types.
+            Ok((specialized_tuple_tag(ctx.tuple_elem_types.get(span), bindings.len()), bindings, nested))
         }
         // `Point { x, y }` / `Point { x: px, .. }` — named fields need
         // the struct's DECLARED order (same reason struct literals need
@@ -846,10 +939,10 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
         // struct — `tuple_tag` picks a tag no user identifier can ever
         // spell (`is_ident_start` forbids a leading digit), so it can
         // never collide with a real struct/enum name.
-        ast::Expr::Tuple(elems, _) => {
+        ast::Expr::Tuple(elems, span) => {
             let fields = elems.iter().map(|e| lower_expr(e, ctx)).collect::<Result<_, _>>()?;
             Ok(ir::Expr::Ctor {
-                tag: tuple_tag(elems.len()),
+                tag: specialized_tuple_tag(ctx.tuple_elem_types.get(span), elems.len()),
                 fields,
             })
         }

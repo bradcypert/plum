@@ -9244,3 +9244,52 @@ So the bootstrap backend now compiles three things the real one can't:
 tuples. Not a claim of superiority — the first two are deliberate
 rejections — but the third is a genuine capability the older design
 made expensive.
+
+### Tuples in the real backend: type-specialized tags (2026-08-16)
+
+`plum build` compiles tuples now. The obstacle was recorded in
+`codegen_cli.rs` long before this — `lower.rs` tagged every tuple by
+ARITY alone (`tuple_tag(2)` → `"2Tuple"`), and codegen's `tag_fields` is
+a flat map from tag to field types, so `(Int, String)` and
+`(Bool, Bool)` would have needed one entry to describe two layouts. That
+comment also named the fix and called it "real, cross-crate work":
+thread a span-keyed side channel from inference into lowering, mirroring
+`resolve_empty_array_elem_types`.
+
+That is what this is. `Infer` records every tuple expression's and tuple
+pattern's element types by span; `resolve_tuple_elem_types` resolves
+them against the final substitution (including the template fallback for
+a tuple written inside a still-generic body); `lower.rs` folds them into
+the tag. `(Int, String)` and `(Bool, Bool)` are simply different tags
+now.
+
+Construction and destructuring must agree on the spelling, so both go
+through one shared `specialized_tuple_tag` — a naming mismatch between
+them would be a silent miscompile, not a build error.
+
+#### The regression this caused, and the fix
+
+`channel[T]()` evaluates to a `(Sender[T], Receiver[T])`, but codegen
+BUILDS that tuple itself (`ir::Expr::Channel`, which carries no type)
+and registers its own `tag_fields` entry under the legacy arity tag.
+Specializing the *destructuring pattern* gave it a tag the construction
+never produced — and the match silently found no arm. The channel test
+program compiled, ran, exited 0, and printed nothing.
+
+Channels therefore keep the legacy tag, tested for by their element
+types being `Sender`/`Receiver`. That also leaves their existing
+one-element-type-per-program limitation exactly as it was, rather than
+half-lifting it.
+
+#### Where tuples stand
+
+Both backends compile them. `bootstrap/exec_corpus/tuples` builds and
+runs under `plum build` and under the self-hosted backend, with
+identical output, and four new codegen tests pin the cases that were
+impossible before — including two same-arity tuples with different
+element types in one program, and a tuple as a declared parameter and
+return type.
+
+The two backends now agree on 15 of 17 fixtures; the remaining two are
+`plum build`'s own deliberate rejections (`let empty = []` is
+uninferable there, and it refuses a closure-typed struct field).

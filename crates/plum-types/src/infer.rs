@@ -351,6 +351,22 @@ pub struct Infer {
     // `ArrayLiteral` arm), and only becomes concrete (if it ever does)
     // once the WHOLE program's final substitution is known.
     empty_array_elem_types: HashMap<Span, (Type, Option<String>)>,
+    /// Every tuple EXPRESSION's and tuple PATTERN's element types, keyed
+    /// by span, resolved against the final substitution the same way
+    /// `empty_array_elem_types` is.
+    ///
+    /// Lowering needs these because a tuple's Ctor tag has to be
+    /// SPECIALIZED BY ELEMENT TYPE. `lower.rs` used to tag every tuple
+    /// by arity alone (`"2Tuple"`), which is fine as long as a tuple
+    /// never reaches codegen through a signature — and stops being fine
+    /// the moment it does, because `tag_fields` is a flat map and
+    /// `(Int, String)` and `(Bool, Bool)` would need one tag to carry
+    /// two different layouts.
+    ///
+    /// Lowering cannot compute them itself: it sees the AST, and a
+    /// tuple's element types are an inference result. Hence the same
+    /// span-keyed side channel the empty-array case established.
+    tuple_elem_types: HashMap<Span, (Vec<Type>, Option<String>)>,
     // `Expr::Closure` span -> its (still-possibly-unresolved) param
     // types and body/return type — the closure-literal counterpart to
     // `empty_array_elem_types` immediately above, populated by
@@ -492,6 +508,7 @@ impl Infer {
             array_for_loops: std::collections::HashSet::new(),
             unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
+            tuple_elem_types: HashMap::new(),
             closure_types: HashMap::new(),
             partial_calls: HashMap::new(),
             in_unsafe: false,
@@ -518,6 +535,7 @@ impl Infer {
             array_for_loops: std::collections::HashSet::new(),
             unit_sugar_calls: std::collections::HashSet::new(),
             empty_array_elem_types: HashMap::new(),
+            tuple_elem_types: HashMap::new(),
             closure_types: HashMap::new(),
             partial_calls: HashMap::new(),
             in_unsafe: false,
@@ -628,6 +646,33 @@ impl Infer {
     /// rejected as an ambiguity. Any OTHER still-unresolved `Var`
     /// remains a genuine error — the element type really is never
     /// pinned to anything concrete anywhere.
+    /// The tuple counterpart to `resolve_empty_array_elem_types`, and
+    /// resolved the same way — including the same template fallback for
+    /// a tuple written inside a still-generic function's body, whose
+    /// element types are pinned only to that function's own parameters.
+    /// Monomorphization substitutes those later.
+    pub fn resolve_tuple_elem_types(&self) -> Result<HashMap<Span, Vec<Type>>, plum_syntax::error::CompileError> {
+        let subst = self
+            .final_subst
+            .as_ref()
+            .ok_or_else(|| "internal error: resolve_tuple_elem_types called before infer_program completed".to_string())?;
+        let mut out = HashMap::with_capacity(self.tuple_elem_types.len());
+        for (span, (tys, enclosing_fn)) in &self.tuple_elem_types {
+            let mut resolved = Vec::with_capacity(tys.len());
+            for ty in tys {
+                resolved.push(self.resolve_closure_component(ty, enclosing_fn, subst, *span).map_err(|_| {
+                    plum_syntax::error::CompileError::new(
+                        *span,
+                        "cannot determine this tuple's element types — they are never pinned to \
+                         anything concrete",
+                    )
+                })?);
+            }
+            out.insert(*span, resolved);
+        }
+        Ok(out)
+    }
+
     pub fn resolve_empty_array_elem_types(&self) -> Result<HashMap<Span, Type>, plum_syntax::error::CompileError> {
         let subst = self
             .final_subst
@@ -1673,7 +1718,7 @@ impl Infer {
             ast::Expr::Str(_, _) => Ok((Type::Str, Subst::empty())),
             ast::Expr::Bool(_, _) => Ok((Type::Bool, Subst::empty())),
             ast::Expr::Tuple(elems, _) if elems.is_empty() => Ok((Type::Unit, Subst::empty())),
-            ast::Expr::Tuple(elems, _) => {
+            ast::Expr::Tuple(elems, span) => {
                 let mut acc = Subst::empty();
                 let mut refined_env = env.clone();
                 let mut elem_types = Vec::with_capacity(elems.len());
@@ -1683,7 +1728,8 @@ impl Infer {
                     refined_env = refined_env.apply_subst(&acc);
                     elem_types.push(t);
                 }
-                let resolved = elem_types.iter().map(|t| acc.apply(t)).collect();
+                let resolved: Vec<Type> = elem_types.iter().map(|t| acc.apply(t)).collect();
+                self.tuple_elem_types.insert(*span, (resolved.clone(), self.current_fn.clone()));
                 Ok((Type::Tuple(resolved), acc))
             }
             // `[e1, e2, ...]` — every element must unify to ONE shared
@@ -3295,6 +3341,11 @@ impl Infer {
             }
             ast::Pattern::Tuple(elems, span) => {
                 let fresh_vars: Vec<Type> = elems.iter().map(|_| self.fresh()).collect();
+                // Recorded BEFORE binding the sub-patterns: the vars are
+                // unresolved here, and resolving them is exactly what
+                // `resolve_tuple_elem_types` does at the end against the
+                // whole program's final substitution.
+                self.tuple_elem_types.insert(*span, (fresh_vars.clone(), self.current_fn.clone()));
                 let s = unify(&acc.apply(scrutinee_ty), &Type::Tuple(fresh_vars.clone()))
                     .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("tuple pattern: {e}")))?;
                 *acc = s.compose(acc);

@@ -65,6 +65,14 @@ fn plum_type_to_cg_type(ty: &PlumType) -> Result<CgType, String> {
         // `plum_codegen::emit_program`'s own "unknown tag" error at the
         // point something actually tries to construct/match it, not
         // here.
+        // A TUPLE is a heap value like a struct — opaque at the LLVM
+        // level (a plain `ptr`), with its layout described by a
+        // `tag_fields` entry keyed on the tag `lower.rs` gave it. That
+        // tag is specialized by the element types (see
+        // `specialized_tuple_tag`), which is what makes this safe: with
+        // one tag per ARITY, `(Int, String)` and `(Bool, Bool)` would
+        // have needed the same flat-map entry to describe two layouts.
+        PlumType::Tuple(_) => Ok(CgType::Heap),
         PlumType::Str => Ok(CgType::Str),
         // `.as_cstr()`'s own result type — see `CgType::CStr`'s doc
         // comment for why it's a genuinely distinct representation from
@@ -584,6 +592,22 @@ pub fn compile_program_to_ir_diag(
 
     let resolved_sites = infer.resolve_generic_sites().map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
     let empty_array_elem_types = infer.resolve_empty_array_elem_types().map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
+    let tuple_elem_types = infer.resolve_tuple_elem_types().map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
+    // TUPLE tags. Unlike a struct or enum there is no declaration to
+    // read a layout from, so every tuple that appears anywhere in the
+    // program registers its own — keyed by the SAME specialized tag
+    // `lower.rs` gave it, via the same shared function, so the two can
+    // never disagree about a tag's spelling.
+    //
+    // Distinct element types give distinct tags, so inserting each is
+    // idempotent rather than conflicting: two `(Int, String)` tuples
+    // anywhere in the program describe the same layout.
+    for (_, elems) in &tuple_elem_types {
+        if let Ok(cg_fields) = elems.iter().map(plum_type_to_cg_type).collect::<Result<Vec<_>, _>>() {
+            tag_fields.insert(plum_ir::lower::specialized_tuple_tag(Some(elems), elems.len()), cg_fields);
+        }
+    }
+
     let closure_types = infer.resolve_closure_types().map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
 
     plum_ir::movecheck::check_moves(program).map_err(|e: plum_syntax::error::CompileError| e.context("move error"))?;
@@ -607,6 +631,7 @@ pub fn compile_program_to_ir_diag(
         &closure_types,
         infer.partial_calls(),
         &empty_array_elem_types,
+        &tuple_elem_types,
         &variant_payload_types,
     )
     .map_err(|e| format!("monomorphization error: {e}"))?;
@@ -617,6 +642,7 @@ pub fn compile_program_to_ir_diag(
         .with_unit_sugar_calls(infer.unit_sugar_calls().clone())
         .with_partial_calls(infer.partial_calls().clone())
         .with_empty_array_elem_types(empty_array_elem_types)
+        .with_tuple_elem_types(tuple_elem_types.clone())
         .with_closure_types(closure_types)
         .with_variant_payload_types(variant_payload_types);
     let mut ir_program = lower_program(program, &lowering_ctx).map_err(|e: plum_syntax::error::CompileError| e.context("lowering error"))?;
@@ -1439,6 +1465,43 @@ mod tests {
         // `CgType::Unit` arm). This assertion used to end in a stray
         // `"0"` — `Unit` echoed through `Bool`'s `%d\n` print path.
         assert_eq!(lines, vec!["3", "foo", "bar", "baz qux"]);
+    }
+
+    // --- tuples in native codegen (see `specialized_tuple_tag`) ---
+
+    #[test]
+    fn a_tuple_round_trips_through_native_codegen() {
+        let src = "let go (): Int = match (1, 2) { (a, b) => a + b }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("3".to_string()));
+    }
+
+    #[test]
+    fn two_tuples_of_the_same_arity_but_different_element_types_coexist() {
+        // THE case that made tuples unsupportable before. Tuple tags
+        // used to be arity-only ("2Tuple"), and `tag_fields` is a flat
+        // map — so these two would have needed one entry to describe
+        // two different layouts. They get distinct specialized tags now.
+        let src = "let go (): Int = { \
+                       let a = match (1, \"x\") { (n, _) => n }; \
+                       let b = match (true, false) { (p, q) => if p && !q { 10 } else { 0 } }; \
+                       a + b \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("11".to_string()));
+    }
+
+    #[test]
+    fn a_nested_tuple_round_trips() {
+        let src = "let go (): Int = match (1, (2, 3)) { (a, inner) => match inner { (b, c) => a + b + c } }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("6".to_string()));
+    }
+
+    #[test]
+    fn a_tuple_can_be_a_declared_parameter_and_return_type() {
+        // Needs both the tuple TYPE annotation and native tuple support:
+        // before, a tuple could only ever be a fully-destructured local.
+        let src = "let swap (t: (Int, Bool)): (Bool, Int) = match t { (n, p) => (p, n) } \
+                   let go (): Int = match swap((7, true)) { (p, n) => if p { n } else { 0 } }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("7".to_string()));
     }
 
     // --- testing framework: `panic_raw` (see `ir::Expr::PanicRaw`) ---
@@ -3316,6 +3379,7 @@ mod tests {
             &closure_types,
             infer.partial_calls(),
             &HashMap::new(),
+            &infer.resolve_tuple_elem_types().unwrap_or_else(|e| panic!("tuple elem type error: {e}")),
             &HashMap::new(),
         )
         .unwrap_or_else(|e| panic!("monomorphization error: {e}"));
