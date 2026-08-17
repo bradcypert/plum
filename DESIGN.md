@@ -9481,8 +9481,10 @@ Because `fbip` never tracks these nodes, it never emits a `Dec` for them.
 So:
 
 - A `Ref` cell is never released by scope exit. **Measured: 63MB for
-  2,000,000 `ref()` calls**, ~32 bytes each, unbounded.
+  2,000,000 `ref()` calls**, ~32 bytes each, unbounded. **Fixed on
+  2026-08-17 by `plum_ir::refdrop` — see below.**
 - `.get()` increments the value it hands back, and nothing balances it.
+  Still true.
 
 The increment is not optional. Without it,
 `let p = r.get(); r.set(other)` leaves `p` dangling — a use-after-free.
@@ -9552,10 +9554,77 @@ at scope end frees the cell the caller just received. Guarding it needs a
 tail-position analysis this pass doesn't have.
 
 So the honest summary is that `Ref` needs a notion of BORROWED use
-positions in `fbip`, not a wider heap predicate. That is real work in the
-most delicate pass in the compiler — the same one whose "gap 1 (parameter
-tracking)" attempt was previously found unsafe and reverted — and it is
-not something to land on the way past.
+positions, not a wider heap predicate.
+
+### `plum_ir::refdrop` — the borrow-aware pass (2026-08-17)
+
+Built the next day. **63MB -> 5.0MB** for the 2,000,000-`ref()`
+benchmark, and flat: the release is per-scope, not amortized.
+
+It is a SEPARATE pass rather than a change to `fbip`, which is what
+makes it safe to add at all. A `Ref` binding provably never enters
+`fbip`'s `known_heap` — `is_syntactically_heap` has no `RefNew` arm, and
+its `Var(n)` case only qualifies if `n` is already in the set — so
+`fbip` ignores exactly the bindings this pass owns, and this pass ignores
+everything else. That also preserves for free the property `Ref` needs
+most: `mark_reuse` is gated on the same set, so a `Ref` can never become
+a reuse-in-place candidate. No predicate split turned out to be necessary.
+
+Verified inert for everything else, not just argued: a program with no
+`ref` emits **byte-identical** IR before and after the pass existed.
+
+The rule, for a variable bound to a `Ref` cell:
+
+1. Every CONSUMING use gets an `Inc`.
+2. Exactly one `Dec` at the end of the binding's scope.
+3. BORROWING uses get nothing.
+
+Borrowing uses need no increment because the binding holds the original
+reference alive until (2) runs, so any read through the pointer inside
+that scope is safe by construction. The borrow positions are
+`RefGet`/`RefSet`'s base, and `Binary`'s operands — `Ref` equality is a
+raw pointer compare, taking no ownership. A closure body is not
+descended into at all: codegen already balances captures itself
+(`codegen_closure_literal` increments each heap-shaped capture,
+`closure_release$*` decrements it), so marking there would
+double-increment.
+
+**Rule 1 is what makes rule 2 unconditionally safe**, and that is the
+whole design. The earlier attempt died on `let r = ref(n); r` — the
+binding's own value escaping as the body's result. Here that bare `Var`
+in return position is a consuming use, so it is incremented, and the
+scope-end decrement releases only the binding's own reference. Escaping
+through a `Ctor` field works for the identical reason. Both are pinned by
+tests, as is a three-deep alias chain (`let b = a; let c = b`), where
+each alias is a consuming use with its own scope-end release, so N names
+for one cell net out exactly.
+
+Scope-end decrement is expressed by binding the body's result to a
+synthetic temporary (`refdrop$N` — `$` is unavailable to Plum
+identifiers), since `RcAnnotated`'s decrement runs BEFORE its `rest` and
+there is no "decrement after this produces its value" node. One
+consequence worth naming: the body stops being in tail position, so a
+call at the end of it is no longer a `musttail` candidate. That is a
+correctness requirement rather than a lost optimization — a function
+holding a `Ref` cell has cleanup to run after the call returns, so it
+genuinely cannot tail-call its frame away.
+
+Shadowing is handled precisely rather than over-approximated (which for
+increment insertion would mean leaks, not just imprecision): every binder
+— `Let`, `For`, match-arm bindings, closure params — removes its own name
+from the tracked set for the scope it governs.
+
+Confirmed under ASan across the aliasing, escaping, struct-field,
+shadowing, nesting, and loop cases: **no use-after-free and no
+double-free**, leaks only at the pre-existing baseline (a trivial program
+with no `Ref` at all already leaks its own top-level locals).
+
+What this does NOT fix is `.get()`'s unbalanced increment on
+heap-shaped contents. That one needs the inner TYPE, which this IR does
+not carry — the same reason `RefGet` cannot join `is_syntactically_heap`.
+It is bounded by the number of `.get()` calls on a `Ref` whose contents
+are heap-shaped, not by cell count, and `.set()`'s own release of what it
+overwrites is unaffected (still flat at 5MB over 2M writes).
 
 ### Thread boundary
 

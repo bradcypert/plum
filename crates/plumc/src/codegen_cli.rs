@@ -711,6 +711,24 @@ pub fn compile_program_to_ir_roots(
     ir_program.globals = mono_plan.globals;
     let mut ir_program = optimize_program(ir_program);
 
+    // `Ref[T]` cell release — AFTER `optimize_program`, and only on the
+    // codegen path. See `plum_ir::refdrop`'s module doc comment for why
+    // `Ref` needs a borrow-aware pass of its own rather than a wider
+    // predicate inside `fbip`.
+    //
+    // Deliberately NOT part of `optimize_program`: that runs for the
+    // interpreter too, and `plum-interp` represents a `Ref` as a real
+    // `Rc<RefCell<Value>>` whose reclamation Rust already handles. There
+    // is nothing for this pass to contribute there, and inserting
+    // `RcAnnotated` nodes targeting a `Value::Ref` would only give the
+    // interpreter's toy heap something it has no business touching.
+    for f in &mut ir_program.functions {
+        f.body = plum_ir::refdrop::insert_ref_drops(std::mem::replace(&mut f.body, plum_ir::ir::Expr::Unit));
+    }
+    for g in &mut ir_program.globals {
+        g.value = plum_ir::refdrop::insert_ref_drops(std::mem::replace(&mut g.value, plum_ir::ir::Expr::Unit));
+    }
+
     // Dead-function elimination, rooted at the entry point plus every
     // global's initializer — see `plum_ir::prune`'s module doc comment
     // for the full "why", but in short: `monomorphize::plan` seeds its
@@ -1751,6 +1769,70 @@ mod tests {
                        match c { Counter(v) => { v.set(v.get() + 5); v.get() } } \
                    }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("5".to_string()));
+    }
+
+    #[test]
+    fn a_ref_cell_bound_in_a_loop_body_is_released_each_iteration() {
+        // The unbounded-growth case `plum_ir::refdrop` exists for: this
+        // shape leaked one 16-byte cell per iteration (63MB over 2M
+        // iterations) until that pass landed. Correctness half here;
+        // the memory half is measured directly (flat at 5MB).
+        let src = "let step (n: Int): Int = { let r = ref(n); r.set(r.get() + 1); r.get() }\n\
+                   let go (): Int = { let mut acc = 0; for i in 0..1000 { acc = acc + step(i); }; acc }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("500500".to_string()));
+    }
+
+    #[test]
+    fn a_ref_can_escape_the_scope_that_bound_it() {
+        // The shape a naive scope-end release turns into a
+        // use-after-free: the binding's own value IS the function's
+        // result. `refdrop` treats the bare `Var` in return position as
+        // a CONSUMING use and increments it, so the caller receives a
+        // live cell rather than a freed one.
+        let src = "let make_cell (n: Int): Ref[Int] = { let r = ref(n); r }\n\
+                   let go (): Int = { let c = make_cell(7); c.set(c.get() + 1); c.get() }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("8".to_string()));
+    }
+
+    #[test]
+    fn a_ref_escaping_through_a_struct_field_stays_alive() {
+        // Same argument, escaping via a `Ctor` field instead of a
+        // return — also a consuming use.
+        let src = "struct Holder { cell: Ref[Int] }\n\
+                   let stash (r: Ref[Int]): Holder = Holder { cell: r }\n\
+                   let go (): Int = { \
+                       let r = ref(21); \
+                       let h = stash(r); \
+                       match h { Holder(c) => { c.set(c.get() * 2); c.get() } } \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("42".to_string()));
+    }
+
+    #[test]
+    fn a_chain_of_ref_aliases_all_see_one_cell_and_release_it_once() {
+        // Each `let` alias is a consuming use (count up) and gets its own
+        // scope-end release (count down), so three names for one cell
+        // net out exactly.
+        let src = "let go (): Int = { \
+                       let a = ref(5); \
+                       let b = a; \
+                       let c = b; \
+                       c.set(c.get() + 1); \
+                       a.get() + b.get() + c.get() \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("18".to_string()));
+    }
+
+    #[test]
+    fn a_non_ref_binding_shadowing_a_ref_is_treated_independently() {
+        // The inner `r` is an ordinary Int; it must not inherit the outer
+        // `Ref` `r`'s increment/release treatment.
+        let src = "let go (): Int = { \
+                       let r = ref(7); \
+                       let inner = { let r = ref(100); r.get() }; \
+                       r.get() + inner \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("107".to_string()));
     }
 
     #[test]

@@ -4,3 +4,4 @@ pub mod lower;
 pub mod monomorphize;
 pub mod movecheck;
 pub mod prune;
+pub mod refdrop;

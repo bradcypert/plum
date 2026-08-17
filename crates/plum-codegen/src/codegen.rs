@@ -5415,7 +5415,11 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
             };
             match op {
                 RcOp::Inc => {
-                    if !matches!(ty, CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..)) {
+                    // `Ref` included: its cell carries a refcount word
+                    // at offset 0 like every other shape here, and
+                    // `plum_ir::refdrop` genuinely targets `Ref`
+                    // bindings, so this arm is reached in practice.
+                    if !matches!(ty, CgType::Heap | CgType::Str | CgType::Array(_) | CgType::Closure(..) | CgType::Ref(_)) {
                         return Err(format!(
                             "codegen: internal error — RcAnnotated target {target:?} is not heap-shaped ({ty:?})"
                         ));
@@ -5428,6 +5432,13 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                     })?;
                     if let CgType::Array(elem) = &ty {
                         register_array_elem(ctx, elem);
+                    }
+                    // Mirrors the `Array` registration above: a `Dec` can
+                    // be the only place a given `Ref` shape appears in a
+                    // function (e.g. released via a parameter), and the
+                    // release function it names has to exist.
+                    if let CgType::Ref(inner) = &ty {
+                        register_ref_inner(ctx, inner);
                     }
                     em.push(format!("  call void {dec_fn}(ptr {reg})"));
                 }
