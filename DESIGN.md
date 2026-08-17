@@ -9768,9 +9768,7 @@ bindings and reuse, which this deliberately does not touch.
 
 **Unbound temporaries.** `let s = "a".concat("b")` leaks the two literals:
 they are never bound to anything, so there is no binding to hang a
-release on. Bind them (`let a = "a"; let b = "b"; a.concat(b)`) and it is
-flat. Fixing it properly means A-normalising the IR so every intermediate
-gets a name.
+release on. **Fixed the same day by `plum_ir::anf` — see below.**
 
 **Multi-use bindings**, deliberately, until reuse-in-place stops relying
 on a bare runtime refcount check for its safety.
@@ -9778,3 +9776,82 @@ on a bare runtime refcount check for its safety.
 **Owned parameters and match-extracted bindings**, which need heap-ness
 information the IR does not carry — the same blocker recorded in the
 "gap 1" entry above.
+
+## A-normalisation: naming the intermediates (2026-08-17)
+
+The scope-end release only reaches a value with a NAME, since the release
+attaches to a `Let`'s scope. An unnamed intermediate leaked regardless,
+and those are at least as common as the bound case:
+
+| 1M-iteration loop | before | after |
+| --- | --- | --- |
+| `"abcdefgh".concat("ijklmnop").len()` | 139.2 MB | **5.1 MB** |
+| `Point { x: i, y: i }.x` | 47.5 MB | **5.2 MB** |
+| `i.to_string().len()` | 34.0 MB | **5.2 MB** |
+| `match mk(i) { .. }` (a call result) | 48.1 MB | 48.0 MB |
+
+`i.to_string()` is as ordinary as code gets. `plum_ir::anf` binds
+qualifying intermediates to `anf$N` temporaries, which routes them all
+through machinery that already works instead of adding a second release
+mechanism.
+
+### What qualifies, and why the rule is narrow
+
+Only an expression that is BOTH a syntactically fresh allocation AND has
+nothing but atoms for children.
+
+The second half is a soundness requirement. Hoisting moves evaluation
+EARLIER — before any sibling to its left — so it is only safe for an
+expression whose sole effect is allocating. `f() + Point { x: g() }.x`
+would run `g()` before `f()`. Children are processed first, so a nested
+fresh allocation becomes a `Var` before its parent is considered, which
+is what lets `"a".concat("b")` hoist all three of its allocations rather
+than none.
+
+**A `Call` is never hoisted**, which is why the fourth row above is
+unchanged. This backend's callees do not release their parameters, so a
+function may return one of them and the caller holds no extra reference —
+treating a call result as owned would be a use-after-free for
+`let pass (p) = p`. That shape is pinned by a test precisely because it
+would fail loudly if the rule were ever loosened without an
+owned-parameter convention first.
+
+Every deferred or conditional slot — an `If` branch, a `Match` arm, a
+loop body, a closure body, a `Let`'s own body — is flattened as its own
+region rather than hoisted out of. Hoisting from a match arm would
+evaluate it whether or not the arm was taken; hoisting from a loop body
+would evaluate it once instead of per iteration, defeating the entire
+point.
+
+### A latent codegen bug this exposed
+
+`i.to_string()` in a million-iteration loop **overflowed the stack** once
+the release landed. The cause was pre-existing and unrelated:
+`ToString`'s `snprintf` scratch buffer was an `alloca` emitted INSIDE the
+loop body. LLVM only guarantees a static alloca in the ENTRY block is
+allocated once per call; anywhere else it is a fresh stack allocation
+every time control reaches it. LLVM had been hoisting it opportunistically
+and stopped once the loop body gained one more call — the baseline
+survived 20M iterations, which is why this had never been noticed.
+
+`Emitter::fresh_entry_alloca` now collects allocas separately and
+`body_lines` splices them in after the `entry:` label. Flat at 5.2MB
+through 20M iterations, and a test asserts the placement directly rather
+than only its symptom.
+
+### The cost, stated plainly
+
+The self-hosted compiler gets **~8% slower** to type-check itself
+(0.2106s → 0.2279s, best of 15) and its peak grows slightly
+(254.5 → 271.7 MB); `emit-llvm` moves the other way
+(4717 → 4539 MB, 1.73 → 1.85s). The extra `Let` bindings and release
+calls are not free, and the compiler's own hot paths are dominated by
+multi-use bindings and call results that none of this releases. Turning
+unbounded growth into flat memory for ordinary loops is worth 8% on one
+workload, but it is a real trade rather than a free win.
+
+### Verified
+
+527 plumc tests + 310 in plum-ir, all 15 suites, fixed point
+byte-identical, corpus 99/99, exec_corpus 18/18, zero ASan errors across
+the corpus and the concurrency/shared-mutability examples.

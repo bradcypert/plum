@@ -288,6 +288,18 @@ pub(crate) struct Emitter {
     /// block; `lib.rs::emit_function` splices these in just BEFORE the
     /// function's own `define` line instead. See `fresh_string_global`.
     pub(crate) string_globals: Vec<String>,
+    /// `alloca` lines hoisted to the ENTRY block, kept separate from
+    /// `lines` so they can be spliced in right after the `entry:` label
+    /// (see `body_lines`).
+    ///
+    /// LLVM only guarantees that a STATIC alloca in the entry block is
+    /// allocated once per call. An `alloca` emitted anywhere else is a
+    /// fresh stack allocation every time control reaches it, so one
+    /// inside a loop body grows the stack per iteration. `i.to_string()`
+    /// in a million-iteration loop overflowed the stack for exactly this
+    /// reason — LLVM had been hoisting it opportunistically, and stopped
+    /// once the loop body gained one more call.
+    entry_allocas: Vec<String>,
 }
 
 impl Emitter {
@@ -297,6 +309,7 @@ impl Emitter {
             lines: vec!["entry:".to_string()],
             current_block: "entry".to_string(),
             string_globals: Vec::new(),
+            entry_allocas: Vec::new(),
         }
     }
 
@@ -354,6 +367,35 @@ impl Emitter {
 
     fn push(&mut self, line: impl Into<String>) {
         self.lines.push(line.into());
+    }
+
+    /// A fresh stack buffer of `bytes`, allocated ONCE per call in the
+    /// entry block regardless of where in the body it is requested — see
+    /// `entry_allocas` for why that placement is required rather than
+    /// merely tidy.
+    ///
+    /// Safe to share one slot across every reach of the same site: the
+    /// buffer is written and fully consumed within a single expression
+    /// (`snprintf` then `memcpy` into a fresh string cell), never held
+    /// across anything that could reach the site again.
+    fn fresh_entry_alloca(&mut self, bytes: usize) -> String {
+        let reg = self.fresh_reg();
+        self.entry_allocas.push(format!("  {reg} = alloca [{bytes} x i8]"));
+        reg
+    }
+
+    /// This function body's lines with the hoisted entry allocas spliced
+    /// in directly after the `entry:` label. Every site that renders a
+    /// body must use this rather than `lines` directly.
+    pub(crate) fn body_lines(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::with_capacity(self.lines.len() + self.entry_allocas.len());
+        let mut rest = self.lines.iter();
+        if let Some(first) = rest.next() {
+            out.push(first);
+        }
+        out.extend(self.entry_allocas.iter().map(String::as_str));
+        out.extend(rest.map(String::as_str));
+        out
     }
 
     /// Starts a new basic block: pushes its label line and updates
@@ -1723,7 +1765,7 @@ fn emit_closure_body_fn(
         out.push('\n');
     }
     out.push_str(&format!("define {} @{}({}) {{\n", ret_type.llvm_type(), fn_name, param_decls.join(", ")));
-    for line in &em.lines {
+    for line in em.body_lines() {
         out.push_str(line);
         out.push('\n');
     }
@@ -3331,7 +3373,7 @@ fn emit_spawn_entry_fn(fn_name: &str, captures: &[(String, CgType)], block: &Exp
         out.push('\n');
     }
     out.push_str(&format!("define ptr @{fn_name}(ptr %args) {{\n"));
-    for line in &em.lines {
+    for line in em.body_lines() {
         out.push_str(line);
         out.push('\n');
     }
@@ -5018,8 +5060,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             match ty {
                 CgType::Int => {
                     let fmt = em.fresh_string_global(ctx.fn_name, b"%lld\0");
-                    let buf = em.fresh_reg();
-                    em.push(format!("  {buf} = alloca [32 x i8]"));
+                    let buf = em.fresh_entry_alloca(32);
                     let n = em.fresh_reg();
                     em.push(format!(
                         "  {n} = call i32 (ptr, i64, ptr, ...) @snprintf(ptr {buf}, i64 32, ptr {fmt}, i64 {reg})"
@@ -5047,8 +5088,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
                     // vs Rust's `1e20`), a documented, honest caveat,
                     // not a silent gap.
                     let fmt = em.fresh_string_global(ctx.fn_name, b"%.15g\0");
-                    let buf = em.fresh_reg();
-                    em.push(format!("  {buf} = alloca [64 x i8]"));
+                    let buf = em.fresh_entry_alloca(64);
                     let n = em.fresh_reg();
                     em.push(format!(
                         "  {n} = call i32 (ptr, i64, ptr, ...) @snprintf(ptr {buf}, i64 64, ptr {fmt}, double {reg})"

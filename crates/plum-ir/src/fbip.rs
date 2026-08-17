@@ -1178,47 +1178,32 @@ fn for_each_child<'a>(expr: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
 ///   memory-unsafe rather than merely leaky, so it is checked
 ///   explicitly rather than left to the OWNED default.
 fn all_uses_are_borrows(expr: &Expr, name: &str) -> bool {
-    if !expr_mentions_var(expr, name) {
-        return true;
-    }
     match expr {
-        // The borrow positions. Each reads through the pointer and hands
-        // back something that does not alias the cell's ownership:
-        // `Match` inspects the tag and copies fields out (and increments
-        // any heap-shaped field it binds — see DESIGN.md), `ArrayLen`
-        // loads the length word, `Index` loads one element.
+        // THE base case. Reaching a bare `Var(name)` here means the
+        // parent did not intercept it as a borrow slot, so this use owns
+        // the value: a return, an alias, a stored field, a call argument.
+        Expr::Var(n) => n != name,
+
+        // --- the borrow slots ---
+        //
+        // Each reads through the pointer and hands back something that
+        // does not alias the cell's ownership. Verified against each
+        // runtime definition, not assumed: `Match` inspects the tag and
+        // copies fields out (incrementing any refcounted field it binds),
+        // `ArrayLen` loads the length word, and every pure string
+        // operation reads its operands' bytes and allocates a fresh cell
+        // for the result.
         Expr::Match { scrutinee, arms } => {
-            let scrutinee_ok = matches!(scrutinee.as_ref(), Expr::Var(n) if n == name)
-                || all_uses_are_borrows(scrutinee, name);
-            scrutinee_ok
+            borrowed_slot(scrutinee, name)
                 && arms.iter().all(|arm| {
-                    // A rebinding shadows the outer name, so uses below
-                    // it refer to something else entirely.
+                    // A rebinding shadows the outer name, so uses below it
+                    // refer to something else entirely.
                     arm.bindings.iter().any(|b| b == name)
                         || (arm.guard.as_ref().map(|g| all_uses_are_borrows(g, name)).unwrap_or(true)
                             && all_uses_are_borrows(&arm.body, name))
                 })
         }
         Expr::ArrayLen { array } => borrowed_slot(array, name),
-        // `Index` is deliberately NOT a borrow slot, despite looking
-        // like the most obvious one. `codegen_index` loads the element
-        // word and hands it straight back with NO increment, so `a[0]`
-        // on an array of heap values returns a pointer the array still
-        // owns. Releasing `a` at scope end would leave that element
-        // dangling — found as a segfault in the string/JSON tests, not by
-        // inspection. Whether it is safe depends on the ELEMENT type,
-        // which this IR does not carry.
-
-        // The pure string operations. Every one is a mathematical
-        // function of its inputs — it reads their bytes and allocates a
-        // fresh cell for the result (verified by reading each runtime
-        // definition in `emit_runtime`, e.g. `@plum_str_concat` loads
-        // both lengths, allocates, and `memcpy`s), so none takes
-        // ownership of an operand.
-        //
-        // `AsString` is deliberately absent: it can return its input
-        // register unchanged, so it is not a read-only slot. So are the
-        // `*Reuse` variants, which consume what they reuse.
         Expr::StrConcat { base, other } => borrowed_slot(base, name) && borrowed_slot(other, name),
         Expr::StrContains { base, needle } => borrowed_slot(base, name) && borrowed_slot(needle, name),
         Expr::StrStartsWith { base, prefix } => borrowed_slot(base, name) && borrowed_slot(prefix, name),
@@ -1234,23 +1219,113 @@ fn all_uses_are_borrows(expr: &Expr, name: &str) -> bool {
         | Expr::ToString { base }
         | Expr::StrHash { base } => borrowed_slot(base, name),
 
-        // Structural recursion through everything that cannot itself own
-        // a value: control flow and scalar arithmetic.
+        // --- consuming slots, which STILL recurse ---
+        //
+        // Recursing rather than short-circuiting to `false` is what makes
+        // a borrow nested inside a consuming slot work: in
+        // `println(n.to_string().len())` the call ARGUMENT is owned, but
+        // `n` itself only appears inside `ToString`'s borrow slot. An
+        // earlier version answered `false` for anything a `Call`
+        // mentioned at all, which silently disabled the release for most
+        // real code — `i.to_string().len()` included.
+        //
+        // A direct `Var(name)` in any of these lands on the base case
+        // above and correctly reports owned.
+        Expr::Ctor { fields, .. } => fields.iter().all(|f| all_uses_are_borrows(f, name)),
+        Expr::Call { callee, args } => {
+            all_uses_are_borrows(callee, name) && args.iter().all(|a| all_uses_are_borrows(a, name))
+        }
+        Expr::ExternCall { args, .. } => args.iter().all(|a| all_uses_are_borrows(a, name)),
+        // `Index` is deliberately NOT a borrow slot, despite looking like
+        // the most obvious one. `codegen_index` loads the element word and
+        // hands it straight back with NO increment, so `a[0]` on an array
+        // of heap values returns a pointer the array still owns.
+        // Releasing `a` at scope end would leave that element dangling —
+        // found as a segfault in the string/JSON tests, not by inspection.
+        // Whether it is safe depends on the ELEMENT type, which this IR
+        // does not carry.
+        Expr::Index { base, index } => all_uses_are_borrows(base, name) && all_uses_are_borrows(index, name),
+        // The array operations read their receiver and allocate a fresh
+        // array, so the receiver looks like a borrow — but each has a
+        // `*Reuse` counterpart that `mark_reuse` may rewrite it into,
+        // which CONSUMES the receiver. Left owned rather than reasoning
+        // about that interaction here.
+        Expr::ArrayPop { array } => all_uses_are_borrows(array, name),
+        Expr::ArrayPush { array, value } => {
+            all_uses_are_borrows(array, name) && all_uses_are_borrows(value, name)
+        }
+        Expr::ArraySet { array, index, value } => {
+            all_uses_are_borrows(array, name)
+                && all_uses_are_borrows(index, name)
+                && all_uses_are_borrows(value, name)
+        }
+        Expr::ArrayRemove { array, index } => {
+            all_uses_are_borrows(array, name) && all_uses_are_borrows(index, name)
+        }
+        // `AsCStr` gets a PROTECTIVE `Inc` from `transform` to close a
+        // real use-after-free, so a binding released at scope end must not
+        // also be on that path.
+        Expr::AsCStr(e) => all_uses_are_borrows(e, name),
+        Expr::AsString(e) => all_uses_are_borrows(e, name),
+        // Captured by a closure, or crossing into a spawned block: both
+        // are handled entirely by codegen (it increments each heap-shaped
+        // capture and the generated release function decrements it), but
+        // left owned here rather than reasoning about that ownership
+        // transfer — the cost is a missed release, never a double free.
+        Expr::Closure { body, .. } => !expr_mentions_var(body, name),
+        Expr::Spawn { block } => !expr_mentions_var(block, name),
+
+        // Every `*Reuse` node CONSUMES the cell named by `reuse_of` — it
+        // releases the old one before overwriting in place — so releasing
+        // it again at scope end would be a double free. This is the one
+        // case where getting it wrong is memory-unsafe rather than merely
+        // leaky, so each is checked explicitly.
+        Expr::CtorReuse { reuse_of, fields, .. } => {
+            reuse_of != name && fields.iter().all(|f| all_uses_are_borrows(f, name))
+        }
+        Expr::ArrayPushReuse { reuse_of, value } => reuse_of != name && all_uses_are_borrows(value, name),
+        Expr::ArrayPopReuse { reuse_of }
+        | Expr::StrTrimReuse { reuse_of }
+        | Expr::StrToUpperReuse { reuse_of }
+        | Expr::StrToLowerReuse { reuse_of } => reuse_of != name,
+        Expr::ArraySetReuse { reuse_of, index, value } => {
+            reuse_of != name && all_uses_are_borrows(index, name) && all_uses_are_borrows(value, name)
+        }
+        Expr::ArrayRemoveReuse { reuse_of, index } => reuse_of != name && all_uses_are_borrows(index, name),
+        Expr::StrConcatReuse { reuse_of, other } => reuse_of != name && all_uses_are_borrows(other, name),
+        Expr::StrReplaceReuse { reuse_of, from, to } => {
+            reuse_of != name && all_uses_are_borrows(from, name) && all_uses_are_borrows(to, name)
+        }
+
+        // `Ref` operations are owned by `refdrop`, which runs separately
+        // and has its own borrow analysis; a `Ref` binding never reaches
+        // this pass at all (see `is_syntactically_heap`).
+        Expr::RefNew { value } => all_uses_are_borrows(value, name),
+        Expr::RefGet { base } => all_uses_are_borrows(base, name),
+        Expr::RefSet { base, value } => {
+            all_uses_are_borrows(base, name) && all_uses_are_borrows(value, name)
+        }
+
+        // --- structural: cannot own anything themselves ---
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) => true,
+        Expr::Channel { .. } | Expr::ArgsRaw | Expr::RandomRaw => true,
+        Expr::Unary(_, e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => {
+            all_uses_are_borrows(e, name)
+        }
+        Expr::Binary(_, l, r) => all_uses_are_borrows(l, name) && all_uses_are_borrows(r, name),
         Expr::If { cond, then_branch, else_branch } => {
             all_uses_are_borrows(cond, name)
                 && all_uses_are_borrows(then_branch, name)
                 && all_uses_are_borrows(else_branch, name)
         }
-        Expr::Binary(_, l, r) => all_uses_are_borrows(l, name) && all_uses_are_borrows(r, name),
-        Expr::Unary(_, e) => all_uses_are_borrows(e, name),
         Expr::Let { name: n, value, body } => {
             all_uses_are_borrows(value, name) && (n == name || all_uses_are_borrows(body, name))
         }
-        Expr::RcAnnotated { rest, .. } => all_uses_are_borrows(rest, name),
+        Expr::RcAnnotated { target, rest, .. } => target != name && all_uses_are_borrows(rest, name),
         Expr::Assign { name: n, value, rest } => {
             // Assigning THROUGH the name replaces the binding this
-            // analysis is about, which its scope-end release has no way
-            // to account for.
+            // analysis is about, which its scope-end release cannot
+            // account for.
             n != name && all_uses_are_borrows(value, name) && all_uses_are_borrows(rest, name)
         }
         Expr::For { var, start, end, body } => {
@@ -1258,13 +1333,20 @@ fn all_uses_are_borrows(expr: &Expr, name: &str) -> bool {
                 && all_uses_are_borrows(end, name)
                 && (var == name || all_uses_are_borrows(body, name))
         }
-
-        // Everything else that mentions `name` is treated as OWNED. This
-        // includes `Var(name)` reached directly (a bare mention outside
-        // any borrow slot above — a return, an alias, a stored field),
-        // every `*Reuse` node's `reuse_of`, `Ctor` fields, call
-        // arguments, `Closure` captures, and `AsCStr`.
-        _ => false,
+        Expr::TaskJoin { task } => all_uses_are_borrows(task, name),
+        Expr::ChannelSend { sender, value } => {
+            all_uses_are_borrows(sender, name) && all_uses_are_borrows(value, name)
+        }
+        Expr::ChannelRecv { receiver } => all_uses_are_borrows(receiver, name),
+        Expr::Select { arms } => arms
+            .iter()
+            .all(|a| all_uses_are_borrows(&a.receiver, name) && all_uses_are_borrows(&a.body, name)),
+        Expr::ReadFileRaw { path } => all_uses_are_borrows(path, name),
+        Expr::WriteFileRaw { path, contents } => {
+            all_uses_are_borrows(path, name) && all_uses_are_borrows(contents, name)
+        }
+        Expr::EnvVarRaw { name: n } => all_uses_are_borrows(n, name),
+        Expr::PanicRaw { message } => all_uses_are_borrows(message, name),
     }
 }
 

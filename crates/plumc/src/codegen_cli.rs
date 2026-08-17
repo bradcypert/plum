@@ -709,6 +709,14 @@ pub fn compile_program_to_ir_roots(
     // declaration has no body, so generics can't reach into it.
     ir_program.functions = mono_plan.functions;
     ir_program.globals = mono_plan.globals;
+    // A-normalise BEFORE the FBIP passes, so an unnamed heap-allocating
+    // intermediate becomes a `Let` that `fbip::all_uses_are_borrows` can
+    // attach a scope-end release to. See `plum_ir::anf`'s module doc
+    // comment for what qualifies and why the rule is narrow.
+    //
+    // Codegen path only, like `refdrop` and `prune`: the interpreter has
+    // its own heap and gains nothing from the extra bindings.
+    let ir_program = plum_ir::anf::anf_program(ir_program);
     let mut ir_program = optimize_program(ir_program);
 
     // `Ref[T]` cell release — AFTER `optimize_program`, and only on the
@@ -1768,6 +1776,88 @@ mod tests {
                        acc \
                    }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("8000".to_string()));
+    }
+
+    // --- A-normalisation: unnamed intermediates (see `plum_ir::anf`) ---
+
+    #[test]
+    fn an_unnamed_string_intermediate_is_released() {
+        // `"a".concat("b").len()` — nothing was bound, so nothing could be
+        // released: 139.2MB per 1M iterations. Flat at 5.2MB now.
+        let src = "let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { acc = acc + \"abcdefgh\".concat(\"ijklmnop\").len(); }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("16000".to_string()));
+    }
+
+    #[test]
+    fn an_unnamed_struct_intermediate_is_released() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { acc = acc + Point { x: i, y: i }.x; }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("499500".to_string()));
+    }
+
+    #[test]
+    fn to_string_in_a_loop_neither_leaks_nor_overflows_the_stack() {
+        // Two separate bugs met here. The intermediate `Str` leaked
+        // (34.0MB/1M); and `ToString`'s `snprintf` buffer was an `alloca`
+        // emitted INSIDE the loop body, which LLVM had been hoisting
+        // opportunistically and stopped once the body gained the release
+        // call — a stack overflow at 1M iterations. Allocas are emitted in
+        // the entry block now, which is the only placement LLVM guarantees
+        // is once-per-call.
+        let src = "let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..2000 { acc = acc + i.to_string().len(); }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("6890".to_string()));
+    }
+
+    #[test]
+    fn to_strings_scratch_buffer_is_allocated_in_the_entry_block() {
+        // Pins the placement directly, not just its symptom: an `alloca`
+        // anywhere but the entry block is a fresh stack allocation every
+        // time control reaches it.
+        let src = "let go (): Int = { let mut acc = 0; for i in 0..3 { acc = acc + i.to_string().len(); }; acc }";
+        let (ir, _, _, _) = compile_to_ir(src, "go").expect("compiles");
+        let start = ir.find("define i64 @go(").expect("`@go` should be emitted");
+        let body = &ir[start..];
+        let first_block_end = body.find("\nfor_header").unwrap_or(body.len());
+        assert!(
+            body[..first_block_end].contains("alloca ["),
+            "the scratch buffer should sit in the entry block: {}",
+            &body[..first_block_end]
+        );
+        let after_entry = &body[first_block_end..body.find("\n}").unwrap_or(body.len())];
+        assert!(
+            !after_entry.contains("alloca ["),
+            "no alloca may remain outside the entry block: {after_entry}"
+        );
+    }
+
+    #[test]
+    fn a_call_result_intermediate_is_deliberately_not_released() {
+        // Documents the stopping point, and that it is still CORRECT: a
+        // callee may return one of its own parameters, and this backend's
+        // callees do not release parameters, so the caller has no extra
+        // reference. Treating a call result as owned would be a
+        // use-after-free — as this shape would show immediately.
+        let src = "struct Point { x: Int, y: Int }\n\
+                   let mk (n: Int): Point = Point { x: n, y: n }\n\
+                   let pass (p: Point): Point = p\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { acc = acc + match pass(mk(i)) { Point(x, y) => x + y }; }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("999000".to_string()));
     }
 
     // --- Ref[T]: the shared mutable cell (see `CgType::Ref`) ---

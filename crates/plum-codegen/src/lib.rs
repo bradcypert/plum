@@ -4015,7 +4015,7 @@ fn emit_function(
         out.push('\n');
     }
     out.push_str(&format!("define {} @{}({}) {{\n", sig.ret.llvm_type(), f.name, param_decls.join(", ")));
-    for line in &em.lines {
+    for line in em.body_lines() {
         out.push_str(line);
         out.push('\n');
     }
@@ -4118,7 +4118,7 @@ fn emit_init_globals(
         out.push('\n');
     }
     out.push_str("define void @plum_init_globals() {\n");
-    for line in &em.lines {
+    for line in em.body_lines() {
         out.push_str(line);
         out.push('\n');
     }
