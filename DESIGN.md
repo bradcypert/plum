@@ -10541,20 +10541,38 @@ one branch runs. A loop body or closure body counts as two reads — one
 syntactic read there is not one dynamic read. Assigning through the name,
 or a pattern that rebinds it, also disqualifies.
 
+### The same treatment for `.push`
+
+`@plum_array_push_grow` has the identical contract to
+`@plum_str_concat_reuse` — rc-guarded, consumes its receiver, and DOUBLES
+on the copy branch — and `cg_array_push` had the identical problem: it
+allocated a fresh array and copied on every push unless the code matched
+`acc = acc.push(x)` literally. The parser accumulates `Array[Token]`
+through a tail-recursive call, which never did.
+
+With a moved receiver, a 20,000-element accumulation takes **14 array
+allocations** instead of 20,000, and 0.53 MB instead of ~1.6 GB of copies.
+
 ### Results
 
-| | before | after |
-| --- | --- | --- |
-| 20,000-item accumulation, peak RSS | 194.0 MB | **5.2 MB** |
-| ...bytes allocated | 200.4 MB | 12.5 MB |
-| compiler emitting its own IR, peak RSS | 1458.7 MB | **113.6 MB** |
-| ...bytes allocated | 4564 MB | 3902 MB |
-| ...concat operations | 6,762,970 | 1,481,586 fewer |
-| compiler CHECKING itself, peak RSS | 49.4 MB | 50.5 MB |
+| | before | + concat | + push |
+| --- | --- | --- | --- |
+| compiler emitting its own IR, peak RSS | 1458.1 MB | 114.0 MB | **118.4 MB** |
+| ...wall time | 1.98 s | 1.85 s | **0.94 s** |
+| ...bytes allocated | 4564 MB | 3902 MB | **1565 MB** |
+| ...array allocations | 2,040,355 | — | **621,176** |
+| 20,000-item string accumulation, peak RSS | 194.0 MB | **5.2 MB** | 5.2 MB |
+| compiler CHECKING itself, peak RSS | 49.4 MB | 50.5 MB | 52.7 MB |
 
-5.2 MB now matches the real backend exactly. The `check` path barely moves,
-and that is worth stating: it is not accumulator-dominated, so this does
-nothing for it.
+**12.3x less memory and 2.1x faster** on the compiler's own IR emission.
+Worth separating the two: `concat` bought the memory, `push` bought the
+speed, and neither alone gets both.
+
+5.2 MB on the microbenchmark matches the real backend exactly.
+
+The `check` path is essentially unmoved (49.4 -> 52.7 MB), and that is
+worth stating rather than hiding in an average: it is not
+accumulator-dominated, so this does nothing for it.
 
 ### Verified
 
@@ -10564,7 +10582,10 @@ under BOTH the self-hosted interpreter and the self-hosted backend (the
 suites, and zero ASan errors across the self-hosted backend's own output
 for every corpus fixture.
 
-A new `accumulator/` fixture pins both halves: the moved case, and a
-`twice_read` function whose parameter is read twice on one path and
-therefore must NOT be moved — the second read would find a nulled slot.
-All three implementations agree on it.
+A new `accumulator/` fixture pins every half of the rule for both strings
+and arrays: the moved case; `twice_str`/`twice_arr`, whose parameter is
+read twice on one path and therefore must NOT be moved (the second read
+would find a nulled slot); and `branchy`, read once per branch and
+therefore movable despite two syntactic reads. All three implementations —
+the real backend, the self-hosted interpreter, and the self-hosted backend
+— agree on it, and it is ASan-clean under the self-hosted backend.

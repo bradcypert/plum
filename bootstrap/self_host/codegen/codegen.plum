@@ -1449,24 +1449,33 @@ let cg_index (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr
     Emit { code: code, allocas: b.allocas.concat(i.allocas), releases: b.releases.concat(i.releases), globals: b.globals.concat(i.globals), val: out, ty: elem, n: i.n + 10 }
 }
 
+// The array counterpart of `cg_concat`, and the same story:
+// `@plum_array_push_grow` CONSUMES its receiver (its copy branch releases
+// it, its in-place branch returns it) and is runtime-guarded on `rc == 1`
+// plus `malloc_usable_size`, so handing the reference over is never wrong
+// — merely useless when the count is higher.
+//
+// This path used to allocate a fresh array and copy on EVERY push, making
+// an n-element accumulation O(n^2) unless it happened to match
+// `cg_is_self_method`'s literal `acc = acc.push(x)`. The parser
+// accumulates `Array[Token]` through a tail-recursive call, which never
+// did. The copy branch doubles, so a moved receiver amortizes to O(1).
 let cg_array_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (value: typecheck.TExpr) (ty: CgTy): Emit = {
-    let b = cg_expr(p, env, n, base);
+    let bty = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
+    let elem = cg_elem_ty(ty);
+    let b = cg_move_or_own(p, env, n, base);
     let v = cg_expr(p, env, b.n, value);
-    let old_len = cg_reg(v.n);
-    let new_len = cg_reg(v.n + 1);
-    let cell = cg_reg(v.n + 2);
-    let copied = cg_reg(v.n + 3);
+    let cell = cg_reg(v.n);
+    let len = cg_reg(v.n + 1);
+    let idx = cg_reg(v.n + 2);
     let code = b.code.concat(v.code)
-        .concat("  ").concat(old_len).concat(" = call i64 @plum_array_len(ptr ").concat(b.val).concat(")\n")
-        .concat("  ").concat(new_len).concat(" = add i64 ").concat(old_len).concat(", 1\n")
-        .concat("  ").concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(new_len).concat(")\n")
-        .concat("  ").concat(copied).concat(" = call i1 @plum_array_copy(ptr ").concat(cell).concat(", ptr ").concat(b.val).concat(", i64 ").concat(old_len).concat(")\n")
-        .concat(cg_inc_elems(v.ty, cell, old_len, cell.concat("_ie")))
-        .concat(cg_elem_ptr_lines(cell, old_len, v.n + 4))
-        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 4)).concat("\n")
-        // The source array was an owned temporary and is done with.
-        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, base)), b.val));
-    Emit { code: code, allocas: b.allocas.concat(v.allocas), releases: b.releases.concat(v.releases),globals: b.globals.concat(v.globals), val: cell, ty: ty, n: v.n + 7 }
+        .concat("  ").concat(cell).concat(" = call ptr @plum_array_push_grow(ptr ").concat(b.val).concat(", i1 ").concat(if cg_is_heap(elem) { "1" } else { "0" }).concat(", ptr ").concat(cg_rel_sym(bty)).concat(")\n")
+        .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(cell).concat(")\n")
+        .concat("  ").concat(idx).concat(" = sub i64 ").concat(len).concat(", 1\n")
+        .concat(cg_elem_ptr_lines(cell, idx, v.n + 3))
+        // The pushed value's own +1 moves into the array (rule 5).
+        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 3)).concat("\n");
+    Emit { code: code, allocas: b.allocas.concat(v.allocas), releases: b.releases.concat(v.releases),globals: b.globals.concat(v.globals), val: cell, ty: ty, n: v.n + 6 }
 }
 
 let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (idx: typecheck.TExpr) (value: typecheck.TExpr) (ty: CgTy): Emit = {
