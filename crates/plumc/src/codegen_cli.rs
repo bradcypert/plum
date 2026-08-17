@@ -10,7 +10,6 @@
 
 use crate::with_prelude;
 use plum_codegen::{CgType, FnSig};
-use plum_ir::fbip::optimize_program;
 use plum_ir::lower::{lower_program, LoweringContext};
 use plum_syntax::ast;
 use plum_syntax::lexer::Lexer;
@@ -716,8 +715,13 @@ pub fn compile_program_to_ir_roots(
     //
     // Codegen path only, like `refdrop` and `prune`: the interpreter has
     // its own heap and gains nothing from the extra bindings.
+    // Parameter-reuse eligibility, computed BEFORE `anf` — see
+    // `plum_ir::fbip::reusable_params`' own ordering note. `anf` hoists a
+    // fresh-allocation argument into a temporary, which would leave a bare
+    // `Var` where the analysis needs to see the allocation.
+    let reusable = plum_ir::fbip::reusable_params(&ir_program);
     let ir_program = plum_ir::anf::anf_program(ir_program);
-    let mut ir_program = optimize_program(ir_program);
+    let mut ir_program = plum_ir::fbip::optimize_program_with_reusable_params(ir_program, &reusable);
 
     // `Ref[T]` cell release — AFTER `optimize_program`, and only on the
     // codegen path. See `plum_ir::refdrop`'s module doc comment for why
@@ -1805,6 +1809,74 @@ mod tests {
                        acc \
                    }";
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("8000".to_string()));
+    }
+
+    // --- reuse-in-place on parameters (see `fbip::reusable_params`) ---
+    //
+    // A tail-recursive accumulator held as a PARAMETER never got reused,
+    // because `mark_reuse` only targets names in `known_heap` and a
+    // parameter is never in it. Measured on a 20,000-character
+    // accumulation: 200.7 MB of copies, versus 0.36 MB for the same thing
+    // written as a local rebinding. The self-hosted compiler is written in
+    // this style throughout — emitting its own IR went 4717 MB -> 2389 MB
+    // and 1.45 s -> 0.89 s.
+
+    #[test]
+    fn a_tail_recursive_string_accumulator_is_correct_and_reused() {
+        let src = "let go (acc: String) (n: Int): String = if n == 0 { acc } else { go(acc.concat(\"x\"), n - 1) }\n\
+                   let go2 (): Int = go(\"\", 500).len()";
+        assert_eq!(compile_and_run(src, "go2", &[CgValue::Unit]), Ok("500".to_string()));
+    }
+
+    #[test]
+    fn a_tail_recursive_array_accumulator_is_correct_and_reused() {
+        let src = "let go (acc: Array[Int]) (n: Int): Array[Int] = if n == 0 { acc } else { go(acc.push(n), n - 1) }\n\
+                   let go2 (): Int = go([], 300).len()";
+        assert_eq!(compile_and_run(src, "go2", &[CgValue::Unit]), Ok("300".to_string()));
+    }
+
+    #[test]
+    fn a_parameter_used_twice_on_one_path_is_not_destructively_reused() {
+        // THE shape whose parameter reuse was a real segfault
+        // (DESIGN.md's "Gap 1"): two simultaneous uses of the same
+        // unprotected parameter could each observe refcount 1 and both
+        // reuse the cell. `reusable_params` rejects it because both uses
+        // are on the same path.
+        let src = "let rep (s: String) (n: Int): String = if n == 0 { \"\" } else { s.concat(rep(s, n - 1)) }\n\
+                   let go (): String = rep(\"ab\", 3)";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("ababab".to_string()));
+    }
+
+    #[test]
+    fn a_caller_that_still_needs_an_argument_it_passed_is_not_corrupted() {
+        // The other half of the safety argument. `q` is a PARAMETER, so
+        // nothing increments it when it is passed on, and the callee would
+        // observe refcount 1 — the runtime check offers no protection here.
+        // Safe only because a bare `Var` argument disqualifies the callee's
+        // parameter from reuse at all.
+        let src = "let grow (s: String): String = s.concat(\"!\")\n\
+                   let hold (q: String): Int = { let r = grow(q); q.len() + r.len() }\n\
+                   let go (): Int = hold(\"xy\")";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("5".to_string()));
+    }
+
+    #[test]
+    fn a_tracked_caller_binding_survives_being_passed_to_a_reusing_function() {
+        // Here the caller's `s` IS tracked, so `mark_last_uses` increments
+        // it and the callee's runtime check declines to reuse. Both the
+        // original and the result must be intact.
+        let src = "let go2 (acc: String) (n: Int): String = if n == 0 { acc } else { go2(acc.concat(\"x\"), n - 1) }\n\
+                   let go (): Int = { let s = \"seed\"; let t = go2(s, 3); s.len() + t.len() }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("11".to_string()));
+    }
+
+    #[test]
+    fn a_parameter_reused_inside_a_loop_body_is_not_eligible() {
+        // One syntactic use is not one dynamic use — after the first
+        // iteration the cell would be gone.
+        let src = "let f (p: String): Int = { let mut n = 0; for i in 0..3 { n = n + p.concat(\"x\").len(); }; n }\n\
+                   let go (): Int = f(\"ab\")";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("9".to_string()));
     }
 
     // --- owned-returning calls (see `plum_ir::anf::owned_returning`) ---

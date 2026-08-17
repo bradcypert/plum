@@ -10002,7 +10002,9 @@ multi-use bindings (deliberately untouched, since their increments are
 what keep reuse-in-place honest), by functions that return parameters or
 extracted fields (which do not qualify as owned-returning), and very
 likely by genuinely live data. **Finding out which** is the obvious next
-question, and `PLUM_RT_STATS` already exists to answer it.
+question, and `PLUM_ALLOC_STATS` already exists to answer it. It was asked
+and answered immediately — see "Where the compiler's memory actually
+goes" below. The guess in this paragraph was wrong.
 
 ### Verified
 
@@ -10012,3 +10014,157 @@ exec_corpus 18/18, zero ASan errors across the corpus, the
 concurrency/shared-mutability examples, and a dedicated ownership fixture
 exercising parameter-returning, branch-returning, and chained constructor
 functions against the interpreter.
+
+## Where the compiler's memory actually goes (2026-08-17)
+
+Several chunks of release work left the self-hosted compiler unmoved, so
+the next step was to stop guessing and read `PLUM_ALLOC_STATS`.
+
+`emit-llvm` over the whole compiler, bytes allocated:
+
+| bucket | allocations | bytes |
+| --- | --- | --- |
+| str | 21,955,285 | **2286 MB** |
+| array | 1,945,667 | **2170 MB** |
+| ctor | 2,222,808 | 59 MB |
+| closure | 1,495,855 | 37 MB |
+
+Total ≈ 4552 MB against a 4532 MB peak RSS — so essentially NOTHING is
+freed, and the footprint is copy garbage rather than live data. (`check`
+is the same shape, smaller: 184 MB allocated, 271 MB peak.)
+
+### The cause, confirmed by direct measurement
+
+Two ways of accumulating the same 20,000-character string:
+
+| accumulator held as... | allocations | bytes |
+| --- | --- | --- |
+| a PARAMETER (tail-recursive `go(acc.concat("x"), n - 1)`) | 40,005 | **200.7 MB** |
+| a LOCAL rebinding (`let mut acc` in a `for` loop) | 20,005 | **0.36 MB** |
+
+**557x more bytes**, and 200.7 MB is exactly the sum of 1..20000 — textbook
+O(n^2) copying. The local version gets reuse-in-place; the parameter
+version never does.
+
+`mark_reuse` only ever targets a name present in `known_heap`, and a
+PARAMETER is never in it. The self-hosted compiler is written in
+tail-recursive accumulator style throughout, so this is its 4.5 GB.
+
+This also settles a question DESIGN.md had already recorded and got wrong.
+The "Where the self-hosted backend actually lands" section concluded that
+a general last-use analysis "would catch the accumulators that are not
+self-rebinding (`f(acc.push(x))` in a tail-recursive loop, which is how
+the parser is written)" but that "the measured upside is now small". The
+shape it named was right; the size was not, by two orders of magnitude.
+The difference is that the earlier measurement was of peak RSS on a
+workload where reuse already handled the dominant path, not of bytes
+allocated.
+
+### A sound rule for parameter reuse
+
+Parameter reuse was attempted once and reverted (see "Gap 1" above): two
+simultaneous uses of the same unprotected parameter could each observe
+refcount 1 and both destructively reuse the same cell — `s.concat(rep(s,
+n - 1))`, a real segfault. The fix at the time was to gate reuse on
+`known_heap`, which excluded parameters wholesale.
+
+What makes reuse safe is the CALLER's increment: `mark_last_uses` already
+increments a tracked argument the caller still needs, so the callee
+observes refcount > 1 and the runtime check declines to reuse. That
+protection is real but incomplete — it does not cover a callee that uses
+its own parameter again AFTER the reuse site, which is exactly the
+reverted crash.
+
+A local, checkable condition closes that hole: allow reuse on a parameter
+only when the parameter is used **at most once on any path** through the
+function body, counting `If`/`Match` branches as alternatives rather than
+additively. Then:
+
+- `go (acc) (n) = if n == 0 { acc } else { go(acc.concat("x"), n - 1) }` —
+  one use per branch, so max 1. ELIGIBLE, and it is the shape that matters.
+- `rep (s) (n) = s.concat(rep(s, n - 1))` — two uses on the same path.
+  REJECTED, which is precisely the shape that crashed.
+
+Implemented immediately after — see below.
+
+## Reuse-in-place on parameters (2026-08-17)
+
+The first change in this whole sequence that actually moved the compiler.
+
+| the compiler emitting its own IR | before | after |
+| --- | --- | --- |
+| peak RSS | 4717 MB | **2389 MB** |
+| wall time | 1.4457 s | **0.8934 s** |
+| array bytes allocated | 2170 MB | **51 MB** |
+
+And on the isolated shape — a 20,000-character tail-recursive
+accumulation: **200.7 MB -> 0.36 MB**, byte-for-byte identical to the same
+thing written as a local rebinding (20,005 allocations, 360,102 bytes).
+
+### The rule
+
+Two conditions, and each closes one of the two ways reuse can be unsafe.
+Reuse's only guard is a runtime `rc == 1` check, so it is safe exactly when
+nothing else needs the cell at that moment.
+
+**1. The parameter is used at most once on any PATH** — `If`/`Match`
+branches counted as alternatives rather than additively. This rules out
+the callee corrupting a cell it still needs. The branch/alternative
+distinction is the entire point: it admits `go (acc) (n) = if n == 0
+{ acc } else { go(acc.concat("x"), n - 1) }` (one use per branch) while
+rejecting `rep (s) (n) = s.concat(rep(s, n - 1))` (two uses on one path) —
+and that second shape is the exact segfault DESIGN.md's "Gap 1" records as
+the reason the previous attempt was reverted.
+
+A loop body or a closure body counts as two uses regardless of what is
+inside it. One syntactic use is not one dynamic use: either can run the
+reuse site again, and after the first time the cell is gone.
+
+**2. Every call site passes a provably uniquely-owned value** — a
+syntactically fresh allocation, or a `*Reuse` node. This rules out the
+CALLER being corrupted. For a tracked argument the existing machinery
+already handles it (`mark_last_uses` increments an argument the caller
+still needs, so the callee observes `rc > 1`), but for an UNTRACKED one —
+itself a parameter, a call result, a match binding — no increment exists
+and the runtime check offers nothing. `{ let r = f(q); q.len() }` with `q`
+a parameter is that hole, and requiring a non-`Var` argument closes it.
+
+A function whose name is ever mentioned other than as a direct callee has
+call sites this cannot enumerate, so all of its parameters are ineligible.
+
+### What it does NOT do
+
+No increment is added anywhere and no calling convention changes. The
+eligible parameters seed `mark_reuse`'s `known_heap` and only
+`mark_reuse`'s; `insert_refcount_ops` is untouched. This does deliberately
+relax the invariant `mark_reuse_scoped`'s doc comment describes — that
+reuse fires only for names `insert_refcount_ops` protected — and the two
+conditions above are what stand in for that protection.
+
+Computed BEFORE `anf`, which hoists a fresh-allocation argument into a
+temporary and would leave a bare `Var` where condition 2 needs to see the
+allocation. Not a soundness hole either way (an ANF temporary is a
+`Let`-bound fresh allocation, hence tracked and single-use, so it is safe
+by the tracked-argument case), but computing it first is what keeps the
+accumulator shape recognizable.
+
+### What is left
+
+Strings barely moved: 2286 MB -> 2154 MB allocated, still 21.8M
+allocations. So the compiler's remaining 2.4 GB is string building that
+this does not reach — some accumulator that fails one of the two
+conditions, or a shape that is not a parameter accumulator at all. That is
+the next thing to measure rather than guess at.
+
+`check` is unchanged in memory (254.7 -> 251.5 MB) and still carries the
+release work's ~6% time cost (0.1774 -> 0.1886 s).
+
+### Verified
+
+548 plumc tests + 339 in plum-ir (10 new unit + 6 new end-to-end), all 15
+suites green on the first run, fixed point byte-identical, corpus 99/99,
+exec_corpus 18/18, and zero ASan errors across the corpus, the
+concurrency/shared-mutability examples, and dedicated fixtures for the
+`rep`, `hold`, and tracked-caller shapes — each of which is a
+use-after-free rather than a leak if the rule is wrong. All of those also
+agree with the interpreter output for output.

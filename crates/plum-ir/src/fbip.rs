@@ -1,5 +1,5 @@
 use crate::ir::{Expr, Function, Global, MatchArm, Program, RcOp, SelectArm};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Inserts explicit refcount inc/dec operations via last-use analysis
 /// (the first half of Perceus-style FBIP — see DESIGN.md's memory
@@ -53,14 +53,42 @@ pub fn optimize(expr: Expr) -> Expr {
 /// ownership (deeper than parameter-tracking alone) — left for a future,
 /// more careful pass; see DESIGN.md's own section for the full story.
 pub fn optimize_program(program: Program) -> Program {
+    let reusable = reusable_params(&program);
+    optimize_program_with_reusable_params(program, &reusable)
+}
+
+/// `optimize_program` with the parameter-reuse eligibility supplied from
+/// outside.
+///
+/// Exists because that analysis must be computed BEFORE `anf` runs, while
+/// this pass runs after it — see `reusable_params`' own ordering note. The
+/// codegen pipeline computes it up front and hands it in here; the
+/// interpreter's path has no `anf` stage and lets `optimize_program`
+/// derive it directly.
+///
+/// The eligible parameters seed `mark_reuse`'s `known_heap`, and ONLY
+/// `mark_reuse`'s. `insert_refcount_ops` is untouched: nothing here adds
+/// an increment or a release for a parameter, so no calling convention
+/// changes. This deliberately relaxes the invariant
+/// `mark_reuse_scoped`'s doc comment describes — reuse normally fires only
+/// for names `insert_refcount_ops` protected — and `reusable_params`'
+/// two conditions are what stand in for that protection instead.
+pub fn optimize_program_with_reusable_params(
+    program: Program,
+    reusable: &HashMap<String, HashSet<String>>,
+) -> Program {
+    let empty = HashSet::new();
     Program {
         functions: program
             .functions
             .into_iter()
-            .map(|f| Function {
-                name: f.name,
-                params: f.params,
-                body: optimize(f.body),
+            .map(|f| {
+                let seed = reusable.get(&f.name).unwrap_or(&empty);
+                Function {
+                    body: mark_reuse_scoped(insert_refcount_ops(f.body), seed),
+                    name: f.name,
+                    params: f.params,
+                }
             })
             .collect(),
         globals: program
@@ -1386,6 +1414,276 @@ pub(crate) fn drop_at_scope_end(body: Expr, name: &str) -> Expr {
     }
 }
 
+/// Which of each function's PARAMETERS may be targeted by
+/// reuse-in-place.
+///
+/// # The problem this solves
+///
+/// `mark_reuse` only ever targets a name in `known_heap`, and a parameter
+/// is never in it — so a tail-recursive accumulator held as a parameter
+/// never gets reused, and every `acc.concat(x)` copies the whole
+/// accumulator. Measured on the same 20,000-character result:
+///
+/// | accumulator held as... | allocations | bytes |
+/// | --- | --- | --- |
+/// | a PARAMETER (`go(acc.concat("x"), n - 1)`) | 40,005 | 200.7 MB |
+/// | a LOCAL rebinding (`let mut` in a `for`) | 20,005 | 0.36 MB |
+///
+/// 557x, and 200.7 MB is exactly the sum of 1..20000 — O(n^2) copying. The
+/// self-hosted compiler is written in tail-recursive accumulator style
+/// throughout, which is where its 4.5 GB comes from.
+///
+/// # Why the obvious version is unsafe
+///
+/// Parameter reuse was tried once and reverted (DESIGN.md's "Gap 1"): two
+/// simultaneous uses of the same unprotected parameter could each observe
+/// refcount 1 and both destructively reuse the same cell —
+/// `s.concat(rep(s, n - 1))`, a real segfault.
+///
+/// Reuse's only guard is a runtime `rc == 1` check, so it is safe exactly
+/// when nothing else needs the cell at that moment. Two things could:
+///
+/// 1. **The callee itself, after the reuse site.** Ruled out by
+///    `max_uses_on_path <= 1` — if the parameter is used once, there is no
+///    second use to corrupt. `If`/`Match` branches count as ALTERNATIVES
+///    rather than additively, which is what lets the accumulator shape
+///    (one use in each branch) qualify while `s.concat(rep(s, ...))` (two
+///    uses on one path) does not.
+/// 2. **The caller, after the call.** For a tracked argument this is
+///    already handled — `mark_last_uses` increments an argument the caller
+///    still needs, so the callee observes `rc > 1`. For an UNTRACKED one
+///    (itself a parameter, a call result, a match binding) no increment
+///    exists, and that is precisely the reverted crash. Ruled out by
+///    requiring every call site to pass a provably uniquely-owned value.
+///
+/// # What "uniquely owned" means here
+///
+/// Deliberately the narrowest useful answer: the argument is a
+/// syntactically fresh allocation, or a `*Reuse` node (which yields a cell
+/// its own analysis already proved unique). Both give the callee a cell
+/// with refcount 1 that nothing else references. A bare `Var` does NOT
+/// qualify, which is what rejects `rep(s, n - 1)` and
+/// `{ let r = f(q); q.len() }` alike.
+///
+/// A function whose name is ever mentioned other than as a direct callee
+/// (used as a value, passed to a higher-order function) has call sites this
+/// cannot enumerate, so ALL its parameters are ineligible.
+///
+/// # Ordering
+///
+/// Must be computed BEFORE `anf`, which hoists a fresh-allocation argument
+/// into a temporary and would leave a bare `Var` in its place. That is not
+/// a soundness hole either way — an ANF temporary is a `Let`-bound fresh
+/// allocation, hence tracked, single-use, and therefore safe by case 2
+/// above — but computing it first is what keeps the accumulator shape
+/// recognizable.
+pub fn reusable_params(program: &Program) -> HashMap<String, HashSet<String>> {
+    let declared: HashSet<&str> = program.functions.iter().map(|f| f.name.as_str()).collect();
+    let mut escaped: HashSet<String> = HashSet::new();
+    // Per function, per parameter index: does EVERY call site pass a
+    // provably uniquely-owned value here? Starts optimistic and is
+    // narrowed by each call site seen.
+    let mut args_unique: HashMap<&str, Vec<bool>> = program
+        .functions
+        .iter()
+        .map(|f| (f.name.as_str(), vec![true; f.params.len()]))
+        .collect();
+
+    for f in &program.functions {
+        scan_calls(&f.body, &declared, &mut escaped, &mut args_unique);
+    }
+    for g in &program.globals {
+        scan_calls(&g.value, &declared, &mut escaped, &mut args_unique);
+    }
+
+    let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+    for f in &program.functions {
+        if escaped.contains(&f.name) {
+            continue;
+        }
+        let unique = &args_unique[f.name.as_str()];
+        let mut eligible = HashSet::new();
+        for (i, p) in f.params.iter().enumerate() {
+            if unique.get(i).copied() == Some(true) && max_uses_on_path(&f.body, p) <= 1 {
+                eligible.insert(p.clone());
+            }
+        }
+        if !eligible.is_empty() {
+            out.insert(f.name.clone(), eligible);
+        }
+    }
+    out
+}
+
+/// Records, for every call to a declared function, whether each argument
+/// is provably uniquely owned; and records any mention of a declared
+/// function's name OUTSIDE a direct callee position as an escape.
+fn scan_calls<'a>(
+    expr: &'a Expr,
+    declared: &HashSet<&'a str>,
+    escaped: &mut HashSet<String>,
+    args_unique: &mut HashMap<&'a str, Vec<bool>>,
+) {
+    if let Expr::Call { callee, args } = expr {
+        if let Expr::Var(name) = callee.as_ref() {
+            if let Some(name) = declared.get(name.as_str()) {
+                let slots = args_unique.get_mut(*name).expect("declared implies present");
+                if args.len() != slots.len() {
+                    // A shape this cannot reason about (partial
+                    // application, or an arity mismatch that should not
+                    // happen) — decline every parameter rather than guess.
+                    slots.iter_mut().for_each(|s| *s = false);
+                } else {
+                    for (i, a) in args.iter().enumerate() {
+                        if !is_uniquely_owned(a) {
+                            slots[i] = false;
+                        }
+                    }
+                }
+                // The callee `Var` is deliberately NOT walked: naming a
+                // function in order to call it is not an escape.
+                for a in args {
+                    scan_calls(a, declared, escaped, args_unique);
+                }
+                return;
+            }
+        }
+    }
+    if let Expr::Var(name) = expr {
+        if declared.contains(name.as_str()) {
+            escaped.insert(name.clone());
+        }
+        return;
+    }
+    for_each_child(expr, &mut |c| scan_calls(c, declared, escaped, args_unique));
+}
+
+/// Whether `expr` evaluates to a cell nothing else holds a reference to.
+///
+/// A fresh allocation obviously qualifies. So does a `*Reuse` node: it
+/// either overwrote a cell whose refcount was already 1, or allocated a
+/// new one, and in both cases the result is uniquely owned.
+fn is_uniquely_owned(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::Ctor { .. }
+            | Expr::Str(_)
+            | Expr::EmptyArray(_)
+            | Expr::StrConcat { .. }
+            | Expr::StrTrim { .. }
+            | Expr::StrToUpper { .. }
+            | Expr::StrToLower { .. }
+            | Expr::StrReplace { .. }
+            | Expr::StrRunes { .. }
+            | Expr::StrSplit { .. }
+            | Expr::ToString { .. }
+            | Expr::ArrayPush { .. }
+            | Expr::ArrayPop { .. }
+            | Expr::ArraySet { .. }
+            | Expr::ArrayRemove { .. }
+            | Expr::CtorReuse { .. }
+            | Expr::ArrayPushReuse { .. }
+            | Expr::ArrayPopReuse { .. }
+            | Expr::ArraySetReuse { .. }
+            | Expr::ArrayRemoveReuse { .. }
+            | Expr::StrConcatReuse { .. }
+            | Expr::StrTrimReuse { .. }
+            | Expr::StrToUpperReuse { .. }
+            | Expr::StrToLowerReuse { .. }
+            | Expr::StrReplaceReuse { .. }
+    )
+}
+
+/// The greatest number of times `name` can be used on any single path
+/// through `expr`.
+///
+/// `If`/`Match` branches are ALTERNATIVES — only one runs — so their
+/// contribution is the maximum across branches, not the sum. That
+/// distinction is the whole point: it is what separates the
+/// tail-recursive accumulator (one use per branch) from
+/// `s.concat(rep(s, n - 1))` (two uses on one path).
+///
+/// A loop body and a closure body both count as 2 regardless of what is
+/// inside them: either can run more than once, so a single syntactic use
+/// is not a single dynamic use. Saturates at 2 — nothing needs to
+/// distinguish "twice" from "many".
+fn max_uses_on_path(expr: &Expr, name: &str) -> usize {
+    match expr {
+        Expr::Var(n) => usize::from(n == name),
+        // Branches are alternatives.
+        Expr::If { cond, then_branch, else_branch } => (max_uses_on_path(cond, name)
+            + max_uses_on_path(then_branch, name).max(max_uses_on_path(else_branch, name)))
+        .min(2),
+        Expr::Match { scrutinee, arms } => (max_uses_on_path(scrutinee, name)
+            + arms
+                .iter()
+                .map(|a| {
+                    if a.bindings.iter().any(|b| b == name) {
+                        0
+                    } else {
+                        a.guard.as_ref().map(|g| max_uses_on_path(g, name)).unwrap_or(0)
+                            + max_uses_on_path(&a.body, name)
+                    }
+                })
+                .max()
+                .unwrap_or(0))
+        .min(2),
+        // Shadowed: only the value is still the outer binding.
+        Expr::Let { name: n, value, body } => {
+            if n == name {
+                max_uses_on_path(value, name)
+            } else {
+                (max_uses_on_path(value, name) + max_uses_on_path(body, name)).min(2)
+            }
+        }
+        // Repeatable: one syntactic use is not one dynamic use.
+        Expr::For { var, start, end, body } => {
+            let head = max_uses_on_path(start, name) + max_uses_on_path(end, name);
+            let inner = if var == name { 0 } else { max_uses_on_path(body, name) };
+            (head + if inner > 0 { 2 } else { 0 }).min(2)
+        }
+        Expr::Closure { params, body, .. } => {
+            if params.iter().any(|p| p == name) || max_uses_on_path(body, name) == 0 {
+                0
+            } else {
+                2
+            }
+        }
+        // `reuse_of` names a cell this expression CONSUMES, which is as
+        // real a use as any.
+        Expr::CtorReuse { reuse_of, fields, .. } => (usize::from(reuse_of == name)
+            + fields.iter().map(|f| max_uses_on_path(f, name)).sum::<usize>())
+        .min(2),
+        Expr::ArrayPopReuse { reuse_of }
+        | Expr::StrTrimReuse { reuse_of }
+        | Expr::StrToUpperReuse { reuse_of }
+        | Expr::StrToLowerReuse { reuse_of } => usize::from(reuse_of == name),
+        Expr::ArrayPushReuse { reuse_of, value } => {
+            (usize::from(reuse_of == name) + max_uses_on_path(value, name)).min(2)
+        }
+        Expr::ArraySetReuse { reuse_of, index, value } => (usize::from(reuse_of == name)
+            + max_uses_on_path(index, name)
+            + max_uses_on_path(value, name))
+        .min(2),
+        Expr::ArrayRemoveReuse { reuse_of, index } => {
+            (usize::from(reuse_of == name) + max_uses_on_path(index, name)).min(2)
+        }
+        Expr::StrConcatReuse { reuse_of, other } => {
+            (usize::from(reuse_of == name) + max_uses_on_path(other, name)).min(2)
+        }
+        Expr::StrReplaceReuse { reuse_of, from, to } => (usize::from(reuse_of == name)
+            + max_uses_on_path(from, name)
+            + max_uses_on_path(to, name))
+        .min(2),
+        // Everything else evaluates all of its children, so uses add.
+        _ => {
+            let mut total = 0usize;
+            for_each_child(expr, &mut |c| total += max_uses_on_path(c, name));
+            total.min(2)
+        }
+    }
+}
+
 /// Releases MATCH-EXTRACTED bindings whose every use is a borrow — the
 /// third and last place a heap value could be owned without ever being
 /// released.
@@ -1425,7 +1723,7 @@ pub(crate) fn drop_at_scope_end(body: Expr, name: &str) -> Expr {
 /// it is a pure borrow. Such an arm has no `tag_heap` entry, so it is
 /// skipped, and the `is_empty` guard below makes that explicit rather
 /// than incidental.
-pub fn release_match_bindings(expr: Expr, tag_heap: &std::collections::HashMap<String, Vec<bool>>) -> Expr {
+pub fn release_match_bindings(expr: Expr, tag_heap: &HashMap<String, Vec<bool>>) -> Expr {
     match expr {
         Expr::Match { scrutinee, arms } => Expr::Match {
             scrutinee: Box::new(release_match_bindings(*scrutinee, tag_heap)),
@@ -3015,6 +3313,186 @@ mod tests {
             value: Box::new(value),
             rest: Box::new(rest),
         }
+    }
+
+    // --- parameter reuse eligibility (see `reusable_params`) ---
+
+    fn func(name: &str, params: Vec<&str>, body: Expr) -> Function {
+        Function {
+            name: name.to_string(),
+            params: params.into_iter().map(|p| p.to_string()).collect(),
+            body,
+        }
+    }
+
+    fn program_of(fns: Vec<Function>) -> Program {
+        Program { functions: fns, globals: vec![], externs: vec![] }
+    }
+
+    fn str_lit(v: &str) -> Expr {
+        Expr::Str(v.to_string())
+    }
+
+    fn concat(base: Expr, other: Expr) -> Expr {
+        Expr::StrConcat { base: Box::new(base), other: Box::new(other) }
+    }
+
+    /// `go (acc) (n) = if n == 0 { acc } else { go(acc.concat("x"), n - 1) }`
+    /// — the tail-recursive accumulator this whole analysis exists for.
+    fn accumulator_program() -> Program {
+        program_of(vec![
+            func(
+                "go",
+                vec!["acc", "n"],
+                if_(
+                    var("n"),
+                    var("acc"),
+                    call(var("go"), vec![concat(var("acc"), str_lit("x")), var("n")]),
+                ),
+            ),
+            func("main", vec![], call(var("go"), vec![str_lit(""), int(9)])),
+        ])
+    }
+
+    #[test]
+    fn a_tail_recursive_accumulator_parameter_is_reuse_eligible() {
+        // One use per BRANCH, and every call site passes a freshly
+        // allocated string. Measured 200.7 MB -> 0.36 MB on a
+        // 20,000-character accumulation.
+        let r = reusable_params(&accumulator_program());
+        assert_eq!(r.get("go").map(|s| s.contains("acc")), Some(true), "got {r:?}");
+    }
+
+    #[test]
+    fn the_accumulator_actually_gets_rewritten_to_a_reuse_node() {
+        let p = accumulator_program();
+        let reusable = reusable_params(&p);
+        let out = optimize_program_with_reusable_params(p, &reusable);
+        let go = out.functions.into_iter().find(|f| f.name == "go").unwrap();
+        assert!(
+            mentions_str_concat_reuse(&go.body, "acc"),
+            "expected StrConcatReuse on `acc`: {:?}",
+            go.body
+        );
+    }
+
+    #[test]
+    fn two_uses_on_one_path_make_a_parameter_ineligible() {
+        // `rep (s) (n) = s.concat(rep(s, n - 1))` — THE shape whose reuse
+        // was a real segfault (DESIGN.md's "Gap 1"): two simultaneous uses
+        // of the same unprotected parameter could each observe refcount 1
+        // and both destructively reuse the cell.
+        let p = program_of(vec![func(
+            "rep",
+            vec!["s", "n"],
+            concat(var("s"), call(var("rep"), vec![var("s"), var("n")])),
+        )]);
+        let r = reusable_params(&p);
+        assert!(r.get("rep").map(|s| s.contains("s")) != Some(true), "got {r:?}");
+    }
+
+    #[test]
+    fn a_bare_variable_argument_makes_the_parameter_ineligible() {
+        // The caller may still need it and — being untracked itself — will
+        // not have incremented, so the runtime `rc == 1` check would not
+        // protect it. `{ let r = f(q); q.len() }` is the failing shape.
+        let p = program_of(vec![
+            func("f", vec!["p"], concat(var("p"), str_lit("x"))),
+            func("caller", vec!["q"], call(var("f"), vec![var("q")])),
+        ]);
+        let r = reusable_params(&p);
+        assert!(r.get("f").map(|s| s.contains("p")) != Some(true), "got {r:?}");
+    }
+
+    #[test]
+    fn one_bad_call_site_among_several_is_enough_to_disqualify() {
+        let p = program_of(vec![
+            func("f", vec!["p"], concat(var("p"), str_lit("x"))),
+            func("good", vec![], call(var("f"), vec![str_lit("fresh")])),
+            func("bad", vec!["q"], call(var("f"), vec![var("q")])),
+        ]);
+        let r = reusable_params(&p);
+        assert!(r.get("f").map(|s| s.contains("p")) != Some(true), "got {r:?}");
+    }
+
+    #[test]
+    fn a_function_used_as_a_value_has_no_eligible_parameters() {
+        // Its call sites cannot be enumerated, so nothing can be proven
+        // about what its arguments alias.
+        let p = program_of(vec![
+            func("f", vec!["p"], concat(var("p"), str_lit("x"))),
+            func("takes", vec!["g"], var("g")),
+            func("caller", vec![], call(var("takes"), vec![var("f")])),
+        ]);
+        let r = reusable_params(&p);
+        assert!(r.get("f").is_none(), "got {r:?}");
+    }
+
+    #[test]
+    fn a_use_inside_a_loop_body_counts_as_more_than_one() {
+        // One syntactic use is not one dynamic use: the loop can run the
+        // reuse site repeatedly, and after the first iteration the cell is
+        // gone.
+        let p = program_of(vec![func(
+            "f",
+            vec!["p"],
+            for_("i", int(0), int(10), concat(var("p"), str_lit("x"))),
+        )]);
+        let r = reusable_params(&p);
+        assert!(r.get("f").map(|s| s.contains("p")) != Some(true), "got {r:?}");
+    }
+
+    #[test]
+    fn a_use_inside_a_closure_body_counts_as_more_than_one() {
+        // A closure can be called more than once.
+        let p = program_of(vec![func(
+            "f",
+            vec!["p"],
+            closure_(vec!["x"], concat(var("p"), str_lit("y"))),
+        )]);
+        let r = reusable_params(&p);
+        assert!(r.get("f").map(|s| s.contains("p")) != Some(true), "got {r:?}");
+    }
+
+    #[test]
+    fn branches_count_as_alternatives_not_additively() {
+        // The distinction the whole rule turns on: one use in each arm of
+        // an `If` is still one use on any single path.
+        let body = if_(var("n"), concat(var("p"), str_lit("a")), concat(var("p"), str_lit("b")));
+        assert_eq!(max_uses_on_path(&body, "p"), 1);
+        let sequential = Expr::Binary(
+            BinOp::Add,
+            Box::new(concat(var("p"), str_lit("a"))),
+            Box::new(concat(var("p"), str_lit("b"))),
+        );
+        assert_eq!(max_uses_on_path(&sequential, "p"), 2);
+    }
+
+    #[test]
+    fn a_reuse_of_name_counts_as_a_use() {
+        // A `*Reuse` node CONSUMES the cell it names, which is as real a
+        // use as reading it.
+        let body = Expr::Binary(
+            BinOp::Add,
+            Box::new(Expr::StrConcatReuse { reuse_of: "p".into(), other: Box::new(str_lit("a")) }),
+            Box::new(Expr::ArrayLen { array: Box::new(var("p")) }),
+        );
+        assert_eq!(max_uses_on_path(&body, "p"), 2);
+    }
+
+    fn mentions_str_concat_reuse(expr: &Expr, name: &str) -> bool {
+        if let Expr::StrConcatReuse { reuse_of, .. } = expr {
+            if reuse_of == name {
+                return true;
+            }
+        }
+        let mut found = false;
+        super::for_each_child(expr, &mut |c| {
+            if !found && mentions_str_concat_reuse(c, name) {
+                found = true;
+            }
+        });
+        found
     }
 
     // --- release for match-extracted bindings ---
