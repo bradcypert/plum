@@ -179,7 +179,12 @@ pub struct CgEnumDecl { name: String, variants: Array[CgVariant] }
 // (`cg_concrete`), which is the whole of monomorphization's effect on
 // emission — there is no rewritten copy of the body anywhere, only a
 // different mapping applied while walking the same one.
-pub struct CgProgram { fns: Array[typecheck.TFn], globals: Array[typecheck.TFn], ctx: typecheck.TyContext, enums: Array[CgEnumDecl], subst: typecheck.Subst, generics: Array[String], targs: Array[typecheck.ITy] }
+pub struct CgProgram { fns: Array[typecheck.TFn], globals: Array[typecheck.TFn], ctx: typecheck.TyContext, enums: Array[CgEnumDecl], subst: typecheck.Subst, generics: Array[String], targs: Array[typecheck.ITy],
+    // Slot names this function reads AT MOST ONCE on any path, so a read
+    // may hand its reference over instead of lending it — see
+    // `cg_reads_max`. Set per function by `cg_fn`; empty elsewhere, which
+    // simply means nothing moves.
+    movable: Array[String] }
 
 // --- Cell layouts ---
 //
@@ -323,6 +328,7 @@ pub let cg_build_program (program: parser.ProgramNode): CgProgram =
         subst: typecheck.subst_empty(()),
         generics: [],
         targs: [],
+        movable: [],
     }
 
 // `next_tag` runs across the whole program, so every variant in every
@@ -900,6 +906,165 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
         }
     }
 
+// --- Move-on-last-read ---
+//
+// The one thing standing between this backend and the real one on
+// accumulator code. Reference counting here is precise (see the note
+// further down), and `cg_borrow` on an identifier is a TRUE borrow — no
+// increment — so `acc.concat(x)` already sees refcount 1. What it does not
+// do is hand that reference OVER: `cg_concat` calls the copying
+// `@plum_str_concat`, and reuse was reachable only through
+// `cg_is_self_method`'s literal `x = x.concat(..)` shape.
+//
+// So `go(acc.concat("x"), n - 1)` — an accumulator threaded through a
+// tail-recursive call, which is how this whole compiler is written —
+// copied the accumulator every iteration. Measured against the real
+// backend on a 20,000-item accumulation: 200.4 MB here versus 0.36 MB
+// there, and 194 MB versus 5.2 MB of peak RSS.
+//
+// A slot read AT MOST ONCE on any path can hand its reference over
+// instead of lending it: load it, store null back, and skip the
+// increment. Storing null is what makes this need no path analysis at
+// all — the slot's release at function exit still runs, and every
+// `plum_rel_*` is null-safe by construction (see `cg_null_init`, which
+// relies on the same property), so it becomes a no-op on exactly the
+// paths where the reference left.
+//
+// Safe with no whole-program reasoning, unlike the real backend's version
+// of this: rule 4 below says a call CONSUMES its arguments, so a parameter
+// slot OWNS its value outright and no caller is still holding it. That is
+// the owned-parameter convention `plum-ir` deliberately does not have.
+//
+// Counting reads on any PATH rather than in total is what admits the
+// accumulator: `if n == 0 { acc } else { go(acc.concat("x"), n - 1) }`
+// reads `acc` once per branch, and only one branch runs.
+let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
+    match e.node {
+        TIdent(v) => if v == name { 1 } else { 0 },
+        TInt(_) => 0,
+        TFloat(_) => 0,
+        TStr(_) => 0,
+        TBool(_) => 0,
+        TUnitLit => 0,
+        TGlobalRef(_, _) => 0,
+        TUnsupported(_) => 0,
+        TUnary(_, a) => cg_reads_max(name, a),
+        TFieldGet(a, _) => cg_reads_max(name, a),
+        TPrintln(a) => cg_reads_max(name, a),
+        TBinary(_, a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
+        TIndex(a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
+        TArrayLit(xs) => cg_reads_max_list(name, xs, 0, 0),
+        TTupleLit(xs) => cg_reads_max_list(name, xs, 0, 0),
+        TVariantNew(_, xs) => cg_reads_max_list(name, xs, 0, 0),
+        TFnCall(_, _, xs, _) => cg_reads_max_list(name, xs, 0, 0),
+        TArrayNs(_, xs) => cg_reads_max_list(name, xs, 0, 0),
+        TStructLit(_, fs) => cg_reads_max_fields(name, fs, 0, 0),
+        TMethodCall(_, b, xs) => cg_cap2(cg_reads_max(name, b) + cg_reads_max_list(name, xs, 0, 0)),
+        TClosureCall(f, xs) => cg_cap2(cg_reads_max(name, f) + cg_reads_max_list(name, xs, 0, 0)),
+        // Branches are ALTERNATIVES: only one runs, so their contribution
+        // is the maximum rather than the sum.
+        TIf(c, t, e2) => cg_cap2(cg_reads_max(name, c) + cg_max2(cg_reads_max(name, t), match e2 {
+            Some(x) => cg_reads_max(name, x),
+            None => 0,
+        })),
+        TMatch(sc, arms) => cg_cap2(cg_reads_max(name, sc) + cg_reads_max_arms(name, arms, 0, 0)),
+        TBlockE(b) => cg_reads_max_block(name, b),
+        // A loop body and a closure body can both run more than once, so
+        // one syntactic read there is not one dynamic read. Two is
+        // "more than one" — nothing needs to distinguish it from many.
+        TFor(_, lo, hi, body) => cg_cap2(cg_reads_max(name, lo) + cg_reads_max(name, hi)
+            + (if cg_reads_max(name, body) > 0 { 2 } else { 0 })),
+        TClosure(ps, body) => if cg_params_shadow(ps, name, 0) { 0 } else {
+            if cg_reads_max(name, body) > 0 { 2 } else { 0 }
+        },
+    }
+
+// Does `pat` bind `name`? A pattern that does SHADOWS the outer name, so
+// reads under it refer to something else and must not be counted.
+// The parameters this body reads at most once on any path.
+let cg_movable_params (body: typecheck.TExpr) (ps: Array[typecheck.TParam]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= ps.len() { acc } else {
+        cg_movable_params(body, ps, i + 1,
+            if cg_reads_max(ps[i].name, body) <= 1 { acc.push(ps[i].name) } else { acc })
+    }
+
+let cg_is_movable (p: CgProgram) (name: String): Bool = cg_name_in(p.movable, name, 0)
+
+let cg_name_in (xs: Array[String]) (name: String) (i: Int): Bool =
+    if i >= xs.len() { false } else { if xs[i] == name { true } else { cg_name_in(xs, name, i + 1) } }
+
+let cg_pattern_binds (pat: parser.PPattern) (name: String): Bool =
+    match pat {
+        PIdent(v) => v == name,
+        PTuple(ps) => cg_any_pattern_binds(ps, name, 0),
+        PVariant(_, ps) => cg_any_pattern_binds(ps, name, 0),
+        POr(ps) => cg_any_pattern_binds(ps, name, 0),
+        PStruct(_, fps, _) => cg_any_field_pattern_binds(fps, name, 0),
+        PInt(_) => false,
+        PFloat(_) => false,
+        PStr(_) => false,
+        PBool(_) => false,
+        PWildcard => false,
+    }
+
+let cg_any_pattern_binds (ps: Array[parser.PPattern]) (name: String) (i: Int): Bool =
+    if i >= ps.len() { false } else {
+        if cg_pattern_binds(ps[i], name) { true } else { cg_any_pattern_binds(ps, name, i + 1) }
+    }
+
+let cg_any_field_pattern_binds (fps: Array[parser.FieldPatternNode]) (name: String) (i: Int): Bool =
+    if i >= fps.len() { false } else {
+        if cg_pattern_binds(fps[i].pattern, name) { true } else { cg_any_field_pattern_binds(fps, name, i + 1) }
+    }
+
+let cg_cap2 (v: Int): Int = if v > 2 { 2 } else { v }
+let cg_max2 (a: Int) (b: Int): Int = if a > b { a } else { b }
+
+let cg_params_shadow (ps: Array[String]) (name: String) (i: Int): Bool =
+    if i >= ps.len() { false } else { if ps[i] == name { true } else { cg_params_shadow(ps, name, i + 1) } }
+
+let cg_reads_max_list (name: String) (xs: Array[typecheck.TExpr]) (i: Int) (acc: Int): Int =
+    if i >= xs.len() { cg_cap2(acc) } else { cg_reads_max_list(name, xs, i + 1, cg_cap2(acc + cg_reads_max(name, xs[i]))) }
+
+let cg_reads_max_fields (name: String) (fs: Array[typecheck.TFieldInit]) (i: Int) (acc: Int): Int =
+    if i >= fs.len() { cg_cap2(acc) } else { cg_reads_max_fields(name, fs, i + 1, cg_cap2(acc + cg_reads_max(name, fs[i].value))) }
+
+// Arms are alternatives, so the maximum. An arm whose pattern REBINDS the
+// name shadows it, and reads below refer to something else.
+let cg_reads_max_arms (name: String) (arms: Array[typecheck.TArm]) (i: Int) (best: Int): Int =
+    if i >= arms.len() { best } else {
+        let here = if cg_pattern_binds(arms[i].pattern, name) { 0 } else {
+            cg_cap2(cg_reads_max(name, arms[i].body) + match arms[i].guard {
+                Some(g) => cg_reads_max(name, g),
+                None => 0,
+            })
+        };
+        cg_reads_max_arms(name, arms, i + 1, cg_max2(best, here))
+    }
+
+let cg_reads_max_block (name: String) (b: typecheck.TBlock): Int =
+    cg_reads_max_stmts(name, b.stmts, 0, match b.tail {
+        Some(t) => cg_reads_max(name, t),
+        None => 0,
+    })
+
+// Statements run in sequence, so their reads ADD. A `let` whose pattern
+// rebinds the name ends the outer name's scope, so nothing after it counts.
+let cg_reads_max_stmts (name: String) (stmts: Array[typecheck.TStmt]) (i: Int) (acc: Int): Int =
+    if i >= stmts.len() { cg_cap2(acc) } else {
+        match stmts[i] {
+            TSLet(pat, v) =>
+                if cg_pattern_binds(pat, name) { cg_cap2(acc + cg_reads_max(name, v)) }
+                else { cg_reads_max_stmts(name, stmts, i + 1, cg_cap2(acc + cg_reads_max(name, v))) },
+            // Assigning THROUGH the name replaces what the slot holds,
+            // which a move (which nulls the slot) cannot account for.
+            TSAssign(n2, v) =>
+                if n2 == name { 2 }
+                else { cg_reads_max_stmts(name, stmts, i + 1, cg_cap2(acc + cg_reads_max(name, v))) },
+            TSExpr(v) => cg_reads_max_stmts(name, stmts, i + 1, cg_cap2(acc + cg_reads_max(name, v))),
+        }
+    }
+
 // Is this assignment `x = x.<method>(<one argument>)`? That shape — and
 // only that shape — makes the slot's current value provably dead: it is
 // overwritten with the result, so nothing can observe a mutation.
@@ -1140,16 +1305,64 @@ let cg_str_binop (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
     }
 }
 
+// `@plum_str_concat_reuse` CONSUMES its receiver — the copy branch
+// releases it, the in-place branch returns it — so it is only correct
+// where the receiver's reference is handed over rather than lent. Its
+// runtime guard (`rc == 1` and the allocation already large enough) means
+// using it is never WRONG, just useless when the count is higher.
+//
+// A movable slot read hands the reference over, which is what makes the
+// guard pass: `go(acc.concat("x"), n - 1)` grows the accumulator in place
+// instead of copying it, 200.4 MB -> 0.36 MB over 20,000 items. Anything
+// else is evaluated to an owned reference and handed over just the same,
+// where the guard declines and it copies — same result as before, one
+// call instead of two.
 let cg_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (arg: typecheck.TExpr): Emit = {
-    let a = cg_borrow(p, env, n, base);
+    let a = cg_move_or_own(p, env, n, base);
     let b = cg_borrow(p, env, a.n, arg);
     let reg = cg_reg(b.n);
     Emit {
-        code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ptr @plum_str_concat(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n")
-            .concat(a.drop).concat(b.drop),
+        code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ptr @plum_str_concat_reuse(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n")
+            .concat(b.drop),
         allocas: a.allocas.concat(b.allocas), releases: a.releases.concat(b.releases),globals: a.globals.concat(b.globals), val: reg, ty: CgStr, n: b.n + 1,
     }
 }
+
+// An OWNED reference to `e`, obtained by MOVING it out of its slot when
+// that is the slot's only read, and by ordinary evaluation otherwise.
+//
+// The move stores null back into the slot. That is what removes the need
+// for any path analysis: the slot's release at function exit still runs,
+// and every `plum_rel_*` is null-safe by construction (`cg_null_init`
+// depends on the same property), so it becomes a no-op on exactly the
+// paths where the reference left.
+//
+// No whole-program reasoning is needed either — rule 4 says a call
+// CONSUMES its arguments, so a parameter slot owns its value outright and
+// no caller is still holding it.
+let cg_move_or_own (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): BorrowEmit =
+    match e.node {
+        TIdent(name) =>
+            if cg_is_movable(p, name) {
+                match cg_lookup(env, name) {
+                    Some(slot) => {
+                        let reg = cg_reg(n);
+                        BorrowEmit {
+                            code: "  ".concat(reg).concat(" = load ").concat(cg_llvm_ty(slot.ty)).concat(", ptr ").concat(slot.ptr).concat("\n")
+                                .concat(cg_null_out(slot)),
+                            allocas: "", releases: "", globals: "", val: reg, ty: slot.ty, drop: "", n: n + 1,
+                        }
+                    },
+                    None => cg_borrow_owned(p, env, n, e),
+                }
+            } else { cg_borrow_owned(p, env, n, e) },
+        _ => cg_borrow_owned(p, env, n, e),
+    }
+
+// Null the slot a reference was moved out of, so its exit release is a
+// no-op rather than a second decrement.
+let cg_null_out (slot: CgSlot): String =
+    if cg_rc_enabled(()) && cg_is_heap(slot.ty) { "  store ptr null, ptr ".concat(slot.ptr).concat("\n") } else { "" }
 
 // --- Strings and arrays ---
 
@@ -1982,7 +2195,8 @@ struct FnEmit { text: String, next: Int }
 // during its inference. Each function was inferred independently, so
 // each has its own.
 let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0: Int): FnEmit = {
-    let p = CgProgram { fns: p0.fns, globals: p0.globals, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs };
+    let p = CgProgram { fns: p0.fns, globals: p0.globals, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs,
+        movable: cg_movable_params(def.body, def.params, 0, []) };
     let params = cg_params_of(p, def.params, 0, []);
     let entry = cg_param_slots(params, Array.map(def.params, |q| cg_concrete(p, q.ty)), 0, [], "", "");
     let ret = cg_of_ity(cg_concrete(p, def.ret));
@@ -2673,7 +2887,7 @@ let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: Stri
         cg_emit_globals(p, i + 1, n, slots, body)
     } else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [] };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [] };
         let ty = cg_of_ity(cg_concrete(gp, g.ret));
         let r = cg_expr(gp, [], n, g.body);
         let slot = cg_global_slot(g.module, g.name).concat(" = global ").concat(cg_llvm_ty(ty)).concat(" ").concat(cg_zero_of(ty)).concat("\n");
@@ -2712,7 +2926,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
                     done
                 },
                 Some(def) => {
-                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs };
+                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs, movable: [] };
                     cg_reachable(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), done.push(head), fuel + 1)
                 },
             }
@@ -2730,7 +2944,7 @@ let cg_rel_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[t
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_rel_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [] };
                 let withparams = cg_rel_close_list(inner, Array.map(def.params, |q| cg_concrete(inner, q.ty)), 0, acc);
                 let withret = cg_rel_close(inner, cg_concrete(inner, def.ret), withparams);
                 cg_rel_types_of(p, insts, i + 1, cg_rel_in(inner, def.body, withret))
@@ -2804,7 +3018,7 @@ let cg_eq_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[ty
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_eq_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [] };
                 cg_eq_types_of(p, insts, i + 1, cg_eq_in(inner, def.body, acc))
             },
         }
@@ -2876,7 +3090,7 @@ let cg_global_roots (p: CgProgram) (i: Int) (acc: Array[CgInst]): Array[CgInst] 
     if i >= p.globals.len() { acc }
     else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [] };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [] };
         cg_global_roots(p, i + 1, Array.concat(acc, cg_calls_in(gp, g.body, [])))
     }
 

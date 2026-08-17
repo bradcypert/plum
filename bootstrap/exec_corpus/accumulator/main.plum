@@ -1,0 +1,17 @@
+// A tail-recursive accumulator threaded through a call — the shape this
+// whole compiler is written in, and the one the self-hosted backend used
+// to copy on every iteration. `acc` is read once on each path, so the
+// read hands its reference over instead of lending it, and the
+// accumulator grows in place.
+let build (acc: String) (n: Int): String =
+    if n == 0 { acc } else { build(acc.concat("ab"), n - 1) }
+
+// Read twice on one path, so `acc` must NOT be moved: the second read
+// would find a nulled slot.
+let twice_read (acc: String): Int = acc.len() + acc.concat("!").len()
+
+let main (): Unit = {
+    println(build("", 400).len().to_string());
+    println(twice_read("xyz").to_string());
+    println(build("seed", 0));
+}

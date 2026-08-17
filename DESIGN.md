@@ -9071,6 +9071,14 @@ in a tail-recursive loop, which is how the parser is written). But the
 measured upside is now small, and saying so is more useful than building
 it: the backend is fast enough that the next real work is elsewhere.
 
+**That last sentence was wrong, by an order of magnitude.** The shape named
+here was right; the size was not. Measured on 2026-08-17: 194 MB versus
+5.2 MB of peak RSS on a 20,000-item accumulation, and 1458.7 MB versus
+113.6 MB for this compiler emitting its own IR. See "Move-on-last-read in
+the self-hosted backend" below. The error came from measuring peak RSS on
+a workload where the self-rebinding special case already covered the
+dominant path, rather than measuring bytes allocated.
+
 ### Tuple type annotations (2026-08-16)
 
 Plum had tuple VALUES from the start and no way to write their type. A
@@ -10477,3 +10485,86 @@ WORKS now, and says so.
 560 plumc tests (7 new) + 363 in plum-ir (10 new), all 15 suites, fixed
 point byte-identical, corpus 99/99, exec_corpus 18/18, zero ASan errors,
 and every new case checked against the interpreter output for output.
+
+## Move-on-last-read in the self-hosted backend (2026-08-17)
+
+The two backends had diverged badly, and measuring it was the whole reason
+this got found. Same program, a 20,000-item string accumulation:
+
+| backend | bytes allocated | peak RSS |
+| --- | --- | --- |
+| real (`plum build`) | 0.36 MB | 5.2 MB |
+| self-hosted (`./sh emit-llvm`) | 200.4 MB | 194.0 MB |
+
+557x on allocation. A week of memory work had gone into the real backend
+and none of it existed here.
+
+### The diagnosis was the opposite of what was expected
+
+The self-hosted backend is not leaking. It does PRECISE reference counting
+on the typed tree, and its own note explains why it can: every node's type
+is known, so `cg_is_heap` is total and exact, and parameters are counted
+like anything else. That is a better foundation than `plum-ir/fbip`, which
+cannot see types at all.
+
+What it lacked was REUSE. `cg_borrow` on an identifier is already a true
+borrow — no increment — so `acc.concat(x)` already saw refcount 1. But
+`cg_concat` called the copying `@plum_str_concat`, and the reusing path was
+reachable only through `cg_is_self_method`'s literal `x = x.concat(..)`
+shape. An accumulator threaded through a call never matched.
+
+### The change
+
+A slot read AT MOST ONCE on any path hands its reference over instead of
+lending it: load it, store null back, no increment. `cg_concat` then calls
+`@plum_str_concat_reuse`, which CONSUMES its receiver (its copy branch
+releases it, its in-place branch returns it) and is runtime-guarded on
+`rc == 1` plus `malloc_usable_size` — so using it is never wrong, merely
+useless when the count is higher.
+
+Storing null is what removes the need for any path analysis. The slot's
+release at function exit still runs, and every `plum_rel_*` is null-safe by
+construction (`cg_null_init` already depended on that), so it becomes a
+no-op on exactly the paths where the reference left.
+
+**No whole-program reasoning is needed**, unlike the real backend's
+equivalent. Rule 4 of this backend's discipline says a call CONSUMES its
+arguments, so a parameter slot owns its value outright and no caller is
+still holding it. That is the owned-parameter convention `plum-ir`
+deliberately does not have — and it is why the same idea took a
+least-fixpoint uniqueness analysis there and takes none here.
+
+Reads are counted per PATH, with `If`/`Match` branches as alternatives.
+That is what admits the accumulator: `if n == 0 { acc } else {
+build(acc.concat("ab"), n - 1) }` reads `acc` once in each branch, and only
+one branch runs. A loop body or closure body counts as two reads — one
+syntactic read there is not one dynamic read. Assigning through the name,
+or a pattern that rebinds it, also disqualifies.
+
+### Results
+
+| | before | after |
+| --- | --- | --- |
+| 20,000-item accumulation, peak RSS | 194.0 MB | **5.2 MB** |
+| ...bytes allocated | 200.4 MB | 12.5 MB |
+| compiler emitting its own IR, peak RSS | 1458.7 MB | **113.6 MB** |
+| ...bytes allocated | 4564 MB | 3902 MB |
+| ...concat operations | 6,762,970 | 1,481,586 fewer |
+| compiler CHECKING itself, peak RSS | 49.4 MB | 50.5 MB |
+
+5.2 MB now matches the real backend exactly. The `check` path barely moves,
+and that is worth stating: it is not accumulator-dominated, so this does
+nothing for it.
+
+### Verified
+
+Fixed point byte-identical (119,107 lines), corpus 99/99, exec_corpus 17/18
+under BOTH the self-hosted interpreter and the self-hosted backend (the
+18th is `refs`, the documented `Ref[T]` scope gap), 560 plumc tests, all 15
+suites, and zero ASan errors across the self-hosted backend's own output
+for every corpus fixture.
+
+A new `accumulator/` fixture pins both halves: the moved case, and a
+`twice_read` function whose parameter is read twice on one path and
+therefore must NOT be moved — the second read would find a nulled slot.
+All three implementations agree on it.
