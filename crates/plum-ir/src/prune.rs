@@ -129,7 +129,7 @@ fn walk<'a>(e: &'a Expr, names: &mut Vec<&'a str>, stack: &mut Vec<&'a Expr>) {
         | Expr::Bool(_)
         | Expr::Unit
         | Expr::EmptyArray(_)
-        | Expr::Channel
+        | Expr::Channel { .. }
         | Expr::ArgsRaw
         | Expr::RandomRaw => {}
 

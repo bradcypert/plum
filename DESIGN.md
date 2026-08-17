@@ -3737,9 +3737,10 @@ purely into `For`+`Assign`+ordinary `Call` — see "General array
 iteration" below), `spawn { block }`/`.join()` (real OS-thread
 concurrency), and — as of a further follow-on chunk — `channel[T]()`/
 `.send()`/`.recv()`/`select` (see "Concurrency: channels/select"
-below; disconnect detection is explicitly NOT part of this, and at
-most one distinct `channel[T]()` element type `T` is supported per
-program — see that section), and — as of a further follow-on chunk —
+below; disconnect detection is explicitly NOT part of this. More than
+one distinct `channel[T]()` element type per program was also
+unsupported at the time; that was lifted on 2026-08-16 — see "Channels
+of more than one element type"), and — as of a further follow-on chunk —
 `extern "C"` calls, `CStr`, and C callbacks (see "FFI: scalar extern
 calls, CStr, callbacks" below), and — as of a further follow-on chunk
 — struct-by-value FFI marshaling (see "FFI: struct-by-value marshaling"
@@ -3764,8 +3765,7 @@ loop's carried variable (structurally out of reach of this backend's
 closure design, not merely unimplemented), an `Assign` reachable only
 through a `Let`/`If`/`Match`/`RcAnnotated` used in an ordinary value
 position (e.g. `f({ sum = sum + 1; sum })` as a `Call` argument),
-disconnect detection on channels, more than one distinct `channel[T]()`
-element type per program — and a generic instantiated at any of these
+disconnect detection on channels — and a generic instantiated at any of these
 still-unsupported types (e.g. `Box[Array[Str]]` once `.split()` is
 needed).
 
@@ -4462,9 +4462,17 @@ cross-crate follow-up work. Rather than risk silently mis-tagging a
 second element type (a genuine memory-safety bug, since `.recv()`'s
 word-to-value conversion depends entirely on the `Receiver`'s declared
 inner `CgType` being correct), **at most one distinct `channel[T]()`
-element type is supported per program** — a second, differently-typed
-`channel[..]` call anywhere in the same program is a loud, clear
+element type was supported per program** — a second, differently-typed
+`channel[..]` call anywhere in the same program was a loud, clear
 compile-time `Err`, never a silent miscompile.
+
+**Lifted on 2026-08-16.** The cross-crate follow-up work this paragraph
+predicted was done, in exactly the shape predicted: a span-keyed side
+channel through `Infer`, feeding type-specialized tuple tags. A program
+may now use as many distinct channel element types as it likes. See
+"Channels of more than one element type" for what it took, and in
+particular for why `ir::Expr::Channel` had to start carrying its tuple's
+tag.
 
 **FFI: scalar extern calls, CStr, callbacks** (struct-by-value
 marshaling deferred). Confirmed directly (not assumed) that FFI is far
@@ -9281,6 +9289,11 @@ types being `Sender`/`Receiver`. That also leaves their existing
 one-element-type-per-program limitation exactly as it was, rather than
 half-lifting it.
 
+**Superseded the next day** — the full lift landed by giving
+`ir::Expr::Channel` the tag itself, so the construction site stops being
+the one place that can't know it. See "Channels of more than one element
+type".
+
 #### Where tuples stand
 
 Both backends compile them. `bootstrap/exec_corpus/tuples` builds and
@@ -9368,3 +9381,48 @@ Two things the pass has to get right:
 The pass runs only on the codegen path. `plum-interp` can be asked to
 invoke any top-level function by name, so it has no single entry point
 to root a walk at.
+
+## Channels of more than one element type (2026-08-16)
+
+`channel[Int]()` and `channel[String]()` could not appear in the same
+program. The compiler said so loudly:
+
+> codegen does not yet support more than one distinct `channel[T]()`
+> element type in the same program — tuple tagging isn't
+> type-specialized per element type yet
+
+That message named its own blocker, and the blocker was gone. Tuple
+tags became type-specialized the day before; the message was stale.
+
+`channel[T]()` evaluates to a `(Sender[T], Receiver[T])` tuple, and tuple
+tags used to be arity-only, so both channels wanted the single flat
+`tag_fields["2Tuple"]` entry to describe two different layouts. That is
+not a cosmetic collision — `.recv()`'s `word_to_value` conversion depends
+entirely on the Receiver's declared inner `CgType` being correct, so
+mis-tagging the second element type is a memory-safety bug. Hence the
+rejection rather than a silent miscompile.
+
+When ordinary tuples were specialized, channels were deliberately left on
+the legacy arity tag rather than half-lifted, and the reason is the
+interesting part: **this tuple has no construction site in the source.**
+Codegen synthesizes it, from `ir::Expr::Channel`, which carried no type
+at all. Specializing the destructuring pattern alone gave it a tag the
+construction never produced — the match then found no arm, and the
+program compiled, ran, exited 0 and printed nothing. That is the failure
+mode this whole area keeps producing, and it is why the fix is shaped the
+way it is.
+
+So `ir::Expr::Channel` now carries `tag: String`. Not the element type —
+`T` stays as erased as ever, and the interpreter ignores the field
+entirely. It carries *the tuple's tag*, computed by the same
+`lower::specialized_tuple_tag` the destructuring pattern calls, from the
+same two end types, which `Infer`'s `channel[T]()` arm now records by span
+like any other tuple's. Three call sites, one function, equal inputs: the
+construction, the pattern, and `register_channel_tag`'s `tag_fields` entry
+cannot disagree about the name. Making a mismatch unrepresentable is the
+only defense that works here, because a mismatch produces no error.
+
+`register_channel_tag` registers one entry per distinct `T` and the
+rejection is gone. Verified with four element types at once (`Int`,
+`String`, `Bool`, and a struct), across real spawned threads, with the
+native build and the interpreter agreeing.

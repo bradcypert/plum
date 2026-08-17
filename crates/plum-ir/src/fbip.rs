@@ -205,7 +205,7 @@ fn mark_reuse_scoped(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         Expr::TaskJoin { task } => Expr::TaskJoin {
             task: Box::new(mark_reuse_scoped(*task, known_heap)),
         },
-        Expr::Channel => Expr::Channel,
+        Expr::Channel { tag } => Expr::Channel { tag: tag.clone() },
         Expr::ChannelSend { sender, value } => Expr::ChannelSend {
             sender: Box::new(mark_reuse_scoped(*sender, known_heap)),
             value: Box::new(mark_reuse_scoped(*value, known_heap)),
@@ -597,7 +597,7 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
         Expr::TaskJoin { task } => Expr::TaskJoin {
             task: Box::new(transform(*task, known_heap)),
         },
-        Expr::Channel => Expr::Channel,
+        Expr::Channel { tag } => Expr::Channel { tag: tag.clone() },
         Expr::ChannelSend { sender, value } => Expr::ChannelSend {
             sender: Box::new(transform(*sender, known_heap)),
             value: Box::new(transform(*value, known_heap)),
@@ -816,7 +816,7 @@ fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
         Expr::Assign { value, rest, .. } => expr_mentions_var(value, name) || expr_mentions_var(rest, name),
         Expr::Spawn { block } => expr_mentions_var(block, name),
         Expr::TaskJoin { task } => expr_mentions_var(task, name),
-        Expr::Channel => false,
+        Expr::Channel { .. } => false,
         Expr::ChannelSend { sender, value } => {
             expr_mentions_var(sender, name) || expr_mentions_var(value, name)
         }
@@ -1021,7 +1021,7 @@ fn collect_confirmed_params(expr: &Expr, params: &[String], out: &mut HashSet<St
         }
         Expr::Spawn { block } => collect_confirmed_params(block, params, out),
         Expr::TaskJoin { task } => collect_confirmed_params(task, params, out),
-        Expr::Channel => {}
+        Expr::Channel { .. } => {}
         Expr::ChannelSend { sender, value } => {
             collect_confirmed_params(sender, params, out);
             collect_confirmed_params(value, params, out);
@@ -1207,7 +1207,7 @@ fn expr_assigns_var(expr: &Expr, name: &str) -> bool {
         Expr::Ctor { fields, .. } | Expr::CtorReuse { fields, .. } => fields.iter().any(|f| expr_assigns_var(f, name)),
         Expr::RcAnnotated { rest, .. } => expr_assigns_var(rest, name),
         Expr::TaskJoin { task } => expr_assigns_var(task, name),
-        Expr::Channel => false,
+        Expr::Channel { .. } => false,
         Expr::ChannelSend { sender, value } => expr_assigns_var(sender, name) || expr_assigns_var(value, name),
         Expr::ChannelRecv { receiver } => expr_assigns_var(receiver, name),
         Expr::RefNew { value } => expr_assigns_var(value, name),
@@ -1636,7 +1636,7 @@ fn mark_last_uses(expr: Expr, name: &str, live_after: bool) -> (Expr, bool) {
             let (task_t, used) = mark_last_uses(*task, name, live_after);
             (Expr::TaskJoin { task: Box::new(task_t) }, used)
         }
-        Expr::Channel => (Expr::Channel, live_after),
+        Expr::Channel { tag } => (Expr::Channel { tag: tag.clone() }, live_after),
         // `sender.send(value)`: evaluation order is sender-then-value
         // (matching an ordinary method-style call), so backward
         // analysis processes `value` first. Neither is heap-tracked

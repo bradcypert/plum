@@ -1227,7 +1227,7 @@ fn free_vars_scoped(expr: &Expr, env: &Env, local: &HashSet<String>, out: &mut B
     };
     match expr {
         Expr::Var(name) => candidate(name, local, out),
-        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel => {}
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel { .. } => {}
         Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::AsString(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => free_vars_scoped(e, env, local, out),
         Expr::Binary(_, l, r) => {
             free_vars_scoped(l, env, local, out);
@@ -1443,7 +1443,7 @@ fn assigned_vars(expr: &Expr) -> BTreeSet<String> {
 
 fn assigned_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<String>) {
     match expr {
-        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel | Expr::Var(_) => {}
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel { .. } | Expr::Var(_) => {}
         Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::AsString(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => assigned_vars_scoped(e, local, out),
         Expr::Binary(_, l, r) => {
             assigned_vars_scoped(l, local, out);
@@ -3406,11 +3406,19 @@ fn codegen_task_join(task: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Res
 /// analogue to the interpreter's need for an owned, `Clone`-able
 /// handle (see `CgType::Sender`/`Receiver`'s own doc comment in
 /// lib.rs).
-fn codegen_channel_literal(em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
+/// `tag` is the resulting `(Sender[T], Receiver[T])` tuple's tag,
+/// computed by `lower::specialized_tuple_tag` and carried on
+/// `ir::Expr::Channel` — see that variant's own doc comment. It must be
+/// the tag the matching destructuring pattern looks for, which is why
+/// it is threaded here rather than recomputed: this tuple is
+/// synthesized rather than written, so nothing else would keep the two
+/// in agreement, and a mismatch is silent (the match simply finds no
+/// arm and the program does nothing).
+fn codegen_channel_literal(tag: &str, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
     *ctx.needs_channel_runtime.borrow_mut() = true;
     let q = em.fresh_reg();
     em.push(format!("  {q} = call ptr @plum_channel_new()"));
-    let id = tag_id(ctx, "2Tuple")?;
+    let id = tag_id(ctx, tag)?;
     let cell = em.fresh_reg();
     em.push(format!("  {cell} = call ptr @plum_alloc(i64 {id}, i64 2)"));
     let sender_addr = em.fresh_reg();
@@ -3875,7 +3883,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
         // (duplicated-as-local-const, same as `DEFAULT_ARM_TAG` already
         // is) to route to the array-alloc path instead of the ordinary
         // tag-lookup `Ctor` path; every OTHER tag is unaffected.
-        Expr::Channel => codegen_channel_literal(em, ctx),
+        Expr::Channel { tag } => codegen_channel_literal(tag, em, ctx),
         Expr::ChannelSend { sender, value } => codegen_channel_send(sender, value, env, em, ctx),
         Expr::ChannelRecv { receiver } => codegen_channel_recv(receiver, env, em, ctx),
         Expr::Ctor { tag, fields } if tag == ARRAY_TAG => codegen_array_literal(fields, env, em, ctx),

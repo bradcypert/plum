@@ -194,44 +194,39 @@ fn derive_variant_payload_types(program: &ast::Program, type_ctx: &TypeContext) 
 /// # The `channel[T]()` tuple-tagging resolution (read before touching this)
 ///
 /// `channel[T]()` evaluates to a `(Sender[T], Receiver[T])` — an
-/// ORDINARY tuple as far as `plum_types`/lowering are concerned, tagged
-/// `"2Tuple"` by `lower.rs`'s own `tuple_tag(2)`, the exact SAME
-/// synthetic tag literally every other 2-element tuple in the whole
-/// language gets (confirmed by reading `lower.rs`'s tuple-pattern
-/// lowering AND `plum_ir::monomorphize`'s `rewrite_expr`/`rewrite_
-/// pattern` `Tuple` arms directly: neither ever renames/mangles a
-/// tuple's tag per its element types — unlike a generic struct/enum,
-/// which DOES get a distinct mangled tag per instantiation via
-/// `monomorphize::mangle` — so "2Tuple" is genuinely one flat,
-/// program-wide tag, not type-specialized at all). Plain (non-channel)
-/// tuples aren't wired into codegen's `tag_fields` derivation ANYWHERE
-/// else yet either (`plum_type_to_cg_type` has no `Type::Tuple` arm at
-/// all — a tuple only ever reaches codegen as a fully-destructured
-/// LOCAL value, never through a signature), so there is, today,
-/// genuinely no OTHER 2-tuple shape in this whole backend that could
-/// collide with a channel's.
+/// ordinary tuple as far as `plum_types`/lowering are concerned. It
+/// used to be tagged `"2Tuple"` by `lower.rs`'s `tuple_tag(2)`, the
+/// exact same synthetic tag every other 2-element tuple got, because
+/// tuple tags were arity-only and genuinely flat across a whole
+/// program.
 ///
-/// The one LIVE collision risk this DOES leave open: two `channel[T]()`
-/// calls with two DIFFERENT `T`s in the SAME program would both need
-/// tag `"2Tuple"` to carry a DIFFERENT pair of field `CgType`s
-/// simultaneously — `tag_fields` is a flat `HashMap<String, _>`, so
-/// that's not representable. Giving each element type its OWN mangled
-/// tag would need `channel[T]()`'s destructuring `Match` to also use a
-/// T-specific tag at the IR level — but `ir::Expr::Channel` carries NO
-/// type at all, by deliberate design (see its own doc comment), and the
-/// tag lowering literally happens at the SAME fixed `tuple_tag(2)` call
-/// site every other 2-tuple pattern uses, with zero visibility into
-/// "this particular tuple came from `channel[T]()`". Resolving that
-/// properly would mean threading a NEW span-keyed side channel through
-/// `plum_types::Infer` and a matching special case into `lower.rs`'s
-/// tuple-pattern lowering (mirroring `resolve_empty_array_elem_types`/
-/// `EmptyArray`'s own precedent) — real, cross-crate work well beyond
-/// this chunk's own file list. Rather than silently mis-tag a second
-/// element type (a genuine memory-safety bug: `.recv()`'s `word_to_
-/// value` conversion depends entirely on the Receiver's declared inner
-/// `CgType` being correct), this is a documented, loudly-REJECTED
-/// limitation instead — see `resolve_channel_elem_cg_type`'s own doc
-/// comment for the actual guard.
+/// That made two `channel[T]()` calls with two DIFFERENT `T`s in one
+/// program unrepresentable: both needed tag `"2Tuple"` to carry a
+/// different pair of field `CgType`s simultaneously, and `tag_fields`
+/// is a flat `HashMap<String, _>`. Rather than silently mis-tag the
+/// second element type — a genuine memory-safety bug, since
+/// `.recv()`'s `word_to_value` conversion depends entirely on the
+/// Receiver's declared inner `CgType` being correct — it was a loud,
+/// documented rejection.
+///
+/// Both halves of the fix that comment called for are in place now:
+///
+/// - Tuple tags are type-specialized (`lower::specialized_tuple_tag`),
+///   via the span-keyed side channel through `plum_types::Infer` that
+///   this comment predicted would be needed, mirroring
+///   `resolve_empty_array_elem_types`/`EmptyArray`'s precedent.
+/// - `ir::Expr::Channel` carries its tuple's tag. It still carries no
+///   TYPE — `T` is as erased as ever — but the construction site is
+///   synthesized by codegen rather than written by the programmer, so
+///   without this it had no way to agree with the destructuring
+///   pattern. Channels were deliberately held back on the legacy arity
+///   tag when ordinary tuples were specialized, precisely because
+///   specializing only the pattern gave it a tag the construction never
+///   produced, and the match then silently found no arm.
+///
+/// So a program may now use as many distinct channel element types as
+/// it likes, and this function's callers register one `tag_fields`
+/// entry per distinct `T` (see `register_channel_tag`).
 fn find_channel_type_args(program: &ast::Program) -> Vec<ast::Type> {
     let mut out = Vec::new();
     for item in &program.items {
@@ -342,44 +337,52 @@ fn walk_channel_block(block: &ast::Block, out: &mut Vec<ast::Type>) {
     }
 }
 
-/// Resolves every `channel[T]()` call site's `T` and registers
-/// `tag_fields["2Tuple"]` for it — see `find_channel_type_args`'s own
-/// doc comment for the full tuple-tagging story this implements
-/// (single global element type per program, loudly rejected otherwise,
-/// rather than silently mis-tagging a second one). A no-op (empty
-/// `Ok(())`, `tag_fields` untouched) for a program that never uses
-/// `channel[T]()` at all.
+/// Resolves every `channel[T]()` call site's `T` and registers a
+/// `tag_fields` entry for the `(Sender[T], Receiver[T])` tuple each one
+/// evaluates to. A no-op (empty `Ok(())`, `tag_fields` untouched) for a
+/// program that never uses `channel[T]()` at all.
+///
+/// A program may now use as many distinct channel element types as it
+/// likes. It could not until 2026-08-16: every 2-element tuple shared
+/// one flat `"2Tuple"` entry, so a second element type would have
+/// silently mis-tagged the first — a genuine memory-safety bug, since
+/// `.recv()`'s `word_to_value` conversion depends entirely on the
+/// Receiver's declared inner `CgType` being correct. It was a loud
+/// rejection rather than a silent miscompile, and `find_channel_type_
+/// args`' own doc comment named the fix: type-specialized tuple tags.
+///
+/// Those landed for ordinary tuples first, with channels deliberately
+/// held back on the legacy arity tag rather than half-lifted — the
+/// construction side (`ir::Expr::Channel`) carried no type, so
+/// specializing only the destructuring pattern gave it a tag the
+/// construction never produced and the match silently found no arm.
+/// `Expr::Channel` carries its tuple's tag now, so both sides go
+/// through `lower::specialized_tuple_tag` on equal inputs and the
+/// entries registered here are what both of them look up.
 fn register_channel_tag(
     program: &ast::Program,
     type_ctx: &TypeContext,
     tag_fields: &mut plum_codegen::TagFields,
 ) -> Result<(), String> {
-    let type_args = find_channel_type_args(program);
-    if type_args.is_empty() {
-        return Ok(());
-    }
-    let mut distinct: Vec<PlumType> = Vec::new();
-    for t in &type_args {
-        let resolved = plum_types::infer::ast_type_to_type(t, type_ctx, &[])
+    for t in &find_channel_type_args(program) {
+        let elem = plum_types::infer::ast_type_to_type(t, type_ctx, &[])
             .map_err(|e| format!("`channel[..]` type argument: {e}"))?;
-        if !distinct.contains(&resolved) {
-            distinct.push(resolved);
-        }
+        let ends = vec![
+            PlumType::Struct("Sender".to_string(), vec![elem.clone()]),
+            PlumType::Struct("Receiver".to_string(), vec![elem.clone()]),
+        ];
+        // The SAME function lowering uses for both the construction and
+        // the destructuring site, called on the same two end types — so
+        // a naming mismatch between the three is not possible. Passing
+        // `Some(&ends)` rather than the arity alone is the whole point:
+        // that is what makes the tag specialized.
+        let tag = plum_ir::lower::specialized_tuple_tag(Some(&ends), 2);
+        let elem_cg = plum_type_to_cg_type(&elem)?;
+        tag_fields.insert(
+            tag,
+            vec![CgType::Sender(Box::new(elem_cg.clone())), CgType::Receiver(Box::new(elem_cg))],
+        );
     }
-    if distinct.len() > 1 {
-        return Err(format!(
-            "codegen does not yet support more than one distinct `channel[T]()` element type in the same \
-             program (found {distinct:?}) — tuple tagging isn't type-specialized per element type yet (every \
-             2-element tuple, channels included, currently shares one flat \"2Tuple\" tag_fields entry; see \
-             `find_channel_type_args`'s own doc comment in codegen_cli.rs for the full story and what real \
-             follow-up work would need)"
-        ));
-    }
-    let elem_cg = plum_type_to_cg_type(&distinct[0])?;
-    tag_fields.insert(
-        "2Tuple".to_string(),
-        vec![CgType::Sender(Box::new(elem_cg.clone())), CgType::Receiver(Box::new(elem_cg))],
-    );
     Ok(())
 }
 
@@ -4406,6 +4409,56 @@ mod tests {
         let src = "let go (): Int = { let (tx, rx) = channel[Int](); tx.send(42); rx.recv() }";
         let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
         assert_eq!(out, "42");
+    }
+
+    #[test]
+    fn two_distinct_channel_element_types_coexist_in_one_program() {
+        // Rejected outright until 2026-08-16: every 2-element tuple
+        // shared one flat `"2Tuple"` tag_fields entry, so a second
+        // element type would have silently mis-tagged the first — and
+        // `.recv()`'s word_to_value conversion depends entirely on the
+        // Receiver's declared inner CgType being right, making that a
+        // memory-safety bug rather than a cosmetic one.
+        let src = "let go (): Int = { \
+                       let (ti, ri) = channel[Int](); \
+                       let (ts, rs) = channel[String](); \
+                       ti.send(40); \
+                       ts.send(\"ab\"); \
+                       ri.recv() + rs.recv().len() \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("42".to_string()));
+    }
+
+    #[test]
+    fn a_channel_and_an_ordinary_tuple_of_the_same_arity_coexist() {
+        // The neighbouring collision: a channel's synthesized
+        // `(Sender[Int], Receiver[Int])` and a hand-written `(Int, Int)`
+        // are both 2-tuples, and both used to want the `"2Tuple"` entry.
+        let src = "let go (): Int = { \
+                       let (tx, rx) = channel[Int](); \
+                       tx.send(2); \
+                       let pair = (3, 4); \
+                       rx.recv() + match pair { (a, b) => a * b } \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("14".to_string()));
+    }
+
+    #[test]
+    fn distinct_channel_element_types_survive_a_real_thread_boundary() {
+        // The single-threaded cases above would still pass if the two
+        // channels shared a queue by accident; crossing a real spawn
+        // exercises the deep-copy path, which is what actually reads
+        // each Receiver's declared element type back.
+        let src = "struct Point { x: Int, y: Int }\n\
+                   let go (): Int = { \
+                       let (tp, rp) = channel[Point](); \
+                       let (tb, rb) = channel[Bool](); \
+                       spawn { tp.send(Point { x: 3, y: 4 }) }; \
+                       spawn { tb.send(true) }; \
+                       let n = match rp.recv() { Point(a, b) => a + b }; \
+                       if rb.recv() { n } else { 0 } \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("7".to_string()));
     }
 
     #[test]

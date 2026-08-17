@@ -334,11 +334,22 @@ pub enum Expr {
     // `channel[T]()` — creates a new channel and evaluates to a
     // `(Sender[T], Receiver[T])` pair (an ordinary `Ctor`-backed
     // 2-tuple, same as any other tuple; the two FIELDS are what carry
-    // the actual `Value::Sender`/`Value::Receiver` runtime handles). No
-    // fields here: `T` is fully erased at this layer, matching every
-    // other generic in the language — the interpreter only ever needs
-    // to know "make a channel," never what it carries.
-    Channel,
+    // the actual `Value::Sender`/`Value::Receiver` runtime handles).
+    //
+    // `T` is still erased — `tag` is not the element type, it's the
+    // TUPLE's tag, exactly the one `lower::specialized_tuple_tag`
+    // computes for the matching destructuring pattern. The interpreter
+    // ignores it entirely (it only ever needs to know "make a
+    // channel"), but native codegen synthesizes this tuple itself and
+    // so must build it under the same tag the pattern will look for.
+    // Carrying it here rather than recomputing it in codegen is what
+    // makes construction and destructuring incapable of disagreeing —
+    // and is what allows more than one channel element type per
+    // program, since a flat `tag_fields` map can hold both layouts once
+    // they have distinct tags.
+    Channel {
+        tag: String,
+    },
     // `tx.send(v)` — pushes `v`, deep-copied into portable form (the
     // SAME crossing mechanism `Spawn`/`TaskJoin` use — see
     // `Interpreter::to_portable`), onto the channel `sender` (expected

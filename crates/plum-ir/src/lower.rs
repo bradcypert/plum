@@ -507,9 +507,7 @@ fn tuple_tag(arity: usize) -> String {
 /// A tuple's tag, SPECIALIZED by its element types when they are known.
 ///
 /// The bare arity form (`"2Tuple"`) is kept as the fallback for a tuple
-/// whose element types inference did not record — which today means a
-/// `channel[T]()` result, whose tuple is synthesized rather than
-/// written, and which has its own separate handling in codegen.
+/// whose element types inference did not record.
 ///
 /// Specializing matters because codegen's `tag_fields` is a flat map
 /// from tag to field types: with one tag per arity, `(Int, String)` and
@@ -523,20 +521,23 @@ pub fn specialized_tuple_tag(
     elem_types: Option<&Vec<plum_types::types::Type>>,
     arity: usize,
 ) -> String {
-    // A `channel[T]()` result is a `(Sender[T], Receiver[T])` that
-    // codegen BUILDS itself (`ir::Expr::Channel`, which carries no type)
-    // and registers its own `tag_fields` entry for, under the legacy
-    // arity tag. Specializing the DESTRUCTURING pattern would give it a
-    // tag the construction never produces, and the match would silently
-    // find no arm — which is exactly what happened the first time this
-    // was written.
+    // A `channel[T]()` result is a `(Sender[T], Receiver[T])` tuple that
+    // codegen BUILDS itself rather than one the programmer wrote, so it
+    // used to be forced back to the legacy arity tag here: specializing
+    // only the DESTRUCTURING pattern would give it a tag the
+    // construction never produces, and the match would silently find no
+    // arm — which is exactly what happened the first time this was
+    // written, and why channels were left on the legacy tag rather than
+    // half-lifted.
     //
-    // So channels keep the legacy tag. That also keeps their existing
-    // one-element-type-per-program limitation exactly as it was, rather
-    // than half-lifting it: see `register_channel_tag`.
-    if elem_types.map(|tys| tys.iter().any(is_channel_end)).unwrap_or(false) {
-        return tuple_tag(arity);
-    }
+    // Both sides are specialized now. `Infer`'s `channel[T]()` arm
+    // records the two end types by span like any other tuple's, and
+    // `ir::Expr::Channel` carries the tag this function computes from
+    // them — so construction and destructuring go through THIS function
+    // on equal inputs and cannot disagree. That is what lets one
+    // program hold channels of more than one element type: they are
+    // simply different tags now, rather than two layouts fighting over
+    // a single flat `tag_fields` entry. See `register_channel_tag`.
     match elem_types {
         Some(tys) if tys.len() == arity => {
             let parts: Vec<String> = tys.iter().map(plum_ir_type_tag_part).collect();
@@ -544,14 +545,6 @@ pub fn specialized_tuple_tag(
         }
         _ => tuple_tag(arity),
     }
-}
-
-// `Sender[T]`/`Receiver[T]` are opaque pseudo-generic BUILTINS,
-// represented as `Type::Struct("Sender", ..)` rather than dedicated
-// variants — see `ast_type_to_type`'s own note on why they are never
-// registered as real declarations.
-fn is_channel_end(ty: &plum_types::types::Type) -> bool {
-    matches!(ty, plum_types::types::Type::Struct(n, _) if n == "Sender" || n == "Receiver")
 }
 
 /// One element type rendered into a tag. Deliberately the same shape
@@ -1098,7 +1091,7 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
         // generic in the language; nothing about it is checked here
         // (lowering never checks types) — `plum-types` is what
         // actually validates the arity/shape at the type level.
-        ast::Expr::Call { callee, args, .. }
+        ast::Expr::Call { callee, args, span }
             if args.is_empty()
                 && matches!(
                     callee.as_ref(),
@@ -1106,7 +1099,15 @@ pub fn lower_expr(expr: &ast::Expr, ctx: &LoweringContext) -> Result<ir::Expr, p
                         if args.len() == 1 && matches!(callee.as_ref(), ast::Expr::Ident(name, _) if name == "channel")
                 ) =>
         {
-            Ok(ir::Expr::Channel)
+            // The one exception to "T is erased entirely" above, and a
+            // narrow one: what's carried is the resulting TUPLE's tag,
+            // not the element type. `Infer` records this call's two end
+            // types by span, so this goes through the very same
+            // `specialized_tuple_tag` the destructuring pattern below
+            // uses — the two cannot produce different strings.
+            Ok(ir::Expr::Channel {
+                tag: specialized_tuple_tag(ctx.tuple_elem_types.get(span), 2),
+            })
         }
         // `ref(v)` — a bare-Ident callee named `ref`, called with
         // exactly one value arg. Checked BEFORE the general variant-
@@ -4222,7 +4223,14 @@ mod tests {
 
     #[test]
     fn channel_generic_instantiation_lowers_to_a_channel_node() {
-        assert_eq!(lower("channel[Int]()"), ir::Expr::Channel);
+        // The bare arity tag, because this helper lowers without the
+        // span-keyed element types `Infer` supplies in the real
+        // pipeline — same fallback any tuple gets here. What matters is
+        // that the CONSTRUCTION and DESTRUCTURING sites agree, and they
+        // agree by both calling `specialized_tuple_tag`; see
+        // `a_channel_construction_and_its_destructuring_share_one_tag`
+        // for the end-to-end version.
+        assert_eq!(lower("channel[Int]()"), ir::Expr::Channel { tag: "2Tuple".to_string() });
     }
 
     #[test]

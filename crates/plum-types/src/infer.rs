@@ -1998,13 +1998,23 @@ impl Infer {
                 };
                 let elem_ty = ast_type_to_type(&type_args[0], &self.ctx, &[])
                     .map_err(|e| plum_syntax::error::CompileError::new(*span, format!("`channel[..]` type argument: {e}")))?;
-                Ok((
-                    Type::Tuple(vec![
-                        Type::Struct("Sender".to_string(), vec![elem_ty.clone()]),
-                        Type::Struct("Receiver".to_string(), vec![elem_ty]),
-                    ]),
-                    Subst::empty(),
-                ))
+                let ends = vec![
+                    Type::Struct("Sender".to_string(), vec![elem_ty.clone()]),
+                    Type::Struct("Receiver".to_string(), vec![elem_ty]),
+                ];
+                // Recorded like any other tuple's element types even
+                // though this tuple is never WRITTEN as one: `channel
+                // [T]()` evaluates to a tuple that codegen synthesizes
+                // itself, and without this entry `lower.rs` would have
+                // no way to give the CONSTRUCTION site the same
+                // type-specialized tag the DESTRUCTURING pattern gets —
+                // which is what used to limit a program to a single
+                // channel element type. Always fully concrete (it comes
+                // from an explicit type argument), so unlike an
+                // ordinary tuple literal there's no unresolved variable
+                // for `resolve_tuple_elem_types` to fall back on.
+                self.tuple_elem_types.insert(*span, (ends.clone(), self.current_fn.clone()));
+                Ok((Type::Tuple(ends), Subst::empty()))
             }
             // `ref(v)` — a bare-Ident callee named `ref`, called with
             // exactly one value arg (mirrors lower.rs's identical

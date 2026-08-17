@@ -5319,7 +5319,7 @@ mod tests {
     fn channel_destructure_body(tail: Expr) -> Expr {
         Expr::Let {
             name: "__nested0".to_string(),
-            value: Box::new(Expr::Channel),
+            value: Box::new(Expr::Channel { tag: "2Tuple".to_string() }),
             body: Box::new(Expr::Match {
                 scrutinee: Box::new(Expr::Var("__nested0".to_string())),
                 arms: vec![MatchArm {
@@ -5359,7 +5359,7 @@ mod tests {
         // let go(p: Point): Int = { let (tx, rx) = channel[Point](); tx.send(p); 0 }
         let body = Expr::Let {
             name: "__nested0".to_string(),
-            value: Box::new(Expr::Channel),
+            value: Box::new(Expr::Channel { tag: "2Tuple".to_string() }),
             body: Box::new(Expr::Match {
                 scrutinee: Box::new(Expr::Var("__nested0".to_string())),
                 arms: vec![MatchArm {

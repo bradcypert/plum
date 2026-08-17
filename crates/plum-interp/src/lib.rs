@@ -594,7 +594,7 @@ fn free_vars_scoped(expr: &Expr, local: &HashSet<String>, out: &mut BTreeSet<Str
     };
     match expr {
         Expr::Var(name) => candidate(name, local, out),
-        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel => {}
+        Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) | Expr::Channel { .. } => {}
         Expr::Unary(_, e) | Expr::AsCStr(e) | Expr::AsString(e) | Expr::ToIntTrunc(e) | Expr::ToIntRound(e) | Expr::ToFloat(e) => free_vars_scoped(e, local, out),
         Expr::Binary(_, l, r) => {
             free_vars_scoped(l, local, out);
@@ -1662,7 +1662,7 @@ impl Interpreter {
                     Err(_) => Err("spawned task panicked".to_string()),
                 }
             }
-            Expr::Channel => {
+            Expr::Channel { .. } => {
                 let (tx, rx) = mpsc::channel::<PortableValue>();
                 let sender = Value::Sender(SenderHandle(Arc::new(tx)));
                 let receiver = Value::Receiver(ReceiverHandle(Arc::new(Mutex::new(rx))));
