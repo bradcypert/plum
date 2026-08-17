@@ -151,7 +151,7 @@ fn hoistable(expr: &Expr) -> bool {
 /// more functions, but being wrong here is a use-after-free, and the
 /// common shape this targets (a constructor-style function whose body IS
 /// a `Ctor`) converges on the first pass anyway.
-fn owned_returning(program: &crate::ir::Program) -> std::collections::HashSet<String> {
+pub fn owned_returning(program: &crate::ir::Program) -> std::collections::HashSet<String> {
     let mut owned: std::collections::HashSet<String> = std::collections::HashSet::new();
     loop {
         let mut changed = false;

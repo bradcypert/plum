@@ -10148,13 +10148,51 @@ allocation. Not a soundness hole either way (an ANF temporary is a
 by the tracked-argument case), but computing it first is what keeps the
 accumulator shape recognizable.
 
-### What is left
+### What is left: struct-field accumulators
 
 Strings barely moved: 2286 MB -> 2154 MB allocated, still 21.8M
-allocations. So the compiler's remaining 2.4 GB is string building that
-this does not reach — some accumulator that fails one of the two
-conditions, or a shape that is not a parameter accumulator at all. That is
-the next thing to measure rather than guess at.
+allocations. Measured rather than guessed at, and the answer is sharp — the
+same 20,000-item accumulation, two ways:
+
+| accumulator held as... | allocations | bytes |
+| --- | --- | --- |
+| a bare PARAMETER (`acc.concat(x)`) | 20,005 | 0.36 MB |
+| a STRUCT FIELD (`Emit { code: r.code.concat(x), .. }`) | 40,005 | 200.7 MB |
+
+The second is `codegen.plum`'s `Emit` exactly, and it is still fully
+O(n^2). Two independent things block it:
+
+1. `r.code` is a MATCH-EXTRACTED binding, and codegen increments a
+   refcounted field as it extracts it — so `rc == 2` at the concat and
+   reuse correctly declines. `r` is still alive and genuinely holds that
+   string.
+2. Extracted bindings are not in `known_heap`, so `mark_reuse` would not
+   target one anyway.
+
+The `Emit` CELL is not reused either: `r` is read six times in that one
+expression (`r.code`, `r.allocas`, ... each lowering to its own `Match`),
+so `max_uses_on_path` saturates at 2 and the parameter is ineligible. The
+20,001 ctor allocations in the measurement above confirm it.
+
+### The mechanism this needs: consuming pattern match
+
+When the scrutinee is provably dead after the match, extraction should
+MOVE its fields — no increment — rather than borrow them. Then `code` has
+`rc == 1` and `StrConcatReuse` grows it in place: O(n) instead of O(n^2).
+Worth roughly 2154 MB -> ~100 MB of the compiler's string traffic.
+
+Not attempted here, and the reason is specific rather than general
+caution: moving fields out means the scrutinee's cell must be freed
+WITHOUT releasing its fields, which collides directly with `CtorReuse`'s
+existing "release the old fields, then overwrite in place" path. That
+interaction needs a design pass, not an increment.
+
+A cheaper, strictly smaller variant is also available and worth noting:
+relaxing condition 1 from "at most once on any path" to a true last-use
+test would let `CtorReuse` fire for the `Emit` cell itself, since the
+construction happens after every field read. That is sound but only worth
+the ~59 MB of ctor traffic, not the 2154 MB, so it is not the interesting
+half.
 
 `check` is unchanged in memory (254.7 -> 251.5 MB) and still carries the
 release work's ~6% time cost (0.1774 -> 0.1886 s).
@@ -10168,3 +10206,106 @@ concurrency/shared-mutability examples, and dedicated fixtures for the
 `rep`, `hold`, and tracked-caller shapes — each of which is a
 use-after-free rather than a leak if the rule is wrong. All of those also
 agree with the interpreter output for output.
+
+## Toward consuming pattern match: three fixes, and why the compiler did not move (2026-08-17)
+
+Going after the struct-field accumulator turned up two regressions I had
+introduced earlier the same day, one hole in my own analysis, and a
+correction to the plan itself. The compiler's numbers are unchanged, and
+the reason is now exact rather than suspected.
+
+### The plan was wrong, and one experiment said so
+
+The write-up above proposed coalescing the six field reads as the enabling
+step. Hand-writing the single-match form first took two minutes and
+settled it:
+
+| shape | bytes |
+| --- | --- |
+| six field reads (`Emit { code: r.code.concat(x), .. }`) | 200.7 MB |
+| ONE match (`match r { Emit(code, n) => Emit { .. } }`) | 200.7 MB |
+
+Identical. Coalescing alone changes nothing, because `code` is still
+incremented on extraction (`rc == 2`) and `r` is still never released.
+Building the pass first would have been a day's work for no effect.
+
+### Fix 1: an unused extracted field was still incremented
+
+`let second (p: Pair): Int = p.n` incremented the `String` field it never
+touches. That increment had nothing to balance it —
+`release_match_bindings` deliberately requires a USE before it will
+release — so it leaked the field and, through it, the scrutinee. Introduced
+by widening the extraction increment from `CgType::Heap` to every
+refcounted shape; visible directly in the emitted IR.
+
+Now gated on the arm actually mentioning the binding.
+`expr_mentions_var` is coarse and shadowing-unaware, which is the safe
+direction: over-reporting costs an increment, never a dangling pointer.
+
+### Fix 2: `anf` had silently disabled `CtorReuse`
+
+`mark_reuse` rewrites a `Ctor` into a `CtorReuse` only when the `Ctor` is
+the match arm's body. `anf` hoists a `Ctor`'s fields into `Let`
+temporaries, so the arm body became `Let { anf$1, .., Ctor { .. } }` and
+the pattern stopped matching — **reuse-in-place quietly stopped firing for
+every such arm**, with no failing test, because the interpreter's path has
+no `anf` stage and the unit tests build IR directly.
+
+`rewrite_tail_ctor` now looks through leading `Let`/`RcAnnotated` chains.
+Measured on the accumulator: **20,001 ctor allocations -> 1.**
+
+### Fix 3: uniqueness is transitive, and escapes could launder it
+
+`reusable_params`' condition 2 required a syntactically fresh argument at
+every call site, which rejected `push(r, "x")` — where `r` is the caller's
+own parameter at its last use, and therefore safe. It is now a least
+fixpoint over "unique on entry": an argument may be a bare `Var` naming
+the ENCLOSING function's parameter, provided that parameter is itself
+unique on entry AND this is its last use.
+
+The transitivity is load-bearing. Without it `g (p) = f(p)` would
+establish `f`'s parameter as unique on the strength of `g`'s, while
+`h (q) = { let r = g(q); q.len() }` still needed the value.
+
+Writing that fixpoint exposed a hole of its own: an ESCAPED function's
+parameters were being treated as unique (no enumerable call sites meant
+"no call site violates it"), and that propagated outward to establish
+uniqueness for other functions that nothing guaranteed. Escaped functions
+are now excluded from the fixpoint entirely. Two of my own safety tests
+also had to be rewritten — they asserted that any bare `Var` argument
+disqualifies, which was the old rule, not the actual hazard.
+
+### Why the compiler still did not move
+
+Byte-identical allocation stats. The reason is one line of `codegen.plum`:
+
+```
+Emit { code: r.code.concat(line), allocas: r.allocas, releases: r.releases, ... }
+```
+
+The `Emit` construction is OUTSIDE all six field-read matches, so
+`rewrite_tail_ctor` never sees it and `CtorReuse` cannot attach to
+anything. Coalescing IS needed after all — not to fix the string, but to
+put the `Ctor` inside a match arm so cell reuse can fire at all.
+
+So the remaining chain is two steps, in order:
+
+1. **Coalesce sibling field-read matches** on the same scrutinee into one.
+   Worth the ~59 MB of ctor traffic by itself, and a prerequisite for (2).
+2. **Move fields instead of incrementing them** when the arm's body became
+   a `CtorReuse` of the scrutinee — the cell is being consumed anyway, so
+   the fields are morally ours. That is what gets `rc == 1` at the concat
+   and turns the 2154 MB into roughly 100 MB.
+
+Step 2 has a genuine subtlety worth recording before anyone starts it:
+`CtorReuse` decides between reuse and fresh allocation with a RUNTIME
+`rc == 1` check, but the extraction increment happens earlier. Moving
+unconditionally would be wrong on the fresh-allocation branch, so either
+the increment becomes conditional on the same test, or the test moves
+earlier. Both are real changes to that node's shape.
+
+### Verified
+
+548 plumc tests + 344 in plum-ir (4 new), all 15 suites, fixed point
+byte-identical, corpus 99/99, exec_corpus 18/18, zero ASan errors across
+the corpus, the examples, and the `rep`/`hold`/ownership fixtures.

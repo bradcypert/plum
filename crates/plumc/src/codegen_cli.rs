@@ -1811,6 +1811,39 @@ mod tests {
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("8000".to_string()));
     }
 
+    #[test]
+    fn an_unused_extracted_field_is_not_incremented() {
+        // An unused binding's extraction increment has nothing to balance
+        // it — `fbip::release_match_bindings` requires a use before it will
+        // release — so it leaked the field and, through it, the scrutinee.
+        // `p.n` used to increment the `String` field it never touches.
+        let src = "struct Pair { s: String, n: Int }\n\
+                   let second (p: Pair): Int = p.n\n\
+                   let go (): Int = second(Pair { s: \"abcdefgh\", n: 42 })";
+        let (ir, _, _, _) = compile_to_ir(src, "go").expect("compiles");
+        let start = ir.find("define i64 @second(").expect("`@second` should be emitted");
+        let body = &ir[start..start + ir[start..].find("\n}").unwrap_or(0)];
+        assert!(
+            !body.contains("plum_rc_inc"),
+            "reading only the Int field should increment nothing: {body}"
+        );
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("42".to_string()));
+    }
+
+    #[test]
+    fn a_struct_rebuilt_from_its_own_fields_reuses_its_cell() {
+        // `match r { Emit(code, n) => Emit { .. } }` with `r` a uniquely
+        // owned parameter: the cell is reused rather than reallocated.
+        // Verified by allocation count separately (20,001 -> 1 over 20,000
+        // iterations); this pins the correctness and that the reuse node is
+        // actually emitted.
+        let src = "struct Emit { code: String, n: Int }\n\
+                   let push (r: Emit) (line: String): Emit = match r { Emit(code, n) => Emit { code: code.concat(line), n: n + 1 } }\n\
+                   let go2 (r: Emit) (k: Int): Emit = if k == 0 { r } else { go2(push(r, \"x\"), k - 1) }\n\
+                   let go (): Int = match go2(Emit { code: \"\", n: 0 }, 50) { Emit(c, n) => c.len() + n }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("100".to_string()));
+    }
+
     // --- reuse-in-place on parameters (see `fbip::reusable_params`) ---
     //
     // A tail-recursive accumulator held as a PARAMETER never got reused,

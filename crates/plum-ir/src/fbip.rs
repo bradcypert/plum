@@ -481,18 +481,10 @@ fn mark_reuse_scoped(expr: Expr, known_heap: &HashSet<String>) -> Expr {
                     // either — same conservative limitation `transform`
                     // documents for its own `Match` arm.
                     let body = mark_reuse_scoped(arm.body, known_heap);
-                    let body = match (&reuse_target, &body) {
-                        // 0-field constructions (e.g. `Nil`) have
-                        // nothing worth reusing.
-                        (Some(reuse_of), Expr::Ctor { tag, fields })
-                            if arity > 0 && fields.len() == arity =>
-                        {
-                            Expr::CtorReuse {
-                                reuse_of: reuse_of.clone(),
-                                tag: tag.clone(),
-                                fields: fields.clone(),
-                            }
-                        }
+                    // 0-field constructions (e.g. `Nil`) have nothing
+                    // worth reusing.
+                    let body = match &reuse_target {
+                        Some(reuse_of) if arity > 0 => rewrite_tail_ctor(body, reuse_of, arity),
                         _ => body,
                     };
                     MatchArm {
@@ -1414,6 +1406,47 @@ pub(crate) fn drop_at_scope_end(body: Expr, name: &str) -> Expr {
     }
 }
 
+/// Rewrites a `Ctor` in `body`'s TAIL position into a `CtorReuse` of
+/// `reuse_of`, looking through any leading `Let`/`RcAnnotated` chain.
+///
+/// Looking through the chain is not a refinement, it is required. `anf`
+/// hoists a `Ctor`'s field expressions into `Let` temporaries, so a match
+/// arm that was written as
+///
+/// ```text
+/// Emit(code, n) => Emit { code: code.concat(line), n: n + 1 }
+/// ```
+///
+/// arrives here as `Let { anf$1, .., Ctor { .. } }` rather than a bare
+/// `Ctor`. Matching only the bare shape silently stopped reuse from firing
+/// for every such arm once `anf` landed — a performance regression with no
+/// failing test, since the interpreter's path has no `anf` stage and the
+/// unit tests build IR directly.
+///
+/// `If`/`Match` tails are deliberately NOT descended into. Each branch is
+/// a separate tail and would need its own rewrite; that is sound but a
+/// larger change, and this covers the shape `anf` actually produces.
+fn rewrite_tail_ctor(body: Expr, reuse_of: &str, arity: usize) -> Expr {
+    match body {
+        Expr::Ctor { tag, fields } if fields.len() == arity => Expr::CtorReuse {
+            reuse_of: reuse_of.to_string(),
+            tag,
+            fields,
+        },
+        Expr::Let { name, value, body } => Expr::Let {
+            name,
+            value,
+            body: Box::new(rewrite_tail_ctor(*body, reuse_of, arity)),
+        },
+        Expr::RcAnnotated { op, target, rest } => Expr::RcAnnotated {
+            op,
+            target,
+            rest: Box::new(rewrite_tail_ctor(*rest, reuse_of, arity)),
+        },
+        other => other,
+    }
+}
+
 /// Which of each function's PARAMETERS may be targeted by
 /// reuse-in-place.
 ///
@@ -1478,22 +1511,91 @@ pub(crate) fn drop_at_scope_end(body: Expr, name: &str) -> Expr {
 /// above — but computing it first is what keeps the accumulator shape
 /// recognizable.
 pub fn reusable_params(program: &Program) -> HashMap<String, HashSet<String>> {
+    let owned_returning = crate::anf::owned_returning(program);
     let declared: HashSet<&str> = program.functions.iter().map(|f| f.name.as_str()).collect();
     let mut escaped: HashSet<String> = HashSet::new();
-    // Per function, per parameter index: does EVERY call site pass a
-    // provably uniquely-owned value here? Starts optimistic and is
-    // narrowed by each call site seen.
-    let mut args_unique: HashMap<&str, Vec<bool>> = program
+    let mut sites: Vec<CallArg> = Vec::new();
+    let mut arity_ok: HashSet<&str> = declared.clone();
+    let arity: HashMap<&str, usize> = program
         .functions
         .iter()
-        .map(|f| (f.name.as_str(), vec![true; f.params.len()]))
+        .map(|f| (f.name.as_str(), f.params.len()))
         .collect();
 
     for f in &program.functions {
-        scan_calls(&f.body, &declared, &mut escaped, &mut args_unique);
+        scan_calls(&f.body, &f.name, &declared, &owned_returning, &mut escaped, &mut sites, &arity, &mut arity_ok);
     }
     for g in &program.globals {
-        scan_calls(&g.value, &declared, &mut escaped, &mut args_unique);
+        // A global initializer has no parameters, so nothing in it can be
+        // a `ParamRef`; `""` simply never matches a real function name.
+        scan_calls(&g.value, "", &declared, &owned_returning, &mut escaped, &mut sites, &arity, &mut arity_ok);
+    }
+
+    // Which parameters are UNIQUELY OWNED ON ENTRY: every call site hands
+    // them a cell nothing else holds. A least fixpoint from the empty set,
+    // so a parameter merely PASSED ALONG only qualifies once the parameter
+    // it came from does. That transitivity is load-bearing — without it,
+    // `g (p) = f(p)` would establish `f`'s parameter as unique on the
+    // strength of `g`'s, while `h (q) = { let r = g(q); q.len() }` still
+    // needed the value.
+    let by_param: HashMap<&str, &[String]> = program
+        .functions
+        .iter()
+        .map(|f| (f.name.as_str(), f.params.as_slice()))
+        .collect();
+    let mut uoe: HashSet<(&str, &str)> = HashSet::new();
+    loop {
+        let mut changed = false;
+        for f in &program.functions {
+            for (i, p) in f.params.iter().enumerate() {
+                if uoe.contains(&(f.name.as_str(), p.as_str())) {
+                    continue;
+                }
+                // An ESCAPED function's parameters are never unique on
+                // entry. Its call sites cannot be enumerated, so "every
+                // call site passes a unique value" is unknowable — and
+                // marking them would leak through `ArgKind::ParamRef` into
+                // OTHER functions' eligibility, which is how a
+                // higher-order call site could quietly establish
+                // uniqueness it has no business establishing.
+                if escaped.contains(&f.name) {
+                    continue;
+                }
+                if !arity_ok.contains(f.name.as_str()) {
+                    continue;
+                }
+                let relevant: Vec<&CallArg> = sites
+                    .iter()
+                    .filter(|s| s.callee == f.name && s.index == i)
+                    .collect();
+                // No call sites at all: nothing can hand it a shared cell,
+                // so the question is vacuous rather than unsafe.
+                let all_unique = relevant.iter().all(|s| match &s.kind {
+                    ArgKind::Unique => true,
+                    ArgKind::ParamRef { enclosing, param } => {
+                        uoe.contains(&(enclosing.as_str(), param.as_str()))
+                            && by_param
+                                .get(enclosing.as_str())
+                                .map(|_| true)
+                                .unwrap_or(false)
+                            && program
+                                .functions
+                                .iter()
+                                .find(|g| &g.name == enclosing)
+                                .map(|g| max_uses_on_path(&g.body, param) <= 1)
+                                .unwrap_or(false)
+                    }
+                    ArgKind::Other => false,
+                });
+                if all_unique {
+                    uoe.insert((f.name.as_str(), p.as_str()));
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
     }
 
     let mut out: HashMap<String, HashSet<String>> = HashMap::new();
@@ -1501,10 +1603,9 @@ pub fn reusable_params(program: &Program) -> HashMap<String, HashSet<String>> {
         if escaped.contains(&f.name) {
             continue;
         }
-        let unique = &args_unique[f.name.as_str()];
         let mut eligible = HashSet::new();
-        for (i, p) in f.params.iter().enumerate() {
-            if unique.get(i).copied() == Some(true) && max_uses_on_path(&f.body, p) <= 1 {
+        for p in &f.params {
+            if uoe.contains(&(f.name.as_str(), p.as_str())) && max_uses_on_path(&f.body, p) <= 1 {
                 eligible.insert(p.clone());
             }
         }
@@ -1515,35 +1616,68 @@ pub fn reusable_params(program: &Program) -> HashMap<String, HashSet<String>> {
     out
 }
 
-/// Records, for every call to a declared function, whether each argument
-/// is provably uniquely owned; and records any mention of a declared
+/// One argument at one call site, classified by what it can be proven
+/// about.
+struct CallArg {
+    callee: String,
+    index: usize,
+    kind: ArgKind,
+}
+
+/// How much is known about an argument's ownership.
+enum ArgKind {
+    /// A cell nothing else holds: a fresh allocation, a `*Reuse` result,
+    /// or a call to an owned-returning function.
+    Unique,
+    /// A bare reference to the ENCLOSING function's own parameter. Safe
+    /// only if that parameter is itself unique on entry AND this is its
+    /// last use — checked in the fixpoint, not here, because both facts
+    /// depend on the enclosing function.
+    ParamRef { enclosing: String, param: String },
+    /// Anything else. Declined.
+    Other,
+}
+
+/// Records, for every call to a declared function, how much is known
+/// about each argument's ownership; and records any mention of a declared
 /// function's name OUTSIDE a direct callee position as an escape.
+///
+/// `enclosing` is the function whose body is being scanned, needed so a
+/// bare `Var` argument can be recognized as a reference to that
+/// function's own parameter (`ArgKind::ParamRef`) rather than dismissed.
+#[allow(clippy::too_many_arguments)]
 fn scan_calls<'a>(
     expr: &'a Expr,
+    enclosing: &str,
     declared: &HashSet<&'a str>,
+    owned_returning: &HashSet<String>,
     escaped: &mut HashSet<String>,
-    args_unique: &mut HashMap<&'a str, Vec<bool>>,
+    sites: &mut Vec<CallArg>,
+    arity: &HashMap<&'a str, usize>,
+    arity_ok: &mut HashSet<&'a str>,
 ) {
     if let Expr::Call { callee, args } = expr {
         if let Expr::Var(name) = callee.as_ref() {
             if let Some(name) = declared.get(name.as_str()) {
-                let slots = args_unique.get_mut(*name).expect("declared implies present");
-                if args.len() != slots.len() {
-                    // A shape this cannot reason about (partial
-                    // application, or an arity mismatch that should not
-                    // happen) — decline every parameter rather than guess.
-                    slots.iter_mut().for_each(|s| *s = false);
-                } else {
-                    for (i, a) in args.iter().enumerate() {
-                        if !is_uniquely_owned(a) {
-                            slots[i] = false;
-                        }
-                    }
+                for (i, a) in args.iter().enumerate() {
+                    sites.push(CallArg {
+                        callee: (*name).to_string(),
+                        index: i,
+                        kind: classify_arg(a, enclosing, owned_returning),
+                    });
+                }
+                // A call whose argument count does not match the
+                // declaration is a shape this cannot reason about
+                // (partial application, or an arity mismatch that should
+                // not happen) — decline the whole function rather than
+                // guess which slot is which.
+                if arity.get(*name).copied() != Some(args.len()) {
+                    arity_ok.remove(*name);
                 }
                 // The callee `Var` is deliberately NOT walked: naming a
                 // function in order to call it is not an escape.
                 for a in args {
-                    scan_calls(a, declared, escaped, args_unique);
+                    scan_calls(a, enclosing, declared, owned_returning, escaped, sites, arity, arity_ok);
                 }
                 return;
             }
@@ -1555,15 +1689,38 @@ fn scan_calls<'a>(
         }
         return;
     }
-    for_each_child(expr, &mut |c| scan_calls(c, declared, escaped, args_unique));
+    for_each_child(expr, &mut |c| {
+        scan_calls(c, enclosing, declared, owned_returning, escaped, sites, arity, arity_ok)
+    });
+}
+
+/// Classifies one argument expression. See `ArgKind`.
+fn classify_arg(arg: &Expr, enclosing: &str, owned_returning: &HashSet<String>) -> ArgKind {
+    if is_uniquely_owned(arg, owned_returning) {
+        return ArgKind::Unique;
+    }
+    if let Expr::Var(x) = arg {
+        return ArgKind::ParamRef {
+            enclosing: enclosing.to_string(),
+            param: x.clone(),
+        };
+    }
+    ArgKind::Other
 }
 
 /// Whether `expr` evaluates to a cell nothing else holds a reference to.
 ///
 /// A fresh allocation obviously qualifies. So does a `*Reuse` node: it
-/// either overwrote a cell whose refcount was already 1, or allocated a
-/// new one, and in both cases the result is uniquely owned.
-fn is_uniquely_owned(expr: &Expr) -> bool {
+/// either overwrote a cell whose refcount was already 1 or allocated a new
+/// one, and the result is uniquely owned either way. So does a call to an
+/// OWNED-RETURNING function (`anf::owned_returning`) — that analysis
+/// exists precisely to identify calls whose result the caller owns, and
+/// declining to use it here would reject the ordinary
+/// `go(push(acc, x), ...)` shape for no reason.
+fn is_uniquely_owned(expr: &Expr, owned_returning: &HashSet<String>) -> bool {
+    if let Expr::Call { callee, .. } = expr {
+        return matches!(callee.as_ref(), Expr::Var(n) if owned_returning.contains(n));
+    }
     matches!(
         expr,
         Expr::Ctor { .. }
@@ -1594,7 +1751,7 @@ fn is_uniquely_owned(expr: &Expr) -> bool {
     )
 }
 
-/// The greatest number of times `name` can be used on any single path
+/// The greatest number of times `name` can be used on any single path/// The greatest number of times `name` can be used on any single path
 /// through `expr`.
 ///
 /// `If`/`Match` branches are ALTERNATIVES — only one runs — so their
@@ -1913,7 +2070,7 @@ fn map_children_owned(expr: Expr, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
 /// A coarse (shadowing-unaware, over-approximating is fine — see the
 /// `For` arm of `mark_last_uses`) check for whether `name` appears
 /// anywhere inside `expr` at all.
-fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
+pub fn expr_mentions_var(expr: &Expr, name: &str) -> bool {
     match expr {
         Expr::Var(n) => n == name,
         Expr::Int(_) | Expr::Float(_) | Expr::Str(_) | Expr::Bool(_) | Expr::Unit | Expr::EmptyArray(_) => false,
@@ -3315,6 +3472,47 @@ mod tests {
         }
     }
 
+    // --- reuse must look through ANF's hoisted temporaries ---
+
+    #[test]
+    fn reuse_fires_when_anf_has_wrapped_the_arm_body_in_lets() {
+        // `anf` hoists a `Ctor`'s field expressions into `Let`
+        // temporaries, so an arm written as `Emit(code, n) => Emit { .. }`
+        // reaches `mark_reuse` as `Let { anf$1, .., Ctor { .. } }`.
+        // Matching only the bare `Ctor` silently stopped reuse firing for
+        // every such arm once `anf` landed — a performance regression with
+        // no failing test, because the interpreter's path has no `anf`
+        // stage and the unit tests build IR directly.
+        let arm_body = let_(
+            "anf$1",
+            int(7),
+            ctor("Emit", vec![var("anf$1"), var("n")]),
+        );
+        let input = let_(
+            "e",
+            ctor("Emit", vec![int(0), int(0)]),
+            match_(var("e"), vec![arm("Emit", vec!["code", "n"], arm_body)]),
+        );
+        let out = optimize(input);
+        assert!(
+            expr_mentions_ctor_reuse(&out, "e"),
+            "reuse should see through the hoisted Let: {out:?}"
+        );
+    }
+
+    #[test]
+    fn a_tail_that_is_not_a_ctor_is_left_alone() {
+        // Looking through `Let`s must not turn something that merely ENDS
+        // in a variable into a reuse.
+        let input = let_(
+            "e",
+            ctor("Emit", vec![int(0), int(0)]),
+            match_(var("e"), vec![arm("Emit", vec!["code", "n"], let_("t", int(1), var("t")))]),
+        );
+        let out = optimize(input);
+        assert!(!expr_mentions_ctor_reuse(&out, "e"), "got {out:?}");
+    }
+
     // --- parameter reuse eligibility (see `reusable_params`) ---
 
     fn func(name: &str, params: Vec<&str>, body: Expr) -> Function {
@@ -3392,27 +3590,97 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_variable_argument_makes_the_parameter_ineligible() {
-        // The caller may still need it and — being untracked itself — will
-        // not have incremented, so the runtime `rc == 1` check would not
-        // protect it. `{ let r = f(q); q.len() }` is the failing shape.
+    fn a_caller_that_uses_the_argument_again_makes_the_parameter_ineligible() {
+        // THE hazard. `q` is a parameter, so nothing increments it when it
+        // is passed on and the callee would observe refcount 1 — the
+        // runtime check offers no protection. Rejected because `q` is used
+        // AFTER the call, which `max_uses_on_path` sees as two uses.
         let p = program_of(vec![
             func("f", vec!["p"], concat(var("p"), str_lit("x"))),
-            func("caller", vec!["q"], call(var("f"), vec![var("q")])),
+            func(
+                "hold",
+                vec!["q"],
+                let_(
+                    "r",
+                    call(var("f"), vec![var("q")]),
+                    Expr::Binary(
+                        BinOp::Add,
+                        Box::new(Expr::ArrayLen { array: Box::new(var("q")) }),
+                        Box::new(Expr::ArrayLen { array: Box::new(var("r")) }),
+                    ),
+                ),
+            ),
         ]);
         let r = reusable_params(&p);
         assert!(r.get("f").map(|s| s.contains("p")) != Some(true), "got {r:?}");
     }
 
     #[test]
-    fn one_bad_call_site_among_several_is_enough_to_disqualify() {
+    fn passing_a_parameter_along_at_its_last_use_is_allowed() {
+        // The permissive half, and it is what makes the compiler's own
+        // shape work: `push(r, "x")` inside `go` passes `go`'s parameter,
+        // which `go` never touches again on that path. A bare `Var` is not
+        // disqualifying by itself — being needed afterwards is.
         let p = program_of(vec![
             func("f", vec!["p"], concat(var("p"), str_lit("x"))),
-            func("good", vec![], call(var("f"), vec![str_lit("fresh")])),
-            func("bad", vec!["q"], call(var("f"), vec![var("q")])),
+            func("g", vec!["q"], call(var("f"), vec![var("q")])),
+            func("main", vec![], call(var("g"), vec![str_lit("fresh")])),
+        ]);
+        let r = reusable_params(&p);
+        assert_eq!(r.get("f").map(|s| s.contains("p")), Some(true), "got {r:?}");
+    }
+
+    #[test]
+    fn uniqueness_does_not_propagate_through_a_caller_that_is_not_itself_unique() {
+        // The transitive hole, and why the fixpoint is a LEAST one. `g`
+        // merely passes its parameter along, so `f` may only treat it as
+        // unique once `g`'s own parameter is — and `h` still needs the
+        // value it handed `g`, so it never is.
+        let p = program_of(vec![
+            func("f", vec!["p"], concat(var("p"), str_lit("x"))),
+            func("g", vec!["p2"], call(var("f"), vec![var("p2")])),
+            func(
+                "h",
+                vec!["q"],
+                let_(
+                    "r",
+                    call(var("g"), vec![var("q")]),
+                    Expr::ArrayLen { array: Box::new(var("q")) },
+                ),
+            ),
+        ]);
+        let r = reusable_params(&p);
+        assert!(r.get("g").map(|s| s.contains("p2")) != Some(true), "g: got {r:?}");
+        assert!(r.get("f").map(|s| s.contains("p")) != Some(true), "f: got {r:?}");
+    }
+
+    #[test]
+    fn an_escaped_function_cannot_launder_uniqueness_onto_another() {
+        // `escapes` is passed as a value, so its own call sites are
+        // unknowable. If its parameters were treated as unique on entry,
+        // that would propagate through `ArgKind::ParamRef` and establish
+        // uniqueness for `f` that nothing actually guarantees.
+        let p = program_of(vec![
+            func("f", vec!["p"], concat(var("p"), str_lit("x"))),
+            func("escapes", vec!["e"], call(var("f"), vec![var("e")])),
+            func("takes", vec!["fnval"], var("fnval")),
+            func("main", vec![], call(var("takes"), vec![var("escapes")])),
         ]);
         let r = reusable_params(&p);
         assert!(r.get("f").map(|s| s.contains("p")) != Some(true), "got {r:?}");
+    }
+
+    #[test]
+    fn an_owned_returning_calls_result_counts_as_a_unique_argument() {
+        // `go(push(acc, x), ..)` is the ordinary shape; rejecting it for
+        // want of a syntactically visible allocation would miss the point.
+        let p = program_of(vec![
+            func("mk", vec!["n"], ctor("Point", vec![var("n")])),
+            func("f", vec!["p"], ctor("Wrap", vec![var("p")])),
+            func("main", vec![], call(var("f"), vec![call(var("mk"), vec![int(1)])])),
+        ]);
+        let r = reusable_params(&p);
+        assert_eq!(r.get("f").map(|s| s.contains("p")), Some(true), "got {r:?}");
     }
 
     #[test]

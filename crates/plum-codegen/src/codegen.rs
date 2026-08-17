@@ -5586,6 +5586,26 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                     let field_types = tag_field_types(ctx, &arm.tag)?.to_vec();
                     for (i, (name, fty)) in arm.bindings.iter().zip(&field_types).enumerate() {
                         let val = load_field_word(em, &scrutinee_ptr, i, fty.clone());
+                        // Only increment a field this arm actually
+                        // MENTIONS. An unused binding's increment has
+                        // nothing to balance it — `fbip::release_match_
+                        // bindings` deliberately requires a use before it
+                        // will release — so it leaked both the field and,
+                        // through it, the scrutinee. Visible in the
+                        // emitted IR for `let second (p) = p.n`, which
+                        // incremented the `String` field it never touches.
+                        //
+                        // `expr_mentions_var` is coarse and
+                        // shadowing-unaware, which is the safe direction
+                        // here: over-reporting a mention costs an
+                        // increment (the previous behaviour), never a
+                        // dangling pointer.
+                        let mentioned = plum_ir::fbip::expr_mentions_var(&arm.body, name)
+                            || arm
+                                .guard
+                                .as_ref()
+                                .map(|g| plum_ir::fbip::expr_mentions_var(g, name))
+                                .unwrap_or(false);
                         // EVERY refcounted field shape, not just
                         // `CgType::Heap` — `dec_fn_for(..).is_some()` is
                         // exactly "this shape has a refcount word".
@@ -5609,7 +5629,7 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                         // field ends up correctly owned and a discarded
                         // one leaks no more than the whole scrutinee used
                         // to.
-                        if crate::dec_fn_for(fty).is_some() {
+                        if mentioned && crate::dec_fn_for(fty).is_some() {
                             em.push(format!("  call void @plum_rc_inc(ptr {val})"));
                         }
                         arm_env.insert(name.clone(), (val, fty.clone()));
