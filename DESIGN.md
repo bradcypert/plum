@@ -9480,7 +9480,8 @@ eligible for reuse-in-place — and a `match` could then try to reuse a
 Because `fbip` never tracks these nodes, it never emits a `Dec` for them.
 So:
 
-- A `Ref` cell is never released by scope exit.
+- A `Ref` cell is never released by scope exit. **Measured: 63MB for
+  2,000,000 `ref()` calls**, ~32 bytes each, unbounded.
 - `.get()` increments the value it hands back, and nothing balances it.
 
 The increment is not optional. Without it,
@@ -9500,6 +9501,61 @@ Ordering is what makes that safe: load the old word, store the new one,
 release the old **after**. Release-before-store would free the value in
 between and store a dangling pointer whenever the two alias —
 `r.set(r.get())` being the obvious case, pinned by a test.
+
+### Why releasing the cell is not a one-line fix (attempted 2026-08-16)
+
+The obvious fix — add `RefNew` to `is_syntactically_heap` so
+`insert_refcount_ops` protects and releases `Ref` bindings — was tried,
+measured, and reverted. It is worth recording why, because the change
+LOOKS correct and even compiles and passes casually.
+
+The predicate split it needs is real and fine on its own. `Ref` must be
+refcounted (or it leaks) but must never be a reuse-in-place candidate
+(reuse is backwards for it, and a `Ref` cell has no tag word for a match
+arm to overwrite as a `Ctor`). Those pull in opposite directions, but
+`mark_reuse`'s stated invariant is a SUBSET relation — reuse may only
+fire for names `insert_refcount_ops` protected — so widening only the
+refcount predicate keeps it intact. Two predicates, `is_syntactically_
+heap` and an `is_reusable_heap` that subtracts `Ref`, is the right shape.
+
+`RefGet` cannot join it either way: its result has the INNER type, which
+may be a scalar, and this IR has no type information to tell the cases
+apart — `RcAnnotated` on a scalar is a hard codegen error, so a
+`Ref[Int]`'s ordinary `let n = r.get()` would stop compiling. Only
+`RefNew` is type-INDEPENDENT enough to add.
+
+The actual blocker is deeper, and it is Perceus's own model. **The last
+use of a value is assumed to CONSUME it**, so no trailing `Dec` is ever
+emitted — ownership simply moves into whatever the last use was. That
+holds for a `Ctor` field, a call argument, a return. It does NOT hold for
+`RefGet`/`RefSet`, which only BORROW their base: the reference is read
+and then dropped on the floor.
+
+The measured result of adding the arm was `step()` emitting two
+`@plum_rc_inc` calls and zero decrements — strictly worse than before,
+since the leak remained and pointless increments joined it.
+
+Emitting a scope-end release instead is not expressible in this IR:
+`RcAnnotated { op: Dec, target, rest }` runs its decrement BEFORE `rest`,
+and there is no "decrement after this expression produces its value"
+node. It could be simulated by rewriting `Let { r, RefNew(v), body }`
+into a temp binding — bind `body`'s result, decrement `r`, return the
+temp — but that is a use-after-free for a shape that is perfectly legal
+and works today:
+
+```
+let make_cell (n: Int): Ref[Int] = { let r = ref(n); r }
+```
+
+Here the binding's own value escapes as the body's result, so decrementing
+at scope end frees the cell the caller just received. Guarding it needs a
+tail-position analysis this pass doesn't have.
+
+So the honest summary is that `Ref` needs a notion of BORROWED use
+positions in `fbip`, not a wider heap predicate. That is real work in the
+most delicate pass in the compiler — the same one whose "gap 1 (parameter
+tracking)" attempt was previously found unsafe and reverted — and it is
+not something to land on the way past.
 
 ### Thread boundary
 
