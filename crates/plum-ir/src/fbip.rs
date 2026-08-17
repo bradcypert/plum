@@ -129,6 +129,22 @@ fn mark_reuse_scoped(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             // since neither pass restructures a Let's own top-level
             // Ctor/Str-literal/EmptyArray-literal/Var(already-heap)
             // value node, only nested uses within it).
+            // A name `insert_refcount_ops` decided to release at scope
+            // end (`all_uses_are_borrows`) must NOT also be a reuse
+            // candidate. `CtorReuse` consumes the old cell — it releases
+            // it before overwriting in place — so a scope-end release on
+            // top of that is a double free. This is the one interaction
+            // between the two halves of FBIP where getting it wrong is
+            // memory-unsafe rather than merely leaky.
+            //
+            // Detected by looking for the `Dec` itself rather than by
+            // recomputing `all_uses_are_borrows` here: the two passes
+            // would then have to agree on that predicate forever, and
+            // this pass runs on `insert_refcount_ops`' OUTPUT, so the
+            // decision it needs is already written into the tree. The
+            // pre-existing `used == false` release is covered by the same
+            // check, harmlessly — a name nothing references was never a
+            // reuse candidate anyway.
             let is_heap_value = is_syntactically_heap(&value, known_heap);
             let value_t = mark_reuse_scoped(*value, known_heap);
             let mut inner_heap = known_heap.clone();
@@ -136,6 +152,25 @@ fn mark_reuse_scoped(expr: Expr, known_heap: &HashSet<String>) -> Expr {
                 inner_heap.insert(name.clone());
             }
             let body_t = mark_reuse_scoped(*body, &inner_heap);
+            // Reuse and scope-end release both claim the SAME reference,
+            // so exactly one of them may happen — doing both is a double
+            // free. Reuse WINS wherever it fires: it avoids the
+            // allocation as well as releasing the cell, so it strictly
+            // dominates.
+            //
+            // Resolved here rather than in `insert_refcount_ops` because
+            // this is where the decision is actually made. That pass runs
+            // first and cannot know whether reuse will fire without
+            // duplicating the conditions above — and a duplicated
+            // predicate that drifted apart would produce a double free,
+            // the worst possible failure mode. So the release is inserted
+            // optimistically there and retracted here, by the code that
+            // just decided to reuse.
+            let body_t = if reuses_name(&body_t, &name) {
+                strip_scope_end_release(body_t, &name)
+            } else {
+                body_t
+            };
             Expr::Let {
                 name,
                 value: Box::new(value_t),
@@ -749,8 +784,62 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
             }
             let body_t = transform(*body, &inner_heap);
 
+            let releasable = is_heap_value || allocates_fresh_heap(&value_t);
+            let (marked, used) = if releasable {
+                mark_last_uses(body_t.clone(), &name, false)
+            } else {
+                (body_t.clone(), false)
+            };
+
+            // Every use is a BORROW — see `all_uses_are_borrows`. The
+            // binding is released at the end of its scope, and no use
+            // needs a `dup` at all (`marked` is discarded), because the
+            // binding itself keeps the cell alive across all of them.
+            //
+            // This is the case Perceus's "the last use CONSUMES" rule
+            // gets wrong, and it is the ordinary case, not an exotic one:
+            // `let p = Point { .. }; match p { .. }` leaked the cell
+            // outright, measured linear at 13.7/47.9/185.1 MB for
+            // 250k/1M/4M iterations. Before this arm existed, the ONLY
+            // `Dec` this pass ever emitted was the `used == false` one
+            // below, so every heap value a program actually USED was
+            // never freed — see DESIGN.md's own memory-model section,
+            // which has specified "at a variable's final use, insert a
+            // `drop`" the whole time.
+            //
+            // Gated on `used` so the `used == false` case below still
+            // wins: a binding with no uses at all trivially satisfies
+            // `all_uses_are_borrows`, but releasing it IMMEDIATELY is
+            // strictly better than at scope end. `used` is also the
+            // shadowing-aware answer — `expr_mentions_var` is
+            // deliberately coarse and would call an immediately-shadowed
+            // binding "used".
+            //
+            // Gated on `!incs_name(&marked, ..)` — i.e. exactly ONE use —
+            // for a much sharper reason, found as a real wrong-answer
+            // regression (`let s = "ab"; let t = s.concat("cd");
+            // s.len() + t.len()` returned 8 instead of 6). Those `Inc`s
+            // are not merely release bookkeeping: reuse-in-place has NO
+            // static check at all, only a runtime `rc == 1` test, so a
+            // non-last use's `Inc` is the only thing stopping
+            // `StrConcatReuse` from destructively overwriting a string
+            // that is still needed afterwards. Take the increments away
+            // and reuse silently corrupts the value.
+            //
+            // With exactly one use there is no increment to remove, so
+            // reuse keeps working unchanged and multi-use bindings keep
+            // today's behaviour byte for byte. Every case measured for
+            // this change is single-use anyway — `let p = Point { .. };
+            // match p { .. }` and friends.
+            if releasable && used && !incs_name(&marked, &name) && all_uses_are_borrows(&body_t, &name) {
+                return Expr::Let {
+                    name: name.clone(),
+                    value: Box::new(value_t),
+                    body: Box::new(drop_at_scope_end(body_t, &name)),
+                };
+            }
+
             let final_body = if is_heap_value {
-                let (marked, used) = mark_last_uses(body_t, &name, false);
                 if used {
                     marked
                 } else {
@@ -772,6 +861,446 @@ fn transform(expr: Expr, known_heap: &HashSet<String>) -> Expr {
                 body: Box::new(final_body),
             }
         }
+    }
+}
+
+/// Whether `expr` ALWAYS evaluates to a freshly allocated heap cell this
+/// binding therefore owns outright.
+///
+/// Deliberately kept OUT of `is_syntactically_heap`, and that separation
+/// is the point. `is_syntactically_heap` feeds both `mark_last_uses` and
+/// `mark_reuse`, so widening it would newly expose these shapes to
+/// dup-insertion and to reuse-in-place — a broad behaviour change with
+/// real risk, and the same kind of widening whose earlier attempt is
+/// recorded in DESIGN.md as found unsafe and reverted. This predicate is
+/// consulted at exactly ONE site: the scope-end release for a binding
+/// whose every use is a borrow. So it can only ever turn a leak into a
+/// release, never perturb an existing decision.
+///
+/// It exists because `let s = a.concat(b); s.len()` leaked 139MB per 1M
+/// iterations while the `Ctor` version was fixed by the borrow analysis
+/// alone: `StrConcat` is not a `Ctor`/`Str` literal/`EmptyArray`, so
+/// `is_syntactically_heap` never saw it as heap at all.
+///
+/// Every arm below is type-INDEPENDENT — it allocates whatever its
+/// operand types are — which is what makes a `Dec` on the result always
+/// well-defined. Two exclusions are load-bearing:
+///
+/// - `AsString` may return its input register UNCHANGED when that input
+///   is already a `Str` (see `codegen_as_string`), so the result can
+///   alias a cell this binding does not own.
+/// - Every `*Reuse` node may return the very cell it reused, which
+///   belongs to a different binding. Releasing it here would be a double
+///   free.
+fn allocates_fresh_heap(expr: &Expr) -> bool {
+    matches!(
+        expr,
+        Expr::StrConcat { .. }
+            | Expr::StrTrim { .. }
+            | Expr::StrToUpper { .. }
+            | Expr::StrToLower { .. }
+            | Expr::StrReplace { .. }
+            | Expr::StrRunes { .. }
+            | Expr::StrSplit { .. }
+            | Expr::ToString { .. }
+            | Expr::ArrayPush { .. }
+            | Expr::ArrayPop { .. }
+            | Expr::ArraySet { .. }
+            | Expr::ArrayRemove { .. }
+    )
+}
+
+/// Whether `expr` contains an `Inc` targeting `name` — i.e. whether
+/// `mark_last_uses` found more than one use of it. See
+/// `insert_refcount_ops`' `Let` arm for why that distinction is
+/// load-bearing rather than an optimization detail.
+fn incs_name(expr: &Expr, name: &str) -> bool {
+    if let Expr::RcAnnotated { op: RcOp::Inc, target, .. } = expr {
+        if target == name {
+            return true;
+        }
+    }
+    let mut found = false;
+    for_each_child(expr, &mut |c| {
+        if !found && incs_name(c, name) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Whether `expr` reuses `name`'s cell in place — i.e. whether one of
+/// the `*Reuse` nodes this pass produces has taken over responsibility
+/// for that reference. See `mark_reuse_scoped`'s `Let` arm.
+fn reuses_name(expr: &Expr, name: &str) -> bool {
+    let claims = match expr {
+        Expr::CtorReuse { reuse_of, .. }
+        | Expr::ArrayPushReuse { reuse_of, .. }
+        | Expr::ArrayPopReuse { reuse_of }
+        | Expr::ArraySetReuse { reuse_of, .. }
+        | Expr::ArrayRemoveReuse { reuse_of, .. }
+        | Expr::StrConcatReuse { reuse_of, .. }
+        | Expr::StrTrimReuse { reuse_of }
+        | Expr::StrToUpperReuse { reuse_of }
+        | Expr::StrToLowerReuse { reuse_of }
+        | Expr::StrReplaceReuse { reuse_of, .. } => reuse_of == name,
+        _ => false,
+    };
+    if claims {
+        return true;
+    }
+    let mut found = false;
+    for_each_child(expr, &mut |c| {
+        if !found && reuses_name(c, name) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Undoes `drop_at_scope_end` for `name`, recognizing the exact shape it
+/// produces and nothing else — if `expr` is not that shape it is returned
+/// untouched, so a failure to match can only ever leave a leak, never
+/// strip something load-bearing.
+fn strip_scope_end_release(expr: Expr, name: &str) -> Expr {
+    let tmp = format!("drop${name}");
+    if let Expr::Let { name: outer, value, body } = &expr {
+        if *outer == tmp {
+            if let Expr::RcAnnotated { op: RcOp::Dec, target, rest } = body.as_ref() {
+                if target == name {
+                    if let Expr::Var(v) = rest.as_ref() {
+                        if *v == tmp {
+                            return (**value).clone();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    expr
+}
+
+/// Applies `f` to every direct child subexpression.
+///
+/// Exhaustive over `Expr` with NO `_` arm, deliberately. An earlier
+/// version had a catch-all and silently skipped `StrConcat` (among
+/// others), which made `incs_name` miss an increment nested inside one —
+/// so a two-use string binding was mistaken for single-use, its
+/// protective increment was dropped, and reuse-in-place then destroyed a
+/// value still needed later. That surfaced as `let s = "ab"; let t =
+/// s.concat("cd"); s.len() + t.len()` returning 8 instead of 6. A missing
+/// arm here is a wrong-answer bug, so it must fail to compile instead.
+fn for_each_child<'a>(expr: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
+    match expr {
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::Str(_)
+        | Expr::Bool(_)
+        | Expr::Unit
+        | Expr::Var(_)
+        | Expr::EmptyArray(_)
+        | Expr::Channel { .. }
+        | Expr::ArgsRaw
+        | Expr::RandomRaw
+        | Expr::ArrayPopReuse { .. }
+        | Expr::StrTrimReuse { .. }
+        | Expr::StrToUpperReuse { .. }
+        | Expr::StrToLowerReuse { .. } => {}
+
+        Expr::Unary(_, e)
+        | Expr::AsCStr(e)
+        | Expr::AsString(e)
+        | Expr::ToIntTrunc(e)
+        | Expr::ToIntRound(e)
+        | Expr::ToFloat(e) => f(e),
+        Expr::Binary(_, l, r) => {
+            f(l);
+            f(r);
+        }
+        Expr::Let { value, body, .. } => {
+            f(value);
+            f(body);
+        }
+        Expr::If { cond, then_branch, else_branch } => {
+            f(cond);
+            f(then_branch);
+            f(else_branch);
+        }
+        Expr::Call { callee, args } => {
+            f(callee);
+            args.iter().for_each(|a| f(a));
+        }
+        Expr::ExternCall { args, .. } => args.iter().for_each(|a| f(a)),
+        Expr::Ctor { fields, .. } | Expr::CtorReuse { fields, .. } => fields.iter().for_each(|x| f(x)),
+        Expr::Match { scrutinee, arms } => {
+            f(scrutinee);
+            for a in arms {
+                if let Some(g) = &a.guard {
+                    f(g);
+                }
+                f(&a.body);
+            }
+        }
+        Expr::RcAnnotated { rest, .. } => f(rest),
+        Expr::For { start, end, body, .. } => {
+            f(start);
+            f(end);
+            f(body);
+        }
+        Expr::Closure { body, .. } => f(body),
+        Expr::Assign { value, rest, .. } => {
+            f(value);
+            f(rest);
+        }
+        Expr::Spawn { block } => f(block),
+        Expr::TaskJoin { task } => f(task),
+        Expr::ChannelSend { sender, value } => {
+            f(sender);
+            f(value);
+        }
+        Expr::ChannelRecv { receiver } => f(receiver),
+        Expr::Select { arms } => {
+            for a in arms {
+                f(&a.receiver);
+                f(&a.body);
+            }
+        }
+
+        Expr::Index { base, index } => {
+            f(base);
+            f(index);
+        }
+        Expr::ArrayLen { array } | Expr::ArrayPop { array } => f(array),
+        Expr::ArrayPush { array, value } => {
+            f(array);
+            f(value);
+        }
+        Expr::ArraySet { array, index, value } => {
+            f(array);
+            f(index);
+            f(value);
+        }
+        Expr::ArrayRemove { array, index } => {
+            f(array);
+            f(index);
+        }
+        Expr::ArrayPushReuse { value, .. } => f(value),
+        Expr::ArraySetReuse { index, value, .. } => {
+            f(index);
+            f(value);
+        }
+        Expr::ArrayRemoveReuse { index, .. } => f(index),
+
+        Expr::StrConcat { base, other } => {
+            f(base);
+            f(other);
+        }
+        Expr::StrConcatReuse { other, .. } => f(other),
+        Expr::StrRunes { base }
+        | Expr::StrTrim { base }
+        | Expr::StrToUpper { base }
+        | Expr::StrToLower { base }
+        | Expr::ToString { base }
+        | Expr::StrHash { base }
+        | Expr::RefGet { base } => f(base),
+        Expr::StrSplit { base, sep } => {
+            f(base);
+            f(sep);
+        }
+        Expr::StrContains { base, needle } => {
+            f(base);
+            f(needle);
+        }
+        Expr::StrStartsWith { base, prefix } => {
+            f(base);
+            f(prefix);
+        }
+        Expr::StrEndsWith { base, suffix } => {
+            f(base);
+            f(suffix);
+        }
+        Expr::StrReplace { base, from, to } => {
+            f(base);
+            f(from);
+            f(to);
+        }
+        Expr::StrReplaceReuse { from, to, .. } => {
+            f(from);
+            f(to);
+        }
+
+        Expr::RefNew { value } => f(value),
+        Expr::RefSet { base, value } => {
+            f(base);
+            f(value);
+        }
+        Expr::ReadFileRaw { path } => f(path),
+        Expr::WriteFileRaw { path, contents } => {
+            f(path);
+            f(contents);
+        }
+        Expr::EnvVarRaw { name } => f(name),
+        Expr::PanicRaw { message } => f(message),
+    }
+}
+
+
+/// Whether EVERY mention of `name` inside `expr` sits in a position that
+/// only READS the value, never taking ownership of it.
+///
+/// The whitelist is deliberately narrow, and the default is OWNED: any
+/// position not listed here makes this return `false`, which leaves the
+/// binding on the pre-existing `mark_last_uses` path unchanged. So
+/// widening this predicate can turn a leak into a release, but never
+/// turns a working program into a double-free — the risk is entirely
+/// one-directional, which is what makes it safe to grow one position at
+/// a time with a measurement behind each.
+///
+/// What disqualifies a binding, and why each matters:
+///
+/// - Anything that STORES the value (a `Ctor`/`CtorReuse` field, an
+///   array element, a `Let` alias) takes ownership of the reference.
+/// - A `Call`/`ExternCall` argument, conservatively: this backend's
+///   callees do not release their own parameters, but a callee is free
+///   to store an argument into a cell that outlives the call, and
+///   nothing at this call site can tell the two apart.
+/// - A bare mention in the body's TAIL position — that is the function's
+///   return value, and returning transfers ownership to the caller.
+///   Not distinguished structurally here; it falls out of `Var` not
+///   being whitelisted anywhere except inside the listed borrow slots.
+/// - `AsCStr`, specifically: `transform` inserts a PROTECTIVE `Inc`
+///   before one to close a real use-after-free, and a binding released
+///   at scope end must not also be on that path.
+/// - `reuse_of` on any of the `*Reuse` nodes. That name's cell is
+///   consumed by the reuse itself (`CtorReuse` releases the old cell
+///   before overwriting it), so releasing it again at scope end would be
+///   a double free. This is the one case where getting it wrong is
+///   memory-unsafe rather than merely leaky, so it is checked
+///   explicitly rather than left to the OWNED default.
+fn all_uses_are_borrows(expr: &Expr, name: &str) -> bool {
+    if !expr_mentions_var(expr, name) {
+        return true;
+    }
+    match expr {
+        // The borrow positions. Each reads through the pointer and hands
+        // back something that does not alias the cell's ownership:
+        // `Match` inspects the tag and copies fields out (and increments
+        // any heap-shaped field it binds — see DESIGN.md), `ArrayLen`
+        // loads the length word, `Index` loads one element.
+        Expr::Match { scrutinee, arms } => {
+            let scrutinee_ok = matches!(scrutinee.as_ref(), Expr::Var(n) if n == name)
+                || all_uses_are_borrows(scrutinee, name);
+            scrutinee_ok
+                && arms.iter().all(|arm| {
+                    // A rebinding shadows the outer name, so uses below
+                    // it refer to something else entirely.
+                    arm.bindings.iter().any(|b| b == name)
+                        || (arm.guard.as_ref().map(|g| all_uses_are_borrows(g, name)).unwrap_or(true)
+                            && all_uses_are_borrows(&arm.body, name))
+                })
+        }
+        Expr::ArrayLen { array } => borrowed_slot(array, name),
+        // `Index` is deliberately NOT a borrow slot, despite looking
+        // like the most obvious one. `codegen_index` loads the element
+        // word and hands it straight back with NO increment, so `a[0]`
+        // on an array of heap values returns a pointer the array still
+        // owns. Releasing `a` at scope end would leave that element
+        // dangling — found as a segfault in the string/JSON tests, not by
+        // inspection. Whether it is safe depends on the ELEMENT type,
+        // which this IR does not carry.
+
+        // The pure string operations. Every one is a mathematical
+        // function of its inputs — it reads their bytes and allocates a
+        // fresh cell for the result (verified by reading each runtime
+        // definition in `emit_runtime`, e.g. `@plum_str_concat` loads
+        // both lengths, allocates, and `memcpy`s), so none takes
+        // ownership of an operand.
+        //
+        // `AsString` is deliberately absent: it can return its input
+        // register unchanged, so it is not a read-only slot. So are the
+        // `*Reuse` variants, which consume what they reuse.
+        Expr::StrConcat { base, other } => borrowed_slot(base, name) && borrowed_slot(other, name),
+        Expr::StrContains { base, needle } => borrowed_slot(base, name) && borrowed_slot(needle, name),
+        Expr::StrStartsWith { base, prefix } => borrowed_slot(base, name) && borrowed_slot(prefix, name),
+        Expr::StrEndsWith { base, suffix } => borrowed_slot(base, name) && borrowed_slot(suffix, name),
+        Expr::StrSplit { base, sep } => borrowed_slot(base, name) && borrowed_slot(sep, name),
+        Expr::StrReplace { base, from, to } => {
+            borrowed_slot(base, name) && borrowed_slot(from, name) && borrowed_slot(to, name)
+        }
+        Expr::StrRunes { base }
+        | Expr::StrTrim { base }
+        | Expr::StrToUpper { base }
+        | Expr::StrToLower { base }
+        | Expr::ToString { base }
+        | Expr::StrHash { base } => borrowed_slot(base, name),
+
+        // Structural recursion through everything that cannot itself own
+        // a value: control flow and scalar arithmetic.
+        Expr::If { cond, then_branch, else_branch } => {
+            all_uses_are_borrows(cond, name)
+                && all_uses_are_borrows(then_branch, name)
+                && all_uses_are_borrows(else_branch, name)
+        }
+        Expr::Binary(_, l, r) => all_uses_are_borrows(l, name) && all_uses_are_borrows(r, name),
+        Expr::Unary(_, e) => all_uses_are_borrows(e, name),
+        Expr::Let { name: n, value, body } => {
+            all_uses_are_borrows(value, name) && (n == name || all_uses_are_borrows(body, name))
+        }
+        Expr::RcAnnotated { rest, .. } => all_uses_are_borrows(rest, name),
+        Expr::Assign { name: n, value, rest } => {
+            // Assigning THROUGH the name replaces the binding this
+            // analysis is about, which its scope-end release has no way
+            // to account for.
+            n != name && all_uses_are_borrows(value, name) && all_uses_are_borrows(rest, name)
+        }
+        Expr::For { var, start, end, body } => {
+            all_uses_are_borrows(start, name)
+                && all_uses_are_borrows(end, name)
+                && (var == name || all_uses_are_borrows(body, name))
+        }
+
+        // Everything else that mentions `name` is treated as OWNED. This
+        // includes `Var(name)` reached directly (a bare mention outside
+        // any borrow slot above — a return, an alias, a stored field),
+        // every `*Reuse` node's `reuse_of`, `Ctor` fields, call
+        // arguments, `Closure` captures, and `AsCStr`.
+        _ => false,
+    }
+}
+
+/// A slot that BORROWS: a direct `Var(name)` here is fine. Anything else
+/// is an ordinary subexpression, checked normally — the borrow applies to
+/// the slot, not to whatever computes the value that lands in it.
+fn borrowed_slot(expr: &Expr, name: &str) -> bool {
+    matches!(expr, Expr::Var(n) if n == name) || all_uses_are_borrows(expr, name)
+}
+
+/// Wraps `body` so `name` is released AFTER `body` has produced its
+/// value.
+///
+/// `RcAnnotated { op: Dec, .. }` decrements BEFORE its `rest`, and this
+/// IR has no "decrement after this expression produces its value" node,
+/// so the body's result is bound to a synthetic temporary first. `$`
+/// cannot appear in a Plum identifier, so the name can never collide
+/// with a user's own (the same guarantee `monomorphize`'s mangling
+/// relies on); it is derived from `name` rather than a counter so this
+/// stays a pure function of its input, which the bootstrap fixed point
+/// depends on.
+///
+/// One consequence worth naming: `body` stops being in tail position, so
+/// a call at the end of it is no longer a `musttail` candidate. That is
+/// a correctness requirement rather than a lost optimization — a scope
+/// with a value still to release cannot hand its frame away.
+fn drop_at_scope_end(body: Expr, name: &str) -> Expr {
+    let tmp = format!("drop${name}");
+    Expr::Let {
+        name: tmp.clone(),
+        value: Box::new(body),
+        body: Box::new(Expr::RcAnnotated {
+            op: RcOp::Dec,
+            target: name.to_string(),
+            rest: Box::new(Expr::Var(tmp)),
+        }),
     }
 }
 
@@ -2178,6 +2707,196 @@ mod tests {
             value: Box::new(value),
             rest: Box::new(rest),
         }
+    }
+
+    // --- scope-end release for borrow-only bindings ---
+    //
+    // The gap these close: before them, `RcOp::Dec` was only ever emitted
+    // for a binding NOTHING referenced, so every heap value a program
+    // actually used leaked. Measured linear at 13.7/47.9/185.1 MB for
+    // 250k/1M/4M iterations of `let p = Point { .. }; match p { .. }`.
+
+    /// `drop$<name>`, the synthetic temporary `drop_at_scope_end` binds
+    /// the body's result to so the release can happen AFTER it.
+    fn drop_tmp(name: &str) -> String {
+        format!("drop${name}")
+    }
+
+    #[test]
+    fn a_match_scrutinee_is_a_borrow_so_its_binding_is_released_at_scope_end() {
+        // `let p = Point(..); match p { Point(x) => x }` — the match reads
+        // the tag and copies fields out; it does not consume the cell.
+        let input = let_(
+            "p",
+            ctor("Point", vec![int(1)]),
+            match_(var("p"), vec![arm("Point", vec!["x"], var("x"))]),
+        );
+        let out = insert_refcount_ops(input);
+        let Expr::Let { name, body, .. } = &out else {
+            panic!("expected a Let, got {out:?}");
+        };
+        assert_eq!(name, "p");
+        let Expr::Let { name: tmp, body: inner, .. } = body.as_ref() else {
+            panic!("expected the scope-end temporary, got {body:?}");
+        };
+        assert_eq!(*tmp, drop_tmp("p"));
+        assert_eq!(
+            **inner,
+            dec("p", var(&drop_tmp("p"))),
+            "the release must run AFTER the body has produced its value"
+        );
+    }
+
+    #[test]
+    fn array_len_is_a_borrow_slot() {
+        let input = let_("a", ctor("Arr", vec![]), Expr::ArrayLen { array: Box::new(var("a")) });
+        assert!(
+            expr_mentions_dec(&insert_refcount_ops(input), "a"),
+            "`.len()` only loads the length word, so `a` should be released"
+        );
+    }
+
+    #[test]
+    fn indexing_is_not_a_borrow_slot() {
+        // Deliberately excluded: `codegen_index` hands back the element
+        // word with NO increment, so `a[0]` on an array of heap values
+        // returns a pointer the array still owns. Releasing `a` would
+        // dangle it — this was a real segfault, not a hypothetical.
+        let input = let_(
+            "a",
+            ctor("Arr", vec![]),
+            Expr::Index { base: Box::new(var("a")), index: Box::new(int(0)) },
+        );
+        assert!(!expr_mentions_dec(&insert_refcount_ops(input), "a"));
+    }
+
+    #[test]
+    fn a_binding_used_twice_is_left_on_the_old_path_with_its_protective_inc() {
+        // Two uses means `mark_last_uses` inserts an `Inc`, and that
+        // increment is the ONLY thing stopping reuse-in-place from
+        // destroying a value still needed later — reuse has no static
+        // check, just a runtime `rc == 1` test. So multi-use bindings keep
+        // the pre-existing behaviour exactly.
+        // Two uses on ONE path (a `Binary`), not two branches — both are
+        // genuinely evaluated, so the first is not a last use.
+        let input = let_(
+            "p",
+            ctor("Point", vec![int(1)]),
+            Expr::Binary(
+                BinOp::Add,
+                Box::new(Expr::ArrayLen { array: Box::new(var("p")) }),
+                Box::new(Expr::ArrayLen { array: Box::new(var("p")) }),
+            ),
+        );
+        let out = insert_refcount_ops(input);
+        // `expr_mentions_inc_deep`, not this module's older
+        // `expr_mentions_inc` — that one does not descend into
+        // `ArrayLen`, so it would report "no Inc" for exactly this shape.
+        assert!(expr_mentions_inc_deep(&out, "p"), "the protective Inc must survive");
+        assert!(!expr_mentions_dec(&out, "p"), "and no scope-end release is added");
+    }
+
+    #[test]
+    fn a_binding_with_a_consuming_use_is_left_unchanged() {
+        // Storing the value in a `Ctor` transfers ownership, so the
+        // pre-existing "last use consumes" handling applies.
+        let input = let_("p", ctor("Point", vec![int(1)]), ctor("Wrapper", vec![var("p")]));
+        assert!(!expr_mentions_dec(&insert_refcount_ops(input), "p"));
+    }
+
+    #[test]
+    fn reuse_in_place_wins_over_the_scope_end_release() {
+        // Both claim the same reference, so exactly one may happen. Reuse
+        // dominates — it avoids the allocation as well as releasing the
+        // cell — and doing both would be a double free. `optimize` runs
+        // reuse second, which retracts the optimistically-inserted
+        // release.
+        let input = let_(
+            "p",
+            ctor("Point", vec![int(1)]),
+            match_(var("p"), vec![arm("Point", vec!["x"], ctor("Point", vec![var("x")]))]),
+        );
+        let released = insert_refcount_ops(input.clone());
+        assert!(expr_mentions_dec(&released, "p"), "release inserted optimistically");
+
+        let optimized = optimize(input);
+        assert!(
+            !expr_mentions_dec(&optimized, "p"),
+            "and retracted once reuse claimed the cell: {optimized:?}"
+        );
+        assert!(expr_mentions_ctor_reuse(&optimized, "p"), "reuse should still fire: {optimized:?}");
+    }
+
+    #[test]
+    fn a_string_producing_operation_is_releasable_even_though_it_is_not_a_ctor() {
+        // `is_syntactically_heap` only recognizes `Ctor`/`Str` literal/
+        // `EmptyArray`, so `let s = a.concat(b)` was never tracked at all
+        // — 139MB per 1M iterations. `allocates_fresh_heap` covers it, at
+        // this one site only.
+        let input = let_(
+            "s",
+            Expr::StrConcat { base: Box::new(Expr::Str("a".into())), other: Box::new(Expr::Str("b".into())) },
+            Expr::ArrayLen { array: Box::new(var("s")) },
+        );
+        assert!(expr_mentions_dec(&insert_refcount_ops(input), "s"));
+    }
+
+    #[test]
+    fn an_unused_binding_still_gets_the_better_immediate_release() {
+        // Zero uses trivially satisfies "all uses are borrows", but
+        // releasing immediately beats releasing at scope end, so the
+        // pre-existing path must still win.
+        let input = let_("p", ctor("Point", vec![]), int(5));
+        assert_eq!(insert_refcount_ops(input), let_("p", ctor("Point", vec![]), dec("p", int(5))));
+    }
+
+    /// A COMPLETE walk, unlike this module's older `expr_mentions_inc`
+    /// (which has its own hand-rolled, partial recursion and misses
+    /// annotations nested inside e.g. `ArrayLen`). Built on
+    /// `super::for_each_child`, which is exhaustive by construction.
+    fn expr_mentions_inc_deep(expr: &Expr, name: &str) -> bool {
+        if let Expr::RcAnnotated { op: RcOp::Inc, target, .. } = expr {
+            if target == name {
+                return true;
+            }
+        }
+        let mut found = false;
+        super::for_each_child(expr, &mut |c| {
+            if !found && expr_mentions_inc_deep(c, name) {
+                found = true;
+            }
+        });
+        found
+    }
+
+    fn expr_mentions_dec(expr: &Expr, name: &str) -> bool {
+        if let Expr::RcAnnotated { op: RcOp::Dec, target, .. } = expr {
+            if target == name {
+                return true;
+            }
+        }
+        let mut found = false;
+        super::for_each_child(expr, &mut |c| {
+            if !found && expr_mentions_dec(c, name) {
+                found = true;
+            }
+        });
+        found
+    }
+
+    fn expr_mentions_ctor_reuse(expr: &Expr, name: &str) -> bool {
+        if let Expr::CtorReuse { reuse_of, .. } = expr {
+            if reuse_of == name {
+                return true;
+            }
+        }
+        let mut found = false;
+        super::for_each_child(expr, &mut |c| {
+            if !found && expr_mentions_ctor_reuse(c, name) {
+                found = true;
+            }
+        });
+        found
     }
 
     #[test]

@@ -1668,6 +1668,108 @@ mod tests {
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("42".to_string()));
     }
 
+    // --- scope-end release for borrow-only bindings ---
+    //
+    // See `plum_ir::fbip`'s `all_uses_are_borrows`. Before it, `Dec` was
+    // only ever emitted for a binding NOTHING referenced, so every heap
+    // value a program actually used leaked — verified linear at
+    // 13.7/47.9/185.1 MB for 250k/1M/4M iterations. These pin the
+    // CORRECTNESS half; the memory half is measured directly (flat at
+    // 5.2MB through 4M iterations).
+
+    #[test]
+    fn a_struct_allocated_and_matched_in_a_loop_stays_correct() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { let p = Point { x: i, y: i }; acc = acc + match p { Point(x, y) => x + y }; }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("999000".to_string()));
+    }
+
+    #[test]
+    fn a_matched_struct_with_a_string_field_keeps_the_field_alive() {
+        // The scrutinee is released at scope end now, so a bound `Str`
+        // field must be incremented when it is extracted. Match arms used
+        // to increment only `CgType::Heap` fields, silently omitting
+        // `Str`/`Array`/`Closure`/`Ref` — harmless while nothing ever
+        // released a scrutinee, a dangling pointer the moment something
+        // did.
+        let src = "struct Named { name: String, n: Int }\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..100 { \
+                           let p = Named { name: \"abcd\", n: i }; \
+                           acc = acc + match p { Named(nm, k) => nm.len() + k }; \
+                       }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("5350".to_string()));
+    }
+
+    #[test]
+    fn a_matched_struct_with_an_array_field_keeps_the_field_alive() {
+        // Same argument for an `Array`-typed field, the other shape the
+        // old `== CgType::Heap` check omitted.
+        let src = "struct Bag { items: Array[Int], n: Int }\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..100 { \
+                           let b = Bag { items: [1, 2, 3], n: i }; \
+                           acc = acc + match b { Bag(xs, k) => xs.len() + k }; \
+                       }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("5250".to_string()));
+    }
+
+    #[test]
+    fn an_escaping_matched_field_outlives_its_released_scrutinee() {
+        // The field escapes the scope that released the scrutinee. It
+        // survives because extraction incremented it and the scrutinee's
+        // release decrements it right back — a transfer, not a leak.
+        let src = "struct Named { name: String }\n\
+                   let extract (): String = { let p = Named { name: \"survives\" }; match p { Named(nm) => nm } }\n\
+                   let go (): Int = extract().len()";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("8".to_string()));
+    }
+
+    #[test]
+    fn indexing_a_heap_array_does_not_release_the_array_underneath_it() {
+        // `codegen_index` returns the element word with no increment, so
+        // the element is borrowed from the array. If `Index` were treated
+        // as a borrow slot, the array would be released while its element
+        // was still in use — a real segfault, found in exactly this
+        // shape.
+        let src = "let go (): Int = { let a = [\"alpha\", \"beta\"]; let s = a[0]; s.len() }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("5".to_string()));
+    }
+
+    #[test]
+    fn a_string_used_after_a_reuse_in_place_concat_still_sees_its_own_contents() {
+        // The native counterpart of `plumc::tests::string_reused_after_a_
+        // reuse_in_place_concat_...`. A non-last use's `Inc` is the ONLY
+        // guard on reuse-in-place, which has no static check at all —
+        // just a runtime `rc == 1` test. Dropping that increment let
+        // `.concat()` destructively overwrite `s`, and this returned 8.
+        let src = "let go (): Int = { let s = \"ab\"; let t = s.concat(\"cd\"); s.len() + t.len() }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("6".to_string()));
+    }
+
+    #[test]
+    fn a_freshly_concatenated_string_bound_and_only_measured_is_released() {
+        // `StrConcat` is not a `Ctor`/`Str` literal/`EmptyArray`, so
+        // `is_syntactically_heap` never saw it as heap — 139MB per 1M
+        // iterations. `allocates_fresh_heap` covers it.
+        let src = "let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { let a = \"abcd\"; let b = \"efgh\"; let s = a.concat(b); acc = acc + s.len(); }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("8000".to_string()));
+    }
+
     // --- Ref[T]: the shared mutable cell (see `CgType::Ref`) ---
 
     #[test]

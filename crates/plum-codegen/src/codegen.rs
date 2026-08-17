@@ -5546,7 +5546,30 @@ pub(crate) fn codegen_expr(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx, 
                     let field_types = tag_field_types(ctx, &arm.tag)?.to_vec();
                     for (i, (name, fty)) in arm.bindings.iter().zip(&field_types).enumerate() {
                         let val = load_field_word(em, &scrutinee_ptr, i, fty.clone());
-                        if *fty == CgType::Heap {
+                        // EVERY refcounted field shape, not just
+                        // `CgType::Heap` — `dec_fn_for(..).is_some()` is
+                        // exactly "this shape has a refcount word".
+                        //
+                        // This used to be `== CgType::Heap`, silently
+                        // omitting `Str`, `Array`, `Closure` and `Ref`
+                        // fields. That was harmless only while nothing
+                        // ever released a match scrutinee: the binding
+                        // borrowed the field and the scrutinee outlived
+                        // it by virtue of leaking. Now that
+                        // `fbip::all_uses_are_borrows` releases a
+                        // scrutinee at scope end, an un-incremented
+                        // `Str` field would dangle the moment the
+                        // scrutinee went away.
+                        //
+                        // Not a new leak either, despite adding
+                        // increments: it TRANSFERS one reference from
+                        // the scrutinee to the binding. When the
+                        // scrutinee is released, `plum_release_fields`
+                        // decrements the field right back, so an escaping
+                        // field ends up correctly owned and a discarded
+                        // one leaks no more than the whole scrutinee used
+                        // to.
+                        if crate::dec_fn_for(fty).is_some() {
                             em.push(format!("  call void @plum_rc_inc(ptr {val})"));
                         }
                         arm_env.insert(name.clone(), (val, fty.clone()));

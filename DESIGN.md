@@ -9658,3 +9658,123 @@ makes `Ref` useful for aliasing at all, so `eq_fn_for` returns `None`
 pointer compare — the direct analogue of the interpreter's `Rc::ptr_eq`.
 `.to_string()` is likewise unsupported: printing contents would render
 two genuinely distinct cells identically.
+
+## Nothing was ever freed (2026-08-17)
+
+Chasing the remaining `Ref` leak turned up something much larger. The
+`.get()` leak was a symptom; the disease was that **the native backend
+never released anything at all.**
+
+`fbip`'s own comment stated it, and had for a long time:
+
+> `RcOp::Dec` is only ever emitted by this pass's `Let` arm's "name never
+> referenced at all" case, gated on `used == false`
+
+So a heap binding was released only if it was never used. Every value a
+program actually *used* leaked. Measured, in ordinary code, per 1M
+iterations of a loop:
+
+| shape | before | after |
+| --- | --- | --- |
+| `let p = Point { .. }; match p { .. }` | 47.9 MB | **5.2 MB** |
+| `let a = [i, i, i, i]; a.len()` | 63.3 MB | **5.2 MB** |
+| `let s = Circle(i); match s { .. }` | 32.6 MB | **5.2 MB** |
+| `let s = a.concat(b); s.len()` | 139.5 MB | **5.2 MB** |
+
+Linear before (13.7 / 47.9 / 185.1 MB at 250k / 1M / 4M), flat after
+(5.2 MB at 4M). This contradicted DESIGN.md's own memory model, which has
+specified "at a variable's final use, insert a `drop`" from the start.
+What had been carrying the project was reuse-in-place — a different
+mechanism entirely.
+
+### The cause is borrow vs. consume, again
+
+Perceus assumes **the last use CONSUMES**, so it emits no trailing
+decrement: ownership moves into whatever the last use was. True for a
+`Ctor` field, a call argument, a return. False for a `match` scrutinee,
+`.len()`, or `.concat()`'s operands, which only READ. The reference is
+read and dropped on the floor.
+
+That is the same insight as `Ref`'s (`plum_ir::refdrop`, the day before),
+which is what made this one findable.
+
+`all_uses_are_borrows` identifies bindings whose every use is a read, and
+`drop_at_scope_end` releases them. The whitelist of borrow positions is
+narrow and the DEFAULT IS OWNED, so any position not listed leaves the
+binding on the pre-existing path untouched. Widening it can turn a leak
+into a release but never turns a working program into a double free —
+the risk is one-directional, which is what makes it safe to grow one
+position at a time with a measurement behind each.
+
+`allocates_fresh_heap` covers the string/array-producing operations,
+consulted at that ONE site rather than added to `is_syntactically_heap`
+— which feeds `mark_last_uses` and `mark_reuse` too, so widening it would
+have been a broad behavioural change of exactly the kind whose earlier
+attempt is recorded above as found unsafe and reverted.
+
+### Four things this got wrong first, each caught by a measurement
+
+**1. `Index` is not a borrow.** `codegen_index` hands back the element
+word with no increment, so `a[0]` returns a pointer the array still owns.
+Releasing the array dangles it. Found as a segfault in the string and
+JSON tests. Whether it is safe depends on the ELEMENT type, which this IR
+does not carry, so it stays owned.
+
+**2. Match arms only incremented `CgType::Heap` fields.** `Str`, `Array`,
+`Closure` and `Ref` fields were silently omitted — harmless for as long
+as nothing ever released a scrutinee, a dangling pointer the moment
+something did. Now gated on `dec_fn_for(..).is_some()`, i.e. "this shape
+has a refcount word". Not a new leak: it TRANSFERS one reference from
+the scrutinee to the binding, and the scrutinee's release decrements it
+right back.
+
+**3. Removing the increments broke reuse-in-place.** This was the sharp
+one. Those `Inc`s are not merely release bookkeeping — **reuse has no
+static check at all, only a runtime `rc == 1` test**, so a non-last use's
+increment is the only thing stopping `StrConcatReuse` from destructively
+overwriting a string still needed afterwards. Without it,
+`let s = "ab"; let t = s.concat("cd"); s.len() + t.len()` returned 8
+instead of 6. The release is therefore restricted to bindings with
+exactly ONE use, where there is no increment to remove. Multi-use
+bindings keep today's behaviour byte for byte, and every measured case is
+single-use anyway.
+
+**4. Reuse and release both claim the same reference.** Doing both is a
+double free. Reuse WINS wherever it fires, since it avoids the allocation
+as well as releasing the cell. Resolved by inserting the release
+optimistically in `insert_refcount_ops` and RETRACTING it in
+`mark_reuse`, by the code that just decided to reuse — rather than
+duplicating reuse's conditions into the earlier pass, where a predicate
+that drifted apart would produce a double free, the worst available
+failure mode.
+
+There was also a plain bug in my own helper: `for_each_child` had a `_`
+catch-all and skipped `StrConcat`, so `incs_name` missed an increment
+nested inside one and misread a two-use binding as single-use. That is
+what produced (3). It is exhaustive with no `_` arm now, so a missing arm
+fails to compile.
+
+### Verified
+
+520 plumc tests + 301 in plum-ir, all 15 suites, fixed point
+byte-identical, corpus 99/99, exec_corpus 18/18, and **zero ASan errors**
+(no use-after-free, no double-free) across the whole corpus plus the
+concurrency and shared-mutability examples. The self-hosted compiler is
+unchanged in both memory and speed (254 MB / 0.191 s to check itself,
+identical before and after) — its hot paths are dominated by multi-use
+bindings and reuse, which this deliberately does not touch.
+
+### What is still open
+
+**Unbound temporaries.** `let s = "a".concat("b")` leaks the two literals:
+they are never bound to anything, so there is no binding to hang a
+release on. Bind them (`let a = "a"; let b = "b"; a.concat(b)`) and it is
+flat. Fixing it properly means A-normalising the IR so every intermediate
+gets a name.
+
+**Multi-use bindings**, deliberately, until reuse-in-place stops relying
+on a bare runtime refcount check for its safety.
+
+**Owned parameters and match-extracted bindings**, which need heap-ness
+information the IR does not carry — the same blocker recorded in the
+"gap 1" entry above.
