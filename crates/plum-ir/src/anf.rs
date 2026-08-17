@@ -129,8 +129,83 @@ fn hoistable(expr: &Expr) -> bool {
     all_atoms
 }
 
+/// The set of functions whose RESULT the caller owns — i.e. whose return
+/// value is always a reference the caller may release.
+///
+/// This exists so a call-result intermediate can be released. It was the
+/// last shape still leaking (48.1 MB per 1M iterations of
+/// `match mk(i) { .. }`), and the reason is a real one: this backend's
+/// callees do not release their parameters, so a function may RETURN one
+/// and the caller then holds no extra reference. Releasing the result of
+/// `let pass (p) = p` would free the caller's own value.
+///
+/// The safe, convention-preserving answer is to identify the functions
+/// for which that cannot happen, rather than to change what a parameter
+/// means. Nothing here adds an increment anywhere and no calling
+/// convention moves; a function either provably hands back a new
+/// reference or it does not, and "does not" is the default.
+///
+/// A least fixpoint from the empty set, so mutual recursion simply fails
+/// to qualify rather than being assumed safe — an optimistic
+/// greatest-fixpoint would be the usual formulation and would qualify
+/// more functions, but being wrong here is a use-after-free, and the
+/// common shape this targets (a constructor-style function whose body IS
+/// a `Ctor`) converges on the first pass anyway.
+fn owned_returning(program: &crate::ir::Program) -> std::collections::HashSet<String> {
+    let mut owned: std::collections::HashSet<String> = std::collections::HashSet::new();
+    loop {
+        let mut changed = false;
+        for f in &program.functions {
+            if !owned.contains(&f.name) && returns_owned(&f.body, &owned) {
+                owned.insert(f.name.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            return owned;
+        }
+    }
+}
+
+/// Whether `tail` — an expression in RETURN position — always evaluates
+/// to a reference its caller owns.
+///
+/// Deliberately conservative, and the default is `false`. Two refusals
+/// are worth naming because both look like they could be allowed:
+///
+/// - A bare `Var`, even a match-extracted binding that codegen DID
+///   increment. Telling those apart from a parameter needs types the IR
+///   does not carry, and mistaking a parameter for an owned value is a
+///   use-after-free.
+/// - `Index`, which loads an element with no increment — the array still
+///   owns it.
+///
+/// A scalar return (`Int`, `Unit`, a comparison) is also `false`, which
+/// matters: a scalar has nothing to release, and marking such a function
+/// owned would invite a decrement on an `Int`.
+fn returns_owned(tail: &Expr, owned: &std::collections::HashSet<String>) -> bool {
+    if is_fresh_alloc(tail) {
+        return true;
+    }
+    match tail {
+        // Tail position threads through these unchanged.
+        Expr::Let { body, .. } => returns_owned(body, owned),
+        Expr::RcAnnotated { rest, .. } => returns_owned(rest, owned),
+        Expr::If { then_branch, else_branch, .. } => {
+            returns_owned(then_branch, owned) && returns_owned(else_branch, owned)
+        }
+        Expr::Match { arms, .. } => arms.iter().all(|a| returns_owned(&a.body, owned)),
+        // By induction over the fixpoint: a call to an owned-returning
+        // function hands back an owned reference, so returning it does
+        // too.
+        Expr::Call { callee, .. } => matches!(callee.as_ref(), Expr::Var(n) if owned.contains(n)),
+        _ => false,
+    }
+}
+
 /// A-normalises every function body and global initializer in `program`.
 pub fn anf_program(program: crate::ir::Program) -> crate::ir::Program {
+    let owned = owned_returning(&program);
     let mut counter = 0usize;
     crate::ir::Program {
         functions: program
@@ -139,7 +214,7 @@ pub fn anf_program(program: crate::ir::Program) -> crate::ir::Program {
             .map(|f| crate::ir::Function {
                 name: f.name,
                 params: f.params,
-                body: region(f.body, &mut counter),
+                body: region(f.body, &mut counter, &owned),
             })
             .collect(),
         globals: program
@@ -147,11 +222,23 @@ pub fn anf_program(program: crate::ir::Program) -> crate::ir::Program {
             .into_iter()
             .map(|g| crate::ir::Global {
                 name: g.name,
-                value: region(g.value, &mut counter),
+                value: region(g.value, &mut counter, &owned),
             })
             .collect(),
         externs: program.externs,
     }
+}
+
+/// Whether `expr` is a call whose result the caller owns AND whose
+/// arguments are all atoms — the two conditions that make it safe to
+/// hoist. See `owned_returning` for the first and this module's doc
+/// comment for the second (hoisting moves evaluation earlier, so a
+/// non-atom argument would be reordered against siblings).
+fn hoistable_owned_call(expr: &Expr, owned: &std::collections::HashSet<String>) -> bool {
+    let Expr::Call { callee, args } = expr else {
+        return false;
+    };
+    matches!(callee.as_ref(), Expr::Var(n) if owned.contains(n)) && args.iter().all(is_atom)
 }
 
 /// Flattens `expr` as a self-contained region: hoisted bindings are
@@ -160,15 +247,31 @@ pub fn anf_program(program: crate::ir::Program) -> crate::ir::Program {
 /// The region's OWN result is never hoisted — only proper
 /// subexpressions. Binding the result would hand it to `fbip` as a
 /// releasable local, which for a value being returned is exactly wrong.
-fn region(expr: Expr, counter: &mut usize) -> Expr {
+fn region(expr: Expr, counter: &mut usize, owned: &std::collections::HashSet<String>) -> Expr {
     let mut binds = Vec::new();
-    let flat = flatten(expr, &mut binds, counter);
+    let flat = flatten(expr, &mut binds, counter, owned);
     let mut out = flat;
-    for (name, value) in binds.into_iter().rev() {
+    for (name, value, is_owned_call) in binds.into_iter().rev() {
+        // A hoisted OWNED CALL gets its release emitted here rather than
+        // by `fbip`. `fbip::allocates_fresh_heap` does not recognize a
+        // `Call` (it cannot — that judgement needs the whole-program
+        // `owned_returning` analysis), so it will not add a second one;
+        // and `is_syntactically_heap` does not either, so the binding
+        // never becomes a reuse target or picks up increments.
+        //
+        // The borrow test is `fbip`'s OWN predicate, not a copy of it.
+        // Two passes deciding "is this use a borrow" separately is how
+        // they come to disagree, and disagreeing means a double free.
+        // Single-use is automatic: this pass created the one use itself.
+        let body = if is_owned_call && crate::fbip::all_uses_are_borrows(&out, &name) {
+            crate::fbip::drop_at_scope_end(out, &name)
+        } else {
+            out
+        };
         out = Expr::Let {
             name,
             value: Box::new(value),
-            body: Box::new(out),
+            body: Box::new(body),
         };
     }
     out
@@ -176,9 +279,15 @@ fn region(expr: Expr, counter: &mut usize) -> Expr {
 
 /// Hoists `child` into `binds` if it qualifies, returning what should
 /// stand in its place.
-fn hoist(child: Expr, binds: &mut Vec<(String, Expr)>, counter: &mut usize) -> Expr {
-    let flat = flatten(child, binds, counter);
-    if !hoistable(&flat) {
+fn hoist(
+    child: Expr,
+    binds: &mut Vec<(String, Expr, bool)>,
+    counter: &mut usize,
+    owned: &std::collections::HashSet<String>,
+) -> Expr {
+    let flat = flatten(child, binds, counter, owned);
+    let is_owned_call = hoistable_owned_call(&flat, owned);
+    if !hoistable(&flat) && !is_owned_call {
         return flat;
     }
     *counter += 1;
@@ -186,7 +295,7 @@ fn hoist(child: Expr, binds: &mut Vec<(String, Expr)>, counter: &mut usize) -> E
     // with a user's own name — the same guarantee `monomorphize`'s
     // mangling relies on.
     let name = format!("anf${counter}");
-    binds.push((name.clone(), flat));
+    binds.push((name.clone(), flat, is_owned_call));
     Expr::Var(name)
 }
 
@@ -197,7 +306,12 @@ fn hoist(child: Expr, binds: &mut Vec<(String, Expr)>, counter: &mut usize) -> E
 /// Exhaustive over `Expr` with no `_` arm, deliberately: a new variant
 /// must force a decision about whether its children are inline or
 /// deferred, rather than silently defaulting to one.
-fn flatten(expr: Expr, binds: &mut Vec<(String, Expr)>, counter: &mut usize) -> Expr {
+fn flatten(
+    expr: Expr,
+    binds: &mut Vec<(String, Expr, bool)>,
+    counter: &mut usize,
+    owned: &std::collections::HashSet<String>,
+) -> Expr {
     match expr {
         // Atoms and childless nodes.
         Expr::Int(_)
@@ -220,35 +334,35 @@ fn flatten(expr: Expr, binds: &mut Vec<(String, Expr)>, counter: &mut usize) -> 
         // Hoisting out of any of these would change WHETHER or HOW OFTEN
         // the expression is evaluated, not just when.
         Expr::If { cond, then_branch, else_branch } => Expr::If {
-            cond: Box::new(hoist(*cond, binds, counter)),
-            then_branch: Box::new(region(*then_branch, counter)),
-            else_branch: Box::new(region(*else_branch, counter)),
+            cond: Box::new(hoist(*cond, binds, counter, owned)),
+            then_branch: Box::new(region(*then_branch, counter, owned)),
+            else_branch: Box::new(region(*else_branch, counter, owned)),
         },
         Expr::Match { scrutinee, arms } => Expr::Match {
-            scrutinee: Box::new(hoist(*scrutinee, binds, counter)),
+            scrutinee: Box::new(hoist(*scrutinee, binds, counter, owned)),
             arms: arms
                 .into_iter()
                 .map(|arm| MatchArm {
                     tag: arm.tag,
                     bindings: arm.bindings,
-                    guard: arm.guard.map(|g| Box::new(region(*g, counter))),
-                    body: region(arm.body, counter),
+                    guard: arm.guard.map(|g| Box::new(region(*g, counter, owned))),
+                    body: region(arm.body, counter, owned),
                 })
                 .collect(),
         },
         Expr::For { var, start, end, body } => Expr::For {
             var,
-            start: Box::new(hoist(*start, binds, counter)),
-            end: Box::new(hoist(*end, binds, counter)),
-            body: Box::new(region(*body, counter)),
+            start: Box::new(hoist(*start, binds, counter, owned)),
+            end: Box::new(hoist(*end, binds, counter, owned)),
+            body: Box::new(region(*body, counter, owned)),
         },
         Expr::Closure { params, param_types, ret_type, body } => Expr::Closure {
             params,
             param_types,
             ret_type,
-            body: Box::new(region(*body, counter)),
+            body: Box::new(region(*body, counter, owned)),
         },
-        Expr::Spawn { block } => Expr::Spawn { block: Box::new(region(*block, counter)) },
+        Expr::Spawn { block } => Expr::Spawn { block: Box::new(region(*block, counter, owned)) },
         // Both slots of a `Select` arm are deferred — a receiver is polled
         // as part of the select's own scheduling, not evaluated inline
         // here.
@@ -256,8 +370,8 @@ fn flatten(expr: Expr, binds: &mut Vec<(String, Expr)>, counter: &mut usize) -> 
             arms: arms
                 .into_iter()
                 .map(|arm| SelectArm {
-                    receiver: region(arm.receiver, counter),
-                    body: region(arm.body, counter),
+                    receiver: region(arm.receiver, counter, owned),
+                    body: region(arm.body, counter, owned),
                 })
                 .collect(),
         },
@@ -267,160 +381,160 @@ fn flatten(expr: Expr, binds: &mut Vec<(String, Expr)>, counter: &mut usize) -> 
         // binding before `value` evaluates.
         Expr::Let { name, value, body } => Expr::Let {
             name,
-            value: Box::new(flatten(*value, binds, counter)),
-            body: Box::new(region(*body, counter)),
+            value: Box::new(flatten(*value, binds, counter, owned)),
+            body: Box::new(region(*body, counter, owned)),
         },
         Expr::Assign { name, value, rest } => Expr::Assign {
             name,
-            value: Box::new(hoist(*value, binds, counter)),
-            rest: Box::new(region(*rest, counter)),
+            value: Box::new(hoist(*value, binds, counter, owned)),
+            rest: Box::new(region(*rest, counter, owned)),
         },
         Expr::RcAnnotated { op, target, rest } => Expr::RcAnnotated {
             op,
             target,
-            rest: Box::new(region(*rest, counter)),
+            rest: Box::new(region(*rest, counter, owned)),
         },
 
         // --- inline slots: hoisted in left-to-right evaluation order ---
-        Expr::Unary(op, e) => Expr::Unary(op, Box::new(hoist(*e, binds, counter))),
-        Expr::AsCStr(e) => Expr::AsCStr(Box::new(hoist(*e, binds, counter))),
-        Expr::AsString(e) => Expr::AsString(Box::new(hoist(*e, binds, counter))),
-        Expr::ToIntTrunc(e) => Expr::ToIntTrunc(Box::new(hoist(*e, binds, counter))),
-        Expr::ToIntRound(e) => Expr::ToIntRound(Box::new(hoist(*e, binds, counter))),
-        Expr::ToFloat(e) => Expr::ToFloat(Box::new(hoist(*e, binds, counter))),
+        Expr::Unary(op, e) => Expr::Unary(op, Box::new(hoist(*e, binds, counter, owned))),
+        Expr::AsCStr(e) => Expr::AsCStr(Box::new(hoist(*e, binds, counter, owned))),
+        Expr::AsString(e) => Expr::AsString(Box::new(hoist(*e, binds, counter, owned))),
+        Expr::ToIntTrunc(e) => Expr::ToIntTrunc(Box::new(hoist(*e, binds, counter, owned))),
+        Expr::ToIntRound(e) => Expr::ToIntRound(Box::new(hoist(*e, binds, counter, owned))),
+        Expr::ToFloat(e) => Expr::ToFloat(Box::new(hoist(*e, binds, counter, owned))),
         Expr::Binary(op, l, r) => {
-            let l = hoist(*l, binds, counter);
-            let r = hoist(*r, binds, counter);
+            let l = hoist(*l, binds, counter, owned);
+            let r = hoist(*r, binds, counter, owned);
             Expr::Binary(op, Box::new(l), Box::new(r))
         }
         Expr::Call { callee, args } => {
-            let callee = hoist(*callee, binds, counter);
-            let args = args.into_iter().map(|a| hoist(a, binds, counter)).collect();
+            let callee = hoist(*callee, binds, counter, owned);
+            let args = args.into_iter().map(|a| hoist(a, binds, counter, owned)).collect();
             Expr::Call { callee: Box::new(callee), args }
         }
         Expr::ExternCall { name, args } => Expr::ExternCall {
             name,
-            args: args.into_iter().map(|a| hoist(a, binds, counter)).collect(),
+            args: args.into_iter().map(|a| hoist(a, binds, counter, owned)).collect(),
         },
         Expr::Ctor { tag, fields } => Expr::Ctor {
             tag,
-            fields: fields.into_iter().map(|f| hoist(f, binds, counter)).collect(),
+            fields: fields.into_iter().map(|f| hoist(f, binds, counter, owned)).collect(),
         },
         Expr::CtorReuse { reuse_of, tag, fields } => Expr::CtorReuse {
             reuse_of,
             tag,
-            fields: fields.into_iter().map(|f| hoist(f, binds, counter)).collect(),
+            fields: fields.into_iter().map(|f| hoist(f, binds, counter, owned)).collect(),
         },
-        Expr::TaskJoin { task } => Expr::TaskJoin { task: Box::new(hoist(*task, binds, counter)) },
+        Expr::TaskJoin { task } => Expr::TaskJoin { task: Box::new(hoist(*task, binds, counter, owned)) },
         Expr::ChannelSend { sender, value } => {
-            let sender = hoist(*sender, binds, counter);
-            let value = hoist(*value, binds, counter);
+            let sender = hoist(*sender, binds, counter, owned);
+            let value = hoist(*value, binds, counter, owned);
             Expr::ChannelSend { sender: Box::new(sender), value: Box::new(value) }
         }
         Expr::ChannelRecv { receiver } => Expr::ChannelRecv {
-            receiver: Box::new(hoist(*receiver, binds, counter)),
+            receiver: Box::new(hoist(*receiver, binds, counter, owned)),
         },
 
         Expr::Index { base, index } => {
-            let base = hoist(*base, binds, counter);
-            let index = hoist(*index, binds, counter);
+            let base = hoist(*base, binds, counter, owned);
+            let index = hoist(*index, binds, counter, owned);
             Expr::Index { base: Box::new(base), index: Box::new(index) }
         }
-        Expr::ArrayLen { array } => Expr::ArrayLen { array: Box::new(hoist(*array, binds, counter)) },
-        Expr::ArrayPop { array } => Expr::ArrayPop { array: Box::new(hoist(*array, binds, counter)) },
+        Expr::ArrayLen { array } => Expr::ArrayLen { array: Box::new(hoist(*array, binds, counter, owned)) },
+        Expr::ArrayPop { array } => Expr::ArrayPop { array: Box::new(hoist(*array, binds, counter, owned)) },
         Expr::ArrayPush { array, value } => {
-            let array = hoist(*array, binds, counter);
-            let value = hoist(*value, binds, counter);
+            let array = hoist(*array, binds, counter, owned);
+            let value = hoist(*value, binds, counter, owned);
             Expr::ArrayPush { array: Box::new(array), value: Box::new(value) }
         }
         Expr::ArraySet { array, index, value } => {
-            let array = hoist(*array, binds, counter);
-            let index = hoist(*index, binds, counter);
-            let value = hoist(*value, binds, counter);
+            let array = hoist(*array, binds, counter, owned);
+            let index = hoist(*index, binds, counter, owned);
+            let value = hoist(*value, binds, counter, owned);
             Expr::ArraySet { array: Box::new(array), index: Box::new(index), value: Box::new(value) }
         }
         Expr::ArrayRemove { array, index } => {
-            let array = hoist(*array, binds, counter);
-            let index = hoist(*index, binds, counter);
+            let array = hoist(*array, binds, counter, owned);
+            let index = hoist(*index, binds, counter, owned);
             Expr::ArrayRemove { array: Box::new(array), index: Box::new(index) }
         }
         Expr::ArrayPushReuse { reuse_of, value } => Expr::ArrayPushReuse {
             reuse_of,
-            value: Box::new(hoist(*value, binds, counter)),
+            value: Box::new(hoist(*value, binds, counter, owned)),
         },
         Expr::ArraySetReuse { reuse_of, index, value } => {
-            let index = hoist(*index, binds, counter);
-            let value = hoist(*value, binds, counter);
+            let index = hoist(*index, binds, counter, owned);
+            let value = hoist(*value, binds, counter, owned);
             Expr::ArraySetReuse { reuse_of, index: Box::new(index), value: Box::new(value) }
         }
         Expr::ArrayRemoveReuse { reuse_of, index } => Expr::ArrayRemoveReuse {
             reuse_of,
-            index: Box::new(hoist(*index, binds, counter)),
+            index: Box::new(hoist(*index, binds, counter, owned)),
         },
 
         Expr::StrConcat { base, other } => {
-            let base = hoist(*base, binds, counter);
-            let other = hoist(*other, binds, counter);
+            let base = hoist(*base, binds, counter, owned);
+            let other = hoist(*other, binds, counter, owned);
             Expr::StrConcat { base: Box::new(base), other: Box::new(other) }
         }
         Expr::StrConcatReuse { reuse_of, other } => Expr::StrConcatReuse {
             reuse_of,
-            other: Box::new(hoist(*other, binds, counter)),
+            other: Box::new(hoist(*other, binds, counter, owned)),
         },
-        Expr::StrRunes { base } => Expr::StrRunes { base: Box::new(hoist(*base, binds, counter)) },
-        Expr::StrTrim { base } => Expr::StrTrim { base: Box::new(hoist(*base, binds, counter)) },
-        Expr::StrToUpper { base } => Expr::StrToUpper { base: Box::new(hoist(*base, binds, counter)) },
-        Expr::StrToLower { base } => Expr::StrToLower { base: Box::new(hoist(*base, binds, counter)) },
-        Expr::ToString { base } => Expr::ToString { base: Box::new(hoist(*base, binds, counter)) },
-        Expr::StrHash { base } => Expr::StrHash { base: Box::new(hoist(*base, binds, counter)) },
+        Expr::StrRunes { base } => Expr::StrRunes { base: Box::new(hoist(*base, binds, counter, owned)) },
+        Expr::StrTrim { base } => Expr::StrTrim { base: Box::new(hoist(*base, binds, counter, owned)) },
+        Expr::StrToUpper { base } => Expr::StrToUpper { base: Box::new(hoist(*base, binds, counter, owned)) },
+        Expr::StrToLower { base } => Expr::StrToLower { base: Box::new(hoist(*base, binds, counter, owned)) },
+        Expr::ToString { base } => Expr::ToString { base: Box::new(hoist(*base, binds, counter, owned)) },
+        Expr::StrHash { base } => Expr::StrHash { base: Box::new(hoist(*base, binds, counter, owned)) },
         Expr::StrSplit { base, sep } => {
-            let base = hoist(*base, binds, counter);
-            let sep = hoist(*sep, binds, counter);
+            let base = hoist(*base, binds, counter, owned);
+            let sep = hoist(*sep, binds, counter, owned);
             Expr::StrSplit { base: Box::new(base), sep: Box::new(sep) }
         }
         Expr::StrContains { base, needle } => {
-            let base = hoist(*base, binds, counter);
-            let needle = hoist(*needle, binds, counter);
+            let base = hoist(*base, binds, counter, owned);
+            let needle = hoist(*needle, binds, counter, owned);
             Expr::StrContains { base: Box::new(base), needle: Box::new(needle) }
         }
         Expr::StrStartsWith { base, prefix } => {
-            let base = hoist(*base, binds, counter);
-            let prefix = hoist(*prefix, binds, counter);
+            let base = hoist(*base, binds, counter, owned);
+            let prefix = hoist(*prefix, binds, counter, owned);
             Expr::StrStartsWith { base: Box::new(base), prefix: Box::new(prefix) }
         }
         Expr::StrEndsWith { base, suffix } => {
-            let base = hoist(*base, binds, counter);
-            let suffix = hoist(*suffix, binds, counter);
+            let base = hoist(*base, binds, counter, owned);
+            let suffix = hoist(*suffix, binds, counter, owned);
             Expr::StrEndsWith { base: Box::new(base), suffix: Box::new(suffix) }
         }
         Expr::StrReplace { base, from, to } => {
-            let base = hoist(*base, binds, counter);
-            let from = hoist(*from, binds, counter);
-            let to = hoist(*to, binds, counter);
+            let base = hoist(*base, binds, counter, owned);
+            let from = hoist(*from, binds, counter, owned);
+            let to = hoist(*to, binds, counter, owned);
             Expr::StrReplace { base: Box::new(base), from: Box::new(from), to: Box::new(to) }
         }
         Expr::StrReplaceReuse { reuse_of, from, to } => {
-            let from = hoist(*from, binds, counter);
-            let to = hoist(*to, binds, counter);
+            let from = hoist(*from, binds, counter, owned);
+            let to = hoist(*to, binds, counter, owned);
             Expr::StrReplaceReuse { reuse_of, from: Box::new(from), to: Box::new(to) }
         }
 
-        Expr::RefNew { value } => Expr::RefNew { value: Box::new(hoist(*value, binds, counter)) },
-        Expr::RefGet { base } => Expr::RefGet { base: Box::new(hoist(*base, binds, counter)) },
+        Expr::RefNew { value } => Expr::RefNew { value: Box::new(hoist(*value, binds, counter, owned)) },
+        Expr::RefGet { base } => Expr::RefGet { base: Box::new(hoist(*base, binds, counter, owned)) },
         Expr::RefSet { base, value } => {
-            let base = hoist(*base, binds, counter);
-            let value = hoist(*value, binds, counter);
+            let base = hoist(*base, binds, counter, owned);
+            let value = hoist(*value, binds, counter, owned);
             Expr::RefSet { base: Box::new(base), value: Box::new(value) }
         }
 
-        Expr::ReadFileRaw { path } => Expr::ReadFileRaw { path: Box::new(hoist(*path, binds, counter)) },
+        Expr::ReadFileRaw { path } => Expr::ReadFileRaw { path: Box::new(hoist(*path, binds, counter, owned)) },
         Expr::WriteFileRaw { path, contents } => {
-            let path = hoist(*path, binds, counter);
-            let contents = hoist(*contents, binds, counter);
+            let path = hoist(*path, binds, counter, owned);
+            let contents = hoist(*contents, binds, counter, owned);
             Expr::WriteFileRaw { path: Box::new(path), contents: Box::new(contents) }
         }
-        Expr::EnvVarRaw { name } => Expr::EnvVarRaw { name: Box::new(hoist(*name, binds, counter)) },
-        Expr::PanicRaw { message } => Expr::PanicRaw { message: Box::new(hoist(*message, binds, counter)) },
+        Expr::EnvVarRaw { name } => Expr::EnvVarRaw { name: Box::new(hoist(*name, binds, counter, owned)) },
+        Expr::PanicRaw { message } => Expr::PanicRaw { message: Box::new(hoist(*message, binds, counter, owned)) },
     }
 }
 
@@ -622,6 +736,183 @@ mod tests {
             e = *body;
         }
         (binds, e)
+    }
+
+    // --- which functions hand back an owned reference ---
+
+    fn prog(fns: Vec<(&str, Vec<&str>, Expr)>) -> Program {
+        Program {
+            functions: fns
+                .into_iter()
+                .map(|(n, ps, b)| crate::ir::Function {
+                    name: n.to_string(),
+                    params: ps.into_iter().map(|p| p.to_string()).collect(),
+                    body: b,
+                })
+                .collect(),
+            globals: vec![],
+            externs: vec![],
+        }
+    }
+
+    fn call(f: &str, args: Vec<Expr>) -> Expr {
+        Expr::Call { callee: Box::new(var(f)), args }
+    }
+
+    #[test]
+    fn a_function_returning_a_fresh_allocation_returns_owned() {
+        let p = prog(vec![("mk", vec!["n"], ctor("Point", vec![var("n")]))]);
+        assert!(owned_returning(&p).contains("mk"));
+    }
+
+    #[test]
+    fn a_function_returning_its_own_parameter_does_not() {
+        // THE case this whole analysis exists for. This backend's callees
+        // do not release their parameters, so `pass` hands back the
+        // CALLER's reference and the caller has nothing extra to release.
+        // Releasing it would free the caller's own value.
+        let p = prog(vec![("pass", vec!["p"], var("p"))]);
+        assert!(!owned_returning(&p).contains("pass"));
+    }
+
+    #[test]
+    fn returning_a_parameter_from_only_one_branch_still_disqualifies() {
+        let p = prog(vec![(
+            "pick",
+            vec!["a", "b", "first"],
+            Expr::If {
+                cond: Box::new(var("first")),
+                then_branch: Box::new(var("a")),
+                else_branch: Box::new(ctor("Point", vec![])),
+            },
+        )]);
+        assert!(!owned_returning(&p).contains("pick"));
+    }
+
+    #[test]
+    fn ownership_propagates_through_calls_to_other_owned_functions() {
+        // The fixpoint's only real job. `build`'s tail is a call to `mk`,
+        // so it qualifies once `mk` does.
+        let p = prog(vec![
+            ("mk", vec!["n"], ctor("Point", vec![var("n")])),
+            ("build", vec!["n"], call("mk", vec![var("n")])),
+        ]);
+        let owned = owned_returning(&p);
+        assert!(owned.contains("mk") && owned.contains("build"), "got {owned:?}");
+    }
+
+    #[test]
+    fn calling_a_non_owned_function_in_tail_position_disqualifies() {
+        let p = prog(vec![
+            ("pass", vec!["p"], var("p")),
+            ("wrap", vec!["p"], call("pass", vec![var("p")])),
+        ]);
+        assert!(!owned_returning(&p).contains("wrap"));
+    }
+
+    #[test]
+    fn a_scalar_returning_function_does_not_return_owned() {
+        // Not an oversight: a scalar has nothing to release, and marking
+        // it owned would invite a decrement on an `Int`.
+        let p = prog(vec![("count", vec![], Expr::Int(3))]);
+        assert!(!owned_returning(&p).contains("count"));
+    }
+
+    #[test]
+    fn returning_a_bare_match_binding_conservatively_does_not_qualify() {
+        // Codegen DOES increment a refcounted extracted field, so this
+        // could in principle qualify — but telling such a binding apart
+        // from a parameter needs types the IR does not carry, and guessing
+        // wrong is a use-after-free. The cost is a missed release.
+        let p = prog(vec![(
+            "unwrap",
+            vec!["n"],
+            Expr::Match {
+                scrutinee: Box::new(var("n")),
+                arms: vec![crate::ir::MatchArm {
+                    tag: "Named".into(),
+                    bindings: vec!["s".into()],
+                    guard: None,
+                    body: var("s"),
+                }],
+            },
+        )]);
+        assert!(!owned_returning(&p).contains("unwrap"));
+    }
+
+    #[test]
+    fn mutual_recursion_fails_to_qualify_rather_than_being_assumed_safe() {
+        // A least fixpoint from the empty set. An optimistic
+        // greatest-fixpoint would qualify these and is the usual
+        // formulation, but being wrong here is a use-after-free.
+        let p = prog(vec![
+            ("ping", vec!["n"], call("pong", vec![var("n")])),
+            ("pong", vec!["n"], call("ping", vec![var("n")])),
+        ]);
+        assert!(owned_returning(&p).is_empty());
+    }
+
+    #[test]
+    fn an_owned_calls_result_is_hoisted_and_released_in_a_borrow_slot() {
+        let p = prog(vec![
+            ("mk", vec!["n"], ctor("Point", vec![var("n")])),
+            ("go", vec![], len(call("mk", vec![Expr::Int(1)]))),
+        ]);
+        let out = anf_program(p);
+        let go = out.functions.into_iter().find(|f| f.name == "go").unwrap();
+        let (binds, _) = peel(go.body.clone());
+        assert_eq!(binds.len(), 1, "the call result should be bound: {binds:?}");
+        assert!(
+            mentions_dec(&go.body, &binds[0].0),
+            "and released, since `.len()` only borrows it: {:?}",
+            go.body
+        );
+    }
+
+    #[test]
+    fn a_non_owned_calls_result_is_not_hoisted() {
+        let p = prog(vec![
+            ("pass", vec!["p"], var("p")),
+            ("go", vec!["p"], len(call("pass", vec![var("p")]))),
+        ]);
+        let out = anf_program(p);
+        let go = out.functions.into_iter().find(|f| f.name == "go").unwrap();
+        let (binds, _) = peel(go.body);
+        assert!(binds.is_empty(), "must not be hoisted: {binds:?}");
+    }
+
+    #[test]
+    fn an_owned_calls_result_in_a_consuming_slot_is_hoisted_but_not_released() {
+        // Hoisting is harmless; releasing would not be — the `Ctor` takes
+        // ownership of the value.
+        let p = prog(vec![
+            ("mk", vec!["n"], ctor("Point", vec![var("n")])),
+            ("go", vec![], ctor("Wrapper", vec![call("mk", vec![Expr::Int(1)])])),
+        ]);
+        let out = anf_program(p);
+        let go = out.functions.into_iter().find(|f| f.name == "go").unwrap();
+        let (binds, _) = peel(go.body.clone());
+        assert_eq!(binds.len(), 1);
+        assert!(
+            !mentions_dec(&go.body, &binds[0].0),
+            "a stored value must not be released: {:?}",
+            go.body
+        );
+    }
+
+    fn mentions_dec(expr: &Expr, name: &str) -> bool {
+        if let Expr::RcAnnotated { op: crate::ir::RcOp::Dec, target, .. } = expr {
+            if target == name {
+                return true;
+            }
+        }
+        let mut found = false;
+        for_each_child(expr, &mut |c| {
+            if !found && mentions_dec(c, name) {
+                found = true;
+            }
+        });
+        found
     }
 
     #[test]

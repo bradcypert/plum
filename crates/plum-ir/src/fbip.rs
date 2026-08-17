@@ -1177,7 +1177,7 @@ fn for_each_child<'a>(expr: &'a Expr, f: &mut dyn FnMut(&'a Expr)) {
 ///   a double free. This is the one case where getting it wrong is
 ///   memory-unsafe rather than merely leaky, so it is checked
 ///   explicitly rather than left to the OWNED default.
-fn all_uses_are_borrows(expr: &Expr, name: &str) -> bool {
+pub(crate) fn all_uses_are_borrows(expr: &Expr, name: &str) -> bool {
     match expr {
         // THE base case. Reaching a bare `Var(name)` here means the
         // parent did not intercept it as a borrow slot, so this use owns
@@ -1373,7 +1373,7 @@ fn borrowed_slot(expr: &Expr, name: &str) -> bool {
 /// a call at the end of it is no longer a `musttail` candidate. That is
 /// a correctness requirement rather than a lost optimization — a scope
 /// with a value still to release cannot hand its frame away.
-fn drop_at_scope_end(body: Expr, name: &str) -> Expr {
+pub(crate) fn drop_at_scope_end(body: Expr, name: &str) -> Expr {
     let tmp = format!("drop${name}");
     Expr::Let {
         name: tmp.clone(),

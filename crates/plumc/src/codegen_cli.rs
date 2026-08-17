@@ -1807,6 +1807,80 @@ mod tests {
         assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("8000".to_string()));
     }
 
+    // --- owned-returning calls (see `plum_ir::anf::owned_returning`) ---
+
+    #[test]
+    fn a_constructor_functions_result_is_released_when_only_matched() {
+        // The last shape still leaking: 48.1MB per 1M iterations, flat at
+        // 5.2MB now. `mk`'s body IS a `Ctor`, so its result is provably a
+        // new reference the caller owns.
+        let src = "struct Point { x: Int, y: Int }\n\
+                   let mk (n: Int): Point = Point { x: n, y: n }\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { acc = acc + match mk(i) { Point(x, y) => x + y }; }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("999000".to_string()));
+    }
+
+    #[test]
+    fn a_function_returning_its_parameter_has_its_result_left_alone() {
+        // THE reason the analysis exists. `pass` hands back the caller's
+        // own reference, so releasing its result would free a live value.
+        // This would fail immediately — a double free, not a leak — if
+        // `owned_returning` ever qualified it.
+        let src = "struct Point { x: Int, y: Int }\n\
+                   let mk (n: Int): Point = Point { x: n, y: n }\n\
+                   let pass (p: Point): Point = p\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { acc = acc + match pass(mk(i)) { Point(x, y) => x + y }; }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("999000".to_string()));
+    }
+
+    #[test]
+    fn returning_a_parameter_from_one_branch_is_enough_to_disqualify() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                   let mk (n: Int): Point = Point { x: n, y: n }\n\
+                   let pick (a: Point) (b: Point) (first: Bool): Point = if first { a } else { b }\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..500 { acc = acc + match pick(mk(i), mk(i), true) { Point(x, y) => x + y }; }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("249500".to_string()));
+    }
+
+    #[test]
+    fn ownership_propagates_through_a_chain_of_constructor_functions() {
+        let src = "struct Point { x: Int, y: Int }\n\
+                   let mk (n: Int): Point = Point { x: n, y: n }\n\
+                   let build (n: Int): Point = if n == 0 { Point { x: 0, y: 0 } } else { mk(n) }\n\
+                   let go (): Int = { \
+                       let mut acc = 0; \
+                       for i in 0..1000 { acc = acc + match build(i) { Point(x, y) => x + y }; }; \
+                       acc \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("999000".to_string()));
+    }
+
+    #[test]
+    fn an_owned_call_result_stored_into_a_struct_is_not_released() {
+        // Hoisting it is harmless; releasing it would not be, since the
+        // enclosing `Ctor` takes ownership.
+        let src = "struct Point { x: Int, y: Int }\n\
+                   struct Wrapper { p: Point }\n\
+                   let mk (n: Int): Point = Point { x: n, y: n }\n\
+                   let go (): Int = { \
+                       let w = Wrapper { p: mk(21) }; \
+                       match w { Wrapper(p) => match p { Point(x, y) => x + y } } \
+                   }";
+        assert_eq!(compile_and_run(src, "go", &[CgValue::Unit]), Ok("42".to_string()));
+    }
+
     // --- release for match-extracted bindings ---
     //
     // See `plum_ir::fbip::release_match_bindings`. A refcounted field is

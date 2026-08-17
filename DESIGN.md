@@ -9775,8 +9775,10 @@ on a bare runtime refcount check for its safety.
 
 **Owned parameters and match-extracted bindings**, which need heap-ness
 information the IR does not carry — the same blocker recorded in the
-"gap 1" entry above. **Match-extracted bindings were done on 2026-08-17
-— see below;** owned parameters remain open.
+"gap 1" entry above. **Both were addressed on 2026-08-17** — see
+"Releasing match-extracted bindings" and "Owned-returning calls" below.
+Owned parameters as a CONVENTION remain deliberately untouched; what
+landed instead identifies the functions that do not need one.
 
 ## A-normalisation: naming the intermediates (2026-08-17)
 
@@ -9810,7 +9812,8 @@ is what lets `"a".concat("b")` hoist all three of its allocations rather
 than none.
 
 **A `Call` is never hoisted**, which is why the fourth row above is
-unchanged. This backend's callees do not release their parameters, so a
+unchanged. (Lifted later the same day for the subset that provably hands
+back a new reference — see "Owned-returning calls" below.) This backend's callees do not release their parameters, so a
 function may return one of them and the caller holds no extra reference —
 treating a call result as owned would be a use-after-free for
 `let pass (p) = p`. That shape is pinned by a test precisely because it
@@ -9917,3 +9920,95 @@ concurrency/shared-mutability examples.
 The self-hosted compiler's own numbers are unchanged by this increment
 (271.7 MB, 0.192s to check itself) — its matches mostly bind values that
 escape or are used more than once, which this deliberately leaves alone.
+
+## Owned-returning calls (2026-08-17)
+
+The last shape still leaking, and the one that looked like it needed a
+calling-convention change:
+
+| 1M-iteration loop | before | after |
+| --- | --- | --- |
+| `match mk(i) { .. }`, `mk` returns a `Point` | 48.1 MB | **5.2 MB** |
+
+A call result could not be released because this backend's callees do not
+release their parameters, so a function may RETURN one and the caller then
+holds no extra reference. Releasing the result of `let pass (p) = p` frees
+the caller's own value.
+
+### What was NOT done, and why
+
+The textbook answer is to make parameters owned — callees release their
+own parameters, callers transfer ownership at the call — after which every
+return is uniformly owned. That is a genuine convention change touching
+every function, its failure mode is a use-after-free rather than a leak,
+and DESIGN.md already records one attempt in this territory ("gap 1") as
+found unsafe and reverted.
+
+So the convention stayed put and the question was inverted: instead of
+making every function's return owned, identify the functions whose return
+already is. `anf::owned_returning` is a least fixpoint over
+"my tail is a fresh allocation, or a call to something already in the
+set". **It adds no increment anywhere and moves no convention** — a
+function either provably hands back a new reference or it does not, and
+"does not" is the default.
+
+Least fixpoint from the empty set, deliberately: mutual recursion simply
+fails to qualify rather than being assumed safe. An optimistic
+greatest-fixpoint is the usual formulation and would qualify more
+functions, but the constructor-style shape this targets converges on the
+first pass anyway, so the extra reach buys little against a
+use-after-free.
+
+Two refusals are worth naming because both look allowable:
+
+- **A bare `Var` in return position**, even a match-extracted binding that
+  codegen genuinely did increment. Telling one apart from a parameter needs
+  types the IR does not carry.
+- **A scalar return.** Not an oversight — a scalar has nothing to release,
+  and marking such a function owned would invite a decrement on an `Int`.
+
+`ANF` hoists a qualifying call (with atom arguments, same ordering
+requirement as everything else it hoists) and emits the release itself,
+using `fbip`'s OWN `all_uses_are_borrows` rather than a copy of it. `fbip`
+will not add a second release, because `allocates_fresh_heap` does not
+recognize a `Call` and cannot — that judgement needs the whole-program
+analysis.
+
+The `pass(mk(i))` shape is pinned by a test precisely because it would
+fail as a DOUBLE FREE, not a leak, if the analysis ever qualified it.
+
+### Where the memory work as a whole landed
+
+Every ordinary loop-shaped allocation pattern measured over these chunks
+is now flat at ~5.2 MB, from 32–139 MB and growing linearly:
+
+| shape | before | after |
+| --- | --- | --- |
+| `let p = Ctor; match p` | 47.9 MB | 5.2 MB |
+| `let a = [..]; a.len()` | 63.3 MB | 5.2 MB |
+| `let s = a.concat(b); s.len()` | 139.5 MB | 5.2 MB |
+| `"a".concat("b").len()` (unnamed) | 139.2 MB | 5.1 MB |
+| `Ctor { .. }.field` (unnamed) | 47.5 MB | 5.2 MB |
+| `i.to_string().len()` | 34.0 MB | 5.2 MB |
+| arm binds a `String`/`Array`/struct field | 32.5/63.1/32.6 MB | 5.2 MB |
+| `match mk(i) { .. }` | 48.1 MB | 5.2 MB |
+| `ref(v)` per iteration | 63.0 MB | 5.0 MB |
+
+**The self-hosted compiler is essentially unmoved**: 254.6 → 271.6 MB and
+0.1753 → 0.1870 s to check itself, and 4717 → 4532 MB to emit its own IR.
+That is worth stating plainly rather than burying. The compiler's own
+footprint is not made of the shapes this work fixes — it is dominated by
+multi-use bindings (deliberately untouched, since their increments are
+what keep reuse-in-place honest), by functions that return parameters or
+extracted fields (which do not qualify as owned-returning), and very
+likely by genuinely live data. **Finding out which** is the obvious next
+question, and `PLUM_RT_STATS` already exists to answer it.
+
+### Verified
+
+537 plumc tests + 329 in plum-ir (12 new unit + 5 new end-to-end), all 15
+suites green on the first run, fixed point byte-identical, corpus 99/99,
+exec_corpus 18/18, zero ASan errors across the corpus, the
+concurrency/shared-mutability examples, and a dedicated ownership fixture
+exercising parameter-returning, branch-returning, and chained constructor
+functions against the interpreter.
