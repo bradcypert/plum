@@ -1670,7 +1670,16 @@ let cg_call_closure_value (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: Emi
     let code = clo.code.concat(a.code)
         .concat("  ").concat(fp).concat("p = getelementptr i8, ptr ").concat(clo.val).concat(", i64 ").concat(cg_closure_code_offset(()).to_string()).concat("\n")
         .concat("  ").concat(fp).concat(" = load ptr, ptr ").concat(fp).concat("p\n")
-        .concat("  ").concat(out).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(fp).concat("(ptr ").concat(clo.val).concat(cg_prefix_commas(a.vals)).concat(")\n");
+        .concat("  ").concat(out).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(fp).concat("(ptr ").concat(clo.val).concat(cg_prefix_commas(a.vals)).concat(")\n")
+        // The callee arrived OWNED — `cg_expr`, so reading a closure
+        // out of a variable incremented it — and invoking a closure
+        // does not consume it. Without this the reference taken to
+        // make the call was never given back, which leaked the cell
+        // and everything it captured. This, not any missing
+        // machinery, was the closure "capture leak": `<fn>_rel` and
+        // the release pointer in the cell header were correct all
+        // along and simply never reached.
+        .concat(cg_dec_cg(clo.ty, clo.val));
     Emit { code: code, allocas: clo.allocas.concat(a.allocas), releases: clo.releases.concat(a.releases),globals: clo.globals.concat(a.globals), val: out, ty: ret, n: a.n + 2 }
 }
 
@@ -2894,7 +2903,21 @@ let cg_emit_rel_fn (p: CgProgram) (t: typecheck.ITy): String =
         // struct release path is not merely similar, it is exactly
         // right: release the single child, then free the cell.
         ITRef(inner) => cg_emit_struct_rel(t, [inner]),
-        ITFunction(_, _) => cg_rel_head(t).concat(cg_rel_tail(())),
+        // DELEGATES to `@plum_rel_closure` rather than doing its own
+        // dec-and-free. A closure cell carries a release-function
+        // pointer at offset 16 that walks exactly the captures that
+        // literal took (`<fn>_rel`, emitted with the lifted function);
+        // `plum_rel_closure` is what loads and calls it. Open-coding
+        // the usual head/tail here instead freed the cell WITHOUT ever
+        // consulting that pointer, so every capture held by a closure
+        // reached through a struct field or a generic was leaked.
+        //
+        // This is also why the note above about captures being
+        // impossible to release was wrong: the machinery was already
+        // there, and one release path simply wasn't using it.
+        ITFunction(_, _) =>
+            "define void ".concat(cg_rel_sym(t)).concat("(ptr %p) {\nentry:\n")
+                .concat("  call void @plum_rel_closure(ptr %p)\n  ret void\n}\n\n"),
         _ => "",
     }
 
