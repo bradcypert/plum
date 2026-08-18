@@ -57,7 +57,59 @@ use interp;
 use typecheck;
 use codegen;
 
-let usage (): Unit = println("usage: self_host (tokens|ast|run|emit-llvm) <file> | check <file-or-project-dir>")
+let usage (): Unit = println("usage: self_host (tokens|ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>]")
+
+// The C shims every self-hosted binary links against: `process_run`
+// and friends are declared by the runtime preamble but IMPLEMENTED in
+// `native_stdlib/*.c`, so a produced binary does not link without
+// them. Discovered rather than hard-coded as a list, since the set has
+// grown before and the directory is the authority.
+let native_c_files (dir: String): Array[String] =
+    match list_dir(dir) {
+        Err(_) => [],
+        Ok(entries) => Array.fold(entries, [], |acc, e|
+            if e.ends_with(".c") { acc.push(dir.concat("/").concat(e)) } else { acc }),
+    }
+
+// `-o` if given, else the project directory's own basename -- the same
+// convention `plum build` uses.
+let output_path (argv: Array[String]): String =
+    if argv.len() >= 4 && argv[2] == "-o" { argv[3] } else { basename_of(argv[1]) }
+
+let basename_of (path: String): String = {
+    let parts = path.split("/");
+    if Array.is_empty(parts) { "a.out" } else {
+        let last = parts[parts.len() - 1];
+        if last == "" { "a.out" } else { last }
+    }
+}
+
+// `build` = `emit-llvm` + `clang`. The IR was already being produced
+// correctly; what was missing was only the link step, which is why the
+// self-hosted compiler could compile itself to IR but not to a BINARY
+// -- and so could not replace the compiler that builds it.
+let build_project (argv: Array[String]): Unit = {
+    let out = output_path(argv);
+    let ll = out.concat(".ll");
+    let ir = codegen.cg_emit_program(parser.ProgramNode { items: collect_project(argv[1]) });
+    match write_file(ll, ir) {
+        Err(e) => println("build failed: ".concat(e)),
+        Ok(_) => {
+            let cfiles = native_c_files("native_stdlib");
+            let base = ["-O2", "-Wno-override-module", ll];
+            let argv2 = Array.concat(Array.concat(base, cfiles), ["-lm", "-o", out]);
+            match run_process("clang", argv2) {
+                Err(e) => println("build failed: ".concat(e)),
+                Ok(r) => if r.exit_code == 0 {
+                    println("wrote ".concat(out));
+                } else {
+                    println("clang failed (exit ".concat(r.exit_code.to_string()).concat("):"));
+                    println(r.stderr);
+                },
+            }
+        },
+    }
+}
 
 // --- Project loading (`check` only) ---
 //
@@ -147,6 +199,8 @@ let main (): Unit = {
         // DIRECTORY, which `read_file` can't open at all.
         typecheck.check_program(parser.ProgramNode { items: collect_project(argv[1]) });
         println("ok");
+    } else if argv[0] == "build" && Result.unwrap_or(is_directory(argv[1]), false) {
+        build_project(argv);
     } else if argv[0] == "emit-llvm" && Result.unwrap_or(is_directory(argv[1]), false) {
         // Same directory loading `check` and `run` use. A real Plum
         // project is several modules, so a backend that only accepted

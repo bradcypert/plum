@@ -10984,3 +10984,99 @@ comment asserting something is impossible is a claim about code, and
 claims about code can be checked. This one had been true of an earlier
 design and was never revisited when the release-pointer machinery
 landed.
+
+## `build` in the self-hosted compiler, and the road to deprecating the Rust one (2026-08-18)
+
+Brad's goal: retire the Rust backend once the self-hosted compiler is
+solid. That reframes the leak work above — `plum-ir`'s untracked-
+temporary leaks are the documented consequence of `fbip` having no type
+information, and fixing THAT is precisely the effort deprecation throws
+away. Recorded as a deliberate won't-fix instead: the Rust backend
+leaks on 19/19 `exec_corpus` fixtures (16,977 bytes total, 13,270 of it
+in `accumulator`), against the self-hosted backend's 19/19 clean.
+
+### The gap that actually blocked deprecation
+
+The self-hosted compiler could `check`, `run` and `emit-llvm` — but not
+produce a BINARY. It could compile itself to IR and not to an
+executable, so it could not replace the compiler that builds it. That
+one gap blocked deprecation outright; every other gap merely limits
+what programs it accepts.
+
+`build` = `emit-llvm` + `clang`, and it now bootstraps:
+
+```
+shbld build bootstrap/self_host -o g2     # built by the Rust compiler
+g2    build bootstrap/self_host -o g3     # built by ITSELF
+g2.ll == g3.ll                            # byte-identical
+```
+
+`g3` then builds and runs all 19 `exec_corpus` fixtures correctly and
+rejects all 7 `typecheck_corpus` ones. (The BINARIES differ — embedded
+paths and build ids — which is why the IR is the invariant here, the
+same choice `bootstrap-check` already made.)
+
+Two new runtime primitives, both through the established three-layer
+pattern (a `prelude.plum` stub for the checker's signature, interception
+in `cg_runtime_fn`, real IR in `runtime.plum`): `write_file`, and the
+handle-based process set. The C shims were already linked into every
+self-hosted binary, so `process_run` needed only a `declare`.
+
+### Two mistakes, both from inventing an API instead of matching one
+
+`main.plum` is compiled by BOTH compilers, so anything it calls must
+mean the same thing in each. A simplified `run_process (..) -> Int`
+failed immediately for that reason. Rewritten to the real
+`Result[ProcessResult, String]`.
+
+Subtler: the self-BUILT compiler passed `clang` a `-o` with no value,
+while the Rust-built one worked from identical source. The join was at
+fault. `process_run` points `argv[1]` at the WHOLE joined string, so a
+LEADING separator makes `argv[1]` empty and pushes the last real
+argument past `argc`, silently dropping it. The real prelude's
+`join_args_acc` special-cases `i == 0`; an `Array.fold` that prefixes a
+separator to every element is NOT equivalent. The first diagnostic
+compared the same hand-written join expression under both compilers,
+found it identical, and proved nothing — it never exercised the real
+prelude's helper at all. Reading `process_shim.c`'s parsing loop is
+what found it.
+
+### `build` does not type-check, on purpose
+
+It calls `cg_emit_program` without `check_program`, matching
+`emit-llvm`. The backend prepends the prelude and checks the COMBINED
+program; a separate check would check the wrong one — the user's items
+without the prelude — and reject every prelude call lacking a
+`builtin_sig` entry.
+
+That difference bit immediately: `build` worked while `check
+bootstrap/self_host` failed with "unbound function: write_file", and
+the bootstrap fixed-point test caught it. Fixed by giving `write_file`/
+`run_process` `builtin_sig` entries beside `read_file`, and adding
+`ProcessResult` to `builtin_context` — `main.plum` reads `.exit_code`
+and `.stderr`, so checking this compiler's own source needs the field
+layout, not just the name. That list's own comment invites exactly this
+("extending this list is the right move when a specific missing
+declaration blocks a specific real program").
+
+### What remains before the Rust backend can go
+
+Verified by running each, not by reading code:
+
+| gap | `check` | codegen |
+|---|---|---|
+| `.to_string()` on struct/array/tuple/variant/closure | ok | missing |
+| destructuring `let (a, b) = ..` | ok | missing |
+| `\|>` | rejects | — |
+| `require`/`ensure` contracts | rejects | — |
+| `==`/`!=` between closures | — | missing |
+| generic instantiation syntax | rejects | — |
+
+Note the shape of the first two: `check` says ok and codegen then
+refuses, so the failure arrives with no source location — the same
+class as the stale-binding soundness bug fixed earlier. Making the
+checker reject what the backend cannot emit would turn every remaining
+gap into a clean diagnostic.
+
+CLI: self-hosted has `check`, `run`, `emit-llvm`, `build`. Still
+missing `test`, `new`, `lsp`, and the `dump-*` helpers.

@@ -78,7 +78,23 @@ pub let build_context (program: parser.ProgramNode): TyContext = {
 // specific real program, matching how every other v1 scope decision in
 // this bootstrap has been made.
 let builtin_context (unit: Unit): TyContext = TyContext {
-    structs: [],
+    // `ProcessResult` is here for the same reason `Option`/`Result`
+    // are: it lives in the prelude, and `check` runs on a program
+    // WITHOUT the prelude (unlike `emit-llvm`/`build`, where the
+    // backend prepends it). `main.plum` reads `.exit_code`/`.stderr`
+    // off a `run_process` result, so checking this compiler's own
+    // source needs the field layout, not just the name.
+    structs: [
+        StructInfo {
+            name: "ProcessResult",
+            generics: [],
+            fields: [
+                StructFieldTemplate { name: "exit_code", ty: ITInt },
+                StructFieldTemplate { name: "stdout", ty: ITStr },
+                StructFieldTemplate { name: "stderr", ty: ITStr },
+            ],
+        },
+    ],
     enums: [
         EnumInfo {
             name: "Option",

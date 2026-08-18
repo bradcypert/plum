@@ -166,6 +166,8 @@ let builtin_sig (name: String): Option[FnSig] =
     else if name == "panic_raw" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITUnit }) }
     else if name == "read_file" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITStr, ITStr) }) }
     else if name == "is_directory" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITBool, ITStr) }) }
+    else if name == "write_file" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITStr], ret: res_of(ITUnit, ITStr) }) }
+    else if name == "run_process" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, arr_of(ITStr)], ret: res_of(ITStruct("ProcessResult", []), ITStr) }) }
     else if name == "list_dir" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(arr_of(ITStr), ITStr) }) }
     // `args()` is written with empty parentheses, which this parser
     // turns into a ZERO-argument call (it implements no `f()`-means-

@@ -1227,6 +1227,12 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "panic_raw" { Some("@plum_panic") }
     else if name == "args" { Some("@plum_args") }
     else if name == "read_file_raw" { Some("@plum_read_file_raw") }
+    else if name == "write_file_raw" { Some("@plum_write_file_raw") }
+    else if name == "process_run_raw" { Some("@plum_process_run_raw") }
+    else if name == "process_exit_code_raw" { Some("@plum_process_exit_code_raw") }
+    else if name == "process_stdout_raw" { Some("@plum_process_stdout_raw") }
+    else if name == "process_stderr_raw" { Some("@plum_process_stderr_raw") }
+    else if name == "process_free_raw" { Some("@plum_process_free_raw") }
     else if name == "path_is_dir_raw" { Some("@plum_path_is_dir") }
     else if name == "dir_open_handle" { Some("@plum_dir_open") }
     else if name == "dir_next_entry" { Some("@plum_dir_next") }
