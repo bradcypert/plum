@@ -2717,12 +2717,20 @@ let cg_release_slot (t: typecheck.ITy) (slot: String) (suffix: String): String =
 // `false` emits the leaking version, which is a one-line way to tell a
 // counting bug apart from any other kind.
 //
-// KNOWN, and bounded: a closure cell's captures are incremented when
-// stored but never released, because a closure's captures are not
-// visible from its type and its release cannot walk them. That is a
-// leak, not a crash, and it is why the real backend spends a word per
-// closure cell on a release-function pointer. Arguments to runtime
-// primitives are likewise not released.
+// This used to carry a note claiming a closure cell's captures could
+// never be released, "because a closure's captures are not visible
+// from its type and its release cannot walk them". That was WRONG, and
+// it was wrong about this backend's own code: a closure cell has
+// carried a release-function pointer at offset 16 all along, and
+// `<fn>_rel` — emitted next to each lifted function, where the capture
+// list is known — walks exactly the captures that literal took. The
+// machinery was complete; one caller simply never reached it.
+//
+// The actual bug was a single missing decrement: `cg_call_closure_
+// value` took its callee OWNED (`cg_expr` increments when it reads a
+// variable) but invoking a closure does not consume it, so the
+// reference taken to make the call was never given back. See that
+// function. `exec_corpus` is now leak-free end to end under ASan.
 let cg_rc_enabled (unit: Unit): Bool = true
 
 let cg_is_heap (t: CgTy): Bool =

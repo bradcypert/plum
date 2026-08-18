@@ -10927,13 +10927,60 @@ anywhere, 19/19 still correct, fixed point still byte-identical, 7/7
 `typecheck_corpus` still rejected.
 
 The two survivors — `closures_in_structs` (24 bytes) and `generics`
-(72) — are the closure-capture gap this backend already documents as
-architectural: a closure's captures are incremented when stored and
-never released, because they are not visible from the closure's TYPE
-and its release function cannot walk them. Fixing it means what the
-real backend does, a release-function pointer per closure cell. That is
-a design change, not a patch, and is left scoped rather than tacked on.
+(72) — looked like the closure-capture gap this backend documented as
+architectural. They were not; see the next section. **The corpus is now
+19/19 leak-free.**
 
 The method that found both: ASan as the oracle, then MINIMISE. Every
 one-construct fixture was clean, which is itself the clue — it said the
 bug lived in a combination, not a construct.
+
+### The closure "capture leak" was one missing decrement (2026-08-18)
+
+The last two leaking fixtures were attributed to a documented
+architectural limitation: captures are incremented when stored and
+never released, "because a closure's captures are not visible from its
+type and its release cannot walk them", so fixing it would mean adding
+a release-function pointer per closure cell the way the real backend
+does.
+
+Every part of that was false about this backend's own code. A closure
+cell ALREADY carries a release-function pointer at offset 16.
+`<fn>_rel` is ALREADY emitted beside each lifted function — the one
+place the capture list is known — and walks exactly the captures that
+literal took. `@plum_rel_closure` ALREADY loads that pointer and calls
+it before freeing. The machinery was complete and correct.
+
+The bug was one missing decrement. `cg_call_closure_value` receives its
+callee OWNED — `cg_expr` increments when it reads a variable — but
+invoking a closure does not consume it, so the reference taken in order
+to make the call was never given back. Visible directly in the emitted
+IR for a function taking a closure parameter: it arrives at rc=1, the
+read increments it to 2, scope-end releases it back to 1, and there it
+stays.
+
+```llvm
+  %t54 = load ptr, ptr %s2
+  call void @plum_rc_inc(ptr %t54)      ; read: rc 1 -> 2
+  ...
+  %s2_end = load ptr, ptr %s2
+  call void @plum_rel_fnInt_Int_to_Int(ptr %s2_end)   ; rc 2 -> 1, leaked
+```
+
+One `cg_dec_cg` after the call. **`exec_corpus` is now 19/19 correct
+AND 19/19 leak-free, with no use-after-free, double-free or overflow
+anywhere.** Fixed point still byte-identical, 7/7 `typecheck_corpus`
+still rejected, Rust suite 1934/0.
+
+The `ITFunction` release path was also changed to delegate to
+`@plum_rel_closure` rather than open-code its own dec-and-free, which
+would skip that release pointer. That is independently correct but
+fixed nothing on its own — it was tried FIRST, as the obvious
+candidate, and changed no measurement at all. The emitted IR is what
+identified the real cause, for the third leak in a row.
+
+Worth stating as a pattern, since it recurred all through this work: a
+comment asserting something is impossible is a claim about code, and
+claims about code can be checked. This one had been true of an earlier
+design and was never revisited when the release-pointer machinery
+landed.
