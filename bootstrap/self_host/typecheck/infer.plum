@@ -766,7 +766,15 @@ let infer_named_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
             // precedence.
             None => match builtin_sig(name) {
                 Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
-                None => {
+                // `ref(v)` is checked HERE, alongside the other
+                // builtins and after `find_sig`, so a user-declared
+                // `ref` still shadows it — the same precedence every
+                // other builtin gets. It can't go in `builtin_sig`
+                // because its result type depends on its argument's.
+                None => if name == "ref" && args.len() == 1 {
+                    let r = infer_expr(p2, state, env, acc, args[0]);
+                    ir_leaf(ITRef(subst_apply(r.subst, r.ty)), r.subst, r.state, TRefNew(r.texpr))
+                } else {
                     let ar = infer_list(p2, state, env, acc, args, 0, [], []);
                     if is_capitalized_name(name) { infer_variant(p2, ar.state, ar.subst, name, ar.tys, ar.texprs) }
                     else { { fail_tc("unbound function: ".concat(name)); ir_unsupported(ar.subst, ar.state, "unbound function ".concat(name)) } }
@@ -857,6 +865,27 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         infer_array_push(p2, state, env, acc, base, args[0])
     } else if method_name == "set" && args.len() == 2 {
         infer_array_set(p2, state, env, acc, base, args[0], args[1])
+    } else if method_name == "get" && Array.is_empty(args) {
+        // `r.get()` on a `Ref[T]` yields `T`. The receiver is unified
+        // against `Ref[fresh]` rather than inspected, so it works even
+        // when the receiver's type is not yet resolved.
+        let r = infer_expr(p2, state, env, acc, base);
+        let inner = fresh(r.state);
+        let s1 = match unify(subst_apply(r.subst, r.ty), ITRef(inner.ty)) {
+            Ok(s) => subst_compose(s, r.subst),
+            Err(e) => { fail_tc(".get() receiver: ".concat(e)); r.subst },
+        };
+        ir_leaf(subst_apply(s1, inner.ty), s1, inner.state, TMethodCall("get", r.texpr, []))
+    } else if method_name == "set" && args.len() == 1 {
+        // `r.set(v)` on a `Ref[T]`. Distinguished from `Array.set`
+        // above purely by ARITY -- the array form takes an index too.
+        let r = infer_expr(p2, state, env, acc, base);
+        let vr = infer_expr(p2, r.state, env, r.subst, args[0]);
+        let s1 = match unify(subst_apply(vr.subst, r.ty), ITRef(subst_apply(vr.subst, vr.ty))) {
+            Ok(s) => subst_compose(s, vr.subst),
+            Err(e) => { fail_tc(".set() receiver: ".concat(e)); vr.subst },
+        };
+        ir_leaf(ITUnit, s1, vr.state, TMethodCall("set", r.texpr, [vr.texpr]))
     } else {
         // Struct-field closure call — the record-of-closures dispatch
         // pattern (`reader.read(x)`, DESIGN.md's "interfaces via
@@ -1199,7 +1228,26 @@ let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: T
             let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
             bind_pattern_list(p2, fr.state, s1, env, arg_pats, payload, 0)
         },
-        None => { fail_tc("unbound variant: ".concat(tag)); BindResult { env: env, subst: acc, state: state } },
+        // Not a variant — try a STRUCT of that name. `Point(x, y)`
+        // destructures a struct POSITIONALLY, binding its fields in
+        // declared order, which the parser produces as a Ctor pattern
+        // indistinguishable from a variant one until the name is
+        // resolved here. The real compiler accepts it (see
+        // `exec_corpus/refs`), so this checker has to as well.
+        None => match find_struct(p2.ctx, tag) {
+            Some(info) => {
+                let fr = fresh_list(state, info.generics.len());
+                let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(tag, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
+                if arg_pats.len() != info.fields.len() {
+                    fail_tc("struct ".concat(tag).concat(" has ").concat(info.fields.len().to_string()).concat(" field(s), pattern binds ").concat(arg_pats.len().to_string()));
+                    BindResult { env: env, subst: s1, state: fr.state }
+                } else {
+                    let tys = Array.map(info.fields, |f| instantiate_template(info.generics, fr.tys, f.ty));
+                    bind_pattern_list(p2, fr.state, s1, env, arg_pats, tys, 0)
+                }
+            },
+            None => { fail_tc("unbound variant: ".concat(tag)); BindResult { env: env, subst: acc, state: state } },
+        },
     }
 
 let bind_struct_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (name: String) (field_pats: Array[parser.FieldPatternNode]) (scrutinee_ty: ITy): BindResult =

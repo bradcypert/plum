@@ -104,6 +104,15 @@ pub enum CgTy {
     // are. Nothing about it needs a declaration, which is the whole
     // difference — the element types come from the type itself.
     CgTuple(Array[CgTy]),
+    // `Ref[T]`: a `ptr` to a REFCOUNTED two-word cell,
+    // `{ i64 refcount, i64 value }`, allocated by `@plum_alloc_ref`.
+    // The inner representation is carried so `.get()`/`.set()` know
+    // the machine type to load and store. Closest analogue here is
+    // `CgArray`, not `CgClosure`: it is genuinely Plum-managed memory
+    // with a real refcount word at offset 0, so it needs a release
+    // function per inner type. It carries NO tag, so it is never
+    // pattern-matched.
+    CgRef(CgTy),
 }
 
 // `Unit` is an `i1` rather than LLVM's own `void` so that every Plum
@@ -120,6 +129,7 @@ let cg_llvm_ty (t: CgTy): String =
         CgStruct(_) => "ptr",
         CgEnum(_) => "ptr",
         CgArray(_) => "ptr",
+        CgRef(_) => "ptr",
         CgClosure(_, _) => "ptr",
         CgTuple(_) => "ptr",
     }
@@ -134,6 +144,7 @@ let cg_ty_name (t: CgTy): String =
         CgStruct(name) => name,
         CgEnum(name) => name,
         CgArray(elem) => "Array[".concat(cg_ty_name(elem)).concat("]"),
+        CgRef(inner) => "Ref[".concat(cg_ty_name(inner)).concat("]"),
         CgClosure(_, ret) => "(..) -> ".concat(cg_ty_name(ret)),
         CgTuple(elems) => "(".concat(cg_ty_name_list(elems, 0, "")).concat(")"),
     }
@@ -299,6 +310,7 @@ let cg_ity_mangle (t: typecheck.ITy): String =
         ITEnum(name, args) => if Array.is_empty(args) { name } else { name.concat("_").concat(cg_targ_suffix(args, 0, "")) },
         ITFunction(ptys, ret) => "fn".concat(cg_targ_suffix(ptys, 0, "")).concat("_to_").concat(cg_ity_mangle(ret)),
         ITTuple(elems) => "tup".concat(cg_targ_suffix(elems, 0, "")),
+        ITRef(inner) => "Ref_".concat(cg_ity_mangle(inner)),
         // An unconstrained type variable DEFAULTS, exactly as it does in
         // `cg_of_ity` — and it must default to the same thing here, or
         // a call site and its callee would disagree about the symbol.
@@ -521,6 +533,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TIf(cond, then_branch, else_branch) => cg_if(p, env, n, cond, then_branch, else_branch, cg_ty(p, e)),
         TBlockE(block) => cg_block_ty(p, env, n, block, cg_ty(p, e)),
         TFieldGet(base, name) => cg_field_read(p, env, n, base, name, cg_ty(p, e)),
+        TRefNew(inner) => cg_ref_new(p, env, n, inner),
         TMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms, cg_ty(p, e)),
         TFor(pattern, lo, hi, body) => cg_for(p, env, n, pattern, lo, hi, body),
         TArrayLit(elems) => cg_array_lit(p, env, n, elems, cg_ty(p, e)),
@@ -572,6 +585,7 @@ let cg_of_ity (t: typecheck.ITy): CgTy =
         ITStr => CgStr,
         ITUnit => CgUnit,
         ITStruct(name, args) => if name == "Array" { CgArray(cg_of_ity(args[0])) } else { CgStruct(name) },
+        ITRef(inner) => CgRef(cg_of_ity(inner)),
         ITEnum(name, _) => CgEnum(name),
         ITFunction(ptys, ret) => CgClosure(Array.map(ptys, |q| cg_of_ity(q)), cg_of_ity(ret)),
         ITTuple(elems) => CgTuple(Array.map(elems, |q| cg_of_ity(q))),
@@ -959,6 +973,7 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TUnary(_, a) => cg_reads_max(name, a),
         TFieldGet(a, _) => cg_reads_max(name, a),
         TPrintln(a) => cg_reads_max(name, a),
+        TRefNew(a) => cg_reads_max(name, a),
         TBinary(_, a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
         TIndex(a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
         TArrayLit(xs) => cg_reads_max_list(name, xs, 0, 0),
@@ -1252,7 +1267,11 @@ let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (method_name: St
     else if method_name == "concat" { cg_concat(p, env, n, base, args[0]) }
     else if method_name == "len" { cg_len(p, env, n, base) }
     else if method_name == "push" { cg_array_push(p, env, n, base, args[0], ty) }
-    else if method_name == "set" { cg_array_set(p, env, n, base, args[0], args[1], ty) }
+    else if method_name == "set" && args.len() == 2 { cg_array_set(p, env, n, base, args[0], args[1], ty) }
+    // Arity is what separates `Ref.set(v)` from `Array.set(i, v)` —
+    // the same split inference makes.
+    else if method_name == "set" { cg_ref_set(p, env, n, base, args[0]) }
+    else if method_name == "get" { cg_ref_get(p, env, n, base) }
     else if method_name == "to_float" { cg_to_float(p, env, n, base) }
     else if method_name == "ends_with" { cg_str_binop(p, env, n, base, args[0], "@plum_str_ends_with", CgBool) }
     else if method_name == "starts_with" { cg_str_binop(p, env, n, base, args[0], "@plum_str_starts_with", CgBool) }
@@ -1278,6 +1297,11 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         CgStruct(name) => { cg_fail(".to_string() on a struct isn't supported yet: ".concat(name)); cg_unit_emit(b.n) },
         CgEnum(name) => { cg_fail(".to_string() on an enum isn't supported yet: ".concat(name)); cg_unit_emit(b.n) },
         CgArray(_) => { cg_fail(".to_string() on an Array isn't supported yet"); cg_unit_emit(b.n) },
+        // Deliberately unsupported, same as `Array`: a `Ref` has no
+        // meaningful text form of its own, and printing the cell
+        // ADDRESS would be worse than useless. `.get().to_string()`
+        // is the thing the caller wants.
+        CgRef(_) => { cg_fail(".to_string() on a Ref isn't supported — use .get().to_string()"); cg_unit_emit(b.n) },
         CgClosure(_, _) => { cg_fail("a closure has no .to_string()"); cg_unit_emit(b.n) },
         CgTuple(_) => { cg_fail(".to_string() on a tuple isn't supported yet"); cg_unit_emit(b.n) },
     }
@@ -1875,6 +1899,66 @@ let cg_store_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (field_names: A
         cg_store_fields(p, env, r.n + 1, field_names, cell, fields, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
     }
 
+// `ref(v)`: a two-word cell, `{ i64 refcount, i64 value }`. The value
+// is stored in its NATURAL machine type at offset 8, exactly the way
+// an array element or a struct field is — no i64 punning, and no tag,
+// since a `Ref` is never pattern-matched. `@plum_alloc` already
+// installs the refcount of 1.
+//
+// The value is stored OWNED: `cg_expr` hands back a value the caller
+// owns, and the cell takes that reference over rather than retaining
+// a second one.
+let cg_ref_new (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.TExpr): Emit = {
+    let r = cg_expr(p, env, n, inner);
+    let cell = cg_reg(r.n);
+    let vp = cg_reg(r.n + 1);
+    let code = r.code
+        .concat("  ").concat(cell).concat(" = call ptr @plum_alloc(i64 16)\n")
+        .concat("  ").concat(vp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 8\n")
+        .concat("  store ").concat(cg_llvm_ty(r.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(vp).concat("\n");
+    Emit { code: code, allocas: r.allocas, releases: r.releases, globals: r.globals, val: cell, ty: CgRef(r.ty), n: r.n + 2 }
+}
+
+// `r.get()`: borrow the cell, load the value, and RETAIN it — the
+// caller receives an owned value while the cell keeps its own
+// reference. Same shape as `cg_field_read`, for the same reason.
+let cg_ref_get (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
+    let b = cg_borrow(p, env, n, base);
+    match b.ty {
+        CgRef(inner) => {
+            let vp = cg_reg(b.n);
+            let out = cg_reg(b.n + 1);
+            let code = b.code
+                .concat("  ").concat(vp).concat(" = getelementptr i8, ptr ").concat(b.val).concat(", i64 8\n")
+                .concat("  ").concat(out).concat(" = load ").concat(cg_llvm_ty(inner)).concat(", ptr ").concat(vp).concat("\n")
+                .concat(cg_inc(inner, out))
+                .concat(b.drop);
+            Emit { code: code, allocas: b.allocas, releases: b.releases, globals: b.globals, val: out, ty: inner, n: b.n + 2 }
+        },
+        _ => { cg_fail(".get() on a value that isn't a Ref"); cg_unit_emit(b.n) },
+    }
+}
+
+// `r.set(v)`: store IN PLACE, which is the entire point of `Ref` and
+// the one way it differs from `Array.set` (which copies). The value
+// being overwritten owned a reference, so it is released first.
+let cg_ref_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (value: typecheck.TExpr): Emit = {
+    let b = cg_borrow(p, env, n, base);
+    let v = cg_expr(p, env, b.n, value);
+    let vp = cg_reg(v.n);
+    let old = cg_reg(v.n + 1);
+    let code = b.code.concat(v.code)
+        .concat("  ").concat(vp).concat(" = getelementptr i8, ptr ").concat(b.val).concat(", i64 8\n")
+        .concat("  ").concat(old).concat(" = load ").concat(cg_llvm_ty(v.ty)).concat(", ptr ").concat(vp).concat("\n")
+        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, value)), old))
+        .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(vp).concat("\n")
+        .concat(b.drop);
+    Emit {
+        code: code, allocas: b.allocas.concat(v.allocas), releases: b.releases.concat(v.releases),
+        globals: b.globals.concat(v.globals), val: "0", ty: CgUnit, n: v.n + 2,
+    }
+}
+
 let cg_field_read (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (name: String) (fty: CgTy): Emit = {
     let b = cg_borrow(p, env, n, base);
     match b.ty {
@@ -1984,6 +2068,7 @@ let cg_zero_of (t: CgTy): String =
         CgStruct(_) => "null",
         CgEnum(_) => "null",
         CgArray(_) => "null",
+        CgRef(_) => "null",
         CgClosure(_, _) => "null",
         CgTuple(_) => "null",
     }
@@ -2107,7 +2192,20 @@ let cg_pat_str (env: Array[CgSlot]) (n: Int) (sval: String) (lit: String): PatEm
 
 let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (arg_pats: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy): PatEmit =
     match cg_find_variant(p, name) {
-        None => { cg_fail("unknown variant in pattern: ".concat(name)); PatEmit { code: "", binds: "", allocas: "", releases: "",globals: "", test: "0", env: env, n: n } },
+        // Not a variant — a STRUCT destructured positionally,
+        // `Point(x, y)`. The parser can't tell the two apart; the name
+        // decides. Reuses the struct path by pairing each position
+        // with its declared field name, exactly the way the tuple case
+        // just below reuses it by pairing with an index.
+        None => {
+            let fnames = typecheck.ctx_field_names(p.ctx, name);
+            if Array.is_empty(fnames) {
+                cg_fail("unknown variant in pattern: ".concat(name));
+                PatEmit { code: "", binds: "", allocas: "", releases: "",globals: "", test: "0", env: env, n: n }
+            } else {
+                cg_pat_struct(p, env, n, name, cg_positional_field_pats(fnames, arg_pats, 0, []), sval, sity)
+            }
+        },
         Some(v) => {
             let tag = cg_reg(n);
             let tag_ok = cg_reg(n + 1);
@@ -2156,6 +2254,13 @@ let cg_pat_struct (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (f
 // works by field name — so each position is given its index as a name.
 // Reusing the struct path is the point: a tuple is an anonymous struct,
 // and the emitter should not have a second copy of the same loop.
+// Pairs positional sub-patterns with a struct's DECLARED field names,
+// in order, so `Point(x, y)` becomes the same shape as
+// `Point { x: x, y: y }`.
+let cg_positional_field_pats (fnames: Array[String]) (pats: Array[parser.PPattern]) (i: Int) (acc: Array[parser.FieldPatternNode]): Array[parser.FieldPatternNode] =
+    if i >= pats.len() || i >= fnames.len() { acc }
+    else { cg_positional_field_pats(fnames, pats, i + 1, acc.push(parser.FieldPatternNode { name: fnames[i], pattern: pats[i] })) }
+
 let cg_tuple_index_names (pats: Array[parser.PPattern]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= pats.len() { acc } else { cg_tuple_index_names(pats, i + 1, acc.push(i.to_string())) }
 
@@ -2380,6 +2485,14 @@ let cg_emit_eq_fn (p: CgProgram) (t: typecheck.ITy): String =
             else { cg_emit_struct_eq(t, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
         ITEnum(name, args) => cg_emit_enum_eq(p, t, cg_find_enum(p, name).variants, args),
         ITTuple(elems) => cg_emit_struct_eq(t, elems),
+        // `Ref` equality is IDENTITY, not structural: two cells holding
+        // equal values are still two different cells. That is the whole
+        // point of an explicit shared-mutable reference, and it is what
+        // `exec_corpus/refs` pins down — `a == b` is true only when
+        // both name the same cell.
+        ITRef(_) =>
+            "define i1 ".concat(cg_eq_sym(t)).concat("(ptr %a, ptr %b) {\nentry:\n")
+                .concat("  %r = icmp eq ptr %a, %b\n  ret i1 %r\n}\n\n"),
         _ => "",
     }
 
@@ -2585,7 +2698,7 @@ let cg_rc_enabled (unit: Unit): Bool = true
 let cg_is_heap (t: CgTy): Bool =
     match t {
         CgInt => false, CgFloat => false, CgBool => false, CgUnit => false,
-        CgStr => true, CgStruct(_) => true, CgEnum(_) => true, CgArray(_) => true, CgClosure(_, _) => true,
+        CgStr => true, CgStruct(_) => true, CgEnum(_) => true, CgArray(_) => true, CgClosure(_, _) => true, CgRef(_) => true,
         CgTuple(_) => true,
     }
 
@@ -2755,6 +2868,11 @@ let cg_emit_rel_fn (p: CgProgram) (t: typecheck.ITy): String =
             else { cg_emit_struct_rel(t, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
         ITEnum(name, args) => cg_emit_enum_rel(p, t, cg_find_enum(p, name).variants, args),
         ITTuple(elems) => cg_emit_struct_rel(t, elems),
+        // A `Ref` cell is `{ i64 rc, value }` — byte-for-byte the
+        // layout of a ONE-FIELD struct, value at offset 8. So the
+        // struct release path is not merely similar, it is exactly
+        // right: release the single child, then free the cell.
+        ITRef(inner) => cg_emit_struct_rel(t, [inner]),
         ITFunction(_, _) => cg_rel_head(t).concat(cg_rel_tail(())),
         _ => "",
     }
@@ -2980,6 +3098,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TArrayNs(_, args) => cg_rel_in_list(p, args, 0, here),
         TVariantNew(_, args) => cg_rel_in_list(p, args, 0, here),
         TPrintln(a) => cg_rel_in(p, a, here),
+        TRefNew(a) => cg_rel_in(p, a, here),
         TUnary(_, a) => cg_rel_in(p, a, here),
         TBinary(_, a, b) => cg_rel_in(p, b, cg_rel_in(p, a, here)),
         TFieldGet(a, _) => cg_rel_in(p, a, here),
@@ -3053,6 +3172,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TArrayNs(_, args) => cg_eq_in_list(p, args, 0, acc),
         TVariantNew(_, args) => cg_eq_in_list(p, args, 0, acc),
         TPrintln(a) => cg_eq_in(p, a, acc),
+        TRefNew(a) => cg_eq_in(p, a, acc),
         TUnary(_, a) => cg_eq_in(p, a, acc),
         TFieldGet(a, _) => cg_eq_in(p, a, acc),
         TIndex(a, b) => cg_eq_in(p, b, cg_eq_in(p, a, acc)),
@@ -3134,6 +3254,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TArrayNs(_, args) => cg_calls_in_list(p, args, acc),
         TVariantNew(_, args) => cg_calls_in_list(p, args, acc),
         TPrintln(a) => cg_calls_in(p, a, acc),
+        TRefNew(a) => cg_calls_in(p, a, acc),
         TUnary(_, a) => cg_calls_in(p, a, acc),
         TBinary(_, a, b) => cg_calls_in(p, b, cg_calls_in(p, a, acc)),
         TFieldGet(a, _) => cg_calls_in(p, a, acc),

@@ -10832,3 +10832,58 @@ soundness fix above, so the INPUT SOURCE had changed underneath it.
 Against a same-source baseline the output is byte-identical. Byte
 comparison is only as good as the discipline about what is being
 compared to what.
+
+### `Ref[T]` in the self-hosted backend — the last exec_corpus gap (2026-08-18)
+
+`bootstrap/exec_corpus` was 18/19 for a long time: `refs` was the one
+fixture the self-hosted compiler could not check, let alone run
+("unbound function: ref"). It is now **19/19**.
+
+`ITRef(ITy)` threads through unify/subst/occurs/render; `CgRef(CgTy)`
+through the codegen type layer. `ref(v)` gets its own `TRefNew` node —
+it is a CONSTRUCTOR, not a receiver-shaped call, and a new `TNode`
+variant only costs 7 sites. `.get()`/`.set(v)` reuse `TMethodCall`,
+split from `Array.set` purely by ARITY, exactly the way inference
+splits them.
+
+Three places where the existing design already had the right answer:
+
+  * **Layout.** The cell is `{ i64 rc, value }` with the value in its
+    NATURAL machine type at offset 8 — the same convention array
+    elements and struct fields already use. No i64 punning, and no new
+    runtime helper. A `@plum_alloc_ref` had already been written
+    (mirroring the Rust backend, which does pun through i64) before
+    this was noticed; it was deleted rather than kept.
+  * **Release.** `cg_emit_struct_rel(t, [inner])`. A `Ref` cell is
+    byte-for-byte a ONE-FIELD struct, so the struct path is not merely
+    similar to what `Ref` needs, it is exactly it.
+  * **`.get()`.** Borrow the cell, load, retain, drop the base — the
+    same shape as `cg_field_read`, for the same reason: the caller
+    receives an owned value while the cell keeps its own reference.
+
+Equality is IDENTITY, not structural: two cells holding equal values
+are still two cells. That is the entire point of an explicit
+shared-mutable reference, and it is what the fixture pins down
+(`a == b` true, `a == c` false with identical contents).
+
+**Positional struct patterns came along for the ride.** The fixture
+also needs `match a.get() { Point(x, y) => .. }` — a struct
+destructured positionally — which neither the self-hosted checker nor
+its codegen supported, and which has nothing to do with `Ref`. The
+parser cannot tell `Point(x, y)` apart from a variant pattern; the NAME
+decides. Both layers now fall back to the struct path when the tag
+resolves to a struct instead of a variant, pairing positions with
+declared field names — the same reuse the tuple case already makes by
+pairing with indices.
+
+**Memory, checked under ASan rather than assumed.** No use-after-free,
+no double-free, no overflow in any of the 19 fixtures. 16 of the 19 DO
+leak at exit — including `recursion_factorial` (32 bytes) and
+`arithmetic` (160), which never touch a `Ref` — so exit-time leaking is
+a pre-existing, backend-wide property, not something this introduced.
+The Rust backend leaks on the same fixtures too, and MORE on this one
+(291 bytes in 17 allocations, against the self-hosted 96 in 3). Worth
+its own investigation someday; it is not a `Ref` bug.
+
+Fixed point still holds byte-for-byte; 7/7 typecheck_corpus still
+rejected; Rust suite 1934/0.

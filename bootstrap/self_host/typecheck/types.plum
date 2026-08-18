@@ -39,6 +39,10 @@ pub enum ITy {
     // unify in practice" invariant.
     ITParam(String),
     ITTuple(Array[ITy]),
+    // `Ref[T]` — the explicit shared-mutable cell (`ref(v)`, `.get()`,
+    // `.set(v)`; see DESIGN.md's "Mutability and cycles"). Carries its
+    // inner type, exactly as `ITStruct`/`ITEnum` carry their arguments.
+    ITRef(ITy),
 }
 
 // --- Substitution ---
@@ -68,6 +72,7 @@ pub let subst_apply (s: Subst) (ty: ITy): ITy =
         },
         ITFunction(params, ret) => ITFunction(Array.map(params, |p| subst_apply(s, p)), subst_apply(s, ret)),
         ITTuple(elems) => ITTuple(Array.map(elems, |e| subst_apply(s, e))),
+        ITRef(inner) => ITRef(subst_apply(s, inner)),
         ITStruct(name, args) => ITStruct(name, Array.map(args, |a| subst_apply(s, a))),
         ITEnum(name, args) => ITEnum(name, Array.map(args, |a| subst_apply(s, a))),
         _ => ty,
@@ -155,6 +160,13 @@ let unify_non_var (a: ITy) (b: ITy): Result[Subst, String] =
             ITFunction(p2, r2) => unify_fn_types(p1, r1, p2, r2),
             _ => type_mismatch(a, b),
         },
+        ITRef(i1) => match b {
+            // Two `Ref`s unify exactly when their inner types do —
+            // `Ref` is invariant here, same as every other one-argument
+            // constructor in this checker.
+            ITRef(i2) => unify(i1, i2),
+            _ => type_mismatch(a, b),
+        },
         ITTuple(e1) => match b {
             ITTuple(e2) => unify_arg_lists(e1, e2),
             _ => type_mismatch(a, b),
@@ -173,6 +185,7 @@ let occurs (id: Int) (ty: ITy): Bool =
         ITVar(other) => other == id,
         ITFunction(params, ret) => Array.any(params, |p| occurs(id, p)) || occurs(id, ret),
         ITTuple(elems) => Array.any(elems, |e| occurs(id, e)),
+        ITRef(inner) => occurs(id, inner),
         ITStruct(_, args) => Array.any(args, |a| occurs(id, a)),
         ITEnum(_, args) => Array.any(args, |a| occurs(id, a)),
         _ => false,
@@ -216,6 +229,7 @@ pub let render_ty (ty: ITy): String =
         ITEnum(name, args) => if Array.is_empty(args) { name } else { name.concat("[").concat(join_comma_ty(args)).concat("]") },
         ITParam(name) => name,
         ITTuple(elems) => "(".concat(join_comma_ty(elems)).concat(")"),
+        ITRef(inner) => "Ref[".concat(render_ty(inner)).concat("]"),
     }
 
 let join_comma_ty (tys: Array[ITy]): String = Array.fold(tys, "", |acc, t| if acc == "" { render_ty(t) } else { acc.concat(", ").concat(render_ty(t)) })

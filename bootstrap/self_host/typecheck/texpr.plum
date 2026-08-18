@@ -105,6 +105,10 @@ pub enum TNode {
     TMethodCall(String, TExpr, Array[TExpr]),
     // `Array.map`/`filter`/`fold` — a namespace call, not a method.
     TArrayNs(String, Array[TExpr]),
+    // `ref(v)` — allocates a fresh `Ref[T]` cell holding `v`. Its own
+    // node rather than a `TMethodCall`, because it is a CONSTRUCTOR:
+    // the operand is the value going in, not a receiver.
+    TRefNew(TExpr),
     TPrintln(TExpr),
     TUnsupported(String),
 }
