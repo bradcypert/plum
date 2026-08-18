@@ -10630,3 +10630,91 @@ as a net negative (see "Consuming pattern match" above).
 The remaining gap is TIME, not memory, and it is the smaller one. Worth
 saying plainly: nothing here shows the self-hosted backend generates faster
 code — it does not, yet.
+
+## Where the compile time actually went (2026-08-17)
+
+`plum emit-llvm` on this compiler's own source took **68.6s**. It now
+takes **9.7s**, and every step of getting there was a measurement
+contradicting a guess.
+
+Nothing could say which pass was responsible, so the first change was
+`PLUM_PASS_TIMES=1` — a per-phase stopwatch that works from any entry
+point (`build`, `emit-llvm`, a test). The answer was not close:
+
+```
+  0.007s  front-end rewrites
+ 68.123s  type inference          <- 99.3%
+  0.176s  monomorphize::plan
+  0.151s  fbip::optimize_program
+  0.075s  emit_program
+   ...    everything else < 0.005s
+```
+
+The guess had been the whole-program fixpoint passes — `reusable_params`,
+ANF, `prune`, `refdrop`. Together they are **0.19s**. Two orders of
+magnitude off. The backend, the part with all the interesting analysis
+in it, was never the problem.
+
+**`TypeEnv::extend` was O(environment).** It was a `Vec` used as a
+persistent value, so binding one name cloned every `String` and
+`Scheme` in scope. Inference calls it once per parameter, `let`, match
+binding and lambda argument: 629,231 calls copying **257,126,855**
+entries, average environment 409. Making it a shared-tail `Rc` cons
+list makes `extend` O(1) — one node, one refcount bump — with
+identical value semantics, since nothing was ever mutated. The lookups
+already wanted innermost-first order (`.iter().rev().find(..)`), so the
+chain reads more naturally than the `Vec` did. **68.6s -> 15.4s.**
+
+**Then `apply_subst`, and a wrong turn worth recording.** It rebuilt
+every binding in scope on each refinement: 33,699 calls, 42,754,972
+entries. The obvious fix — carry a PENDING substitution on the
+environment and apply it lazily at lookup, O(substitution) instead of
+O(environment) — was implemented, produced byte-identical IR, and was
+**slower**: 15.4s -> 19.5s. The pending substitution accumulates every
+binding, so `compose` grew from 18M entries copied to **163M** (average
+map 1535). Cheap work done 42M times beat expensive work done 33k
+times. It was reverted.
+
+What the counters actually showed: of those 42.7M entries, only
+**325,831 — 0.76% — change**. Applying a substitution to a type is
+cheap; ALLOCATING a new binding for the 99.24% that come back
+identical is not. So the rewrite stays eager but SHARES: rebuild
+bottom-up, and when a node's own scheme and its whole tail are both
+untouched, hand back the original `Rc`. 92.9% of nodes are now shared
+rather than reallocated. **15.4s -> 9.7s.**
+
+A free-var min/max range check was also measured before being built,
+and would have skipped only 41.6% — worth knowing, since it is the
+first idea that comes to mind and it is the wrong one.
+
+### The compiler was not reproducible
+
+Verifying "this refactor changed nothing" ought to be a matter of
+diffing the emitted IR. That was not available: the same binary emitted
+**261,046 differing lines** on two consecutive runs. Two independent
+causes, both `HashMap` iteration order (randomised per process):
+
+  * `monomorphize::plan` seeded its worklist unordered, so function
+    emission order varied — and closures are numbered from one global
+    counter in emission order, so they were renamed.
+  * `codegen::merge_envs` allocated SSA registers while iterating an
+    `Env`, permuting register numbers at branch merges.
+
+The output was always CORRECT — two differently-numbered builds of the
+self-hosted compiler emit byte-identical output, the IR handed to
+codegen was already deterministic, and `reusable_params` fingerprints
+identically across runs, so no analysis was order-dependent. What it
+cost was reproducible builds, caching, bisectable codegen regressions,
+and the ability to check a refactor by diffing. The last one is not
+hypothetical: it is exactly the check the `TypeEnv` work needed and
+could not use until this was fixed. Both inference changes above are
+now verified byte-identical against a baseline built from the previous
+commit.
+
+The regression test must run the compiler in SEPARATE PROCESSES.
+Rust seeds each `HashMap` once per process, so two compiles inside one
+process iterate identically and pass regardless of how order-dependent
+the compiler is — the first version of this test did exactly that and
+passed with both fixes reverted. It also needs a fixture with enough
+branch-divergent bindings to actually permute; the existing examples
+were too small to notice.

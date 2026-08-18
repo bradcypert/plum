@@ -31,6 +31,10 @@ impl Subst {
         Subst(HashMap::new())
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn single(id: TypeVarId, ty: Type) -> Self {
         let mut map = HashMap::new();
         map.insert(id, ty);

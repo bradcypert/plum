@@ -222,6 +222,12 @@ pub static ENV_SUBST_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::At
 pub static ENV_SUBST_ENTRIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static GENERALIZE_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static GENERALIZE_ENTRIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Of the entries `apply_subst` walks, how many it actually has to
+/// REBUILD (its own scheme changed, or something below it did). The
+/// gap between this and `ENV_SUBST_ENTRIES` is what node sharing
+/// avoids allocating.
+pub static ENV_SUBST_CHANGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 
 pub fn env_stats() -> String {
     use std::sync::atomic::Ordering::Relaxed;
@@ -234,6 +240,14 @@ pub fn env_stats() -> String {
         f(ENV_EXTEND_CALLS.load(Relaxed), ENV_EXTEND_ENTRIES.load(Relaxed)),
         f(ENV_SUBST_CALLS.load(Relaxed), ENV_SUBST_ENTRIES.load(Relaxed)),
         f(GENERALIZE_CALLS.load(Relaxed), GENERALIZE_ENTRIES.load(Relaxed)),
+    ) + &format!(
+        "\n             env: of {} apply_subst entries, {} rebuilt ({:.1}% shared)",
+        ENV_SUBST_ENTRIES.load(Relaxed),
+        ENV_SUBST_CHANGED.load(Relaxed),
+        {
+            let (e, c) = (ENV_SUBST_ENTRIES.load(Relaxed), ENV_SUBST_CHANGED.load(Relaxed));
+            if e == 0 { 0.0 } else { 100.0 * (e - c) as f64 / e as f64 }
+        }
     )
 }
 
@@ -303,8 +317,8 @@ impl TypeEnv {
         }
     }
 
-    fn lookup_scheme(&self, name: &str) -> Option<&Scheme> {
-        self.iter().find(|(n, _, _)| *n == name).map(|(_, s, _)| s)
+    fn lookup_scheme(&self, name: &str) -> Option<Scheme> {
+        self.iter().find(|(n, _, _)| *n == name).map(|(_, s, _)| s.clone())
     }
 
     /// The declaration span `name`'s CURRENT (innermost-scope, per
@@ -341,28 +355,45 @@ impl TypeEnv {
     pub fn apply_subst(&self, subst: &Subst) -> TypeEnv {
         ENV_SUBST_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         ENV_SUBST_ENTRIES.fetch_add(self.len as u64, std::sync::atomic::Ordering::Relaxed);
-        // Collected innermost-first, then rebuilt from the OUTERMOST
-        // end so the resulting chain has the same order as this one.
-        let refined: Vec<(String, Scheme, Option<Span>)> = self
-            .iter()
-            .map(|(n, s, sp)| {
-                (
-                    n.to_string(),
-                    Scheme {
-                        vars: s.vars.clone(),
-                        ty: subst.apply(&s.ty),
-                        bounds: s.bounds.clone(),
-                    },
-                    sp,
-                )
-            })
-            .collect();
-        let mut head: Option<Rc<EnvNode>> = None;
-        for (name, scheme, span) in refined.into_iter().rev() {
-            head = Some(Rc::new(EnvNode { name, scheme, span, next: head }));
-        }
+        let (head, _) = apply_subst_node(&self.head, subst);
         TypeEnv { head, len: self.len }
     }
+}
+
+/// Rebuilds a chain under `subst`, SHARING every node the
+/// substitution leaves alone. Returns the new chain and whether
+/// anything changed.
+///
+/// The eager rewrite this replaces rebuilt every node unconditionally:
+/// a fresh `String` for the name and a fresh allocation per binding,
+/// 42,754,972 of them on this compiler's own source — of which only
+/// 325,831 (0.76%) differed from what they replaced. Applying a
+/// substitution to a type is cheap; ALLOCATING the result is not, and
+/// that was nearly all waste.
+///
+/// Bottom-up so a node can be shared only when its own scheme and its
+/// entire tail are both untouched. Depth is the number of bindings in
+/// scope (~1300 at most here), well within the stack.
+fn apply_subst_node(node: &Option<Rc<EnvNode>>, subst: &Subst) -> (Option<Rc<EnvNode>>, bool) {
+    let Some(n) = node else {
+        return (None, false);
+    };
+    let (next, tail_changed) = apply_subst_node(&n.next, subst);
+    let ty = subst.apply(&n.scheme.ty);
+    let self_changed = ty != n.scheme.ty;
+    if !self_changed && !tail_changed {
+        return (Some(Rc::clone(n)), false);
+    }
+    ENV_SUBST_CHANGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    (
+        Some(Rc::new(EnvNode {
+            name: n.name.clone(),
+            scheme: Scheme { vars: n.scheme.vars.clone(), ty, bounds: n.scheme.bounds.clone() },
+            span: n.span,
+            next,
+        })),
+        true,
+    )
 }
 
 impl Default for TypeEnv {
@@ -1953,7 +1984,6 @@ impl Infer {
             ast::Expr::Ident(name, span) => {
                 let scheme = env
                     .lookup_scheme(name)
-                    .cloned()
                     .ok_or_else(|| plum_syntax::error::CompileError::new(*span, format!("unbound variable: {name}")))?;
                 if let Some(decl_span) = env.lookup_span(name) {
                     self.definitions.insert(*span, decl_span);
@@ -4321,7 +4351,6 @@ impl Infer {
                     // doc comment).
                     let existing = cur_env
                         .lookup_scheme(name)
-                        .cloned()
                         .ok_or_else(|| plum_syntax::error::CompileError::new(*span, format!("assignment to undefined variable {name:?}")))?;
                     let existing_ty = self.instantiate(&existing);
                     let (val_ty, s) = self.infer_expr(value, &cur_env)?;
