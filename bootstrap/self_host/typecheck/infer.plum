@@ -368,7 +368,32 @@ let extend_closure_params (env: TyEnv) (params: Array[String]) (tys: Array[ITy])
 
 let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (name: String): InferResult =
     match tyenv_lookup(env, name) {
-        Some(ty) => ir_leaf(ty, acc, state, TIdent(name)),
+        // `subst_apply(acc, ..)`, NOT the raw stored type. A binding is
+        // recorded in `TyEnv` with whatever type it had when it was
+        // bound, and nothing ever rewrites the environment afterwards
+        // (there is deliberately no `tyenv_apply` — that walk is what
+        // makes the Rust checker's own `TypeEnv::apply_subst` cost
+        // 42.7M entry visits on this compiler's source). So a variable
+        // whose type was PINNED DOWN after it was bound still reads
+        // back unconstrained here.
+        //
+        // That was a real unsoundness, not a theoretical one:
+        //
+        //     let f = |n| if n == 0 { !n } else { true };
+        //
+        // `n == 0` pins n to Int; `!n` then needs Bool. Reading the
+        // stale, unconstrained `n` let `!` unify it with Bool locally,
+        // and `subst_compose` favors the already-established binding
+        // for a repeated variable, so the conflicting one was silently
+        // DISCARDED instead of reported. `check` answered "ok" and
+        // codegen went on to emit `xor i1` against an `i64`, which only
+        // `clang` finally rejected — with no source location.
+        //
+        // Resolving at lookup fixes it without reintroducing the walk:
+        // `acc` is already threaded through inference, so this is O(the
+        // substitution) at the handful of points that read a name,
+        // rather than O(the environment) at every refinement.
+        Some(ty) => ir_leaf(subst_apply(acc, ty), acc, state, TIdent(name)),
         // A top-level 0-parameter binding. Its BODY is still inferred —
         // that is where its type comes from, and it has to be checked
         // anyway — but the node records a REFERENCE rather than the
@@ -570,7 +595,8 @@ let unify_variant_args_acc (payload: Array[ITy]) (args: Array[ITy]) (i: Int) (ac
 let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (callee: parser.PExpr) (args: Array[parser.PExpr]): InferResult =
     match callee {
         EIdent(name) => match tyenv_lookup(env, name) {
-            Some(ty) => infer_closure_call(p2, state, env, acc, ty, args, TExpr { ty: ty, node: TIdent(name) }),
+            // Same resolve-at-lookup rule as `infer_ident` above.
+            Some(raw) => { let ty = subst_apply(acc, raw); infer_closure_call(p2, state, env, acc, ty, args, TExpr { ty: ty, node: TIdent(name) }) },
             None => infer_named_call(p2, state, env, acc, name, args),
         },
         // `Array.map`/`filter`/`fold` — a NAMESPACE call ("Array" is

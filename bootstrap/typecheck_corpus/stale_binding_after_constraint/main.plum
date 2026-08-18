@@ -1,0 +1,20 @@
+// `n` is an unannotated closure parameter, so its type is inferred.
+// The CONDITION `n == 0` pins n to Int; the then-branch `!n` needs
+// Bool. `n` cannot be both, so this must be REJECTED.
+//
+// This fixture exists because the self-hosted checker accepted it.
+// `TyEnv` records a binding with whatever type it had when bound and
+// nothing rewrites the environment afterwards, so reading `n` back
+// inside the branch returned its original, unconstrained type
+// variable. `!` unified that with Bool locally, and `subst_compose`
+// keeps the already-established binding for a repeated variable — so
+// the conflicting one was silently discarded rather than reported.
+//
+// `check` answered "ok" and codegen went on to emit `xor i1` against
+// an `i64`; the only thing that ever complained was `clang`, with no
+// source location. Fixed by resolving identifiers against the
+// threaded substitution at lookup (see `infer_ident`).
+let main (): Unit = {
+    let f = |n| if n == 0 { !n } else { true };
+    println(f(1));
+}

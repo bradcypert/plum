@@ -10718,3 +10718,60 @@ the compiler is — the first version of this test did exactly that and
 passed with both fixes reverted. It also needs a fixture with enough
 branch-divergent bindings to actually permute; the existing examples
 were too small to notice.
+
+## The 20x gap was a missing check, not a faster design (2026-08-18)
+
+After the inference work above, the Rust compiler emitted IR for this
+compiler's source in 9.6s. The SELF-HOSTED compiler did the same job in
+**0.48s** — 20x faster, same input, same output. Two ways that could
+go: the Rust one still had structural waste, or the self-hosted one was
+skipping work it should be doing. It was the second.
+
+`bootstrap/self_host/typecheck/infer.plum` has exactly four `tyenv_*`
+functions — `empty`, `extend`, `lookup`, `lookup_acc`. There is no
+environment refinement at all. The Rust engine's `TypeEnv::apply_subst`
+runs 33,699 times over 42,754,972 entries; the self-hosted checker
+simply never does it. That absence IS the 20x.
+
+Is that refinement load-bearing? Disabling it and running the suite
+answers precisely: **one** test fails, `if_condition_constraint_on_an_
+existing_binding_propagates_into_sibling_branches`. One case, already
+documented at the point it was fixed.
+
+So the self-hosted checker was tested on that case, and got it wrong:
+
+```plum
+let f = |n| if n == 0 { !n } else { true };
+```
+
+`n == 0` pins n to Int; `!n` needs Bool. The Rust compiler rejects it
+with a span. The self-hosted `check` printed **`ok`**. Codegen then
+emitted `xor i1` against an `i64`, and the only thing that ever
+objected was `clang` — with no source location. A `check` that answers
+"ok" for an ill-typed program is failing at the one thing it exists to
+do.
+
+Worth being precise about severity: no wrong BINARY was produced here,
+because LLVM's own type checker caught the i1/i64 confusion. Whether a
+confusion between two same-width representations could slip through
+silently was not established either way — it is plausible and
+unproven, so it is not claimed.
+
+The fix follows the self-hosted architecture rather than importing the
+Rust one. `infer_ident` (and the `EIdent` case of `infer_call`) now
+returns `subst_apply(acc, ty)` instead of the raw stored type — the
+substitution is ALREADY threaded through inference, so resolving at
+lookup costs O(substitution) at the handful of points that read a
+name, instead of O(environment) at every refinement. The environment
+walk stays gone.
+
+Verified: both failing programs now rejected, all 7 rejection fixtures
+rejected, 18/19 `exec_corpus` still `ok` (the exception is the
+pre-existing `Ref[T]` gap, confirmed identical on the old binary), the
+compiler still checks its own source, and the BOOTSTRAP FIXED POINT
+still holds byte-for-byte. Cost: 0.503s -> 0.596s.
+
+The general lesson is worth keeping: when two implementations of the
+same thing differ by 20x, "the faster one is better designed" is a
+hypothesis, not a conclusion. Here the faster one was faster because it
+was doing less, and some of what it skipped was necessary.

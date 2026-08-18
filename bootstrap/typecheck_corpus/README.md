@@ -3,7 +3,7 @@
 The REJECTION counterpart to `bootstrap/exec_corpus/` — Stage 4 (the
 self-hosted type checker) is validated two ways: `exec_corpus/`'s own
 fixtures (11 of 12 — see below) must all type-check successfully
-(`ok`), and these 5 fixtures must all be REJECTED. Without this half,
+(`ok`), and these 7 fixtures must all be REJECTED. Without this half,
 "the checker prints `ok` for everything" and "the checker actually
 discriminates well-typed from ill-typed programs" would be
 indistinguishable.
