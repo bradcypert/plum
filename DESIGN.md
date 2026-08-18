@@ -10882,8 +10882,58 @@ leak at exit — including `recursion_factorial` (32 bytes) and
 `arithmetic` (160), which never touch a `Ref` — so exit-time leaking is
 a pre-existing, backend-wide property, not something this introduced.
 The Rust backend leaks on the same fixtures too, and MORE on this one
-(291 bytes in 17 allocations, against the self-hosted 96 in 3). Worth
-its own investigation someday; it is not a `Ref` bug.
+(291 bytes in 17 allocations, against the self-hosted 96 in 3). Not a
+`Ref` bug — and investigated immediately after, see below.
 
 Fixed point still holds byte-for-byte; 7/7 typecheck_corpus still
 rejected; Rust suite 1934/0.
+
+### The exit-time leaks were two real bugs, not "locals aren't released" (2026-08-18)
+
+16 of 19 `exec_corpus` fixtures leaked at exit. The obvious explanation
+— that `main`'s locals are simply never released — was wrong, and
+reading the generated IR is what said so. For `println(1.to_string())`
+the release is right there:
+
+```llvm
+  %t0 = call ptr @plum_int_to_string(i64 1)
+  %t1 = call i1 @plum_println(ptr %t0)
+  call void @plum_rel_str(ptr %t0)
+```
+
+The reference counting was never the problem. Two unrelated causes
+were.
+
+**1. Leaked scratch buffers in the runtime.** `plum_int_to_string`
+mallocs a 32-byte buffer, formats into it, and hands it to
+`plum_str_new` — which COPIES the bytes into a fresh cell. The buffer
+is dead on return and was never freed: 32 bytes per `.to_string()`,
+which is exactly what ASan reported, one allocation per call.
+`plum_float_to_string` had the same shape (64 bytes), and `read_file`
+the worst version of it — it leaked THE WHOLE FILE on every read. Three
+`@free` calls. The Rust backend uses an `alloca` for the same job and
+so never had this bug.
+
+**2. `Array.map`/`filter`/`fold` released neither operand.** Both the
+source array and the closure arrive OWNED — `cg_expr`, not
+`cg_borrow` — so both are the call's to release, and neither was. This
+is why it hid so well: every single-construct test came back clean,
+because an array used once has its reference consumed elsewhere. It
+only appears when the same array is mapped AND filtered, which is why
+`arrays` was the worst fixture in the corpus at 896 bytes.
+
+Result: **16 leaking -> 2**, no use-after-free/double-free/overflow
+anywhere, 19/19 still correct, fixed point still byte-identical, 7/7
+`typecheck_corpus` still rejected.
+
+The two survivors — `closures_in_structs` (24 bytes) and `generics`
+(72) — are the closure-capture gap this backend already documents as
+architectural: a closure's captures are incremented when stored and
+never released, because they are not visible from the closure's TYPE
+and its release function cannot walk them. Fixing it means what the
+real backend does, a release-function pointer per closure cell. That is
+a design change, not a patch, and is left scoped rather than tacked on.
+
+The method that found both: ASan as the oracle, then MINIMISE. Every
+one-construct fixture was clean, which is itself the clue — it said the
+bug lived in a combination, not a construct.

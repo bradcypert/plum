@@ -315,6 +315,11 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "  %len32 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 32, ptr @.plum_fmt_int, i64 %n)",
     "  %len = sext i32 %len32 to i64",
     "  %s = call ptr @plum_str_new(ptr %buf, i64 %len)",
+    // `plum_str_new` COPIES the bytes into the new cell, so the
+    // scratch buffer is dead the moment it returns. Leaving it
+    // unfreed leaked 32 bytes per `.to_string()` call -- invisible in
+    // a fixture, unbounded in a loop.
+    "  call void @free(ptr %buf)",
     "  ret ptr %s",
     "}",
     "",
@@ -328,6 +333,11 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "  %len32 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 64, ptr @.plum_fmt_float, double %f)",
     "  %len = sext i32 %len32 to i64",
     "  %s = call ptr @plum_str_new(ptr %buf, i64 %len)",
+    // `plum_str_new` COPIES the bytes into the new cell, so the
+    // scratch buffer is dead the moment it returns. Leaving it
+    // unfreed leaked 32 bytes per `.to_string()` call -- invisible in
+    // a fixture, unbounded in a loop.
+    "  call void @free(ptr %buf)",
     "  ret ptr %s",
     "}",
     "",
@@ -658,6 +668,9 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "  %got = call i64 @fread(ptr %buf, i64 1, i64 %size, ptr %f)",
     "  %closed = call i32 @fclose(ptr %f)",
     "  %cell = call ptr @plum_str_new(ptr %buf, i64 %got)",
+    // Same as the `to_string` buffers: the cell owns a copy now. This
+    // one leaked the WHOLE FILE on every read.
+    "  call void @free(ptr %buf)",
     "  %out = call ptr @plum_array_new(i64 1)",
     "  %slot = getelementptr i8, ptr %out, i64 16",
     "  store ptr %cell, ptr %slot",

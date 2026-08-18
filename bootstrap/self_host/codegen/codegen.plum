@@ -1761,7 +1761,14 @@ let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.
     let code = a.code.concat(f.code)
         .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val).concat(")\n")
         .concat("  ").concat(out).concat(" = call ptr @plum_array_new(i64 ").concat(len).concat(")\n")
-        .concat(lp.pre).concat(body).concat(lp.post);
+        .concat(lp.pre).concat(body).concat(lp.post)
+        // Both operands arrived OWNED (`cg_expr`, not `cg_borrow`), so
+        // both are this call's to release. Neither was, which leaked
+        // the source array and the closure cell on every
+        // `Array.map`/`filter`/`fold` -- invisible when an array is
+        // used once, real the moment one is folded over twice.
+        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), a.val))
+        .concat(cg_dec_cg(f.ty, f.val));
     Emit { code: code, allocas: "  ".concat(iv).concat(" = alloca i64\n").concat(a.allocas).concat(f.allocas), releases: a.releases.concat(f.releases),globals: a.globals.concat(f.globals), val: out, ty: CgArray(ret), n: b + 9 }
 }
 
@@ -1808,7 +1815,14 @@ let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typeche
         .concat(lp.pre).concat(body).concat(lp.post)
         .concat("  ").concat(final_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
         .concat("  ").concat(final_cnt).concat("p = getelementptr i8, ptr ").concat(out).concat(", i64 8\n")
-        .concat("  store i64 ").concat(final_cnt).concat(", ptr ").concat(final_cnt).concat("p\n");
+        .concat("  store i64 ").concat(final_cnt).concat(", ptr ").concat(final_cnt).concat("p\n")
+        // Both operands arrived OWNED (`cg_expr`, not `cg_borrow`), so
+        // both are this call's to release. Neither was, which leaked
+        // the source array and the closure cell on every
+        // `Array.map`/`filter`/`fold` -- invisible when an array is
+        // used once, real the moment one is folded over twice.
+        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), a.val))
+        .concat(cg_dec_cg(f.ty, f.val));
     Emit {
         code: code,
         allocas: "  ".concat(iv).concat(" = alloca i64\n").concat("  ").concat(cnt).concat(" = alloca i64\n").concat(a.allocas).concat(f.allocas), releases: a.releases.concat(f.releases),
@@ -1843,7 +1857,14 @@ let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck
         .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(a.val).concat(")\n")
         .concat("  store ").concat(acc_ty).concat(" ").concat(init.val).concat(", ptr ").concat(acc).concat("\n")
         .concat(lp.pre).concat(body).concat(lp.post)
-        .concat("  ").concat(out).concat(" = load ").concat(acc_ty).concat(", ptr ").concat(acc).concat("\n");
+        .concat("  ").concat(out).concat(" = load ").concat(acc_ty).concat(", ptr ").concat(acc).concat("\n")
+        // Both operands arrived OWNED (`cg_expr`, not `cg_borrow`), so
+        // both are this call's to release. Neither was, which leaked
+        // the source array and the closure cell on every
+        // `Array.map`/`filter`/`fold` -- invisible when an array is
+        // used once, real the moment one is folded over twice.
+        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), a.val))
+        .concat(cg_dec_cg(f.ty, f.val));
     Emit {
         code: code,
         allocas: "  ".concat(iv).concat(" = alloca i64\n").concat("  ").concat(acc).concat(" = alloca ").concat(acc_ty).concat("\n").concat(a.allocas).concat(init.allocas).concat(f.allocas), releases: a.releases.concat(init.releases).concat(f.releases),
