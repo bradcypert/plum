@@ -423,8 +423,16 @@ struct Emit { code: String, allocas: String, releases: String, globals: String, 
 // construct a phi node or reason about dominance: an `if` that produces
 // a value stores into one slot from both arms. LLVM's own mem2reg pass
 // turns all of it back into registers with correct phis, so the
-// generated code is not actually slower for it. Same reason `let mut`
-// and plain `let` need no distinction here at all.
+// generated code is not actually slower for it — BUT ONLY AT `-O1` AND
+// ABOVE, since that is where mem2reg runs at all. For a long time
+// nothing in the toolchain passed `clang` an `-O` flag, so this
+// claim was quietly false for every binary the compiler produced:
+// each local read really was a load and each write really a store.
+// See `OPT_ARTIFACT` in `codegen_cli.rs` — turning it on is worth 2x
+// on this compiler compiled by itself, and this backend gains more
+// from it than the Rust one precisely because it leans on the trick
+// harder. Same reason `let mut` and plain `let` need no distinction
+// here at all.
 // `ity` is the slot's full type, not just its representation. A
 // release function is named after the full type (`@plum_rel_Box_Int`),
 // which a `CgTy` cannot reconstruct — `CgStruct("Box")` has already

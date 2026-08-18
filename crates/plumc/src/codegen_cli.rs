@@ -1168,16 +1168,42 @@ fn write_native_shims(dir: &std::path::Path) -> Result<Vec<PathBuf>, String> {
         .collect()
 }
 
+/// The `clang` `-O` level used by the transient-execution paths (`plum
+/// run`, the interpreter-free test harness, `run_via_clang`): those
+/// compile-and-immediately-discard a binary, so *their* wall time is
+/// dominated by `clang` itself, not by the program. Measured on this
+/// compiler's own IR: `-O0` links in 0.4s, `-O2` in 6.5s — so paying
+/// for optimization on a throwaway binary is a straight loss.
+pub const OPT_TRANSIENT: u8 = 0;
+
+/// The `-O` level `plum build`/`plum compile-ir` default to. These
+/// persist an artifact someone will run repeatedly, so the tradeoff
+/// inverts: the one-time `clang` cost buys a permanently faster binary.
+///
+/// Why this matters more than a usual "-O2 is a bit faster": the
+/// codegen backends deliberately emit an `alloca` per local and let
+/// LLVM's `mem2reg` promote them back to SSA registers (see the
+/// entry-block-alloca note in `codegen.rs`). That's only free if
+/// `mem2reg` actually RUNS — and it doesn't at `-O0`. Measured on this
+/// compiler compiled by itself: `check` 0.264s -> 0.111s and
+/// `emit-llvm` 0.953s -> 0.480s going from `-O0` to `-O1`, a 2x
+/// speedup that is purely this design assumption being paid off.
+/// `-O2` costs no more `clang` time than `-O1` (6.5s vs 6.1s) and is
+/// never slower at runtime, so it's the better default of the two.
+pub const OPT_ARTIFACT: u8 = 2;
+
 fn clang_compile(
     ir: &str,
     ll_path: &std::path::Path,
     bin_path: &std::path::Path,
     extra_c_sources: &[PathBuf],
     extra_libs: &[String],
+    opt_level: u8,
 ) -> Result<(), String> {
     std::fs::write(ll_path, ir).map_err(|e| format!("failed to write generated IR: {e}"))?;
     let shim_paths = write_native_shims(ll_path.parent().ok_or("internal error: ll_path has no parent directory")?)?;
     let compile = Command::new("clang")
+        .arg(format!("-O{opt_level}"))
         .arg(ll_path)
         .args(&shim_paths)
         .args(extra_c_sources)
@@ -1214,7 +1240,7 @@ fn clang_compile(
 /// wherever `out_path` lives) via the same `clang_compile` helper
 /// `run_via_clang` uses, so both paths compile identically.
 pub fn compile_ir_to_binary(ir: &str, out_path: &std::path::Path) -> Result<(), String> {
-    compile_ir_to_binary_with_native(ir, out_path, &[], &[])
+    compile_ir_to_binary_with_native(ir, out_path, &[], &[], OPT_TRANSIENT)
 }
 
 /// The native-linking-aware sibling of `compile_ir_to_binary` — see
@@ -1230,6 +1256,7 @@ pub fn compile_ir_to_binary_with_native(
     out_path: &std::path::Path,
     extra_c_sources: &[PathBuf],
     extra_libs: &[String],
+    opt_level: u8,
 ) -> Result<(), String> {
     if let Some(parent) = out_path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -1239,7 +1266,7 @@ pub fn compile_ir_to_binary_with_native(
     let dir = unique_temp_dir("plumc-build");
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp build directory: {e}"))?;
     let ll_path = dir.join("program.ll");
-    clang_compile(ir, &ll_path, out_path, extra_c_sources, extra_libs)
+    clang_compile(ir, &ll_path, out_path, extra_c_sources, extra_libs, opt_level)
 }
 
 /// The compile-and-run test harness's C-fixture VARIANT — links an
@@ -1347,7 +1374,7 @@ fn run_via_clang(ir: &str) -> Result<String, String> {
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp build directory: {e}"))?;
     let ll_path = dir.join("program.ll");
     let bin_path: PathBuf = dir.join("program");
-    clang_compile(ir, &ll_path, &bin_path, &[], &[])?;
+    clang_compile(ir, &ll_path, &bin_path, &[], &[], OPT_TRANSIENT)?;
 
     let run = Command::new(&bin_path)
         .output()
@@ -1620,7 +1647,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let ll_path = dir.join("program.ll");
         let bin_path = dir.join("program");
-        clang_compile(&full_ir, &ll_path, &bin_path, &[], &[]).unwrap();
+        clang_compile(&full_ir, &ll_path, &bin_path, &[], &[], OPT_TRANSIENT).unwrap();
 
         let run = Command::new(&bin_path).args(["foo", "bar", "baz qux"]).output().unwrap();
         assert!(run.status.success(), "stderr: {}", String::from_utf8_lossy(&run.stderr));
@@ -2739,7 +2766,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let ll_path = dir.join("program.ll");
         let bin_path = dir.join("program");
-        clang_compile(&full_ir, &ll_path, &bin_path, &[], &[]).unwrap();
+        clang_compile(&full_ir, &ll_path, &bin_path, &[], &[], OPT_TRANSIENT).unwrap();
 
         let run1 = Command::new(&bin_path).output().unwrap();
         let run2 = Command::new(&bin_path).output().unwrap();

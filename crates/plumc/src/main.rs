@@ -219,6 +219,11 @@ struct BuildArgs {
     // than-ideal v1 scope, not a silent gap, matching this codebase's
     // own established "honest narrow gap" style elsewhere.
     link_lib: Vec<String>,
+    // The `clang` `-O` level, from `-O0`..`-O3`/`--release`/`--debug`.
+    // Defaults to `OPT_ARTIFACT` rather than the `OPT_TRANSIENT` the
+    // run/test paths use — see those constants' own doc comments for
+    // the measurements behind the split.
+    opt_level: u8,
 }
 
 fn parse_build_args(args: &[String]) -> Result<BuildArgs, String> {
@@ -226,6 +231,7 @@ fn parse_build_args(args: &[String]) -> Result<BuildArgs, String> {
     let mut output = None;
     let mut link_c = Vec::new();
     let mut link_lib = Vec::new();
+    let mut opt_level = plumc::OPT_ARTIFACT;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
@@ -252,6 +258,21 @@ fn parse_build_args(args: &[String]) -> Result<BuildArgs, String> {
         } else if let Some(value) = arg.strip_prefix("--link-lib=") {
             link_lib.push(value.to_string());
             i += 1;
+        } else if let Some(value) = arg.strip_prefix("-O") {
+            opt_level = match value {
+                "0" => 0,
+                "1" => 1,
+                "2" => 2,
+                "3" => 3,
+                _ => return Err(format!("unknown optimization level {arg:?} (expected -O0, -O1, -O2 or -O3)")),
+            };
+            i += 1;
+        } else if arg == "--release" {
+            opt_level = plumc::OPT_ARTIFACT;
+            i += 1;
+        } else if arg == "--debug" {
+            opt_level = plumc::OPT_TRANSIENT;
+            i += 1;
         } else if project_dir.is_none() {
             project_dir = Some(arg.clone());
             i += 1;
@@ -260,8 +281,8 @@ fn parse_build_args(args: &[String]) -> Result<BuildArgs, String> {
         }
     }
     let project_dir = project_dir
-        .ok_or_else(|| "usage: plumc build <project-dir> [-o <output>] [--link-c <file>]... [--link-lib <name>]...".to_string())?;
-    Ok(BuildArgs { project_dir, output, link_c, link_lib })
+        .ok_or_else(|| "usage: plumc build <project-dir> [-o <output>] [-O0|-O1|-O2|-O3|--debug|--release] [--link-c <file>]... [--link-lib <name>]...".to_string())?;
+    Ok(BuildArgs { project_dir, output, link_c, link_lib, opt_level })
 }
 
 /// The default output path when `-o`/`--output` is omitted: the
@@ -334,7 +355,7 @@ fn run_build(args: &[String]) {
     };
     link_c.extend(parsed.link_c.iter().map(PathBuf::from));
 
-    if let Err(e) = build(root, &out_path, &link_c, &parsed.link_lib) {
+    if let Err(e) = build(root, &out_path, &link_c, &parsed.link_lib, parsed.opt_level) {
         eprintln!("{}", sources.render(&e));
         std::process::exit(1);
     }
@@ -367,9 +388,9 @@ fn discover_native_c_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-fn build(root: &Path, out_path: &Path, link_c: &[PathBuf], link_lib: &[String]) -> Result<(), plum_syntax::error::CompileError> {
+fn build(root: &Path, out_path: &Path, link_c: &[PathBuf], link_lib: &[String], opt_level: u8) -> Result<(), plum_syntax::error::CompileError> {
     let full_ir = build_ir(root)?;
-    compile_ir_to_binary_with_native(&full_ir, out_path, link_c, link_lib).map_err(plum_syntax::error::CompileError::spanless)
+    compile_ir_to_binary_with_native(&full_ir, out_path, link_c, link_lib, opt_level).map_err(plum_syntax::error::CompileError::spanless)
 }
 
 /// The front half of `build` — everything up to and including the
@@ -452,11 +473,11 @@ fn run_emit_llvm(args: &[String]) {
 /// it's the same division of labor `plum build` already has internally.
 fn run_compile_ir(args: &[String]) {
     let Some(ir_path) = args.first() else {
-        eprintln!("usage: plum compile-ir <file.ll> -o <binary>");
+        eprintln!("usage: plum compile-ir <file.ll> -o <binary> [-O0|-O1|-O2|-O3]");
         std::process::exit(1);
     };
     let Some(out) = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)) else {
-        eprintln!("usage: plum compile-ir <file.ll> -o <binary>");
+        eprintln!("usage: plum compile-ir <file.ll> -o <binary> [-O0|-O1|-O2|-O3]");
         std::process::exit(1);
     };
     let ir = match std::fs::read_to_string(ir_path) {
@@ -468,7 +489,11 @@ fn run_compile_ir(args: &[String]) {
     };
     let link_c: Vec<PathBuf> = collect_flag(args, "--link-c").into_iter().map(PathBuf::from).collect();
     let link_lib: Vec<String> = collect_flag(args, "--link-lib");
-    if let Err(e) = compile_ir_to_binary_with_native(&ir, Path::new(out), &link_c, &link_lib) {
+    let opt_level = args
+        .iter()
+        .find_map(|a| a.strip_prefix("-O").and_then(|v| v.parse::<u8>().ok()).filter(|v| *v <= 3))
+        .unwrap_or(plumc::OPT_ARTIFACT);
+    if let Err(e) = compile_ir_to_binary_with_native(&ir, Path::new(out), &link_c, &link_lib, opt_level) {
         eprintln!("{e}");
         std::process::exit(1);
     }
@@ -689,28 +714,28 @@ mod tests {
     fn a_bare_project_directory_with_no_flags_parses() {
         let args: Vec<String> = vec!["myproj".to_string()];
         let parsed = parse_build_args(&args).unwrap();
-        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: None, link_c: vec![], link_lib: vec![] });
+        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: None, link_c: vec![], link_lib: vec![], opt_level: plumc::OPT_ARTIFACT });
     }
 
     #[test]
     fn a_dash_o_flag_with_a_separate_value_is_parsed() {
         let args: Vec<String> = vec!["myproj".to_string(), "-o".to_string(), "myapp".to_string()];
         let parsed = parse_build_args(&args).unwrap();
-        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: Some("myapp".to_string()), link_c: vec![], link_lib: vec![] });
+        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: Some("myapp".to_string()), link_c: vec![], link_lib: vec![], opt_level: plumc::OPT_ARTIFACT });
     }
 
     #[test]
     fn a_long_output_flag_before_the_positional_arg_is_parsed() {
         let args: Vec<String> = vec!["--output".to_string(), "myapp".to_string(), "myproj".to_string()];
         let parsed = parse_build_args(&args).unwrap();
-        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: Some("myapp".to_string()), link_c: vec![], link_lib: vec![] });
+        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: Some("myapp".to_string()), link_c: vec![], link_lib: vec![], opt_level: plumc::OPT_ARTIFACT });
     }
 
     #[test]
     fn an_equals_form_flag_is_parsed() {
         let args: Vec<String> = vec!["myproj".to_string(), "--output=myapp".to_string()];
         let parsed = parse_build_args(&args).unwrap();
-        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: Some("myapp".to_string()), link_c: vec![], link_lib: vec![] });
+        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: Some("myapp".to_string()), link_c: vec![], link_lib: vec![], opt_level: plumc::OPT_ARTIFACT });
     }
 
     #[test]
@@ -753,6 +778,7 @@ mod tests {
                 output: None,
                 link_c: vec!["shim.c".to_string(), "other.c".to_string()],
                 link_lib: vec!["raylib".to_string(), "m".to_string()],
+                opt_level: plumc::OPT_ARTIFACT,
             }
         );
     }
@@ -855,7 +881,7 @@ mod tests {
         std::fs::write(dir.join("main.plum"), "let main (): Int = 6 * 7").unwrap();
         let out_bin = dir.join("built-from-main-rs");
 
-        let result = build(&dir, &out_bin, &[], &[]);
+        let result = build(&dir, &out_bin, &[], &[], plumc::OPT_TRANSIENT);
         assert!(result.is_ok(), "build failed: {result:?}");
         let output = std::process::Command::new(&out_bin).output().unwrap();
         assert!(output.status.success());
@@ -909,7 +935,7 @@ mod tests {
         // half of what this test means to prove.
         let mut link_c = discover_native_c_files(&dir).unwrap();
         link_c.push(explicit_c.clone());
-        let result = build(&dir, &out_bin, &link_c, &[]);
+        let result = build(&dir, &out_bin, &link_c, &[], plumc::OPT_TRANSIENT);
         assert!(result.is_ok(), "build failed: {result:?}");
         let output = std::process::Command::new(&out_bin).output().unwrap();
         assert!(output.status.success());

@@ -8245,7 +8245,14 @@ arms; `let mut` and `let` need no distinction at all; and a `for` body's
 assignment to an outer local is just a store — the exact thing the
 self-hosted INTERPRETER needed a whole env-threading mechanism
 (`scope_out`) to get right. LLVM's mem2reg turns all of it back into
-registers with correct phis, so it costs nothing.
+registers with correct phis, so it costs nothing — **at `-O1` and
+above**. That qualifier went unwritten for a long time and it was not
+free: nothing in the toolchain passed `clang` an `-O` flag at all, so
+every binary this compiler had ever produced was `-O0`, mem2reg never
+ran, and the design's central "the spill is free" assumption was simply
+never collected on. Every local read was a real load, every write a
+real store. Fixing it is one `clang` argument, and the measurement is
+in the `OPT_ARTIFACT` doc comment: 2x, across the board.
 
 The one catch is that allocas must be **hoisted to the entry block**.
 An `alloca` executed inside a loop body allocates afresh every iteration
@@ -10589,3 +10596,37 @@ would find a nulled slot); and `branchy`, read once per branch and
 therefore movable despite two syntactic reads. All three implementations —
 the real backend, the self-hosted interpreter, and the self-hosted backend
 — agree on it, and it is ASan-clean under the self-hosted backend.
+
+## The self-hosted backend overtakes the real one (2026-08-17)
+
+Compiling the same source, the two backends now produce this:
+
+| workload | rust-built | self-hosted-built |
+| --- | --- | --- |
+| `check` the whole compiler | 0.184 s / 256.7 MB | 0.268 s / **52.6 MB** |
+| `emit-llvm` the whole compiler | 0.805 s / 2445.4 MB | 0.946 s / **118.2 MB** |
+
+**4.9x less memory on `check` and 20.7x less on `emit-llvm`**, at 1.2-1.5x
+the wall time. A day earlier the self-hosted backend was 37x WORSE on the
+accumulator microbenchmark; it is now decisively ahead on the compiler's
+own workloads.
+
+This is architectural rather than incidental, and the reason is the one
+both backends' comments have been pointing at from opposite directions.
+`plum-ir/fbip` cannot see types — its own comment says "no type checker in
+this IR to prove one is heap-shaped" — so it cannot track parameters, which
+is what forced every workaround in the real backend: the reverted "gap 1"
+attempt, the least-fixpoint uniqueness analysis, the owned-returning
+analysis, and finally the merging pass that had to be removed. The
+self-hosted backend has the typed tree, so `cg_is_heap` is total, parameters
+are counted like anything else, and move-on-last-read needed no
+whole-program reasoning at all.
+
+The real backend's remaining 2445 MB is precisely the struct-field
+accumulator it cannot reach: `Emit { code: r.code.concat(x), .. }`, where
+the fix needs consuming destructuring, and the only route to that measured
+as a net negative (see "Consuming pattern match" above).
+
+The remaining gap is TIME, not memory, and it is the smaller one. Worth
+saying plainly: nothing here shows the self-hosted backend generates faster
+code — it does not, yet.

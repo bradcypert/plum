@@ -10,7 +10,7 @@ mod project;
 mod test_util;
 mod testing;
 pub use codegen_cli::{
-    compile_and_run, compile_ir_to_binary, compile_ir_to_binary_with_native, compile_program_to_ir, compile_program_to_ir_diag, emit_main,
+    compile_and_run, compile_ir_to_binary, compile_ir_to_binary_with_native, OPT_ARTIFACT, OPT_TRANSIENT, compile_program_to_ir, compile_program_to_ir_diag, emit_main,
     reject_unprintable_return, CgValue,
 };
 pub use diagnostics::ModuleSources;

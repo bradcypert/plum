@@ -86,7 +86,14 @@ fn the_self_hosted_compiler_compiles_itself_to_a_fixed_point() {
 
     let stage2 = work.join("stage2");
     run(
-        Command::new(&plum).current_dir(&root).arg("compile-ir").arg(&ir2_path).arg("-o").arg(&stage2),
+        // `-O0` explicitly: `compile-ir` defaults to `OPT_ARTIFACT`
+        // (`-O2`) because it normally persists a binary someone will
+        // run many times, but stage 2 here is run exactly ONCE — to
+        // emit stage 3's IR — so the ~6s of extra `clang` time would
+        // never be repaid. This is the same tradeoff `OPT_TRANSIENT`
+        // exists for; the fixed point compares emitted IR TEXT, which
+        // no `clang` optimization level can affect.
+        Command::new(&plum).current_dir(&root).arg("compile-ir").arg(&ir2_path).arg("-o").arg(&stage2).arg("-O0"),
         "stage 2 link",
     );
 
