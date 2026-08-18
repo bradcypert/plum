@@ -11065,7 +11065,7 @@ Verified by running each, not by reading code:
 
 | gap | `check` | codegen |
 |---|---|---|
-| `.to_string()` on struct/array/tuple/variant/closure | ok | missing |
+| ~~`.to_string()` on struct/array/variant~~ | | **DONE, see below** |
 | destructuring `let (a, b) = ..` | ok | missing |
 | `\|>` | rejects | — |
 | `require`/`ensure` contracts | rejects | — |
@@ -11080,3 +11080,66 @@ gap into a clean diagnostic.
 
 CLI: self-hosted has `check`, `run`, `emit-llvm`, `build`. Still
 missing `test`, `new`, `lsp`, and the `dump-*` helpers.
+
+### `.to_string()` on aggregates (2026-08-18)
+
+The largest remaining language gap, and the one most likely to stop a
+real program. Structs, enums (payload or not), and arrays now render,
+matching the real compiler byte for byte:
+
+```
+Outer { name: "o", items: [1, 2], inner: Inner { v: 9 } }
+[Inner { v: 1 }, Inner { v: 2 }]
+Pair(3, "x")
+Nil
+[[1], [2, 3]]
+```
+
+Including the quoting rule: a `String` nested inside an aggregate
+renders QUOTED, while `"hi".to_string()` at top level does not. That is
+a debug rendering, where an unquoted empty string would be invisible.
+
+A renderer per type, emitted from the SAME reachable-type set the
+release functions use rather than from the call sites that print. A
+struct's renderer calls its fields' renderers, so the set has to be
+closed under nesting, and the release set already is — reusing it is
+less machinery than a second discovery traversal, at the cost of
+emitting a few renderers nothing calls.
+
+**A correction to the gap table above**: tuple `.to_string()` was
+listed as a self-hosted gap. It is not — the REAL compiler rejects it
+too (`.to_string() not yet supported for Tuple([..])`). That was
+parity, not a gap, and the table said otherwise because it was built by
+grepping this backend's own error strings instead of by comparing the
+two compilers. Corrected by running both.
+
+**One deliberate divergence.** The real compiler REJECTS `.to_string()`
+on an aggregate containing a closure. This one renders `<closure>`.
+More permissive, and the alternative is worse: renderers are emitted
+for every reachable heap type, so a struct with a closure field would
+otherwise emit a call to a renderer that is never defined and fail at
+LINK time — for a program that never printed the thing. A closure has
+no text form in either compiler; the only question is whether that
+costs you a link error. `<ref>`, `<tuple>` and `<?>` exist for the same
+reason.
+
+**Three self-inflicted bugs, all caught by running rather than
+reasoning**, worth recording because two share a cause:
+
+  * A SEGFAULT from seeding the accumulator with `null` on the claim —
+    written into a comment — that `plum_str_concat` treats null as
+    empty. It does not; it dereferences both operands immediately. The
+    first literal is now itself the accumulator (static, so the
+    releases are no-ops). Asserting the false thing in a comment was
+    the worse half of that mistake.
+  * A LINK failure on `closures_in_structs`: a call to
+    `@plum_str_fnInt_Int_to_Int`, never emitted.
+  * A TYPE error on `arrays`: the empty literal `[]` has element type
+    `Unit`, so the renderer called `@plum_str_Unit(ptr %ev)` on an
+    `i1`.
+
+The last two are one cause: `cg_render_val`'s catch-all assumed every
+remaining type was a renderable aggregate. It is now total.
+
+19/19 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 7/7 `typecheck_corpus` rejected, Rust suite 1934/0.

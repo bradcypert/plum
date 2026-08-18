@@ -1285,6 +1285,17 @@ let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (method_name: St
     else if method_name == "split" { cg_str_binop(p, env, n, base, args[0], "@plum_str_split", CgArray(CgStr)) }
     else { { cg_fail("method .".concat(method_name).concat("() isn't supported by this backend yet")); cg_unit_emit(n) } }
 
+// The aggregate arm of `.to_string()`. The base arrived OWNED, so it
+// is released once the rendering has read it.
+let cg_str_call (p: CgProgram) (b: Emit) (ity: typecheck.ITy): Emit = {
+    let out = cg_reg(b.n);
+    Emit {
+        code: b.code.concat("  ").concat(out).concat(" = call ptr ").concat(cg_str_sym(ity)).concat("(ptr ").concat(b.val).concat(")\n")
+            .concat(cg_dec(ity, b.val)),
+        allocas: b.allocas, releases: b.releases, globals: b.globals, val: out, ty: CgStr, n: b.n + 1,
+    }
+}
+
 let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
     let b = cg_expr(p, env, n, base);
     let reg = cg_reg(b.n);
@@ -1296,13 +1307,13 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         CgFloat => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_float_to_string(double ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
         CgBool => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_bool_to_string(i1 ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
         CgUnit => { cg_fail("Unit has no .to_string()"); cg_unit_emit(b.n) },
-        // The real backend generates a per-type `to_string` for these,
-        // driven by its tag tables. Doing the same here is real work and
-        // nothing in the corpus needs it yet, so it fails loudly rather
-        // than printing a pointer.
-        CgStruct(name) => { cg_fail(".to_string() on a struct isn't supported yet: ".concat(name)); cg_unit_emit(b.n) },
-        CgEnum(name) => { cg_fail(".to_string() on an enum isn't supported yet: ".concat(name)); cg_unit_emit(b.n) },
-        CgArray(_) => { cg_fail(".to_string() on an Array isn't supported yet"); cg_unit_emit(b.n) },
+        // Dispatched to the per-type renderer emitted by
+        // `cg_emit_str_fn`, chosen by the base's own ITy -- the CgTy
+        // alone cannot name the function, since `CgStruct("Box")` has
+        // already discarded the type arguments.
+        CgStruct(_) => cg_str_call(p, b, cg_concrete(p, typecheck.texpr_ty(p.subst, base))),
+        CgEnum(_) => cg_str_call(p, b, cg_concrete(p, typecheck.texpr_ty(p.subst, base))),
+        CgArray(_) => cg_str_call(p, b, cg_concrete(p, typecheck.texpr_ty(p.subst, base))),
         // Deliberately unsupported, same as `Array`: a `Ref` has no
         // meaningful text form of its own, and printing the cell
         // ADDRESS would be worse than useless. `.get().to_string()`
@@ -2511,6 +2522,248 @@ let cg_eq_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[type
         cg_eq_close_variants(p, vs, args, i + 1, cg_eq_close_list(p, payload, 0, acc))
     }
 
+// --- `.to_string()` on aggregates ---
+//
+// A per-TYPE renderer, discovered and emitted exactly the way the
+// equality and release functions are. The output format matches the
+// real compiler's byte for byte -- `P { x: 1, y: "hi" }`, `[1, 2, 3]`,
+// `Circle(2.5)` -- because both compilers' output is compared against
+// the same `exec_corpus` expectations.
+//
+// Note the quoting rule: a `String` nested inside an aggregate renders
+// QUOTED, while `"hi".to_string()` at the top level does not. That is
+// the real compiler's behaviour and it is deliberate -- the nested form
+// is a debug rendering, where an unquoted empty string would be
+// invisible.
+let cg_str_sym (t: typecheck.ITy): String = "@plum_str_".concat(cg_ity_mangle(t))
+
+let cg_sfmt_sym (owner: typecheck.ITy) (i: Int): String =
+    "@.sfmt_".concat(cg_ity_mangle(owner)).concat("_").concat(i.to_string())
+
+// A STATIC string cell (refcount -1), the same shape `cg_str_constant`
+// produces -- so `plum_rel_str` skips it and these never need freeing.
+let cg_sfmt_const (owner: typecheck.ITy) (i: Int) (s: String): String = {
+    let bytes = s.len();
+    let arr = bytes + 1;
+    cg_sfmt_sym(owner, i).concat(" = private global { i64, i64, [").concat(arr.to_string())
+        .concat(" x i8] } { i64 -1, i64 ").concat(bytes.to_string()).concat(", [").concat(arr.to_string())
+        .concat(" x i8] c\"").concat(cg_escape_llvm(s)).concat("\\00\" }\n")
+}
+
+struct StrEmit { code: String, consts: String, val: String, n: Int }
+
+// Renders one value of type `t`, already loaded into `val`, as a fresh
+// string cell. `owner` only supplies a unique prefix for any constants.
+let cg_render_val (owner: typecheck.ITy) (t: typecheck.ITy) (val: String) (n: Int): StrEmit =
+    match t {
+        ITInt => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr @plum_int_to_string(i64 ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
+        ITFloat => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr @plum_float_to_string(double ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
+        ITBool => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr @plum_bool_to_string(i1 ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
+        // Quoted, and the intermediate concat released so a nested
+        // string costs no leak.
+        ITStr => {
+            let q = cg_sfmt_sym(owner, n);
+            let r1 = cg_reg(n + 1);
+            let r2 = cg_reg(n + 2);
+            StrEmit {
+                consts: cg_sfmt_const(owner, n, "\""),
+                code: "  ".concat(r1).concat(" = call ptr @plum_str_concat(ptr ").concat(q).concat(", ptr ").concat(val).concat(")\n")
+                    .concat("  ").concat(r2).concat(" = call ptr @plum_str_concat(ptr ").concat(r1).concat(", ptr ").concat(q).concat(")\n")
+                    .concat("  call void @plum_rel_str(ptr ").concat(r1).concat(")\n"),
+                val: r2, n: n + 3,
+            }
+        },
+        ITUnit => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "Unit"), val: cg_sfmt_sym(owner, n), n: n + 1 },
+        // The renderable aggregates -- `Array` is an `ITStruct` too, so
+        // both reach their own emitted renderer the same way.
+        ITStruct(_, _) => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr ").concat(cg_str_sym(t)).concat("(ptr ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
+        ITEnum(_, _) => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr ").concat(cg_str_sym(t)).concat("(ptr ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
+        // Everything with no sensible text form gets a PLACEHOLDER
+        // rather than a call to a renderer that was never emitted.
+        // This is a deliberate, documented divergence: the real
+        // compiler REJECTS `.to_string()` on an aggregate containing a
+        // closure outright. Emitting a placeholder is strictly more
+        // permissive, and the alternative here is worse -- renderers
+        // are emitted for every reachable heap type, so a struct with
+        // a closure field would otherwise emit a call to a missing
+        // symbol and fail at LINK time, even when nothing ever printed
+        // it. A closure has no text form in either compiler; the only
+        // question is whether that costs you a link error.
+        ITFunction(_, _) => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<closure>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
+        ITRef(_) => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<ref>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
+        ITTuple(_) => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<tuple>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
+        ITVar(_) => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<?>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
+        ITParam(_) => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<?>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
+    }
+
+// `acc = acc ++ piece`, releasing both operands. Every operand is either
+// a fresh cell this function made or a static literal, and
+// `plum_rel_str` is null- and static-safe, so one rule covers both.
+let cg_str_append (acc: String) (piece: String) (n: Int): StrEmit = {
+    let out = cg_reg(n);
+    StrEmit {
+        code: "  ".concat(out).concat(" = call ptr @plum_str_concat(ptr ").concat(acc).concat(", ptr ").concat(piece).concat(")\n")
+            .concat("  call void @plum_rel_str(ptr ").concat(acc).concat(")\n")
+            .concat("  call void @plum_rel_str(ptr ").concat(piece).concat(")\n"),
+        consts: "", val: out, n: n + 1,
+    }
+}
+
+// Starts an accumulator AT a literal. `plum_str_concat` dereferences
+// both operands immediately, so there is no null/empty seed to start
+// from -- the first piece has to be a real cell. It is static, so
+// later `plum_rel_str` calls on it are no-ops.
+let cg_str_seed_lit (owner: typecheck.ITy) (text: String) (n: Int): StrEmit =
+    StrEmit { code: "", consts: cg_sfmt_const(owner, n, text), val: cg_sfmt_sym(owner, n), n: n + 1 }
+
+// Appends a literal, which needs no release of its own.
+let cg_str_append_lit (owner: typecheck.ITy) (acc: String) (text: String) (n: Int): StrEmit = {
+    let lit = cg_sfmt_sym(owner, n);
+    let out = cg_reg(n + 1);
+    StrEmit {
+        consts: cg_sfmt_const(owner, n, text),
+        code: "  ".concat(out).concat(" = call ptr @plum_str_concat(ptr ").concat(acc).concat(", ptr ").concat(lit).concat(")\n")
+            .concat("  call void @plum_rel_str(ptr ").concat(acc).concat(")\n"),
+        val: out, n: n + 2,
+    }
+}
+
+// One renderer per aggregate type. Emitted for every reachable heap
+// type (the same set the release functions use) rather than only where
+// `.to_string()` is actually called: a struct's renderer calls its
+// fields' renderers, so the set has to be closed under nesting anyway,
+// and the release set already is.
+let cg_emit_str_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: String): String =
+    if i >= ts.len() { acc } else { cg_emit_str_fns(p, ts, i + 1, acc.concat(cg_emit_str_fn(p, ts[i]))) }
+
+let cg_emit_str_fn (p: CgProgram) (t: typecheck.ITy): String =
+    match t {
+        ITStruct(name, args) =>
+            if name == "Array" { cg_emit_array_str(t, args[0]) }
+            else { cg_emit_struct_str(p, t, name, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
+        ITEnum(name, args) => cg_emit_enum_str(p, t, name, args),
+        _ => "",
+    }
+
+// `P { x: 1, y: "hi" }`
+let cg_emit_struct_str (p: CgProgram) (t: typecheck.ITy) (name: String) (ftys: Array[typecheck.ITy]): String = {
+    let names = typecheck.ctx_field_names(p.ctx, name);
+    let start = cg_str_seed_lit(t, name.concat(" { "), 0);
+    let body = cg_struct_str_fields(t, names, ftys, 0, start.val, start.code, start.consts, start.n);
+    let fin = cg_str_append_lit(t, body.val, " }", body.n);
+    "define ptr ".concat(cg_str_sym(t)).concat("(ptr %p) {\nentry:\n")
+        .concat(body.code).concat(fin.code)
+        .concat("  ret ptr ").concat(fin.val).concat("\n}\n\n")
+        .concat(body.consts).concat(fin.consts)
+}
+
+let cg_struct_str_fields (t: typecheck.ITy) (names: Array[String]) (ftys: Array[typecheck.ITy]) (i: Int) (acc: String) (code: String) (consts: String) (n: Int): StrEmit =
+    if i >= ftys.len() { StrEmit { code: code, consts: consts, val: acc, n: n } }
+    else {
+        let sep = if i == 0 { "" } else { ", " };
+        let lbl = cg_str_append_lit(t, acc, sep.concat(names[i]).concat(": "), n);
+        let fp = cg_reg(lbl.n);
+        let fv = cg_reg(lbl.n + 1);
+        let load = "  ".concat(fp).concat(" = getelementptr i8, ptr %p, i64 ").concat(cg_field_offset(i).to_string()).concat("\n")
+            .concat("  ").concat(fv).concat(" = load ").concat(cg_llvm_ty(cg_of_ity(ftys[i]))).concat(", ptr ").concat(fp).concat("\n");
+        let r = cg_render_val(t, ftys[i], fv, lbl.n + 2);
+        let app = cg_str_append(lbl.val, r.val, r.n);
+        cg_struct_str_fields(t, names, ftys, i + 1, app.val,
+            code.concat(lbl.code).concat(load).concat(r.code).concat(app.code),
+            consts.concat(lbl.consts).concat(r.consts), app.n)
+    }
+
+// `[1, 2, 3]` -- a runtime loop, since the length is not known here.
+let cg_emit_array_str (t: typecheck.ITy) (elem: typecheck.ITy): String = {
+    let ety = cg_llvm_ty(cg_of_ity(elem));
+    let r = cg_render_val(t, elem, "%ev", 20);
+    let sep = cg_sfmt_sym(t, 1);
+    "define ptr ".concat(cg_str_sym(t)).concat("(ptr %p) {\nentry:\n")
+        .concat("  %accp = alloca ptr\n  store ptr ").concat(cg_sfmt_sym(t, 0)).concat(", ptr %accp\n")
+        .concat("  %lp = getelementptr i8, ptr %p, i64 8\n  %len = load i64, ptr %lp\n")
+        .concat("  %ip = alloca i64\n  store i64 0, ptr %ip\n  br label %loop\n")
+        .concat("loop:\n  %i = load i64, ptr %ip\n  %more = icmp slt i64 %i, %len\n")
+        .concat("  br i1 %more, label %body, label %done\n")
+        .concat("body:\n")
+        .concat("  %first = icmp eq i64 %i, 0\n")
+        .concat("  br i1 %first, label %noSep, label %withSep\n")
+        .concat("withSep:\n  %a1 = load ptr, ptr %accp\n")
+        .concat("  %a2 = call ptr @plum_str_concat(ptr %a1, ptr ").concat(sep).concat(")\n")
+        .concat("  call void @plum_rel_str(ptr %a1)\n  store ptr %a2, ptr %accp\n  br label %noSep\n")
+        .concat("noSep:\n")
+        .concat("  %off = mul i64 %i, 8\n  %ep0 = getelementptr i8, ptr %p, i64 %off\n")
+        .concat("  %ep = getelementptr i8, ptr %ep0, i64 ").concat(cg_array_elem_offset(0).to_string()).concat("\n")
+        .concat("  %ev = load ").concat(ety).concat(", ptr %ep\n")
+        .concat(r.code)
+        .concat("  %a3 = load ptr, ptr %accp\n")
+        .concat("  %a4 = call ptr @plum_str_concat(ptr %a3, ptr ").concat(r.val).concat(")\n")
+        .concat("  call void @plum_rel_str(ptr %a3)\n  call void @plum_rel_str(ptr ").concat(r.val).concat(")\n")
+        .concat("  store ptr %a4, ptr %accp\n")
+        .concat("  %i1 = add i64 %i, 1\n  store i64 %i1, ptr %ip\n  br label %loop\n")
+        .concat("done:\n  %af = load ptr, ptr %accp\n")
+        .concat("  %out = call ptr @plum_str_concat(ptr %af, ptr ").concat(cg_sfmt_sym(t, 2)).concat(")\n")
+        .concat("  call void @plum_rel_str(ptr %af)\n")
+        .concat("  ret ptr %out\n}\n\n")
+        .concat(cg_sfmt_const(t, 0, "[")).concat(cg_sfmt_const(t, 1, ", ")).concat(cg_sfmt_const(t, 2, "]"))
+        .concat(r.consts)
+}
+
+// `Circle(2.5)` / `Empty` -- one block per variant, selected on the
+// tag, same dispatch shape the release and equality functions use.
+// Each block returns directly rather than joining a merge point: a phi
+// over N incoming strings buys nothing here, and returning early keeps
+// each variant's rendering entirely local.
+let cg_emit_enum_str (p: CgProgram) (t: typecheck.ITy) (name: String) (args: Array[typecheck.ITy]): String = {
+    let vs = cg_find_enum(p, name).variants;
+    let blocks = cg_enum_str_blocks(p, t, vs, args, 0, 100, "", "");
+    "define ptr ".concat(cg_str_sym(t)).concat("(ptr %p) {\nentry:\n")
+        .concat("  %tp = getelementptr i8, ptr %p, i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
+        .concat("  %tag = load i64, ptr %tp\n")
+        .concat("  switch i64 %tag, label %unknown [\n").concat(cg_enum_str_cases(vs, 0, "")).concat("  ]\n")
+        .concat(blocks.code)
+        .concat("unknown:\n  ret ptr ").concat(cg_sfmt_sym(t, 99)).concat("\n}\n\n")
+        .concat(cg_sfmt_const(t, 99, "<unknown>")).concat(blocks.consts)
+}
+
+let cg_enum_str_cases (vs: Array[CgVariant]) (i: Int) (acc: String): String =
+    if i >= vs.len() { acc }
+    else { cg_enum_str_cases(vs, i + 1, acc.concat("    i64 ").concat(vs[i].tag.to_string()).concat(", label %S").concat(vs[i].tag.to_string()).concat("\n")) }
+
+let cg_enum_str_blocks (p: CgProgram) (t: typecheck.ITy) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (n: Int) (code: String) (consts: String): StrEmit =
+    if i >= vs.len() { StrEmit { code: code, consts: consts, val: "", n: n } }
+    else {
+        let ptys = cg_variant_payload_tys(p, vs[i], args);
+        let head = "S".concat(vs[i].tag.to_string()).concat(":\n");
+        // A payload-free variant is just its own name.
+        if Array.is_empty(ptys) {
+            cg_enum_str_blocks(p, t, vs, args, i + 1, n + 1,
+                code.concat(head).concat("  ret ptr ").concat(cg_sfmt_sym(t, n)).concat("\n"),
+                consts.concat(cg_sfmt_const(t, n, vs[i].name)))
+        } else {
+            let start = cg_str_seed_lit(t, vs[i].name.concat("("), n);
+            let body = cg_enum_str_payloads(t, ptys, 0, start.val, start.code, start.consts, start.n);
+            let fin = cg_str_append_lit(t, body.val, ")", body.n);
+            cg_enum_str_blocks(p, t, vs, args, i + 1, fin.n,
+                code.concat(head).concat(body.code).concat(fin.code).concat("  ret ptr ").concat(fin.val).concat("\n"),
+                consts.concat(body.consts).concat(fin.consts))
+        }
+    }
+
+let cg_enum_str_payloads (t: typecheck.ITy) (ptys: Array[typecheck.ITy]) (i: Int) (acc: String) (code: String) (consts: String) (n: Int): StrEmit =
+    if i >= ptys.len() { StrEmit { code: code, consts: consts, val: acc, n: n } }
+    else {
+        let pre = if i == 0 { StrEmit { code: "", consts: "", val: acc, n: n } } else { cg_str_append_lit(t, acc, ", ", n) };
+        let pp = cg_reg(pre.n);
+        let pv = cg_reg(pre.n + 1);
+        let load = "  ".concat(pp).concat(" = getelementptr i8, ptr %p, i64 ").concat(cg_payload_offset(i).to_string()).concat("\n")
+            .concat("  ").concat(pv).concat(" = load ").concat(cg_llvm_ty(cg_of_ity(ptys[i]))).concat(", ptr ").concat(pp).concat("\n");
+        let r = cg_render_val(t, ptys[i], pv, pre.n + 2);
+        let app = cg_str_append(pre.val, r.val, r.n);
+        cg_enum_str_payloads(t, ptys, i + 1, app.val,
+            code.concat(pre.code).concat(load).concat(r.code).concat(app.code),
+            consts.concat(pre.consts).concat(r.consts), app.n)
+    }
+
 let cg_emit_eq_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: String): String =
     if i >= ts.len() { acc } else { cg_emit_eq_fns(p, ts, i + 1, acc.concat(cg_emit_eq_fn(p, ts[i]))) }
 
@@ -3046,6 +3299,7 @@ pub let cg_emit_program (program0: parser.ProgramNode): String = {
     cg_runtime(())
         .concat(cg_emit_eq_fns(p, eqs, 0, ""))
         .concat(cg_emit_rel_fns(p, rels, 0, ""))
+        .concat(cg_emit_str_fns(p, rels, 0, ""))
         .concat(gl.slots)
         .concat(cg_emit_insts(p, insts, 0, 0, ""))
         .concat(gl.init)
