@@ -4,6 +4,7 @@ use crate::unify::unify;
 use plum_syntax::ast;
 use plum_syntax::span::Span;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 /// Which kind of declaration a generic instantiation site names — the
 /// monomorphization pass (`plum_ir::monomorphize`) needs to know this to
@@ -154,7 +155,9 @@ fn free_vars_scheme(scheme: &Scheme) -> HashSet<TypeVarId> {
 /// pin them down consistently — quantifying them here would let each
 /// instantiation drift independently, silently losing that constraint.
 fn generalize(ty: &Type, env: &TypeEnv) -> Scheme {
-    let env_vars: HashSet<TypeVarId> = env.0.iter().flat_map(|(_, s, _)| free_vars_scheme(s)).collect();
+    GENERALIZE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    GENERALIZE_ENTRIES.fetch_add(env.len() as u64, std::sync::atomic::Ordering::Relaxed);
+    let env_vars: HashSet<TypeVarId> = env.iter().flat_map(|(_, s, _)| free_vars_scheme(s)).collect();
     let vars: Vec<TypeVarId> = free_vars(ty).difference(&env_vars).copied().collect();
     Scheme {
         vars,
@@ -168,12 +171,97 @@ fn generalize(ty: &Type, env: &TypeEnv) -> Scheme {
 /// Values. Most bindings are monomorphic Schemes (nothing quantified);
 /// only top-level functions are ever stored as genuinely polymorphic
 /// ones — see `generalize`.
+/// One binding in the environment chain. `next` is an `Rc` so that
+/// `extend` can share the entire existing environment instead of
+/// copying it — see `TypeEnv`'s own doc comment for why that matters.
+struct EnvNode {
+    name: String,
+    scheme: Scheme,
+    span: Option<Span>,
+    next: Option<Rc<EnvNode>>,
+}
+
+/// A persistent (shared-tail) linked list, innermost binding FIRST.
+///
+/// This was a `Vec<(String, Scheme, Option<Span>)>` cloned in full by
+/// `extend`, which is the natural way to write a persistent scope
+/// stack and is correct — but it makes binding ONE name O(size of the
+/// whole environment), and inference calls `extend` once per
+/// parameter, `let`, match binding and lambda argument in the program.
+/// Measured on this compiler's own source: 629,231 `extend` calls
+/// copying 257,126,855 entries (average environment 409 bindings),
+/// which was the bulk of a 68s type-inference phase — 99.3% of the
+/// entire `emit-llvm` run.
+///
+/// A shared tail makes `extend` O(1) (allocate one node, bump an
+/// `Rc`) while keeping exactly the same value semantics: an existing
+/// `TypeEnv` is never mutated, so every caller holding one still sees
+/// precisely the bindings it saw before. `Rc` rather than `Arc`
+/// because nothing in inference crosses a thread.
+///
+/// Order is REVERSED relative to the old `Vec` (head = most recently
+/// bound), which is what the lookups already wanted — they were
+/// `.iter().rev().find(..)` and are now a plain walk from the head.
+/// `len` is carried explicitly since a chain can't be measured in O(1)
+/// otherwise, and or-pattern checking needs it.
 #[derive(Clone)]
-pub struct TypeEnv(Vec<(String, Scheme, Option<Span>)>);
+pub struct TypeEnv {
+    head: Option<Rc<EnvNode>>,
+    len: usize,
+}
+
+/// Counters behind `PLUM_PASS_TIMES`, mirroring `subst::stats` — see
+/// `env_stats()`. `TypeEnv` is a persistent Vec: `extend` clones the
+/// WHOLE environment to add one binding, `apply_subst` rebuilds it,
+/// and `generalize` walks it. Each is O(env) at a call site invoked
+/// once per binding/expression, so all three are quadratic in program
+/// size; these counters say which one actually dominates.
+pub static ENV_EXTEND_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static ENV_EXTEND_ENTRIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static ENV_SUBST_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static ENV_SUBST_ENTRIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static GENERALIZE_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static GENERALIZE_ENTRIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn env_stats() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    let f = |c: u64, e: u64| {
+        let avg = if c == 0 { 0.0 } else { e as f64 / c as f64 };
+        format!("{c} calls / {e} entries (avg {avg:.0})")
+    };
+    format!(
+        "env: extend {}\n             env: apply_subst {}\n             env: generalize {}",
+        f(ENV_EXTEND_CALLS.load(Relaxed), ENV_EXTEND_ENTRIES.load(Relaxed)),
+        f(ENV_SUBST_CALLS.load(Relaxed), ENV_SUBST_ENTRIES.load(Relaxed)),
+        f(GENERALIZE_CALLS.load(Relaxed), GENERALIZE_ENTRIES.load(Relaxed)),
+    )
+}
 
 impl TypeEnv {
     pub fn new() -> Self {
-        TypeEnv(Vec::new())
+        TypeEnv { head: None, len: 0 }
+    }
+
+    /// Number of bindings currently in scope (shadowed ones included,
+    /// exactly as the old `Vec` counted them).
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Walks the chain from the INNERMOST binding outwards. The old
+    /// `Vec` representation stored oldest-first and every consumer
+    /// reversed it; this yields that reversed order directly.
+    fn iter(&self) -> impl Iterator<Item = (&str, &Scheme, Option<Span>)> {
+        let mut cur = self.head.as_deref();
+        std::iter::from_fn(move || {
+            let node = cur?;
+            cur = node.next.as_deref();
+            Some((node.name.as_str(), &node.scheme, node.span))
+        })
     }
 
     /// Binds `name` with no recorded declaration site — the go-to-
@@ -208,13 +296,15 @@ impl TypeEnv {
     }
 
     pub fn extend_scheme_spanned(&self, name: String, scheme: Scheme, span: Option<Span>) -> TypeEnv {
-        let mut v = self.0.clone();
-        v.push((name, scheme, span));
-        TypeEnv(v)
+        ENV_EXTEND_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        TypeEnv {
+            head: Some(Rc::new(EnvNode { name, scheme, span, next: self.head.clone() })),
+            len: self.len + 1,
+        }
     }
 
     fn lookup_scheme(&self, name: &str) -> Option<&Scheme> {
-        self.0.iter().rev().find(|(n, _, _)| n == name).map(|(_, s, _)| s)
+        self.iter().find(|(n, _, _)| *n == name).map(|(_, s, _)| s)
     }
 
     /// The declaration span `name`'s CURRENT (innermost-scope, per
@@ -226,7 +316,7 @@ impl TypeEnv {
     /// go-to-definition; nothing in ordinary type inference itself
     /// ever calls this.
     pub fn lookup_span(&self, name: &str) -> Option<Span> {
-        self.0.iter().rev().find(|(n, _, _)| n == name).and_then(|(_, _, sp)| *sp)
+        self.iter().find(|(n, _, _)| *n == name).and_then(|(_, _, sp)| sp)
     }
 
     /// Refines every binding already in the env through `subst` — not
@@ -249,22 +339,29 @@ impl TypeEnv {
     /// before a scheme is used), so `subst` can never have an opinion
     /// about one.
     pub fn apply_subst(&self, subst: &Subst) -> TypeEnv {
-        TypeEnv(
-            self.0
-                .iter()
-                .map(|(n, s, sp)| {
-                    (
-                        n.clone(),
-                        Scheme {
-                            vars: s.vars.clone(),
-                            ty: subst.apply(&s.ty),
-                            bounds: s.bounds.clone(),
-                        },
-                        *sp,
-                    )
-                })
-                .collect(),
-        )
+        ENV_SUBST_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        ENV_SUBST_ENTRIES.fetch_add(self.len as u64, std::sync::atomic::Ordering::Relaxed);
+        // Collected innermost-first, then rebuilt from the OUTERMOST
+        // end so the resulting chain has the same order as this one.
+        let refined: Vec<(String, Scheme, Option<Span>)> = self
+            .iter()
+            .map(|(n, s, sp)| {
+                (
+                    n.to_string(),
+                    Scheme {
+                        vars: s.vars.clone(),
+                        ty: subst.apply(&s.ty),
+                        bounds: s.bounds.clone(),
+                    },
+                    sp,
+                )
+            })
+            .collect();
+        let mut head: Option<Rc<EnvNode>> = None;
+        for (name, scheme, span) in refined.into_iter().rev() {
+            head = Some(Rc::new(EnvNode { name, scheme, span, next: head }));
+        }
+        TypeEnv { head, len: self.len }
     }
 }
 
@@ -3529,13 +3626,27 @@ impl Infer {
                  or-pattern alternative",
             ));
         }
-        let before_len = env.0.len();
+        let before_len = env.len();
         let mut first_new: Option<Vec<(String, Type)>> = None;
         let mut result_env = env.clone();
         for alt in alts {
             let alt_env = self.bind_pattern(alt, scrutinee_ty, env.clone(), acc)?;
             let new_bindings: Vec<(String, Type)> =
-                alt_env.0[before_len..].iter().map(|(name, scheme, _)| (name.clone(), scheme.ty.clone())).collect();
+                {
+                    // The bindings this alternative ADDED, in the order
+                    // it added them. The chain yields innermost-first,
+                    // so take the newest `added` entries and reverse —
+                    // equivalent to the old `[before_len..]` slice of an
+                    // oldest-first `Vec`. Order is load-bearing: the
+                    // check below compares alternatives name-by-name and
+                    // requires them to bind the same names in the same
+                    // order.
+                    let added = alt_env.len().saturating_sub(before_len);
+                    let mut v: Vec<(String, Type)> =
+                        alt_env.iter().take(added).map(|(name, scheme, _)| (name.to_string(), scheme.ty.clone())).collect();
+                    v.reverse();
+                    v
+                };
             match &first_new {
                 None => first_new = Some(new_bindings),
                 Some(first) => {

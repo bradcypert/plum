@@ -363,18 +363,36 @@ pub fn plan(
     // ordinary function that never touches a generic type still needs
     // to be included here, not just ones reachable via some generic
     // instantiation.
-    for (name, def) in &let_defs {
-        if def.generics.is_empty() {
-            worklist.push((Task::Function(name.clone(), vec![]), vec![]));
-        }
+    // Sorted, NOT raw `HashMap` order. The worklist's drain order
+    // decides the order functions land in `MonoPlan::functions`, which
+    // decides the order codegen emits them, which decides what each
+    // closure literal draws from the single global `closure_counter`
+    // (see `emit_closure` in plum-codegen). A `HashMap` iterates in a
+    // per-PROCESS random order, so without this the compiler emitted
+    // differently-numbered `closure$f$N` symbols on every run — the
+    // generated program was always CORRECT (verified: two separately
+    // numbered builds of this compiler emit byte-identical output),
+    // but its IR was not reproducible, which makes a build
+    // uncacheable, a codegen regression un-bisectable, and an IR diff
+    // useless as a way to check that a refactor changed nothing.
+    let mut seed_fns: Vec<&String> = let_defs.iter().filter(|(_, def)| def.generics.is_empty()).map(|(name, _)| name).collect();
+    seed_fns.sort();
+    for name in seed_fns {
+        worklist.push((Task::Function(name.clone(), vec![]), vec![]));
     }
     // Seed with EVERY global too, unconditionally — a global is never
     // itself generic, so every one is always reachable, mirroring the
     // ordinary-function seeding just above.
-    for name in global_defs.keys() {
+    let mut seed_globals: Vec<&String> = global_defs.keys().collect();
+    seed_globals.sort();
+    for name in seed_globals {
         worklist.push((Task::Global(name.clone()), vec![]));
     }
-    for site in resolved_sites.values() {
+    // Keyed by `Span`, so sorting by span is both deterministic and
+    // source order — the most natural order to discover sites in.
+    let mut seed_sites: Vec<(&Span, &ResolvedSite)> = resolved_sites.iter().collect();
+    seed_sites.sort_by_key(|(span, _)| (span.start, span.end));
+    for (_, site) in seed_sites {
         if site.args.iter().any(|a| matches!(a, Type::Param(_))) {
             // Only reachable once SOME enclosing generic function is
             // itself instantiated concretely — discovered later, when

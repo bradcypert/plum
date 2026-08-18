@@ -5337,7 +5337,20 @@ fn merge_envs(branches: &[(Env, String)], em: &mut Emitter) -> Env {
     let Some((first_env, _)) = branches.first() else {
         return merged;
     };
-    for key in first_env.keys() {
+    // SORTED, not raw `HashMap` order: this loop calls `fresh_reg()`
+    // for every key whose register diverged between branches, so the
+    // iteration order decides which SSA number each merged value gets.
+    // `Env` is a `HashMap`, which iterates in a per-PROCESS random
+    // order, so without this the same input emitted the same
+    // instructions with permuted register numbers from run to run —
+    // the last remaining source of nondeterministic IR after
+    // `monomorphize::plan`'s worklist seeding was fixed. Purely a
+    // naming difference (verified: identical once register numbers are
+    // normalized), but it made the compiler's output unreproducible,
+    // and an unreproducible backend can't be checked by diffing its IR.
+    let mut keys: Vec<&String> = first_env.keys().collect();
+    keys.sort();
+    for key in keys {
         let (first_reg, ty) = first_env[key].clone();
         let all_same = branches.iter().all(|(e, _)| e[key].0 == first_reg);
         if all_same {

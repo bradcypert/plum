@@ -1,5 +1,25 @@
 use crate::types::{Type, TypeVarId};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Counters behind `PLUM_PASS_TIMES` — see `stats()`. Relaxed ordering
+/// and a plain `static`: these are diagnostics, never load-bearing.
+pub static COMPOSE_CALLS: AtomicU64 = AtomicU64::new(0);
+pub static COMPOSE_ENTRIES: AtomicU64 = AtomicU64::new(0);
+
+/// Human-readable dump of the substitution counters, for the
+/// `PLUM_PASS_TIMES` report. `compose` rebuilds its whole result map
+/// on every call, so `entries / calls` is the average map size being
+/// copied — the number that decides whether this is linear or
+/// quadratic in practice.
+pub fn stats() -> String {
+    let calls = COMPOSE_CALLS.load(Ordering::Relaxed);
+    let entries = COMPOSE_ENTRIES.load(Ordering::Relaxed);
+    let avg = if calls == 0 { 0.0 } else { entries as f64 / calls as f64 };
+    format!(
+        "subst: {calls} compose calls, {entries} entries copied (avg map {avg:.1})"
+    )
+}
 
 /// The accumulated "answers so far" — a partial mapping from type
 /// variables to the concrete types unification has pinned them to.
@@ -91,6 +111,8 @@ impl Subst {
         // ever produces can loop under `apply`" invariant intact
         // through arbitrarily many chained `compose` calls, not just
         // this one.
+        COMPOSE_CALLS.fetch_add(1, Ordering::Relaxed);
+        COMPOSE_ENTRIES.fetch_add((self.0.len() + other.0.len()) as u64, Ordering::Relaxed);
         let mut result: HashMap<TypeVarId, Type> = other
             .0
             .iter()

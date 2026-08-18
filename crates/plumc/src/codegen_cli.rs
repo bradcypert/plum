@@ -574,6 +574,52 @@ fn compile_to_ir(src: &str, entry_fn: &str) -> Result<(String, HashMap<String, F
 /// modules` already injects it once at the root module before merging —
 /// see that module's own doc comment). `compile_to_ir` above is now just
 /// a two-line parse+prelude shim in front of this.
+/// A phase-by-phase stopwatch for the compile pipeline, printed to
+/// stderr only when `PLUM_PASS_TIMES` is set in the environment.
+///
+/// Exists because the pipeline's cost turned out to be wildly
+/// unevenly distributed and nothing in the toolchain could say where:
+/// `plum emit-llvm` on this compiler's own source takes ~69s to
+/// produce a 6.2MB `.ll` that the self-hosted backend emits in 0.48s,
+/// and "which pass" was pure guesswork before this existed. Gated on
+/// an env var rather than a flag so it works from any entry point
+/// (`build`, `emit-llvm`, a test) without threading a parameter
+/// through several `pub` signatures that already have callers.
+pub(crate) struct PhaseTimer {
+    on: bool,
+    last: std::time::Instant,
+    start: std::time::Instant,
+}
+
+impl PhaseTimer {
+    pub(crate) fn new() -> Self {
+        let now = std::time::Instant::now();
+        let on = std::env::var_os("PLUM_PASS_TIMES").is_some();
+        if on {
+            eprintln!("--- plum pass times ---");
+        }
+        PhaseTimer { on, last: now, start: now }
+    }
+
+    /// Records the time since the previous `mark` (or construction)
+    /// and attributes it to `name`.
+    pub(crate) fn mark(&mut self, name: &str) {
+        if !self.on {
+            return;
+        }
+        let now = std::time::Instant::now();
+        eprintln!("  {:>9.3}s  {name}", now.duration_since(self.last).as_secs_f64());
+        self.last = now;
+    }
+
+    pub(crate) fn total(&self) {
+        if !self.on {
+            return;
+        }
+        eprintln!("  {:>9.3}s  TOTAL", self.start.elapsed().as_secs_f64());
+    }
+}
+
 pub fn compile_program_to_ir(program: &ast::Program, entry_fn: &str) -> Result<(String, HashMap<String, FnSig>, String, bool), String> {
     compile_program_to_ir_diag(program, entry_fn).map_err(|e| e.to_string())
 }
@@ -620,6 +666,7 @@ pub fn compile_program_to_ir_roots(
     // hand over; a compile isn't a hot enough path to justify the API
     // churn just to avoid one clone. See `crate::assoc_fns`'s own doc
     // comment for what this rewrites and why.
+    let mut t = PhaseTimer::new();
     let mut program = program.clone();
     // `TypeContext` built BEFORE `resolve_associated_calls` so `nested_
     // struct_update` (which needs it for struct field-name lookups) can
@@ -629,11 +676,17 @@ pub fn compile_program_to_ir_roots(
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
     crate::nested_struct_update::expand_nested_field_updates(&mut program, &type_ctx).map_err(|e| e.context("type error"))?;
     crate::assoc_fns::resolve_associated_calls(&mut program);
+    t.mark("front-end rewrites (nested-update, assoc fns)");
     let program = &program;
     let (mut tag_fields, mut struct_field_names) = derive_tag_fields(program, &type_ctx);
     let variant_payload_types = derive_variant_payload_types(program, &type_ctx);
     let mut infer = Infer::with_context(type_ctx);
     let types = infer.infer_program(program).map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
+    t.mark("type inference");
+    if std::env::var_os("PLUM_PASS_TIMES").is_some() {
+        eprintln!("             {}", plum_types::subst::stats());
+        eprintln!("             {}", plum_types::infer::env_stats());
+    }
 
     let resolved_sites = infer.resolve_generic_sites().map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
     let empty_array_elem_types = infer.resolve_empty_array_elem_types().map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
@@ -654,8 +707,10 @@ pub fn compile_program_to_ir_roots(
     }
 
     let closure_types = infer.resolve_closure_types().map_err(|e: plum_syntax::error::CompileError| e.context("type error"))?;
+    t.mark("resolve inference side-tables");
 
     plum_ir::movecheck::check_moves(program).map_err(|e: plum_syntax::error::CompileError| e.context("move error"))?;
+    t.mark("movecheck");
 
     // `resolve_generic_sites` needs its own `TypeContext` too (the
     // first one was moved into `infer` above — see `Infer::with_context`)
@@ -680,6 +735,7 @@ pub fn compile_program_to_ir_roots(
         &variant_payload_types,
     )
     .map_err(|e| format!("monomorphization error: {e}"))?;
+    t.mark("monomorphize::plan");
 
     let lowering_ctx = LoweringContext::from_items(&program.items)
         .with_field_owners(infer.field_owners().clone())
@@ -691,6 +747,7 @@ pub fn compile_program_to_ir_roots(
         .with_closure_types(closure_types)
         .with_variant_payload_types(variant_payload_types);
     let mut ir_program = lower_program(program, &lowering_ctx).map_err(|e: plum_syntax::error::CompileError| e.context("lowering error"))?;
+    t.mark("lower_program");
     // `mono_plan.functions` REPLACES `lower_program`'s own function list
     // wholesale — it already covers every function actually needed,
     // including ordinary (never-generic) ones re-lowered with mangled
@@ -723,8 +780,23 @@ pub fn compile_program_to_ir_roots(
     // `codegen_expr` already handles them — see `plum_ir::liftassign`. Run
     // before every analysis below so none of them sees the odd shape.
     let ir_program = plum_ir::liftassign::lift_value_assigns(ir_program);
+    t.mark("liftassign");
 
     let reusable = plum_ir::fbip::reusable_params(&ir_program);
+    t.mark("fbip::reusable_params");
+    if std::env::var_os("PLUM_PASS_TIMES").is_some() {
+        // Sorted fingerprint of the analysis result — if this varies
+        // between runs on identical input, the fixpoint is order-
+        // dependent, which is a correctness question, not a cosmetic one.
+        let mut flat: Vec<String> = reusable.iter().flat_map(|(f, ps)| ps.iter().map(move |p| format!("{f}:{p}"))).collect();
+        flat.sort();
+        eprintln!("             reusable_params: {} fns, {} params, fingerprint {:x}", reusable.len(), flat.len(), {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            flat.hash(&mut h);
+            h.finish()
+        });
+    }
 
     // Release a matched scrutinee that nothing else needs, so its
     // extracted fields become uniquely owned and can themselves be reused
@@ -742,8 +814,11 @@ pub fn compile_program_to_ir_roots(
             &owned_returning,
         );
     }
+    t.mark("fbip::consume_matched_scrutinees");
     let ir_program = plum_ir::anf::anf_program(ir_program);
+    t.mark("anf");
     let mut ir_program = plum_ir::fbip::optimize_program_with_reusable_params(ir_program, &reusable);
+    t.mark("fbip::optimize_program");
 
     // `Ref[T]` cell release — AFTER `optimize_program`, and only on the
     // codegen path. See `plum_ir::refdrop`'s module doc comment for why
@@ -762,6 +837,7 @@ pub fn compile_program_to_ir_roots(
     for g in &mut ir_program.globals {
         g.value = plum_ir::refdrop::insert_ref_drops(std::mem::replace(&mut g.value, plum_ir::ir::Expr::Unit));
     }
+    t.mark("refdrop");
 
     // Dead-function elimination, rooted at the entry point plus every
     // global's initializer — see `plum_ir::prune`'s module doc comment
@@ -799,6 +875,7 @@ pub fn compile_program_to_ir_roots(
         }
     }
     plum_ir::prune::prune_unreachable(&mut ir_program, &entry_roots);
+    t.mark("prune");
     let ir_program = ir_program;
 
     for (mangled, field_types) in &mono_plan.tag_fields {
@@ -835,6 +912,16 @@ pub fn compile_program_to_ir_roots(
             std::mem::replace(&mut g.value, plum_ir::ir::Expr::Unit),
             &tag_heap,
         );
+    }
+    t.mark("fbip::release_match_bindings");
+    if std::env::var_os("PLUM_PASS_TIMES").is_some() {
+        // Fingerprint of the FINAL IR handed to codegen. Compared
+        // against the emitted text's own variability, this says
+        // whether nondeterminism enters before or during codegen.
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        format!("{:?}", ir_program.functions).hash(&mut h);
+        eprintln!("             final IR fingerprint: {:x}", h.finish());
     }
     let ir_program = ir_program;
 
@@ -917,6 +1004,7 @@ pub fn compile_program_to_ir_roots(
     // native `main()` calls the resolved entry function.
     let has_globals = !ir_program.globals.is_empty();
     let mut body_ir = plum_codegen::emit_program(&ir_program, &signatures, &tag_fields, &global_types, &struct_field_names)?;
+    t.mark("emit_program");
 
     // A real collision, not a hypothetical one: `plumc build`'s own
     // fixed convention (matching the interpreter CLI's — see main.rs)
@@ -949,6 +1037,7 @@ pub fn compile_program_to_ir_roots(
         resolved_entry = "__plum_entry_main".to_string();
     }
 
+    t.total();
     Ok((body_ir, signatures, resolved_entry, has_globals))
 }
 
