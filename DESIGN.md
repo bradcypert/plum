@@ -10775,3 +10775,60 @@ The general lesson is worth keeping: when two implementations of the
 same thing differ by 20x, "the faster one is better designed" is a
 hypothesis, not a conclusion. Here the faster one was faster because it
 was doing less, and some of what it skipped was necessary.
+
+### Skipping the environment suffix (2026-08-18)
+
+Node sharing above stopped `apply_subst` from ALLOCATING for the 93% of
+bindings a substitution leaves alone, but it still WALKED all of them:
+42.7M node visits. Measuring the ceiling first — make `apply_subst` a
+no-op and time it — put type inference at **2.0s** against 9.2s, so
+about 7s was on the table and worth going after.
+
+The obvious fix is what the self-hosted checker does: resolve names
+against the substitution at lookup and drop environment refinement
+entirely. That does not port cheaply here. `infer_expr` RETURNS a
+`Subst` rather than taking one; callers propagate knowledge by doing
+`env.apply_subst(&s)` before inferring the next subexpression. Refining
+the environment IS this engine's threading mechanism, so removing it
+means threading an accumulator through the whole recursion — a
+signature change across a 8,000-line file, for a win that could be had
+another way.
+
+The cheaper route uses a property the cons list already has. Type
+variables are handed out in increasing order and bindings push onto the
+HEAD, so the chain is ordered newest-first and variable ids decrease
+monotonically with depth. The deep bulk of the environment is every
+top-level signature in the program — which is why the average
+environment is 1269 entries — and all of it predates any substitution
+generated while inferring a function body.
+
+So each `EnvNode` caches `tail_max`: the largest variable id in its own
+scheme or anywhere in its tail, maintained in O(1) per `extend` as the
+max of the new scheme and the tail's cached value. `apply_subst` takes
+the substitution's lowest key, and the walk stops dead at the first
+node whose whole suffix falls below it. Sound by construction: skipping
+requires every variable in the suffix to be below every key in the
+substitution, so none can be in its domain. `tail_max` is RECOMPUTED
+rather than inherited when a node is rebuilt, since substituting can
+replace a variable with a type mentioning higher-numbered ones.
+
+**9.7s -> 4.2s**, IR byte-identical, against a floor of ~2.4s.
+
+The whole arc, on this compiler's own source:
+
+```
+  68.6s   where it started
+  15.4s   cons-list `extend`      (O(env) -> O(1) per binding)
+   9.7s   node sharing            (stop reallocating the 93% that don't change)
+   4.2s   suffix pruning          (stop WALKING them either)
+  ~2.4s   floor, if the walk vanished entirely
+```
+
+A note on process, since it nearly went wrong: the first IR comparison
+after this change came out DIFFERENT, and the difference was reported
+before it was understood. The baseline was stale — it had been emitted
+before `bootstrap/self_host/typecheck/infer.plum` was patched for the
+soundness fix above, so the INPUT SOURCE had changed underneath it.
+Against a same-source baseline the output is byte-identical. Byte
+comparison is only as good as the discipline about what is being
+compared to what.

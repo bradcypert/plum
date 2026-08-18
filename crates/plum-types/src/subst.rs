@@ -45,6 +45,13 @@ impl Subst {
     /// knows about it, resolving chains (`T0 -> T1 -> Int` resolves
     /// fully to `Int`, not stopping at `T1`) and recursing into
     /// compound types.
+    /// The smallest variable id this substitution binds, or `None` if
+    /// it's empty. Used to skip environment suffixes that predate it
+    /// entirely — see `EnvNode::tail_max` in infer.rs.
+    pub fn min_key(&self) -> Option<TypeVarId> {
+        self.0.keys().copied().min()
+    }
+
     pub fn apply(&self, ty: &Type) -> Type {
         match ty {
             Type::Var(id) => match self.0.get(id) {

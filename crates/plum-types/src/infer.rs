@@ -179,6 +179,38 @@ struct EnvNode {
     scheme: Scheme,
     span: Option<Span>,
     next: Option<Rc<EnvNode>>,
+    /// The largest type-variable id occurring anywhere in this node's
+    /// scheme OR in its entire tail — `None` when the whole suffix is
+    /// variable-free.
+    ///
+    /// This is what lets `apply_subst_node` skip an entire suffix in
+    /// O(1). Type variables are handed out in increasing order and
+    /// bindings are pushed onto the head, so the chain is ordered
+    /// newest-first and `tail_max` DECREASES monotonically with depth.
+    /// A substitution produced while inferring one function body has
+    /// keys drawn from that body's own (recent, high) variables, so
+    /// once the walk reaches a node whose whole suffix predates the
+    /// substitution's lowest key, nothing below it can possibly
+    /// change. The deep part of the environment is every top-level
+    /// signature in the program — bound first, and the reason the
+    /// average environment is ~1269 entries.
+    ///
+    /// Maintained in O(1) per `extend`: the max of the new scheme's
+    /// own vars and the tail's cached value.
+    tail_max: Option<TypeVarId>,
+}
+
+/// Largest type-variable id in `ty`, without allocating. `free_vars`
+/// builds a `HashSet` per call, which is far too expensive for
+/// something on the `extend` path (629,231 calls).
+fn max_var(ty: &Type) -> Option<TypeVarId> {
+    match ty {
+        Type::Var(id) => Some(*id),
+        Type::Function(params, ret) => params.iter().filter_map(max_var).chain(max_var(ret)).max(),
+        Type::Tuple(elems) => elems.iter().filter_map(max_var).max(),
+        Type::Struct(_, args) | Type::Enum(_, args) => args.iter().filter_map(max_var).max(),
+        Type::Int | Type::Float | Type::Bool | Type::Str | Type::CStr | Type::Unit | Type::Range | Type::Param(_) => None,
+    }
 }
 
 /// A persistent (shared-tail) linked list, innermost binding FIRST.
@@ -311,8 +343,12 @@ impl TypeEnv {
 
     pub fn extend_scheme_spanned(&self, name: String, scheme: Scheme, span: Option<Span>) -> TypeEnv {
         ENV_EXTEND_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tail_max = match (max_var(&scheme.ty), self.head.as_ref().and_then(|n| n.tail_max)) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
         TypeEnv {
-            head: Some(Rc::new(EnvNode { name, scheme, span, next: self.head.clone() })),
+            head: Some(Rc::new(EnvNode { name, scheme, span, next: self.head.clone(), tail_max })),
             len: self.len + 1,
         }
     }
@@ -355,7 +391,10 @@ impl TypeEnv {
     pub fn apply_subst(&self, subst: &Subst) -> TypeEnv {
         ENV_SUBST_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         ENV_SUBST_ENTRIES.fetch_add(self.len as u64, std::sync::atomic::Ordering::Relaxed);
-        let (head, _) = apply_subst_node(&self.head, subst);
+        let Some(min_key) = subst.min_key() else {
+            return self.clone();
+        };
+        let (head, _) = apply_subst_node(&self.head, subst, min_key);
         TypeEnv { head, len: self.len }
     }
 }
@@ -374,23 +413,39 @@ impl TypeEnv {
 /// Bottom-up so a node can be shared only when its own scheme and its
 /// entire tail are both untouched. Depth is the number of bindings in
 /// scope (~1300 at most here), well within the stack.
-fn apply_subst_node(node: &Option<Rc<EnvNode>>, subst: &Subst) -> (Option<Rc<EnvNode>>, bool) {
+fn apply_subst_node(node: &Option<Rc<EnvNode>>, subst: &Subst, min_key: TypeVarId) -> (Option<Rc<EnvNode>>, bool) {
     let Some(n) = node else {
         return (None, false);
     };
-    let (next, tail_changed) = apply_subst_node(&n.next, subst);
+    // O(1) suffix skip: every variable from here down predates the
+    // lowest key this substitution has an opinion about, so no node in
+    // this suffix can change. See `EnvNode::tail_max`.
+    match n.tail_max {
+        None => return (Some(Rc::clone(n)), false),
+        Some(m) if m < min_key => return (Some(Rc::clone(n)), false),
+        Some(_) => {}
+    }
+    let (next, tail_changed) = apply_subst_node(&n.next, subst, min_key);
     let ty = subst.apply(&n.scheme.ty);
     let self_changed = ty != n.scheme.ty;
     if !self_changed && !tail_changed {
         return (Some(Rc::clone(n)), false);
     }
     ENV_SUBST_CHANGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Recomputed, not inherited: substituting can replace one variable
+    // with a type mentioning OTHER, higher-numbered ones, so the cached
+    // maximum can legitimately grow here.
+    let tail_max = match (max_var(&ty), next.as_ref().and_then(|t| t.tail_max)) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (a, b) => a.or(b),
+    };
     (
         Some(Rc::new(EnvNode {
             name: n.name.clone(),
             scheme: Scheme { vars: n.scheme.vars.clone(), ty, bounds: n.scheme.bounds.clone() },
             span: n.span,
             next,
+            tail_max,
         })),
         true,
     )
