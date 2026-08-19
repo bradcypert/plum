@@ -1,0 +1,6 @@
+let SCREEN_W: Float = 800.0
+
+let wrap (x: Float): Float =
+    if x > SCREEN_W { x - SCREEN_W }
+    else if x < 0.0 { x + SCREEN_W }
+    else { x }

@@ -36,6 +36,17 @@ declare -A no_run=(
     [asteroids]="opens a window (raylib)"
 )
 
+# Examples the self-hosted compiler is not expected to build YET, with
+# the reason. These still report FAIL and still count as failing -- the
+# annotation only saves the reader from re-deriving why. Silencing them
+# is what turned the old gap table into fiction; the point here is that
+# the reason travels WITH the failure instead of in a list somewhere
+# else.
+declare -A known=(
+    [asteroids]="needs extern \"C\"/unsafe FFI (raylib)"
+    [concurrency]="needs channels/spawn"
+)
+
 ok=0
 fail=0
 emit_only=0
@@ -48,14 +59,14 @@ for dir in examples/*/; do
     if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh emit-llvm "$dir" > "$work/$name.ll" 2>"$work/$name.emit_err"; then
         reason="$(head -n 1 "$work/$name.emit_err" 2>/dev/null)"
         [ -n "$reason" ] || reason="$(grep -m1 -v '^;' "$work/$name.ll" 2>/dev/null)"
-        printf 'FAIL  %-24s %s\n' "$name" "${reason:-emit failed}"
+        printf 'FAIL  %-24s %s%s\n' "$name" "${reason:-emit failed}" "${known[$name]:+  [known: ${known[$name]}]}"
         fail=$((fail + 1))
         continue
     fi
     # `sh` reports checker errors on stdout and still exits 0, so the
     # emitted text is what says whether it really worked.
     if ! head -n 1 "$work/$name.ll" | grep -q '^;'; then
-        printf 'FAIL  %-24s %s\n' "$name" "$(head -n 1 "$work/$name.ll")"
+        printf 'FAIL  %-24s %s%s\n' "$name" "$(head -n 1 "$work/$name.ll")" "${known[$name]:+  [known: ${known[$name]}]}"
         fail=$((fail + 1))
         continue
     fi

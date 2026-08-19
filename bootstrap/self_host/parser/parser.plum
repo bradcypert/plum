@@ -21,13 +21,13 @@
 //
 // **Deliberate v1 scope cuts, stated up front, not discovered as
 // gaps**:
-// - No `no_struct_literal` suppression (GRAMMAR.md's "struct-literal
-//   vs. block ambiguity in `if`/`match` scrutinee position"). Checked
-//   directly: none of the 98 corpus fixtures exercise an `if`/`match`
-//   with a struct-literal condition, so this parser doesn't need the
-//   restriction to pass the corpus. A REAL gap versus the Rust parser
-//   — `if Point { x: 1 } { .. }` would misparse here — revisit if a
-//   fixture ever needs it.
+// - ~~No `no_struct_literal` suppression~~ — CLOSED 2026-08-19. It was
+//   listed here as a v1 cut ("revisit if a fixture ever needs it") on
+//   the evidence that no corpus fixture exercised it. `examples/
+//   asteroids` did, via `if pos.x > SCREEN_WIDTH_F { .. }`: any
+//   all-caps constant in an `if`/`match`/`for` head trips it, which is
+//   a good deal more common than the `if Point { x: 1 }` shape this
+//   note imagined. See `parse_expr_no_struct`.
 // - No parse-error recovery or messages: every "expected X, found Y"
 //   failure is a bare `panic_raw`, not a `Result`-returning diagnostic.
 //   The corpus is 100% valid Plum by construction; there's nothing
@@ -694,16 +694,41 @@ let parse_tuple_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult = {
 
 struct ExprResult { value: PExpr, next_pos: Int }
 
-pub let parse_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = parse_pipe(tokens, pos)
+// GRAMMAR.md's "struct-literal vs. block ambiguity": in an `if`/`match`/
+// `while`/`for` HEAD a `{` opens the body, so a capitalized path
+// followed by `{` there must NOT be read as a struct literal.
+// `if pos.x > SCREEN_WIDTH_F { .. }` is the shape that matters, and it
+// is not exotic -- ANY all-caps constant in a condition hits it.
+// `examples/asteroids` did, and the whole file failed to parse with
+// "a nested field-update path needs an explicit ': value'": the body's
+// statements were being read as struct FIELDS.
+//
+// This file's top comment listed the suppression as a deliberate v1 cut
+// -- "revisit if a fixture ever needs it." A real program needed it.
+//
+// The real parser carries `no_struct_literal` as MUTABLE parser state.
+// This one is a pure function of (tokens, pos), so the flag is threaded
+// as a parameter down the whole precedence chain to its single
+// consumer, `parse_path_shaped_expr`. `parse_expr` keeps its two-
+// argument shape: most of its callers have nothing to do with this.
+pub let parse_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = parse_pipe(tokens, pos, false)
 
-let parse_pipe (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
-    let lhs = parse_or(tokens, pos);
-    parse_pipe_rest(tokens, lhs.next_pos, lhs.value)
+// The head of an `if`/`match`/`while`/`for`, where a `{` belongs to the
+// body rather than to a value. Suppression stops at any BRACKET: inside
+// `(..)`, `[..]` or an argument list the ambiguity cannot arise, so
+// those positions go back through `parse_expr` and a struct literal is
+// allowed again -- same re-entry the real parser spells
+// `parse_expr_allowing_struct_literal`.
+pub let parse_expr_no_struct (tokens: Array[lexer.Token]) (pos: Int): ExprResult = parse_pipe(tokens, pos, true)
+
+let parse_pipe (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let lhs = parse_or(tokens, pos, ns);
+    parse_pipe_rest(tokens, lhs.next_pos, lhs.value, ns)
 }
-let parse_pipe_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprResult = {
+let parse_pipe_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr) (ns: Bool): ExprResult = {
     let b = bump_if(tokens, pos, TokPipeGt);
     if !b.matched { ExprResult { value: lhs, next_pos: pos } }
-    else { let rhs = parse_or(tokens, b.next_pos); parse_pipe_rest(tokens, rhs.next_pos, EBinary(BPipe, lhs, rhs.value)) }
+    else { let rhs = parse_or(tokens, b.next_pos, ns); parse_pipe_rest(tokens, rhs.next_pos, EBinary(BPipe, lhs, rhs.value), ns) }
 }
 
 // `|>` desugaring, exported for the checker and the interpreter -- the
@@ -742,24 +767,24 @@ let splice_pipe_args (args: Array[PExpr]) (lhs: PExpr): Array[PExpr] = {
     else { fail("at most one `_` placeholder is allowed in a piped call"); args }
 }
 
-let parse_or (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
-    let lhs = parse_and(tokens, pos);
-    parse_or_rest(tokens, lhs.next_pos, lhs.value)
+let parse_or (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let lhs = parse_and(tokens, pos, ns);
+    parse_or_rest(tokens, lhs.next_pos, lhs.value, ns)
 }
-let parse_or_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprResult = {
+let parse_or_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr) (ns: Bool): ExprResult = {
     let b = bump_if(tokens, pos, TokOrOr);
     if !b.matched { ExprResult { value: lhs, next_pos: pos } }
-    else { let rhs = parse_and(tokens, b.next_pos); parse_or_rest(tokens, rhs.next_pos, EBinary(BOr, lhs, rhs.value)) }
+    else { let rhs = parse_and(tokens, b.next_pos, ns); parse_or_rest(tokens, rhs.next_pos, EBinary(BOr, lhs, rhs.value), ns) }
 }
 
-let parse_and (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
-    let lhs = parse_compare(tokens, pos);
-    parse_and_rest(tokens, lhs.next_pos, lhs.value)
+let parse_and (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let lhs = parse_compare(tokens, pos, ns);
+    parse_and_rest(tokens, lhs.next_pos, lhs.value, ns)
 }
-let parse_and_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprResult = {
+let parse_and_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr) (ns: Bool): ExprResult = {
     let b = bump_if(tokens, pos, TokAndAnd);
     if !b.matched { ExprResult { value: lhs, next_pos: pos } }
-    else { let rhs = parse_compare(tokens, b.next_pos); parse_and_rest(tokens, rhs.next_pos, EBinary(BAnd, lhs, rhs.value)) }
+    else { let rhs = parse_compare(tokens, b.next_pos, ns); parse_and_rest(tokens, rhs.next_pos, EBinary(BAnd, lhs, rhs.value), ns) }
 }
 
 struct CompareOp { op: BOp, next_pos: Int }
@@ -774,82 +799,82 @@ let compare_op_at (tokens: Array[lexer.Token]) (pos: Int): Option[CompareOp] =
         _ => None,
     }
 
-let parse_compare (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
-    let lhs = parse_range(tokens, pos);
+let parse_compare (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let lhs = parse_range(tokens, pos, ns);
     match compare_op_at(tokens, lhs.next_pos) {
         None => lhs,
         Some(op_r) => {
-            let rhs = parse_range(tokens, op_r.next_pos);
+            let rhs = parse_range(tokens, op_r.next_pos, ns);
             if Option.is_some(compare_op_at(tokens, rhs.next_pos)) { fail("comparison operators do not chain") };
             ExprResult { value: EBinary(op_r.op, lhs.value, rhs.value), next_pos: rhs.next_pos }
         },
     }
 }
 
-let parse_range (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
-    let lhs = parse_add(tokens, pos);
+let parse_range (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let lhs = parse_add(tokens, pos, ns);
     let b = bump_if(tokens, lhs.next_pos, TokDotDot);
     if !b.matched { lhs }
     else {
-        let rhs = parse_add(tokens, b.next_pos);
+        let rhs = parse_add(tokens, b.next_pos, ns);
         if check(tokens, rhs.next_pos, TokDotDot) { fail("ranges do not chain") };
         ExprResult { value: EBinary(BRange, lhs.value, rhs.value), next_pos: rhs.next_pos }
     }
 }
 
-let parse_add (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
-    let lhs = parse_mul(tokens, pos);
-    parse_add_rest(tokens, lhs.next_pos, lhs.value)
+let parse_add (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let lhs = parse_mul(tokens, pos, ns);
+    parse_add_rest(tokens, lhs.next_pos, lhs.value, ns)
 }
-let parse_add_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprResult =
+let parse_add_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr) (ns: Bool): ExprResult =
     match tokens[pos] {
-        TokPlus => { let rhs = parse_mul(tokens, pos + 1); parse_add_rest(tokens, rhs.next_pos, EBinary(BAdd, lhs, rhs.value)) },
-        TokMinus => { let rhs = parse_mul(tokens, pos + 1); parse_add_rest(tokens, rhs.next_pos, EBinary(BSub, lhs, rhs.value)) },
+        TokPlus => { let rhs = parse_mul(tokens, pos + 1, ns); parse_add_rest(tokens, rhs.next_pos, EBinary(BAdd, lhs, rhs.value), ns) },
+        TokMinus => { let rhs = parse_mul(tokens, pos + 1, ns); parse_add_rest(tokens, rhs.next_pos, EBinary(BSub, lhs, rhs.value), ns) },
         _ => ExprResult { value: lhs, next_pos: pos },
     }
 
-let parse_mul (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
-    let lhs = parse_unary(tokens, pos);
-    parse_mul_rest(tokens, lhs.next_pos, lhs.value)
+let parse_mul (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let lhs = parse_unary(tokens, pos, ns);
+    parse_mul_rest(tokens, lhs.next_pos, lhs.value, ns)
 }
-let parse_mul_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprResult =
+let parse_mul_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr) (ns: Bool): ExprResult =
     match tokens[pos] {
-        TokStar => { let rhs = parse_unary(tokens, pos + 1); parse_mul_rest(tokens, rhs.next_pos, EBinary(BMul, lhs, rhs.value)) },
-        TokSlash => { let rhs = parse_unary(tokens, pos + 1); parse_mul_rest(tokens, rhs.next_pos, EBinary(BDiv, lhs, rhs.value)) },
-        TokPercent => { let rhs = parse_unary(tokens, pos + 1); parse_mul_rest(tokens, rhs.next_pos, EBinary(BRem, lhs, rhs.value)) },
+        TokStar => { let rhs = parse_unary(tokens, pos + 1, ns); parse_mul_rest(tokens, rhs.next_pos, EBinary(BMul, lhs, rhs.value), ns) },
+        TokSlash => { let rhs = parse_unary(tokens, pos + 1, ns); parse_mul_rest(tokens, rhs.next_pos, EBinary(BDiv, lhs, rhs.value), ns) },
+        TokPercent => { let rhs = parse_unary(tokens, pos + 1, ns); parse_mul_rest(tokens, rhs.next_pos, EBinary(BRem, lhs, rhs.value), ns) },
         _ => ExprResult { value: lhs, next_pos: pos },
     }
 
-let parse_unary (tokens: Array[lexer.Token]) (pos: Int): ExprResult =
+let parse_unary (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult =
     match tokens[pos] {
-        TokMinus => { let r = parse_unary(tokens, pos + 1); ExprResult { value: EUnary(UNeg, r.value), next_pos: r.next_pos } },
-        TokBang => { let r = parse_unary(tokens, pos + 1); ExprResult { value: EUnary(UNot, r.value), next_pos: r.next_pos } },
-        _ => parse_postfix(tokens, pos),
+        TokMinus => { let r = parse_unary(tokens, pos + 1, ns); ExprResult { value: EUnary(UNeg, r.value), next_pos: r.next_pos } },
+        TokBang => { let r = parse_unary(tokens, pos + 1, ns); ExprResult { value: EUnary(UNot, r.value), next_pos: r.next_pos } },
+        _ => parse_postfix(tokens, pos, ns),
     }
 
-let parse_postfix (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
-    let base = parse_primary(tokens, pos);
-    parse_postfix_from(tokens, base.next_pos, base.value)
+let parse_postfix (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let base = parse_primary(tokens, pos, ns);
+    parse_postfix_from(tokens, base.next_pos, base.value, ns)
 }
 
-let parse_postfix_from (tokens: Array[lexer.Token]) (pos: Int) (expr: PExpr): ExprResult =
+let parse_postfix_from (tokens: Array[lexer.Token]) (pos: Int) (expr: PExpr) (ns: Bool): ExprResult =
     match tokens[pos] {
         TokDot => {
             let name_tok = expect_ident(tokens, pos + 1);
-            parse_postfix_from(tokens, name_tok.next_pos, EField(expr, name_tok.name))
+            parse_postfix_from(tokens, name_tok.next_pos, EField(expr, name_tok.name), ns)
         },
         TokLParen => {
             let args_r = parse_arguments(tokens, pos);
-            parse_postfix_from(tokens, args_r.next_pos, ECall(expr, args_r.value))
+            parse_postfix_from(tokens, args_r.next_pos, ECall(expr, args_r.value), ns)
         },
         TokLBracket => {
             if next_bracket_is_generic(tokens, pos + 1) {
                 let args_r = parse_generic_args(tokens, pos);
-                parse_postfix_from(tokens, args_r.next_pos, EGenericInst(expr, args_r.value))
+                parse_postfix_from(tokens, args_r.next_pos, EGenericInst(expr, args_r.value), ns)
             } else {
                 let index_r = parse_expr(tokens, pos + 1);
                 let close_pos = expect(tokens, index_r.next_pos, TokRBracket, "']'");
-                parse_postfix_from(tokens, close_pos, EIndex(expr, index_r.value))
+                parse_postfix_from(tokens, close_pos, EIndex(expr, index_r.value), ns)
             }
         },
         _ => ExprResult { value: expr, next_pos: pos },
@@ -890,7 +915,7 @@ let parse_argument_list_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[
 // parser.rs::parse_argument`'s own doc comment for the full "why."
 let parse_argument (tokens: Array[lexer.Token]) (pos: Int): ExprResult =
     if check(tokens, pos, TokUnderscore) {
-        let chain_r = parse_postfix_from(tokens, pos + 1, EIdent("_"));
+        let chain_r = parse_postfix_from(tokens, pos + 1, EIdent("_"), false);
         ExprResult { value: EClosure(["_"], chain_r.value), next_pos: chain_r.next_pos }
     } else {
         parse_expr(tokens, pos)
@@ -917,7 +942,7 @@ let parse_expr_list_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[PExp
 
 // --- Primary expressions ---
 
-let parse_primary (tokens: Array[lexer.Token]) (pos: Int): ExprResult =
+let parse_primary (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult =
     match tokens[pos] {
         TokInt(n) => ExprResult { value: EInt(n), next_pos: pos + 1 },
         TokFloat(f) => ExprResult { value: EFloat(f), next_pos: pos + 1 },
@@ -925,7 +950,7 @@ let parse_primary (tokens: Array[lexer.Token]) (pos: Int): ExprResult =
         TokInterpStr(parts) => ExprResult { value: desugar_interp_str(parts), next_pos: pos + 1 },
         TokTrue => ExprResult { value: EBool(true), next_pos: pos + 1 },
         TokFalse => ExprResult { value: EBool(false), next_pos: pos + 1 },
-        TokIdent(_) => parse_path_shaped_expr(tokens, pos),
+        TokIdent(_) => parse_path_shaped_expr(tokens, pos, ns),
         TokLParen => parse_paren_or_tuple(tokens, pos),
         TokLBracket => parse_array_literal(tokens, pos),
         TokLBrace => { let b = parse_block(tokens, pos); ExprResult { value: EBlock(b.value), next_pos: b.next_pos } },
@@ -983,10 +1008,10 @@ let parse_paren_or_tuple (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
     }
 }
 
-let parse_path_shaped_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
+let parse_path_shaped_expr (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
     let path_r = parse_expr_path_acc(tokens, pos, []);
     let last_name = path_r.value[path_r.value.len() - 1];
-    if check(tokens, path_r.next_pos, TokLBrace) && is_capitalized(last_name) {
+    if check(tokens, path_r.next_pos, TokLBrace) && is_capitalized(last_name) && !ns {
         parse_struct_literal(tokens, path_r.next_pos, path_r.value)
     } else {
         ExprResult { value: path_to_field_chain(path_r.value), next_pos: path_r.next_pos }
@@ -1059,7 +1084,7 @@ let parse_extra_path_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[Str
 }
 
 let parse_if_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
-    let cond_r = parse_expr(tokens, pos + 1);
+    let cond_r = parse_expr_no_struct(tokens, pos + 1);
     let then_r = parse_block(tokens, cond_r.next_pos);
     let else_b = bump_if(tokens, then_r.next_pos, TokElse);
     if !else_b.matched { ExprResult { value: EIf(cond_r.value, then_r.value, None), next_pos: else_b.next_pos } }
@@ -1073,7 +1098,7 @@ let parse_if_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
 }
 
 let parse_match_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
-    let scrutinee_r = parse_expr(tokens, pos + 1);
+    let scrutinee_r = parse_expr_no_struct(tokens, pos + 1);
     let open = expect(tokens, scrutinee_r.next_pos, TokLBrace, "'{'");
     if check(tokens, open, TokRBrace) { ExprResult { value: EMatch(scrutinee_r.value, []), next_pos: open + 1 } }
     else {
@@ -1128,7 +1153,7 @@ let parse_select_arms_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[Se
 let parse_for_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
     let pat_r = parse_pattern(tokens, pos + 1);
     let in_pos = expect(tokens, pat_r.next_pos, TokIn, "'in'");
-    let iter_r = parse_expr(tokens, in_pos);
+    let iter_r = parse_expr_no_struct(tokens, in_pos);
     let body_r = parse_block(tokens, iter_r.next_pos);
     ExprResult { value: EFor(pat_r.value, iter_r.value, body_r.value), next_pos: body_r.next_pos }
 }

@@ -1,0 +1,1 @@
+Let Ident("SCREEN_W") Colon Ident("Float") Eq Float(800) Let Ident("wrap") LParen Ident("x") Colon Ident("Float") RParen Colon Ident("Float") Eq If Ident("x") Gt Ident("SCREEN_W") LBrace Ident("x") Minus Ident("SCREEN_W") RBrace Else If Ident("x") Lt Float(0) LBrace Ident("x") Plus Ident("SCREEN_W") RBrace Else LBrace Ident("x") RBrace

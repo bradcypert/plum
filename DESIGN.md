@@ -11577,3 +11577,57 @@ observationally identical.
 Sweep: 7 of 9 matching. 25/25 `exec_corpus` correct and leak-free,
 self-build fixed point byte-identical, 99/99 parser goldens, 10/10
 `typecheck_corpus` rejected, Rust suite 1941/0.
+
+### The struct-literal/block ambiguity, and what asteroids really needs (2026-08-19)
+
+`parser.plum`'s top comment listed `no_struct_literal` suppression as a
+deliberate v1 cut: "none of the 98 corpus fixtures exercise an `if`/
+`match` with a struct-literal condition... revisit if a fixture ever
+needs it." A real program needed it, and the shape is not exotic at all:
+
+```plum
+if pos.x > SCREEN_WIDTH_F { pos.x - SCREEN_WIDTH_F }
+```
+
+`SCREEN_WIDTH_F` is capitalized, so a capitalized-path-followed-by-`{`
+was read as a struct literal and the `if` BODY was parsed as field
+initialisers. **Any all-caps constant in an `if`/`match`/`for` head hits
+this** — the error it produced ("a nested field-update path needs an
+explicit ': value'") points nowhere near the cause.
+
+The real parser carries `no_struct_literal` as mutable parser state.
+This one is a pure function of `(tokens, pos)`, so the flag is threaded
+as a parameter down the whole precedence chain — seventeen functions —
+to its single consumer, `parse_path_shaped_expr`. Suppression stops at
+any BRACKET: inside `(..)`, `[..]`, an index or an argument list the
+ambiguity cannot arise, and those positions re-enter through the plain
+`parse_expr`, which pins the flag back to false. That is the same
+re-entry the real parser spells `parse_expr_allowing_struct_literal`.
+
+**Currying quietly changed what a threading mistake looks like.** Two
+call sites missed the new argument, and instead of an arity error the
+compiler reported `parse_pipe`'s BODY as having type `Function([Var],
+ExprResult)` — the under-applied call had become a closure. Still
+caught, one step removed from the cause. That is the cost side of the
+`f(a)(b) === f(a, b)` equivalence, and worth knowing about rather than
+rediscovering.
+
+**asteroids is not close.** With the parser fixed it now reaches the
+type checker and stops at `Float.sqrt`/`Float.pow`/`Float.random` —
+which look like a stdlib gap but are not: the real prelude defines them
+as `unsafe { sqrt(x) }`, and the file itself declares `extern "C"` and
+uses twelve `unsafe` blocks to drive raylib. It is an FFI program. The
+self-hosted backend has no `extern`/`unsafe` support at all, which puts
+asteroids in the same category as `concurrency`: a genuine scope cut,
+not a near miss.
+
+Both are now annotated IN the sweep, next to their reason. They still
+report FAIL and still count as failing — silencing them is exactly what
+turned the old gap table into fiction. The annotation only saves the
+reader from re-deriving why.
+
+Sweep: 7 of 9 matching, 2 failing, both annotated. 25/25 `exec_corpus`
+correct and leak-free, self-build fixed point byte-identical, 101/101
+parser goldens (two new: `if_capitalized_condition`,
+`match_capitalized_scrutinee`), 10/10 `typecheck_corpus` rejected, Rust
+suite 1941/0.

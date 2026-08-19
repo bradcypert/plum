@@ -1,0 +1,8 @@
+let MAX: Int = 10
+
+let pick (n: Int): String = match MAX {
+    10 => "ten",
+    _ => "other",
+}
+
+let clamp (n: Int): Int = if n > MAX { MAX } else { n }
