@@ -874,7 +874,38 @@ let infer_array_fold (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
 // closure, or a struct field read. It becomes the `TClosureCall`'s own
 // callee, which is how the backend knows to load a code pointer rather
 // than emit a direct call.
+// Under-applying a closure VALUE, not just a named function:
+// `clamp3(0)(10)` leaves one parameter, and the first `(0)` already
+// produced a closure -- so the residual has to be built here too, or
+// currying would work only for the FIRST application in a chain. Same
+// shape as `infer_partial_call`, with a `TClosureCall` body: the callee
+// is a value, so there is no symbol to name.
+let infer_partial_closure_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ptys: Array[ITy]) (ret: ITy) (args: Array[parser.PExpr]) (callee_texpr: TExpr): InferResult = {
+    let supplied = Array.slice(ptys, 0, args.len());
+    let residual = Array.slice(ptys, args.len(), ptys.len());
+    let ar = infer_call_args(p2, state, env, acc, args, supplied, 0, []);
+    let names = partial_param_names(residual.len(), 0, []);
+    let res_tys = Array.map(residual, |t| subst_apply(ar.subst, t));
+    let ret_ty = subst_apply(ar.subst, ret);
+    let fn_ty = ITFunction(res_tys, ret_ty);
+    let body_args = Array.concat(ar.texprs, partial_param_refs(names, res_tys, 0, []));
+    InferResult {
+        ty: fn_ty, subst: ar.subst, state: ar.state,
+        texpr: TExpr { ty: fn_ty, node: TClosure(names, TExpr { ty: ret_ty, node: TClosureCall(callee_texpr, body_args) }) },
+    }
+}
+
 let infer_closure_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_ty: ITy) (args: Array[parser.PExpr]) (callee_texpr: TExpr): InferResult = {
+    match subst_apply(acc, fn_ty) {
+        ITFunction(ptys, ret) =>
+            if !Array.is_empty(args) && args.len() < ptys.len() {
+                infer_partial_closure_call(p2, state, env, acc, ptys, ret, args, callee_texpr)
+            } else { infer_closure_call_exact(p2, state, env, acc, fn_ty, args, callee_texpr) },
+        _ => infer_closure_call_exact(p2, state, env, acc, fn_ty, args, callee_texpr),
+    }
+}
+
+let infer_closure_call_exact (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (fn_ty: ITy) (args: Array[parser.PExpr]) (callee_texpr: TExpr): InferResult = {
     let fr = fresh_list(state, args.len());
     let retf = fresh(fr.state);
     let s1 = match unify(subst_apply(acc, fn_ty), ITFunction(fr.tys, retf.ty)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc("call: ".concat(e)); acc } };
@@ -923,13 +954,69 @@ let infer_println_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
 // return type — mirrors the real compiler's `instantiate_generic` +
 // per-argument unification exactly, minus bound-checking (`Num`/`Eq`/
 // `Show` — this checker's own stated v1 scope cut, "no bounds").
+// `scale(2)` where `scale` takes two parameters: an under-applied call
+// is a function value over the REMAINING parameters, not an arity
+// error. `f(a)(b)` and `f(a, b)` then mean the same thing, which is the
+// well-known ML property and, per DESIGN.md's "Currying" section, a
+// resolution of Plum's old juxtaposition footgun rather than a new one.
+//
+// Nothing downstream needed a new concept. The residual value IS a
+// closure -- over synthetic parameters, with a fully-applied call as
+// its body -- so this builds an ordinary `TClosure` and the backend
+// compiles it the way it compiles any other closure literal. That
+// mirrors the real compiler, which rewrites the same shape in LOWERING
+// (`plum_ir::lower` consults `partial_calls`); this checker can do it
+// directly, because it emits a typed tree rather than recording a
+// span-keyed note for a later pass to act on.
+//
+// `args.is_empty()` deliberately never takes this path: `f()` on a
+// multi-parameter `f` stays an arity error, never a vacuous "give me
+// `f` back" -- the same scope decision the real compiler made.
+//
+// The supplied argument EXPRESSIONS end up inside the closure body, so
+// they are re-evaluated per call of the residual rather than once at
+// partial-application time. That matches the real compiler's own
+// rewrite exactly, and Plum expressions of this kind are pure, so the
+// two are observationally identical.
+let infer_partial_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult = {
+    let fr = fresh_list(state, sig.generics.len());
+    let inst_params = Array.map(sig.params, |t| instantiate_template(sig.generics, fr.tys, t));
+    let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
+    let supplied = Array.slice(inst_params, 0, args.len());
+    let residual = Array.slice(inst_params, args.len(), inst_params.len());
+    let ar = infer_call_args(p2, fr.state, env, acc, args, supplied, 0, []);
+    let names = partial_param_names(residual.len(), 0, []);
+    let res_tys = Array.map(residual, |t| subst_apply(ar.subst, t));
+    let ret_ty = subst_apply(ar.subst, inst_ret);
+    let fn_ty = ITFunction(res_tys, ret_ty);
+    let body_args = Array.concat(ar.texprs, partial_param_refs(names, res_tys, 0, []));
+    InferResult {
+        ty: fn_ty, subst: ar.subst, state: ar.state,
+        texpr: TExpr { ty: fn_ty, node: TClosure(names, TExpr { ty: ret_ty, node: TFnCall(sig.module, sig.name, body_args, fr.tys) }) },
+    }
+}
+
+// `__partial_arg0`, `__partial_arg1`, ... -- double-underscored for the
+// same reason every other compiler-synthesized name is: a user cannot
+// write one, so these can never shadow anything real.
+let partial_param_names (count: Int) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= count { acc } else { partial_param_names(count, i + 1, acc.push("__partial_arg".concat(i.to_string()))) }
+
+let partial_param_refs (names: Array[String]) (tys: Array[ITy]) (i: Int) (acc: Array[TExpr]): Array[TExpr] =
+    if i >= names.len() { acc }
+    else { partial_param_refs(names, tys, i + 1, acc.push(TExpr { ty: tys[i], node: TIdent(names[i]) })) }
+
 let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult = {
+    if !Array.is_empty(args) && args.len() < sig.params.len() {
+        infer_partial_call(p2, state, env, acc, sig, args)
+    } else {
     if sig.params.len() != args.len() { fail_tc("call to ".concat(sig.name).concat(": expected ").concat(sig.params.len().to_string()).concat(" argument(s), found ").concat(args.len().to_string())) };
     let fr = fresh_list(state, sig.generics.len());
     let inst_params = Array.map(sig.params, |t| instantiate_template(sig.generics, fr.tys, t));
     let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
     let ar = infer_call_args(p2, fr.state, env, acc, args, inst_params, 0, []);
     ir_leaf(subst_apply(ar.subst, inst_ret), ar.subst, ar.state, TFnCall(sig.module, sig.name, ar.texprs, fr.tys))
+    }
 }
 
 struct CallArgsResult { subst: Subst, state: FreshState, texprs: Array[TExpr] }

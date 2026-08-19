@@ -1,0 +1,39 @@
+// Partial application: an under-applied call is a function value over
+// the remaining parameters. The checker builds it as an ordinary
+// closure over synthetic parameters whose body is a fully-applied call,
+// so the backend needed no new concept -- the same conclusion the real
+// compiler reached, one pass earlier (it rewrites in lowering).
+//
+// `f(a)(b)` and `f(a, b)` must agree; that equivalence is the whole
+// argument for currying not reintroducing Plum's juxtaposition footgun.
+
+let scale (factor: Int) (x: Int): Int = factor * x
+
+let clamp3 (lo: Int) (hi: Int) (x: Int): Int =
+    if x < lo { lo } else if x > hi { hi } else { x }
+
+let label (prefix: String) (n: Int): String = prefix.concat(n.to_string())
+
+let main (): Unit = {
+    println(scale(2, 21).to_string());
+    println(scale(2)(21).to_string());
+
+    let double = scale(2);
+    println(double(21).to_string());
+
+    // More than one parameter left over, and applied in two steps.
+    println(clamp3(0, 10)(15).to_string());
+    println(clamp3(0)(10)(-5).to_string());
+
+    // An ordinary function value: usable wherever a closure is.
+    println(Array.map([1, 2, 3], scale(3)).to_string());
+
+    // Built inside a closure, so it outlives the scope that made it.
+    let make = |f: Int| scale(f);
+    println(make(10)(7).to_string());
+
+    // A heap-typed captured argument, which is where the closure
+    // parameter-release path matters.
+    let greet = label("n=");
+    println(greet(5));
+}

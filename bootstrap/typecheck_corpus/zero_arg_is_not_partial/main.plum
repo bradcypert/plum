@@ -1,0 +1,11 @@
+// Partial application deliberately does NOT include the 0-of-N case:
+// `f()` on a multi-parameter `f` stays an arity error rather than
+// becoming a vacuous "give me `f` back". Same scope decision the real
+// compiler made when currying was designed (DESIGN.md's "Currying"
+// section), pinned here because it is a choice, not a consequence --
+// nothing about the implementation would stop `args.is_empty()` from
+// taking the partial path.
+
+let scale (factor: Int) (x: Int): Int = factor * x
+
+let main (): Unit = println(scale().to_string())

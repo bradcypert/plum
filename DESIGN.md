@@ -11532,3 +11532,48 @@ wearing two costumes.
 Sweep: 6 of 9 matching. 24/24 `exec_corpus` correct and leak-free,
 self-build fixed point byte-identical, 99/99 parser goldens, 9/9
 `typecheck_corpus` rejected, Rust suite 1941/0.
+
+### Currying in the self-hosted compiler (2026-08-19)
+
+The residual value IS a closure — over synthetic parameters, with a
+fully-applied call as its body — so the backend needed no new concept
+whatsoever. That is the same conclusion the real compiler reached (see
+"Currying (partial application)" above), reached one pass earlier here:
+`plum_ir::lower` consults a span-keyed `partial_calls` map to rewrite
+the node later, while this checker emits the `TClosure` directly,
+because it produces a typed tree rather than a note for a subsequent
+pass to act on. No side-channel, no new IR, no codegen change.
+
+**Both call shapes needed it, which the first attempt missed.**
+`infer_fn_call` covers `scale(2)` — a named function under-applied. But
+`clamp3(0)(10)(-5)` under-applies a closure VALUE at the second step,
+and that goes through `infer_closure_call`, which failed with "function
+arity mismatch". Currying that works only for the first application in
+a chain is not currying; the residual is now built in both places, with
+a `TClosureCall` body where the callee is a value rather than a symbol.
+The corpus fixture caught this — the hand-written smoke test happened
+to stop at one level of chaining.
+
+Three things that must still be errors, and are:
+
+| written | result |
+|---|---|
+| `scale()` | arity error — the deliberate 0-of-N gate |
+| `scale(1, 2, 3)` | arity error — over-application |
+| `scale("x")` | `argument 0: String != Int`, not a misleading arity error |
+
+The first is pinned by `typecheck_corpus/zero_arg_is_not_partial`,
+because it is a CHOICE rather than a consequence: nothing in the
+implementation would stop `args.is_empty()` from taking the partial
+path.
+
+One inherited caveat, stated rather than discovered later: the supplied
+argument expressions end up inside the closure body, so they are
+re-evaluated per call of the residual rather than once at
+partial-application time. The real compiler's rewrite does exactly the
+same, and expressions of this kind are pure, so the two are
+observationally identical.
+
+Sweep: 7 of 9 matching. 25/25 `exec_corpus` correct and leak-free,
+self-build fixed point byte-identical, 99/99 parser goldens, 10/10
+`typecheck_corpus` rejected, Rust suite 1941/0.
