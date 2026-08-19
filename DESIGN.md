@@ -12007,3 +12007,47 @@ user-level `extern` block, never both.
 31/31 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 101/101 parser goldens, 11/11 `typecheck_corpus`
 rejected, sweep 9/9, Rust suite 1941/0.
+
+### Hover and go-to-definition (2026-08-19)
+
+Both work. `./sh lsp` now advertises `hoverProvider` and
+`definitionProvider`; hovering `scale` shows `let scale (p: Point) (f:
+Int): Point`, and go-to-definition jumps to its declaration.
+`bootstrap/lsp-smoke` asserts both.
+
+**They are NAME-based, which is the honest headline.** The identifier
+under the cursor is looked up among the project's top-level definitions
+BY NAME. So a local variable that shadows a top-level name resolves to
+the top-level one, and a local with no top-level namesake resolves to
+nothing at all.
+
+That was a deliberate trade, made with the numbers in hand. Precise
+hover needs a position on every expression, which this compiler records
+per STATEMENT: 181 match sites and 113 constructions across the parser,
+interpreter, checker and backend, against roughly zero for the
+name-based version. And jumping to the function or type under the cursor
+is what the overwhelming majority of real go-to-definition use IS. The
+precise version stays additive on top of this — nothing here has to be
+undone to get it.
+
+The mechanism is the lexer, not the AST. Token offsets already exist
+(they are what gave parse errors their locations), and an identifier
+token's length is its own text — so "what identifier is at line 4,
+column 28" is answerable without any AST position at all. That is the
+second time the spans work has paid for something it was not built for.
+
+`defs <project>` is a new subcommand: every top-level definition as
+JSON. A SUBCOMMAND rather than in-process work, for the same reason
+`check` is one — the parser reports by aborting, and a file with a
+syntax error is most files, most of the time, while someone is typing.
+A child that dies simply yields no index. It indexes the compiler's own
+source at 763 functions, 137 structs and 15 enums.
+
+The index is rebuilt per request rather than cached. Not free, but a
+project here is a handful of files, and a cache needs invalidating on
+every edit — precisely the stale-state bug language servers are prone
+to. Correct first; measurable later if it matters.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 101/101 parser goldens, 11/11 `typecheck_corpus`
+rejected, sweep 9/9, Rust suite 1941/0.

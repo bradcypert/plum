@@ -10,6 +10,9 @@ d = sys.argv[1]
 msgs = [
   {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
   {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % d}}},
+  # hover and go-to-definition on `P` in `let f (p: P)` -- line 2, char 11
+  {"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://%s/main.plum" % d},"position":{"line":2,"character":10}}},
+  {"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://%s/main.plum" % d},"position":{"line":2,"character":10}}},
   {"jsonrpc":"2.0","id":2,"method":"shutdown"},
   {"jsonrpc":"2.0","method":"exit"},
 ]
@@ -24,5 +27,7 @@ echo "$out" | grep -q '"textDocumentSync":1' || { echo "FAIL: no capabilities"; 
 echo "$out" | grep -q 'has no field named nope' || { echo "FAIL: no diagnostic"; fail=1; }
 echo "$out" | grep -q '"line":2' || { echo "FAIL: wrong line"; fail=1; }
 echo "$out" | grep -q '"id":2,"result":null' || { echo "FAIL: no shutdown reply"; fail=1; }
+echo "$out" | grep -q '"value":"struct P"' || { echo "FAIL: hover did not report the struct"; fail=1; }
+echo "$out" | grep -q '"id":4,"result":{"uri"' || { echo "FAIL: no definition location"; fail=1; }
 [ $fail -eq 0 ] && echo "lsp smoke: ok"
 exit $fail

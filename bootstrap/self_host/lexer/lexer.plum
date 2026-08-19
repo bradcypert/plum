@@ -446,6 +446,43 @@ let line_col_acc (chars: Array[String]) (offset: Int) (i: Int) (line: Int) (col:
     else if chars[i] == "\n" { line_col_acc(chars, offset, i + 1, line + 1, 1) }
     else { line_col_acc(chars, offset, i + 1, line, col + 1) }
 
+// The inverse of `line_col`: a 1-based line and column back to a
+// character offset. Clamps past the end of a short line rather than
+// running into the next one -- an editor can and does send a column
+// past the end of a line.
+pub let offset_of (source: String) (line: Int) (col: Int): Int =
+    offset_of_acc(chars_of(source), line, col, 0, 1, 1)
+
+let offset_of_acc (chars: Array[String]) (line: Int) (col: Int) (i: Int) (l: Int) (c: Int): Int =
+    if i >= chars.len() { chars.len() }
+    else if l == line && c == col { i }
+    else if chars[i] == "\n" {
+        // Asked for a column past this line's end: stop at the newline.
+        if l == line { i } else { offset_of_acc(chars, line, col, i + 1, l + 1, 1) }
+    }
+    else { offset_of_acc(chars, line, col, i + 1, l, c + 1) }
+
+// The IDENTIFIER token containing `offset`, or "" if the position is on
+// anything else. This is what makes name-based hover and
+// go-to-definition possible without spans on every expression: the
+// lexer already records where each token starts, and an identifier's
+// length is its own text.
+pub let ident_at (source: String) (offset: Int): String = {
+    let lexed = tokenize_spanned(source);
+    ident_at_acc(lexed.tokens, lexed.starts, offset, 0)
+}
+
+let ident_at_acc (tokens: Array[Token]) (starts: Array[Int]) (offset: Int) (i: Int): String =
+    if i >= tokens.len() || i >= starts.len() { "" }
+    else {
+        match tokens[i] {
+            TokIdent(name) =>
+                if offset >= starts[i] && offset < starts[i] + name.len() { name }
+                else { ident_at_acc(tokens, starts, offset, i + 1) },
+            _ => ident_at_acc(tokens, starts, offset, i + 1),
+        }
+    }
+
 // The text of the line containing `offset`, without its newline --
 // what a caret diagnostic underlines.
 pub let line_text (source: String) (offset: Int): String = {
