@@ -94,6 +94,17 @@ let builtin_context (unit: Unit): TyContext = TyContext {
                 StructFieldTemplate { name: "stderr", ty: ITStr },
             ],
         },
+        // `Array.zip`'s element type. A struct rather than a tuple in
+        // the real prelude too, which is why it needs a declaration
+        // here at all.
+        StructInfo {
+            name: "Zipped",
+            generics: ["A", "B"],
+            fields: [
+                StructFieldTemplate { name: "first", ty: ITParam("A") },
+                StructFieldTemplate { name: "second", ty: ITParam("B") },
+            ],
+        },
         // The JSON value tree, seeded for the same reason: the prelude
         // declares it, `check` runs without the prelude, and
         // `examples/json_and_files` is ordinary Plum that names these

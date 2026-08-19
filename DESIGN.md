@@ -11756,3 +11756,40 @@ seven want runtime primitives, not prelude source.
 `collections`, `for_array`), self-build fixed point byte-identical,
 101/101 parser goldens, 10/10 `typecheck_corpus` rejected, sweep 7/9,
 Rust suite 1941/0.
+
+### The pure-Plum half of the remaining stdlib (2026-08-19)
+
+`Array.sort_by`/`sort_int`/`sort_float`, `Array.zip`, `String.lines`/
+`trim_start`/`trim_end` — mirrored from the real prelude, which is the
+whole point: insertion sort is STABLE, and two implementations only
+agree on equal keys if they are the same implementation.
+
+`Array.sort_string` was deliberately LEFT OUT despite being pure Plum
+in the real prelude, because its comparison goes through `a.runes()`
+and this compiler has no such primitive. It belongs with `Float.sqrt`
+and friends — the group needing runtime support, not prelude source —
+and putting it here would have meant inventing a different string
+ordering, which is exactly the kind of quiet divergence the mirroring
+approach exists to prevent.
+
+`Zipped` is a named struct rather than a tuple, as in the real prelude,
+so it needed seeding into `builtin_context` alongside `Option`/`Result`/
+`JsonValue` for `check` to know it.
+
+Stdlib parity is now 70 of 78. The eight left all need runtime
+primitives: `Float.sqrt`/`pow`/`floor`/`ceil`/`round` are `unsafe { }`
+libm calls, `Float.random`/`random_range` need `random_raw`, and
+`Array.sort_string` needs `.runes()`. Nothing pure-Plum remains.
+
+**A tooling bug worth recording**: the corpus run appeared to fail on 18
+of 28 fixtures with "CLANG FAIL", which looked like a codegen
+regression from this change. It was `/tmp` filling up — the local
+validation script created a temp directory per run and never removed
+one, across roughly twenty runs on a RAM-backed tmpfs. The script now
+traps EXIT. Worth noting because the failure mode impersonated a real
+regression convincingly, and the actual error was two layers down in
+`ld`, not in anything the compiler emitted.
+
+28/28 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 101/101 parser goldens, 10/10 `typecheck_corpus`
+rejected, sweep 7/9, Rust suite 1941/0.

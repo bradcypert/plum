@@ -216,6 +216,13 @@ let builtin_sig (name: String): Option[FnSig] =
     else if name == "Array.reverse" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: arr_of(tp("T")) }) }
     else if name == "Array.sum_int" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITInt)], ret: ITInt }) }
     else if name == "Array.sum_float" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITFloat)], ret: ITFloat }) }
+    else if name == "Array.sort_by" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T"), tp("T")], ITBool)], ret: arr_of(tp("T")) }) }
+    else if name == "Array.sort_int" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITInt)], ret: arr_of(ITInt) }) }
+    else if name == "Array.sort_float" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITFloat)], ret: arr_of(ITFloat) }) }
+    else if name == "Array.zip" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [arr_of(tp("T")), arr_of(tp("U"))], ret: arr_of(ITStruct("Zipped", [tp("T"), tp("U")])) }) }
+    else if name == "String.trim_start" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITStr }) }
+    else if name == "String.trim_end" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITStr }) }
+    else if name == "String.lines" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) }) }
     else if name == "Option.map" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], tp("U"))], ret: opt_of(tp("U")) }) }
     else if name == "Option.and_then" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], opt_of(tp("U")))], ret: opt_of(tp("U")) }) }
     else if name == "Option.unwrap_or_else" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), ITFunction([], tp("T"))], ret: tp("T") }) }

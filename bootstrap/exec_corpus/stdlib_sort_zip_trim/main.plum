@@ -1,0 +1,26 @@
+// The pure-Plum half of the remaining stdlib: sorting, zip, and string
+// trimming. Mirrored from the real prelude, so the point of the fixture
+// is that the two agree exactly -- insertion sort is STABLE, and a
+// fixture that only sorted distinct values could not tell.
+//
+// `Array.sort_string` is deliberately missing: the real one compares
+// via `a.runes()`, which this compiler has no primitive for, so it sits
+// with `Float.sqrt` in the group that needs runtime support rather than
+// prelude source.
+
+struct P { name: String, n: Int }
+
+let main (): Unit = {
+    println(Array.sort_int([3, 1, 2, 1]).to_string());
+    println(Array.sort_float([2.5, 0.5, 1.5]).to_string());
+    println(Array.sort_by([P { name: "b", n: 2 }, P { name: "a", n: 1 }], |x: P, y: P| x.n <= y.n).to_string());
+    println(Array.sort_int([]).to_string());
+
+    let z = Array.zip([1, 2, 3], ["a", "b"]);
+    println(z.len().to_string());
+    println(z[0].first.to_string().concat(z[0].second));
+
+    println(String.trim_start("   hi  ").concat("|"));
+    println(String.trim_end("   hi  ").concat("|"));
+    println(String.lines("a\nb\nc").to_string());
+}
