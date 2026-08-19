@@ -11483,3 +11483,52 @@ application unsupported in the self-hosted checker), `json_and_files`
 23/23 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 99/99 parser goldens, 9/9 `typecheck_corpus` rejected,
 Rust suite 1941/0.
+
+### The JSON stdlib, and a leak in every closure (2026-08-19)
+
+`json_and_files` was the third example the sweep still failed on. The
+JSON library is ~245 lines of ordinary Plum in the real compiler's
+prelude, so it was mirrored mechanically — extracted from
+`STDLIB_JSON_SRC`, un-escaped, re-escaped for embedding, and inserted
+character-for-character apart from dropping its own `chars_of` (the
+self-hosted runtime already provides that one; it is the single thing
+this prelude cannot write in Plum). Copying rather than rewriting is
+the point: the two compilers agree on number formatting, escape
+handling and parse errors by construction rather than by inspection.
+`check` also needs `JsonValue`/`JsonEntry` seeded into
+`builtin_context`, for the same reason `Option`/`Result`/
+`ProcessResult` are there — it runs without the prelude.
+
+Every name was checked against the compiler's own source first. The
+prelude is prepended to every program INCLUDING the compiler itself,
+and this bootstrap has already been bitten once by an unprefixed
+prelude helper shadowing a module's own function.
+
+**Then the corpus fixture leaked, and the example did not.** Chasing
+that found something much larger than JSON: a lifted closure emitted
+neither its body's slot releases nor any release for its own
+PARAMETERS, where a named function emits both (`cg_fn` concatenates
+`body.releases` and `entry.releases` before `ret`; the closure path
+concatenated neither).
+
+The parameter half is what bites. A caller hands a closure an owned
+value — `Array.map` explicitly increments each element first, "the
+closure consumes what it is given" — and nothing ever gave it back. So
+`Array.map`/`filter`/`fold` over an array of HEAP elements leaked one
+cell PER ELEMENT. That is why `json_stringify` leaked in proportion to
+the document it was printing, and why the leak was invisible for
+`Array[Int]`: an `Int` element's increment is a no-op, so every earlier
+corpus fixture happened to use exactly the case that could not show it.
+
+Captures are deliberately NOT released there: they belong to the
+closure CELL, and `<fn>_rel` walks them when the cell dies. Releasing
+them per CALL would free them out from under the next invocation.
+
+Worth noting how this was found. The output diff that started it was a
+red herring — ASan's leak check `_exit`s and discards buffered stdout,
+so a leaking program looks like a program printing nothing. One bug
+wearing two costumes.
+
+Sweep: 6 of 9 matching. 24/24 `exec_corpus` correct and leak-free,
+self-build fixed point byte-identical, 99/99 parser goldens, 9/9
+`typecheck_corpus` rejected, Rust suite 1941/0.

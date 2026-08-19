@@ -1,0 +1,5 @@
+{"name":"plum","version":1.5,"tags":["a","b"],"stable":true,"extra":null}
+{"b":[true,null,"x"]}
+[1,2.5,-3,100]
+"escaped: \"quoted\""
+error: expected opening quote

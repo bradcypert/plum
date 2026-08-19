@@ -94,8 +94,32 @@ let builtin_context (unit: Unit): TyContext = TyContext {
                 StructFieldTemplate { name: "stderr", ty: ITStr },
             ],
         },
+        // The JSON value tree, seeded for the same reason: the prelude
+        // declares it, `check` runs without the prelude, and
+        // `examples/json_and_files` is ordinary Plum that names these
+        // types directly.
+        StructInfo {
+            name: "JsonEntry",
+            generics: [],
+            fields: [
+                StructFieldTemplate { name: "key", ty: ITStr },
+                StructFieldTemplate { name: "value", ty: ITEnum("JsonValue", []) },
+            ],
+        },
     ],
     enums: [
+        EnumInfo {
+            name: "JsonValue",
+            generics: [],
+            variants: [
+                VariantInfo { tag: "JsonNull", enum_name: "JsonValue", payload: [] },
+                VariantInfo { tag: "JsonBool", enum_name: "JsonValue", payload: [ITBool] },
+                VariantInfo { tag: "JsonNumber", enum_name: "JsonValue", payload: [ITFloat] },
+                VariantInfo { tag: "JsonString", enum_name: "JsonValue", payload: [ITStr] },
+                VariantInfo { tag: "JsonArray", enum_name: "JsonValue", payload: [ITStruct("Array", [ITEnum("JsonValue", [])])] },
+                VariantInfo { tag: "JsonObject", enum_name: "JsonValue", payload: [ITStruct("Array", [ITStruct("JsonEntry", [])])] },
+            ],
+        },
         EnumInfo {
             name: "Option",
             generics: ["T"],

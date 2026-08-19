@@ -182,6 +182,8 @@ let builtin_sig (name: String): Option[FnSig] =
     else if name == "Float.min" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat }) }
     else if name == "Float.max" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat }) }
     else if name == "Float.clamp" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat, ITFloat], ret: ITFloat }) }
+    else if name == "json_stringify" { Some(FnSig { name: name, module: "", generics: [], params: [ITEnum("JsonValue", [])], ret: ITStr }) }
+    else if name == "json_parse" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITEnum("JsonValue", []), ITStr) }) }
     else if name == "Option.is_some" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool }) }
     else if name == "Option.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), tp("T")], ret: tp("T") }) }
     else if name == "Result.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), tp("T")], ret: tp("T") }) }

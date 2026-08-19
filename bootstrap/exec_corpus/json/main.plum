@@ -1,0 +1,25 @@
+// The JSON stdlib: build a value, stringify it, parse it back. Mirrored
+// from the real compiler's own STDLIB_JSON_SRC character for character
+// (minus its `chars_of`, which the self-hosted runtime provides), so
+// the two agree on number formatting and escape handling by
+// construction rather than by inspection -- which is what this fixture
+// checks.
+
+let round_trip (text: String): String = match json_parse(text) {
+    Ok(v) => json_stringify(v),
+    Err(e) => "error: ".concat(e),
+}
+
+let main (): Unit = {
+    println(json_stringify(JsonObject([
+        JsonEntry { key: "name", value: JsonString("plum") },
+        JsonEntry { key: "version", value: JsonNumber(1.5) },
+        JsonEntry { key: "tags", value: JsonArray([JsonString("a"), JsonString("b")]) },
+        JsonEntry { key: "stable", value: JsonBool(true) },
+        JsonEntry { key: "extra", value: JsonNull },
+    ])));
+    println(round_trip("{\"b\": [true, null, \"x\"]}"));
+    println(round_trip("[1, 2.5, -3, 1e2]"));
+    println(round_trip("\"escaped: \\\"quoted\\\"\""));
+    println(round_trip("{bad"));
+}

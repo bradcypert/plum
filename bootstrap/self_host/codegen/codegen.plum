@@ -1637,6 +1637,25 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
         .concat(cg_closure_param_slots(param_tys, 0, ""))
         .concat(inner.allocas)
         .concat(inner.code)
+        // The same two release lists a NAMED function emits on the way
+        // out (see `cg_fn`), and for the same reasons. Neither was
+        // emitted here, so a closure leaked both its own body's slots
+        // and every heap ARGUMENT it was handed.
+        //
+        // The argument half is the one that bites: a caller hands a
+        // closure an owned value -- `Array.map` explicitly increments
+        // each element first, "the closure consumes what it is given"
+        // -- and nothing ever gave it back. `Array.map` over an array
+        // of heap elements leaked one cell PER ELEMENT, which is how
+        // the JSON stringifier came to leak proportionally to the
+        // document it was printing.
+        //
+        // CAPTURES are deliberately not released here: they belong to
+        // the closure CELL, and `<fn>_rel` walks them when the cell
+        // itself dies. Releasing them per CALL would free them out from
+        // under the next invocation.
+        .concat(inner.releases)
+        .concat(cg_closure_param_releases(param_itys, 0, ""))
         .concat("  ret ").concat(cg_llvm_ty(inner.ty)).concat(" ").concat(inner.val).concat("\n}\n\n");
     let cell = cg_reg(inner.n);
     let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((24 + 8 * env.len()).to_string()).concat(")\n")
@@ -1690,6 +1709,15 @@ let cg_capture_loads (env: Array[CgSlot]) (i: Int) (acc: String): String =
             .concat("  store ").concat(lty).concat(" %cv").concat(i.to_string()).concat(", ptr %c").concat(i.to_string()).concat("\n");
         cg_capture_loads(env, i + 1, acc.concat(line))
     }
+
+// One release per parameter slot, mirroring `cg_param_slots`'s own
+// `cg_release_slot` for named functions. The RESULT needs no special
+// case for the same reason it needs none there: it carries its own +1,
+// obtained independently of any slot, so returning a parameter and then
+// releasing that parameter is balanced rather than a use-after-free.
+let cg_closure_param_releases (param_itys: Array[typecheck.ITy]) (i: Int) (acc: String): String =
+    if i >= param_itys.len() { acc }
+    else { cg_closure_param_releases(param_itys, i + 1, acc.concat(cg_release_slot(param_itys[i], "%a".concat(i.to_string()), "_cend"))) }
 
 let cg_closure_param_slots (param_tys: Array[CgTy]) (i: Int) (acc: String): String =
     if i >= param_tys.len() { acc }
