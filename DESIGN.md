@@ -11896,3 +11896,56 @@ link flags live in the script, next to the reason.
 own C shim), self-build fixed point byte-identical, 101/101 parser
 goldens, 11/11 `typecheck_corpus` rejected (new: the unsafe gate),
 Rust suite 1941/0.
+
+### Concurrency, and the sweep reaching 9 of 9 (2026-08-19)
+
+`spawn`, `.join()`, `channel[T]()`, `.send()`, `.recv()` — the last
+sweep row. **Every `examples/` project now builds under both compilers**
+and produces identical output (asteroids build-only: it opens a window).
+
+Threads and channels come from `native_stdlib/thread_shim.c` rather
+than from hand-emitted pthread IR. The real backend does emit its own
+(`emit_channel_runtime`); this backend reaches the same primitives
+through a shim, the same split it already uses for directories and
+processes. A mutex/condvar queue is a lot of fiddly text to get right in
+LLVM IR and none of it is Plum-specific. The shim compiles clean under
+`-Wall -Wextra`, uses the `while`-not-`if` predicate loop that spurious
+wakeups require, and signals while holding the lock.
+
+Two design choices worth stating:
+
+**`spawn { body }` becomes a zero-parameter CLOSURE in the checker.** A
+spawn body captures its enclosing locals exactly as a closure does, so
+reusing the closure path means the capture machinery, the lifting and
+the release function were all already written. The backend adds only a
+per-site entry function matching `void *(*)(void *)`, which invokes the
+closure and boxes the result. Boxing rather than stuffing the value into
+the pointer: a `Float` does not fit in a pointer on every target, and
+one boxed word is the same shape for every element type.
+
+**`Task`/`Sender`/`Receiver` are bare handles**, `Int`-shaped, with no
+cell and nothing to release. Both channel ends are the SAME handle
+underneath — only their types differ, which is what makes `.send` on a
+`Receiver` a type error rather than a runtime one.
+
+`channel[T]()` is also the one place explicit type arguments mean
+anything, in either compiler — recognised by shape, matching the real
+compiler's own `GenericInst`-callee match.
+
+**One honest exception**: `exec_corpus/concurrency` is the corpus's only
+expected leak. A task nobody joins is never freed — its handle struct,
+boxed result and closure all outlive the program — and that is true of
+BOTH compilers; the real one leaks 734 bytes to this backend's 608 on
+exactly that program. Fixing it needs the Plum side to signal that a
+`Task` died unjoined, which a bare handle cannot do. It is listed in the
+validation script with that reason, not silenced.
+
+Two validation-harness bugs were fixed while landing this, both of which
+had impersonated real failures: the leak check and the output comparison
+now run as separate passes, because LeakSanitizer `_exit()`s after
+reporting and discards buffered stdout — a leaking program looks like
+one that printed nothing.
+
+**Sweep: 9 of 9.** 31/31 `exec_corpus` correct and leak-free, self-build
+fixed point byte-identical, 101/101 parser goldens, 11/11
+`typecheck_corpus` rejected, Rust suite 1941/0.

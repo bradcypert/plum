@@ -509,7 +509,17 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
             UNSAFE.set(was);
             r
         },
-        ESpawn(_) => { fail_tc("spawn/concurrency isn't supported yet"); ir_unsupported(acc, state, "spawn") },
+        // `spawn { body }` runs `body` on another thread and evaluates
+        // to a `Task[T]` to join later. The body is inferred exactly as
+        // a block, then wrapped as a zero-parameter closure for the
+        // backend to lift -- it captures its enclosing locals, which is
+        // what a closure already knows how to do.
+        ESpawn(block) => {
+            let r = infer_block(p2, state, env, acc, block);
+            let body_ty = subst_apply(r.subst, r.ty);
+            ir_leaf(ITStruct("Task", [body_ty]), r.subst, r.state,
+                TSpawn(TExpr { ty: ITFunction([], body_ty), node: TClosure([], r.texpr) }))
+        },
         ESelect(_) => { fail_tc("select/channels aren't supported yet"); ir_unsupported(acc, state, "select") },
     }
 
@@ -846,7 +856,33 @@ let unify_variant_args_acc (payload: Array[ITy]) (args: Array[ITy]) (i: Int) (ac
 // besides a bare name or `.field`/`.method()` (an immediately-invoked
 // closure literal, a closure produced by a call/`if`/`match`) falls to
 // the general case: infer it normally and expect an `ITFunction`.
+// `channel[T]()` -- recognised by SHAPE, exactly as the real compiler
+// recognises it (`Infer`'s own `Call` arm matches a `GenericInst`
+// callee named `channel` with one type argument and no value
+// arguments). It is the one place explicit type arguments mean
+// anything in either compiler.
+let channel_elem_ty (p2: Program2) (callee: parser.PExpr) (args: Array[parser.PExpr]): Option[ITy] =
+    if !Array.is_empty(args) { None }
+    else {
+        match callee {
+            EGenericInst(inner, targs) =>
+                if targs.len() == 1 {
+                    match inner {
+                        EIdent(nm) => if nm == "channel" { Some(resolve_ann(p2.ctx, [], targs[0])) } else { None },
+                        _ => None,
+                    }
+                } else { None },
+            _ => None,
+        }
+    }
+
 let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (callee: parser.PExpr) (args: Array[parser.PExpr]): InferResult =
+    match channel_elem_ty(p2, callee, args) {
+        Some(elem) => ir_leaf(ITTuple([ITStruct("Sender", [elem]), ITStruct("Receiver", [elem])]), acc, state, TChannelNew),
+        None => infer_call_shapes(p2, state, env, acc, callee, args),
+    }
+
+let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (callee: parser.PExpr) (args: Array[parser.PExpr]): InferResult =
     match callee {
         EIdent(name) => match tyenv_lookup(env, name) {
             // Same resolve-at-lookup rule as `infer_ident` above.
@@ -1241,6 +1277,39 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         ir_leaf(ITFloat, s1, r.state, TMethodCall("to_float", r.texpr, []))
     } else if method_name == "len" && Array.is_empty(args) {
         infer_len(p2, state, env, acc, base)
+    } else if method_name == "send" && args.len() == 1 {
+        let r = infer_expr(p2, state, env, acc, base);
+        let ef = fresh(r.state);
+        let s1 = match unify(subst_apply(r.subst, r.ty), ITStruct("Sender", [ef.ty])) {
+            Ok(x) => subst_compose(x, r.subst),
+            Err(e) => { fail_tc(".send() requires a Sender: ".concat(e)); r.subst },
+        };
+        let vr = infer_expr(p2, ef.state, env, s1, args[0]);
+        let s2 = match unify(subst_apply(vr.subst, vr.ty), subst_apply(vr.subst, ef.ty)) {
+            Ok(x) => subst_compose(x, vr.subst),
+            Err(e) => { fail_tc(".send() value: ".concat(e)); vr.subst },
+        };
+        ir_leaf(ITUnit, s2, vr.state, TChannelSend(r.texpr, vr.texpr))
+    } else if method_name == "recv" && Array.is_empty(args) {
+        let r = infer_expr(p2, state, env, acc, base);
+        let ef = fresh(r.state);
+        let s1 = match unify(subst_apply(r.subst, r.ty), ITStruct("Receiver", [ef.ty])) {
+            Ok(x) => subst_compose(x, r.subst),
+            Err(e) => { fail_tc(".recv() requires a Receiver: ".concat(e)); r.subst },
+        };
+        ir_leaf(subst_apply(s1, ef.ty), s1, ef.state, TChannelRecv(r.texpr))
+    } else if method_name == "join" && Array.is_empty(args) {
+        // `t.join()` -- wait for the task and take its value. Recognised
+        // by SHAPE, matching the real compiler's own precedent: a struct
+        // with an unrelated zero-argument field called `join` would
+        // collide, an accepted and documented narrowness there too.
+        let r = infer_expr(p2, state, env, acc, base);
+        let ef = fresh(r.state);
+        let s1 = match unify(subst_apply(r.subst, r.ty), ITStruct("Task", [ef.ty])) {
+            Ok(x) => subst_compose(x, r.subst),
+            Err(e) => { fail_tc(".join() requires a Task: ".concat(e)); r.subst },
+        };
+        ir_leaf(subst_apply(s1, ef.ty), s1, ef.state, TTaskJoin(r.texpr))
     } else if method_name == "as_cstr" {
         // `s.as_cstr()` -- hand a Plum string's bytes to C. Validated at
         // this boundary rather than at the extern call, so a string with

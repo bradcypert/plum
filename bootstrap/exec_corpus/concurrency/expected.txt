@@ -1,0 +1,5 @@
+81
+49
+[1, 4, 9]
+from-thread!
+first

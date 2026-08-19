@@ -133,6 +133,18 @@ pub enum TNode {
     // Plum `String` cell and a raw `char*`.
     TAsCStr(TExpr),
     TAsString(TExpr),
+    // `spawn { .. }` -- the block becomes a zero-parameter CLOSURE (the
+    // backend lifts it exactly as it lifts a closure literal, because
+    // the body captures locals the same way), and the closure is handed
+    // to a thread. `TTaskJoin` waits and unboxes.
+    TSpawn(TExpr),
+    TTaskJoin(TExpr),
+    // `channel[T]()` evaluates to a `(Sender[T], Receiver[T])` pair;
+    // `.send(v)` and `.recv()` are the two ends. Both ends are the same
+    // handle underneath -- the TYPES are what keep them apart.
+    TChannelNew,
+    TChannelSend(TExpr, TExpr),
+    TChannelRecv(TExpr),
     TPrintln(TExpr),
     TUnsupported(String),
 }

@@ -3,4 +3,7 @@
 false
 5
 hello from C
+true
+100
+200
 done

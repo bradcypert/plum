@@ -556,6 +556,11 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TExternCall(name, args) => cg_extern_call(p, env, n, name, args, cg_ty(p, e)),
         TAsCStr(inner) => cg_as_cstr(p, env, n, inner),
         TAsString(inner) => cg_as_string(p, env, n, inner),
+        TChannelNew => cg_channel_new(p, env, n, cg_ty(p, e)),
+        TChannelSend(ch, v) => cg_channel_send(p, env, n, ch, v),
+        TChannelRecv(ch) => cg_channel_recv(p, env, n, ch, cg_ty(p, e)),
+        TSpawn(clo) => cg_spawn(p, env, n, clo),
+        TTaskJoin(t) => cg_task_join(p, env, n, t, cg_ty(p, e)),
         TPrintln(arg) => cg_println(p, env, n, arg),
         TTupleLit(elems) => cg_tuple_lit(p, env, n, elems, cg_ty(p, e)),
         TUnsupported(what) => { cg_fail(what.concat(" isn't supported by this backend")); cg_unit_emit(n) },
@@ -596,7 +601,11 @@ let cg_of_ity (t: typecheck.ITy): CgTy =
         ITStr => CgStr,
         ITCStr => CgCStr,
         ITUnit => CgUnit,
-        ITStruct(name, args) => if name == "Array" { CgArray(cg_of_ity(args[0])) } else { CgStruct(name) },
+        // A `Task` is a bare handle from `thread_spawn` -- an `Int`'s
+        // shape, with no cell, no fields and nothing to release. Mapping
+        // it to `CgStruct("Task")` would send every field/release path
+        // looking for a declaration that does not exist.
+        ITStruct(name, args) => if name == "Task" || name == "Sender" || name == "Receiver" { CgInt } else if name == "Array" { CgArray(cg_of_ity(args[0])) } else { CgStruct(name) },
         ITRef(inner) => CgRef(cg_of_ity(inner)),
         ITEnum(name, _) => CgEnum(name),
         ITFunction(ptys, ret) => CgClosure(Array.map(ptys, |q| cg_of_ity(q)), cg_of_ity(ret)),
@@ -1089,6 +1098,11 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TUnary(_, a) => cg_reads_max(name, a),
         TFieldGet(a, _) => cg_reads_max(name, a),
         TPrintln(a) => cg_reads_max(name, a),
+        TSpawn(a) => cg_reads_max(name, a),
+        TChannelNew => 0,
+        TChannelSend(a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
+        TChannelRecv(a) => cg_reads_max(name, a),
+        TTaskJoin(a) => cg_reads_max(name, a),
         TExternCall(_, xs) => cg_reads_max_list(name, xs, 0, 0),
         TAsCStr(a) => cg_reads_max(name, a),
         TAsString(a) => cg_reads_max(name, a),
@@ -1737,15 +1751,47 @@ let cg_array_remove (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typechec
 // value is the usual Unit placeholder.
 let cg_extern_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (ret: CgTy): Emit = {
     let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
-    let reg = cg_reg(a.n);
+    // Bool arguments widen to C's `int` before the call.
+    let m = cg_marshal_args(p, args, a.vals, 0, a.n, "", []);
+    let reg = cg_reg(m.n);
+    let raw = cg_reg(m.n + 1);
     let is_void = cg_ty_eq(ret, CgUnit);
+    let is_bool = cg_ty_eq(ret, CgBool);
     let call = if is_void {
-        "  call void @".concat(name).concat("(").concat(cg_join_commas(a.vals)).concat(")\n")
+        "  call void @".concat(name).concat("(").concat(cg_join_commas(m.vals)).concat(")\n")
+    } else if is_bool {
+        // C returns an `int`; anything non-zero is true. Truncating
+        // instead would read 2 as FALSE.
+        "  ".concat(raw).concat(" = call i32 @").concat(name).concat("(").concat(cg_join_commas(m.vals)).concat(")\n")
+            .concat("  ").concat(reg).concat(" = icmp ne i32 ").concat(raw).concat(", 0\n")
     } else {
-        "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" @").concat(name).concat("(").concat(cg_join_commas(a.vals)).concat(")\n")
+        "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" @").concat(name).concat("(").concat(cg_join_commas(m.vals)).concat(")\n")
     };
-    Emit { code: a.code.concat(call).concat(cg_dec_args(p, args, a.vals, 0, "")), allocas: a.allocas, releases: a.releases, globals: a.globals,
-        val: if is_void { "0" } else { reg }, ty: ret, n: a.n + 1 }
+    Emit { code: a.code.concat(m.code).concat(call).concat(cg_dec_args(p, args, a.vals, 0, "")), allocas: a.allocas, releases: a.releases, globals: a.globals,
+        val: if is_void { "0" } else { reg }, ty: ret, n: m.n + 2 }
+}
+
+struct MarshalEmit { code: String, vals: Array[String], n: Int }
+
+// One operand per argument, in C's spelling. Only `Bool` differs, and
+// it differs in both directions -- see `cg_c_ty`.
+let cg_marshal_args (p: CgProgram) (args: Array[typecheck.TExpr]) (vals: Array[String]) (i: Int) (n: Int) (code: String) (acc: Array[String]): MarshalEmit =
+    if i >= args.len() || i >= vals.len() { MarshalEmit { code: code, vals: acc, n: n } }
+    else {
+        let ty = cg_ty(p, args[i]);
+        if cg_ty_eq(ty, CgBool) {
+            let w = cg_reg(n);
+            cg_marshal_args(p, args, vals, i + 1, n + 1,
+                code.concat("  ").concat(w).concat(" = zext i1 ").concat(cg_arg_val(vals[i])).concat(" to i32\n"),
+                acc.push("i32 ".concat(w)))
+        } else { cg_marshal_args(p, args, vals, i + 1, n, code, acc.push(vals[i])) }
+    }
+
+// `cg_args` yields "<ty> <reg>" operands; the register alone is what a
+// conversion needs.
+let cg_arg_val (operand: String): String = {
+    let parts = operand.split(" ");
+    parts[parts.len() - 1]
 }
 
 // `s.as_cstr()` -- the bytes of a string cell, which the runtime always
@@ -1771,6 +1817,101 @@ let cg_as_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.
     Emit {
         code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_cstr_to_string(ptr ").concat(b.val).concat(")\n"),
         allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1,
+    }
+}
+
+// `spawn { body }`. The body arrives as a zero-parameter closure (the
+// checker wrapped it), so the capture machinery is already done: this
+// emits a per-site ENTRY function matching what `thread_spawn` expects
+// (`void *(*)(void *)`), which invokes the closure and boxes its result
+// into one malloc'd word for `.join()` to collect.
+//
+// A box, rather than returning the value in the pointer itself: a
+// `Float` does not fit in a pointer on every target, and a boxed word
+// is the same shape for every element type, so `.join()`'s unboxing
+// depends only on the type it already knows.
+let cg_spawn (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: typecheck.TExpr): Emit = {
+    let c = cg_expr(p, env, n, clo);
+    let ret_ity = match cg_concrete(p, typecheck.texpr_ty(p.subst, clo)) {
+        ITFunction(_, r) => r,
+        _ => ITUnit,
+    };
+    let ret = cg_of_ity(ret_ity);
+    let entry = "@plum_task_entry".concat(c.n.to_string());
+    let lty = cg_llvm_ty(ret);
+    let fn_text = "define ptr ".concat(entry).concat("(ptr %clo) {\nentry:\n")
+        .concat(cg_invoke("%clo", ret, "", 0))
+        .concat("  %box = call ptr @malloc(i64 8)\n")
+        .concat("  store ").concat(lty).concat(" ").concat(cg_reg(1)).concat(", ptr %box\n")
+        .concat("  ret ptr %box\n}\n\n");
+    let h = cg_reg(c.n + 1);
+    Emit {
+        code: c.code.concat("  ").concat(h).concat(" = call i64 @thread_spawn(ptr ").concat(entry).concat(", ptr ").concat(c.val).concat(")\n"),
+        allocas: c.allocas, releases: c.releases, globals: c.globals.concat(fn_text),
+        val: h, ty: CgInt, n: c.n + 2,
+    }
+}
+
+// `t.join()` -- block, then take the boxed value. The box is freed
+// here; the task struct itself is freed by `thread_join`.
+let cg_task_join (p: CgProgram) (env: Array[CgSlot]) (n: Int) (task: typecheck.TExpr) (ret: CgTy): Emit = {
+    let t = cg_expr(p, env, n, task);
+    let box = cg_reg(t.n);
+    let v = cg_reg(t.n + 1);
+    let lty = cg_llvm_ty(ret);
+    Emit {
+        code: t.code
+            .concat("  ").concat(box).concat(" = call ptr @thread_join(i64 ").concat(t.val).concat(")\n")
+            .concat("  ").concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(box).concat("\n")
+            .concat("  call void @free(ptr ").concat(box).concat(")\n"),
+        allocas: t.allocas, releases: t.releases, globals: t.globals, val: v, ty: ret, n: t.n + 2,
+    }
+}
+
+// `channel[T]()` -- one handle, returned as BOTH ends. The tuple's two
+// components are the same integer; only their types differ, which is
+// what makes `.send` on a `Receiver` a type error rather than a runtime
+// one.
+let cg_channel_new (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ty: CgTy): Emit = {
+    let h = cg_reg(n);
+    let cell = cg_reg(n + 1);
+    let code = "  ".concat(h).concat(" = call i64 @channel_new()\n")
+        .concat("  ").concat(cell).concat(" = call ptr @plum_alloc(i64 24)\n")
+        .concat("  ").concat(cell).concat("_a = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(0).to_string()).concat("\n")
+        .concat("  store i64 ").concat(h).concat(", ptr ").concat(cell).concat("_a\n")
+        .concat("  ").concat(cell).concat("_b = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(1).to_string()).concat("\n")
+        .concat("  store i64 ").concat(h).concat(", ptr ").concat(cell).concat("_b\n");
+    Emit { code: code, allocas: "", releases: "", globals: "", val: cell, ty: ty, n: n + 2 }
+}
+
+// Values cross a channel BOXED, one malloc'd word, for the same reason
+// a task's result is boxed: one shape for every element type.
+let cg_channel_send (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.TExpr) (v: typecheck.TExpr): Emit = {
+    let c = cg_expr(p, env, n, ch);
+    let x = cg_expr(p, env, c.n, v);
+    let box = cg_reg(x.n);
+    let lty = cg_llvm_ty(x.ty);
+    Emit {
+        code: c.code.concat(x.code)
+            .concat("  ").concat(box).concat(" = call ptr @malloc(i64 8)\n")
+            .concat("  store ").concat(lty).concat(" ").concat(x.val).concat(", ptr ").concat(box).concat("\n")
+            .concat("  call void @channel_send(i64 ").concat(c.val).concat(", ptr ").concat(box).concat(")\n"),
+        allocas: c.allocas.concat(x.allocas), releases: c.releases.concat(x.releases), globals: c.globals.concat(x.globals),
+        val: "0", ty: CgUnit, n: x.n + 1,
+    }
+}
+
+let cg_channel_recv (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.TExpr) (ret: CgTy): Emit = {
+    let c = cg_expr(p, env, n, ch);
+    let box = cg_reg(c.n);
+    let v = cg_reg(c.n + 1);
+    let lty = cg_llvm_ty(ret);
+    Emit {
+        code: c.code
+            .concat("  ").concat(box).concat(" = call ptr @channel_recv(i64 ").concat(c.val).concat(")\n")
+            .concat("  ").concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(box).concat("\n")
+            .concat("  call void @free(ptr ").concat(box).concat(")\n"),
+        allocas: c.allocas, releases: c.releases, globals: c.globals, val: v, ty: ret, n: c.n + 2,
     }
 }
 
@@ -3696,7 +3837,7 @@ let cg_emit_extern_decls (items: Array[parser.ItemNode]) (i: Int) (acc: String):
 let cg_extern_decl_list (fns: Array[parser.ExternFnNode]) (i: Int) (acc: String): String =
     if i >= fns.len() { acc }
     else {
-        let ret = match fns[i].ret_ty { Some(t) => cg_llvm_ty(cg_of_ann(t)), None => "void" };
+        let ret = match fns[i].ret_ty { Some(t) => cg_c_ty(cg_of_ann(t)), None => "void" };
         let params = cg_extern_param_tys(fns[i].params, 0, "");
         cg_extern_decl_list(fns, i + 1, acc.concat("declare ").concat(ret).concat(" @").concat(fns[i].name).concat("(").concat(params).concat(")\n"))
     }
@@ -3704,7 +3845,7 @@ let cg_extern_decl_list (fns: Array[parser.ExternFnNode]) (i: Int) (acc: String)
 let cg_extern_param_tys (ps: Array[parser.ExternParamNode]) (i: Int) (acc: String): String =
     if i >= ps.len() { acc }
     else {
-        let t = cg_llvm_ty(cg_of_ann(ps[i].ty));
+        let t = cg_c_ty(cg_of_ann(ps[i].ty));
         cg_extern_param_tys(ps, i + 1, if acc == "" { t } else { acc.concat(", ").concat(t) })
     }
 
@@ -3712,6 +3853,18 @@ let cg_extern_param_tys (ps: Array[parser.ExternParamNode]) (i: Int) (acc: Strin
 // never go through inference, so they are mapped here rather than read
 // off a `TExpr`. Only the C-compatible surface is accepted; anything
 // else is a type the FFI boundary cannot carry.
+// The C ABI's spelling of a type, which differs from Plum's in exactly
+// one place: `Bool`. C's `int` is 32 bits wide and Plum's `Bool` is
+// `i1`, so every crossing needs a real CONVERSION -- `zext` going out,
+// a compare-against-zero coming back -- never a bitcast pretending the
+// two are the same width.
+//
+// This was wrong in the first cut of FFI, and wrong in the silent way:
+// a C function returning 2 (truthy, but not 1) truncated to `i1` and
+// read as FALSE. The real backend's own marshaling notes call this "the
+// one genuinely subtle piece", which is how it was found.
+let cg_c_ty (t: CgTy): String = match t { CgBool => "i32", _ => cg_llvm_ty(t) }
+
 let cg_of_ann (t: parser.Ty): CgTy =
     match t {
         TyPath(segments) => {
@@ -3861,6 +4014,11 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TArrayNs(_, args) => cg_rel_in_list(p, args, 0, here),
         TVariantNew(_, args) => cg_rel_in_list(p, args, 0, here),
         TPrintln(a) => cg_rel_in(p, a, here),
+        TSpawn(a) => cg_rel_in(p, a, here),
+        TChannelNew => here,
+        TChannelSend(a, b) => cg_rel_in(p, b, cg_rel_in(p, a, here)),
+        TChannelRecv(a) => cg_rel_in(p, a, here),
+        TTaskJoin(a) => cg_rel_in(p, a, here),
         TExternCall(_, xs) => cg_rel_in_list(p, xs, 0, here),
         TAsCStr(a) => cg_rel_in(p, a, here),
         TAsString(a) => cg_rel_in(p, a, here),
@@ -3939,6 +4097,11 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TArrayNs(_, args) => cg_eq_in_list(p, args, 0, acc),
         TVariantNew(_, args) => cg_eq_in_list(p, args, 0, acc),
         TPrintln(a) => cg_eq_in(p, a, acc),
+        TSpawn(a) => cg_eq_in(p, a, acc),
+        TChannelNew => acc,
+        TChannelSend(a, b) => cg_eq_in(p, b, cg_eq_in(p, a, acc)),
+        TChannelRecv(a) => cg_eq_in(p, a, acc),
+        TTaskJoin(a) => cg_eq_in(p, a, acc),
         TExternCall(_, xs) => cg_eq_in_list(p, xs, 0, acc),
         TAsCStr(a) => cg_eq_in(p, a, acc),
         TAsString(a) => cg_eq_in(p, a, acc),
@@ -4025,6 +4188,11 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TArrayNs(_, args) => cg_calls_in_list(p, args, acc),
         TVariantNew(_, args) => cg_calls_in_list(p, args, acc),
         TPrintln(a) => cg_calls_in(p, a, acc),
+        TSpawn(a) => cg_calls_in(p, a, acc),
+        TChannelNew => acc,
+        TChannelSend(a, b) => cg_calls_in(p, b, cg_calls_in(p, a, acc)),
+        TChannelRecv(a) => cg_calls_in(p, a, acc),
+        TTaskJoin(a) => cg_calls_in(p, a, acc),
         TExternCall(_, xs) => cg_calls_in_list(p, xs, acc),
         TAsCStr(a) => cg_calls_in(p, a, acc),
         TAsString(a) => cg_calls_in(p, a, acc),

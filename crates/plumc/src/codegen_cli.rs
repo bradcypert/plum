@@ -1240,6 +1240,13 @@ const ALL_NATIVE_SHIMS: &[(&str, &str)] = &[
     ("net_shim.c", include_str!("../../../native_stdlib/net_shim.c")),
     ("dir_shim.c", include_str!("../../../native_stdlib/dir_shim.c")),
     ("process_shim.c", include_str!("../../../native_stdlib/process_shim.c")),
+    // Used by the SELF-HOSTED backend, which reaches threads and
+    // channels through a shim rather than emitting pthread IR of its own
+    // (this backend does emit its own — see `emit_channel_runtime`).
+    // Embedded here because `plum compile-ir` is what links that
+    // backend's output, so its shims have to be available even though
+    // nothing this compiler emits calls them.
+    ("thread_shim.c", include_str!("../../../native_stdlib/thread_shim.c")),
 ];
 
 /// Writes every embedded shim out to real `.c` files inside `dir`,

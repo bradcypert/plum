@@ -249,6 +249,12 @@ let resolve_named (ctx: TyContext) (in_scope: Array[String]) (name: String) (arg
     else if name == "CStr" { ITCStr }
     else if name == "Unit" { ITUnit }
     else if name == "Array" { ITStruct("Array", args) }
+    // Handles, not declarations: `Task`/`Sender`/`Receiver` have no
+    // fields to look up, and the type argument is what `.join()`/
+    // `.recv()` read the element type from.
+    else if name == "Task" { ITStruct("Task", args) }
+    else if name == "Sender" { ITStruct("Sender", args) }
+    else if name == "Receiver" { ITStruct("Receiver", args) }
     else if Array.contains(in_scope, name) { ITParam(name) }
     else if Option.is_some(find_struct(ctx, name)) { ITStruct(name, args) }
     else if Option.is_some(find_enum(ctx, name)) { ITEnum(name, args) }

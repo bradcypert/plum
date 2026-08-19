@@ -18,6 +18,8 @@ extern "C" {
     fn shim_strlen(s: CStr) -> Int;
     fn shim_greeting() -> CStr;
     fn shim_noop();
+    fn shim_returns_two() -> Bool;
+    fn shim_takes_bool(b: Bool) -> Int;
 }
 
 let main (): Unit = unsafe {
@@ -27,5 +29,10 @@ let main (): Unit = unsafe {
     println(shim_strlen("hello".as_cstr()).to_string());
     println(shim_greeting().as_string());
     shim_noop();
+    // Bool crosses as C's `int`: truthy-but-not-1 must read as true,
+    // which a truncating conversion gets wrong in silence.
+    println(shim_returns_two().to_string());
+    println(shim_takes_bool(true).to_string());
+    println(shim_takes_bool(false).to_string());
     println("done");
 }

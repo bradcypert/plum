@@ -42,9 +42,10 @@ declare -A no_run=(
 # is what turned the old gap table into fiction; the point here is that
 # the reason travels WITH the failure instead of in a list somewhere
 # else.
-declare -A known=(
-    [concurrency]="needs channels/spawn"
-)
+# Empty, for now: every example builds under both compilers. Kept
+# rather than deleted because the next gap found should be annotated
+# here, next to its reason, instead of in a list somewhere else.
+declare -A known=()
 
 # Extra flags an example needs to LINK, passed to both compilers. Kept
 # here rather than inferred: `asteroids` reaches raylib through its own

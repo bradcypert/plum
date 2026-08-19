@@ -1,0 +1,48 @@
+// Threads and channels. The self-hosted backend reaches both through
+// native_stdlib/thread_shim.c rather than emitting pthread IR of its
+// own, which is what the real backend does -- the same split as
+// directories and processes.
+//
+// `spawn { .. }` becomes a zero-parameter CLOSURE in the checker, so
+// the capture machinery is already done; the backend emits a per-site
+// entry function matching what `thread_spawn` expects and boxes the
+// result for `.join()`.
+//
+// Both channel ends are the SAME handle underneath. Only the types
+// differ, which is what makes `.send` on a Receiver a type error rather
+// than a runtime one.
+//
+// This fixture is the corpus's one expected LEAK. A task nobody joins
+// is never freed -- its handle struct, its boxed result and its closure
+// all outlive the program -- and that is true of BOTH compilers: the
+// real one leaks 734 bytes to this backend's 608 on exactly this
+// program. Fixing it needs the Plum side to signal that a `Task` value
+// died unjoined, which a bare handle cannot do.
+
+let square (n: Int): Int = n * n
+
+let producer (tx: Sender[Int]) (n: Int): Unit = tx.send(square(n))
+
+let main (): Unit = {
+    let t = spawn { square(9) };
+    println(t.join().to_string());
+
+    let (tx, rx) = channel[Int]();
+    spawn { producer(tx, 7) };
+    println(rx.recv().to_string());
+
+    let a = spawn { square(1) };
+    let b = spawn { square(2) };
+    let c = spawn { square(3) };
+    println([a.join(), b.join(), c.join()].to_string());
+
+    // A captured heap value crossing a thread boundary.
+    let label = "from-thread";
+    let d = spawn { label.concat("!") };
+    println(d.join());
+
+    // Several values through one channel, in order.
+    let (tx2, rx2) = channel[String]();
+    spawn { tx2.send("first") };
+    println(rx2.recv());
+}
