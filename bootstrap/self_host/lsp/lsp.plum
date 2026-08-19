@@ -1,0 +1,203 @@
+// A Language Server, in Plum.
+//
+// **v1 scope: diagnostics.** Parse and type errors, published on open
+// and on save. No hover, no go-to-definition, no completion — those are
+// position QUERIES, and answering them needs spans on every expression,
+// where this compiler currently records them per statement (see
+// DESIGN.md's "AST positions"). Diagnostics need only the position of
+// the error itself, which is exactly what it has.
+//
+// **Diagnostics come from a SUBPROCESS**, not from calling the checker
+// in-process. `fail_tc` reports by aborting (`panic_raw`), so an
+// in-process check would take the server down with the first type error
+// a user typed — which is every keystroke of a half-written program.
+// The same reason `test` runs each test in its own process. The child
+// is this binary re-invoked as `check`, and its own diagnostic text,
+// already carrying `path:line:col`, is what becomes the diagnostic.
+//
+// **Synchronous, one message at a time.** A language server is a
+// request loop; nothing here needs concurrency, and the debouncing the
+// real LSP does exists to fix a race that a single-threaded loop cannot
+// have.
+//
+// Deliberately NOT supported in v1, stated rather than discovered:
+// unsaved buffers. `didChange` does not re-check, because the checker
+// reads from disk and reporting disk state against an edited buffer
+// means reporting the wrong lines. Saving re-checks.
+
+// --- JSON helpers ---
+//
+// `json_parse`/`json_stringify` come from the prelude; these are the
+// small accessors that make an object usable as a record.
+
+pub let json_field (v: JsonValue) (key: String): Option[JsonValue] =
+    match v {
+        JsonObject(entries) => json_field_acc(entries, key, 0),
+        _ => None,
+    }
+
+let json_field_acc (entries: Array[JsonEntry]) (key: String) (i: Int): Option[JsonValue] =
+    if i >= entries.len() { None }
+    else if entries[i].key == key { Some(entries[i].value) }
+    else { json_field_acc(entries, key, i + 1) }
+
+pub let json_str (v: JsonValue): String = match v { JsonString(s) => s, _ => "" }
+
+pub let json_field_str (v: JsonValue) (key: String): String =
+    match json_field(v, key) { Some(f) => json_str(f), None => "" }
+
+// --- Framing ---
+//
+// `Content-Length: N\r\n\r\n<N bytes>`. Parsing a header line is pure;
+// READING them is not, and lives in `main.plum` -- an `extern "C"`
+// block only works in the root module, because the real compiler
+// prefixes a module's item names and the linker then looks for
+// `lsp.stdout_write`.
+
+// The byte count from a `Content-Length:` header, or -1 for any other
+// header line. Every other header is ignored, which the protocol allows.
+pub let content_length (line: String): Int =
+    if line.starts_with("Content-Length:") {
+        Result.unwrap_or(String.parse_int(String.trim_start(String.slice(line, 15, line.len()))), 0 - 1)
+    } else { 0 - 1 }
+
+// `Content-Length` is in BYTES. `.len()` is the string cell's byte
+// length in this backend, so the two agree here -- but the real
+// compiler counts CHARACTERS, so a server built with it would frame a
+// diagnostic quoting a non-ASCII identifier differently. Recorded
+// rather than papered over: the fix is a byte-length primitive, and no
+// diagnostic this server emits today is non-ASCII.
+pub let frame (body: String): String =
+    "Content-Length: ".concat(body.len().to_string()).concat("\r\n\r\n").concat(body)
+
+// --- Requests ---
+
+pub struct Request { method: String, id: Option[JsonValue], params: JsonValue }
+
+pub let parse_request (body: String): Option[Request] =
+    match json_parse(body) {
+        Err(_) => None,
+        Ok(v) => Some(Request {
+            method: json_field_str(v, "method"),
+            id: json_field(v, "id"),
+            params: match json_field(v, "params") { Some(p) => p, None => JsonNull },
+        }),
+    }
+
+// --- Responses ---
+
+pub let response (id: JsonValue) (result: JsonValue): String =
+    json_stringify(JsonObject([
+        JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
+        JsonEntry { key: "id", value: id },
+        JsonEntry { key: "result", value: result },
+    ]))
+
+pub let notification (method: String) (params: JsonValue): String =
+    json_stringify(JsonObject([
+        JsonEntry { key: "jsonrpc", value: JsonString("2.0") },
+        JsonEntry { key: "method", value: JsonString(method) },
+        JsonEntry { key: "params", value: params },
+    ]))
+
+// `textDocumentSync: 1` is FULL sync. Nothing here uses the document
+// text the client sends, but announcing incremental sync would be a
+// promise this server does not keep.
+pub let capabilities (): JsonValue =
+    JsonObject([
+        JsonEntry { key: "capabilities", value: JsonObject([
+            JsonEntry { key: "textDocumentSync", value: JsonNumber(1.0) },
+        ]) },
+    ])
+
+// --- Diagnostics ---
+
+pub struct Diagnostic { line: Int, col: Int, message: String }
+
+// The checker's own output, parsed back. It looks like
+//
+//     error: <message>
+//       --> <path>:<line>:<col>
+//
+// which this reads rather than duplicating the checker's knowledge of
+// what an error is. Coupled to that format on purpose: one renderer,
+// one parser, and `lexer.render_at` is where the format lives.
+pub let parse_diagnostic (output: String): Option[Diagnostic] = {
+    let lines = String.lines(output);
+    if Array.is_empty(lines) { None }
+    else {
+        let message = strip_prefix(lines[0], "error: ");
+        find_arrow(lines, message, 1)
+    }
+}
+
+let find_arrow (lines: Array[String]) (message: String) (i: Int): Option[Diagnostic] =
+    if i >= lines.len() {
+        // A message with no `-->` still deserves to be reported; it just
+        // has nowhere better to point than the top of the file.
+        Some(Diagnostic { line: 1, col: 1, message: message })
+    } else {
+        let t = String.trim_start(lines[i]);
+        if t.starts_with("--> ") {
+            let rest = String.slice(t, 4, t.len());
+            let parts = rest.split(":");
+            if parts.len() >= 3 {
+                Some(Diagnostic {
+                    line: Result.unwrap_or(String.parse_int(parts[parts.len() - 2]), 1),
+                    col: Result.unwrap_or(String.parse_int(parts[parts.len() - 1]), 1),
+                    message: message,
+                })
+            } else { Some(Diagnostic { line: 1, col: 1, message: message }) }
+        } else { find_arrow(lines, message, i + 1) }
+    }
+
+let strip_prefix (s: String) (p: String): String =
+    if s.starts_with(p) { String.slice(s, p.len(), s.len()) } else { s }
+
+// LSP positions are 0-based; the compiler's are 1-based.
+pub let diagnostic_json (d: Diagnostic): JsonValue = {
+    let pos = JsonObject([
+        JsonEntry { key: "line", value: JsonNumber((d.line - 1).to_float()) },
+        JsonEntry { key: "character", value: JsonNumber((d.col - 1).to_float()) },
+    ]);
+    JsonObject([
+        JsonEntry { key: "range", value: JsonObject([
+            JsonEntry { key: "start", value: pos },
+            JsonEntry { key: "end", value: pos },
+        ]) },
+        JsonEntry { key: "severity", value: JsonNumber(1.0) },
+        JsonEntry { key: "source", value: JsonString("plum") },
+        JsonEntry { key: "message", value: JsonString(d.message) },
+    ])
+}
+
+pub let publish_message (uri: String) (diagnostics: Array[JsonValue]): String =
+    notification("textDocument/publishDiagnostics", JsonObject([
+        JsonEntry { key: "uri", value: JsonString(uri) },
+        JsonEntry { key: "diagnostics", value: JsonArray(diagnostics) },
+    ]))
+
+// --- Paths ---
+
+// `file:///a/b/c.plum` -> `/a/b/c.plum`. No percent-decoding: a path
+// with an escaped character comes back wrong, a real limitation and a
+// small one next to not having a server at all.
+pub let uri_to_path (uri: String): String =
+    if uri.starts_with("file://") { String.slice(uri, 7, uri.len()) } else { uri }
+
+// No `String.last_index_of` in either prelude, and one call site does
+// not justify adding one.
+pub let dir_of (path: String): String = {
+    let cs = chars_of(path);
+    let i = last_slash(cs, cs.len() - 1);
+    if i < 0 { "." } else { String.slice(path, 0, i) }
+}
+
+let last_slash (cs: Array[String]) (i: Int): Int =
+    if i < 0 { 0 - 1 } else if cs[i] == "/" { i } else { last_slash(cs, i - 1) }
+
+pub let document_uri (params: JsonValue): String =
+    match json_field(params, "textDocument") {
+        Some(doc) => json_field_str(doc, "uri"),
+        None => "",
+    }

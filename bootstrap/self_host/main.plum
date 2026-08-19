@@ -53,11 +53,111 @@
 
 use lexer;
 use parser;
+use lsp;
 use interp;
 use typecheck;
 use codegen;
 
-let usage (): Unit = println("usage: self_host (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] | test <project-dir> | new <name>")
+// --- The language server's I/O ---
+//
+// The extern block lives HERE, in the root module, not in `lsp/`: the
+// real compiler prefixes a module's item names, so an extern declared
+// in `lsp.plum` is looked up as `lsp.stdout_write` and never found.
+// `lsp.plum` is the pure protocol logic; this is the part that talks.
+extern "C" {
+    fn stdin_read_line() -> CStr;
+    fn stdin_read_n(n: Int) -> CStr;
+    fn stdout_write(s: CStr);
+    fn stdout_flush();
+}
+
+// The shim owns and reuses its buffers, so `.as_string()` must copy
+// before the next read overwrites them -- which it does. Nothing frees:
+// see `native_stdlib/io_shim.c` for why caller-owned buffers are not
+// portable across the two compilers.
+let lsp_read_line (): String = unsafe { stdin_read_line().as_string() }
+let lsp_read_bytes (n: Int): String = unsafe { stdin_read_n(n).as_string() }
+let lsp_write (s: String): Unit = unsafe { stdout_write(s.as_cstr()) }
+// stdout is block-buffered when it is a pipe; a server that never
+// flushes deadlocks against a client waiting for a reply it has
+// already written.
+let lsp_flush (): Unit = unsafe { stdout_flush() }
+
+let lsp_send (body: String): Unit = { lsp_write(lsp.frame(body)); lsp_flush(()) }
+
+// Headers until the blank line; the body is length-prefixed.
+let lsp_read_message (): String = {
+    let len = lsp_read_headers(0 - 1);
+    if len <= 0 { "" } else { lsp_read_bytes(len) }
+}
+
+let lsp_read_headers (len: Int): Int = {
+    let line = lsp_read_line(());
+    if line == "" { len }
+    else {
+        let n = lsp.content_length(line);
+        lsp_read_headers(if n >= 0 { n } else { len })
+    }
+}
+
+// Diagnostics come from a SUBPROCESS: `fail_tc` reports by aborting, so
+// checking in-process would take the server down on the first type
+// error a user typed. `/proc/self/exe` is the same trick `cmd_test`
+// uses -- no path to look up, and no chance of running a different
+// build than this one.
+let lsp_check (path: String): Array[JsonValue] =
+    match run_process("/proc/self/exe", ["check", lsp.dir_of(path)]) {
+        Err(_) => [],
+        Ok(r) =>
+            if r.exit_code == 0 { [] }
+            else {
+                match lsp.parse_diagnostic(r.stdout.concat(r.stderr)) {
+                    Some(d) => [lsp.diagnostic_json(d)],
+                    None => [],
+                }
+            },
+    }
+
+let lsp_serve (): Unit = lsp_loop(true)
+
+let lsp_loop (running: Bool): Unit =
+    if !running { () }
+    else {
+        let body = lsp_read_message(());
+        if body == "" { () } else { lsp_loop(lsp_handle(body)) }
+    }
+
+// Returns whether to keep serving.
+let lsp_handle (body: String): Bool =
+    match lsp.parse_request(body) {
+        None => true,
+        Some(req) =>
+            if req.method == "initialize" {
+                lsp_reply(req.id, lsp.capabilities(()));
+                true
+            } else if req.method == "shutdown" {
+                lsp_reply(req.id, JsonNull);
+                true
+            } else if req.method == "exit" {
+                false
+            } else if req.method == "textDocument/didOpen" || req.method == "textDocument/didSave" {
+                let uri = lsp.document_uri(req.params);
+                if uri == "" { () }
+                else { lsp_send(lsp.publish_message(uri, lsp_check(lsp.uri_to_path(uri)))) };
+                true
+            } else {
+                // An unknown NOTIFICATION is ignored; an unknown REQUEST
+                // would hang a client waiting for a reply, so it gets an
+                // empty result instead of silence.
+                lsp_reply(req.id, JsonNull);
+                true
+            },
+    }
+
+let lsp_reply (id: Option[JsonValue]) (result: JsonValue): Unit =
+    match id { Some(i) => lsp_send(lsp.response(i, result)), None => () }
+
+let usage (): Unit = println("usage: self_host (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] | test <project-dir> | new <name> | lsp")
 
 // Every top-level `let` whose name's LAST segment starts with `test_`.
 // The last-segment rule is what makes a module-qualified
@@ -347,7 +447,10 @@ let mkdir_ok (name: String): Bool =
 
 let main (): Unit = {
     let argv = args();
-    if argv.len() < 2 {
+    if argv.len() >= 1 && argv[0] == "lsp" {
+        // No file argument: the server talks over stdin/stdout.
+        lsp_serve(())
+    } else if argv.len() < 2 {
         usage(());
     } else if argv[0] == "new" {
         cmd_new(argv[1]);

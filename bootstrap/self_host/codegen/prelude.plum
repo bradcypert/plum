@@ -369,6 +369,7 @@ pub let cg_prelude_src (unit: Unit): String = cg_lines([
     "// needing a `.runes()` decoder.",
     "let string_cmp_raw (a: String) (b: String): Int = 0",
     "",
+    "",
     "pub let string_le (a: String) (b: String): Bool = string_cmp_raw(a, b) <= 0",
     "",
     "pub let Array.sort_string (arr: Array[String]): Array[String] = Array.sort_by(arr, |a: String, b: String| string_le(a, b))",

@@ -1247,6 +1247,7 @@ const ALL_NATIVE_SHIMS: &[(&str, &str)] = &[
     // backend's output, so its shims have to be available even though
     // nothing this compiler emits calls them.
     ("thread_shim.c", include_str!("../../../native_stdlib/thread_shim.c")),
+    ("io_shim.c", include_str!("../../../native_stdlib/io_shim.c")),
 ];
 
 /// Writes every embedded shim out to real `.c` files inside `dir`,

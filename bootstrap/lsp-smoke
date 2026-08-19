@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# End-to-end LSP smoke test: initialize, open a file with a known error,
+# expect a diagnostic on the right line, then shut down.
+cd /home/brad/Projects/plum
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+printf 'struct P { x: Int }\n\nlet f (p: P): Int = p.nope\n' > "$work/main.plum"
+python3 - "$work" > "$work/session.bin" <<'PY'
+import json, sys
+d = sys.argv[1]
+msgs = [
+  {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+  {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % d}}},
+  {"jsonrpc":"2.0","id":2,"method":"shutdown"},
+  {"jsonrpc":"2.0","method":"exit"},
+]
+out=sys.stdout.buffer
+for m in msgs:
+    b=json.dumps(m).encode()
+    out.write(b"Content-Length: %d\r\n\r\n" % len(b)); out.write(b)
+PY
+out=$(SH_MEM=4G SH_TIMEOUT=60 ./sh lsp < "$work/session.bin" 2>&1)
+fail=0
+echo "$out" | grep -q '"textDocumentSync":1' || { echo "FAIL: no capabilities"; fail=1; }
+echo "$out" | grep -q 'has no field named nope' || { echo "FAIL: no diagnostic"; fail=1; }
+echo "$out" | grep -q '"line":2' || { echo "FAIL: wrong line"; fail=1; }
+echo "$out" | grep -q '"id":2,"result":null' || { echo "FAIL: no shutdown reply"; fail=1; }
+[ $fail -eq 0 ] && echo "lsp smoke: ok"
+exit $fail

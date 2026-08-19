@@ -11949,3 +11949,61 @@ one that printed nothing.
 **Sweep: 9 of 9.** 31/31 `exec_corpus` correct and leak-free, self-build
 fixed point byte-identical, 101/101 parser goldens, 11/11
 `typecheck_corpus` rejected, Rust suite 1941/0.
+
+### A language server, in Plum (2026-08-19)
+
+`./sh lsp` speaks LSP over stdin/stdout and publishes real diagnostics.
+`bootstrap/lsp-smoke` drives a full session — initialize, open a file
+with a known error, assert the diagnostic lands on the right line, shut
+down.
+
+**Two prerequisites I had called blockers turned out not to be.**
+
+"No async" was wrong: a language server is a request loop, and a
+synchronous one is a correct server. The debouncing the real LSP does
+exists to fix a race between overlapping re-checks that a
+single-threaded loop cannot have. What was actually missing was
+BLOCKING STDIN, which is a shim function, not an architecture.
+
+"Needs expression spans" was half wrong. Hover and go-to-definition are
+position QUERIES and do need them. DIAGNOSTICS need only the position of
+the error, which statement granularity already gives — and diagnostics
+are the half that makes an editor useful.
+
+**Diagnostics come from a subprocess.** `fail_tc` reports by aborting,
+so an in-process check would take the server down on the first type
+error a user typed, which is every keystroke of a half-written program.
+The child is this binary re-invoked as `check` — the same
+`/proc/self/exe` trick `test` uses — and its own diagnostic text,
+already carrying `path:line:col`, is parsed straight back. The format is
+coupled on purpose: one renderer (`lexer.render_at`), one parser.
+
+**Two portability constraints shaped the code**, both found by the real
+compiler rejecting the first version:
+
+1. An `extern "C"` block only works in the ROOT module. The real
+   compiler prefixes a module's item names, so an extern declared in
+   `lsp/lsp.plum` is looked up as `lsp.stdout_write` and never found.
+   So `lsp.plum` is pure protocol logic — framing, JSON, diagnostic
+   parsing — and `main.plum` owns everything that talks. Better
+   separation than I would have chosen unprompted.
+2. An extern's `CStr` RETURN cannot be passed back to another extern:
+   the real compiler materializes it as a Plum string. So the shim OWNS
+   its buffers and reuses them, rather than handing malloc'd memory to a
+   caller that has no `free`. Caller-owned buffers would have leaked one
+   allocation per message in a process meant to run for hours.
+
+Deliberately not in v1, stated rather than discovered: unsaved buffers.
+`didChange` does not re-check, because the checker reads from disk and
+reporting disk state against an edited buffer means reporting the wrong
+lines. Saving re-checks.
+
+A third duplicate `declare` collision (after `memcmp` and `strlen`):
+the runtime's stdin declares collided with the extern block's once both
+existed. The pattern is now clear enough to state as a rule — a libc or
+shim symbol belongs in exactly one of the runtime's declare list or a
+user-level `extern` block, never both.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 101/101 parser goldens, 11/11 `typecheck_corpus`
+rejected, sweep 9/9, Rust suite 1941/0.
