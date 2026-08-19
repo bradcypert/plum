@@ -523,8 +523,92 @@ let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (o
         Err(e) => { fail_tc("'".concat(op_name(op)).concat("': ").concat(e)); rr.subst },
     };
     let operand_ty = subst_apply(combined, lr.ty);
+    reject_function_equality(p2, op, operand_ty);
     ir_leaf(binary_result_ty(op, operand_ty), combined, rr.state, TBinary(op, lr.texpr, rr.texpr))
 }
+
+// `==`/`!=` on anything CONTAINING a function is a type error, not a
+// backend failure. Mirrors the real compiler's own check (see
+// `plum_types::Infer::first_function_within`), added there and here at
+// the same time for the same reason: the two backends failed
+// differently, late, and without a source location -- and one step out,
+// for a struct with a closure FIELD, they disagreed outright (a runtime
+// error under the interpreter, `true` under native codegen, for two
+// different closures).
+let reject_function_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
+    match op {
+        BEq => reject_if_functional(p2, "==", t),
+        BNe => reject_if_functional(p2, "!=", t),
+        _ => (),
+    }
+
+let reject_if_functional (p2: Program2) (sym: String) (t: ITy): Unit =
+    match first_function_within(p2.ctx, t, []) {
+        Some(inner) => fail_tc("'".concat(sym).concat("' is not supported for ").concat(render_ty(t))
+            .concat(if render_ty(inner) == render_ty(t) { ": a function has no meaningful equality" }
+                    else { ": it would have to compare ".concat(render_ty(inner)).concat(", and a function has no meaningful equality") })),
+        None => (),
+    }
+
+// The first function type reachable inside `t` -- directly, or through
+// a type argument, a struct field, or a variant payload. `seen` guards
+// recursive declarations BY NAME, which can only under-report (leaving
+// today's behaviour untouched) and never reject something legitimate.
+let first_function_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[ITy] =
+    match t {
+        ITFunction(_, _) => Some(t),
+        ITStruct(name, args) =>
+            if Array.contains(seen, name) { None }
+            else {
+                let inner = first_function_in_list(ctx, args, seen.push(name), 0);
+                if Option.is_some(inner) { inner }
+                else {
+                    // `Array`/`Ref` and friends are BUILTIN: they have
+                    // no declaration to read fields from, and asking
+                    // for one is an error rather than an empty answer.
+                    // Their element type is a type ARGUMENT, already
+                    // walked just above.
+                    match find_struct(ctx, name) {
+                        None => None,
+                        Some(_) => first_function_in_list(ctx,
+                            Array.map(ctx_field_types(ctx, name), |ft| instantiate_template(ctx_struct_generics(ctx, name), args, ft)),
+                            seen.push(name), 0),
+                    }
+                }
+            },
+        ITEnum(name, args) =>
+            if Array.contains(seen, name) { None }
+            else {
+                let inner = first_function_in_list(ctx, args, seen.push(name), 0);
+                if Option.is_some(inner) { inner }
+                else {
+                    match ctx_enum_tags(ctx, name) {
+                        Some(tags) => first_function_in_variants(ctx, tags, args, seen.push(name), 0),
+                        None => None,
+                    }
+                }
+            },
+        _ => None,
+    }
+
+let first_function_in_list (ctx: TyContext) (ts: Array[ITy]) (seen: Array[String]) (i: Int): Option[ITy] =
+    if i >= ts.len() { None }
+    else {
+        match first_function_within(ctx, ts[i], seen) {
+            Some(f) => Some(f),
+            None => first_function_in_list(ctx, ts, seen, i + 1),
+        }
+    }
+
+let first_function_in_variants (ctx: TyContext) (tags: Array[String]) (args: Array[ITy]) (seen: Array[String]) (i: Int): Option[ITy] =
+    if i >= tags.len() { None }
+    else {
+        let payload = Array.map(ctx_variant_payload(ctx, tags[i]), |pt| instantiate_template(ctx_variant_generics(ctx, tags[i]), args, pt));
+        match first_function_in_list(ctx, payload, seen, 0) {
+            Some(f) => Some(f),
+            None => first_function_in_variants(ctx, tags, args, seen, i + 1),
+        }
+    }
 
 let op_name (op: parser.BOp): String = match op {
     BAdd => "+", BSub => "-", BMul => "*", BDiv => "/", BRem => "%",

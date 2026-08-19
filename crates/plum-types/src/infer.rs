@@ -4225,6 +4225,48 @@ impl Infer {
         }
     }
 
+    /// The first FUNCTION type reachable inside `ty` — directly, or
+    /// through a struct field, a variant payload, a tuple element, or a
+    /// type argument (which is what covers `Array[(Int) -> Int]`,
+    /// whose element type is not a declared field of anything).
+    ///
+    /// `seen` guards against recursive declarations (`enum List { Cons
+    /// (Int, List), End }`), by NAME: revisiting a type already on the
+    /// stack answers "no function here" and lets the walk finish. That
+    /// can only ever under-report, never over-report — a false negative
+    /// leaves today's behavior exactly as it was, while a false positive
+    /// would reject a legitimate comparison.
+    fn first_function_within(&self, ty: &Type, seen: &mut Vec<String>) -> Option<String> {
+        match ty {
+            Type::Function(..) => Some(format!("{ty:?}")),
+            Type::Tuple(elems) => elems.iter().find_map(|e| self.first_function_within(e, seen)),
+            Type::Struct(name, args) | Type::Enum(name, args) => {
+                if seen.iter().any(|s| s == name) {
+                    return None;
+                }
+                seen.push(name.clone());
+                let found = args
+                    .iter()
+                    .find_map(|a| self.first_function_within(a, seen))
+                    .or_else(|| {
+                        self.ctx
+                            .struct_fields_for(name, args)
+                            .and_then(|fields| fields.iter().find_map(|(_, t)| self.first_function_within(t, seen)))
+                    })
+                    .or_else(|| {
+                        let tags: Vec<String> = self.ctx.enum_variant_tags(name)?.to_vec();
+                        tags.iter().find_map(|tag| {
+                            let (_, payload) = self.ctx.variant_payload_for(tag, args)?;
+                            payload.iter().find_map(|t| self.first_function_within(t, seen))
+                        })
+                    });
+                seen.pop();
+                found
+            }
+            _ => None,
+        }
+    }
+
     fn infer_binary(
         &mut self,
         op: &ast::BinaryOp,
@@ -4258,7 +4300,47 @@ impl Infer {
         let operand_ty = acc.apply(&lty);
 
         match op {
-            Eq | Ne => Ok((Type::Bool, acc)),
+            // Equality on anything that CONTAINS a function is rejected
+            // here rather than left to a backend. Neither backend can
+            // implement it, and until this check existed they failed
+            // differently and late: comparing two closures was an
+            // interpreter RUNTIME error ("cannot compare Closure(0) and
+            // Closure(1)") and a codegen error ("Eq is not supported for
+            // Closure([Int], Int) operands"), neither carrying a source
+            // location. Worse, one step further out they DISAGREED — a
+            // struct with a closure field was a runtime error under the
+            // interpreter and printed `true` under the LLVM backend, for
+            // two DIFFERENT closures, because `@plum_struct_eq` never
+            // meaningfully compared that field.
+            //
+            // A type error here is the honest answer: two functions have
+            // no equality worth defining (structural equality of code is
+            // not a thing Plum can offer, and pointer identity would
+            // make `|n| n + 1 == |n| n + 1` depend on whether the
+            // optimizer happened to share the two closures). Same
+            // reasoning already applied to the `Eq` BOUND, which
+            // excludes what codegen cannot compare — see
+            // `satisfies_bound`.
+            Eq | Ne => {
+                if let Some(inner) = self.first_function_within(&operand_ty, &mut Vec::new()) {
+                    let sym = if matches!(op, Eq) { "==" } else { "!=" };
+                    // Naming the reachable function only helps when it
+                    // is NOT the operand itself — "not supported for
+                    // Function([Int], Int): it would have to compare
+                    // Function([Int], Int)" says the same thing twice.
+                    return Err(plum_syntax::error::CompileError::spanless(
+                        if inner == format!("{operand_ty:?}") {
+                            format!("`{sym}` is not supported for {operand_ty:?}: a function has no meaningful equality")
+                        } else {
+                            format!(
+                                "`{sym}` is not supported for {operand_ty:?}: it would have to compare {inner}, \
+                                 and a function has no meaningful equality"
+                            )
+                        },
+                    ));
+                }
+                Ok((Type::Bool, acc))
+            }
             Lt | Gt | Le | Ge => {
                 let (_, s) = default_numeric(&operand_ty)?;
                 acc = s.compose(&acc);
@@ -8354,6 +8436,47 @@ mod tests {
         assert_eq!(empty_array_elem_types.len(), 1);
         let ty = empty_array_elem_types.values().next().unwrap();
         assert_eq!(ty, &Type::Param("T".to_string()));
+    }
+
+    /// `==` between closures used to type-check and then fail in a
+    /// backend: a runtime error in the interpreter, a codegen error
+    /// under LLVM, neither with a source location.
+    #[test]
+    fn equality_between_functions_is_a_type_error() {
+        let err = infer_program_err("let go () = { let f = |n: Int| n + 1; let g = f; f == g }");
+        assert!(err.contains("no meaningful equality"), "unexpected error: {err}");
+    }
+
+    /// One step out, and the case where the two backends used to
+    /// DISAGREE: a struct with a closure field was a runtime error in
+    /// the interpreter and `true` under LLVM, for two DIFFERENT
+    /// closures.
+    #[test]
+    fn equality_reaching_a_function_through_a_struct_field_is_a_type_error() {
+        let err = infer_program_err(
+            "struct Holder { f: (Int) -> Int, n: Int }\n\
+             let go () = { \
+                let a = Holder { f: |n: Int| n + 1, n: 1 }; \
+                let b = Holder { f: |n: Int| n + 2, n: 1 }; \
+                a == b }",
+        );
+        assert!(err.contains("no meaningful equality"), "unexpected error: {err}");
+    }
+
+    /// The check must not over-reach: a recursive declaration has to
+    /// terminate (`seen`), and an ordinary aggregate stays comparable.
+    #[test]
+    fn equality_on_function_free_aggregates_is_still_allowed() {
+        for src in [
+            "struct P { x: Int, y: Int }\nlet go () = P { x: 1, y: 2 } == P { x: 1, y: 2 }",
+            "enum List { Cons(Int, List), End }\nlet go () = Cons(1, End) == Cons(1, End)",
+            "let go () = [1, 2] == [1, 2]",
+            "enum Maybe[T] { Yes(T), No }\nlet go () = Yes(1) == Yes(1)",
+        ] {
+            // Panics on failure, which is the assertion — a recursive
+            // `List` that never terminated would hang here instead.
+            infer_with(src);
+        }
     }
 
     #[test]

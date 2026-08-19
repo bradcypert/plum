@@ -1,0 +1,13 @@
+// The same rule one step out: a struct is comparable only if every
+// field is, so a closure-typed field makes the whole struct
+// incomparable. This is the case where the two backends used to
+// DISAGREE rather than merely both fail — native codegen answered
+// `true` for two different closures.
+
+struct Holder { f: (Int) -> Int, n: Int }
+
+let main (): Unit = {
+    let a = Holder { f: |n: Int| n + 1, n: 1 };
+    let b = Holder { f: |n: Int| n + 2, n: 1 };
+    println((a == b).to_string());
+}

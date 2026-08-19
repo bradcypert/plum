@@ -1,0 +1,17 @@
+// Two functions have no equality worth defining, so `==` on them must
+// be REJECTED — by the checker, with a source location.
+//
+// This fixture exists because BOTH compilers accepted it and then
+// failed late, differently, and without a span: the interpreter raised
+// "cannot compare Closure(0) and Closure(1)" at runtime, and codegen
+// refused with "Eq is not supported for Closure([Int], Int) operands".
+// One step further out they disagreed outright — a struct with a
+// closure FIELD was a runtime error under the interpreter and printed
+// `true` under native codegen, for two DIFFERENT closures, because
+// struct equality never meaningfully compared that field.
+
+let main (): Unit = {
+    let f = |n: Int| n + 1;
+    let g = |n: Int| n + 1;
+    println((f == g).to_string());
+}

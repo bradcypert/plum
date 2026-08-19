@@ -11069,7 +11069,7 @@ Verified by running each, not by reading code:
 | ~~destructuring `let (a, b) = ..`~~ | | **DONE, see below** |
 | ~~`\|>`~~ | | **DONE, see below** |
 | ~~`require`/`ensure` contracts~~ | | **DONE, see below** |
-| `==`/`!=` between closures | — | missing |
+| ~~`==`/`!=` between closures~~ | | **DONE, see below** |
 | generic instantiation syntax | rejects | — |
 
 The contracts row was WRONG, and the error is worth recording: it said
@@ -11079,11 +11079,9 @@ was written from the gap list rather than from running the thing, which
 is the one habit this table exists to prevent. Every row above has now
 been re-verified by running it.
 
-Note the shape of the closure-equality row: `check` says ok and codegen
-then refuses, so the failure arrives with no source location — the same
-class as the stale-binding soundness bug fixed earlier. Making the
-checker reject what the backend cannot emit would turn that gap into a
-clean diagnostic; generic instantiation already is one.
+Closure equality is now a checker rejection in both compilers rather
+than a late backend failure — see below. Generic instantiation syntax,
+the one row left, already fails as a clean diagnostic.
 
 CLI: self-hosted has `check`, `run`, `emit-llvm`, `build`, `test`.
 Still missing `new`, `lsp`, and the `dump-*` helpers.
@@ -11382,3 +11380,52 @@ compilers.
 22/22 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 99/99 parser goldens, 7/7 rejections, Rust suite
 1938/0.
+
+### Equality that would have to compare a function (2026-08-19)
+
+Listed as a self-hosted CODEGEN gap. It was not: the REAL compiler had
+it too, and the shape of the failure was the interesting part.
+
+`f == g` on two closures type-checked in both compilers and then failed
+in a backend — "cannot compare Closure(0) and Closure(1)" at
+interpreter runtime, "Eq is not supported for Closure([Int], Int)
+operands" from codegen. Neither carries a source location, which is the
+same complaint that made this a listed gap in the first place.
+
+One step further out the two backends did not merely both fail, they
+DISAGREED. A struct with a closure-typed field was a runtime error
+under the interpreter and printed `true` under the LLVM backend — for
+two *different* closures, because `@plum_struct_eq` never meaningfully
+compared that field. A silently wrong answer, which is worse than
+either error.
+
+So the fix is a type error, in both compilers, for `==`/`!=` on any
+type that CONTAINS a function — directly, through a struct field, a
+variant payload, a tuple element, or a type argument (which is what
+covers `Array[(Int) -> Int]`, whose element type is nobody's declared
+field). Two functions have no equality worth defining: structural
+equality of code is not something Plum can offer, and pointer identity
+would make `(|n| n + 1) == (|n| n + 1)` depend on whether the optimizer
+happened to share the two closures. The `Eq` BOUND already reasoned
+this way — `satisfies_bound` excludes what codegen cannot compare — so
+this extends an existing rule to concrete types rather than inventing
+one.
+
+The walk (`first_function_within`, mirrored in both checkers) guards
+recursive declarations by NAME. That can only ever under-report, never
+over-report: a false negative leaves the old behaviour exactly as it
+was, while a false positive would reject a legitimate comparison. A
+regression test compares an `enum List { Cons(Int, List), End }` for
+exactly that reason — it hangs rather than fails if the guard breaks.
+
+One bug caught while writing the self-hosted half, worth recording
+because it is a trap the Rust version dodged by accident: `Array` is
+BUILTIN, so `ctx_field_types(ctx, "Array")` is an ERROR ("unknown
+struct: Array"), not an empty answer — the self-hosted compiler stopped
+type-checking itself. Rust's `struct_fields_for` returns an `Option`
+and simply answered `None`. An undeclared aggregate's element type is
+always a type ARGUMENT, already walked.
+
+22/22 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 99/99 parser goldens, 9/9 `typecheck_corpus` rejected,
+Rust suite 1941/0.
