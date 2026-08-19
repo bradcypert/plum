@@ -1,0 +1,9 @@
+4
+1024
+3
+4
+4
+-4
+["Apple", "app", "apple", "banana", "pear"]
+true
+true

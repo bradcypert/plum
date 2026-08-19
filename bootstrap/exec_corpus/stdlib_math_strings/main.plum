@@ -1,0 +1,31 @@
+// The last eight stdlib functions, all of which needed RUNTIME support
+// rather than prelude source.
+//
+// `Float.sqrt` and friends are `unsafe { sqrt(x) }` in the real
+// prelude; this backend has no extern/unsafe, so they are runtime
+// primitives reaching the same libm functions.
+//
+// `Array.sort_string` compares byte-lexicographically, which for UTF-8
+// IS codepoint order -- so it agrees with the real prelude's
+// rune-by-rune comparison without needing a `.runes()` decoder. The
+// fixture includes "Apple"/"app"/"apple" precisely because a
+// case-insensitive or length-first ordering would sort those
+// differently.
+//
+// The random values are asserted by RANGE, not by value: the real
+// interpreter uses splitmix64 and both native backends use libc rand(),
+// so no two of them agree on the numbers, only on the distribution.
+
+let main (): Unit = {
+    println(Float.sqrt(16.0).to_string());
+    println(Float.pow(2.0, 10.0).to_string());
+    println(Float.floor(3.7).to_string());
+    println(Float.ceil(3.2).to_string());
+    println(Float.round(3.5).to_string());
+    println(Float.floor(0.0 - 3.2).to_string());
+    println(Array.sort_string(["pear", "apple", "Apple", "banana", "app"]).to_string());
+    let r = Float.random(());
+    println((r >= 0.0 && r < 1.0).to_string());
+    let rr = Float.random_range(10.0, 20.0);
+    println((rr >= 10.0 && rr < 20.0).to_string());
+}

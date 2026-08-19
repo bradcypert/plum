@@ -223,6 +223,14 @@ let builtin_sig (name: String): Option[FnSig] =
     else if name == "String.trim_start" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITStr }) }
     else if name == "String.trim_end" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITStr }) }
     else if name == "String.lines" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) }) }
+    else if name == "Float.sqrt" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat }) }
+    else if name == "Float.floor" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat }) }
+    else if name == "Float.ceil" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat }) }
+    else if name == "Float.round" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat }) }
+    else if name == "Float.pow" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat }) }
+    else if name == "Float.random" { Some(FnSig { name: name, module: "", generics: [], params: [ITUnit], ret: ITFloat }) }
+    else if name == "Float.random_range" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat }) }
+    else if name == "Array.sort_string" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITStr)], ret: arr_of(ITStr) }) }
     else if name == "Option.map" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], tp("U"))], ret: opt_of(tp("U")) }) }
     else if name == "Option.and_then" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], opt_of(tp("U")))], ret: opt_of(tp("U")) }) }
     else if name == "Option.unwrap_or_else" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), ITFunction([], tp("T"))], ret: tp("T") }) }

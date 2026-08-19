@@ -30,7 +30,7 @@ plum build bootstrap/self_host -o sh
 ```
 
 `./sh run` type-checks BEFORE interpreting (Stage 4 wired into the same
-pipeline, matching the real `plum run`'s own order). **All 28 fixtures
+pipeline, matching the real `plum run`'s own order). **All 29 fixtures
 pass end to end**, under both the self-hosted interpreter and the
 self-hosted backend, ASan-clean in the latter. `tuples/` used to be a documented exception — Plum
 had no tuple type-ANNOTATION syntax, so it could not satisfy Stage 4's
@@ -84,7 +84,7 @@ on 2026-08-16:
   (`plum_ir::prune`) fixed it at the root: the gate now means what its
   doc comment always claimed.
 
-So all 28 fixtures build and run identically under both backends —
+So all 29 fixtures build and run identically under both backends —
 including `refs/`, added on 2026-08-16 when `Ref[T]` (`ref(v)`/`.get()`/
 `.set(v)`, the shared mutable cell) stopped being interpreter-only. See
 DESIGN.md's "`Ref[T]` in native codegen".

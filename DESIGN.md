@@ -11793,3 +11793,43 @@ regression convincingly, and the actual error was two layers down in
 28/28 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 101/101 parser goldens, 10/10 `typecheck_corpus`
 rejected, sweep 7/9, Rust suite 1941/0.
+
+### The last eight stdlib functions — 78/78 (2026-08-19)
+
+All eight needed RUNTIME support rather than prelude source, which is
+why they were held back from the pure-Plum batch.
+
+`Float.sqrt`/`pow`/`floor`/`ceil`/`round` are `unsafe { sqrt(x) }` in
+the real prelude. This backend has no `extern "C"`/`unsafe` support at
+all, so they are runtime primitives reaching the same libm functions —
+same results, different route. That is a real divergence in MECHANISM
+worth naming: if `extern`/`unsafe` ever lands here (it is what
+`examples/asteroids` needs), these should move back to being ordinary
+prelude source.
+
+`Float.random`/`random_range` follow the real NATIVE backend: libc
+`rand()` over `RAND_MAX + 1`, seeded once from `time(0)` in the entry
+prologue rather than per call. No output parity is possible or
+attempted — the real INTERPRETER uses splitmix64 while both native
+backends use `rand()`, so the two real backends already disagree on the
+numbers. Only the distribution is shared.
+
+`Array.sort_string` was the interesting one. The real prelude compares
+`a.runes()` rune by rune, and this compiler has no decoder. Rather than
+build one, the comparison is byte-lexicographic via `memcmp` — which
+for UTF-8 IS codepoint order, a designed property of the encoding. So
+the orderings agree exactly, with no decoder involved. The fixture
+sorts `"Apple"`/`"app"`/`"apple"` specifically, because a
+case-insensitive or length-first ordering would place those
+differently.
+
+One duplicate `declare i32 @memcmp` slipped in — `plum_str_eq` already
+declared it — and LLVM rejected the module outright. Caught on the
+first compile.
+
+**Stdlib parity is 78 of 78.** Every associated function the real
+compiler's prelude defines now exists in the self-hosted one.
+
+29/29 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 101/101 parser goldens, 10/10 `typecheck_corpus`
+rejected, sweep 7/9, Rust suite 1941/0.

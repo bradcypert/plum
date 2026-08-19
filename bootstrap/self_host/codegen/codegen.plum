@@ -1361,6 +1361,13 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "read_file_raw" { Some("@plum_read_file_raw") }
     else if name == "write_file_raw" { Some("@plum_write_file_raw") }
     else if name == "string_hash_raw" { Some("@plum_str_hash_raw") }
+    else if name == "sqrt_raw" { Some("@plum_sqrt_raw") }
+    else if name == "pow_raw" { Some("@plum_pow_raw") }
+    else if name == "floor_raw" { Some("@plum_floor_raw") }
+    else if name == "ceil_raw" { Some("@plum_ceil_raw") }
+    else if name == "round_raw" { Some("@plum_round_raw") }
+    else if name == "random_raw" { Some("@plum_random_raw") }
+    else if name == "string_cmp_raw" { Some("@plum_str_cmp_raw") }
     else if name == "process_run_raw" { Some("@plum_process_run_raw") }
     else if name == "process_exit_code_raw" { Some("@plum_process_exit_code_raw") }
     else if name == "process_stdout_raw" { Some("@plum_process_stdout_raw") }
@@ -2709,6 +2716,13 @@ let cg_entry (unit: Unit): String = cg_lines([
     "  store i32 %argc, ptr @plum_argc",
     "  store ptr %argv, ptr @plum_argv",
     "  %reg = call i32 @atexit(ptr @plum_dump_stats)",
+    // Seeded ONCE here, not per call, exactly where the real backend
+    // seeds it (`plumc::emit_main`'s prologue). Seeding per call would
+    // make `Float.random()` return the same value every time within a
+    // second.
+    "  %seed = call i64 @time(ptr null)",
+    "  %seed32 = trunc i64 %seed to i32",
+    "  call void @srand(i32 %seed32)",
     "  call void @plum_init_globals()",
     "  %r = call i1 @plum_main()",
     "  ret i32 0",
