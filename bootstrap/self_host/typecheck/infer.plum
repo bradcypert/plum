@@ -332,6 +332,9 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
         EIdent(name) => infer_ident(p2, state, env, acc, name),
         ETuple(elems) => infer_tuple(p2, state, env, acc, elems),
         EUnary(op, inner) => infer_unary(p2, state, env, acc, op, inner),
+        // Desugared, not inferred directly: `|>` has no type of its
+        // own, it just rearranges a call (parser.plum::desugar_pipe).
+        EBinary(BPipe, lhs, rhs) => infer_expr(p2, state, env, acc, parser.desugar_pipe(lhs, rhs)),
         EBinary(op, lhs, rhs) => infer_binary(p2, state, env, acc, op, lhs, rhs),
         EField(base, name) => infer_field(p2, state, env, acc, base, name),
         ECall(callee, args) => infer_call(p2, state, env, acc, callee, args),
@@ -529,7 +532,8 @@ let binary_result_ty (op: parser.BOp) (operand_ty: ITy): ITy =
         BEq => ITBool, BNe => ITBool, BLt => ITBool, BGt => ITBool, BLe => ITBool, BGe => ITBool,
         BAnd => ITBool, BOr => ITBool,
         BRange => operand_ty,
-        BPipe => { fail_tc("'|>' isn't supported yet"); ITUnit },
+        // Unreachable: `infer_expr` desugars `|>` before it gets here.
+        BPipe => { fail_tc("internal: un-desugared '|>'"); ITUnit },
     }
 
 // A struct value's type must ALREADY be concrete (resolved through the

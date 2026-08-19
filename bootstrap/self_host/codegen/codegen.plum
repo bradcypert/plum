@@ -665,7 +665,9 @@ let cg_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BOp) (lhs
         BAnd => cg_shortcircuit(p, env, n, lhs, rhs, true),
         BOr => cg_shortcircuit(p, env, n, lhs, rhs, false),
         BRange => { cg_fail("'..' is only supported as a 'for' iterand"); cg_unit_emit(n) },
-        BPipe => { cg_fail("'|>' isn't supported yet"); cg_unit_emit(n) },
+        // Unreachable: the checker desugars `|>` into a call, so no
+        // `TBinary(BPipe, ..)` ever reaches codegen.
+        BPipe => { cg_fail("internal: un-desugared '|>'"); cg_unit_emit(n) },
         _ => cg_strict_binary(p, env, n, op, lhs, rhs, ty),
     }
 
@@ -724,7 +726,7 @@ let cg_binary_op_text (op: parser.BOp) (t: CgTy): String = {
         BAnd => { cg_fail("'&&' should have been short-circuited"); "and" },
         BOr => { cg_fail("'||' should have been short-circuited"); "or" },
         BRange => { cg_fail("'..' isn't an operator here"); "add" },
-        BPipe => { cg_fail("'|>' isn't supported yet"); "add" },
+        BPipe => { cg_fail("internal: un-desugared '|>'"); "add" },
     }
 }
 
@@ -2301,20 +2303,58 @@ let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
 // Each payload's own sub-pattern is tested and AND-ed into the running
 // result. Plain `and`, not a short-circuit branch: every operand is
 // already computed and side-effect-free, so there is nothing to skip.
+//
+// "Side-effect-free" holds for the payload LOAD (over-allocation, see
+// `cg_payload_offset`) but NOT for what a nested sub-pattern does next
+// with what it loaded. `Some(Some(n))` tested against a `None` loads
+// the None's payload word -- another variant's data, or nothing at all
+// -- and then follows it as a pointer to read an inner tag. That
+// segfaults, and did: matching `Option[Option[Int]]` against `None`
+// crashed under ASan while appearing to work without it.
+//
+// So a DEREFERENCING sub-pattern is handed a pointer that is safe to
+// walk either way: the real payload when the tags so far matched, and
+// `@plum_pat_safe` when they didn't (see its own comment in
+// runtime.plum). A `select` keeps this flat -- no second control-flow
+// layer through nested patterns, which is what the design note above
+// this file's `PatEmit` deliberately avoids -- and costs one
+// instruction on a path that was already loading. Binding is unchanged:
+// `select` yields the REAL payload on the matching path, and `binds`
+// only ever runs there.
 let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (payload: Array[typecheck.ITy]) (pats: Array[parser.PPattern]) (i: Int) (sval: String) (test: String) (code: String) (binds: String) (allocas: String) (releases: String) (globals: String): PatEmit =
     if i >= pats.len() { PatEmit { code: code, binds: binds, allocas: allocas, releases: releases, globals: globals, test: test, env: env, n: n } }
     else {
         let pp = cg_reg(n);
         let pv = cg_reg(n + 1);
         let pty = cg_concrete(p, payload[i]);
+        let pllty = cg_llvm_ty(cg_of_ity(pty));
         let load = "  ".concat(pp).concat(" = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_payload_offset(i).to_string()).concat("\n")
-            .concat("  ").concat(pv).concat(" = load ").concat(cg_llvm_ty(cg_of_ity(pty))).concat(", ptr ").concat(pp).concat("\n");
-        let sub = cg_pattern(p, env, n + 2, pats[i], pv, pty);
+            .concat("  ").concat(pv).concat(" = load ").concat(pllty).concat(", ptr ").concat(pp).concat("\n");
+        let needs_safe = pllty == "ptr" && cg_pat_derefs(pats[i]);
+        let pval = if needs_safe { cg_reg(n + 2) } else { pv };
+        let guard = if needs_safe {
+            "  ".concat(pval).concat(" = select i1 ").concat(test).concat(", ptr ").concat(pv).concat(", ptr @plum_pat_safe\n")
+        } else { "" };
+        let sub = cg_pattern(p, env, n + 3, pats[i], pval, pty);
         let combined = cg_reg(sub.n);
         let join = "  ".concat(combined).concat(" = and i1 ").concat(test).concat(", ").concat(sub.test).concat("
 ");
         cg_pat_payloads(p, sub.env, sub.n + 1, payload, pats, i + 1, sval, combined,
-            code.concat(load).concat(sub.code).concat(join), binds.concat(sub.binds), allocas.concat(sub.allocas), releases.concat(sub.releases), globals.concat(sub.globals))
+            code.concat(load).concat(guard).concat(sub.code).concat(join), binds.concat(sub.binds), allocas.concat(sub.allocas), releases.concat(sub.releases), globals.concat(sub.globals))
+    }
+
+// True for a sub-pattern that FOLLOWS the value it is given as a
+// pointer, rather than just binding or comparing it as a word -- the
+// ones that need `cg_pat_payloads`'s safe stand-in. A string pattern
+// counts: `plum_str_eq` reads a length out of the cell and then
+// memcmp's from it.
+let cg_pat_derefs (pat: parser.PPattern): Bool =
+    match pat {
+        PVariant(_, _) => true,
+        PStruct(_, _, _) => true,
+        PTuple(_) => true,
+        PStr(_) => true,
+        _ => false,
     }
 
 // A struct pattern has no tag to check — it always matches its own

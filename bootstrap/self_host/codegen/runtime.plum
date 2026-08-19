@@ -29,6 +29,14 @@
 
 pub let cg_lines (lines: Array[String]): String = Array.fold(lines, "", |acc, l| acc.concat(l).concat("\n"))
 
+// The self-referential tail of `@plum_pat_safe` -- `n` copies of
+// `ptr @plum_pat_safe`, comma-separated. A global is allowed to name
+// itself in its own initializer, which is what makes one fixed cell
+// stand in for a payload chain of unbounded depth.
+let cg_pat_safe_words (n: Int) (acc: String): String =
+    if n <= 0 { acc }
+    else { cg_pat_safe_words(n - 1, if acc == "" { "ptr @plum_pat_safe" } else { acc.concat(", ptr @plum_pat_safe") }) }
+
 pub let cg_runtime (unit: Unit): String = cg_lines([
     "; --- Stage 5 runtime (self-hosted backend) ---",
     "declare ptr @malloc(i64)",
@@ -95,6 +103,24 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "@.plum_fmt_line = private constant [4 x i8] c\"%s\\0A\\00\"",
     "@.plum_true = private constant [5 x i8] c\"true\\00\"",
     "@.plum_false = private constant [6 x i8] c\"false\\00\"",
+    "",
+    // A stand-in cell for a payload load that is about to be
+    // DEREFERENCED by a nested pattern while the enclosing tag has
+    // already failed to match. Over-allocation makes the payload LOAD
+    // itself safe (see `cg_payload_offset`), but the word it loads is
+    // another variant's data -- an integer, say -- and following it as
+    // a pointer to read an inner tag is not safe at all. So a
+    // mismatched load is redirected here instead (`cg_pat_payloads`).
+    //
+    // Word 0 is the reference count, word 1 doubles as the tag (an
+    // enum), the length (a string), and the length (an array) -- all
+    // zero, so an inner tag test simply fails, an inner string compare
+    // sees length 0, and nothing walks off the end. Every remaining
+    // word points back at this same cell, so nesting of ANY depth stays
+    // in bounds rather than needing a fixed number of levels. Writable,
+    // not `constant`: a stray increment through it must corrupt a dead
+    // word, not fault on a read-only page.
+    "@plum_pat_safe = internal global [16 x ptr] [ptr null, ptr null, ".concat(cg_pat_safe_words(14, "")).concat("]"),
     "",
     "; The one allocation point. Every cell begins with a reference",
     "; count, initialised to 1: the caller of an allocating expression",

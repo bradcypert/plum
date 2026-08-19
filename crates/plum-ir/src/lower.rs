@@ -748,6 +748,121 @@ fn wrap_nested_destructures(
     Ok(result)
 }
 
+// True when matching `pattern` in a NESTED position can FAIL — i.e.
+// when it tests a tag rather than just binding names.
+//
+// This distinction exists because `wrap_nested_destructures` compiles
+// every nested pattern into a single-arm `Match`, a shape that has no
+// way to fail: it assumes the tag it is about to match is the tag the
+// value actually carries. That assumption holds for a tuple or a struct
+// (one possible tag, nothing to test) and is exactly what makes the
+// simple destructure-chain lowering work. It does NOT hold for an ENUM
+// VARIANT in a nested position — `ENode(OMul, a) => ..` matches only
+// SOME `ENode`s, and when the inner tag is `OAdd` the arm must be
+// skipped and the NEXT arm tried.
+//
+// Until this existed, that case was silently miscompiled rather than
+// rejected: the inner tag was never tested at all, so `ENode(OAdd, 1)`
+// ran the `ENode(OMul, a)` arm's body under the LLVM backend (wrong
+// answer, no diagnostic) and hit a bare "no match arm for tag" error
+// under the interpreter. See `nested_tag_test` for the fix.
+//
+// A variant tag is looked up in `ctx.variants` (tag -> arity), which is
+// also how a POSITIONAL STRUCT pattern is told apart from a variant
+// one: both parse as `Pattern::Variant`, but only a real enum variant's
+// tag is in that map, so `W(OMul, n)` correctly reports "the W part is
+// certain, the OMul part is not." A single-variant enum is treated as
+// refutable too — the extra tag test is redundant, never wrong, and
+// `ctx.variants` doesn't group tags by owning enum to tell the
+// difference.
+fn nested_pattern_is_refutable(pattern: &ast::Pattern, ctx: &LoweringContext) -> bool {
+    match pattern {
+        ast::Pattern::Variant { path, args, .. } => {
+            let tag = path.last().expect("a path always has at least one segment");
+            ctx.variants.contains_key(tag.as_str()) || args.iter().any(|a| nested_pattern_is_refutable(a, ctx))
+        }
+        ast::Pattern::Tuple(elems, _) => elems.iter().any(|e| nested_pattern_is_refutable(e, ctx)),
+        ast::Pattern::Struct { fields, .. } => fields.iter().any(|f| nested_pattern_is_refutable(&f.pattern, ctx)),
+        _ => false,
+    }
+}
+
+// Builds the runtime test that makes a refutable nested pattern
+// (`nested_pattern_is_refutable`) actually refutable — `None` when the
+// pattern can't fail and needs no test at all.
+//
+// The test is an ordinary `Match` used as a BOOLEAN expression:
+//
+//     match __nested0 { OMul(_) => true, 0Default => false }
+//
+// reusing `DEFAULT_ARM_TAG`'s existing "matches unconditionally"
+// semantics for the false branch, so no new IR node or `MatchArm` field
+// is involved — the same reasoning that constant's own doc comment
+// gives for existing as a sentinel. Sub-patterns that are THEMSELVES
+// refutable recurse, conjoined with `&&`, which is why the arm binds
+// fresh `__g<n>` names for exactly those positions (every other
+// position binds `"_"`: the test reads tags, never values, so binding
+// the user's real names here would shadow them for no reason).
+//
+// The caller installs the result as the arm's `guard`, which is what
+// buys the fall-through: a guard that evaluates false skips its arm
+// "as though its tag hadn't matched at all" (see `ir::MatchArm::guard`)
+// and moves to the next arm — precisely the semantics a failed nested
+// tag match needs. The destructuring itself is unchanged: by the time
+// `wrap_nested_destructures` runs inside the body, the guard has
+// already proven every tag it is about to match on.
+fn nested_tag_test(
+    var: &str,
+    pattern: &ast::Pattern,
+    ctx: &LoweringContext,
+    counter: &mut usize,
+) -> Result<Option<ir::Expr>, plum_syntax::error::CompileError> {
+    if !nested_pattern_is_refutable(pattern, ctx) {
+        return Ok(None);
+    }
+    let (tag, bindings, nested) = lower_tag_pattern(pattern, ctx)?;
+    let by_name: HashMap<&str, &ast::Pattern> = nested.iter().map(|(n, p)| (n.as_str(), p)).collect();
+    let mut arm_bindings = Vec::with_capacity(bindings.len());
+    let mut sub_tests = Vec::new();
+    for binding in &bindings {
+        match by_name.get(binding.as_str()) {
+            Some(sub) if nested_pattern_is_refutable(sub, ctx) => {
+                let fresh = format!("__g{counter}");
+                *counter += 1;
+                if let Some(test) = nested_tag_test(&fresh, sub, ctx, counter)? {
+                    sub_tests.push(test);
+                }
+                arm_bindings.push(fresh);
+            }
+            _ => arm_bindings.push("_".to_string()),
+        }
+    }
+    let matched = sub_tests
+        .into_iter()
+        .reduce(|a, b| ir::Expr::Binary(ir::BinOp::And, Box::new(a), Box::new(b)))
+        .unwrap_or(ir::Expr::Bool(true));
+    Ok(Some(ir::Expr::Match {
+        scrutinee: Box::new(ir::Expr::Var(var.to_string())),
+        arms: vec![
+            ir::MatchArm {
+                tag,
+                bindings: arm_bindings,
+                guard: None,
+                body: matched,
+            },
+            // Unreachable when the pattern's OWN tag is certain (a
+            // tuple/struct with a refutable sub-pattern) — harmless
+            // there, and required whenever it isn't.
+            ir::MatchArm {
+                tag: DEFAULT_ARM_TAG.to_string(),
+                bindings: Vec::new(),
+                guard: None,
+                body: ir::Expr::Bool(false),
+            },
+        ],
+    }))
+}
+
 // Classifies one sub-pattern position (a variant arg, tuple element, or
 // struct field's sub-pattern) into `bindings`/`nested`: a plain
 // identifier or wildcard binds directly; a variant/tuple/struct pattern
@@ -2033,7 +2148,25 @@ fn lower_match(scrutinee: &ast::Expr, arms: &[ast::MatchArm], ctx: &LoweringCont
                 ));
             }
             Some(g) => Some(Box::new(lower_expr(g, ctx)?)),
-            None => None,
+            // Every REFUTABLE nested sub-pattern becomes part of a
+            // SYNTHESIZED guard (see `nested_tag_test` for why a guard
+            // is the right home for it). Unlike a user-written guard,
+            // this one only ever reads the synthetic top-level bindings
+            // that already exist at guard time, so the restriction just
+            // above doesn't apply to it.
+            None => {
+                let mut counter = 0;
+                let mut tests = Vec::new();
+                for (name, pattern) in &nested {
+                    if let Some(test) = nested_tag_test(name, pattern, ctx, &mut counter)? {
+                        tests.push(test);
+                    }
+                }
+                tests
+                    .into_iter()
+                    .reduce(|a, b| ir::Expr::Binary(ir::BinOp::And, Box::new(a), Box::new(b)))
+                    .map(Box::new)
+            }
         };
         let arm_body = lower_expr(&arm.body, ctx)?;
         let body = wrap_nested_destructures(nested, ctx, arm_body)?;

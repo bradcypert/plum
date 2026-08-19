@@ -11067,16 +11067,16 @@ Verified by running each, not by reading code:
 |---|---|---|
 | ~~`.to_string()` on struct/array/variant~~ | | **DONE, see below** |
 | ~~destructuring `let (a, b) = ..`~~ | | **DONE, see below** |
-| `\|>` | rejects | — |
+| ~~`\|>`~~ | | **DONE, see below** |
 | `require`/`ensure` contracts | rejects | — |
 | `==`/`!=` between closures | — | missing |
 | generic instantiation syntax | rejects | — |
 
-Note the shape of the first two: `check` says ok and codegen then
-refuses, so the failure arrives with no source location — the same
+Note the shape of the closure-equality row: `check` says ok and codegen
+then refuses, so the failure arrives with no source location — the same
 class as the stale-binding soundness bug fixed earlier. Making the
-checker reject what the backend cannot emit would turn every remaining
-gap into a clean diagnostic.
+checker reject what the backend cannot emit would turn that gap into a
+clean diagnostic; the other two already are one.
 
 CLI: self-hosted has `check`, `run`, `emit-llvm`, `build`, `test`.
 Still missing `new`, `lsp`, and the `dump-*` helpers.
@@ -11224,3 +11224,87 @@ argument convention, visible in `dump-ast` as `(let f (((tuple))) ...)`.
 
 19/19 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 7/7 `typecheck_corpus` rejected, Rust suite 1934/0.
+
+### `|>` in the self-hosted compiler (2026-08-18)
+
+Desugared in the CHECKER and the INTERPRETER, not in the parser:
+`render_expr` must keep printing `(|> x f)` to match
+`bootstrap/corpus/expressions/pipe_*.expected`, so the pipe node has to
+survive into the parse tree. That is the same reason the real parser
+keeps `BinaryOp::Pipe` and desugars separately in `infer.rs` and
+`lower.rs` — one shared `parser.desugar_pipe` serves both self-hosted
+consumers, and codegen never sees a pipe at all because the checker
+rewrites it before building a `TExpr`.
+
+Semantics mirror `infer.rs::infer_pipe` exactly: `x |> f` is `f(x)`,
+`x |> f(a, b)` APPENDS — `f(a, b, x)` — and a single `_` argument
+claims the position instead (`x |> f(a, _)` is `f(a, x)`). Two
+placeholders are an error rather than a silent choice. `_` needs no
+grammar support: `parse_argument` already turns a bare `_` into the
+identity closure `|_| _`, and pipe gives that one shape a meaning
+inside a piped call's argument list and nowhere else.
+
+### Refutable nested patterns — two different miscompilations (2026-08-18)
+
+Found while adding `|>`: the checker arm for it is
+`EBinary(BPipe, lhs, rhs)`, a variant pattern nested inside another,
+and the self-hosted compiler built from that source began treating
+EVERY binary operator as a pipe. `n * 2` became `2(n)`.
+
+**The Rust backend never tested the inner tag.**
+`wrap_nested_destructures` compiles each nested pattern into a
+single-arm `Match` — a shape with no way to fail — which is right for a
+tuple or a struct (one possible tag) and wrong for an enum variant.
+`ENode(OAdd, 1)` ran the `ENode(OMul, a)` arm's body. Silently: the
+LLVM backend printed a wrong answer with no diagnostic, and the
+interpreter raised a bare "no match arm for tag OAdd" that reads like an
+exhaustiveness bug in the user's program. A nested LITERAL pattern was
+already rejected with a clear "not yet implemented" error; the variant
+case fell through to being treated as a binding instead.
+
+The fix reuses two things that already existed. Refutability is decided
+by `ctx.variants` (`nested_pattern_is_refutable`), which also tells a
+positional STRUCT pattern from a variant one — both parse as
+`Pattern::Variant`, only a real variant's tag is in that map. The test
+itself becomes a synthesized arm GUARD (`nested_tag_test`), because a
+guard's documented semantics are already exactly what a failed nested
+tag needs: "skipped as though its tag hadn't matched at all," on to the
+next arm. The guard is an ordinary `Match` used as a Bool, with
+`DEFAULT_ARM_TAG` supplying the false branch, so no new IR node or
+`MatchArm` field was needed. Sub-patterns recurse, conjoined with `&&`.
+The existing "no guard on an arm with a nested pattern" restriction
+stays: it exists because a USER guard would reference names that only
+exist deeper in the destructure chain, and a synthesized one references
+only the synthetic top-level bindings that are already in scope.
+
+**The self-hosted backend tested the tag but dereferenced first.** Its
+patterns are deliberately flat — `PatEmit` computes an `i1` with no
+control flow, documented as safe because `cg_payload_offset`
+over-allocates every cell, so loading another variant's payload word is
+always in bounds. True for the load; not true for what a nested
+sub-pattern does next, which is follow that word as a POINTER to read an
+inner tag. `Option[Option[Int]]` matched against `None` produced correct
+output normally and a SEGV under ASan — the giveaway was `0xbe` bytes
+in the faulting register, ASan's fill pattern for allocated-but-
+uninitialized memory.
+
+Fixed without giving up flatness: a dereferencing sub-pattern is handed
+`select i1 <tags matched so far>, ptr <real payload>, ptr @plum_pat_safe`.
+`@plum_pat_safe` is a global whose word 1 is zero — the tag for an
+enum, the length for a string or array, so an inner test simply fails —
+and whose every remaining word points back at itself, which is what
+makes ONE fixed cell stand in for a payload chain of unbounded depth. It
+is `global`, not `constant`: a stray write must corrupt a dead word
+rather than fault on a read-only page. Binding is unaffected, because
+`select` yields the real payload on the matching path and `binds` only
+ever runs there.
+
+Both regression tests assert on the ANSWER, not the IR. This bug was
+invisible to every other check: the IR looked reasonable, the type
+checker was happy, and the corpus goldens (which render the parse tree)
+could not see it at all. `bootstrap/exec_corpus/nested_patterns` covers
+the self-hosted half, ASan-clean rather than merely correct.
+
+21/21 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 99/99 parser goldens, 7/7 `typecheck_corpus` rejected,
+Rust suite 1934/0.

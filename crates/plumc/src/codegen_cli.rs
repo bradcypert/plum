@@ -1528,6 +1528,69 @@ mod tests {
         assert_eq!(out, "3");
     }
 
+    /// A REFUTABLE pattern in a NESTED position — `ENode(OMul, a)`,
+    /// where the inner `OMul` may not be the tag the value carries.
+    ///
+    /// This was silently miscompiled: `lower.rs`'s
+    /// `wrap_nested_destructures` compiles every nested pattern into a
+    /// single-arm `Match`, a shape with no way to fail, so the inner
+    /// tag was never tested at all and `ENode(OAdd, 1)` ran the
+    /// `ENode(OMul, ..)` arm's body. Wrong answer, no diagnostic, both
+    /// backends affected (the interpreter reported a bare "no match arm
+    /// for tag" instead). See `nested_tag_test` for the fix: the inner
+    /// tag becomes a synthesized arm GUARD, whose failure falls through
+    /// to the next arm exactly as a failed tag match must.
+    ///
+    /// Asserts on the ANSWER, not on the IR, deliberately: this bug was
+    /// invisible in every check except running the program.
+    #[test]
+    fn a_refutable_nested_variant_pattern_falls_through_to_the_next_arm() {
+        let src = "\
+            enum Op { OAdd, OMul, ONeg }\n\
+            enum E { ENode(Op, Int) }\n\
+            \n\
+            let classify (e: E): Int = match e {\n\
+                ENode(OMul, a) => a * 100,\n\
+                ENode(ONeg, a) => a * 10,\n\
+                ENode(op, a) => a,\n\
+            }\n\
+            \n\
+            let go (): Int = classify(ENode(OAdd, 7))\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "7", "the OMul arm must not claim an OAdd value");
+    }
+
+    /// The same fix, at depth: `Some(Some(n))` vs `Some(None)` vs
+    /// `None` over `Option[Option[Int]]`, which needs the inner tag
+    /// test to recurse (`nested_tag_test` conjoins sub-tests with
+    /// `&&`), plus a nested variant reached through a STRUCT field —
+    /// where the struct's own tag is certain but the field's is not.
+    #[test]
+    fn nested_variant_patterns_discriminate_at_every_depth() {
+        let src = "\
+            enum Op { OAdd, OMul }\n\
+            struct W { op: Op, n: Int }\n\
+            \n\
+            let depth (o: Option[Option[Int]]): Int = match o {\n\
+                Some(Some(n)) => n,\n\
+                Some(None) => 20,\n\
+                None => 30,\n\
+            }\n\
+            \n\
+            let through_struct (w: W): Int = match w {\n\
+                W { op: OMul, n } => n * 100,\n\
+                W { op: OAdd, n } => n,\n\
+            }\n\
+            \n\
+            let go (): Int =\n\
+                depth(Some(Some(1))) + depth(Some(None)) + depth(None)\n\
+                    + through_struct(W { op: OAdd, n: 5 })\n\
+        ";
+        let out = compile_and_run(src, "go", &[CgValue::Unit]).unwrap();
+        assert_eq!(out, "56", "1 + 20 + 30 + 5");
+    }
+
     #[test]
     fn gap_b_an_empty_array_literal_pinned_only_by_its_enclosing_generic_functions_own_param_works() {
         // `let map_keys[K, V] (m: Map[K, V]): Array[K] = match m { ...

@@ -706,6 +706,42 @@ let parse_pipe_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr): ExprRe
     else { let rhs = parse_or(tokens, b.next_pos); parse_pipe_rest(tokens, rhs.next_pos, EBinary(BPipe, lhs, rhs.value)) }
 }
 
+// `|>` desugaring, exported for the checker and the interpreter -- the
+// two consumers of `EBinary(BPipe, ..)` -- rather than applied here at
+// parse time. `render_expr` has to keep printing `(|> x f)` to match
+// bootstrap/corpus/expressions/pipe_*.expected, so the pipe node must
+// survive into the parse tree: the same reason the real parser keeps
+// `BinaryOp::Pipe` (crates/plum-syntax/src/ast.rs's own comment) and
+// desugars separately in infer.rs and lower.rs. Mirrors
+// infer.rs::infer_pipe: `x |> f` is `f(x)`, and `x |> f(a, b)` appends
+// -- `f(a, b, x)` -- unless a `_` placeholder claims the position.
+pub let desugar_pipe (lhs: PExpr) (rhs: PExpr): PExpr =
+    match rhs {
+        ECall(callee, args) => ECall(callee, splice_pipe_args(args, lhs)),
+        // No argument list to search for a placeholder in, so this is
+        // always just `rhs(lhs)`.
+        other => ECall(other, [lhs]),
+    }
+
+// The exact shape a bare `_` argument ALREADY parses to -- the identity
+// closure `|_| _`, see `parse_argument`. Pipe gives that one shape a
+// special meaning inside a piped call's own argument list and nowhere
+// else; no grammar or parser change is involved. Mirrors
+// infer.rs::is_pipe_placeholder.
+let is_pipe_placeholder (e: PExpr): Bool = match e {
+    EClosure(params, body) => params.len() == 1 && params[0] == "_" && match body { EIdent(n) => n == "_", _ => false },
+    _ => false,
+}
+
+// Two placeholders are rejected rather than silently resolved -- which
+// of them would `lhs` even go in? Mirrors infer.rs::splice_pipe_args.
+let splice_pipe_args (args: Array[PExpr]) (lhs: PExpr): Array[PExpr] = {
+    let holes = Array.fold(args, 0, |n, a| if is_pipe_placeholder(a) { n + 1 } else { n });
+    if holes == 0 { Array.concat(args, [lhs]) }
+    else if holes == 1 { Array.map(args, |a| if is_pipe_placeholder(a) { lhs } else { a }) }
+    else { fail("at most one `_` placeholder is allowed in a piped call"); args }
+}
+
 let parse_or (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
     let lhs = parse_and(tokens, pos);
     parse_or_rest(tokens, lhs.next_pos, lhs.value)

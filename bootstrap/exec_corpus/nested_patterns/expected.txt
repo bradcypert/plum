@@ -1,0 +1,11 @@
+add 1
+mul 2
+neg 3
+leaf-add 4
+leaf-other 5
+some-some 6
+some-none
+none
+mul-add
+mul-other
+other

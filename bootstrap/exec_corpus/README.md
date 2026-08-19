@@ -30,19 +30,25 @@ plum build bootstrap/self_host -o sh
 ```
 
 `./sh run` type-checks BEFORE interpreting (Stage 4 wired into the same
-pipeline, matching the real `plum run`'s own order). **17 of 18 fixtures
-pass end to end.** `tuples/` used to be a documented exception — Plum
+pipeline, matching the real `plum run`'s own order). **All 21 fixtures
+pass end to end**, under both the self-hosted interpreter and the
+self-hosted backend, ASan-clean in the latter. `tuples/` used to be a documented exception — Plum
 had no tuple type-ANNOTATION syntax, so it could not satisfy Stage 4's
 requirement that every top-level signature be annotated. Tuple types
 were added in 2026-08 and the fixture is annotated now.
 
-`refs/` is the current exception, and a plain scope gap rather than a
-bug: the self-hosted compiler doesn't know `ref` at all
-(`unbound function: ref` from Stage 4), because `Ref[T]` isn't part of
-the bounded subset Stages 3/4 were written against — same category as
-explicit generic instantiation and concurrency, which they also don't
-implement. It is check-and-build only, under the REAL compiler, where
-both backends agree on it.
+`refs/` used to be the next exception — the self-hosted compiler didn't
+know `ref` at all (`unbound function: ref` from Stage 4) — until
+`Ref[T]` was added to Stages 4/5 in 2026-08. Two fixtures were added
+later still, each pinning down a bug rather than a feature:
+
+- `pipe/` — `|>`, desugared in the self-hosted checker and interpreter
+  rather than in its parser (the parse tree has to keep printing
+  `(|> x f)` for `corpus/expressions/pipe_*.expected`).
+- `nested_patterns/` — a REFUTABLE pattern in a nested position
+  (`ENode(OMul, a)`), which BOTH compilers miscompiled, differently.
+  See its own header comment, and DESIGN.md's "Refutable nested
+  patterns".
 
 The BACKENDS are universal too now. Both the self-hosted backend and
 `plum build` compile tuple VALUES (type-specialized tags — see
@@ -63,7 +69,7 @@ on 2026-08-16:
   (`plum_ir::prune`) fixed it at the root: the gate now means what its
   doc comment always claimed.
 
-So all 18 fixtures build and run identically under both backends —
+So all 21 fixtures build and run identically under both backends —
 including `refs/`, added on 2026-08-16 when `Ref[T]` (`ref(v)`/`.get()`/
 `.set(v)`, the shared mutable cell) stopped being interpreter-only. See
 DESIGN.md's "`Ref[T]` in native codegen".

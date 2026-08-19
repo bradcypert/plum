@@ -1,0 +1,28 @@
+let double (n: Int): Int = n * 2
+
+let add (a: Int) (b: Int): Int = a + b
+
+let describe (label: String) (n: Int): String = label.concat("=").concat(n.to_string())
+
+let main (): Unit = {
+    // Bare callee: `x |> f` is `f(x)`.
+    println(21 |> double |> to_str());
+
+    // Explicit call: the piped value is APPENDED as the last argument.
+    println(add(1, 2) |> add(4) |> to_str());
+
+    // A `_` placeholder claims the position instead of appending.
+    println("n" |> describe(_, 7));
+
+    let xs = [1, 2, 3];
+    println(xs |> Array.map(_, |n| n * 10) |> sum_of() |> to_str());
+
+    // The left side can be any expression, and a closure works as the
+    // callee just as well as a named function.
+    let triple = |n: Int| n * 3;
+    println(2 + 3 |> triple |> to_str());
+}
+
+let to_str (n: Int): String = n.to_string()
+
+let sum_of (xs: Array[Int]): Int = Array.fold(xs, 0, |acc, n| acc + n)

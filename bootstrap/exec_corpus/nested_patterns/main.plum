@@ -1,0 +1,50 @@
+// A refutable pattern in a NESTED position: the inner tag decides which
+// arm runs, so a mismatch has to fall through to the next arm rather
+// than run the first arm's body against another variant's data.
+//
+// Both compilers got this wrong, differently. The Rust backend never
+// tested the inner tag at all (silently wrong answers). The self-hosted
+// backend tested it but loaded the payload UNCONDITIONALLY and followed
+// it as a pointer, which is why `Option[Option[Int]]` matched against
+// `None` reads uninitialized memory -- correct output without ASan,
+// SEGV with it. Keep this fixture ASan-clean, not merely correct.
+
+enum Op { OAdd, OMul, ONeg }
+
+struct W { op: Op, n: Int }
+
+enum E { ENode(Op, Int), ELeaf(W) }
+
+let classify (e: E): String = match e {
+    ENode(OMul, a) => "mul ".concat(a.to_string()),
+    ENode(ONeg, a) => "neg ".concat(a.to_string()),
+    ENode(op, a) => "add ".concat(a.to_string()),
+    ELeaf(W { op: OAdd, n }) => "leaf-add ".concat(n.to_string()),
+    ELeaf(w) => "leaf-other ".concat(w.n.to_string()),
+}
+
+let depth (o: Option[Option[Int]]): String = match o {
+    Some(Some(n)) => "some-some ".concat(n.to_string()),
+    Some(None) => "some-none",
+    None => "none",
+}
+
+let pair (p: (Op, Op)): String = match p {
+    (OMul, OAdd) => "mul-add",
+    (OMul, o) => "mul-other",
+    (a, b) => "other",
+}
+
+let main (): Unit = {
+    println(classify(ENode(OAdd, 1)));
+    println(classify(ENode(OMul, 2)));
+    println(classify(ENode(ONeg, 3)));
+    println(classify(ELeaf(W { op: OAdd, n: 4 })));
+    println(classify(ELeaf(W { op: OMul, n: 5 })));
+    println(depth(Some(Some(6))));
+    println(depth(Some(None)));
+    println(depth(None));
+    println(pair((OMul, OAdd)));
+    println(pair((OMul, ONeg)));
+    println(pair((OAdd, OAdd)));
+}

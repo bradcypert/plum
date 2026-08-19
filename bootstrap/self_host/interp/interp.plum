@@ -224,6 +224,9 @@ pub let eval_expr (state: ProgramState) (env: Array[EnvEntry]) (e: parser.PExpr)
         EIdent(name) => eval_ident(state, env, name),
         ETuple(elems) => VTuple(eval_exprs(state, env, elems)),
         EUnary(op, inner) => eval_unary(op, eval_expr(state, env, inner)),
+        // Desugared, not evaluated directly -- see the checker's
+        // matching arm and parser.plum::desugar_pipe.
+        EBinary(BPipe, lhs, rhs) => eval_expr(state, env, parser.desugar_pipe(lhs, rhs)),
         EBinary(op, lhs, rhs) => eval_binary_expr(state, env, op, lhs, rhs),
         EField(base, name) => struct_field(eval_expr(state, env, base), name),
         ECall(callee, args) => eval_call(state, env, callee, args),
@@ -1052,7 +1055,8 @@ let eval_binary (op: parser.BOp) (lhs: Value) (rhs: Value): Value =
         BAnd => match lhs { VBool(a) => match rhs { VBool(b) => VBool(a && b), _ => { fail_interp("'&&' requires two Bools"); VUnit } }, _ => { fail_interp("'&&' requires two Bools"); VUnit } },
         BOr => match lhs { VBool(a) => match rhs { VBool(b) => VBool(a || b), _ => { fail_interp("'||' requires two Bools"); VUnit } }, _ => { fail_interp("'||' requires two Bools"); VUnit } },
         BRange => { fail_interp("'..' is only supported directly as a 'for' iterand"); VUnit },
-        BPipe => { fail_interp("'|>' isn't supported yet"); VUnit },
+        // Unreachable: `eval_expr` desugars `|>` before it gets here.
+        BPipe => { fail_interp("internal: un-desugared '|>'"); VUnit },
     }
 
 // --- Entry point: evaluate `main`'s body against `state` ---
