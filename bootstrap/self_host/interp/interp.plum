@@ -235,7 +235,9 @@ pub let eval_expr (state: ProgramState) (env: Array[EnvEntry]) (e: parser.PExpr)
         EMatch(scrutinee, arms) => eval_match(state, env, eval_expr(state, env, scrutinee), arms),
         EFor(pattern, iter, body) => eval_for(state, env, pattern, iter, body),
         EStructLit(path, fields, spread) => eval_struct_lit(state, env, path, fields, spread),
-        EGenericInst(_, _) => { fail_interp("generic instantiation syntax isn't supported yet"); VUnit },
+        // See the checker's matching arm: this is not a feature the real
+        // compiler has either, outside `channel[T]()`.
+        EGenericInst(_, _) => { fail_interp("type inference not yet implemented for this expression form"); VUnit },
         EIndex(base, idx) => array_index(eval_expr(state, env, base), eval_expr(state, env, idx)),
         EArray(elems) => VArray(eval_exprs(state, env, elems)),
         // Captures `env` AS IT IS RIGHT HERE — the closure literal's own

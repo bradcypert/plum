@@ -381,7 +381,20 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
         EMatch(scrutinee, arms) => infer_match(p2, state, env, acc, scrutinee, arms),
         EFor(pattern, iter, body) => infer_for(p2, state, env, acc, pattern, iter, body),
         EStructLit(path, fields, spread) => infer_struct_lit(p2, state, env, acc, path, fields, spread),
-        EGenericInst(_, _) => { fail_tc("generic instantiation syntax isn't supported yet"); ir_unsupported(acc, state, "generic instantiation") },
+        // `f[T](x)` -- explicit type arguments -- is NOT a feature the
+        // real compiler has either: `GenericInst` parses, but the only
+        // form with meaning anywhere is `channel[T]()`, and everything
+        // else is rejected there too ("type inference not yet
+        // implemented for this expression form"). So this arm is not a
+        // gap versus the real compiler; the `channel` half of it is
+        // simply part of the concurrency scope cut. The message used to
+        // claim a whole missing feature.
+        EGenericInst(callee, _) =>
+            match callee {
+                EIdent(name) => if name == "channel" { fail_tc("channels aren't supported yet"); ir_unsupported(acc, state, "channel") }
+                    else { fail_tc("type inference not yet implemented for this expression form"); ir_unsupported(acc, state, "generic instantiation") },
+                _ => { fail_tc("type inference not yet implemented for this expression form"); ir_unsupported(acc, state, "generic instantiation") },
+            },
         EIndex(base, idx) => infer_index(p2, state, env, acc, base, idx),
         EArray(elems) => infer_array_lit(p2, state, env, acc, elems),
         EClosure(params, body) => infer_closure(p2, state, env, acc, params, body),

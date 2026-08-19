@@ -57,7 +57,7 @@ use interp;
 use typecheck;
 use codegen;
 
-let usage (): Unit = println("usage: self_host (tokens|ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] | test <project-dir>")
+let usage (): Unit = println("usage: self_host (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] | test <project-dir> | new <name>")
 
 // Every top-level `let` whose name's LAST segment starts with `test_`.
 // The last-segment rule is what makes a module-qualified
@@ -301,10 +301,48 @@ let collect_entries (dir: String) (module_name: String) (entries: Array[String])
         collect_entries(dir, module_name, entries, i + 1, Array.concat(acc, collect_path_items(full, module_name)))
     }
 
+// `new <name>` — scaffold a project, mirroring the real compiler's own
+// `run_new`/`new_project`, including refusing to overwrite.
+//
+// The directory is created by shelling out to `mkdir`, not by a runtime
+// primitive. A `mkdir_raw` primitive was written first and then removed:
+// this file is compiled by BOTH compilers, and the real one has no such
+// builtin, so it would have had to gain a whole IR node -- ir.rs,
+// lowering, the interpreter, codegen, the prelude -- to scaffold a
+// directory. `build` already shells out to `clang`, so this uses the
+// mechanism that exists in both rather than adding one that exists in
+// neither. A primitive that only one compiler could exercise would rot
+// unnoticed until the Rust backend goes away.
+let cmd_new (name: String): Unit =
+    if Result.unwrap_or(is_directory(name), false) {
+        new_failed(name.concat(" already exists — refusing to overwrite it"))
+    } else if !mkdir_ok(name) {
+        new_failed("failed to create ".concat(name))
+    } else {
+        match write_file(name.concat("/main.plum"), "let main (): Unit = println(\"hello, plum\")\n") {
+            Err(e) => new_failed("failed to write main.plum: ".concat(e)),
+            Ok(_) => println("created ".concat(name)),
+        }
+    }
+
+// The real `plum new` exits 1 on every one of these, so this does too.
+// `panic_raw` is the only non-zero exit this language exposes (see
+// `run_tests`), so the message is printed first and the panic carries
+// nothing -- otherwise the abort message would double-report it.
+let new_failed (msg: String): Unit = { println(msg); panic_raw("") }
+
+let mkdir_ok (name: String): Bool =
+    match run_process("mkdir", [name]) {
+        Ok(r) => r.exit_code == 0,
+        Err(_) => false,
+    }
+
 let main (): Unit = {
     let argv = args();
     if argv.len() < 2 {
         usage(());
+    } else if argv[0] == "new" {
+        cmd_new(argv[1]);
     } else if argv[0] == "check" {
         // Handled before `read_file` below: the argument may be a
         // DIRECTORY, which `read_file` can't open at all.
@@ -341,9 +379,13 @@ let main (): Unit = {
         match read_file(argv[1]) {
             Err(e) => println("failed to read file: ".concat(e)),
             Ok(src) => {
-                if argv[0] == "tokens" {
+                // `dump-tokens`/`dump-ast` are the REAL compiler's names for
+                // these, and `bootstrap/corpus`'s goldens were generated with
+                // them. Accepting both means a corpus regeneration command
+                // can be pointed at either compiler unchanged.
+                if argv[0] == "tokens" || argv[0] == "dump-tokens" {
                     println(lexer.render_tokens(lexer.tokenize(src)));
-                } else if argv[0] == "ast" {
+                } else if argv[0] == "ast" || argv[0] == "dump-ast" {
                     println(parser.render_program(parser.parse_program(lexer.tokenize(src))));
                 } else if argv[0] == "emit-llvm" {
                     // Stage 5. NO separate `check_program` call: the
