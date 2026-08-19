@@ -63,20 +63,29 @@ use lexer;
 //
 // The source is re-read from disk to render, which only ever happens on
 // the failure path -- the compiler is about to abort anyway.
-struct ErrPos { path: String, offset: Int }
-let ERR: Ref[ErrPos] = ref(ErrPos { path: "", offset: 0 - 1 })
+struct ErrPos { path: String, offset: Int, fn_name: String }
+let ERR: Ref[ErrPos] = ref(ErrPos { path: "", offset: 0 - 1, fn_name: "" })
 
-pub let set_err_pos (path: String) (offset: Int): Unit = ERR.set(ErrPos { path: path, offset: offset })
+// The FUNCTION being checked, recorded alongside the position. It is
+// what a PRELUDE error has instead of a position: prelude source is a
+// string inside the compiler, so it has no file to point into, and
+// "unknown struct: Array" with no further context is nearly useless
+// when the prelude is a thousand lines.
+pub let set_err_pos (path: String) (offset: Int) (fn_name: String): Unit =
+    ERR.set(ErrPos { path: path, offset: offset, fn_name: fn_name })
 
 // A statement offset of -1 means "synthesized, or parsed without a
 // source context" — keep whatever the enclosing item set instead of
 // overwriting it with a position that points nowhere.
 pub let set_stmt_pos (offset: Int): Unit =
-    if offset >= 0 { ERR.set(ErrPos { path: ERR.get().path, offset: offset }) } else { () }
+    if offset >= 0 { ERR.set(ErrPos { path: ERR.get().path, offset: offset, fn_name: ERR.get().fn_name }) } else { () }
 
 let fail_tc (msg: String): Unit = {
     let e = ERR.get();
-    if e.path == "" || e.offset < 0 { panic_raw("self-hosted type checker: ".concat(msg)) }
+    if e.path == "" || e.offset < 0 {
+        panic_raw("self-hosted type checker: ".concat(msg)
+            .concat(if e.fn_name == "" { "" } else { " (checking '".concat(e.fn_name).concat("')") }))
+    }
     else {
         match read_file(e.path) {
             Ok(src) => panic_raw(lexer.render_at(src, e.path, e.offset, msg)),
@@ -234,6 +243,7 @@ let builtin_sig (name: String): Option[FnSig] =
     else if name == "String.index_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITStr], ret: opt_of(ITInt) }) }
     else if name == "String.parse_int" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITInt, ITStr) }) }
     else if name == "String.parse_float" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITFloat, ITStr) }) }
+    else if name == "String.hash" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITInt }) }
     else if name == "String.slice" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITInt, ITInt], ret: ITStr }) }
     else if name == "String.is_empty" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITBool }) }
     else if name == "chars_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) }) }
@@ -304,7 +314,7 @@ let check_all_fns (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): Unit 
     if i >= items.len() { () }
     else {
         match items[i].kind {
-            IKLet(def) => if Array.is_empty(def.params) { check_all_fns(p2, items, i + 1) } else { { set_err_pos(items[i].path, items[i].start); check_fn(p2, def, items[i].module); check_all_fns(p2, items, i + 1) } },
+            IKLet(def) => if Array.is_empty(def.params) { check_all_fns(p2, items, i + 1) } else { { set_err_pos(items[i].path, items[i].start, def.name); check_fn(p2, def, items[i].module); check_all_fns(p2, items, i + 1) } },
             _ => check_all_fns(p2, items, i + 1),
         }
     }
@@ -734,7 +744,10 @@ let infer_field (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
                 Some(field_ty) => ir_leaf(instantiate_template(info.generics, args, field_ty), r.subst, r.state, TFieldGet(r.texpr, name)),
                 None => { fail_tc("struct ".concat(struct_name).concat(" has no field named ").concat(name)); ir_unsupported(r.subst, r.state, "bad field access") },
             },
-            None => { fail_tc("unknown struct: ".concat(struct_name)); ir_unsupported(r.subst, r.state, "unknown struct") },
+            // Naming the FIELD matters: reaching here with `Array`
+            // means something is reading `.field` off an array, and
+            // which field says which expression is at fault.
+            None => { fail_tc("no such type '".concat(struct_name).concat("' to read field '").concat(name).concat("' from")); ir_unsupported(r.subst, r.state, "unknown struct") },
         },
         _ => { fail_tc("field access requires a struct value with a statically known type, found ".concat(render_ty(base_ty))); ir_unsupported(r.subst, r.state, "field access on a non-struct") },
     }
@@ -1144,6 +1157,24 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         ir_leaf(ITFloat, s1, r.state, TMethodCall("to_float", r.texpr, []))
     } else if method_name == "len" && Array.is_empty(args) {
         infer_len(p2, state, env, acc, base)
+    } else if method_name == "remove" && args.len() == 1 {
+        // `xs.remove(i)` -- a new array without element `i`. Arity is
+        // what separates it from `Map.remove`/`Set.remove`, which are
+        // ordinary declared functions reached through `find_sig` -- the
+        // same split `.set` already uses to tell `Array.set(i, v)` from
+        // `Ref.set(v)`.
+        let br = infer_expr(p2, state, env, acc, base);
+        let ef = fresh(br.state);
+        let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [ef.ty])) {
+            Ok(s) => subst_compose(s, br.subst),
+            Err(e) => { fail_tc(".remove() requires an Array: ".concat(e)); br.subst },
+        };
+        let ir = infer_expr(p2, ef.state, env, s1, args[0]);
+        let s2 = match unify(subst_apply(ir.subst, ir.ty), ITInt) {
+            Ok(s) => subst_compose(s, ir.subst),
+            Err(e) => { fail_tc(".remove() index: ".concat(e)); ir.subst },
+        };
+        ir_leaf(subst_apply(s2, ITStruct("Array", [ef.ty])), s2, ir.state, TMethodCall("remove", br.texpr, [ir.texpr]))
     } else if method_name == "push" && args.len() == 1 {
         infer_array_push(p2, state, env, acc, base, args[0])
     } else if method_name == "set" && args.len() == 2 {
@@ -1321,7 +1352,22 @@ let infer_for (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (patt
             let bodyr = infer_block(p2, br.state, br.env, br.subst, body);
             ir_leaf(ITUnit, bodyr.subst, bodyr.state, TFor(pattern, lr.texpr, hr.texpr, bodyr.texpr))
         },
-        _ => { fail_tc("'for' only supports a literal range (lo..hi) as its iterand"); ir_unsupported(acc, state, "non-range 'for'") },
+        // `for x in xs` over an array. The element type comes from
+        // unifying the iterand against `Array[?]`, so a non-array
+        // iterand reports a type error naming what it actually got
+        // rather than the old blanket "only a literal range".
+        _ => {
+            let ir = infer_expr(p2, state, env, acc, iter);
+            let ef = fresh(ir.state);
+            let s1 = match unify(subst_apply(ir.subst, ir.ty), ITStruct("Array", [ef.ty])) {
+                Ok(s) => subst_compose(s, ir.subst),
+                Err(e) => { fail_tc("'for' iterand must be a range or an array: ".concat(e)); ir.subst },
+            };
+            let elem = subst_apply(s1, ef.ty);
+            let br = bind_pattern_ty(p2, ef.state, s1, env, pattern, elem);
+            let bodyr = infer_block(p2, br.state, br.env, br.subst, body);
+            ir_leaf(ITUnit, bodyr.subst, bodyr.state, TForArray(pattern, ir.texpr, bodyr.texpr))
+        },
     }
 
 let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): InferResult = {

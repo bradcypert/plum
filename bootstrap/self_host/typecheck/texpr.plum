@@ -72,6 +72,13 @@ pub enum TNode {
     TMatch(TExpr, Array[TArm]),
     // pattern, range start, range end, body
     TFor(parser.PPattern, TExpr, TExpr, TExpr),
+    // `for x in xs` over an ARRAY, as opposed to `TFor`'s range. Its
+    // own node rather than a flag on `TFor`: the two share no operands
+    // (a range has two bounds, an array has one iterand) and no codegen
+    // (an index-and-load loop versus a counter), so folding them
+    // together would be a tag pretending to be a shape.
+    // pattern, array, body
+    TForArray(parser.PPattern, TExpr, TExpr),
     TClosure(Array[String], TExpr),
     TStructLit(String, Array[TFieldInit]),
     TVariantNew(String, Array[TExpr]),

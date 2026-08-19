@@ -11690,3 +11690,69 @@ byte-identical, 101/101 parser goldens (positions are invisible to
 `render_program`, by design), 10/10 `typecheck_corpus` rejected — all
 ten now reporting a file and line — sweep 7/9, Rust suite 1941/0.
 Self-compilation 0.86s.
+
+### Map and Set, and the two features they exposed (2026-08-19)
+
+Mirrored from `STDLIB_COLLECTIONS_SRC` the same way JSON was. `Map` is a
+real hash map, which makes one detail load-bearing that a smoke test
+would never catch: the bucket index is `String.hash(..) % bucket_count`,
+so `Map.keys` and `Map.values` enumerate in HASH order. The two
+compilers agree on a map's printed contents only if their hashes agree
+exactly — including the final `& i64::MAX`, which clears the sign bit so
+`% bucket_count` can never index negatively. A first attempt left the
+mask off and every hash differed, caught immediately because
+`String.hash("")` is the offset basis only if you forget it.
+
+`String.hash` itself is a new runtime primitive (FNV-1a, the same
+algorithm both real backends implement independently).
+
+**Two gaps fell out of the mirror, neither specific to collections.**
+
+`for x in xs` over an ARRAY. The self-hosted checker accepted only a
+literal range, so `for bucket in m.buckets` was rejected — but so is any
+ordinary program that iterates an array, which is most of them. It is
+now `TForArray`, its own typed node rather than a flag on `TFor`: a
+range has two bounds and an array has one iterand, they share no
+operands and no codegen, and folding them together would be a tag
+pretending to be a shape. Ownership follows `cg_array_map`'s rule — the
+array is an owned temporary released after the loop; each element is
+borrowed for one iteration, incremented on the way in and released on
+the way out.
+
+`xs.remove(i)`. Used exactly once in the prelude, by `Map.remove`, and
+absent from this compiler entirely. The runtime does the copy; codegen
+does the counting (every surviving element gains a reference, then the
+source is released, which drops the removed element's last one).
+
+**The spans work paid for itself here.** The failure was
+`unknown struct: Array` on every program, with no location because it
+came from the prelude — a string inside the compiler with no file to
+point at. Four rounds of guessing at call sites got nowhere, and a
+binary search over the prelude cost eleven seconds per step. What
+actually found it: reconstructing the prelude as a real FILE and running
+`./sh check` on it, which printed
+
+```
+error: unknown struct: Array
+  --> .../main.plum:327:17
+327 |     if i >= 0 { Map { buckets: m.buckets.set(idx, bucket.remove(i)), ... } }
+```
+
+— one command, exact line. That is the difference the previous commit
+bought, demonstrated on the first real bug after it landed.
+
+Two diagnostics were improved while hunting: the three
+`unknown struct` context accessors now say which one asked, and a type
+error inside a prelude function reports which function it was checking
+(a prelude item has no file, so the function name is all it has).
+
+Stdlib parity is 65 of 78. What remains splits cleanly: `Array.sort_*`/
+`zip` and `String.lines`/`trim_*` are pure Plum; `Float.sqrt`/`pow`/
+`floor`/`ceil`/`round` are `unsafe { }` calls into libm in the real
+prelude, and `Float.random*` needs the `random_raw` primitive — so those
+seven want runtime primitives, not prelude source.
+
+27/27 `exec_corpus` correct and leak-free (two new fixtures:
+`collections`, `for_array`), self-build fixed point byte-identical,
+101/101 parser goldens, 10/10 `typecheck_corpus` rejected, sweep 7/9,
+Rust suite 1941/0.

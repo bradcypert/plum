@@ -276,13 +276,13 @@ let lookup_generic_arg (generics: Array[String]) (args: Array[ITy]) (name: Strin
 pub let ctx_field_names (ctx: TyContext) (name: String): Array[String] =
     match find_struct(ctx, name) {
         Some(info) => Array.map(info.fields, |f| f.name),
-        None => { fail_ctx("unknown struct: ".concat(name)); [] },
+        None => { fail_ctx("unknown struct: ".concat(name).concat(" (asked for its field names)")); [] },
     }
 
 pub let ctx_field_types (ctx: TyContext) (name: String): Array[ITy] =
     match find_struct(ctx, name) {
         Some(info) => Array.map(info.fields, |f| f.ty),
-        None => { fail_ctx("unknown struct: ".concat(name)); [] },
+        None => { fail_ctx("unknown struct: ".concat(name).concat(" (asked for its field types)")); [] },
     }
 
 pub let ctx_variant_payload (ctx: TyContext) (tag: String): Array[ITy] =
@@ -299,7 +299,7 @@ pub let ctx_variant_payload (ctx: TyContext) (tag: String): Array[ITy] =
 pub let ctx_struct_generics (ctx: TyContext) (name: String): Array[String] =
     match find_struct(ctx, name) {
         Some(info) => info.generics,
-        None => { fail_ctx("unknown struct: ".concat(name)); [] },
+        None => { fail_ctx("unknown struct: ".concat(name).concat(" (asked for its generics)")); [] },
     }
 
 pub let ctx_variant_generics (ctx: TyContext) (tag: String): Array[String] =

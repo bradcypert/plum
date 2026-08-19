@@ -1,0 +1,28 @@
+// Map and Set, mirrored from the real compiler's own prelude. `Map` is
+// a hash map, so this fixture pins something a smoke test would miss:
+// `Map.keys`/`Map.values` enumerate in HASH order, which means the two
+// compilers only agree if `String.hash` agrees down to the sign-bit
+// mask. A first attempt got that mask wrong and every hash differed.
+//
+// `Map.remove` is also the only user of `xs.remove(i)` in the prelude,
+// which the self-hosted compiler did not have until this landed.
+
+let main (): Unit = {
+    let m = Map.insert(Map.insert(Map.new(()), "a", 1), "b", 2);
+    println(Map.len(m).to_string());
+    println(Option.unwrap_or(Map.get(m, "a"), 0).to_string());
+    println(Map.contains(m, "b").to_string());
+    println(Map.keys(m).to_string());
+    println(Map.values(m).to_string());
+    let m2 = Map.remove(m, "a");
+    println(Map.len(m2).to_string());
+
+    let s = Set.insert(Set.insert(Set.new(()), 3), 7);
+    println(Set.len(s).to_string());
+    println(Set.contains(s, 7).to_string());
+    println(Set.to_array(s).to_string());
+    let t = Set.from_array([7, 9]);
+    println(Set.to_array(Set.union(s, t)).to_string());
+    println(Set.to_array(Set.intersection(s, t)).to_string());
+    println(Set.to_array(Set.difference(s, t)).to_string());
+}
