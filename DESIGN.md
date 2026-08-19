@@ -11078,8 +11078,8 @@ class as the stale-binding soundness bug fixed earlier. Making the
 checker reject what the backend cannot emit would turn every remaining
 gap into a clean diagnostic.
 
-CLI: self-hosted has `check`, `run`, `emit-llvm`, `build`. Still
-missing `test`, `new`, `lsp`, and the `dump-*` helpers.
+CLI: self-hosted has `check`, `run`, `emit-llvm`, `build`, `test`.
+Still missing `new`, `lsp`, and the `dump-*` helpers.
 
 ### `.to_string()` on aggregates (2026-08-18)
 
@@ -11170,6 +11170,57 @@ with a source location — which was the point of prioritising it. That
 failure shape (accept, then fail late without a span) is the same one
 behind the stale-binding soundness bug earlier in this file, and it is
 now absent from the language surface.
+
+19/19 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 7/7 `typecheck_corpus` rejected, Rust suite 1934/0.
+
+### `test` in the self-hosted compiler (2026-08-18)
+
+Matches the real harness's output and exit code:
+
+```
+running 3 tests
+test test_one_ok ... ok
+test test_boom ... FAILED
+test test_after_boom ... ok
+
+failures:
+
+---- test_boom ----
+array index out of bounds
+
+test result: FAILED. 2 passed; 1 failed        (exit 1)
+```
+
+**Each test runs in its OWN PROCESS**, and that is the design, not an
+implementation detail. `panic_raw` aborts rather than returning a
+catchable error, so a single-process harness stops at the first failure
+and cannot report the rest — which is exactly why the real compiler's
+NATIVE path is built the same way (`testing.rs`: "there is no way to
+run more than one test per compiled PROCESS and still observe every
+test's own outcome"). `test_after_boom` running after `test_boom` died
+is the proof it works. The child is this same binary re-invoked through
+`/proc/self/exe` — `args()` does not include the program's own path —
+and `run_process`'s captured output becomes the failure report,
+printed under the test's name rather than interleaved with progress.
+
+The parent type-checks ONCE; children skip it, since they load the same
+program and re-checking per test would dominate the run.
+
+**Discovery needs more than the name prefix.** A `test_`-prefixed
+helper that takes real arguments is not a test, and calling it with
+none reads out of bounds instead of reporting a failure. This was not
+hypothetical for five minutes: this compiler's own `cmd_test`/
+`cmd_test_one` were originally named `test_*`, and pointing `test` at
+`bootstrap/self_host` "discovered" and crashed on both. Note the real
+compiler's `discover_tests` filters on the name alone and would
+mis-discover the same way.
+
+The obvious filter is wrong too. `Array.is_empty(def.params)` reported
+**0 tests** for genuine test files, because `let f ()` parses as ONE
+parameter holding the empty-tuple pattern, not as zero — the unit-
+argument convention, visible in `dump-ast` as `(let f (((tuple))) ...)`.
+`takes_no_args` accepts either shape.
 
 19/19 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 7/7 `typecheck_corpus` rejected, Rust suite 1934/0.

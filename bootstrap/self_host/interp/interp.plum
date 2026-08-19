@@ -95,7 +95,7 @@ struct FnDef { name: String, params: Array[String], body: parser.PExpr }
 // argument list, which is exactly what running the self-hosted
 // compiler under this interpreter needs: `./sh run bootstrap/self_host
 // ast foo.plum` must give the INNER `main` `["ast", "foo.plum"]`.
-struct ProgramState { fns: Array[FnDef], globals: Array[FnDef], argv: Array[String] }
+pub struct ProgramState { fns: Array[FnDef], globals: Array[FnDef], argv: Array[String] }
 
 pub let build_program_state (program: parser.ProgramNode): ProgramState = build_program_state_argv(program, [])
 
@@ -1056,6 +1056,15 @@ let eval_binary (op: parser.BOp) (lhs: Value) (rhs: Value): Value =
     }
 
 // --- Entry point: evaluate `main`'s body against `state` ---
+
+// Calls one top-level 0-parameter function by name. `run_main` is the
+// same operation specialised to "main"; `plum test` needs it for an
+// arbitrary `test_*`.
+pub let run_named (state: ProgramState) (name: String): Value =
+    match find_fn(state, name) {
+        Some(def) => call_fn(state, def, []),
+        None => { fail_interp("no top-level function named '".concat(name).concat("'")); VUnit },
+    }
 
 pub let run_main (state: ProgramState): Value =
     match find_fn(state, "main") {

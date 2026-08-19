@@ -57,7 +57,118 @@ use interp;
 use typecheck;
 use codegen;
 
-let usage (): Unit = println("usage: self_host (tokens|ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>]")
+let usage (): Unit = println("usage: self_host (tokens|ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] | test <project-dir>")
+
+// Every top-level `let` whose name's LAST segment starts with `test_`.
+// The last-segment rule is what makes a module-qualified
+// `lexer.test_foo` discoverable — the same rule the real compiler's
+// `discover_tests` uses.
+let discover_tests (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= items.len() { acc }
+    else {
+        let next = match items[i].kind {
+            IKLet(def) => {
+                let parts = def.name.split(".");
+                let last = parts[parts.len() - 1];
+                // The NAME is not enough: a helper that merely starts
+                // with `test_` and takes real arguments is not a test,
+                // and calling it with none reads out of bounds instead
+                // of reporting a failure. Caught immediately -- this
+                // compiler's own `cmd_test`/`cmd_test_one` were named
+                // `test_*` at first and were "discovered".
+                if last.starts_with("test_") && takes_no_args(def.params) { acc.push(def.name) } else { acc }
+            },
+            _ => acc,
+        };
+        discover_tests(items, i + 1, next)
+    }
+
+// `let f ()` parses as ONE parameter holding the empty-tuple pattern,
+// not as zero parameters -- the unit-argument convention. So "callable
+// with no arguments" is that shape, or genuinely no parameters at all.
+let takes_no_args (params: Array[parser.ParamNode]): Bool =
+    if Array.is_empty(params) { true }
+    else if params.len() > 1 { false }
+    else {
+        match params[0] {
+            ParamPatternTy(pat, _) => match pat { PTuple(elems) => Array.is_empty(elems), _ => false },
+            _ => false,
+        }
+    }
+
+// A test PASSES unless running it ERRORS; its return value is ignored.
+// That is the real compiler's rule, and it is why these are typically
+// `Bool`-returning functions nothing inspects: the assertion mechanism
+// is `require`/`panic`, not the result.
+//
+// Each test runs in its OWN PROCESS. `panic_raw` aborts rather than
+// returning a catchable error, so a harness that ran every test in one
+// process would stop at the first failure and could not report the
+// rest -- which is precisely why the real compiler's NATIVE test path
+// is structured the same way (see `testing.rs`: "there is no way to
+// run more than one test per compiled PROCESS and still observe every
+// test's own outcome"). The child is this same binary re-invoked
+// through `/proc/self/exe`, since `args()` does not include the
+// program's own path.
+struct TestRun { failed: Int, detail: String }
+
+let run_tests (dir: String) (names: Array[String]) (i: Int) (acc: TestRun): TestRun =
+    if i >= names.len() { acc }
+    else {
+        let r = run_process("/proc/self/exe", ["test-one", dir, names[i]]);
+        let outcome = match r {
+            Err(e) => TestRun { failed: 1, detail: e },
+            Ok(pr) => if pr.exit_code == 0 { TestRun { failed: 0, detail: "" } }
+                      else { TestRun { failed: 1, detail: if pr.stderr == "" { pr.stdout } else { pr.stderr } } },
+        };
+        if outcome.failed == 0 {
+            println("test ".concat(names[i]).concat(" ... ok"));
+            run_tests(dir, names, i + 1, acc)
+        } else {
+            println("test ".concat(names[i]).concat(" ... FAILED"));
+            // The child's own output IS the failure report -- the panic
+            // message it died with. Captured rather than let through so
+            // it lands under the test's name instead of interleaved
+            // with the progress lines.
+            run_tests(dir, names, i + 1, TestRun {
+                failed: acc.failed + 1,
+                detail: acc.detail.concat("---- ").concat(names[i]).concat(" ----\n").concat(outcome.detail).concat("\n"),
+            })
+        }
+    }
+
+let cmd_test (dir: String): Unit = {
+    let program = parser.ProgramNode { items: collect_project(dir) };
+    // Checked ONCE here, in the parent. The children skip it: the
+    // program they load is the same one, and re-checking it per test
+    // would dominate the run.
+    typecheck.check_program(program);
+    let names = discover_tests(program.items, 0, []);
+    println("running ".concat(names.len().to_string()).concat(" tests"));
+    let run = run_tests(dir, names, 0, TestRun { failed: 0, detail: "" });
+    println("");
+    if run.failed == 0 {
+        println("test result: ok. ".concat(names.len().to_string()).concat(" passed; 0 failed"));
+    } else {
+        println("failures:");
+        println("");
+        println(run.detail);
+        println("test result: FAILED. ".concat((names.len() - run.failed).to_string()).concat(" passed; ").concat(run.failed.to_string()).concat(" failed"));
+        // Non-zero exit. `panic_raw` is the only mechanism this
+        // language exposes for that, so its message is deliberately
+        // terse -- the real report is above.
+        panic_raw("");
+    }
+}
+
+// One test, in its own process -- see `run_tests`. Exits non-zero by
+// ABORTING if the test panics, which is the signal the parent reads.
+let cmd_test_one (dir: String) (name: String): Unit = {
+    let program = parser.ProgramNode { items: collect_project(dir) };
+    let state = interp.build_program_state(program);
+    let ignored = interp.run_named(state, name);
+    ()
+}
 
 // The C shims every self-hosted binary links against: `process_run`
 // and friends are declared by the runtime preamble but IMPLEMENTED in
@@ -199,6 +310,10 @@ let main (): Unit = {
         // DIRECTORY, which `read_file` can't open at all.
         typecheck.check_program(parser.ProgramNode { items: collect_project(argv[1]) });
         println("ok");
+    } else if argv[0] == "test-one" && argv.len() >= 3 {
+        cmd_test_one(argv[1], argv[2]);
+    } else if argv[0] == "test" && Result.unwrap_or(is_directory(argv[1]), false) {
+        cmd_test(argv[1]);
     } else if argv[0] == "build" && Result.unwrap_or(is_directory(argv[1]), false) {
         build_project(argv);
     } else if argv[0] == "emit-llvm" && Result.unwrap_or(is_directory(argv[1]), false) {
