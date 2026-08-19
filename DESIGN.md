@@ -11833,3 +11833,66 @@ compiler's prelude defines now exists in the self-hosted one.
 29/29 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 101/101 parser goldens, 10/10 `typecheck_corpus`
 rejected, sweep 7/9, Rust suite 1941/0.
+
+### FFI: `extern "C"`, `unsafe`, and `CStr` (2026-08-19)
+
+The self-hosted compiler can now call C. `examples/asteroids` — a
+raylib game, twelve `unsafe` blocks, sixteen extern declarations —
+builds from self-hosted IR and links against raylib.
+
+The parser already handled `extern` blocks and `unsafe`; everything
+else was new:
+
+- **`ITCStr`/`CgCStr`** — a raw `char*`, deliberately NOT an alias for
+  `String`, so the conversion has to be written. `.as_cstr()` borrows a
+  Plum string's bytes (the runtime always NUL-terminates them, so it is
+  a pointer adjustment, not a copy); `.as_string()` COPIES back, because
+  whatever C returned may be static, stack, or freed on the next call.
+  A `CStr` is not heap-shaped: nothing increments or releases one.
+- **Extern signatures** enter the ordinary signature table with an
+  `is_extern` marker, so ordinary call inference resolves them. No
+  currying for an extern — there is no closure to build.
+- **The `unsafe` gate** mirrors `plum_types::Infer::in_unsafe`,
+  including being saved and restored around the block rather than
+  simply set: a closure defined inside `unsafe` must not carry the
+  permission to wherever it is later called.
+- **Codegen** emits one `declare` per extern (unconditionally — a
+  declaration costs nothing and externs have no bodies for the
+  reachability worklist to reason about) and a direct call. C does not
+  participate in reference counting, so arguments are borrowed.
+
+**Three more gaps surfaced on the way, each found by asteroids failing
+one step further along.** None were FFI:
+
+1. `f()` where `f` was declared `let f (): T`. That declaration has ONE
+   parameter — the empty-tuple pattern — so the call needs one argument,
+   and the real compiler synthesizes it. This compiler's own source
+   writes `f(())` throughout, which is exactly why the gap survived this
+   long: nothing it compiled had ever used the sugar.
+2. **Struct-literal spread** (`Game { score: 0, ..g }`). Carried to the
+   backend rather than desugared in the checker, because the copied
+   fields must be INCREMENTED as they are stored — desugaring to
+   `TFieldGet` yields borrowed values where `cg_store_fields` requires
+   owned ones, and every refcount would come out one short.
+3. **Nested field update** (`Game { ship.rotation: r, ..g }`), expanded
+   to `Game { ship: Ship { rotation: r, ..g.ship }, ..g }`. The
+   expansion needs the INNER struct's name, which only the context
+   knows — so it lives in the checker, exactly as the real compiler's
+   `nested_struct_update` runs after declarations are collected.
+
+Two duplicate `declare`s (`strlen`, and `memcmp` in the previous batch)
+were rejected outright by LLVM. Cheap to fix, and worth noting that
+adding a libc declaration means checking the runtime does not already
+have it.
+
+The sweep now LINKS an example it cannot run: "both compilers produce a
+binary" is most of what running asteroids would have told us, and it
+catches a codegen regression that emitting alone would not. Per-example
+link flags live in the script, next to the reason.
+
+**Sweep: 8 of 9.** Only `concurrency` remains.
+
+30/30 `exec_corpus` correct and leak-free (new `ffi` fixture, with its
+own C shim), self-build fixed point byte-identical, 101/101 parser
+goldens, 11/11 `typecheck_corpus` rejected (new: the unsafe gate),
+Rust suite 1941/0.

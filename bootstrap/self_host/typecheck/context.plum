@@ -246,6 +246,7 @@ let resolve_named (ctx: TyContext) (in_scope: Array[String]) (name: String) (arg
     else if name == "Float" { ITFloat }
     else if name == "Bool" { ITBool }
     else if name == "String" { ITStr }
+    else if name == "CStr" { ITCStr }
     else if name == "Unit" { ITUnit }
     else if name == "Array" { ITStruct("Array", args) }
     else if Array.contains(in_scope, name) { ITParam(name) }

@@ -43,8 +43,15 @@ declare -A no_run=(
 # the reason travels WITH the failure instead of in a list somewhere
 # else.
 declare -A known=(
-    [asteroids]="needs extern \"C\"/unsafe FFI (raylib)"
     [concurrency]="needs channels/spawn"
+)
+
+# Extra flags an example needs to LINK, passed to both compilers. Kept
+# here rather than inferred: `asteroids` reaches raylib through its own
+# `native/` shim, and which library that shim needs is a property of the
+# example, not something a compiler can work out.
+declare -A link_flags=(
+    [asteroids]="--link-lib raylib"
 )
 
 ok=0
@@ -54,6 +61,17 @@ emit_only=0
 for dir in examples/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
+
+    # `--link-c` only when the example actually HAS a native shim: most
+    # do not, and clang is happy to fail on a path that is not there.
+    # `compile-ir` wants the C FILES, unlike `build`, which scans the
+    # directory itself. Most examples have no shim at all.
+    native_flag=""
+    if [ -d "$dir/native" ]; then
+        for c in "$dir"/native/*.c; do
+            [ -e "$c" ] && native_flag="$native_flag --link-c $c"
+        done
+    fi
 
     # 1. self-hosted emit
     if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh emit-llvm "$dir" > "$work/$name.ll" 2>"$work/$name.emit_err"; then
@@ -71,14 +89,28 @@ for dir in examples/*/; do
         continue
     fi
 
+    # An example that cannot be run non-interactively is still LINKED by
+    # both compilers -- "the self-hosted output is a working binary" is
+    # most of what running it would have told us, and it catches a
+    # codegen regression that emit alone would not.
     if [ -n "${no_run[$name]:-}" ]; then
-        printf 'EMIT  %-24s (not run: %s)\n' "$name" "${no_run[$name]}"
+        if ! $plum build "$dir" ${link_flags[$name]:-} -o "$work/$name.ref" > "$work/$name.ref_err" 2>&1; then
+            printf 'FAIL  %-24s the REAL compiler could not build it: %s\n' "$name" "$(head -n 1 "$work/$name.ref_err")"
+            fail=$((fail + 1))
+            continue
+        fi
+        if ! $plum compile-ir "$work/$name.ll" ${link_flags[$name]:-} $native_flag -o "$work/$name.bin" > "$work/$name.link_err" 2>&1; then
+            printf 'FAIL  %-24s emitted IR did not link: %s\n' "$name" "$(head -n 1 "$work/$name.link_err")"
+            fail=$((fail + 1))
+            continue
+        fi
+        printf 'LINK  %-24s both compilers produce a binary (not run: %s)\n' "$name" "${no_run[$name]}"
         emit_only=$((emit_only + 1))
         continue
     fi
 
     # 2. reference output from the real compiler
-    if ! $plum build "$dir" -o "$work/$name.ref" > "$work/$name.ref_err" 2>&1; then
+    if ! $plum build "$dir" ${link_flags[$name]:-} -o "$work/$name.ref" > "$work/$name.ref_err" 2>&1; then
         printf 'FAIL  %-24s the REAL compiler could not build it: %s\n' "$name" "$(head -n 1 "$work/$name.ref_err")"
         fail=$((fail + 1))
         continue
@@ -86,7 +118,7 @@ for dir in examples/*/; do
     ref_out="$(cd "$work" && "./$name.ref" 2>&1)"
 
     # 3. self-hosted output
-    if ! $plum compile-ir "$work/$name.ll" -o "$work/$name.bin" > "$work/$name.link_err" 2>&1; then
+    if ! $plum compile-ir "$work/$name.ll" ${link_flags[$name]:-} $native_flag -o "$work/$name.bin" > "$work/$name.link_err" 2>&1; then
         printf 'FAIL  %-24s emitted IR did not link: %s\n' "$name" "$(head -n 1 "$work/$name.link_err")"
         fail=$((fail + 1))
         continue

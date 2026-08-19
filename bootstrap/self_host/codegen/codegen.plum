@@ -83,6 +83,10 @@ pub enum CgTy {
     CgBool,
     CgUnit,
     CgStr,
+    // A raw `char*`. Distinct from `CgStr` because it is NOT a
+    // refcounted Plum cell: nothing increments it, releases it, or reads
+    // a length header off it.
+    CgCStr,
     // Both are a `ptr` to a heap cell; the NAME is carried so field
     // offsets and variant tags can be looked up in the declaration
     // tables. Nothing else about the type is needed at this level —
@@ -126,6 +130,7 @@ let cg_llvm_ty (t: CgTy): String =
         CgBool => "i1",
         CgUnit => "i1",
         CgStr => "ptr",
+        CgCStr => "ptr",
         CgStruct(_) => "ptr",
         CgEnum(_) => "ptr",
         CgArray(_) => "ptr",
@@ -141,6 +146,7 @@ let cg_ty_name (t: CgTy): String =
         CgBool => "Bool",
         CgUnit => "Unit",
         CgStr => "String",
+        CgCStr => "CStr",
         CgStruct(name) => name,
         CgEnum(name) => name,
         CgArray(elem) => "Array[".concat(cg_ty_name(elem)).concat("]"),
@@ -305,6 +311,7 @@ let cg_ity_mangle (t: typecheck.ITy): String =
         ITFloat => "Float",
         ITBool => "Bool",
         ITStr => "Str",
+        ITCStr => "CStr",
         ITUnit => "Unit",
         ITStruct(name, args) => if Array.is_empty(args) { name } else { name.concat("_").concat(cg_targ_suffix(args, 0, "")) },
         ITEnum(name, args) => if Array.is_empty(args) { name } else { name.concat("_").concat(cg_targ_suffix(args, 0, "")) },
@@ -540,12 +547,15 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TArrayLit(elems) => cg_array_lit(p, env, n, elems, cg_ty(p, e)),
         TIndex(base, idx) => cg_index(p, env, n, base, idx, cg_ty(p, e)),
         TClosure(params, body) => cg_closure(p, env, n, params, body, cg_concrete(p, typecheck.texpr_ty(p.subst, e))),
-        TStructLit(name, fields) => cg_struct_lit(p, env, n, name, fields),
+        TStructLit(name, fields, spread) => cg_struct_lit(p, env, n, name, fields, spread),
         TVariantNew(tag, args) => cg_variant_call(p, env, n, tag, args),
         TFnCall(m, name, args, targs) => cg_fn_call(p, env, n, m, name, args, targs, cg_ty(p, e)),
         TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
         TArrayNs(name, args) => cg_array_ns_call(p, env, n, name, args),
+        TExternCall(name, args) => cg_extern_call(p, env, n, name, args, cg_ty(p, e)),
+        TAsCStr(inner) => cg_as_cstr(p, env, n, inner),
+        TAsString(inner) => cg_as_string(p, env, n, inner),
         TPrintln(arg) => cg_println(p, env, n, arg),
         TTupleLit(elems) => cg_tuple_lit(p, env, n, elems, cg_ty(p, e)),
         TUnsupported(what) => { cg_fail(what.concat(" isn't supported by this backend")); cg_unit_emit(n) },
@@ -584,6 +594,7 @@ let cg_of_ity (t: typecheck.ITy): CgTy =
         ITFloat => CgFloat,
         ITBool => CgBool,
         ITStr => CgStr,
+        ITCStr => CgCStr,
         ITUnit => CgUnit,
         ITStruct(name, args) => if name == "Array" { CgArray(cg_of_ity(args[0])) } else { CgStruct(name) },
         ITRef(inner) => CgRef(cg_of_ity(inner)),
@@ -1078,6 +1089,9 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TUnary(_, a) => cg_reads_max(name, a),
         TFieldGet(a, _) => cg_reads_max(name, a),
         TPrintln(a) => cg_reads_max(name, a),
+        TExternCall(_, xs) => cg_reads_max_list(name, xs, 0, 0),
+        TAsCStr(a) => cg_reads_max(name, a),
+        TAsString(a) => cg_reads_max(name, a),
         TRefNew(a) => cg_reads_max(name, a),
         TBinary(_, a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
         TIndex(a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
@@ -1086,7 +1100,7 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TVariantNew(_, xs) => cg_reads_max_list(name, xs, 0, 0),
         TFnCall(_, _, xs, _) => cg_reads_max_list(name, xs, 0, 0),
         TArrayNs(_, xs) => cg_reads_max_list(name, xs, 0, 0),
-        TStructLit(_, fs) => cg_reads_max_fields(name, fs, 0, 0),
+        TStructLit(_, fs, sp) => cg_cap2(cg_reads_max_fields(name, fs, 0, 0) + match sp { Some(b) => cg_reads_max(name, b), None => 0 }),
         TMethodCall(_, b, xs) => cg_cap2(cg_reads_max(name, b) + cg_reads_max_list(name, xs, 0, 0)),
         TClosureCall(f, xs) => cg_cap2(cg_reads_max(name, f) + cg_reads_max_list(name, xs, 0, 0)),
         // Branches are ALTERNATIVES: only one runs, so their contribution
@@ -1448,6 +1462,10 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         CgFloat => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_float_to_string(double ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
         CgBool => Emit { code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_bool_to_string(i1 ").concat(b.val).concat(")\n"), allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1 },
         CgUnit => { cg_fail("Unit has no .to_string()"); cg_unit_emit(b.n) },
+        // A raw `char*` has no length header and no ownership, so
+        // rendering it means deciding who owns the copy. `.as_string()`
+        // is that decision, written explicitly.
+        CgCStr => { cg_fail(".to_string() on a CStr isn't supported -- use .as_string()"); cg_unit_emit(b.n) },
         // Dispatched to the per-type renderer emitted by
         // `cg_emit_str_fn`, chosen by the base's own ITy -- the CgTy
         // alone cannot name the function, since `CgStruct("Box")` has
@@ -1707,6 +1725,53 @@ let cg_array_remove (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typechec
         .concat(cg_inc_elems(elem, cell, len, cell.concat("_ie")))
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, base)), b.val));
     Emit { code: code, allocas: b.allocas.concat(i.allocas), releases: b.releases.concat(i.releases), globals: b.globals.concat(i.globals), val: cell, ty: ty, n: i.n + 2 }
+}
+
+// A call into an `extern "C"` function. No mangling, no specialization,
+// no ownership transfer: C does not participate in reference counting,
+// so every argument is BORROWED and released here exactly as it would
+// be for any other temporary.
+//
+// A `Unit` return is `void` in C terms, and LLVM will not let a void
+// call produce a value -- so nothing is assigned and the expression's
+// value is the usual Unit placeholder.
+let cg_extern_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (ret: CgTy): Emit = {
+    let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
+    let reg = cg_reg(a.n);
+    let is_void = cg_ty_eq(ret, CgUnit);
+    let call = if is_void {
+        "  call void @".concat(name).concat("(").concat(cg_join_commas(a.vals)).concat(")\n")
+    } else {
+        "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" @").concat(name).concat("(").concat(cg_join_commas(a.vals)).concat(")\n")
+    };
+    Emit { code: a.code.concat(call).concat(cg_dec_args(p, args, a.vals, 0, "")), allocas: a.allocas, releases: a.releases, globals: a.globals,
+        val: if is_void { "0" } else { reg }, ty: ret, n: a.n + 1 }
+}
+
+// `s.as_cstr()` -- the bytes of a string cell, which the runtime always
+// keeps NUL-terminated (see runtime.plum's own note on why every string
+// carries a trailing NUL the length never counts). So this is a pointer
+// adjustment, not a copy, and the result BORROWS from the string: it
+// stays valid exactly as long as that cell does.
+let cg_as_cstr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.TExpr): Emit = {
+    let b = cg_borrow(p, env, n, inner);
+    let reg = cg_reg(b.n);
+    Emit {
+        code: b.code.concat("  ").concat(reg).concat(" = getelementptr i8, ptr ").concat(b.val).concat(", i64 16\n").concat(b.drop),
+        allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgCStr, n: b.n + 1,
+    }
+}
+
+// `c.as_string()` -- a fresh, owned string cell COPIED from the C
+// pointer. A copy is the whole point: whatever C handed back may be a
+// static buffer, a stack temporary, or freed on the next call.
+let cg_as_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (inner: typecheck.TExpr): Emit = {
+    let b = cg_expr(p, env, n, inner);
+    let reg = cg_reg(b.n);
+    Emit {
+        code: b.code.concat("  ").concat(reg).concat(" = call ptr @plum_cstr_to_string(ptr ").concat(b.val).concat(")\n"),
+        allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgStr, n: b.n + 1,
+    }
 }
 
 // --- Closures ---
@@ -2111,13 +2176,58 @@ let cg_store_tuple (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (
 // declared index. Fields are stored in DECLARATION order regardless of
 // the order they were written in the literal, which is what makes a
 // field read a fixed offset.
-let cg_struct_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (fields: Array[typecheck.TFieldInit]): Emit = {
+let cg_struct_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (fields: Array[typecheck.TFieldInit]) (spread: Option[typecheck.TExpr]): Emit = {
     let field_names = typecheck.ctx_field_names(p.ctx, name);
     let cell = cg_reg(n);
     let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((8 + 8 * field_names.len()).to_string()).concat(")\n");
     let f = cg_store_fields(p, env, n + 1, field_names, cell, fields, 0, "", "", "", "");
-    Emit { code: head.concat(f.code), allocas: f.allocas, releases: f.releases,globals: f.globals, val: cell, ty: CgStruct(name), n: f.n }
+    match spread {
+        None => Emit { code: head.concat(f.code), allocas: f.allocas, releases: f.releases,globals: f.globals, val: cell, ty: CgStruct(name), n: f.n },
+        // `..base` fills in every position the literal did not mention.
+        // The base is evaluated ONCE, each copied field is incremented
+        // as it is stored -- the new cell owns its own reference to a
+        // shared field, exactly as if it had been written out -- and the
+        // base is then released.
+        Some(base) => {
+            let b = cg_expr(p, env, f.n, base);
+            let ity = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
+            let copies = cg_copy_missing_fields(p, field_names, cg_struct_field_itys(p, ity, name), fields, cell, b.val, 0, b.n, "");
+            Emit {
+                code: head.concat(f.code).concat(b.code).concat(copies.code).concat(cg_dec(ity, b.val)),
+                allocas: f.allocas.concat(b.allocas), releases: f.releases.concat(b.releases), globals: f.globals.concat(b.globals),
+                val: cell, ty: CgStruct(name), n: copies.n,
+            }
+        },
+    }
 }
+
+struct CopyEmit { code: String, n: Int }
+
+// Every declared field the literal did not mention, loaded from the
+// spread base and stored into the new cell -- with an increment for any
+// heap-shaped one, because both cells now point at it.
+let cg_copy_missing_fields (p: CgProgram) (field_names: Array[String]) (field_itys: Array[typecheck.ITy]) (given: Array[typecheck.TFieldInit]) (cell: String) (base: String) (i: Int) (n: Int) (acc: String): CopyEmit =
+    if i >= field_names.len() { CopyEmit { code: acc, n: n } }
+    else if cg_field_given(given, field_names[i], 0) { cg_copy_missing_fields(p, field_names, field_itys, given, cell, base, i + 1, n, acc) }
+    else {
+        let fty = if i < field_itys.len() { field_itys[i] } else { ITUnit };
+        let lty = cg_llvm_ty(cg_of_ity(fty));
+        let sp = cg_reg(n);
+        let v = cg_reg(n + 1);
+        let dp = cg_reg(n + 2);
+        let line = "  ".concat(sp).concat(" = getelementptr i8, ptr ").concat(base).concat(", i64 ").concat(cg_field_offset(i).to_string()).concat("\n")
+            .concat("  ").concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(sp).concat("\n")
+            .concat(cg_inc(cg_of_ity(fty), v))
+            .concat("  ").concat(dp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(i).to_string()).concat("\n")
+            .concat("  store ").concat(lty).concat(" ").concat(v).concat(", ptr ").concat(dp).concat("\n");
+        cg_copy_missing_fields(p, field_names, field_itys, given, cell, base, i + 1, n + 3, acc.concat(line))
+    }
+
+let cg_field_given (given: Array[typecheck.TFieldInit]) (name: String) (i: Int): Bool =
+    if i >= given.len() { false } else if given[i].name == name { true } else { cg_field_given(given, name, i + 1) }
+
+let cg_struct_field_itys (p: CgProgram) (ity: typecheck.ITy) (name: String): Array[typecheck.ITy] =
+    Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), cg_ity_args(ity), ft))
 
 struct FieldsEmit { code: String, allocas: String, releases: String, globals: String, n: Int }
 
@@ -2300,6 +2410,7 @@ let cg_zero_of (t: CgTy): String =
         CgBool => "0",
         CgUnit => "0",
         CgStr => "null",
+        CgCStr => "null",
         CgStruct(_) => "null",
         CgEnum(_) => "null",
         CgArray(_) => "null",
@@ -2750,7 +2861,7 @@ let cg_eq_sym (t: typecheck.ITy): String = "@plum_eq_".concat(cg_ity_mangle(t))
 // Is this type compared by VALUE inline, or does it need a function?
 let cg_eq_is_primitive (t: typecheck.ITy): Bool =
     match t {
-        ITInt => true, ITFloat => true, ITBool => true, ITUnit => true, ITStr => true,
+        ITInt => true, ITFloat => true, ITBool => true, ITUnit => true, ITStr => true, ITCStr => true,
         ITVar(_) => true,
         _ => false,
     }
@@ -2844,6 +2955,9 @@ let cg_render_val (owner: typecheck.ITy) (t: typecheck.ITy) (val: String) (n: In
         ITInt => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr @plum_int_to_string(i64 ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
         ITFloat => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr @plum_float_to_string(double ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
         ITBool => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr @plum_bool_to_string(i1 ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
+        // Unreachable in practice: `.to_string()` on a `CStr` is
+        // rejected in `cg_to_string`, so nothing gets this far with one.
+        ITCStr => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<cstr>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
         // Quoted, and the intermediate concat released so a nested
         // string costs no leak.
         ITStr => {
@@ -3280,6 +3394,10 @@ let cg_rc_enabled (unit: Unit): Bool = true
 let cg_is_heap (t: CgTy): Bool =
     match t {
         CgInt => false, CgFloat => false, CgBool => false, CgUnit => false,
+        // NOT heap: a `CStr` is a borrowed `char*`, owned by whatever
+        // produced it -- a string cell that outlives the call, or the C
+        // side. Nothing here increments or frees one.
+        CgCStr => false,
         CgStr => true, CgStruct(_) => true, CgEnum(_) => true, CgArray(_) => true, CgClosure(_, _) => true, CgRef(_) => true,
         CgTuple(_) => true,
     }
@@ -3561,6 +3679,53 @@ let cg_emit_array_rel (t: typecheck.ITy) (elem: typecheck.ITy): String =
 // Prepending (rather than appending) is what makes a user definition of
 // the same name WIN — `find_sig` scans in order, so a later declaration
 // shadows the prelude's, which is the real compiler's behaviour too.
+// One `declare` per `extern "C"` function in the program, emitted
+// whether or not it is reached: a declaration costs nothing in the
+// output, and filtering by reachability would mean threading extern
+// names through the same worklist that exists to decide which BODIES to
+// emit -- externs have no bodies.
+let cg_emit_extern_decls (items: Array[parser.ItemNode]) (i: Int) (acc: String): String =
+    if i >= items.len() { acc }
+    else {
+        match items[i].kind {
+            IKExtern(block) => cg_emit_extern_decls(items, i + 1, acc.concat(cg_extern_decl_list(block.fns, 0, ""))),
+            _ => cg_emit_extern_decls(items, i + 1, acc),
+        }
+    }
+
+let cg_extern_decl_list (fns: Array[parser.ExternFnNode]) (i: Int) (acc: String): String =
+    if i >= fns.len() { acc }
+    else {
+        let ret = match fns[i].ret_ty { Some(t) => cg_llvm_ty(cg_of_ann(t)), None => "void" };
+        let params = cg_extern_param_tys(fns[i].params, 0, "");
+        cg_extern_decl_list(fns, i + 1, acc.concat("declare ").concat(ret).concat(" @").concat(fns[i].name).concat("(").concat(params).concat(")\n"))
+    }
+
+let cg_extern_param_tys (ps: Array[parser.ExternParamNode]) (i: Int) (acc: String): String =
+    if i >= ps.len() { acc }
+    else {
+        let t = cg_llvm_ty(cg_of_ann(ps[i].ty));
+        cg_extern_param_tys(ps, i + 1, if acc == "" { t } else { acc.concat(", ").concat(t) })
+    }
+
+// An extern declaration's types are written directly in the AST and
+// never go through inference, so they are mapped here rather than read
+// off a `TExpr`. Only the C-compatible surface is accepted; anything
+// else is a type the FFI boundary cannot carry.
+let cg_of_ann (t: parser.Ty): CgTy =
+    match t {
+        TyPath(segments) => {
+            let name = segments[segments.len() - 1];
+            if name == "Int" { CgInt }
+            else if name == "Float" { CgFloat }
+            else if name == "Bool" { CgBool }
+            else if name == "CStr" { CgCStr }
+            else if name == "Unit" { CgUnit }
+            else { { cg_fail("extern declarations can only use Int/Float/Bool/CStr/Unit, found ".concat(name)); CgInt } }
+        },
+        _ => { cg_fail("extern declarations can only use simple types"); CgInt },
+    }
+
 pub let cg_with_prelude (program: parser.ProgramNode): parser.ProgramNode =
     parser.ProgramNode { items: Array.concat(parser.parse_program(lexer.tokenize(cg_prelude_src(()))).items, program.items) }
 
@@ -3582,6 +3747,7 @@ pub let cg_emit_program (program0: parser.ProgramNode): String = {
     let rels = cg_rel_types_of(p, insts, 0, cg_rel_close_list(p, eqs, 0, []));
     let gl = cg_emit_globals(p, 0, 1000000, "", "");
     cg_runtime(())
+        .concat(cg_emit_extern_decls(program.items, 0, ""))
         .concat(cg_emit_eq_fns(p, eqs, 0, ""))
         .concat(cg_emit_rel_fns(p, rels, 0, ""))
         .concat(cg_emit_str_fns(p, rels, 0, ""))
@@ -3695,6 +3861,9 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TArrayNs(_, args) => cg_rel_in_list(p, args, 0, here),
         TVariantNew(_, args) => cg_rel_in_list(p, args, 0, here),
         TPrintln(a) => cg_rel_in(p, a, here),
+        TExternCall(_, xs) => cg_rel_in_list(p, xs, 0, here),
+        TAsCStr(a) => cg_rel_in(p, a, here),
+        TAsString(a) => cg_rel_in(p, a, here),
         TRefNew(a) => cg_rel_in(p, a, here),
         TUnary(_, a) => cg_rel_in(p, a, here),
         TBinary(_, a, b) => cg_rel_in(p, b, cg_rel_in(p, a, here)),
@@ -3711,7 +3880,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TFor(_, lo, hi, body) => cg_rel_in(p, body, cg_rel_in(p, hi, cg_rel_in(p, lo, here))),
         TForArray(_, arr, body) => cg_rel_in(p, body, cg_rel_in(p, arr, here)),
         TClosure(_, body) => cg_rel_in(p, body, here),
-        TStructLit(_, fields) => cg_rel_in_fields(p, fields, 0, here),
+        TStructLit(_, fields, sp) => cg_rel_in_fields(p, fields, 0, match sp { Some(b) => cg_rel_in(p, b, here), None => here }),
         TInt(_) => here, TFloat(_) => here, TStr(_) => here, TBool(_) => here,
         TUnitLit => here, TIdent(_) => here, TGlobalRef(_, _) => here, TUnsupported(_) => here,
     }
@@ -3770,6 +3939,9 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TArrayNs(_, args) => cg_eq_in_list(p, args, 0, acc),
         TVariantNew(_, args) => cg_eq_in_list(p, args, 0, acc),
         TPrintln(a) => cg_eq_in(p, a, acc),
+        TExternCall(_, xs) => cg_eq_in_list(p, xs, 0, acc),
+        TAsCStr(a) => cg_eq_in(p, a, acc),
+        TAsString(a) => cg_eq_in(p, a, acc),
         TRefNew(a) => cg_eq_in(p, a, acc),
         TUnary(_, a) => cg_eq_in(p, a, acc),
         TFieldGet(a, _) => cg_eq_in(p, a, acc),
@@ -3788,7 +3960,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TFor(_, lo, hi, body) => cg_eq_in(p, body, cg_eq_in(p, hi, cg_eq_in(p, lo, acc))),
         TForArray(_, arr, body) => cg_eq_in(p, body, cg_eq_in(p, arr, acc)),
         TClosure(_, body) => cg_eq_in(p, body, acc),
-        TStructLit(_, fields) => cg_eq_in_fields(p, fields, 0, acc),
+        TStructLit(_, fields, sp) => cg_eq_in_fields(p, fields, 0, match sp { Some(b) => cg_eq_in(p, b, acc), None => acc }),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
         TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
     }
@@ -3853,6 +4025,9 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TArrayNs(_, args) => cg_calls_in_list(p, args, acc),
         TVariantNew(_, args) => cg_calls_in_list(p, args, acc),
         TPrintln(a) => cg_calls_in(p, a, acc),
+        TExternCall(_, xs) => cg_calls_in_list(p, xs, acc),
+        TAsCStr(a) => cg_calls_in(p, a, acc),
+        TAsString(a) => cg_calls_in(p, a, acc),
         TRefNew(a) => cg_calls_in(p, a, acc),
         TUnary(_, a) => cg_calls_in(p, a, acc),
         TBinary(_, a, b) => cg_calls_in(p, b, cg_calls_in(p, a, acc)),
@@ -3869,7 +4044,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TFor(_, lo, hi, body) => cg_calls_in(p, body, cg_calls_in(p, hi, cg_calls_in(p, lo, acc))),
         TForArray(_, arr, body) => cg_calls_in(p, body, cg_calls_in(p, arr, acc)),
         TClosure(_, body) => cg_calls_in(p, body, acc),
-        TStructLit(_, fields) => cg_calls_in_fields(p, fields, 0, acc),
+        TStructLit(_, fields, sp) => cg_calls_in_fields(p, fields, 0, match sp { Some(b) => cg_calls_in(p, b, acc), None => acc }),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
         TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
     }

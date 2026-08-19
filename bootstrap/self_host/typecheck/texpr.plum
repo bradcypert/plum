@@ -80,7 +80,14 @@ pub enum TNode {
     // pattern, array, body
     TForArray(parser.PPattern, TExpr, TExpr),
     TClosure(Array[String], TExpr),
-    TStructLit(String, Array[TFieldInit]),
+    // `Game { score: 0, ..g }` -- the optional `TExpr` is the SPREAD
+    // base, whose fields fill in every position the literal does not
+    // mention. Carried to the backend rather than desugared in the
+    // checker because the copied fields must be INCREMENTED as they are
+    // stored: desugaring to `TFieldGet` would produce borrowed values
+    // where `cg_store_fields` requires owned ones, and the refcount
+    // would come out one short per field.
+    TStructLit(String, Array[TFieldInit], Option[TExpr]),
     TVariantNew(String, Array[TExpr]),
     // --- The five resolved call shapes ---
     // A named function: a user's own, or a prelude signature from
@@ -116,6 +123,16 @@ pub enum TNode {
     // node rather than a `TMethodCall`, because it is a CONSTRUCTOR:
     // the operand is the value going in, not a receiver.
     TRefNew(TExpr),
+    // A call into an `extern "C"` function: no Plum body, no closure
+    // cell, just a direct call to a `declare`d symbol. Its own node
+    // rather than a flag on `TFnCall` because the backend does
+    // something entirely different with it -- no specialization, no
+    // mangling, no argument ownership transfer.
+    TExternCall(String, Array[TExpr]),
+    // `s.as_cstr()` / `c.as_string()` -- the two conversions between a
+    // Plum `String` cell and a raw `char*`.
+    TAsCStr(TExpr),
+    TAsString(TExpr),
     TPrintln(TExpr),
     TUnsupported(String),
 }

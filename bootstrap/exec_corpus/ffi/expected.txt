@@ -1,0 +1,6 @@
+42
+6
+false
+5
+hello from C
+done

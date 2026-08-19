@@ -1,0 +1,14 @@
+// An extern call outside `unsafe` must be REJECTED. The gate is the
+// entire safety story for FFI: nothing about a C function's signature
+// tells the checker whether calling it can corrupt memory, so the
+// requirement is that a human wrote `unsafe` at the call site.
+//
+// Saved and restored around the block rather than merely set, so a
+// closure DEFINED inside an `unsafe` block does not carry the
+// permission to wherever it is later called.
+
+extern "C" {
+    fn shim_add(a: Int, b: Int) -> Int;
+}
+
+let main (): Unit = println(shim_add(1, 2).to_string())

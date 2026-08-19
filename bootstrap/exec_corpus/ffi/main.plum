@@ -1,0 +1,31 @@
+// `extern "C"` + `unsafe`, the FFI boundary. `native/shim.c` is
+// compiled and linked alongside, the same way `examples/asteroids`
+// reaches raylib.
+//
+// Covers each type the boundary carries -- Int, Float, Bool, CStr, and
+// a void return -- plus both conversions: `.as_cstr()` borrows a Plum
+// string's bytes (the runtime always NUL-terminates them), and
+// `.as_string()` COPIES C's bytes into a fresh cell, because whatever C
+// returned may be static, stack, or freed on the next call.
+//
+// Calling any of these outside `unsafe` is a type error; see
+// `typecheck_corpus/extern_without_unsafe`.
+
+extern "C" {
+    fn shim_add(a: Int, b: Int) -> Int;
+    fn shim_scale(x: Float, f: Float) -> Float;
+    fn shim_is_even(n: Int) -> Bool;
+    fn shim_strlen(s: CStr) -> Int;
+    fn shim_greeting() -> CStr;
+    fn shim_noop();
+}
+
+let main (): Unit = unsafe {
+    println(shim_add(2, 40).to_string());
+    println(shim_scale(1.5, 4.0).to_string());
+    println(shim_is_even(7).to_string());
+    println(shim_strlen("hello".as_cstr()).to_string());
+    println(shim_greeting().as_string());
+    shim_noop();
+    println("done");
+}

@@ -29,6 +29,12 @@ pub enum ITy {
     // use site — empty for non-generic, one entry per declared param
     // for a generic one, in declared order. Mirrors `Type::Struct`/
     // `Type::Enum` exactly.
+    // A raw C string -- a `char*` on its way into or out of an extern
+    // call, NOT a Plum `String`. Kept as its own type rather than an
+    // alias for `ITStr` precisely so the conversion has to be written:
+    // `.as_cstr()` one way, `.as_string()` the other. Mirrors
+    // `plum_types::Type::CStr` exactly, including that reasoning.
+    ITCStr,
     ITStruct(String, Array[ITy]),
     ITEnum(String, Array[ITy]),
     // A generic declaration's own type parameter, named exactly as
@@ -130,6 +136,7 @@ let unify_non_var (a: ITy) (b: ITy): Result[Subst, String] =
         ITFloat => match b { ITFloat => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITBool => match b { ITBool => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITStr => match b { ITStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        ITCStr => match b { ITCStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITUnit => match b { ITUnit => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITStruct(a_name, a_args) => match b {
             ITStruct(b_name, b_args) => if a_name == b_name { unify_arg_lists(a_args, b_args) } else { type_mismatch(a, b) },
@@ -222,7 +229,7 @@ let type_mismatch (a: ITy) (b: ITy): Result[Subst, String] = Err(render_ty(a).co
 
 pub let render_ty (ty: ITy): String =
     match ty {
-        ITInt => "Int", ITFloat => "Float", ITBool => "Bool", ITStr => "String", ITUnit => "Unit",
+        ITInt => "Int", ITFloat => "Float", ITBool => "Bool", ITStr => "String", ITUnit => "Unit", ITCStr => "CStr",
         ITVar(id) => "T".concat(id.to_string()),
         ITFunction(params, ret) => "(".concat(join_comma_ty(params)).concat(") -> ").concat(render_ty(ret)),
         ITStruct(name, args) => if Array.is_empty(args) { name } else { name.concat("[").concat(join_comma_ty(args)).concat("]") },

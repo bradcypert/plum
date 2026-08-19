@@ -63,6 +63,16 @@ use lexer;
 //
 // The source is re-read from disk to render, which only ever happens on
 // the failure path -- the compiler is about to abort anyway.
+// Whether the expression currently being checked is inside an `unsafe`
+// block. A cell rather than a threaded parameter for the same reason
+// the error position is one: it would otherwise be a new argument on
+// every `infer_*` function, and it is consulted in exactly one place.
+// Mirrors `plum_types::Infer::in_unsafe`, including that it is saved and
+// restored around the block rather than simply set -- a closure defined
+// inside an `unsafe` block and CALLED outside it must not carry the
+// permission with it.
+let UNSAFE: Ref[Bool] = ref(false)
+
 struct ErrPos { path: String, offset: Int, fn_name: String }
 let ERR: Ref[ErrPos] = ref(ErrPos { path: "", offset: 0 - 1, fn_name: "" })
 
@@ -124,7 +134,10 @@ let tyenv_lookup_acc (bindings: Array[EnvBinding]) (name: String) (i: Int): Opti
 // builtin signature table both use "" — the root module — which is also
 // what a project's root-level files use, so a program can shadow a
 // prelude name exactly as it always could.
-pub struct FnSig { name: String, module: String, generics: Array[String], params: Array[ITy], ret: ITy }
+// `is_extern` marks a signature declared in an `extern "C"` block:
+// there is no Plum body to call, the backend emits a `declare` and a
+// direct call instead, and reaching one outside `unsafe` is an error.
+pub struct FnSig { name: String, module: String, generics: Array[String], params: Array[ITy], ret: ITy, is_extern: Bool }
 // `current` is the module whose body is being checked right now. It is
 // swapped per function rather than threaded as a parameter, for the
 // same reason `CgProgram` carries the current substitution: it would
@@ -135,6 +148,19 @@ pub struct Program2 { sigs: Array[FnSig], globals: Array[GlobalDef], ctx: TyCont
 pub struct GlobalDef { module: String, def: parser.LetDefNode }
 
 pub let build_sigs (ctx: TyContext) (program: parser.ProgramNode): Program2 = collect_sigs_acc(ctx, program.items, 0, [], [])
+
+// An extern function has no generics and no body; `Unit` stands in for
+// a declaration with no return type, matching how the real compiler
+// types a `void` extern (`plum_types::TypeContext::extern_fns`).
+let is_unit_ty (t: ITy): Bool = match t { ITUnit => true, _ => false }
+
+let extern_sigs (ctx: TyContext) (fns: Array[parser.ExternFnNode]) (i: Int) (acc: Array[FnSig]): Array[FnSig] =
+    if i >= fns.len() { acc }
+    else {
+        let params = Array.map(fns[i].params, |q| resolve_ann(ctx, [], q.ty));
+        let ret = match fns[i].ret_ty { Some(t) => resolve_ann(ctx, [], t), None => ITUnit };
+        extern_sigs(ctx, fns, i + 1, acc.push(FnSig { name: fns[i].name, module: "", generics: [], params: params, ret: ret, is_extern: true }))
+    }
 
 let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (sigs: Array[FnSig]) (globals: Array[GlobalDef]): Program2 =
     if i >= items.len() { Program2 { sigs: sigs, globals: globals, ctx: ctx, current: "" } }
@@ -149,9 +175,14 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
                         Some(t) => resolve_ann(ctx, generic_names, t),
                         None => { fail_tc("top-level function ".concat(def.name).concat(" needs an explicit return type annotation")); ITUnit },
                     };
-                    collect_sigs_acc(ctx, items, i + 1, sigs.push(FnSig { name: def.name, module: items[i].module, generics: generic_names, params: params, ret: ret }), globals)
+                    collect_sigs_acc(ctx, items, i + 1, sigs.push(FnSig { name: def.name, module: items[i].module, generics: generic_names, params: params, ret: ret , is_extern: false }), globals)
                 }
             },
+            // `extern "C" { fn sin(x: Float) -> Float; }` -- a signature
+            // with no body. Recorded like any other so ordinary call
+            // inference resolves it; `is_extern` is what the unsafe gate
+            // and the backend key off.
+            IKExtern(block) => collect_sigs_acc(ctx, items, i + 1, Array.concat(sigs, extern_sigs(ctx, block.fns, 0, [])), globals),
             _ => collect_sigs_acc(ctx, items, i + 1, sigs, globals),
         }
     }
@@ -199,88 +230,88 @@ let res_of (t: ITy) (e: ITy): ITy = ITEnum("Result", [t, e])
 let tp (name: String): ITy = ITParam(name)
 
 let builtin_sig (name: String): Option[FnSig] =
-    if name == "Array.is_empty" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: ITBool }) }
-    else if name == "Array.concat" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), arr_of(tp("T"))], ret: arr_of(tp("T")) }) }
-    else if name == "Array.contains" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: ITBool }) }
-    else if name == "Array.push" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) }) }
-    else if name == "Array.slice" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt, ITInt], ret: arr_of(tp("T")) }) }
-    else if name == "Array.any" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool }) }
-    else if name == "Array.all" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool }) }
-    else if name == "Array.find" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: opt_of(tp("T")) }) }
-    else if name == "Array.find_index" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: opt_of(ITInt) }) }
-    else if name == "Array.index_of" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: opt_of(ITInt) }) }
-    else if name == "Array.first" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: opt_of(tp("T")) }) }
-    else if name == "Array.last" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: opt_of(tp("T")) }) }
-    else if name == "Array.take" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt], ret: arr_of(tp("T")) }) }
-    else if name == "Array.drop" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt], ret: arr_of(tp("T")) }) }
-    else if name == "Array.reverse" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: arr_of(tp("T")) }) }
-    else if name == "Array.sum_int" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITInt)], ret: ITInt }) }
-    else if name == "Array.sum_float" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITFloat)], ret: ITFloat }) }
-    else if name == "Array.sort_by" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T"), tp("T")], ITBool)], ret: arr_of(tp("T")) }) }
-    else if name == "Array.sort_int" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITInt)], ret: arr_of(ITInt) }) }
-    else if name == "Array.sort_float" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITFloat)], ret: arr_of(ITFloat) }) }
-    else if name == "Array.zip" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [arr_of(tp("T")), arr_of(tp("U"))], ret: arr_of(ITStruct("Zipped", [tp("T"), tp("U")])) }) }
-    else if name == "String.trim_start" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITStr }) }
-    else if name == "String.trim_end" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITStr }) }
-    else if name == "String.lines" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) }) }
-    else if name == "Float.sqrt" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat }) }
-    else if name == "Float.floor" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat }) }
-    else if name == "Float.ceil" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat }) }
-    else if name == "Float.round" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat }) }
-    else if name == "Float.pow" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat }) }
-    else if name == "Float.random" { Some(FnSig { name: name, module: "", generics: [], params: [ITUnit], ret: ITFloat }) }
-    else if name == "Float.random_range" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat }) }
-    else if name == "Array.sort_string" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITStr)], ret: arr_of(ITStr) }) }
-    else if name == "Option.map" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], tp("U"))], ret: opt_of(tp("U")) }) }
-    else if name == "Option.and_then" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], opt_of(tp("U")))], ret: opt_of(tp("U")) }) }
-    else if name == "Option.unwrap_or_else" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), ITFunction([], tp("T"))], ret: tp("T") }) }
-    else if name == "Option.ok_or" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [opt_of(tp("T")), tp("E")], ret: res_of(tp("T"), tp("E")) }) }
-    else if name == "Option.is_none" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool }) }
-    else if name == "Result.is_ok" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E"))], ret: ITBool }) }
-    else if name == "Result.is_err" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E"))], ret: ITBool }) }
-    else if name == "Result.unwrap_or_else" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("E")], tp("T"))], ret: tp("T") }) }
-    else if name == "Result.map" { Some(FnSig { name: name, module: "", generics: ["T", "E", "U"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("T")], tp("U"))], ret: res_of(tp("U"), tp("E")) }) }
-    else if name == "Result.map_err" { Some(FnSig { name: name, module: "", generics: ["T", "E", "F"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("E")], tp("F"))], ret: res_of(tp("T"), tp("F")) }) }
-    else if name == "Result.and_then" { Some(FnSig { name: name, module: "", generics: ["T", "E", "U"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("T")], res_of(tp("U"), tp("E")))], ret: res_of(tp("U"), tp("E")) }) }
-    else if name == "Int.abs" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt], ret: ITInt }) }
-    else if name == "Int.min" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt], ret: ITInt }) }
-    else if name == "Int.max" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt], ret: ITInt }) }
-    else if name == "Int.clamp" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt, ITInt], ret: ITInt }) }
-    else if name == "Float.abs" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat }) }
-    else if name == "Float.min" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat }) }
-    else if name == "Float.max" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat }) }
-    else if name == "Float.clamp" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat, ITFloat], ret: ITFloat }) }
-    else if name == "json_stringify" { Some(FnSig { name: name, module: "", generics: [], params: [ITEnum("JsonValue", [])], ret: ITStr }) }
-    else if name == "json_parse" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITEnum("JsonValue", []), ITStr) }) }
-    else if name == "Option.is_some" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool }) }
-    else if name == "Option.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), tp("T")], ret: tp("T") }) }
-    else if name == "Result.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), tp("T")], ret: tp("T") }) }
-    else if name == "String.index_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITStr], ret: opt_of(ITInt) }) }
-    else if name == "String.parse_int" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITInt, ITStr) }) }
-    else if name == "String.parse_float" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITFloat, ITStr) }) }
-    else if name == "String.hash" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITInt }) }
-    else if name == "String.slice" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITInt, ITInt], ret: ITStr }) }
-    else if name == "String.is_empty" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITBool }) }
-    else if name == "chars_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) }) }
-    else if name == "string_is_ascii_ws" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITBool }) }
-    else if name == "chars_join" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITStr)], ret: ITStr }) }
-    else if name == "panic_raw" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITUnit }) }
+    if name == "Array.is_empty" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: ITBool , is_extern: false }) }
+    else if name == "Array.concat" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), arr_of(tp("T"))], ret: arr_of(tp("T")) , is_extern: false }) }
+    else if name == "Array.contains" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: ITBool , is_extern: false }) }
+    else if name == "Array.push" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) , is_extern: false }) }
+    else if name == "Array.slice" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt, ITInt], ret: arr_of(tp("T")) , is_extern: false }) }
+    else if name == "Array.any" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool , is_extern: false }) }
+    else if name == "Array.all" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool , is_extern: false }) }
+    else if name == "Array.find" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: opt_of(tp("T")) , is_extern: false }) }
+    else if name == "Array.find_index" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: opt_of(ITInt) , is_extern: false }) }
+    else if name == "Array.index_of" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: opt_of(ITInt) , is_extern: false }) }
+    else if name == "Array.first" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: opt_of(tp("T")) , is_extern: false }) }
+    else if name == "Array.last" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: opt_of(tp("T")) , is_extern: false }) }
+    else if name == "Array.take" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt], ret: arr_of(tp("T")) , is_extern: false }) }
+    else if name == "Array.drop" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt], ret: arr_of(tp("T")) , is_extern: false }) }
+    else if name == "Array.reverse" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: arr_of(tp("T")) , is_extern: false }) }
+    else if name == "Array.sum_int" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITInt)], ret: ITInt , is_extern: false }) }
+    else if name == "Array.sum_float" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITFloat)], ret: ITFloat , is_extern: false }) }
+    else if name == "Array.sort_by" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T"), tp("T")], ITBool)], ret: arr_of(tp("T")) , is_extern: false }) }
+    else if name == "Array.sort_int" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITInt)], ret: arr_of(ITInt) , is_extern: false }) }
+    else if name == "Array.sort_float" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITFloat)], ret: arr_of(ITFloat) , is_extern: false }) }
+    else if name == "Array.zip" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [arr_of(tp("T")), arr_of(tp("U"))], ret: arr_of(ITStruct("Zipped", [tp("T"), tp("U")])) , is_extern: false }) }
+    else if name == "String.trim_start" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITStr , is_extern: false }) }
+    else if name == "String.trim_end" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITStr , is_extern: false }) }
+    else if name == "String.lines" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) , is_extern: false }) }
+    else if name == "Float.sqrt" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat , is_extern: false }) }
+    else if name == "Float.floor" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat , is_extern: false }) }
+    else if name == "Float.ceil" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat , is_extern: false }) }
+    else if name == "Float.round" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat , is_extern: false }) }
+    else if name == "Float.pow" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat , is_extern: false }) }
+    else if name == "Float.random" { Some(FnSig { name: name, module: "", generics: [], params: [ITUnit], ret: ITFloat , is_extern: false }) }
+    else if name == "Float.random_range" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat , is_extern: false }) }
+    else if name == "Array.sort_string" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITStr)], ret: arr_of(ITStr) , is_extern: false }) }
+    else if name == "Option.map" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], tp("U"))], ret: opt_of(tp("U")) , is_extern: false }) }
+    else if name == "Option.and_then" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], opt_of(tp("U")))], ret: opt_of(tp("U")) , is_extern: false }) }
+    else if name == "Option.unwrap_or_else" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), ITFunction([], tp("T"))], ret: tp("T") , is_extern: false }) }
+    else if name == "Option.ok_or" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [opt_of(tp("T")), tp("E")], ret: res_of(tp("T"), tp("E")) , is_extern: false }) }
+    else if name == "Option.is_none" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool , is_extern: false }) }
+    else if name == "Result.is_ok" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E"))], ret: ITBool , is_extern: false }) }
+    else if name == "Result.is_err" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E"))], ret: ITBool , is_extern: false }) }
+    else if name == "Result.unwrap_or_else" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("E")], tp("T"))], ret: tp("T") , is_extern: false }) }
+    else if name == "Result.map" { Some(FnSig { name: name, module: "", generics: ["T", "E", "U"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("T")], tp("U"))], ret: res_of(tp("U"), tp("E")) , is_extern: false }) }
+    else if name == "Result.map_err" { Some(FnSig { name: name, module: "", generics: ["T", "E", "F"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("E")], tp("F"))], ret: res_of(tp("T"), tp("F")) , is_extern: false }) }
+    else if name == "Result.and_then" { Some(FnSig { name: name, module: "", generics: ["T", "E", "U"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("T")], res_of(tp("U"), tp("E")))], ret: res_of(tp("U"), tp("E")) , is_extern: false }) }
+    else if name == "Int.abs" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt], ret: ITInt , is_extern: false }) }
+    else if name == "Int.min" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt], ret: ITInt , is_extern: false }) }
+    else if name == "Int.max" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt], ret: ITInt , is_extern: false }) }
+    else if name == "Int.clamp" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt, ITInt], ret: ITInt , is_extern: false }) }
+    else if name == "Float.abs" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat , is_extern: false }) }
+    else if name == "Float.min" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat , is_extern: false }) }
+    else if name == "Float.max" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat , is_extern: false }) }
+    else if name == "Float.clamp" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat, ITFloat], ret: ITFloat , is_extern: false }) }
+    else if name == "json_stringify" { Some(FnSig { name: name, module: "", generics: [], params: [ITEnum("JsonValue", [])], ret: ITStr , is_extern: false }) }
+    else if name == "json_parse" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITEnum("JsonValue", []), ITStr) , is_extern: false }) }
+    else if name == "Option.is_some" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool , is_extern: false }) }
+    else if name == "Option.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), tp("T")], ret: tp("T") , is_extern: false }) }
+    else if name == "Result.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), tp("T")], ret: tp("T") , is_extern: false }) }
+    else if name == "String.index_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITStr], ret: opt_of(ITInt) , is_extern: false }) }
+    else if name == "String.parse_int" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITInt, ITStr) , is_extern: false }) }
+    else if name == "String.parse_float" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITFloat, ITStr) , is_extern: false }) }
+    else if name == "String.hash" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITInt , is_extern: false }) }
+    else if name == "String.slice" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITInt, ITInt], ret: ITStr , is_extern: false }) }
+    else if name == "String.is_empty" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITBool , is_extern: false }) }
+    else if name == "chars_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) , is_extern: false }) }
+    else if name == "string_is_ascii_ws" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITBool , is_extern: false }) }
+    else if name == "chars_join" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITStr)], ret: ITStr , is_extern: false }) }
+    else if name == "panic_raw" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITUnit , is_extern: false }) }
     // `require`/`ensure`, already desugared by the parser into calls to
     // these. The prelude DECLARES both (see prelude.plum), so a
     // compiled program resolves them through `find_sig` like any other
     // function -- these entries exist for `check`, which runs without
     // the prelude.
-    else if name == "__contract_require" || name == "__contract_ensure" { Some(FnSig { name: name, module: "", generics: [], params: [ITBool, ITStr], ret: ITUnit }) }
-    else if name == "read_file" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITStr, ITStr) }) }
-    else if name == "is_directory" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITBool, ITStr) }) }
-    else if name == "write_file" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITStr], ret: res_of(ITUnit, ITStr) }) }
-    else if name == "run_process" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, arr_of(ITStr)], ret: res_of(ITStruct("ProcessResult", []), ITStr) }) }
-    else if name == "list_dir" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(arr_of(ITStr), ITStr) }) }
+    else if name == "__contract_require" || name == "__contract_ensure" { Some(FnSig { name: name, module: "", generics: [], params: [ITBool, ITStr], ret: ITUnit , is_extern: false }) }
+    else if name == "read_file" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITStr, ITStr) , is_extern: false }) }
+    else if name == "is_directory" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITBool, ITStr) , is_extern: false }) }
+    else if name == "write_file" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITStr], ret: res_of(ITUnit, ITStr) , is_extern: false }) }
+    else if name == "run_process" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, arr_of(ITStr)], ret: res_of(ITStruct("ProcessResult", []), ITStr) , is_extern: false }) }
+    else if name == "list_dir" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(arr_of(ITStr), ITStr) , is_extern: false }) }
     // `args()` is written with empty parentheses, which this parser
     // turns into a ZERO-argument call (it implements no `f()`-means-
     // `f(())` sugar — see `interp/interp.plum`'s own note), so the
     // signature has to be zero-param to match the real call shape.
-    else if name == "args" { Some(FnSig { name: name, module: "", generics: [], params: [], ret: arr_of(ITStr) }) }
+    else if name == "args" { Some(FnSig { name: name, module: "", generics: [], params: [], ret: arr_of(ITStr) , is_extern: false }) }
     else { None }
 
 // An UNQUALIFIED name resolves in the CURRENT module first, then in the
@@ -345,7 +376,7 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
     // Swapped in for the duration of this body: every unqualified name
     // it mentions resolves in ITS module.
     let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name };
-    let sig = Option.unwrap_or(find_sig(p2, def.name), FnSig { name: def.name, module: p2.current, generics: [], params: [], ret: ITUnit });
+    let sig = Option.unwrap_or(find_sig(p2, def.name), FnSig { name: def.name, module: p2.current, generics: [], params: [], ret: ITUnit , is_extern: false });
     let env = bind_params(tyenv_empty(()), def.params, sig.params, 0);
     let r = infer_expr(p2, fresh_state_new(()), env, subst_empty(()), def.body);
     let body_ty = subst_apply(r.subst, r.ty);
@@ -467,7 +498,17 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
         EIndex(base, idx) => infer_index(p2, state, env, acc, base, idx),
         EArray(elems) => infer_array_lit(p2, state, env, acc, elems),
         EClosure(params, body) => infer_closure(p2, state, env, acc, params, body),
-        EUnsafe(_) => { fail_tc("unsafe/extern FFI isn't supported yet"); ir_unsupported(acc, state, "unsafe/extern FFI") },
+        // `unsafe { .. }` is an ordinary block that flips the gate while
+        // it is being checked. The block's own type is the result, so
+        // there is no node for it in the typed tree -- by the time the
+        // backend runs, the gate has already done its whole job.
+        EUnsafe(block) => {
+            let was = UNSAFE.get();
+            UNSAFE.set(true);
+            let r = infer_block(p2, state, env, acc, block);
+            UNSAFE.set(was);
+            r
+        },
         ESpawn(_) => { fail_tc("spawn/concurrency isn't supported yet"); ir_unsupported(acc, state, "spawn") },
         ESelect(_) => { fail_tc("select/channels aren't supported yet"); ir_unsupported(acc, state, "select") },
     }
@@ -1092,6 +1133,33 @@ let partial_param_refs (names: Array[String]) (tys: Array[ITy]) (i: Int) (acc: A
     else { partial_param_refs(names, tys, i + 1, acc.push(TExpr { ty: tys[i], node: TIdent(names[i]) })) }
 
 let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sig: FnSig) (args: Array[parser.PExpr]): InferResult = {
+    if sig.is_extern {
+        // No currying for an extern: there is no closure to build over
+        // its remaining parameters, and a partial application would have
+        // nothing to compile to.
+        if sig.params.len() != args.len() {
+            fail_tc("call to extern ".concat(sig.name).concat(": expected ").concat(sig.params.len().to_string()).concat(" argument(s), found ").concat(args.len().to_string()))
+        };
+        if !UNSAFE.get() {
+            fail_tc("calling extern function '".concat(sig.name).concat("' requires an 'unsafe' block"))
+        };
+        let ar = infer_call_args(p2, state, env, acc, args, sig.params, 0, []);
+        ir_leaf(sig.ret, ar.subst, ar.state, TExternCall(sig.name, ar.texprs))
+    } else if Array.is_empty(args) && sig.params.len() == 1 && is_unit_ty(sig.params[0]) {
+        // `f()` where `f` was declared `let f (): T`. That declaration
+        // has ONE parameter -- the empty-tuple pattern -- so the call
+        // needs one argument, and the real compiler synthesizes it
+        // (`Infer::unit_sugar_calls`). Without this, every such call has
+        // to be written `f(())`, which is what this compiler's own
+        // source does throughout and why the gap went unnoticed until a
+        // program written for the real compiler came through.
+        //
+        // Deliberately narrow: exactly one parameter, exactly `Unit`,
+        // exactly zero arguments. A no-argument call to a multi-param
+        // function stays the arity error that partial application
+        // deliberately does not swallow.
+        ir_leaf(sig.ret, acc, state, TFnCall(sig.module, sig.name, [TExpr { ty: ITUnit, node: TUnitLit }], []))
+    } else {
     if !Array.is_empty(args) && args.len() < sig.params.len() {
         infer_partial_call(p2, state, env, acc, sig, args)
     } else {
@@ -1101,6 +1169,7 @@ let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
     let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
     let ar = infer_call_args(p2, fr.state, env, acc, args, inst_params, 0, []);
     ir_leaf(subst_apply(ar.subst, inst_ret), ar.subst, ar.state, TFnCall(sig.module, sig.name, ar.texprs, fr.tys))
+    }
     }
 }
 
@@ -1172,6 +1241,20 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         ir_leaf(ITFloat, s1, r.state, TMethodCall("to_float", r.texpr, []))
     } else if method_name == "len" && Array.is_empty(args) {
         infer_len(p2, state, env, acc, base)
+    } else if method_name == "as_cstr" {
+        // `s.as_cstr()` -- hand a Plum string's bytes to C. Validated at
+        // this boundary rather than at the extern call, so a string with
+        // an embedded NUL is caught where it is converted rather than
+        // silently truncating inside the callee.
+        let r = infer_expr(p2, state, env, acc, base);
+        let s1 = match unify(subst_apply(r.subst, r.ty), ITStr) { Ok(x) => subst_compose(x, r.subst), Err(e) => { fail_tc(".as_cstr() requires a String: ".concat(e)); r.subst } };
+        ir_leaf(ITCStr, s1, r.state, TAsCStr(r.texpr))
+    } else if method_name == "as_string" {
+        // The way back. Without it a `CStr` is a dead end -- exactly the
+        // gap the real compiler found while wiring up TCP.
+        let r = infer_expr(p2, state, env, acc, base);
+        let s1 = match unify(subst_apply(r.subst, r.ty), ITCStr) { Ok(x) => subst_compose(x, r.subst), Err(e) => { fail_tc(".as_string() requires a CStr: ".concat(e)); r.subst } };
+        ir_leaf(ITStr, s1, r.state, TAsString(r.texpr))
     } else if method_name == "remove" && args.len() == 1 {
         // `xs.remove(i)` -- a new array without element `i`. Arity is
         // what separates it from `Map.remove`/`Set.remove`, which are
@@ -1385,15 +1468,67 @@ let infer_for (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (patt
         },
     }
 
-let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): InferResult = {
-    if Option.is_some(spread) { fail_tc("struct-literal ..spread isn't supported yet") };
+// `Game { ship.rotation: r, ..g }` -- the nested field-update sugar the
+// parser records as a FieldInitNode with a non-empty `extra_path`.
+// Expanded to what it means before anything else looks at it:
+//
+//     Game { ship: Ship { rotation: r, ..g.ship }, ..g }
+//
+// The expansion needs the INNER struct's name, which only the context
+// knows, which is why this lives in the checker rather than in the
+// parser (the real compiler's `plumc::nested_struct_update` runs after
+// declarations are collected, for the same reason).
+//
+// A nested update with no `..base` cannot be expanded -- there would be
+// nothing to copy the inner struct's other fields from -- and is left
+// alone to fail as an ordinary "missing field" error.
+let expand_nested_updates (p2: Program2) (info: StructInfo) (fields: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): Array[parser.FieldInitNode] =
+    match spread {
+        None => fields,
+        Some(base) => expand_nested_acc(p2, info, fields, base, 0, []),
+    }
+
+let expand_nested_acc (p2: Program2) (info: StructInfo) (fields: Array[parser.FieldInitNode]) (base: parser.PExpr) (i: Int) (acc: Array[parser.FieldInitNode]): Array[parser.FieldInitNode] =
+    if i >= fields.len() { acc }
+    else if Array.is_empty(fields[i].extra_path) { expand_nested_acc(p2, info, fields, base, i + 1, acc.push(fields[i])) }
+    else {
+        let outer = fields[i].name;
+        let inner_name = match find_field_template(info.fields, outer) {
+            Some(ITStruct(sn, _)) => sn,
+            _ => { fail_tc("'".concat(outer).concat(".") .concat(fields[i].extra_path[0]).concat("' needs '").concat(outer).concat("' to be a struct")); "" },
+        };
+        // The inner literal updates ONE field of `base.outer`, spreading
+        // the rest -- and recurses, so `a.b.c: v` nests twice.
+        let inner_field = parser.FieldInitNode {
+            name: fields[i].extra_path[0],
+            extra_path: Array.slice(fields[i].extra_path, 1, fields[i].extra_path.len()),
+            value: fields[i].value,
+        };
+        let inner = EStructLit([inner_name], [inner_field], Some(EField(base, outer)));
+        expand_nested_acc(p2, info, fields, base, i + 1, acc.push(parser.FieldInitNode { name: outer, extra_path: [], value: inner }))
+    }
+
+let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields0: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): InferResult = {
     let name = path[path.len() - 1];
     match find_struct(p2.ctx, name) {
         Some(info) => {
+            let fields = expand_nested_updates(p2, info, fields0, spread);
             let fr = fresh_list(state, info.generics.len());
             let r = infer_struct_fields(p2, fr.state, env, acc, info, fr.tys, fields, 0, []);
-            ir_leaf(ITStruct(name, Array.map(fr.tys, |t| subst_apply(r.subst, t))), r.subst, r.state,
-                TStructLit(name, cg_zip_field_inits(fields, r.texprs, 0, [])))
+            let lit_ty = ITStruct(name, Array.map(fr.tys, |t| subst_apply(r.subst, t)));
+            // The spread base must be the SAME struct type -- `Game {
+            // ..point }` is a type error, not a partial copy.
+            match spread {
+                None => ir_leaf(lit_ty, r.subst, r.state, TStructLit(name, cg_zip_field_inits(fields, r.texprs, 0, []), None)),
+                Some(base) => {
+                    let br = infer_expr(p2, r.state, env, r.subst, base);
+                    let s2 = match unify(subst_apply(br.subst, br.ty), subst_apply(br.subst, lit_ty)) {
+                        Ok(x) => subst_compose(x, br.subst),
+                        Err(e) => { fail_tc("struct-literal '..' base: ".concat(e)); br.subst },
+                    };
+                    ir_leaf(subst_apply(s2, lit_ty), s2, br.state, TStructLit(name, cg_zip_field_inits(fields, r.texprs, 0, []), Some(br.texpr)))
+                },
+            }
         },
         None => { fail_tc("unknown struct: ".concat(name)); ir_unsupported(acc, state, "unknown struct ".concat(name)) },
     }
