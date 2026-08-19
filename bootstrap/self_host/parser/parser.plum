@@ -148,6 +148,40 @@ pub struct ProgramNode { items: Array[ItemNode] }
 
 let fail (msg: String): Unit = panic_raw(msg)
 
+// --- Source context, for locating a parse error ---
+//
+// Every diagnostic this compiler produced was location-free: "expected
+// '}'", with no hint as to WHERE. Finding one meant bisecting the file
+// by hand -- which is literally how `examples/asteroids`'s parse
+// failure was tracked down, by re-running against `head -100`,
+// `head -140`, `head -160`.
+//
+// The position was always right there: every parse function threads
+// `pos`, the token INDEX, and the lexer now records where each token
+// starts (`lexer.tokenize_spanned`). The only thing missing at a
+// failure site was the SOURCE to resolve that index against.
+//
+// It is held in a module-level cell rather than threaded, deliberately.
+// Threading it would mean a new parameter on roughly sixty functions
+// that have no other use for it, to serve a path taken only when the
+// compiler is about to abort. The cell is set once per file, before
+// that file is parsed; there is no concurrency here to make it racy.
+// When it is unset -- a unit test, a caller that never set it -- the
+// message falls back to exactly what it printed before, so nothing
+// depends on this having been done.
+pub struct SourceContext { path: String, source: String, starts: Array[Int] }
+
+let CTX: Ref[SourceContext] = ref(SourceContext { path: "", source: "", starts: [] })
+
+pub let set_source_context (path: String) (source: String) (starts: Array[Int]): Unit =
+    CTX.set(SourceContext { path: path, source: source, starts: starts })
+
+let fail_at (pos: Int) (msg: String): Unit = {
+    let ctx = CTX.get();
+    if ctx.source == "" || pos >= ctx.starts.len() { panic_raw(msg) }
+    else { panic_raw(lexer.render_at(ctx.source, ctx.path, ctx.starts[pos], msg)) }
+}
+
 let check (tokens: Array[lexer.Token]) (pos: Int) (expected: lexer.Token): Bool = tokens[pos] == expected
 
 struct Bumped { matched: Bool, next_pos: Int }
@@ -155,20 +189,21 @@ let bump_if (tokens: Array[lexer.Token]) (pos: Int) (expected: lexer.Token): Bum
     if check(tokens, pos, expected) { Bumped { matched: true, next_pos: pos + 1 } } else { Bumped { matched: false, next_pos: pos } }
 
 let expect (tokens: Array[lexer.Token]) (pos: Int) (expected: lexer.Token) (what: String): Int =
-    if check(tokens, pos, expected) { pos + 1 } else { { fail("expected ".concat(what)); pos } }
+    if check(tokens, pos, expected) { pos + 1 }
+    else { { fail_at(pos, "expected ".concat(what).concat(", found ").concat(lexer.render_token(tokens[pos]))); pos } }
 
 struct IdentTok { name: String, next_pos: Int }
 let expect_ident (tokens: Array[lexer.Token]) (pos: Int): IdentTok =
     match tokens[pos] {
         TokIdent(name) => IdentTok { name: name, next_pos: pos + 1 },
-        _ => { fail("expected an identifier"); IdentTok { name: "", next_pos: pos } },
+        _ => { fail_at(pos, "expected an identifier"); IdentTok { name: "", next_pos: pos } },
     }
 
 struct StrTok { text: String, next_pos: Int }
 let expect_str_tok (tokens: Array[lexer.Token]) (pos: Int): StrTok =
     match tokens[pos] {
         TokStr(s) => StrTok { text: s, next_pos: pos + 1 },
-        _ => { fail("expected a string literal"); StrTok { text: "", next_pos: pos } },
+        _ => { fail_at(pos, "expected a string literal"); StrTok { text: "", next_pos: pos } },
     }
 
 // `require`/`ensure` are contextual keywords — see `crates/plum-syntax/
@@ -204,7 +239,7 @@ let parse_item (tokens: Array[lexer.Token]) (pos: Int): ItemResult = {
         TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKEnum(r.value) }, next_pos: r.next_pos } },
         TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKExtern(r.value) }, next_pos: r.next_pos } },
         TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKUse(r.value) }, next_pos: r.next_pos } },
-        _ => { fail("expected an item (let/struct/enum/extern/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }) }, next_pos: start } },
+        _ => { fail_at(start, "expected an item (let/struct/enum/extern/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }) }, next_pos: start } },
     }
 }
 
@@ -364,7 +399,7 @@ let parse_param (tokens: Array[lexer.Token]) (pos: Int): ParamResult =
                 }
             }
         },
-        _ => { fail("expected a parameter"); ParamResult { value: ParamIdent(""), next_pos: pos } },
+        _ => { fail_at(pos, "expected a parameter"); ParamResult { value: ParamIdent(""), next_pos: pos } },
     }
 
 struct PatternListResult { value: Array[PPattern], next_pos: Int }
@@ -609,7 +644,7 @@ let parse_primary_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult =
             else { PatResult { value: PIdent(name), next_pos: pos + 1 } }
         },
         TokLParen => parse_tuple_pattern(tokens, pos),
-        _ => { fail("expected a pattern"); PatResult { value: PWildcard, next_pos: pos } },
+        _ => { fail_at(pos, "expected a pattern"); PatResult { value: PWildcard, next_pos: pos } },
     }
 
 // Pre-split uppercase alphabet as a GLOBAL (evaluated once), tested
@@ -805,7 +840,7 @@ let parse_compare (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult
         None => lhs,
         Some(op_r) => {
             let rhs = parse_range(tokens, op_r.next_pos, ns);
-            if Option.is_some(compare_op_at(tokens, rhs.next_pos)) { fail("comparison operators do not chain") };
+            if Option.is_some(compare_op_at(tokens, rhs.next_pos)) { fail_at(rhs.next_pos, "comparison operators do not chain") };
             ExprResult { value: EBinary(op_r.op, lhs.value, rhs.value), next_pos: rhs.next_pos }
         },
     }
@@ -817,7 +852,7 @@ let parse_range (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult =
     if !b.matched { lhs }
     else {
         let rhs = parse_add(tokens, b.next_pos, ns);
-        if check(tokens, rhs.next_pos, TokDotDot) { fail("ranges do not chain") };
+        if check(tokens, rhs.next_pos, TokDotDot) { fail_at(rhs.next_pos, "ranges do not chain") };
         ExprResult { value: EBinary(BRange, lhs.value, rhs.value), next_pos: rhs.next_pos }
     }
 }
@@ -962,7 +997,7 @@ let parse_primary (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult
         TokOrOr => parse_closure_expr(tokens, pos),
         TokUnsafe => { let b = parse_block(tokens, pos + 1); ExprResult { value: EUnsafe(b.value), next_pos: b.next_pos } },
         TokSpawn => { let b = parse_block(tokens, pos + 1); ExprResult { value: ESpawn(b.value), next_pos: b.next_pos } },
-        _ => { fail("expected an expression"); ExprResult { value: EInt(0), next_pos: pos } },
+        _ => { fail_at(pos, "expected an expression"); ExprResult { value: EInt(0), next_pos: pos } },
     }
 
 // Desugars `"a${x}b"` into `"a".concat(x.to_string()).concat("b")` —
@@ -1072,7 +1107,7 @@ let parse_field_init (tokens: Array[lexer.Token]) (pos: Int): FieldInitResult = 
     } else if Array.is_empty(extra_r.value) {
         FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: [], value: EIdent(name_tok.name) }, next_pos: extra_r.next_pos }
     } else {
-        fail("a nested field-update path needs an explicit ': value'");
+        fail_at(extra_r.next_pos, "a nested field-update path needs an explicit ': value'");
         FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: extra_r.value, value: EInt(0) }, next_pos: extra_r.next_pos }
     }
 }
@@ -1214,7 +1249,7 @@ let parse_block_items_acc (tokens: Array[lexer.Token]) (pos: Int) (stmts: Array[
     } else {
         let expr_r = parse_expr(tokens, pos);
         if check(tokens, expr_r.next_pos, TokEq) {
-            let name = match expr_r.value { EIdent(n) => n, _ => { fail("invalid assignment target"); "" } };
+            let name = match expr_r.value { EIdent(n) => n, _ => { fail_at(pos, "invalid assignment target"); "" } };
             let value_r = parse_expr(tokens, expr_r.next_pos + 1);
             let semi_pos = expect(tokens, value_r.next_pos, TokSemicolon, "';'");
             parse_block_items_acc(tokens, semi_pos, stmts.push(SAssign(name, value_r.value)), no_tail(()))

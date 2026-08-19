@@ -254,7 +254,15 @@ let build_project (argv: Array[String]): Unit = {
 // tag namespace as a deliberate boundary.
 let parse_file_items (path: String) (module_name: String): Array[parser.ItemNode] =
     match read_file(path) {
-        Ok(src) => parser.with_module(parser.parse_program(lexer.tokenize(src)).items, module_name),
+        // The source context is set per FILE, immediately before that
+        // file is parsed, so a parse error can report `path:line:col`
+        // with a caret instead of a bare message. See
+        // `parser.set_source_context`.
+        Ok(src) => {
+            let lexed = lexer.tokenize_spanned(src);
+            parser.set_source_context(path, src, lexed.starts);
+            parser.with_module(parser.parse_program(lexed.tokens).items, module_name)
+        },
         Err(e) => { panic_raw("failed to read ".concat(path).concat(": ").concat(e)); [] },
     }
 
@@ -383,6 +391,9 @@ let main (): Unit = {
                 // these, and `bootstrap/corpus`'s goldens were generated with
                 // them. Accepting both means a corpus regeneration command
                 // can be pointed at either compiler unchanged.
+                // Same context, for the single-file commands.
+                let lexed0 = lexer.tokenize_spanned(src);
+                parser.set_source_context(argv[1], src, lexed0.starts);
                 if argv[0] == "tokens" || argv[0] == "dump-tokens" {
                     println(lexer.render_tokens(lexer.tokenize(src)));
                 } else if argv[0] == "ast" || argv[0] == "dump-ast" {

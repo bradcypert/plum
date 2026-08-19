@@ -396,23 +396,91 @@ let lex_one (chars: Array[String]) (pos: Int): FullTokResult =
 // (harmless — `skip_ws_and_comments`/`lex_one` at `pos >= chars.len()`
 // would keep re-observing `TokEof` forever otherwise, appending it
 // repeatedly).
-pub let tokenize (source: String): Array[Token] = {
+pub let tokenize (source: String): Array[Token] = tokenize_spanned(source).tokens
+
+// The tokens PLUS where each one starts, as a character offset into
+// `chars_of(source)`. Kept as a PARALLEL array rather than as a field
+// on `Token` itself: the parser matches on `tokens[pos]` in something
+// like two hundred places, and every one of them would have had to
+// learn to unwrap a wrapper struct. A parallel array costs those sites
+// nothing, and the parser already threads the token INDEX everywhere,
+// so `starts[pos]` is exactly the handle it needs.
+//
+// Offsets are CHARACTER indices, not byte indices, because that is the
+// space this whole lexer works in (`chars_of`). `line_col` reads the
+// source the same way, so the two agree by construction; nothing here
+// ever needs a byte offset.
+pub struct LexedSource { tokens: Array[Token], starts: Array[Int] }
+
+pub let tokenize_spanned (source: String): LexedSource = {
     let chars = chars_of(source);
     let mut pos = 0;
     let mut acc = [];
+    let mut starts = [];
     let mut done = false;
     for tok_step in 0..(chars.len() + 1) {
         if !done {
             let start = skip_ws_and_comments(chars, pos);
             let r = lex_one(chars, start);
             match r.token {
-                TokEof => { acc = acc.push(TokEof); done = true; },
-                _ => { acc = acc.push(r.token); pos = r.next_pos; },
+                TokEof => { acc = acc.push(TokEof); starts = starts.push(start); done = true; },
+                _ => { acc = acc.push(r.token); starts = starts.push(start); pos = r.next_pos; },
             }
         };
     };
-    acc
+    LexedSource { tokens: acc, starts: starts }
 }
+
+// --- Source positions ---
+
+pub struct LineCol { line: Int, col: Int }
+
+// 1-based, matching every compiler diagnostic anyone has ever read (and
+// `plum_syntax::span`'s own rendering). `offset` is a character index;
+// an offset past the end clamps to the last line, so a diagnostic at
+// EOF still points somewhere real.
+pub let line_col (source: String) (offset: Int): LineCol = line_col_acc(chars_of(source), offset, 0, 1, 1)
+
+let line_col_acc (chars: Array[String]) (offset: Int) (i: Int) (line: Int) (col: Int): LineCol =
+    if i >= offset || i >= chars.len() { LineCol { line: line, col: col } }
+    else if chars[i] == "\n" { line_col_acc(chars, offset, i + 1, line + 1, 1) }
+    else { line_col_acc(chars, offset, i + 1, line, col + 1) }
+
+// The text of the line containing `offset`, without its newline --
+// what a caret diagnostic underlines.
+pub let line_text (source: String) (offset: Int): String = {
+    let chars = chars_of(source);
+    let start = line_start_at(chars, if offset >= chars.len() { chars.len() } else { offset });
+    chars_join(Array.slice(chars, start, line_end_at(chars, start)))
+}
+
+let line_start_at (chars: Array[String]) (i: Int): Int =
+    if i <= 0 { 0 } else if chars[i - 1] == "\n" { i } else { line_start_at(chars, i - 1) }
+
+let line_end_at (chars: Array[String]) (i: Int): Int =
+    if i >= chars.len() { chars.len() } else if chars[i] == "\n" { i } else { line_end_at(chars, i + 1) }
+
+// The `--> file:line:col` + source line + caret block every real
+// compiler error carries, and which no self-hosted diagnostic has ever
+// had. Matches `plum_syntax::error::CompileError`'s own rendering
+// closely enough to be recognisable, deliberately: someone reading both
+// compilers' output should not have to learn two formats.
+pub let render_at (source: String) (path: String) (offset: Int) (msg: String): String = {
+    let lc = line_col(source, offset);
+    let text = line_text(source, offset);
+    let gutter = lc.line.to_string();
+    // The bar lines align under the line NUMBER, so their width follows
+    // it -- byte-identical to `plum_syntax::error::CompileError`'s own
+    // layout, so output from the two compilers can be diffed directly.
+    let pad = spaces(gutter.len());
+    "error: ".concat(msg).concat("\n")
+        .concat("  --> ").concat(path).concat(":").concat(gutter).concat(":").concat(lc.col.to_string()).concat("\n")
+        .concat(pad).concat(" |\n")
+        .concat(gutter).concat(" | ").concat(text).concat("\n")
+        .concat(pad).concat(" | ").concat(spaces(lc.col - 1)).concat("^\n")
+}
+
+let spaces (n: Int): String = if n <= 0 { "" } else { spaces(n - 1).concat(" ") }
 
 // --- Rendering (must match `plum_syntax::render::render_tokens`) ---
 
@@ -470,7 +538,7 @@ let render_interp_piece (p: InterpPiece): String = match p {
     PieceExpr(s) => "Expr(".concat(quote(s)).concat(")"),
 }
 
-let render_token (t: Token): String = match t {
+pub let render_token (t: Token): String = match t {
     TokIdent(s) => "Ident(".concat(quote(s)).concat(")"),
     TokInt(n) => "Int(".concat(n.to_string()).concat(")"),
     TokFloat(f) => "Float(".concat(f.to_string()).concat(")"),
