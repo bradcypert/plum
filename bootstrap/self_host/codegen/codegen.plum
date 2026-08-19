@@ -867,7 +867,31 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
     if i >= stmts.len() { BlockEmit { code: "", allocas: "", releases: "",globals: "", env: env, n: n } }
     else {
         match stmts[i] {
-            TSLet(pattern, value) => {
+            // A DESTRUCTURING `let` is an irrefutable one-arm match,
+            // so it reuses the pattern machinery rather than growing a
+            // second copy of it: `cg_pattern` already knows how to bind
+            // every name in a tuple/struct pattern, take a reference per
+            // binding, and report the slots it created. The `test` it
+            // produces is ignored -- the checker has already established
+            // the pattern is irrefutable, which is what makes this a
+            // `let` and not a `match`.
+            TSLet(pattern, value) => if !cg_is_ident_pattern(pattern) {
+                let r = cg_expr(p, env, n, value);
+                let vty = cg_concrete(p, typecheck.texpr_ty(p.subst, value));
+                let pat = cg_pattern(p, env, r.n, pattern, r.val, vty);
+                // Bindings borrow from the scrutinee and take their own
+                // reference (see `cg_pattern`'s `PIdent` arm), so the
+                // scrutinee's own reference is released once they have.
+                let head = r.code.concat(pat.code).concat(pat.binds).concat(cg_dec(vty, r.val));
+                let rest = cg_stmts(p, pat.env, pat.n, stmts, i + 1);
+                BlockEmit {
+                    code: head.concat(rest.code),
+                    allocas: r.allocas.concat(pat.allocas).concat(rest.allocas),
+                    releases: r.releases.concat(pat.releases).concat(rest.releases),
+                    globals: r.globals.concat(pat.globals).concat(rest.globals),
+                    env: rest.env, n: rest.n,
+                }
+            } else {
                 let r = cg_expr(p, env, n, value);
                 let name = cg_let_name(pattern);
                 let slot = cg_reg(r.n);
@@ -1152,6 +1176,11 @@ let cg_self_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (va
         },
         _ => { cg_fail("internal: cg_self_push on a non-push"); cg_stmts(p, env, n, stmts, i + 1) },
     }
+
+// A plain `let x = ..` binds one name and needs no pattern machinery;
+// anything else destructures.
+let cg_is_ident_pattern (pattern: parser.PPattern): Bool =
+    match pattern { PIdent(_) => true, _ => false }
 
 let cg_let_name (pattern: parser.PPattern): String =
     match pattern {

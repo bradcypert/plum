@@ -11066,7 +11066,7 @@ Verified by running each, not by reading code:
 | gap | `check` | codegen |
 |---|---|---|
 | ~~`.to_string()` on struct/array/variant~~ | | **DONE, see below** |
-| destructuring `let (a, b) = ..` | ok | missing |
+| ~~destructuring `let (a, b) = ..`~~ | | **DONE, see below** |
 | `\|>` | rejects | — |
 | `require`/`ensure` contracts | rejects | — |
 | `==`/`!=` between closures | — | missing |
@@ -11140,6 +11140,36 @@ reasoning**, worth recording because two share a cause:
 
 The last two are one cause: `cg_render_val`'s catch-all assumed every
 remaining type was a renderable aggregate. It is now total.
+
+19/19 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 7/7 `typecheck_corpus` rejected, Rust suite 1934/0.
+
+### Destructuring `let` (2026-08-18)
+
+`let (a, b) = ..`, `let P { x: px, y: py } = ..`, and nested forms like
+`let ((m, n), o) = ..` now compile, matching the real compiler exactly.
+
+The implementation is small because a destructuring `let` IS an
+irrefutable one-arm match. `cg_pattern` already binds every name in a
+tuple/struct pattern, takes a reference per binding, and reports the
+slots it created — so this reuses it rather than growing a second
+binding path. The `test` it returns is discarded: the checker has
+already established the pattern is irrefutable, which is exactly what
+makes this a `let` and not a `match`. The one rule to respect is
+ordering — `code` (the field loads) before `binds` (the stores and
+increments) — which the match-arm emitter documents.
+
+Bindings borrow from the scrutinee and take their own reference, so the
+scrutinee's own reference is released once they have. ASan-clean, which
+is the check that matters here: one release too few leaks and one too
+many is a use-after-free.
+
+**This closes the last construct where `check` said `ok` and codegen
+then refused.** Every remaining gap is now rejected by the CHECKER,
+with a source location — which was the point of prioritising it. That
+failure shape (accept, then fail late without a span) is the same one
+behind the stale-binding soundness bug earlier in this file, and it is
+now absent from the language surface.
 
 19/19 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 7/7 `typecheck_corpus` rejected, Rust suite 1934/0.
