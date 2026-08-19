@@ -1,0 +1,37 @@
+// Match arm GUARDS. The self-hosted backend used to drop them on the
+// floor: the checker types a guard and every other codegen pass walks
+// it, but `cg_match_arms` -- the one place that turns an arm into
+// blocks -- never read it, so a guarded arm ran unconditionally. That
+// is a wrong ANSWER rather than a crash, which is why the example
+// sweep caught it and the corpus did not.
+//
+// Covers what that bug would have hidden: a guard that fails falling
+// through to a LATER arm with the same tag, a guard reading the arm's
+// own bindings, and a guard on the last arm falling through to nothing.
+
+enum Shape { Rect(Int, Int), Circle(Int) }
+
+let describe (s: Shape): String = match s {
+    Rect(w, h) if w == h => "square ".concat(w.to_string()),
+    Rect(w, h) if w > h => "wide ".concat(w.to_string()).concat("x").concat(h.to_string()),
+    Rect(w, h) => "tall ".concat(w.to_string()).concat("x").concat(h.to_string()),
+    Circle(r) if r > 10 => "big circle",
+    Circle(r) => "circle ".concat(r.to_string()),
+}
+
+let first_big (xs: Array[Int]): String = match Array.find(xs, |n| n > 100) {
+    Some(n) if n > 1000 => "huge ".concat(n.to_string()),
+    Some(n) => "big ".concat(n.to_string()),
+    None => "none",
+}
+
+let main (): Unit = {
+    println(describe(Rect(3, 3)));
+    println(describe(Rect(5, 2)));
+    println(describe(Rect(2, 5)));
+    println(describe(Circle(20)));
+    println(describe(Circle(4)));
+    println(first_big([1, 2, 500]));
+    println(first_big([1, 2, 5000]));
+    println(first_big([1, 2, 3]));
+}

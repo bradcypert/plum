@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# THE DEPRECATION SCOREBOARD.
+#
+# Runs every `examples/` project through BOTH compilers and reports where
+# the self-hosted one still falls short. This exists because the hand-
+# maintained gap table in DESIGN.md was wrong three times running, always
+# in the direction of understating what was left: it listed four rows
+# while six of nine examples failed, and it named causes ("check rejects
+# contracts") that had not been true for some time. A list you have to
+# remember to update is not a source of truth. This is.
+#
+# For each example:
+#   1. the REAL compiler builds and runs it            -> reference output
+#   2. the SELF-HOSTED compiler emits IR, which
+#      `plum compile-ir` links, and that runs          -> actual output
+#   3. the two outputs must match exactly
+#
+# A self-hosted failure is reported with its first error line, which is
+# the whole point — the output is a to-do list, not a pass/fail gate.
+#
+# Run from the repo root, after `cargo build --release` and
+# `plum build bootstrap/self_host -o sh.real`.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+work="$(mktemp -d -t plum-sweep-XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+
+plum=./target/release/plum
+
+# Examples that cannot be run non-interactively, with the reason. They
+# are still EMITTED and reported on — only the output comparison is
+# skipped, so a compile regression in one is still caught.
+declare -A no_run=(
+    [asteroids]="opens a window (raylib)"
+)
+
+ok=0
+fail=0
+emit_only=0
+
+for dir in examples/*/; do
+    name="$(basename "$dir")"
+    [ -f "$dir/main.plum" ] || continue
+
+    # 1. self-hosted emit
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh emit-llvm "$dir" > "$work/$name.ll" 2>"$work/$name.emit_err"; then
+        reason="$(head -n 1 "$work/$name.emit_err" 2>/dev/null)"
+        [ -n "$reason" ] || reason="$(grep -m1 -v '^;' "$work/$name.ll" 2>/dev/null)"
+        printf 'FAIL  %-24s %s\n' "$name" "${reason:-emit failed}"
+        fail=$((fail + 1))
+        continue
+    fi
+    # `sh` reports checker errors on stdout and still exits 0, so the
+    # emitted text is what says whether it really worked.
+    if ! head -n 1 "$work/$name.ll" | grep -q '^;'; then
+        printf 'FAIL  %-24s %s\n' "$name" "$(head -n 1 "$work/$name.ll")"
+        fail=$((fail + 1))
+        continue
+    fi
+
+    if [ -n "${no_run[$name]:-}" ]; then
+        printf 'EMIT  %-24s (not run: %s)\n' "$name" "${no_run[$name]}"
+        emit_only=$((emit_only + 1))
+        continue
+    fi
+
+    # 2. reference output from the real compiler
+    if ! $plum build "$dir" -o "$work/$name.ref" > "$work/$name.ref_err" 2>&1; then
+        printf 'FAIL  %-24s the REAL compiler could not build it: %s\n' "$name" "$(head -n 1 "$work/$name.ref_err")"
+        fail=$((fail + 1))
+        continue
+    fi
+    ref_out="$(cd "$work" && "./$name.ref" 2>&1)"
+
+    # 3. self-hosted output
+    if ! $plum compile-ir "$work/$name.ll" -o "$work/$name.bin" > "$work/$name.link_err" 2>&1; then
+        printf 'FAIL  %-24s emitted IR did not link: %s\n' "$name" "$(head -n 1 "$work/$name.link_err")"
+        fail=$((fail + 1))
+        continue
+    fi
+    act_out="$(cd "$work" && "./$name.bin" 2>&1)"
+
+    if [ "$ref_out" == "$act_out" ]; then
+        printf 'OK    %-24s\n' "$name"
+        ok=$((ok + 1))
+    else
+        printf 'DIFF  %-24s output differs from the real compiler\n' "$name"
+        diff <(printf '%s\n' "$ref_out") <(printf '%s\n' "$act_out") | head -n 10 | sed 's/^/        /'
+        fail=$((fail + 1))
+    fi
+done
+
+echo
+echo "examples: $ok matching, $emit_only emit-only, $fail failing"
+[ "$fail" -eq 0 ]

@@ -2178,29 +2178,81 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
     else {
         let test_label = cg_label(n);
         let pat = cg_pattern(p, env, n + 1, arms[i].pattern, sval, sity);
-        let body_label = cg_label(pat.n);
-        let b = cg_expr(p, pat.env, pat.n + 1, arms[i].body);
-        // The NEXT arm's test label, or the fail block if this is the
-        // last arm — computed before recursing so the branch can name
-        // it, which is why the arm counter is threaded rather than
-        // derived.
-        let next_label = if i + 1 >= arms.len() { fail_label } else { cg_label(b.n) };
-        let this_code = test_label.concat(":
+        match arms[i].guard {
+            None => {
+                let body_label = cg_label(pat.n);
+                let b = cg_expr(p, pat.env, pat.n + 1, arms[i].body);
+                // The NEXT arm's test label, or the fail block if this is the
+                // last arm — computed before recursing so the branch can name
+                // it, which is why the arm counter is threaded rather than
+                // derived.
+                let next_label = if i + 1 >= arms.len() { fail_label } else { cg_label(b.n) };
+                let this_code = test_label.concat(":
 ")
-            .concat(pat.code)
-            .concat("  br i1 ").concat(pat.test).concat(", label %").concat(body_label).concat(", label %").concat(next_label).concat("
+                    .concat(pat.code)
+                    .concat("  br i1 ").concat(pat.test).concat(", label %").concat(body_label).concat(", label %").concat(next_label).concat("
 ")
-            .concat(body_label).concat(":\n")
-            // Only now is the arm known to match, so only now may its
-            // bindings be stored and take references.
-            .concat(pat.binds)
-            .concat(b.code)
-            .concat("  store ").concat(lty).concat(" ").concat(b.val).concat(", ptr ").concat(slot).concat("
+                    .concat(body_label).concat(":\n")
+                    // Only now is the arm known to match, so only now may its
+                    // bindings be stored and take references.
+                    .concat(pat.binds)
+                    .concat(b.code)
+                    .concat("  store ").concat(lty).concat(" ").concat(b.val).concat(", ptr ").concat(slot).concat("
 ")
-            .concat("  br label %").concat(end_label).concat("
+                    .concat("  br label %").concat(end_label).concat("
 ");
-        cg_match_arms(p, env, b.n, arms, i + 1, sval, sity, slot, lty, end_label, fail_label,
-            code.concat(this_code), allocas.concat(pat.allocas).concat(b.allocas), releases.concat(pat.releases).concat(b.releases), globals.concat(pat.globals).concat(b.globals))
+                cg_match_arms(p, env, b.n, arms, i + 1, sval, sity, slot, lty, end_label, fail_label,
+                    code.concat(this_code), allocas.concat(pat.allocas).concat(b.allocas), releases.concat(pat.releases).concat(b.releases), globals.concat(pat.globals).concat(b.globals))
+            },
+            // `Rect(a, b) if a.x == b.x => ..` — the tag matched, but the
+            // arm still has to earn the body. This emitter used to drop
+            // the guard on the floor: the checker types it (see
+            // `infer_match`) and every other pass walks it (`cg_rel_in`,
+            // `cg_eq_in`, `cg_reads_max`), but the one place that turns an
+            // arm into blocks never read it, so a guarded arm ran
+            // unconditionally. `examples/adts_and_matching` printed
+            // "(a square!)" for a rectangle that is not one -- a wrong
+            // ANSWER, not a crash, which is why the example sweep found
+            // it and nothing else had.
+            //
+            // The guard gets its own block between the test and the body,
+            // and a false guard branches to the next arm exactly as a
+            // failed tag test does -- the same fall-through the real
+            // compiler's `MatchArm::guard` documents.
+            Some(gexpr) => {
+                let guard_label = cg_label(pat.n);
+                let g = cg_expr(p, pat.env, pat.n + 1, gexpr);
+                let body_label = cg_label(g.n);
+                let b = cg_expr(p, pat.env, g.n + 1, arms[i].body);
+                let next_label = if i + 1 >= arms.len() { fail_label } else { cg_label(b.n) };
+                let this_code = test_label.concat(":
+")
+                    .concat(pat.code)
+                    .concat("  br i1 ").concat(pat.test).concat(", label %").concat(guard_label).concat(", label %").concat(next_label).concat("
+")
+                    .concat(guard_label).concat(":\n")
+                    // The guard READS the arm's bindings, so they have to
+                    // be stored before it runs rather than in the body
+                    // block. A guard that then fails leaves the extra
+                    // reference in a slot the function's own exit release
+                    // already covers -- delayed, not leaked.
+                    .concat(pat.binds)
+                    .concat(g.code)
+                    .concat("  br i1 ").concat(g.val).concat(", label %").concat(body_label).concat(", label %").concat(next_label).concat("
+")
+                    .concat(body_label).concat(":\n")
+                    .concat(b.code)
+                    .concat("  store ").concat(lty).concat(" ").concat(b.val).concat(", ptr ").concat(slot).concat("
+")
+                    .concat("  br label %").concat(end_label).concat("
+");
+                cg_match_arms(p, env, b.n, arms, i + 1, sval, sity, slot, lty, end_label, fail_label,
+                    code.concat(this_code),
+                    allocas.concat(pat.allocas).concat(g.allocas).concat(b.allocas),
+                    releases.concat(pat.releases).concat(g.releases).concat(b.releases),
+                    globals.concat(pat.globals).concat(g.globals).concat(b.globals))
+            },
+        }
     }
 
 // --- Patterns ---

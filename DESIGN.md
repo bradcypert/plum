@@ -11061,30 +11061,26 @@ declaration blocks a specific real program").
 
 ### What remains before the Rust backend can go
 
-Verified by running each, not by reading code:
+**Run `./bootstrap/example-sweep`.** That is the answer, not a list kept
+here.
 
-| gap | `check` | codegen |
-|---|---|---|
-| ~~`.to_string()` on struct/array/variant~~ | | **DONE, see below** |
-| ~~destructuring `let (a, b) = ..`~~ | | **DONE, see below** |
-| ~~`\|>`~~ | | **DONE, see below** |
-| ~~`require`/`ensure` contracts~~ | | **DONE, see below** |
-| ~~`==`/`!=` between closures~~ | | **DONE, see below** |
-| generic instantiation syntax | rejects | — |
+The hand-maintained table this section used to hold was wrong three
+times running, always understating what was left. It listed four rows
+while six of nine `examples/` failed; it claimed `check` rejects
+contracts, which had not been true for a long time; and it never
+mentioned the stdlib, which turned out to be the largest gap by far (18
+of the real compiler's 78 associated functions). A list you have to
+remember to update is not a source of truth. The sweep builds and runs
+every example through BOTH compilers and diffs the output, so it cannot
+drift.
 
-The contracts row was WRONG, and the error is worth recording: it said
-`check` rejects them. It never did — the checker and the interpreter
-both handled contracts already, and only the BACKEND refused. The row
-was written from the gap list rather than from running the thing, which
-is the one habit this table exists to prevent. Every row above has now
-been re-verified by running it.
+It also finds what a table cannot. `adts_and_matching` began COMPILING
+after the stdlib batch and printed the wrong answer — the self-hosted
+backend was silently ignoring match arm guards (see below). No amount of
+list-keeping surfaces that; only running the program does.
 
-Closure equality is now a checker rejection in both compilers rather
-than a late backend failure — see below. Generic instantiation syntax,
-the one row left, already fails as a clean diagnostic.
-
-CLI: self-hosted has `check`, `run`, `emit-llvm`, `build`, `test`.
-Still missing `new`, `lsp`, and the `dump-*` helpers.
+Known-and-deliberate exclusions live in the script itself, next to the
+reason (`asteroids` opens a window), rather than in prose here.
 
 ### `.to_string()` on aggregates (2026-08-18)
 
@@ -11427,5 +11423,63 @@ and simply answered `None`. An undeclared aggregate's element type is
 always a type ARGUMENT, already walked.
 
 22/22 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 99/99 parser goldens, 9/9 `typecheck_corpus` rejected,
+Rust suite 1941/0.
+
+### The example sweep, and the three bugs it found (2026-08-19)
+
+`bootstrap/example-sweep` replaced the hand-maintained gap table. Its
+first run reported 7 of 9 examples failing where the table listed four
+rows total — and the causes were mostly things the table never
+mentioned.
+
+**Stdlib parity was the big one.** The self-hosted prelude declared 18
+associated functions; the real compiler has 78. Adding `Option`/`Result`
+combinators, `Array` queries (`find`, `find_index`, `first`, `last`,
+`take`, `drop`, `all`, `index_of`, `sum_*`) and the `Int`/`Float`
+numerics fixed three examples outright. They are ordinary Plum, mirrored
+from `crates/plumc/src/lib.rs`. Each also needs a `builtin_sig` entry:
+`check` runs WITHOUT the prelude, so a function that exists only in
+`prelude.plum` is invisible to it. `Map` and `Set` are still entirely
+absent — they are recursive generic enums and want their own batch.
+
+**Match arm guards were ignored by the self-hosted backend.** The
+checker types a guard (`infer_match`) and every other codegen pass walks
+it (`cg_rel_in`, `cg_eq_in`, `cg_reads_max`), but `cg_match_arms` — the
+one place that turns an arm into blocks — never read it, so a guarded
+arm ran unconditionally. `adts_and_matching` reported a rectangle as
+"(a square!)". A guard now gets its own block between the tag test and
+the body, and a false guard branches to the next arm exactly as a failed
+tag test does. The arm's bindings move into that guard block, because
+the guard reads them; a guard that then fails leaves an extra reference
+in a slot the function's own exit release already covers — delayed, not
+leaked, and the corpus is ASan-clean.
+
+This is the third silent wrong-answer bug in a week (after nested
+pattern tags and struct-with-closure equality), and the pattern is
+consistent: every one of them type-checked, emitted plausible IR, and
+was only visible by running a real program and looking at the output.
+
+**A closure argument was inferred in isolation.** `Array.find(xs, |it|
+it.price > 0)` failed with "field access requires a struct value with a
+statically known type, found T1", even though `xs: Array[Item]` pinned
+the element type one argument earlier — the closure body was checked
+before the argument was ever unified with the parameter. The fix is the
+generalization the real checker already made for the same reason:
+`infer_closure_seeded` existed but only `Array.map`/`filter`/`fold` used
+it, so every OTHER callback-taking function, stdlib or user-defined, hit
+this. `infer_call_args` now seeds any closure argument from its
+parameter type. The self-hosted checker is now slightly AHEAD of the
+real one here: `examples/option_result` documents an annotation as
+"required", and this checker no longer needs it.
+
+Sweep: 5 of 9 matching, from 2. Remaining: `asteroids` (an ALL-CAPS
+constant in an `if` condition parses as a struct literal — the
+`no_struct_literal` suppression `parser.plum` documents as a v1 cut),
+`concurrency` (channels, a documented scope cut), `currying` (partial
+application unsupported in the self-hosted checker), `json_and_files`
+(the JSON stdlib, ~200 lines of prelude Plum).
+
+23/23 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 99/99 parser goldens, 9/9 `typecheck_corpus` rejected,
 Rust suite 1941/0.

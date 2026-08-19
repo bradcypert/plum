@@ -152,6 +152,36 @@ let builtin_sig (name: String): Option[FnSig] =
     else if name == "Array.push" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) }) }
     else if name == "Array.slice" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt, ITInt], ret: arr_of(tp("T")) }) }
     else if name == "Array.any" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool }) }
+    else if name == "Array.all" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool }) }
+    else if name == "Array.find" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: opt_of(tp("T")) }) }
+    else if name == "Array.find_index" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: opt_of(ITInt) }) }
+    else if name == "Array.index_of" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: opt_of(ITInt) }) }
+    else if name == "Array.first" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: opt_of(tp("T")) }) }
+    else if name == "Array.last" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: opt_of(tp("T")) }) }
+    else if name == "Array.take" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt], ret: arr_of(tp("T")) }) }
+    else if name == "Array.drop" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt], ret: arr_of(tp("T")) }) }
+    else if name == "Array.reverse" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: arr_of(tp("T")) }) }
+    else if name == "Array.sum_int" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITInt)], ret: ITInt }) }
+    else if name == "Array.sum_float" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITFloat)], ret: ITFloat }) }
+    else if name == "Option.map" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], tp("U"))], ret: opt_of(tp("U")) }) }
+    else if name == "Option.and_then" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], opt_of(tp("U")))], ret: opt_of(tp("U")) }) }
+    else if name == "Option.unwrap_or_else" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), ITFunction([], tp("T"))], ret: tp("T") }) }
+    else if name == "Option.ok_or" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [opt_of(tp("T")), tp("E")], ret: res_of(tp("T"), tp("E")) }) }
+    else if name == "Option.is_none" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool }) }
+    else if name == "Result.is_ok" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E"))], ret: ITBool }) }
+    else if name == "Result.is_err" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E"))], ret: ITBool }) }
+    else if name == "Result.unwrap_or_else" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("E")], tp("T"))], ret: tp("T") }) }
+    else if name == "Result.map" { Some(FnSig { name: name, module: "", generics: ["T", "E", "U"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("T")], tp("U"))], ret: res_of(tp("U"), tp("E")) }) }
+    else if name == "Result.map_err" { Some(FnSig { name: name, module: "", generics: ["T", "E", "F"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("E")], tp("F"))], ret: res_of(tp("T"), tp("F")) }) }
+    else if name == "Result.and_then" { Some(FnSig { name: name, module: "", generics: ["T", "E", "U"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("T")], res_of(tp("U"), tp("E")))], ret: res_of(tp("U"), tp("E")) }) }
+    else if name == "Int.abs" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt], ret: ITInt }) }
+    else if name == "Int.min" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt], ret: ITInt }) }
+    else if name == "Int.max" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt], ret: ITInt }) }
+    else if name == "Int.clamp" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt, ITInt], ret: ITInt }) }
+    else if name == "Float.abs" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat }) }
+    else if name == "Float.min" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat }) }
+    else if name == "Float.max" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat }) }
+    else if name == "Float.clamp" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat, ITFloat], ret: ITFloat }) }
     else if name == "Option.is_some" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool }) }
     else if name == "Option.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), tp("T")], ret: tp("T") }) }
     else if name == "Result.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), tp("T")], ret: tp("T") }) }
@@ -904,7 +934,27 @@ struct CallArgsResult { subst: Subst, state: FreshState, texprs: Array[TExpr] }
 let infer_call_args (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (args: Array[parser.PExpr]) (param_tys: Array[ITy]) (i: Int) (texprs: Array[TExpr]): CallArgsResult =
     if i >= args.len() || i >= param_tys.len() { CallArgsResult { subst: acc, state: state, texprs: texprs } }
     else {
-        let r = infer_expr(p2, state, env, acc, args[i]);
+        // A CLOSURE argument is inferred against the parameter type it
+        // is about to be checked against, not in isolation. Inferring
+        // it in isolation gives its parameters disconnected fresh
+        // variables, and the body is checked BEFORE the unification
+        // just below could ever resolve them -- so `Array.find(xs, |it|
+        // it.price > 0)` failed with "field access requires a struct
+        // value with a statically known type, found T1" even though
+        // `xs: Array[Item]` had already pinned the element type one
+        // argument earlier.
+        //
+        // `infer_closure_seeded` already existed for exactly this
+        // reason, but only `Array.map`/`filter`/`fold` used it. Same
+        // generalization the real checker made, for the same reason:
+        // ANY function taking a callback hit this, stdlib or
+        // user-defined, and patching the three builtins individually
+        // just hid it (see `plum_types::Infer::infer_call_with_callee`).
+        let seeded = match subst_apply(acc, param_tys[i]) {
+            ITFunction(ptys, _) => infer_closure_seeded(p2, state, env, acc, args[i], ptys),
+            _ => infer_expr(p2, state, env, acc, args[i]),
+        };
+        let r = seeded;
         let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, param_tys[i])) {
             Ok(s) => subst_compose(s, r.subst),
             Err(e) => { fail_tc("argument ".concat(i.to_string()).concat(": ").concat(e)); r.subst },

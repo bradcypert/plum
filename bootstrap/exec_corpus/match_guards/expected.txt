@@ -1,0 +1,8 @@
+square 3
+wide 5x2
+tall 2x5
+big circle
+circle 4
+big 500
+huge 5000
+none
