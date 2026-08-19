@@ -1,0 +1,4 @@
+40
+15
+30
+Account { balance: 40 }

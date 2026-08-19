@@ -244,4 +244,17 @@ pub let cg_prelude_src (unit: Unit): String = cg_lines([
     "    else if cs[0] == \"-\" { match plum__string_parse_float_body(Array.slice(cs, 1, cs.len())) { Ok(f) => Ok(0.0 - f), Err(e) => Err(e) } }",
     "    else { plum__string_parse_float_body(cs) }",
     "}",
+    "",
+    // The backing calls for `require`/`ensure`. The parser desugars
+    // every clause into a call to one of these BEFORE the checker or
+    // this backend sees the body, so contracts need no work of their
+    // own anywhere downstream -- exactly two prelude one-liners, which
+    // is how the real compiler implements them too (see
+    // `crates/plumc/src/lib.rs`). They are ordinary Plum, compiled by
+    // this backend like everything else here.
+    "let __contract_require (cond: Bool) (msg: String): Unit =",
+    "    if cond { () } else { panic_raw(msg) }",
+    "",
+    "let __contract_ensure (cond: Bool) (msg: String): Unit =",
+    "    if cond { () } else { panic_raw(msg) }",
 ])

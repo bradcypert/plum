@@ -709,6 +709,28 @@ pub(crate) fn wrap_destructure(
     ctx: &LoweringContext,
     rest: ir::Expr,
 ) -> Result<ir::Expr, plum_syntax::error::CompileError> {
+    // Every caller is an IRREFUTABLE position — a function parameter,
+    // or `select`'s receive binding — where there is no next arm to
+    // fall through to and so no way to compile a test that fails. A
+    // `match` arm can synthesize a guard for exactly this (see
+    // `nested_tag_test`); here the only correct answer is to reject.
+    //
+    // Until this check existed the pattern was destructured as though
+    // its tags were certain: `let f (W { op: OMul, n }: W)` called with
+    // an `OAdd` segfaulted under the LLVM backend and raised a
+    // misleading "no match arm for tag" under the interpreter. `let`
+    // and `for` already rejected their own refutable patterns, so this
+    // was the last position in which one could still be written.
+    if let Some(tag) = refutable_tag(pattern, ctx) {
+        return Err(plum_syntax::error::CompileError::new(
+            pattern.span(),
+            format!(
+                "this pattern only matches `{tag}`, but a binding position has to match every \
+                 value of its type — there is no other arm to fall through to. Bind the value \
+                 and `match` on it instead."
+            ),
+        ));
+    }
     let (tag, bindings, nested) = lower_tag_pattern(pattern, ctx)?;
     let body = wrap_nested_destructures(nested, ctx, rest)?;
     Ok(ir::Expr::Match {
@@ -776,14 +798,25 @@ fn wrap_nested_destructures(
 // `ctx.variants` doesn't group tags by owning enum to tell the
 // difference.
 fn nested_pattern_is_refutable(pattern: &ast::Pattern, ctx: &LoweringContext) -> bool {
+    refutable_tag(pattern, ctx).is_some()
+}
+
+// The first tag that makes `pattern` refutable, or `None` when it
+// always matches. Split out from `nested_pattern_is_refutable` so a
+// REJECTION can name the offending tag (see `wrap_destructure`) rather
+// than just asserting that something in here can fail.
+fn refutable_tag<'p>(pattern: &'p ast::Pattern, ctx: &LoweringContext) -> Option<&'p str> {
     match pattern {
         ast::Pattern::Variant { path, args, .. } => {
             let tag = path.last().expect("a path always has at least one segment");
-            ctx.variants.contains_key(tag.as_str()) || args.iter().any(|a| nested_pattern_is_refutable(a, ctx))
+            if ctx.variants.contains_key(tag.as_str()) {
+                return Some(tag.as_str());
+            }
+            args.iter().find_map(|a| refutable_tag(a, ctx))
         }
-        ast::Pattern::Tuple(elems, _) => elems.iter().any(|e| nested_pattern_is_refutable(e, ctx)),
-        ast::Pattern::Struct { fields, .. } => fields.iter().any(|f| nested_pattern_is_refutable(&f.pattern, ctx)),
-        _ => false,
+        ast::Pattern::Tuple(elems, _) => elems.iter().find_map(|e| refutable_tag(e, ctx)),
+        ast::Pattern::Struct { fields, .. } => fields.iter().find_map(|f| refutable_tag(&f.pattern, ctx)),
+        _ => None,
     }
 }
 
@@ -4937,6 +4970,34 @@ mod tests {
             .unwrap_or_else(|e| panic!("parse error for {src:?}: {e}"));
         let ctx = LoweringContext::from_items(&program.items);
         super::lower_program(&program, &ctx).expect_err(&format!("expected lowering of {src:?} to fail")).to_string()
+    }
+
+    /// A parameter pattern that only matches SOME values of its type
+    /// has nowhere to fail to — unlike a `match` arm, which falls
+    /// through to the next arm (see `nested_tag_test`). It used to be
+    /// destructured as though its tags were certain, which segfaulted
+    /// under the LLVM backend when the value carried a different tag.
+    #[test]
+    fn a_refutable_parameter_pattern_is_rejected() {
+        let err = lower_program_err(
+            "enum Op { OAdd, OMul }\n\
+             struct W { op: Op, n: Int }\n\
+             let f (W { op: OMul, n }: W): Int = n",
+        );
+        assert!(err.contains("only matches `OMul`"), "unexpected error: {err}");
+    }
+
+    /// The counterpart: an irrefutable nested pattern in the same
+    /// position stays allowed, which is the whole reason parameter
+    /// destructuring exists.
+    #[test]
+    fn an_irrefutable_nested_parameter_pattern_still_lowers() {
+        let program = lower_program(
+            "struct P { x: Int, y: Int }\n\
+             struct L { a: P, b: P }\n\
+             let f (L { a: P { x, y }, b }: L): Int = x + y",
+        );
+        assert!(program.functions.iter().any(|f| f.name == "f"));
     }
 
     #[test]

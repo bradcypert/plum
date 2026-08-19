@@ -1198,15 +1198,35 @@ let cg_let_name (pattern: parser.PPattern): String =
 // builtin namespace beats top-level function beats method) now lives in
 // the checker, stated once for both backends.
 
-let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExpr): Emit = {
-    let a = cg_borrow(p, env, n, arg);
-    let reg = cg_reg(a.n);
-    if !cg_ty_eq(a.ty, CgStr) { cg_fail("println expects a String, found ".concat(cg_ty_name(a.ty))) };
-    Emit {
-        code: a.code.concat("  ").concat(reg).concat(" = call i1 @plum_println(ptr ").concat(a.val).concat(")\n").concat(a.drop),
-        allocas: a.allocas, releases: a.releases,globals: a.globals, val: reg, ty: CgUnit, n: a.n + 1,
+// `println` takes ANY type, matching the real compiler
+// (`println(account.balance)` is ordinary Plum, and
+// `examples/contracts` is written that way). A String is printed
+// directly; anything else is rendered through exactly the same
+// per-type machinery `.to_string()` uses, so the two can never
+// disagree about how a value looks.
+//
+// The two paths differ in ownership, which is why they are not
+// merged. A String argument is BORROWED -- printing reads it and the
+// caller still owns it. A rendered one is a fresh cell this call
+// created and nothing else will ever see, so it is released the
+// moment `@plum_println` returns.
+let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExpr): Emit =
+    if cg_ty_eq(cg_ty(p, arg), CgStr) {
+        let a = cg_borrow(p, env, n, arg);
+        let reg = cg_reg(a.n);
+        Emit {
+            code: a.code.concat("  ").concat(reg).concat(" = call i1 @plum_println(ptr ").concat(a.val).concat(")\n").concat(a.drop),
+            allocas: a.allocas, releases: a.releases,globals: a.globals, val: reg, ty: CgUnit, n: a.n + 1,
+        }
+    } else {
+        let s = cg_to_string(p, env, n, arg);
+        let reg = cg_reg(s.n);
+        Emit {
+            code: s.code.concat("  ").concat(reg).concat(" = call i1 @plum_println(ptr ").concat(s.val).concat(")\n")
+                .concat(if cg_rc_enabled(()) { "  call void @plum_rel_str(ptr ".concat(s.val).concat(")\n") } else { "" }),
+            allocas: s.allocas, releases: s.releases, globals: s.globals, val: reg, ty: CgUnit, n: s.n + 1,
+        }
     }
-}
 
 // A named call: the user's own function, or a prelude signature. Only
 // the former has a body to call — a builtin needs a real

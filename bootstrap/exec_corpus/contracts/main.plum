@@ -1,0 +1,29 @@
+// `require`/`ensure`, which the parser desugars into calls to
+// `__contract_require`/`__contract_ensure` before anything downstream
+// sees the body. The self-hosted compiler implements those the same way
+// the real one does: two ordinary prelude functions, no backend work.
+//
+// Also covers `println` of a non-String, which the self-hosted backend
+// used to reject outright ("println expects a String") -- it renders
+// through the same per-type machinery `.to_string()` uses now.
+
+struct Account { balance: Int }
+
+let withdraw (account: Account) (amount: Int): Account
+    require amount > 0 : "withdrawal amount must be positive"
+    require amount <= account.balance : "insufficient funds"
+    ensure result.balance >= 0
+= Account { balance: account.balance - amount }
+
+let average (total: Int) (count: Int): Int
+    require count > 0 : "cannot average over zero items"
+= total / count
+
+let main (): Unit = {
+    let account = Account { balance: 100 };
+    let after_rent = withdraw(account, 60);
+    println(after_rent.balance);
+    println(withdraw(after_rent, 25).balance);
+    println(average(90, 3));
+    println(after_rent);
+}

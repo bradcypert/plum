@@ -11068,15 +11068,22 @@ Verified by running each, not by reading code:
 | ~~`.to_string()` on struct/array/variant~~ | | **DONE, see below** |
 | ~~destructuring `let (a, b) = ..`~~ | | **DONE, see below** |
 | ~~`\|>`~~ | | **DONE, see below** |
-| `require`/`ensure` contracts | rejects | — |
+| ~~`require`/`ensure` contracts~~ | | **DONE, see below** |
 | `==`/`!=` between closures | — | missing |
 | generic instantiation syntax | rejects | — |
+
+The contracts row was WRONG, and the error is worth recording: it said
+`check` rejects them. It never did — the checker and the interpreter
+both handled contracts already, and only the BACKEND refused. The row
+was written from the gap list rather than from running the thing, which
+is the one habit this table exists to prevent. Every row above has now
+been re-verified by running it.
 
 Note the shape of the closure-equality row: `check` says ok and codegen
 then refuses, so the failure arrives with no source location — the same
 class as the stale-binding soundness bug fixed earlier. Making the
 checker reject what the backend cannot emit would turn that gap into a
-clean diagnostic; the other two already are one.
+clean diagnostic; generic instantiation already is one.
 
 CLI: self-hosted has `check`, `run`, `emit-llvm`, `build`, `test`.
 Still missing `new`, `lsp`, and the `dump-*` helpers.
@@ -11308,3 +11315,70 @@ the self-hosted half, ASan-clean rather than merely correct.
 21/21 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 99/99 parser goldens, 7/7 `typecheck_corpus` rejected,
 Rust suite 1934/0.
+
+### Refutable patterns where nothing can fall through (2026-08-18)
+
+The other half of the nested-pattern family, found by checking the
+positions the `match` fix did not touch:
+
+| position | refutable nested pattern |
+|---|---|
+| `match` arm | synthesized guard (above) |
+| `let` destructuring | already rejected, in the checker |
+| `for` pattern | already rejected |
+| **function parameter** | **segfaulted** |
+
+`let f (W { op: OMul, n }: W): Int = n`, called with an `OAdd`, ran the
+body against another variant's data — SEGV under the LLVM backend,
+"no match arm for tag" under the interpreter, which reads like the
+user's own bug. A guard cannot help here: a parameter has no next arm
+to fall through to, which is exactly what makes REJECTING it the only
+correct answer.
+
+`wrap_destructure` is the single funnel for every irrefutable
+destructuring position (function parameters via `lower_params`, and
+`select`'s receive binding), so the check lives there, and
+`refutable_tag` names the offending tag in the message rather than
+just asserting something can fail.
+
+One rough edge left, pre-existing and not specific to this check:
+reached through `monomorphize.rs`, every lowering error is stringified
+(`.map_err(|e| e.to_string())`) and loses its span, so `plum build`
+reports this without a source location while `plum run` shows the
+underlying line. Worth fixing at the `monomorphize` boundary, for every
+lowering error at once, rather than here.
+
+### `require`/`ensure` in the self-hosted compiler (2026-08-18)
+
+Two prelude one-liners, no backend work — the same implementation the
+real compiler uses:
+
+```plum
+let __contract_require (cond: Bool) (msg: String): Unit =
+    if cond { () } else { panic_raw(msg) }
+```
+
+The parser already desugars every clause into a call to one of these
+before the checker or the backend sees the body, so the whole feature
+is a prelude declaration plus a `builtin_sig` entry (for `check`, which
+runs without the prelude). The self-hosted checker had been
+special-casing both names to produce a `TUnsupported` node; deleting
+that special case is what turned them into ordinary calls.
+
+Violations now match the real compiler exactly, on both paths:
+`precondition failed: withdrawal amount must be positive`, exit 1.
+
+**`println` of a non-String** was the actual thing blocking
+`examples/contracts`, not contracts at all — the example prints
+`account.balance`, and the self-hosted backend accepted only a String.
+It renders through the same per-type machinery `.to_string()` already
+used, so the two cannot disagree. The paths differ only in ownership:
+a String argument is borrowed, a rendered one is a fresh cell released
+as soon as `@plum_println` returns.
+
+`examples/contracts` now builds and runs identically under both
+compilers.
+
+22/22 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 99/99 parser goldens, 7/7 rejections, Rust suite
+1938/0.
