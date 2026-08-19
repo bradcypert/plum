@@ -11631,3 +11631,62 @@ correct and leak-free, self-build fixed point byte-identical, 101/101
 parser goldens (two new: `if_capitalized_condition`,
 `match_capitalized_scrutinee`), 10/10 `typecheck_corpus` rejected, Rust
 suite 1941/0.
+
+### AST positions, and type errors that say where (2026-08-19)
+
+The second half of the spans work. Parse errors got locations first
+(token offsets plus the index every parse function already threads);
+TYPE errors needed positions on the AST itself, because the checker
+walks a tree, not a token stream.
+
+**The constraint that shaped the design**: the checker runs on a MERGED
+program — every module's items concatenated into one flat list (see
+`collect_project`) — so by the time an error is reported there is no
+ambient "current file" to attribute it to. A position therefore has to
+carry its FILE with it. `ItemNode` gained `path` and `start`; `PBlock`
+gained `starts`, one character offset per statement plus a trailing one
+for the tail expression. The source is re-read from disk to render,
+which only ever happens on the failure path — the compiler is about to
+abort anyway.
+
+**Granularity is a statement, not an expression, and that was a
+choice.** The real compiler carets the exact subexpression:
+
+```
+real:  4 | let c (p: P): Int = p.nope
+         |                     ^^^^^^
+self:  4 | let c (p: P): Int = p.nope
+         | ^
+```
+
+Expression precision would mean a position on all twenty-odd `PExpr`
+variants — 181 match sites and 113 construction sites across the
+parser, interpreter, checker and backend. Statement granularity cost
+roughly a dozen edits, because `ItemNode`/`PBlock` are constructed in
+exactly 12 places (all in the parser) and read everywhere else by FIELD
+NAME, so adding fields broke nothing. Two large mechanical rewrites
+earlier the same day had each introduced a bug the compiler then caught
+(a duplicated parameter, a mis-scoped in-chain detection), which is a
+fair prior on how a 294-site version would have gone.
+
+The thing that actually matters — turning "somewhere in your project"
+into "this line" — is bought at statement level. Going from there to the
+exact column is a refinement that can be made later without redoing any
+of this: `PBlock.starts` and `ItemNode.start` stay exactly as they are,
+and only the leaf nodes gain positions.
+
+Both parallel arrays (`LexedSource.starts`, `PBlock.starts`) follow the
+same rule for the same reason: the thing being annotated is matched on
+in dozens of places that have no use for a position, and none of them
+should have to unwrap a wrapper to keep working.
+
+A -1 offset means "unknown" throughout — a synthesized block (contract
+desugaring), or a parse with no source context set. It falls back to the
+enclosing item's position, or to the bare message, so nothing depends on
+positions having been recorded.
+
+25/25 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 101/101 parser goldens (positions are invisible to
+`render_program`, by design), 10/10 `typecheck_corpus` rejected — all
+ten now reporting a file and line — sweep 7/9, Rust suite 1941/0.
+Self-compilation 0.86s.

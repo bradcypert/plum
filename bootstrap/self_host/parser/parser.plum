@@ -78,7 +78,14 @@ pub enum PExpr {
     ESelect(Array[SelectArmNode]),
 }
 
-pub struct PBlock { stmts: Array[PStmt], tail: Option[PExpr] }
+// `starts` is one character offset per entry in `stmts`, parallel to it
+// -- the same shape, and for the same reason, as the lexer's token
+// offsets: `PStmt` is matched on in a dozen places that have no use for
+// a position, and none of them should have to unwrap a wrapper to keep
+// working. A statement is the granularity a type error is reported at;
+// see `typecheck/infer.plum`'s `fail_tc` for what that does and does
+// not buy versus the real compiler's expression-precise spans.
+pub struct PBlock { stmts: Array[PStmt], tail: Option[PExpr], starts: Array[Int] }
 
 pub enum PStmt {
     SLet(Bool, PPattern, PExpr),
@@ -136,11 +143,17 @@ pub enum ItemKindNode {
 // stamps the real name on afterwards, via `with_module`. That keeps
 // module identity out of the grammar, where it does not belong, while
 // still making it part of the AST, where every later pass needs it.
-pub struct ItemNode { is_pub: Bool, module: String, kind: ItemKindNode }
+// `path`/`start` are the item's own source position: which FILE it was
+// parsed from, and the character offset it begins at. The checker needs
+// both because it runs on a MERGED program -- every module's items
+// concatenated into one flat list -- so by the time a type error is
+// reported there is no ambient "current file" left to attribute it to.
+// See `typecheck/infer.plum`'s `fail_tc`.
+pub struct ItemNode { is_pub: Bool, module: String, kind: ItemKindNode, path: String, start: Int }
 
 // Stamps a module name onto every item parsed from one file.
 pub let with_module (items: Array[ItemNode]) (m: String): Array[ItemNode] =
-    Array.map(items, |it| ItemNode { is_pub: it.is_pub, module: m, kind: it.kind })
+    Array.map(items, |it| ItemNode { is_pub: it.is_pub, module: m, kind: it.kind, path: it.path, start: it.start })
 pub struct ProgramNode { items: Array[ItemNode] }
 
 // --- lexer.Token-stream helpers (the `(tokens, pos) -> (value, next_pos)`
@@ -175,6 +188,18 @@ let CTX: Ref[SourceContext] = ref(SourceContext { path: "", source: "", starts: 
 
 pub let set_source_context (path: String) (source: String) (starts: Array[Int]): Unit =
     CTX.set(SourceContext { path: path, source: source, starts: starts })
+
+// Where the token at `pos` starts, as a character offset -- or -1 when
+// no source context is set, which is what every AST position degrades
+// to for a caller that never set one (a unit test, a REPL). A negative
+// offset means "unknown" everywhere downstream and simply suppresses
+// the source quote, rather than pointing confidently at byte 0.
+pub let offset_at (pos: Int): Int = {
+    let ctx = CTX.get();
+    if pos >= ctx.starts.len() { 0 - 1 } else { ctx.starts[pos] }
+}
+
+pub let current_path (unit: Unit): String = CTX.get().path
 
 let fail_at (pos: Int) (msg: String): Unit = {
     let ctx = CTX.get();
@@ -234,12 +259,12 @@ let parse_item (tokens: Array[lexer.Token]) (pos: Int): ItemResult = {
     let pub_bump = bump_if(tokens, pos, TokPub);
     let start = pub_bump.next_pos;
     match tokens[start] {
-        TokLet => { let r = parse_let_def(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKLet(r.value) }, next_pos: r.next_pos } },
-        TokStruct => { let r = parse_struct_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKStruct(r.value) }, next_pos: r.next_pos } },
-        TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKEnum(r.value) }, next_pos: r.next_pos } },
-        TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKExtern(r.value) }, next_pos: r.next_pos } },
-        TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKUse(r.value) }, next_pos: r.next_pos } },
-        _ => { fail_at(start, "expected an item (let/struct/enum/extern/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }) }, next_pos: start } },
+        TokLet => { let r = parse_let_def(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKLet(r.value), path: current_path(()), start: offset_at(start) }, next_pos: r.next_pos } },
+        TokStruct => { let r = parse_struct_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKStruct(r.value), path: current_path(()), start: offset_at(start) }, next_pos: r.next_pos } },
+        TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKEnum(r.value), path: current_path(()), start: offset_at(start) }, next_pos: r.next_pos } },
+        TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKExtern(r.value), path: current_path(()), start: offset_at(start) }, next_pos: r.next_pos } },
+        TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKUse(r.value), path: current_path(()), start: offset_at(start) }, next_pos: r.next_pos } },
+        _ => { fail_at(start, "expected an item (let/struct/enum/extern/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), start: offset_at(start) }, next_pos: start } },
     }
 }
 
@@ -363,11 +388,11 @@ let desugar_contracts (params: Array[ParamNode]) (requires: Array[ContractClause
         };
         let require_stmts = Array.map(requires, |c| SExpr(contract_check_call("__contract_require", "precondition failed", c)));
         if Array.is_empty(ensures) {
-            EBlock(PBlock { stmts: require_stmts, tail: Some(raw_body) })
+            EBlock(PBlock { stmts: require_stmts, tail: Some(raw_body), starts: synthetic_starts(require_stmts.len() + 1, 0, []) })
         } else {
             let with_let = require_stmts.push(SLet(false, PIdent("result"), raw_body));
             let ensure_stmts = Array.map(ensures, |c| SExpr(contract_check_call("__contract_ensure", "postcondition failed", c)));
-            EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result")) })
+            EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result")), starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []) })
         }
     }
 
@@ -1222,11 +1247,11 @@ struct BlockResult { value: PBlock, next_pos: Int }
 
 let parse_block (tokens: Array[lexer.Token]) (pos: Int): BlockResult = {
     let open = expect(tokens, pos, TokLBrace, "'{'");
-    let r = parse_block_items_acc(tokens, open, [], None);
-    BlockResult { value: PBlock { stmts: r.stmts, tail: r.tail }, next_pos: expect(tokens, r.next_pos, TokRBrace, "'}'") }
+    let r = parse_block_items_acc(tokens, open, [], None, []);
+    BlockResult { value: PBlock { stmts: r.stmts, tail: r.tail, starts: r.starts }, next_pos: expect(tokens, r.next_pos, TokRBrace, "'}'") }
 }
 
-struct BlockItemsResult { stmts: Array[PStmt], tail: Option[PExpr], next_pos: Int }
+struct BlockItemsResult { stmts: Array[PStmt], tail: Option[PExpr], next_pos: Int, starts: Array[Int] }
 
 // `no_tail(())` instead of a bare `None` at each recursive call below —
 // a real, narrow type-inference gap found while building this file:
@@ -1238,25 +1263,35 @@ struct BlockItemsResult { stmts: Array[PStmt], tail: Option[PExpr], next_pos: In
 // helper sidesteps it entirely rather than depending on that
 // resolution — `no_tail`'s OWN declared return type pins the `Option`
 // down before it's ever passed anywhere.
+// A block the parser SYNTHESIZED (contract desugaring) has no source
+// position of its own: -1 everywhere, which reads as "unknown" and
+// falls back to the enclosing item.
+let synthetic_starts (n: Int) (i: Int) (acc: Array[Int]): Array[Int] =
+    if i >= n { acc } else { synthetic_starts(n, i + 1, acc.push(0 - 1)) }
+
 let no_tail (unit: Unit): Option[PExpr] = None
 
-let parse_block_items_acc (tokens: Array[lexer.Token]) (pos: Int) (stmts: Array[PStmt]) (tail: Option[PExpr]): BlockItemsResult =
-    if check(tokens, pos, TokRBrace) { BlockItemsResult { stmts: stmts, tail: tail, next_pos: pos } }
+let parse_block_items_acc (tokens: Array[lexer.Token]) (pos: Int) (stmts: Array[PStmt]) (tail: Option[PExpr]) (starts: Array[Int]): BlockItemsResult =
+    if check(tokens, pos, TokRBrace) { BlockItemsResult { stmts: stmts, tail: tail, next_pos: pos, starts: starts } }
     else if check(tokens, pos, TokLet) {
         let stmt_r = parse_let_stmt(tokens, pos);
         let semi_pos = expect(tokens, stmt_r.next_pos, TokSemicolon, "';'");
-        parse_block_items_acc(tokens, semi_pos, stmts.push(stmt_r.value), no_tail(()))
+        parse_block_items_acc(tokens, semi_pos, stmts.push(stmt_r.value), no_tail(()), starts.push(offset_at(pos)))
     } else {
         let expr_r = parse_expr(tokens, pos);
         if check(tokens, expr_r.next_pos, TokEq) {
             let name = match expr_r.value { EIdent(n) => n, _ => { fail_at(pos, "invalid assignment target"); "" } };
             let value_r = parse_expr(tokens, expr_r.next_pos + 1);
             let semi_pos = expect(tokens, value_r.next_pos, TokSemicolon, "';'");
-            parse_block_items_acc(tokens, semi_pos, stmts.push(SAssign(name, value_r.value)), no_tail(()))
+            parse_block_items_acc(tokens, semi_pos, stmts.push(SAssign(name, value_r.value)), no_tail(()), starts.push(offset_at(pos)))
         } else {
             let semi_b = bump_if(tokens, expr_r.next_pos, TokSemicolon);
-            if semi_b.matched { parse_block_items_acc(tokens, semi_b.next_pos, stmts.push(SExpr(expr_r.value)), no_tail(())) }
-            else { BlockItemsResult { stmts: stmts, tail: Some(expr_r.value), next_pos: expr_r.next_pos } }
+            if semi_b.matched { parse_block_items_acc(tokens, semi_b.next_pos, stmts.push(SExpr(expr_r.value)), no_tail(()), starts.push(offset_at(pos))) }
+            // The TAIL expression's own position rides along in `starts`
+            // too: it is the last thing checked in the block, so a type
+            // error in it would otherwise fall back to the enclosing
+            // item's position.
+            else { BlockItemsResult { stmts: stmts, tail: Some(expr_r.value), next_pos: expr_r.next_pos, starts: starts.push(offset_at(pos)) } }
         }
     }
 

@@ -38,8 +38,52 @@
 // error.
 
 use parser;
+use lexer;
 
-let fail_tc (msg: String): Unit = panic_raw("self-hosted type checker: ".concat(msg))
+// --- Where a type error happened ---
+//
+// The checker runs on a MERGED program: every module's items
+// concatenated into one flat list (see main.plum's `collect_project`),
+// so there is no ambient "current file" by the time an error is
+// reported. The position therefore travels on the AST -- `ItemNode`
+// carries the file it was parsed from and its own offset, and `PBlock`
+// carries one offset per statement -- and this cell records whichever
+// is currently being checked.
+//
+// **Granularity is a statement, not an expression.** The real compiler
+// carets the exact subexpression (`p.nope`); this points at the
+// statement containing it. That is a deliberate trade: expression-level
+// spans would mean a position on all twenty-odd `PExpr` variants, which
+// is ~180 match sites across the parser, interpreter, checker and
+// backend, against roughly a dozen for this. Statement granularity is
+// what turns "somewhere in your project" into "this line", which is the
+// difference that actually matters; going from there to the exact
+// column is a refinement that can be made later without redoing any of
+// this.
+//
+// The source is re-read from disk to render, which only ever happens on
+// the failure path -- the compiler is about to abort anyway.
+struct ErrPos { path: String, offset: Int }
+let ERR: Ref[ErrPos] = ref(ErrPos { path: "", offset: 0 - 1 })
+
+pub let set_err_pos (path: String) (offset: Int): Unit = ERR.set(ErrPos { path: path, offset: offset })
+
+// A statement offset of -1 means "synthesized, or parsed without a
+// source context" — keep whatever the enclosing item set instead of
+// overwriting it with a position that points nowhere.
+pub let set_stmt_pos (offset: Int): Unit =
+    if offset >= 0 { ERR.set(ErrPos { path: ERR.get().path, offset: offset }) } else { () }
+
+let fail_tc (msg: String): Unit = {
+    let e = ERR.get();
+    if e.path == "" || e.offset < 0 { panic_raw("self-hosted type checker: ".concat(msg)) }
+    else {
+        match read_file(e.path) {
+            Ok(src) => panic_raw(lexer.render_at(src, e.path, e.offset, msg)),
+            Err(_) => panic_raw("self-hosted type checker: ".concat(msg)),
+        }
+    }
+}
 
 // --- Fresh type variables ---
 
@@ -260,7 +304,7 @@ let check_all_fns (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): Unit 
     if i >= items.len() { () }
     else {
         match items[i].kind {
-            IKLet(def) => if Array.is_empty(def.params) { check_all_fns(p2, items, i + 1) } else { { check_fn(p2, def, items[i].module); check_all_fns(p2, items, i + 1) } },
+            IKLet(def) => if Array.is_empty(def.params) { check_all_fns(p2, items, i + 1) } else { { set_err_pos(items[i].path, items[i].start); check_fn(p2, def, items[i].module); check_all_fns(p2, items, i + 1) } },
             _ => check_all_fns(p2, items, i + 1),
         }
     }
@@ -1198,9 +1242,11 @@ let infer_array_set (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst)
 }
 
 let infer_block (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (block: parser.PBlock): InferResult = {
-    let r = infer_stmts(p2, state, env, acc, block.stmts, 0, []);
+    let r = infer_stmts(p2, state, env, acc, block.stmts, 0, [], block.starts);
     match block.tail {
         Some(t) => {
+            // The tail's own position is the last entry in `starts`.
+            set_stmt_pos(block_start_at(block.starts, block.stmts.len()));
             let tr = infer_expr(p2, r.state, r.env, r.subst, t);
             ir_leaf(tr.ty, tr.subst, tr.state, TBlockE(TBlock { stmts: r.tstmts, tail: Some(tr.texpr) }))
         },
@@ -1209,14 +1255,23 @@ let infer_block (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (bl
 }
 
 struct StmtsResult { env: TyEnv, subst: Subst, state: FreshState, tstmts: Array[TStmt] }
-let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (stmts: Array[parser.PStmt]) (i: Int) (tstmts: Array[TStmt]): StmtsResult =
+
+// `starts` is `PBlock.starts` -- one offset per statement, plus a
+// trailing one for the block's tail expression. Out-of-range reads
+// answer -1 ("unknown"), so a block built without a source context
+// behaves exactly as it did before positions existed.
+let block_start_at (starts: Array[Int]) (i: Int): Int =
+    if i >= starts.len() { 0 - 1 } else { starts[i] }
+
+let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (stmts: Array[parser.PStmt]) (i: Int) (tstmts: Array[TStmt]) (starts: Array[Int]): StmtsResult =
     if i >= stmts.len() { StmtsResult { env: env, subst: acc, state: state, tstmts: tstmts } }
     else {
+        set_stmt_pos(block_start_at(starts, i));
         match stmts[i] {
             SLet(_, pattern, value) => {
                 let r = infer_expr(p2, state, env, acc, value);
                 let br = bind_pattern_ty(p2, r.state, r.subst, env, pattern, subst_apply(r.subst, r.ty));
-                infer_stmts(p2, br.state, br.env, br.subst, stmts, i + 1, tstmts.push(TSLet(pattern, r.texpr)))
+                infer_stmts(p2, br.state, br.env, br.subst, stmts, i + 1, tstmts.push(TSLet(pattern, r.texpr)), starts)
             },
             SAssign(name, value) => {
                 let r = infer_expr(p2, state, env, acc, value);
@@ -1235,9 +1290,9 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
                     None => { fail_tc("assignment to an unbound name: ".concat(name)); ITUnit },
                 };
                 let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, target_ty)) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc("assignment to ".concat(name).concat(": ").concat(e)); r.subst } };
-                infer_stmts(p2, r.state, env, s2, stmts, i + 1, tstmts.push(TSAssign(name, r.texpr)))
+                infer_stmts(p2, r.state, env, s2, stmts, i + 1, tstmts.push(TSAssign(name, r.texpr)), starts)
             },
-            SExpr(e) => { let r = infer_expr(p2, state, env, acc, e); infer_stmts(p2, r.state, env, r.subst, stmts, i + 1, tstmts.push(TSExpr(r.texpr))) },
+            SExpr(e) => { let r = infer_expr(p2, state, env, acc, e); infer_stmts(p2, r.state, env, r.subst, stmts, i + 1, tstmts.push(TSExpr(r.texpr)), starts) },
         }
     }
 
