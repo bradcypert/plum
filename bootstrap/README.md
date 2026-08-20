@@ -71,6 +71,40 @@ self-hosted TYPE CHECKER) actually rejects ill-typed programs, not just
 that it accepts well-typed ones. See its own `typecheck_corpus/
 README.md`.
 
+## `seed/`
+
+The self-hosted compiler as LLVM IR, checked in so a fresh clone can
+build a compiler with `clang` alone — no Rust toolchain:
+
+```
+./bootstrap/from-seed                          # clang only
+./sh.seed build bootstrap/self_host -o sh.real
+```
+
+See `seed/README.md` for why it is IR rather than a binary, and for the
+refresh rule (`check-seed` fails when the seed has fallen behind;
+`gen-seed` refreshes it, deliberately, because each refresh is ~6MB of
+generated text).
+
+**What the Rust compiler is still for.** Since the seed landed it is no
+longer required to build anything. It stays for two jobs it is uniquely
+good at: it is the ORACLE the example sweep compares self-hosted output
+against byte for byte (which is what caught the `Bool`-width FFI bug,
+the dropped match guards and both nested-pattern miscompilations), and
+it is a from-source path for anyone unwilling to trust a checked-in
+artifact. It is no longer where new language work happens.
+
+## Scripts
+
+| script | what it proves |
+|---|---|
+| `bootstrap-check` | the compiler compiled by itself is the same compiler |
+| `self-sufficiency` | it can build itself with no Rust compiler, from any directory |
+| `check-seed` | the checked-in seed still bootstraps to today's compiler |
+| `example-sweep` | every `examples/` project agrees with the Rust compiler |
+| `lsp-smoke` | the language server answers a real session |
+| `check-shims` | the embedded C shims match `native_stdlib/` |
+
 ## `self_host/`
 
 The self-hosted implementation itself — ONE project (Go-style

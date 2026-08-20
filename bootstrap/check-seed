@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Proves the checked-in seed is still good enough to bootstrap from.
+#
+# "Good enough" is a specific claim, and this checks exactly it:
+#
+#   1. clang alone turns the seed into a compiler
+#   2. that compiler compiles TODAY's `bootstrap/self_host`
+#   3. what it produces emits the same IR as the current compiler does
+#
+# Step 3 is the one that matters. A seed that builds but produces a
+# DIFFERENT compiler would be a seed that silently bootstraps something
+# other than this source tree.
+#
+# When this fails, the fix is `bootstrap/gen-seed` — the seed has fallen
+# behind the language the compiler's own source now uses. That is
+# expected occasionally and should be a deliberate commit, not a
+# reflex: each refresh puts 6MB of generated text into history.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+work="$(mktemp -d -t plum-seed-XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+
+echo "seed -> compiler (clang only) ..."
+./bootstrap/from-seed -o "$work/sh.seed" > "$work/build.log" 2>&1 || {
+    echo "clang could not build the seed:" >&2; cat "$work/build.log" >&2; exit 1; }
+
+echo "seed compiler -> today's source ..."
+(cd "$work" && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh.seed build "$root/bootstrap/self_host" -o "$work/sh.next" > "$work/next.log" 2>&1) || {
+    echo "the seed compiler could not build today's source -- run bootstrap/gen-seed:" >&2
+    head -20 "$work/next.log" >&2; exit 1; }
+
+echo "comparing what it produces against the current compiler ..."
+(cd "$work" && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh.next emit-llvm "$root/bootstrap/self_host" > "$work/next.ll" 2>&1)
+SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > "$work/cur.ll" 2>&1
+
+if cmp -s "$work/next.ll" "$work/cur.ll"; then
+    echo "SEED OK: bootstraps to a compiler identical to the current one"
+else
+    echo "SEED STALE: a compiler bootstrapped from the seed differs from the current one" >&2
+    echo "run bootstrap/gen-seed to refresh it" >&2
+    exit 1
+fi

@@ -12151,3 +12151,60 @@ it, serving an editor — the self-hosted compiler does alone.
 byte-identical, self-sufficiency check passing, 101/101 parser goldens,
 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok, Rust suite
 1941/0.
+
+### The bootstrap seed (2026-08-19)
+
+`bootstrap/seed/plum.ll` is the self-hosted compiler as LLVM IR, checked
+in. A fresh clone now gets a compiler with `clang` alone:
+
+```
+./bootstrap/from-seed                          # no Rust toolchain
+./sh.seed build bootstrap/self_host -o sh.real
+```
+
+**IR rather than a binary**, deliberately: text is readable, diffable
+and reviewable in a pull request the way a committed `.so` is not, and
+it builds anywhere clang runs. The cost is 6.1MB (0.9MB gzipped) of
+generated text, which is why it is refreshed rarely.
+
+**The real reason it exists is not convenience.** Depending on the Rust
+compiler to build the self-hosted one confines the self-hosted
+compiler's own source to the INTERSECTION of the two languages —
+`main.plum` has to compile under both. That was a recurring tax, and
+this session paid it four times: a `mkdir` primitive, three stdin
+primitives, the placement of an `extern` block, and a `CStr` return's
+lifetime were each designed twice. With a seed, the compiler's source
+can use the compiler's own features and the seed is refreshed when it
+can no longer keep up.
+
+`check-seed` proves three things, the third being the one that matters:
+clang can build the seed; the seed compiler can build today's source;
+and what it produces emits IR IDENTICAL to the current compiler's. A
+seed that built but produced a different compiler would silently
+bootstrap something other than this source tree. When it fails, the fix
+is `gen-seed` — expected occasionally, and a deliberate commit rather
+than a reflex.
+
+**The Rust compiler is now demoted, not deleted**, and the distinction
+is the point. It is no longer required to build anything. It stays for
+two jobs it is uniquely good at:
+
+1. It is the ORACLE `example-sweep` compares self-hosted output against,
+   byte for byte. That comparison caught the `Bool`-width FFI bug, the
+   dropped match guards, and both nested-pattern miscompilations — three
+   silent wrong answers that no self-consistency check could have found,
+   because a compiler that is wrong in the same way twice still agrees
+   with itself. Crucially the sweep compares USER programs, so this
+   survives even after the compiler's own source diverges past what Rust
+   can build.
+2. It is a from-source path for anyone unwilling to trust a checked-in
+   artifact — the standing mitigation for a trusting-trust seed.
+
+Deleting it is the one step here that is not easily undone, and there is
+no rush: it costs nothing to keep and is still earning its place every
+time the sweep runs.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, self-sufficiency passing, seed bootstrapping to an
+identical compiler, 101/101 parser goldens, 11/11 `typecheck_corpus`
+rejected, sweep 9/9, LSP smoke ok, Rust suite 1941/0.

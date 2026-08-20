@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Builds a working Plum compiler from the checked-in SEED, using clang
+# and nothing else — no Rust toolchain, no existing `./sh`.
+#
+# This is the answer to "I just cloned this; how do I get a compiler?"
+# The self-hosted compiler needs a Plum compiler to build it, and the
+# seed is that compiler, shipped as LLVM IR: readable text, diffable,
+# and turned into a binary by the same `clang` the project already
+# requires.
+#
+# Usage:  ./bootstrap/from-seed [-o <out>]     (default: ./sh.seed)
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+out="./sh.seed"
+if [ "${1:-}" = "-o" ] && [ -n "${2:-}" ]; then out="$2"; fi
+
+seed="bootstrap/seed/plum.ll"
+[ -f "$seed" ] || { echo "missing $seed -- run bootstrap/gen-seed" >&2; exit 1; }
+
+# The same four shims the compiler embeds (see `bootstrap/gen-shims`).
+# `net_shim.c` is not among them: nothing in the compiler calls it.
+clang -O2 -Wno-override-module "$seed" \
+    native_stdlib/dir_shim.c \
+    native_stdlib/io_shim.c \
+    native_stdlib/process_shim.c \
+    native_stdlib/thread_shim.c \
+    -lm -o "$out"
+
+echo "built $out from the seed -- no Rust compiler involved"
+echo "next: $out build bootstrap/self_host -o sh.real"

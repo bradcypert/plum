@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Regenerates the BOOTSTRAP SEED: the self-hosted compiler as LLVM IR,
+# checked in so a fresh clone can build a compiler with clang alone and
+# no Rust toolchain.
+#
+# Refresh this only when it stops working -- `bootstrap/check-seed`
+# says so, by failing. The seed does not need to be CURRENT; it needs to
+# be new enough to compile today's source. Refreshing on every change
+# would put 6MB of generated text into history for no benefit.
+#
+# Run from the repo root with a working `./sh`.
+set -euo pipefail
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > bootstrap/seed/plum.ll
+echo "wrote bootstrap/seed/plum.ll ($(wc -l < bootstrap/seed/plum.ll) lines, $(du -h bootstrap/seed/plum.ll | cut -f1))"
