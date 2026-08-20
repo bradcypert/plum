@@ -12208,3 +12208,74 @@ time the sweep runs.
 byte-identical, self-sufficiency passing, seed bootstrapping to an
 identical compiler, 101/101 parser goldens, 11/11 `typecheck_corpus`
 rejected, sweep 9/9, LSP smoke ok, Rust suite 1941/0.
+
+### Memory: 4 GB to 51 MB (2026-08-19)
+
+Compiling the compiler took **4,005 MB** peak RSS, against the Rust
+compiler's **192 MB** on identical input — 21× worse, and the reason the
+`sh` guard wrapper exists at all (its own comment records a 44.9GB OOM
+that killed a terminal). At that size a modest laptop cannot build a
+large Plum project.
+
+**Measured before fixing**, and the split was decisive:
+
+| phase | peak RSS |
+|---|---|
+| `emit-llvm` (no clang) | 3,580 MB |
+| clang on the emitted IR | 54 MB |
+| `check` (parse + typecheck) | 284 MB |
+
+So codegen owned it. The runtime's own counters (`PLUM_RT_STATS`, which
+only a self-hosted-BUILT binary has) named the cause:
+
+```
+alloc n=14,039,362  bytes=3,541,197,435  concat=8,644,862
+```
+
+3.5GB allocated to produce 6MB of IR, and peak RSS almost exactly equal
+to total bytes allocated — nothing was being reclaimed, because the
+accumulator chain held every intermediate alive.
+
+**The cause was quadratic string building.** The emitter accumulated its
+entire output by repeated `.concat`: appending function N copies the N−1
+already appended. `cg_emit_insts` (every function body in the program),
+the three generated-function emitters, and `cg_lines` all did this. I
+had even written "`Array.fold` over `concat` is quadratic" in a comment
+in the generated shims file, without connecting it to the emitter doing
+the same thing for six megabytes.
+
+The fix is a runtime primitive, `String.concat_all`, which sums the
+lengths, allocates ONCE and memcpys each piece — then the five
+accumulators collect into an array and join at the end.
+
+| | before | after |
+|---|---|---|
+| peak RSS, `emit-llvm` | 3,580 MB | **51 MB** |
+| peak RSS, full `build` | 4,005 MB | **51 MB** |
+| bytes allocated | 3.54 GB | 0.95 GB |
+| wall time, `emit-llvm` | 1.33s | 0.78s |
+| system time | 0.75s | 0.02s |
+
+Peak fell 70× while bytes allocated fell only 73%, and the gap is the
+point: the remaining allocations are transient and get reclaimed, where
+before the growing accumulator pinned everything. The system-time
+collapse is the page-faulting for 3.5GB disappearing.
+
+The compiler now uses a QUARTER of the Rust compiler's memory, and
+builds itself under the guard wrapper's default 1GB cap with no
+`SH_MEM` override — the overrides scattered through the harnesses are
+now upper bounds rather than requirements.
+
+**Two things this exercised for the first time.** `String.concat_all`
+had to be added to the REAL compiler's prelude too (as ordinary,
+quadratic Plum) because the self-hosted compiler's own source must
+compile under both — the intersection tax the seed exists to lift,
+charged one more time. And `check-seed` failed exactly as designed: the
+seed predated the new function, said so, and `gen-seed` fixed it. That
+is the refresh workflow working on its first real occasion rather than
+in theory.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, self-sufficiency passing, seed refreshed and verified,
+101/101 parser goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9,
+LSP smoke ok, Rust suite 1941/0.

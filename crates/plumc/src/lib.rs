@@ -1177,6 +1177,15 @@ let String.trim_start (s: String): String = {
 
 let String.trim_end (s: String): String = string_reverse(String.trim_start(string_reverse(s)))
 
+// Parity with the self-hosted prelude, where this is a RUNTIME
+// primitive that joins in one allocation. Here it is ordinary Plum and
+// therefore quadratic, which is fine for the one job this compiler
+// still has -- building the self-hosted compiler once, after which that
+// compiler rebuilds itself with the linear version. Without it, the
+// self-hosted compiler's own source could not use `String.concat_all`
+// at all, since that source has to compile under both.
+let String.concat_all (parts: Array[String]): String = Array.fold(parts, \"\", |acc, p| acc.concat(p))
+
 let string_matches_at (chars: Array[String]) (needle: Array[String]) (base: Int) (j: Int): Bool =
     if j >= needle.len() { true }
     else if chars[base + j] != needle[j] { false }

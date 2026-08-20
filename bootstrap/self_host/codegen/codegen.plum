@@ -1396,6 +1396,7 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "round_raw" { Some("@plum_round_raw") }
     else if name == "random_raw" { Some("@plum_random_raw") }
     else if name == "string_cmp_raw" { Some("@plum_str_cmp_raw") }
+    else if name == "string_concat_all_raw" { Some("@plum_str_concat_all") }
     else if name == "process_run_raw" { Some("@plum_process_run_raw") }
     else if name == "process_exit_code_raw" { Some("@plum_process_exit_code_raw") }
     else if name == "process_stdout_raw" { Some("@plum_process_stdout_raw") }
@@ -3173,8 +3174,13 @@ let cg_str_append_lit (owner: typecheck.ITy) (acc: String) (text: String) (n: In
 // `.to_string()` is actually called: a struct's renderer calls its
 // fields' renderers, so the set has to be closed under nesting anyway,
 // and the release set already is.
+// Array-then-join, like `cg_emit_insts`: one generated function per
+// type, and appending each onto a growing string is quadratic.
 let cg_emit_str_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: String): String =
-    if i >= ts.len() { acc } else { cg_emit_str_fns(p, ts, i + 1, acc.concat(cg_emit_str_fn(p, ts[i]))) }
+    String.concat_all(cg_emit_str_fns_acc(p, ts, 0, []))
+
+let cg_emit_str_fns_acc (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= ts.len() { acc } else { cg_emit_str_fns_acc(p, ts, i + 1, acc.push(cg_emit_str_fn(p, ts[i]))) }
 
 let cg_emit_str_fn (p: CgProgram) (t: typecheck.ITy): String =
     match t {
@@ -3304,8 +3310,13 @@ let cg_enum_str_payloads (t: typecheck.ITy) (ptys: Array[typecheck.ITy]) (i: Int
             consts.concat(pre.consts).concat(r.consts), app.n)
     }
 
+// Array-then-join, like `cg_emit_insts`: one generated function per
+// type, and appending each onto a growing string is quadratic.
 let cg_emit_eq_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: String): String =
-    if i >= ts.len() { acc } else { cg_emit_eq_fns(p, ts, i + 1, acc.concat(cg_emit_eq_fn(p, ts[i]))) }
+    String.concat_all(cg_emit_eq_fns_acc(p, ts, 0, []))
+
+let cg_emit_eq_fns_acc (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= ts.len() { acc } else { cg_emit_eq_fns_acc(p, ts, i + 1, acc.push(cg_emit_eq_fn(p, ts[i]))) }
 
 let cg_emit_eq_fn (p: CgProgram) (t: typecheck.ITy): String =
     match t {
@@ -3680,8 +3691,13 @@ let cg_rel_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typ
         cg_rel_close_variants(p, vs, args, i + 1, cg_rel_close_list(p, payload, 0, acc))
     }
 
+// Array-then-join, like `cg_emit_insts`: one generated function per
+// type, and appending each onto a growing string is quadratic.
 let cg_emit_rel_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: String): String =
-    if i >= ts.len() { acc } else { cg_emit_rel_fns(p, ts, i + 1, acc.concat(cg_emit_rel_fn(p, ts[i]))) }
+    String.concat_all(cg_emit_rel_fns_acc(p, ts, 0, []))
+
+let cg_emit_rel_fns_acc (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= ts.len() { acc } else { cg_emit_rel_fns_acc(p, ts, i + 1, acc.push(cg_emit_rel_fn(p, ts[i]))) }
 
 // Every release function has the same shape: decrement, and on reaching
 // zero release the children and free the cell.
@@ -4247,14 +4263,22 @@ let cg_calls_in_arms (p: CgProgram) (arms: Array[typecheck.TArm]) (i: Int) (acc:
 let cg_calls_in_fields (p: CgProgram) (fields: Array[typecheck.TFieldInit]) (i: Int) (acc: Array[CgInst]): Array[CgInst] =
     if i >= fields.len() { acc } else { cg_calls_in_fields(p, fields, i + 1, cg_calls_in(p, fields[i].value, acc)) }
 
+// Accumulates into an ARRAY and joins once, rather than concatenating
+// onto a growing string. This is the emitter's biggest accumulator --
+// every function body in the program -- and appending to a string makes
+// it quadratic: function N copies the N-1 already there. Compiling this
+// compiler allocated 3.5GB to produce 6MB of IR, most of it here.
 let cg_emit_insts (p: CgProgram) (insts: Array[CgInst]) (i: Int) (n: Int) (acc: String): String =
+    String.concat_all(cg_collect_insts(p, insts, 0, n, []))
+
+let cg_collect_insts (p: CgProgram) (insts: Array[CgInst]) (i: Int) (n: Int) (acc: Array[String]): Array[String] =
     if i >= insts.len() { acc }
     else {
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
-            None => cg_emit_insts(p, insts, i + 1, n, acc),
+            None => cg_collect_insts(p, insts, i + 1, n, acc),
             Some(def) => {
                 let f = cg_fn(p, def, insts[i].targs, n);
-                cg_emit_insts(p, insts, i + 1, f.next, acc.concat(f.text))
+                cg_collect_insts(p, insts, i + 1, f.next, acc.push(f.text))
             },
         }
     }
