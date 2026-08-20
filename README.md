@@ -8,23 +8,62 @@ optimizer. It runs two ways: an interpreter for fast iteration, and a
 native LLVM backend for compiled binaries — both are kept behaviorally
 identical and are tested independently.
 
+**Plum is self-hosted**: the compiler is written in Plum
+(`bootstrap/self_host/`), compiles itself to a fixed point, and needs no
+Rust toolchain to build. A second implementation in Rust (`crates/`)
+came first and is still here — see "Two compilers" below for what each
+is for.
+
 See [DESIGN.md](DESIGN.md) for the full design history and rationale
 behind every decision below. This README is the practical, "how do I
 actually use it" companion.
 
 ## Building the toolchain
 
-Plum is implemented in Rust as a Cargo workspace. You'll need a Rust
-toolchain and, for compiling to native binaries, `clang` on your `PATH`
-(the LLVM backend shells out to it to assemble and link).
+You need `clang` on your `PATH`. That is the whole list.
 
 ```sh
-cargo build --workspace --release
+./bootstrap/from-seed -o plum          # clang only, no Rust
+./plum build bootstrap/self_host -o plum
 ```
 
-The `plum` binary is produced at `target/release/plum` (or
-`target/debug/plum` for a debug build). The rest of this doc assumes
-`plum` is on your `PATH`; substitute the full path otherwise.
+The first line builds a compiler from `bootstrap/seed/plum.ll` — the
+self-hosted compiler shipped as LLVM IR, because building a compiler
+written in Plum requires a Plum compiler to start from. The second line
+then rebuilds it with itself, which is the compiler you keep.
+
+The rest of this doc assumes `plum` is on your `PATH`; substitute the
+full path otherwise.
+
+### Two compilers
+
+There are two complete implementations in this repository, and knowing
+which one you are running matters:
+
+| | `bootstrap/self_host/` | `crates/` |
+|---|---|---|
+| written in | Plum | Rust |
+| build with | `clang` (via the seed) | `cargo build --release` |
+| status | the compiler | oracle and reference |
+
+The Rust implementation came first and bootstrapped the other. It is no
+longer needed to build anything, and new language work does not happen
+there — but it has not been deleted, for two reasons. It is the ORACLE
+that `bootstrap/example-sweep` compares the self-hosted compiler's
+output against, byte for byte, which is how several silent
+wrong-answer bugs were caught (a compiler that is wrong the same way
+twice still agrees with itself). And it is a from-source path for anyone
+unwilling to trust a checked-in artifact.
+
+If you want it:
+
+```sh
+cargo build --workspace --release       # produces target/release/plum
+```
+
+The two agree on every program in `examples/`, which is checked by
+`./bootstrap/example-sweep`. Where they differ today is editor support
+(below).
 
 ## Running a program
 
@@ -151,11 +190,34 @@ ever don't, that's a real bug worth reporting.
 
 ## Editor support
 
+Both compilers serve an LSP out of the `plum` binary itself (the same
+shape `gopls` takes for Go), speaking LSP over stdio — but they do not
+offer the same things, and this is the one place the Rust
+implementation is still ahead:
+
+| | self-hosted | Rust |
+|---|---|---|
+| diagnostics | on open and save | live, as you edit |
+| hover | top-level names, by name | resolved type of any expression |
+| go-to-definition | top-level names, by name | locals, params, fields, variants |
+| completion | — | keywords, scope, struct fields |
+
+The self-hosted server's hover and go-to-definition are NAME-based: the
+identifier under the cursor is looked up among the project's top-level
+definitions. Jumping to a function or type works; a local variable that
+shadows a top-level name resolves to the top-level one, and a local with
+no top-level namesake resolves to nothing. Making it precise needs a
+source position on every expression, where that compiler currently
+records one per statement.
+
+If editor support is what you care about most today, build the Rust
+implementation and point your editor at that binary. Everything below
+describes it.
+
 Two pieces, independent of each other:
 
 - **`plum lsp`** — an LSP server served straight out of the `plum`
-  binary itself (the same shape `gopls` takes for Go), speaking LSP
-  over stdio. Diagnostics (parse/resolution/type errors, reported live
+  binary itself, speaking LSP over stdio. Diagnostics (parse/resolution/type errors, reported live
   as you edit), hover (shows the resolved type under your cursor),
   go-to-definition (variables, params, `let`s, function/global calls,
   struct/enum names, `.field` access, enum variant references), and
@@ -684,6 +746,15 @@ v1 simplification (see DESIGN.md), not a permanent design point.
 
 ## Interpreter vs. native codegen
 
+This section describes the RUST implementation, which has both an
+interpreter and a native backend. The self-hosted compiler has only the
+native backend: its `plum run` COMPILES to a temporary binary and
+executes it, so `run` and `build` cannot disagree there — they are the
+same path. (It once had a tree-walking interpreter too. Keeping two
+implementations of the semantics in one compiler meant every feature had
+to be written twice, and the second half kept not happening: `run` fell
+seven features behind `build` before anyone noticed.)
+
 `plum <project>` and `plum build <project>` run the *exact same*
 program through the *exact same* front end (parse → type-check →
 lower → optimize) and only diverge at the very last step. They're
@@ -750,8 +821,14 @@ in the project's design — illustrative only, not a runnable project.
 
 ## Status
 
-Plum is a work in progress. The core language and LLVM backend are
+Plum is a work in progress, and self-hosted: the compiler is written in
+Plum, compiles itself to a byte-identical fixed point, and builds
+without a Rust toolchain. The core language and LLVM backend are
 substantially complete (scalars, control flow, closures, generics,
-arrays, strings, concurrency, FFI); the standard library is being
-built out incrementally. See DESIGN.md for exactly what's implemented
-versus still open.
+arrays, strings, concurrency, FFI), and the standard library reaches
+parity between the two implementations.
+
+Every project in `examples/` builds and runs identically under both,
+which `./bootstrap/example-sweep` checks — that sweep, rather than any
+list kept by hand, is the honest answer to "what still differs". See
+DESIGN.md for the full history.

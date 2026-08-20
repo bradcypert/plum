@@ -12279,3 +12279,46 @@ in theory.
 byte-identical, self-sufficiency passing, seed refreshed and verified,
 101/101 parser goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9,
 LSP smoke ok, Rust suite 1941/0.
+
+### The README stops asking for a Rust toolchain (2026-08-20)
+
+A newcomer was still told "Plum is implemented in Rust as a Cargo
+workspace" and to run `cargo build`. That has not been the truth since
+the seed landed. The getting-started path is now two lines and needs
+only clang:
+
+```sh
+./bootstrap/from-seed -o plum          # clang only, no Rust
+./plum build bootstrap/self_host -o plum
+```
+
+Verified verbatim, from a clean shell, before it was written down.
+
+Three other claims were stale, and correcting them meant being explicit
+about which compiler a reader is running:
+
+- **Editor support** is the one place the Rust implementation is still
+  ahead, and the README now says so in a table rather than implying
+  parity: live diagnostics, expression-precise hover, go-to-definition
+  for locals and fields, and completion — against the self-hosted
+  server's diagnostics-on-save and NAME-based hover/definition. A reader
+  who cares most about editor support is told plainly to build the Rust
+  one and point their editor at it.
+- **"Interpreter vs. native codegen"** describes the Rust
+  implementation. The self-hosted compiler has no interpreter: its `run`
+  compiles and executes, so `run` and `build` cannot disagree. The
+  section now says which compiler it is about, and why the other one
+  dropped its interpreter.
+- **Status** now leads with self-hosting, and points at
+  `example-sweep` as the honest answer to "what still differs" — rather
+  than a list kept by hand, which this project has already learned not
+  to trust.
+
+The point of the "Two compilers" table is that a reader should never
+have to guess which one they are running. The Rust implementation is
+labelled what it now is: oracle and reference, not the compiler.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, self-sufficiency passing, seed verified, 101/101 parser
+goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok,
+Rust suite 1941/0.
