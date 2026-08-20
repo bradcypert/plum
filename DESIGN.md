@@ -12103,3 +12103,51 @@ layers down.
 31/31 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 101/101 parser goldens, 11/11 `typecheck_corpus`
 rejected, sweep 9/9, LSP smoke ok, Rust suite 1941/0.
+
+### Self-sufficiency: the compiler builds itself, with no Rust involved (2026-08-19)
+
+`bootstrap/self-sufficiency` proves the thing that actually gates
+deprecation:
+
+```
+gen1 -> gen2 (from a temp dir) ...
+gen2 -> gen3 (from /tmp) ...
+SELF-SUFFICIENT: gen2 and gen3 emit byte-identical IR (169781 lines),
+no Rust compiler involved
+```
+
+`bootstrap-check` never proved this. It drives every stage through
+`plum compile-ir`, so the Rust compiler is still holding the tools — it
+answers "is the compiler compiled by itself the same compiler", which is
+a different question from "can this compiler stand alone".
+
+**It could not, and the reason was one relative path.** `sh build` read
+`native_stdlib/*.c` relative to the CURRENT DIRECTORY, so it worked
+only when run from the repo root. Every harness in this project happens
+to run from the root, so nothing caught it; the failure only appears
+when someone runs the compiler from somewhere else, which is what an
+installed compiler always does. The new check runs every stage from an
+unrelated working directory ON PURPOSE.
+
+The fix is the one the real compiler already made: EMBED the shims.
+Rust gets that free through `include_str!`; Plum has no equivalent, so
+`bootstrap/gen-shims` generates `shims/shims.plum` from
+`native_stdlib/*.c`, and `bootstrap/check-shims` fails if the two have
+drifted. A generated file with a drift check is strictly better than a
+hand-copied one, and the alternative — resolving paths relative to the
+binary — still breaks the moment the compiler is installed without its
+source tree.
+
+`net_shim.c` is deliberately not embedded: the self-hosted runtime
+declares nothing from it, and 166 unused lines in every compiler binary
+buys nothing.
+
+What this means concretely: the Rust compiler is now needed for exactly
+one thing, compiling the FIRST self-hosted binary from source. Everything
+after that — building the compiler, running it, testing it, checking
+it, serving an editor — the self-hosted compiler does alone.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, self-sufficiency check passing, 101/101 parser goldens,
+11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok, Rust suite
+1941/0.

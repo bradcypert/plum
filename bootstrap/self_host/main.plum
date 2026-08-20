@@ -57,6 +57,7 @@ use lsp;
 use interp;
 use typecheck;
 use codegen;
+use shims;
 
 // `defs <project>` -- every top-level definition, as JSON, for the
 // language server to answer hover and go-to-definition with.
@@ -441,13 +442,46 @@ let link_args (argv: Array[String]) (dir: String): Array[String] = {
 // Compiles a project to `out`. Returns an error message, or "" on
 // success -- shared by `build` and `run`, which differ only in what
 // they do with the binary afterwards.
-let compile_project (dir: String) (out: String) (extra: Array[String]): String = {
+// Writes every embedded shim into `dir`, returning their paths. A
+// failure to write one is reported as an empty path list, which clang
+// then fails on with a message naming the missing symbol -- not ideal,
+// but strictly better than the silent wrong-directory behaviour this
+// replaced.
+let write_shims (dir: String): Array[String] =
+    write_shims_acc(shims.shim_files(()), dir, 0, [])
+
+let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= files.len() { acc }
+    else {
+        let path = dir.concat("/").concat(files[i].name);
+        match write_file(path, files[i].source) {
+            Err(_) => write_shims_acc(files, dir, i + 1, acc),
+            Ok(_) => write_shims_acc(files, dir, i + 1, acc.push(path)),
+        }
+    }
+
+let compile_project (dir: String) (out: String) (extra: Array[String]): String =
+    match run_process("mktemp", ["-d"]) {
+        Err(e) => "build failed: ".concat(e),
+        Ok(t) => {
+            let scratch = String.trim_end(t.stdout);
+            let err = compile_with_scratch(dir, out, extra, scratch);
+            let cleaned = run_process("rm", ["-rf", scratch]);
+            err
+        },
+    }
+
+let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scratch: String): String = {
     let ll = out.concat(".ll");
     let ir = codegen.cg_emit_program(parser.ProgramNode { items: collect_project(dir) });
     match write_file(ll, ir) {
         Err(e) => "build failed: ".concat(e),
         Ok(_) => {
-            let cfiles = native_c_files("native_stdlib");
+            // The shims are EMBEDDED and written out per build, not read
+            // from `native_stdlib/` on disk: that path was relative to
+            // the current directory, so this compiler only worked when
+            // run from the repo root. See `shims/shims.plum`.
+            let cfiles = write_shims(scratch);
             let base = ["-O2", "-Wno-override-module", ll];
             let argv2 = Array.concat(Array.concat(Array.concat(base, cfiles), extra), ["-lm", "-o", out]);
             match run_process("clang", argv2) {

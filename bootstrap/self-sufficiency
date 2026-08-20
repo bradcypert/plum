@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# THE SELF-SUFFICIENCY CHECK.
+#
+# `bootstrap-check` proves the compiler compiled by ITSELF is the same
+# compiler — but it drives every stage through `plum compile-ir`, so the
+# Rust compiler is still holding the tools. This asks a different
+# question, and the one that actually gates deprecation:
+#
+#   can the self-hosted compiler build the self-hosted compiler,
+#   start to finish, with no Rust compiler involved at all?
+#
+# It runs from an unrelated working directory ON PURPOSE. `sh build`
+# used to read `native_stdlib/` relative to the CURRENT directory, so it
+# worked only from the repo root — a compiler that works in one
+# directory is not a compiler you can install, and nothing caught it
+# because every harness happened to run from the root. The shims are
+# embedded now (`bootstrap/gen-shims`), and this is what keeps them so.
+#
+# Run from the repo root, after `plum build bootstrap/self_host -o sh.real`.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+work="$(mktemp -d -t plum-selfsuff-XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+
+cp sh.real "$work/gen1"
+
+# Every step below runs with the working directory somewhere else, so a
+# path resolved relative to `.` fails here rather than in someone's
+# install.
+echo "gen1 -> gen2 (from $work) ..."
+(cd "$work" && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./gen1 build "$root/bootstrap/self_host" -o "$work/gen2" > "$work/gen2.log" 2>&1) || {
+    echo "gen1 could not build gen2:" >&2; cat "$work/gen2.log" >&2; exit 1; }
+
+echo "gen2 -> gen3 (from /tmp) ..."
+(cd /tmp && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/gen2" build "$root/bootstrap/self_host" -o "$work/gen3" > "$work/gen3.log" 2>&1) || {
+    echo "gen2 could not build gen3:" >&2; cat "$work/gen3.log" >&2; exit 1; }
+
+# The binaries themselves are not compared: clang embeds paths and build
+# ids, so two runs differ for reasons that say nothing about the
+# compiler. The IR each one EMITS is the real artifact.
+echo "comparing what gen2 and gen3 emit ..."
+(cd /tmp && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/gen2" emit-llvm "$root/bootstrap/self_host" > "$work/g2.ll" 2>&1)
+(cd /tmp && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/gen3" emit-llvm "$root/bootstrap/self_host" > "$work/g3.ll" 2>&1)
+
+if cmp -s "$work/g2.ll" "$work/g3.ll"; then
+    echo "SELF-SUFFICIENT: gen2 and gen3 emit byte-identical IR ($(wc -l < "$work/g2.ll") lines), no Rust compiler involved"
+else
+    echo "NOT a fixed point: gen2 and gen3 differ" >&2
+    diff <(head -50 "$work/g2.ll") <(head -50 "$work/g3.ll") | head -20 >&2
+    exit 1
+fi
