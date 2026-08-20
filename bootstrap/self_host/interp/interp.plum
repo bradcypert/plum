@@ -221,7 +221,7 @@ pub let eval_expr (state: ProgramState) (env: Array[EnvEntry]) (e: parser.PExpr)
         EFloat(f) => VFloat(f),
         EStr(s) => VStr(s),
         EBool(b) => VBool(b),
-        EIdent(name) => eval_ident(state, env, name),
+        EIdent(name, _) => eval_ident(state, env, name),
         ETuple(elems) => VTuple(eval_exprs(state, env, elems)),
         EUnary(op, inner) => eval_unary(op, eval_expr(state, env, inner)),
         // Desugared, not evaluated directly -- see the checker's
@@ -299,7 +299,7 @@ let eval_unary (op: parser.UOp) (v: Value): Value =
 // bottom: evaluate it, expect a `VClosure`.
 let eval_call (state: ProgramState) (env: Array[EnvEntry]) (callee: parser.PExpr) (args: Array[parser.PExpr]): Value =
     match callee {
-        EIdent(name) => match env_lookup(env, name) {
+        EIdent(name, _) => match env_lookup(env, name) {
             // Two separate `match`es (outer `Some`/`None`, then an inner
             // match on the unwrapped value), NOT `Some(VClosure(..))` as
             // one nested pattern — see the `EField`/`to_string` arm's own
@@ -348,7 +348,7 @@ let eval_call (state: ProgramState) (env: Array[EnvEntry]) (callee: parser.PExpr
             // `eval_ident` would otherwise happily (and wrongly)
             // construct a bogus zero-payload `VVariant("Array", [])`
             // for it, since it starts with a capital letter.
-            EIdent(ns) => eval_qualified_call(state, env, base, ns, method_name, args),
+            EIdent(ns, _) => eval_qualified_call(state, env, base, ns, method_name, args),
             _ => eval_dot_call(state, env, base, method_name, args),
         },
         // General case: any other callee shape (an immediately-invoked

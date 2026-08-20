@@ -4,6 +4,10 @@
 cd /home/brad/Projects/plum
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 printf 'struct P { x: Int }\n\nlet f (p: P): Int = p.nope\n' > "$work/main.plum"
+# A second, well-typed project: hover on a LOCAL needs the project to
+# check cleanly, which the one above deliberately does not.
+mkdir -p "$work/ok"
+printf 'struct P { x: Int }\n\nlet f (p: P): Int = {\n    let n = p.x;\n    n + 1\n}\n' > "$work/ok/main.plum"
 python3 - "$work" > "$work/session.bin" <<'PY'
 import json, sys
 d = sys.argv[1]
@@ -13,6 +17,9 @@ msgs = [
   # hover and go-to-definition on `P` in `let f (p: P)` -- line 2, char 11
   {"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://%s/main.plum" % d},"position":{"line":2,"character":10}}},
   {"jsonrpc":"2.0","id":4,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://%s/main.plum" % d},"position":{"line":2,"character":10}}},
+  # hover on the LOCAL `n` (line 4, char 4) -- the checker's inferred
+  # type, which a name-based lookup cannot produce
+  {"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://%s/ok/main.plum" % d},"position":{"line":4,"character":4}}},
   {"jsonrpc":"2.0","id":2,"method":"shutdown"},
   {"jsonrpc":"2.0","method":"exit"},
 ]
@@ -29,5 +36,6 @@ echo "$out" | grep -q '"line":2' || { echo "FAIL: wrong line"; fail=1; }
 echo "$out" | grep -q '"id":2,"result":null' || { echo "FAIL: no shutdown reply"; fail=1; }
 echo "$out" | grep -q '"value":"struct P"' || { echo "FAIL: hover did not report the struct"; fail=1; }
 echo "$out" | grep -q '"id":4,"result":{"uri"' || { echo "FAIL: no definition location"; fail=1; }
+echo "$out" | grep -q '"value":"n: Int"' || { echo "FAIL: hover did not infer the local's type"; fail=1; }
 [ $fail -eq 0 ] && echo "lsp smoke: ok"
 exit $fail

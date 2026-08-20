@@ -58,7 +58,13 @@ pub enum PExpr {
     EFloat(Float),
     EStr(String),
     EBool(Bool),
-    EIdent(String),
+    // The Int is a character OFFSET: where this identifier appears in
+    // its source file, or -1 for one the parser SYNTHESIZED (contract
+    // desugaring, the `_` placeholder, a path's head). Only identifiers
+    // and field names carry positions -- they are the only expressions a
+    // position query can land on, which is why this costs 33 sites
+    // rather than the 185 a position on every variant would.
+    EIdent(String, Int),
     ETuple(Array[PExpr]),
     EArray(Array[PExpr]),
     EUnary(UOp, PExpr),
@@ -392,13 +398,13 @@ let desugar_contracts (params: Array[ParamNode]) (requires: Array[ContractClause
         } else {
             let with_let = require_stmts.push(SLet(false, PIdent("result"), raw_body));
             let ensure_stmts = Array.map(ensures, |c| SExpr(contract_check_call("__contract_ensure", "postcondition failed", c)));
-            EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result")), starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []) })
+            EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result", 0 - 1)), starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []) })
         }
     }
 
 let contract_check_call (callee: String) (base_msg: String) (clause: ContractClause): PExpr = {
     let msg = match clause.message { Some(m) => base_msg.concat(": ").concat(m), None => base_msg };
-    ECall(EIdent(callee), [clause.cond, EStr(msg)])
+    ECall(EIdent(callee, 0 - 1), [clause.cond, EStr(msg)])
 }
 
 // --- Params ---
@@ -814,7 +820,7 @@ pub let desugar_pipe (lhs: PExpr) (rhs: PExpr): PExpr =
 // else; no grammar or parser change is involved. Mirrors
 // infer.rs::is_pipe_placeholder.
 let is_pipe_placeholder (e: PExpr): Bool = match e {
-    EClosure(params, body) => params.len() == 1 && params[0] == "_" && match body { EIdent(n) => n == "_", _ => false },
+    EClosure(params, body) => params.len() == 1 && params[0] == "_" && match body { EIdent(n, _) => n == "_", _ => false },
     _ => false,
 }
 
@@ -975,7 +981,7 @@ let parse_argument_list_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[
 // parser.rs::parse_argument`'s own doc comment for the full "why."
 let parse_argument (tokens: Array[lexer.Token]) (pos: Int): ExprResult =
     if check(tokens, pos, TokUnderscore) {
-        let chain_r = parse_postfix_from(tokens, pos + 1, EIdent("_"), false);
+        let chain_r = parse_postfix_from(tokens, pos + 1, EIdent("_", 0 - 1), false);
         ExprResult { value: EClosure(["_"], chain_r.value), next_pos: chain_r.next_pos }
     } else {
         parse_expr(tokens, pos)
@@ -1074,11 +1080,14 @@ let parse_path_shaped_expr (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): E
     if check(tokens, path_r.next_pos, TokLBrace) && is_capitalized(last_name) && !ns {
         parse_struct_literal(tokens, path_r.next_pos, path_r.value)
     } else {
-        ExprResult { value: path_to_field_chain(path_r.value), next_pos: path_r.next_pos }
+        ExprResult { value: path_to_field_chain(path_r.value, offset_at(pos)), next_pos: path_r.next_pos }
     }
 }
 
-let path_to_field_chain (segments: Array[String]): PExpr = path_to_field_chain_acc(segments, 1, EIdent(segments[0]))
+// The head of a path carries the position it was parsed at; the
+// segments after it become field accesses, which carry their own.
+let path_to_field_chain (segments: Array[String]) (start: Int): PExpr =
+    path_to_field_chain_acc(segments, 1, EIdent(segments[0], start))
 let path_to_field_chain_acc (segments: Array[String]) (i: Int) (acc: PExpr): PExpr =
     if i >= segments.len() { acc } else { path_to_field_chain_acc(segments, i + 1, EField(acc, segments[i])) }
 
@@ -1130,7 +1139,7 @@ let parse_field_init (tokens: Array[lexer.Token]) (pos: Int): FieldInitResult = 
         let value_r = parse_expr(tokens, colon_b.next_pos);
         FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: extra_r.value, value: value_r.value }, next_pos: value_r.next_pos }
     } else if Array.is_empty(extra_r.value) {
-        FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: [], value: EIdent(name_tok.name) }, next_pos: extra_r.next_pos }
+        FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: [], value: EIdent(name_tok.name, offset_at(pos)) }, next_pos: extra_r.next_pos }
     } else {
         fail_at(extra_r.next_pos, "a nested field-update path needs an explicit ': value'");
         FieldInitResult { value: FieldInitNode { name: name_tok.name, extra_path: extra_r.value, value: EInt(0) }, next_pos: extra_r.next_pos }
@@ -1280,7 +1289,7 @@ let parse_block_items_acc (tokens: Array[lexer.Token]) (pos: Int) (stmts: Array[
     } else {
         let expr_r = parse_expr(tokens, pos);
         if check(tokens, expr_r.next_pos, TokEq) {
-            let name = match expr_r.value { EIdent(n) => n, _ => { fail_at(pos, "invalid assignment target"); "" } };
+            let name = match expr_r.value { EIdent(n, _) => n, _ => { fail_at(pos, "invalid assignment target"); "" } };
             let value_r = parse_expr(tokens, expr_r.next_pos + 1);
             let semi_pos = expect(tokens, value_r.next_pos, TokSemicolon, "';'");
             parse_block_items_acc(tokens, semi_pos, stmts.push(SAssign(name, value_r.value)), no_tail(()), starts.push(offset_at(pos)))
@@ -1346,7 +1355,7 @@ let render_expr (e: PExpr): String = match e {
     EFloat(f) => f.to_string(),
     EStr(s) => quote(s),
     EBool(b) => b.to_string(),
-    EIdent(name) => name,
+    EIdent(name, _) => name,
     ETuple(elems) => sexpr(Array.concat(["tuple"], Array.map(elems, |x| render_expr(x)))),
     EArray(elems) => sexpr(Array.concat(["array"], Array.map(elems, |x| render_expr(x)))),
     EUnary(op, inner) => {

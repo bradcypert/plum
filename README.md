@@ -198,17 +198,23 @@ implementation is still ahead:
 | | self-hosted | Rust |
 |---|---|---|
 | diagnostics | on open and save | live, as you edit |
-| hover | top-level names, by name | resolved type of any expression |
+| hover | inferred type of any identifier | resolved type of any expression |
 | go-to-definition | top-level names, by name | locals, params, fields, variants |
 | completion | — | keywords, scope, struct fields |
 
-The self-hosted server's hover and go-to-definition are NAME-based: the
-identifier under the cursor is looked up among the project's top-level
-definitions. Jumping to a function or type works; a local variable that
-shadows a top-level name resolves to the top-level one, and a local with
-no top-level namesake resolves to nothing. Making it precise needs a
-source position on every expression, where that compiler currently
-records one per statement.
+The self-hosted server's HOVER asks the type checker, so hovering a
+local or a parameter shows the type it was actually inferred to have —
+`doubled: Point`, not whatever top-level name it happens to share. It
+answers on identifier USES; a `let` binding's own name is a pattern
+rather than an expression, and is not yet recorded. It also needs the
+project to type-check cleanly, and re-checks the project per hover
+(26ms on a small project, ~0.9s on the compiler's own 14k lines).
+
+GO-TO-DEFINITION is still name-based: the identifier under the cursor is
+looked up among top-level definitions, so jumping to a function or type
+works, while a local resolves to whatever top-level name it shares, or
+to nothing. The checker records what a name RESOLVES TO, not where it
+was bound; binding sites are the next piece.
 
 If editor support is what you care about most today, build the Rust
 implementation and point your editor at that binary. Everything below

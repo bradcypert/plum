@@ -12322,3 +12322,56 @@ labelled what it now is: oracle and reference, not the compiler.
 byte-identical, self-sufficiency passing, seed verified, 101/101 parser
 goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok,
 Rust suite 1941/0.
+
+### Expression-level spans, scoped to what a cursor can land on (2026-08-20)
+
+Hover now reports the type the CHECKER inferred:
+
+```
+doubled: Point      # a local
+p: Point            # a parameter
+```
+
+which a name-based lookup can never do — it finds top-level definitions
+and nothing else, so a local resolves to whatever top-level name it
+happens to share, or to nothing.
+
+**The version I twice declined to build was the wrong shape.** "A
+position on every expression" is 185 construction sites and 181 match
+sites across four modules, and I priced the feature at that twice. But a
+cursor can only land on an IDENTIFIER or a FIELD NAME — every other
+expression is made of those plus punctuation. Positions on `EIdent` and
+`EField` alone cost **33 sites**, an order of magnitude less, and answer
+the same questions.
+
+That is the whole trick, and it was available the entire time. The
+lesson is not about spans: pricing a feature by its maximal
+implementation and then declining it twice is how a cheap version stays
+unbuilt.
+
+The checker records each identifier occurrence with its resolved type
+into a table (`NodeType`), gated behind `record_types` so `check`,
+`build` and `emit-llvm` pay nothing for a table nothing reads. A `query`
+subcommand runs the check and answers a position — a subcommand for the
+same reason `check` and `defs` are, since the checker reports by
+aborting and a query runs against the file someone is editing.
+
+Two honest limits, both stated in the README rather than discovered:
+
+- It answers on identifier USES. A `let` binding's own name is a
+  PATTERN, not an expression, so hovering the `doubled` in `let doubled
+  = ...` finds nothing. Recording pattern bindings is the natural next
+  piece and needs positions on `PIdent`.
+- Go-to-definition is still name-based. The checker records what a name
+  RESOLVES TO, not where it was BOUND; a local's binding site is not in
+  the table.
+
+Latency is a per-hover project re-check: 26ms on a small project, ~0.9s
+on the compiler's own 14k lines. Acceptable, and honest about it —
+caching would need invalidating on every edit, which is the stale-state
+bug language servers are prone to.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, self-sufficiency passing, seed verified, 101/101 parser
+goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok
+(now asserting a local's inferred type), Rust suite 1941/0.

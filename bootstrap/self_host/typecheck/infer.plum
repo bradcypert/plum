@@ -73,6 +73,35 @@ use lexer;
 // permission with it.
 let UNSAFE: Ref[Bool] = ref(false)
 
+// --- Recorded types, for hover and go-to-definition ---
+//
+// Every IDENTIFIER occurrence, with the type inference resolved it to
+// and which file it was in. This is what lets an editor answer "what is
+// the type under my cursor" for a LOCAL -- a name-based lookup can only
+// ever find top-level definitions, and gets a shadowed local wrong.
+//
+// Only identifiers are recorded, not every expression: they are the
+// only thing a cursor position can land on, which is why positions live
+// on `EIdent`/`EField` alone and not on all twenty-two `PExpr`
+// variants. Recording is OFF unless a query asks for it -- `check`,
+// `build` and `emit-llvm` should not pay for a table nothing reads.
+pub struct NodeType { path: String, offset: Int, name: String, ty: String }
+
+let RECORD: Ref[Bool] = ref(false)
+// `ref([])` cannot pin the element type from the annotation alone --
+// the same narrow gap `parser.plum`'s `no_tail` works around, and the
+// same fix: a helper whose own declared return type does the pinning.
+let no_nodes (unit: Unit): Array[NodeType] = []
+let NODES: Ref[Array[NodeType]] = ref(no_nodes(()))
+
+pub let record_types (on: Bool): Unit = { RECORD.set(on); NODES.set(no_nodes(())) }
+pub let recorded_types (): Array[NodeType] = NODES.get()
+
+let note_ident (name: String) (offset: Int) (ty: ITy): Unit =
+    if RECORD.get() && offset >= 0 {
+        NODES.set(NODES.get().push(NodeType { path: ERR.get().path, offset: offset, name: name, ty: render_ty(ty) }))
+    } else { () }
+
 struct ErrPos { path: String, offset: Int, fn_name: String }
 let ERR: Ref[ErrPos] = ref(ErrPos { path: "", offset: 0 - 1, fn_name: "" })
 
@@ -468,7 +497,7 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
         EFloat(v) => ir_leaf(ITFloat, acc, state, TFloat(v)),
         EStr(v) => ir_leaf(ITStr, acc, state, TStr(v)),
         EBool(v) => ir_leaf(ITBool, acc, state, TBool(v)),
-        EIdent(name) => infer_ident(p2, state, env, acc, name),
+        EIdent(name, off) => infer_ident(p2, state, env, acc, name, off),
         ETuple(elems) => infer_tuple(p2, state, env, acc, elems),
         EUnary(op, inner) => infer_unary(p2, state, env, acc, op, inner),
         // Desugared, not inferred directly: `|>` has no type of its
@@ -492,7 +521,7 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
         // claim a whole missing feature.
         EGenericInst(callee, _) =>
             match callee {
-                EIdent(name) => if name == "channel" { fail_tc("channels aren't supported yet"); ir_unsupported(acc, state, "channel") }
+                EIdent(name, _) => if name == "channel" { fail_tc("channels aren't supported yet"); ir_unsupported(acc, state, "channel") }
                     else { fail_tc("type inference not yet implemented for this expression form"); ir_unsupported(acc, state, "generic instantiation") },
                 _ => { fail_tc("type inference not yet implemented for this expression form"); ir_unsupported(acc, state, "generic instantiation") },
             },
@@ -543,7 +572,7 @@ let infer_closure (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
 let extend_closure_params (env: TyEnv) (params: Array[String]) (tys: Array[ITy]) (i: Int): TyEnv =
     if i >= params.len() { env } else { extend_closure_params(tyenv_extend(env, params[i], tys[i]), params, tys, i + 1) }
 
-let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (name: String): InferResult =
+let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (name: String) (offset: Int): InferResult =
     match tyenv_lookup(env, name) {
         // `subst_apply(acc, ..)`, NOT the raw stored type. A binding is
         // recorded in `TyEnv` with whatever type it had when it was
@@ -570,7 +599,11 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
         // `acc` is already threaded through inference, so this is O(the
         // substitution) at the handful of points that read a name,
         // rather than O(the environment) at every refinement.
-        Some(ty) => ir_leaf(subst_apply(acc, ty), acc, state, TIdent(name)),
+        Some(ty) => {
+            let resolved = subst_apply(acc, ty);
+            note_ident(name, offset, resolved);
+            ir_leaf(resolved, acc, state, TIdent(name))
+        },
         // A top-level 0-parameter binding. Its BODY is still inferred —
         // that is where its type comes from, and it has to be checked
         // anyway — but the node records a REFERENCE rather than the
@@ -579,6 +612,7 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
         None => match find_global_def(p2, name) {
             Some(def) => {
                 let r = infer_expr(p2, state, tyenv_empty(()), acc, def.body);
+                note_ident(name, offset, r.ty);
                 ir_leaf(r.ty, r.subst, r.state, TGlobalRef(global_module_of(p2, name), name))
             },
             None => if is_capitalized_name(name) { infer_variant(p2, state, acc, name, [], []) } else { { fail_tc("unbound variable: ".concat(name)); ir_unsupported(acc, state, "unbound variable ".concat(name)) } },
@@ -869,7 +903,7 @@ let channel_elem_ty (p2: Program2) (callee: parser.PExpr) (args: Array[parser.PE
             EGenericInst(inner, targs) =>
                 if targs.len() == 1 {
                     match inner {
-                        EIdent(nm) => if nm == "channel" { Some(resolve_ann(p2.ctx, [], targs[0])) } else { None },
+                        EIdent(nm, _) => if nm == "channel" { Some(resolve_ann(p2.ctx, [], targs[0])) } else { None },
                         _ => None,
                     }
                 } else { None },
@@ -885,7 +919,7 @@ let infer_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (cal
 
 let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (callee: parser.PExpr) (args: Array[parser.PExpr]): InferResult =
     match callee {
-        EIdent(name) => match tyenv_lookup(env, name) {
+        EIdent(name, _) => match tyenv_lookup(env, name) {
             // Same resolve-at-lookup rule as `infer_ident` above.
             Some(raw) => { let ty = subst_apply(acc, raw); infer_closure_call(p2, state, env, acc, ty, args, TExpr { ty: ty, node: TIdent(name) }) },
             None => infer_named_call(p2, state, env, acc, name, args),
@@ -900,7 +934,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         // name would otherwise "succeed" as a bogus zero-payload variant
         // construction instead of failing.
         EField(base, method_name) => match base {
-            EIdent(ns) => {
+            EIdent(ns, _) => {
                 if ns == "Array" && (method_name == "map" || method_name == "filter" || method_name == "fold") {
                     infer_array_ns_call(p2, state, env, acc, method_name, args)
                 } else if Option.is_some(tyenv_lookup(env, ns)) || Option.is_some(find_global_def(p2, ns)) {

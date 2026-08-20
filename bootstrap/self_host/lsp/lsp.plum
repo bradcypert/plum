@@ -258,6 +258,21 @@ pub let find_def (defs: Array[Def]) (name: String) (i: Int): Option[Def] =
     else if defs[i].name == name { Some(defs[i]) }
     else { find_def(defs, name, i + 1) }
 
+// The `type` field of a `query` answer, or "" when it answered `{}`.
+pub let query_type_of (out: String): String =
+    match json_parse(String.trim_end(out)) {
+        Err(_) => "",
+        Ok(v) => json_field_str(v, "type"),
+    }
+
+pub let hover_text (text: String): JsonValue =
+    JsonObject([
+        JsonEntry { key: "contents", value: JsonObject([
+            JsonEntry { key: "kind", value: JsonString("plaintext") },
+            JsonEntry { key: "value", value: JsonString(text) },
+        ]) },
+    ])
+
 pub let hover_result (d: Def): JsonValue =
     JsonObject([
         JsonEntry { key: "contents", value: JsonObject([

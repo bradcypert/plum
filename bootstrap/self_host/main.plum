@@ -59,6 +59,42 @@ use typecheck;
 use codegen;
 use shims;
 
+// `query <project> <path> <line> <col>` -- what is the type of the
+// identifier at that position?
+//
+// This is what `defs` cannot do. A name-based lookup finds top-level
+// definitions and nothing else: a local resolves to whatever top-level
+// name it happens to share, or to nothing. Here the CHECKER answers,
+// with the type it actually inferred, so hovering a local shows its
+// real type and a shadowed name shows the shadow.
+//
+// A subcommand, like `check` and `defs`, because the checker reports by
+// aborting -- and a query runs against a file someone is editing, which
+// is the state most likely to be broken.
+let cmd_query (dir: String) (path: String) (line: Int) (col: Int): Unit = {
+    typecheck.record_types(true);
+    typecheck.check_program(parser.ProgramNode { items: collect_project(dir) });
+    match read_file(path) {
+        Err(_) => println("{}"),
+        Ok(src) => {
+            let off = lexer.offset_of(src, line, col);
+            println(query_answer(typecheck.recorded_types(()), path, off, 0));
+        },
+    }
+}
+
+// The recorded entry whose identifier CONTAINS the offset. Recorded
+// entries store the identifier's start; its length is its own name.
+let query_answer (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (i: Int): String =
+    if i >= nodes.len() { "{}" }
+    else if nodes[i].path == path && off >= nodes[i].offset && off < nodes[i].offset + nodes[i].name.len() {
+        json_stringify(JsonObject([
+            JsonEntry { key: "name", value: JsonString(nodes[i].name) },
+            JsonEntry { key: "type", value: JsonString(nodes[i].ty) },
+        ]))
+    }
+    else { query_answer(nodes, path, off, i + 1) }
+
 // `defs <project>` -- every top-level definition, as JSON, for the
 // language server to answer hover and go-to-definition with.
 //
@@ -240,6 +276,16 @@ let lsp_handle (body: String): Bool =
 // would need invalidating on every edit -- which is exactly the kind of
 // stale-state bug a language server is prone to. Correct and simple
 // first; the cache is measurable later if it matters.
+// The CHECKER's answer for the identifier at a position -- the real
+// inferred type, including for a local, which the name index cannot
+// give. Empty when the position is not on an identifier USE, or when
+// the project does not currently type-check.
+let lsp_query_type (path: String) (line: Int) (col: Int): String =
+    match run_process("/proc/self/exe", ["query", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
+        Err(_) => "",
+        Ok(r) => if r.exit_code == 0 { lsp.query_type_of(r.stdout) } else { "" },
+    }
+
 let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
     let uri = lsp.document_uri(params);
     let path = lsp.uri_to_path(uri);
@@ -252,9 +298,19 @@ let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
                 let name = lexer.ident_at(src, off);
                 if name == "" { JsonNull }
                 else {
-                    match lsp.find_def(lsp_defs(path), name, 0) {
-                        None => JsonNull,
-                        Some(d) => if method == "textDocument/hover" { lsp.hover_result(d) } else { lsp.location_result(d) },
+                    // Hover prefers the checker: it knows a local's type,
+                    // where the name index only knows top-level
+                    // definitions and would answer for whatever
+                    // top-level name a local happens to shadow.
+                    // Go-to-definition still uses the index -- the
+                    // checker records types, not binding SITES.
+                    let inferred = if method == "textDocument/hover" { lsp_query_type(path, lsp.params_line(params), lsp.params_col(params)) } else { "" };
+                    if inferred != "" { lsp.hover_text(name.concat(": ").concat(inferred)) }
+                    else {
+                        match lsp.find_def(lsp_defs(path), name, 0) {
+                            None => JsonNull,
+                            Some(d) => if method == "textDocument/hover" { lsp.hover_result(d) } else { lsp.location_result(d) },
+                        }
                     }
                 }
             },
@@ -685,6 +741,10 @@ let main (): Unit = {
         lsp_serve(())
     } else if argv.len() < 2 {
         usage(());
+    } else if argv[0] == "query" && argv.len() >= 5 {
+        cmd_query(argv[1], argv[2],
+            Result.unwrap_or(String.parse_int(argv[3]), 1),
+            Result.unwrap_or(String.parse_int(argv[4]), 1));
     } else if argv[0] == "defs" {
         cmd_defs(argv[1]);
     } else if argv[0] == "new" {
