@@ -133,6 +133,11 @@ let param_list (ps: Array[parser.ParamNode]) (i: Int) (acc: String): String =
 // in `lsp.plum` is looked up as `lsp.stdout_write` and never found.
 // `lsp.plum` is the pure protocol logic; this is the part that talks.
 extern "C" {
+    // Runs a command with stdio inherited and waits. Reached through
+    // the extern boundary rather than the prelude because this file is
+    // compiled by BOTH compilers, and only the self-hosted prelude has
+    // a wrapper for it.
+    fn process_run_inherit(program: CStr, joined: CStr, argc: Int) -> Int;
     fn stdin_read_line() -> CStr;
     fn stdin_read_n(n: Int) -> CStr;
     fn stdout_write(s: CStr);
@@ -392,8 +397,19 @@ let native_c_files (dir: String): Array[String] =
 
 // `-o` if given, else the project directory's own basename -- the same
 // convention `plum build` uses.
+// `-o` is found wherever it appears, not just at position 2: link
+// flags may precede it, and a positional check silently ignored the
+// output name the moment they did.
 let output_path (argv: Array[String]): String =
-    if argv.len() >= 4 && argv[2] == "-o" { argv[3] } else { basename_of(argv[1]) }
+    match find_flag_value(argv, "-o", 0) {
+        Some(v) => v,
+        None => basename_of(argv[1]),
+    }
+
+let find_flag_value (argv: Array[String]) (flag: String) (i: Int): Option[String] =
+    if i + 1 >= argv.len() { None }
+    else if argv[i] == flag { Some(argv[i + 1]) }
+    else { find_flag_value(argv, flag, i + 1) }
 
 let basename_of (path: String): String = {
     let parts = path.split("/");
@@ -407,24 +423,99 @@ let basename_of (path: String): String = {
 // correctly; what was missing was only the link step, which is why the
 // self-hosted compiler could compile itself to IR but not to a BINARY
 // -- and so could not replace the compiler that builds it.
-let build_project (argv: Array[String]): Unit = {
-    let out = output_path(argv);
+// `--link-lib <name>` becomes `-l<name>`; `--link-c <file>` adds a C
+// source to the link. A project's own `native/*.c` is picked up
+// automatically, which is how `examples/asteroids` reaches its raylib
+// shim without being told to -- the same convention `plum build` uses.
+let collect_flag (argv: Array[String]) (flag: String) (i: Int) (acc: Array[String]): Array[String] =
+    if i + 1 >= argv.len() { acc }
+    else if argv[i] == flag { collect_flag(argv, flag, i + 2, acc.push(argv[i + 1])) }
+    else { collect_flag(argv, flag, i + 1, acc) }
+
+let link_args (argv: Array[String]) (dir: String): Array[String] = {
+    let libs = Array.map(collect_flag(argv, "--link-lib", 0, []), |l| "-l".concat(l));
+    let cs = Array.concat(collect_flag(argv, "--link-c", 0, []), native_c_files(dir.concat("/native")));
+    Array.concat(cs, libs)
+}
+
+// Compiles a project to `out`. Returns an error message, or "" on
+// success -- shared by `build` and `run`, which differ only in what
+// they do with the binary afterwards.
+let compile_project (dir: String) (out: String) (extra: Array[String]): String = {
     let ll = out.concat(".ll");
-    let ir = codegen.cg_emit_program(parser.ProgramNode { items: collect_project(argv[1]) });
+    let ir = codegen.cg_emit_program(parser.ProgramNode { items: collect_project(dir) });
     match write_file(ll, ir) {
-        Err(e) => println("build failed: ".concat(e)),
+        Err(e) => "build failed: ".concat(e),
         Ok(_) => {
             let cfiles = native_c_files("native_stdlib");
             let base = ["-O2", "-Wno-override-module", ll];
-            let argv2 = Array.concat(Array.concat(base, cfiles), ["-lm", "-o", out]);
+            let argv2 = Array.concat(Array.concat(Array.concat(base, cfiles), extra), ["-lm", "-o", out]);
             match run_process("clang", argv2) {
-                Err(e) => println("build failed: ".concat(e)),
+                Err(e) => "build failed: ".concat(e),
                 Ok(r) => if r.exit_code == 0 {
-                    println("wrote ".concat(out));
+                    // The scratch `.ll` is removed on SUCCESS and kept on
+                    // failure, where it is the thing you want to look at.
+                    // Leaving it always is the same leak `plum build` had
+                    // (see DESIGN.md) -- several MB per build, forever.
+                    let cleaned = run_process("rm", ["-f", ll]);
+                    ""
                 } else {
-                    println("clang failed (exit ".concat(r.exit_code.to_string()).concat("):"));
-                    println(r.stderr);
+                    "clang failed (exit ".concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
+                        .concat("\nIR left at ").concat(ll)
                 },
+            }
+        },
+    }
+}
+
+let build_project (argv: Array[String]): Unit = {
+    let out = output_path(argv);
+    let err = compile_project(argv[1], out, link_args(argv, argv[1]));
+    if err == "" { println("wrote ".concat(out)) } else { println(err) }
+}
+
+// `run` COMPILES and executes, rather than walking the AST.
+//
+// The tree-walking interpreter it replaces had fallen seven features
+// behind the backend -- no `Ref`, no `spawn`, no FFI, no JSON, most
+// methods missing -- because every feature this compiler gained had to
+// be written for the backend and then AGAIN for the interpreter, and
+// the second half kept not happening. Two implementations of one
+// language's semantics is a standing invitation to exactly that drift.
+// Compiling means `run` and `build` cannot disagree, because they are
+// the same path.
+//
+// Costs a compile before anything runs, which for a project this size
+// is well under a second, and the honest comparison is against a `run`
+// that failed on seven of nine examples.
+//
+// Output is INHERITED, not captured: the program's output appears as it
+// happens and it can read stdin, neither of which `run_process` allows.
+// The shim splits its argument string on TABs (`PLUM_PROC_ARG_SEP`),
+// and the FIRST element must not be preceded by one -- a leading
+// separator makes `argv[1]` empty and pushes the last argument past
+// `argc`, which is a bug this project has already made once.
+let tab_join (args: Array[String]) (i: Int) (acc: String): String =
+    if i >= args.len() { acc }
+    else { tab_join(args, i + 1, if i == 0 { args[i] } else { acc.concat("\t").concat(args[i]) }) }
+
+let run_project (argv: Array[String]): Unit = {
+    match run_process("mktemp", ["-d"]) {
+        Err(e) => println("run failed: ".concat(e)),
+        Ok(t) => {
+            let dir = String.trim_end(t.stdout);
+            let out = dir.concat("/a.out");
+            let err = compile_project(argv[1], out, link_args(argv, argv[1]));
+            if err != "" { println(err) }
+            else {
+                let args = Array.slice(argv, 2, argv.len());
+                let code = unsafe { process_run_inherit(out.as_cstr(), tab_join(args, 0, "").as_cstr(), args.len()) };
+                let cleaned = run_process("rm", ["-rf", dir]);
+                // The child's exit code is this process's exit code, so
+                // `plum run` composes in a shell the way anything else
+                // would. `panic_raw` is the only non-zero exit this
+                // language exposes.
+                if code != 0 { panic_raw("") } else { () }
             }
         },
     }
@@ -581,30 +672,13 @@ let main (): Unit = {
         // one file could never compile one.
         println(codegen.cg_emit_program(parser.ProgramNode { items: collect_project(argv[1]) }));
     } else if argv[0] == "run" && Result.unwrap_or(is_directory(argv[1]), false) {
-        // Same directory-loading path `check` uses, for the same
-        // reason: a module can't be RUN alone either — `main.plum`'s
-        // `main` calls into `lexer`/`parser`/`interp`/`typecheck`, so
-        // every module's items have to be present in the one program
-        // this interpreter walks. Concatenation is again the whole
-        // mechanism (`find_fn` scans a flat list, exactly as
-        // `find_sig` does), with the same flat-namespace consequence.
-        let program = parser.ProgramNode { items: collect_project(argv[1]) };
-        typecheck.check_program(program);
-        // Everything after the project directory becomes the
-        // INTERPRETED program's own `args()` — so `./sh run bootstrap/
-        // self_host ast foo.plum` runs the self-hosted compiler under
-        // the self-hosted interpreter and asks IT for `foo.plum`'s AST.
-        let state = interp.build_program_state_argv(program, Array.slice(argv, 2, argv.len()));
-        interp.run_main(state);
+        run_project(argv);
     } else {
         match read_file(argv[1]) {
             Err(e) => println("failed to read file: ".concat(e)),
             Ok(src) => {
-                // `dump-tokens`/`dump-ast` are the REAL compiler's names for
-                // these, and `bootstrap/corpus`'s goldens were generated with
-                // them. Accepting both means a corpus regeneration command
-                // can be pointed at either compiler unchanged.
-                // Same context, for the single-file commands.
+                // Same source context the project path sets, so a parse
+                // error in a single file reports its location too.
                 let lexed0 = lexer.tokenize_spanned(src);
                 parser.set_source_context(argv[1], src, lexed0.starts);
                 if argv[0] == "tokens" || argv[0] == "dump-tokens" {

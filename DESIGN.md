@@ -12051,3 +12051,55 @@ to. Correct first; measurable later if it matters.
 31/31 `exec_corpus` correct and leak-free, self-build fixed point
 byte-identical, 101/101 parser goldens, 11/11 `typecheck_corpus`
 rejected, sweep 9/9, Rust suite 1941/0.
+
+### `run` compiles now, and a temp-directory leak (2026-08-19)
+
+**`./sh run` went from 2 of 9 examples to 9 of 9** by compiling and
+executing instead of walking the AST.
+
+The tree-walking interpreter had fallen seven features behind the
+backend — no `Ref`, no `spawn`, no FFI, no JSON, most methods missing —
+because every feature this compiler gained had to be written for the
+backend and then AGAIN for the interpreter, and the second half kept not
+happening. Two implementations of one language's semantics is a standing
+invitation to exactly that drift, and the drift was invisible because
+the corpus validates the BACKEND. Compiling means `run` and `build`
+cannot disagree: they are the same path.
+
+Output is INHERITED rather than captured (a new
+`process_run_inherit` shim entry point), so a program's output appears
+as it happens and it can read stdin — neither of which `run_process`,
+whose whole design is temp-file capture, can offer. `sh build` also
+gained `--link-lib`/`--link-c` and picks up a project's own `native/*.c`
+automatically, which is what `examples/asteroids` needs.
+
+The interpreter module is now unused by any command. It is left in
+place: it is Stage 3 of the documented bootstrap story and still
+type-checks as part of the project. Deleting it is a separate decision.
+
+**Then the shell stopped working**, and the cause turned out to be worth
+more than the feature.
+
+`/tmp` was full — on this machine a 32G RAM-backed tmpfs, 25G consumed.
+`compile_ir_to_binary` created a scratch directory per `plum build` and
+per `compile-ir` and never removed it, and the compile-and-run TEST
+harness did the same once per test. The suite has hundreds; a session
+like this runs `cargo test` twenty times. There were **53,969 leftover
+directories**, and removing them freed **21GB of RAM**.
+
+Both now clean up, best-effort, whether or not the compile succeeded —
+a failure to remove scratch must not mask a successful build. A full
+`cargo test` went from leaking roughly 1,250 directories to 18 (the
+remainder are error paths in a few test helpers, worth an hour someday,
+not today).
+
+Two things this cost, both worth recording. The `bootstrap_fixed_point`
+test "failed" for a while and I nearly went looking for a codegen
+regression — it was the disk. And this is the second time a full `/tmp`
+has impersonated a real failure in this project (the first made 18 of 28
+corpus fixtures report CLANG FAIL). Both times the real error was two
+layers down.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, 101/101 parser goldens, 11/11 `typecheck_corpus`
+rejected, sweep 9/9, LSP smoke ok, Rust suite 1941/0.

@@ -1363,7 +1363,13 @@ pub fn compile_ir_to_binary_with_native(
     let dir = unique_temp_dir("plumc-build");
     std::fs::create_dir_all(&dir).map_err(|e| format!("failed to create temp build directory: {e}"))?;
     let ll_path = dir.join("program.ll");
-    clang_compile(ir, &ll_path, out_path, extra_c_sources, extra_libs, opt_level)
+    let result = clang_compile(ir, &ll_path, out_path, extra_c_sources, extra_libs, opt_level);
+    // Removed whether or not clang succeeded. The scratch `.ll` is
+    // several MB for any real program, and this ran once per `plum
+    // build` and once per `compile-ir` while leaving every one behind.
+    // Best-effort: failing to clean up must not mask a successful build.
+    std::fs::remove_dir_all(&dir).ok();
+    result
 }
 
 /// The compile-and-run test harness's C-fixture VARIANT — links an
@@ -1484,7 +1490,13 @@ fn run_via_clang(ir: &str) -> Result<String, String> {
             String::from_utf8_lossy(&run.stderr)
         ));
     }
-    Ok(String::from_utf8_lossy(&run.stdout).trim_end().to_string())
+    let out = String::from_utf8_lossy(&run.stdout).trim_end().to_string();
+    // Same cleanup as `compile_ir_to_binary`, and it matters more here:
+    // this runs once per compile-and-run TEST, and the suite has
+    // hundreds of them. Left behind, they were the bulk of what filled
+    // /tmp -- a RAM-backed tmpfs on this machine.
+    std::fs::remove_dir_all(&dir).ok();
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -4274,6 +4286,9 @@ mod tests {
         assert!(!stderr.contains("ERROR: AddressSanitizer"), "ASan flagged an error:\n{stderr}");
         let expected: i64 = (0..1000i64).map(|i| i + i * 2).sum();
         assert_eq!(stdout, expected.to_string());
+    // Scratch directory removed; see `compile_ir_to_binary`. These
+    // helpers ran once per test and left every one behind.
+    std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -5730,6 +5745,9 @@ mod tests {
         assert!(!stderr.contains("ERROR: AddressSanitizer"), "ASan flagged an error:\n{stderr}");
         assert!(!stderr.contains("WARNING: ThreadSanitizer"), "TSan flagged a data race:\n{stderr}");
         assert_eq!(stdout, expected_stdout);
+    // Scratch directory removed; see `compile_ir_to_binary`. These
+    // helpers ran once per test and left every one behind.
+    std::fs::remove_dir_all(&dir).ok();
     }
 
     // --- FFI: real compile-and-run tests ---

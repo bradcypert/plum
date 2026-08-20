@@ -218,3 +218,57 @@ void process_free(long long handle) {
     free(plum_process_slots[handle].err_data);
     plum_process_slots[handle].in_use = 0;
 }
+
+// Runs a command with stdio INHERITED — no capture, no temp files — and
+// returns its exit status. `process_run` above is for a caller that
+// wants the output as a value; this is for a caller that wants the
+// child to simply BE the program: `plum run` streaming its output as it
+// happens, and a child that can read stdin.
+//
+// Deliberately separate rather than a flag on `process_run`: that one's
+// whole design is the temp-file capture described above, and threading
+// "except don't" through it would leave every path harder to read.
+long long process_run_inherit(const char *program, const char *args_joined, long long argc) {
+    char *args_copy = strdup(args_joined);
+    char **argv = malloc(sizeof(char *) * (size_t)(argc + 2));
+    if (args_copy == NULL || argv == NULL) {
+        free(args_copy);
+        free(argv);
+        return -1;
+    }
+    // Same separator-splitting as `process_run` above; see its own note
+    // on why the first element is special-cased.
+    argv[0] = (char *)program;
+    long long idx = 1;
+    if (argc > 0) {
+        argv[idx++] = args_copy;
+        for (char *c = args_copy; *c != '\0'; c++) {
+            if (*c == PLUM_PROC_ARG_SEP) {
+                *c = '\0';
+                if (idx <= argc) {
+                    argv[idx++] = c + 1;
+                }
+            }
+        }
+    }
+    argv[idx] = NULL;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        free(args_copy);
+        free(argv);
+        return -1;
+    }
+    if (pid == 0) {
+        execvp(program, argv);
+        _exit(127);
+    }
+    int status = 0;
+    int waited = waitpid(pid, &status, 0);
+    free(args_copy);
+    free(argv);
+    if (waited < 0) return -1;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return -1;
+}
