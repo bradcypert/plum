@@ -248,152 +248,42 @@ let resolve_param_ty (ctx: TyContext) (in_scope: Array[String]) (p: parser.Param
         },
     }
 
-// --- Builtin (prelude) signatures ---
+// --- The four things the prelude does NOT declare ---
 //
-// These live in the real compiler's PRELUDE, not in any file this
-// checker is handed, but ordinary Plum source calls them constantly —
-// a checker that doesn't know them can't check anything real. Written
-// as ordinary generic `FnSig`s so `infer_fn_call`'s EXISTING
-// instantiate-generics-with-fresh-vars path handles them with no
-// special-casing: `Option.unwrap_or[T](Option[T], T) -> T` type-checks
-// through exactly the same code a user's own generic function does.
+// This used to be a table of 97 signatures: a hand-written second copy
+// of the prelude's surface, maintained by remembering to. It existed
+// because `check` ran WITHOUT the prelude, so the checker had no other
+// way to know what `Array.concat` or `Option.unwrap_or` were.
 //
-// Deliberately only the ones the self-hosted sources actually call
-// (counted directly, not guessed) rather than a mechanism for loading
-// the real prelude's full surface — extending this list when a specific
-// missing builtin blocks a specific real program matches how every
-// other v1 scope decision in this bootstrap was made. `Array.map`/
-// `filter`/`fold` are NOT here: they already have hand-written
-// inference (`infer_array_ns_call`) that predates this table and works,
-// and rewriting working inference for uniformity alone isn't worth the
-// churn.
+// The two copies drifted, silently. `Map`, `Set`, `String.contains` and
+// `String.repeat` were declared in the prelude and missing here, so
+// `check` rejected programs that `build` compiled and ran correctly --
+// a compiler disagreeing with itself about which programs are valid.
+//
+// `check` prepends the prelude now (see `main.plum`), exactly as the
+// backend always has, so 92 of these entries became dead weight
+// duplicating source that the checker reads for real. Deleted
+// 2026-08-20. Reading the actual prelude costs ~20ms.
+//
+// What is left is what the prelude genuinely does not declare, and
+// each is here for its own reason -- there is no list to keep in sync
+// any more, and adding to this one should feel like it needs a reason.
 let arr_of (t: ITy): ITy = ITStruct("Array", [t])
-let opt_of (t: ITy): ITy = ITEnum("Option", [t])
-let res_of (t: ITy) (e: ITy): ITy = ITEnum("Result", [t, e])
 let tp (name: String): ITy = ITParam(name)
-let map_of (k: ITy) (v: ITy): ITy = ITStruct("Map", [k, v])
-let set_of (t: ITy): ITy = ITStruct("Set", [t])
 
 let builtin_sig (name: String): Option[FnSig] =
-    if name == "Array.is_empty" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: ITBool , is_extern: false }) }
-    else if name == "Array.concat" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), arr_of(tp("T"))], ret: arr_of(tp("T")) , is_extern: false }) }
-    else if name == "Array.contains" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: ITBool , is_extern: false }) }
-    else if name == "Array.push" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) , is_extern: false }) }
-    else if name == "Array.slice" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt, ITInt], ret: arr_of(tp("T")) , is_extern: false }) }
-    else if name == "Array.any" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool , is_extern: false }) }
-    else if name == "Array.all" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: ITBool , is_extern: false }) }
-    else if name == "Array.find" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: opt_of(tp("T")) , is_extern: false }) }
-    else if name == "Array.find_index" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T")], ITBool)], ret: opt_of(ITInt) , is_extern: false }) }
-    else if name == "Array.index_of" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: opt_of(ITInt) , is_extern: false }) }
-    else if name == "Array.first" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: opt_of(tp("T")) , is_extern: false }) }
-    else if name == "Array.last" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: opt_of(tp("T")) , is_extern: false }) }
-    else if name == "Array.take" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt], ret: arr_of(tp("T")) , is_extern: false }) }
-    else if name == "Array.drop" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITInt], ret: arr_of(tp("T")) , is_extern: false }) }
-    else if name == "Array.reverse" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: arr_of(tp("T")) , is_extern: false }) }
-    else if name == "Array.sum_int" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITInt)], ret: ITInt , is_extern: false }) }
-    else if name == "Array.sum_float" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITFloat)], ret: ITFloat , is_extern: false }) }
-    else if name == "Array.sort_by" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), ITFunction([tp("T"), tp("T")], ITBool)], ret: arr_of(tp("T")) , is_extern: false }) }
-    else if name == "Array.sort_int" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITInt)], ret: arr_of(ITInt) , is_extern: false }) }
-    else if name == "Array.sort_float" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITFloat)], ret: arr_of(ITFloat) , is_extern: false }) }
-    else if name == "Array.zip" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [arr_of(tp("T")), arr_of(tp("U"))], ret: arr_of(ITStruct("Zipped", [tp("T"), tp("U")])) , is_extern: false }) }
-    else if name == "String.trim_start" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITStr , is_extern: false }) }
-    else if name == "String.trim_end" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITStr , is_extern: false }) }
-    else if name == "String.lines" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) , is_extern: false }) }
-    else if name == "Float.sqrt" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat , is_extern: false }) }
-    else if name == "Float.floor" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat , is_extern: false }) }
-    else if name == "Float.ceil" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat , is_extern: false }) }
-    else if name == "Float.round" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat , is_extern: false }) }
-    else if name == "Float.pow" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat , is_extern: false }) }
-    else if name == "Float.random" { Some(FnSig { name: name, module: "", generics: [], params: [ITUnit], ret: ITFloat , is_extern: false }) }
-    else if name == "Float.random_range" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat , is_extern: false }) }
-    else if name == "Array.sort_string" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITStr)], ret: arr_of(ITStr) , is_extern: false }) }
-    else if name == "Option.map" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], tp("U"))], ret: opt_of(tp("U")) , is_extern: false }) }
-    else if name == "Option.and_then" { Some(FnSig { name: name, module: "", generics: ["T", "U"], params: [opt_of(tp("T")), ITFunction([tp("T")], opt_of(tp("U")))], ret: opt_of(tp("U")) , is_extern: false }) }
-    else if name == "Option.unwrap_or_else" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), ITFunction([], tp("T"))], ret: tp("T") , is_extern: false }) }
-    else if name == "Option.ok_or" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [opt_of(tp("T")), tp("E")], ret: res_of(tp("T"), tp("E")) , is_extern: false }) }
-    else if name == "Option.is_none" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool , is_extern: false }) }
-    else if name == "Result.is_ok" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E"))], ret: ITBool , is_extern: false }) }
-    else if name == "Result.is_err" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E"))], ret: ITBool , is_extern: false }) }
-    else if name == "Result.unwrap_or_else" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("E")], tp("T"))], ret: tp("T") , is_extern: false }) }
-    else if name == "Result.map" { Some(FnSig { name: name, module: "", generics: ["T", "E", "U"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("T")], tp("U"))], ret: res_of(tp("U"), tp("E")) , is_extern: false }) }
-    else if name == "Result.map_err" { Some(FnSig { name: name, module: "", generics: ["T", "E", "F"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("E")], tp("F"))], ret: res_of(tp("T"), tp("F")) , is_extern: false }) }
-    else if name == "Result.and_then" { Some(FnSig { name: name, module: "", generics: ["T", "E", "U"], params: [res_of(tp("T"), tp("E")), ITFunction([tp("T")], res_of(tp("U"), tp("E")))], ret: res_of(tp("U"), tp("E")) , is_extern: false }) }
-    else if name == "Int.abs" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt], ret: ITInt , is_extern: false }) }
-    else if name == "Int.min" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt], ret: ITInt , is_extern: false }) }
-    else if name == "Int.max" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt], ret: ITInt , is_extern: false }) }
-    else if name == "Int.clamp" { Some(FnSig { name: name, module: "", generics: [], params: [ITInt, ITInt, ITInt], ret: ITInt , is_extern: false }) }
-    else if name == "Float.abs" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat], ret: ITFloat , is_extern: false }) }
-    else if name == "Float.min" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat , is_extern: false }) }
-    else if name == "Float.max" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat], ret: ITFloat , is_extern: false }) }
-    else if name == "Float.clamp" { Some(FnSig { name: name, module: "", generics: [], params: [ITFloat, ITFloat, ITFloat], ret: ITFloat , is_extern: false }) }
-    else if name == "json_stringify" { Some(FnSig { name: name, module: "", generics: [], params: [ITEnum("JsonValue", [])], ret: ITStr , is_extern: false }) }
-    else if name == "json_parse" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITEnum("JsonValue", []), ITStr) , is_extern: false }) }
-    else if name == "Option.is_some" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T"))], ret: ITBool , is_extern: false }) }
-    else if name == "Option.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T"], params: [opt_of(tp("T")), tp("T")], ret: tp("T") , is_extern: false }) }
-    else if name == "Result.unwrap_or" { Some(FnSig { name: name, module: "", generics: ["T", "E"], params: [res_of(tp("T"), tp("E")), tp("T")], ret: tp("T") , is_extern: false }) }
-    else if name == "String.index_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITStr], ret: opt_of(ITInt) , is_extern: false }) }
-    else if name == "String.parse_int" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITInt, ITStr) , is_extern: false }) }
-    else if name == "String.parse_float" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITFloat, ITStr) , is_extern: false }) }
-    // The test assertions. `assert_eq` is generic over one type in the
-    // real prelude (`[T: Eq + Show]`); the bound is not represented
-    // here, and nothing downstream needs it -- an unsatisfiable
-    // comparison fails at the `==` inside the prelude's own body.
-    else if name == "assert" { Some(FnSig { name: name, module: "", generics: [], params: [ITBool], ret: ITUnit, is_extern: false }) }
-    else if name == "assert_eq" { Some(FnSig { name: name, module: "", generics: ["T"], params: [tp("T"), tp("T")], ret: ITUnit, is_extern: false }) }
-    else if name == "assert_ne" { Some(FnSig { name: name, module: "", generics: ["T"], params: [tp("T"), tp("T")], ret: ITUnit, is_extern: false }) }
-    else if name == "String.concat_all" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITStr)], ret: ITStr, is_extern: false }) }
-    else if name == "String.hash" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITInt , is_extern: false }) }
-    else if name == "String.slice" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITInt, ITInt], ret: ITStr , is_extern: false }) }
-    else if name == "String.is_empty" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITBool , is_extern: false }) }
+    // A built-in ARRAY operation, not a prelude function: there is no
+    // `let Array.push` anywhere to read.
+    if name == "Array.push" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) , is_extern: false }) }
+    // Both are runtime primitives the backend intercepts and emits
+    // directly (`cg_runtime_fn`), so neither has a Plum body to declare.
     else if name == "chars_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) , is_extern: false }) }
-    else if name == "string_is_ascii_ws" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITBool , is_extern: false }) }
-    else if name == "chars_join" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITStr)], ret: ITStr , is_extern: false }) }
     else if name == "panic_raw" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITUnit , is_extern: false }) }
-    // `require`/`ensure`, already desugared by the parser into calls to
-    // these. The prelude DECLARES both (see prelude.plum), so a
-    // compiled program resolves them through `find_sig` like any other
-    // function -- these entries exist for `check`, which runs without
-    // the prelude.
-    else if name == "__contract_require" || name == "__contract_ensure" { Some(FnSig { name: name, module: "", generics: [], params: [ITBool, ITStr], ret: ITUnit , is_extern: false }) }
-    else if name == "read_file" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITStr, ITStr) , is_extern: false }) }
-    else if name == "is_directory" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITBool, ITStr) , is_extern: false }) }
-    else if name == "write_file" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITStr], ret: res_of(ITUnit, ITStr) , is_extern: false }) }
-    else if name == "run_process" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, arr_of(ITStr)], ret: res_of(ITStruct("ProcessResult", []), ITStr) , is_extern: false }) }
-    else if name == "list_dir" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(arr_of(ITStr), ITStr) , is_extern: false }) }
     // `args()` is written with empty parentheses, which this parser
     // turns into a ZERO-argument call (it implements no `f()`-means-
-    // `f(())` sugar — see `interp/interp.plum`'s own note), so the
-    // signature has to be zero-param to match the real call shape.
+    // `f(())` sugar), so the signature has to be zero-param to match
+    // the real call shape.
     else if name == "args" { Some(FnSig { name: name, module: "", generics: [], params: [], ret: arr_of(ITStr) , is_extern: false }) }
-    // `Map`/`Set`. The prelude declares these with `Eq` BOUNDS
-    // (`Map.insert[K: Eq, V]`); the bounds are dropped here because
-    // this checker has no trait bounds at all, so it accepts a
-    // `Map[K, V]` for a `K` the backend would reject. That is the
-    // existing v1 simplification, not a new one -- the alternative is
-    // trait bounds, which is a much larger piece of work.
-    //
-    // `Map.new(())` passes Unit EXPLICITLY, so the parameter is
-    // `ITUnit` rather than an empty list -- the opposite of `args()`
-    // below, and the reason both are written out rather than inferred.
-    else if name == "Map.new" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [ITUnit], ret: map_of(tp("K"), tp("V")) , is_extern: false }) }
-    else if name == "Map.insert" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V")), tp("K"), tp("V")], ret: map_of(tp("K"), tp("V")) , is_extern: false }) }
-    else if name == "Map.get" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V")), tp("K")], ret: opt_of(tp("V")) , is_extern: false }) }
-    else if name == "Map.contains" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V")), tp("K")], ret: ITBool , is_extern: false }) }
-    else if name == "Map.remove" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V")), tp("K")], ret: map_of(tp("K"), tp("V")) , is_extern: false }) }
-    else if name == "Map.len" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V"))], ret: ITInt , is_extern: false }) }
-    else if name == "Map.keys" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V"))], ret: arr_of(tp("K")) , is_extern: false }) }
-    else if name == "Map.values" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V"))], ret: arr_of(tp("V")) , is_extern: false }) }
-    else if name == "Map.from_arrays" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [arr_of(tp("K")), arr_of(tp("V"))], ret: map_of(tp("K"), tp("V")) , is_extern: false }) }
-    else if name == "Set.new" { Some(FnSig { name: name, module: "", generics: ["T"], params: [ITUnit], ret: set_of(tp("T")) , is_extern: false }) }
-    else if name == "Set.insert" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), tp("T")], ret: set_of(tp("T")) , is_extern: false }) }
-    else if name == "Set.contains" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), tp("T")], ret: ITBool , is_extern: false }) }
-    else if name == "Set.remove" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), tp("T")], ret: set_of(tp("T")) , is_extern: false }) }
-    else if name == "Set.len" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T"))], ret: ITInt , is_extern: false }) }
-    else if name == "Set.to_array" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T"))], ret: arr_of(tp("T")) , is_extern: false }) }
-    else if name == "Set.union" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), set_of(tp("T"))], ret: set_of(tp("T")) , is_extern: false }) }
-    else if name == "Set.intersection" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), set_of(tp("T"))], ret: set_of(tp("T")) , is_extern: false }) }
-    else if name == "Set.difference" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), set_of(tp("T"))], ret: set_of(tp("T")) , is_extern: false }) }
-    else if name == "Set.from_array" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: set_of(tp("T")) , is_extern: false }) }
     else { None }
 
 // An UNQUALIFIED name resolves in the CURRENT module first, then in the

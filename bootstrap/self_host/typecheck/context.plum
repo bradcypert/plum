@@ -63,122 +63,25 @@ pub let build_context (program: parser.ProgramNode): TyContext = {
     resolve_decls_acc(program.items, 0, names_only, builtin_context(()))
 }
 
-// `Option[T]`/`Result[T, E]` are declared in the real compiler's PRELUDE
-// (see `plumc`'s `STDLIB_*_SRC`), not in any file this checker is handed
-// — but they're referenced pervasively by ordinary Plum source, so a
-// checker that doesn't know them can't check anything real. Seeded into
-// BOTH passes so their variant tags (`Some`/`None`/`Ok`/`Err`) resolve
-// through the same `find_variant` path a user-declared enum's tags do,
-// with no special-casing anywhere else.
+// The prelude declares all nine of the types this used to hand-write --
+// `Option`, `Result`, `JsonValue`, `JsonEntry`, `ProcessResult`,
+// `Zipped`, `Map`, `MapEntry`, `Set` -- and every caller of
+// `build_context` now passes a program with the prelude prepended:
+// `check` included, since 2026-08-20.
 //
-// Deliberately NOT a general prelude import: this is the two enums whose
-// absence actually blocks checking, hand-written, rather than a
-// mechanism for loading the real prelude's ~1,500 lines. Extending this
-// list is the right move when a specific missing declaration blocks a
-// specific real program, matching how every other v1 scope decision in
-// this bootstrap has been made.
+// The hand-written copies existed because `check` ran WITHOUT the
+// prelude, and a checker that doesn't know `Option` can't check
+// anything real. That made this a second copy of nine declarations,
+// kept current by remembering to, and it fell behind -- `Map` and `Set`
+// were missing entirely, so `check` rejected programs the backend
+// compiled and ran correctly. The prelude source is the only copy now.
+//
+// Kept as an empty function rather than deleted outright: the next
+// genuinely-undeclarable type goes here, and this comment is where the
+// reason for one would be written down.
 let builtin_context (unit: Unit): TyContext = TyContext {
-    // `ProcessResult` is here for the same reason `Option`/`Result`
-    // are: it lives in the prelude, and `check` runs on a program
-    // WITHOUT the prelude (unlike `emit-llvm`/`build`, where the
-    // backend prepends it). `main.plum` reads `.exit_code`/`.stderr`
-    // off a `run_process` result, so checking this compiler's own
-    // source needs the field layout, not just the name.
-    structs: [
-        StructInfo {
-            name: "ProcessResult",
-            generics: [],
-            fields: [
-                StructFieldTemplate { name: "exit_code", ty: ITInt },
-                StructFieldTemplate { name: "stdout", ty: ITStr },
-                StructFieldTemplate { name: "stderr", ty: ITStr },
-            ],
-        },
-        // `Array.zip`'s element type. A struct rather than a tuple in
-        // the real prelude too, which is why it needs a declaration
-        // here at all.
-        StructInfo {
-            name: "Zipped",
-            generics: ["A", "B"],
-            fields: [
-                StructFieldTemplate { name: "first", ty: ITParam("A") },
-                StructFieldTemplate { name: "second", ty: ITParam("B") },
-            ],
-        },
-        // The JSON value tree, seeded for the same reason: the prelude
-        // declares it, `check` runs without the prelude, and
-        // `examples/json_and_files` is ordinary Plum that names these
-        // types directly.
-        StructInfo {
-            name: "JsonEntry",
-            generics: [],
-            fields: [
-                StructFieldTemplate { name: "key", ty: ITStr },
-                StructFieldTemplate { name: "value", ty: ITEnum("JsonValue", []) },
-            ],
-        },
-        // `Map[K, V]`/`Set[T]`, seeded for the same reason as the rest
-        // of this list -- ordinary Plum in the prelude, absent from
-        // what `check` is handed. They were missing until 2026-08-20,
-        // when `bootstrap/corpus-check` first ran `check` over
-        // `exec_corpus/collections`: the fixture COMPILED AND RAN
-        // correctly the whole time, because the backend does see the
-        // prelude, and only the checker was blind to it. Nothing had
-        // ever asked the checker about that fixture.
-        StructInfo {
-            name: "MapEntry",
-            generics: ["K", "V"],
-            fields: [
-                StructFieldTemplate { name: "key", ty: ITParam("K") },
-                StructFieldTemplate { name: "value", ty: ITParam("V") },
-            ],
-        },
-        StructInfo {
-            name: "Map",
-            generics: ["K", "V"],
-            fields: [
-                StructFieldTemplate { name: "buckets", ty: ITStruct("Array", [ITStruct("Array", [ITStruct("MapEntry", [ITParam("K"), ITParam("V")])])]) },
-                StructFieldTemplate { name: "size", ty: ITInt },
-            ],
-        },
-        StructInfo {
-            name: "Set",
-            generics: ["T"],
-            fields: [
-                StructFieldTemplate { name: "inner", ty: ITStruct("Map", [ITParam("T"), ITUnit]) },
-            ],
-        },
-    ],
-    enums: [
-        EnumInfo {
-            name: "JsonValue",
-            generics: [],
-            variants: [
-                VariantInfo { tag: "JsonNull", enum_name: "JsonValue", payload: [] },
-                VariantInfo { tag: "JsonBool", enum_name: "JsonValue", payload: [ITBool] },
-                VariantInfo { tag: "JsonNumber", enum_name: "JsonValue", payload: [ITFloat] },
-                VariantInfo { tag: "JsonString", enum_name: "JsonValue", payload: [ITStr] },
-                VariantInfo { tag: "JsonArray", enum_name: "JsonValue", payload: [ITStruct("Array", [ITEnum("JsonValue", [])])] },
-                VariantInfo { tag: "JsonObject", enum_name: "JsonValue", payload: [ITStruct("Array", [ITStruct("JsonEntry", [])])] },
-            ],
-        },
-        EnumInfo {
-            name: "Option",
-            generics: ["T"],
-            variants: [
-                VariantInfo { tag: "Some", enum_name: "Option", payload: [ITParam("T")] },
-                VariantInfo { tag: "None", enum_name: "Option", payload: [] },
-            ],
-        },
-        EnumInfo {
-            name: "Result",
-            generics: ["T", "E"],
-            variants: [
-                VariantInfo { tag: "Ok", enum_name: "Result", payload: [ITParam("T")] },
-                VariantInfo { tag: "Err", enum_name: "Result", payload: [ITParam("E")] },
-            ],
-        },
-    ],
+    structs: [],
+    enums: [],
 }
 
 let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext): TyContext =

@@ -72,7 +72,7 @@ use shims;
 // is the state most likely to be broken.
 let cmd_query (dir: String) (path: String) (line: Int) (col: Int): Unit = {
     typecheck.record_types(true);
-    typecheck.check_program(parser.ProgramNode { items: collect_project(dir) });
+    typecheck.check_program(codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }));
     match read_file(path) {
         Err(_) => println("{}"),
         Ok(src) => {
@@ -832,7 +832,20 @@ let main (): Unit = {
     } else if argv[0] == "check" {
         // Handled before `read_file` below: the argument may be a
         // DIRECTORY, which `read_file` can't open at all.
-        typecheck.check_program(parser.ProgramNode { items: collect_project(argv[1]) });
+        //
+        // The PRELUDE is prepended, exactly as the backend does before
+        // it checks (`cg_emit_program_entry`). Before 2026-08-20 this
+        // checked the user's items ALONE, against a hand-written table
+        // of prelude signatures in `typecheck/infer.plum` -- a second
+        // copy of a list that already exists as source. The two copies
+        // disagreed, silently and for a long time: `Map`, `Set`,
+        // `String.contains` and `String.repeat` were missing from the
+        // table, so `check` rejected four groups of programs that
+        // `build` compiled and ran correctly.
+        //
+        // Reading the real thing costs ~20ms. The table cost four
+        // wrong answers.
+        typecheck.check_program(codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(argv[1]) }));
         println("ok");
     } else if argv[0] == "test" && Result.unwrap_or(is_directory(argv[1]), false) {
         cmd_test(argv[1]);
@@ -861,11 +874,17 @@ let main (): Unit = {
                     // Stage 5. NO separate `check_program` call: the
                     // backend prepends the prelude and then type-checks
                     // the combined program itself (`typed_program` IS
-                    // `check_program` with the results kept). Checking
-                    // here as well would check the WRONG program — the
-                    // user's items without the prelude — and reject any
-                    // call to a prelude function that has no
-                    // `builtin_sig` entry.
+                    // `check_program` with the results kept), so a
+                    // second call here would check the same program
+                    // twice.
+                    //
+                    // This comment used to warn that checking here
+                    // would check the WRONG program -- the user's items
+                    // WITHOUT the prelude -- and reject calls to
+                    // prelude functions absent from a hand-written
+                    // `builtin_sig` table. That hazard is gone: `check`
+                    // prepends the prelude too now, and the table with
+                    // it. See DESIGN.md's "One prelude, not two".
                     println(codegen.cg_emit_program(parser.parse_program(lexer.tokenize(src))));
                 } else if argv[0] == "run" {
                     // A single FILE runs the same way a project does --

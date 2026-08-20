@@ -12607,3 +12607,89 @@ is a miscompile, and it is invisible in an output comparison. The
 annotation lives next to the exception for the same reason the old
 DESIGN.md gap table failed: a list of exceptions kept somewhere else
 becomes fiction.
+
+## One prelude, not two (2026-08-20)
+
+Plum's standard library is written once, as ordinary Plum. Two parts of
+the self-hosted compiler need to know what is in it, and until today
+they learned it two different ways.
+
+The BACKEND pastes the prelude source in front of the user's program
+and type-checks the combination (`cg_with_prelude`, called from
+`cg_emit_program_entry` before `cg_build_program` runs
+`typed_program`). It reads the real thing, through the real inference
+engine.
+
+`check` did not. It checked the user's items alone, against a
+hand-written table in `typecheck/infer.plum` — 97 `FnSig`s — plus nine
+hand-written type declarations in `typecheck/context.plum`. A second
+copy of a list that already existed as source, kept current by
+remembering to.
+
+The two copies disagreed:
+
+| declared in the prelude | in the table | result |
+|---|---|---|
+| `Map.*` (9 functions) | no | `check` rejected, `build` compiled |
+| `Set.*` (10 functions) | no | same |
+| `String.contains` | no | same |
+| `String.repeat` | no | same |
+
+Four groups of programs that one half of the compiler called invalid
+and the other half compiled and ran correctly. In an editor that is a
+red squiggle under working code.
+
+### Why the table existed, and why that stopped being a reason
+
+Sequencing. The checker was Stage 4 and the backend Stage 5, so when the
+table was written there was no prelude source for it to read — the
+comment above it said to extend the list whenever a specific missing
+builtin blocked a specific real program, which is a reasonable v1
+decision and was followed for months. Then Stage 5 arrived, brought the
+prelude with it, and started checking against it properly. Nobody went
+back.
+
+The remaining argument was cost: `check` is what the LSP runs while
+someone types, and the prelude is ~1,500 lines. Measured on a
+hello-world:
+
+```
+./sh check      (the table)          0.031s
+./sh emit-llvm  (the real prelude)   0.054s
+```
+
+and the second figure includes emitting all the IR. Parsing and
+checking the prelude costs roughly 20ms. That is not a reason.
+
+### The fix
+
+`check` and `query` (the LSP's) now call `cg_with_prelude`, exactly as
+the backend does. Then 92 of the 97 signatures and all nine type
+declarations were deleted — `builtin_sig` is a fallback consulted only
+after `find_sig`, so a real declaration always won anyway, which is
+what made the deletion safe rather than merely tidy.
+
+Four signatures survive, and each names its own reason: `Array.push`
+(an array builtin, not a prelude function), `chars_of` and `panic_raw`
+(runtime primitives the backend emits directly, so they have no Plum
+body to declare) and `args` (written `args()`, which this parser makes
+a zero-ARGUMENT call, so the signature has to be zero-param).
+`builtin_context` is now empty, kept as a function so the next
+genuinely-undeclarable type has somewhere to go with its reason.
+
+### What was verified rather than assumed
+
+That error locations survive. Prepending 1,500 lines in front of the
+user's program is exactly the kind of change that reports a mistake on
+line 3 as line 1503, and it would have broken the editor integration
+rather than any test. It does not: the prelude and the user's files are
+tokenized separately and each item keeps its own path and offset, so
+the diagnostics are byte-identical before and after.
+
+### The script that did not get written
+
+The plan going in was `bootstrap/check-prelude` — extract both lists,
+fail on a difference, in the manner of `check-shims`. Asking why there
+were two lists at all turned out to be the better question. A sync
+check would have policed the duplication forever; deleting the second
+copy retires it, and there is now nothing left to drift.
