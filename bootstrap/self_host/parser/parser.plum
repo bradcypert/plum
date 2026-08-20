@@ -109,7 +109,11 @@ pub enum PPattern {
     PStr(String),
     PBool(Bool),
     PWildcard,
-    PIdent(String),
+    // Like `EIdent`, the Int is a character offset -- where the name
+    // being BOUND appears. That is what lets go-to-definition on a
+    // local jump to its binding, and hover work on the binding itself.
+    // -1 for a pattern the parser synthesized.
+    PIdent(String, Int),
     PTuple(Array[PPattern]),
     PVariant(Array[String], Array[PPattern]),
     PStruct(Array[String], Array[FieldPatternNode], Bool),
@@ -389,14 +393,14 @@ struct MsgResult { value: Option[String], next_pos: Int }
 let desugar_contracts (params: Array[ParamNode]) (requires: Array[ContractClause]) (ensures: Array[ContractClause]) (raw_body: PExpr): PExpr =
     if Array.is_empty(requires) && Array.is_empty(ensures) { raw_body }
     else {
-        if !Array.is_empty(ensures) && Array.any(params, |p| match p { ParamIdent(n) => n == "result", ParamPatternTy(pat, _) => match pat { PIdent(n) => n == "result", _ => false } }) {
+        if !Array.is_empty(ensures) && Array.any(params, |p| match p { ParamIdent(n) => n == "result", ParamPatternTy(pat, _) => match pat { PIdent(n, _) => n == "result", _ => false } }) {
             fail("a function with 'ensure' clauses can't have a parameter named 'result'");
         };
         let require_stmts = Array.map(requires, |c| SExpr(contract_check_call("__contract_require", "precondition failed", c)));
         if Array.is_empty(ensures) {
             EBlock(PBlock { stmts: require_stmts, tail: Some(raw_body), starts: synthetic_starts(require_stmts.len() + 1, 0, []) })
         } else {
-            let with_let = require_stmts.push(SLet(false, PIdent("result"), raw_body));
+            let with_let = require_stmts.push(SLet(false, PIdent("result", 0 - 1), raw_body));
             let ensure_stmts = Array.map(ensures, |c| SExpr(contract_check_call("__contract_ensure", "postcondition failed", c)));
             EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result", 0 - 1)), starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []) })
         }
@@ -672,7 +676,7 @@ let parse_primary_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult =
         TokUnderscore => PatResult { value: PWildcard, next_pos: pos + 1 },
         TokIdent(name) => {
             if is_capitalized(name) { parse_path_shaped_pattern(tokens, pos) }
-            else { PatResult { value: PIdent(name), next_pos: pos + 1 } }
+            else { PatResult { value: PIdent(name, offset_at(pos)), next_pos: pos + 1 } }
         },
         TokLParen => parse_tuple_pattern(tokens, pos),
         _ => { fail_at(pos, "expected a pattern"); PatResult { value: PWildcard, next_pos: pos } },
@@ -738,7 +742,7 @@ let parse_field_pattern (tokens: Array[lexer.Token]) (pos: Int): FieldPatResult 
         let pat_r = parse_pattern(tokens, colon_b.next_pos);
         FieldPatResult { value: FieldPatternNode { name: name_tok.name, pattern: pat_r.value }, next_pos: pat_r.next_pos }
     } else {
-        FieldPatResult { value: FieldPatternNode { name: name_tok.name, pattern: PIdent(name_tok.name) }, next_pos: colon_b.next_pos }
+        FieldPatResult { value: FieldPatternNode { name: name_tok.name, pattern: PIdent(name_tok.name, offset_at(pos)) }, next_pos: colon_b.next_pos }
     }
 }
 
@@ -1423,7 +1427,7 @@ pub let render_pattern (p: PPattern): String = match p {
     PStr(s) => quote(s),
     PBool(b) => b.to_string(),
     PWildcard => "_",
-    PIdent(name) => name,
+    PIdent(name, _) => name,
     PTuple(elems) => sexpr(Array.concat(["tuple"], Array.map(elems, |x| render_pattern(x)))),
     PVariant(path, args) => sexpr(Array.concat(["variant", join_dot(path)], Array.map(args, |x| render_pattern(x)))),
     PStruct(path, fields, has_rest) => {

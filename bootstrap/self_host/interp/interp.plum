@@ -151,7 +151,7 @@ let param_name (p: parser.ParamNode): Option[String] =
     match p {
         ParamIdent(name) => Some(name),
         ParamPatternTy(pattern, _) => match pattern {
-            PIdent(name) => Some(name),
+            PIdent(name, _) => Some(name),
             PTuple(elems) => if Array.is_empty(elems) { None } else { { fail_interp("destructuring function parameters aren't supported yet"); None } },
             _ => { fail_interp("destructuring function parameters aren't supported yet"); None },
         },
@@ -884,7 +884,7 @@ let eval_match_acc (state: ProgramState) (env: Array[EnvEntry]) (scrutinee: Valu
 let match_pattern (pattern: parser.PPattern) (v: Value): Option[Array[EnvEntry]] =
     match pattern {
         PWildcard => Some([]),
-        PIdent(name) => Some([EnvEntry { name: name, value: v }]),
+        PIdent(name, _) => Some([EnvEntry { name: name, value: v }]),
         PInt(n) => match v { VInt(m) => if n == m { Some([]) } else { None }, _ => None },
         PFloat(f) => match v { VFloat(g) => if f == g { Some([]) } else { None }, _ => None },
         PStr(s) => match v { VStr(t) => if s == t { Some([]) } else { None }, _ => None },

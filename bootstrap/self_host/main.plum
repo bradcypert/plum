@@ -88,12 +88,29 @@ let cmd_query (dir: String) (path: String) (line: Int) (col: Int): Unit = {
 let query_answer (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (i: Int): String =
     if i >= nodes.len() { "{}" }
     else if nodes[i].path == path && off >= nodes[i].offset && off < nodes[i].offset + nodes[i].name.len() {
-        json_stringify(JsonObject([
-            JsonEntry { key: "name", value: JsonString(nodes[i].name) },
-            JsonEntry { key: "type", value: JsonString(nodes[i].ty) },
-        ]))
+        json_stringify(JsonObject(Array.concat(
+            [
+                JsonEntry { key: "name", value: JsonString(nodes[i].name) },
+                JsonEntry { key: "type", value: JsonString(nodes[i].ty) },
+            ],
+            // The BINDING's position, when the checker knows one. A
+            // top-level name has none here -- the name index answers
+            // for those, and it knows which file they live in.
+            if nodes[i].def_offset >= 0 { def_position_fields(path, nodes[i].def_offset) } else { [] })))
     }
     else { query_answer(nodes, path, off, i + 1) }
+
+let def_position_fields (path: String) (off: Int): Array[JsonEntry] =
+    match read_file(path) {
+        Err(_) => [],
+        Ok(src) => {
+            let lc = lexer.line_col(src, off);
+            [
+                JsonEntry { key: "defLine", value: JsonNumber(lc.line.to_float()) },
+                JsonEntry { key: "defCol", value: JsonNumber(lc.col.to_float()) },
+            ]
+        },
+    }
 
 // `defs <project>` -- every top-level definition, as JSON, for the
 // language server to answer hover and go-to-definition with.
@@ -280,10 +297,10 @@ let lsp_handle (body: String): Bool =
 // inferred type, including for a local, which the name index cannot
 // give. Empty when the position is not on an identifier USE, or when
 // the project does not currently type-check.
-let lsp_query_type (path: String) (line: Int) (col: Int): String =
+let lsp_query (path: String) (line: Int) (col: Int): String =
     match run_process("/proc/self/exe", ["query", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
         Err(_) => "",
-        Ok(r) => if r.exit_code == 0 { lsp.query_type_of(r.stdout) } else { "" },
+        Ok(r) => if r.exit_code == 0 { String.trim_end(r.stdout) } else { "" },
     }
 
 let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
@@ -304,8 +321,17 @@ let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
                     // top-level name a local happens to shadow.
                     // Go-to-definition still uses the index -- the
                     // checker records types, not binding SITES.
-                    let inferred = if method == "textDocument/hover" { lsp_query_type(path, lsp.params_line(params), lsp.params_col(params)) } else { "" };
-                    if inferred != "" { lsp.hover_text(name.concat(": ").concat(inferred)) }
+                    let answer = lsp_query(path, lsp.params_line(params), lsp.params_col(params));
+                    let inferred = lsp.query_field(answer, "type");
+                    let def_line = lsp.query_int(answer, "defLine");
+                    if method == "textDocument/hover" && inferred != "" { lsp.hover_text(name.concat(": ").concat(inferred)) }
+                    // A LOCAL's binding site, which the name index does
+                    // not have: it only knows top-level definitions, so
+                    // without this a local jumps to whatever top-level
+                    // name it happens to share.
+                    else if method == "textDocument/definition" && def_line > 0 {
+                        lsp.location_at(path, def_line, lsp.query_int(answer, "defCol"))
+                    }
                     else {
                         match lsp.find_def(lsp_defs(path), name, 0) {
                             None => JsonNull,

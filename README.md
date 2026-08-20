@@ -199,22 +199,20 @@ implementation is still ahead:
 |---|---|---|
 | diagnostics | on open and save | live, as you edit |
 | hover | inferred type of any identifier | resolved type of any expression |
-| go-to-definition | top-level names, by name | locals, params, fields, variants |
+| go-to-definition | locals, params, top-level names | locals, params, fields, variants |
 | completion | — | keywords, scope, struct fields |
 
-The self-hosted server's HOVER asks the type checker, so hovering a
-local or a parameter shows the type it was actually inferred to have —
-`doubled: Point`, not whatever top-level name it happens to share. It
-answers on identifier USES; a `let` binding's own name is a pattern
-rather than an expression, and is not yet recorded. It also needs the
-project to type-check cleanly, and re-checks the project per hover
-(26ms on a small project, ~0.9s on the compiler's own 14k lines).
+The self-hosted server asks the TYPE CHECKER, so hovering a local or a
+parameter shows the type it was actually inferred to have — `doubled:
+Point` — and go-to-definition on a local jumps to its binding, not to
+whatever top-level name it happens to share. Top-level names fall back
+to a by-name index, which is what supplies a function's full signature
+on hover.
 
-GO-TO-DEFINITION is still name-based: the identifier under the cursor is
-looked up among top-level definitions, so jumping to a function or type
-works, while a local resolves to whatever top-level name it shares, or
-to nothing. The checker records what a name RESOLVES TO, not where it
-was bound; binding sites are the next piece.
+Two limits: it needs the project to type-check cleanly, and it re-checks
+per request (26ms on a small project, ~0.9s on the compiler's own 14k
+lines). Field names and enum variants are not yet resolved — hovering
+`.x` in `p.x` answers for `p`.
 
 If editor support is what you care about most today, build the Rust
 implementation and point your editor at that binary. Everything below

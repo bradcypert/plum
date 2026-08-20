@@ -258,12 +258,34 @@ pub let find_def (defs: Array[Def]) (name: String) (i: Int): Option[Def] =
     else if defs[i].name == name { Some(defs[i]) }
     else { find_def(defs, name, i + 1) }
 
-// The `type` field of a `query` answer, or "" when it answered `{}`.
-pub let query_type_of (out: String): String =
-    match json_parse(String.trim_end(out)) {
+// One field of a `query` answer, or ""/0 when it answered `{}`.
+pub let query_field (out: String) (key: String): String =
+    match json_parse(out) {
         Err(_) => "",
-        Ok(v) => json_field_str(v, "type"),
+        Ok(v) => json_field_str(v, key),
     }
+
+pub let query_int (out: String) (key: String): Int =
+    match json_parse(out) {
+        Err(_) => 0,
+        Ok(v) => json_field_int(v, key),
+    }
+
+// A location in a file the client already has open, from a line and
+// column rather than from an indexed definition.
+pub let location_at (path: String) (line: Int) (col: Int): JsonValue = {
+    let pos = JsonObject([
+        JsonEntry { key: "line", value: JsonNumber((line - 1).to_float()) },
+        JsonEntry { key: "character", value: JsonNumber((col - 1).to_float()) },
+    ]);
+    JsonObject([
+        JsonEntry { key: "uri", value: JsonString("file://".concat(path)) },
+        JsonEntry { key: "range", value: JsonObject([
+            JsonEntry { key: "start", value: pos },
+            JsonEntry { key: "end", value: pos },
+        ]) },
+    ])
+}
 
 pub let hover_text (text: String): JsonValue =
     JsonObject([

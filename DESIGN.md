@@ -12375,3 +12375,39 @@ bug language servers are prone to.
 byte-identical, self-sufficiency passing, seed verified, 101/101 parser
 goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok
 (now asserting a local's inferred type), Rust suite 1941/0.
+
+### Binding sites: go-to-definition for locals (2026-08-20)
+
+The two limits recorded with the previous commit are closed. Hovering a
+`let` binding's own name works, and go-to-definition on a local jumps to
+where it was bound rather than to whatever top-level name it shares.
+
+Priced the same way as before, and it came out the same way: `PIdent`
+appears at **16 sites**. The environment's bindings gained a
+`def_offset` — where the name was bound — so resolving an identifier now
+answers both what type it has and where it came from. No path is stored
+alongside it: a local's binding is always in the same file as its use,
+because a function body does not span files.
+
+A binding records ITSELF as its own definition, which is what makes
+hover work on `let n = ..` and not only on the uses of `n`.
+
+**Currying turned a missed call site into a closure again** — the third
+time this session. Two `tyenv_extend` calls kept the old three-argument
+form and became partial applications, surfacing as "match arms must
+produce the same type: expected Function([Int], TyEnv), found TyEnv".
+Caught immediately, one step removed from the cause, and by now a
+recognisable signature: when a threading change produces a type error
+mentioning `Function(...)` where a value was expected, look for a call
+that did not get the new argument.
+
+What is still name-based: field names and enum variants. Hovering `.x`
+in `p.x` answers for `p`, because `EField` carries a position but the
+checker does not yet record the FIELD as its own resolvable entity. That
+is the same shape of work again — record it where the field type is
+already known, in `infer_field`.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, self-sufficiency passing, seed verified, 101/101 parser
+goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok
+(now asserting a local's binding site), Rust suite 1941/0.

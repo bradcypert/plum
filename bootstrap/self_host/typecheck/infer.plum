@@ -85,7 +85,10 @@ let UNSAFE: Ref[Bool] = ref(false)
 // on `EIdent`/`EField` alone and not on all twenty-two `PExpr`
 // variants. Recording is OFF unless a query asks for it -- `check`,
 // `build` and `emit-llvm` should not pay for a table nothing reads.
-pub struct NodeType { path: String, offset: Int, name: String, ty: String }
+// `def_offset` is where the identifier's binding is, or -1 when it has
+// none recorded -- a top-level name, which the name index answers for
+// instead.
+pub struct NodeType { path: String, offset: Int, name: String, ty: String, def_offset: Int }
 
 let RECORD: Ref[Bool] = ref(false)
 // `ref([])` cannot pin the element type from the annotation alone --
@@ -97,10 +100,16 @@ let NODES: Ref[Array[NodeType]] = ref(no_nodes(()))
 pub let record_types (on: Bool): Unit = { RECORD.set(on); NODES.set(no_nodes(())) }
 pub let recorded_types (): Array[NodeType] = NODES.get()
 
-let note_ident (name: String) (offset: Int) (ty: ITy): Unit =
+let note_at (name: String) (offset: Int) (ty: ITy) (def_offset: Int): Unit =
     if RECORD.get() && offset >= 0 {
-        NODES.set(NODES.get().push(NodeType { path: ERR.get().path, offset: offset, name: name, ty: render_ty(ty) }))
+        NODES.set(NODES.get().push(NodeType { path: ERR.get().path, offset: offset, name: name, ty: render_ty(ty), def_offset: def_offset }))
     } else { () }
+
+let note_ident (name: String) (offset: Int) (ty: ITy) (def_offset: Int): Unit = note_at(name, offset, ty, def_offset)
+
+// A BINDING site records itself, so hovering `let n = ..` works and not
+// only the uses of `n`. Its own definition is itself.
+let note_binding (name: String) (offset: Int) (ty: ITy): Unit = note_at(name, offset, ty, offset)
 
 struct ErrPos { path: String, offset: Int, fn_name: String }
 let ERR: Ref[ErrPos] = ref(ErrPos { path: "", offset: 0 - 1, fn_name: "" })
@@ -149,13 +158,18 @@ let fresh_list_acc (state: FreshState) (n: Int) (acc: Array[ITy]): FreshListResu
 
 // --- Type environment (locals/params) ---
 
-struct EnvBinding { name: String, ty: ITy }
+// `def_offset` is where the name was BOUND -- carried so that resolving
+// an identifier can say not just what type it has but where it came
+// from. A local's binding is always in the same file as its use (a
+// function body does not span files), so no path is needed alongside it.
+struct EnvBinding { name: String, ty: ITy, def_offset: Int }
 pub struct TyEnv { bindings: Array[EnvBinding] }
 pub let tyenv_empty (unit: Unit): TyEnv = TyEnv { bindings: [] }
-pub let tyenv_extend (env: TyEnv) (name: String) (ty: ITy): TyEnv = TyEnv { bindings: env.bindings.push(EnvBinding { name: name, ty: ty }) }
-let tyenv_lookup (env: TyEnv) (name: String): Option[ITy] = tyenv_lookup_acc(env.bindings, name, env.bindings.len() - 1)
-let tyenv_lookup_acc (bindings: Array[EnvBinding]) (name: String) (i: Int): Option[ITy] =
-    if i < 0 { None } else if bindings[i].name == name { Some(bindings[i].ty) } else { tyenv_lookup_acc(bindings, name, i - 1) }
+pub let tyenv_extend (env: TyEnv) (name: String) (ty: ITy) (def_offset: Int): TyEnv =
+    TyEnv { bindings: env.bindings.push(EnvBinding { name: name, ty: ty, def_offset: def_offset }) }
+let tyenv_lookup (env: TyEnv) (name: String): Option[EnvBinding] = tyenv_lookup_acc(env.bindings, name, env.bindings.len() - 1)
+let tyenv_lookup_acc (bindings: Array[EnvBinding]) (name: String) (i: Int): Option[EnvBinding] =
+    if i < 0 { None } else if bindings[i].name == name { Some(bindings[i]) } else { tyenv_lookup_acc(bindings, name, i - 1) }
 
 // --- Top-level function signatures ---
 
@@ -369,9 +383,9 @@ let find_sig_in (sigs: Array[FnSig]) (module_name: String) (name: String) (i: In
 
 let bind_param (env: TyEnv) (p: parser.ParamNode) (ty: ITy): TyEnv =
     match p {
-        ParamIdent(name) => tyenv_extend(env, name, ty),
+        ParamIdent(name) => tyenv_extend(env, name, ty, 0 - 1),
         ParamPatternTy(pattern, _) => match pattern {
-            PIdent(name) => tyenv_extend(env, name, ty),
+            PIdent(name, off) => tyenv_extend(env, name, ty, off),
             PTuple(elems) => if Array.is_empty(elems) { env } else { { fail_tc("destructuring parameters aren't supported yet"); env } },
             _ => { fail_tc("destructuring parameters aren't supported yet"); env },
         },
@@ -428,7 +442,7 @@ let typed_params (params: Array[parser.ParamNode]) (tys: Array[ITy]) (subst: Sub
         match params[i] {
             ParamIdent(name) => typed_params(params, tys, subst, i + 1, acc.push(TParam { name: name, ty: subst_apply(subst, tys[i]) })),
             ParamPatternTy(pattern, _) => match pattern {
-                PIdent(name) => typed_params(params, tys, subst, i + 1, acc.push(TParam { name: name, ty: subst_apply(subst, tys[i]) })),
+                PIdent(name, _) => typed_params(params, tys, subst, i + 1, acc.push(TParam { name: name, ty: subst_apply(subst, tys[i]) })),
                 _ => typed_params(params, tys, subst, i + 1, acc),
             },
         }
@@ -570,7 +584,7 @@ let infer_closure (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
 }
 
 let extend_closure_params (env: TyEnv) (params: Array[String]) (tys: Array[ITy]) (i: Int): TyEnv =
-    if i >= params.len() { env } else { extend_closure_params(tyenv_extend(env, params[i], tys[i]), params, tys, i + 1) }
+    if i >= params.len() { env } else { extend_closure_params(tyenv_extend(env, params[i], tys[i], 0 - 1), params, tys, i + 1) }
 
 let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (name: String) (offset: Int): InferResult =
     match tyenv_lookup(env, name) {
@@ -599,9 +613,9 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
         // `acc` is already threaded through inference, so this is O(the
         // substitution) at the handful of points that read a name,
         // rather than O(the environment) at every refinement.
-        Some(ty) => {
-            let resolved = subst_apply(acc, ty);
-            note_ident(name, offset, resolved);
+        Some(b) => {
+            let resolved = subst_apply(acc, b.ty);
+            note_ident(name, offset, resolved, b.def_offset);
             ir_leaf(resolved, acc, state, TIdent(name))
         },
         // A top-level 0-parameter binding. Its BODY is still inferred —
@@ -612,7 +626,7 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
         None => match find_global_def(p2, name) {
             Some(def) => {
                 let r = infer_expr(p2, state, tyenv_empty(()), acc, def.body);
-                note_ident(name, offset, r.ty);
+                note_ident(name, offset, r.ty, 0 - 1);
                 ir_leaf(r.ty, r.subst, r.state, TGlobalRef(global_module_of(p2, name), name))
             },
             None => if is_capitalized_name(name) { infer_variant(p2, state, acc, name, [], []) } else { { fail_tc("unbound variable: ".concat(name)); ir_unsupported(acc, state, "unbound variable ".concat(name)) } },
@@ -921,7 +935,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
     match callee {
         EIdent(name, _) => match tyenv_lookup(env, name) {
             // Same resolve-at-lookup rule as `infer_ident` above.
-            Some(raw) => { let ty = subst_apply(acc, raw); infer_closure_call(p2, state, env, acc, ty, args, TExpr { ty: ty, node: TIdent(name) }) },
+            Some(b) => { let ty = subst_apply(acc, b.ty); infer_closure_call(p2, state, env, acc, ty, args, TExpr { ty: ty, node: TIdent(name) }) },
             None => infer_named_call(p2, state, env, acc, name, args),
         },
         // `Array.map`/`filter`/`fold` — a NAMESPACE call ("Array" is
@@ -1519,7 +1533,7 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
                 // was bound or not. `match` only evaluates the branch
                 // actually taken.
                 let target_ty = match tyenv_lookup(env, name) {
-                    Some(t) => t,
+                    Some(b) => b.ty,
                     None => { fail_tc("assignment to an unbound name: ".concat(name)); ITUnit },
                 };
                 let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, target_ty)) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc("assignment to ".concat(name).concat(": ").concat(e)); r.subst } };
@@ -1725,7 +1739,7 @@ let has_catchall_arm (arms: Array[parser.MatchArmNode]): Bool =
     if Array.is_empty(arms) { false } else { is_catchall_pattern(arms[arms.len() - 1].pattern) }
 
 let is_catchall_pattern (pattern: parser.PPattern): Bool =
-    match pattern { PWildcard => true, PIdent(_) => true, _ => false }
+    match pattern { PWildcard => true, PIdent(_, _) => true, _ => false }
 
 let covered_tags (arms: Array[parser.MatchArmNode]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= arms.len() { acc }
@@ -1787,7 +1801,7 @@ struct BindResult { env: TyEnv, subst: Subst, state: FreshState }
 let bind_pattern_ty (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (pattern: parser.PPattern) (scrutinee_ty: ITy): BindResult =
     match pattern {
         PWildcard => BindResult { env: env, subst: acc, state: state },
-        PIdent(name) => BindResult { env: tyenv_extend(env, name, scrutinee_ty), subst: acc, state: state },
+        PIdent(name, off) => { note_binding(name, off, scrutinee_ty); BindResult { env: tyenv_extend(env, name, scrutinee_ty, off), subst: acc, state: state } },
         PInt(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITInt), state: state },
         PFloat(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITFloat), state: state },
         PStr(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITStr), state: state },

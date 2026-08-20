@@ -1153,7 +1153,7 @@ let cg_name_in (xs: Array[String]) (name: String) (i: Int): Bool =
 
 let cg_pattern_binds (pat: parser.PPattern) (name: String): Bool =
     match pat {
-        PIdent(v) => v == name,
+        PIdent(v, _) => v == name,
         PTuple(ps) => cg_any_pattern_binds(ps, name, 0),
         PVariant(_, ps) => cg_any_pattern_binds(ps, name, 0),
         POr(ps) => cg_any_pattern_binds(ps, name, 0),
@@ -1291,11 +1291,11 @@ let cg_self_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (va
 // A plain `let x = ..` binds one name and needs no pattern machinery;
 // anything else destructures.
 let cg_is_ident_pattern (pattern: parser.PPattern): Bool =
-    match pattern { PIdent(_) => true, _ => false }
+    match pattern { PIdent(_, _) => true, _ => false }
 
 let cg_let_name (pattern: parser.PPattern): String =
     match pattern {
-        PIdent(name) => name,
+        PIdent(name, _) => name,
         _ => { cg_fail("destructuring `let` isn't supported yet"); "_" },
     }
 
@@ -2677,7 +2677,7 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
         PWildcard => PatEmit { code: "", binds: "", allocas: "", releases: "",globals: "", test: "1", env: env, n: n },
         // A binding always matches; the slot it introduces is what the
         // arm body reads.
-        PIdent(name) => {
+        PIdent(name, _) => {
             let slot = cg_reg(n);
             let sty = cg_of_ity(sity);
             let lty = cg_llvm_ty(sty);
