@@ -102,8 +102,16 @@ artifact. It is no longer where new language work happens.
 | `self-sufficiency` | it can build itself with no Rust compiler, from any directory |
 | `check-seed` | the checked-in seed still bootstraps to today's compiler |
 | `example-sweep` | every `examples/` project agrees with the Rust compiler |
+| `corpus-check` | 42 corpus fixtures compile, run, print the right thing, and leak nothing |
+| `test-smoke` | `plum test` really runs tests, and both compilers agree |
 | `lsp-smoke` | the language server answers a real session |
 | `check-shims` | the embedded C shims match `native_stdlib/` |
+
+`corpus-check` and `example-sweep` divide differently than the names
+suggest. `example-sweep` derives its reference output by RUNNING the
+Rust compiler, so it is the differential test and it needs `crates/`.
+`corpus-check` compares against answers checked into the tree, so it
+needs no second compiler and will outlive the first one.
 
 ## `self_host/`
 

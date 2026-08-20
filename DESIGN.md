@@ -12535,3 +12535,75 @@ interpreter.
 byte-identical, self-sufficiency passing, seed verified, 101/101 parser
 goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok,
 test smoke ok (both compilers), Rust suite 1941/0.
+
+## Two corpora that nothing ran (2026-08-20)
+
+`bootstrap/exec_corpus` (31 fixtures) and `bootstrap/typecheck_corpus`
+(11) each ship every fixture's answer checked into the tree. Nothing in
+the repository executed either one. `grep -rl exec_corpus` found the
+name only in comments, in two READMEs, and — inertly — in the seed.
+
+Both READMEs documented validation as a command you were expected to
+type by hand, once, per fixture, and then asserted the result in prose:
+"All 31 fixtures pass end to end", "11 of 12". That is the same shape as
+the `sh test` bug, which ran every test through an interpreter that
+never loaded the prelude and failed every `assert_eq` for months, and
+the same shape as the self-hosted interpreter, deleted the same week for
+being described as live while reachable from nothing.
+
+`bootstrap/corpus-check` runs both, and found two things on its first
+execution.
+
+### The checker rejected a fixture that runs correctly
+
+`exec_corpus/collections` compiled, ran, and printed exactly its
+`expected.txt` — while `./sh check` on that same directory said
+`unbound variant/function: Map`.
+
+Both are true at once because the BACKEND prepends the prelude, where
+`Map`/`Set` are ordinary Plum, and the CHECKER does not: it models the
+prelude with hand-written `FnSig`s and `StructInfo`s (see
+`typecheck/context.plum`'s own note on why `Option`/`Result` are seeded
+there). Roughly forty builtin signatures were written when that table
+went in. `Map` and `Set` were missed — nineteen functions and three
+type declarations — and no harness ever asked the checker about the one
+fixture that would have noticed.
+
+Fixed by seeding `Map[K, V]`, `MapEntry[K, V]` and `Set[T]` into
+`builtin_context`, and the nineteen `Map.*`/`Set.*` signatures into
+`builtin_sig`. The prelude declares them with `Eq` bounds
+(`Map.insert[K: Eq, V]`); the bounds are dropped, because this checker
+has no trait bounds at all. That is the pre-existing v1 simplification,
+not a new one, and it is written down at the signatures.
+
+The general lesson is about what a rejection corpus can and cannot see.
+`typecheck_corpus` proves the checker rejects bad programs. It says
+nothing about the checker rejecting GOOD ones, and a compiler whose
+checker and backend disagree about which programs are valid is broken
+in a way that no amount of rejection fixtures detects. `corpus-check`
+therefore runs `check` over `exec_corpus` too, and treats a rejection
+there as a failure.
+
+### Why this needs no Rust compiler
+
+`bootstrap/example-sweep` derives its reference output by running the
+Rust compiler live. That is what makes it a differential test, and it
+is also what makes `crates/` load-bearing rather than merely useful.
+
+These two corpora have their answers checked in, so `corpus-check`
+needs no oracle. Harnessing them moves 42 fixtures from the "kept alive
+by the Rust compiler" column to the "survives its deletion" column,
+which is the actual gate on retiring it — not any capability gap. The
+two CLI surfaces already match command for command.
+
+### The one fixture that leaks on purpose
+
+`exec_corpus/concurrency` leaks: a `Task` nobody joins is never freed,
+and the Rust compiler leaks more on the same program (734 bytes to
+608). The fixture's header has said so for months. `corpus-check`
+annotates it by name, with that reason, rather than dropping ASan for
+every fixture or silently skipping it — a leak in a refcounted language
+is a miscompile, and it is invisible in an output comparison. The
+annotation lives next to the exception for the same reason the old
+DESIGN.md gap table failed: a list of exceptions kept somewhere else
+becomes fiction.

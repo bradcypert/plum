@@ -2,37 +2,52 @@
 
 The execution counterpart to `bootstrap/corpus/` — where `corpus/`
 validates the PARSER (does a snippet produce the right AST?), this
-validates Stage 3, the self-hosted INTERPRETER (does a real *program*
-produce the right *output*?). Token/AST dumps can't validate an
-interpreter at all, hence a separate corpus.
+validates the whole pipeline: does a real *program* produce the right
+*output*? Token/AST dumps can't answer that, hence a separate corpus.
 
 Each `<name>/` is a small, runnable project (`main.plum`, matching
 `examples/<name>/main.plum`'s own convention — a real `let main ():
-Unit = ...`), paired with `expected.txt`: the exact stdout the REAL
-`plum run` produces for it, generated via:
+Unit = ...`), paired with `expected.txt`: the exact stdout the program
+prints.
+
+## Running it
 
 ```
-plum run bootstrap/exec_corpus/<name> | head -n -1
+bootstrap/corpus-check
 ```
 
-(`head -n -1` drops the CLI's own trailing return-value echo —
-`plum run` (the INTERPRETER) always prints `{value:?}` of `main`'s own
-return after the program's own output; since `main` always returns
-`Unit`, that's always a literal `Unit` line, not real program output.
-The NATIVE build no longer needs this — see below.)
+That builds every fixture with the SELF-HOSTED compiler, runs it under
+ASan with `detect_leaks=1`, and compares stdout to `expected.txt` — and
+also runs `./sh check` over each one, which is a separate claim from
+"it runs" and turned out not to be true (below). No Rust compiler is
+involved: the answers are checked in, not derived by running the other
+compiler, so this keeps working after `crates/` is gone.
 
-**Validating the self-hosted interpreter** (`bootstrap/self_host`,
-native build — see `lexer/lexer.plum`'s own top comment for why):
+**These fixtures were run by nothing at all until 2026-08-20.** Every
+sentence below about what passes was, until then, the record of
+somebody having typed the commands by hand once. Two things had rotted
+in the meantime, and neither was visible in any output:
 
-```
-plum build bootstrap/self_host -o sh
-./sh run bootstrap/exec_corpus/<name>/main.plum
-```
+- `check` rejected `collections/` with `unbound variant/function: Map`.
+  The fixture compiled and ran correctly the whole time — the BACKEND
+  sees the prelude, and only the checker was blind to it. `Map`/`Set`
+  had simply been missed when the builtin signatures were written.
+- `concurrency/` leaks, by design (see its header). Worth knowing;
+  `corpus-check` annotates it rather than dropping ASan for everyone.
 
-`./sh run` type-checks BEFORE interpreting (Stage 4 wired into the same
-pipeline, matching the real `plum run`'s own order). **All 31 fixtures
-pass end to end**, under both the self-hosted interpreter and the
-self-hosted backend, ASan-clean in the latter. `tuples/` used to be a documented exception — Plum
+This paragraph will rot too. `bootstrap/corpus-check` will not.
+
+## History
+
+`./sh run` used to INTERPRET, and these fixtures used to validate Stage
+3, the self-hosted interpreter, which was deleted on 2026-08-20 once
+`run` and `test` both compiled instead. Expected output used to be
+generated with `plum run <dir> | head -n -1`, the `head` dropping the
+interpreter's trailing echo of `main`'s own return value. A compiled
+binary prints exactly what the program printed, so neither the echo nor
+the `head` exists any more.
+
+`tuples/` used to be a documented exception — Plum
 had no tuple type-ANNOTATION syntax, so it could not satisfy Stage 4's
 requirement that every top-level signature be annotated. Tuple types
 were added in 2026-08 and the fixture is annotated now.
@@ -98,40 +113,31 @@ ended with a stray `0`. A `Unit`-returning entry now prints nothing, and
 a compiled binary's output is exactly what the program printed. No
 `head -n -1` on the native side.
 
-## Self-interpretation
+## Self-interpretation (gone)
 
-Since 2026-08-15 these fixtures are also run through TWO interpreter
-levels — the self-hosted interpreter interpreting the self-hosted
-interpreter interpreting the fixture:
-
-```
-./sh run bootstrap/self_host run bootstrap/exec_corpus/<name>/main.plum
-```
-
-14/14 pass. The same mechanism runs the whole compiler under itself
-(`./sh run bootstrap/self_host check bootstrap/self_host` -> `ok`); see
-DESIGN.md's "The self-hosted interpreter now runs the whole self-hosted
-compiler" section for the four real interpreter bugs that found.
+These fixtures were once run through TWO interpreter levels — the
+self-hosted interpreter interpreting the self-hosted interpreter
+interpreting the fixture — and the same trick ran the whole compiler
+under itself. It found four real interpreter bugs; see DESIGN.md. None
+of it is possible now that the self-hosted interpreter is gone. The
+fixed-point check (`bootstrap/bootstrap-check`) is what covers
+"the compiler is correct enough to process itself" today.
 
 ## Scope
 
-Deliberately narrower than `corpus/`'s 98-fixture grammar breadth —
-Stage 3 is scoped to a real but bounded subset (see `interp/interp.plum`'s
-own top comment for the exact list: closures-as-values and arrays ARE
-supported now, but explicit generic instantiation (`EGenericInst`) and
-concurrency/FFI still aren't; `Ref[T]` isn't either — see `refs/`
-above). Fixtures here are chosen to exercise
-exactly what that subset supports: arithmetic, comparisons/logic, `if`/
-`else`, recursion, `struct`/`enum`/`match` (including tuple and nested-
-struct patterns), `for` loops with `let mut` accumulation, string
-building, closures (as first-class values, including the record-of-
-closures pattern), and arrays (literals, indexing, `.len()`/`.push()`/
-`.set()`, `Array.map`/`filter`/`fold`). Two fixtures originally planned
-(`match` with a guard, `match` with an or-pattern) were dropped after
-discovering the REAL Rust interpreter itself can't run those exact
-shapes yet (pre-existing, unrelated compiler limits — confirmed via
-direct testing, not assumed) — no golden could be generated for them at
-all, so there was nothing to validate against.
+Deliberately narrower than `corpus/`'s 98-fixture grammar breadth. This
+section used to describe the bounded subset the self-hosted INTERPRETER
+supported, and listed concurrency, FFI and explicit generic
+instantiation as things it could not do — while `concurrency/`, `ffi/`
+and `generics/` sat in this same directory, passing. The interpreter is
+gone and the bound with it: a fixture belongs here if it pins down
+behavior worth defending, and `bootstrap/corpus-check` decides whether
+it passes.
+
+Two fixtures originally planned (`match` with a guard, `match` with an
+or-pattern) were dropped in 2026-08 because the REAL Rust interpreter
+could not run those shapes, so no golden could be generated at all.
+`match_guards/` exists now.
 
 `closures/` exercises a closure bound to a local and called by name, a
 closure returned from another closure (`make_adder(5)`), a closure

@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# Runs `bootstrap/exec_corpus` and `bootstrap/typecheck_corpus` against
+# the SELF-HOSTED compiler.
+#
+# These two corpora -- 42 fixtures, every one with its answer checked in
+# -- were exercised by nothing in this repo until 2026-08-20. Both
+# READMEs documented validation as a command you were expected to type
+# by hand, once, per fixture. That is the same state `sh test` was in
+# while it was broken for months, and the same state the self-hosted
+# interpreter was in when it was deleted: described as working, run by
+# no harness.
+#
+# Unlike `bootstrap/example-sweep`, this needs NO Rust compiler. The
+# expected output is checked in rather than derived by running the other
+# compiler, so this keeps working after `crates/` is gone -- which is
+# the point of writing it.
+#
+# Three things are checked, and the second is easy to forget:
+#
+#   1. exec_corpus  -- compiles, runs, and prints exactly expected.txt
+#   2. exec_corpus  -- ALSO type-checks clean (`check` exits 0). A
+#      fixture that runs but that the checker rejects is a real
+#      disagreement inside one compiler.
+#   3. typecheck_corpus -- every fixture is REJECTED (`check` exits 1).
+#      Without this half, "the checker prints ok for everything" and
+#      "the checker discriminates" look identical.
+#
+# Binaries are built with ASan and run with detect_leaks=1 by default:
+# Plum is refcounted, so a leak is a MISCOMPILE, not untidiness, and it
+# is invisible in the output comparison. `--no-asan` skips it.
+#
+# Usage:  bootstrap/corpus-check [--no-asan]
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+work="$(mktemp -d -t plum-corpus-XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+
+asan=1
+[ "${1:-}" = "--no-asan" ] && asan=0
+
+# The four shims `sh build` embeds (see `bootstrap/gen-shims`). Linked
+# unconditionally: which one a fixture reaches is not worth deriving,
+# and an unused shim costs nothing.
+shims=(native_stdlib/dir_shim.c native_stdlib/io_shim.c
+       native_stdlib/process_shim.c native_stdlib/thread_shim.c)
+
+# Fixtures that leak BY DESIGN, with the reason. Annotated here rather
+# than silently excluded, and rather than dropping ASan for everyone:
+# the reason belongs next to the exception, which is the lesson the old
+# DESIGN.md gap table taught the hard way. They are still built, run and
+# output-compared -- only the leak check is off.
+declare -A leaks=(
+    [concurrency]="a task nobody joins is never freed; the REAL compiler leaks more on this same program (734 bytes to 608) -- see the fixture's own header"
+)
+
+if [ $asan -eq 1 ]; then
+    cflags=(-O1 -g -fsanitize=address)
+else
+    cflags=(-O2)
+fi
+
+ok=0; fail=0
+
+fail_with() { printf 'FAIL  %-24s %s\n' "$1" "$2"; fail=$((fail + 1)); }
+
+echo "exec_corpus: compile, run, compare$([ $asan -eq 1 ] && echo ' (ASan, detect_leaks=1)')"
+for dir in bootstrap/exec_corpus/*/; do
+    name="$(basename "$dir")"
+    [ -f "$dir/main.plum" ] || continue
+    [ -f "$dir/expected.txt" ] || { fail_with "$name" "no expected.txt"; continue; }
+
+    # The checker's verdict, first. `emit-llvm` reports checker errors on
+    # stdout and still exits 0, so a fixture the checker hates would
+    # otherwise reach clang as garbage and be reported as a link error.
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh check "$dir" > "$work/$name.chk" 2>&1; then
+        fail_with "$name" "runs, but the checker REJECTS it: $(grep -m1 -v '^\s*$' "$work/$name.chk")"
+        continue
+    fi
+
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh emit-llvm "$dir" > "$work/$name.ll" 2>"$work/$name.err"; then
+        fail_with "$name" "emit failed: $(head -n 1 "$work/$name.err")"
+        continue
+    fi
+    if ! head -n 1 "$work/$name.ll" | grep -q '^;'; then
+        fail_with "$name" "$(head -n 1 "$work/$name.ll")"
+        continue
+    fi
+
+    native=()
+    if [ -d "$dir/native" ]; then
+        for c in "$dir"/native/*.c; do [ -e "$c" ] && native+=("$c"); done
+    fi
+
+    if ! clang "${cflags[@]}" -Wno-override-module "$work/$name.ll" \
+            "${shims[@]}" "${native[@]}" -lm -o "$work/$name.bin" > "$work/$name.link" 2>&1; then
+        fail_with "$name" "emitted IR did not link: $(head -n 1 "$work/$name.link")"
+        continue
+    fi
+
+    leakcheck=$asan
+    [ -n "${leaks[$name]:-}" ] && leakcheck=0
+    act="$(cd "$work" && ASAN_OPTIONS=detect_leaks=$leakcheck timeout 60 "./$name.bin" 2>"$work/$name.rt")"
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        # ASan writes its report to stderr and exits nonzero; that
+        # report is the whole reason this runs under ASan at all.
+        fail_with "$name" "exited $rc: $(grep -m1 -E 'ERROR|SUMMARY|panic' "$work/$name.rt" || head -n 1 "$work/$name.rt")"
+        continue
+    fi
+
+    if [ "$act" == "$(cat "$dir/expected.txt")" ]; then
+        if [ $leakcheck -eq 0 ] && [ $asan -eq 1 ]; then
+            printf 'OK    %-24s [leaks by design: %s]\n' "$name" "${leaks[$name]}"
+        else
+            printf 'OK    %-24s\n' "$name"
+        fi
+        ok=$((ok + 1))
+    else
+        fail_with "$name" "output differs from expected.txt"
+        diff <(cat "$dir/expected.txt") <(printf '%s\n' "$act") | head -n 8 | sed 's/^/        /'
+    fi
+done
+
+echo
+echo "typecheck_corpus: every fixture must be REJECTED"
+for dir in bootstrap/typecheck_corpus/*/; do
+    name="$(basename "$dir")"
+    [ -f "$dir/main.plum" ] || continue
+
+    if SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh check "$dir" > "$work/tc-$name.out" 2>&1; then
+        fail_with "$name" "ACCEPTED an ill-typed program"
+        continue
+    fi
+    printf 'OK    %-24s rejected: %s\n' "$name" "$(grep -m1 -v '^\s*$' "$work/tc-$name.out" | cut -c1-60)"
+    ok=$((ok + 1))
+done
+
+echo
+if [ $fail -eq 0 ]; then
+    echo "corpus-check: $ok fixtures pass, no Rust compiler involved"
+else
+    echo "corpus-check: $ok pass, $fail FAIL"
+fi
+exit $((fail > 0))

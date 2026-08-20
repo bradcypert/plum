@@ -271,6 +271,8 @@ let arr_of (t: ITy): ITy = ITStruct("Array", [t])
 let opt_of (t: ITy): ITy = ITEnum("Option", [t])
 let res_of (t: ITy) (e: ITy): ITy = ITEnum("Result", [t, e])
 let tp (name: String): ITy = ITParam(name)
+let map_of (k: ITy) (v: ITy): ITy = ITStruct("Map", [k, v])
+let set_of (t: ITy): ITy = ITStruct("Set", [t])
 
 let builtin_sig (name: String): Option[FnSig] =
     if name == "Array.is_empty" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: ITBool , is_extern: false }) }
@@ -363,6 +365,35 @@ let builtin_sig (name: String): Option[FnSig] =
     // `f(())` sugar — see `interp/interp.plum`'s own note), so the
     // signature has to be zero-param to match the real call shape.
     else if name == "args" { Some(FnSig { name: name, module: "", generics: [], params: [], ret: arr_of(ITStr) , is_extern: false }) }
+    // `Map`/`Set`. The prelude declares these with `Eq` BOUNDS
+    // (`Map.insert[K: Eq, V]`); the bounds are dropped here because
+    // this checker has no trait bounds at all, so it accepts a
+    // `Map[K, V]` for a `K` the backend would reject. That is the
+    // existing v1 simplification, not a new one -- the alternative is
+    // trait bounds, which is a much larger piece of work.
+    //
+    // `Map.new(())` passes Unit EXPLICITLY, so the parameter is
+    // `ITUnit` rather than an empty list -- the opposite of `args()`
+    // below, and the reason both are written out rather than inferred.
+    else if name == "Map.new" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [ITUnit], ret: map_of(tp("K"), tp("V")) , is_extern: false }) }
+    else if name == "Map.insert" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V")), tp("K"), tp("V")], ret: map_of(tp("K"), tp("V")) , is_extern: false }) }
+    else if name == "Map.get" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V")), tp("K")], ret: opt_of(tp("V")) , is_extern: false }) }
+    else if name == "Map.contains" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V")), tp("K")], ret: ITBool , is_extern: false }) }
+    else if name == "Map.remove" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V")), tp("K")], ret: map_of(tp("K"), tp("V")) , is_extern: false }) }
+    else if name == "Map.len" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V"))], ret: ITInt , is_extern: false }) }
+    else if name == "Map.keys" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V"))], ret: arr_of(tp("K")) , is_extern: false }) }
+    else if name == "Map.values" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [map_of(tp("K"), tp("V"))], ret: arr_of(tp("V")) , is_extern: false }) }
+    else if name == "Map.from_arrays" { Some(FnSig { name: name, module: "", generics: ["K", "V"], params: [arr_of(tp("K")), arr_of(tp("V"))], ret: map_of(tp("K"), tp("V")) , is_extern: false }) }
+    else if name == "Set.new" { Some(FnSig { name: name, module: "", generics: ["T"], params: [ITUnit], ret: set_of(tp("T")) , is_extern: false }) }
+    else if name == "Set.insert" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), tp("T")], ret: set_of(tp("T")) , is_extern: false }) }
+    else if name == "Set.contains" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), tp("T")], ret: ITBool , is_extern: false }) }
+    else if name == "Set.remove" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), tp("T")], ret: set_of(tp("T")) , is_extern: false }) }
+    else if name == "Set.len" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T"))], ret: ITInt , is_extern: false }) }
+    else if name == "Set.to_array" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T"))], ret: arr_of(tp("T")) , is_extern: false }) }
+    else if name == "Set.union" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), set_of(tp("T"))], ret: set_of(tp("T")) , is_extern: false }) }
+    else if name == "Set.intersection" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), set_of(tp("T"))], ret: set_of(tp("T")) , is_extern: false }) }
+    else if name == "Set.difference" { Some(FnSig { name: name, module: "", generics: ["T"], params: [set_of(tp("T")), set_of(tp("T"))], ret: set_of(tp("T")) , is_extern: false }) }
+    else if name == "Set.from_array" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T"))], ret: set_of(tp("T")) , is_extern: false }) }
     else { None }
 
 // An UNQUALIFIED name resolves in the CURRENT module first, then in the

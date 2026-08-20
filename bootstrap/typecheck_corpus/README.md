@@ -1,9 +1,9 @@
 # `bootstrap/typecheck_corpus/`
 
 The REJECTION counterpart to `bootstrap/exec_corpus/` — Stage 4 (the
-self-hosted type checker) is validated two ways: `exec_corpus/`'s own
-fixtures (11 of 12 — see below) must all type-check successfully
-(`ok`), and these 11 fixtures must all be REJECTED. Without this half,
+self-hosted type checker) is validated two ways: all 31 `exec_corpus/`
+fixtures must type-check successfully (`ok`), and these eleven fixtures
+must all be REJECTED. Without this half,
 "the checker prints `ok` for everything" and "the checker actually
 discriminates well-typed from ill-typed programs" would be
 indistinguishable.
@@ -14,9 +14,25 @@ compiler first (`plum run <dir>`) before being added here — a fixture
 that accidentally happened to be valid Plum would prove nothing.
 
 ```
-plum build bootstrap/self_host -o sh
-./sh check bootstrap/typecheck_corpus/<name>/main.plum   # must exit 1
+bootstrap/corpus-check
 ```
+
+That runs both halves — every `exec_corpus/` fixture must type-check
+clean, every fixture here must exit 1 — with no Rust compiler involved.
+Until 2026-08-20 nothing ran either half, and the acceptance half was
+in fact failing: `check` rejected `exec_corpus/collections` outright,
+because `Map`/`Set` had been missed when the builtin signatures were
+written. A fixture that runs but that the checker rejects is a real
+disagreement inside one compiler, and it is exactly what a rejection
+corpus on its own cannot see.
+
+To run one by hand:
+
+```
+./sh check bootstrap/typecheck_corpus/<name>   # must exit 1
+```
+
+The eleven fixtures, and what each pins down:
 
 - `wrong_return_type/` — a function's body doesn't match its declared
   return type.
@@ -27,17 +43,26 @@ plum build bootstrap/self_host -o sh
 - `unbound_variable/` — a genuinely undeclared name.
 - `wrong_field_type/` — a struct literal with a field value of the
   wrong type.
+- `closure_equality/`, `closure_field_equality/` — `==` on a function,
+  directly and through a struct field. Structural equality would have
+  to compare code.
+- `extern_without_unsafe/` — calling an `extern` function outside an
+  `unsafe` block.
+- `stale_binding_after_constraint/` — a binding whose type was pinned
+  by a later constraint, used at the older type.
+- `zero_arg_is_not_partial/` — `scale()` on a two-parameter function.
+  Currying makes a missing argument look like a closure rather than an
+  error, which is how three separate call-site bugs hid in this
+  compiler; see DESIGN.md.
+- `non_exhaustive_match/` — below.
 
-## Why `exec_corpus/` isn't 12/12 here
+## The one exclusion, now closed
 
-`exec_corpus/tuples/main.plum` uses an UNANNOTATED tuple-shaped
-parameter (`let swap (t) = match t { (a, b) => (b, a) }`) — Plum has no
-tuple type-ANNOTATION syntax at all (only tuple values), so there is
-no way to satisfy this checker's own stated scope requirement (every
-top-level function must be fully annotated) for this specific fixture.
-A real, expected, documented exclusion — not a bug — see `typecheck/
-infer.plum`'s own top comment for the full reasoning behind requiring
-annotations in the first place.
+`exec_corpus/tuples/` used to be the exception: it took an UNANNOTATED
+tuple-shaped parameter (`let swap (t) = match t { (a, b) => (b, a) }`)
+and Plum had no tuple type-ANNOTATION syntax, so it could not satisfy
+this checker's requirement that every top-level signature be annotated.
+Tuple types were added in 2026-08. The corpus is 31 of 31 now.
 
 ## `non_exhaustive_match/`
 
