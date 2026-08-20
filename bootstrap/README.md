@@ -109,29 +109,37 @@ artifact. It is no longer where new language work happens.
 
 The self-hosted implementation itself — ONE project (Go-style
 directory modules, DESIGN.md's "Module system" section), not one
-project per stage: `lexer/`, `parser/`, `interp/`, and `typecheck/` are
-library modules (`use lexer;`/`use parser;`/`use interp;`/`use
-typecheck;`), `main.plum` at the root is the one real entry point.
+project per stage: `lexer/`, `parser/`, `typecheck/`, `codegen/`,
+`lsp/` and `shims/` are library modules, `main.plum` at the root is the
+one real entry point.
 
 ```
-plum build bootstrap/self_host -o sh
-./sh tokens bootstrap/corpus/<topic>/<name>.plum          # lexer only
-./sh ast    bootstrap/corpus/<topic>/<name>.plum          # lexer + parser
-./sh run    bootstrap/exec_corpus/<name>/main.plum        # lexer + parser + interpreter
-./sh emit-llvm bootstrap/exec_corpus/<name>/main.plum      # Stage 5: LLVM IR text
-bootstrap/shbuild <file.plum> <out-binary>                # emit-llvm + plum compile-ir
-./bootstrap/bootstrap-check                               # the fixed-point check (see below)
-./sh check  bootstrap/typecheck_corpus/<name>/main.plum   # lexer + parser + type checker
+./sh tokens <file>.plum            # lexer only
+./sh ast    <file>.plum            # lexer + parser
+./sh check  <file-or-project>      # lexer + parser + type checker
+./sh emit-llvm <project>           # + codegen: LLVM IR text
+./sh build  <project> -o <out>     # + clang: a native binary
+./sh run    <project>              # build to a temp binary and execute
+./sh test   <project>              # compile once, run each test in its own process
+./sh lsp                           # language server over stdio
 ```
 
-**Validate with the NATIVE build, not `plum run`** — `plum run`
-genuinely stack-overflows on some fixtures, a real, documented
-interpreter limit (`lexer/lexer.plum`'s own top comment has the full
-story), not a bug in this code. `plum build` doesn't hit it.
+`run` and `test` COMPILE — there is no interpreter here. There was one,
+Stage 3 of the bootstrap below, and it was removed on 2026-08-20 once
+both commands compiled instead. Keeping a second implementation of the
+semantics inside one compiler meant every feature had to be written
+twice, and the second half kept not happening: `run` fell seven features
+behind `build`, and `test` was broken for every test that called
+`assert_eq` — for months, unnoticed, because nothing exercised it. See
+DESIGN.md's "The test runner was running on the wrong engine".
+
+Plum still HAS an interpreter: `crates/plum-interp`, reached through the
+Rust implementation's `plum run`. That one is live and tested.
 
 - **`lexer/`** — DONE, 98/98 corpus fixtures. Two real, concrete bugs
   found by actually running it against the corpus (a golden-generator
-  bug, and the interpreter-stack-cost limit above) — see DESIGN.md's
+  bug, and a stack-cost limit in the since-removed interpreter) — see
+  DESIGN.md's
   "Stage 1: self-hosted lexer" section.
 - **`parser/`** — DONE, 98/98 corpus fixtures, both `tokens` and `ast`
   modes. Found and FIXED a genuine, previously-undiscovered bug in
@@ -142,19 +150,13 @@ story), not a bug in this code. `plum build` doesn't hit it.
   DESIGN.md's "Stage 2: self-hosted parser" section for the full story,
   including one narrower, related gap found but NOT fixed (worked
   around in Plum source instead, documented at its exact call site).
-- **`interp/`** — DONE, 12/12 execution-corpus fixtures, PLUS closures-
-  as-values (`VClosure`, lexically captured at the closure literal's
-  own creation site) AND arrays (`VArray` wrapping a real HOST `Array
-  [Value]`, `EArray`/`EIndex`, `.len()`/`.push()`/`.set()`, `Array.map`/
-  `filter`/`fold` as namespace calls) added afterward — 3 more
-  fixtures, 15/15 total. Dynamically typed, walks the parser's AST
-  directly (no lowering/IR) — no type checker needed to run a program.
-  Found a real gap in its own env model along the way (`for`-loop
-  accumulation into an outer `let mut` didn't persist past the loop)
-  and fixed it with a scoped env-threading path, not a full rewrite.
-  See DESIGN.md's "Stage 3: self-hosted interpreter", "Closures-as-
-  values," and "Arrays" sections for the full story, including two more
-  native-codegen pattern-lowering gaps found and worked around.
+- **`interp/`** — REMOVED 2026-08-20. It reached 15/15 execution-corpus
+  fixtures and was a genuine stage of the bootstrap (see DESIGN.md's
+  "Stage 3: self-hosted interpreter"), but once `run` and `test` both
+  compiled it was reachable from nothing, exercised by no harness, and
+  still described here as live — which is exactly the state in which the
+  `sh test` bug survived for months. The history is in DESIGN.md and in
+  git; the code is not worth carrying unexecuted.
 - **`typecheck/`** — DONE, 11/12 `exec_corpus` fixtures accepted (1
   real, documented exclusion — Plum has no tuple type-ANNOTATION
   syntax) + 5/5 `typecheck_corpus` fixtures correctly rejected, PLUS
@@ -180,14 +182,19 @@ story), not a bug in this code. `plum build` doesn't hit it.
 
 ## What's next
 
-Four self-hosted Plum stages now exist (lexer, parser, interpreter,
-type checker), each validated against its own real corpus, and the
-interpreter and type checker now support both closures and arrays as
-first-class values/types — the two biggest blockers identified when
-this push toward true self-hosting began. Still not self-hosting:
-neither stage supports generics beyond what's needed for `Array`
-itself, and a real codegen backend (genuinely a different kind of
-problem than tree-walking interpretation) is the single biggest
-remaining piece. Neither has been scoped yet, matching how every prior
-stage was scoped only once the previous stage's own real pain points
-were known.
+**Self-hosting is done.** The compiler compiles itself to a
+byte-identical fixed point, builds itself with no Rust compiler involved
+from any directory (`self-sufficiency`), and a fresh clone bootstraps
+from `seed/` with clang alone. Every project in `examples/` builds and
+runs identically under both implementations.
+
+The paragraph that stood here described four stages and said "still not
+self-hosting" — accurate when written, wrong for a long time after, and
+nobody noticed because nothing checks prose. That is the argument for
+`example-sweep`: **run it, and believe it over anything written here**,
+including this sentence.
+
+Known remaining differences are all in editor support — the Rust
+implementation still has completion, live-as-you-type diagnostics, and
+resolution for field names and enum variants. See the README's "Editor
+support" table.

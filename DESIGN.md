@@ -12483,3 +12483,55 @@ narrative.
 byte-identical, self-sufficiency passing, seed verified, 101/101 parser
 goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok,
 test smoke ok (both compilers), Rust suite 1941/0.
+
+### Removing the self-hosted interpreter (2026-08-20)
+
+`bootstrap/self_host/interp/` is gone — 1,079 lines, Stage 3 of the
+bootstrap, reachable from nothing since `run` and `test` both started
+compiling.
+
+**This does not remove interpreted mode from Plum.** The two
+interpreters are separate implementations:
+
+| | lines | wired to | after this |
+|---|---|---|---|
+| `bootstrap/self_host/interp/` | 1,079 | nothing | deleted |
+| `crates/plum-interp/` | 5,954 | the Rust `plum run` | untouched |
+
+`plum run` under the Rust implementation still interprets, and that
+crate's interpreter-versus-codegen cross-checks still run. What is gone
+is the SELF-HOSTED compiler's ability to interpret, which it no longer
+used for anything.
+
+The case for deleting rather than keeping was its state, not its
+quality. It was unreachable (verified by grep), exercised by no harness,
+and still documented as live — `bootstrap/README.md` described `./sh run
+<file>` as "lexer + parser + interpreter" when that path compiles. That
+combination is exactly how the `sh test` bug survived for months, and
+having just corrected two claims of the same kind it seemed worth not
+leaving a third standing. The history stays in DESIGN.md; the code stays
+in git.
+
+The measurable cost of not having it: on a hello-world, interpreting
+reaches first output in 0.18s against 0.43s to compile-and-run. Real,
+and 0.25s.
+
+**Two more stale claims fell out of the cleanup**, both in
+`bootstrap/README.md`, and both the same failure as the ones corrected
+above:
+
+- The command list documented a `run` that interprets. It compiles.
+- "What's next" said "Still not self-hosting" — accurate when written,
+  wrong for a long time after, and unnoticed because nothing checks
+  prose. It now says self-hosting is done and points at
+  `example-sweep`: run it, and believe it over anything written in a
+  README, including that sentence.
+
+The emitted compiler shrank from 172,068 lines of IR to 156,459 (−9%),
+which is dead-code elimination no longer having to discard the
+interpreter.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, self-sufficiency passing, seed verified, 101/101 parser
+goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok,
+test smoke ok (both compilers), Rust suite 1941/0.

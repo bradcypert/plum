@@ -54,7 +54,6 @@
 use lexer;
 use parser;
 use lsp;
-use interp;
 use typecheck;
 use codegen;
 use shims;
