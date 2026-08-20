@@ -332,6 +332,13 @@ let builtin_sig (name: String): Option[FnSig] =
     else if name == "String.index_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITStr], ret: opt_of(ITInt) , is_extern: false }) }
     else if name == "String.parse_int" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITInt, ITStr) , is_extern: false }) }
     else if name == "String.parse_float" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: res_of(ITFloat, ITStr) , is_extern: false }) }
+    // The test assertions. `assert_eq` is generic over one type in the
+    // real prelude (`[T: Eq + Show]`); the bound is not represented
+    // here, and nothing downstream needs it -- an unsatisfiable
+    // comparison fails at the `==` inside the prelude's own body.
+    else if name == "assert" { Some(FnSig { name: name, module: "", generics: [], params: [ITBool], ret: ITUnit, is_extern: false }) }
+    else if name == "assert_eq" { Some(FnSig { name: name, module: "", generics: ["T"], params: [tp("T"), tp("T")], ret: ITUnit, is_extern: false }) }
+    else if name == "assert_ne" { Some(FnSig { name: name, module: "", generics: ["T"], params: [tp("T"), tp("T")], ret: ITUnit, is_extern: false }) }
     else if name == "String.concat_all" { Some(FnSig { name: name, module: "", generics: [], params: [arr_of(ITStr)], ret: ITStr, is_extern: false }) }
     else if name == "String.hash" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITInt , is_extern: false }) }
     else if name == "String.slice" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr, ITInt, ITInt], ret: ITStr , is_extern: false }) }

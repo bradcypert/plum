@@ -2963,7 +2963,11 @@ let cg_param_slots (params: Array[CgParam]) (ptys: Array[typecheck.ITy]) (i: Int
 // REAL backend echoed it for years, which is where every compiled
 // program's stray trailing `0` came from; that was fixed the same day
 // this file was started.)
-let cg_entry (unit: Unit): String = cg_lines([
+// The C entry point calls ONE Plum function. Which one is a parameter
+// because `test` compiles a program whose entry is a synthesized
+// dispatcher rather than the project's own `main` -- see main.plum's
+// `cmd_test`.
+let cg_entry_named (entry_sym: String): String = cg_lines([
     "define i32 @main(i32 %argc, ptr %argv) {",
     "entry:",
     "  store i32 %argc, ptr @plum_argc",
@@ -2977,7 +2981,7 @@ let cg_entry (unit: Unit): String = cg_lines([
     "  %seed32 = trunc i64 %seed to i32",
     "  call void @srand(i32 %seed32)",
     "  call void @plum_init_globals()",
-    "  %r = call i1 @plum_main()",
+    "  %r = call i1 ".concat(entry_sym).concat("()"),
     "  ret i32 0",
     "}",
 ])
@@ -3898,13 +3902,19 @@ let cg_of_ann (t: parser.Ty): CgTy =
 pub let cg_with_prelude (program: parser.ProgramNode): parser.ProgramNode =
     parser.ProgramNode { items: Array.concat(parser.parse_program(lexer.tokenize(cg_prelude_src(()))).items, program.items) }
 
-pub let cg_emit_program (program0: parser.ProgramNode): String = {
+pub let cg_emit_program (program0: parser.ProgramNode): String = cg_emit_program_entry(program0, "main")
+
+// Same emitter, with the entry function named. `test` uses it to
+// compile a project ONCE against a synthesized dispatcher, instead of
+// interpreting each test -- which is what it used to do, and why every
+// test that touched the prelude failed.
+pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): String = {
     let program = cg_with_prelude(program0);
     let p = cg_build_program(program);
-    if !cg_has_fn(p, "main") { cg_fail("no top-level 'main' function to compile") };
+    if !cg_has_fn(p, entry) { cg_fail("no top-level '".concat(entry).concat("' function to compile")) };
     // Globals are roots too: their bodies can call functions that
     // nothing else reaches.
-    let insts = cg_reachable(p, cg_global_roots(p, 0, [CgInst { module: "", name: "main", targs: [] }]), [], 0);
+    let insts = cg_reachable(p, cg_global_roots(p, 0, [CgInst { module: "", name: entry, targs: [] }]), [], 0);
     // Equality functions are discovered from the SAME reachable set —
     // an aggregate compared inside an unreachable function needs no
     // function emitted for it.
@@ -3923,7 +3933,7 @@ pub let cg_emit_program (program0: parser.ProgramNode): String = {
         .concat(gl.slots)
         .concat(cg_emit_insts(p, insts, 0, 0, ""))
         .concat(gl.init)
-        .concat(cg_entry(()))
+        .concat(cg_entry_named("@".concat(cg_sym("", entry, []))))
 }
 
 // Each top-level 0-parameter binding gets a module-level SLOT and one

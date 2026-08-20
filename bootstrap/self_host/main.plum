@@ -408,10 +408,10 @@ let takes_no_args (params: Array[parser.ParamNode]): Bool =
 // program's own path.
 struct TestRun { failed: Int, detail: String }
 
-let run_tests (dir: String) (names: Array[String]) (i: Int) (acc: TestRun): TestRun =
+let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): TestRun =
     if i >= names.len() { acc }
     else {
-        let r = run_process("/proc/self/exe", ["test-one", dir, names[i]]);
+        let r = run_process(bin, [names[i]]);
         let outcome = match r {
             Err(e) => TestRun { failed: 1, detail: e },
             Ok(pr) => if pr.exit_code == 0 { TestRun { failed: 0, detail: "" } }
@@ -419,29 +419,75 @@ let run_tests (dir: String) (names: Array[String]) (i: Int) (acc: TestRun): Test
         };
         if outcome.failed == 0 {
             println("test ".concat(names[i]).concat(" ... ok"));
-            run_tests(dir, names, i + 1, acc)
+            run_tests(bin, names, i + 1, acc)
         } else {
             println("test ".concat(names[i]).concat(" ... FAILED"));
             // The child's own output IS the failure report -- the panic
             // message it died with. Captured rather than let through so
             // it lands under the test's name instead of interleaved
             // with the progress lines.
-            run_tests(dir, names, i + 1, TestRun {
+            run_tests(bin, names, i + 1, TestRun {
                 failed: acc.failed + 1,
                 detail: acc.detail.concat("---- ").concat(names[i]).concat(" ----\n").concat(outcome.detail).concat("\n"),
             })
         }
     }
 
+// `test` COMPILES the project once, against a synthesized dispatcher
+// main, and runs each test as a child of the resulting binary.
+//
+// It used to interpret each test instead, which quietly meant `sh test`
+// inherited every limitation of the tree-walking interpreter: no `Ref`,
+// no stdlib, and -- because the interpreter path never loads the
+// prelude -- not even `assert_eq`. Every realistic test failed with
+// "unbound function: assert_eq" while the same code compiled and ran
+// fine. Compiling means `test`, `run` and `build` are one path, so a
+// test cannot fail for a reason the program would not.
+//
+// Each test still runs in its OWN process: `panic_raw` aborts rather
+// than returning, so a single-process harness stops at the first
+// failure and cannot report the rest. That was the original reason for
+// the design and it is unchanged -- only the child is different, an
+// argument to a compiled binary rather than an interpreter invocation.
+let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Array[String]): TestRun =
+    match run_process("mktemp", ["-d"]) {
+        Err(e) => TestRun { failed: 1, detail: "could not create a scratch directory: ".concat(e) },
+        Ok(t) => {
+            let scratch = String.trim_end(t.stdout);
+            let bin = scratch.concat("/tests");
+            let ll = bin.concat(".ll");
+            let ir = codegen.cg_emit_program_entry(program, "__plum_test_main");
+            let outcome = match write_file(ll, ir) {
+                Err(e) => TestRun { failed: 1, detail: "could not write test IR: ".concat(e) },
+                Ok(_) => {
+                    let cfiles = write_shims(scratch);
+                    let argv = Array.concat(Array.concat(["-O2", "-Wno-override-module", ll], cfiles),
+                        Array.concat(link_args([], dir), ["-lm", "-o", bin]));
+                    match run_process("clang", argv) {
+                        Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
+                        Ok(r) => if r.exit_code == 0 { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
+                            else { TestRun { failed: 1, detail: "could not link tests:\n".concat(r.stderr) } },
+                    }
+                },
+            };
+            let cleaned = run_process("rm", ["-rf", scratch]);
+            outcome
+        },
+    }
+
 let cmd_test (dir: String): Unit = {
-    let program = parser.ProgramNode { items: collect_project(dir) };
-    // Checked ONCE here, in the parent. The children skip it: the
-    // program they load is the same one, and re-checking it per test
-    // would dominate the run.
-    typecheck.check_program(program);
-    let names = discover_tests(program.items, 0, []);
+    let items = collect_project(dir);
+    let names = discover_tests(items, 0, []);
+    let src = test_dispatcher_src(names);
+    let dispatcher = parser.parse_program(lexer.tokenize(src)).items;
+    let program = parser.ProgramNode { items: Array.concat(items, dispatcher) };
+    // NO separate check here. The compile below type-checks the
+    // combined program -- user items PLUS the prelude -- and checking
+    // the user's items alone would check the WRONG program and reject
+    // every call to a prelude function, `assert_eq` first among them.
+    // The same note `emit-llvm` already carries, for the same reason.
     println("running ".concat(names.len().to_string()).concat(" tests"));
-    let run = run_tests(dir, names, 0, TestRun { failed: 0, detail: "" });
+    let run = compile_and_run_tests(dir, program, names);
     println("");
     if run.failed == 0 {
         println("test result: ok. ".concat(names.len().to_string()).concat(" passed; 0 failed"));
@@ -457,14 +503,23 @@ let cmd_test (dir: String): Unit = {
     }
 }
 
-// One test, in its own process -- see `run_tests`. Exits non-zero by
-// ABORTING if the test panics, which is the signal the parent reads.
-let cmd_test_one (dir: String) (name: String): Unit = {
-    let program = parser.ProgramNode { items: collect_project(dir) };
-    let state = interp.build_program_state(program);
-    let ignored = interp.run_named(state, name);
-    ()
-}
+// The dispatcher `test` compiles into the project: a `main` that reads
+// the test name from `args()` and calls it.
+//
+// Synthesized as SOURCE and parsed, rather than built as an AST by
+// hand. Two hundred characters of Plum is easier to read, and to be
+// sure is correct, than the equivalent tree of `EIf`/`ECall` nodes.
+let test_dispatcher_src (names: Array[String]): String =
+    "let __plum_test_main (): Unit = {\n    let which = args()[0];\n"
+        .concat(test_dispatch_arms(names, 0, ""))
+        .concat("    ()\n}\n")
+
+let test_dispatch_arms (names: Array[String]) (i: Int) (acc: String): String =
+    if i >= names.len() { acc }
+    else {
+        test_dispatch_arms(names, i + 1,
+            acc.concat("    if which == \"").concat(names[i]).concat("\" { ").concat(names[i]).concat("(()) } else { () };\n"))
+    }
 
 // The C shims every self-hosted binary links against: `process_run`
 // and friends are declared by the runtime preamble but IMPLEMENTED in
@@ -780,8 +835,6 @@ let main (): Unit = {
         // DIRECTORY, which `read_file` can't open at all.
         typecheck.check_program(parser.ProgramNode { items: collect_project(argv[1]) });
         println("ok");
-    } else if argv[0] == "test-one" && argv.len() >= 3 {
-        cmd_test_one(argv[1], argv[2]);
     } else if argv[0] == "test" && Result.unwrap_or(is_directory(argv[1]), false) {
         cmd_test(argv[1]);
     } else if argv[0] == "build" && Result.unwrap_or(is_directory(argv[1]), false) {
@@ -816,10 +869,10 @@ let main (): Unit = {
                     // `builtin_sig` entry.
                     println(codegen.cg_emit_program(parser.parse_program(lexer.tokenize(src))));
                 } else if argv[0] == "run" {
-                    let program = parser.parse_program(lexer.tokenize(src));
-                    typecheck.check_program(program);
-                    let state = interp.build_program_state(program);
-                    interp.run_main(state);
+                    // A single FILE runs the same way a project does --
+                    // compiled. `collect_project` accepts either, so
+                    // there is no second path to keep in step.
+                    run_project(argv);
                 } else {
                     usage(());
                 }

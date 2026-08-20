@@ -12073,9 +12073,13 @@ whose whole design is temp-file capture, can offer. `sh build` also
 gained `--link-lib`/`--link-c` and picks up a project's own `native/*.c`
 automatically, which is what `examples/asteroids` needs.
 
-The interpreter module is now unused by any command. It is left in
-place: it is Stage 3 of the documented bootstrap story and still
-type-checks as part of the project. Deleting it is a separate decision.
+The interpreter module is left in place: it is Stage 3 of the documented
+bootstrap story and still type-checks as part of the project.
+
+**Correction (2026-08-20): the claim that first stood here — "unused by
+any command" — was false.** It was still backing `test` and single-file
+`run`, which I had not checked before writing it down. See "The test
+runner was running on the wrong engine" below for what that cost.
 
 **Then the shell stopped working**, and the cause turned out to be worth
 more than the feature.
@@ -12411,3 +12415,71 @@ already known, in `infer_field`.
 byte-identical, self-sufficiency passing, seed verified, 101/101 parser
 goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok
 (now asserting a local's binding site), Rust suite 1941/0.
+
+### The test runner was running on the wrong engine (2026-08-20)
+
+`sh test` was broken for every realistic test, and had been since it was
+built.
+
+```
+$ sh test <project>
+error: unbound function: assert_eq
+```
+
+It ran each test through the tree-walking INTERPRETER, which never loads
+the prelude — so `assert_eq`, which essentially every test calls, did
+not exist. A test using `Ref` or the stdlib failed the same way. The
+real compiler passed all three of the same tests.
+
+**How it survived: I validated it against the wrong tests.** When `test`
+was built, its fixtures used `panic_raw` directly — chosen to exercise
+the process-isolation design, which they did — and never called an
+assertion. The feature was proven to isolate failures correctly while
+being unable to run a normal test at all.
+
+**And I had written the opposite down.** A previous entry claimed the
+interpreter was "unused by any command", which I asserted without
+checking; it was still backing `test` and single-file `run`. The
+correction is inline above. Both mistakes have the same shape — stating
+something convenient without running it — which is exactly what
+`example-sweep` exists to prevent, and neither `test` nor `run <file>`
+was covered by any sweep.
+
+**The fix** is the one `run` already had: compile, don't interpret.
+`test` now compiles the project ONCE against a synthesized dispatcher
+`main` that reads the test name from `args()`, then runs each test as a
+child of that binary. Each test still gets its own process — `panic_raw`
+aborts rather than returning, so a single-process harness stops at the
+first failure — but the child is an argument to a compiled binary rather
+than an interpreter invocation. Compiling once rather than per test
+matters: per-test compilation would be N full builds.
+
+The dispatcher is synthesized as SOURCE and parsed. Two hundred
+characters of Plum is easier to read, and to be sure is correct, than
+the equivalent tree of `EIf`/`ECall` nodes.
+
+Two supporting fixes fell out. The parent was type-checking the user's
+items WITHOUT the prelude — the exact trap `emit-llvm` already carries a
+comment about — so it rejected `assert_eq` before compilation could
+accept it; that check is gone, since the compile checks the real
+program. And the self-hosted prelude had no assertions at all: `assert`,
+`assert_eq` and `assert_ne` are now mirrored from the real prelude,
+message for message, so a failing test reads identically whichever
+compiler ran it.
+
+`bootstrap/test-smoke` guards it, and deliberately uses what a smoke
+test is tempted to skip: prelude assertions, a `Ref`, a stdlib call, and
+a failing test that must not stop the ones after it. It runs both
+compilers and requires them to agree.
+
+**The interpreter is now genuinely unreachable** — verified by grep this
+time, not assumed; the only remaining mentions are in comments. Dead-code
+elimination drops it, and the compiler's own emitted IR fell from
+172,068 lines to 156,464 (−9%) as a result. Whether to delete the 1,079
+lines is still a separate decision: it is Stage 3 of the bootstrap
+narrative.
+
+31/31 `exec_corpus` correct and leak-free, self-build fixed point
+byte-identical, self-sufficiency passing, seed verified, 101/101 parser
+goldens, 11/11 `typecheck_corpus` rejected, sweep 9/9, LSP smoke ok,
+test smoke ok (both compilers), Rust suite 1941/0.

@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Proves `plum test` actually runs tests, and that BOTH compilers agree
+# on the result.
+#
+# This exists because `sh test` was broken for months without anyone
+# noticing. It ran each test through the tree-walking interpreter, which
+# never loads the prelude — so every test calling `assert_eq`, which is
+# every realistic test, failed with "unbound function: assert_eq" while
+# the same code compiled and ran fine. The feature had been "validated"
+# against tests that happened to use only `panic_raw`.
+#
+# So the fixture below deliberately uses the things a smoke test is
+# tempted to skip: the prelude's assertions, a `Ref`, and a stdlib
+# call. And it asserts a FAILING test both fails and does not stop the
+# ones after it.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+work="$(mktemp -d -t plum-testsmoke-XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+
+cat > "$work/main.plum" <<'PLUM'
+let main (): Unit = println("app")
+
+let test_assertions (): Unit = assert_eq(1 + 1, 2)
+
+let test_ref (): Unit = {
+    let cell = ref(0);
+    cell.set(cell.get() + 42);
+    assert_eq(cell.get(), 42)
+}
+
+let test_stdlib (): Unit =
+    assert_eq(Option.unwrap_or(Array.find([1, 2, 3], |n| n > 2), 0), 3)
+
+let test_fails_on_purpose (): Unit = assert_eq(2 + 2, 5)
+
+let test_runs_after_a_failure (): Unit = assert(true)
+PLUM
+
+fail=0
+
+check_run() {
+    local label="$1"; shift
+    local out; out="$("$@" test "$work" 2>&1)"
+    echo "$out" | grep -q 'test test_ref ... ok' || { echo "FAIL [$label]: a Ref test did not pass"; fail=1; }
+    echo "$out" | grep -q 'test test_stdlib ... ok' || { echo "FAIL [$label]: a stdlib test did not pass"; fail=1; }
+    echo "$out" | grep -q 'test_fails_on_purpose' || { echo "FAIL [$label]: the failing test was not reported"; fail=1; }
+    # 4 passed proves the run continued past the failure.
+    echo "$out" | grep -q 'FAILED. 4 passed; 1 failed' || { echo "FAIL [$label]: wrong tally"; echo "$out" | tail -3; fail=1; }
+}
+
+check_run self-hosted ./sh
+check_run rust ./target/release/plum
+
+[ $fail -eq 0 ] && echo "test smoke: ok, both compilers agree"
+exit $fail
