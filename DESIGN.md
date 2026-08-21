@@ -13175,3 +13175,74 @@ arithmetic agreed three engines onto aborting inside `parse_int`.
 Exact float printing agreed them onto a rendering that then exposed a
 parser that had always been wrong. Each was progress, and each needed a
 second look at what they had agreed ON.
+
+## Four string methods the self-hosted compiler did not have (2026-08-21)
+
+`.replace()`, `.to_upper()`, `.to_lower()` and `.trim()` worked under
+the real compiler and were rejected outright by the self-hosted one:
+
+```
+error: only .to_string()/.concat() and struct-field closure calls are supported
+```
+
+A parity gap, and the kind that blocks the stated goal directly — the
+compiler being retired supported language surface its replacement did
+not.
+
+### How the gap was mis-measured first
+
+The probe that found it tested `String.split(s, ",")` and concluded
+that `split`, `join`, `replace`, `starts_with`, `ends_with`,
+`to_upper` and `to_lower` were "rejected by all three engines" — a
+missing stdlib. That was wrong. They exist as METHODS (`s.split(",")`),
+and only the namespaced form is absent. Re-probing with method syntax
+gave the real picture: `split`/`starts_with`/`ends_with`/`contains`/
+`len` work everywhere, and exactly four were missing from the
+self-hosted side.
+
+Worth recording because the wrong version was more alarming and less
+actionable than the truth.
+
+### Ported, not reimplemented
+
+The implementations are copied VERBATIM out of what
+`crates/plum-codegen` emits — 552 lines across eleven functions:
+`plum_str_replace`, `plum_str_to_upper`, `plum_str_to_lower`,
+`plum_str_trim`, and the UTF-8 and whitespace helpers they need
+(`plum_utf8_decode`/`encode`/`encoded_len`/`len_at`,
+`plum_is_unicode_whitespace`, `plum_str_trim_bounds`,
+`plum_str_count_matches`).
+
+Both backends emit LLVM IR text, so the bodies transfer directly. That
+is not available for anything written in Rust, and it is worth taking
+when it is: the two agree by construction rather than by two careful
+implementations kept in step. This repository has paid for the
+alternative twice — see "One prelude, not two".
+
+The string cell layout was verified identical before relying on it
+(`{ rc, len, bytes.., nul }`, data at offset 16). Only three symbols
+had to be supplied on this side: `towupper`/`towlower` declarations,
+and a `@plum_alloc_str` that allocates through this runtime's own
+`@plum_alloc` so the heap statistics stay correct.
+
+`@plum_locale_init` is now called from `@main`, exactly where the real
+backend calls it. Without it `towupper` runs in the default `C` locale
+and touches ASCII only — a silent divergence rather than a loud one.
+
+### The caveat came along with the code
+
+Case mapping goes through libc's `towupper`/`towlower`, which are
+one-codepoint-in-one-codepoint-out. Multi-codepoint expansions cannot
+happen:
+
+```
+"Grüße".to_upper()
+  both backends   GRÜßE
+  interpreter     GRÜSSE
+```
+
+Pre-existing, documented, and unchanged by this port. It does mean
+`bootstrap/interp-check` would fail on a fixture containing it, since
+that harness compares against a BACKEND's recorded answer — so
+`exec_corpus/string_methods` exercises non-ASCII that maps one-to-one
+instead, and says why at the top.

@@ -1,0 +1,40 @@
+// `.replace()`, `.to_upper()`, `.to_lower()` and `.trim()`, which the
+// real compiler had and the self-hosted one rejected outright until
+// 2026-08-21 ("only .to_string()/.concat() and struct-field closure
+// calls are supported"). A parity gap, and the kind that blocks
+// retiring the real compiler: it supported language surface the
+// replacement did not.
+//
+// The self-hosted runtime's implementations are PORTED VERBATIM from
+// what `crates/plum-codegen` emits -- both backends emit LLVM IR text,
+// so the bodies could be copied rather than rewritten, and the two
+// agree by construction.
+//
+// Deliberately NOT here: `"Grüße".to_upper()`. Both BACKENDS give
+// `GRÜßE` and the INTERPRETER gives `GRÜSSE`, because libc's
+// `towupper` is one-codepoint-in-one-codepoint-out and cannot expand
+// `ß` to `SS` while Rust's `str::to_uppercase()` can. A real,
+// pre-existing, documented divergence (DESIGN.md's "Strings"), and
+// `bootstrap/interp-check` compares against a BACKEND's answer -- so a
+// fixture containing it would fail there for a reason that is not a
+// bug. Non-ASCII that maps one-to-one is exercised instead.
+
+let s (): String = "  Hello, World  "
+
+let main (): Unit = {
+    println(s().trim());
+    println(s().trim().to_upper());
+    println(s().trim().to_lower());
+    println(s().replace("l", "L"));
+    // Non-ASCII, one codepoint in and one out.
+    println("ÄÖÜ".to_lower());
+    println("äöü".to_upper());
+    // Replacement edge cases: empty replacement, no match at all,
+    // and a needle longer than one character.
+    println("[".concat("aXbXc".replace("X", "")).concat("]"));
+    println("abc".replace("zz", "!"));
+    println("aXXb".replace("XX", "-"));
+    // Trimming a string that is entirely whitespace, and one with none.
+    println("[".concat("     ".trim()).concat("]"));
+    println("[".concat("tight".trim()).concat("]"))
+}

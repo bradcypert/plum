@@ -1253,6 +1253,21 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         let ar = infer_expr(p2, br.state, env, s1, args[0]);
         let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".split() argument: ".concat(e)); ar.subst } };
         ir_leaf(arr_of(ITStr), s2, ar.state, TMethodCall("split", br.texpr, [ar.texpr]))
+    } else if (method_name == "to_upper" || method_name == "to_lower" || method_name == "trim") && Array.is_empty(args) {
+        // Str -> Str, no arguments. Compiler primitives like
+        // `ends_with`/`split` above, recognised by name and arity.
+        let br = infer_expr(p2, state, env, acc, base);
+        let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() receiver: ").concat(e)); br.subst } };
+        ir_leaf(ITStr, s1, br.state, TMethodCall(method_name, br.texpr, []))
+    } else if method_name == "replace" && args.len() == 2 {
+        // Str -> Str -> Str -> Str: haystack, needle, replacement.
+        let br = infer_expr(p2, state, env, acc, base);
+        let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".replace() receiver: ".concat(e)); br.subst } };
+        let a1 = infer_expr(p2, br.state, env, s1, args[0]);
+        let s2 = match unify(subst_apply(a1.subst, a1.ty), ITStr) { Ok(s) => subst_compose(s, a1.subst), Err(e) => { fail_tc(".replace() pattern: ".concat(e)); a1.subst } };
+        let a2 = infer_expr(p2, a1.state, env, s2, args[1]);
+        let s3 = match unify(subst_apply(a2.subst, a2.ty), ITStr) { Ok(s) => subst_compose(s, a2.subst), Err(e) => { fail_tc(".replace() replacement: ".concat(e)); a2.subst } };
+        ir_leaf(ITStr, s3, a2.state, TMethodCall("replace", br.texpr, [a1.texpr, a2.texpr]))
     } else if method_name == "to_float" && Array.is_empty(args) {
         // `Int.to_float()` — a compiler primitive (`ir::Expr::ToFloat`),
         // like `ends_with`/`split` above, so it has no `builtin_sig`

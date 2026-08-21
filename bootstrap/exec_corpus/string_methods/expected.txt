@@ -1,0 +1,11 @@
+Hello, World
+HELLO, WORLD
+hello, world
+  HeLLo, WorLd  
+äöü
+ÄÖÜ
+[abc]
+abc
+a-b
+[]
+[tight]

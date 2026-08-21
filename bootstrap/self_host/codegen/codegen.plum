@@ -1582,6 +1582,12 @@ let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (method_name: St
     else if method_name == "starts_with" { cg_str_binop(p, env, n, base, args[0], "@plum_str_starts_with", CgBool) }
     else if method_name == "contains" { cg_str_binop(p, env, n, base, args[0], "@plum_str_contains", CgBool) }
     else if method_name == "split" { cg_str_binop(p, env, n, base, args[0], "@plum_str_split", CgArray(CgStr)) }
+    // Ported verbatim from the real backend -- see `runtime.plum`'s
+    // "Unicode string operations".
+    else if method_name == "replace" { cg_str_ternop(p, env, n, base, args[0], args[1], "@plum_str_replace") }
+    else if method_name == "to_upper" { cg_str_unop(p, env, n, base, "@plum_str_to_upper") }
+    else if method_name == "to_lower" { cg_str_unop(p, env, n, base, "@plum_str_to_lower") }
+    else if method_name == "trim" { cg_str_unop(p, env, n, base, "@plum_str_trim") }
     else { { cg_fail("method .".concat(method_name).concat("() isn't supported by this backend yet")); cg_unit_emit(n) } }
 
 // The aggregate arm of `.to_string()`. The base arrived OWNED, so it
@@ -1646,6 +1652,35 @@ let cg_to_float (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TE
 // `chars_of` in Plum would make them codepoint-level -- a different,
 // slower, and for `starts_with`/`ends_with` observably different
 // function.
+// The one- and three-operand shapes of `cg_str_binop`, for the string
+// methods ported from the real backend. All three borrow their
+// operands and return a FRESH string cell, so the operands are dropped
+// after the call exactly as `cg_str_binop` drops its two.
+let cg_str_unop (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (fn_name: String): Emit = {
+    let a = cg_borrow(p, env, n, base);
+    let reg = cg_reg(a.n);
+    Emit {
+        code: a.code.concat("  ").concat(reg).concat(" = call ptr ").concat(fn_name).concat("(ptr ").concat(a.val).concat(")\n").concat(a.drop),
+        allocas: a.allocas, releases: a.releases, globals: a.globals, val: reg, ty: CgStr, n: a.n + 1,
+    }
+}
+
+let cg_str_ternop (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (a1: typecheck.TExpr) (a2: typecheck.TExpr) (fn_name: String): Emit = {
+    let a = cg_borrow(p, env, n, base);
+    let b = cg_borrow(p, env, a.n, a1);
+    let c = cg_borrow(p, env, b.n, a2);
+    let reg = cg_reg(c.n);
+    Emit {
+        code: a.code.concat(b.code).concat(c.code).concat("  ").concat(reg).concat(" = call ptr ").concat(fn_name)
+            .concat("(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(", ptr ").concat(c.val).concat(")\n")
+            .concat(a.drop).concat(b.drop).concat(c.drop),
+        allocas: a.allocas.concat(b.allocas).concat(c.allocas),
+        releases: a.releases.concat(b.releases).concat(c.releases),
+        globals: a.globals.concat(b.globals).concat(c.globals),
+        val: reg, ty: CgStr, n: c.n + 1,
+    }
+}
+
 let cg_str_binop (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (arg: typecheck.TExpr) (fn_name: String) (ret: CgTy): Emit = {
     let a = cg_borrow(p, env, n, base);
     let b = cg_borrow(p, env, a.n, arg);
@@ -3101,6 +3136,11 @@ let cg_entry_named (entry_sym: String): String = cg_lines([
     "entry:",
     "  store i32 %argc, ptr @plum_argc",
     "  store ptr %argv, ptr @plum_argv",
+    // Before anything else, and for the same reason the real backend
+    // does it here: `towupper`/`towlower` touch ASCII only in the
+    // default "C" locale, so `.to_upper()` would quietly differ from
+    // the real backend on any non-ASCII string.
+    "  call void @plum_locale_init()",
     "  %reg = call i32 @atexit(ptr @plum_dump_stats)",
     // Seeded ONCE here, not per call, exactly where the real backend
     // seeds it (`plumc::emit_main`'s prologue). Seeding per call would
