@@ -1,0 +1,5 @@
+3
+Point { x: 5, y: 5 }
+true
+false
+42

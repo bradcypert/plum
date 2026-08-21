@@ -1,0 +1,7 @@
+Some(300)
+-1
+banana costs 1
+kiwi is not on the menu
+Ok(42)
+Err("expected a digit, found b")
+0

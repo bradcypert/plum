@@ -1,25 +1,35 @@
 #!/usr/bin/env bash
 # THE DEPRECATION SCOREBOARD.
 #
-# Runs every `examples/` project through BOTH compilers and reports where
-# the self-hosted one still falls short. This exists because the hand-
-# maintained gap table in DESIGN.md was wrong three times running, always
-# in the direction of understating what was left: it listed four rows
-# while six of nine examples failed, and it named causes ("check rejects
+# Runs every `examples/` project and reports where the self-hosted
+# compiler still falls short. This exists because the hand-maintained
+# gap table in DESIGN.md was wrong three times running, always in the
+# direction of understating what was left: it listed four rows while six
+# of nine examples failed, and it named causes ("check rejects
 # contracts") that had not been true for some time. A list you have to
 # remember to update is not a source of truth. This is.
 #
+# The reference is each example's CHECKED-IN `expected.txt`, not a live
+# run of the other compiler. That is what lets this work with no Rust
+# toolchain present, which it could not do before 2026-08-21.
+#
 # For each example:
-#   1. the REAL compiler builds and runs it            -> reference output
-#   2. the SELF-HOSTED compiler emits IR, which
-#      `plum compile-ir` links, and that runs          -> actual output
-#   3. the two outputs must match exactly
+#   1. the SELF-HOSTED compiler emits IR, which is linked and run
+#   2. its output must match `expected.txt` exactly
+#   3. IF the real compiler is present, it is built and run too, and ITS
+#      output must match `expected.txt` as well
+#
+# Step 3 is what preserves the differential test. Two implementations
+# both required to match one fixed recording are two implementations
+# required to agree with each other -- and unlike a live comparison,
+# this also catches the case where BOTH drift together, because the
+# recording does not move with them.
 #
 # A self-hosted failure is reported with its first error line, which is
 # the whole point — the output is a to-do list, not a pass/fail gate.
 #
-# Run from the repo root, after `cargo build --release` and
-# `plum build bootstrap/self_host -o sh.real`.
+# Run from the repo root after `plum build bootstrap/self_host -o
+# sh.real`. `cargo build --release` is optional and only adds step 3.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,6 +38,11 @@ work="$(mktemp -d -t plum-sweep-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
 plum=./target/release/plum
+# The real compiler is OPTIONAL now. Without it the recorded output is
+# still checked; only the second opinion is missing.
+have_plum=0
+[ -x "$plum" ] && have_plum=1
+[ $have_plum -eq 1 ] || echo "note: $plum not built -- checking against expected.txt only, no differential"
 
 # Examples that cannot be run non-interactively, with the reason. They
 # are still EMITTED and reported on — only the output comparison is
@@ -94,43 +109,76 @@ for dir in examples/*/; do
     # both compilers -- "the self-hosted output is a working binary" is
     # most of what running it would have told us, and it catches a
     # codegen regression that emit alone would not.
+    # The self-hosted IR is linked with clang directly. This used to go
+    # through `plum compile-ir`, which meant a Rust binary was needed
+    # for a step that is just a call to clang.
+    # `link_flags` is written in the REAL compiler's spelling, since it
+    # is passed to `plum build` too. clang wants the C spelling:
+    # `--link-lib raylib` is `-lraylib`, and `--link-c foo.c` is just
+    # the path.
+    clang_flags="$(printf '%s %s' "${link_flags[$name]:-}" "$native_flag" | sed 's/--link-lib */-l/g; s/--link-c *//g')"
+    link_self() {
+        clang -O2 -Wno-override-module "$work/$name.ll" \
+            native_stdlib/dir_shim.c native_stdlib/io_shim.c \
+            native_stdlib/process_shim.c native_stdlib/thread_shim.c \
+            $clang_flags -lm -o "$work/$name.bin"
+    }
+
     if [ -n "${no_run[$name]:-}" ]; then
-        if ! $plum build "$dir" ${link_flags[$name]:-} -o "$work/$name.ref" > "$work/$name.ref_err" 2>&1; then
-            printf 'FAIL  %-24s the REAL compiler could not build it: %s\n' "$name" "$(head -n 1 "$work/$name.ref_err")"
-            fail=$((fail + 1))
-            continue
-        fi
-        if ! $plum compile-ir "$work/$name.ll" ${link_flags[$name]:-} $native_flag -o "$work/$name.bin" > "$work/$name.link_err" 2>&1; then
+        if ! link_self > "$work/$name.link_err" 2>&1; then
             printf 'FAIL  %-24s emitted IR did not link: %s\n' "$name" "$(head -n 1 "$work/$name.link_err")"
             fail=$((fail + 1))
             continue
         fi
-        printf 'LINK  %-24s both compilers produce a binary (not run: %s)\n' "$name" "${no_run[$name]}"
+        if [ $have_plum -eq 1 ] && ! $plum build "$dir" ${link_flags[$name]:-} -o "$work/$name.ref" > "$work/$name.ref_err" 2>&1; then
+            printf 'FAIL  %-24s the REAL compiler could not build it: %s\n' "$name" "$(head -n 1 "$work/$name.ref_err")"
+            fail=$((fail + 1))
+            continue
+        fi
+        printf 'LINK  %-24s produces a binary (not run: %s)\n' "$name" "${no_run[$name]}"
         emit_only=$((emit_only + 1))
         continue
     fi
 
-    # 2. reference output from the real compiler
-    if ! $plum build "$dir" ${link_flags[$name]:-} -o "$work/$name.ref" > "$work/$name.ref_err" 2>&1; then
-        printf 'FAIL  %-24s the REAL compiler could not build it: %s\n' "$name" "$(head -n 1 "$work/$name.ref_err")"
+    # The reference is the CHECKED-IN recording, not a live run of the
+    # other compiler -- see this script's own header for why.
+    if [ ! -f "$dir/expected.txt" ]; then
+        printf 'FAIL  %-24s no expected.txt (regenerate with bootstrap/record-examples)\n' "$name"
         fail=$((fail + 1))
         continue
     fi
-    ref_out="$(cd "$work" && "./$name.ref" 2>&1)"
+    ref_out="$(cat "$dir/expected.txt")"
 
-    # 3. self-hosted output
-    if ! $plum compile-ir "$work/$name.ll" ${link_flags[$name]:-} $native_flag -o "$work/$name.bin" > "$work/$name.link_err" 2>&1; then
+    if ! link_self > "$work/$name.link_err" 2>&1; then
         printf 'FAIL  %-24s emitted IR did not link: %s\n' "$name" "$(head -n 1 "$work/$name.link_err")"
         fail=$((fail + 1))
         continue
     fi
     act_out="$(cd "$work" && "./$name.bin" 2>&1)"
 
+    # The real compiler, when present, must match the SAME recording.
+    # Two implementations both required to match one fixed string are
+    # two implementations required to agree with each other.
+    if [ $have_plum -eq 1 ]; then
+        if ! $plum build "$dir" ${link_flags[$name]:-} -o "$work/$name.ref" > "$work/$name.ref_err" 2>&1; then
+            printf 'FAIL  %-24s the REAL compiler could not build it: %s\n' "$name" "$(head -n 1 "$work/$name.ref_err")"
+            fail=$((fail + 1))
+            continue
+        fi
+        rust_out="$(cd "$work" && "./$name.ref" 2>&1)"
+        if [ "$rust_out" != "$ref_out" ]; then
+            printf 'FAIL  %-24s the REAL compiler no longer matches expected.txt\n' "$name"
+            diff <(printf '%s\n' "$ref_out") <(printf '%s\n' "$rust_out") | head -n 10 | sed 's/^/        /'
+            fail=$((fail + 1))
+            continue
+        fi
+    fi
+
     if [ "$ref_out" == "$act_out" ]; then
         printf 'OK    %-24s\n' "$name"
         ok=$((ok + 1))
     else
-        printf 'DIFF  %-24s output differs from the real compiler\n' "$name"
+        printf 'DIFF  %-24s output differs from expected.txt\n' "$name"
         diff <(printf '%s\n' "$ref_out") <(printf '%s\n' "$act_out") | head -n 10 | sed 's/^/        /'
         fail=$((fail + 1))
     fi

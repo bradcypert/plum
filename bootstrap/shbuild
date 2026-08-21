@@ -5,12 +5,14 @@
 #
 # Three steps, and the middle one is the whole point:
 #   1. ./sh emit-llvm <file>   -- the Plum-written compiler emits LLVM IR
-#   2. plum compile-ir         -- clang assembles + links it
+#   2. clang                   -- assembles + links it
 #   3. (caller runs the binary)
 #
 # Step 2 shells out to the system toolchain because Plum has no
 # process-spawn builtin; the real compiler delegates the same step
 # internally, so this is a division of labor, not a bootstrapping cheat.
+# It used to go through `plum compile-ir`, which meant a RUST binary was
+# needed to run clang. Removed 2026-08-21.
 #
 # `./sh` is the guard wrapper (cgroup MemoryMax) -- never invoke
 # `./sh.real` directly, see that script's own comment for why.
@@ -40,4 +42,12 @@ if ! head -n 1 "$ll" | grep -q "Stage 5 runtime"; then
     exit 1
 fi
 
-"$root/target/release/plum" compile-ir "$ll" -o "$out" > /dev/null
+# clang directly, not `plum compile-ir`. That call was a leftover: it
+# needed a Rust binary for a step that is a call to clang, and `sh
+# build` has linked its own output since the self-sufficiency check
+# started passing. The four shims are the ones the compiler embeds
+# (see `bootstrap/gen-shims`).
+clang -O2 -Wno-override-module "$ll" \
+    "$root/native_stdlib/dir_shim.c" "$root/native_stdlib/io_shim.c" \
+    "$root/native_stdlib/process_shim.c" "$root/native_stdlib/thread_shim.c" \
+    -lm -o "$out"

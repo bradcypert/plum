@@ -33,7 +33,14 @@ if ! head -n 1 "$work/stage2.ll" | grep -q "Stage 5 runtime"; then
     grep -m 1 "self-hosted" "$work/stage2.ll" >&2 || head -n 3 "$work/stage2.ll" >&2
     exit 1
 fi
-./target/release/plum compile-ir "$work/stage2.ll" -o "$work/sh2" > /dev/null
+# clang directly, not `plum compile-ir`. That call needed a RUST binary
+# for a step that is a call to clang, in a script whose entire purpose
+# is proving the compiler reproduces ITSELF -- the one place a Rust
+# dependency was most misleading. Removed 2026-08-21.
+clang -O2 -Wno-override-module "$work/stage2.ll" \
+    native_stdlib/dir_shim.c native_stdlib/io_shim.c \
+    native_stdlib/process_shim.c native_stdlib/thread_shim.c \
+    -lm -o "$work/sh2"
 
 echo "stage 2 -> IR ..."
 "$work/sh2" emit-llvm bootstrap/self_host > "$work/stage3.ll"

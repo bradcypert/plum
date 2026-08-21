@@ -112,24 +112,41 @@ own.
 | `test-smoke` | `plum test` really runs tests, and both compilers agree |
 | `lsp-smoke` | the language server answers a real session |
 | `check-shims` | the embedded C shims match `native_stdlib/` |
+| `record-examples` | regenerates the `examples/*/expected.txt` the sweep checks against |
 
-These three divide differently than the names suggest, and the
-difference is what each can SEE:
+These divide differently than the names suggest, and the difference is
+what each can SEE:
 
-- `example-sweep` compares the two BACKENDS. When both are wrong the
-  same way, it sees nothing -- which is exactly what happened with
-  float formatting.
-- `corpus-check` compares against `expected.txt`, generated FROM a
-  backend, so it inherits any answer a backend got wrong. What it
-  catches is a REGRESSION away from a known-good answer, plus the
-  things no comparison covers: leaks, aborts, checker agreement.
+- `example-sweep` and `corpus-check` compare against CHECKED-IN
+  recordings. A recording does not move when the compilers do, so it
+  catches drift -- including both compilers drifting together, which no
+  comparison between them can see.
 - `interp-check` compares against the INTERPRETER, the one independent
   implementation of the semantics. It found division-by-zero and float
   precision in two days, before it existed as a script.
 
-Only `example-sweep` needs `crates/`; the other two keep working after
-it is gone, and `interp-check` is the reason retiring the interpreter
-along with it would cost something real.
+**Only `interp-check` requires `crates/`**, and `test-smoke` uses it for
+its second half when present. Everything else runs with no Rust
+toolchain at all — verified by moving the binary aside, not by reading
+the scripts:
+
+```
+bootstrap-check    ok        check-seed       ok
+example-sweep      ok        check-shims      ok
+corpus-check       ok        lsp-smoke        ok
+self-sufficiency   ok        test-smoke       ok (self-hosted half)
+interp-check       declines: missing ./target/release/plum
+```
+
+`example-sweep` still runs the real compiler when it is there, and
+requires it to match the SAME recording — two implementations both
+required to match one fixed string are two implementations required to
+agree with each other. That keeps the differential test without making
+it a dependency.
+
+`interp-check` is the reason retiring `plum-interp` along with the rest
+of `crates/` would cost something real. A second implementation of the
+SEMANTICS is worth more than a second implementation of the compiler.
 
 ## `self_host/`
 

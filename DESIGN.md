@@ -13294,3 +13294,71 @@ returns a `String` — `String.replace(needle, haystack, to)` would look
 fine in any test that only asserted the call succeeded. The paired
 comparison is what catches it, and the argument-order-sensitive cases
 print their results too.
+
+## The test infrastructure no longer needs the Rust compiler (2026-08-21)
+
+Eight of the nine `bootstrap/` harnesses now run with no Rust toolchain
+present. Verified by moving `target/release/plum` aside and running
+them, not by reading the scripts:
+
+```
+bootstrap-check    ok        check-seed       ok
+example-sweep      ok        check-shims      ok
+corpus-check       ok        lsp-smoke        ok
+self-sufficiency   ok        test-smoke       ok (self-hosted half)
+interp-check       declines: missing ./target/release/plum
+```
+
+`interp-check` is the one exception, and it is the right one — it
+exists to run the interpreter.
+
+### Two dependencies that were vestigial
+
+`bootstrap-check` and `shbuild` both called `plum compile-ir` to turn
+emitted IR into a binary. That is a call to clang. It needed a RUST
+binary for a step the self-hosted compiler has done natively since
+self-sufficiency started passing, and in `bootstrap-check` it sat
+inside a script whose entire purpose is proving the compiler reproduces
+ITSELF — the one place a Rust dependency was most misleading. Both link
+with clang directly now.
+
+### `example-sweep` gained a recording
+
+It derived its reference output by RUNNING the real compiler on every
+invocation, which is what made `crates/` load-bearing rather than
+merely useful. Each example now has a checked-in `expected.txt`, and
+the sweep compares against that.
+
+The differential test is NOT given up. When the real compiler is
+present it is still built and run, and required to match the SAME
+recording — two implementations both required to match one fixed string
+are two implementations required to agree with each other. It also
+gains something a live comparison structurally cannot have: a recording
+does not move when the compilers do, so BOTH drifting together is now
+visible. That is exactly the failure mode that hid the float formatting
+bug for as long as it did.
+
+`bootstrap/record-examples` regenerates the recordings, and says in its
+own header that re-recording is how you ERASE a bug report rather than
+fix one. It records with the real compiler when present, on the
+principle that a recording should come from the implementation being
+retired rather than the one replacing it.
+
+It runs examples from a TEMP directory, matching the sweep.
+`json_and_files` writes a file into its working directory, and the
+first recording pass — run from inside `examples/json_and_files/` —
+dropped `plum_demo_config.json` into the repo.
+
+### Where this leaves the deprecation
+
+Retiring `crates/` is now a question of how much oracle to keep, not
+whether anything still depends on it. Two things would be lost:
+
+- the differential half of `example-sweep` and `test-smoke`
+- `interp-check` entirely, and with it the only independent
+  implementation of the semantics
+
+The second is the one worth paying for. `plum-interp` found
+division-by-zero and float precision in two days. A second
+implementation of the SEMANTICS is worth more than a second
+implementation of the compiler, and it is a fraction of the code.

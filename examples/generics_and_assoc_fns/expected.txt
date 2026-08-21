@@ -1,0 +1,6 @@
+Point { x: 11, y: 22 }
+Point { x: 3, y: 6 }
+Pair { first: "b", second: "a" }
+false
+true
+Some(Point { x: 2, y: 4 })
