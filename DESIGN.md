@@ -13106,3 +13106,72 @@ the fix took TWO rebuild generations to reach the compiler's own lexer:
 a compiler carries the prelude it was BUILT with, so generation one
 emits the fixed parser without using it.
 
+
+## `parse_int` killed the program it was meant to protect (2026-08-21)
+
+```plum
+match String.parse_int("99999999999999999999") {
+    Ok(n) => ..,
+    Err(e) => ..,          // never reached
+}
+```
+
+`integer overflow`, exit 1 — from inside a function whose entire
+signature is an apology for bad input. A caller that had done exactly
+the right thing, asking for a `Result` so it could handle a bad string,
+got a dead process.
+
+This is a REGRESSION introduced the day before, by making `+` and `*`
+checked. Worth being precise about what it replaced, because the
+earlier behaviour was not good either:
+
+| | backends | interpreter |
+|---|---|---|
+| before checked arithmetic | wrapped, returned garbage | aborted |
+| after checked arithmetic | aborted | aborted |
+| now | `Err("integer out of range")` | same |
+
+The checked-arithmetic change made the three engines AGREE, which was
+its job. It agreed them onto the wrong answer, which nothing caught
+because no fixture parsed an out-of-range integer.
+
+The fix checks range BEFORE multiplying, in both preludes, since an
+overflow can no longer be detected after the fact. Note
+`String.parse_int("-9223372036854775808")` — exactly `Int::MIN` — now
+returns `Err`, because the magnitude is parsed before the sign is
+applied. A real, narrow edge case, stated rather than discovered.
+
+### And two more, in the lexers
+
+An out-of-range integer LITERAL in source:
+
+```plum
+let main (): Unit = println((99999999999999999999).to_string())
+```
+
+- The self-hosted compiler printed **`0`**. Its lexer read the literal
+  with `Result.unwrap_or(String.parse_int(text), 0)`, and once
+  `parse_int` started rejecting out-of-range input, the fallback that
+  "never actually fires" started firing.
+- The real compiler PANICKED with `lexer produced an invalid int
+  literal` — a message that reads as a compiler bug when a user simply
+  wrote a number too big.
+
+Both comments made the same wrong assumption, in the same words: that
+`scan_digit_run` only collects digits, so the parse cannot fail. True
+of the literal's SYNTAX and false of its RANGE — a distinction with no
+difference until range checking existed.
+
+Both now report `integer literal out of range: <text> (Int is a 64-bit
+signed integer)`. Panicking IS the real lexer's error mechanism (see
+its `'&'` arm), so that side changed the message rather than the
+mechanism.
+
+### The pattern worth naming
+
+Three of this week's findings share a shape: a fix made behaviour
+UNIFORM, and uniform behaviour is easy to mistake for correct. Checked
+arithmetic agreed three engines onto aborting inside `parse_int`.
+Exact float printing agreed them onto a rendering that then exposed a
+parser that had always been wrong. Each was progress, and each needed a
+second look at what they had agreed ON.

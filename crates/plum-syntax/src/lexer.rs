@@ -251,7 +251,16 @@ impl<'a> Lexer<'a> {
             TokenKind::Float(cleaned.parse().expect("lexer produced an invalid float literal"))
         } else {
             let cleaned: String = text.chars().filter(|c| *c != '_').collect();
-            TokenKind::Int(cleaned.parse().expect("lexer produced an invalid int literal"))
+            // The `expect` here used to say "lexer produced an invalid
+            // int literal", which reads as a compiler bug and is not
+            // what fires: `scan_digit_run` only ever collects digits, so
+            // the only way this fails is a literal too large for a
+            // 64-bit Int. A user wrote that, and the message should say
+            // so. (Panicking IS this lexer's error mechanism -- see the
+            // `'&'` arm below.)
+            TokenKind::Int(cleaned.parse().unwrap_or_else(|_| {
+                panic!("integer literal out of range: {cleaned} (Int is a 64-bit signed integer)")
+            }))
         }
     }
 

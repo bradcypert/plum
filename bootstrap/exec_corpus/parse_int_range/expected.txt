@@ -1,0 +1,9 @@
+42
+-42
+0
+9223372036854775807
+Err: integer out of range
+Err: integer out of range
+Err: expected a digit, found x
+Err: empty string
+survived

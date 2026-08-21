@@ -1209,7 +1209,15 @@ let string_digit_value (c: String): Result[Int, String] = match c {
 let string_parse_int_digits_acc (chars: Array[String]) (i: Int) (acc: Int) (any: Bool): Result[Int, String] =
     if i >= chars.len() { if any { Ok(acc) } else { Err(\"expected at least one digit\") } }
     else { match string_digit_value(chars[i]) {
-        Ok(d) => string_parse_int_digits_acc(chars, i + 1, acc * 10 + d, true),
+        // Range is checked BEFORE multiplying, not after. `*` and `+` on
+        // Int abort the program on overflow (2026-08-21), so an
+        // out-of-range literal used to KILL a program that had asked for
+        // a `Result` precisely so it could handle bad input. Before that
+        // change it wrapped and returned a garbage number, which was no
+        // better. 922337203685477580 is Int::MAX / 10.
+        Ok(d) => if acc > 922337203685477580 { Err(\"integer out of range\") }
+                 else if acc * 10 > 9223372036854775807 - d { Err(\"integer out of range\") }
+                 else { string_parse_int_digits_acc(chars, i + 1, acc * 10 + d, true) },
         Err(e) => Err(e),
     } }
 

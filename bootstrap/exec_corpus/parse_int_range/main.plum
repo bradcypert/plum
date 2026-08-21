@@ -1,0 +1,32 @@
+// `String.parse_int` returns a `Result` so a caller can HANDLE bad
+// input. Out-of-range input must therefore be an `Err`, not a dead
+// program.
+//
+// It was neither, twice. Before 2026-08-21 the backends wrapped and
+// returned a garbage number for `"99999999999999999999"` while the
+// interpreter aborted. Then `*` and `+` on Int became checked, which
+// made all three agree -- on aborting, from inside a function whose
+// whole signature is an apology for bad input. `parse_int` now checks
+// range BEFORE multiplying.
+//
+// The last line is the point of the fixture: the program is still
+// running.
+
+let show (s: String): String =
+    match String.parse_int(s) { Ok(n) => n.to_string(), Err(e) => "Err: ".concat(e) }
+
+let main (): Unit = {
+    println(show("42"));
+    println(show("-42"));
+    println(show("0"));
+    // Exactly Int::MAX, which must still parse.
+    println(show("9223372036854775807"));
+    // One past it, and far past it.
+    println(show("9223372036854775808"));
+    println(show("99999999999999999999"));
+    // Not a number at all -- the pre-existing Err path, here so a
+    // range check cannot swallow it.
+    println(show("4x"));
+    println(show(""));
+    println("survived")
+}

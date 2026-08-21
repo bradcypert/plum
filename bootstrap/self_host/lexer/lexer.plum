@@ -164,20 +164,33 @@ let scan_digit_run (chars: Array[String]) (pos: Int): Int =
 // Same "collect digits/underscores, strip underscores before parsing"
 // shape as `crates/plum-syntax/src/lexer.rs::lex_number` — reuses
 // `String.parse_int`/`String.parse_float` rather than re-deriving the
-// digit-accumulation those already do (`Result.unwrap_or`'s fallback
-// never actually fires: `scan_digit_run` only ever collects real
-// digits/underscores, so the string handed to `parse_int`/`parse_float`
-// is always well-formed by construction).
+// digit-accumulation those already do.
+//
+// This used to say the fallback "never actually fires: `scan_digit_run`
+// only ever collects real digits/underscores, so the string handed to
+// `parse_int`/`parse_float` is always well-formed by construction."
+// True of its SYNTAX and false of its RANGE, which stopped being a
+// distinction without a difference when `parse_int` learned to reject
+// out-of-range input (2026-08-21). Before that, `99999999999999999999`
+// as a literal compiled to a wrapped garbage number; after it, to
+// `Result.unwrap_or`'s fallback of 0 -- a silent wrong answer either
+// way. It is an error now, which is what the real compiler does too.
 let lex_number (chars: Array[String]) (pos: Int): NumResult = {
     let int_end = scan_digit_run(chars, pos);
     let is_float = int_end < chars.len() && chars[int_end] == "." && int_end + 1 < chars.len() && is_digit_char(chars[int_end + 1]);
     if is_float {
         let frac_end = scan_digit_run(chars, int_end + 1);
         let text = chars_join(Array.filter(Array.slice(chars, pos, frac_end), |c| c != "_"));
-        NumResult { token: TokFloat(Result.unwrap_or(String.parse_float(text), 0.0)), next_pos: frac_end }
+        match String.parse_float(text) {
+            Ok(f) => NumResult { token: TokFloat(f), next_pos: frac_end },
+            Err(_) => { panic_raw("float literal out of range: ".concat(text)); NumResult { token: TokFloat(0.0), next_pos: frac_end } },
+        }
     } else {
         let text = chars_join(Array.filter(Array.slice(chars, pos, int_end), |c| c != "_"));
-        NumResult { token: TokInt(Result.unwrap_or(String.parse_int(text), 0)), next_pos: int_end }
+        match String.parse_int(text) {
+            Ok(n) => NumResult { token: TokInt(n), next_pos: int_end },
+            Err(_) => { panic_raw("integer literal out of range: ".concat(text).concat(" (Int is a 64-bit signed integer)")); NumResult { token: TokInt(0), next_pos: int_end } },
+        }
     }
 }
 
