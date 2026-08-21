@@ -493,12 +493,20 @@ let cmd_test (dir: String): Unit = {
     } else {
         println("failures:");
         println("");
-        println(run.detail);
+        // `print`, not `println`. Each failure block in `run.detail`
+        // already ends with its own newline (see the `.concat("\n")`
+        // where it is built), so `println` added a SECOND one and every
+        // failure was followed by a doubled blank line -- a small
+        // divergence from the real compiler's report, which
+        // `bootstrap/test-smoke` compares.
+        print(run.detail);
         println("test result: FAILED. ".concat((names.len() - run.failed).to_string()).concat(" passed; ").concat(run.failed.to_string()).concat(" failed"));
-        // Non-zero exit. `panic_raw` is the only mechanism this
-        // language exposes for that, so its message is deliberately
-        // terse -- the real report is above.
-        panic_raw("");
+        // Non-zero exit, printing nothing: the report is already
+        // written. This used to be `panic_raw("")`, the only mechanism
+        // the language had -- and it printed its (empty) message,
+        // leaving a stray blank line the real compiler's report does
+        // not have. `exit_with` was added for this.
+        exit_with(1);
     }
 }
 

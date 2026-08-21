@@ -34,6 +34,21 @@ plum=./target/release/plum
 # for a NEW reason should still be noticed.
 declare -A cannot=(
     [ffi]="the interpreter cannot call extern C functions"
+    [networking]="listens on a socket; lives in bootstrap/net-smoke instead"
+)
+
+# Fixtures where the interpreter and the compilers are KNOWN to differ,
+# with the reason. Their output is still compared -- against a second
+# recording, `expected.interp.txt`, so a divergence that is expected
+# stays pinned and any OTHER change in the same fixture still fails.
+#
+# This exists because the alternative was worse and was what we had:
+# the one known divergence (German `ss` case mapping) was handled by
+# NOT WRITING a fixture that contained it. That is the
+# documented-but-unenforced pattern that produced four separate
+# findings this week -- a claim nothing executes.
+declare -A diverges=(
+    [string_case]="libc towupper is one-codepoint-in-one-codepoint-out and cannot expand ss to SS; Rust's str::to_uppercase can"
 )
 
 ok=0; fail=0; skip=0
@@ -62,8 +77,20 @@ for dir in bootstrap/exec_corpus/*/; do
     # (always `Unit`), which a compiled binary does not print.
     act="$(printf '%s' "$out" | sed '$d')"
 
-    if [ "$act" == "$(cat "$dir/expected.txt")" ]; then
-        printf 'OK    %-24s\n' "$name"
+    # A known divergence is compared against its OWN recording, so the
+    # difference stays pinned rather than merely tolerated.
+    reference="$dir/expected.txt"
+    if [ -n "${diverges[$name]:-}" ]; then
+        reference="$dir/expected.interp.txt"
+        [ -f "$reference" ] || { printf 'FAIL  %-24s known divergence but no %s\n' "$name" "$(basename "$reference")"; fail=$((fail+1)); continue; }
+    fi
+
+    if [ "$act" == "$(cat "$reference")" ]; then
+        if [ -n "${diverges[$name]:-}" ]; then
+            printf 'OK    %-24s [differs by design: %s]\n' "$name" "${diverges[$name]}"
+        else
+            printf 'OK    %-24s\n' "$name"
+        fi
         ok=$((ok+1))
     else
         printf 'FAIL  %-24s interpreter disagrees with the compiled answer\n' "$name"

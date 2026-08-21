@@ -13764,3 +13764,66 @@ A duplicate `declare ptr @getenv(ptr)` was also caught before it
 compiled — the fifth such collision in this file, after `memcmp`,
 `strlen`, `stdout_flush` and `process_run_inherit`. There is now a note
 at the declare list saying to check first.
+
+## Three consistency fixes (2026-08-21)
+
+### Qualified names as values
+
+```plum
+Array.map(xs, double)       // worked as of this morning
+Array.map(xs, String.len)   // unbound variant/function: String
+```
+
+A dotted name arrives as a FIELD ACCESS, not an identifier, so it never
+reached the fallback added with function-as-value support. And
+`infer_field` inferred its base first, meaning `String` alone failed
+before the field was even looked at.
+
+`infer_field` now checks, before inferring the base, whether the base
+is a bare capitalized identifier that is not a local and whether
+`Ns.name` resolves to a signature. If so it eta-expands through the
+same partial-application path. Ordinary field access is untouched, and
+a local shadows the namespace.
+
+Leaving this broken right after fixing the undotted case would have
+been worse than neither working — an inconsistency invented rather than
+inherited.
+
+### The test report was off by two blank lines
+
+Two causes, and only the second was interesting.
+
+`println(run.detail)` added a newline to a string that already ended
+with one, so every failure block was followed by a doubled blank line.
+
+The trailing one was `panic_raw("")`. Exiting non-zero was something
+this language could only do by PANICKING, and a panic prints its
+message — so failing a test run printed a stray blank line after a
+report that was already complete. `exit_with(code)` was added for it:
+a runtime primitive that sets the status and prints nothing.
+
+The self-hosted `plum test` report is now byte-identical to the real
+compiler's, which is what `bootstrap/test-smoke` compares.
+
+Adding `exit_with` needed TWO bootstrap generations and briefly broke
+the build when done in one. A compiler carries the prelude it was BUILT
+with, so `main.plum` cannot call a prelude function that the compiler
+compiling it does not have. Prelude first, use it a generation later.
+
+### `interp-check` had a known exception enforced by nothing
+
+One case where the interpreter and the compilers legitimately differ:
+libc's `towupper` is one-codepoint-in-one-codepoint-out and cannot
+expand the German sharp s to `SS`, while Rust's `str::to_uppercase`
+can. That was handled by NOT WRITING a fixture containing the
+character — a divergence documented in prose and enforced by nothing,
+which is the exact pattern behind four separate findings this week.
+
+`interp-check` now has a `diverges` table alongside its existing
+`cannot` table, and a fixture listed there is compared against a SECOND
+recording, `expected.interp.txt`. Both are checked in, so the
+difference is pinned in both directions: if either engine changes for
+any other reason, one of the two comparisons fails.
+
+`exec_corpus/string_case` is that fixture, and it deliberately contains
+the character the old approach avoided.

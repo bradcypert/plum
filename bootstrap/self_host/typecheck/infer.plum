@@ -809,7 +809,41 @@ let binary_result_ty (op: parser.BOp) (operand_ty: ITy): ITy =
 // problem here at all — every top-level signature is fully known
 // before any body is checked, per this file's own top comment) but the
 // UNDERLYING constraint on field access itself is the same regardless.
-let infer_field (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (name: String): InferResult = {
+let infer_field (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (name: String): InferResult =
+    // `String.len` as a VALUE -- a qualified function name, not a field
+    // read. Checked BEFORE the base is inferred, because inferring
+    // `String` on its own fails first ("unbound variant/function:
+    // String") and the field never gets looked at.
+    //
+    // Bare function names became values earlier the same day
+    // (`Array.map(xs, double)`); dotted ones did not, because they
+    // arrive here as a field access rather than as an identifier. That
+    // left `Array.map(xs, String.len)` failing right after
+    // `Array.map(xs, double)` started working, which is a worse state
+    // than neither working.
+    //
+    // A LOCAL shadows this: a capitalized variable is unusual but
+    // legal, and `Thing.field` on one must stay a field read.
+    match qualified_fn_ref(p2, env, base, name) {
+        Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
+        None => infer_field_read(p2, state, env, acc, base, name),
+    }
+
+// The signature `Ns.name` names, when `base` is a bare capitalized
+// identifier that is not a local.
+let qualified_fn_ref (p2: Program2) (env: TyEnv) (base: parser.PExpr) (name: String): Option[FnSig] =
+    match base {
+        EIdent(ns, _) =>
+            if !is_capitalized_name(ns) { None }
+            else if Option.is_some(tyenv_lookup(env, ns)) { None }
+            else {
+                let qualified = ns.concat(".").concat(name);
+                match find_sig(p2, qualified) { Some(sig) => Some(sig), None => builtin_sig(qualified) }
+            },
+        _ => None,
+    }
+
+let infer_field_read (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (name: String): InferResult = {
     let r = infer_expr(p2, state, env, acc, base);
     let base_ty = subst_apply(r.subst, r.ty);
     match base_ty {

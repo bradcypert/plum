@@ -1516,6 +1516,7 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "panic_raw" { Some("@plum_panic") }
     else if name == "args" { Some("@plum_args") }
     else if name == "print_raw" { Some("@plum_print_raw") }
+    else if name == "exit_raw" { Some("@plum_exit_raw") }
     else if name == "env_var_raw" { Some("@plum_env_var_raw") }
     else if name == "read_file_raw" { Some("@plum_read_file_raw") }
     else if name == "write_file_raw" { Some("@plum_write_file_raw") }

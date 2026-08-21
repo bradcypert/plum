@@ -1,0 +1,29 @@
+// Case mapping, INCLUDING the one input where the compilers and the
+// interpreter legitimately disagree.
+//
+// Both backends go through libc's `towupper`, which is one codepoint
+// in and one codepoint out and so cannot turn the German sharp s into
+// "SS". Rust's `str::to_uppercase`, which the interpreter uses, can.
+//
+// Until 2026-08-21 this was handled by NOT WRITING a fixture that
+// contained the character -- a divergence documented in prose and
+// enforced by nothing, which is the exact pattern that hid four other
+// bugs this week. `bootstrap/interp-check` has a `diverges` table now,
+// and this fixture is compared against `expected.interp.txt` there and
+// `expected.txt` everywhere else. Both recordings are checked in, so
+// the difference is pinned: if either side changes for any OTHER
+// reason, one of the two comparisons fails.
+
+let sharp (): String = "Gruße"
+
+let main (): Unit = {
+    // Plain ASCII, where everything agrees.
+    println("hello".to_upper());
+    println("WORLD".to_lower());
+    // Non-ASCII that maps one codepoint to one codepoint.
+    println("Äöü".to_upper());
+    println("ÄÖÜ".to_lower());
+    // The divergent one is built at runtime so no constant folding can
+    // reach it.
+    println(sharp().to_upper())
+}
