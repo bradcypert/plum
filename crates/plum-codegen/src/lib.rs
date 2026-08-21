@@ -565,12 +565,10 @@ fn render_word_as_string(out: &mut String, next_id: &mut usize, word_reg: &str, 
             out.push_str(&format!("  {dbl} = bitcast i64 {word_reg} to double\n"));
             let buf = next_reg(next_id);
             out.push_str(&format!("  {buf} = alloca [64 x i8]\n"));
-            let n = next_reg(next_id);
-            out.push_str(&format!(
-                "  {n} = call i32 (ptr, i64, ptr, ...) @snprintf(ptr {buf}, i64 64, ptr @plum_tostr_fmt_float, double {dbl})\n"
-            ));
             let len = next_reg(next_id);
-            out.push_str(&format!("  {len} = sext i32 {n} to i64\n"));
+            out.push_str(&format!(
+                "  {len} = call i64 @plum_fmt_double(double {dbl}, ptr {buf})\n"
+            ));
             let cell = next_reg(next_id);
             out.push_str(&format!("  {cell} = call ptr @plum_alloc_str(i64 {len})\n"));
             let dst = next_reg(next_id);
@@ -870,6 +868,7 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     out.push_str("declare void @exit(i32)\n");
     out.push_str("declare i32 @printf(ptr, ...)\n");
     out.push_str("declare i32 @snprintf(ptr, i64, ptr, ...)\n");
+    out.push_str("declare double @strtod(ptr, ptr)\n");
     // `@strlen`/`@memchr` — reached for over hand-rolled loops for the
     // SAME reason `@memcpy`/`@memmove` above are: a real libc primitive
     // already exists and is trusted elsewhere in this backend, matching
@@ -933,6 +932,10 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     // `as` cast semantics (confirmed as the deliberate choice for this
     // feature, not assumed).
     out.push_str("declare i64 @llvm.fptosi.sat.i64.f64(double)\n");
+    // Checked `+`/`-`/`*` on Int -- see `codegen_binop`'s own note.
+    out.push_str("declare { i64, i1 } @llvm.sadd.with.overflow.i64(i64, i64)\n");
+    out.push_str("declare { i64, i1 } @llvm.ssub.with.overflow.i64(i64, i64)\n");
+    out.push_str("declare { i64, i1 } @llvm.smul.with.overflow.i64(i64, i64)\n");
     // `@memcmp` — backs `@plum_str_eq` below (Str `==`/`!=`), the same
     // "reach for a real libc declare" precedent as `@memcpy`/`@strlen`/
     // `@memchr` above.
@@ -1207,7 +1210,53 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     // exact same two formats). `%.15g`, not `%f` — see `codegen.rs`'s
     // own `Expr::ToString`/`CgType::Float` doc comment for why.
     out.push_str("@plum_tostr_fmt_int = private constant [5 x i8] c\"%lld\\00\"\n");
-    out.push_str("@plum_tostr_fmt_float = private constant [6 x i8] c\"%.15g\\00\"\n\n");
+    out.push_str("@plum_fmt_g15 = private constant [6 x i8] c\"%.15g\\00\"\n");
+    out.push_str("@plum_fmt_g16 = private constant [6 x i8] c\"%.16g\\00\"\n");
+    out.push_str("@plum_fmt_g17 = private constant [6 x i8] c\"%.17g\\00\"\n\n");
+
+    // The SHORTEST decimal rendering that reads back as the same
+    // double: try 15 significant digits, then 16, then 17, and stop at
+    // the first that survives a round trip through `strtod`. 17 always
+    // suffices for an IEEE double, so the last attempt needs no check.
+    //
+    // A bare `%.15g` was wrong in a way that made the language look
+    // like it was lying:
+    //
+    //     let sum = 0.1 + 0.2;
+    //     println(sum.to_string())          ->  0.3
+    //     println((sum == 0.3).to_string()) ->  false
+    //
+    // The INTERPRETER was right all along (Rust's `{}` for f64 is
+    // shortest-round-trip), so this closes a divergence rather than
+    // inventing a rule.
+    //
+    // NaN costs three `snprintf` calls instead of one, since `nan`
+    // never compares equal to itself and so never satisfies the round
+    // trip. The output is identical either way.
+    out.push_str(
+        "define i64 @plum_fmt_double(double %f, ptr %buf) {\n\
+entry:\n\
+  %n15 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 64, ptr @plum_fmt_g15, double %f)\n\
+  %b15 = call double @strtod(ptr %buf, ptr null)\n\
+  %ok15 = fcmp oeq double %b15, %f\n\
+  br i1 %ok15, label %d15, label %t16\n\
+d15:\n\
+  %r15 = sext i32 %n15 to i64\n\
+  ret i64 %r15\n\
+t16:\n\
+  %n16 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 64, ptr @plum_fmt_g16, double %f)\n\
+  %b16 = call double @strtod(ptr %buf, ptr null)\n\
+  %ok16 = fcmp oeq double %b16, %f\n\
+  br i1 %ok16, label %d16, label %t17\n\
+d16:\n\
+  %r16 = sext i32 %n16 to i64\n\
+  ret i64 %r16\n\
+t17:\n\
+  %n17 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 64, ptr @plum_fmt_g17, double %f)\n\
+  %r17 = sext i32 %n17 to i64\n\
+  ret i64 %r17\n\
+}\n\n",
+    );
 
     out.push_str(&emit_struct_to_string(tag_fields, tag_ids, struct_field_names));
     out.push_str(STR_QUOTE_RUNTIME);
@@ -4188,7 +4237,9 @@ mod tests {
         // user parameter's own LLVM register is `.`-prefixed so it can
         // never collide with a codegen-reserved bare name.
         assert!(ir.contains("define i64 @double(i64 %.n) {"), "{ir}");
-        assert!(ir.contains("mul i64 %.n, 2"), "{ir}");
+        // `*` on Int is CHECKED (2026-08-21), so this is an overflow
+        // intrinsic rather than a bare `mul i64 %.n, 2`.
+        assert!(ir.contains("call { i64, i1 } @llvm.smul.with.overflow.i64(i64 %.n, i64 2)"), "{ir}");
         assert!(ir.contains("ret i64"), "{ir}");
     }
 
@@ -5169,14 +5220,24 @@ mod tests {
         assert_eq!(phi_count, 2, "expected exactly two phis (induction var + accumulator), got:\n{ir}");
 
         // The accumulator phi's SECOND operand must be the register the
-        // `add` instruction inside the body actually produced — not a
-        // stale/placeholder one. Find the `add i64 %sumN, %iN` line
-        // (the body's real update) and confirm ITS result register is
-        // exactly what the phi's second incoming value names.
+        // body's update actually produced — not a stale/placeholder
+        // one.
+        //
+        // That update used to be a bare `add i64 %sumN, %iN`. Since
+        // `+` on Int became CHECKED (2026-08-21) it is a
+        // `llvm.sadd.with.overflow.i64` call followed by an
+        // `extractvalue ..., 0`, and the phi names the extractvalue.
+        // The property under test is unchanged; only the instruction
+        // carrying the value moved.
+        let call_line = ir
+            .lines()
+            .find(|l| l.contains(" = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %v"))
+            .unwrap_or_else(|| panic!("expected the accumulator's checked `add` in:\n{ir}"));
+        let pair_reg = call_line.trim_start().split(' ').next().unwrap();
         let add_line = ir
             .lines()
-            .find(|l| l.trim_start().starts_with('%') && l.contains(" = add i64 ") && l.contains(", %v"))
-            .unwrap_or_else(|| panic!("expected to find the accumulator's `add` instruction in:\n{ir}"));
+            .find(|l| l.contains(&format!(" = extractvalue {{ i64, i1 }} {pair_reg}, 0")))
+            .unwrap_or_else(|| panic!("expected the value half of {pair_reg:?} in:\n{ir}"));
         let add_reg = add_line.trim_start().split(' ').next().unwrap();
         ir.lines()
             .find(|l| l.contains(" = phi i64 ") && l.contains(&format!("[ {add_reg}, %")))

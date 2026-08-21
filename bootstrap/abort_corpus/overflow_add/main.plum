@@ -1,0 +1,8 @@
+// `+` past Int::MAX. The value comes from a function so nothing can be
+// constant-folded: the check has to be in the emitted code.
+let big (): Int = 9223372036854775807
+let main (): Unit = {
+    println("before");
+    println((big() + 1).to_string());
+    println("unreachable")
+}

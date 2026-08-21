@@ -1,0 +1,8 @@
+// `*` past Int::MAX. The one most likely to overflow by accident in
+// real code, since a product grows far faster than a sum.
+let big (): Int = 9223372036854775807
+let main (): Unit = {
+    println("before");
+    println((big() * 2).to_string());
+    println("unreachable")
+}

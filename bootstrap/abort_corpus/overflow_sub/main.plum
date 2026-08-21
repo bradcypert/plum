@@ -1,0 +1,8 @@
+// `-` past Int::MIN. Separate from `+` because they are separate
+// intrinsics and a fix applied to one is easy to forget for the other.
+let least (): Int = 0 - 9223372036854775807 - 1
+let main (): Unit = {
+    println("before");
+    println((least() - 1).to_string());
+    println("unreachable")
+}

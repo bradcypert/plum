@@ -12870,3 +12870,170 @@ That is a real divergence but a much larger decision than this one —
 guarding every arithmetic operation has a cost that guarding division
 does not, and unlike division there is no undefined behaviour involved,
 just two defensible semantics. Recorded here rather than fixed.
+
+## The language appeared to lie about floats (2026-08-21)
+
+```plum
+let sum = 0.1 + 0.2;
+println(sum.to_string());            // 0.3
+println((sum == 0.3).to_string());   // false
+```
+
+Compiled. It printed a number and then denied that number equalled
+itself. Interpreted, the same program printed `0.30000000000000004` and
+`false`, which at least explains itself.
+
+### Cause
+
+The backends formatted floats with a bare `%.15g` — 15 significant
+digits and stop. The interpreter used Rust's `{}` for `f64`, which is
+the shortest text that reads back as the same number. So any value
+needing 16 or 17 digits printed one way interpreted and another way
+compiled, and the compiled rendering did not round-trip.
+
+| | `0.1 + 0.2` | `1.0 / 3.0` | `100.0 / 7.0` |
+|---|---|---|---|
+| interpreter | `0.30000000000000004` | `0.3333333333333333` | `14.285714285714286` |
+| both backends | `0.3` | `0.333333333333333` | `14.2857142857143` |
+
+The comment above the `%.15g` had defended it: "closely matches the
+interpreter ... though not byte-perfect at the extremes (e.g. `%g`'s
+`1e+20` vs Rust's `1e20`), a documented, honest caveat, not a silent
+gap." `0.1 + 0.2` is not an extreme value, the caveat appeared nowhere
+a user would find it, and a language that prints a number and denies it
+equals itself is not honestly caveated. That comment is now the
+cautionary note above the fix.
+
+### Note on which oracle found it
+
+Both backends AGREED with each other here, so the backend-versus-backend
+sweep that found everything else this week was structurally blind to
+it. It took comparing against the INTERPRETER — the same third oracle
+that specified the division fix the day before. Two findings in two
+days from a comparison nothing runs automatically is a strong argument
+for running it automatically.
+
+### Fix
+
+`@plum_fmt_double(double, ptr) -> i64`, in both runtimes: try `%.15g`,
+then `%.16g`, then `%.17g`, stopping at the first whose `strtod` round
+trip returns the original value. 17 digits always suffice for an IEEE
+double, so the last attempt needs no check. Roughly ten lines, and the
+cost falls only on values that genuinely need the digits.
+
+Three call sites were routed through it — the top-level `.to_string()`
+in each backend plus the shared aggregate renderer that formats floats
+inside arrays and structs. A fix applied to only one of the two would
+have left `[0.1 + 0.2]` printing `[0.3]`, which is why the fixture
+checks both.
+
+NaN costs three `snprintf` calls rather than one, since `nan` never
+compares equal to itself and so never satisfies the round trip. The
+output is identical either way.
+
+### A compile failure found along the way
+
+```plum
+let x = 0.000001;
+```
+
+```
+error: integer constant must have integer type
+  %t17 = call ptr @plum_float_to_string(double 1e-06.0)
+```
+
+`cg_float_text` appended `.0` when the rendered literal had no decimal
+point, because LLVM rejects `double 5`. But the rendering can come back
+in EXPONENT form, and `1e-06` has no point either — so it produced
+`1e-06.0`, which is not valid IR at all. A legal program that would not
+compile, introduced silently the day `.to_string()` started using
+`%.15g`. The `.0` now goes before the exponent.
+
+### Still divergent: notation, not precision
+
+```
+                interpreter      backends
+0.000001        0.000001         1e-06
+10^20           100000000000000000000        1e+20
+10^100          (101 digits)     1e+100
+NaN             NaN              nan
+```
+
+Rust's `{}` for `f64` NEVER uses exponent notation — it prints 10^100
+as 101 digits. Matching that in C means arbitrary positional expansion
+into a ~1100-byte buffer.
+
+Worth noting the backends are now the ones matching convention:
+Python and Go both print `1e+100`, `1e-06` and `nan`, and both use
+shortest-round-trip digits. After this fix the backends agree with
+Python exactly. So closing the remaining gap is a small change to the
+INTERPRETER rather than a large one to two backends — which is the
+opposite of how it looked before the precision half was fixed.
+
+## Integer overflow now stops the program (2026-08-21)
+
+`+`, `-` and `*` on `Int` are checked in both backends. An overflowing
+one prints `integer overflow` and exits 1, where it previously wrapped
+silently.
+
+This was a DECISION, not a bug fix. The interpreter has always used
+`checked_add`/`checked_sub`/`checked_mul`, so
+`9223372036854775807 + 1` errored interpreted and printed
+`-9223372036854775808` compiled. Wrapping is a defensible semantics —
+Go and C# wrap, Rust wraps in release — it simply was not the semantics
+the interpreter implemented, and having both is not a position.
+
+### The cost, measured before choosing rather than after
+
+A microbenchmark of arithmetic-dense, data-dependent code (clang -O2,
+`__builtin_*_overflow` standing in for the intrinsics):
+
+```
+wrapping   0.094s
+checked    0.153s      ~1.6x
+```
+
+And a loop LLVM could otherwise close-form collapses to O(1) when
+unchecked and cannot when checked — 0.001s against 0.119s. That is the
+honest worst case: the expense is not the branch, it is the
+optimizations the early exit blocks.
+
+Then the same measurement on a REAL program, the self-hosted compiler
+compiling itself:
+
+```
+without checks   0.72s
+with checks      0.66s
+```
+
+Unmeasurable — inside the noise, and if anything faster. A 30,000-line
+compiler is dominated by allocation, string building and pointer
+chasing, not tight arithmetic loops. The 1.6x is real but applies to
+arithmetic-bound code specifically, which is not most code. Emitted IR
+grew 4.2% (153,980 to 160,424 lines).
+
+Both figures are worth keeping together. Quoting only the microbenchmark
+overstates the tax; quoting only the compiler understates what a
+numeric inner loop will pay.
+
+### Implementation
+
+`llvm.sadd.with.overflow.i64` and friends, whose `{ i64, i1 }` result
+carries the value and the overflow flag, with the flag routed to the
+same abort path array bounds and division already use. The message is
+the interpreter's, `integer overflow`, and it reuses
+`@plum_div_overflow_fail` — `MIN / -1` reports the same thing for the
+same reason.
+
+Three new `abort_corpus` fixtures, one per operator: they are three
+separate intrinsics and a fix applied to one is easy to forget for the
+others.
+
+### What this does not cover
+
+`Float` arithmetic is untouched — IEEE overflow produces `inf`, which
+is defined behaviour and not an error. Shifts have no operators in the
+language. The runtime's own hand-written IR is unaffected, which
+matters: `@plum_str_hash_raw` is FNV-1a and RELIES on wrapping
+multiplication. It is not Plum source, so it never passes through
+`codegen_binop` and keeps wrapping, correctly.

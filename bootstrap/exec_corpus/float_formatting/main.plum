@@ -1,0 +1,42 @@
+// Float rendering. Every value here is chosen because it printed
+// DIFFERENTLY under `plum run` and a compiled binary before 2026-08-21.
+//
+// The backends used a bare `%.15g`, which is 15 significant digits and
+// stop. The interpreter used Rust's own `{}` for f64, which is the
+// shortest text that reads back as the same number. Any value needing
+// 16 or 17 digits therefore printed one way interpreted and another
+// way compiled -- and the compiled rendering did not round-trip.
+//
+// The visible symptom was a language that appeared to lie:
+//
+//     let sum = 0.1 + 0.2;
+//     println(sum.to_string())          ->  0.3
+//     println((sum == 0.3).to_string()) ->  false
+//
+// The values go through FUNCTIONS so nothing can be constant-folded
+// into a literal at compile time, which would test the compiler's own
+// formatting rather than the runtime's.
+
+let a (): Float = 0.1
+let b (): Float = 0.2
+let one (): Float = 1.0
+let seven (): Float = 7.0
+
+let main (): Unit = {
+    // The classic. 17 significant digits.
+    println((a() + b()).to_string());
+    // 16.
+    println((one() / 3.0).to_string());
+    println((100.0 / seven()).to_string());
+    // Values that were ALREADY right, and must stay right: a float
+    // that is a whole number prints without a decimal point, and one
+    // that needs few digits gains no spurious ones.
+    println((2.0 * one()).to_string());
+    println(a().to_string());
+    println((one() / 4.0).to_string());
+    // Through the aggregate renderers, which format floats by their
+    // own path rather than the top-level one -- a fix applied to only
+    // one of the two would show up here.
+    println([a() + b()].to_string());
+    println([one() / 3.0, 2.0 * one()].to_string())
+}

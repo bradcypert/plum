@@ -528,6 +528,25 @@ fn codegen_binop(op: BinOp, l: String, r: String, ty: CgType, em: &mut Emitter, 
     }
     // Captured before the match below CONSUMES `op`.
     let is_int_division = op == BinOp::Div || op == BinOp::Rem;
+    // `+`, `-` and `*` on Int are CHECKED: an overflowing one stops the
+    // program rather than wrapping. The interpreter has always done
+    // this (`eval_arith` uses `checked_add` and friends) while both
+    // backends wrapped silently, so `9223372036854775807 + 1` printed
+    // -9223372036854775808 compiled and errored interpreted.
+    //
+    // The cost is real and was measured before choosing: about 1.6x on
+    // an arithmetic-dense, data-dependent loop, and much worse on a
+    // loop LLVM could otherwise close-form or vectorize, since the
+    // early exits block that outright. Accepted deliberately -- Plum
+    // already checks array bounds and (since 2026-08-20) division
+    // unconditionally, and silently wrong arithmetic is the thing this
+    // language has spent its correctness budget removing.
+    let checked_intrinsic = match op {
+        BinOp::Add => Some("llvm.sadd.with.overflow.i64"),
+        BinOp::Sub => Some("llvm.ssub.with.overflow.i64"),
+        BinOp::Mul => Some("llvm.smul.with.overflow.i64"),
+        _ => None,
+    };
     let (instr, result_ty) = match (op, ty) {
         (BinOp::Add, CgType::Int) => ("add i64", CgType::Int),
         (BinOp::Sub, CgType::Int) => ("sub i64", CgType::Int),
@@ -586,6 +605,22 @@ fn codegen_binop(op: BinOp, l: String, r: String, ty: CgType, em: &mut Emitter, 
         let ok = em.fresh_reg();
         em.push(format!("  {ok} = xor i1 {overflows}, true"));
         emit_runtime_check(em, ctx, &ok, "integer overflow");
+    }
+    if result_ty == CgType::Int {
+        if let Some(intrinsic) = checked_intrinsic {
+            let pair = em.fresh_reg();
+            em.push(format!(
+                "  {pair} = call {{ i64, i1 }} @{intrinsic}(i64 {l}, i64 {r})"
+            ));
+            let value = em.fresh_reg();
+            em.push(format!("  {value} = extractvalue {{ i64, i1 }} {pair}, 0"));
+            let overflowed = em.fresh_reg();
+            em.push(format!("  {overflowed} = extractvalue {{ i64, i1 }} {pair}, 1"));
+            let ok = em.fresh_reg();
+            em.push(format!("  {ok} = xor i1 {overflowed}, true"));
+            emit_runtime_check(em, ctx, &ok, "integer overflow");
+            return Ok((value, result_ty));
+        }
     }
     let reg = em.fresh_reg();
     em.push(format!("  {reg} = {instr} {l}, {r}"));
@@ -5110,25 +5145,29 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
                     Ok((cell, CgType::Str))
                 }
                 CgType::Float => {
-                    // `%.15g`, not `%f`: `%f` always prints exactly 6
-                    // decimal places (`3.0` -> `"3.000000"`), which
-                    // diverges badly from the interpreter's Rust-
-                    // `Display`-based rendering (`3.0` -> `"3"`). `%g`
-                    // already omits trailing zero decimals for whole
-                    // numbers, and 15 significant digits matches `f64`'s
-                    // own precision — closely matches the interpreter
-                    // for ordinary program values, though not
-                    // byte-perfect at the extremes (e.g. `%g`'s `1e+20`
-                    // vs Rust's `1e20`), a documented, honest caveat,
-                    // not a silent gap.
-                    let fmt = em.fresh_string_global(ctx.fn_name, b"%.15g\0");
+                    // `@plum_fmt_double` -- the SHORTEST rendering that
+                    // reads back as the same double (see its own
+                    // comment in `lib.rs`).
+                    //
+                    // This was a bare `%.15g` until 2026-08-21, and the
+                    // comment here defended it as "closely matches the
+                    // interpreter ... though not byte-perfect at the
+                    // extremes, a documented, honest caveat". The
+                    // caveat was neither documented where a user would
+                    // find it nor confined to extremes:
+                    //
+                    //     let sum = 0.1 + 0.2;
+                    //     println(sum.to_string())         ->  0.3
+                    //     println((sum == 0.3).to_string()) ->  false
+                    //
+                    // 0.1 + 0.2 is not an extreme value, and a language
+                    // that prints a number and then denies it equals
+                    // itself is not honestly caveated, it is wrong.
                     let buf = em.fresh_entry_alloca(64);
-                    let n = em.fresh_reg();
-                    em.push(format!(
-                        "  {n} = call i32 (ptr, i64, ptr, ...) @snprintf(ptr {buf}, i64 64, ptr {fmt}, double {reg})"
-                    ));
                     let len = em.fresh_reg();
-                    em.push(format!("  {len} = sext i32 {n} to i64"));
+                    em.push(format!(
+                        "  {len} = call i64 @plum_fmt_double(double {reg}, ptr {buf})"
+                    ));
                     let cell = em.fresh_reg();
                     em.push(format!("  {cell} = call ptr @plum_alloc_str(i64 {len})"));
                     let dst = em.fresh_reg();

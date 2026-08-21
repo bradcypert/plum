@@ -637,9 +637,27 @@ let cg_unit_emit (n: Int): Emit = Emit { code: "", allocas: "", releases: "",glo
 // here rather than left as a lurking rounding bug.
 let cg_float_literal (v: Float) (n: Int): Emit = Emit { code: "", allocas: "", releases: "",globals: "", val: cg_float_text(v), ty: CgFloat, n: n }
 
+// LLVM's float literal syntax needs a decimal POINT, not just digits:
+// `double 5` is rejected, `double 5.0` is fine. Appending `.0` when
+// there is no `.` handles that -- but the rendering can also come back
+// in exponent form, and `1e-06` has no `.` either. Appending there
+// produced `double 1e-06.0`, which is not valid IR at all:
+//
+//     let x = 0.000001    ->    error: integer constant must have
+//                               integer type
+//
+// A legal program that failed to compile, silently introduced the day
+// `.to_string()` started using `%.15g`. The mantissa is what needs the
+// point, so the `.0` goes BEFORE the exponent.
 let cg_float_text (v: Float): String = {
     let s = v.to_string();
-    if Option.is_some(String.index_of(s, ".")) { s } else { s.concat(".0") }
+    if Option.is_some(String.index_of(s, ".")) { s }
+    else {
+        match String.index_of(s, "e") {
+            None => s.concat(".0"),
+            Some(i) => String.slice(s, 0, i).concat(".0").concat(String.slice(s, i, s.len())),
+        }
+    }
 }
 
 let cg_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (ty: CgTy): Emit =
@@ -718,6 +736,11 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
                 Emit { code: code.concat(cmp.code).concat(drop_operands).concat("  ").concat(neg).concat(" = xor i1 ").concat(cmp.val).concat(", true\n"), allocas: allocas, releases: releases, globals: globals, val: neg, ty: CgBool, n: cmp.n + 1 }
             },
         }
+    } else if cg_is_checked_arith(op, a.ty) {
+        // CHECKED. `+`, `-` and `*` on Int stop the program on overflow
+        // rather than wrapping -- see `cg_overflow_guard`.
+        let g = cg_overflow_guard(cg_overflow_intrinsic(op), a.val, b.val, b.n);
+        Emit { code: code.concat(g.code), allocas: allocas, releases: releases, globals: globals, val: g.reg, ty: ty, n: g.next }
     } else if cg_is_int_division(op, a.ty) {
         // GUARDED. See `cg_div_guard` -- `sdiv`/`srem` are undefined
         // for a zero divisor and for `i64::MIN / -1`, and the emitted
@@ -730,6 +753,54 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
         let line = "  ".concat(reg).concat(" = ").concat(cg_binary_op_text(op, a.ty)).concat(" ").concat(cg_llvm_ty(a.ty)).concat(" ").concat(a.val).concat(", ").concat(b.val).concat("\n");
         Emit { code: code.concat(line), allocas: allocas, releases: releases, globals: globals, val: reg, ty: ty, n: b.n + 1 }
     }
+}
+
+let cg_is_checked_arith (op: parser.BOp) (t: CgTy): Bool =
+    if cg_ty_eq(t, CgFloat) { false } else { match op { BAdd => true, BSub => true, BMul => true, _ => false } }
+
+let cg_overflow_intrinsic (op: parser.BOp): String =
+    match op {
+        BAdd => "llvm.sadd.with.overflow.i64",
+        BSub => "llvm.ssub.with.overflow.i64",
+        _ => "llvm.smul.with.overflow.i64",
+    }
+
+// `+`, `-` and `*` on Int, CHECKED: an overflowing one stops the
+// program instead of wrapping.
+//
+// The interpreter has always done this (`eval_arith` uses
+// `checked_add` and friends) while both backends wrapped silently, so
+// `9223372036854775807 + 1` printed -9223372036854775808 compiled and
+// errored interpreted. Closing that divergence was a decision, not a
+// bug fix: wrapping is defensible, it just was not what the
+// interpreter implemented, and having both is not.
+//
+// The cost was measured before choosing: about 1.6x on an
+// arithmetic-dense, data-dependent loop, and much worse on a loop LLVM
+// could otherwise close-form or vectorize, since the early exits block
+// that outright. Accepted because Plum already checks array bounds and
+// division unconditionally, and silently wrong arithmetic is precisely
+// what this language has been removing.
+//
+// Reuses `@plum_div_overflow_fail` -- the message is the same, and the
+// interpreter reports `integer overflow` for both.
+let cg_overflow_guard (intrinsic: String) (lhs: String) (rhs: String) (n: Int): DivGuard = {
+    let pair = cg_reg(n);
+    let value = cg_reg(n + 1);
+    let ovf = cg_reg(n + 2);
+    let ok = cg_reg(n + 3);
+    let cont = cg_label(n + 4);
+    let bad = cg_label(n + 5);
+    let code = "  ".concat(pair).concat(" = call { i64, i1 } @").concat(intrinsic).concat("(i64 ").concat(lhs).concat(", i64 ").concat(rhs).concat(")\n")
+        .concat("  ").concat(value).concat(" = extractvalue { i64, i1 } ").concat(pair).concat(", 0\n")
+        .concat("  ").concat(ovf).concat(" = extractvalue { i64, i1 } ").concat(pair).concat(", 1\n")
+        .concat("  ").concat(ok).concat(" = xor i1 ").concat(ovf).concat(", true\n")
+        .concat("  br i1 ").concat(ok).concat(", label %").concat(cont).concat(", label %").concat(bad).concat("\n")
+        .concat(bad).concat(":\n")
+        .concat("  call void @plum_div_overflow_fail()\n")
+        .concat("  unreachable\n")
+        .concat(cont).concat(":\n");
+    DivGuard { code: code, reg: value, next: n + 6 }
 }
 
 let cg_is_int_division (op: parser.BOp) (t: CgTy): Bool =
