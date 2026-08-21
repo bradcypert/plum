@@ -1,0 +1,34 @@
+// The ACCEPTING half of the `let`-annotation fix (2026-08-20). Its
+// rejecting half is `typecheck_corpus/let_annotation_mismatch`, and
+// this half is the one that would catch an over-strict fix: a checker
+// that started rejecting every annotation would pass a rejection
+// corpus perfectly.
+//
+// An annotation also CONSTRAINS: `empty: Array[Int]` is what pins the
+// element type of an otherwise-unconstrained `[]`.
+
+let double (n: Int): Int = n * 2
+
+let main (): Unit = {
+    let a: Int = 5;
+    println(a.to_string());
+
+    let mut total: Int = 0;
+    total = total + double(a);
+    println(total.to_string());
+
+    let name: String = "plum";
+    println(name);
+
+    let flags: Array[Bool] = [true, false];
+    println(flags.to_string());
+
+    let empty: Array[Int] = [];
+    println(empty.len().to_string());
+
+    let maybe: Option[Int] = Some(7);
+    println(Option.unwrap_or(maybe, 0).to_string());
+
+    let via_call: Int = double(21);
+    println(via_call.to_string())
+}

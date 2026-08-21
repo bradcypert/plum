@@ -1,0 +1,17 @@
+// A local `let` whose annotation contradicts its value.
+//
+// The self-hosted compiler ACCEPTED this, in every shape, until
+// 2026-08-20 -- and compiled and ran it. The parser read the annotation
+// only to find where it ended, then discarded it, so no later stage
+// could have checked it. The real compiler rejected all of these the
+// whole time.
+//
+// Nothing found it because nothing in this repo annotates a local: not
+// the parser corpus, not the execution corpus, not the examples, and
+// not the compiler's own 30,000 lines. It was reachable only by
+// writing Plum the way a user would. Hence this fixture.
+
+let main (): Unit = {
+    let a: Int = true;
+    println(a.to_string())
+}

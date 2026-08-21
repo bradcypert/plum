@@ -12693,3 +12693,87 @@ fail on a difference, in the manner of `check-shims`. Asking why there
 were two lists at all turned out to be the better question. A sync
 check would have policed the duplication forever; deleting the second
 copy retires it, and there is now nothing left to drift.
+
+## The annotation the parser threw away (2026-08-20)
+
+The self-hosted compiler ignored type annotations on local variables.
+Not just `check` — the whole pipeline. It compiled and ran this:
+
+```plum
+let a: Int = true;
+let b: String = 42;
+```
+
+Six shapes were tried; the self-hosted compiler accepted every wrong
+one and the real compiler rejected every wrong one:
+
+| | self-hosted | real |
+|---|---|---|
+| `let a: Int = true` | accepted | rejected |
+| `let mut a: Int = true` | accepted | rejected |
+| `let a: String = 1 + 2` | accepted | rejected |
+| `let a: Array[Int] = "s"` | accepted | rejected |
+| `let a: Bool = f(1)` | accepted | rejected |
+| `let a: Int = 5` (valid) | accepted | accepted |
+
+### The cause
+
+`parse_let_stmt` read the annotation and discarded it:
+
+```plum
+let after_ty = if ty_b.matched { let t = parse_type(tokens, ty_b.next_pos); t.next_pos } else { .. }
+```
+
+It kept where the type ENDED, so it could skip past it, and dropped the
+type. `SLet` had no field for one. Nothing downstream could check an
+annotation because nothing downstream ever saw one.
+
+That is a different failure from the two before it. `Map`/`Set` and the
+prelude table were copies that fell out of sync, and both were found by
+making something run that had never run. This was a feature never wired
+up, silent in BOTH halves of the compiler, so no amount of checking the
+compiler against itself would have surfaced it. It took running a
+program a USER would write.
+
+Nothing in the repository annotates a local — not one of the 98 parser
+fixtures, the 31 execution fixtures, the 9 examples, or the compiler's
+own ~30,000 lines. The feature was untested because it was unused, and
+unused because everything here was written by people who knew the type
+was inferred anyway.
+
+### The fix
+
+`SLet` carries `Option[Ty]`; the parser keeps what it parses; the
+checker resolves the annotation and unifies it against the value's
+type, and the BINDING then takes the unified type, so
+`let empty: Array[Int] = []` pins the element type. `Program2` gained
+the enclosing function's `generics`, without which `let y: T = x`
+inside a generic function would fail as an unknown type.
+
+`render_stmt` deliberately does not print the annotation: that output
+has to match `crates/plum-syntax/src/render.rs` byte for byte across 98
+fixtures, and the real renderer does not print it either.
+
+### Where the two compilers now differ, in the other direction
+
+```plum
+let id[T] (x: T): T = { let y: T = x; y }
+```
+
+The self-hosted compiler accepts this and prints the right answer. The
+real one rejects it: "type inference not yet implemented for this type
+annotation". That is a gap in the real compiler, not a rule, so the
+self-hosted compiler is not being made to match it. It is worth
+recording as a place where the two disagree and the newer one is right.
+
+The real compiler also gets its own message backwards — `let a: Int =
+true` reports "expected Bool, found Int". The self-hosted message reads
+the right way round.
+
+### Fixtures
+
+Both directions, because the absence of any is what let this survive:
+`typecheck_corpus/let_annotation_mismatch` must be rejected, and
+`exec_corpus/let_annotations` must compile, run and print. The second
+is the one that would catch an over-strict fix — a checker that
+rejected every annotation would pass a rejection corpus perfectly.

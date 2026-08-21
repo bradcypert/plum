@@ -1,8 +1,8 @@
 # `bootstrap/typecheck_corpus/`
 
 The REJECTION counterpart to `bootstrap/exec_corpus/` — Stage 4 (the
-self-hosted type checker) is validated two ways: all 31 `exec_corpus/`
-fixtures must type-check successfully (`ok`), and these eleven fixtures
+self-hosted type checker) is validated two ways: all 32 `exec_corpus/`
+fixtures must type-check successfully (`ok`), and these twelve fixtures
 must all be REJECTED. Without this half,
 "the checker prints `ok` for everything" and "the checker actually
 discriminates well-typed from ill-typed programs" would be
@@ -32,7 +32,7 @@ To run one by hand:
 ./sh check bootstrap/typecheck_corpus/<name>   # must exit 1
 ```
 
-The eleven fixtures, and what each pins down:
+The twelve fixtures, and what each pins down:
 
 - `wrong_return_type/` — a function's body doesn't match its declared
   return type.
@@ -54,6 +54,13 @@ The eleven fixtures, and what each pins down:
   Currying makes a missing argument look like a closure rather than an
   error, which is how three separate call-site bugs hid in this
   compiler; see DESIGN.md.
+- `let_annotation_mismatch/` — a local `let` whose annotation
+  contradicts its value. The self-hosted compiler ACCEPTED this in
+  every shape until 2026-08-20, and compiled and ran it: the parser
+  read the annotation only to find where it ended, then discarded it.
+  Its accepting counterpart is `exec_corpus/let_annotations`, which is
+  the half that catches an over-strict fix. See DESIGN.md's "The
+  annotation the parser threw away".
 - `non_exhaustive_match/` — below.
 
 ## The one exclusion, now closed
@@ -62,7 +69,7 @@ The eleven fixtures, and what each pins down:
 tuple-shaped parameter (`let swap (t) = match t { (a, b) => (b, a) }`)
 and Plum had no tuple type-ANNOTATION syntax, so it could not satisfy
 this checker's requirement that every top-level signature be annotated.
-Tuple types were added in 2026-08. The corpus is 31 of 31 now.
+Tuple types were added in 2026-08. The corpus is 32 of 32 now.
 
 ## `non_exhaustive_match/`
 

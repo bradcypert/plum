@@ -94,7 +94,15 @@ pub enum PExpr {
 pub struct PBlock { stmts: Array[PStmt], tail: Option[PExpr], starts: Array[Int] }
 
 pub enum PStmt {
-    SLet(Bool, PPattern, PExpr),
+    // The `Option[Ty]` is the OPTIONAL annotation in `let x: Int = ..`.
+    // It used to be parsed and thrown away -- `parse_let_stmt` kept
+    // only where the type ENDED, so it could skip past it, and dropped
+    // the type itself. Nothing downstream could check an annotation
+    // because nothing downstream ever saw one, and the self-hosted
+    // compiler accepted `let a: Int = true` in every shape while the
+    // real compiler rejected all of them. See DESIGN.md's "The
+    // annotation the parser threw away".
+    SLet(Bool, PPattern, Option[Ty], PExpr),
     SAssign(String, PExpr),
     SExpr(PExpr),
 }
@@ -400,7 +408,7 @@ let desugar_contracts (params: Array[ParamNode]) (requires: Array[ContractClause
         if Array.is_empty(ensures) {
             EBlock(PBlock { stmts: require_stmts, tail: Some(raw_body), starts: synthetic_starts(require_stmts.len() + 1, 0, []) })
         } else {
-            let with_let = require_stmts.push(SLet(false, PIdent("result", 0 - 1), raw_body));
+            let with_let = require_stmts.push(SLet(false, PIdent("result", 0 - 1), None, raw_body));
             let ensure_stmts = Array.map(ensures, |c| SExpr(contract_check_call("__contract_ensure", "postcondition failed", c)));
             EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result", 0 - 1)), starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []) })
         }
@@ -1314,10 +1322,15 @@ let parse_let_stmt (tokens: Array[lexer.Token]) (pos: Int): LetStmtResult = {
     let mut_b = bump_if(tokens, pos + 1, TokMut);
     let pat_r = parse_pattern(tokens, mut_b.next_pos);
     let ty_b = bump_if(tokens, pat_r.next_pos, TokColon);
-    let after_ty = if ty_b.matched { let t = parse_type(tokens, ty_b.next_pos); t.next_pos } else { ty_b.next_pos };
+    // Both halves of the parsed type are kept. This used to read
+    // `let t = parse_type(..); t.next_pos` -- taking the position so it
+    // could skip the annotation, and discarding the annotation.
+    let ann = if ty_b.matched { Some(parse_type(tokens, ty_b.next_pos)) } else { None };
+    let after_ty = match ann { Some(t) => t.next_pos, None => ty_b.next_pos };
     let eq_pos = expect(tokens, after_ty, TokEq, "'='");
     let value_r = parse_expr(tokens, eq_pos);
-    LetStmtResult { value: SLet(mut_b.matched, pat_r.value, value_r.value), next_pos: value_r.next_pos }
+    let ann_ty = match ann { Some(t) => Some(t.value), None => None };
+    LetStmtResult { value: SLet(mut_b.matched, pat_r.value, ann_ty, value_r.value), next_pos: value_r.next_pos }
 }
 
 // --- Rendering (must match crates/plum-syntax/src/render.rs's
@@ -1402,8 +1415,11 @@ let render_block (b: PBlock): String = {
     sexpr(Array.concat(["block"], parts))
 }
 
+// The annotation is deliberately NOT rendered: this output has to match
+// `crates/plum-syntax/src/render.rs` byte for byte across 98 corpus
+// fixtures, and the real renderer does not print it either.
 let render_stmt (s: PStmt): String = match s {
-    SLet(is_mut, pattern, value) => {
+    SLet(is_mut, pattern, _, value) => {
         let mut_marker = if is_mut { "mut " } else { "" };
         "(let ".concat(mut_marker).concat(render_pattern(pattern)).concat(" ").concat(render_expr(value)).concat(")")
     },

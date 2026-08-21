@@ -186,7 +186,11 @@ pub struct FnSig { name: String, module: String, generics: Array[String], params
 // same reason `CgProgram` carries the current substitution: it would
 // otherwise have to be added to thirty signatures that do not otherwise
 // care.
-pub struct Program2 { sigs: Array[FnSig], globals: Array[GlobalDef], ctx: TyContext, current: String }
+// `generics` is the ENCLOSING function's type parameters, carried so a
+// `let x: T = ..` inside a generic function resolves `T` to `ITParam`
+// rather than failing as an unknown type. Everything else here was
+// already threaded through every inference call; this rides along.
+pub struct Program2 { sigs: Array[FnSig], globals: Array[GlobalDef], ctx: TyContext, current: String, generics: Array[String] }
 
 pub struct GlobalDef { module: String, def: parser.LetDefNode }
 
@@ -206,7 +210,7 @@ let extern_sigs (ctx: TyContext) (fns: Array[parser.ExternFnNode]) (i: Int) (acc
     }
 
 let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (sigs: Array[FnSig]) (globals: Array[GlobalDef]): Program2 =
-    if i >= items.len() { Program2 { sigs: sigs, globals: globals, ctx: ctx, current: "" } }
+    if i >= items.len() { Program2 { sigs: sigs, globals: globals, ctx: ctx, current: "", generics: [] } }
     else {
         match items[i].kind {
             IKLet(def) => {
@@ -347,8 +351,12 @@ let check_fn (p2: Program2) (def: parser.LetDefNode) (module_name: String): Unit
 let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String): TFn = {
     // Swapped in for the duration of this body: every unqualified name
     // it mentions resolves in ITS module.
-    let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name };
-    let sig = Option.unwrap_or(find_sig(p2, def.name), FnSig { name: def.name, module: p2.current, generics: [], params: [], ret: ITUnit , is_extern: false });
+    // The signature is looked up against a provisional `Program2` so
+    // its generics can be put INTO the real one: `sig.generics` is what
+    // makes `let x: T = ..` resolve inside a generic function.
+    let p2x = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name, generics: [] };
+    let sig = Option.unwrap_or(find_sig(p2x, def.name), FnSig { name: def.name, module: module_name, generics: [], params: [], ret: ITUnit , is_extern: false });
+    let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name, generics: sig.generics };
     let env = bind_params(tyenv_empty(()), def.params, sig.params, 0);
     let r = infer_expr(p2, fresh_state_new(()), env, subst_empty(()), def.body);
     let body_ty = subst_apply(r.subst, r.ty);
@@ -398,7 +406,7 @@ pub let typed_globals (program: parser.ProgramNode): Array[TFn] = {
 let typed_globals_acc (p20: Program2) (globals: Array[GlobalDef]) (i: Int) (acc: Array[TFn]): Array[TFn] =
     if i >= globals.len() { acc }
     else {
-        let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: globals[i].module };
+        let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: globals[i].module, generics: [] };
         let r = infer_expr(p2, fresh_state_new(()), tyenv_empty(()), subst_empty(()), globals[i].def.body);
         typed_globals_acc(p20, globals, i + 1,
             acc.push(TFn { name: globals[i].def.name, module: globals[i].module, generics: [], params: [], ret: subst_apply(r.subst, r.ty), body: r.texpr, subst: r.subst }))
@@ -1438,14 +1446,55 @@ struct StmtsResult { env: TyEnv, subst: Subst, state: FreshState, tstmts: Array[
 let block_start_at (starts: Array[Int]) (i: Int): Int =
     if i >= starts.len() { 0 - 1 } else { starts[i] }
 
+// The result of checking a `let` statement's annotation: the type the
+// binding takes, and the substitution unifying it produced. A struct
+// rather than a tuple because both halves are read by name below.
+struct LetTy { ty: ITy, subst: Subst }
+
+// The bound NAME, for the error message. A destructuring pattern has no
+// single name, so it renders as its pattern -- which is what the reader
+// wrote either way.
+let render_pattern_name (p: parser.PPattern): String =
+    match p {
+        PIdent(name, _) => name,
+        _ => parser.render_pattern(p),
+    }
+
 let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (stmts: Array[parser.PStmt]) (i: Int) (tstmts: Array[TStmt]) (starts: Array[Int]): StmtsResult =
     if i >= stmts.len() { StmtsResult { env: env, subst: acc, state: state, tstmts: tstmts } }
     else {
         set_stmt_pos(block_start_at(starts, i));
         match stmts[i] {
-            SLet(_, pattern, value) => {
+            // The ANNOTATION, when there is one, is unified against the
+            // value's inferred type -- and the binding then takes the
+            // unified type, so `let xs: Array[Int] = []` pins the
+            // element type the way a reader expects.
+            //
+            // Until 2026-08-20 the annotation was discarded by the
+            // parser and this arm could not have checked it: the
+            // self-hosted compiler accepted `let a: Int = true`,
+            // `let a: String = 1 + 2` and `let a: Array[Int] = "s"`
+            // and compiled them, while the real compiler rejected
+            // every one. Nothing caught it because nothing in this
+            // repo -- corpus, examples, or the compiler's own 30,000
+            // lines -- annotates a local.
+            SLet(_, pattern, ann, value) => {
                 let r = infer_expr(p2, state, env, acc, value);
-                let br = bind_pattern_ty(p2, r.state, r.subst, env, pattern, subst_apply(r.subst, r.ty));
+                let vty = subst_apply(r.subst, r.ty);
+                let checked = match ann {
+                    None => LetTy { ty: vty, subst: r.subst },
+                    Some(t) => {
+                        let want = resolve_ann(p2.ctx, p2.generics, t);
+                        match unify(vty, want) {
+                            Ok(sub) => LetTy { ty: subst_apply(sub, want), subst: subst_compose(r.subst, sub) },
+                            Err(e) => {
+                                fail_tc("let ".concat(render_pattern_name(pattern)).concat(": declared type ").concat(render_ty(want)).concat(" doesn't match value type ").concat(render_ty(vty)).concat(" (").concat(e).concat(")"));
+                                LetTy { ty: want, subst: r.subst }
+                            },
+                        }
+                    },
+                };
+                let br = bind_pattern_ty(p2, r.state, checked.subst, env, pattern, checked.ty);
                 infer_stmts(p2, br.state, br.env, br.subst, stmts, i + 1, tstmts.push(TSLet(pattern, r.texpr)), starts)
             },
             SAssign(name, value) => {
