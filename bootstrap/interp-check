@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# Runs every `exec_corpus` fixture through the INTERPRETER and compares
+# it to the compiled answer checked into the tree.
+#
+# This is a THIRD oracle, and it catches a class the other two
+# structurally cannot:
+#
+#   * `example-sweep` compares the two BACKENDS against each other. When
+#     both backends are wrong in the same way, it sees nothing.
+#   * `corpus-check` compares against `expected.txt`, which was
+#     generated FROM a backend -- so it inherits that same wrong answer.
+#   * only the interpreter is an independent implementation of the
+#     semantics.
+#
+# It earned its place twice in two days. Integer division by zero was
+# undefined in both backends and printed a different wrong number in
+# each, while the interpreter had reported `division by zero` all along
+# -- which is where the fix's error message came from. And floats
+# printed `0.3` for `0.1 + 0.2` in BOTH backends, so the backend-vs-
+# backend sweep was blind to it; the interpreter printed
+# `0.30000000000000004` and was right.
+#
+# Neither comparison was run by anything. This is that comparison.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+plum=./target/release/plum
+[ -x "$plum" ] || { echo "missing $plum -- cargo build --release" >&2; exit 1; }
+
+# Fixtures the interpreter cannot run AT ALL, with the reason. Annotated
+# rather than silently skipped -- a skipped fixture that starts failing
+# for a NEW reason should still be noticed.
+declare -A cannot=(
+    [ffi]="the interpreter cannot call extern C functions"
+)
+
+ok=0; fail=0; skip=0
+
+for dir in bootstrap/exec_corpus/*/; do
+    name="$(basename "$dir")"
+    [ -f "$dir/main.plum" ] || continue
+    [ -f "$dir/expected.txt" ] || { printf 'FAIL  %-24s no expected.txt\n' "$name"; fail=$((fail+1)); continue; }
+
+    out="$(timeout 120 "$plum" run "$dir" 2>&1)"
+    rc=$?
+
+    if [ -n "${cannot[$name]:-}" ]; then
+        printf 'SKIP  %-24s %s\n' "$name" "${cannot[$name]}"
+        skip=$((skip+1))
+        continue
+    fi
+
+    if [ $rc -ne 0 ]; then
+        printf 'FAIL  %-24s interpreter exited %s: %s\n' "$name" "$rc" "$(printf '%s' "$out" | head -1 | cut -c1-60)"
+        fail=$((fail+1))
+        continue
+    fi
+
+    # `plum run` echoes `main`'s own return value as a trailing line
+    # (always `Unit`), which a compiled binary does not print.
+    act="$(printf '%s' "$out" | sed '$d')"
+
+    if [ "$act" == "$(cat "$dir/expected.txt")" ]; then
+        printf 'OK    %-24s\n' "$name"
+        ok=$((ok+1))
+    else
+        printf 'FAIL  %-24s interpreter disagrees with the compiled answer\n' "$name"
+        diff <(cat "$dir/expected.txt") <(printf '%s\n' "$act") | head -n 8 | sed 's/^/        /'
+        fail=$((fail+1))
+    fi
+done
+
+echo
+if [ $fail -eq 0 ]; then
+    echo "interp-check: $ok fixtures agree with the interpreter, $skip skipped"
+else
+    echo "interp-check: $ok agree, $fail DISAGREE, $skip skipped"
+fi
+exit $((fail > 0))

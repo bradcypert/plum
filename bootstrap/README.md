@@ -102,16 +102,34 @@ artifact. It is no longer where new language work happens.
 | `self-sufficiency` | it can build itself with no Rust compiler, from any directory |
 | `check-seed` | the checked-in seed still bootstraps to today's compiler |
 | `example-sweep` | every `examples/` project agrees with the Rust compiler |
-| `corpus-check` | 49 corpus fixtures compile, run, print the right thing, abort when they should, and leak nothing |
+| `corpus-check` | every corpus fixture compiles, runs, prints the right thing, aborts when it should, and leaks nothing |
+| `interp-check` | the INTERPRETER agrees with the compiled answer on every fixture |
+
+No counts in this table on purpose: a number here is a number to keep
+current by remembering to, and this project has been wrong about
+exactly that kind of number more than once. The scripts print their
+own.
 | `test-smoke` | `plum test` really runs tests, and both compilers agree |
 | `lsp-smoke` | the language server answers a real session |
 | `check-shims` | the embedded C shims match `native_stdlib/` |
 
-`corpus-check` and `example-sweep` divide differently than the names
-suggest. `example-sweep` derives its reference output by RUNNING the
-Rust compiler, so it is the differential test and it needs `crates/`.
-`corpus-check` compares against answers checked into the tree, so it
-needs no second compiler and will outlive the first one.
+These three divide differently than the names suggest, and the
+difference is what each can SEE:
+
+- `example-sweep` compares the two BACKENDS. When both are wrong the
+  same way, it sees nothing -- which is exactly what happened with
+  float formatting.
+- `corpus-check` compares against `expected.txt`, generated FROM a
+  backend, so it inherits any answer a backend got wrong. What it
+  catches is a REGRESSION away from a known-good answer, plus the
+  things no comparison covers: leaks, aborts, checker agreement.
+- `interp-check` compares against the INTERPRETER, the one independent
+  implementation of the semantics. It found division-by-zero and float
+  precision in two days, before it existed as a script.
+
+Only `example-sweep` needs `crates/`; the other two keep working after
+it is gone, and `interp-check` is the reason retiring the interpreter
+along with it would cost something real.
 
 ## `self_host/`
 

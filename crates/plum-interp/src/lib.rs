@@ -1137,6 +1137,72 @@ impl Interpreter {
 
     /// `.to_string()`'s actual rendering logic, factored out so it can
     /// recurse into struct/enum fields and array elements (each nested
+/// A `Float`, rendered exactly as a COMPILED Plum program renders it.
+///
+/// This used to be `f64::to_string()`, which is Rust's shortest-round-
+/// trip `Display`. The backends used C's `%g` family. The two disagreed
+/// in two separate ways, and only one of them was the backends' fault:
+///
+///   * PRECISION — `0.1 + 0.2` printed `0.30000000000000004` here and
+///     `0.3` compiled, because the backends stopped at 15 significant
+///     digits. That was the backends being wrong, and was fixed in them
+///     (see `plum-codegen`'s `@plum_fmt_double`).
+///   * NOTATION — `0.000001` prints `0.000001` under Rust's `Display`
+///     and `1e-06` under `%g`; 10^100 prints as 101 digits here and
+///     `1e+100` there; NaN is `NaN` here and `nan` there. Rust's
+///     `Display` for `f64` NEVER uses exponent notation. That is the
+///     outlier: Python and Go both print `1e+100`, `1e-06` and `nan`.
+///
+/// So this side moved, and it moved by CALLING THE SAME C FUNCTIONS the
+/// backends emit rather than by reimplementing `%g`'s rules in Rust.
+/// Two implementations of one format would be a second copy to keep in
+/// sync, and this repository has already paid for that mistake twice
+/// (see DESIGN.md's "One prelude, not two"). Here the two agree by
+/// construction.
+///
+/// The algorithm is `@plum_fmt_double`'s: try 15 significant digits,
+/// then 16, then 17, and stop at the first whose `strtod` round trip
+/// returns the original value. 17 always suffices for an IEEE double.
+/// NaN never compares equal to itself, so it falls through to `%.17g`
+/// and prints `nan` — the same output, by the same path, as compiled.
+fn format_float(f: f64) -> String {
+    // NaN's SIGN BIT is not meaningful and is not consistent across the
+    // three engines: `0.0 / 0.0` evaluated at runtime on x86 yields a
+    // NaN with the sign set (glibc prints `-nan`), while the same
+    // expression constant-folded by LLVM yields a positive one (`nan`).
+    // Normalized here and in both runtimes so the three agree on a
+    // value whose sign carries no information.
+    if f.is_nan() {
+        return "nan".to_string();
+    }
+    const FORMATS: [&[u8]; 3] = [b"%.15g\0", b"%.16g\0", b"%.17g\0"];
+    let mut buf = [0u8; 64];
+    for (i, fmt) in FORMATS.iter().enumerate() {
+        // SAFETY: `buf` is 64 bytes and `snprintf` is given that bound;
+        // every format string is nul-terminated above; `strtod` reads
+        // the nul-terminated bytes `snprintf` just wrote.
+        let n = unsafe {
+            libc::snprintf(
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+                fmt.as_ptr() as *const libc::c_char,
+                f,
+            )
+        };
+        let len = (n.max(0) as usize).min(buf.len() - 1);
+        let last = i == FORMATS.len() - 1;
+        if !last {
+            let back =
+                unsafe { libc::strtod(buf.as_ptr() as *const libc::c_char, std::ptr::null_mut()) };
+            if back != f {
+                continue;
+            }
+        }
+        return String::from_utf8_lossy(&buf[..len]).into_owned();
+    }
+    unreachable!("the %.17g attempt always returns")
+}
+
     /// value re-enters this same function). `quote_str` distinguishes
     /// the two contexts a `Str` can be rendered in: a BARE top-level
     /// `"hi".to_string()` stays raw/unquoted (unchanged, existing
@@ -1147,7 +1213,7 @@ impl Interpreter {
     fn render_value(&self, v: &Value, quote_str: bool) -> Result<String, String> {
         match v {
             Value::Int(n) => Ok(n.to_string()),
-            Value::Float(f) => Ok(f.to_string()),
+            Value::Float(f) => Ok(Self::format_float(*f)),
             Value::Bool(b) => Ok(b.to_string()),
             // Matches native codegen's own `CgType::Unit` arm exactly
             // (`plum-codegen`'s top-level `Expr::ToString` codegen and

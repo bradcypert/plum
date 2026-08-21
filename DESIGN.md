@@ -13037,3 +13037,72 @@ language. The runtime's own hand-written IR is unaffected, which
 matters: `@plum_str_hash_raw` is FNV-1a and RELIES on wrapping
 multiplication. It is not Plum source, so it never passes through
 `codegen_binop` and keeps wrapping, correctly.
+
+## `bootstrap/interp-check`, and what it can see (2026-08-21)
+
+A fourth harness: every `exec_corpus` fixture, run through the
+INTERPRETER, compared against the compiled answer checked into the
+tree. 33 agree, 1 skipped (`ffi` — the interpreter cannot call extern C
+functions at all).
+
+It exists because the two comparisons that already ran are both blind
+to a specific and recurring failure: BOTH backends being wrong the same
+way.
+
+- `example-sweep` compares the two backends against each other.
+- `corpus-check` compares against `expected.txt`, which was generated
+  from a backend, so it inherits whatever that backend got wrong.
+- The interpreter is the only independent implementation of the
+  semantics in the repository.
+
+The comparison earned its place twice in two days before anything ran
+it as a script. Integer division by zero was undefined in both backends
+and printed a different wrong number in each, while the interpreter had
+reported `division by zero` all along — which is where the fix's
+message came from. Float formatting printed `0.3` for `0.1 + 0.2` in
+BOTH backends, so backend-versus-backend saw nothing; the interpreter
+printed `0.30000000000000004` and was right.
+
+This is also the argument against retiring `plum-interp` along with the
+rest of `crates/`. A second implementation of the semantics is worth
+more than a second implementation of the compiler.
+
+### Float notation: the interpreter moved
+
+Rust's `Display` for `f64` never uses exponent notation — it printed
+10^100 as 101 digits and `0.000001` in full, where the backends printed
+`1e+100` and `1e-06`. After the precision fix the backends matched
+Python and Go exactly, so the interpreter was the outlier and it is the
+side that changed.
+
+It changed by CALLING the same C functions the backends emit
+(`snprintf` with `%.15g`/`%.16g`/`%.17g`, `strtod` to check the round
+trip) rather than by reimplementing `%g`'s rules in Rust. Two
+implementations of one format would be a second copy to keep in sync,
+and this repository has already paid for that twice — see "One prelude,
+not two".
+
+NaN was normalized in all three. Its sign bit carries no information
+and did not agree: `0.0 / 0.0` computed at runtime on x86 sets it and
+glibc prints `-nan`, while the same expression constant-folded by LLVM
+does not.
+
+### A parser bug that exact printing exposed
+
+The self-hosted prelude's `String.parse_float` accumulated the fraction
+digit by digit, adding `d * scale` with `scale` starting at `0.1` and
+divided by ten each step. `0.1` is not representable in binary, so
+every step compounded the error, and `0.000001` parsed as
+`1.0000000000000002e-06`.
+
+Invisible until floats started printing every digit that matters:
+`%.15g` rendered the wrong answer and the right one identically. It now
+accumulates an integer and divides once, which is correctly rounded.
+
+Two details worth recording. Accumulation stops past ~18 digits — a
+double cannot use them, and since `*` became checked the day before,
+`acc * 10` would otherwise OVERFLOW AND ABORT on a long literal. And
+the fix took TWO rebuild generations to reach the compiler's own lexer:
+a compiler carries the prelude it was BUILT with, so generation one
+emits the fixed parser without using it.
+

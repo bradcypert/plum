@@ -1,0 +1,41 @@
+// Float NOTATION -- where the digits stop being the question and the
+// layout starts. Every line here printed differently under `plum run`
+// than under a compiled binary before 2026-08-21.
+//
+// The interpreter used Rust's `Display` for f64, which NEVER uses
+// exponent notation: it printed 10^100 as 101 digits and `0.000001` in
+// full. The backends used C's `%g`, which switches to exponent form
+// outside a middle band. The backends were the ones matching
+// convention -- Python and Go both print `1e+100` and `1e-06` -- so the
+// interpreter moved, and it moved by calling the SAME C functions the
+// backends emit rather than by reimplementing `%g` in Rust. One
+// implementation, not two to keep in step.
+//
+// `up()` builds the magnitudes by multiplication so no literal has to
+// carry them, which also keeps this fixture inside the exponent
+// literal syntax the lexer does NOT have (`1.0e10` does not parse in
+// either compiler -- a real, separate gap).
+
+let z (): Float = 0.0
+let ten (): Float = 10.0
+let up (b: Float) (n: Int): Float = if n <= 0 { 1.0 } else { b * up(b, n - 1) }
+
+let main (): Unit = {
+    // Small enough to leave positional notation behind.
+    println((0.000001).to_string());
+    // Large enough to leave it at the other end.
+    println(up(ten(), 20).to_string());
+    // The band in between stays positional.
+    println(up(ten(), 5).to_string());
+    println((0.0001).to_string());
+    // Infinities are already agreed, and are here so a change to the
+    // special-value path cannot pass unnoticed.
+    println((1.0 / z()).to_string());
+    println((0.0 - 1.0 / z()).to_string());
+    // NaN. Its SIGN BIT is not meaningful and differed by engine: a
+    // runtime `0.0 / 0.0` on x86 sets it (glibc prints `-nan`) while
+    // the constant-folded one does not. All three normalize it now.
+    println((z() / z()).to_string());
+    // Through the aggregate renderer as well as the top-level one.
+    println([0.000001, up(ten(), 20)].to_string())
+}

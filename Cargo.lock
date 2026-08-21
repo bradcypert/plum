@@ -425,6 +425,7 @@ dependencies = [
 name = "plum-interp"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "libffi",
  "libloading",
  "plum-ir",

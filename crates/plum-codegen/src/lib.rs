@@ -1212,7 +1212,9 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     out.push_str("@plum_tostr_fmt_int = private constant [5 x i8] c\"%lld\\00\"\n");
     out.push_str("@plum_fmt_g15 = private constant [6 x i8] c\"%.15g\\00\"\n");
     out.push_str("@plum_fmt_g16 = private constant [6 x i8] c\"%.16g\\00\"\n");
-    out.push_str("@plum_fmt_g17 = private constant [6 x i8] c\"%.17g\\00\"\n\n");
+    out.push_str("@plum_fmt_g17 = private constant [6 x i8] c\"%.17g\\00\"\n");
+    out.push_str("@plum_nan_text = private constant [4 x i8] c\"nan\\00\"\n");
+    out.push_str("@plum_fmt_s = private constant [3 x i8] c\"%s\\00\"\n\n");
 
     // The SHORTEST decimal rendering that reads back as the same
     // double: try 15 significant digits, then 16, then 17, and stop at
@@ -1230,12 +1232,23 @@ fn emit_runtime(tag_fields: &TagFields, tag_ids: &HashMap<String, i64>, struct_f
     // shortest-round-trip), so this closes a divergence rather than
     // inventing a rule.
     //
-    // NaN costs three `snprintf` calls instead of one, since `nan`
-    // never compares equal to itself and so never satisfies the round
-    // trip. The output is identical either way.
+    // NaN is handled FIRST, and not because of the round trip (`nan`
+    // never compares equal to itself, so it would fall through to
+    // `%.17g` and print correctly anyway). Its SIGN BIT is the problem:
+    // `0.0 / 0.0` computed at runtime on x86 yields a NaN with the sign
+    // set, which glibc prints as `-nan`, while the same expression
+    // constant-folded by LLVM yields a positive one. The sign of a NaN
+    // carries no information, so all three engines normalize it.
     out.push_str(
         "define i64 @plum_fmt_double(double %f, ptr %buf) {\n\
 entry:\n\
+  %isnan = fcmp uno double %f, %f\n\
+  br i1 %isnan, label %nanout, label %num\n\
+nanout:\n\
+  %nn = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 64, ptr @plum_fmt_s, ptr @plum_nan_text)\n\
+  %nr = sext i32 %nn to i64\n\
+  ret i64 %nr\n\
+num:\n\
   %n15 = call i32 (ptr, i64, ptr, ...) @snprintf(ptr %buf, i64 64, ptr @plum_fmt_g15, double %f)\n\
   %b15 = call double @strtod(ptr %buf, ptr null)\n\
   %ok15 = fcmp oeq double %b15, %f\n\
