@@ -67,6 +67,7 @@ declare -A link_flags=(
 
 ok=0
 fail=0
+skipped_link=0
 emit_only=0
 
 for dir in examples/*/; do
@@ -112,12 +113,40 @@ for dir in examples/*/; do
     # `--link-lib raylib` is `-lraylib`, and `--link-c foo.c` is just
     # the path.
     clang_flags="$(printf '%s %s' "${link_flags[$name]:-}" "$native_flag" | sed 's/--link-lib */-l/g; s/--link-c *//g')"
+
+    # An example may reach a SYSTEM library through its own `native/`
+    # shim -- `asteroids` includes `raylib.h`. Those headers are not
+    # installed everywhere, and notably not on a clean CI runner: this
+    # harness passed locally and failed there on exactly that, because
+    # raylib happened to be installed on the developer's machine.
+    #
+    # The IR is still emitted and still checked, which is the COMPILER
+    # coverage. Only the final link is skipped, and the reason is
+    # printed rather than the example quietly disappearing.
+    headers_missing=""
+    if [ -d "$dir/native" ]; then
+        for c in "$dir"/native/*.c; do
+            [ -e "$c" ] || continue
+            if ! clang -fsyntax-only "$c" > "$work/$name.hdr" 2>&1; then
+                headers_missing="$(grep -oE "'[^']+\.h' file not found" "$work/$name.hdr" | head -1)"
+                [ -n "$headers_missing" ] || headers_missing="$(head -1 "$work/$name.hdr")"
+                break
+            fi
+        done
+    fi
+
     link_self() {
         clang -O2 -Wno-override-module "$work/$name.ll" \
             native_stdlib/dir_shim.c native_stdlib/io_shim.c \
             native_stdlib/process_shim.c native_stdlib/thread_shim.c \
             $clang_flags -lm -o "$work/$name.bin"
     }
+
+    if [ -n "$headers_missing" ]; then
+        printf 'EMIT  %-24s IR ok; link skipped (%s)\n' "$name" "$headers_missing"
+        skipped_link=$((skipped_link + 1))
+        continue
+    fi
 
     if [ -n "${no_run[$name]:-}" ]; then
         if ! link_self > "$work/$name.link_err" 2>&1; then
@@ -157,5 +186,9 @@ for dir in examples/*/; do
 done
 
 echo
-echo "examples: $ok matching, $emit_only emit-only, $fail failing"
+if [ "$skipped_link" -gt 0 ]; then
+    echo "examples: $ok matching, $emit_only emit-only, $skipped_link emitted-but-not-linked, $fail failing"
+else
+    echo "examples: $ok matching, $emit_only emit-only, $fail failing"
+fi
 [ "$fail" -eq 0 ]

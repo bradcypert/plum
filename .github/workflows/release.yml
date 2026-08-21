@@ -40,6 +40,20 @@ jobs:
           sudo apt-get install -y clang
           clang --version
 
+      # BEST EFFORT, and it must never fail the build. Only
+      # `examples/asteroids` needs raylib, through its own native shim.
+      # With the headers present the example is LINKED as well as
+      # emitted; without them `bootstrap/example-sweep` reports it as
+      # emitted-but-not-linked and carries on.
+      #
+      # This is here because the first release attempt died on exactly
+      # this: raylib happened to be installed on the developer's
+      # machine, so the sweep passed locally and failed on a clean
+      # runner.
+      - name: raylib, if it is available
+        continue-on-error: true
+        run: sudo apt-get install -y libraylib-dev || echo "raylib not available; asteroids will be emit-only"
+
       # From the SEED, not from a compiler built some other way: this
       # is the same path a user takes, so the released binary is the
       # one the documented instructions produce.
