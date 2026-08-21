@@ -1,0 +1,49 @@
+// Every string operation, called BOTH ways, with the two forms
+// asserted equal.
+//
+// Until 2026-08-21 which form you could use depended on how the
+// operation happened to be implemented. Compiler primitives lowered
+// straight to IR (`len`, `split`, `contains`, `starts_with`,
+// `ends_with`, `replace`, `to_upper`, `to_lower`, `trim`) had only a
+// METHOD form; ordinary prelude functions (`slice`, `index_of`,
+// `lines`, `repeat`, `trim_start`, `trim_end`) had only a NAMESPACED
+// one. That distinction is invisible from outside, and it made
+// neighbours behave oppositely: `"x".trim()` worked and
+// `String.trim("x")` did not, while `String.trim_start("x")` worked
+// and `"x".trim_start()` did not.
+//
+// The rule is now: `String.f(s, ..)` always works, and some operations
+// also have method sugar. The pairs below are what keeps the two forms
+// from drifting apart -- a wrapper that got the argument ORDER wrong
+// would still compile and still return a String.
+
+let eq (a: String) (b: String): String = if a == b { "ok" } else { a.concat(" != ").concat(b) }
+
+let s (): String = "  Hello, World  "
+
+let main (): Unit = {
+    println(eq(String.len("abc").to_string(), "abc".len().to_string()));
+    println(eq(String.split("a,b", ",").to_string(), "a,b".split(",").to_string()));
+    println(eq(String.contains("abc", "b").to_string(), "abc".contains("b").to_string()));
+    println(eq(String.starts_with("abc", "a").to_string(), "abc".starts_with("a").to_string()));
+    println(eq(String.ends_with("abc", "c").to_string(), "abc".ends_with("c").to_string()));
+    println(eq(String.replace("aXb", "X", "-"), "aXb".replace("X", "-")));
+    println(eq(String.to_upper("ab"), "ab".to_upper()));
+    println(eq(String.to_lower("AB"), "AB".to_lower()));
+    println(eq(String.trim(s()), s().trim()));
+
+    // Argument order matters and is easy to get backwards in a
+    // wrapper, so the results are printed too, not just compared.
+    println(String.replace("one two one", "one", "1"));
+    println(String.split("a::b::c", "::").to_string());
+
+    // `String.join` had NEITHER form before: there was no way to join
+    // an array of strings with a separator at all.
+    println(String.join(["a", "b", "c"], "-"));
+    println("[".concat(String.join([], "-")).concat("]"));
+    println(String.join(["solo"], "-"));
+    println(String.join(["a", "b"], ""));
+
+    // Round trip against its inverse.
+    println(String.join(String.split("x,y,z", ","), ","))
+}

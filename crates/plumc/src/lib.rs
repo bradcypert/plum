@@ -1228,6 +1228,39 @@ let String.parse_int (s: String): Result[Int, String] = {
     else { string_parse_int_digits_acc(chars, 0, 0, false) }
 }
 
+// --- Namespaced forms of the string METHODS ---
+//
+// `.len()`, `.split()`, `.replace()` and friends are compiler
+// PRIMITIVES lowered straight to IR, so they existed only as methods,
+// while `String.slice`/`index_of`/`lines`/`repeat`/`trim_start`/
+// `trim_end` are ordinary prelude functions and so existed only
+// namespaced. That split tracks how each one happens to be
+// implemented, which is invisible from outside and produced a
+// confusing surface: `\"x\".trim()` worked and `String.trim(\"x\")` did
+// not, while `String.trim_start(\"x\")` worked and `\"x\".trim_start()`
+// did not.
+//
+// The rule now: `String.f(s, ..)` always works. Some also have method
+// sugar. Unused wrappers are dropped by dead-function elimination.
+let String.len (s: String): Int = s.len()
+let String.split (s: String) (sep: String): Array[String] = s.split(sep)
+let String.contains (s: String) (needle: String): Bool = s.contains(needle)
+let String.starts_with (s: String) (prefix: String): Bool = s.starts_with(prefix)
+let String.ends_with (s: String) (suffix: String): Bool = s.ends_with(suffix)
+let String.replace (s: String) (from: String) (to: String): String = s.replace(from, to)
+let String.to_upper (s: String): String = s.to_upper()
+let String.to_lower (s: String): String = s.to_lower()
+let String.trim (s: String): String = s.trim()
+
+// The one string operation that had NEITHER form: there was no way to
+// join an array of strings with a separator at all.
+let plum_join_acc (parts: Array[String]) (sep: String) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= parts.len() { acc }
+    else if i == 0 { plum_join_acc(parts, sep, 1, acc.push(parts[0])) }
+    else { plum_join_acc(parts, sep, i + 1, acc.push(sep).push(parts[i])) }
+
+let String.join (parts: Array[String]) (sep: String): String = String.concat_all(plum_join_acc(parts, sep, 0, []))
+
 let String.parse_float (s: String): Result[Float, String] = {
     let chars = chars_of(s);
     match parse_number(chars, 0) {

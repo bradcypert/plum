@@ -13246,3 +13246,51 @@ Pre-existing, documented, and unchanged by this port. It does mean
 that harness compares against a BACKEND's recorded answer — so
 `exec_corpus/string_methods` exercises non-ASCII that maps one-to-one
 instead, and says why at the top.
+
+## Which call form worked depended on the implementation (2026-08-21)
+
+Mapping the string surface in both call forms produced a table that is
+perfectly consistent and completely unlearnable:
+
+| | method | namespaced |
+|---|---|---|
+| `len` `split` `contains` `starts_with` `ends_with` `replace` `to_upper` `to_lower` `trim` | yes | **no** |
+| `slice` `index_of` `is_empty` `lines` `repeat` `trim_start` `trim_end` | **no** | yes |
+| `join` | **no** | **no** |
+
+The line is exactly primitive-versus-prelude: the first group is
+lowered straight to IR by the compiler, the second is ordinary Plum in
+the prelude. That is a real explanation and a useless one from outside,
+because nothing in the source tells a caller which group an operation
+is in. The result put neighbours in opposition:
+
+```plum
+"x".trim()            // works
+String.trim("x")      // error
+String.trim_start("x")  // works
+"x".trim_start()        // error
+```
+
+The rule now: **`String.f(s, ..)` always works**, and some operations
+also have method sugar. Nine one-line prelude wrappers in each
+compiler, dropped by dead-function elimination when unused.
+
+`String.join` had NEITHER form — there was no way to join an array of
+strings with a separator at all. Added to both.
+
+### A parity divergence the other way
+
+`String.contains` already existed in the self-hosted prelude and not
+the real one, so the self-hosted compiler ACCEPTED a program the real
+one rejected. Every previous parity gap this week ran the other
+direction. Adding the full namespaced set to both preludes closes it.
+
+### What the fixture actually defends
+
+`exec_corpus/string_namespaced` calls every operation both ways and
+compares the two results, rather than just checking each one runs. A
+wrapper with its arguments in the wrong order still compiles and still
+returns a `String` — `String.replace(needle, haystack, to)` would look
+fine in any test that only asserted the call succeeded. The paired
+comparison is what catches it, and the argument-order-sensitive cases
+print their results too.
