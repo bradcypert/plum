@@ -352,7 +352,16 @@ let lsp_defs (path: String): Array[lsp.Def] =
 let lsp_reply (id: Option[JsonValue]) (result: JsonValue): Unit =
     match id { Some(i) => lsp_send(lsp.response(i, result)), None => () }
 
-let usage (): Unit = println("usage: self_host (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] | test <project-dir> | new <name> | lsp")
+// THE version string, and the only one. `bootstrap/check-version`
+// fails if a release tag disagrees with it, so a `v0.0.2` tag can
+// never ship a binary that says 0.0.1 -- the same class of drift this
+// project has been closing everywhere else.
+pub let plum_version (): String = "0.0.1"
+
+let usage (): Unit = {
+    println("plum ".concat(plum_version()));
+    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] | test <project-dir> | new <name> | version | lsp")
+}
 
 // Every top-level `let` whose name's LAST segment starts with `test_`.
 // The last-segment rule is what makes a module-qualified
@@ -824,7 +833,13 @@ let mkdir_ok (name: String): Bool =
 
 let main (): Unit = {
     let argv = args();
-    if argv.len() >= 1 && argv[0] == "lsp" {
+    // Before the `argv.len() < 2` guard below, alongside `lsp`: both
+    // are complete with no second argument. Placed after it at first,
+    // where it was unreachable -- `version` fell into the usage branch
+    // instead.
+    if argv.len() >= 1 && (argv[0] == "version" || argv[0] == "--version" || argv[0] == "-V") {
+        println("plum ".concat(plum_version()));
+    } else if argv.len() >= 1 && argv[0] == "lsp" {
         // No file argument: the server talks over stdin/stdout.
         lsp_serve(())
     } else if argv.len() < 2 {

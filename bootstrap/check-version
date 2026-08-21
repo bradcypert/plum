@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Proves a release TAG and the version the binary REPORTS are the same
+# thing.
+#
+# There is one version string, `plum_version` in
+# `bootstrap/self_host/main.plum`. Everything else derives from it: the
+# `version` command, the usage banner, and the release artifact's name.
+# The one thing that cannot derive from it is the git tag, because a
+# human types that -- so this compares them.
+#
+# Without it, `git tag v0.0.2` on a tree whose source still says 0.0.1
+# publishes a release whose binary reports the wrong version. That is
+# the same drift this project has spent its time closing everywhere
+# else: two copies of one fact, kept in step by remembering to.
+#
+#   bootstrap/check-version            # tag = $GITHUB_REF_NAME, or HEAD's tag
+#   bootstrap/check-version v0.0.1     # explicit
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+declared="$(grep -oE 'pub let plum_version \(\): String = "[^"]+"' bootstrap/self_host/main.plum | grep -oE '"[^"]+"' | tr -d '"')"
+[ -n "$declared" ] || { echo "could not read plum_version from bootstrap/self_host/main.plum" >&2; exit 1; }
+
+# What the built compiler actually prints, which is the claim that
+# reaches a user. Checking the source alone would miss a stale binary.
+reported="$(./sh version 2>/dev/null | awk '{print $2}')"
+if [ "$reported" != "$declared" ]; then
+    echo "MISMATCH: source says $declared, the built compiler reports ${reported:-<nothing>}" >&2
+    echo "the binary is stale -- rebuild with ./sh build bootstrap/self_host -o sh.real" >&2
+    exit 1
+fi
+
+tag="${1:-${GITHUB_REF_NAME:-$(git describe --exact-match --tags HEAD 2>/dev/null || true)}}"
+if [ -z "$tag" ]; then
+    echo "version ok: $declared (no tag to compare -- HEAD is not tagged)"
+    exit 0
+fi
+
+# `v0.0.1` and `0.0.1` are both accepted spellings of the same tag.
+if [ "${tag#v}" != "$declared" ]; then
+    echo "MISMATCH: tag $tag but plum_version is $declared" >&2
+    echo "edit plum_version in bootstrap/self_host/main.plum, rebuild, and re-tag" >&2
+    exit 1
+fi
+
+echo "version ok: $declared, tag $tag, and the built compiler all agree"

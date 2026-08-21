@@ -13827,3 +13827,79 @@ any other reason, one of the two comparisons fails.
 
 `exec_corpus/string_case` is that fixture, and it deliberately contains
 the character the old approach avoided.
+
+## Cutting 0.0.1 (2026-08-21)
+
+A `version` command, a version-drift guard, two GitHub Actions
+workflows, and release notes.
+
+### One version string
+
+`plum_version` in `bootstrap/self_host/main.plum` is the only place a
+version number is written. The `version` command, the usage banner and
+the release artifact's name all derive from it.
+
+The one thing that cannot derive from it is the git TAG, because a
+human types that. `bootstrap/check-version` compares them, and also
+compares against what the BUILT compiler reports — checking the source
+alone would pass on a stale binary. Verified by running it against a
+deliberately wrong tag and confirming it fails.
+
+Without it, `git tag v0.0.2` on a tree that still says 0.0.1 publishes
+a release whose binary lies about itself: two copies of one fact kept
+in step by remembering to, which is the failure this project has spent
+its time closing everywhere else.
+
+### The guard wrapper would have broken CI on the first run
+
+Every harness in `bootstrap/` invokes `./sh`, which wrapped the
+compiler in `systemd-run --user --scope` to cap memory. That needs a
+user session bus, which a CI runner does not have — so the entire test
+suite would have failed on a machine that is not a developer's desktop.
+
+`./sh` now probes for a working cgroup and falls back to a plain
+`timeout` when there isn't one. The timeout still applies; only the
+memory ceiling is lost, and a disposable runner is where that ceiling
+matters least. `SH_NO_CGROUP=1` forces the fallback, which is how the
+fallback path itself gets exercised.
+
+That memory ceiling exists because of a real 44.9GB OOM that killed a
+terminal, so weakening it anywhere was not done lightly — the point is
+that it was an absolute dependency where it should have been a
+preference.
+
+### What the workflows do
+
+`ci.yml` builds from the SEED with clang alone, which is the path a
+fresh clone takes, and then runs every harness. A second job builds the
+Rust front end and runs `interp-check` and the Rust suite — the only
+things `crates/` is still kept for.
+
+`release.yml` fires on a `v*` tag. It builds from the seed, checks the
+tag against the version, runs the full validation, packages a tarball
+with a checksum, then UNPACKS that tarball and uses the binary inside
+it to build and run a program before publishing. Trusting that the
+artifact matches what was tested is exactly the assumption worth not
+making.
+
+Linux x86_64 only. macOS and aarch64 are not built because they are
+not tested anywhere in this project, and a release job is the wrong
+place to discover whether they work.
+
+### Claims in the release notes were checked, and two were wrong
+
+Drafting them from memory produced two false statements, both caught by
+running the thing rather than recalling it:
+
+- "9 example projects match their recorded output" — 8 do. The ninth
+  opens a window and is built but not run.
+- "a named function cannot be used as a value through a module
+  qualifier in every position; the common ones work" — vague, and
+  nearly wrong. Exactly three fail: `Array.map`, `Array.filter` and
+  `Array.fold`, which have hand-written type inference rather than
+  ordinary signatures, so a bare reference finds nothing. Every other
+  standard-library function works.
+
+The packaging steps were run locally rather than trusted as YAML: a
+617KB tarball that unpacks, reports its version, and builds and runs a
+program from an unrelated directory.

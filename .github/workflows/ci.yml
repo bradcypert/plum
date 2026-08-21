@@ -1,0 +1,99 @@
+# Builds Plum the way a fresh clone does -- from the checked-in seed,
+# with clang and nothing else -- and then runs the harnesses that need
+# no Rust toolchain.
+#
+# The seed path is the point. `bootstrap/seed/plum.ll` is the
+# self-hosted compiler shipped as LLVM IR, because building a compiler
+# written in Plum requires a Plum compiler to start from. If that stops
+# working, nobody can build this project at all, and this is the job
+# that says so.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  bootstrap:
+    name: build from seed and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+
+      # Two builds, not one. The first proves the SEED still works; the
+      # second proves the compiler it produced can build today's source.
+      # `bootstrap/check-seed` asserts the stronger property -- that the
+      # result is byte-identical to the current compiler -- and runs
+      # below.
+      - name: seed -> compiler
+        run: |
+          ./bootstrap/from-seed -o sh.seed
+          ./sh.seed build bootstrap/self_host -o sh.real
+          ./sh version
+
+      - name: the seed is still current
+        run: ./bootstrap/check-seed
+
+      - name: the compiler reproduces itself
+        run: ./bootstrap/bootstrap-check
+
+      - name: it can build itself with no Rust, from any directory
+        run: ./bootstrap/self-sufficiency
+
+      - name: corpus
+        run: ./bootstrap/corpus-check
+
+      - name: examples
+        run: ./bootstrap/example-sweep
+
+      - name: embedded C shims match native_stdlib/
+        run: ./bootstrap/check-shims
+
+      - name: plum test really runs tests
+        run: ./bootstrap/test-smoke
+
+      - name: the language server answers a real session
+        run: ./bootstrap/lsp-smoke
+
+      - name: TCP and HTTP work in a compiled binary
+        run: ./bootstrap/net-smoke
+
+      - name: the version string is consistent
+        run: ./bootstrap/check-version
+
+  # The Rust front end and interpreter are kept ONLY as a test oracle
+  # (see DESIGN.md's "Deleting the Rust backend"). `interp-check` is
+  # what they are for: comparing every execution fixture against an
+  # independent implementation of the semantics.
+  oracle:
+    name: interpreter agrees with the compiler
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: build both
+        run: |
+          cargo build --workspace --release
+          ./bootstrap/from-seed -o sh.seed
+          ./sh.seed build bootstrap/self_host -o sh.real
+
+      - name: rust suite
+        run: cargo test --workspace --release
+
+      - name: interpreter vs compiled
+        run: ./bootstrap/interp-check

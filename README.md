@@ -19,9 +19,25 @@ See [DESIGN.md](DESIGN.md) for the full design history and rationale
 behind every decision below. This README is the practical, "how do I
 actually use it" companion.
 
+## Installing
+
+Grab a release from
+[Releases](https://github.com/bradcypert/plum/releases) — a single
+binary. You need **`clang`** on your `PATH`; the compiler shells out to
+it to assemble and link what it emits. Nothing else is required: the C
+shims Plum programs use are embedded in the compiler itself.
+
+```sh
+tar -xzf plum-0.0.1-x86_64-linux.tar.gz
+./plum-0.0.1-x86_64-linux/plum version
+```
+
+Linux x86_64 only so far. macOS and aarch64 are not published because
+they are not tested.
+
 ## Building the toolchain
 
-You need `clang` on your `PATH`. That is the whole list.
+Same requirement — `clang`, and nothing else.
 
 ```sh
 ./bootstrap/from-seed -o plum          # clang only, no Rust

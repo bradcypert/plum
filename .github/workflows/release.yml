@@ -1,0 +1,102 @@
+# Publishes a release when a `v*` tag is pushed.
+#
+# The artifact is a single binary. Plum's compiler shells out to
+# `clang` at build time -- that is how it assembles and links what it
+# emits -- so a user needs clang on their PATH, and needs nothing else.
+# The C shims are embedded in the compiler itself
+# (`bootstrap/gen-shims`), which is what makes a lone binary enough.
+#
+# Linux x86_64 only, deliberately. macOS and aarch64 are not built here
+# because they are not tested anywhere in this project, and a release
+# job is the wrong place to find out whether they work. Adding a
+# platform means adding a matrix entry AND getting the harnesses green
+# on it first.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "tag to build (must already exist)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+
+      # From the SEED, not from a compiler built some other way: this
+      # is the same path a user takes, so the released binary is the
+      # one the documented instructions produce.
+      - name: seed -> compiler -> compiler
+        run: |
+          ./bootstrap/from-seed -o sh.seed
+          ./sh.seed build bootstrap/self_host -o sh.real
+
+      # A tag that disagrees with the version the binary REPORTS would
+      # publish a release that lies about itself. Checked before
+      # anything is uploaded.
+      - name: tag and version agree
+        run: ./bootstrap/check-version "${{ github.event.inputs.tag || github.ref_name }}"
+
+      # The release is not the place to discover a broken compiler.
+      - name: validate
+        run: |
+          ./bootstrap/check-seed
+          ./bootstrap/bootstrap-check
+          ./bootstrap/self-sufficiency
+          ./bootstrap/corpus-check
+          ./bootstrap/example-sweep
+          ./bootstrap/test-smoke
+          ./bootstrap/net-smoke
+          ./bootstrap/lsp-smoke
+
+      - name: package
+        id: package
+        run: |
+          version="$(./sh version | awk '{print $2}')"
+          name="plum-${version}-x86_64-linux"
+          mkdir -p "dist/${name}"
+          cp sh.real "dist/${name}/plum"
+          cp README.md LICENSE "dist/${name}/" 2>/dev/null || cp README.md "dist/${name}/"
+          tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      # Unpack what was actually built and run it, rather than trusting
+      # that the thing in the tarball is the thing that was tested.
+      - name: the packaged binary works
+        run: |
+          tar -xzf "dist/${{ steps.package.outputs.name }}.tar.gz" -C /tmp
+          bin="/tmp/${{ steps.package.outputs.name }}/plum"
+          "$bin" version
+          mkdir -p /tmp/relcheck
+          printf 'let main (): Unit = println("released")\n' > /tmp/relcheck/main.plum
+          cd /tmp && "$bin" build /tmp/relcheck -o /tmp/relcheck/out
+          test "$(/tmp/relcheck/out)" = "released"
+
+      - name: publish
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: plum ${{ steps.package.outputs.version }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/${{ steps.package.outputs.name }}.tar.gz
+            dist/${{ steps.package.outputs.name }}.tar.gz.sha256
