@@ -102,7 +102,7 @@ artifact. It is no longer where new language work happens.
 | `self-sufficiency` | it can build itself with no Rust compiler, from any directory |
 | `check-seed` | the checked-in seed still bootstraps to today's compiler |
 | `example-sweep` | every `examples/` project agrees with the Rust compiler |
-| `corpus-check` | 44 corpus fixtures compile, run, print the right thing, and leak nothing |
+| `corpus-check` | 49 corpus fixtures compile, run, print the right thing, abort when they should, and leak nothing |
 | `test-smoke` | `plum test` really runs tests, and both compilers agree |
 | `lsp-smoke` | the language server answers a real session |
 | `check-shims` | the embedded C shims match `native_stdlib/` |

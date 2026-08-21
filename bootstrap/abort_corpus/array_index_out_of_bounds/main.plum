@@ -1,0 +1,11 @@
+// Not a new fix -- both backends have checked this for a long time.
+// It is here because it had no fixture either, and it is the case the
+// division guards were built to match: the same abort path, the same
+// shape of message, the same exit code.
+let five (): Int = 5
+let main (): Unit = {
+    println("before");
+    let a = [1, 2];
+    println(a[five()].to_string());
+    println("unreachable")
+}

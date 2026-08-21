@@ -1,0 +1,9 @@
+// The OTHER undefined case: `i64::MIN / -1`, whose true result is not
+// representable. Easy to miss when guarding only the zero divisor, and
+// silent when missed -- this printed 0 before the guard landed.
+let neg1 (): Int = 0 - 1
+let main (): Unit = {
+    println("before");
+    println(((0 - 9223372036854775807 - 1) / neg1()).to_string());
+    println("unreachable")
+}

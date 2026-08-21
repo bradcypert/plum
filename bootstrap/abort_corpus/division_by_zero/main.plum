@@ -1,0 +1,8 @@
+// `d` comes from a function so no constant-folding can see the zero:
+// the check has to be in the emitted code, not in the compiler.
+let zero (): Int = 0
+let main (): Unit = {
+    println("before");
+    println((10 / zero()).to_string());
+    println("unreachable")
+}

@@ -1,0 +1,35 @@
+// Integer division and modulo, including the shapes LLVM leaves
+// UNDEFINED: a zero divisor and `i64::MIN / -1`.
+//
+// Both were undefined in both backends until 2026-08-20, and undefined
+// did not mean "crashes". Optimized, `10 / d` with a runtime zero `d`
+// printed 22988924727 under the real backend and 135105 under the
+// self-hosted one, and both programs CARRIED ON afterwards.
+// Unoptimized, the same program died of SIGFPE with no message. The
+// interpreter got it right the whole time.
+//
+// The failing cases can't live in this fixture -- they abort the
+// process -- so they live in `bootstrap/abort_corpus/` instead.
+//
+// What this fixture defends is the OTHER half: that adding the guards
+// did not change any answer that was already correct, including the
+// rounding direction on negative operands, which is the part a naive
+// guard is most likely to disturb.
+
+let by (n: Int) (d: Int): Int = n / d
+let rem (n: Int) (d: Int): Int = n % d
+
+let main (): Unit = {
+    println(by(10, 3).to_string());
+    println(by(0 - 10, 3).to_string());
+    println(by(10, 0 - 3).to_string());
+    println(by(0 - 10, 0 - 3).to_string());
+    println(rem(10, 3).to_string());
+    println(rem(0 - 10, 3).to_string());
+    println(rem(10, 0 - 3).to_string());
+    println(rem(0 - 10, 0 - 3).to_string());
+    // The largest magnitudes that are NOT the undefined case.
+    println(by(0 - 9223372036854775807 - 1, 2).to_string());
+    println(by(9223372036854775807, 0 - 1).to_string());
+    println(rem(0 - 9223372036854775807 - 1, 0 - 2).to_string())
+}

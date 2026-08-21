@@ -718,10 +718,68 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
                 Emit { code: code.concat(cmp.code).concat(drop_operands).concat("  ").concat(neg).concat(" = xor i1 ").concat(cmp.val).concat(", true\n"), allocas: allocas, releases: releases, globals: globals, val: neg, ty: CgBool, n: cmp.n + 1 }
             },
         }
+    } else if cg_is_int_division(op, a.ty) {
+        // GUARDED. See `cg_div_guard` -- `sdiv`/`srem` are undefined
+        // for a zero divisor and for `i64::MIN / -1`, and the emitted
+        // program did not merely crash, it printed a wrong number and
+        // kept going.
+        let g = cg_div_guard(a.val, b.val, b.n);
+        let line = "  ".concat(g.reg).concat(" = ").concat(cg_binary_op_text(op, a.ty)).concat(" ").concat(cg_llvm_ty(a.ty)).concat(" ").concat(a.val).concat(", ").concat(b.val).concat("\n");
+        Emit { code: code.concat(g.code).concat(line), allocas: allocas, releases: releases, globals: globals, val: g.reg, ty: ty, n: g.next }
     } else {
         let line = "  ".concat(reg).concat(" = ").concat(cg_binary_op_text(op, a.ty)).concat(" ").concat(cg_llvm_ty(a.ty)).concat(" ").concat(a.val).concat(", ").concat(b.val).concat("\n");
         Emit { code: code.concat(line), allocas: allocas, releases: releases, globals: globals, val: reg, ty: ty, n: b.n + 1 }
     }
+}
+
+let cg_is_int_division (op: parser.BOp) (t: CgTy): Bool =
+    if cg_ty_eq(t, CgFloat) { false } else { match op { BDiv => true, BRem => true, _ => false } }
+
+struct DivGuard { code: String, reg: String, next: Int }
+
+// The two checks LLVM needs before an integer `sdiv`/`srem`, because
+// both of its undefined cases are reachable from ordinary Plum:
+//
+//   10 / d   where d is a runtime 0      -> undefined
+//   MIN / -1                             -> undefined
+//
+// Undefined is not "crashes". Optimized, `10 / d` printed 135105 under
+// this backend and 22988924727 under the real one, and BOTH programs
+// continued afterwards. Unoptimized it was SIGFPE with no message.
+//
+// The messages match the interpreter's (`eval_arith`'s `checked_div`),
+// which has been right all along -- this closes a divergence between
+// the backends and the interpreter rather than inventing a rule.
+//
+// Nothing is emitted conditionally on the divisor being a constant:
+// `icmp ne i64 5, 0` folds to `true` and LLVM deletes the branch, so
+// the cost lands only where the divisor is genuinely unknown.
+let cg_div_guard (lhs: String) (rhs: String) (n: Int): DivGuard = {
+    let nz = cg_reg(n);
+    let zero_ok = cg_label(n + 1);
+    let zero_bad = cg_label(n + 2);
+    let is_min = cg_reg(n + 3);
+    let is_neg1 = cg_reg(n + 4);
+    let both = cg_reg(n + 5);
+    let ovf_ok_reg = cg_reg(n + 6);
+    let ovf_ok = cg_label(n + 7);
+    let ovf_bad = cg_label(n + 8);
+    let code = "  ".concat(nz).concat(" = icmp ne i64 ").concat(rhs).concat(", 0\n")
+        .concat("  br i1 ").concat(nz).concat(", label %").concat(zero_ok).concat(", label %").concat(zero_bad).concat("\n")
+        .concat(zero_bad).concat(":\n")
+        .concat("  call void @plum_div_zero_fail()\n")
+        .concat("  unreachable\n")
+        .concat(zero_ok).concat(":\n")
+        .concat("  ").concat(is_min).concat(" = icmp eq i64 ").concat(lhs).concat(", -9223372036854775808\n")
+        .concat("  ").concat(is_neg1).concat(" = icmp eq i64 ").concat(rhs).concat(", -1\n")
+        .concat("  ").concat(both).concat(" = and i1 ").concat(is_min).concat(", ").concat(is_neg1).concat("\n")
+        .concat("  ").concat(ovf_ok_reg).concat(" = xor i1 ").concat(both).concat(", true\n")
+        .concat("  br i1 ").concat(ovf_ok_reg).concat(", label %").concat(ovf_ok).concat(", label %").concat(ovf_bad).concat("\n")
+        .concat(ovf_bad).concat(":\n")
+        .concat("  call void @plum_div_overflow_fail()\n")
+        .concat("  unreachable\n")
+        .concat(ovf_ok).concat(":\n");
+    DivGuard { code: code, reg: cg_reg(n + 9), next: n + 10 }
 }
 
 let cg_is_equality (op: parser.BOp): Bool = match op { BEq => true, BNe => true, _ => false }

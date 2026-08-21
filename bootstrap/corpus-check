@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Runs `bootstrap/exec_corpus` and `bootstrap/typecheck_corpus` against
-# the SELF-HOSTED compiler.
+# Runs `bootstrap/exec_corpus`, `bootstrap/abort_corpus` and
+# `bootstrap/typecheck_corpus` against the SELF-HOSTED compiler.
 #
 # These two corpora -- 42 fixtures, every one with its answer checked in
 # -- were exercised by nothing in this repo until 2026-08-20. Both
@@ -21,7 +21,11 @@
 #   2. exec_corpus  -- ALSO type-checks clean (`check` exits 0). A
 #      fixture that runs but that the checker rejects is a real
 #      disagreement inside one compiler.
-#   3. typecheck_corpus -- every fixture is REJECTED (`check` exits 1).
+#   3. abort_corpus  -- every fixture DIES, with the right message, at
+#      the right point. A program that stops halfway has no "output" to
+#      compare in the exec_corpus sense; what matters is the partial
+#      output, the message and the exit code together.
+#   4. typecheck_corpus -- every fixture is REJECTED (`check` exits 1).
 #      Without this half, "the checker prints ok for everything" and
 #      "the checker discriminates" look identical.
 #
@@ -119,6 +123,37 @@ for dir in bootstrap/exec_corpus/*/; do
         ok=$((ok + 1))
     else
         fail_with "$name" "output differs from expected.txt"
+        diff <(cat "$dir/expected.txt") <(printf '%s\n' "$act") | head -n 8 | sed 's/^/        /'
+    fi
+done
+
+echo
+echo "abort_corpus: every fixture must DIE with the right message"
+for dir in bootstrap/abort_corpus/*/; do
+    name="$(basename "$dir")"
+    [ -f "$dir/main.plum" ] || continue
+
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh emit-llvm "$dir" > "$work/ab-$name.ll" 2>"$work/ab-$name.err"; then
+        fail_with "$name" "emit failed: $(head -n 1 "$work/ab-$name.err")"; continue
+    fi
+    # These fixtures ABORT, so ASan's leak check would report whatever
+    # was live at the abort -- which is not a leak, it is a program that
+    # stopped. Built plain.
+    if ! clang -O2 -Wno-override-module "$work/ab-$name.ll" "${shims[@]}" -lm -o "$work/ab-$name.bin" > "$work/ab-$name.link" 2>&1; then
+        fail_with "$name" "emitted IR did not link: $(head -n 1 "$work/ab-$name.link")"; continue
+    fi
+
+    act="$(cd "$work" && timeout 60 "./ab-$name.bin" 2>&1)"
+    rc=$?
+    if [ $rc -eq 0 ]; then
+        fail_with "$name" "did NOT abort -- it exited 0 and printed: $(printf '%s' "$act" | tr '\n' ' ')"
+        continue
+    fi
+    if [ "$act" == "$(cat "$dir/expected.txt")" ]; then
+        printf 'OK    %-24s exit %s: %s\n' "$name" "$rc" "$(printf '%s' "$act" | tail -1)"
+        ok=$((ok + 1))
+    else
+        fail_with "$name" "aborted, but not as expected"
         diff <(cat "$dir/expected.txt") <(printf '%s\n' "$act") | head -n 8 | sed 's/^/        /'
     fi
 done

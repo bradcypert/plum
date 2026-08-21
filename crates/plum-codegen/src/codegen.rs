@@ -472,7 +472,7 @@ fn codegen_call_args(args: &[Expr], env: &Env, em: &mut Emitter, ctx: &Ctx, sig:
     Ok(parts.join(", "))
 }
 
-fn codegen_binop(op: BinOp, l: String, r: String, ty: CgType, em: &mut Emitter) -> Result<(String, CgType), String> {
+fn codegen_binop(op: BinOp, l: String, r: String, ty: CgType, em: &mut Emitter, ctx: &Ctx) -> Result<(String, CgType), String> {
     // `Str` `==`/`!=` — handled BEFORE the generic `(op, ty)` match below
     // because it needs a `call`-shaped instruction (`@plum_str_eq`), not
     // a single binary op, so it doesn't fit that match's tuple-returning
@@ -526,6 +526,8 @@ fn codegen_binop(op: BinOp, l: String, r: String, ty: CgType, em: &mut Emitter) 
         em.push(format!("  {reg} = {instr} {l}, {r}"));
         return Ok((reg, CgType::Bool));
     }
+    // Captured before the match below CONSUMES `op`.
+    let is_int_division = op == BinOp::Div || op == BinOp::Rem;
     let (instr, result_ty) = match (op, ty) {
         (BinOp::Add, CgType::Int) => ("add i64", CgType::Int),
         (BinOp::Sub, CgType::Int) => ("sub i64", CgType::Int),
@@ -553,6 +555,38 @@ fn codegen_binop(op: BinOp, l: String, r: String, ty: CgType, em: &mut Emitter) 
         (BinOp::Ge, CgType::Float) => ("fcmp oge double", CgType::Bool),
         (op, ty) => return Err(format!("codegen: {op:?} is not supported for {ty:?} operands")),
     };
+    // Integer `/` and `%` are GUARDED. LLVM's `sdiv`/`srem` have two
+    // undefined cases -- a zero divisor, and `i64::MIN / -1` -- and
+    // undefined means the optimizer may do anything at all with the
+    // surrounding code. It does: `10 / d` for a runtime `d == 0`
+    // printed 22988924727 here and a different wrong number under the
+    // self-hosted backend, then both programs CARRIED ON. Unoptimized,
+    // the same program died of SIGFPE with no message.
+    //
+    // The interpreter has always got this right (`eval_arith` uses
+    // `checked_div`), so the two messages below are its messages, not
+    // new ones -- this closes a divergence rather than inventing a
+    // rule. README.md already promised "a division by zero" was an
+    // ordinary runtime error like an out-of-bounds index.
+    //
+    // Both checks fold away when the divisor is a non-zero constant:
+    // `icmp ne i64 5, 0` is `true`, and LLVM deletes the branch. The
+    // cost lands only where the divisor is genuinely unknown.
+    if result_ty == CgType::Int && is_int_division {
+        let nonzero = em.fresh_reg();
+        em.push(format!("  {nonzero} = icmp ne i64 {r}, 0"));
+        emit_runtime_check(em, ctx, &nonzero, "division by zero");
+
+        let is_min = em.fresh_reg();
+        em.push(format!("  {is_min} = icmp eq i64 {l}, -9223372036854775808"));
+        let is_neg_one = em.fresh_reg();
+        em.push(format!("  {is_neg_one} = icmp eq i64 {r}, -1"));
+        let overflows = em.fresh_reg();
+        em.push(format!("  {overflows} = and i1 {is_min}, {is_neg_one}"));
+        let ok = em.fresh_reg();
+        em.push(format!("  {ok} = xor i1 {overflows}, true"));
+        emit_runtime_check(em, ctx, &ok, "integer overflow");
+    }
     let reg = em.fresh_reg();
     em.push(format!("  {reg} = {instr} {l}, {r}"));
     Ok((reg, result_ty))
@@ -4071,7 +4105,7 @@ fn codegen_value(expr: &Expr, env: &Env, em: &mut Emitter, ctx: &Ctx) -> Result<
             if l_ty != r_ty {
                 return Err(format!("codegen: `{op:?}` operand type mismatch — {l_ty:?} vs {r_ty:?}"));
             }
-            codegen_binop(op.clone(), l_reg, r_reg, l_ty, em)
+            codegen_binop(op.clone(), l_reg, r_reg, l_ty, em, ctx)
         }
         Expr::Call { callee, args } => {
             let (reg, ty, _) = codegen_call(callee, args, env, em, ctx, false)?;

@@ -1,0 +1,8 @@
+// `%` was broken exactly like `/` -- `srem` has the same two undefined
+// cases as `sdiv` -- and is easy to forget when fixing one of them.
+let zero (): Int = 0
+let main (): Unit = {
+    println("before");
+    println((10 % zero()).to_string());
+    println("unreachable")
+}

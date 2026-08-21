@@ -12777,3 +12777,96 @@ Both directions, because the absence of any is what let this survive:
 `exec_corpus/let_annotations` must compile, run and print. The second
 is the one that would catch an over-strict fix — a checker that
 rejected every annotation would pass a rejection corpus perfectly.
+
+## Dividing by zero gave you a wrong number (2026-08-20)
+
+Found by writing 34 small programs the way a USER would and running
+them through both compilers. Thirty-three agreed. The one that did not
+turned out not to be a disagreement at all — both were broken, in
+different ways, and one of them only looked right because of constant
+folding.
+
+```plum
+let d = zero();
+println((10 / d).to_string());
+```
+
+```
+real backend:   22988924727
+self-hosted:    135105
+```
+
+Both garbage, both different, and **both programs continued running
+afterwards**. Compiled without optimization, the same program died of
+SIGFPE with no message. So the behaviour was: wrong answer, or crash,
+or something else, depending on the optimization level.
+
+### Cause
+
+LLVM's `sdiv` and `srem` are UNDEFINED in two cases: a zero divisor,
+and `i64::MIN / -1`, whose true result is not representable. Both
+backends emitted them bare. Undefined does not mean "traps" — it means
+the optimizer may assume the case never happens and rewrite the
+surrounding code on that assumption, which is exactly what produced two
+different plausible-looking numbers.
+
+The neighbouring case was already right in both:
+
+```
+a[5] on a 2-element array   ->   "array index out of bounds"   both
+10 / 0                      ->   135105                        both
+```
+
+### The behaviour was already specified
+
+The INTERPRETER has always been correct — `eval_arith` uses
+`checked_div`/`checked_rem` and reports `division by zero` and
+`integer overflow`. So this was a divergence between the interpreter
+and both backends, not an open design question, and the fix had a
+message to match rather than one to invent.
+
+README.md also already promised it, in the section on `plum test`:
+"any other error (an array-index-out-of-bounds, a division by zero, ...)
+inside a test function fails it the same way". Fourth false
+documentation claim this week, and the first in the user-facing README
+rather than an internal note.
+
+### Fix
+
+A zero check and a `MIN / -1` check before every integer `sdiv`/`srem`,
+in both backends, routed to the abort path array bounds already used.
+`%` was broken identically to `/` and is easy to forget when fixing
+one of them.
+
+Both checks fold away when the divisor is a non-zero constant —
+`icmp ne i64 5, 0` is `true` and LLVM deletes the branch — so the cost
+lands only where the divisor is genuinely unknown.
+
+### `bootstrap/abort_corpus/`
+
+A program that dies halfway has no "output" in the `exec_corpus` sense,
+so these needed a third corpus: partial output, message and exit code
+compared together. Four fixtures — the three division cases plus
+array-index-out-of-bounds, which was already correct but equally had no
+fixture.
+
+Every divisor and index comes from a FUNCTION CALL. A guard that only
+worked where the compiler could already see the zero would pass a
+fixture written the obvious way and do nothing for a real program.
+
+Each fixture prints `"before"` and would print `"unreachable"`. The
+first proves it reached the failing operation instead of dying earlier
+for an unrelated reason; the second proves it actually stopped. Before
+this fix, the division fixtures printed `"unreachable"`.
+
+### Still divergent, not fixed here
+
+The interpreter also checks `+`, `-` and `*` for overflow
+(`checked_add` and friends, reporting `integer overflow`). Both
+backends wrap silently: `9223372036854775807 + 1` prints
+`-9223372036854775808` in compiled code and errors in the interpreter.
+
+That is a real divergence but a much larger decision than this one —
+guarding every arithmetic operation has a cost that guarding division
+does not, and unlike division there is no undefined behaviour involved,
+just two defensible semantics. Recorded here rather than fixed.
