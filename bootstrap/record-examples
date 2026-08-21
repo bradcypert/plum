@@ -7,13 +7,13 @@
 # one: the recording is the reference precisely because it does not move
 # when the compilers do.
 #
-# It records with the REAL compiler when that is available, on the
-# principle that a recording should come from the implementation being
-# retired rather than the one replacing it — if the two ever disagree,
-# the recording sides with the older, more-tested one and the sweep
-# reports the difference. Falls back to the self-hosted compiler when
-# `crates/` is gone, at which point that principle no longer applies
-# and this is just "record what it does now".
+# It records with the self-hosted compiler, which is the only one with
+# a backend since 2026-08-21. Until then it recorded with the REAL
+# compiler on the principle that a recording should come from the
+# implementation being retired rather than the one replacing it. With
+# the Rust backend gone that principle has nothing to attach to, and
+# this is simply "record what it does now" -- which is why re-recording
+# needs more care than it used to, not less.
 #
 # Examples are run from a TEMP directory, matching how `example-sweep`
 # runs them. `json_and_files` writes a file into its working directory;
@@ -26,15 +26,8 @@ cd "$root"
 work="$(mktemp -d -t plum-record-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
-plum=./target/release/plum
 declare -A no_run=([asteroids]="opens a window (raylib)")
 declare -A link_flags=([asteroids]="--link-lib raylib")
-
-if [ -x "$plum" ]; then
-    echo "recording with the real compiler"
-else
-    echo "note: $plum not built -- recording with the self-hosted compiler"
-fi
 
 for dir in examples/*/; do
     name="$(basename "$dir")"
@@ -49,19 +42,14 @@ for dir in examples/*/; do
         for c in "$dir"/native/*.c; do [ -e "$c" ] && native_flag="$native_flag --link-c $c"; done
     fi
 
-    if [ -x "$plum" ]; then
-        $plum build "$dir" ${link_flags[$name]:-} -o "$work/bin" > "$work/err" 2>&1 || {
-            printf '  FAIL  %-24s %s\n' "$name" "$(head -1 "$work/err")"; continue; }
-    else
-        SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh emit-llvm "$dir" > "$work/ir.ll" 2>"$work/err" || {
-            printf '  FAIL  %-24s %s\n' "$name" "$(head -1 "$work/err")"; continue; }
-        clang_flags="$(printf '%s %s' "${link_flags[$name]:-}" "$native_flag" | sed 's/--link-lib */-l/g; s/--link-c *//g')"
-        clang -O2 -Wno-override-module "$work/ir.ll" \
-            native_stdlib/dir_shim.c native_stdlib/io_shim.c \
-            native_stdlib/process_shim.c native_stdlib/thread_shim.c \
-            $clang_flags -lm -o "$work/bin" > "$work/err" 2>&1 || {
-            printf '  FAIL  %-24s %s\n' "$name" "$(head -1 "$work/err")"; continue; }
-    fi
+    SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh emit-llvm "$dir" > "$work/ir.ll" 2>"$work/err" || {
+        printf '  FAIL  %-24s %s\n' "$name" "$(head -1 "$work/err")"; continue; }
+    clang_flags="$(printf '%s %s' "${link_flags[$name]:-}" "$native_flag" | sed 's/--link-lib */-l/g; s/--link-c *//g')"
+    clang -O2 -Wno-override-module "$work/ir.ll" \
+        native_stdlib/dir_shim.c native_stdlib/io_shim.c \
+        native_stdlib/process_shim.c native_stdlib/thread_shim.c \
+        $clang_flags -lm -o "$work/bin" > "$work/err" 2>&1 || {
+        printf '  FAIL  %-24s %s\n' "$name" "$(head -1 "$work/err")"; continue; }
 
     (cd "$work" && ./bin > "$work/out.txt" 2>&1) || true
     if [ -f "$dir/expected.txt" ] && cmp -s "$work/out.txt" "$dir/expected.txt"; then

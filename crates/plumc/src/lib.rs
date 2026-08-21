@@ -1,6 +1,5 @@
 mod assoc_fns;
 mod check;
-mod codegen_cli;
 mod diagnostics;
 pub mod lsp;
 mod modules;
@@ -9,17 +8,13 @@ mod project;
 #[cfg(test)]
 mod test_util;
 mod testing;
-pub use codegen_cli::{
-    compile_and_run, compile_ir_to_binary, compile_ir_to_binary_with_native, OPT_ARTIFACT, OPT_TRANSIENT, compile_program_to_ir, compile_program_to_ir_diag, emit_main,
-    reject_unprintable_return, CgValue,
-};
 pub use diagnostics::ModuleSources;
 pub use modules::{resolve_modules, typecheck_and_run_modules};
 pub use project::{
     collect_project_files, collect_project_files_with_paths, resolve_project, resolve_project_diag, typecheck_and_run_project,
     typecheck_and_run_project_diag, typecheck_and_run_project_with_process_args_diag,
 };
-pub use testing::{discover_tests, run_tests_interpreted, run_tests_native, TestOutcome};
+pub use testing::{discover_tests, run_tests_interpreted, TestOutcome};
 
 use plum_interp::{Interpreter, Value};
 use plum_ir::fbip::optimize_program;

@@ -6,7 +6,6 @@ members = [
     "crates/plum-types",
     "crates/plum-ir",
     "crates/plum-interp",
-    "crates/plum-codegen",
 ]
 
 [workspace.package]

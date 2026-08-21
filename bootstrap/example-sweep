@@ -38,11 +38,6 @@ work="$(mktemp -d -t plum-sweep-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
 plum=./target/release/plum
-# The real compiler is OPTIONAL now. Without it the recorded output is
-# still checked; only the second opinion is missing.
-have_plum=0
-[ -x "$plum" ] && have_plum=1
-[ $have_plum -eq 1 ] || echo "note: $plum not built -- checking against expected.txt only, no differential"
 
 # Examples that cannot be run non-interactively, with the reason. They
 # are still EMITTED and reported on — only the output comparison is
@@ -130,11 +125,6 @@ for dir in examples/*/; do
             fail=$((fail + 1))
             continue
         fi
-        if [ $have_plum -eq 1 ] && ! $plum build "$dir" ${link_flags[$name]:-} -o "$work/$name.ref" > "$work/$name.ref_err" 2>&1; then
-            printf 'FAIL  %-24s the REAL compiler could not build it: %s\n' "$name" "$(head -n 1 "$work/$name.ref_err")"
-            fail=$((fail + 1))
-            continue
-        fi
         printf 'LINK  %-24s produces a binary (not run: %s)\n' "$name" "${no_run[$name]}"
         emit_only=$((emit_only + 1))
         continue
@@ -155,24 +145,6 @@ for dir in examples/*/; do
         continue
     fi
     act_out="$(cd "$work" && "./$name.bin" 2>&1)"
-
-    # The real compiler, when present, must match the SAME recording.
-    # Two implementations both required to match one fixed string are
-    # two implementations required to agree with each other.
-    if [ $have_plum -eq 1 ]; then
-        if ! $plum build "$dir" ${link_flags[$name]:-} -o "$work/$name.ref" > "$work/$name.ref_err" 2>&1; then
-            printf 'FAIL  %-24s the REAL compiler could not build it: %s\n' "$name" "$(head -n 1 "$work/$name.ref_err")"
-            fail=$((fail + 1))
-            continue
-        fi
-        rust_out="$(cd "$work" && "./$name.ref" 2>&1)"
-        if [ "$rust_out" != "$ref_out" ]; then
-            printf 'FAIL  %-24s the REAL compiler no longer matches expected.txt\n' "$name"
-            diff <(printf '%s\n' "$ref_out") <(printf '%s\n' "$rust_out") | head -n 10 | sed 's/^/        /'
-            fail=$((fail + 1))
-            continue
-        fi
-    fi
 
     if [ "$ref_out" == "$act_out" ]; then
         printf 'OK    %-24s\n' "$name"

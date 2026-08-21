@@ -10,9 +10,10 @@ identical and are tested independently.
 
 **Plum is self-hosted**: the compiler is written in Plum
 (`bootstrap/self_host/`), compiles itself to a fixed point, and needs no
-Rust toolchain to build. A second implementation in Rust (`crates/`)
-came first and is still here — see "Two compilers" below for what each
-is for.
+Rust toolchain to build. A Rust implementation (`crates/`) came first
+and bootstrapped it; its BACKEND was deleted on 2026-08-21 and what
+survives is an interpreter used as a test oracle — see "The Rust
+interpreter" below.
 
 See [DESIGN.md](DESIGN.md) for the full design history and rationale
 behind every decision below. This README is the practical, "how do I
@@ -35,35 +36,37 @@ then rebuilds it with itself, which is the compiler you keep.
 The rest of this doc assumes `plum` is on your `PATH`; substitute the
 full path otherwise.
 
-### Two compilers
+### The Rust interpreter
 
-There are two complete implementations in this repository, and knowing
-which one you are running matters:
-
-| | `bootstrap/self_host/` | `crates/` |
-|---|---|---|
-| written in | Plum | Rust |
-| build with | `clang` (via the seed) | `cargo build --release` |
-| status | the compiler | oracle and reference |
-
-The Rust implementation came first and bootstrapped the other. It is no
-longer needed to build anything, and new language work does not happen
-there — but it has not been deleted, for two reasons. It is the ORACLE
-that `bootstrap/example-sweep` compares the self-hosted compiler's
-output against, byte for byte, which is how several silent
-wrong-answer bugs were caught (a compiler that is wrong the same way
-twice still agrees with itself). And it is a from-source path for anyone
-unwilling to trust a checked-in artifact.
-
-If you want it:
+There is exactly one compiler: the self-hosted one. `crates/` holds a
+Rust front end and INTERPRETER — no code generator, since 2026-08-21 —
+and it exists for one reason.
 
 ```sh
 cargo build --workspace --release       # produces target/release/plum
 ```
 
-The two agree on every program in `examples/`, which is checked by
-`./bootstrap/example-sweep`. Where they differ today is editor support
-(below).
+That binary can `run`, `test`, `lsp`, `new` and dump tokens/ASTs. It
+cannot `build`: `plum build`, `plum emit-llvm` and `plum compile-ir`
+were removed with the backend. Compiling is the self-hosted compiler's
+job now.
+
+**Why keep it at all.** `bootstrap/interp-check` runs every execution
+fixture through the interpreter and compares it to the compiled answer.
+That is a comparison against an independent implementation of the
+SEMANTICS, and it earns its place: integer division by zero was
+undefined in both backends and printed a different wrong number in
+each, while the interpreter had reported `division by zero` all along;
+floats printed `0.3` for `0.1 + 0.2` in both backends, where the
+interpreter printed `0.30000000000000004` and was right. Comparing two
+code generators could not see either — they agreed, and were both
+wrong.
+
+Nothing else needs it. Every other harness in `bootstrap/` runs with no
+Rust toolchain present.
+
+**It is meant to go eventually.** See DESIGN.md's "Deleting the Rust
+backend" for what would have to be true first.
 
 ## Running a program
 
@@ -177,16 +180,15 @@ inside a test function fails it the same way, not only a failed
 qualified name (`shapes.test_area`, ...), same as anywhere else a
 qualified name is used.
 
-`plum test` runs every discovered test through the interpreter by
-default — fast, one process for the whole run. `plum test --native`
-compiles and runs each test as its own native subprocess instead:
-slower, but exercises the real LLVM backend, and — unlike the
-interpreter, where one test's runtime error is just an ordinary,
-catchable `Result` — a native runtime failure is a hard process abort
-with no way to recover and keep going in the same process, so each
-test genuinely needs its own process to get an isolated pass/fail
-result at all. Both should always agree on the same project; if they
-ever don't, that's a real bug worth reporting.
+`plum test` COMPILES the project once and runs each test in its own
+process — a runtime failure is a hard abort with no way to keep going
+in the same process, so isolation is not optional.
+
+The Rust `plum test` interprets instead, one process for the whole run.
+Both are exercised by `bootstrap/test-smoke`, and are expected to agree
+on the same project; if they ever don't, that is a real bug worth
+reporting. (There was a `plum test --native` flag on the Rust side
+until 2026-08-21; it went with the backend.)
 
 ## Editor support
 
@@ -710,7 +712,7 @@ program's prelude):
   read-until-close responses are supported. See DESIGN.md's "HTTP
   client" section for the full scope writeup, including a real
   interpreter-only recursion-depth caveat for very large responses
-  under `plum run` (native `plum build` has no such limit).
+  under the Rust `plum run` (compiled code has no such limit).
 - **HTTP server** — `http_serve_once(port, handler): Result[Unit,
   String]` (listens, handles exactly one connection, returns — a real
   one-shot server on its own) and `http_serve(port, handler): Result
@@ -759,32 +761,34 @@ implementations of the semantics in one compiler meant every feature had
 to be written twice, and the second half kept not happening: `run` fell
 seven features behind `build` before anyone noticed.)
 
-`plum <project>` and `plum build <project>` run the *exact same*
-program through the *exact same* front end (parse → type-check →
-lower → optimize) and only diverge at the very last step. They're
-tested independently throughout this codebase and are expected to
-agree on every observable result, with two known, deliberate
-exceptions:
+`plum <project>` and `plum build <project>` COMPILE the same way and
+differ only in whether the binary is kept.
 
-- **Tail-call elimination** is a native-codegen-only guarantee (real
-  LLVM `musttail`). The interpreter's evaluator has no such guarantee
-  and can exhaust the native stack on deeply recursive programs the
-  compiled version would run in constant stack space.
+The Rust `plum run` interprets, and `bootstrap/interp-check` requires
+it to agree with the compiled answer on every execution fixture. Two
+deliberate exceptions:
+
+- **Tail-call elimination** is a compiled-only guarantee (real LLVM
+  `musttail`). The interpreter's evaluator has none and can exhaust the
+  native stack on deeply recursive programs the compiled version runs
+  in constant space.
 - **OS error message text** (e.g. a failed `read_file`) legitimately
-  differs in wording between the two — the interpreter surfaces Rust's
-  own `std::io::Error` text, native codegen surfaces glibc's
-  `strerror`. Both correctly describe the same real OS error.
-- **`Ref[T]`** (see DESIGN.md's "Mutability and cycles" section) is
-  currently interpreter-only — native codegen has no representation
-  for it yet, a documented v1 scope boundary, not a bug.
+  differs in wording — the interpreter surfaces Rust's own
+  `std::io::Error` text, compiled code surfaces glibc's `strerror`.
+  Both describe the same real OS error.
+
+A third exception used to be listed here — that `Ref[T]` was
+interpreter-only because native codegen had no representation for it.
+That stopped being true in 2026-08 and the sentence stayed. It is
+exercised compiled by `bootstrap/exec_corpus/refs` and by the
+`shared_mutability` example.
 
 ## Examples
 
 Real, runnable projects under [`examples/`](examples/), one per theme —
-each verified through both `plum run` and `plum build` (except
-`shared_mutability`, which needs the interpreter — see the `Ref[T]`
-note above — and `asteroids`, which needs `make`/`--link-lib raylib`,
-see its own entry below):
+each with its output recorded in `expected.txt` and checked by
+`bootstrap/example-sweep` (except `asteroids`, which opens a window and
+is only built, not run — see its own entry below):
 
 - [`adts_and_matching`](examples/adts_and_matching/main.plum) —
   structs, enums, exhaustive `match`, guard clauses.

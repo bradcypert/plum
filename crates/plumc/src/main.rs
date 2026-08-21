@@ -1,10 +1,9 @@
 use plum_interp::Value;
 use plumc::{
-    collect_project_files, compile_ir_to_binary_with_native, compile_program_to_ir_diag, discover_tests, emit_main,
-    reject_unprintable_return, resolve_project_diag, run_tests_interpreted, run_tests_native, typecheck_and_run,
-    typecheck_and_run_project_with_process_args_diag, CgValue, ModuleSources, TestOutcome,
+    collect_project_files, discover_tests, resolve_project_diag, run_tests_interpreted, typecheck_and_run,
+    typecheck_and_run_project_with_process_args_diag, ModuleSources, TestOutcome,
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // Raw libc FFI, not a new crate dependency (matching this codebase's
 // established preference — see the FFI section of DESIGN.md — for
@@ -62,10 +61,6 @@ unsafe extern "C" {
 fn main() {
     let mut cli_args = std::env::args().skip(1);
     match cli_args.next() {
-        Some(first) if first == "build" => {
-            let rest: Vec<String> = cli_args.collect();
-            run_build(&rest);
-        }
         Some(first) if first == "run" => {
             let rest: Vec<String> = cli_args.collect();
             run_interpreter(&rest);
@@ -85,14 +80,6 @@ fn main() {
         Some(first) if first == "dump-tokens" => {
             let rest: Vec<String> = cli_args.collect();
             run_dump_tokens(&rest);
-        }
-        Some(first) if first == "emit-llvm" => {
-            let rest: Vec<String> = cli_args.collect();
-            run_emit_llvm(&rest);
-        }
-        Some(first) if first == "compile-ir" => {
-            let rest: Vec<String> = cli_args.collect();
-            run_compile_ir(&rest);
         }
         Some(first) if first == "lsp" => {
             plumc::lsp::run();
@@ -188,325 +175,15 @@ fn module_sources(root: &Path) -> Result<ModuleSources, String> {
     Ok(ModuleSources::new(&modules))
 }
 
-/// Parsed `plumc build` arguments — a single positional project
-/// directory plus an optional `-o`/`--output` flag, hand-parsed in the
-/// same raw `std::env::args()` style `main` already uses (no new crate
-/// dependency needed for one positional + one optional flag). Split
-/// into its own directly-testable function since there's no existing
-/// precedent in this codebase for testing `main()` itself.
-#[derive(Debug, PartialEq, Eq)]
-struct BuildArgs {
-    project_dir: String,
-    output: Option<String>,
-    // Extra C source files to compile+link alongside the generated IR
-    // — see `run_build`'s own doc comment for why (an FFI-bound C
-    // library whose real ABI doesn't fit Plum's `extern "C"` type
-    // surface needs a hand-written shim). ADDS to, doesn't replace,
-    // whatever `native/*.c` auto-discovery already finds (see
-    // `discover_native_c_files`) — the explicit flag and the directory
-    // convention are two different ways to reach the SAME mechanism,
-    // not competing ones: a project that doesn't want (or can't have)
-    // a `native/` directory of its own can still link a shim from
-    // anywhere via this flag alone.
-    link_c: Vec<String>,
-    // Extra libraries to link — each becomes a plain `-l<name>` clang
-    // flag (e.g. `--link-lib raylib` → `-lraylib`). No `-L`/`-I`
-    // support yet — not needed for any library installed at its
-    // system-default paths (confirmed directly: `-lraylib` alone
-    // links against this system's package-manager-installed raylib,
-    // headers and library both already on clang's default search
-    // paths, no `pkg-config` invocation required) — a real, narrower-
-    // than-ideal v1 scope, not a silent gap, matching this codebase's
-    // own established "honest narrow gap" style elsewhere.
-    link_lib: Vec<String>,
-    // The `clang` `-O` level, from `-O0`..`-O3`/`--release`/`--debug`.
-    // Defaults to `OPT_ARTIFACT` rather than the `OPT_TRANSIENT` the
-    // run/test paths use — see those constants' own doc comments for
-    // the measurements behind the split.
-    opt_level: u8,
-}
 
-fn parse_build_args(args: &[String]) -> Result<BuildArgs, String> {
-    let mut project_dir = None;
-    let mut output = None;
-    let mut link_c = Vec::new();
-    let mut link_lib = Vec::new();
-    let mut opt_level = plumc::OPT_ARTIFACT;
-    let mut i = 0;
-    while i < args.len() {
-        let arg = &args[i];
-        if arg == "-o" || arg == "--output" {
-            let value = args
-                .get(i + 1)
-                .ok_or_else(|| format!("{arg} requires a value"))?;
-            output = Some(value.clone());
-            i += 2;
-        } else if let Some(value) = arg.strip_prefix("-o=").or_else(|| arg.strip_prefix("--output=")) {
-            output = Some(value.to_string());
-            i += 1;
-        } else if arg == "--link-c" {
-            let value = args.get(i + 1).ok_or_else(|| format!("{arg} requires a value"))?;
-            link_c.push(value.clone());
-            i += 2;
-        } else if let Some(value) = arg.strip_prefix("--link-c=") {
-            link_c.push(value.to_string());
-            i += 1;
-        } else if arg == "--link-lib" {
-            let value = args.get(i + 1).ok_or_else(|| format!("{arg} requires a value"))?;
-            link_lib.push(value.clone());
-            i += 2;
-        } else if let Some(value) = arg.strip_prefix("--link-lib=") {
-            link_lib.push(value.to_string());
-            i += 1;
-        } else if let Some(value) = arg.strip_prefix("-O") {
-            opt_level = match value {
-                "0" => 0,
-                "1" => 1,
-                "2" => 2,
-                "3" => 3,
-                _ => return Err(format!("unknown optimization level {arg:?} (expected -O0, -O1, -O2 or -O3)")),
-            };
-            i += 1;
-        } else if arg == "--release" {
-            opt_level = plumc::OPT_ARTIFACT;
-            i += 1;
-        } else if arg == "--debug" {
-            opt_level = plumc::OPT_TRANSIENT;
-            i += 1;
-        } else if project_dir.is_none() {
-            project_dir = Some(arg.clone());
-            i += 1;
-        } else {
-            return Err(format!("unexpected argument: {arg:?}"));
-        }
-    }
-    let project_dir = project_dir
-        .ok_or_else(|| "usage: plumc build <project-dir> [-o <output>] [-O0|-O1|-O2|-O3|--debug|--release] [--link-c <file>]... [--link-lib <name>]...".to_string())?;
-    Ok(BuildArgs { project_dir, output, link_c, link_lib, opt_level })
-}
 
-/// The default output path when `-o`/`--output` is omitted: the
-/// project directory's own basename (matching `go build`/`cargo build
-/// --bin`'s own convention), resolved against the CURRENT WORKING
-/// DIRECTORY — not written inside the project source tree — falling
-/// back to `"a.out"` if the directory path has no filename component
-/// (e.g. `plumc build .` or `plumc build /`).
-fn default_output_path(project_dir: &str) -> PathBuf {
-    let name = Path::new(project_dir)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| "a.out".to_string());
-    PathBuf::from(name)
-}
 
-/// `plumc build <project-dir> [-o <output>] [--link-c <file>]... [--link-lib
-/// <name>]...`: resolves the project's modules into one flat `ast::
-/// Program` (`resolve_project` — the exact same pre-pass `plumc
-/// <project-dir>`'s interpreter path already uses, just stopped short of
-/// running anything), compiles it through the LLVM backend (`compile_
-/// program_to_ir`), verifies `main` has the compiled entry-point shape
-/// this CLI always produces (exactly one Unit parameter — see `plum_ir::
-/// lower`'s `__unit_paramN` convention), rejects an unprintable return
-/// type up front, appends the hand-written native entry point
-/// (`emit_main`), and persists the linked binary (`compile_ir_to_
-/// binary_with_native`). Any failure at any stage prints via `eprintln!`
-/// and exits 1, mirroring the interpreter path's own error-handling
-/// pattern (see `main` above) exactly.
-///
-/// **Native C linking**: an `extern "C"` function whose real C ABI
-/// doesn't fit Plum's own extern type surface (`Int`/`Float`/`Bool`/
-/// `CStr`/qualifying-struct only — no raw pointers, no `float`/`u8`-
-/// sized fields) — raylib being the concrete motivating case, whose
-/// `Vector2`/`Color` use 32-bit `float`/`unsigned char` fields Plum has
-/// no representation for — needs a hand-written C shim exposing an
-/// ABI-safe wrapper API instead (see `plum_codegen::codegen`'s module
-/// doc comment, or just: this is the same reason every OTHER language's
-/// FFI story eventually reaches for a shim too). TWO ways to supply
-/// one, usable together or alone: drop `.c` files in the project's own
-/// `native/` directory (auto-discovered, sorted for a deterministic
-/// build), or pass `--link-c <file>` explicitly for a project that
-/// doesn't want (or can't have) its own `native/` directory. `--link-
-/// lib <name>` links an external library (`-l<name>`) the shim itself
-/// calls into (e.g. `--link-lib raylib`).
-fn run_build(args: &[String]) {
-    let parsed = match parse_build_args(args) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
-    let out_path = parsed.output.map(PathBuf::from).unwrap_or_else(|| default_output_path(&parsed.project_dir));
-    let root = Path::new(&parsed.project_dir);
-    let sources = match module_sources(root) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
-    let mut link_c: Vec<PathBuf> = match discover_native_c_files(root) {
-        Ok(files) => files,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    };
-    link_c.extend(parsed.link_c.iter().map(PathBuf::from));
 
-    if let Err(e) = build(root, &out_path, &link_c, &parsed.link_lib, parsed.opt_level) {
-        eprintln!("{}", sources.render(&e));
-        std::process::exit(1);
-    }
-    println!("built {:?} -> {:?}", parsed.project_dir, out_path);
-}
 
-/// `<project-dir>/native/*.c`, sorted by filename — the auto-discovery
-/// half of `run_build`'s own native-linking support (see its doc
-/// comment). Sorted for the SAME "reproducible build order" reason
-/// `project::collect_plum_files` sorts its own directory walk; `clang`
-/// itself doesn't care about source-file order, but a stable build is
-/// still worth having. Missing `native/` entirely is NOT an error —
-/// the overwhelming common case (most Plum projects have no native
-/// code at all) — only a real filesystem error while reading an
-/// EXISTING `native/` directory is.
-fn discover_native_c_files(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let native_dir = root.join("native");
-    if !native_dir.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&native_dir)
-        .map_err(|e| format!("failed to read {native_dir:?}: {e}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("failed to read a directory entry in {native_dir:?}: {e}"))?
-        .into_iter()
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("c"))
-        .collect();
-    files.sort();
-    Ok(files)
-}
 
-fn build(root: &Path, out_path: &Path, link_c: &[PathBuf], link_lib: &[String], opt_level: u8) -> Result<(), plum_syntax::error::CompileError> {
-    let full_ir = build_ir(root)?;
-    compile_ir_to_binary_with_native(&full_ir, out_path, link_c, link_lib, opt_level).map_err(plum_syntax::error::CompileError::spanless)
-}
 
-/// The front half of `build` — everything up to and including the
-/// `main` wrapper, stopping short of `clang`. Split out so `plum
-/// emit-llvm` can print exactly the IR `plum build` would have
-/// compiled, with no risk of the two drifting apart.
-fn build_ir(root: &Path) -> Result<String, plum_syntax::error::CompileError> {
-    let program = resolve_project_diag(root)?;
-    let (body_ir, signatures, resolved_entry, has_globals) = compile_program_to_ir_diag(&program, "main")?;
-    let sig = signatures
-        .get(&resolved_entry)
-        .ok_or_else(|| {
-            plum_syntax::error::CompileError::spanless(
-                "codegen: no such function \"main\" — every buildable project needs a `main` entry point",
-            )
-        })?
-        .clone();
-    // Every compiled entry point this CLI produces takes exactly one
-    // synthetic Unit parameter (`let main (): T = ...` lowers to a
-    // single `i1` param — see `plum_ir::lower`'s `__unit_paramN`
-    // convention) — a `main` with any other arity is a clear error
-    // here rather than a confusing argument-count mismatch downstream.
-    if sig.params.len() != 1 {
-        return Err(plum_syntax::error::CompileError::spanless(format!(
-            "codegen: \"main\" must take exactly one Unit parameter (`let main (): T = ...`), found {} parameter(s)",
-            sig.params.len()
-        )));
-    }
-    reject_unprintable_return("main", sig.ret.clone()).map_err(plum_syntax::error::CompileError::spanless)?;
-    let main_ir = emit_main(&resolved_entry, sig.ret, &[CgValue::Unit], has_globals);
-    Ok(format!("{body_ir}\n{main_ir}"))
-}
 
-/// `plum emit-llvm <project-dir> [-o <file.ll>]`: print the LLVM IR
-/// `plum build` would compile, without compiling it.
-///
-/// Added for self-hosting: the Plum-written backend (`bootstrap/
-/// self_host/codegen/`) needs a reference for what correct IR looks
-/// like for a given program, and diffing against the real compiler's
-/// own output is the most direct form that reference can take. Useful
-/// on its own for anyone debugging generated code.
-fn run_emit_llvm(args: &[String]) {
-    let Some(project_dir) = args.first() else {
-        eprintln!("usage: plum emit-llvm <project-dir> [-o <file.ll>]");
-        std::process::exit(1);
-    };
-    let out = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1));
-    let ir = match build_ir(Path::new(project_dir)) {
-        Ok(ir) => ir,
-        Err(e) => {
-            match module_sources(Path::new(project_dir)) {
-                Ok(sources) => eprintln!("{}", sources.render(&e)),
-                Err(_) => eprintln!("{}", e.message),
-            }
-            std::process::exit(1);
-        }
-    };
-    match out {
-        Some(path) => {
-            if let Err(e) = std::fs::write(path, &ir) {
-                eprintln!("failed to write {path:?}: {e}");
-                std::process::exit(1);
-            }
-            println!("wrote {path:?}");
-        }
-        None => print!("{ir}"),
-    }
-}
 
-/// `plum compile-ir <file.ll> -o <binary> [--link-c f.c] [--link-lib m]`:
-/// compile and link an already-generated LLVM IR file into an
-/// executable.
-///
-/// This is the assemble-and-link step, and it is deliberately a
-/// separate command because the SELF-HOSTED backend needs it: Plum has
-/// no process-spawn builtin, so `bootstrap/self_host` writes a `.ll`
-/// with `write_file` and something else has to invoke `clang`. Even a
-/// finished self-hosted compiler would delegate this step to the
-/// system toolchain, so handing it off is not a bootstrapping cheat —
-/// it's the same division of labor `plum build` already has internally.
-fn run_compile_ir(args: &[String]) {
-    let Some(ir_path) = args.first() else {
-        eprintln!("usage: plum compile-ir <file.ll> -o <binary> [-O0|-O1|-O2|-O3]");
-        std::process::exit(1);
-    };
-    let Some(out) = args.iter().position(|a| a == "-o").and_then(|i| args.get(i + 1)) else {
-        eprintln!("usage: plum compile-ir <file.ll> -o <binary> [-O0|-O1|-O2|-O3]");
-        std::process::exit(1);
-    };
-    let ir = match std::fs::read_to_string(ir_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("failed to read {ir_path:?}: {e}");
-            std::process::exit(1);
-        }
-    };
-    let link_c: Vec<PathBuf> = collect_flag(args, "--link-c").into_iter().map(PathBuf::from).collect();
-    let link_lib: Vec<String> = collect_flag(args, "--link-lib");
-    let opt_level = args
-        .iter()
-        .find_map(|a| a.strip_prefix("-O").and_then(|v| v.parse::<u8>().ok()).filter(|v| *v <= 3))
-        .unwrap_or(plumc::OPT_ARTIFACT);
-    if let Err(e) = compile_ir_to_binary_with_native(&ir, Path::new(out), &link_c, &link_lib, opt_level) {
-        eprintln!("{e}");
-        std::process::exit(1);
-    }
-    println!("compiled {ir_path:?} -> {out:?}");
-}
-
-fn collect_flag(args: &[String], flag: &str) -> Vec<String> {
-    args.iter()
-        .enumerate()
-        .filter(|(_, a)| a.as_str() == flag)
-        .filter_map(|(i, _)| args.get(i + 1).cloned())
-        .collect()
-}
 
 /// `plum new <name>`: scaffolds a minimal starter project — a new
 /// directory `<name>/` (resolved against the current working
@@ -665,11 +342,7 @@ fn run_test_cmd(args: &[String]) {
         }
     };
     let names = discover_tests(&program);
-    let outcomes = if parsed.native {
-        run_tests_native(&program, &names)
-    } else {
-        run_tests_interpreted(program, &names)
-    };
+    let outcomes = run_tests_interpreted(program, &names);
     let outcomes = match outcomes {
         Ok(o) => o,
         Err(e) => {
@@ -710,106 +383,16 @@ mod tests {
     use super::*;
     use plumc::typecheck_and_run_project;
 
-    #[test]
-    fn a_bare_project_directory_with_no_flags_parses() {
-        let args: Vec<String> = vec!["myproj".to_string()];
-        let parsed = parse_build_args(&args).unwrap();
-        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: None, link_c: vec![], link_lib: vec![], opt_level: plumc::OPT_ARTIFACT });
-    }
 
-    #[test]
-    fn a_dash_o_flag_with_a_separate_value_is_parsed() {
-        let args: Vec<String> = vec!["myproj".to_string(), "-o".to_string(), "myapp".to_string()];
-        let parsed = parse_build_args(&args).unwrap();
-        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: Some("myapp".to_string()), link_c: vec![], link_lib: vec![], opt_level: plumc::OPT_ARTIFACT });
-    }
 
-    #[test]
-    fn a_long_output_flag_before_the_positional_arg_is_parsed() {
-        let args: Vec<String> = vec!["--output".to_string(), "myapp".to_string(), "myproj".to_string()];
-        let parsed = parse_build_args(&args).unwrap();
-        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: Some("myapp".to_string()), link_c: vec![], link_lib: vec![], opt_level: plumc::OPT_ARTIFACT });
-    }
 
-    #[test]
-    fn an_equals_form_flag_is_parsed() {
-        let args: Vec<String> = vec!["myproj".to_string(), "--output=myapp".to_string()];
-        let parsed = parse_build_args(&args).unwrap();
-        assert_eq!(parsed, BuildArgs { project_dir: "myproj".to_string(), output: Some("myapp".to_string()), link_c: vec![], link_lib: vec![], opt_level: plumc::OPT_ARTIFACT });
-    }
 
-    #[test]
-    fn missing_project_directory_is_a_clear_error() {
-        let args: Vec<String> = vec!["-o".to_string(), "myapp".to_string()];
-        let err = parse_build_args(&args).expect_err("expected a usage error");
-        assert!(err.contains("usage"), "unexpected error: {err}");
-    }
 
-    #[test]
-    fn a_dash_o_flag_missing_its_value_is_a_clear_error() {
-        let args: Vec<String> = vec!["myproj".to_string(), "-o".to_string()];
-        let err = parse_build_args(&args).expect_err("expected a missing-value error");
-        assert!(err.contains("requires a value"), "unexpected error: {err}");
-    }
 
-    #[test]
-    fn a_second_unexpected_positional_argument_is_a_clear_error() {
-        let args: Vec<String> = vec!["myproj".to_string(), "extra".to_string()];
-        let err = parse_build_args(&args).expect_err("expected an unexpected-argument error");
-        assert!(err.contains("unexpected argument"), "unexpected error: {err}");
-    }
 
-    #[test]
-    fn link_c_and_link_lib_flags_are_repeatable_in_both_forms() {
-        let args: Vec<String> = vec![
-            "myproj".to_string(),
-            "--link-c".to_string(),
-            "shim.c".to_string(),
-            "--link-c=other.c".to_string(),
-            "--link-lib".to_string(),
-            "raylib".to_string(),
-            "--link-lib=m".to_string(),
-        ];
-        let parsed = parse_build_args(&args).unwrap();
-        assert_eq!(
-            parsed,
-            BuildArgs {
-                project_dir: "myproj".to_string(),
-                output: None,
-                link_c: vec!["shim.c".to_string(), "other.c".to_string()],
-                link_lib: vec!["raylib".to_string(), "m".to_string()],
-                opt_level: plumc::OPT_ARTIFACT,
-            }
-        );
-    }
 
-    #[test]
-    fn a_link_c_flag_missing_its_value_is_a_clear_error() {
-        let args: Vec<String> = vec!["myproj".to_string(), "--link-c".to_string()];
-        let err = parse_build_args(&args).expect_err("expected a missing-value error");
-        assert!(err.contains("requires a value"), "unexpected error: {err}");
-    }
 
-    #[test]
-    fn discover_native_c_files_is_empty_when_there_is_no_native_directory() {
-        let dir = std::env::temp_dir().join(format!("plumc-native-discover-none-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        assert_eq!(discover_native_c_files(&dir).unwrap(), Vec::<PathBuf>::new());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 
-    #[test]
-    fn discover_native_c_files_finds_only_dot_c_files_sorted() {
-        let dir = std::env::temp_dir().join(format!("plumc-native-discover-some-{}", std::process::id()));
-        let native = dir.join("native");
-        std::fs::create_dir_all(&native).unwrap();
-        std::fs::write(native.join("b.c"), "").unwrap();
-        std::fs::write(native.join("a.c"), "").unwrap();
-        std::fs::write(native.join("notes.txt"), "").unwrap();
-        let found = discover_native_c_files(&dir).unwrap();
-        assert_eq!(found, vec![native.join("a.c"), native.join("b.c")]);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 
     #[test]
     fn a_bare_project_directory_with_no_separator_has_no_process_args() {
@@ -849,102 +432,9 @@ mod tests {
         assert!(err.contains("unexpected argument"), "unexpected error: {err}");
     }
 
-    #[test]
-    fn the_default_output_path_is_the_project_directory_s_own_basename() {
-        assert_eq!(default_output_path("some/nested/myproj"), PathBuf::from("myproj"));
-        assert_eq!(default_output_path("myproj"), PathBuf::from("myproj"));
-        assert_eq!(default_output_path("myproj/"), PathBuf::from("myproj"));
-    }
 
-    #[test]
-    fn a_directory_path_with_no_filename_component_falls_back_to_a_dot_out() {
-        assert_eq!(default_output_path("/"), PathBuf::from("a.out"));
-        assert_eq!(default_output_path("."), PathBuf::from("a.out"));
-    }
 
-    #[test]
-    fn build_end_to_end_compiles_and_runs_via_the_persisted_binary() {
-        // The one non-arg-parsing integration test living in main.rs
-        // rather than codegen_cli.rs's own build tests — proves `build`
-        // (the function `run_build`/`main` actually calls) wires
-        // `resolve_project` -> `compile_program_to_ir` -> `emit_main`
-        // -> `compile_ir_to_binary` together correctly end to end, not
-        // just that each piece works in isolation. A minimal inline
-        // temp-directory setup (not `plumc`'s own `TempProject` — that's
-        // a `#[cfg(test)]`-only fixture private to the LIB crate's own
-        // test binary, not reachable from this separate BIN crate).
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("plumc-mainrs-test-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("main.plum"), "let main (): Int = 6 * 7").unwrap();
-        let out_bin = dir.join("built-from-main-rs");
 
-        let result = build(&dir, &out_bin, &[], &[], plumc::OPT_TRANSIENT);
-        assert!(result.is_ok(), "build failed: {result:?}");
-        let output = std::process::Command::new(&out_bin).output().unwrap();
-        assert!(output.status.success());
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), "42");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn native_c_linking_works_via_both_the_native_directory_and_the_explicit_flag() {
-        // The end-to-end proof for `run_build`'s own native-linking
-        // support (see its doc comment) — a real project directory
-        // with a `native/` C file (auto-discovered) AND a SEPARATE C
-        // file passed via the explicit `--link-c`-equivalent `link_c`
-        // parameter, both actually linked into the SAME binary and
-        // both actually called from Plum via `extern "C"`. No raylib
-        // dependency needed to prove the MECHANISM works — a trivial
-        // hand-written C function is enough; raylib itself needs
-        // nothing more than what this test already exercises (`plum
-        // build`'s own clang invocation doesn't care what the C code
-        // actually does).
-        use std::sync::atomic::{AtomicU32, Ordering};
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("plumc-native-link-test-{}-{n}", std::process::id()));
-        let native = dir.join("native");
-        std::fs::create_dir_all(&native).unwrap();
-        std::fs::write(
-            dir.join("main.plum"),
-            "extern \"C\" { \
-                fn native_test_double(x: Int) -> Int; \
-                fn native_test_triple(x: Int) -> Int; \
-             } \
-             let main (): Int = unsafe { native_test_double(5) + native_test_triple(5) }",
-        )
-        .unwrap();
-        // Auto-discovered via `native/`.
-        std::fs::write(native.join("double.c"), "long long native_test_double(long long x) { return x * 2; }").unwrap();
-        // Passed explicitly, living OUTSIDE the project directory
-        // entirely — proving a project doesn't need its own `native/`
-        // directory to use this at all.
-        let explicit_c = dir.join("../plumc-native-link-test-explicit.c");
-        std::fs::write(&explicit_c, "long long native_test_triple(long long x) { return x * 3; }").unwrap();
-        let out_bin = dir.join("built-with-native-c");
-
-        // `build()` itself takes exactly the link inputs it's given —
-        // `discover_native_c_files` is `run_build`'s own job (see its
-        // doc comment), so this test replicates that merge step
-        // exactly the way `run_build` does, rather than calling
-        // `build()` with only the explicit file and silently missing
-        // half of what this test means to prove.
-        let mut link_c = discover_native_c_files(&dir).unwrap();
-        link_c.push(explicit_c.clone());
-        let result = build(&dir, &out_bin, &link_c, &[], plumc::OPT_TRANSIENT);
-        assert!(result.is_ok(), "build failed: {result:?}");
-        let output = std::process::Command::new(&out_bin).output().unwrap();
-        assert!(output.status.success());
-        // double(5) + triple(5) = 10 + 15 = 25
-        assert_eq!(String::from_utf8_lossy(&output.stdout).trim_end(), "25");
-
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_file(&explicit_c);
-    }
 
     #[test]
     fn new_project_scaffolds_a_runnable_hello_world() {
@@ -973,23 +463,7 @@ mod tests {
         assert_eq!(parsed, TestArgs { project_dir: "myproj".to_string(), native: false });
     }
 
-    #[test]
-    fn the_native_flag_is_parsed_regardless_of_position() {
-        let args: Vec<String> = vec!["--native".to_string(), "myproj".to_string()];
-        let parsed = parse_test_args(&args).unwrap();
-        assert_eq!(parsed, TestArgs { project_dir: "myproj".to_string(), native: true });
 
-        let args: Vec<String> = vec!["myproj".to_string(), "--native".to_string()];
-        let parsed = parse_test_args(&args).unwrap();
-        assert_eq!(parsed, TestArgs { project_dir: "myproj".to_string(), native: true });
-    }
-
-    #[test]
-    fn missing_project_directory_is_a_clear_error_for_test_args() {
-        let args: Vec<String> = vec!["--native".to_string()];
-        let err = parse_test_args(&args).expect_err("expected a usage error");
-        assert!(err.contains("usage"), "unexpected error: {err}");
-    }
 
     #[test]
     fn print_test_report_returns_the_failure_count() {

@@ -13362,3 +13362,88 @@ The second is the one worth paying for. `plum-interp` found
 division-by-zero and float precision in two days. A second
 implementation of the SEMANTICS is worth more than a second
 implementation of the compiler, and it is a fraction of the code.
+
+## Deleting the Rust backend (2026-08-21)
+
+`crates/plum-codegen` is gone, along with `plumc/src/codegen_cli.rs`,
+the three codegen-only IR passes (`refdrop`, `prune`, `liftassign`),
+and `plum test --native`. Roughly 20,000 lines. `plum build`,
+`plum emit-llvm` and `plum compile-ir` no longer exist.
+
+What remains of `crates/` is the front end and the INTERPRETER:
+`plum-syntax`, `plum-types`, `plum-ir` and `plum-interp`, driven by a
+slimmed `plumc`. `plum run`, `plum test`, `plum lsp`, `plum new` and
+the dump commands still work.
+
+### Why this half and not the whole thing
+
+Two backends is a redundancy; two implementations of the SEMANTICS is
+an oracle. Everything this week argued for the distinction:
+
+- Division by zero was undefined in BOTH backends, which printed
+  different wrong numbers and carried on. The interpreter had reported
+  `division by zero` all along, and that is where the fix's message
+  came from.
+- Floats printed `0.3` for `0.1 + 0.2` in both backends. Backend-versus-
+  backend comparison was structurally blind to it; the interpreter
+  printed `0.30000000000000004` and was right.
+
+A second code generator told us the two agreed. It did not tell us they
+were right, and twice they were not.
+
+### The seam was cleaner than the dependency graph suggested
+
+Measured before committing to it, by removing the crate and counting
+what broke. `plumc/src/lib.rs` and `main.rs` referenced the backend
+only in COMMENTS. The whole coupling was `codegen_cli.rs` (deleted
+anyway) plus one function in `testing.rs` — the `--native` test path,
+which compiled each test to its own binary because a native abort is
+not a catchable `Result`.
+
+The `monomorphize` entanglement that looked worrying from the crate
+graph was a non-issue: it lives in `plum-ir`, which stays. Of the IR
+passes, only `refdrop`/`prune`/`liftassign` were codegen-only. `anf`
+had to stay — `fbip` uses it, and the interpreter runs on FBIP-
+optimized IR.
+
+### What was given up, stated plainly
+
+- **402 tests**, 1,941 down to 1,539.
+- The differential half of `example-sweep`. It compared two backends
+  against one recording; there is one backend now. The recording still
+  catches DRIFT, which is not nothing — it does not move when the
+  compiler does — but it is not a second opinion.
+- `plum test --native`. `plum test` interprets; `./sh test` compiles.
+  `bootstrap/test-smoke` still exercises both.
+
+`bootstrap/record-examples` now records with the self-hosted compiler,
+and says so at its own head: the principle that a recording should come
+from the implementation being RETIRED has nothing left to attach to, so
+re-recording needs more care than before, not less. Every recording the
+Rust backend made was reproduced byte-for-byte by the self-hosted
+compiler on the first run after deletion.
+
+### The intent is to finish the job
+
+This is a way station, not a resting place. The remaining ~37,000 lines
+of Rust exist for exactly one reason — `bootstrap/interp-check`, the
+comparison against an independent implementation of the semantics — and
+that reason is real today because the self-hosted compiler is young.
+
+The intended end state is **no `crates/` at all**. What would have to
+be true first:
+
+1. The self-hosted compiler is stable enough that "does it agree with a
+   second implementation" stops earning its keep. Two bugs in one week
+   says it has not stopped yet.
+2. Something replaces what `interp-check` provides, or its loss is
+   accepted deliberately rather than by attrition. A self-hosted
+   interpreter is NOT that something — one was deleted on 2026-08-20
+   precisely because a second implementation inside one compiler gets
+   written once and maintained never.
+3. The 1,539 remaining tests are understood as either covered by the
+   Plum-side corpora or knowingly given up.
+
+None of that is scheduled. It is written down so the next person to ask
+"why is there still Rust here?" gets an answer rather than a shrug —
+and so that if the answer stops being true, the code goes.

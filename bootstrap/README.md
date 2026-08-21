@@ -127,22 +127,14 @@ what each can SEE:
 
 **Only `interp-check` requires `crates/`**, and `test-smoke` uses it for
 its second half when present. Everything else runs with no Rust
-toolchain at all — verified by moving the binary aside, not by reading
-the scripts:
+toolchain at all.
 
-```
-bootstrap-check    ok        check-seed       ok
-example-sweep      ok        check-shims      ok
-corpus-check       ok        lsp-smoke        ok
-self-sufficiency   ok        test-smoke       ok (self-hosted half)
-interp-check       declines: missing ./target/release/plum
-```
+`example-sweep` used to run the real compiler too and require it to
+match the same recording. That went with the Rust BACKEND on
+2026-08-21 — there is no second code generator left to compare
+against. What a recording still catches is DRIFT: it does not move when
+the compiler does.
 
-`example-sweep` still runs the real compiler when it is there, and
-requires it to match the SAME recording — two implementations both
-required to match one fixed string are two implementations required to
-agree with each other. That keeps the differential test without making
-it a dependency.
 
 `interp-check` is the reason retiring `plum-interp` along with the rest
 of `crates/` would cost something real. A second implementation of the

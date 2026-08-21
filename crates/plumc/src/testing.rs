@@ -95,100 +95,16 @@ pub fn run_tests_interpreted(program: ast::Program, names: &[String]) -> Result<
         .collect())
 }
 
-/// The native-compiled counterpart to `run_tests_interpreted` — see
-/// this module's own doc comment for WHY it needs to be structured so
-/// differently: a native runtime-check failure (`panic_raw`'s own
-/// `@plum_abort`) is a hard process abort, not a catchable `Result`, so
-/// there is no way to run more than one test per compiled PROCESS and
-/// still observe every test's own outcome.
-///
-/// Compiles `program`'s IR body exactly ONCE (`compile_program_to_ir_
-/// roots`, passing every discovered test name as an extra reachability
-/// root — see the call site for why that's load-bearing). For each
-/// discovered test, builds
-/// its OWN native entry point by appending a fresh `emit_main` wrapper
-/// to that SAME shared IR body (identical to what `plum build` does
-/// for `"main"` specifically, just looped over every test name
-/// instead) and runs the resulting binary as its own child process,
-/// deleted again immediately after — pass on exit code 0, fail
-/// (message from the compiled binary's own captured stdout, where
-/// `@plum_abort`'s `printf` put it) on anything else.
-///
-/// A test whose signature doesn't match the required shape (exactly
-/// one `Unit` parameter, a printable return type — the same convention
-/// `main` itself is held to) is reported as a per-test FAILURE with a
-/// clear message, not a whole-run abort — mirrors `run_tests_
-/// interpreted`'s own graceful handling of an arity mismatch (an
-/// ordinary `Interpreter::call` error, caught per-test there for free).
-pub fn run_tests_native(program: &ast::Program, names: &[String]) -> Result<Vec<TestOutcome>, CompileError> {
-    // MUST be `"main"`, not an arbitrary probe name — found via a real
-    // `clang` "invalid redefinition of function 'main'" failure on a
-    // throwaway project that (entirely reasonably) has its OWN real
-    // `let main (): Unit = ...` alongside its tests: `compile_program_
-    // to_ir_diag`'s own collision-avoidance rename (renaming a Plum-
-    // level `main` to `@__plum_entry_main` so it never clashes with
-    // `emit_main`'s hand-written native `@main()`) only fires when the
-    // entry_fn IT WAS CALLED WITH resolves to `"main"` — passing
-    // anything else left the project's real `main` compiled into the
-    // shared `body_ir` under its own unrenamed `@main` symbol, which
-    // then collided with EVERY per-test `emit_main` wrapper appended
-    // below. Passing `"main"` here is always safe even when the
-    // project has no `main` at all (confirmed: `compile_program_to_ir_
-    // diag`'s own entry resolution doesn't require the name to exist,
-    // only errors on an AMBIGUOUS generic entry).
-    //
-    // `names` is passed as EXTRA REACHABILITY ROOTS: the dead-function
-    // prune (`plum_ir::prune`) keeps only what the entry point and the
-    // globals can reach, and a test function is reachable from neither.
-    // Left unnamed here, every test would be pruned out of the shared
-    // body and each per-test `emit_main` wrapper would fail to link.
-    let (body_ir, signatures, _resolved_entry, has_globals) = crate::codegen_cli::compile_program_to_ir_roots(program, "main", names)?;
-
-    let mut outcomes = Vec::with_capacity(names.len());
-    for name in names {
-        outcomes.push(run_one_native_test(name, &body_ir, &signatures, has_globals));
-    }
-    Ok(outcomes)
-}
-
-fn run_one_native_test(
-    name: &str,
-    body_ir: &str,
-    signatures: &std::collections::HashMap<String, plum_codegen::FnSig>,
-    has_globals: bool,
-) -> TestOutcome {
-    let outcome = (|| -> Result<(), String> {
-        let sig = signatures
-            .get(name)
-            .ok_or_else(|| format!("internal error: no signature found for discovered test {name:?}"))?
-            .clone();
-        if sig.params.len() != 1 {
-            return Err(format!(
-                "test functions must take exactly one Unit parameter (`let {name} (): T = ...`), found {} parameter(s)",
-                sig.params.len()
-            ));
-        }
-        crate::reject_unprintable_return(name, sig.ret.clone())?;
-        let main_ir = crate::emit_main(name, sig.ret, &[crate::CgValue::Unit], has_globals);
-        let full_ir = format!("{body_ir}\n{main_ir}");
-
-        let bin_path = crate::codegen_cli::unique_temp_dir("plum-test").join(name.replace('.', "_"));
-        std::fs::create_dir_all(bin_path.parent().expect("unique_temp_dir always has a parent")).map_err(|e| format!("failed to create temp build directory: {e}"))?;
-        crate::compile_ir_to_binary(&full_ir, &bin_path)?;
-
-        let run = std::process::Command::new(&bin_path)
-            .output()
-            .map_err(|e| format!("failed to run compiled test binary {bin_path:?}: {e}"))?;
-        let _ = std::fs::remove_dir_all(bin_path.parent().expect("unique_temp_dir always has a parent"));
-
-        if run.status.success() {
-            Ok(())
-        } else {
-            Err(String::from_utf8_lossy(&run.stdout).trim_end().to_string())
-        }
-    })();
-    TestOutcome { name: name.to_string(), result: outcome }
-}
+// `plum test --native` -- which compiled each test to its own binary
+// and ran it as a child process -- lived here until 2026-08-21, when
+// the Rust BACKEND was removed (DESIGN.md's "Deleting the Rust
+// backend"). It existed because a native runtime-check failure is a
+// hard process abort rather than a catchable Result, so each test
+// needed its own process to have its outcome observed at all.
+//
+// `plum test` runs through the interpreter now, and the self-hosted
+// `./sh test` is what compiles tests. `bootstrap/test-smoke` exercises
+// both.
 
 #[cfg(test)]
 mod tests {
@@ -250,64 +166,6 @@ mod tests {
         assert!(err.to_string().contains("type error"), "unexpected error: {err}");
     }
 
-    #[test]
-    fn run_tests_native_reports_pass_and_fail_independently() {
-        // One failing test's process abort must NOT prevent the other
-        // tests from running (or being reported at all) — the whole
-        // point of subprocess-per-test isolation.
-        let program = crate::with_prelude(parse(
-            "let test_pass (): Unit = assert(true)\n\
-             let test_fail (): Unit = assert_eq(1, 2)\n\
-             let test_also_pass (): Unit = assert_eq(3, 3)",
-        ));
-        let names = discover_tests(&program);
-        let mut outcomes = run_tests_native(&program, &names).unwrap();
-        outcomes.sort_by(|a, b| a.name.cmp(&b.name));
-        assert_eq!(outcomes[0].name, "test_also_pass");
-        assert!(outcomes[0].result.is_ok(), "{:?}", outcomes[0].result);
-        assert_eq!(outcomes[1].name, "test_fail");
-        assert!(outcomes[1].result.as_ref().unwrap_err().contains("left != right"), "{:?}", outcomes[1].result);
-        assert_eq!(outcomes[2].name, "test_pass");
-        assert!(outcomes[2].result.is_ok(), "{:?}", outcomes[2].result);
-    }
 
-    #[test]
-    fn run_tests_native_and_interpreted_agree_on_the_same_program() {
-        let program = crate::with_prelude(parse(
-            "struct Point { x: Int, y: Int }\n\
-             let test_struct_eq_ok (): Unit = assert_eq(Point { x: 1, y: 2 }, Point { x: 1, y: 2 })\n\
-             let test_struct_eq_fail (): Unit = assert_eq(Point { x: 1, y: 2 }, Point { x: 1, y: 3 })",
-        ));
-        let names = discover_tests(&program);
-        let native_outcomes = run_tests_native(&program, &names).unwrap();
-        let interp_outcomes = run_tests_interpreted(program, &names).unwrap();
-        let find = |outcomes: &[TestOutcome], name: &str| outcomes.iter().find(|o| o.name == name).unwrap().result.clone();
 
-        assert!(find(&native_outcomes, "test_struct_eq_ok").is_ok());
-        assert!(find(&interp_outcomes, "test_struct_eq_ok").is_ok());
-        assert!(find(&native_outcomes, "test_struct_eq_fail").unwrap_err().contains("Point"));
-        assert!(find(&interp_outcomes, "test_struct_eq_fail").unwrap_err().contains("Point"));
-    }
-
-    #[test]
-    fn run_tests_native_works_on_a_project_that_also_has_its_own_real_main() {
-        // Found via real end-to-end verification, not a hypothetical:
-        // a project's own `let main (): Unit = ...` (a real, ordinary
-        // thing for a project under test to have) was compiled into
-        // the shared `body_ir` under its own unrenamed `@main` symbol,
-        // colliding with every per-test `emit_main` wrapper — `clang`
-        // rejected every single test with "invalid redefinition of
-        // function 'main'". Fixed by passing `"main"` (not an arbitrary
-        // probe name) as `compile_program_to_ir_diag`'s own `entry_fn`,
-        // triggering its EXISTING Plum-`main`-vs-native-`main` rename
-        // unconditionally.
-        let program = crate::with_prelude(parse(
-            "let main (): Unit = ()\n\
-             let test_pass (): Unit = assert(true)",
-        ));
-        let names = discover_tests(&program);
-        let outcomes = run_tests_native(&program, &names).unwrap();
-        assert_eq!(outcomes.len(), 1);
-        assert!(outcomes[0].result.is_ok(), "{:?}", outcomes[0].result);
-    }
 }

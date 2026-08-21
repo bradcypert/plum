@@ -12,7 +12,6 @@ plum-syntax = { path = "../plum-syntax" }
 plum-ir = { path = "../plum-ir" }
 plum-interp = { path = "../plum-interp" }
 plum-types = { path = "../plum-types" }
-plum-codegen = { path = "../plum-codegen" }
 # `plum lsp` only — see `src/lsp.rs`'s own doc comment for why these
 # are judged exempt from the usual "would a future self-hosted Plum
 # compiler need to reimplement this" scrutiny: this is dev-tooling
