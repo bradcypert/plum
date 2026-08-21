@@ -1,0 +1,1 @@
+Let Ident("a") Colon Ident("Float") Eq Float(1000) Let Ident("b") Colon Ident("Float") Eq Float(0.0015) Let Ident("c") Colon Ident("Float") Eq Float(200) Let Ident("d") Colon Ident("Float") Eq Float(10005)

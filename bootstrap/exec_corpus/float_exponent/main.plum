@@ -1,0 +1,50 @@
+// Scientific notation, in SOURCE and through `String.parse_float`.
+//
+// Until 2026-08-21 neither worked, and they failed differently, which
+// is why they read as one problem and were two:
+//
+//   * No lexer in either compiler had exponent syntax, so `1e3` did
+//     not parse at all. A plain missing feature.
+//   * `String.parse_float("1e3")` returned 1000 under the real
+//     compiler and an ERROR under the self-hosted one. The real
+//     prelude delegated to the JSON number parser; the self-hosted one
+//     had a second, hand-written parser whose own comment admitted "no
+//     exponent, which is a real narrowing, stated rather than
+//     discovered". Stated -- but it made the two compilers disagree
+//     about which strings are valid floats. That parser is gone; both
+//     delegate to the JSON one now.
+//
+// JSON was never affected: it always had its own number parser, and it
+// always handled exponents. That is what made the divergence hard to
+// notice -- the obvious place to look was already correct.
+
+let show (s: String): String =
+    match String.parse_float(s) { Ok(f) => f.to_string(), Err(e) => "Err: ".concat(e) }
+
+let main (): Unit = {
+    // Literals. An exponent makes a literal a Float with no decimal
+    // point present at all, which is the case a naive lexer misses.
+    println((1e3).to_string());
+    println((1.5e-3).to_string());
+    println((2E+2).to_string());
+    println((1e0).to_string());
+    println((1_000.5e1).to_string());
+
+    // The same values through the parser.
+    println(show("1e3"));
+    println(show("1.5e-3"));
+    println(show("2E+2"));
+    println(show("-2.5e2"));
+
+    // Not exponents, and must not be mangled into one. `1e` is a
+    // number followed by an identifier; a lexer that consumed the `e`
+    // before checking for a digit would break both.
+    println(show("1e"));
+    println(show("1e+"));
+
+    // JSON, which handled exponents throughout.
+    println(match json_parse("{\"a\": 1e3, \"b\": 2.5e-2}") {
+        Ok(v) => json_stringify(v),
+        Err(e) => "Err: ".concat(e),
+    })
+}

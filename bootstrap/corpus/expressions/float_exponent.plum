@@ -1,0 +1,4 @@
+let a: Float = 1e3
+let b: Float = 1.5e-3
+let c: Float = 2E+2
+let d: Float = 1_000.5e1

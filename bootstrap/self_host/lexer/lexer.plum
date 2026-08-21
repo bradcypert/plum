@@ -175,11 +175,38 @@ let scan_digit_run (chars: Array[String]) (pos: Int): Int =
 // as a literal compiled to a wrapped garbage number; after it, to
 // `Result.unwrap_or`'s fallback of 0 -- a silent wrong answer either
 // way. It is an error now, which is what the real compiler does too.
+// The character at `pos`, or "" past the end -- so the exponent scan
+// below can look ahead two or three characters without an index check
+// at every step.
+let char_at (chars: Array[String]) (pos: Int): String =
+    if pos >= chars.len() || pos < 0 { "" } else { chars[pos] }
+
+// Where the exponent of a number starting at `pos` ENDS, or `pos`
+// itself when there is no exponent -- `1e9`, `1.5e-3`, `2E+2`.
+//
+// The digit after the optional sign is REQUIRED before anything is
+// consumed: `1e` and `1e+` are not numbers, and `1.e` must still lex as
+// `1.` followed by `e` rather than swallowing the `e` and then failing.
+let scan_exponent (chars: Array[String]) (pos: Int): Int = {
+    let c = char_at(chars, pos);
+    if c != "e" && c != "E" { pos }
+    else {
+        let signed = char_at(chars, pos + 1) == "+" || char_at(chars, pos + 1) == "-";
+        let digit_start = if signed { pos + 2 } else { pos + 1 };
+        if is_digit_char(char_at(chars, digit_start)) { scan_digit_run(chars, digit_start) } else { pos }
+    }
+}
+
 let lex_number (chars: Array[String]) (pos: Int): NumResult = {
     let int_end = scan_digit_run(chars, pos);
-    let is_float = int_end < chars.len() && chars[int_end] == "." && int_end + 1 < chars.len() && is_digit_char(chars[int_end + 1]);
-    if is_float {
-        let frac_end = scan_digit_run(chars, int_end + 1);
+    let has_point = int_end < chars.len() && chars[int_end] == "." && int_end + 1 < chars.len() && is_digit_char(chars[int_end + 1]);
+    let mantissa_end = if has_point { scan_digit_run(chars, int_end + 1) } else { int_end };
+    // An exponent makes the literal a FLOAT even with no decimal point,
+    // which is why this is checked independently of `has_point`.
+    let exp_end = scan_exponent(chars, mantissa_end);
+    let has_exp = exp_end != mantissa_end;
+    if has_point || has_exp {
+        let frac_end = exp_end;
         let text = chars_join(Array.filter(Array.slice(chars, pos, frac_end), |c| c != "_"));
         match String.parse_float(text) {
             Ok(f) => NumResult { token: TokFloat(f), next_pos: frac_end },

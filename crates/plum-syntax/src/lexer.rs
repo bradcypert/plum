@@ -233,10 +233,10 @@ impl<'a> Lexer<'a> {
             }
         }
 
-        let is_float = self.peek_char() == Some('.')
+        let has_point = self.peek_char() == Some('.')
             && self.peek_char_at(1).is_some_and(|c| c.is_ascii_digit());
 
-        if is_float {
+        if has_point {
             text.push('.');
             self.advance();
             while let Some(c) = self.peek_char() {
@@ -247,7 +247,42 @@ impl<'a> Lexer<'a> {
                     break;
                 }
             }
+        }
+
+        // Scientific notation: `1e9`, `1.5e-3`, `2E+2`. Added
+        // 2026-08-21 — Plum had no way to write it at all, in either
+        // compiler, while `String.parse_float` and the JSON parser both
+        // accepted it. An exponent makes the literal a FLOAT even
+        // without a decimal point, which is why this is checked
+        // independently of `has_point` rather than inside it.
+        //
+        // The digit after the optional sign is required before anything
+        // is consumed: `1e` and `1e+` are not numbers, and `x1.e` must
+        // still lex as `1` followed by `.e` rather than swallowing the
+        // `e` and then failing.
+        let exp_sign_len = usize::from(matches!(self.peek_char_at(1), Some('+' | '-')));
+        let has_exp = matches!(self.peek_char(), Some('e' | 'E'))
+            && self.peek_char_at(1 + exp_sign_len).is_some_and(|c| c.is_ascii_digit());
+        if has_exp {
+            text.push(self.advance().expect("just peeked"));
+            if exp_sign_len == 1 {
+                text.push(self.advance().expect("just peeked"));
+            }
+            while let Some(c) = self.peek_char() {
+                if c.is_ascii_digit() || c == '_' {
+                    text.push(c);
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if has_point || has_exp {
             let cleaned: String = text.chars().filter(|c| *c != '_').collect();
+            // An out-of-range exponent (`1e400`) parses to `inf` rather
+            // than failing, matching every other IEEE overflow in the
+            // language, so this `expect` still cannot fire on user input.
             TokenKind::Float(cleaned.parse().expect("lexer produced an invalid float literal"))
         } else {
             let cleaned: String = text.chars().filter(|c| *c != '_').collect();

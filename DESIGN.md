@@ -13517,3 +13517,66 @@ it fail.
 that `bootstrap/interp-check` and `test-smoke` compare against. A bug
 that makes its `plum test` disagree with the self-hosted one is a bug
 in the measuring instrument, not in a spare compiler.
+
+## Scientific notation, and a second float parser (2026-08-21)
+
+`1e3` did not lex in either compiler, and `String.parse_float("1e3")`
+returned 1000 under the real compiler and an ERROR under the
+self-hosted one. Those read as one problem and were two.
+
+```
+                              self-hosted   real
+JSON  {"a": 1e3}              1000          1000
+String.parse_float("1e3")     Err           1000
+source literal  let x = 1e3   parse error   parse error
+```
+
+JSON was never affected — it always had its own number parser, with
+exponent support. That is exactly what made the divergence hard to
+notice: the obvious place to look was already correct.
+
+### The divergence: two float parsers, one prelude
+
+The real prelude's `String.parse_float` delegates to `parse_number`,
+the JSON number parser. The self-hosted prelude had a SECOND,
+hand-written parser, and its own comment defended the choice:
+
+> A direct float parser. The real prelude reuses the JSON number parser
+> here, which is the right call THERE (it already exists and is tested)
+> and the wrong one here — dragging a JSON parser in to read a float
+> would be absurd. Sign, integer part, optional fraction; no exponent,
+> which is a real narrowing, stated rather than discovered.
+
+That reasoning cost twice. The narrowing was stated, but stating it did
+not stop the two compilers disagreeing about which strings are valid
+floats. And the hand-written parser had also been silently WRONG: it
+accumulated the fraction against a repeatedly-divided `0.1`, so
+`0.000001` parsed as `1.0000000000000002e-06` until that was fixed
+earlier the same day.
+
+The JSON parser was in the same prelude, already handling exponents,
+already correct. Reusing it is not absurd; writing a second one was.
+Deleted, and `String.parse_float` now delegates — identical results
+including error text (`expected digit`, `trailing characters after
+number`).
+
+Same lesson as "One prelude, not two", reached from the other
+direction: there the second copy was a table, here it was an algorithm.
+
+### The feature: exponent literals
+
+Both lexers now accept `1e3`, `1.5e-3`, `2E+2` and `1_000.5e1`.
+
+Two details that a naive scan gets wrong, and both are tested:
+
+- An exponent makes a literal a FLOAT with no decimal point present at
+  all, so the exponent scan is independent of the fraction scan rather
+  than nested inside it.
+- The digit after the optional sign is REQUIRED before anything is
+  consumed. `1e` is a number followed by an identifier and `1.e` must
+  still lex as `1.` then `e`; a scanner that ate the `e` first and
+  failed afterwards would break both. Verified at token level.
+
+An out-of-range exponent (`1e400`) parses to `inf`, matching every
+other IEEE overflow in the language, so the lexer's remaining `expect`
+still cannot fire on user input.
