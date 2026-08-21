@@ -68,15 +68,54 @@ pub fn discover_tests(program: &ast::Program) -> Vec<String> {
 /// `plum test` invocation.
 pub fn run_tests_interpreted(program: ast::Program, names: &[String]) -> Result<Vec<TestOutcome>, CompileError> {
     let mut program = program;
-    crate::assoc_fns::resolve_associated_calls(&mut program);
+    // The SAME front end, in the SAME order, as
+    // `run_resolved_program_with_process_args_diag`. It used to run
+    // `resolve_associated_calls` first and skip
+    // `expand_nested_field_updates` entirely, which broke dotted-path
+    // struct updates in tests only:
+    //
+    //   let g2 = Game { ship.pos.x: 99, ..g };
+    //     -> parse-level error, inside `plum test`; fine under `plum run`
+    //
+    // The order is load-bearing and its reasoning lives at the run
+    // path: `TypeContext` is built BEFORE `resolve_associated_calls` so
+    // the nested-update expansion can run first, which is safe because
+    // `TypeContext::from_items` only ever reads declarations.
     let type_ctx = TypeContext::from_items(&program.items).map_err(|e: CompileError| e.context("type error"))?;
+    crate::nested_struct_update::expand_nested_field_updates(&mut program, &type_ctx)
+        .map_err(|e: CompileError| e.context("type error"))?;
+    crate::assoc_fns::resolve_associated_calls(&mut program);
     let mut infer = Infer::with_context(type_ctx);
     infer.infer_program(&program).map_err(|e: CompileError| e.context("type error"))?;
     plum_ir::movecheck::check_moves(&program).map_err(|e: CompileError| e.context("move error"))?;
 
+    // All FOUR side-channels, matching `run_resolved_program_with_
+    // process_args_diag` exactly. Two of them were missing until
+    // 2026-08-21, and the effect was that `plum test` lowered a
+    // DIFFERENT program than `plum run` did:
+    //
+    //   let seven (): Int = 7
+    //   let test_x (): Unit = assert_eq(seven(), 7)
+    //     -> "seven expects 1 argument(s), found 0"
+    //
+    //   let double = scale(2);
+    //     -> "scale expects 2 argument(s), found 1"
+    //
+    // `unit_sugar_calls` carries inference's answer about which `f()`
+    // calls mean zero arguments rather than one Unit; `partial_calls`
+    // carries which calls are partial applications. Lowering has no
+    // type information of its own and cannot re-derive either.
+    //
+    // This is the `sh test` bug in a different house (DESIGN.md's "The
+    // test runner was running on the wrong engine"): a test runner on a
+    // different pipeline than the thing it is testing, invisible
+    // because the smoke fixture happened not to use the affected
+    // features.
     let lowering_ctx = LoweringContext::from_items(&program.items)
         .with_field_owners(infer.field_owners().clone())
-        .with_array_for_loops(infer.array_for_loops().clone());
+        .with_array_for_loops(infer.array_for_loops().clone())
+        .with_unit_sugar_calls(infer.unit_sugar_calls().clone())
+        .with_partial_calls(infer.partial_calls().clone());
     let ir_program = lower_program(&program, &lowering_ctx).map_err(|e: CompileError| e.context("lowering error"))?;
     let ir_program = optimize_program(ir_program);
 

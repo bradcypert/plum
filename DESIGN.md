@@ -13447,3 +13447,73 @@ be true first:
 None of that is scheduled. It is written down so the next person to ask
 "why is there still Rust here?" gets an answer rather than a shrug —
 and so that if the answer stops being true, the code goes.
+
+## `plum test` lowered a different program than `plum run` (2026-08-21)
+
+Three language features worked everywhere except inside a test:
+
+| | `plum test` | `plum run` | `./sh test` |
+|---|---|---|---|
+| zero-argument call `seven()` | **FAIL** | ok | ok |
+| partial application `scale(2)` | **FAIL** | ok | ok |
+| dotted field update `Game { ship.pos.x: 99, ..g }` | **FAIL** | ok | ok |
+
+```
+---- test_zero_argument_call ----
+seven expects 1 argument(s), found 0
+
+---- test_partial_application ----
+scale expects 2 argument(s), found 1
+```
+
+### Cause
+
+`run_tests_interpreted` built a front end that was ALMOST the one
+`run_resolved_program_with_process_args_diag` builds. Two differences:
+
+- Its `LoweringContext` threaded two of the four side-channels.
+  `unit_sugar_calls` carries inference's answer about which `f()` calls
+  mean zero arguments rather than one Unit; `partial_calls` carries
+  which calls are partial applications. Lowering has no type
+  information of its own and cannot re-derive either, so without them
+  it lowers something else.
+- It skipped `expand_nested_field_updates` entirely, and ran
+  `resolve_associated_calls` BEFORE building the `TypeContext` rather
+  than after. That order is load-bearing and the run path says why:
+  `TypeContext` is built first so the nested-update expansion can run
+  before associated-call resolution.
+
+Both paths now run the same passes in the same order.
+
+### This is the `sh test` bug in a different house
+
+The self-hosted `sh test` ran every test through the tree-walking
+interpreter, which never loaded the prelude, so every test calling
+`assert_eq` failed — for months, unnoticed (see "The test runner was
+running on the wrong engine"). Same shape here: a test runner on a
+different pipeline than the thing it is testing.
+
+Both hid for the same reason. `bootstrap/test-smoke` was written after
+the first one, deliberately using "the things a smoke test is tempted
+to skip" — assertions, a `Ref`, a stdlib call. None of those needs an
+inference side-channel, so it could not see this.
+
+It does now: the fixture calls a zero-argument helper, partially
+applies a function, and uses a dotted-path struct update. Verified by
+REVERTING the fix and confirming the harness fails —
+
+```
+FAIL [rust]: a zero-argument call did not work in a test
+FAIL [rust]: partial application did not work in a test
+FAIL [rust]: wrong tally
+```
+
+— because a harness that passes proves nothing until you have watched
+it fail.
+
+### Why it mattered more than it would have last week
+
+`crates/` now exists for exactly one purpose: to be the second opinion
+that `bootstrap/interp-check` and `test-smoke` compare against. A bug
+that makes its `plum test` disagree with the self-hosted one is a bug
+in the measuring instrument, not in a spare compiler.

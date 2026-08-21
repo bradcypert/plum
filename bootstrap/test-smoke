@@ -10,9 +10,14 @@
 # against tests that happened to use only `panic_raw`.
 #
 # So the fixture below deliberately uses the things a smoke test is
-# tempted to skip: the prelude's assertions, a `Ref`, and a stdlib
-# call. And it asserts a FAILING test both fails and does not stop the
-# ones after it.
+# tempted to skip: the prelude's assertions, a `Ref`, a stdlib call,
+# and -- added 2026-08-21 -- a zero-argument call, a partial
+# application and a dotted-path struct update. Those last three each
+# need a side-channel that inference computes and lowering cannot
+# re-derive, and all three were broken in the real compiler's
+# `plum test` and nowhere else, for exactly as long as this fixture
+# did not use them. It also asserts a FAILING test both fails and does
+# not stop the ones after it.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,7 +26,14 @@ work="$(mktemp -d -t plum-testsmoke-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
 cat > "$work/main.plum" <<'PLUM'
+struct Vec2 { x: Int, y: Int }
+struct Ship { pos: Vec2 }
+struct Game { ship: Ship, score: Int }
+
 let main (): Unit = println("app")
+
+let seven (): Int = 7
+let scale (a: Int) (b: Int): Int = a * b
 
 let test_assertions (): Unit = assert_eq(1 + 1, 2)
 
@@ -33,6 +45,24 @@ let test_ref (): Unit = {
 
 let test_stdlib (): Unit =
     assert_eq(Option.unwrap_or(Array.find([1, 2, 3], |n| n > 2), 0), 3)
+
+// The three below exist because a test runner can quietly lower a
+// DIFFERENT program than the one `run` lowers. Each needs a side-
+// channel that inference computes and lowering cannot re-derive, and
+// each was broken in the real compiler's `plum test` -- and ONLY there
+// -- until 2026-08-21, because this fixture did not use them.
+let test_zero_argument_call (): Unit = assert_eq(seven(), 7)
+
+let test_partial_application (): Unit = {
+    let double = scale(2);
+    assert_eq(double(21), 42)
+}
+
+let test_dotted_field_update (): Unit = {
+    let g = Game { ship: Ship { pos: Vec2 { x: 1, y: 2 } }, score: 0 };
+    let g2 = Game { ship.pos.x: 99, ..g };
+    assert_eq(g2.ship.pos.x, 99)
+}
 
 let test_fails_on_purpose (): Unit = assert_eq(2 + 2, 5)
 
@@ -46,9 +76,15 @@ check_run() {
     local out; out="$("$@" test "$work" 2>&1)"
     echo "$out" | grep -q 'test test_ref ... ok' || { echo "FAIL [$label]: a Ref test did not pass"; fail=1; }
     echo "$out" | grep -q 'test test_stdlib ... ok' || { echo "FAIL [$label]: a stdlib test did not pass"; fail=1; }
+    # Each of these needs an inference side-channel threaded into
+    # lowering. A test runner that skips one lowers a different program
+    # than `run` does, and says so only here.
+    echo "$out" | grep -q 'test test_zero_argument_call ... ok' || { echo "FAIL [$label]: a zero-argument call did not work in a test"; fail=1; }
+    echo "$out" | grep -q 'test test_partial_application ... ok' || { echo "FAIL [$label]: partial application did not work in a test"; fail=1; }
+    echo "$out" | grep -q 'test test_dotted_field_update ... ok' || { echo "FAIL [$label]: a dotted field update did not work in a test"; fail=1; }
     echo "$out" | grep -q 'test_fails_on_purpose' || { echo "FAIL [$label]: the failing test was not reported"; fail=1; }
-    # 4 passed proves the run continued past the failure.
-    echo "$out" | grep -q 'FAILED. 4 passed; 1 failed' || { echo "FAIL [$label]: wrong tally"; echo "$out" | tail -3; fail=1; }
+    # 7 passed proves the run continued past the failure.
+    echo "$out" | grep -q 'FAILED. 7 passed; 1 failed' || { echo "FAIL [$label]: wrong tally"; echo "$out" | tail -3; fail=1; }
 }
 
 check_run self-hosted ./sh
