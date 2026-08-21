@@ -1,0 +1,50 @@
+// Passing a function by NAME rather than writing it inline.
+//
+// Until 2026-08-21 none of this compiled in the self-hosted compiler.
+// `Array.map([1,2,3], double)` reported `unbound variable: double` --
+// about a function defined three lines up. The checker looked a bare
+// name up among LOCALS only, and consulted signatures just for names
+// in CALL position, so the same name worked in one place and was
+// invisible in the other. Only the inline form `|n| double(n)` worked.
+//
+// It bit real code, not just tests: `http_serve_once(port, handler)`
+// with a named handler is the natural way to use the server API, and
+// two lines of the HTTP prelude had to be eta-expanded by hand during
+// its port. Both are back to their original form now.
+//
+// The fix reuses the PARTIAL APPLICATION path with zero arguments --
+// every parameter becomes residual, producing a closure over a call.
+// The backend needed nothing new, which is why writing the lambda by
+// hand always worked.
+
+enum Shape { Circle(Int), Square }
+
+let double (n: Int): Int = n * 2
+let add (a: Int) (b: Int): Int = a + b
+let id[T] (x: T): T = x
+let pick (): (Int) -> Int = double
+
+let main (): Unit = {
+    // As a callback.
+    println(Array.map([1, 2, 3], double).to_string());
+    // Bound to a variable, then called.
+    let f = double;
+    println(f(4).to_string());
+    // More than one parameter.
+    let g = add;
+    println(g(2, 3).to_string());
+    // Returned from a function, then called immediately.
+    println(pick()(21).to_string());
+    // A GENERIC function by name -- the type arguments are pinned by
+    // the use site, not the reference.
+    println(Array.map([1, 2], id).to_string());
+    println(Array.map(["a", "b"], id).to_string());
+    // An enum CONSTRUCTOR is a function too. Without this it reported
+    // "variant expects a different number of arguments", describing a
+    // call nobody wrote.
+    println(Array.map([1, 2], Circle).len().to_string());
+    // A payload-less variant stays a plain VALUE, not a closure.
+    println(match Square { Circle(n) => n.to_string(), Square => "square" });
+    // The inline form still works, and still means the same thing.
+    println(Array.map([1, 2, 3], |n| double(n)).to_string())
+}

@@ -1,0 +1,27 @@
+// `print` and `env_var`, which the real compiler had and the
+// self-hosted one did not until 2026-08-21. Found by diffing the two
+// preludes' public surfaces -- the same sweep that turned up the
+// missing networking stack, and the reason to run it periodically.
+//
+// `print` is `println` without the trailing newline, which is only
+// observable if something else prints afterwards -- hence the pairs
+// below rather than single calls.
+//
+// `env_var` reads a variable that this fixture cannot set, so it can
+// only assert the UNSET path. That is the half that has to be right
+// anyway: `None`, not an empty string and not a crash.
+
+let main (): Unit = {
+    print("a");
+    print("b");
+    println("c");
+
+    print("");
+    println("empty print leaves no trace");
+
+    println(match env_var("PLUM_DEFINITELY_NOT_SET_4f3a9") {
+        Some(v) => "unexpectedly set: ".concat(v),
+        None => "unset reads as None",
+    });
+    println(Option.unwrap_or(env_var("PLUM_DEFINITELY_NOT_SET_4f3a9"), "fallback"))
+}

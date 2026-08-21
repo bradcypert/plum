@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Proves the networking prelude WORKS in a compiled binary -- a TCP
+# round trip and an HTTP request/response over loopback.
+#
+# Deliberately NOT an `exec_corpus` fixture, and the reason is worth
+# stating. Networking fixtures can HANG rather than fail: if a client
+# connects before its server has listened, the accept blocks forever
+# and the process never exits. The first attempt at this as a corpus
+# fixture did exactly that. A hang inside `corpus-check` is far worse
+# than no coverage -- it blocks every future run of everything -- so
+# this lives in its own script with a hard `timeout`, the same shape as
+# `lsp-smoke` and `test-smoke`, where a hang is a clean failure.
+#
+# It exists because its absence caused a real regression. The
+# self-hosted compiler had no networking prelude at all, survivable
+# only while `plum build` could still compile such programs. When the
+# Rust backend was deleted on 2026-08-21, every HTTP and TCP program
+# became compilable by NOTHING -- and every harness passed, because
+# nothing exercised networking.
+#
+# The ports are high and odd. A collision with an unrelated listener is
+# the one way this fails for a reason that is not a bug.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+work="$(mktemp -d -t plum-netsmoke-XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+
+fail=0
+
+# --- TCP ---------------------------------------------------------
+# Race-free by construction: `main` creates the LISTENING socket before
+# anything can connect, and only then spawns the acceptor.
+mkdir -p "$work/tcp"
+cat > "$work/tcp/main.plum" <<'PLUM'
+let main (): Unit = match tcp_listen_on(18733) {
+    Err(e) => println("listen: ".concat(e)),
+    Ok(srv) => {
+        let acceptor = spawn {
+            match tcp_accept_connection(srv) {
+                Err(e) => "accept: ".concat(e),
+                Ok(conn) => {
+                    let got = tcp_read(conn, 1024);
+                    match tcp_write(conn, "pong") { Ok(_) => (), Err(_) => () };
+                    tcp_close_connection(conn);
+                    got
+                },
+            }
+        };
+        match tcp_connect_to("127.0.0.1", 18733) {
+            Err(e) => println("connect: ".concat(e)),
+            Ok(fd) => {
+                match tcp_write(fd, "ping") { Ok(_) => (), Err(_) => () };
+                let reply = tcp_read(fd, 1024);
+                tcp_close_connection(fd);
+                println(acceptor.join().concat("/").concat(reply))
+            },
+        };
+        tcp_close_connection(srv)
+    },
+}
+PLUM
+
+# --- HTTP --------------------------------------------------------
+# `http_serve_once` listens AND accepts internally, so the race cannot
+# be removed the way it can for raw TCP. The client retries instead: a
+# refused connection returns immediately, so a bounded retry covers the
+# server's startup window without needing a sleep primitive, and a
+# server that never comes up ends the loop rather than hanging it.
+mkdir -p "$work/http"
+cat > "$work/http/main.plum" <<'PLUM'
+let attempt (n: Int): String =
+    if n <= 0 { "client: gave up" }
+    else {
+        match http_get("http://127.0.0.1:18734/world") {
+            Ok(r) => r.status.to_string().concat(" ").concat(r.body),
+            Err(e) => attempt(n - 1),
+        }
+    }
+
+let main (): Unit = {
+    let server = spawn {
+        http_serve_once(18734, |req| HttpResponse {
+            status: 200,
+            headers: [HttpHeader { name: "Content-Type", value: "text/plain" }],
+            body: "hello ".concat(req.path),
+        })
+    };
+    let got = attempt(200);
+    match server.join() { Ok(_) => println(got), Err(e) => println("server: ".concat(e)) };
+    // Failure paths, which need no listener and so cannot be flaky.
+    println(match tcp_connect_to("127.0.0.1", 1) { Ok(_) => "?", Err(e) => e });
+    println(match http_get("https://example.com/") { Ok(_) => "?", Err(e) => e });
+    println(match http_get("nope://example.com/") { Ok(_) => "?", Err(e) => e })
+}
+PLUM
+
+check() {
+    local name="$1" expected="$2"
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh build "$work/$name" -o "$work/$name.bin" > "$work/$name.err" 2>&1; then
+        echo "FAIL [$name]: did not compile: $(head -1 "$work/$name.err")"; fail=1; return
+    fi
+    local out
+    out="$(cd "$work" && timeout 30 "./$name.bin" 2>&1)"
+    local rc=$?
+    if [ $rc -ne 0 ]; then
+        echo "FAIL [$name]: exited $rc$([ $rc -eq 124 ] && echo ' (TIMED OUT -- a blocked accept, not a slow one)')"
+        printf '%s\n' "$out" | head -4 | sed 's/^/        /'
+        fail=1; return
+    fi
+    if [ "$out" != "$expected" ]; then
+        echo "FAIL [$name]: wrong output"
+        diff <(printf '%s\n' "$expected") <(printf '%s\n' "$out") | head -8 | sed 's/^/        /'
+        fail=1; return
+    fi
+}
+
+check tcp "ping/pong"
+check http "200 hello /world
+tcp_connect_to: could not connect to 127.0.0.1:1
+http client: https:// is not supported yet
+http client: url must start with http://"
+
+[ $fail -eq 0 ] && echo "net smoke: ok, TCP and HTTP work in a compiled binary"
+exit $fail

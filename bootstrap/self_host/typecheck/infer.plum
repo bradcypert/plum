@@ -565,7 +565,30 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
                 note_ident(name, offset, r.ty, 0 - 1);
                 ir_leaf(r.ty, r.subst, r.state, TGlobalRef(global_module_of(p2, name), name))
             },
-            None => if is_capitalized_name(name) { infer_variant(p2, state, acc, name, [], []) } else { { fail_tc("unbound variable: ".concat(name)); ir_unsupported(acc, state, "unbound variable ".concat(name)) } },
+            // A bare name that turns out to be a FUNCTION is that
+            // function as a VALUE -- `Array.map(xs, double)`,
+            // `http_serve_once(port, handler)`, `let f = double`.
+            //
+            // Until 2026-08-21 this fell straight through to "unbound
+            // variable", which was a strange thing to say about a
+            // function defined ten lines up: the checker looked the
+            // name up among LOCALS only, and consulted signatures just
+            // for names in CALL position. So the same name worked in
+            // one place and was invisible in the other.
+            //
+            // `infer_partial_call` with NO arguments already is the
+            // eta-expansion this needs -- every parameter becomes
+            // residual, and it builds `TClosure(params, TFnCall(..))`
+            // over them. The backend needs nothing new; closures
+            // already work, which is why the workaround (writing
+            // `|n| double(n)` by hand) always did.
+            None => match find_sig(p2, name) {
+                Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
+                None => match builtin_sig(name) {
+                    Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
+                    None => if is_capitalized_name(name) { infer_variant_ref(p2, state, acc, name) } else { { fail_tc("unbound variable: ".concat(name)); ir_unsupported(acc, state, "unbound variable ".concat(name)) } },
+                },
+            },
         },
     }
 
@@ -807,6 +830,33 @@ let infer_field (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
 let find_field_template (fields: Array[StructFieldTemplate]) (name: String): Option[ITy] = find_field_template_acc(fields, name, 0)
 let find_field_template_acc (fields: Array[StructFieldTemplate]) (name: String) (i: Int): Option[ITy] =
     if i >= fields.len() { None } else if fields[i].name == name { Some(fields[i].ty) } else { find_field_template_acc(fields, name, i + 1) }
+
+// A variant tag referenced BARE. With no payload that is just the
+// value (`None`); with one it is the CONSTRUCTOR as a function --
+// `Array.map(xs, Circle)` -- and eta-expands exactly as a bare
+// function name does.
+//
+// Without this the bare reference reached `infer_variant` with no
+// arguments and reported "variant expects a different number of
+// arguments", which describes a call nobody wrote.
+let infer_variant_ref (p2: Program2) (state: FreshState) (acc: Subst) (tag: String): InferResult =
+    match find_variant(p2.ctx, tag) {
+        None => { fail_tc("unbound variant/function: ".concat(tag)); ir_unsupported(acc, state, "unbound variant ".concat(tag)) },
+        Some(v) => {
+            let fr = fresh_list(state, v.enum_generics.len());
+            let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
+            if Array.is_empty(payload) { infer_variant(p2, state, acc, tag, [], []) }
+            else {
+                let names = partial_param_names(payload.len(), 0, []);
+                let ret_ty = ITEnum(v.enum_name, fr.tys);
+                let fn_ty = ITFunction(payload, ret_ty);
+                InferResult {
+                    ty: fn_ty, subst: acc, state: fr.state,
+                    texpr: TExpr { ty: fn_ty, node: TClosure(names, TExpr { ty: ret_ty, node: TVariantNew(tag, partial_param_refs(names, payload, 0, [])) }) },
+                }
+            }
+        },
+    }
 
 let infer_variant (p2: Program2) (state: FreshState) (acc: Subst) (tag: String) (arg_tys: Array[ITy]) (arg_texprs: Array[TExpr]): InferResult =
     match find_variant(p2.ctx, tag) {

@@ -14,16 +14,20 @@ after editing any shim; `bootstrap/check-shims` fails if the checked-in
 copy has drifted, so a forgotten regeneration is caught rather than
 discovered later as a mysterious link error.
 
-`net_shim.c` is deliberately absent: the self-hosted runtime declares
-nothing from it, and embedding an unused 166 lines into every compiler
-binary buys nothing.
+`net_shim.c` was deliberately absent until 2026-08-21, on the reasoning
+that the runtime declares nothing from it and embedding an unused 166
+lines buys nothing. True of the RUNTIME and false of the point: a
+compiled PROGRAM can call `tcp_*`, and without the shim embedded here
+it cannot be linked. The self-hosted compiler had no networking prelude
+at all, so nothing noticed until the Rust backend was deleted and HTTP
+programs stopped being compilable by anything.
 """
 
 import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SHIMS = ["dir_shim.c", "io_shim.c", "process_shim.c", "thread_shim.c"]
+SHIMS = ["dir_shim.c", "io_shim.c", "net_shim.c", "process_shim.c", "thread_shim.c"]
 OUT = ROOT / "bootstrap" / "self_host" / "shims" / "shims.plum"
 
 HEADER = '''// The C shims this compiler links into every binary it produces --
@@ -40,8 +44,10 @@ HEADER = '''// The C shims this compiler links into every binary it produces --
 // through `include_str!`, for the same reason; Plum has no equivalent,
 // so the embedding is generated.
 //
-// `net_shim.c` is not here: the self-hosted runtime declares nothing
-// from it.
+// `net_shim.c` IS here, since 2026-08-21. It was left out on the
+// reasoning that the runtime declares nothing from it -- true, and
+// beside the point: a compiled PROGRAM calls `tcp_*`, and without the
+// shim embedded here it cannot be linked.
 
 pub struct ShimFile { name: String, source: String }
 

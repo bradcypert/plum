@@ -13580,3 +13580,187 @@ Two details that a naive scan gets wrong, and both are tested:
 An out-of-range exponent (`1e400`) parses to `inf`, matching every
 other IEEE overflow in the language, so the lexer's remaining `expect`
 still cannot fire on user input.
+
+## Networking, ported (2026-08-21)
+
+The self-hosted compiler had no networking prelude: no `tcp_*`, no
+`http_*`, no `env_var`, no `print`. Deleting the Rust backend earlier
+the same day turned that from a gap into a REGRESSION — an HTTP program
+became compilable by nothing at all. Interpretable, not buildable.
+
+```
+$ ./sh build http-program
+self-hosted type checker: unbound function: http_get
+```
+
+Every harness passed through that deletion because no example, corpus
+fixture or smoke test used networking. A sweep only sees what is in it.
+
+### Found by diffing the two preludes
+
+The productive move all week has been looking for the same thing
+written twice. The two preludes are the largest remaining instance —
+`crates/plumc/src/lib.rs`'s `STDLIB_*_SRC` constants against
+`bootstrap/self_host/codegen/prelude.plum` — and comparing their
+function surfaces turned up ~50 names present in one and not the other.
+Most were internal helpers with different naming conventions
+(`array_find_acc` versus `plum__array_find_acc`). The user-facing
+residue was the whole networking stack.
+
+### The shim was the easy half
+
+`native_stdlib/net_shim.c` existed and was deliberately NOT embedded,
+with a stated reason: "the self-hosted runtime declares nothing from
+it, and embedding an unused 166 lines into every compiler binary buys
+nothing." True of the RUNTIME and beside the point — a compiled
+PROGRAM calls `tcp_*`, and without the shim embedded it cannot link.
+Added to `bootstrap/gen-shims`.
+
+### The port itself is a transcription
+
+TCP is an `extern "C"` block plus six `Result`-wrapping functions. HTTP
+is 320 lines and 24 functions of ORDINARY PLUM on top of it, with no
+IR, backend or extern surface of its own — which is exactly what
+building TCP first bought, and what made this a transcription rather
+than a reimplementation.
+
+A prelude comment claiming "this backend has no `extern \"C\"`/`unsafe`
+support" was stale; the FFI work landed earlier and
+`exec_corpus/ffi` proves it.
+
+Verified compiled, not merely type-checked: a TCP loopback round trip
+across a `spawn`ed thread, and an `http_get` against an
+`http_serve_once` in the same program, both byte-identical to the
+interpreter.
+
+### Two lines are not verbatim, and they mark a real gap
+
+```plum
+|> Result.and_then(_, http_parse_head)          // real compiler
+|> Result.and_then(_, |h| http_parse_head(h))   // here
+```
+
+The self-hosted compiler has NO function-as-value support:
+
+```
+Array.map([1, 2, 3], double)
+  real:  [2, 4, 6]
+  here:  error: unbound variable: double
+```
+
+Eta-expanding by hand is a workaround, not a fix, and the gap bites
+users directly rather than only the prelude — passing a named handler
+to `http_serve_once(port, handler)` is the natural way to use the
+server API and does not compile. The lambda form does.
+
+That is the next thing to fix, and it is a real feature: the checker
+would need a bare identifier that resolves to a function to produce an
+`ITFunction`, and the backend would need to build a closure over a
+top-level function.
+
+### The fixture is a script, not a corpus entry
+
+The first attempt put this in `exec_corpus` and it HUNG. A networking
+test fails differently from every other kind: when a client connects
+before its server has listened, the accept blocks forever and the
+process never exits. A hang inside `corpus-check` is far worse than no
+coverage, because it blocks every future run of everything.
+
+`bootstrap/net-smoke` instead, with a hard `timeout` -- the same shape
+as `lsp-smoke` and `test-smoke`, both of which also need a live process
+and where a hang is a clean failure with a message saying so.
+
+The TCP half is race-free by construction: `main` creates the LISTENING
+socket before anything can connect, and only then spawns the acceptor.
+The HTTP half cannot be, since `http_serve_once` listens and accepts
+internally, so the client retries instead -- a refused connection
+returns immediately, so a bounded retry covers the server's startup
+window without needing a sleep primitive, and a server that never comes
+up ends the loop rather than hanging it.
+
+## Functions as values (2026-08-21)
+
+Passing a function by NAME did not compile:
+
+```plum
+let double (n: Int): Int = n * 2
+Array.map([1, 2, 3], double)      // unbound variable: double
+Array.map([1, 2, 3], |n| double(n))  // fine
+```
+
+"Unbound variable" about a function defined three lines up. The
+checker looked a bare name up among LOCALS only, and consulted
+signatures just for names in CALL position — so the same name worked in
+one position and was invisible in the other.
+
+Also missing: a function bound to a variable (`let f = double`), and an
+enum CONSTRUCTOR used as a value (`Array.map(xs, Circle)`), which
+reported "variant expects a different number of arguments" —
+describing a call nobody wrote.
+
+### It bit real code
+
+Two lines of the HTTP prelude had to be eta-expanded by hand during
+its port the same day, and the natural way to use the server API did
+not compile:
+
+```plum
+http_serve_once(8080, handler)              // did not compile
+http_serve_once(8080, |req| ...inline...)   // did
+```
+
+Fine for a three-line handler and unpleasant for a thirty-line one.
+
+### The fix was already written
+
+`infer_partial_call` — partial application — with NO arguments IS the
+eta-expansion this needs: every parameter becomes residual and it
+builds `TClosure(params, TFnCall(..))` over them. `infer_ident` now
+falls back to it when a bare name resolves to a signature. The backend
+needed nothing at all, which is exactly why writing `|n| double(n)` by
+hand always worked: that is the same tree.
+
+Enum constructors get the same treatment through a small
+`infer_variant_ref`, which eta-expands a tag with a payload and leaves
+a payload-less one as the plain value it is.
+
+Generics came along for free rather than needing to be excluded:
+`infer_partial_call` already instantiates with fresh variables, so
+`Array.map([1,2], id)` and `Array.map(["a","b"], id)` both work and the
+use site pins the type.
+
+The HTTP prelude's two hand-expansions were reverted; it is verbatim
+against the real prelude again, and `http_serve_once(port, handler)`
+with a named handler works.
+
+### Still not a value: a QUALIFIED name
+
+`Array.map(xs, String.len)` reports `unbound variant/function: String`.
+A dotted name goes down the namespace-call path rather than the
+identifier path and never reaches this fallback. A real remaining gap,
+narrower than the one closed, and stated rather than left to be found.
+
+## `print` and `env_var` (2026-08-21)
+
+Both existed in the real prelude and not the self-hosted one — the
+remaining user-facing residue of the same prelude diff that turned up
+the networking stack. `print` is `println` without the newline;
+`env_var` reads the environment, returning `None` when unset.
+
+Two things went wrong on the way in, both worth keeping:
+
+- The runtime function was first named `@plum_print`, which is exactly
+  what a Plum function called `print` mangles to — `invalid
+  redefinition of function 'plum_print'`. A runtime symbol has to be
+  named for the intercepted STUB (`print_raw` -> `@plum_print_raw`),
+  because a stub is never emitted and its mangled name is therefore
+  free. That is why `@plum_read_file_raw` and the rest are safe.
+- `@plum_alloc_array` and a 24-byte element offset were copied from the
+  real backend's runtime. This one is `@plum_array_new` with the slot
+  at 16. The first mistake failed to link; the second would have
+  linked and been wrong.
+
+A duplicate `declare ptr @getenv(ptr)` was also caught before it
+compiled — the fifth such collision in this file, after `memcmp`,
+`strlen`, `stdout_flush` and `process_run_inherit`. There is now a note
+at the declare list saying to check first.

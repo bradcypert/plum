@@ -110,6 +110,7 @@ current by remembering to, and this project has been wrong about
 exactly that kind of number more than once. The scripts print their
 own.
 | `test-smoke` | `plum test` really runs tests, and both compilers agree |
+| `net-smoke` | TCP and HTTP work in a compiled binary |
 | `lsp-smoke` | the language server answers a real session |
 | `check-shims` | the embedded C shims match `native_stdlib/` |
 | `record-examples` | regenerates the `examples/*/expected.txt` the sweep checks against |
