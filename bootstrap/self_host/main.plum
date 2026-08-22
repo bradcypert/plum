@@ -231,18 +231,79 @@ let lsp_read_headers (len: Int): Int = {
 // error a user typed. `/proc/self/exe` is the same trick `cmd_test`
 // uses -- no path to look up, and no chance of running a different
 // build than this one.
-let lsp_check (path: String): Array[JsonValue] =
-    match run_process("/proc/self/exe", ["check", lsp.dir_of(path)]) {
-        Err(_) => [],
-        Ok(r) =>
-            if r.exit_code == 0 { [] }
-            else {
-                match lsp.parse_diagnostic(r.stdout.concat(r.stderr)) {
-                    Some(d) => [lsp.diagnostic_json(d)],
-                    None => [],
-                }
-            },
+let lsp_check (dir: String): Option[lsp.Diagnostic] =
+    match run_process("/proc/self/exe", ["check", dir]) {
+        Err(_) => None,
+        Ok(r) => if r.exit_code == 0 { None } else { lsp.parse_diagnostic(r.stdout.concat(r.stderr)) },
     }
+
+// Check a project whose edited file has UNSAVED content.
+//
+// The checker reads from disk, so it is given a disk that matches the
+// buffer: the project is copied into a temp directory and the edited
+// file is overwritten there with the text the editor sent. Nothing in
+// the user's tree is touched -- writing the buffer into the real file
+// would be a language server silently saving on your behalf, which is
+// never acceptable.
+//
+// The copy is per keystroke. A Plum project is a handful of small
+// files, and the alternative -- threading an in-memory overlay through
+// `collect_project` and every path it resolves -- is a much larger
+// change for a cost that has not been shown to matter. Measurable
+// later if it does.
+//
+// Paths in the resulting diagnostic point INTO the temp directory, so
+// the caller maps them back; see `lsp_real_path`.
+struct BufferCheck { diagnostic: Option[lsp.Diagnostic], scratch: String }
+
+let lsp_check_buffer (path: String) (text: String): BufferCheck =
+    match run_process("mktemp", ["-d"]) {
+        Err(_) => BufferCheck { diagnostic: None, scratch: "" },
+        Ok(t) => {
+            let scratch = String.trim_end(t.stdout);
+            let dir = lsp.dir_of(path);
+            // `<dir>/.` copies the CONTENTS, so the project lands
+            // directly in the scratch dir rather than nested inside a
+            // directory named after it -- module paths depend on that.
+            let copied = run_process("cp", ["-r", dir.concat("/."), scratch]);
+            let target = scratch.concat("/").concat(lsp.base_of(path));
+            match write_file(target, text) {
+                Err(_) => { let c = run_process("rm", ["-rf", scratch]); BufferCheck { diagnostic: None, scratch: "" } },
+                Ok(_) => BufferCheck { diagnostic: lsp_check(scratch), scratch: scratch },
+            }
+        },
+    }
+
+// A diagnostic reported inside the scratch copy, mapped back to the
+// file the user is actually editing. Without this every error would
+// point at a temp directory that will not exist a moment later.
+let lsp_real_path (d: lsp.Diagnostic) (scratch: String) (dir: String): String =
+    if scratch != "" && d.path.starts_with(scratch) {
+        dir.concat(String.slice(d.path, scratch.len(), d.path.len()))
+    } else { d.path }
+
+// Publish for the edited document AND, when the error lives in another
+// file of the same project, for that one too.
+//
+// The empty publish for `uri` is what CLEARS a stale error: an editor
+// keeps showing the last diagnostics it was given until it is told
+// otherwise, so a fixed mistake stays on screen unless the fix
+// publishes an empty list.
+let lsp_publish (uri: String) (d: Option[lsp.Diagnostic]) (scratch: String): Unit = {
+    let dir = lsp.dir_of(lsp.uri_to_path(uri));
+    match d {
+        None => lsp_send(lsp.publish_message(uri, [])),
+        Some(diag) => {
+            let real = lsp_real_path(diag, scratch, dir);
+            let target = if real == "" { uri } else { lsp.path_to_uri(real) };
+            if target == uri { lsp_send(lsp.publish_message(uri, [lsp.diagnostic_json(diag)])) }
+            else {
+                lsp_send(lsp.publish_message(uri, []));
+                lsp_send(lsp.publish_message(target, [lsp.diagnostic_json(diag)]))
+            }
+        },
+    }
+}
 
 let lsp_serve (): Unit = lsp_loop(true)
 
@@ -272,7 +333,30 @@ let lsp_handle (body: String): Bool =
             } else if req.method == "textDocument/didOpen" || req.method == "textDocument/didSave" {
                 let uri = lsp.document_uri(req.params);
                 if uri == "" { () }
-                else { lsp_send(lsp.publish_message(uri, lsp_check(lsp.uri_to_path(uri)))) };
+                else { lsp_publish(uri, lsp_check(lsp.dir_of(lsp.uri_to_path(uri))), "") };
+                true
+            } else if req.method == "textDocument/didChange" {
+                // Errors AS YOU TYPE. The buffer is unsaved, so the
+                // check runs against a snapshot of the project with
+                // this file's text substituted -- see
+                // `lsp_check_buffer`.
+                let uri = lsp.document_uri(req.params);
+                if uri == "" { () }
+                else {
+                    match lsp.change_text(req.params) {
+                        // No full text means the client negotiated
+                        // incremental sync despite this server asking
+                        // for full. Checking the stale file on disk
+                        // would report the wrong lines, which is worse
+                        // than reporting nothing.
+                        None => (),
+                        Some(text) => {
+                            let bc = lsp_check_buffer(lsp.uri_to_path(uri), text);
+                            lsp_publish(uri, bc.diagnostic, bc.scratch);
+                            if bc.scratch == "" { () } else { let c = run_process("rm", ["-rf", bc.scratch]); () }
+                        },
+                    }
+                };
                 true
             } else {
                 // An unknown NOTIFICATION is ignored; an unknown REQUEST

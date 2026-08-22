@@ -1,16 +1,44 @@
 #!/usr/bin/env bash
 # End-to-end LSP smoke test: initialize, open a file with a known error,
-# expect a diagnostic on the right line, then shut down.
+# expect a diagnostic on the right line, edit an UNSAVED buffer and see
+# the diagnostics follow it, then shut down.
+#
+# The `didChange` half is what proves live diagnostics work on the
+# BUFFER rather than on disk. Its assertions deliberately include the
+# clearing case: an editor keeps showing the last diagnostics it was
+# handed, so a fix that publishes nothing leaves the error on screen
+# forever.
 cd /home/brad/Projects/plum
-work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+work=$(mktemp -d)
 printf 'struct P { x: Int }\n\nlet f (p: P): Int = p.nope\n' > "$work/main.plum"
 # A second, well-typed project: hover on a LOCAL needs the project to
 # check cleanly, which the one above deliberately does not.
 mkdir -p "$work/ok"
 printf 'struct P { x: Int }\n\nlet f (p: P): Int = {\n    let n = p.x;\n    n + 1\n}\n' > "$work/ok/main.plum"
-python3 - "$work" > "$work/session.bin" <<'PY'
+# A THIRD project, clean on disk, for the unsaved-buffer half. It must
+# start clean so that any diagnostic can only have come from the
+# buffer -- if it started broken, a stale on-disk read would look like
+# success.
+# In its OWN temp root, not under `$work`: a directory IS a project
+# here, so a deliberately-broken fixture nested inside `$work` becomes
+# part of `$work`'s own project and poisons the diagnostics the earlier
+# assertions look for. That is exactly what happened on the first
+# attempt.
+live=$(mktemp -d); trap 'rm -rf "$work" "$live" "$multi"' EXIT
+printf 'let main (): Unit = println("clean on disk")\n' > "$live/main.plum"
+# A multi-file project: the error lives in `other.plum` while the edit
+# happens in `main.plum`. The diagnostic must be attributed to the file
+# it is IN. Before the path was carried through, it was reported
+# against whichever document triggered the check, at the other file's
+# line number.
+multi=$(mktemp -d)
+printf 'let main (): Unit = println(helper())\n' > "$multi/main.plum"
+printf 'let helper (): String = "ok"\nlet oops (): Int = "wrong"\n' > "$multi/other.plum"
+python3 - "$work" "$live" "$multi" > "$work/session.bin" <<'PY'
 import json, sys
 d = sys.argv[1]
+live = sys.argv[2]
+multi = sys.argv[3]
 msgs = [
   {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
   {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % d}}},
@@ -24,6 +52,17 @@ msgs = [
   # (line 3) -- the name index cannot do this, it only knows top-level
   # definitions
   {"jsonrpc":"2.0","id":6,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://%s/ok/main.plum" % d},"position":{"line":4,"character":4}}},
+  # --- live diagnostics, on unsaved text ---
+  {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % live}}},
+  # an UNSAVED edit that BREAKS the file; disk still holds the good one
+  {"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file://%s/main.plum" % live},
+    "contentChanges":[{"text":'let main (): Unit = println("x")\nlet broken (): Int = "not an int"\n'}]}},
+  # and an unsaved edit that FIXES it again
+  {"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file://%s/main.plum" % live},
+    "contentChanges":[{"text":'let main (): Unit = println("x")\nlet fixed (): Int = 1\n'}]}},
+  # editing one file while the error is in ANOTHER
+  {"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file://%s/main.plum" % multi},
+    "contentChanges":[{"text":'let main (): Unit = println(helper())\n'}]}},
   {"jsonrpc":"2.0","id":2,"method":"shutdown"},
   {"jsonrpc":"2.0","method":"exit"},
 ]
@@ -42,5 +81,20 @@ echo "$out" | grep -q '"value":"struct P"' || { echo "FAIL: hover did not report
 echo "$out" | grep -q '"id":4,"result":{"uri"' || { echo "FAIL: no definition location"; fail=1; }
 echo "$out" | grep -q '"value":"n: Int"' || { echo "FAIL: hover did not infer the local's type"; fail=1; }
 echo "$out" | grep -q '"id":6,"result":{"uri":[^}]*"line":3' || { echo "FAIL: go-to-definition did not reach the local's binding"; fail=1; }
+# --- live diagnostics ---
+# The error text can ONLY have come from the buffer: the file on disk
+# says `println("clean on disk")` and nothing else.
+echo "$out" | grep -q 'function broken: declared return type Int' || { echo "FAIL: an unsaved edit produced no diagnostic"; fail=1; }
+# ...and the disk file must still say that afterwards. A language
+# server that writes your buffer out to check it is saving for you.
+grep -q 'clean on disk' "$live/main.plum" || { echo "FAIL: checking an unsaved buffer MODIFIED the file on disk"; fail=1; }
+# The fixing edit must publish an EMPTY list for that file, or the
+# error stays on screen forever.
+echo "$out" | grep -q "$live/main.plum\",\"diagnostics\":\[\]" || { echo "FAIL: a fixed buffer did not clear its diagnostics"; fail=1; }
+# An error in another file is attributed to THAT file, not to the one
+# being edited.
+echo "$out" | grep -q "$multi/other.plum\",\"diagnostics\":\[{" || { echo "FAIL: a cross-file error was not attributed to the file it is in"; fail=1; }
+echo "$out" | grep -q "$multi/main.plum\",\"diagnostics\":\[\]" || { echo "FAIL: the edited file should have no diagnostics of its own"; fail=1; }
+
 [ $fail -eq 0 ] && echo "lsp smoke: ok"
 exit $fail

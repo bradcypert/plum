@@ -13903,3 +13903,70 @@ running the thing rather than recalling it:
 The packaging steps were run locally rather than trusted as YAML: a
 617KB tarball that unpacks, reports its version, and builds and runs a
 program from an unrelated directory.
+
+## Live diagnostics (2026-08-22)
+
+Errors now appear as you type, not only when you save.
+
+### The blocker was real, and the conclusion drawn from it was not
+
+`lsp.plum` said, plainly:
+
+> Deliberately NOT supported in v1, stated rather than discovered:
+> unsaved buffers. `didChange` does not re-check, because the checker
+> reads from disk and reporting disk state against an edited buffer
+> means reporting the wrong lines. Saving re-checks.
+
+The constraint is true — the checker does read from disk. The
+conclusion is not forced. The fix is to give it a disk that matches the
+buffer: `didChange` copies the project into a temp directory,
+substitutes the edited file's unsaved text, and checks THAT.
+
+Writing the buffer into the user's own file was never an option. A
+language server that saves for you in order to check you is worse than
+one that does not check.
+
+The copy happens per keystroke. A Plum project is a handful of small
+files, and the alternative — threading an in-memory overlay through
+`collect_project` and every path it resolves — is a much larger change
+for a cost not yet shown to matter. Measured at **26ms per edit**,
+which is comfortably inside a keystroke.
+
+### A latent wrongness that live diagnostics would have made visible
+
+`Diagnostic` had no `path`. The checker prints `--> <path>:<line>:<col>`
+and the parser took the line and column and threw the path away, so
+every diagnostic was attributed to whichever document triggered the
+check.
+
+Harmless when that only happened on save and usually on the file you
+just saved. Actively misleading once it happens per keystroke: an error
+in `other.plum` would appear in `main.plum`, at `other.plum`'s line
+number, while you typed.
+
+`Diagnostic` carries its path now, and publishing targets the file the
+error is IN — with an empty publish for the edited file, since an
+editor keeps showing the last diagnostics it was handed until told
+otherwise. A fixed error that publishes nothing stays on screen
+forever.
+
+### What the smoke test asserts
+
+`bootstrap/lsp-smoke` gained four assertions, and each is a thing that
+can silently regress:
+
+- an unsaved edit produces a diagnostic whose text can ONLY have come
+  from the buffer, since the file on disk says something else
+- the file on disk is UNCHANGED afterwards
+- a fixing edit publishes an empty list, clearing the error
+- an error in another file is attributed to that file, and the edited
+  file gets an empty list
+
+Verified by removing the `didChange` handler and confirming three of
+the four fail. A harness that passes proves nothing until it has been
+watched failing.
+
+The fixtures live in their own temp roots. Nested under the existing
+one they became part of ITS project — a directory is a project here —
+and their deliberate errors poisoned the assertions the older tests
+depend on. That happened on the first attempt.

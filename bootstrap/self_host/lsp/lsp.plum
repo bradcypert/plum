@@ -20,10 +20,14 @@
 // real LSP does exists to fix a race that a single-threaded loop cannot
 // have.
 //
-// Deliberately NOT supported in v1, stated rather than discovered:
-// unsaved buffers. `didChange` does not re-check, because the checker
-// reads from disk and reporting disk state against an edited buffer
-// means reporting the wrong lines. Saving re-checks.
+// **Unsaved buffers are supported.** This note used to say they were
+// not: "`didChange` does not re-check, because the checker reads from
+// disk and reporting disk state against an edited buffer means
+// reporting the wrong lines." The constraint was real -- the checker
+// does read from disk -- but the conclusion was not forced. The fix is
+// to give it a disk to read that matches the buffer: `didChange`
+// snapshots the project into a temp directory, substitutes the edited
+// file's unsaved text, and checks THAT. See `lsp_check_buffer`.
 
 // --- JSON helpers ---
 //
@@ -106,6 +110,10 @@ pub let notification (method: String) (params: JsonValue): String =
 pub let capabilities (): JsonValue =
     JsonObject([
         JsonEntry { key: "capabilities", value: JsonObject([
+            // 1 = FULL sync: the client sends the whole document on
+            // every change. That is what makes live diagnostics
+            // possible without this server keeping its own buffer --
+            // see `change_text`.
             JsonEntry { key: "textDocumentSync", value: JsonNumber(1.0) },
             JsonEntry { key: "hoverProvider", value: JsonBool(true) },
             JsonEntry { key: "definitionProvider", value: JsonBool(true) },
@@ -114,7 +122,13 @@ pub let capabilities (): JsonValue =
 
 // --- Diagnostics ---
 
-pub struct Diagnostic { line: Int, col: Int, message: String }
+// `path` is the file the error is IN, which is not always the file
+// being edited: a project is several files and a mistake in one is
+// reported while you type in another. It used to be parsed off the
+// `-->` line and thrown away, so every diagnostic was attributed to
+// whatever document triggered the check -- harmless when that only
+// happened on save, actively misleading once it happens per keystroke.
+pub struct Diagnostic { path: String, line: Int, col: Int, message: String }
 
 // The checker's own output, parsed back. It looks like
 //
@@ -137,7 +151,7 @@ let find_arrow (lines: Array[String]) (message: String) (i: Int): Option[Diagnos
     if i >= lines.len() {
         // A message with no `-->` still deserves to be reported; it just
         // has nowhere better to point than the top of the file.
-        Some(Diagnostic { line: 1, col: 1, message: message })
+        Some(Diagnostic { path: "", line: 1, col: 1, message: message })
     } else {
         let t = String.trim_start(lines[i]);
         if t.starts_with("--> ") {
@@ -145,11 +159,15 @@ let find_arrow (lines: Array[String]) (message: String) (i: Int): Option[Diagnos
             let parts = rest.split(":");
             if parts.len() >= 3 {
                 Some(Diagnostic {
+                    // Everything before the final two colons. A path may
+                    // contain colons of its own, so this rejoins rather
+                    // than taking `parts[0]`.
+                    path: String.join(Array.slice(parts, 0, parts.len() - 2), ":"),
                     line: Result.unwrap_or(String.parse_int(parts[parts.len() - 2]), 1),
                     col: Result.unwrap_or(String.parse_int(parts[parts.len() - 1]), 1),
                     message: message,
                 })
-            } else { Some(Diagnostic { line: 1, col: 1, message: message }) }
+            } else { Some(Diagnostic { path: "", line: 1, col: 1, message: message }) }
         } else { find_arrow(lines, message, i + 1) }
     }
 
@@ -193,6 +211,14 @@ pub let dir_of (path: String): String = {
     let cs = chars_of(path);
     let i = last_slash(cs, cs.len() - 1);
     if i < 0 { "." } else { String.slice(path, 0, i) }
+}
+
+// The filename alone -- `/a/b/c.plum` -> `c.plum`. The counterpart of
+// `dir_of`, and used to place a buffer's text inside the scratch copy.
+pub let base_of (path: String): String = {
+    let cs = chars_of(path);
+    let i = last_slash(cs, cs.len() - 1);
+    if i < 0 { path } else { String.slice(path, i + 1, path.len()) }
 }
 
 let last_slash (cs: Array[String]) (i: Int): Int =
@@ -323,6 +349,21 @@ pub let params_line (params: JsonValue): Int =
 
 pub let params_col (params: JsonValue): Int =
     match json_field(params, "position") { Some(p) => json_field_int(p, "character") + 1, None => 1 }
+
+pub let path_to_uri (path: String): String =
+    if path.starts_with("file://") { path } else { "file://".concat(path) }
+
+// `didChange` under FULL sync (`textDocumentSync: 1`) carries the whole
+// document in the last content change, which is why full sync is what
+// this server asks for: an incremental range would have to be applied
+// to a buffer this server does not keep.
+pub let change_text (params: JsonValue): Option[String] =
+    match json_field(params, "contentChanges") {
+        Some(JsonArray(changes)) =>
+            if Array.is_empty(changes) { None }
+            else { Some(json_field_str(changes[changes.len() - 1], "text")) },
+        _ => None,
+    }
 
 pub let document_uri (params: JsonValue): String =
     match json_field(params, "textDocument") {
