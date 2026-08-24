@@ -16,7 +16,7 @@ work.
 | Tier | Meaning | Platforms |
 |---|---|---|
 | 1 | Full harness suite green in CI. Binaries published. | Linux x86_64 |
-| 2 | `bootstrap/platform-smoke` green in CI. Binaries published. | macOS arm64, macOS x86_64 |
+| 2 | `bootstrap/platform-smoke` green in CI. Binaries published. | macOS arm64 (green), macOS x86_64 (runner queue) |
 | 3 | Expected to work. Untested, unpublished, no promise. | Linux arm64 |
 | — | Known not to work. | Windows |
 
@@ -150,10 +150,17 @@ in-process type error would take the language server down.
   rather than followed into; tested against a symlink pointing outside
   the tree.
 
-**None of the macOS work is verified yet.** It is verified when the CI
-legs above go green, and not before. Expect the first run to find
-something — glibc and Apple's libc differ most in `snprintf` and
-float formatting, which is exactly what the fixtures compare.
+**macOS arm64 is verified.** The `macos-15` CI leg is green: the seed
+bootstraps a compiler, that compiler builds a compiler, and 43 real
+programs build and print the right answer on Apple Silicon. It took two
+runs — the first found the locale bug described above.
+
+The guess about what would break was wrong, which is worth recording.
+Float formatting was expected to differ between glibc and Apple's libc
+and did not; every float fixture passed first time. The failure was
+character case mapping, from a hardcoded libc constant. Predicting
+which part of a port breaks is not something this project has been
+good at.
 
 ## Left to do
 
@@ -222,6 +229,28 @@ Nothing that needs Windows. What could be checked here, was:
 
 Nearly free once macOS arm64 is green, since that proves the compiler
 produces correct code for the architecture. Mostly a runner change.
+
+## What the second CI run found
+
+macOS arm64 and Linux both went green. Windows got much further: the
+whole shim set compiled and linked under MinGW, and `from-seed`
+produced a working compiler binary. It then failed building anything,
+on this:
+
+```
+net_shim.c:48:10: fatal error: 'sys/socket.h' file not found
+```
+
+Self-inflicted, and instructive. The Winsock port moved the socket
+headers into a platform guard — but only from `netinet/in.h` down.
+`sys/types.h` and `sys/socket.h` sat two lines above the edited region
+and stayed outside it. The port looked complete and compiled fine on
+Linux, where the guard is inert.
+
+`bootstrap/check-shims` now rejects a non-portable header outside a
+platform guard, so this cannot recur quietly. `dirent.h`, `pthread.h`
+and `unistd.h` are deliberately not on its list: MinGW-w64 provides all
+three, which the CI leg proved by linking three shims that use them.
 
 ## What the first CI run found
 

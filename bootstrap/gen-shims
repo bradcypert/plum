@@ -87,9 +87,50 @@ def generate() -> str:
     return "".join(out)
 
 
+# Headers that DO NOT EXIST on Windows, even under MinGW-w64. A shim
+# that includes one of these outside a platform guard cannot compile
+# there, and the failure is a fatal error in a temp directory during
+# someone else's build -- see `net_shim.c`, which shipped exactly this
+# and was caught only by CI.
+#
+# `dirent.h`, `pthread.h` and `unistd.h` are deliberately ABSENT from
+# this list. MinGW-w64 provides all three, which is not a guess: the
+# Windows CI leg links `dir_shim.c`, `os_shim.c` and `thread_shim.c`
+# successfully. Listing them would be a false alarm, and a check that
+# cries wolf gets switched off.
+WINDOWS_ABSENT = (
+    "sys/socket.h", "sys/wait.h", "netinet/in.h", "netdb.h",
+    "arpa/inet.h", "mach-o/dyld.h", "malloc/malloc.h",
+)
+
+
+def unguarded_headers():
+    """Every non-portable #include sitting at conditional depth zero."""
+    problems = []
+    for shim in SHIMS:
+        depth = 0
+        for n, line in enumerate((ROOT / "native_stdlib" / shim).read_text().splitlines(), 1):
+            s = line.strip()
+            if s.startswith("#if"):
+                depth += 1
+            elif s.startswith("#endif"):
+                depth -= 1
+            elif depth == 0 and s.startswith("#include"):
+                for h in WINDOWS_ABSENT:
+                    if "<%s>" % h in s:
+                        problems.append("%s:%d: %s is not on Windows and is outside any #if" % (shim, n, h))
+    return problems
+
+
 if __name__ == "__main__":
     text = generate()
     if "--check" in sys.argv:
+        bad = unguarded_headers()
+        if bad:
+            print("non-portable headers outside a platform guard:", file=sys.stderr)
+            for b in bad:
+                print("  " + b, file=sys.stderr)
+            sys.exit(1)
         current = OUT.read_text() if OUT.exists() else ""
         if current != text:
             print("shims.plum is out of date -- run bootstrap/gen-shims", file=sys.stderr)

@@ -44,8 +44,6 @@
 // outcome, not a language-level abort. The real distinction (clean
 // close vs. genuine error) is discarded — a real, documented v1
 // limitation, not silently swept.
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -86,6 +84,8 @@ static int plum_net_init(void) {
     return 0;
 }
 #else
+#include <sys/types.h>
+#include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <arpa/inet.h>

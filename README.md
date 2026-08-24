@@ -44,7 +44,7 @@ programs on it. Nothing here is merely expected to work.
 |---|---|
 | Linux x86_64 | Full test suite, including leak checking under ASan |
 | macOS arm64 | 43 programs built and run in CI |
-| macOS x86_64 | Same |
+| macOS x86_64 | Same, when a runner is available |
 | Linux arm64 | Untested, unpublished |
 | Windows | Not yet supported. WSL works |
 
