@@ -45,9 +45,10 @@ fi
 # clang directly, not `plum compile-ir`. That call was a leftover: it
 # needed a Rust binary for a step that is a call to clang, and `sh
 # build` has linked its own output since the self-sufficiency check
-# started passing. The four shims are the ones the compiler embeds
+# started passing. The shims are the ones the compiler embeds
 # (see `bootstrap/gen-shims`).
 clang -O2 -Wno-override-module "$ll" \
-    "$root/native_stdlib/dir_shim.c" "$root/native_stdlib/io_shim.c" \
+    "$root/native_stdlib/compat_shim.c" "$root/native_stdlib/dir_shim.c" \
+    "$root/native_stdlib/io_shim.c" \
     "$root/native_stdlib/process_shim.c" "$root/native_stdlib/thread_shim.c" \
     -lm -o "$out"

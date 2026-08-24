@@ -16,8 +16,11 @@ survives is an interpreter used as a test oracle — see "The Rust
 interpreter" below.
 
 See [DESIGN.md](DESIGN.md) for the full design history and rationale
-behind every decision below. This README is the practical, "how do I
-actually use it" companion.
+behind every decision below, and [MAINTENANCE.md](MAINTENANCE.md) for
+how to change the compiler without breaking it — the test harnesses,
+when to refresh the bootstrap seed, and the traps that have caught
+people before. This README is the practical, "how do I actually use
+it" companion.
 
 ## Installing
 
@@ -32,8 +35,24 @@ tar -xzf plum-0.0.1-x86_64-linux.tar.gz
 ./plum-0.0.1-x86_64-linux/plum version
 ```
 
-Linux x86_64 only so far. macOS and aarch64 are not published because
-they are not tested.
+### Platforms
+
+A platform is published only once something in CI builds and runs real
+programs on it. Nothing here is merely expected to work.
+
+| Platform | Status |
+|---|---|
+| Linux x86_64 | Full test suite, including leak checking under ASan |
+| macOS arm64 | 42 programs built and run in CI. The language server does not work yet |
+| macOS x86_64 | Same |
+| Linux arm64 | Untested, unpublished |
+| Windows | Not yet supported. WSL works |
+
+macOS is a step down from Linux and it is worth knowing why: Plum is
+refcounted, so a leak is a miscompile rather than untidiness, and
+LeakSanitizer does not exist on Darwin. Correctness is established on
+Linux. See [PORTING.md](PORTING.md) for what that costs and what is
+left.
 
 ## Building the toolchain
 

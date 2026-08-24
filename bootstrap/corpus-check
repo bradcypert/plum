@@ -44,10 +44,12 @@ trap 'rm -rf "$work"' EXIT
 asan=1
 [ "${1:-}" = "--no-asan" ] && asan=0
 
-# The four shims `sh build` embeds (see `bootstrap/gen-shims`). Linked
+# The shims `sh build` embeds (see `bootstrap/gen-shims`). Linked
 # unconditionally: which one a fixture reaches is not worth deriving,
-# and an unused shim costs nothing.
-shims=(native_stdlib/dir_shim.c native_stdlib/io_shim.c
+# and an unused shim costs nothing. `compat_shim.c` is a no-op on
+# Linux and supplies the missing libc names elsewhere.
+shims=(native_stdlib/compat_shim.c native_stdlib/dir_shim.c
+       native_stdlib/io_shim.c
        native_stdlib/process_shim.c native_stdlib/thread_shim.c)
 
 # Fixtures that leak BY DESIGN, with the reason. Annotated here rather

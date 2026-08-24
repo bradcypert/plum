@@ -13876,15 +13876,24 @@ Rust front end and runs `interp-check` and the Rust suite — the only
 things `crates/` is still kept for.
 
 `release.yml` fires on a `v*` tag. It builds from the seed, checks the
-tag against the version, runs the full validation, packages a tarball
-with a checksum, then UNPACKS that tarball and uses the binary inside
-it to build and run a program before publishing. Trusting that the
-artifact matches what was tested is exactly the assumption worth not
-making.
+tag against the version, runs the validation, packages a tarball with a
+checksum, then UNPACKS that tarball and uses the binary inside it to
+build and run a program before publishing. Trusting that the artifact
+matches what was tested is exactly the assumption worth not making.
+That last step is now `bootstrap/package-release`, moved out of inline
+YAML because `sha256sum` is GNU-only and macOS spells it
+`shasum -a 256`.
 
-Linux x86_64 only. macOS and aarch64 are not built because they are
-not tested anywhere in this project, and a release job is the wrong
-place to discover whether they work.
+It was Linux x86_64 only until 2026-08-23, on the reasoning that a
+release job is the wrong place to discover whether an untested platform
+works. That reasoning stands; what changed is that macOS stopped being
+untested. The workflow is now three jobs — `linux`, `macos`, `publish`
+— because the two build jobs check genuinely different amounts:
+`linux` runs the whole harness suite, `macos` runs only
+`bootstrap/platform-smoke`, since the rest of `bootstrap/` is Linux-only
+development tooling. The rule is unchanged and now enforced by the
+shape of the file: a platform is published only once something in CI
+builds and runs real programs on it. See PORTING.md.
 
 ### Claims in the release notes were checked, and two were wrong
 

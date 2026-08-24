@@ -21,16 +21,23 @@ build anywhere clang runs, which a committed binary is not. The cost is
 
 ## Why this exists at all
 
-The Rust compiler in `crates/` can also build the self-hosted compiler,
-and did, for the whole of its development. But depending on it means the
-self-hosted compiler's own source is confined to the INTERSECTION of the
-two languages: `bootstrap/self_host/main.plum` has to compile under
-both. That was a real, recurring tax — a `mkdir` primitive, three stdin
-primitives, an extern block's placement and a `CStr` lifetime were each
-designed twice because of it.
+**It is the only way to get a compiler from a clean clone.** Nothing
+else in the repository can build `bootstrap/self_host`. The Rust
+backend was deleted on 2026-08-21, so `crates/` has no code generator
+at all — it holds a front end and an interpreter, kept as a test
+oracle.
 
-With a seed, the compiler's source can use the compiler's own features,
-and the seed is refreshed when it can no longer keep up.
+That was not always the case. For the whole of the self-hosted
+compiler's development the Rust compiler could build it too, and the
+seed existed to escape a narrower problem: depending on Rust confined
+the compiler's own source to the INTERSECTION of the two languages,
+since `main.plum` had to compile under both. That was a real recurring
+tax — a `mkdir` primitive, three stdin primitives, an extern block's
+placement and a `CStr` lifetime were each designed twice because of it.
+
+The tax is gone along with the second backend. What is left is a
+harder dependency: lose this file and its history, and the only way
+back is to write a Plum compiler in something else first.
 
 ## Refreshing it
 

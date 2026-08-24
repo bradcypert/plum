@@ -3,13 +3,27 @@
 #
 # "Good enough" is a specific claim, and this checks exactly it:
 #
-#   1. clang alone turns the seed into a compiler
-#   2. that compiler compiles TODAY's `bootstrap/self_host`
-#   3. what it produces emits the same IR as the current compiler does
+#   1. the seed CARRIES every C shim in `native_stdlib/`
+#   2. clang alone turns the seed into a compiler
+#   3. that compiler compiles TODAY's `bootstrap/self_host`
+#   4. what it produces emits the same IR as the current compiler does
 #
-# Step 3 is the one that matters. A seed that builds but produces a
+# Step 4 is the one that matters. A seed that builds but produces a
 # DIFFERENT compiler would be a seed that silently bootstraps something
 # other than this source tree.
+#
+# Step 1 looks redundant next to it and is not, which is worth spelling
+# out because the gap it covers was a real one found on 2026-08-23.
+# Steps 2-4 compare what the seed PRODUCES; nothing in them looks at
+# what the seed CONTAINS. The seed embeds the shim sources it will
+# write out when IT builds something, and on Linux a missing one is
+# invisible -- every harness passes, because the harnesses pass the
+# shims to clang themselves. It becomes visible only on a platform
+# where a shim supplies a libc name that is genuinely absent
+# (`compat_shim.c` on macOS and Windows), and only at the second
+# bootstrap step, as an unresolved-symbol link error with nothing to
+# connect it to the seed. Cheap to check here; expensive to diagnose
+# there.
 #
 # When this fails, the fix is `bootstrap/gen-seed` — the seed has fallen
 # behind the language the compiler's own source now uses. That is
@@ -21,6 +35,17 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 work="$(mktemp -d -t plum-seed-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
+
+echo "the seed carries every shim in native_stdlib/ ..."
+missing=""
+for c in native_stdlib/*.c; do
+    grep -q "$(basename "$c")" bootstrap/seed/plum.ll || missing="$missing $(basename "$c")"
+done
+if [ -n "$missing" ]; then
+    echo "SEED STALE: it embeds no copy of:$missing" >&2
+    echo "run bootstrap/gen-seed to refresh it" >&2
+    exit 1
+fi
 
 echo "seed -> compiler (clang only) ..."
 ./bootstrap/from-seed -o "$work/sh.seed" > "$work/build.log" 2>&1 || {

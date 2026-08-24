@@ -20,9 +20,14 @@ if [ "${1:-}" = "-o" ] && [ -n "${2:-}" ]; then out="$2"; fi
 seed="bootstrap/seed/plum.ll"
 [ -f "$seed" ] || { echo "missing $seed -- run bootstrap/gen-seed" >&2; exit 1; }
 
-# The same four shims the compiler embeds (see `bootstrap/gen-shims`).
+# The same shims the compiler embeds (see `bootstrap/gen-shims`).
 # `net_shim.c` is not among them: nothing in the compiler calls it.
+# `compat_shim.c` IS, and must be: it supplies the handful of C
+# symbols the generated runtime calls that do not exist under that
+# name on macOS and Windows, which is what lets THIS seed -- built
+# on Linux, checked in as IR -- link on those platforms at all.
 clang -O2 -Wno-override-module "$seed" \
+    native_stdlib/compat_shim.c \
     native_stdlib/dir_shim.c \
     native_stdlib/io_shim.c \
     native_stdlib/process_shim.c \

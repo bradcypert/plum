@@ -1,0 +1,67 @@
+#!/bin/sh
+# Packages a built compiler into the tarball a user downloads, then
+# UNPACKS that tarball and uses it, rather than trusting that the thing
+# in the archive is the thing that was tested.
+#
+# Extracted from `.github/workflows/release.yml` when the release grew
+# past one platform: the packaging step was inline YAML using
+# `sha256sum`, which is GNU-only -- macOS spells it `shasum -a 256`.
+# Rather than branch inside the workflow, the whole step is a script
+# that runs the same way everywhere, which also means it can be run by
+# hand to reproduce what a release job produced.
+#
+# Usage:  bootstrap/package-release <compiler-binary> <platform-slug>
+#   e.g.  bootstrap/package-release sh.real x86_64-linux
+#
+# Writes dist/plum-<version>-<slug>.tar.gz and a .sha256 beside it. The
+# version is taken from the BINARY, never from the tag or the source, so
+# the name of the file always matches what the file inside reports.
+set -eu
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+
+bin="${1:?usage: package-release <compiler-binary> <platform-slug>}"
+slug="${2:?usage: package-release <compiler-binary> <platform-slug>}"
+case "$bin" in /*) ;; *) bin="$root/${bin#./}" ;; esac
+[ -x "$bin" ] || { echo "no compiler binary at $bin" >&2; exit 1; }
+
+version="$("$bin" version | awk '{print $2}')"
+[ -n "$version" ] || { echo "the binary did not report a version" >&2; exit 1; }
+name="plum-${version}-${slug}"
+
+rm -rf dist
+mkdir -p "dist/${name}"
+cp "$bin" "dist/${name}/plum"
+cp README.md "dist/${name}/"
+[ -f LICENSE ] && cp LICENSE "dist/${name}/"
+
+tar -czf "dist/${name}.tar.gz" -C dist "${name}"
+rm -rf "dist/${name}"
+
+# GNU coreutils and the BSD/macOS tools disagree on the name of this
+# program and on its arguments. Both spellings produce the same digest
+# in the same "<hex>  <file>" format, so either is fine to ship.
+( cd dist \
+  && if command -v sha256sum > /dev/null 2>&1; then
+         sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+     else
+         shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
+     fi )
+
+# Prove the ARCHIVE works, not the build directory. A release that
+# packages the wrong file, or packages a binary that cannot find
+# something it needs once moved, fails here rather than for a user.
+check="$(mktemp -d 2>/dev/null || mktemp -d -t plumpkg)"
+trap 'rm -rf "$check"' EXIT INT TERM
+tar -xzf "dist/${name}.tar.gz" -C "$check"
+unpacked="$check/${name}/plum"
+
+"$unpacked" version
+mkdir -p "$check/proj"
+printf 'let main (): Unit = println("released")\n' > "$check/proj/main.plum"
+( cd "$check" && "$unpacked" build "$check/proj" -o "$check/out" )
+got="$("$check/out")"
+[ "$got" = "released" ] || { echo "the unpacked compiler built a program that printed '$got'" >&2; exit 1; }
+
+echo "packaged dist/${name}.tar.gz -- unpacked, built a program, and ran it"

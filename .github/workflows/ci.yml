@@ -83,6 +83,45 @@ jobs:
       - name: the version string is consistent
         run: ./bootstrap/check-version
 
+  # Does the compiler work somewhere that is not the developer's Linux
+  # box? Only `bootstrap/platform-smoke` runs here, deliberately -- see
+  # that script's header. The rest of `bootstrap/` is Linux-only
+  # tooling (GNU `timeout`, ASan leak detection, the `./sh` cgroup
+  # wrapper), and making it portable would be work spent on the
+  # development environment rather than on the thing users install.
+  #
+  # Correctness is still established on Linux. What this leg answers is
+  # narrower and is the question that does not transfer: does the
+  # bootstrap path work, does the shell-out to `clang` work, do the
+  # embedded C shims compile against a different libc, and do 42 real
+  # programs still print the right thing.
+  #
+  # macos-15 is arm64 and macos-13 is x86_64, so this covers a second
+  # OS and a second CPU architecture at the same time.
+  platforms:
+    name: ${{ matrix.os }} builds and runs real programs
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-13]
+    steps:
+      - uses: actions/checkout@v4
+
+      # clang ships with the Xcode command line tools, already present
+      # on every GitHub macOS runner. Printed rather than installed so
+      # a failure names the version that produced it.
+      - name: clang version
+        run: clang --version
+
+      - name: seed -> compiler
+        run: |
+          ./bootstrap/from-seed -o sh.seed
+          ./sh.seed build bootstrap/self_host -o sh.real
+
+      - name: the compiler it built works
+        run: ./bootstrap/platform-smoke ./sh.real
+
   # The Rust front end and interpreter are kept ONLY as a test oracle
   # (see DESIGN.md's "Deleting the Rust backend"). `interp-check` is
   # what they are for: comparing every execution fixture against an

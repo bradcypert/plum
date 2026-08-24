@@ -1,0 +1,90 @@
+#!/bin/sh
+# Does a Plum compiler BINARY work on the machine it is sitting on?
+#
+# This is the only harness meant to run on macOS and Windows, and it is
+# deliberately the least clever one in the directory. Everything else in
+# `bootstrap/` is a development tool aimed at a Linux workstation: they
+# assume GNU `timeout`, ASan with `detect_leaks=1` (which does not exist
+# on Darwin at all), `readlink -f`, bash arrays, and the `./sh` cgroup
+# wrapper. None of that is available or wanted here.
+#
+# What it checks is the product promise rather than the source tree:
+# take the binary a user would download, point it at real programs, and
+# see whether the programs build and print the right thing. That
+# exercises the whole user-facing path -- the embedded C shims being
+# written out, the shell-out to `clang`, the link, the run -- on the
+# platform in question, which is exactly the part that does not
+# transfer from Linux.
+#
+# It is NOT a substitute for `bootstrap/corpus-check` on Linux. There is
+# no leak checking here, so a refcounting miscompile passes silently.
+# Linux remains the platform where correctness is actually established;
+# this answers the narrower question of whether the same compiler works
+# somewhere else.
+#
+# Usage:  bootstrap/platform-smoke [path-to-plum-binary]     (default: ./sh.real)
+set -u
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root" || exit 1
+
+plum="${1:-./sh.real}"
+case "$plum" in /*) ;; *) plum="$root/${plum#./}" ;; esac
+[ -x "$plum" ] || { echo "no compiler binary at $plum" >&2; exit 1; }
+
+# BSD `mktemp` requires a template; GNU's does not. Neither spelling
+# works on both, so try the plain one and fall back.
+work="$(mktemp -d 2>/dev/null || mktemp -d -t plumsmoke)"
+[ -n "$work" ] || { echo "could not make a temp directory" >&2; exit 1; }
+trap 'rm -rf "$work"' EXIT INT TERM
+
+echo "compiler:  $plum"
+echo "version:   $("$plum" version 2>&1)"
+echo "clang:     $(clang --version 2>&1 | head -n 1)"
+echo "platform:  $(uname -s) $(uname -m)"
+echo
+
+ok=0
+fail=0
+
+for dir in bootstrap/exec_corpus/*/; do
+    name="$(basename "$dir")"
+    [ -f "$dir/main.plum" ] || continue
+    [ -f "$dir/expected.txt" ] || continue
+
+    # `build`, not `emit-llvm` plus a hand-written clang line. The point
+    # is to test what a user actually runs, including the parts of the
+    # compiler that shell out to other programs.
+    if ! "$plum" build "$dir" -o "$work/$name.bin" > "$work/$name.log" 2>&1; then
+        printf 'FAIL  %-24s did not build: %s\n' "$name" "$(head -n 1 "$work/$name.log")"
+        fail=$((fail + 1))
+        continue
+    fi
+
+    act="$(cd "$work" && "./$name.bin" 2>"$work/$name.rt")"
+    rc=$?
+    if [ $rc -ne 0 ]; then
+        printf 'FAIL  %-24s exited %s: %s\n' "$name" "$rc" "$(head -n 1 "$work/$name.rt")"
+        fail=$((fail + 1))
+        continue
+    fi
+
+    if [ "$act" = "$(cat "$dir/expected.txt")" ]; then
+        printf 'OK    %-24s\n' "$name"
+        ok=$((ok + 1))
+    else
+        printf 'FAIL  %-24s output differs from expected.txt\n' "$name"
+        diff "$dir/expected.txt" - <<DIFF | head -n 6 | sed 's/^/        /'
+$act
+DIFF
+        fail=$((fail + 1))
+    fi
+done
+
+echo
+if [ $fail -eq 0 ]; then
+    echo "platform smoke: $ok programs built and ran correctly on $(uname -s) $(uname -m)"
+else
+    echo "platform smoke: $fail of $((ok + fail)) FAILED on $(uname -s) $(uname -m)" >&2
+    exit 1
+fi

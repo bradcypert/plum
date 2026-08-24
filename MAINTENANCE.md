@@ -1,0 +1,266 @@
+# Maintaining Plum
+
+How to change this compiler without breaking it, and what has broken it
+before.
+
+[DESIGN.md](DESIGN.md) is the history — why things are the way they
+are. This is the operating manual.
+
+## Before you commit
+
+```sh
+./sh build bootstrap/self_host -o sh.real   # your change, compiled in
+for h in check-version check-shims lsp-smoke test-smoke net-smoke \
+         corpus-check interp-check example-sweep \
+         bootstrap-check self-sufficiency check-seed; do
+    ./bootstrap/$h || echo "FAILED: $h"
+done
+```
+
+About two minutes. If you only run two, run `corpus-check` and
+`bootstrap-check`.
+
+## The harnesses
+
+| script | what it proves | time |
+|---|---|---|
+| `check-version` | the version string, the tag and the built binary agree | <1s |
+| `check-shims` | the embedded C shims match `native_stdlib/` | <1s |
+| `lsp-smoke` | the language server answers a real session, including live diagnostics on unsaved text | <1s |
+| `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
+| `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
+| `platform-smoke` | a compiler *binary* builds and runs 42 real programs on the machine it is sitting on | 21s |
+| `example-sweep` | every `examples/` project matches its recorded output | 5s |
+| `interp-check` | the interpreter agrees with the compiler on every execution fixture | 7s |
+| `bootstrap-check` | the compiler compiled by itself is the same compiler | 14s |
+| `check-seed` | the checked-in seed still bootstraps to today's compiler | 26s |
+| `self-sufficiency` | it builds itself with no Rust, from any directory | 27s |
+| `corpus-check` | every corpus fixture compiles, runs, prints the right thing, aborts when it should, and leaks nothing | 29s |
+
+`platform-smoke` is the odd one out and is not part of the loop above.
+It is the only harness that runs on macOS and Windows, so it is written
+in POSIX `sh` and uses no GNU `timeout`, no ASan and no `./sh` wrapper —
+see its header and [PORTING.md](PORTING.md). On Linux it is redundant
+with `corpus-check`, which checks strictly more; run it when you have
+changed the shims, the shell-outs, or anything about how `plum build`
+reaches `clang`.
+
+Only `interp-check` needs `crates/` built. `test-smoke` uses it for its
+second half when present and says so when it is not. Everything else
+runs with `clang` alone — verified by moving the Rust binary aside, not
+by reading the scripts.
+
+Three generators, run deliberately rather than routinely:
+`gen-seed`, `gen-shims`, `record-examples`. And one packager,
+`package-release`, which the release workflow calls once per platform;
+it can be run by hand to reproduce exactly what a release job produced.
+
+## The seed
+
+`bootstrap/seed/plum.ll` is the compiler as LLVM IR. It is **the only
+way to get a compiler from a clean clone** — nothing else in the
+repository can build `bootstrap/self_host`.
+
+**Refresh it when `check-seed` fails, and not before.** The seed does
+not need to be current; it needs to be new enough to compile today's
+source.
+
+```sh
+./bootstrap/check-seed     # fails when the seed has fallen behind
+./bootstrap/gen-seed       # then, and only then
+./bootstrap/check-seed     # confirm
+```
+
+Each refresh puts ~6MB of generated text into history, so it belongs in
+its own commit with a reason. A good reason: `check-seed` failed, or
+you are cutting a release.
+
+`check-seed` proves four things, and the last is the one that
+matters: the seed carries every shim in `native_stdlib/`; clang can
+build the seed; the seed compiler can build today's source; and what it
+produces emits IR identical to the current compiler. A seed that built
+but produced a *different* compiler would silently bootstrap something
+other than this source tree.
+
+**What makes the seed go stale** has two causes, and only the first is
+obvious.
+
+1. The compiler's own source uses a language or prelude feature the
+   seed's compiler does not have. Adding `print` to the prelude and
+   calling it from `main.plum` did exactly that.
+2. **A shim was added or renamed.** The seed embeds the shim sources it
+   writes out when *it* builds something, so a seed that predates a new
+   shim bootstraps a compiler that cannot link programs needing it.
+
+Cause 2 was found on 2026-08-23 and is why `check-seed` grew its first
+step. It is invisible on Linux — every harness passes, because the
+harnesses pass the shims to clang themselves — and shows up only on a
+platform where a shim supplies a libc name that is genuinely absent
+(`compat_shim.c` on macOS and Windows), as an unresolved-symbol error
+with nothing connecting it to the seed.
+
+## Bootstrap generations
+
+**A compiler carries the prelude it was built with.** So
+`bootstrap/self_host` cannot call a prelude function that the compiler
+compiling it does not have — even though that function is right there
+in the source you are compiling.
+
+Symptom: you add a prelude function, use it in the compiler, and the
+build fails with `unbound function: yours`.
+
+Do it in two steps:
+
+```sh
+# 1. add the prelude function ONLY. Do not use it yet.
+./sh build bootstrap/self_host -o sh.real     # now the compiler HAS it
+
+# 2. now use it in the compiler's own source.
+./sh build bootstrap/self_host -o sh.real
+```
+
+A prelude change that the compiler itself does not use needs only one
+rebuild — but it takes **two** to show up in behaviour that the
+compiler's own code depends on. When a prelude fix appears not to work,
+this is usually why: `String.parse_float`'s precision fix took two
+generations to reach the compiler's own lexer.
+
+## Traps that have bitten more than once
+
+**Duplicate `declare`.** A symbol belongs in the runtime's declare list
+OR in a user `extern` block, never both. LLVM rejects the second one.
+This has happened five times — `memcmp`, `strlen`, `stdout_flush`,
+`process_run_inherit`, `getenv`. Grep before adding.
+
+**Runtime symbol names collide with Plum function names.** A Plum
+function `f` compiles to `@plum_f`. So a runtime function named
+`@plum_print` collides with the prelude's own `print`. Name a runtime
+function after its intercepted *stub* (`print_raw` → `@plum_print_raw`)
+— a stub is never emitted, so its mangled name is free.
+
+**The two runtimes are not interchangeable.** `crates/` used
+`@plum_alloc_array` with elements at offset 24; this one uses
+`@plum_array_new` with elements at 16. Copying IR between them is
+often right and sometimes silently wrong. The wrong *name* fails to
+link, which is lucky; the wrong *offset* links fine.
+
+**Currying hides a missed call site.** Add a parameter to a function
+and miss a caller, and the call becomes a partial application rather
+than an error. It surfaces far away as `expected Function(...), found
+X`. If you see that message, look for a call with too few arguments.
+
+**Temp directories leak.** Two separate leaks filled `/tmp` with 21GB
+across 54,000 directories, and the resulting failures looked like real
+compiler bugs. Anything that `mktemp`s must clean up on every path,
+including the failing ones.
+
+**Your machine has libraries CI does not.** `example-sweep` passed
+locally and failed the first release because raylib happened to be
+installed here. A harness that depends on a system library should
+degrade with a stated reason, not fail.
+
+**A directory is a project.** Nesting a test fixture inside another
+project makes it part of that project. A fixture with deliberate errors
+will poison the enclosing project's diagnostics.
+
+## Where a change goes
+
+**A new prelude function** → `bootstrap/self_host/codegen/prelude.plum`.
+If the compiler itself will use it, remember the two-generation rule.
+If it needs to exist in the Rust interpreter too, it also goes in
+`crates/plumc/src/lib.rs`'s `STDLIB_*_SRC`. The two preludes drifting
+apart is a recurring source of bugs — diff their public surfaces
+occasionally; that is how the missing networking stack was found.
+
+**A new runtime primitive** → three places: a stub in `prelude.plum`, an
+interception in `cg_runtime_fn` (`codegen.plum`), and the implementation
+in `runtime.plum`.
+
+**A new C shim** → `native_stdlib/`, then `./bootstrap/gen-shims` to
+embed it, or `check-shims` will fail. A shim that a compiled *program*
+calls must be embedded even if the compiler itself never calls it.
+
+**A new fixture** — pick by what it needs to prove:
+
+| | |
+|---|---|
+| a program that runs and prints | `bootstrap/exec_corpus/` |
+| a program that must be REJECTED | `bootstrap/typecheck_corpus/` |
+| a program that must DIE with a message | `bootstrap/abort_corpus/` |
+| a token or AST shape | `bootstrap/corpus/` |
+| anything needing a live process, a port, or a timeout | its own `*-smoke` script |
+
+That last row is not a formality. A networking fixture in
+`exec_corpus` hung for ten minutes, and a hang there blocks every
+future run of everything.
+
+## Documentation rots faster than code
+
+Every false claim found in this repository was in a comment or a README
+that nothing executed. Four in one week: a test runner documented as
+interpreting when it compiled, two corpora described as validated that
+nothing ran, a `Ref[T]` limitation that had been fixed months earlier,
+and a promise about division by zero that was not kept.
+
+Two habits help:
+
+- **Run it, do not recall it.** Before writing that something works,
+  run it. Before writing a number, count it.
+- **Prefer a script to a sentence.** `bootstrap/example-sweep` exists
+  because a hand-maintained gap table in DESIGN.md was wrong three
+  times running, always understating what was left.
+
+Numbers in prose are the worst offenders. Neither this document's
+script table nor `bootstrap/README.md`'s carries fixture counts, for
+that reason — the scripts print their own. The timings above are
+approximate on purpose.
+
+## Cutting a release
+
+The version lives in exactly one place: `plum_version` in
+`bootstrap/self_host/main.plum`.
+
+```sh
+# 1. bump it, rebuild, verify
+$EDITOR bootstrap/self_host/main.plum
+./sh build bootstrap/self_host -o sh.real
+./bootstrap/check-version
+
+# 2. the seed will usually need refreshing for a release
+./bootstrap/check-seed || ./bootstrap/gen-seed
+
+# 3. full validation, then commit
+
+# 4. tag -- this publishes
+git tag v0.0.2 && git push origin v0.0.2
+```
+
+Pushing the tag runs `.github/workflows/release.yml`, which builds from
+the seed, checks the tag against the version, runs every harness,
+packages a tarball, then **unpacks that tarball and uses the binary
+inside it** to build and run a program before publishing.
+
+`check-version` compares the tag against the version the *built binary*
+reports, not just against the source — checking the source alone passes
+on a stale binary.
+
+Update `RELEASE_NOTES.md`; it becomes the release body. Check its
+claims by running them. Two of the 0.0.1 notes were wrong when drafted
+from memory.
+
+## Things that are deliberately true
+
+Worth knowing before you "fix" them:
+
+- **`plum test` compiles.** It does not interpret. It used to, and
+  every test calling `assert_eq` failed for months.
+- **Integer overflow stops the program.** `+`, `-`, `*` are checked.
+  Roughly 1.6x on arithmetic-dense loops, unmeasurable on real code.
+- **`crates/` has no code generator.** It is a front end and an
+  interpreter, kept because `interp-check` compares against an
+  independent implementation of the semantics. Deleting it is intended
+  eventually; DESIGN.md's "Deleting the Rust backend" says what would
+  have to be true first.
+- **The guard wrapper degrades.** `./sh` uses a cgroup memory cap where
+  one is available and a plain timeout where it is not. The cap exists
+  because of a real 44.9GB OOM that killed a terminal.
