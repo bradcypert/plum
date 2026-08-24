@@ -36,13 +36,33 @@ cd "$root"
 work="$(mktemp -d -t plum-seed-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
-echo "the seed carries every shim in native_stdlib/ ..."
+echo "the seed carries every shim in native_stdlib/, at its current content ..."
 missing=""
 for c in native_stdlib/*.c; do
     grep -q "$(basename "$c")" bootstrap/seed/plum.ll || missing="$missing $(basename "$c")"
 done
 if [ -n "$missing" ]; then
     echo "SEED STALE: it embeds no copy of:$missing" >&2
+    echo "run bootstrap/gen-seed to refresh it" >&2
+    exit 1
+fi
+
+# Presence is not enough: an embedded shim can be PRESENT and stale,
+# and the checks below cannot see it, because they compare what the
+# seed PRODUCES and both sides are built from today's source. A stale
+# embedded shim only bites on a platform where that shim's content
+# genuinely differs -- which is every reason the shims were touched in
+# the first place.
+if command -v sha256sum > /dev/null 2>&1; then
+    shim_hash="$(cat native_stdlib/*.c | sha256sum | awk '{print $1}')"
+else
+    shim_hash="$(cat native_stdlib/*.c | shasum -a 256 | awk '{print $1}')"
+fi
+recorded="$(cat bootstrap/seed/shims.sha256 2>/dev/null || echo none)"
+if [ "$shim_hash" != "$recorded" ]; then
+    echo "SEED STALE: native_stdlib/ has changed since the seed was built" >&2
+    echo "  seed was built with $recorded" >&2
+    echo "  native_stdlib/ is now $shim_hash" >&2
     echo "run bootstrap/gen-seed to refresh it" >&2
     exit 1
 fi

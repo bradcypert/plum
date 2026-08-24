@@ -76,9 +76,10 @@ its own commit with a reason. A good reason: `check-seed` failed, or
 you are cutting a release.
 
 `check-seed` proves four things, and the last is the one that
-matters: the seed carries every shim in `native_stdlib/`; clang can
-build the seed; the seed compiler can build today's source; and what it
-produces emits IR identical to the current compiler. A seed that built
+matters: the seed carries every shim in `native_stdlib/`, at its
+current content; clang can build the seed; the seed compiler can build
+today's source; and what it produces emits IR identical to the current
+compiler. A seed that built
 but produced a *different* compiler would silently bootstrap something
 other than this source tree.
 
@@ -88,9 +89,14 @@ obvious.
 1. The compiler's own source uses a language or prelude feature the
    seed's compiler does not have. Adding `print` to the prelude and
    calling it from `main.plum` did exactly that.
-2. **A shim was added or renamed.** The seed embeds the shim sources it
-   writes out when *it* builds something, so a seed that predates a new
-   shim bootstraps a compiler that cannot link programs needing it.
+2. **A shim was added, renamed, or EDITED.** The seed embeds the shim
+   sources it writes out when *it* builds something, so a seed that
+   predates a shim change bootstraps a compiler carrying the old one.
+   Presence is checked by name; content is checked against
+   `bootstrap/seed/shims.sha256`, a fingerprint `gen-seed` records of
+   `native_stdlib/*.c` at the moment the seed was built. Nothing else
+   can see this: the seed's *output* is identical whether its embedded
+   copy is current or three edits stale.
 
 Cause 2 was found on 2026-08-23 and is why `check-seed` grew its first
 step. It is invisible on Linux — every harness passes, because the

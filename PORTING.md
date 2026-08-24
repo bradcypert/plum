@@ -67,7 +67,7 @@ remains available later as ordinary cleanup.
 | `os_shim.c` | ✅ | ✅ Win32 branches written, untested |
 | `thread_shim.c` | ✅ pthread | MinGW winpthreads, or a Win32 rewrite |
 | `dir_shim.c` | ✅ dirent | MinGW `dirent.h`, or `FindFirstFile` |
-| `process_shim.c` | ✅ fork/waitpid | **rewrite** — no `fork` even under MinGW |
+| `process_shim.c` | ✅ fork/waitpid | ✅ `CreateProcess`, written, untested |
 | `net_shim.c` | ✅ BSD sockets | **rewrite** — Winsock needs `WSAStartup`, `SOCKET`, `closesocket` |
 
 ### Unix commands the compiler shelled out to — fixed
@@ -158,17 +158,40 @@ Under the MinGW route, in order:
    Windows branches are written but have never been compiled by a
    Windows toolchain, so treat them as a starting point rather than as
    working code.
-2. Rewrite `process_shim.c` without `fork` (`CreateProcess`, or
-   `_spawnvp` keeping the existing temp-file capture). This is the
-   biggest remaining piece, and it is on the critical path: the
-   compiler cannot invoke `clang` without it.
-3. Rewrite `net_shim.c` against Winsock. Not on the critical path —
+2. ~~Rewrite `process_shim.c` without `fork`.~~ **Done**, unverified.
+   `CreateProcess` with the temp-file capture kept verbatim, because
+   the pipe-deadlock reasoning behind it is not platform-specific.
+   `_spawnvp` was considered and rejected: the CRT joins `argv` with
+   plain spaces and adds no quoting, so it has the same problem with
+   an extra layer over it.
+3. ~~Add a `windows-latest` CI leg running `platform-smoke` under
+   MSYS2.~~ **Done**, marked `continue-on-error` and expected to fail.
+4. **Get that leg green.** This is the next real work, and it is
+   deliberately not "write more Windows code" — three shims now have
+   `_WIN32` branches that have never been compiled, and writing a
+   fourth blind would just add to the pile. The CI leg turns them into
+   errors with line numbers.
+5. Rewrite `net_shim.c` against Winsock. Not on the critical path —
    only Plum programs that open sockets need it, not the compiler — so
    it can follow a first Windows release rather than block one.
-4. Add a `windows-latest` CI leg running `platform-smoke` under MSYS2.
-5. Add the release matrix entry once that is green.
+6. Add the release matrix entry once step 4 is green.
 
-Step 2 is now the first real work. Everything before it is done.
+### What has been verified about the Windows code
+
+Nothing that needs Windows. What could be checked here, was:
+
+- The **command-line quoting** in `process_shim.c` is the highest-risk
+  logic in the port — a Windows path routinely contains a space, and
+  getting it wrong silently splits one argument into two. The algorithm
+  was extracted and tested on Linux against nine cases, including the
+  two that are usually wrong: a trailing backslash before the closing
+  quote, and runs of backslashes preceding an embedded quote.
+- `os_shim.c` was unit-tested on Linux, including that `remove_tree`
+  removes a symlink rather than following it into someone else's files.
+- The POSIX path of `process_shim.c` was refactored behind the same
+  `plum_spawn_capture` boundary the Windows path implements, and all
+  twelve harnesses still pass — so the port did not change Linux
+  behaviour, rather than being believed not to.
 
 ### Linux arm64
 

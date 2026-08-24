@@ -30,7 +30,11 @@ cd "$root" || exit 1
 
 plum="${1:-./sh.real}"
 case "$plum" in /*) ;; *) plum="$root/${plum#./}" ;; esac
-[ -x "$plum" ] || { echo "no compiler binary at $plum" >&2; exit 1; }
+# A MinGW toolchain appends `.exe` to an output name that has no
+# extension, so the file the caller named may not be the file on disk.
+# MSYS2's bash resolves that transparently when EXECUTING, and not when
+# testing for existence, which is the half that matters here.
+[ -x "$plum" ] || [ -x "$plum.exe" ] || { echo "no compiler binary at $plum" >&2; exit 1; }
 
 # BSD `mktemp` requires a template; GNU's does not. Neither spelling
 # works on both, so try the plain one and fall back.

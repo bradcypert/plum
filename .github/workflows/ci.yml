@@ -122,6 +122,53 @@ jobs:
       - name: the compiler it built works
         run: ./bootstrap/platform-smoke ./sh.real
 
+  # Windows, and EXPECTED TO FAIL for now -- `continue-on-error` is
+  # deliberate and is not a way of ignoring a broken build.
+  #
+  # The Windows code in `native_stdlib/` (the `_WIN32` branches of
+  # `compat_shim.c`, `os_shim.c` and `process_shim.c`) has never been
+  # compiled by a Windows toolchain. Writing more of it blind is how a
+  # port accumulates plausible-looking code that has never run, so this
+  # leg exists to convert guesses into errors with line numbers. Its
+  # output is the input to the next piece of work; see PORTING.md.
+  #
+  # Remove `continue-on-error` the moment it passes, and treat any
+  # regression after that as a real failure.
+  #
+  # MSYS2 rather than MSVC: MinGW keeps `dirent.h`, pthreads and bash
+  # working, so `from-seed` and `platform-smoke` run unmodified and the
+  # port is scoped to the shims that genuinely differ.
+  windows:
+    name: windows x86_64 (expected to fail, for now)
+    runs-on: windows-latest
+    continue-on-error: true
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-lld
+            diffutils
+            tar
+
+      - name: clang version
+        run: clang --version
+
+      - name: seed -> compiler
+        run: |
+          ./bootstrap/from-seed -o sh.seed
+          ./sh.seed build bootstrap/self_host -o sh.real
+
+      - name: the compiler it built works
+        run: ./bootstrap/platform-smoke ./sh.real
+
   # The Rust front end and interpreter are kept ONLY as a test oracle
   # (see DESIGN.md's "Deleting the Rust backend"). `interp-check` is
   # what they are for: comparing every execution fixture against an
