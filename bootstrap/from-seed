@@ -22,6 +22,8 @@ seed="bootstrap/seed/plum.ll"
 
 # The same shims the compiler embeds (see `bootstrap/gen-shims`).
 # `net_shim.c` is not among them: nothing in the compiler calls it.
+# `os_shim.c` very much is -- it is how the compiler makes temp
+# directories, deletes them, and finds its own executable.
 # `compat_shim.c` IS, and must be: it supplies the handful of C
 # symbols the generated runtime calls that do not exist under that
 # name on macOS and Windows, which is what lets THIS seed -- built
@@ -30,6 +32,7 @@ clang -O2 -Wno-override-module "$seed" \
     native_stdlib/compat_shim.c \
     native_stdlib/dir_shim.c \
     native_stdlib/io_shim.c \
+    native_stdlib/os_shim.c \
     native_stdlib/process_shim.c \
     native_stdlib/thread_shim.c \
     -lm -o "$out"

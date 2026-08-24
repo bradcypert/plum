@@ -226,13 +226,30 @@ let lsp_read_headers (len: Int): Int = {
     }
 }
 
+// Where this executable lives, so it can re-invoke itself.
+//
+// This was the literal string `/proc/self/exe` until 2026-08-23, which
+// is Linux-only -- so the language server, whose every check is a
+// self-invocation, did not work on macOS at all. `Os.self_exe` asks the
+// same question through `native_stdlib/os_shim.c`, which knows the
+// three different calls the three platforms need.
+//
+// The fallback is the old path rather than an error: on Linux it is
+// exactly what this used to do, and on a platform where the shim cannot
+// answer there was nothing working to lose.
+let self_exe (): String =
+    match Os.self_exe() {
+        Ok(path) => path,
+        Err(_) => "/proc/self/exe",
+    }
+
 // Diagnostics come from a SUBPROCESS: `fail_tc` reports by aborting, so
 // checking in-process would take the server down on the first type
-// error a user typed. `/proc/self/exe` is the same trick `cmd_test`
-// uses -- no path to look up, and no chance of running a different
-// build than this one.
+// error a user typed. Re-invoking THIS executable is the same trick
+// `cmd_test` uses -- no path to look up, and no chance of running a
+// different build than this one.
 let lsp_check (dir: String): Option[lsp.Diagnostic] =
-    match run_process("/proc/self/exe", ["check", dir]) {
+    match run_process(self_exe(), ["check", dir]) {
         Err(_) => None,
         Ok(r) => if r.exit_code == 0 { None } else { lsp.parse_diagnostic(r.stdout.concat(r.stderr)) },
     }
@@ -257,18 +274,19 @@ let lsp_check (dir: String): Option[lsp.Diagnostic] =
 struct BufferCheck { diagnostic: Option[lsp.Diagnostic], scratch: String }
 
 let lsp_check_buffer (path: String) (text: String): BufferCheck =
-    match run_process("mktemp", ["-d"]) {
+    match Os.temp_dir() {
         Err(_) => BufferCheck { diagnostic: None, scratch: "" },
-        Ok(t) => {
-            let scratch = String.trim_end(t.stdout);
+        Ok(scratch) => {
             let dir = lsp.dir_of(path);
-            // `<dir>/.` copies the CONTENTS, so the project lands
-            // directly in the scratch dir rather than nested inside a
-            // directory named after it -- module paths depend on that.
-            let copied = run_process("cp", ["-r", dir.concat("/."), scratch]);
+            // `Os.copy_tree` copies the CONTENTS of `dir`, so the
+            // project lands directly in the scratch dir rather than
+            // nested inside a directory named after it -- module paths
+            // depend on that. It replaced `cp -r <dir>/. <scratch>`,
+            // which meant the same thing and needed a `cp` binary.
+            let copied = Os.copy_tree(dir, scratch);
             let target = scratch.concat("/").concat(lsp.base_of(path));
             match write_file(target, text) {
-                Err(_) => { let c = run_process("rm", ["-rf", scratch]); BufferCheck { diagnostic: None, scratch: "" } },
+                Err(_) => { let c = Os.remove_tree(scratch); BufferCheck { diagnostic: None, scratch: "" } },
                 Ok(_) => BufferCheck { diagnostic: lsp_check(scratch), scratch: scratch },
             }
         },
@@ -353,7 +371,7 @@ let lsp_handle (body: String): Bool =
                         Some(text) => {
                             let bc = lsp_check_buffer(lsp.uri_to_path(uri), text);
                             lsp_publish(uri, bc.diagnostic, bc.scratch);
-                            if bc.scratch == "" { () } else { let c = run_process("rm", ["-rf", bc.scratch]); () }
+                            if bc.scratch == "" { () } else { let c = Os.remove_tree(bc.scratch); () }
                         },
                     }
                 };
@@ -381,7 +399,7 @@ let lsp_handle (body: String): Bool =
 // give. Empty when the position is not on an identifier USE, or when
 // the project does not currently type-check.
 let lsp_query (path: String) (line: Int) (col: Int): String =
-    match run_process("/proc/self/exe", ["query", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
+    match run_process(self_exe(), ["query", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
         Err(_) => "",
         Ok(r) => if r.exit_code == 0 { String.trim_end(r.stdout) } else { "" },
     }
@@ -428,7 +446,7 @@ let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
 }
 
 let lsp_defs (path: String): Array[lsp.Def] =
-    match run_process("/proc/self/exe", ["defs", lsp.dir_of(path)]) {
+    match run_process(self_exe(), ["defs", lsp.dir_of(path)]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_defs(r.stdout) } else { [] },
     }
@@ -495,9 +513,10 @@ let takes_no_args (params: Array[parser.ParamNode]): Bool =
 // rest -- which is precisely why the real compiler's NATIVE test path
 // is structured the same way (see `testing.rs`: "there is no way to
 // run more than one test per compiled PROCESS and still observe every
-// test's own outcome"). The child is this same binary re-invoked
-// through `/proc/self/exe`, since `args()` does not include the
-// program's own path.
+// test's own outcome"). The child is the COMPILED TEST BINARY, named
+// on the command line with the test to run -- not this compiler
+// re-invoked, which is what this comment claimed until 2026-08-23. See
+// `run_tests` immediately below: the program it runs is `bin`.
 struct TestRun { failed: Int, detail: String }
 
 let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): TestRun =
@@ -542,10 +561,9 @@ let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): Test
 // the design and it is unchanged -- only the child is different, an
 // argument to a compiled binary rather than an interpreter invocation.
 let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Array[String]): TestRun =
-    match run_process("mktemp", ["-d"]) {
+    match Os.temp_dir() {
         Err(e) => TestRun { failed: 1, detail: "could not create a scratch directory: ".concat(e) },
-        Ok(t) => {
-            let scratch = String.trim_end(t.stdout);
+        Ok(scratch) => {
             let bin = scratch.concat("/tests");
             let ll = bin.concat(".ll");
             let ir = codegen.cg_emit_program_entry(program, "__plum_test_main");
@@ -562,7 +580,7 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
                     }
                 },
             };
-            let cleaned = run_process("rm", ["-rf", scratch]);
+            let cleaned = Os.remove_tree(scratch);
             outcome
         },
     }
@@ -698,12 +716,11 @@ let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (i: Int) (acc: 
     }
 
 let compile_project (dir: String) (out: String) (extra: Array[String]): String =
-    match run_process("mktemp", ["-d"]) {
+    match Os.temp_dir() {
         Err(e) => "build failed: ".concat(e),
-        Ok(t) => {
-            let scratch = String.trim_end(t.stdout);
+        Ok(scratch) => {
             let err = compile_with_scratch(dir, out, extra, scratch);
-            let cleaned = run_process("rm", ["-rf", scratch]);
+            let cleaned = Os.remove_tree(scratch);
             err
         },
     }
@@ -728,7 +745,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
                     // failure, where it is the thing you want to look at.
                     // Leaving it always is the same leak `plum build` had
                     // (see DESIGN.md) -- several MB per build, forever.
-                    let cleaned = run_process("rm", ["-f", ll]);
+                    let cleaned = Os.remove_file(ll);
                     ""
                 } else {
                     "clang failed (exit ".concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
@@ -771,17 +788,16 @@ let tab_join (args: Array[String]) (i: Int) (acc: String): String =
     else { tab_join(args, i + 1, if i == 0 { args[i] } else { acc.concat("\t").concat(args[i]) }) }
 
 let run_project (argv: Array[String]): Unit = {
-    match run_process("mktemp", ["-d"]) {
+    match Os.temp_dir() {
         Err(e) => println("run failed: ".concat(e)),
-        Ok(t) => {
-            let dir = String.trim_end(t.stdout);
+        Ok(dir) => {
             let out = dir.concat("/a.out");
             let err = compile_project(argv[1], out, link_args(argv, argv[1]));
             if err != "" { println(err) }
             else {
                 let args = Array.slice(argv, 2, argv.len());
                 let code = unsafe { process_run_inherit(out.as_cstr(), tab_join(args, 0, "").as_cstr(), args.len()) };
-                let cleaned = run_process("rm", ["-rf", dir]);
+                let cleaned = Os.remove_tree(dir);
                 // The child's exit code is this process's exit code, so
                 // `plum run` composes in a shell the way anything else
                 // would. `panic_raw` is the only non-zero exit this
@@ -910,8 +926,8 @@ let cmd_new (name: String): Unit =
 let new_failed (msg: String): Unit = { println(msg); panic_raw("") }
 
 let mkdir_ok (name: String): Bool =
-    match run_process("mkdir", [name]) {
-        Ok(r) => r.exit_code == 0,
+    match Os.make_dir(name) {
+        Ok(_) => true,
         Err(_) => false,
     }
 

@@ -28,7 +28,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SHIMS = ["compat_shim.c", "dir_shim.c", "io_shim.c", "net_shim.c",
-         "process_shim.c", "thread_shim.c"]
+         "os_shim.c", "process_shim.c", "thread_shim.c"]
 OUT = ROOT / "bootstrap" / "self_host" / "shims" / "shims.plum"
 
 HEADER = '''// The C shims this compiler links into every binary it produces --

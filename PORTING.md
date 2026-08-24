@@ -30,10 +30,10 @@ established on Linux and assumed to carry.
 
 ## What is actually platform-specific
 
-The generated code depends on 48 external symbols:
+The generated code depends on 54 external symbols:
 
 - **31 libc.** 29 are plain standard C, present everywhere.
-- **14 supplied by our own C shims** in `native_stdlib/`.
+- **20 supplied by our own C shims** in `native_stdlib/`.
 - **3 LLVM intrinsics** (the checked-arithmetic ones), target-neutral.
 
 The compiler **emits no LLVM target triple**, so `clang` targets
@@ -58,37 +58,49 @@ to build the compiler that stops emitting the name. Defining the
 missing symbol breaks the cycle with no seed regeneration. Renaming
 remains available later as ordinary cleanup.
 
-### The six shims
+### The seven shims
 
 | Shim | macOS | Windows |
 |---|---|---|
 | `compat_shim.c` | ✅ | ✅ |
 | `io_shim.c` | ✅ stdio only | ✅ stdio only |
+| `os_shim.c` | ✅ | ✅ Win32 branches written, untested |
 | `thread_shim.c` | ✅ pthread | MinGW winpthreads, or a Win32 rewrite |
 | `dir_shim.c` | ✅ dirent | MinGW `dirent.h`, or `FindFirstFile` |
 | `process_shim.c` | ✅ fork/waitpid | **rewrite** — no `fork` even under MinGW |
 | `net_shim.c` | ✅ BSD sockets | **rewrite** — Winsock needs `WSAStartup`, `SOCKET`, `closesocket` |
 
-### Unix commands the compiler shells out to
+### Unix commands the compiler shelled out to — fixed
 
-Found by `grep -rn 'run_process("' bootstrap/self_host/`. These are not
-in the shims; they are in the compiler's own Plum source, and no shim
-rewrite covers them.
+These were never in the shims. They were in the compiler's own Plum
+source, so no amount of shim rewriting would have covered them.
 
-| Call | Sites | macOS | Windows |
-|---|---|---|---|
-| `clang` | 2 | ✅ intended, stays | ✅ |
-| `mktemp -d` | 5 | ✅ | ✗ |
-| `rm -rf` / `rm -f` | 6 | ✅ | ✗ |
-| `cp -r` | 1 | ✅ | ✗ |
-| `mkdir` | 1 | ✅ | ✗ |
-| `/proc/self/exe` | 3 | ✗ | ✗ |
+| Call | Was | Now |
+|---|---|---|
+| `mktemp -d` | 5 sites | `Os.temp_dir` |
+| `rm -rf` | 5 sites | `Os.remove_tree` |
+| `rm -f` | 1 site | `Os.remove_file` |
+| `cp -r` | 1 site | `Os.copy_tree` |
+| `mkdir` | 1 site | `Os.make_dir` |
+| `/proc/self/exe` | 3 sites | `Os.self_exe` |
+| `clang` | 2 sites | unchanged, and intended |
 
-`/proc/self/exe` is the one that matters before Windows does. It is
-Linux-only, used by the **language server** to re-invoke itself for
-`check`, `query` and `defs`. So on macOS today, `build`, `run` and
-`test` work and **the LSP does not**. macOS needs `_NSGetExecutablePath`;
-Windows needs `GetModuleFileName`.
+`/proc/self/exe` was the one that mattered before Windows did. It is
+Linux-only and the **language server** used it to re-invoke itself for
+`check`, `query` and `defs`, so the LSP could never have worked on a
+Mac. `native_stdlib/os_shim.c` now answers that question with
+`readlink` on Linux, `_NSGetExecutablePath` on Darwin and
+`GetModuleFileNameA` on Windows.
+
+Verified by shadowing `mktemp`, `rm`, `cp` and `mkdir` on `PATH` with
+scripts that log and exit 1, then building a project: the old compiler
+hit them, the new one builds cleanly with zero hits. The only processes
+`plum build` now starts are `clang` — down from four.
+
+`plum test` and the language server still re-invoke the compiler
+itself, deliberately: `panic_raw` aborts rather than returning, so a
+single-process harness would stop at the first failure, and an
+in-process type error would take the language server down.
 
 ## Done
 
@@ -105,13 +117,21 @@ Windows needs `GetModuleFileName`.
   *produces*, which is invisible to this class of bug on Linux — every
   harness passed while the seed was, in fact, unusable on macOS.
 - `bootstrap/platform-smoke`: POSIX `sh`, no ASan, no GNU `timeout`, no
-  `./sh` wrapper. Builds and runs all 42 execution fixtures through
+  `./sh` wrapper. Builds and runs all 43 execution fixtures through
   `plum build` — the path a user takes.
 - `bootstrap/package-release`: packaging plus unpack-and-use
   verification, extracted from inline YAML because `sha256sum` is
   GNU-only.
 - `ci.yml` gained a `platforms` matrix (macos-15 arm64, macos-13 x86_64).
 - `release.yml` split into `linux` / `macos` / `publish`.
+- `native_stdlib/os_shim.c` and an `Os.` prelude namespace
+  (`temp_dir`, `self_exe`, `make_dir`, `remove_file`, `remove_tree`,
+  `copy_tree`), replacing all 16 shell-out sites. This needed a
+  **two-generation** bootstrap — generation 1 carries the new prelude,
+  generation 2 is the first that may call it — and a second seed
+  refresh. `Os.remove_tree` uses `lstat`, so a symlink is removed
+  rather than followed into; tested against a symlink pointing outside
+  the tree.
 
 **None of the macOS work is verified yet.** It is verified when the CI
 legs above go green, and not before. Expect the first run to find
@@ -119,22 +139,6 @@ something — glibc and Apple's libc differ most in `snprintf` and
 float formatting, which is exactly what the fixtures compare.
 
 ## Left to do
-
-### macOS: the language server
-
-Replace `/proc/self/exe`. Two options:
-
-- **A shim that returns the executable's path** (`_NSGetExecutablePath`
-  on Darwin, `readlink("/proc/self/exe")` on Linux). Small, matches the
-  existing shim pattern, keeps the subprocess isolation the LSP gets
-  today.
-- **Stop spawning a subprocess at all** and call the check/query/defs
-  functions in-process. Better engineering — faster, no self-path
-  problem anywhere — but a real refactor.
-
-Either way this needs a **two-generation** bootstrap (a new prelude
-function cannot be called by `main.plum` until the generation after it
-is added) and therefore two seed refreshes. See `MAINTENANCE.md`.
 
 ### Windows
 
@@ -150,19 +154,21 @@ The toolchain decision comes first and determines everything after it.
 
 Under the MinGW route, in order:
 
-1. Add an OS shim providing temp-directory creation, recursive delete,
-   file delete, directory create, tree copy, and executable path.
-   Replace all 16 shell-out sites. **Testable on Linux**, and an
-   improvement there too — fewer processes per build.
+1. ~~An OS shim replacing the 16 shell-out sites.~~ **Done.** Its
+   Windows branches are written but have never been compiled by a
+   Windows toolchain, so treat them as a starting point rather than as
+   working code.
 2. Rewrite `process_shim.c` without `fork` (`CreateProcess`, or
-   `_spawnvp` keeping the existing temp-file capture).
-3. Rewrite `net_shim.c` against Winsock.
+   `_spawnvp` keeping the existing temp-file capture). This is the
+   biggest remaining piece, and it is on the critical path: the
+   compiler cannot invoke `clang` without it.
+3. Rewrite `net_shim.c` against Winsock. Not on the critical path —
+   only Plum programs that open sockets need it, not the compiler — so
+   it can follow a first Windows release rather than block one.
 4. Add a `windows-latest` CI leg running `platform-smoke` under MSYS2.
 5. Add the release matrix entry once that is green.
 
-Step 1 is the one to do first regardless of the toolchain choice: it is
-required by every route except WSL-only, it benefits Linux and macOS,
-and it can be verified here.
+Step 2 is now the first real work. Everything before it is done.
 
 ### Linux arm64
 

@@ -1,0 +1,12 @@
+make_dir: ok
+make_dir nested: ok
+write: ok
+make_dir dst: ok
+copy_tree: ok
+copied file: contents
+remove_file: ok
+file is gone: yes
+removing it twice fails: yes
+remove_tree: ok
+tree is gone: yes
+self_exe: found

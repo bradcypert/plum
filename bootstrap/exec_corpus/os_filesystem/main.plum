@@ -1,0 +1,66 @@
+// The `Os.` prelude namespace: temp directories, directory creation,
+// file and tree removal, tree copying, and self-location.
+//
+// These replaced the compiler shelling out to `mktemp`, `rm`, `cp` and
+// `mkdir`, and reading `/proc/self/exe` -- none of which is portable
+// off Linux. See PORTING.md.
+//
+// Nothing here prints a PATH, because every path involved is a fresh
+// temp directory with a random name, and a fixture compares exact
+// output. What is printed is what was OBSERVED about those paths, which
+// is the part that has to keep being true.
+
+let report (label: String) (r: Result[Unit, String]): Unit =
+    match r {
+        Ok(_) => println(label.concat(": ok")),
+        Err(e) => println(label.concat(": ").concat(e)),
+    }
+
+let main (): Unit =
+    match Os.temp_dir() {
+        Err(e) => println(e),
+        Ok(root) => {
+            // A directory, and a file inside it, to copy and delete.
+            let src = root.concat("/src");
+            report("make_dir", Os.make_dir(src));
+            report("make_dir nested", Os.make_dir(src.concat("/inner")));
+            report("write", write_file(src.concat("/inner/a.txt"), "contents"));
+
+            // `copy_tree` copies the CONTENTS of src into dst, so
+            // `inner/a.txt` lands at `dst/inner/a.txt` and NOT at
+            // `dst/src/inner/a.txt`. Module paths depend on that, so it
+            // is worth pinning.
+            let dst = root.concat("/dst");
+            report("make_dir dst", Os.make_dir(dst));
+            report("copy_tree", Os.copy_tree(src, dst));
+            match read_file(dst.concat("/inner/a.txt")) {
+                Err(e) => println("copied file: ".concat(e)),
+                Ok(text) => println("copied file: ".concat(text)),
+            };
+
+            // Removing a file leaves its directory behind.
+            report("remove_file", Os.remove_file(dst.concat("/inner/a.txt")));
+            match read_file(dst.concat("/inner/a.txt")) {
+                Err(_) => println("file is gone: yes"),
+                Ok(_) => println("file is gone: no"),
+            };
+            match Os.remove_file(dst.concat("/inner/a.txt")) {
+                Err(_) => println("removing it twice fails: yes"),
+                Ok(_) => println("removing it twice fails: no"),
+            };
+
+            // `remove_tree` takes the whole thing, nested and all.
+            report("remove_tree", Os.remove_tree(root));
+            match is_directory(root) {
+                Err(_) => println("tree is gone: yes"),
+                Ok(still) => println(if still { "tree is gone: no" } else { "tree is gone: yes" }),
+            };
+
+            // A path, not the path -- the binary's name is whatever the
+            // harness chose to call it.
+            match Os.self_exe() {
+                Err(e) => println("self_exe: ".concat(e)),
+                Ok(p) => println(if String.is_empty(p) { "self_exe: empty" } else { "self_exe: found" }),
+            }
+        },
+    }

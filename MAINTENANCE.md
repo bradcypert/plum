@@ -29,7 +29,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `lsp-smoke` | the language server answers a real session, including live diagnostics on unsaved text | <1s |
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
-| `platform-smoke` | a compiler *binary* builds and runs 42 real programs on the machine it is sitting on | 21s |
+| `platform-smoke` | a compiler *binary* builds and runs 43 real programs on the machine it is sitting on | 21s |
 | `example-sweep` | every `examples/` project matches its recorded output | 5s |
 | `interp-check` | the interpreter agrees with the compiler on every execution fixture | 7s |
 | `bootstrap-check` | the compiler compiled by itself is the same compiler | 14s |

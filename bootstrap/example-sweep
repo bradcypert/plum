@@ -138,7 +138,7 @@ for dir in examples/*/; do
     link_self() {
         clang -O2 -Wno-override-module "$work/$name.ll" \
             native_stdlib/compat_shim.c native_stdlib/dir_shim.c \
-            native_stdlib/io_shim.c \
+            native_stdlib/io_shim.c native_stdlib/os_shim.c \
             native_stdlib/process_shim.c native_stdlib/thread_shim.c \
             $clang_flags -lm -o "$work/$name.bin"
     }

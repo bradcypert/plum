@@ -43,7 +43,7 @@ programs on it. Nothing here is merely expected to work.
 | Platform | Status |
 |---|---|
 | Linux x86_64 | Full test suite, including leak checking under ASan |
-| macOS arm64 | 42 programs built and run in CI. The language server does not work yet |
+| macOS arm64 | 43 programs built and run in CI |
 | macOS x86_64 | Same |
 | Linux arm64 | Untested, unpublished |
 | Windows | Not yet supported. WSL works |
@@ -779,6 +779,21 @@ program's prelude):
   real, SEPARATE bug found (and filed, not fixed here) while testing
   this: a top-level global `let` used twice with a heap-consuming
   operation like `.as_cstr()` corrupts under native codegen.
+- **`Os.`: filesystem and self-location** — `Os.temp_dir(): Result
+  [String, String]` (a fresh private directory the caller owns and must
+  clean up), `Os.make_dir(path)`, `Os.remove_file(path)`,
+  `Os.remove_tree(path)`, `Os.copy_tree(src, dst)` (copies the CONTENTS
+  of `src` into an existing `dst`), and `Os.self_exe(): Result[String,
+  String]` for a program that re-invokes itself. All return
+  `Result[Unit, String]` unless shown otherwise.
+
+  `Os.remove_tree` removes symlinks rather than following them, so a
+  link pointing outside the tree cannot cause deletions there.
+  `Os.copy_tree` does not preserve file modes.
+
+  These exist because the compiler used to shell out to `mktemp`, `rm`,
+  `cp` and `mkdir` to do them, which is not portable — see
+  [PORTING.md](PORTING.md).
 
 All of the above are ordinary Plum source, not compiler magic — you
 could write equivalents yourself. They currently live in a shared

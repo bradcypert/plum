@@ -1,3 +1,4 @@
 /target
 /dist
 /sh.seed
+/sh.gen*

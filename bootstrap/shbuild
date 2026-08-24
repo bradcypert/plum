@@ -49,6 +49,6 @@ fi
 # (see `bootstrap/gen-shims`).
 clang -O2 -Wno-override-module "$ll" \
     "$root/native_stdlib/compat_shim.c" "$root/native_stdlib/dir_shim.c" \
-    "$root/native_stdlib/io_shim.c" \
+    "$root/native_stdlib/io_shim.c" "$root/native_stdlib/os_shim.c" \
     "$root/native_stdlib/process_shim.c" "$root/native_stdlib/thread_shim.c" \
     -lm -o "$out"

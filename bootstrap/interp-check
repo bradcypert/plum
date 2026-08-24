@@ -35,6 +35,7 @@ plum=./target/release/plum
 declare -A cannot=(
     [ffi]="the interpreter cannot call extern C functions"
     [networking]="listens on a socket; lives in bootstrap/net-smoke instead"
+    [os_filesystem]="the \`Os.\` namespace exists only in the self-hosted prelude; the interpreter has no equivalent and is not getting one, since the Rust side is a test oracle being wound down"
 )
 
 # Fixtures where the interpreter and the compilers are KNOWN to differ,

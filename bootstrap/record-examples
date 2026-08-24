@@ -47,7 +47,7 @@ for dir in examples/*/; do
     clang_flags="$(printf '%s %s' "${link_flags[$name]:-}" "$native_flag" | sed 's/--link-lib */-l/g; s/--link-c *//g')"
     clang -O2 -Wno-override-module "$work/ir.ll" \
         native_stdlib/compat_shim.c native_stdlib/dir_shim.c \
-        native_stdlib/io_shim.c \
+        native_stdlib/io_shim.c native_stdlib/os_shim.c \
         native_stdlib/process_shim.c native_stdlib/thread_shim.c \
         $clang_flags -lm -o "$work/bin" > "$work/err" 2>&1 || {
         printf '  FAIL  %-24s %s\n' "$name" "$(head -1 "$work/err")"; continue; }

@@ -93,7 +93,7 @@ jobs:
   # Correctness is still established on Linux. What this leg answers is
   # narrower and is the question that does not transfer: does the
   # bootstrap path work, does the shell-out to `clang` work, do the
-  # embedded C shims compile against a different libc, and do 42 real
+  # embedded C shims compile against a different libc, and do 43 real
   # programs still print the right thing.
   #
   # macos-15 is arm64 and macos-13 is x86_64, so this covers a second
