@@ -572,7 +572,7 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
                 Ok(_) => {
                     let cfiles = write_shims(scratch);
                     let argv = Array.concat(Array.concat(["-O2", "-Wno-override-module", ll], cfiles),
-                        Array.concat(link_args([], dir), ["-lm", "-o", bin]));
+                        Array.concat(link_args([], dir), Array.concat(platform_libs(), ["-o", bin])));
                     match run_process("clang", argv) {
                         Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
                         Ok(r) => if r.exit_code == 0 { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
@@ -688,6 +688,21 @@ let collect_flag (argv: Array[String]) (flag: String) (i: Int) (acc: Array[Strin
     else if argv[i] == flag { collect_flag(argv, flag, i + 2, acc.push(argv[i + 1])) }
     else { collect_flag(argv, flag, i + 1, acc) }
 
+// The libraries every produced binary links against, which are not the
+// same on every platform.
+//
+// `-lm` alone was enough while this was Linux-only. Windows needs two
+// more: `-lws2_32` because Winsock lives in its own import library
+// rather than in libc, and `-lpthread` because MinGW keeps pthreads in
+// a separate `libwinpthread` where modern glibc has folded them into
+// libc. Adding either on Linux or macOS would be harmless but untrue,
+// and this list is read as documentation of what a platform needs.
+//
+// A C `#ifdef` cannot reach here -- this is Plum source building a
+// command line -- which is the whole reason `Os.platform` exists.
+let platform_libs (): Array[String] =
+    if Os.platform() == "windows" { ["-lm", "-lpthread", "-lws2_32"] } else { ["-lm"] }
+
 let link_args (argv: Array[String]) (dir: String): Array[String] = {
     let libs = Array.map(collect_flag(argv, "--link-lib", 0, []), |l| "-l".concat(l));
     let cs = Array.concat(collect_flag(argv, "--link-c", 0, []), native_c_files(dir.concat("/native")));
@@ -737,7 +752,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
             // run from the repo root. See `shims/shims.plum`.
             let cfiles = write_shims(scratch);
             let base = ["-O2", "-Wno-override-module", ll];
-            let argv2 = Array.concat(Array.concat(Array.concat(base, cfiles), extra), ["-lm", "-o", out]);
+            let argv2 = Array.concat(Array.concat(Array.concat(base, cfiles), extra), Array.concat(platform_libs(), ["-o", out]));
             match run_process("clang", argv2) {
                 Err(e) => "build failed: ".concat(e),
                 Ok(r) => if r.exit_code == 0 {

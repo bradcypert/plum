@@ -40,6 +40,23 @@ The compiler **emits no LLVM target triple**, so `clang` targets
 whatever host it runs on. That was already true and is the single
 biggest reason this port is small rather than large.
 
+### Constants are part of the ABI too
+
+`setlocale(6, "C.utf8")` was emitted straight into the IR. Both halves
+are glibc-specific: `LC_ALL` is 6 on glibc and **0** on macOS, where 6
+is `LC_MESSAGES`; and `C.utf8` is a glibc locale name macOS does not
+have. The call therefore set the wrong category to a locale that did
+not exist, and `towupper`/`towlower` silently stopped mapping anything
+outside ASCII.
+
+The lesson generalises: a libc *constant* baked into generated IR is as
+much a portability hazard as a libc *symbol*, and a quieter one. A
+sweep of every literal the runtime passes to libc found `fseek`'s
+`0`/`2` (universal in practice) and `fopen`'s modes (already `"rb"`/
+`"wb"`, so Windows will not rewrite newlines) — `setlocale` was the
+only real one. Both the category and the locale name now live in
+`compat_shim.c`, where the C header supplies them.
+
 ### The two libc symbols that are not portable
 
 | Symbol | Linux | macOS | Windows |
@@ -68,7 +85,7 @@ remains available later as ordinary cleanup.
 | `thread_shim.c` | ✅ pthread | MinGW winpthreads, or a Win32 rewrite |
 | `dir_shim.c` | ✅ dirent | MinGW `dirent.h`, or `FindFirstFile` |
 | `process_shim.c` | ✅ fork/waitpid | ✅ `CreateProcess`, written, untested |
-| `net_shim.c` | ✅ BSD sockets | **rewrite** — Winsock needs `WSAStartup`, `SOCKET`, `closesocket` |
+| `net_shim.c` | ✅ BSD sockets | ✅ Winsock, written, untested |
 
 ### Unix commands the compiler shelled out to — fixed
 
@@ -171,9 +188,13 @@ Under the MinGW route, in order:
    `_WIN32` branches that have never been compiled, and writing a
    fourth blind would just add to the pile. The CI leg turns them into
    errors with line numbers.
-5. Rewrite `net_shim.c` against Winsock. Not on the critical path —
-   only Plum programs that open sockets need it, not the compiler — so
-   it can follow a first Windows release rather than block one.
+5. ~~Rewrite `net_shim.c` against Winsock.~~ **Done**, unverified.
+
+   This was previously described here as "not on the critical path".
+   **That was wrong.** `write_shims` writes *every* embedded shim into
+   each build and hands them all to `clang`, so `net_shim.c` is
+   compiled into every `plum build` whether the program opens a socket
+   or not. Nothing would have built on Windows until it compiled.
 6. Add the release matrix entry once step 4 is green.
 
 ### What has been verified about the Windows code
@@ -192,8 +213,38 @@ Nothing that needs Windows. What could be checked here, was:
   `plum_spawn_capture` boundary the Windows path implements, and all
   twelve harnesses still pass — so the port did not change Linux
   behaviour, rather than being believed not to.
+- `net_shim.c` was restructured so both platforms share one copy of
+  every function, differing only in a handle type, a close call, an
+  error sentinel and a one-time init. `bootstrap/net-smoke` still opens
+  real TCP and HTTP connections on Linux afterwards.
 
 ### Linux arm64
 
 Nearly free once macOS arm64 is green, since that proves the compiler
 produces correct code for the architecture. Mostly a runner change.
+
+## What the first CI run found
+
+The Windows leg earned its place immediately, and so did the macOS one.
+
+- **`process_run_inherit` was still forking.** `process_shim.c` has a
+  second process function, used by `plum run`, outside any platform
+  guard. It was missed because only the first one had been read. Found
+  as ten compile errors with line numbers, which is exactly the trade
+  the leg exists to make.
+- **A sweep for the same bug class** then found `rmdir` unguarded in
+  `os_shim.c` — MinGW spells it `_rmdir`, like `mkdir`.
+- **macOS failed 2 of 43 fixtures**, both non-ASCII case mapping:
+  `"Äöü".to_upper()` returned `Äöü` unchanged. The cause had already
+  been found by reading the source — see the locale note above — and
+  the failure confirmed it precisely. ASCII was unaffected, which is
+  why only two fixtures noticed and why this would have shipped
+  silently.
+- **Linux failed too, and not because of the port.** `check-version`
+  had been failing on every run since 2026-08-21: it fell back to
+  `GITHUB_REF_NAME`, which on a push to a branch is the *branch* name,
+  so it compared `main` against `0.0.1`. Only `GITHUB_REF` carries the
+  ref type.
+
+The macOS bootstrap itself — seed to compiler to compiler — passed on
+arm64 on the first attempt.

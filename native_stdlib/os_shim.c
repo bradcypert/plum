@@ -39,9 +39,11 @@
 #include <direct.h>
 #include <io.h>
 #define PLUM_MKDIR(p) _mkdir(p)
+#define PLUM_RMDIR(p) _rmdir(p)
 #else
 #include <unistd.h>
 #define PLUM_MKDIR(p) mkdir((p), 0700)
+#define PLUM_RMDIR(p) rmdir(p)
 #endif
 
 #if defined(__APPLE__)
@@ -155,7 +157,7 @@ static int plum_remove_tree(const char *path) {
     }
     free(child);
     closedir(d);
-    if (rmdir(path) != 0) rc = -1;
+    if (PLUM_RMDIR(path) != 0) rc = -1;
     return rc;
 }
 

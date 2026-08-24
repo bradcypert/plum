@@ -46,13 +46,66 @@
 // limitation, not silently swept.
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+// Winsock is a different API in the details, not in the shape: the same
+// `socket`/`bind`/`listen`/`accept`/`send`/`recv` calls with a
+// different handle type, a different close, a different error
+// sentinel, and a mandatory one-time initialisation. Those four
+// differences are abstracted here and NOTHING below is written twice --
+// the alternative, a whole second copy of each function, is how the two
+// halves drift apart.
+//
+// **Untested.** No Windows toolchain has compiled this. See PORTING.md.
+#if defined(_WIN32)
+// winsock2.h must precede windows.h, which ws2tcpip.h pulls in.
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+typedef SOCKET plum_sock;
+#define PLUM_BAD_SOCK       INVALID_SOCKET
+#define PLUM_CLOSESOCK(s)   closesocket(s)
+#define PLUM_SOCKOPT(v)     ((const char *)(v))
+#define PLUM_ADDRLEN(n)     ((int)(n))
+
+// Winsock refuses every call until the library is initialised, and
+// there is no natural place to do it once -- this shim has no
+// initialiser and Plum has no module-load hook. Doing it lazily on each
+// entry point is the standard answer; `WSAStartup` is reference-counted
+// and cheap to call repeatedly, and the matching `WSACleanup` is
+// deliberately never called, because the only correct time to do it is
+// at process exit, when it buys nothing.
+static int plum_net_init(void) {
+    static int started = 0;
+    WSADATA wsa;
+    if (started) return 0;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return -1;
+    started = 1;
+    return 0;
+}
+#else
 #include <netinet/in.h>
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
+
+typedef int plum_sock;
+#define PLUM_BAD_SOCK       (-1)
+#define PLUM_CLOSESOCK(s)   close(s)
+#define PLUM_SOCKOPT(v)     (v)
+#define PLUM_ADDRLEN(n)     (n)
+#define plum_net_init()     0
+#endif
+
+// `INVALID_SOCKET` is `(SOCKET)~0`, which reinterpreted as a signed
+// 64-bit value is exactly -1 -- so the -1 the Plum wrappers already
+// treat as failure keeps working on both platforms without a second
+// sentinel. Checked here rather than assumed.
+static long long plum_sock_out(plum_sock s) {
+    return (s == PLUM_BAD_SOCK) ? -1 : (long long)s;
+}
 
 // Resolves `host`/`port` via `getaddrinfo` (so both hostnames and
 // literal IPs work, IPv4 or IPv6) and connects to the first address
@@ -63,6 +116,7 @@
 // connection are indistinguishable at this level either way).
 long long tcp_connect(const char *host, long long port) {
     struct addrinfo hints;
+    if (plum_net_init() != 0) return -1;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -77,15 +131,15 @@ long long tcp_connect(const char *host, long long port) {
 
     long long fd = -1;
     for (struct addrinfo *rp = res; rp != NULL; rp = rp->ai_next) {
-        int s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (s < 0) {
+        plum_sock s = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+        if (s == PLUM_BAD_SOCK) {
             continue;
         }
-        if (connect(s, rp->ai_addr, rp->ai_addrlen) == 0) {
-            fd = s;
+        if (connect(s, rp->ai_addr, PLUM_ADDRLEN(rp->ai_addrlen)) == 0) {
+            fd = (long long)s;
             break;
         }
-        close(s);
+        PLUM_CLOSESOCK(s);
     }
     freeaddrinfo(res);
     return fd;
@@ -99,12 +153,14 @@ long long tcp_connect(const char *host, long long port) {
 // kernel's own `TIME_WAIT` hold on the port — standard practice for any
 // long-lived listener. Returns the listening fd, or -1 on failure.
 long long tcp_listen(long long port) {
-    int s = socket(AF_INET, SOCK_STREAM, 0);
-    if (s < 0) {
+    plum_sock s;
+    if (plum_net_init() != 0) return -1;
+    s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s == PLUM_BAD_SOCK) {
         return -1;
     }
     int one = 1;
-    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, PLUM_SOCKOPT(&one), sizeof(one));
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -112,15 +168,15 @@ long long tcp_listen(long long port) {
     addr.sin_addr.s_addr = INADDR_ANY;
     addr.sin_port = htons((unsigned short)port);
 
-    if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        close(s);
+    if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        PLUM_CLOSESOCK(s);
         return -1;
     }
-    if (listen(s, 128) < 0) {
-        close(s);
+    if (listen(s, 128) != 0) {
+        PLUM_CLOSESOCK(s);
         return -1;
     }
-    return s;
+    return (long long)s;
 }
 
 // `accept(2)`, discarding the peer's own address (Plum has no way to
@@ -128,7 +184,7 @@ long long tcp_listen(long long port) {
 // UDP's `recvfrom` out of this v1 pass entirely, see DESIGN.md). Blocks
 // until a connection arrives. Returns the new connection's fd, or -1.
 long long tcp_accept(long long fd) {
-    return (long long)accept((int)fd, NULL, NULL);
+    return plum_sock_out(accept((plum_sock)fd, NULL, NULL));
 }
 
 // Blocking send of exactly `len` bytes of `buf`. Returns the number of
@@ -138,7 +194,9 @@ long long tcp_accept(long long fd) {
 // responsible for looping if it cares (matches this shim's own
 // "thin adapter, no retry policy of its own" scope elsewhere).
 long long tcp_send(long long fd, const char *buf, long long len) {
-    return (long long)send((int)fd, buf, (size_t)len, 0);
+    // Winsock's length is `int`, POSIX's is `size_t`; the macro keeps
+    // the one narrowing cast in a single place.
+    return (long long)send((plum_sock)fd, buf, PLUM_ADDRLEN(len), 0);
 }
 
 // See this file's own top doc comment for the full "why CStr, why
@@ -153,7 +211,7 @@ const char *tcp_recv(long long fd, long long max_len) {
     if (buf == NULL) {
         return "";
     }
-    ssize_t n = recv((int)fd, buf, (size_t)max_len, 0);
+    long long n = (long long)recv((plum_sock)fd, buf, PLUM_ADDRLEN(max_len), 0);
     if (n < 0) {
         n = 0;
     }
@@ -162,5 +220,5 @@ const char *tcp_recv(long long fd, long long max_len) {
 }
 
 void tcp_close(long long fd) {
-    close((int)fd);
+    PLUM_CLOSESOCK((plum_sock)fd);
 }

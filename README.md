@@ -787,6 +787,10 @@ program's prelude):
   String]` for a program that re-invokes itself. All return
   `Result[Unit, String]` unless shown otherwise.
 
+  **`Os.platform(): String`** is `"linux"`, `"macos"` or `"windows"` —
+  compiled in rather than detected, since a binary cannot move between
+  platforms. The compiler uses it to choose which libraries to link.
+
   `Os.remove_tree` removes symlinks rather than following them, so a
   link pointing outside the tree cannot cause deletions there.
   `Os.copy_tree` does not preserve file modes.

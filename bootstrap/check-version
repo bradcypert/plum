@@ -32,7 +32,18 @@ if [ "$reported" != "$declared" ]; then
     exit 1
 fi
 
-tag="${1:-${GITHUB_REF_NAME:-$(git describe --exact-match --tags HEAD 2>/dev/null || true)}}"
+# `GITHUB_REF_NAME` is NOT a tag name in general -- on a push to a
+# branch it is the BRANCH name, so this compared `main` against `0.0.1`
+# and failed every CI run on main from 2026-08-21 until this was fixed
+# on 2026-08-24. The ref TYPE is the thing to test, and only `GITHUB_REF`
+# carries it.
+tag="${1:-}"
+if [ -z "$tag" ]; then
+    case "${GITHUB_REF:-}" in
+        refs/tags/*) tag="${GITHUB_REF#refs/tags/}" ;;
+        *)           tag="$(git describe --exact-match --tags HEAD 2>/dev/null || true)" ;;
+    esac
+fi
 if [ -z "$tag" ]; then
     echo "version ok: $declared (no tag to compare -- HEAD is not tagged)"
     exit 0

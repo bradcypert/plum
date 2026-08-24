@@ -28,6 +28,17 @@ seed="bootstrap/seed/plum.ll"
 # symbols the generated runtime calls that do not exist under that
 # name on macOS and Windows, which is what lets THIS seed -- built
 # on Linux, checked in as IR -- link on those platforms at all.
+# The same platform split `platform_libs` makes inside the compiler
+# (see `bootstrap/self_host/main.plum`). It has to be repeated here
+# because this script runs BEFORE any compiler exists -- that is what
+# bootstrapping from a seed means. `net_shim.c` is absent from the link
+# below, so `-lws2_32` is not needed; pthreads are, because
+# `thread_shim.c` is.
+libs="-lm"
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) libs="-lm -lpthread" ;;
+esac
+
 clang -O2 -Wno-override-module "$seed" \
     native_stdlib/compat_shim.c \
     native_stdlib/dir_shim.c \
@@ -35,7 +46,7 @@ clang -O2 -Wno-override-module "$seed" \
     native_stdlib/os_shim.c \
     native_stdlib/process_shim.c \
     native_stdlib/thread_shim.c \
-    -lm -o "$out"
+    $libs -o "$out"
 
 echo "built $out from the seed -- no Rust compiler involved"
 echo "next: $out build bootstrap/self_host -o sh.real"

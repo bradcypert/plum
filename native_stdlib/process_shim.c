@@ -426,6 +426,74 @@ void process_free(long long handle) {
     plum_process_slots[handle].in_use = 0;
 }
 
+// The inherited-stdio counterpart to `plum_spawn_capture`, and the
+// second place this file needs a platform split. It was missed when the
+// first one was written -- the POSIX `fork`/`waitpid` here sat outside
+// any guard and was found by the Windows CI leg, which is what that leg
+// is for.
+#if !defined(_WIN32)
+
+static long long plum_spawn_inherit(const char *program, char **argv) {
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+    if (pid == 0) {
+        execvp(program, argv);
+        _exit(127);
+    }
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0) return -1;
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    // 128 + signal is the shell convention, kept so `plum run` reports
+    // a killed child the way anything else in a pipeline would.
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return -1;
+}
+
+#else
+
+static long long plum_spawn_inherit(const char *program, char **argv) {
+    char *cmdline;
+    size_t cap = 0;
+    size_t len = 0;
+    int i;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    DWORD code = 0;
+
+    for (i = 0; argv[i] != NULL; i++) cap += strlen(argv[i]) * 2 + 3;
+    cap += 1;
+    cmdline = (char *)malloc(cap);
+    if (cmdline == NULL) return -1;
+    for (i = 0; argv[i] != NULL; i++) {
+        if (plum_win_append_arg(cmdline, cap, &len, argv[i]) != 0) {
+            free(cmdline);
+            return -1;
+        }
+    }
+    cmdline[len] = '\0';
+
+    // No `STARTF_USESTDHANDLES`: leaving the field unset is what makes
+    // the child inherit this process's console, which is the entire
+    // point of this function as against `plum_spawn_capture`.
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    ZeroMemory(&pi, sizeof(pi));
+
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        free(cmdline);
+        return -1;
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    if (!GetExitCodeProcess(pi.hProcess, &code)) code = (DWORD)-1;
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    free(cmdline);
+    (void)program;
+    return (long long)(int)code;
+}
+
+#endif
+
 // Runs a command with stdio INHERITED — no capture, no temp files — and
 // returns its exit status. `process_run` above is for a caller that
 // wants the output as a value; this is for a caller that wants the
@@ -460,22 +528,8 @@ long long process_run_inherit(const char *program, const char *args_joined, long
     }
     argv[idx] = NULL;
 
-    pid_t pid = fork();
-    if (pid < 0) {
-        free(args_copy);
-        free(argv);
-        return -1;
-    }
-    if (pid == 0) {
-        execvp(program, argv);
-        _exit(127);
-    }
-    int status = 0;
-    int waited = waitpid(pid, &status, 0);
+    long long code = plum_spawn_inherit(program, argv);
     free(args_copy);
     free(argv);
-    if (waited < 0) return -1;
-    if (WIFEXITED(status)) return WEXITSTATUS(status);
-    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-    return -1;
+    return code;
 }

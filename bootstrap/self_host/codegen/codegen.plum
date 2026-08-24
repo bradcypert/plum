@@ -1544,6 +1544,7 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "os_remove_file_raw" { Some("@plum_os_remove_file") }
     else if name == "os_remove_tree_raw" { Some("@plum_os_remove_tree") }
     else if name == "os_copy_tree_raw" { Some("@plum_os_copy_tree") }
+    else if name == "os_platform_raw" { Some("@plum_os_platform") }
     else { None }
 
 let cg_concrete_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =

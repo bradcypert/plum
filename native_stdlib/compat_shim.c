@@ -31,6 +31,69 @@
 int plum_compat_placeholder(void);
 int plum_compat_placeholder(void) { return 0; }
 
+// Which platform this binary is running on, as a lowercase word.
+//
+// Deliberately NOT named `plum_platform`: a Plum function called
+// `platform` mangles to `@plum_platform`, and a collision between a
+// runtime symbol and a mangled Plum name is a mistake this project has
+// already made once (`@plum_print` against `print`).
+//
+// It exists because the compiler builds a `clang` command line in Plum
+// code, where a C `#ifdef` cannot reach -- and the libraries a link
+// needs are not the same everywhere. Returns a string literal with
+// static storage; the caller copies it immediately.
+const char *plum_host_platform(void);
+const char *plum_host_platform(void) {
+#if defined(_WIN32)
+    return "windows";
+#elif defined(__APPLE__)
+    return "macos";
+#else
+    return "linux";
+#endif
+}
+
+// Puts the process into a UTF-8 locale, so `towupper`/`towlower` map
+// non-ASCII codepoints instead of passing them through.
+//
+// This was `setlocale(6, "C.utf8")` emitted directly as IR until
+// 2026-08-24, and it was wrong on macOS twice over -- silently, which
+// is the worst way for a locale call to be wrong:
+//
+//   1. **`LC_ALL` is not 6 everywhere.** It is 6 on glibc and 0 on
+//      BSD/Darwin, where 6 is `LC_MESSAGES`. The call therefore set the
+//      wrong category and left `LC_CTYPE` alone. Emitting the constant
+//      as a literal in IR is what made this possible; here the C
+//      header supplies it, so it is right by construction on each
+//      platform.
+//   2. **`C.utf8` is a glibc locale name.** macOS does not have it, so
+//      even with the right category the call would have failed and
+//      changed nothing.
+//
+// The fallbacks matter for the same reason: there is no single locale
+// name that exists everywhere. Each branch tries the spellings its
+// platform actually ships, most specific first. If every one fails the
+// process keeps the "C" locale and ASCII case mapping still works --
+// degraded, not broken.
+#include <locale.h>
+
+void plum_set_utf8_locale(void);
+void plum_set_utf8_locale(void) {
+#if defined(_WIN32)
+    // UCRT accepts the codepage-only form, which asks for UTF-8
+    // without naming a language.
+    if (setlocale(LC_ALL, ".UTF-8") == NULL) setlocale(LC_ALL, "en-US.UTF-8");
+#elif defined(__APPLE__)
+    if (setlocale(LC_ALL, "C.UTF-8") == NULL)
+        if (setlocale(LC_ALL, "en_US.UTF-8") == NULL)
+            setlocale(LC_ALL, "UTF-8");
+#else
+    if (setlocale(LC_ALL, "C.utf8") == NULL)
+        if (setlocale(LC_ALL, "C.UTF-8") == NULL)
+            setlocale(LC_ALL, "en_US.UTF-8");
+#endif
+}
+
 #if defined(__APPLE__)
 
 // `malloc_usable_size` is a glibc extension. Apple's libc spells the
