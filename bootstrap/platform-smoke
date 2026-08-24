@@ -78,7 +78,11 @@ for dir in bootstrap/exec_corpus/*/; do
         ok=$((ok + 1))
     else
         printf 'FAIL  %-24s output differs from expected.txt\n' "$name"
-        diff "$dir/expected.txt" - <<DIFF | head -n 6 | sed 's/^/        /'
+        # Carriage returns are rendered rather than printed. A line that
+        # differs ONLY by a trailing CR looks identical in a diff, which
+        # cost a diagnosis once -- and CR is exactly what a Windows text
+        # stream or an autocrlf checkout introduces.
+        diff "$dir/expected.txt" - <<DIFF | head -n 14 | sed -e 's/\r/<CR>/g' -e 's/^/        /'
 $act
 DIFF
         fail=$((fail + 1))

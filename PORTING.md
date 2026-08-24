@@ -230,6 +230,50 @@ Nothing that needs Windows. What could be checked here, was:
 Nearly free once macOS arm64 is green, since that proves the compiler
 produces correct code for the architecture. Mostly a runner change.
 
+## Cross-compiling from Linux
+
+`zig cc` cross-compiles every shim, and links the whole compiler, for
+macOS arm64, macOS x86_64 and Windows x86_64 — from a Linux box, with
+no Xcode SDK and no Windows toolchain, in **about two seconds**. Zig
+vendors the libc headers and link stubs for all three.
+`bootstrap/cross-check` does exactly this and skips cleanly where `zig`
+is absent.
+
+**It does not replace a platform CI leg, and must not be treated as
+one.** It proves that code compiles and links. Nothing it produces is
+ever executed, so it says nothing about behaviour — not the locale bug,
+not the exponent padding, not whether `CreateProcess` actually starts
+`clang`. Every bug this port has hit, except the compile errors, would
+have sailed straight through it. The tier rule stands: a platform is
+published only once something in CI *runs* real programs on it.
+
+Nor should release artifacts be built this way, though they could be.
+A cross-linked binary is one no machine has ever executed, produced by
+a different toolchain than the one the tests ran under. The current
+arrangement builds each platform's binary on that platform, right after
+the harness passed there, which is the property worth keeping.
+
+What it *is* worth: closing the compile-error feedback loop from a CI
+round trip down to a second. Three of this port's failures were compile
+errors of one shape — a POSIX header or call left outside a platform
+guard, invisible on Linux where the guard is inert.
+
+### Cost, and what the real cost was
+
+GitHub Actions is free for public repositories, this one included, on
+every runner size. There was no bill to reduce.
+
+The real cost was **latency, and only on Intel macOS**: `macos-15`
+(arm64) finishes in under a minute, while `macos-13` sat queued for
+over two hours. Worse than being slow, a straggling job keeps the whole
+run marked in-progress, and GitHub will not serve *any* job's logs
+until the run completes — so one scarce runner blocks the diagnosis of
+every other leg.
+
+`macos-13` is therefore in `release.yml` only. Publishing an Intel
+binary still requires it to pass; a tag is a place where waiting is
+acceptable and a push is not.
+
 ## What the second CI run found
 
 macOS arm64 and Linux both went green. Windows got much further: the

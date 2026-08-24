@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Does the C in `native_stdlib/` still COMPILE for macOS and Windows?
+#
+# Answered from a Linux box in under a minute, using `zig cc` as a
+# cross-compiler. Zig vendors libc headers and link stubs for both
+# targets, so no Xcode SDK and no Windows toolchain are needed.
+#
+# **What this proves, and the limit is the whole point:** that the code
+# compiles and links for a platform. It does NOT run anything. A binary
+# produced here has never executed, and nothing about behaviour --
+# locale handling, path semantics, whether `CreateProcess` actually
+# starts `clang` -- is tested by it. Running real programs on a real
+# machine is what `bootstrap/platform-smoke` does in CI, and this does
+# not replace it or reduce what it has to prove.
+#
+# It exists because compile errors were costing a full CI round trip
+# each, and two in a row were the same shape: a POSIX header or a
+# POSIX call left outside a platform guard, invisible on Linux where
+# the guard is inert. Both would have been caught here in a second.
+#
+# Skipped, not failed, when `zig` is absent: this is a convenience for
+# a developer with a Linux box, and the platform legs in CI are the
+# authority either way.
+#
+# Usage:  bootstrap/cross-check
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+if ! command -v zig > /dev/null 2>&1; then
+    echo "cross-check: SKIPPED -- no zig on PATH"
+    echo "  install zig to compile-check macOS and Windows from here;"
+    echo "  the platform legs in CI check them for real either way."
+    exit 0
+fi
+
+work="$(mktemp -d -t plum-cross-XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+
+# The same shims `bootstrap/from-seed` links, in the same order.
+# `net_shim.c` is not among them -- nothing in the compiler calls it --
+# but it IS compile-checked below, because `plum build` writes every
+# embedded shim into every user build.
+seed_shims=(native_stdlib/compat_shim.c native_stdlib/dir_shim.c
+            native_stdlib/io_shim.c native_stdlib/os_shim.c
+            native_stdlib/process_shim.c native_stdlib/thread_shim.c)
+
+targets=(aarch64-macos x86_64-macos x86_64-windows-gnu)
+
+echo "zig $(zig version), cross-compiling for: ${targets[*]}"
+echo
+
+fail=0
+
+for tgt in "${targets[@]}"; do
+    echo "--- $tgt ---"
+
+    for c in native_stdlib/*.c; do
+        name="$(basename "$c")"
+        printf '  %-18s ' "$name"
+        if zig cc -target "$tgt" -O2 -Wall -c "$c" -o "$work/o.o" > "$work/err" 2>&1; then
+            echo "compiles"
+        else
+            echo "FAILED"
+            head -n 4 "$work/err" | sed 's/^/      /'
+            fail=$((fail + 1))
+        fi
+    done
+
+    # The whole compiler, linked. Catches what per-file compilation
+    # cannot: a symbol that no shim defines on this platform.
+    printf '  %-18s ' "seed -> binary"
+    if zig cc -target "$tgt" -O2 -Wno-override-module bootstrap/seed/plum.ll \
+            "${seed_shims[@]}" -lm -o "$work/plum.bin" > "$work/err" 2>&1; then
+        echo "links ($(cd "$work" && du -h plum.bin | cut -f1))"
+    else
+        echo "FAILED"
+        grep -E "error|undefined" "$work/err" | head -n 6 | sed 's/^/      /'
+        fail=$((fail + 1))
+    fi
+    echo
+done
+
+if [ $fail -eq 0 ]; then
+    echo "cross-check: every shim compiles and the compiler links for all ${#targets[@]} targets"
+    echo "  (nothing was RUN -- see bootstrap/platform-smoke and the CI platform legs)"
+else
+    echo "cross-check: $fail failures" >&2
+    exit 1
+fi

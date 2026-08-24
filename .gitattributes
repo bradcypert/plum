@@ -1,0 +1,19 @@
+# Every text file in this repo is LF, on every platform, including a
+# Windows checkout.
+#
+# Git's `core.autocrlf` is on by default on Windows, which would rewrite
+# line endings at checkout time. That breaks three things here at once:
+# the `expected.txt` recordings in `bootstrap/*_corpus/` are compared
+# byte for byte; the `bootstrap/*` harnesses are shell scripts read by
+# bash; and `bootstrap/seed/plum.ll` is LLVM IR whose byte-identity is
+# asserted by `bootstrap/self-sufficiency`.
+#
+# Declaring it here rather than relying on each developer's git config
+# is the point -- the setting that would corrupt a checkout is one this
+# repo cannot see or control.
+* text=auto eol=lf
+
+# Never touch these, whatever they contain.
+*.png binary
+*.jpg binary
+*.gz binary

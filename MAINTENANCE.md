@@ -10,7 +10,7 @@ are. This is the operating manual.
 
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
-for h in check-version check-shims lsp-smoke test-smoke net-smoke \
+for h in check-version check-shims cross-check lsp-smoke test-smoke net-smoke \
          corpus-check interp-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
     ./bootstrap/$h || echo "FAILED: $h"
@@ -29,6 +29,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `lsp-smoke` | the language server answers a real session, including live diagnostics on unsaved text | <1s |
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
+| `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |
 | `platform-smoke` | a compiler *binary* builds and runs 43 real programs on the machine it is sitting on | 21s |
 | `example-sweep` | every `examples/` project matches its recorded output | 5s |
 | `interp-check` | the interpreter agrees with the compiler on every execution fixture | 7s |
@@ -36,6 +37,17 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-seed` | the checked-in seed still bootstraps to today's compiler | 26s |
 | `self-sufficiency` | it builds itself with no Rust, from any directory | 27s |
 | `corpus-check` | every corpus fixture compiles, runs, prints the right thing, aborts when it should, and leaks nothing | 29s |
+
+`cross-check` needs `zig` and skips cleanly without it. Run it after
+touching anything in `native_stdlib/`: it compiles every shim for macOS
+and Windows from this Linux box in about two seconds, using Zig's
+vendored libc headers, so no Xcode SDK or Windows toolchain is needed.
+It proves compilation and linking only -- **nothing it produces is ever
+run**. It exists because two consecutive Windows CI failures were the
+same shape, a POSIX header or call left outside a platform guard,
+invisible on Linux where the guard is inert. Both would have been
+caught here in a second rather than a round trip. It has since caught a
+third.
 
 `platform-smoke` is the odd one out and is not part of the loop above.
 It is the only harness that runs on macOS and Windows, so it is written

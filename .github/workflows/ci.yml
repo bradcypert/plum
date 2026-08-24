@@ -96,15 +96,28 @@ jobs:
   # embedded C shims compile against a different libc, and do 43 real
   # programs still print the right thing.
   #
-  # macos-15 is arm64 and macos-13 is x86_64, so this covers a second
-  # OS and a second CPU architecture at the same time.
+  # macos-15 is arm64, which is also the second CPU architecture this
+  # project targets -- so one runner covers a second OS and a second
+  # architecture at once. It finishes in under a minute.
+  #
+  # **macos-13 (Intel) is deliberately NOT here**, and is in
+  # `release.yml` instead. Intel macOS runners are scarce enough that
+  # the job sat queued for over two hours while everything else
+  # finished, which turns a per-push signal into no signal at all --
+  # nobody waits, and worse, GitHub reports the whole RUN as still in
+  # progress, so no job's logs can be downloaded until it lands.
+  # Publishing an Intel binary still requires it to pass; a tag is a
+  # place where waiting is acceptable and a push is not.
+  #
+  # (Cost is not the reason. This repository is public, so Actions
+  # minutes are free on every runner size.)
   platforms:
     name: ${{ matrix.os }} builds and runs real programs
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-13]
+        os: [macos-15]
     steps:
       - uses: actions/checkout@v4
 
