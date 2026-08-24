@@ -135,6 +135,20 @@ jobs:
       - name: the compiler it built works
         run: ./bootstrap/platform-smoke ./sh.real
 
+      # The language server is the one feature that was BROKEN on macOS
+      # and fixed blind: it re-invokes the compiler through
+      # `/proc/self/exe`, which does not exist here, so it could never
+      # have worked. `Os.self_exe` replaced that, and nothing tested
+      # the result on a Mac until this step. Shipping a release that
+      # advertises editor support without ever running it on the
+      # platform is the gap this closes.
+      #
+      # `lsp-smoke` runs here and not on Windows only because it needs
+      # `python3` to build the LSP session, which macOS runners have
+      # and the MSYS2 environment would have to install.
+      - name: the language server answers a real session
+        run: ./bootstrap/lsp-smoke ./sh.real
+
   # Windows, and EXPECTED TO FAIL for now -- `continue-on-error` is
   # deliberate and is not a way of ignoring a broken build.
   #

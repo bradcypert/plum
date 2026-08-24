@@ -8,7 +8,21 @@
 # clearing case: an editor keeps showing the last diagnostics it was
 # handed, so a fix that publishes nothing leaves the error on screen
 # forever.
-cd /home/brad/Projects/plum
+# The repo root, derived rather than hardcoded. This said
+# `cd /home/brad/Projects/plum` until 2026-08-24 -- one developer's
+# machine, in a checked-in harness. It passed everywhere anyway, which
+# is why it survived: on that machine the `cd` succeeds, and in CI it
+# fails silently while the working directory is already the repo root.
+# A harness that works by luck is a harness that stops working without
+# warning.
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root" || exit 1
+
+# Which compiler to drive. `./sh` is the Linux development wrapper
+# (cgroup limits, `readlink -f`) and is the right default here; pass a
+# plain binary instead to run this against a compiler on a platform
+# where that wrapper does not work.
+plum="${1:-./sh}"
 work=$(mktemp -d)
 printf 'struct P { x: Int }\n\nlet f (p: P): Int = p.nope\n' > "$work/main.plum"
 # A second, well-typed project: hover on a LOCAL needs the project to
@@ -71,7 +85,7 @@ for m in msgs:
     b=json.dumps(m).encode()
     out.write(b"Content-Length: %d\r\n\r\n" % len(b)); out.write(b)
 PY
-out=$(SH_MEM=4G SH_TIMEOUT=60 ./sh lsp < "$work/session.bin" 2>&1)
+out=$(SH_MEM=4G SH_TIMEOUT=60 "$plum" lsp < "$work/session.bin" 2>&1)
 fail=0
 echo "$out" | grep -q '"textDocumentSync":1' || { echo "FAIL: no capabilities"; fail=1; }
 echo "$out" | grep -q 'has no field named nope' || { echo "FAIL: no diagnostic"; fail=1; }
