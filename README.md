@@ -238,10 +238,10 @@ implementation is still ahead:
 
 | | self-hosted | Rust |
 |---|---|---|
-| diagnostics | on open and save | live, as you edit |
+| diagnostics | live, as you edit | live, as you edit |
 | hover | inferred type of any identifier | resolved type of any expression |
 | go-to-definition | locals, params, top-level names | locals, params, fields, variants |
-| completion | — | keywords, scope, struct fields |
+| completion | project names, stdlib, enum variants | keywords, scope, struct fields |
 
 The self-hosted server asks the TYPE CHECKER, so hovering a local or a
 parameter shows the type it was actually inferred to have — `doubled:
@@ -250,14 +250,27 @@ whatever top-level name it happens to share. Top-level names fall back
 to a by-name index, which is what supplies a function's full signature
 on hover.
 
-Two limits: it needs the project to type-check cleanly, and it re-checks
-per request (26ms on a small project, ~0.9s on the compiler's own 14k
-lines). Field names and enum variants are not yet resolved — hovering
-`.x` in `p.x` answers for `p`.
+Completion offers every top-level name in your project, the standard
+library's 100-odd public functions, and every enum variant, each with
+its signature as the detail. It deliberately does **not** resolve `.` —
+that needs the type of whatever precedes the dot, which is a different
+kind of work — so there is no field completion. The whole list is
+returned and your editor filters it, which is what LSP clients do
+anyway.
 
-If editor support is what you care about most today, build the Rust
-implementation and point your editor at that binary. Everything below
-describes it.
+Two limits on the rest: hover and go-to-definition need the project to
+type-check cleanly, and the server re-checks per request (26ms on a
+small project, ~0.9s on the compiler's own 14k lines). Field names and
+enum variants are not resolved for hover — hovering `.x` in `p.x`
+answers for `p`. Completion is unaffected by both, since it reads names
+from disk rather than inferring anything.
+
+The self-hosted server is the one that ships: it is in every published
+binary, on Linux, macOS and Windows. The Rust implementation is still
+ahead on completion depth — keywords, locals in scope, and fields after
+`.` — but it is not published anywhere and is a test oracle being wound
+down. The section below describes it, and is the specification the
+self-hosted server is being brought up to.
 
 Two pieces, independent of each other:
 

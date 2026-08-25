@@ -26,7 +26,7 @@ About two minutes. If you only run two, run `corpus-check` and
 |---|---|---|
 | `check-version` | the version string, the tag and the built binary agree | <1s |
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
-| `lsp-smoke` | the language server answers a real session, including live diagnostics on unsaved text | <1s |
+| `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |

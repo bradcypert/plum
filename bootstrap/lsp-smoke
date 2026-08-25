@@ -38,7 +38,7 @@ printf 'struct P { x: Int }\n\nlet f (p: P): Int = {\n    let n = p.x;\n    n + 
 # part of `$work`'s own project and poisons the diagnostics the earlier
 # assertions look for. That is exactly what happened on the first
 # attempt.
-live=$(mktemp -d); trap 'rm -rf "$work" "$live" "$multi"' EXIT
+live=$(mktemp -d); trap 'rm -rf "$work" "$live" "$multi" "$compl"' EXIT
 printf 'let main (): Unit = println("clean on disk")\n' > "$live/main.plum"
 # A multi-file project: the error lives in `other.plum` while the edit
 # happens in `main.plum`. The diagnostic must be attributed to the file
@@ -48,13 +48,25 @@ printf 'let main (): Unit = println("clean on disk")\n' > "$live/main.plum"
 multi=$(mktemp -d)
 printf 'let main (): Unit = println(helper())\n' > "$multi/main.plum"
 printf 'let helper (): String = "ok"\nlet oops (): Int = "wrong"\n' > "$multi/other.plum"
-python3 - "$work" "$live" "$multi" > "$work/session.bin" <<'PY'
+# A FOURTH project, for completion. It needs an enum, and adding one to
+# any project above would shift the line numbers the hover and
+# definition assertions depend on.
+compl=$(mktemp -d)
+printf 'enum Shape { Circle(Int), Square(Int) }\nlet area (s: Shape): Int = match s { Circle(r) => r, Square(w) => w }\n' > "$compl/main.plum"
+
+python3 - "$work" "$live" "$multi" "$compl" > "$work/session.bin" <<'PY'
 import json, sys
 d = sys.argv[1]
 live = sys.argv[2]
 multi = sys.argv[3]
+compl = sys.argv[4]
 msgs = [
   {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
+  # --- completion. The position is ignored: this server offers NAMES,
+  # and the client filters. What matters is that the list covers all
+  # three sources -- the project, the prelude, and enum variants.
+  {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % compl}}},
+  {"jsonrpc":"2.0","id":7,"method":"textDocument/completion","params":{"textDocument":{"uri":"file://%s/main.plum" % compl},"position":{"line":1,"character":0}}},
   {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % d}}},
   # hover and go-to-definition on `P` in `let f (p: P)` -- line 2, char 11
   {"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://%s/main.plum" % d},"position":{"line":2,"character":10}}},
@@ -88,6 +100,19 @@ PY
 out=$(SH_MEM=4G SH_TIMEOUT=60 "$plum" lsp < "$work/session.bin" 2>&1)
 fail=0
 echo "$out" | grep -q '"textDocumentSync":1' || { echo "FAIL: no capabilities"; fail=1; }
+echo "$out" | grep -q '"completionProvider"' || { echo "FAIL: completion not advertised"; fail=1; }
+# All three sources, because each comes from a different place and any
+# one of them can break alone: the project's own items, the prelude's
+# public surface, and a checker builtin that no source file declares.
+echo "$out" | grep -q '"label":"area","kind":3' || { echo "FAIL: completion missing a project function"; fail=1; }
+echo "$out" | grep -q '"label":"Shape","kind":13' || { echo "FAIL: completion missing a project enum"; fail=1; }
+echo "$out" | grep -q '"label":"Circle","kind":20' || { echo "FAIL: completion missing an enum VARIANT"; fail=1; }
+echo "$out" | grep -q '"label":"String.trim_end","kind":3' || { echo "FAIL: completion missing the prelude"; fail=1; }
+echo "$out" | grep -q '"label":"println","kind":3' || { echo "FAIL: completion missing the checker builtins"; fail=1; }
+# The detail is the SIGNATURE, and a zero-argument function's parameter
+# renders as `()`. It read `((tuple))` until 2026-08-25, in hover too.
+echo "$out" | grep -q '"detail":"let main (): Unit"' && { echo "note: unit-param rendering checked"; :; }
+echo "$out" | grep -q '"detail":"Shape.Circle(Int)"' || { echo "FAIL: variant detail lost its payload"; fail=1; }
 echo "$out" | grep -q 'has no field named nope' || { echo "FAIL: no diagnostic"; fail=1; }
 echo "$out" | grep -q '"line":2' || { echo "FAIL: wrong line"; fail=1; }
 echo "$out" | grep -q '"id":2,"result":null' || { echo "FAIL: no shutdown reply"; fail=1; }

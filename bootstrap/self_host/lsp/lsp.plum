@@ -117,6 +117,18 @@ pub let capabilities (): JsonValue =
             JsonEntry { key: "textDocumentSync", value: JsonNumber(1.0) },
             JsonEntry { key: "hoverProvider", value: JsonBool(true) },
             JsonEntry { key: "definitionProvider", value: JsonBool(true) },
+            // No `triggerCharacters`: this server offers NAMES, so
+            // completion is invoked the ordinary way -- as an
+            // identifier is typed, or explicitly. A trigger character
+            // would be a promise about `.`, which needs the type of
+            // whatever precedes it and is not implemented.
+            //
+            // `resolveProvider: false` says every item is complete as
+            // sent; there is no second round trip to fill in
+            // documentation, because the detail IS the signature.
+            JsonEntry { key: "completionProvider", value: JsonObject([
+                JsonEntry { key: "resolveProvider", value: JsonBool(false) },
+            ]) },
         ]) },
     ])
 
@@ -240,6 +252,62 @@ let last_slash (cs: Array[String]) (i: Int): Int =
 // majority of real use is -- jump to the function or type under the
 // cursor -- so this buys most of the value at a fraction of the risk,
 // and the precise version remains additive on top.
+
+// --- Completion ---
+
+// No path or line, unlike `Def`: completion inserts a name, it does not
+// navigate to one. Most candidates come from the prelude, which has no
+// file to navigate to at all.
+pub struct Completion { name: String, kind: String, detail: String }
+
+pub let parse_completions (text: String): Array[Completion] =
+    match json_parse(text) {
+        Err(_) => [],
+        Ok(v) => match v {
+            JsonArray(items) => parse_completions_acc(items, 0, []),
+            _ => [],
+        },
+    }
+
+let parse_completions_acc (items: Array[JsonValue]) (i: Int) (acc: Array[Completion]): Array[Completion] =
+    if i >= items.len() { acc }
+    else {
+        parse_completions_acc(items, i + 1, acc.push(Completion {
+            name: json_field_str(items[i], "name"),
+            kind: json_field_str(items[i], "kind"),
+            detail: json_field_str(items[i], "detail"),
+        }))
+    }
+
+// `CompletionItemKind` from the LSP specification. The numbers are the
+// protocol's, not ours -- an editor picks the icon from them, so a
+// wrong one is a wrong picture next to a right name.
+let completion_kind (kind: String): Float =
+    if kind == "function" { 3.0 }
+    else if kind == "struct" { 22.0 }
+    else if kind == "enum" { 13.0 }
+    else if kind == "variant" { 20.0 }
+    else { 1.0 }
+
+// `isIncomplete: false` tells the client the list is the WHOLE list, so
+// it may filter what it already has as the user keeps typing instead of
+// asking again on every keystroke. That is what makes returning all of
+// them affordable.
+pub let completion_result (items: Array[Completion]): JsonValue =
+    JsonObject([
+        JsonEntry { key: "isIncomplete", value: JsonBool(false) },
+        JsonEntry { key: "items", value: JsonArray(completion_items(items, 0, [])) },
+    ])
+
+let completion_items (items: Array[Completion]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+    if i >= items.len() { acc }
+    else {
+        completion_items(items, i + 1, acc.push(JsonObject([
+            JsonEntry { key: "label", value: JsonString(items[i].name) },
+            JsonEntry { key: "kind", value: JsonNumber(completion_kind(items[i].kind)) },
+            JsonEntry { key: "detail", value: JsonString(items[i].detail) },
+        ])))
+    }
 
 pub struct Def { name: String, path: String, line: Int, col: Int, kind: String, detail: String }
 
