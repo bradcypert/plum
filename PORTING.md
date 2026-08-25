@@ -274,6 +274,42 @@ every other leg.
 binary still requires it to pass; a tag is a place where waiting is
 acceptable and a push is not.
 
+## The bug that was hidden by another bug
+
+Windows output was CRLF all along. Microsoft's CRT opens `stdout` in
+text mode, so every `\n` a Plum program wrote became `\r\n`.
+
+It went unnoticed because a second problem cancelled it out. Git for
+Windows defaults to `core.autocrlf=true`, so the checked-in
+`expected.txt` recordings were *also* checked out as CRLF — and two
+wrong things compared equal. 40 of 43 fixtures passed for the wrong
+reason.
+
+Adding `.gitattributes` with `eol=lf` fixed the checkout and removed
+the cancellation, and 38 fixtures failed at once. The apparent
+regression was the port getting *more* honest, not less.
+
+Two things made it unusually hard to see:
+
+- **MSYS2's bash strips a trailing `\r\n`** in command substitution. So
+  the last line of any captured output came back clean while every
+  earlier line kept its `\r`. One-line fixtures passed; multi-line ones
+  failed with the last line matching and everything above it differing.
+- **No character-level view showed it.** A diff printed `< 800` against
+  `> 800`. A pass that rendered carriage returns as `<CR>` printed
+  nothing, because it ran on the runner where the sed saw... something
+  it did not match. Only `od -c` in `bootstrap/platform-smoke` made it
+  visible, and that dump is now permanent.
+
+The fix is `plum_set_binary_stdio` in `compat_shim.c`, called at
+startup. It is right independently of this bug: Plum emits UTF-8 bytes,
+its corpus compares output byte for byte, the same program must print
+the same bytes everywhere, and `plum emit-llvm` writes IR to stdout —
+which text mode was corrupting too.
+
+**The lesson worth keeping:** a green test can mean two errors that
+cancel. This one survived a full CI run looking healthy.
+
 ## What the second CI run found
 
 macOS arm64 and Linux both went green. Windows got much further: the
