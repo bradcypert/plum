@@ -16,9 +16,13 @@ work.
 | Tier | Meaning | Platforms |
 |---|---|---|
 | 1 | Full harness suite green in CI. Binaries published. | Linux x86_64 |
-| 2 | `bootstrap/platform-smoke` green in CI. Binaries published. | macOS arm64 (green), macOS x86_64 (runner queue) |
+| 2 | `bootstrap/platform-smoke` green in CI. Binaries published. | macOS arm64, macOS x86_64, Windows x86_64 |
 | 3 | Expected to work. Untested, unpublished, no promise. | Linux arm64 |
-| — | Known not to work. | Windows |
+
+macOS arm64 and Windows x86_64 run on every push. macOS x86_64 runs
+only on a release tag: Intel Mac runners are scarce enough that the job
+queued for hours, and a straggler blocks log downloads for the whole
+run. Publishing an Intel binary still requires it to pass.
 
 Tier 2 is a real step down from tier 1 and the difference is worth
 knowing: tier 1 runs 61 fixtures under AddressSanitizer with
@@ -81,11 +85,16 @@ remains available later as ordinary cleanup.
 |---|---|---|
 | `compat_shim.c` | ✅ | ✅ |
 | `io_shim.c` | ✅ stdio only | ✅ stdio only |
-| `os_shim.c` | ✅ | ✅ Win32 branches written, untested |
-| `thread_shim.c` | ✅ pthread | MinGW winpthreads, or a Win32 rewrite |
-| `dir_shim.c` | ✅ dirent | MinGW `dirent.h`, or `FindFirstFile` |
-| `process_shim.c` | ✅ fork/waitpid | ✅ `CreateProcess`, written, untested |
-| `net_shim.c` | ✅ BSD sockets | ✅ Winsock, written, untested |
+| `os_shim.c` | ✅ | ✅ Win32 branches |
+| `thread_shim.c` | ✅ pthread | ✅ MinGW winpthreads, `-lpthread` |
+| `dir_shim.c` | ✅ dirent | ✅ MinGW's `dirent.h`, unchanged |
+| `process_shim.c` | ✅ fork/waitpid | ✅ `CreateProcess` |
+| `net_shim.c` | ✅ BSD sockets | ✅ Winsock, `-lws2_32` |
+
+Every ✅ above is exercised by a CI leg that builds and runs 43 real
+programs on that platform. `dir_shim.c` and `thread_shim.c` needed no
+Windows code at all — MinGW-w64 supplies `dirent.h` and pthreads, which
+is why neither is on the list of things that had to be written.
 
 ### Unix commands the compiler shelled out to — fixed
 
@@ -164,9 +173,19 @@ good at.
 
 ## Left to do
 
-### Windows
+### Windows — done
 
-The toolchain decision comes first and determines everything after it.
+Windows x86_64 went green on **2026-08-25**: 43 of 43 programs build
+and run under MSYS2/MinGW, and the `continue-on-error` marker came off
+the CI leg in the same commit.
+
+What remains is one gap, stated rather than glossed: **the language
+server is untested on Windows.** `lsp-smoke` needs `python3` to build
+the LSP session and the MSYS2 environment would have to install it. It
+runs on Linux and macOS.
+
+The toolchain reasoning, kept because it is the decision everything
+else followed from:
 
 - **MinGW-w64 via MSYS2** — recommended. `dirent`, pthreads and bash all
   keep working, so the work shrinks to `process_shim.c`, `net_shim.c`,
@@ -189,24 +208,27 @@ Under the MinGW route, in order:
    plain spaces and adds no quoting, so it has the same problem with
    an extra layer over it.
 3. ~~Add a `windows-latest` CI leg running `platform-smoke` under
-   MSYS2.~~ **Done**, marked `continue-on-error` and expected to fail.
-4. **Get that leg green.** This is the next real work, and it is
-   deliberately not "write more Windows code" — three shims now have
-   `_WIN32` branches that have never been compiled, and writing a
-   fourth blind would just add to the pile. The CI leg turns them into
-   errors with line numbers.
-5. ~~Rewrite `net_shim.c` against Winsock.~~ **Done**, unverified.
+   MSYS2.~~ **Done.**
+4. ~~Get that leg green.~~ **Done, 2026-08-25 — 43 of 43.** It took
+   three rounds, and every one was worth more than the analysis that
+   would have replaced it: a second `fork` site nobody had read, a
+   `sys/socket.h` left outside a guard, and CRLF output hidden behind
+   a CRLF checkout.
+5. ~~Rewrite `net_shim.c` against Winsock.~~ **Done.**
 
    This was previously described here as "not on the critical path".
    **That was wrong.** `write_shims` writes *every* embedded shim into
    each build and hands them all to `clang`, so `net_shim.c` is
    compiled into every `plum build` whether the program opens a socket
    or not. Nothing would have built on Windows until it compiled.
-6. Add the release matrix entry once step 4 is green.
+6. ~~Add the release matrix entry.~~ **Done** — `release.yml` builds
+   and publishes `plum-<version>-x86_64-windows.tar.gz`.
 
-### What has been verified about the Windows code
+### What was verified before Windows CI could run it
 
-Nothing that needs Windows. What could be checked here, was:
+All of the below was checked on Linux while the Windows leg was still
+red. It is recorded because it is the part that made three CI rounds
+enough instead of ten:
 
 - The **command-line quoting** in `process_shim.c` is the highest-risk
   logic in the port — a Windows path routinely contains a space, and

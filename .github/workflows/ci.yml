@@ -149,26 +149,22 @@ jobs:
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke ./sh.real
 
-  # Windows, and EXPECTED TO FAIL for now -- `continue-on-error` is
-  # deliberate and is not a way of ignoring a broken build.
-  #
-  # The Windows code in `native_stdlib/` (the `_WIN32` branches of
-  # `compat_shim.c`, `os_shim.c` and `process_shim.c`) has never been
-  # compiled by a Windows toolchain. Writing more of it blind is how a
-  # port accumulates plausible-looking code that has never run, so this
-  # leg exists to convert guesses into errors with line numbers. Its
-  # output is the input to the next piece of work; see PORTING.md.
-  #
-  # Remove `continue-on-error` the moment it passes, and treat any
-  # regression after that as a real failure.
+  # Windows, under MSYS2/MinGW. This was `continue-on-error` while the
+  # port was being written blind; it went green on 2026-08-25 -- 43 of
+  # 43 programs -- and the marker came off in the same commit. A failure
+  # here is now a real failure.
   #
   # MSYS2 rather than MSVC: MinGW keeps `dirent.h`, pthreads and bash
   # working, so `from-seed` and `platform-smoke` run unmodified and the
-  # port is scoped to the shims that genuinely differ.
+  # port was scoped to the shims that genuinely differ.
+  #
+  # `lsp-smoke` is not run here, unlike on macOS: it needs `python3` to
+  # build the LSP session, which the MSYS2 environment would have to
+  # install. The language server is therefore UNTESTED on Windows and
+  # PORTING.md says so.
   windows:
-    name: windows x86_64 (expected to fail, for now)
+    name: windows x86_64 builds and runs real programs
     runs-on: windows-latest
-    continue-on-error: true
     defaults:
       run:
         shell: msys2 {0}

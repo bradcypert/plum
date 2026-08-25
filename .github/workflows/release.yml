@@ -20,9 +20,10 @@
 # and runs real programs on it. Nothing is shipped that is merely
 # expected to work.
 #
-# Windows is not here yet. It needs four of the five C shims rewritten
-# against Win32 and Winsock, and it needs the compiler itself to stop
-# shelling out to `mktemp` and `rm`. See PORTING.md.
+# Windows builds under MSYS2/MinGW. It runs `platform-smoke` only, like
+# macOS, for the same reason: the rest of `bootstrap/` is Linux-only
+# development tooling. Its archive carries `plum.exe`, which
+# `package-release` names from the platform slug.
 name: release
 
 on:
@@ -148,9 +149,54 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  windows:
+    name: windows x86_64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-lld
+            diffutils
+            tar
+
+      - name: clang version
+        run: clang --version
+
+      - name: seed -> compiler -> compiler
+        run: |
+          ./bootstrap/from-seed -o sh.seed
+          ./sh.seed build bootstrap/self_host -o sh.real
+
+      - name: validate
+        run: ./bootstrap/platform-smoke ./sh.real
+
+      # The archive is a .tar.gz like every other platform's. Windows
+      # has shipped `tar` in-box since Windows 10 1803, so this needs no
+      # extra tool -- and one archive format keeps `package-release`,
+      # the checksum step and the docs from growing a special case.
+      - name: package
+        run: ./bootstrap/package-release sh.real x86_64-windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plum-x86_64-windows
+          path: dist/*
+          if-no-files-found: error
+
   publish:
     name: publish
-    needs: [linux, macos]
+    needs: [linux, macos, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

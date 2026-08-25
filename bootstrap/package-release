@@ -24,6 +24,17 @@ cd "$root"
 bin="${1:?usage: package-release <compiler-binary> <platform-slug>}"
 slug="${2:?usage: package-release <compiler-binary> <platform-slug>}"
 case "$bin" in /*) ;; *) bin="$root/${bin#./}" ;; esac
+
+# A MinGW toolchain appends `.exe` to an output name with no extension,
+# so the file on disk may not be the name the caller passed. The name
+# INSIDE the archive follows the same rule: a Windows user expects
+# `plum.exe`, and a file called `plum` will not run there.
+exe=""
+if [ ! -x "$bin" ] && [ -x "$bin.exe" ]; then
+    bin="$bin.exe"
+    exe=".exe"
+fi
+case "$slug" in *windows*) exe=".exe" ;; esac
 [ -x "$bin" ] || { echo "no compiler binary at $bin" >&2; exit 1; }
 
 version="$("$bin" version | awk '{print $2}')"
@@ -32,7 +43,7 @@ name="plum-${version}-${slug}"
 
 rm -rf dist
 mkdir -p "dist/${name}"
-cp "$bin" "dist/${name}/plum"
+cp "$bin" "dist/${name}/plum${exe}"
 cp README.md "dist/${name}/"
 [ -f LICENSE ] && cp LICENSE "dist/${name}/"
 
@@ -55,7 +66,7 @@ rm -rf "dist/${name}"
 check="$(mktemp -d 2>/dev/null || mktemp -d -t plumpkg)"
 trap 'rm -rf "$check"' EXIT INT TERM
 tar -xzf "dist/${name}.tar.gz" -C "$check"
-unpacked="$check/${name}/plum"
+unpacked="$check/${name}/plum${exe}"
 
 "$unpacked" version
 mkdir -p "$check/proj"

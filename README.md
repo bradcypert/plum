@@ -30,9 +30,13 @@ binary. You need **`clang`** on your `PATH`; the compiler shells out to
 it to assemble and link what it emits. Nothing else is required: the C
 shims Plum programs use are embedded in the compiler itself.
 
+Archives are published for Linux x86_64, macOS on Apple Silicon and
+Intel, and Windows x86_64. The Windows one contains `plum.exe` and is
+built for MSYS2/MinGW.
+
 ```sh
-tar -xzf plum-0.0.1-x86_64-linux.tar.gz
-./plum-0.0.1-x86_64-linux/plum version
+tar -xzf plum-0.0.2-arm64-macos.tar.gz
+./plum-0.0.2-arm64-macos/plum version
 ```
 
 ### Platforms
@@ -43,10 +47,10 @@ programs on it. Nothing here is merely expected to work.
 | Platform | Status |
 |---|---|
 | Linux x86_64 | Full test suite, including leak checking under ASan |
-| macOS arm64 | 43 programs built and run in CI |
-| macOS x86_64 | Same, when a runner is available |
+| macOS arm64 | 43 programs built and run in CI, plus the language server |
+| macOS x86_64 | Same, checked on release tags |
+| Windows x86_64 | 43 programs built and run in CI. The language server is untested |
 | Linux arm64 | Untested, unpublished |
-| Windows | Not yet supported. WSL works |
 
 macOS is a step down from Linux and it is worth knowing why: Plum is
 refcounted, so a leak is a miscompile rather than untidiness, and

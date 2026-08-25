@@ -253,10 +253,23 @@ $EDITOR bootstrap/self_host/main.plum
 git tag v0.0.2 && git push origin v0.0.2
 ```
 
-Pushing the tag runs `.github/workflows/release.yml`, which builds from
-the seed, checks the tag against the version, runs every harness,
-packages a tarball, then **unpacks that tarball and uses the binary
-inside it** to build and run a program before publishing.
+Pushing the tag runs `.github/workflows/release.yml`. It has three
+build jobs and a publish job, and produces **four archives**: Linux
+x86_64, macOS arm64, macOS x86_64, Windows x86_64. Each is built on the
+platform it targets — nothing is cross-compiled — from the checked-in
+seed, which is the same path a user takes.
+
+The jobs check different amounts, deliberately. `linux` runs every
+harness; `macos` and `windows` run `bootstrap/platform-smoke` only,
+because the rest of `bootstrap/` is Linux-only development tooling.
+macOS x86_64 is here and not in `ci.yml`: Intel Mac runners are scarce
+enough to queue for hours, which is tolerable on a tag and not on a
+push.
+
+Every job ends in `bootstrap/package-release`, which packages the
+archive and then **unpacks it and uses the binary inside** to build and
+run a program before anything is published. It names the file from the
+version the binary reports, and adds `.exe` for Windows.
 
 `check-version` compares the tag against the version the *built binary*
 reports, not just against the source — checking the source alone passes

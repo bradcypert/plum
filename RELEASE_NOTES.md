@@ -1,25 +1,75 @@
-Plum is a small, statically typed, compiled language. This is its first
-tagged release.
+Plum is a small, statically typed, compiled language. **This release
+adds macOS and Windows.**
 
-**The compiler is written in Plum.** It compiles itself to a fixed
-point — the compiler it produces emits byte-for-byte identical output
-to the compiler that produced it — and building it needs no toolchain
-beyond `clang`.
+The compiler is written in Plum. It compiles itself to a fixed point —
+the compiler it produces emits byte-for-byte identical output to the
+compiler that produced it — and building it needs no toolchain beyond
+`clang`.
 
 ## Install
 
-Download the archive below, unpack it, and put `plum` on your PATH. You
-need **`clang`** available; the compiler shells out to it to assemble
-and link what it emits. Nothing else is required — the C shims Plum
-programs use are embedded in the compiler itself.
+Download the archive for your platform, unpack it, and put `plum` on
+your PATH. You need **`clang`** available; the compiler shells out to it
+to assemble and link what it emits. Nothing else is required — the C
+shims Plum programs use are embedded in the compiler itself.
+
+| Platform | Archive |
+|---|---|
+| Linux x86_64 | `plum-0.0.2-x86_64-linux.tar.gz` |
+| macOS Apple Silicon | `plum-0.0.2-arm64-macos.tar.gz` |
+| macOS Intel | `plum-0.0.2-x86_64-macos.tar.gz` |
+| Windows x86_64 | `plum-0.0.2-x86_64-windows.tar.gz` |
 
 ```sh
-tar -xzf plum-0.0.1-x86_64-linux.tar.gz
-./plum-0.0.1-x86_64-linux/plum version
+tar -xzf plum-0.0.2-arm64-macos.tar.gz
+./plum-0.0.2-arm64-macos/plum version
 ```
 
-Linux x86_64 only for now. macOS and aarch64 are not built because they
-are not tested, and a release is the wrong place to find that out.
+Windows binaries are built for MSYS2/MinGW and the archive contains
+`plum.exe`. Windows has shipped `tar` in-box since Windows 10 1803, so
+the same archive format works there.
+
+## New since 0.0.1
+
+**macOS and Windows support.** Every artifact above is built on the
+platform it targets, by a CI job that first builds the compiler from
+the checked-in seed and then builds and runs 43 real programs with it.
+Nothing is cross-compiled and nothing is published that has not been
+run.
+
+**Live diagnostics in the language server.** Errors update as you type,
+against the unsaved buffer rather than the file on disk. The server
+never writes to your file.
+
+**An `Os.` namespace** in the standard library: `Os.temp_dir`,
+`Os.make_dir`, `Os.remove_file`, `Os.remove_tree`, `Os.copy_tree`,
+`Os.self_exe` and `Os.platform`. These replaced the compiler shelling
+out to `mktemp`, `rm`, `cp` and `mkdir`, so `plum build` now starts one
+child process — `clang` — where it used to start four.
+
+### Fixes
+
+Three of these were only reachable off Linux, and none of them would
+have been found without running the tests on the platform:
+
+- **Character case on macOS.** `"Äöü".to_upper()` returned `Äöü`
+  unchanged. The runtime emitted `setlocale(6, "C.utf8")` directly as
+  IR, and both halves are glibc-specific: `LC_ALL` is 6 on glibc and
+  **0** on macOS, where 6 is `LC_MESSAGES`; and `C.utf8` is not a
+  locale macOS has. ASCII was unaffected, so it would have shipped
+  quietly.
+- **Character case on Windows**, a different cause with the same
+  symptom: `wint_t` is 16 bits there, so the `towupper` declaration was
+  an ABI mismatch, and MinGW's legacy CRT has no UTF-8 locale anyway.
+  Now goes through `CharUpperBuffW`, which needs no locale.
+- **Float notation on Windows.** `1e-006` where every other platform
+  prints `1e-06` — Microsoft's CRT pads exponents to three digits.
+- **Line endings on Windows.** The CRT opens `stdout` in text mode, so
+  every `\n` a program wrote became `\r\n`. This also corrupted
+  `plum emit-llvm`, which writes IR to stdout.
+- **The language server on macOS**, which could never have worked: it
+  re-invokes the compiler through `/proc/self/exe`, which does not
+  exist there. It now uses `Os.self_exe`.
 
 ## What's here
 
@@ -39,52 +89,25 @@ functional update, `Ref[T]` for shared mutability, contracts
 managed by reference counting with in-place reuse — no garbage
 collector, no manual `free`.
 
-The standard library covers strings, arrays, `Option`/`Result`, maps
-and sets, JSON, files, processes, environment variables, TCP sockets,
-and an HTTP client and server.
+## What is checked, and where
 
-Editor support is a language server with diagnostics, hover types, and
-go-to-definition.
+Linux remains the platform where correctness is established. It runs
+the full suite: 62 corpus fixtures — 43 that must run and print exactly
+the right bytes, 7 that must abort with the right message, 12 that the
+type checker must reject — all under AddressSanitizer with
+`detect_leaks=1`, plus a comparison of every execution fixture against
+an independent interpreter.
 
-## Known limitations
+macOS and Windows run the 43 execution fixtures. They do **not** run
+leak checking: Plum is reference counted, so a leak is a miscompile
+rather than untidiness, and LeakSanitizer does not exist on macOS at
+all. Correctness is established on Linux and assumed to carry.
 
-Stated because they will be the first things you hit:
+## Known limits
 
-- **Completion and live diagnostics are not implemented.** The language
-  server re-checks on save, not as you type.
-- **`https://` is not supported** by the HTTP client — plain `http://`
-  only.
-- **Uppercasing `ß` differs** between compiled and interpreted runs
-  (`GRÜßE` vs `GRÜSSE`). A libc limitation, pinned by a test rather
-  than left to be discovered.
-- **`Array.map`, `Array.filter` and `Array.fold` cannot be passed by
-  name** (`let f = Array.map`). They have hand-written type inference
-  rather than ordinary signatures, so the reference finds nothing.
-  Every other standard-library function works this way, and calling
-  these normally is unaffected.
-- Integer arithmetic is **checked** — overflow stops the program rather
-  than wrapping. This is deliberate, and costs roughly 1.6x on
-  arithmetic-dense loops.
-
-## How this release was verified
-
-Every check below runs in CI, and all of them ran on this tag:
-
-- the compiler builds from the checked-in seed with clang alone
-- it compiles itself to a byte-identical fixed point
-- it builds itself from an unrelated directory with no Rust present
-- 61 corpus fixtures compile, run, print the expected output, abort
-  where they should, and are ASan-clean
-- 41 execution fixtures produce identical results under an independent
-  interpreter, with one known divergence pinned in both directions
-- 8 example projects match their recorded output byte for byte; the
-  ninth opens a window and is built but not run
-- the language server answers a real session; `plum test` really runs
-  tests; TCP and HTTP work in a compiled binary
-- the packaged binary is unpacked and used to build and run a program
-  before the release is published
-
-## Caveat
-
-This is 0.0.1. The language is young, the surface will change, and
-there is no compatibility promise yet.
+- **The language server is untested on Windows.** It is tested on Linux
+  and macOS.
+- **Linux arm64 is not published.** It is expected to work — macOS
+  arm64 proves the compiler generates correct code for the
+  architecture — but nothing tests it.
+- This is a 0.0.x release. There is no compatibility promise.

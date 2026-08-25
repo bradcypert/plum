@@ -27449,7 +27449,7 @@ entry:
   ret ptr %t643
 }
 
-@.str644 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"0.0.1\00" }
+@.str644 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"0.0.2\00" }
 define ptr @plum_plum_version() {
 entry:
   ret ptr @.str644
