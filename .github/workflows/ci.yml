@@ -19,6 +19,9 @@ jobs:
   bootstrap:
     name: build from seed and validate
     runs-on: ubuntu-latest
+    # A runner that never arrives must fail in minutes, not in
+    # GitHub's default 24 hours. See the retired-image note above.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -100,20 +103,25 @@ jobs:
   # project targets -- so one runner covers a second OS and a second
   # architecture at once. It finishes in under a minute.
   #
-  # **macos-13 (Intel) is deliberately NOT here**, and is in
-  # `release.yml` instead. Intel macOS runners are scarce enough that
-  # the job sat queued for over two hours while everything else
-  # finished, which turns a per-push signal into no signal at all --
-  # nobody waits, and worse, GitHub reports the whole RUN as still in
-  # progress, so no job's logs can be downloaded until it lands.
-  # Publishing an Intel binary still requires it to pass; a tag is a
-  # place where waiting is acceptable and a push is not.
+  # **Intel macOS is deliberately NOT here**, and is in `release.yml`
+  # instead, as `macos-15-intel`. It was `macos-13` on both until
+  # 2026-08-25, when that image turned out to have been RETIRED --
+  # `actions/runner-images` publishes only macos-15 and macos-26 now.
+  #
+  # A `runs-on` naming a retired image does not fail. It queues until
+  # GitHub's 24-hour job timeout kills it, and while it waits the whole
+  # RUN counts as in progress, so no job's logs can be downloaded. One
+  # run here sat at `24h0m1s` and blocked every other leg's diagnosis
+  # for a day. Every job in both workflows now sets `timeout-minutes`.
   #
   # (Cost is not the reason. This repository is public, so Actions
   # minutes are free on every runner size.)
   platforms:
     name: ${{ matrix.os }} builds and runs real programs
     runs-on: ${{ matrix.os }}
+    # A runner that never arrives must fail in minutes, not in
+    # GitHub's default 24 hours. See the retired-image note above.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -165,6 +173,9 @@ jobs:
   windows:
     name: windows x86_64 builds and runs real programs
     runs-on: windows-latest
+    # A runner that never arrives must fail in minutes, not in
+    # GitHub's default 24 hours. See the retired-image note above.
+    timeout-minutes: 30
     defaults:
       run:
         shell: msys2 {0}
@@ -199,6 +210,9 @@ jobs:
   oracle:
     name: interpreter agrees with the compiler
     runs-on: ubuntu-latest
+    # A runner that never arrives must fail in minutes, not in
+    # GitHub's default 24 hours. See the retired-image note above.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 

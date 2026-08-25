@@ -287,14 +287,24 @@ every runner size. There was no bill to reduce.
 
 The real cost was **latency, and only on Intel macOS**: `macos-15`
 (arm64) finishes in under a minute, while `macos-13` sat queued for
-over two hours. Worse than being slow, a straggling job keeps the whole
-run marked in-progress, and GitHub will not serve *any* job's logs
-until the run completes — so one scarce runner blocks the diagnosis of
-every other leg.
+hours. Worse than being slow, a straggling job keeps the whole run
+marked in-progress, and GitHub will not serve *any* job's logs until
+the run completes — so one runner blocked the diagnosis of every other
+leg.
 
-`macos-13` is therefore in `release.yml` only. Publishing an Intel
-binary still requires it to pass; a tag is a place where waiting is
-acceptable and a push is not.
+**And it was never going to arrive.** The job eventually ended at
+`24h0m1s` — GitHub's job timeout, not a runner. `macos-13` had been
+**retired**: `actions/runner-images` publishes only `macos-15` and
+`macos-26`, each with an x86_64 and an arm64 variant. A `runs-on`
+naming an image that no longer exists does not fail fast; it waits a
+full day and then dies.
+
+Two changes came out of that. Intel macOS is now `macos-15-intel` — the
+x86_64 image of a current OS, which does exist — and **every job in
+both workflows sets `timeout-minutes`**, so a runner that never arrives
+costs minutes rather than a day. Intel macOS remains release-only:
+publishing an Intel binary requires it to pass, and a tag is a place
+where waiting is acceptable while a push is not.
 
 ## The bug that was hidden by another bug
 

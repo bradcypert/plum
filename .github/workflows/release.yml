@@ -42,6 +42,9 @@ jobs:
   linux:
     name: linux x86_64
     runs-on: ubuntu-latest
+    # A runner that never arrives must fail fast rather than hold the
+    # release for GitHub's 24-hour default. See the macos-13 note above.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,17 +110,29 @@ jobs:
   macos:
     name: macos ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
+    # A runner that never arrives must fail fast rather than hold the
+    # release for GitHub's 24-hour default. See the macos-13 note above.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macos-15 runners are Apple Silicon, macos-13 are Intel.
-          # Both are built because a Mac user has no way to run the
-          # other one well, and because arm64 is the first non-x86
-          # target this project has ever produced a binary for.
+          # `macos-15` is Apple Silicon; `macos-15-intel` is the
+          # x86_64 image of the same OS. Both are built because a Mac
+          # user cannot run the other one natively, and because arm64
+          # is the first non-x86 target this project has produced a
+          # binary for.
+          #
+          # This said `macos-13` until 2026-08-25, which by then no
+          # longer EXISTED -- `actions/runner-images` publishes only
+          # macos-15 and macos-26 now. A `runs-on` naming a retired
+          # image does not fail; it queues until GitHub's 24-hour job
+          # timeout kills it, which is how one CI run sat at
+          # `24h0m1s` and blocked every other job's logs for a day.
+          # Hence `timeout-minutes` below.
           - os: macos-15
             arch: arm64-macos
-          - os: macos-13
+          - os: macos-15-intel
             arch: x86_64-macos
     steps:
       - uses: actions/checkout@v4
@@ -152,6 +167,9 @@ jobs:
   windows:
     name: windows x86_64
     runs-on: windows-latest
+    # A runner that never arrives must fail fast rather than hold the
+    # release for GitHub's 24-hour default. See the macos-13 note above.
+    timeout-minutes: 45
     defaults:
       run:
         shell: msys2 {0}
@@ -198,6 +216,9 @@ jobs:
     name: publish
     needs: [linux, macos, windows]
     runs-on: ubuntu-latest
+    # A runner that never arrives must fail fast rather than hold the
+    # release for GitHub's 24-hour default. See the macos-13 note above.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
