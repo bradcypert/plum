@@ -29,7 +29,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
-| `property-check` | invariants hold over generated inputs -- the only harness that can catch a bug the compiler and the interpreter SHARE | 1s |
+| `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |
 | `platform-smoke` | a compiler *binary* builds and runs 43 real programs on the machine it is sitting on | 21s |
@@ -60,6 +60,19 @@ reaches `clang`.
 
 Every harness here runs with `clang` alone. There is no Rust in this
 repository — see "Things that are deliberately true".
+
+`property-check` is the one to reach for after touching the prelude or
+the runtime. Everything else here compares against a CHECKED-IN answer,
+which is whatever the compiler produced last time -- so a bug that was
+present when the answer was recorded is invisible to all of them. The
+properties compare against invariants instead. They cover round trips
+(int, float, JSON, split/join, slice), the laws arrays and strings obey
+(reverse twice, take ++ drop, contains agreeing with index_of), float
+ordering, sorting, and arithmetic near the overflow guards.
+
+Add properties when you add stdlib functions. Two of the first six
+found real bugs, and both were bugs the retired Rust interpreter had
+too -- which is why they had survived.
 
 Three generators, run deliberately rather than routinely:
 `gen-seed`, `gen-shims`, `record-examples`. And one packager,

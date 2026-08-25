@@ -23,6 +23,12 @@ cd "$root" || exit 1
 # plain binary instead to run this against a compiler on a platform
 # where that wrapper does not work.
 plum="${1:-./sh}"
+
+# `python3` on Linux and macOS; MSYS2 ships it as `python`. Only used to
+# BUILD the LSP session -- a stream of Content-Length-framed JSON, which
+# is miserable to write in shell and trivial here.
+PY_BIN="$(command -v python3 || command -v python)"
+[ -n "$PY_BIN" ] || { echo "lsp-smoke: needs python3 (or python) to build the session" >&2; exit 1; }
 work=$(mktemp -d)
 printf 'struct P { x: Int }\n\nlet f (p: P): Int = p.nope\n' > "$work/main.plum"
 # A second, well-typed project: hover on a LOCAL needs the project to
@@ -54,7 +60,7 @@ printf 'let helper (): String = "ok"\nlet oops (): Int = "wrong"\n' > "$multi/ot
 compl=$(mktemp -d)
 printf 'enum Shape { Circle(Int), Square(Int) }\nlet area (s: Shape): Int = match s { Circle(r) => r, Square(w) => w }\n' > "$compl/main.plum"
 
-python3 - "$work" "$live" "$multi" "$compl" > "$work/session.bin" <<'PY'
+"$PY_BIN" - "$work" "$live" "$multi" "$compl" > "$work/session.bin" <<'PY'
 import json, sys
 d = sys.argv[1]
 live = sys.argv[2]

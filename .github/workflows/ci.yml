@@ -159,9 +159,8 @@ jobs:
       # advertises editor support without ever running it on the
       # platform is the gap this closes.
       #
-      # `lsp-smoke` runs here and not on Windows only because it needs
-      # `python3` to build the LSP session, which macOS runners have
-      # and the MSYS2 environment would have to install.
+      # `lsp-smoke` needs a Python only to BUILD the session -- a stream
+      # of Content-Length-framed JSON. macOS runners have one.
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke ./sh.real
 
@@ -174,10 +173,10 @@ jobs:
   # working, so `from-seed` and `platform-smoke` run unmodified and the
   # port was scoped to the shims that genuinely differ.
   #
-  # `lsp-smoke` is not run here, unlike on macOS: it needs `python3` to
-  # build the LSP session, which the MSYS2 environment would have to
-  # install. The language server is therefore UNTESTED on Windows and
-  # PORTING.md says so.
+  # `lsp-smoke` runs here too, since 2026-08-25. It needs a Python to
+  # build the session, hence `python` in the install list below --
+  # MSYS2 spells it without the 3, which is why the harness looks for
+  # both names.
   windows:
     name: windows x86_64 builds and runs real programs
     runs-on: windows-latest
@@ -199,6 +198,7 @@ jobs:
             mingw-w64-x86_64-lld
             diffutils
             tar
+            python
 
       - name: clang version
         run: clang --version
@@ -210,3 +210,9 @@ jobs:
 
       - name: the compiler it built works
         run: ./bootstrap/platform-smoke ./sh.real
+
+      # The last untested feature on any published platform. The
+      # language server re-invokes the compiler through `Os.self_exe`,
+      # which is `GetModuleFileNameA` here -- written blind, never run.
+      - name: the language server answers a real session
+        run: ./bootstrap/lsp-smoke ./sh.real
