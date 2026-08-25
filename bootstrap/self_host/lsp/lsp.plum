@@ -214,8 +214,28 @@ pub let publish_message (uri: String) (diagnostics: Array[JsonValue]): String =
 // `file:///a/b/c.plum` -> `/a/b/c.plum`. No percent-decoding: a path
 // with an escaped character comes back wrong, a real limitation and a
 // small one next to not having a server at all.
+// `file:///home/x/a.plum` -> `/home/x/a.plum`.
+// `file:///C:/x/a.plum`     -> `C:/x/a.plum`.
+//
+// A `file:` URI has an empty authority, so the path component always
+// begins with `/`. On Unix that slash IS the root and must be kept. On
+// Windows the path begins with a drive letter instead, and the slash
+// in front of it belongs to the URI, not to the path -- `/C:/x` opens
+// nothing. Stripping a fixed seven characters was right on one
+// platform and silently wrong on the other.
 pub let uri_to_path (uri: String): String =
-    if uri.starts_with("file://") { String.slice(uri, 7, uri.len()) } else { uri }
+    if uri.starts_with("file://") {
+        let rest = String.slice(uri, 7, uri.len());
+        if starts_with_drive(rest) { String.slice(rest, 1, rest.len()) } else { rest }
+    } else { uri }
+
+// `/C:/...` -- a slash, then a letter, then a colon.
+let starts_with_drive (s: String): Bool =
+    s.len() >= 3 && String.slice(s, 0, 1) == "/" && String.slice(s, 2, 3) == ":"
+
+// `C:/...` -- the same shape without the leading slash.
+let is_drive_path (p: String): Bool =
+    p.len() >= 2 && String.slice(p, 1, 2) == ":"
 
 // No `String.last_index_of` in either prelude, and one call site does
 // not justify adding one.
@@ -418,8 +438,14 @@ pub let params_line (params: JsonValue): Int =
 pub let params_col (params: JsonValue): Int =
     match json_field(params, "position") { Some(p) => json_field_int(p, "character") + 1, None => 1 }
 
+// The inverse of `uri_to_path`, including the slash a drive letter
+// needs putting back: `C:/x` is `file:///C:/x`, and `file://C:/x` would
+// make `C:` the AUTHORITY -- a host name -- rather than part of the
+// path.
 pub let path_to_uri (path: String): String =
-    if path.starts_with("file://") { path } else { "file://".concat(path) }
+    if path.starts_with("file://") { path }
+    else if is_drive_path(path) { "file:///".concat(path) }
+    else { "file://".concat(path) }
 
 // `didChange` under FULL sync (`textDocumentSync: 1`) carries the whole
 // document in the last content change, which is why full sync is what

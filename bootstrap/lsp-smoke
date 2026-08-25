@@ -29,7 +29,18 @@ plum="${1:-./sh}"
 # is miserable to write in shell and trivial here.
 PY_BIN="$(command -v python3 || command -v python)"
 [ -n "$PY_BIN" ] || { echo "lsp-smoke: needs python3 (or python) to build the session" >&2; exit 1; }
-work=$(mktemp -d)
+# The compiler is a NATIVE binary. Under MSYS2 an `/tmp/...` path is a
+# fiction maintained by the MSYS runtime -- it is translated when passed
+# as an argument, and not when it is buried inside a JSON string, which
+# is exactly where this harness puts it. So every path here is converted
+# to its native form up front and used in that form throughout, for the
+# URIs, for writing the fixtures, and for the assertions that grep for
+# them. A no-op off Windows.
+native_path() {
+    if command -v cygpath > /dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
+work=$(native_path "$(mktemp -d)")
 printf 'struct P { x: Int }\n\nlet f (p: P): Int = p.nope\n' > "$work/main.plum"
 # A second, well-typed project: hover on a LOCAL needs the project to
 # check cleanly, which the one above deliberately does not.
@@ -44,20 +55,20 @@ printf 'struct P { x: Int }\n\nlet f (p: P): Int = {\n    let n = p.x;\n    n + 
 # part of `$work`'s own project and poisons the diagnostics the earlier
 # assertions look for. That is exactly what happened on the first
 # attempt.
-live=$(mktemp -d); trap 'rm -rf "$work" "$live" "$multi" "$compl"' EXIT
+live=$(native_path "$(mktemp -d)"); trap 'rm -rf "$work" "$live" "$multi" "$compl"' EXIT
 printf 'let main (): Unit = println("clean on disk")\n' > "$live/main.plum"
 # A multi-file project: the error lives in `other.plum` while the edit
 # happens in `main.plum`. The diagnostic must be attributed to the file
 # it is IN. Before the path was carried through, it was reported
 # against whichever document triggered the check, at the other file's
 # line number.
-multi=$(mktemp -d)
+multi=$(native_path "$(mktemp -d)")
 printf 'let main (): Unit = println(helper())\n' > "$multi/main.plum"
 printf 'let helper (): String = "ok"\nlet oops (): Int = "wrong"\n' > "$multi/other.plum"
 # A FOURTH project, for completion. It needs an enum, and adding one to
 # any project above would shift the line numbers the hover and
 # definition assertions depend on.
-compl=$(mktemp -d)
+compl=$(native_path "$(mktemp -d)")
 printf 'enum Shape { Circle(Int), Square(Int) }\nlet area (s: Shape): Int = match s { Circle(r) => r, Square(w) => w }\n' > "$compl/main.plum"
 
 "$PY_BIN" - "$work" "$live" "$multi" "$compl" > "$work/session.bin" <<'PY'
