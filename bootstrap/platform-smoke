@@ -78,13 +78,18 @@ for dir in bootstrap/exec_corpus/*/; do
         ok=$((ok + 1))
     else
         printf 'FAIL  %-24s output differs from expected.txt\n' "$name"
-        # Carriage returns are rendered rather than printed. A line that
-        # differs ONLY by a trailing CR looks identical in a diff, which
-        # cost a diagnosis once -- and CR is exactly what a Windows text
-        # stream or an autocrlf checkout introduces.
-        diff "$dir/expected.txt" - <<DIFF | head -n 14 | sed -e 's/\r/<CR>/g' -e 's/^/        /'
-$act
-DIFF
+        printf '%s\n' "$act" > "$work/$name.act"
+        # BYTES, not a diff. Twice now a diff has shown two lines that
+        # looked identical, and a rendered-CR pass over it showed
+        # nothing either -- so whatever the difference was, no
+        # character-level view could display it. `od` cannot have that
+        # problem. Truncated to the first 96 bytes of each side, which
+        # is enough to place the first divergence.
+        echo "        expected |"
+        head -c 96 "$dir/expected.txt" | od -c | sed 's/^/          /'
+        echo "        actual   |"
+        head -c 96 "$work/$name.act" | od -c | sed 's/^/          /'
+        echo "        sizes    | expected $(wc -c < "$dir/expected.txt"), actual $(wc -c < "$work/$name.act")"
         fail=$((fail + 1))
     fi
 done
