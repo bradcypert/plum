@@ -41,11 +41,15 @@ afterward, nothing raylib-version-specific.
 
 ## 2. Install `plum`
 
-From the root of the `plum` repo:
+From the root of the `plum` repo — `clang` is the only requirement:
 
 ```sh
-cargo install --path crates/plumc
+./bootstrap/from-seed -o plum
+./plum build bootstrap/self_host -o plum
 ```
+
+Or download a binary from
+[Releases](https://github.com/bradcypert/plum/releases).
 
 ## 3. Build and run
 

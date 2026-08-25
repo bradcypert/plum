@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Proves `plum test` actually runs tests, and that BOTH compilers agree
-# on the result.
+# Proves `plum test` actually runs tests.
+#
+# It used to check that BOTH compilers agreed on the result. The Rust
+# interpreter was retired on 2026-08-25 (see DESIGN.md), so there is one
+# compiler and the agreement half is gone with it.
 #
 # This exists because `sh test` was broken for months without anyone
 # noticing. It ran each test through the tree-walking interpreter, which
@@ -89,17 +92,5 @@ check_run() {
 
 check_run self-hosted ./sh
 
-# The real compiler is OPTIONAL. Its half is the whole point of this
-# script -- "both compilers agree" -- so its absence is announced
-# rather than passed over silently, but it is not a failure: the
-# self-hosted half still proves `plum test` runs tests.
-if [ -x ./target/release/plum ]; then
-    check_run rust ./target/release/plum
-    agreed=" both compilers agree"
-else
-    echo "note: ./target/release/plum not built -- self-hosted half only, no agreement check"
-    agreed=" (self-hosted only)"
-fi
-
-[ $fail -eq 0 ] && echo "test smoke: ok,$agreed"
+[ $fail -eq 0 ] && echo "test smoke: ok"
 exit $fail

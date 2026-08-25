@@ -1,6 +1,0 @@
-[package]
-name = "plum-syntax"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]

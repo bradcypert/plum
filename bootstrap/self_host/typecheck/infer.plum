@@ -1144,6 +1144,75 @@ let infer_closure_call_exact (p2: Program2) (state: FreshState) (env: TyEnv) (ac
     ir_leaf(subst_apply(ar.subst, retf.ty), ar.subst, ar.state, TClosureCall(callee_texpr, ar.texprs))
 }
 
+// The namespace a type owns its methods under. `x.f(a)` means
+// `T.f(x, a)` where `T` is what this returns for `x`'s type -- see
+// DESIGN.md's "Method calls are namespaced functions".
+//
+// `ITStruct`/`ITEnum` carry their own names, which is what makes this
+// work for `Array` (an `ITStruct` named "Array"), for `Option` and
+// `Result`, and for anything a user declares, with no list to keep.
+// Everything else -- a type variable, a function, a tuple, `Unit` --
+// has no name to put before the dot and therefore no methods.
+let ity_namespace (t: ITy): Option[String] =
+    match t {
+        ITStr => Some("String"),
+        ITInt => Some("Int"),
+        ITFloat => Some("Float"),
+        ITBool => Some("Bool"),
+        ITStruct(name, _) => Some(name),
+        ITEnum(name, _) => Some(name),
+        _ => None,
+    }
+
+// Both halves of why a method call failed, because either alone sends
+// the reader looking in the wrong place: "no method `trim_end`" invites
+// a search for a method list that does not exist, and "no function
+// `String.trim_end`" hides that built-in methods are a separate thing.
+let no_method_message (base_ty: ITy) (method_name: String): String =
+    match ity_namespace(base_ty) {
+        Some(ns) => "no method `".concat(method_name).concat("` on ").concat(ns)
+            .concat(": it is not a built-in method, and no function named `")
+            .concat(ns).concat(".").concat(method_name).concat("` is in scope"),
+        None => "no method `".concat(method_name)
+            .concat("` here: only a named type -- String, Int, Float, Bool, an array, a struct or an enum -- can have methods"),
+    }
+
+// `x.f(a)` as `T.f(x, a)`, reached only after the built-in methods and
+// the struct-field lookup have both declined.
+//
+// The receiver is prepended to the arguments and the whole thing goes
+// through `infer_fn_call`, the SAME path an ordinary `String.trim_end(s)`
+// call takes. That is the point: this is sugar, not a second calling
+// convention, so arity errors, generic instantiation and argument
+// unification are all whatever they already were.
+let infer_namespaced_method (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base_ty: ITy) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): InferResult =
+    match ity_namespace(base_ty) {
+        None => { fail_tc(no_method_message(base_ty, method_name)); ir_unsupported(acc, state, "unsupported method call") },
+        Some(ns) => {
+            let qualified = ns.concat(".").concat(method_name);
+            match find_sig(p2, qualified) {
+                Some(sig) => infer_fn_call(p2, state, env, acc, sig, Array.concat([base], args)),
+                // A declaration wins over a builtin of the same name,
+                // the shadowing order used everywhere else here.
+                None => match builtin_sig(qualified) {
+                    Some(sig) => infer_fn_call(p2, state, env, acc, sig, Array.concat([base], args)),
+                    // `Array.map`/`filter`/`fold` have no `FnSig` to
+                    // find at all: their types depend on the closure
+                    // they are handed, so they are checked by hand.
+                    // The method form goes through the SAME dispatch
+                    // `Array.map(xs, f)` already uses rather than
+                    // getting a second implementation.
+                    None => if ns == "Array" && (method_name == "map" || method_name == "filter" || method_name == "fold") {
+                        infer_array_ns_call(p2, state, env, acc, method_name, Array.concat([base], args))
+                    } else {
+                        fail_tc(no_method_message(base_ty, method_name));
+                        ir_unsupported(acc, state, "unsupported method call")
+                    },
+                },
+            }
+        },
+    }
+
 let infer_named_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (name: String) (args: Array[parser.PExpr]): InferResult =
     if name == "println" { infer_println_call(p2, state, env, acc, args) }
     else {
@@ -1326,10 +1395,26 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         // `builtin_sig` and are recognised here, alongside the other
         // dot-methods, by name and arity.
         let br = infer_expr(p2, state, env, acc, base);
-        let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() receiver: ").concat(e)); br.subst } };
-        let ar = infer_expr(p2, br.state, env, s1, args[0]);
-        let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() argument: ").concat(e)); ar.subst } };
-        ir_leaf(ITBool, s2, ar.state, TMethodCall(method_name, br.texpr, [ar.texpr]))
+        let bt = subst_apply(br.subst, br.ty);
+        // A receiver that is NOT a String falls through to the
+        // namespaced rule rather than failing here. `contains` is the
+        // case that forced this: it is a string primitive AND
+        // `Array.contains` exists, so `xs.contains(2)` used to report
+        // "Array[Int] != String" -- the built-in arm claiming a method
+        // name for one type and denying it to every other.
+        //
+        // Built-in methods are matched on NAME before the receiver is
+        // known, which is why this has to be checked per arm rather
+        // than once. Every String-receiver primitive does the same.
+        match unify(bt, ITStr) {
+            Err(_) => infer_namespaced_method(p2, br.state, env, br.subst, bt, base, method_name, args),
+            Ok(s0) => {
+                let s1 = subst_compose(s0, br.subst);
+                let ar = infer_expr(p2, br.state, env, s1, args[0]);
+                let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() argument: ").concat(e)); ar.subst } };
+                ir_leaf(ITBool, s2, ar.state, TMethodCall(method_name, br.texpr, [ar.texpr]))
+            },
+        }
     } else if method_name == "split" && args.len() == 1 {
         // Another compiler primitive, same as `ends_with` above.
         let br = infer_expr(p2, state, env, acc, base);
@@ -1465,11 +1550,19 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                         let ft = instantiate_template(info.generics, gen_args, field_ty);
                         infer_closure_call(p2, br.state, env, br.subst, ft, args, TExpr { ty: ft, node: TFieldGet(br.texpr, method_name) })
                     },
-                    None => { fail_tc("struct ".concat(struct_name).concat(" has no field named ").concat(method_name)); ir_unsupported(br.subst, br.state, "bad method call") },
+                    // No such FIELD -- so try a namespaced function.
+                    // The field is looked for first deliberately: a
+                    // record of closures is a dispatch mechanism, and
+                    // a `S.read` must not be able to shadow a `read`
+                    // field. See DESIGN.md.
+                    None => infer_namespaced_method(p2, br.state, env, br.subst, base_ty, base, method_name, args),
                 },
-                None => { fail_tc("unknown struct: ".concat(struct_name)); ir_unsupported(br.subst, br.state, "unknown struct") },
+                // Not a declared struct at all -- `Array` reaches here,
+                // being an `ITStruct` the checker builds rather than
+                // one anybody declared.
+                None => infer_namespaced_method(p2, br.state, env, br.subst, base_ty, base, method_name, args),
             },
-            _ => { fail_tc("only .to_string()/.concat() and struct-field closure calls are supported"); ir_unsupported(br.subst, br.state, "unsupported method call") },
+            _ => infer_namespaced_method(p2, br.state, env, br.subst, base_ty, base, method_name, args),
         }
     }
 

@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Runs `bootstrap/properties` -- invariants checked against generated
+# inputs rather than against recorded answers.
+#
+# This is the answer to a specific gap. `bootstrap/interp-check` is the
+# only other thing here that can catch the compiler being CONFIDENTLY
+# wrong, and it does that by comparing against the Rust interpreter --
+# so it is blind, by construction, to a bug BOTH implementations share.
+# Both bugs found on the day these were written were of exactly that
+# kind:
+#
+#   * `parse_int("-9223372036854775808")` -- Int's own minimum --
+#     returned "integer out of range", because the magnitude was built
+#     as a positive number before the sign was applied.
+#   * `parse_float("9.21258e-07")` returned a double one ulp out,
+#     because the value was computed as `mantissa * 10^exp` in floating
+#     point instead of by `strtod`.
+#
+# The interpreter agreed with the compiler on both. An oracle can only
+# ever find DISAGREEMENTS.
+#
+# The properties also do not lag the language, which the interpreter now
+# does: they are written in Plum and run by `plum test`, so a new
+# feature can get properties the day it lands instead of a skip entry.
+#
+# Usage:  bootstrap/property-check [path-to-plum-binary]   (default: ./sh)
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+plum="${1:-./sh}"
+out="$(SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$plum" test bootstrap/properties 2>&1)"
+rc=$?
+
+if [ $rc -ne 0 ] || ! printf '%s' "$out" | grep -q "0 failed"; then
+    printf '%s\n' "$out" >&2
+    echo "property-check: FAILED" >&2
+    exit 1
+fi
+
+# The count is echoed rather than asserted: a property suite that
+# silently ran zero tests would otherwise pass. `plum test` reports the
+# number it discovered.
+printf 'property-check: %s\n' "$(printf '%s' "$out" | grep 'test result:')"

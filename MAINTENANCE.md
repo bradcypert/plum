@@ -11,7 +11,8 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version check-shims cross-check lsp-smoke test-smoke net-smoke \
-         corpus-check interp-check example-sweep \
+         property-check \
+         corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
     ./bootstrap/$h || echo "FAILED: $h"
 done
@@ -28,11 +29,11 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
+| `property-check` | invariants hold over generated inputs -- the only harness that can catch a bug the compiler and the interpreter SHARE | 1s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |
 | `platform-smoke` | a compiler *binary* builds and runs 43 real programs on the machine it is sitting on | 21s |
 | `example-sweep` | every `examples/` project matches its recorded output | 5s |
-| `interp-check` | the interpreter agrees with the compiler on every execution fixture | 7s |
 | `bootstrap-check` | the compiler compiled by itself is the same compiler | 14s |
 | `check-seed` | the checked-in seed still bootstraps to today's compiler | 26s |
 | `self-sufficiency` | it builds itself with no Rust, from any directory | 27s |
@@ -57,10 +58,8 @@ with `corpus-check`, which checks strictly more; run it when you have
 changed the shims, the shell-outs, or anything about how `plum build`
 reaches `clang`.
 
-Only `interp-check` needs `crates/` built. `test-smoke` uses it for its
-second half when present and says so when it is not. Everything else
-runs with `clang` alone — verified by moving the Rust binary aside, not
-by reading the scripts.
+Every harness here runs with `clang` alone. There is no Rust in this
+repository — see "Things that are deliberately true".
 
 Three generators, run deliberately rather than routinely:
 `gen-seed`, `gen-shims`, `record-examples`. And one packager,
@@ -156,11 +155,12 @@ function `f` compiles to `@plum_f`. So a runtime function named
 function after its intercepted *stub* (`print_raw` → `@plum_print_raw`)
 — a stub is never emitted, so its mangled name is free.
 
-**The two runtimes are not interchangeable.** `crates/` used
-`@plum_alloc_array` with elements at offset 24; this one uses
-`@plum_array_new` with elements at 16. Copying IR between them is
-often right and sometimes silently wrong. The wrong *name* fails to
-link, which is lucky; the wrong *offset* links fine.
+**Do not copy IR out of DESIGN.md's older sections.** The Rust runtime
+used `@plum_alloc_array` with elements at offset 24; this one uses
+`@plum_array_new` with elements at 16. Those snippets are history, and
+transplanting one is often right and sometimes silently wrong. The
+wrong *name* fails to link, which is lucky; the wrong *offset* links
+fine.
 
 **Currying hides a missed call site.** Add a parameter to a function
 and miss a caller, and the call becomes a partial application rather
@@ -185,10 +185,9 @@ will poison the enclosing project's diagnostics.
 
 **A new prelude function** → `bootstrap/self_host/codegen/prelude.plum`.
 If the compiler itself will use it, remember the two-generation rule.
-If it needs to exist in the Rust interpreter too, it also goes in
-`crates/plumc/src/lib.rs`'s `STDLIB_*_SRC`. The two preludes drifting
-apart is a recurring source of bugs — diff their public surfaces
-occasionally; that is how the missing networking stack was found.
+There is one prelude now; a second one in the Rust interpreter used to
+drift from it, and that is how the missing networking stack was
+found.
 
 **A new runtime primitive** → three places: a stub in `prelude.plum`, an
 interception in `cg_runtime_fn` (`codegen.plum`), and the implementation
@@ -287,11 +286,11 @@ Worth knowing before you "fix" them:
   every test calling `assert_eq` failed for months.
 - **Integer overflow stops the program.** `+`, `-`, `*` are checked.
   Roughly 1.6x on arithmetic-dense loops, unmeasurable on real code.
-- **`crates/` has no code generator.** It is a front end and an
-  interpreter, kept because `interp-check` compares against an
-  independent implementation of the semantics. Deleting it is intended
-  eventually; DESIGN.md's "Deleting the Rust backend" says what would
-  have to be true first.
+- **There is no Rust here.** The Rust front end and interpreter were
+  retired on 2026-08-25. `property-check` replaced them: an oracle can
+  only find *disagreements*, and the two bugs found the day it was
+  written were ones the interpreter shared. See DESIGN.md's
+  "Properties, and two bugs an oracle could never find".
 - **The guard wrapper degrades.** `./sh` uses a cgroup memory cap where
   one is available and a plain timeout where it is not. The cap exists
   because of a real 44.9GB OOM that killed a terminal.

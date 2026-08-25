@@ -9,8 +9,3 @@ ok
 ok
 1 two 1
 ["a", "b", "c"]
-a-b-c
-[]
-solo
-ab
-x,y,z

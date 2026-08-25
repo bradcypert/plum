@@ -23,9 +23,9 @@ build anywhere clang runs, which a committed binary is not. The cost is
 
 **It is the only way to get a compiler from a clean clone.** Nothing
 else in the repository can build `bootstrap/self_host`. The Rust
-backend was deleted on 2026-08-21, so `crates/` has no code generator
-at all — it holds a front end and an interpreter, kept as a test
-oracle.
+backend was deleted on 2026-08-21 and the front end and interpreter
+that survived it as a test oracle were retired on 2026-08-25, so there
+is no other implementation at all.
 
 That was not always the case. For the whole of the self-hosted
 compiler's development the Rust compiler could build it too, and the

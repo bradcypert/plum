@@ -77,6 +77,14 @@ jobs:
       - name: plum test really runs tests
         run: ./bootstrap/test-smoke
 
+      # Invariants checked against generated inputs, not recorded
+      # answers. This catches the class `interp-check` cannot: a bug
+      # the compiler and the interpreter SHARE. Both bugs it found on
+      # the day it was written were of that kind, and the interpreter
+      # agreed with the compiler on both.
+      - name: properties hold
+        run: ./bootstrap/property-check
+
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke
 
@@ -202,35 +210,3 @@ jobs:
 
       - name: the compiler it built works
         run: ./bootstrap/platform-smoke ./sh.real
-
-  # The Rust front end and interpreter are kept ONLY as a test oracle
-  # (see DESIGN.md's "Deleting the Rust backend"). `interp-check` is
-  # what they are for: comparing every execution fixture against an
-  # independent implementation of the semantics.
-  oracle:
-    name: interpreter agrees with the compiler
-    runs-on: ubuntu-latest
-    # A runner that never arrives must fail in minutes, not in
-    # GitHub's default 24 hours. See the retired-image note above.
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: install clang
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: build both
-        run: |
-          cargo build --workspace --release
-          ./bootstrap/from-seed -o sh.seed
-          ./sh.seed build bootstrap/self_host -o sh.real
-
-      - name: rust suite
-        run: cargo test --workspace --release
-
-      - name: interpreter vs compiled
-        run: ./bootstrap/interp-check

@@ -37,10 +37,12 @@ plum dump-ast <file>    > <topic>/<name>.expected
 plum dump-tokens <file> > <topic>/<name>.tokens
 ```
 
-`crates/plum-syntax/tests/golden.rs` discovers every fixture
-automatically (no separate registration) and asserts the real
-lexer/parser's output still matches both goldens — run it via `cargo
-test -p plum-syntax --test golden`.
+`bootstrap/bootstrap-check` discovers every fixture automatically (no
+separate registration) and asserts the self-hosted lexer and parser
+still match both goldens. A Rust test used to do this; it went with the
+rest of the Rust code on 2026-08-25, and the coverage did not — the
+same 102 fixtures are checked, by the compiler that now has to pass
+them.
 
 **Why this format, not `Debug`-derived output**: the AST's own
 `#[derive(Debug)]` includes exact byte-offset `Span`s, which would make
@@ -49,11 +51,11 @@ fixture. The s-expression renderer (`plum_syntax::render`) drops spans
 entirely — two parses that are semantically identical always render
 identically.
 
-**Why this lives at the repo root, not inside `crates/plum-syntax/`**:
-this corpus is a contract between implementations, not one crate's own
-test fixtures. Today only the real Rust parser is checked against it;
-once Stage 1's self-hosted lexer/parser exists, it gets checked against
-these exact same `.expected` files too — same acceptance bar, two
+**Why this lives at the repo root**: this corpus was written as a
+contract between implementations rather than as one crate's test
+fixtures. It was checked against the Rust parser first and the
+self-hosted one second, against these exact same `.expected` files —
+same acceptance bar, two
 independent implementations.
 
 ## `exec_corpus/`
@@ -101,15 +103,14 @@ artifact. It is no longer where new language work happens.
 | `bootstrap-check` | the compiler compiled by itself is the same compiler |
 | `self-sufficiency` | it can build itself with no Rust compiler, from any directory |
 | `check-seed` | the checked-in seed still bootstraps to today's compiler |
-| `example-sweep` | every `examples/` project agrees with the Rust compiler |
+| `example-sweep` | every `examples/` project matches its checked-in recording |
 | `corpus-check` | every corpus fixture compiles, runs, prints the right thing, aborts when it should, and leaks nothing |
-| `interp-check` | the INTERPRETER agrees with the compiled answer on every fixture |
 
 No counts in this table on purpose: a number here is a number to keep
 current by remembering to, and this project has been wrong about
 exactly that kind of number more than once. The scripts print their
 own.
-| `test-smoke` | `plum test` really runs tests, and both compilers agree |
+| `test-smoke` | `plum test` really runs tests |
 | `net-smoke` | TCP and HTTP work in a compiled binary |
 | `lsp-smoke` | the language server answers a real session |
 | `check-shims` | the embedded C shims match `native_stdlib/` |
@@ -122,13 +123,13 @@ what each can SEE:
   recordings. A recording does not move when the compilers do, so it
   catches drift -- including both compilers drifting together, which no
   comparison between them can see.
-- `interp-check` compares against the INTERPRETER, the one independent
-  implementation of the semantics. It found division-by-zero and float
-  precision in two days, before it existed as a script.
+- `property-check` compares against INVARIANTS, which is the only thing
+  here that can catch both halves being wrong together. It found two
+  such bugs on the day it was written — `parse_int` rejecting `Int`'s
+  own minimum, and `parse_float` landing one ulp out.
 
-**Only `interp-check` requires `crates/`**, and `test-smoke` uses it for
-its second half when present. Everything else runs with no Rust
-toolchain at all.
+Everything runs with no Rust toolchain at all, because there is no Rust
+left.
 
 `example-sweep` used to run the real compiler too and require it to
 match the same recording. That went with the Rust BACKEND on
@@ -137,9 +138,11 @@ against. What a recording still catches is DRIFT: it does not move when
 the compiler does.
 
 
-`interp-check` is the reason retiring `plum-interp` along with the rest
-of `crates/` would cost something real. A second implementation of the
-SEMANTICS is worth more than a second implementation of the compiler.
+An interpreter was kept as a test oracle for exactly this reason — a
+second implementation of the SEMANTICS is worth more than a second
+implementation of the compiler. It was retired on 2026-08-25 anyway:
+an oracle can only find DISAGREEMENTS, and the bugs that were left were
+ones it shared. See DESIGN.md.
 
 ## `self_host/`
 
@@ -169,8 +172,8 @@ behind `build`, and `test` was broken for every test that called
 `assert_eq` — for months, unnoticed, because nothing exercised it. See
 DESIGN.md's "The test runner was running on the wrong engine".
 
-Plum still HAS an interpreter: `crates/plum-interp`, reached through the
-Rust implementation's `plum run`. That one is live and tested.
+Plum has no interpreter now. The Rust one was retired on 2026-08-25;
+`plum run` compiles and executes.
 
 - **`lexer/`** — DONE, 98/98 corpus fixtures. Two real, concrete bugs
   found by actually running it against the corpus (a golden-generator

@@ -174,7 +174,7 @@ let find_arrow (lines: Array[String]) (message: String) (i: Int): Option[Diagnos
                     // Everything before the final two colons. A path may
                     // contain colons of its own, so this rejoins rather
                     // than taking `parts[0]`.
-                    path: String.join(Array.slice(parts, 0, parts.len() - 2), ":"),
+                    path: Array.join(Array.slice(parts, 0, parts.len() - 2), ":"),
                     line: Result.unwrap_or(String.parse_int(parts[parts.len() - 2]), 1),
                     col: Result.unwrap_or(String.parse_int(parts[parts.len() - 1]), 1),
                     message: message,

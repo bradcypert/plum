@@ -20,8 +20,9 @@ That builds every fixture with the SELF-HOSTED compiler, runs it under
 ASan with `detect_leaks=1`, and compares stdout to `expected.txt` — and
 also runs `./sh check` over each one, which is a separate claim from
 "it runs" and turned out not to be true (below). No Rust compiler is
-involved: the answers are checked in, not derived by running the other
-compiler, so this keeps working after `crates/` is gone.
+involved: the answers are checked in, not derived by running another
+implementation, which is why this kept working when the Rust code was
+retired on 2026-08-25.
 
 **These fixtures were run by nothing at all until 2026-08-20.** Every
 sentence below about what passes was, until then, the record of

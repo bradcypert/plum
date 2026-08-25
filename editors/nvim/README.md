@@ -10,8 +10,13 @@ isn't published as a standalone plugin anywhere.
 
 **1. `plum` on your `$PATH`** (the LSP config runs `plum lsp`):
 
+Download a binary from
+[Releases](https://github.com/bradcypert/plum/releases), or build one —
+`clang` is the only requirement:
+
 ```sh
-cargo install --path crates/plumc   # from the plum repo root
+./bootstrap/from-seed -o plum        # from the plum repo root
+./plum build bootstrap/self_host -o plum
 ```
 
 **2. Build the tree-sitter parser** — a platform-specific binary

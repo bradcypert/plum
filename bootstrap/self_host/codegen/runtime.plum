@@ -31,7 +31,7 @@
 // lines, and folding `concat` over it copied the whole accumulated
 // prefix each time.
 pub let cg_lines (lines: Array[String]): String =
-    String.concat_all(cg_newline_terminate(lines, 0, []))
+    Array.concat_all(cg_newline_terminate(lines, 0, []))
 
 let cg_newline_terminate (lines: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= lines.len() { acc } else { cg_newline_terminate(lines, i + 1, acc.push(lines[i]).push("\n")) }
@@ -1218,6 +1218,15 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "  %pd = getelementptr i8, ptr %path, i64 16",
     "  %r = call i64 @os_remove_tree(ptr %pd)",
     "  ret i64 %r",
+    "}",
+    "",
+    "; Decimal text to the nearest double. See `parse_float_raw` in the",
+    "; prelude for why this is libc's and not arithmetic.",
+    "define double @plum_parse_float_raw(ptr %s) {",
+    "entry:",
+    "  %sd = getelementptr i8, ptr %s, i64 16",
+    "  %v = call double @strtod(ptr %sd, ptr null)",
+    "  ret double %v",
     "}",
     "",
     "define ptr @plum_os_platform(i1 %ignored) {",

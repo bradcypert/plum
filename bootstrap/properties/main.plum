@@ -1,0 +1,214 @@
+// Property tests: invariants that must hold for MANY inputs, checked
+// against values generated here rather than against answers recorded
+// from a previous run.
+//
+// **Why this exists.** `bootstrap/interp-check` compares the compiler
+// against the Rust interpreter, an independent implementation, and that
+// is the only thing in this repo able to catch the compiler being
+// CONFIDENTLY WRONG -- a recording just preserves whatever it did last
+// time. But the interpreter now lags the language: it has no `Os.`
+// namespace and no `x.f(a)` = `T.f(x, a)` rule, so those fixtures are
+// skipped. New features are exactly what it cannot check, which makes
+// its coverage inversely correlated with risk.
+//
+// A property does not lag. It is written in the language it tests, so a
+// feature gets properties the day it lands, and it encodes an invariant
+// known IN ADVANCE rather than whatever the implementation happens to
+// produce. That is a different kind of independence from a second
+// implementation, and a cheaper one to keep.
+//
+// **Deliberately deterministic.** A fixed seed, not a clock. A property
+// that fails on one CI run in twenty and cannot be reproduced locally
+// is worse than no property: it teaches people to re-run until green.
+// Every failure here reproduces exactly.
+
+// --- A generator ---
+
+// A linear congruential generator, kept small ON PURPOSE. Plum checks
+// integer overflow and aborts on it (`cg_overflow_guard`), so the usual
+// 64-bit LCG constants would kill the test process rather than wrap.
+// With `seed < 2^31` the product below peaks near 2.4e18, comfortably
+// inside `Int`.
+let PRNG_MOD (): Int = 2147483648
+
+let next_seed (seed: Int): Int = (seed * 1103515245 + 12345) % PRNG_MOD()
+
+// A value in [lo, hi]. `Int.abs` is applied to the seed rather than the
+// result so a negative range still lands inside it.
+let rand_between (seed: Int) (lo: Int) (hi: Int): Int =
+    lo + (Int.abs(seed) % (hi - lo + 1))
+
+// --- Reporting ---
+
+// `assert_eq` prints the two values but not the INPUT that produced
+// them, which for a property is the only thing that lets you reproduce
+// it. This prints the case first, so a failure names it even though the
+// abort message cannot.
+let check_eq (label: String) (input: String) (got: String) (want: String): Unit =
+    if got == want { () } else {
+        println("PROPERTY FAILED: ".concat(label));
+        println("  input: ".concat(input));
+        println("  got:   ".concat(got));
+        println("  want:  ".concat(want));
+        panic_raw("property failed: ".concat(label))
+    }
+
+// --- Int round trip ---
+
+// `parse_int(n.to_string()) == n`. The compiler's own `parse_int` and
+// `to_string` are separate code paths, so this checks them against each
+// other rather than against a recording.
+// A sentinel no generated value can be, so a parse FAILURE is a
+// visible mismatch rather than a coincidence.
+let parsed_int (text: String): String =
+    text.parse_int().unwrap_or(0 - 999999999999).to_string()
+
+let int_roundtrip (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let v = rand_between(seed, 0 - 1000000000, 1000000000);
+        let text = v.to_string();
+        check_eq("int round trip", text, parsed_int(text), text);
+        int_roundtrip(next_seed(seed), left - 1)
+    }
+
+pub let test_int_roundtrip (): Unit = {
+    int_roundtrip(12345, 300);
+    // The edges a small generator will never reach on its own, and the
+    // ones most likely to be wrong.
+    check_eq("int edge", "0", parsed_int("0"), "0");
+    check_eq("int edge", "max", parsed_int("9223372036854775807"), "9223372036854775807");
+    check_eq("int edge", "min", parsed_int("-9223372036854775808"), "-9223372036854775808")
+}
+
+// --- Float round trip ---
+
+// `parse_float(x.to_string()) == x`, over magnitudes that reach BOTH
+// notations.
+//
+// This is the property the interpreter earned its keep on. The float
+// formatting bug it caught -- `0.000001` printing as
+// `1.0000000000000002e-06` -- is exactly a round-trip failure, and it
+// would have been caught here without a second implementation. The
+// runtime's own `plum_fmt_double` already works this way internally,
+// retrying at 15, 16 and 17 digits until the text parses back to the
+// same double; this checks the same invariant from outside.
+let float_roundtrip (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let mantissa = rand_between(seed, 1, 999999);
+        let exponent = rand_between(next_seed(seed), 0 - 20, 20);
+        let x = mantissa.to_float() * Float.pow(10.0, exponent.to_float());
+        let text = x.to_string();
+        check_eq("float round trip", text,
+            text.parse_float().unwrap_or(0.0 - 1.0).to_string(), text);
+        float_roundtrip(next_seed(next_seed(seed)), left - 1)
+    }
+
+pub let test_float_roundtrip (): Unit = {
+    float_roundtrip(999, 300);
+    // The two the formatting bug actually showed up on, and the
+    // boundaries where `%g` switches notation.
+    check_eq("float edge", "1e-06", "0.000001".parse_float().unwrap_or(0.0).to_string(), "1e-06");
+    check_eq("float edge", "1e+20", "100000000000000000000.0".parse_float().unwrap_or(0.0).to_string(), "1e+20");
+    check_eq("float edge", "0.1", "0.1".parse_float().unwrap_or(0.0).to_string(), "0.1");
+    check_eq("float edge", "zero", 0.0.to_string(), "0")
+}
+
+// --- split / join ---
+
+// `split(s, sep).join(sep) == s`, for any `s` and any non-empty `sep`.
+// True by construction and easy to get wrong at the edges: a leading
+// separator, a trailing one, two in a row, and the empty string all
+// produce empty parts that must survive the round trip.
+let sep_string (seed: Int) (left: Int) (acc: String): String =
+    if left <= 0 { acc } else {
+        let pick = Int.abs(seed) % 3;
+        let c = if pick == 0 { "a" } else if pick == 1 { "b" } else { "," };
+        sep_string(next_seed(seed), left - 1, acc.concat(c))
+    }
+
+let split_join (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let s = sep_string(seed, rand_between(seed, 0, 12), "");
+        check_eq("split/join round trip", "[".concat(s).concat("]"),
+            s.split(",").join(","), s);
+        split_join(next_seed(seed), left - 1)
+    }
+
+pub let test_split_join (): Unit = {
+    split_join(4242, 200);
+    check_eq("split/join edge", "empty", "".split(",").join(","), "");
+    check_eq("split/join edge", "leading", ",a".split(",").join(","), ",a");
+    check_eq("split/join edge", "trailing", "a,".split(",").join(","), "a,");
+    check_eq("split/join edge", "doubled", "a,,b".split(",").join(","), "a,,b")
+}
+
+// --- Case mapping ---
+
+// Over ASCII, case mapping preserves length and `to_upper` is settled
+// after one application. Deliberately ASCII-only: `ß` uppercases to
+// `SS` in some implementations and not others, which is a real
+// divergence this project has already documented rather than a
+// property violation.
+let ascii_string (seed: Int) (left: Int) (acc: String): String =
+    if left <= 0 { acc } else {
+        let pick = Int.abs(seed) % 4;
+        let c = if pick == 0 { "a" } else if pick == 1 { "Z" } else if pick == 2 { "m" } else { "7" };
+        ascii_string(next_seed(seed), left - 1, acc.concat(c))
+    }
+
+let case_props (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let s = ascii_string(seed, rand_between(seed, 1, 10), "");
+        check_eq("upper preserves length", s, s.to_upper().len().to_string(), s.len().to_string());
+        check_eq("upper is idempotent", s, s.to_upper().to_upper(), s.to_upper());
+        check_eq("lower then upper", s, s.to_lower().to_upper(), s.to_upper());
+        case_props(next_seed(seed), left - 1)
+    }
+
+pub let test_case_mapping (): Unit = case_props(31337, 150)
+
+// --- Sorting ---
+
+// A sort must produce a PERMUTATION that is ordered. Checking "ordered"
+// alone passes for a function that returns an empty array, and checking
+// length alone passes for one that returns its input untouched.
+let is_sorted (xs: Array[Int]) (i: Int): Bool =
+    if i + 1 >= xs.len() { true }
+    else if xs[i] > xs[i + 1] { false }
+    else { is_sorted(xs, i + 1) }
+
+let int_array (seed: Int) (left: Int) (acc: Array[Int]): Array[Int] =
+    if left <= 0 { acc }
+    else { int_array(next_seed(seed), left - 1, acc.push(rand_between(seed, 0 - 50, 50))) }
+
+let sort_props (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let xs = int_array(seed, rand_between(seed, 0, 15), []);
+        let sorted = Array.sort_int(xs);
+        check_eq("sort orders", xs.to_string(), is_sorted(sorted, 0).to_string(), "true");
+        check_eq("sort keeps length", xs.to_string(), sorted.len().to_string(), xs.len().to_string());
+        check_eq("sort keeps sum", xs.to_string(), Array.sum_int(sorted).to_string(), Array.sum_int(xs).to_string());
+        sort_props(next_seed(seed), left - 1)
+    }
+
+pub let test_sorting (): Unit = sort_props(777, 120)
+
+// --- Arithmetic ---
+
+// Identities that must hold whenever no operand overflows. `Int` is
+// CHECKED here -- `+`/`-`/`*` abort rather than wrap -- so the ranges
+// are chosen to stay inside, and what is being tested is that ordinary
+// arithmetic is not quietly wrong near the guards.
+let arith_props (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let a = rand_between(seed, 0 - 1000000, 1000000);
+        let b = rand_between(next_seed(seed), 0 - 1000000, 1000000);
+        let case = a.to_string().concat(", ").concat(b.to_string());
+        check_eq("add then subtract", case, ((a + b) - b).to_string(), a.to_string());
+        check_eq("multiply then divide", case, ((a * 7) / 7).to_string(), a.to_string());
+        check_eq("addition commutes", case, (a + b).to_string(), (b + a).to_string());
+        check_eq("negate twice", case, (0 - (0 - a)).to_string(), a.to_string());
+        arith_props(next_seed(next_seed(seed)), left - 1)
+    }
+
+pub let test_arithmetic (): Unit = arith_props(2024, 200)

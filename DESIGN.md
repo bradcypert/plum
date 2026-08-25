@@ -13979,3 +13979,259 @@ The fixtures live in their own temp roots. Nested under the existing
 one they became part of ITS project — a directory is a project here —
 and their deliberate errors poisoned the assertions the older tests
 depend on. That happened on the first attempt.
+
+## Method calls are namespaced functions (2026-08-25)
+
+`s.trim()` worked and `s.trim_end()` did not. Six string methods were
+missing — `trim_start`, `trim_end`, `slice`, `index_of`, `lines`,
+`repeat` — while eight others worked. Completion made this newly
+visible: it puts `String.trim_end` in front of a user, who types
+`s.trim_end()` and is told "only .to_string()/.concat() and struct-field
+closure calls are supported".
+
+The obvious fix is six more arms in `infer_method_call`. Each existing
+method is hand-wired there with its own unification and its own
+`TMethodCall` node, so six more is a day's work and a permanent tax:
+every future stdlib function needs a decision about whether it also
+gets to be a method, and the two lists drift.
+
+### What was actually wrong
+
+Looking for the pattern rather than the missing entries turned up a
+deeper inconsistency. `Type.` did not mean one thing. It meant three:
+
+| Spelling | Meaning | Example |
+|---|---|---|
+| `String.`, `Array.`, `Int.`, `Float.` | first parameter has this type | `String.trim (s: String)` |
+| `String.` again | *produces* this type | `String.join (parts: Array[String]) (sep: String)` |
+| `Os.` | a module; no receiver at all | `Os.temp_dir ()`, `Os.make_dir (path: String)` |
+
+`String.trim` and `String.join` look identical and are structurally
+different. That ambiguity is why there was no rule to apply, and so a
+hand-maintained list was the only option available.
+
+### The rule
+
+**A namespace names the type of the first parameter. `x.f(a)` is
+`T.f(x, a)`, where `T` is `x`'s type.**
+
+That is the whole thing, and three consequences fall out rather than
+being legislated:
+
+- **`Os.` is excluded automatically**, because `Os` is not a type.
+  Which is correct: `path.make_dir()` is not something anyone wants.
+- **`String.join` and `String.concat_all` are revealed as misfiled.**
+  They take `Array[String]`. They become `Array.join` and
+  `Array.concat_all`, after which `parts.join(",")` works and reads
+  the right way round. A two-function migration that buys a rule with
+  no exceptions.
+- **The six missing methods stop being a list.** They are not special
+  and never were; they satisfy the rule like everything else.
+
+### Three syntaxes, three jobs
+
+None of the existing forms is removed, and each ends up with a
+distinct purpose:
+
+- `Type.f(x, ...)` — the definition form, and what you write to pass
+  it as a value: `Array.map(xs, String.trim)`.
+- `x.f(...)` — sugar for the above. The chaining form.
+- `x |> f` — for your OWN functions and closures, which do not live in
+  a type namespace.
+
+The last one interacts with this more than it looks. `|>` appends the
+piped value as the LAST argument, while the stdlib is receiver-FIRST,
+so piping a stdlib call means writing the placeholder nearly every
+time: `s |> String.split(_, ",")`. Methods remove that pressure
+entirely — `s.split(",")` — and let `|>` specialise in the thing it is
+actually good at, which is composing functions you wrote yourself.
+
+Removing methods instead was never really available: `.to_string()`,
+`.concat()` and `.len()` are pervasive in this compiler's own source.
+
+### Deliberately NOT full UFCS
+
+Nim and D make `f(x)` and `x.f()` interchangeable for *any* function.
+That is not this. Here a function is a method because someone declared
+it under a type, exactly as an inherent method works in Rust — the
+opt-in is the namespace, and it is checkable.
+
+Full UFCS would make every function in scope a method on every type,
+which destroys completion after `.` (the whole world is a candidate),
+makes typo errors confusing, and turns every new top-level function
+into a method on types its author never considered.
+
+### What it costs, stated up front
+
+- **A second failure mode in the error message.** `s.foo()` must now
+  report both that `String` has no built-in method `foo` AND that no
+  `String.foo` is in scope, and pick the useful one.
+- **Resolution needs the receiver's type first**, so a method call
+  cannot help infer its own receiver. Not new — the eight existing
+  methods already have this constraint — but now it applies more
+  widely.
+- **Precedence has to be written down, not left to code order.** `.`
+  already reaches struct fields holding closures (`reader.read(x)`,
+  the records-of-closures pattern). For a struct `S` with a field
+  `read` and a function `S.read`, the FIELD wins: it is the more
+  specific and more local thing, and a record of closures is a
+  deliberate dispatch mechanism that a namespaced function should not
+  be able to shadow.
+
+### What implementing it turned up
+
+**Built-in methods were claiming names.** `xs.contains(2)` reported
+`Array[Int] != String`. The built-in arms are matched on METHOD NAME
+before the receiver's type is known, so `contains` — a string primitive
+— claimed the name for `String` and denied it to every other type,
+`Array.contains` included. The arm now falls through to the namespaced
+rule when the receiver is not a String, rather than failing. This is
+structural, not a typo: name-first dispatch cannot be right in a
+language where several types own a method of the same name, and the
+fall-through is what reconciles the two.
+
+**`Array.map`/`filter`/`fold` have no signature to find.** Their types
+depend on the closure handed to them, so the checker builds them by
+hand and `find_sig` returns nothing. The method form routes to the same
+`infer_array_ns_call` the `Array.map(xs, f)` form already uses, rather
+than getting a second implementation of the same three rules.
+
+**The interpreter now rejects programs the compiler accepts.** This is
+the first divergence of that kind. `interp-check` has always compared
+ANSWERS, and its two prior skips were about capability — the
+interpreter cannot call extern C, cannot open a socket. This one is
+different: the Rust front end has no `x.f(a)` rule at all, so
+`namespaced_methods` is refused outright.
+
+That matters for what the oracle is worth. It caught two real bugs and
+is still worth keeping, but it can now only check the subset of the
+language it still implements, and that subset is shrinking rather than
+growing. When `join` moved to `Array.`, `string_namespaced` began
+failing against it — so `join`'s cases moved into
+`namespaced_methods`, which is skipped anyway, instead of skipping
+`string_namespaced` and losing the oracle's coverage of everything else
+in that file. That trade is available once. The next divergence in a
+file the oracle still checks will cost real coverage.
+
+## Properties, and two bugs an oracle could never find (2026-08-25)
+
+`bootstrap/interp-check` compares the compiler against the Rust
+interpreter, and it was the only thing here able to catch the compiler
+being confidently wrong — a recording preserves whatever it did last
+time, so it cannot.
+
+Two things had gone wrong with that arrangement.
+
+**It lags the language.** The interpreter has no `Os.` namespace and no
+`x.f(a)` = `T.f(x, a)` rule, so those fixtures are skipped. "New
+feature" and "the interpreter does not have it" are the same event,
+which makes the oracle's coverage inversely correlated with risk: it
+checks the mature parts and skips exactly the new ones.
+
+**It is blind to shared bugs by construction.** An oracle finds
+DISAGREEMENTS. Where both implementations are wrong in the same way it
+reports agreement and moves on.
+
+`bootstrap/properties` is the answer to the second problem, and it does
+not have the first. Properties are written in Plum and run by
+`plum test`, so a feature can get properties the day it lands; and they
+encode invariants known IN ADVANCE rather than whatever an
+implementation produces.
+
+### Both bugs found on the first run were shared
+
+**`parse_int("-9223372036854775808")` returned "integer out of
+range".** Int's own minimum, rejected. The magnitude was accumulated as
+a POSITIVE number and negated at the end, and that magnitude is one
+larger than Int's maximum — so it overflowed while still positive. Now
+accumulated negatively when the input is negative, which is the only
+representable way round. The existing `parse_int_range` fixture tested
+`9223372036854775808` — the positive overflow, correctly rejected — and
+never the negative edge. A hand-written fixture tests the case its
+author thought of.
+
+**`parse_float("9.21258e-07")` was one ulp out.** `parse_number` built
+the value as `mantissa * 10^exp` in floating point, accumulating
+rounding error, while `to_string` goes to real lengths to guarantee the
+round trip — retrying at 15, 16 and 17 digits until `strtod` agrees. So
+`parse_float(x.to_string()) != x`. The inverse of a `strtod` round trip
+has to be `strtod`; `parse_number` now validates the grammar as before
+and takes the VALUE from `@plum_parse_float_raw`.
+
+The Rust interpreter had **both** bugs, identically. `interp-check`
+agreed with the compiler and saw nothing, on both, for as long as they
+existed.
+
+### A regression test for the first one cannot be a fixture
+
+Adding `-9223372036854775808` to `parse_int_range` would make that
+fixture DISAGREE with the interpreter, which still has the bug. So the
+regression test for a fixed bug lives in the properties instead.
+
+That is worth naming plainly: the oracle now obstructs pinning a bug
+fix in the corpus. It is no longer only decaying — it constrains what
+can be tested elsewhere. That is a stronger argument for retiring it
+than the skip count, and the trigger for doing so is met once properties
+cover the two areas it earned its keep on, which after today they do.
+
+## Retiring the Rust implementation (2026-08-25)
+
+Deleted: `crates/` (44,698 lines of Rust across five crates),
+`Cargo.toml`, `Cargo.lock`, `bootstrap/interp-check`, and the `oracle`
+CI job. There is no Rust in this repository and no Rust toolchain in
+CI.
+
+Plum began as a Rust compiler. It bootstrapped the self-hosted one, lost
+its code generator on 2026-08-21, and what survived — a front end and a
+tree-walking interpreter — stayed on as a test oracle. That was the
+right call at the time and it earned the keep: integer division by zero
+was undefined in both code generators and printed a different wrong
+number in each, and `0.1 + 0.2` printed `0.3` in both. The interpreter
+was right on both, and a comparison between two code generators could
+not have seen either.
+
+### Why now
+
+Three things, in increasing order of how much they mattered.
+
+**It lagged the language.** No `Os.` namespace, no `x.f(a)` =
+`T.f(x, a)` rule, so those fixtures were skipped. "New feature" and
+"the interpreter does not have it" are the same event, which made its
+coverage inversely correlated with risk — it checked the mature parts
+and skipped the new ones.
+
+**It could not see shared bugs.** An oracle finds DISAGREEMENTS. On the
+day it was retired, property tests found two bugs it had *identically*:
+`parse_int` rejecting `-9223372036854775808`, and `parse_float` landing
+one ulp from the correctly rounded double. It had agreed with the
+compiler on both for as long as they existed, which is not a failure of
+the interpreter — it is what an oracle is.
+
+**It had started to constrain other testing.** Pinning the `parse_int`
+fix as a corpus fixture would have made that fixture DISAGREE with the
+interpreter, which still had the bug. A regression test for a fix could
+not be written in the corpus. That is the point at which a test tool
+stops paying for itself.
+
+### What replaced it
+
+`bootstrap/property-check`. Properties are written in Plum and run by
+`plum test`, so they track the language rather than trailing it, and
+they encode invariants known in advance rather than whatever an
+implementation produces. They are independent in the way that matters
+without being a second implementation to maintain.
+
+### What was checked before deleting
+
+That nothing depended on it silently. `bootstrap-check` already
+verifies all 102 token/AST goldens against the self-hosted lexer and
+parser — a Rust test used to do that too, and the coverage did not
+leave with it. `test-smoke` lost its "both compilers agree" half, which
+was the whole reason it existed, and keeps the half that proves
+`plum test` runs tests at all. Every live instruction pointing at
+`cargo` was rewritten: the nvim editor guide and the asteroids example
+both told readers to `cargo install --path crates/plumc`.
+
+DESIGN.md keeps its Rust sections. They are a log of how this got built,
+not a description of what is here — do not copy IR out of them, since
+the runtimes were never interchangeable.

@@ -1,0 +1,20 @@
+hello
+2
+true
+  pad|
+pad  |
+bc
+1
+2
+ababab
+true
+3
+42
+red
+7
+a-b-c
+a-b-c
+[]
+solo
+ab
+x,y,z

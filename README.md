@@ -10,10 +10,10 @@ identical and are tested independently.
 
 **Plum is self-hosted**: the compiler is written in Plum
 (`bootstrap/self_host/`), compiles itself to a fixed point, and needs no
-Rust toolchain to build. A Rust implementation (`crates/`) came first
-and bootstrapped it; its BACKEND was deleted on 2026-08-21 and what
-survives is an interpreter used as a test oracle — see "The Rust
-interpreter" below.
+Rust toolchain to build, or to be present at all. A Rust
+implementation came first and bootstrapped it; its backend was deleted
+on 2026-08-21 and the rest followed on 2026-08-25 — see "There is no
+Rust in this repository" below.
 
 See [DESIGN.md](DESIGN.md) for the full design history and rationale
 behind every decision below, and [MAINTENANCE.md](MAINTENANCE.md) for
@@ -75,37 +75,32 @@ then rebuilds it with itself, which is the compiler you keep.
 The rest of this doc assumes `plum` is on your `PATH`; substitute the
 full path otherwise.
 
-### The Rust interpreter
+### There is no Rust in this repository
 
-There is exactly one compiler: the self-hosted one. `crates/` holds a
-Rust front end and INTERPRETER — no code generator, since 2026-08-21 —
-and it exists for one reason.
+There used to be. Plum began as a Rust compiler, and after the
+self-hosted one replaced its code generator on 2026-08-21 a Rust front
+end and interpreter stayed on as a test oracle: `interp-check` ran every
+execution fixture through it and compared answers. It earned that place
+twice — integer division by zero was undefined in both code generators
+and printed a different wrong number in each, and `0.1 + 0.2` printed
+`0.3` in both, where the interpreter was right on both counts.
 
-```sh
-cargo build --workspace --release       # produces target/release/plum
-```
+It was retired on 2026-08-25 — 44,698 lines, a CI job, and the Rust
+toolchain dependency. Two things had gone wrong with it:
 
-That binary can `run`, `test`, `lsp`, `new` and dump tokens/ASTs. It
-cannot `build`: `plum build`, `plum emit-llvm` and `plum compile-ir`
-were removed with the backend. Compiling is the self-hosted compiler's
-job now.
+- **It could not see shared bugs.** An oracle finds *disagreements*. On
+  the day it was retired, property tests found two bugs the interpreter
+  had *identically* — `parse_int` rejecting `Int`'s own minimum, and
+  `parse_float` landing one ulp out. It had agreed with the compiler on
+  both for as long as they existed.
+- **It lagged the language**, so the newest features — the ones most
+  likely to be wrong — were exactly the ones it could not check.
 
-**Why keep it at all.** `bootstrap/interp-check` runs every execution
-fixture through the interpreter and compares it to the compiled answer.
-That is a comparison against an independent implementation of the
-SEMANTICS, and it earns its place: integer division by zero was
-undefined in both backends and printed a different wrong number in
-each, while the interpreter had reported `division by zero` all along;
-floats printed `0.3` for `0.1 + 0.2` in both backends, where the
-interpreter printed `0.30000000000000004` and was right. Comparing two
-code generators could not see either — they agreed, and were both
-wrong.
-
-Nothing else needs it. Every other harness in `bootstrap/` runs with no
-Rust toolchain present.
-
-**It is meant to go eventually.** See DESIGN.md's "Deleting the Rust
-backend" for what would have to be true first.
+`bootstrap/property-check` replaced it. Properties are written in Plum
+and run by `plum test`, so they track the language instead of trailing
+it, and they encode invariants known in advance rather than whatever an
+implementation happens to produce. See DESIGN.md's "Properties, and two
+bugs an oracle could never find".
 
 ## Running a program
 
@@ -231,24 +226,23 @@ until 2026-08-21; it went with the backend.)
 
 ## Editor support
 
-Both compilers serve an LSP out of the `plum` binary itself (the same
-shape `gopls` takes for Go), speaking LSP over stdio — but they do not
-offer the same things, and this is the one place the Rust
-implementation is still ahead:
+`plum lsp` serves an LSP out of the `plum` binary itself (the same
+shape `gopls` takes for Go), speaking LSP over stdio. It is in every
+published binary, on Linux, macOS and Windows.
 
-| | self-hosted | Rust |
-|---|---|---|
-| diagnostics | live, as you edit | live, as you edit |
-| hover | inferred type of any identifier | resolved type of any expression |
-| go-to-definition | locals, params, top-level names | locals, params, fields, variants |
-| completion | project names, stdlib, enum variants | keywords, scope, struct fields |
+| | |
+|---|---|
+| diagnostics | live, as you edit, against the unsaved buffer |
+| hover | the inferred type of any identifier |
+| go-to-definition | locals, params, top-level names |
+| completion | project names, the stdlib, enum variants |
 
-The self-hosted server asks the TYPE CHECKER, so hovering a local or a
-parameter shows the type it was actually inferred to have — `doubled:
-Point` — and go-to-definition on a local jumps to its binding, not to
-whatever top-level name it happens to share. Top-level names fall back
-to a by-name index, which is what supplies a function's full signature
-on hover.
+It asks the TYPE CHECKER, so hovering a local or a parameter shows the
+type it was actually inferred to have — `doubled: Point` — and
+go-to-definition on a local jumps to its binding, not to whatever
+top-level name it happens to share. Top-level names fall back to a
+by-name index, which is what supplies a function's full signature on
+hover.
 
 Completion offers every top-level name in your project, the standard
 library's 100-odd public functions, and every enum variant, each with
@@ -258,19 +252,18 @@ kind of work — so there is no field completion. The whole list is
 returned and your editor filters it, which is what LSP clients do
 anyway.
 
-Two limits on the rest: hover and go-to-definition need the project to
-type-check cleanly, and the server re-checks per request (26ms on a
-small project, ~0.9s on the compiler's own 14k lines). Field names and
-enum variants are not resolved for hover — hovering `.x` in `p.x`
-answers for `p`. Completion is unaffected by both, since it reads names
-from disk rather than inferring anything.
+Known limits: hover and go-to-definition need the project to type-check
+cleanly, and the server re-checks per request (26ms on a small project,
+~0.9s on the compiler's own 14k lines). Field names and enum variants
+are not resolved for hover — hovering `.x` in `p.x` answers for `p`.
+Completion is unaffected by both, since it reads names from disk rather
+than inferring anything. The language server is tested on Linux and
+macOS; it is untested on Windows.
 
-The self-hosted server is the one that ships: it is in every published
-binary, on Linux, macOS and Windows. The Rust implementation is still
-ahead on completion depth — keywords, locals in scope, and fields after
-`.` — but it is not published anywhere and is a test oracle being wound
-down. The section below describes it, and is the specification the
-self-hosted server is being brought up to.
+The Rust implementation had a deeper completion — keywords, locals in
+scope, and fields after `.` — and was retired with the rest of the Rust
+code on 2026-08-25. What it did is recorded below as the specification
+this server is being brought up to, not as something you can run.
 
 Two pieces, independent of each other:
 
@@ -796,6 +789,14 @@ program's prelude):
   real, SEPARATE bug found (and filed, not fixed here) while testing
   this: a top-level global `let` used twice with a heap-consuming
   operation like `.as_cstr()` corrupts under native codegen.
+- **Methods are namespaced functions.** `x.f(a)` means `T.f(x, a)`,
+  where `T` is `x`'s type — so `"  hi  ".trim_end()` and
+  `String.trim_end("  hi  ")` are the same call, and declaring
+  `let Box.bump (b: Box) (n: Int): Box` makes `myBox.bump(1)` work.
+  A namespace names the type of the first parameter; `Os.` has no
+  receiver and so has no methods. A struct field holding a closure
+  wins over a namespaced function of the same name.
+
 - **`Os.`: filesystem and self-location** — `Os.temp_dir(): Result
   [String, String]` (a fresh private directory the caller owns and must
   clean up), `Os.make_dir(path)`, `Os.remove_file(path)`,

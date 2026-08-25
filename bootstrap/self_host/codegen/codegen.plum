@@ -1545,6 +1545,7 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "os_remove_tree_raw" { Some("@plum_os_remove_tree") }
     else if name == "os_copy_tree_raw" { Some("@plum_os_copy_tree") }
     else if name == "os_platform_raw" { Some("@plum_os_platform") }
+    else if name == "parse_float_raw" { Some("@plum_parse_float_raw") }
     else { None }
 
 let cg_concrete_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
@@ -3360,7 +3361,7 @@ let cg_str_append_lit (owner: typecheck.ITy) (acc: String) (text: String) (n: In
 // Array-then-join, like `cg_emit_insts`: one generated function per
 // type, and appending each onto a growing string is quadratic.
 let cg_emit_str_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: String): String =
-    String.concat_all(cg_emit_str_fns_acc(p, ts, 0, []))
+    Array.concat_all(cg_emit_str_fns_acc(p, ts, 0, []))
 
 let cg_emit_str_fns_acc (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= ts.len() { acc } else { cg_emit_str_fns_acc(p, ts, i + 1, acc.push(cg_emit_str_fn(p, ts[i]))) }
@@ -3496,7 +3497,7 @@ let cg_enum_str_payloads (t: typecheck.ITy) (ptys: Array[typecheck.ITy]) (i: Int
 // Array-then-join, like `cg_emit_insts`: one generated function per
 // type, and appending each onto a growing string is quadratic.
 let cg_emit_eq_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: String): String =
-    String.concat_all(cg_emit_eq_fns_acc(p, ts, 0, []))
+    Array.concat_all(cg_emit_eq_fns_acc(p, ts, 0, []))
 
 let cg_emit_eq_fns_acc (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= ts.len() { acc } else { cg_emit_eq_fns_acc(p, ts, i + 1, acc.push(cg_emit_eq_fn(p, ts[i]))) }
@@ -3877,7 +3878,7 @@ let cg_rel_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typ
 // Array-then-join, like `cg_emit_insts`: one generated function per
 // type, and appending each onto a growing string is quadratic.
 let cg_emit_rel_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: String): String =
-    String.concat_all(cg_emit_rel_fns_acc(p, ts, 0, []))
+    Array.concat_all(cg_emit_rel_fns_acc(p, ts, 0, []))
 
 let cg_emit_rel_fns_acc (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= ts.len() { acc } else { cg_emit_rel_fns_acc(p, ts, i + 1, acc.push(cg_emit_rel_fn(p, ts[i]))) }
@@ -4458,7 +4459,7 @@ let cg_calls_in_fields (p: CgProgram) (fields: Array[typecheck.TFieldInit]) (i: 
 // it quadratic: function N copies the N-1 already there. Compiling this
 // compiler allocated 3.5GB to produce 6MB of IR, most of it here.
 let cg_emit_insts (p: CgProgram) (insts: Array[CgInst]) (i: Int) (n: Int) (acc: String): String =
-    String.concat_all(cg_collect_insts(p, insts, 0, n, []))
+    Array.concat_all(cg_collect_insts(p, insts, 0, n, []))
 
 let cg_collect_insts (p: CgProgram) (insts: Array[CgInst]) (i: Int) (n: Int) (acc: Array[String]): Array[String] =
     if i >= insts.len() { acc }

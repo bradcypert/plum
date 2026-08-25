@@ -1,0 +1,66 @@
+// `x.f(a)` is `T.f(x, a)`, where `T` names `x`'s type.
+//
+// Before 2026-08-25 each method was hand-wired into the checker, so
+// `s.trim()` worked and `s.trim_end()` did not -- eight worked and six
+// did not, with no rule to predict which. See DESIGN.md's "Method calls
+// are namespaced functions".
+//
+// The point of this fixture is COVERAGE OF THE SOURCES, since a method
+// can now resolve four different ways and each can break alone: a
+// built-in primitive, a prelude function, a checker builtin with no
+// signature (`Array.map`), and a function the user declared.
+
+struct Box { v: Int }
+enum Colour { Red, Blue }
+
+// A user's own namespaced functions are methods on their own types by
+// exactly the same rule -- nothing about this is special to the stdlib.
+let Box.bump (b: Box) (n: Int): Box = Box { v: b.v + n }
+let Colour.name (c: Colour): String = match c { Red => "red", Blue => "blue" }
+
+let main (): Unit = {
+    // Built-in primitives, which still take precedence.
+    println("HeLLo".to_lower());
+    println("a,b".split(",").len().to_string());
+    println("abc".contains("b").to_string());
+
+    // The six that used to be missing. Every one is an ordinary
+    // `String.` function in the prelude.
+    println("  pad  ".trim_end().concat("|"));
+    println("  pad  ".trim_start().concat("|"));
+    println("abcdef".slice(1, 3));
+    println(Option.unwrap_or("a,b".index_of(","), -1).to_string());
+    println("a\nb".lines().len().to_string());
+    println("ab".repeat(3));
+
+    // `Array.contains` -- the case that proved built-in methods were
+    // claiming a name for one type and denying it to every other.
+    // `xs.contains(2)` reported "Array[Int] != String".
+    let xs = [1, 2, 3];
+    println(xs.contains(2).to_string());
+
+    // `Array.map` has no signature to look up at all: its type depends
+    // on the closure, so the checker builds it by hand.
+    println(xs.map(|n| n * 2).len().to_string());
+
+    // A user struct and a user enum.
+    println(Box { v: 1 }.bump(41).v.to_string());
+    println(Red.name());
+
+    // A generic enum from the prelude.
+    println(Some(7).unwrap_or(0).to_string());
+
+    // `join` was namespaced under `String` until 2026-08-25 despite
+    // taking an `Array[String]`. Under the rule it had to move, and
+    // moving it is what makes this line possible at all.
+    println(["a", "b", "c"].join("-"));
+
+    // `join`'s own cases, moved here from `string_namespaced` when it
+    // was renamed: empty, single, empty separator, and a round trip
+    // against `split`. Both call forms, since both must keep working.
+    println(Array.join(["a", "b", "c"], "-"));
+    println("[".concat(Array.join([], "-")).concat("]"));
+    println(Array.join(["solo"], "-"));
+    println(Array.join(["a", "b"], ""));
+    println(String.split("x,y,z", ",").join(","))
+}

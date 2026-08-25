@@ -35,15 +35,11 @@ let main (): Unit = {
     // Argument order matters and is easy to get backwards in a
     // wrapper, so the results are printed too, not just compared.
     println(String.replace("one two one", "one", "1"));
-    println(String.split("a::b::c", "::").to_string());
+    println(String.split("a::b::c", "::").to_string())
 
-    // `String.join` had NEITHER form before: there was no way to join
-    // an array of strings with a separator at all.
-    println(String.join(["a", "b", "c"], "-"));
-    println("[".concat(String.join([], "-")).concat("]"));
-    println(String.join(["solo"], "-"));
-    println(String.join(["a", "b"], ""));
-
-    // Round trip against its inverse.
-    println(String.join(String.split("x,y,z", ","), ","))
+    // `join` lived here until 2026-08-25, when it moved to `Array.`
+    // (it takes an `Array[String]`). Its cases moved to
+    // `namespaced_methods`, which the interpreter cannot run -- keeping
+    // them here would have cost the oracle its coverage of everything
+    // else in this file.
 }
