@@ -1,0 +1,23 @@
+// Aggregate literals built entirely from literals, inside a loop. They
+// are the same bytes every iteration, so they are emitted once as
+// module-level cells with an immortal refcount and never allocated at
+// all.
+//
+// Three shapes that used to cost an allocation apiece per iteration: an
+// array, a struct, and a nullary variant -- the last being the one that
+// matters most in practice, because `None` and its kind appear in loops
+// everywhere.
+//
+// One allocation total, and it is the string `main` prints.
+enum Maybe { Nothing, Just(Int) }
+struct Point { x: Int, y: Int }
+
+let go (acc: Int) (n: Int): Int =
+    if n <= 0 { acc }
+    else {
+        go(acc + Array.fold([1, 2, 3], 0, |a, v| a + v)
+             + Point { x: 1, y: 2 }.y
+             + match Nothing { Nothing => 0, Just(k) => k }, n - 1)
+    }
+
+let main (): Unit = println(go(0, 1000).to_string())

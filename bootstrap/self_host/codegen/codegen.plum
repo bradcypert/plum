@@ -505,6 +505,127 @@ let cg_str_constant (n: Int) (s: String): String = {
         .concat(bytes.to_string()).concat(", [").concat(arr.to_string()).concat(" x i8] c\"").concat(cg_escape_llvm(s)).concat("\\00\" }\n")
 }
 
+// --- Constant aggregates ---
+//
+// An array, struct or variant literal built entirely from literals is
+// the same cell every time it is evaluated, so it is emitted ONCE as a
+// module-level cell with an immortal refcount instead of allocated at
+// each evaluation. `[1, 2, 3]` inside a loop body was costing an
+// allocation per iteration for bytes that never changed.
+//
+// The same -1 sentinel string literals have always used, and safe for
+// the same reason, now checked against four in-place paths rather than
+// one: `@plum_reuse_ok`, `@plum_array_reuse`, `@plum_str_concat_reuse`
+// and `@plum_array_push_grow` all test `rc == 1` exactly, so a negative
+// count declines every one and a static cell is never written through.
+// `@plum_rc_inc` and every generated release skip negative counts too,
+// so it is never retained and never freed -- which is also why its
+// children never need releasing: they are static themselves.
+//
+// This is hoisting, not reuse. There is no cell to recycle because
+// none is ever allocated.
+struct ConstVal { ty: String, val: String, globals: String, n: Int }
+struct ConstList { tys: Array[String], vals: Array[String], globals: String, n: Int }
+
+let cg_const_of (p: CgProgram) (n: Int) (e: typecheck.TExpr): Option[ConstVal] =
+    match e.node {
+        TInt(v) => Some(ConstVal { ty: "i64", val: v.to_string(), globals: "", n: n }),
+        TFloat(v) => Some(ConstVal { ty: "double", val: cg_float_text(v), globals: "", n: n }),
+        TBool(v) => Some(ConstVal { ty: "i1", val: if v { "1" } else { "0" }, globals: "", n: n }),
+        // A string literal is ALREADY a static cell, so nesting one
+        // inside a constant aggregate costs nothing but its pointer.
+        TStr(v) => Some(ConstVal { ty: "ptr", val: "@.str".concat(n.to_string()), globals: cg_str_constant(n, v), n: n + 2 }),
+        TArrayLit(xs) => cg_const_array(p, n, xs),
+        TStructLit(sname, fs, sp) => match sp { Some(_) => None, None => cg_const_struct(p, n, fs) },
+        // A literal that the last-use pass offered a reuse candidate is
+        // still a literal. Hoisting beats recycling: no allocation, and
+        // no runtime check either.
+        TStructReuse(_, fs, _) => cg_const_struct(p, n, fs),
+        TVariantNew(tag, args) => cg_const_variant(p, n, tag, args),
+        TVariantReuse(tag, args, _) => cg_const_variant(p, n, tag, args),
+        _ => None,
+    }
+
+let cg_const_list (p: CgProgram) (xs: Array[typecheck.TExpr]) (i: Int) (acc: ConstList): Option[ConstList] =
+    if i >= xs.len() { Some(acc) }
+    else {
+        match cg_const_of(p, acc.n, xs[i]) {
+            None => None,
+            Some(c) => cg_const_list(p, xs, i + 1,
+                ConstList { tys: acc.tys.push(c.ty), vals: acc.vals.push(c.val), globals: acc.globals.concat(c.globals), n: c.n }),
+        }
+    }
+
+let cg_const_empty (n: Int): ConstList = ConstList { tys: [], vals: [], globals: "", n: n }
+
+// Cells are eight bytes per slot whatever the slot holds, which every
+// offset rule in this backend depends on. An `i1` is the only
+// representation narrower than that, so it is the only one that needs
+// padding written out -- and the struct is PACKED, because otherwise
+// LLVM lays out `<{ i64, i1, i1 }>` at offsets 0, 8, 9 and every
+// `cg_field_offset` reading it would be wrong.
+let cg_const_slot_ty (t: String): String = if t == "i1" { "i1, [7 x i8]" } else { t }
+
+let cg_const_slot_val (t: String) (v: String): String =
+    if t == "i1" { "i1 ".concat(v).concat(", [7 x i8] zeroinitializer") } else { t.concat(" ").concat(v) }
+
+let cg_const_tys (tys: Array[String]) (i: Int) (acc: String): String =
+    if i >= tys.len() { acc } else { cg_const_tys(tys, i + 1, acc.concat(", ").concat(cg_const_slot_ty(tys[i]))) }
+
+let cg_const_vals (tys: Array[String]) (vals: Array[String]) (i: Int) (acc: String): String =
+    if i >= tys.len() { acc } else { cg_const_vals(tys, vals, i + 1, acc.concat(", ").concat(cg_const_slot_val(tys[i], vals[i]))) }
+
+let cg_const_cell (c: ConstList) (head_ty: String) (head_val: String) (pad: Int): ConstVal = {
+    let g = "@.const".concat(c.n.to_string());
+    let padding = if pad > 0 { ", [".concat(pad.to_string()).concat(" x i8]") } else { "" };
+    let pad_val = if pad > 0 { ", [".concat(pad.to_string()).concat(" x i8] zeroinitializer") } else { "" };
+    ConstVal { ty: "ptr", val: g, n: c.n + 1,
+        globals: c.globals.concat(g).concat(" = private global <{ ").concat(head_ty).concat(cg_const_tys(c.tys, 0, "")).concat(padding).concat(" }> <{ ")
+            .concat(head_val).concat(cg_const_vals(c.tys, c.vals, 0, "")).concat(pad_val).concat(" }>\n") }
+}
+
+let cg_const_array (p: CgProgram) (n: Int) (xs: Array[typecheck.TExpr]): Option[ConstVal] =
+    match cg_const_list(p, xs, 0, cg_const_empty(n)) {
+        None => None,
+        Some(c) => Some(cg_const_cell(c, "i64, i64", "i64 -1, i64 ".concat(xs.len().to_string()), 0)),
+    }
+
+let cg_const_struct (p: CgProgram) (n: Int) (fs: Array[typecheck.TFieldInit]): Option[ConstVal] =
+    match cg_const_list(p, cg_field_values(fs, 0, []), 0, cg_const_empty(n)) {
+        None => None,
+        Some(c) => Some(cg_const_cell(c, "i64", "i64 -1", 0)),
+    }
+
+let cg_field_values (fs: Array[typecheck.TFieldInit]) (i: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
+    if i >= fs.len() { acc } else { cg_field_values(fs, i + 1, acc.push(fs[i].value)) }
+
+// Padded to the enum's FULL cell size, not this variant's. Pattern
+// matching loads a payload BEFORE it has confirmed the tag -- the load
+// is only safe because every enum cell is allocated for the widest
+// variant -- so a short static cell would be read past its end.
+let cg_const_variant (p: CgProgram) (n: Int) (tag: String) (args: Array[typecheck.TExpr]): Option[ConstVal] =
+    match cg_find_variant(p, tag) {
+        None => None,
+        Some(v) => match cg_const_list(p, args, 0, cg_const_empty(n)) {
+            None => None,
+            Some(c) => Some(cg_const_cell(c, "i64, i64", "i64 -1, i64 ".concat(v.tag.to_string()),
+                cg_enum_cell_size(p, cg_enum_of_variant(p, v.name)) - 16 - 8 * args.len())),
+        },
+    }
+
+let cg_const_emit (c: ConstVal) (ty: CgTy): Emit =
+    Emit { code: "", allocas: "", releases: "", globals: c.globals, val: c.val, ty: ty, n: c.n }
+
+// The hoisted cell if the literal is constant, otherwise whatever the
+// ordinary emitter produced. `otherwise` is evaluated either way --
+// these emitters are pure string-builders, so the cost of the unused
+// one is the strings it built, not any effect it had.
+let cg_or_const (p: CgProgram) (n: Int) (e: typecheck.TExpr) (otherwise: Emit): Emit =
+    match cg_const_of(p, n, e) {
+        Some(c) => cg_const_emit(c, otherwise.ty),
+        None => otherwise,
+    }
+
 // --- Expression emission ---
 
 // The backend's single dispatch. Every case reads the node's own TYPE
@@ -544,13 +665,13 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms, cg_ty(p, e)),
         TFor(pattern, lo, hi, body) => cg_for(p, env, n, pattern, lo, hi, body),
         TForArray(pattern, arr, body) => cg_for_array(p, env, n, pattern, arr, body),
-        TArrayLit(elems) => cg_array_lit(p, env, n, elems, cg_ty(p, e)),
+        TArrayLit(elems) => cg_or_const(p, n, e, cg_array_lit(p, env, n, elems, cg_ty(p, e))),
         TIndex(base, idx) => cg_index(p, env, n, base, idx, cg_ty(p, e)),
         TClosure(params, body) => cg_closure(p, env, n, params, body, cg_concrete(p, typecheck.texpr_ty(p.subst, e))),
-        TStructLit(name, fields, spread) => cg_struct_lit(p, env, n, name, fields, spread),
-        TStructReuse(name, fields, cands) => cg_struct_reuse(p, env, n, name, fields, cands),
-        TVariantReuse(tag, args, cands) => cg_variant_reuse(p, env, n, tag, args, cands),
-        TVariantNew(tag, args) => cg_variant_call(p, env, n, tag, args),
+        TStructLit(name, fields, spread) => cg_or_const(p, n, e, cg_struct_lit(p, env, n, name, fields, spread)),
+        TStructReuse(name, fields, cands) => cg_or_const(p, n, e, cg_struct_reuse(p, env, n, name, fields, cands)),
+        TVariantReuse(tag, args, cands) => cg_or_const(p, n, e, cg_variant_reuse(p, env, n, tag, args, cands)),
+        TVariantNew(tag, args) => cg_or_const(p, n, e, cg_variant_call(p, env, n, tag, args)),
         TFnCall(m, name, args, targs) => cg_fn_call(p, env, n, m, name, args, targs, cg_ty(p, e)),
         TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),

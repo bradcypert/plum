@@ -1,0 +1,39 @@
+// Constant literals are emitted as module-level cells, which means
+// their layout is written out by hand rather than produced by the
+// stores every other path uses. Everything that makes that layout
+// non-obvious, in one fixture.
+//
+//   * `Bool` is the only representation narrower than a slot. Cells are
+//     eight bytes per slot whatever they hold, so an `i1` needs seven
+//     bytes of padding written after it and the cell has to be PACKED
+//     -- unpacked, LLVM lays two adjacent `i1`s at offsets 8 and 9 and
+//     every field read is wrong from there on.
+//   * A `String` field is a pointer to a cell that is itself already
+//     static.
+//   * Nested aggregates are pointers to further constants, emitted
+//     before the cell that names them.
+//   * An enum cell is padded to the enum's WIDEST variant, not its own.
+//     Pattern matching loads a payload before confirming the tag, so a
+//     `Nothing` sized for `Nothing` would be read past its end when
+//     matched against the arm for `Pair`.
+struct Flags { on: Bool, off: Bool, count: Int, ratio: Float, label: String }
+struct Nested { flags: Flags, xs: Array[Bool] }
+enum Shape { Nothing, One(Int), Pair(Int, Int) }
+
+let describe (s: Shape): Int = match s { Nothing => 0, One(a) => a, Pair(a, b) => a + b }
+
+let main (): Unit = {
+    let f = Flags { on: true, off: false, count: 42, ratio: 0.5, label: "hi" };
+    let n = Nested { flags: Flags { on: false, off: true, count: 7, ratio: 1.5, label: "x" }, xs: [true, false, true] };
+    println(f.on.to_string()
+        .concat(" ").concat(f.off.to_string())
+        .concat(" ").concat(f.count.to_string())
+        .concat(" ").concat(f.ratio.to_string())
+        .concat(" ").concat(f.label)
+        .concat(" | ").concat(n.flags.count.to_string())
+        .concat(" ").concat(n.flags.off.to_string())
+        .concat(" ").concat(n.xs[2].to_string())
+        .concat(" | ").concat(describe(Nothing).to_string())
+        .concat(" ").concat(describe(One(5)).to_string())
+        .concat(" ").concat(describe(Pair(3, 4)).to_string()))
+}

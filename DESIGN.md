@@ -14831,3 +14831,68 @@ references, and an array or struct LITERAL inside a loop — `[1]` in a
 loop body still allocates per iteration, and unlike a closure its
 contents are not constant in general, so it is a reuse question rather
 than a hoisting one.
+
+## Constant literals are not allocated (2026-08-26)
+
+An array, struct or variant literal built entirely from literals is the
+same cell every time it is evaluated, so it is emitted once as a
+module-level cell with an immortal refcount. A loop body containing
+`[1, 2, 3]`, `Point { x: 1, y: 2 }` and `Nothing` went from 1001
+allocations to **1** — the string `main` prints.
+
+The same -1 sentinel string literals have always used. What is new is
+the number of paths that sentinel now has to survive.
+
+### The safety argument is an audit, not an assertion
+
+A static cell is safe exactly as long as nothing writes through it, and
+four separate paths mutate cells in place today: `@plum_reuse_ok`,
+`@plum_array_reuse`, `@plum_str_concat_reuse` and
+`@plum_array_push_grow`. All four test `rc == 1` **exactly**, so a
+negative count declines every one. `@plum_rc_inc` and `cg_rel_head`
+skip negative counts, so a static cell is never retained and never
+freed — which is also why its children never need releasing: they are
+static themselves.
+
+That audit is the whole justification, and it is fragile in a specific
+way: a fifth in-place path written with `<= 1`, or `!= 0`, would begin
+silently writing through every string literal and hoisted constant in
+the program. It is recorded in MAINTENANCE.md for that reason.
+
+### Writing a cell out by hand is not the same as storing into one
+
+Every other path builds a cell with `store`s, which respect the
+eight-bytes-per-slot rule by construction because `cg_field_offset`
+computes the address. A constant is written as an LLVM aggregate
+initialiser instead, and LLVM lays that out by its own rules.
+
+`Bool` is the only representation narrower than a slot, and two
+adjacent ones are enough to break everything: `{ i64, i1, i1 }` puts
+them at offsets 8 and 9, where the backend expects 8 and 16. So the
+cells are PACKED and every `i1` is followed by an explicit
+`[7 x i8] zeroinitializer`.
+
+An enum constant is padded to the enum's **widest** variant rather than
+its own. Pattern matching loads a payload before it has confirmed the
+tag — that load is only safe because every enum cell is allocated for
+the widest variant — so a `Nothing` sized for `Nothing` would be read
+past its end by the arm for `Pair`. `const_literal_layout` matches a
+narrow constant against a wide arm for exactly this reason.
+
+### It made the compiler smaller
+
+The emitted module went from 200,192 lines to 190,661, nearly 5%,
+because the compiler's own source is full of `None`, `TokEof` and `[]`
+— literals that no longer emit an allocation and a store sequence at
+all. The optimisation pays for itself in the compiler before any user
+program sees it.
+
+### What this is not
+
+Hoisting, not reuse: there is no cell to recycle because none is
+allocated. It does nothing for `[n, n + 1]` or `Point { x: n, y: n }`,
+whose contents differ per evaluation and which still allocate once per
+iteration. Recycling those needs a dead cell of the right shape to be
+in scope, and in a loop that consumes its literal immediately there
+isn't one — which makes it an escape-analysis question rather than a
+last-use one, and a different piece of work from anything done today.

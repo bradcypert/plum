@@ -159,6 +159,22 @@ generations to reach the compiler's own lexer.
 
 ## Traps that have bitten more than once
 
+**A static cell is only safe because every in-place path tests
+`rc == 1` exactly.** There are four -- `@plum_reuse_ok`,
+`@plum_array_reuse`, `@plum_str_concat_reuse`, `@plum_array_push_grow`
+-- and a fifth that tested `<= 1`, or `!= 0`, would silently start
+writing through string literals, hoisted constants and capture-free
+closures. Check that property before adding one. `plum_rc_inc` and
+`cg_rel_head` skip negative counts, which is the other half.
+
+**Constant cells are written out BY HAND, so their layout is not the
+one the stores produce.** Eight bytes per slot means an `i1` needs seven
+bytes of padding after it and the cell must be PACKED -- unpacked, LLVM
+lays two adjacent `i1`s at offsets 8 and 9 and every `cg_field_offset`
+reading them is wrong. An enum constant pads to the enum's WIDEST
+variant, because pattern matching loads a payload before confirming the
+tag. `const_literal_layout` covers both.
+
 **Closures capture free variables, and the scan must account for the
 closure's OWN parameters.** `cg_used_captures` asks `cg_reads_max`
 whether the body reads each enclosing slot, but that function applies
