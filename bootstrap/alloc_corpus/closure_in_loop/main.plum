@@ -1,0 +1,14 @@
+// A closure literal inside a loop. `|v| v + 1` captures nothing, so it
+// is the same three words -- refcount, code pointer, release pointer --
+// every time it is evaluated, and is emitted once as a module-level
+// constant with an immortal (-1) refcount rather than allocated per
+// iteration.
+//
+// This is not reuse. There is no cell to recycle; the allocation simply
+// never happens. Together with `Array.map` recycling its source, the
+// whole thousand-iteration chain costs two allocations: one array cell
+// and the string `main` prints.
+let go (xs: Array[Int]) (n: Int): Array[Int] =
+    if n <= 0 { xs } else { go(Array.map(xs, |v| v + 1), n - 1) }
+
+let main (): Unit = println(go([1, 2, 3, 4, 5], 1000).len().to_string())

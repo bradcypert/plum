@@ -2,11 +2,12 @@
 // Each iteration's source is dead the moment the next result exists, so
 // the whole chain runs in ONE array cell instead of a thousand.
 //
-// The count is not 2, and the remainder is not array cells: `array=1`
-// in the runtime stats is the whole story for arrays. What is left is
-// one closure cell per iteration, because `|v| v + 1` is a literal
-// inside the loop body. That is a separate piece of work and a separate
-// mechanism; this fixture holds the array number still while it waits.
+// This fixture and `closure_in_loop` are now the same program, and
+// deliberately so: they were split when the count here was 1002,
+// because the array cells were fixed and the thousand closure cells
+// were not. Both numbers are 2 now. They are kept apart because they
+// fail apart -- one regresses if array reuse breaks, the other if
+// capture-free closures stop being constants.
 let go (xs: Array[Int]) (n: Int): Array[Int] =
     if n <= 0 { xs } else { go(Array.map(xs, |v| v + 1), n - 1) }
 

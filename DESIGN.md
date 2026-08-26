@@ -14753,3 +14753,81 @@ is not a reuse problem at all: a closure that captures nothing is the
 same cell every time and should be a module-level constant with an
 immortal refcount, which the runtime already understands —
 `plum_rc_inc` skips any cell whose count is negative.
+
+## Capture-free closures are constants (2026-08-26)
+
+`Array.map(xs, |v| v + 1)` in a thousand-iteration loop went from 2002
+allocations to **2** — one array cell and the string `main` prints. The
+closure cells are not recycled; they are never allocated.
+
+A closure cell is `{ i64 rc, ptr code, ptr rel, captures... }`. With no
+captures that is the same three words every time the literal is
+evaluated, so it is emitted once as a module-level `private constant`
+with a refcount of **-1** — this runtime's existing spelling of
+"immortal". `@plum_rc_inc` and `@plum_rel_closure` both check for a
+negative count and return without touching the cell, so nothing ever
+writes to it and `constant` is accurate rather than merely convenient.
+
+### The prerequisite was reversing a deliberate decision
+
+This could not work as the backend stood, because captures were **the
+whole enclosing environment**, not the free variables. A closure inside
+any function with locals captured them all, so no cell was ever three
+words. That was deliberate, and the comment explaining it named the
+reason: computing free variables needs a shadowing-aware scan, and that
+analysis is what produced a crash-causing bug in `plum-ir/src/fbip.rs`
+earlier in this project.
+
+What changed is that the scan no longer has to be written.
+`cg_reads_max` already answers "does this body read `name`", shadowing
+and all — it is the same function the move and reuse analyses depend
+on, and it handles nested closures and rebinding patterns because it had
+to for those.
+
+The other half of the argument is the failure mode. Dropping a capture
+the body genuinely reads leaves the name out of `inner_env`, and
+`cg_ident` fails the compile with "unbound variable reached codegen".
+It cannot produce a program that runs and is wrong. That asymmetry is
+what makes the analysis worth doing here where it was not worth it in
+the Rust backend.
+
+It also shrank the emitted module: 203,850 lines to 200,192, because
+every closure now carries only what it uses.
+
+### The one direction that IS silent
+
+Keeping an outer binding where an inner one shadows it computes a wrong
+number with no error at all. `cg_reads_max` applies the
+parameter-shadowing rule when it walks a `TClosure` itself, but asked
+about a bare body it never sees the parameters — so `|x| x * 10` kept
+capturing an enclosing `x` it never reads. `cg_used_captures` has to
+check the parameters first. `closure_capture_shadowing` covers four
+ways a name can look free and not be: a parameter, a `let`, a match arm
+binder, and a nested closure reaching two levels out.
+
+### Known imprecision, deliberately left
+
+A name shadowed by a `let` *inside* the body is still captured.
+`cg_reads_max` computes a block's tail before walking its statements, so
+by the time it reaches the shadowing `let` the tail's mentions are
+already counted. It over-reports, which costs one captured word and
+never a wrong answer. Sharpening it would loosen the move and reuse
+analyses at the same time, and those are the ones where imprecision is
+dangerous rather than merely wasteful.
+
+### Where the memory model stands
+
+| shape | allocations per 1000 iterations |
+|---|---|
+| struct rebuild, scalar or `String` fields | 2 |
+| enum rebuild, scalar payload | 2 |
+| enum rebuild, `String` payload | 1 |
+| `Array.map` chain with a closure literal | 2 |
+| `Array.push` accumulation | 10 (amortised doubling) |
+| `String.concat` accumulation | 65 (amortised doubling) |
+
+What remains: `Array.filter`, mapping an array whose elements are
+references, and an array or struct LITERAL inside a loop — `[1]` in a
+loop body still allocates per iteration, and unlike a closure its
+contents are not constant in general, so it is a reuse question rather
+than a hoisting one.

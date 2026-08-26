@@ -1,0 +1,36 @@
+// Closures capture their FREE variables, which means deciding what is
+// free -- and getting shadowing wrong here is what crashed the old
+// Rust `fbip.rs`. Four ways a name can look captured and not be, or
+// look free and not be:
+//
+//   1. A parameter with the same name as an outer local. `|x| x * 10`
+//      must use its own `x`, not the enclosing 2.
+//   2. A `let` inside the body rebinding the name after a real use of
+//      the outer one.
+//   3. A match arm binding the name.
+//   4. A nested closure reaching past its immediate parent, which the
+//      middle closure therefore has to capture even though its own body
+//      never mentions it directly.
+//
+// Dropping a capture that is genuinely needed is a compile error
+// ("unbound variable reached codegen"), not a wrong answer -- so the
+// failure this fixture guards against is the opposite one: keeping the
+// OUTER binding where an inner one shadows it, which silently computes
+// the wrong number.
+enum Wrap { Plain, Held(Int) }
+
+let apply (f: (Int) -> Int) (v: Int): Int = f(v)
+
+let main (): Unit = {
+    let x = 2;
+    let shadowed_param = apply(|x| x * 10, 7);
+    let shadowed_let = apply(|v| { let x = 100; x + v }, 5);
+    let shadowed_match = apply(|v| match Held(50) { Plain => x, Held(x) => x + v }, 5);
+    let captured = apply(|v| v + x, 1);
+    let nested = apply(|v| apply(|w| w + x, v), 10);
+    println(shadowed_param.to_string()
+        .concat(" ").concat(shadowed_let.to_string())
+        .concat(" ").concat(shadowed_match.to_string())
+        .concat(" ").concat(captured.to_string())
+        .concat(" ").concat(nested.to_string()))
+}

@@ -2426,12 +2426,27 @@ let cg_channel_recv (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.
 // one loads the code pointer and passes the cell itself back in as the
 // first argument, so the lifted function can read its own captures.
 //
-// **Captures are the WHOLE enclosing environment**, not the closure's
-// free variables. Computing free variables means a shadowing-aware scan
-// of the body — the exact analysis that produced a real, crash-causing
-// bug in `plum-ir/src/fbip.rs` earlier in this project when it got
-// shadowing wrong. Capturing everything is trivially correct instead,
-// and costs one word per in-scope local at the creation site.
+// **Captures are the free variables**, which they were not until
+// 2026-08-26: this used to snapshot the WHOLE enclosing environment,
+// on the grounds that computing free variables means a shadowing-aware
+// scan of the body, and that analysis is what produced a real,
+// crash-causing bug in `plum-ir/src/fbip.rs` earlier in this project.
+//
+// What changed is that the scan no longer has to be written. The
+// question "does this body read `name`" is exactly what `cg_reads_max`
+// answers, shadowing and all -- it is the same function the move and
+// reuse analyses depend on, and it handles a nested closure's captures
+// and a pattern that rebinds the name because they had to be handled
+// for those.
+//
+// Being WRONG here is loud rather than silent: a capture dropped that
+// the body actually reads is a name missing from `inner_env`, and
+// `cg_ident` fails the compile with "unbound variable reached codegen"
+// rather than emitting something that runs. That is the property that
+// makes this worth doing where the Rust version was not.
+//
+// It also makes a closure that captures nothing a CONSTANT — see the
+// end of this function.
 //
 // Captures are by VALUE, snapshotted at the literal's own creation
 // site — matching real Plum semantics and the self-hosted interpreter's
@@ -2450,10 +2465,11 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
     // The lifted function's body is emitted against a FRESH environment
     // built from the captures and parameters, never the creation site's
     // slots directly — those are `alloca`s in a different function.
-    let inner_env = cg_closure_inner_env(env, params, param_tys, param_itys, 0, []);
+    let used = cg_used_captures(env, params, body, 0, []);
+    let inner_env = cg_closure_inner_env(used, params, param_tys, param_itys, 0, []);
     let inner = cg_expr(p, inner_env, n + 1, body);
     let lifted = "define ".concat(cg_llvm_ty(inner.ty)).concat(" ").concat(fn_name).concat("(ptr %env").concat(cg_closure_param_decls(param_tys, 0, "")).concat(") {\nentry:\n")
-        .concat(cg_capture_loads(env, 0, ""))
+        .concat(cg_capture_loads(used, 0, ""))
         .concat(cg_closure_param_slots(param_tys, 0, ""))
         .concat(inner.allocas)
         .concat(inner.code)
@@ -2478,21 +2494,64 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
         .concat(cg_closure_param_releases(param_itys, 0, ""))
         .concat("  ret ").concat(cg_llvm_ty(inner.ty)).concat(" ").concat(inner.val).concat("\n}\n\n");
     let cell = cg_reg(inner.n);
-    let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((24 + 8 * env.len()).to_string()).concat(")\n")
+    let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((24 + 8 * used.len()).to_string()).concat(")\n")
         .concat("  ").concat(cell).concat("_c = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_closure_code_offset(()).to_string()).concat("\n")
         .concat("  store ptr ").concat(fn_name).concat(", ptr ").concat(cell).concat("_c\n")
         .concat("  ").concat(cell).concat("_r = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_closure_rel_offset(()).to_string()).concat("\n")
         .concat("  store ptr ").concat(fn_name).concat("_rel, ptr ").concat(cell).concat("_r\n");
-    let caps = cg_capture_stores(env, 0, cell, inner.n + 1, "");
+    let caps = cg_capture_stores(used, 0, cell, inner.n + 1, "");
     // The companion release function walks exactly the captures this
     // literal took, by name and type, and is emitted alongside the
     // lifted function itself — the two are generated together because
     // only here is it known what was captured.
     let rel_fn = "define void ".concat(fn_name).concat("_rel(ptr %p) {\nentry:\n")
-        .concat(cg_capture_releases(env, 0, ""))
+        .concat(cg_capture_releases(used, 0, ""))
         .concat("  ret void\n}\n\n");
-    Emit { code: head.concat(caps.code), allocas: "", releases: "", globals: inner.globals.concat(lifted).concat(rel_fn), val: cell, ty: fn_ty, n: caps.n }
+    // A closure that captured NOTHING is the same three words every
+    // time it is evaluated -- refcount, code pointer, release pointer --
+    // so it is emitted once, as a module-level constant, and the
+    // literal costs no allocation at all. `|v| v + 1` inside a loop was
+    // allocating a cell per iteration for a value that never differed.
+    //
+    // The refcount is -1, which is this runtime's existing spelling of
+    // "immortal": `@plum_rc_inc` and `@plum_rel_closure` both check for
+    // a negative count and return without touching it. Nothing ever
+    // writes to the cell, which is what makes `constant` accurate
+    // rather than merely convenient -- and the companion `_rel` is
+    // still emitted, because the initialiser names it, even though the
+    // path that would call it is unreachable for a cell that never
+    // dies.
+    //
+    // This is not reuse. Reuse recycles a cell; this one is never
+    // allocated.
+    if cg_rc_enabled(()) && Array.is_empty(used) {
+        let g = fn_name.concat("_cell");
+        Emit { code: "", allocas: "", releases: "",
+            globals: inner.globals.concat(lifted).concat(rel_fn)
+                .concat(g).concat(" = private constant { i64, ptr, ptr } { i64 -1, ptr ")
+                .concat(fn_name).concat(", ptr ").concat(fn_name).concat("_rel }\n\n"),
+            val: g, ty: fn_ty, n: inner.n }
+    } else {
+        Emit { code: head.concat(caps.code), allocas: "", releases: "", globals: inner.globals.concat(lifted).concat(rel_fn), val: cell, ty: fn_ty, n: caps.n }
+    }
 }
+
+// The enclosing slots this body actually reads. `cg_reads_max` is
+// asked only whether the count is nonzero, so its cap at 2 is
+// irrelevant; what matters is that a zero is trustworthy, which is the
+// same property the move analysis already relies on.
+// The closure's OWN parameters are checked first, because a parameter
+// shadowing an enclosing local means the body's mentions of that name
+// are not references to the local at all. `cg_reads_max` applies this
+// rule itself when it walks a nested `TClosure`; asking it about a bare
+// body skips the step, which kept `|x| x * 10` capturing an outer `x`
+// it never reads.
+let cg_used_captures (env: Array[CgSlot]) (params: Array[String]) (body: typecheck.TExpr) (i: Int) (acc: Array[CgSlot]): Array[CgSlot] =
+    if i >= env.len() { acc }
+    else {
+        cg_used_captures(env, params, body, i + 1,
+            if !cg_params_shadow(params, env[i].name, 0) && cg_reads_max(env[i].name, body) > 0 { acc.push(env[i]) } else { acc })
+    }
 
 let cg_closure_ret (t: CgTy): CgTy =
     match t { CgClosure(_, ret) => ret, _ => { cg_fail("expected a closure, found ".concat(cg_ty_name(t))); CgUnit } }

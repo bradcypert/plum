@@ -159,6 +159,16 @@ generations to reach the compiler's own lexer.
 
 ## Traps that have bitten more than once
 
+**Closures capture free variables, and the scan must account for the
+closure's OWN parameters.** `cg_used_captures` asks `cg_reads_max`
+whether the body reads each enclosing slot, but that function applies
+the parameter-shadowing rule only when IT walks a `TClosure`; asked
+about a bare body it skips the step, and `|x| x * 10` kept capturing an
+outer `x`. Dropping a capture that is needed fails the compile loudly
+("unbound variable reached codegen"); KEEPING an outer binding that an
+inner one shadows computes the wrong number silently, which is what
+`closure_capture_shadowing` is for.
+
 **Two analyses now move values out of slots.**
 `cg_movable_params` hands a slot's reference to a `concat`; the
 last-use pass (`lv_*`) hands one to `@plum_alloc_reuse`. A slot moved

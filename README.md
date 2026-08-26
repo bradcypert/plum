@@ -927,13 +927,18 @@ under `.push()` and `Array.map`, and to strings under `.concat()`. It
 does not apply to `Array.filter`, or to mapping an array whose elements
 are themselves references.
 
-Nothing about this is visible in the source: it is a runtime check on
+A closure literal that captures nothing is not allocated at all — it is
+the same three words every time, so it becomes a module-level constant.
+`Array.map(xs, |v| v + 1)` in a thousand-iteration loop allocates twice
+in total.
+
+Nothing about this is visible in the source: reuse is a runtime check on
 whether anything else can see the value, so it is never wrong, only
 sometimes unavailable.
 
-What is actually checked, rather than claimed: 70 corpus fixtures under
+What is actually checked, rather than claimed: 71 corpus fixtures under
 AddressSanitizer with leak detection, 102 lexer/parser goldens, 11
-property tests, recorded allocation counts for eight memory-model
+property tests, recorded allocation counts for nine memory-model
 fixtures, every project in `examples/` against its recorded output, and
 a real language-server session — on Linux x86_64 and arm64, macOS, and
 Windows. Running `./bootstrap/` is the honest answer to "what works";
