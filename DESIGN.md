@@ -14309,3 +14309,51 @@ predated it — so the new compiler's own `is_ident_char`, compiled by
 the old one, was still broken. The fix only reached the code that
 needed it a generation later. This is the same rule prelude changes
 follow, arriving from a direction that does not look like the prelude.
+
+## Ordered comparison needs an ordered type (2026-08-26)
+
+`<`, `<=`, `>` and `>=` are now rejected by the checker for every type
+except `Int`, `Float` and `String`.
+
+They were previously accepted for ANY type and passed straight through
+to the generic binary emitter, which produced `icmp slt` on whatever
+representation the operands had. For anything heap-allocated that is a
+comparison of ADDRESSES. The result was not so much wrong as
+incoherent:
+
+    [1] < [2]   was true
+    [2] < [1]   was ALSO true
+
+No ordering satisfies both. `Bool` had its own version: `icmp slt` on
+an `i1`, where `true` is -1 signed, so `true < false` came out true and
+`false < true` came out false — backwards from any convention anyone
+would pick.
+
+Found immediately after fixing the same bug one level down, where
+ordered comparison of STRINGS compared addresses too. The connection is
+the point: **the checker had no notion of which types are comparable**,
+so nothing ever asked the question, and both bugs lived in the same
+unasked question. Fixing the String case without fixing this would have
+left every sibling in place.
+
+### Rejecting rather than defining
+
+Arrays could be ordered lexicographically and structs by field order.
+Both are defensible; enums have no obvious answer at all. That is a
+language design decision, nothing needs it today, and rejecting is the
+direction that can be reversed later — a program that gets a compile
+error can be fixed, while a program that has been silently given the
+wrong answer for a year cannot.
+
+`ITVar` and `ITParam` are allowed through. This checker has no bounds
+(its own documented v1 cut), so a `T` cannot be known to be ordered or
+not, and rejecting every one would reject correct generic code to catch
+a case nothing writes.
+
+### What it cost to verify
+
+Nothing in the compiler's own 14k lines had to change, which is itself
+evidence: no legitimate use of ordered comparison on an unordered type
+existed. `bootstrap/typecheck_corpus/unordered_comparison` pins the
+rejection, and `test_string_ordering` in `bootstrap/properties` pins
+the three types that DO compare, including the literal cases.

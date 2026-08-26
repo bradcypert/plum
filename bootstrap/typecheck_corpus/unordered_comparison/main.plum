@@ -1,0 +1,25 @@
+// `<`, `<=`, `>` and `>=` need an ORDER, and only `Int`, `Float` and
+// `String` have one. Anything else must be REJECTED by the checker.
+//
+// Nothing checked this until 2026-08-26, so every other type reached
+// codegen and got whatever the generic emitter did with it: a
+// comparison of ADDRESSES for anything heap-allocated. It was not a
+// wrong answer so much as an incoherent one --
+//
+//     [1] < [2]   was true
+//     [2] < [1]   was ALSO true
+//
+// -- which no ordering can satisfy. `Bool` had its own flavour:
+// `icmp slt` on an `i1`, where `true` is -1 signed, so `true < false`
+// came out true.
+//
+// Found while fixing the same bug one level down: ordered comparison
+// of STRINGS compared addresses too, and the checker having no notion
+// of which types are comparable is why nobody had ever asked the
+// question.
+
+struct P { x: Int }
+
+let main (): Unit = {
+    println(([1] < [2]).to_string());
+}

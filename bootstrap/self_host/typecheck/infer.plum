@@ -697,6 +697,7 @@ let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (o
     };
     let operand_ty = subst_apply(combined, lr.ty);
     reject_function_equality(p2, op, operand_ty);
+    reject_unordered_comparison(op, operand_ty);
     ir_leaf(binary_result_ty(op, operand_ty), combined, rr.state, TBinary(op, lr.texpr, rr.texpr))
 }
 
@@ -708,6 +709,47 @@ let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (o
 // for a struct with a closure FIELD, they disagreed outright (a runtime
 // error under the interpreter, `true` under native codegen, for two
 // different closures).
+// `<`, `<=`, `>` and `>=` need an ORDER, and only `Int`, `Float` and
+// `String` have one.
+//
+// Nothing checked this before, so every other type reached codegen and
+// got whatever the generic emitter did with it -- a comparison of
+// ADDRESSES for anything heap-allocated, and a signed comparison of an
+// `i1` for `Bool`, where `true` is -1 and `true < false` came out
+// true. `[1] < [2]` and `[2] < [1]` were BOTH true at once, which no
+// ordering can satisfy; that is the shape of the whole class.
+//
+// Rejecting rather than DEFINING an ordering for aggregates is
+// deliberate. Lexicographic for arrays and field-order for structs
+// would both be defensible, and enums have no obvious answer at all --
+// that is a language design decision, and nothing needs it. Rejecting
+// can be relaxed later; the reverse cannot.
+//
+// An unresolved type variable is ALLOWED through. This checker has no
+// bounds (its own documented v1 cut), so a `T` cannot be known to be
+// ordered or not, and rejecting every one would reject correct generic
+// code to catch a case nothing writes. The concrete types are where
+// the bugs were.
+let reject_unordered_comparison (op: parser.BOp) (t: ITy): Unit =
+    if is_ordered_op(op) && is_known_unordered(t) {
+        fail_tc("'".concat(op_name(op)).concat("' needs an ordered type -- Int, Float or String -- but got ").concat(render_ty(t)))
+    } else { () }
+
+let is_ordered_op (op: parser.BOp): Bool =
+    match op { BLt => true, BLe => true, BGt => true, BGe => true, _ => false }
+
+// True only when the type is KNOWN and known not to be ordered. A type
+// variable answers false: unknown is not the same as unordered.
+let is_known_unordered (t: ITy): Bool =
+    match t {
+        ITInt => false,
+        ITFloat => false,
+        ITStr => false,
+        ITVar(_) => false,
+        ITParam(_) => false,
+        _ => true,
+    }
+
 let reject_function_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
     match op {
         BEq => reject_if_functional(p2, "==", t),

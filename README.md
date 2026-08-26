@@ -348,6 +348,14 @@ Both `Float`-to-`Int` conversions are saturating, never undefined
 behavior — `NaN` becomes `0`, and a value outside `Int`'s range becomes
 whichever bound it overshot.
 
+**`==` works on anything; `<`, `<=`, `>` and `>=` need an ordered
+type.** Equality is structural — arrays, structs, enums and their
+payloads, all the way down. Ordering is defined for `Int`, `Float` and
+`String` only, and comparing anything else is a compile error naming
+the type. Arrays and structs could be given a lexicographic order and
+deliberately have not been: nothing needs it, enums have no obvious
+answer, and rejecting can be relaxed later while the reverse cannot.
+
 ### Algebraic data types and pattern matching
 
 ```
