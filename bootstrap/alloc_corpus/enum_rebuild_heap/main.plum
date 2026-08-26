@@ -1,0 +1,15 @@
+// `enum_rebuild`, but the payload is a String -- which used to be the
+// difference between 2 allocations and 1002, exactly as one String
+// field was for `struct_update_heap`.
+//
+// The cell's children are dropped by a generated companion function
+// rather than inline, because which children an enum cell has depends
+// on its runtime tag. One allocation: the first `Named`. No string is
+// allocated after it either, since the same literal is stored back.
+enum Label { Empty, Named(String) }
+
+let bump (c: Label) (n: Int): Label =
+    if n <= 0 { c }
+    else { bump(match c { Empty => Named("x"), Named(s) => Named(s) }, n - 1) }
+
+let main (): Unit = println(match bump(Empty, 1000) { Empty => "e", Named(s) => s })

@@ -176,15 +176,18 @@ whose in-place growth depends on it. Narrowing the set to String-shaped
 parameters took `array_push` from 10 allocations to 1002 and nothing
 failed; only `alloc-check` noticed.
 
-**Each reuse path decides its own drop.** A struct's children are
-dropped inline under the `rc == 1` branch, because its layout is fixed.
-An enum's are not dropped at all, which is why enums holding references
-are refused: which children a cell has depends on its runtime tag.
-`@plum_array_reuse` deliberately does NOT release the source when it
-declines, because the caller is about to read it -- the caller compares
-pointers and releases only when they differ. Four exec fixtures hold
-these apart (`reuse_aliased`, `reuse_heap_fields`, `reuse_replaced_field`,
-`reuse_array_aliased`); each fails a different way, none is redundant.
+**Each reuse path decides its own drop, and they are not
+interchangeable.** A struct's children are dropped INLINE under the
+`rc == 1` branch, because its layout is fixed. An enum's are dropped by
+a generated companion (`cg_emit_relc_fn`), because which children a
+cell has depends on its runtime tag -- inlining that switch at every
+reuse site is what the companion exists to avoid. `@plum_array_reuse`
+deliberately does NOT release the source when it declines, because the
+caller is about to read it; the caller compares pointers and releases
+only when they differ. Six exec fixtures hold these apart
+(`reuse_aliased`, `reuse_heap_fields`, `reuse_replaced_field`,
+`reuse_array_aliased`, `reuse_enum_payload`, `reuse_enum_aliased`);
+each fails a different way, none is redundant.
 
 **Duplicate `declare`.** A symbol belongs in the runtime's declare list
 OR in a user `extern` block, never both. LLVM rejects the second one.

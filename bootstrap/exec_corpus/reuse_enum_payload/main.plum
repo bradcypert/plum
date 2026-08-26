@@ -1,0 +1,34 @@
+// An enum cell holding references, recycled across variants that hold
+// DIFFERENT things. Three hazards in one fixture:
+//
+//   1. A payload replaced rather than copied -- `Text(s.concat("!"))`
+//      builds a new string and the old one must be dropped as the cell
+//      is reused, or it leaks.
+//   2. The tag CHANGING to a variant with a different payload shape.
+//      Going to `Blank` leaves the old payload word in place, now a
+//      dangling pointer. Nothing may ever read it: a payload is only
+//      loaded under a matching tag, and the tag says `Blank`.
+//   3. Going from `Blank` back to a payload variant, writing a slot
+//      whose previous contents were already dropped.
+//
+// Dropping the children of an enum cell means switching on its OLD tag,
+// which is why this delegates to a generated companion rather than
+// inlining the walk. Get the switch wrong and the wrong payload is
+// released -- ASan reports a bad free rather than a leak.
+enum Note { Blank, Text(String), Count(Int) }
+
+let step (v: Note) (n: Int): Note =
+    if n <= 0 { v }
+    else {
+        step(match v {
+            Blank => Text("a"),
+            Text(s) => if s.len() > 3 { Count(s.len()) } else { Text(s.concat("!")) },
+            Count(k) => Blank,
+        }, n - 1)
+    }
+
+let main (): Unit = println(match step(Blank, 25) {
+    Blank => "blank",
+    Text(s) => s,
+    Count(k) => k.to_string(),
+})

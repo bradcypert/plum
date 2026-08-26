@@ -1,0 +1,17 @@
+// The same guard as `reuse_aliased`, for an enum cell that owns a
+// String. `relabel`'s parameter is dead after the literal, so its cell
+// is offered for reuse -- but the caller still holds it, the refcount
+// is 2, and the runtime declines.
+//
+// If it did not, dropping the old cell's children would free a string
+// the caller can still see, and printing `a` afterwards would be a
+// use-after-free rather than "a b".
+enum Tag { Off, On(String) }
+
+let relabel (t: Tag): Tag = match t { Off => On("b"), On(_) => On("b") }
+
+let main (): Unit = {
+    let a = On("a");
+    let b = relabel(a);
+    println(match a { Off => "off", On(s) => s }.concat(" ").concat(match b { Off => "off", On(s) => s }))
+}

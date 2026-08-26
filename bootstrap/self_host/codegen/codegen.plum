@@ -2992,15 +2992,22 @@ let cg_struct_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) 
 // answers are type-correct. That is what making the runtime helper a
 // PREDICATE rather than an allocator bought.
 //
-// Enums must still be free of references, for a reason that does not
-// apply to structs: which children an enum cell holds depends on its
-// runtime TAG, so dropping them inline would mean emitting the whole
-// tag switch at every reuse site. A struct's layout is fixed and its
-// drops are three instructions per heap field.
+// Structs and enums both qualify whether or not they hold references;
+// they differ only in HOW the old children are dropped. A struct's
+// layout is fixed, so its drops are emitted inline -- three
+// instructions per heap field, at the sites that actually reuse. An
+// enum's depend on its runtime TAG, so it delegates to a generated
+// companion (`cg_emit_relc_fn`) rather than inlining a whole switch
+// everywhere.
 //
 // Arrays are excluded outright -- an array cell carries a length and a
 // capacity as well as its elements, none of which this contract covers.
-struct ReuseCand { slot: CgSlot, children: Array[typecheck.ITy], bytes: Int }
+// `children` are dropped INLINE on the reuse path; `drop_sym`, when it
+// is not empty, names a generated function that does the dropping
+// instead. Exactly one of the two is ever non-empty -- structs use the
+// first because their layout is fixed, enums the second because theirs
+// depends on a runtime tag.
+struct ReuseCand { slot: CgSlot, children: Array[typecheck.ITy], drop_sym: String, bytes: Int }
 
 let cg_first_reuse_cand (p: CgProgram) (env: Array[CgSlot]) (cands: Array[String]) (i: Int) (want: Int): Option[ReuseCand] =
     if i >= cands.len() { None }
@@ -3034,33 +3041,21 @@ let cg_reuse_of_ity (p: CgProgram) (slot: CgSlot) (ity: typecheck.ITy) (want: In
                     // Instantiated exactly the way `cg_emit_rel_fn` does
                     // it, so a generic struct's children are the same
                     // types its release function would walk.
-                    Some(ReuseCand { slot: slot, bytes: bytes,
+                    Some(ReuseCand { slot: slot, bytes: bytes, drop_sym: "",
                         children: Array.map(typecheck.ctx_field_types(p.ctx, sname),
                             |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, sname), args, ft)) })
                 } else { None }
             },
-        ITEnum(ename, _) =>
-            if cg_enum_cell_size(p, ename) >= want && cg_enum_all_plain(p, ename) {
-                Some(ReuseCand { slot: slot, bytes: cg_enum_cell_size(p, ename), children: [] })
+        ITEnum(ename, args) =>
+            if cg_enum_cell_size(p, ename) >= want {
+                // An enum that owns nothing needs no drop at all; one
+                // that does gets its generated companion, which is the
+                // tag switch this site would otherwise have to inline.
+                Some(ReuseCand { slot: slot, bytes: cg_enum_cell_size(p, ename), children: [],
+                    drop_sym: if cg_enum_owns(p, cg_find_enum(p, ename).variants, args, 0) { cg_relc_sym(ity) } else { "" } })
             } else { None },
         _ => None,
     }
-
-// Every payload of every variant, scalar. One heap payload ANYWHERE in
-// the enum disqualifies the whole type: which variant a cell holds is a
-// runtime fact and the reuse decision is a compile-time one, so the
-// only safe question is about the type as a whole.
-let cg_enum_all_plain (p: CgProgram) (ename: String): Bool =
-    match typecheck.ctx_enum_tags(p.ctx, ename) {
-        None => false,
-        Some(tags) => cg_tags_plain(p, tags, 0),
-    }
-
-let cg_tags_plain (p: CgProgram) (tags: Array[String]) (i: Int): Bool =
-    if i >= tags.len() { true }
-    else if Array.is_empty(typecheck.ctx_variant_generics(p.ctx, tags[i]))
-        && cg_all_plain(typecheck.ctx_variant_payload(p.ctx, tags[i]), 0) { cg_tags_plain(p, tags, i + 1) }
-    else { false }
 
 let cg_all_plain (tys: Array[typecheck.ITy]) (i: Int): Bool =
     if i >= tys.len() { true }
@@ -3103,7 +3098,7 @@ let cg_reuse_cell (p: CgProgram) (c: ReuseCand) (want: Int) (n: Int): ReuseEmit 
             .concat("  store ptr null, ptr ").concat(c.slot.ptr).concat("\n")
             .concat("  ").concat(ok).concat(" = call i1 @plum_reuse_ok(ptr ").concat(old).concat(", i64 ").concat(want.to_string()).concat(")\n")
             .concat("  br i1 ").concat(ok).concat(", label %").concat(lr).concat(", label %").concat(lf).concat("\n")
-            .concat(lr).concat(":\n").concat(drops.code)
+            .concat(lr).concat(":\n").concat(cg_reuse_drop_code(c, old, drops.code))
             .concat("  br label %").concat(lj).concat("\n")
             .concat(lf).concat(":\n")
             .concat(cg_dec(cg_concrete(p, c.slot.ity), old))
@@ -3119,6 +3114,11 @@ let cg_reuse_cell (p: CgProgram) (c: ReuseCand) (want: Int) (n: Int): ReuseEmit 
 // the same walk `cg_rel_children` does inside a generated release
 // function, emitted inline here because it sits under a branch that
 // function does not have.
+// One of the two drop shapes, never both.
+let cg_reuse_drop_code (c: ReuseCand) (old: String) (inline: String): String =
+    if c.drop_sym == "" { inline }
+    else { "  call void ".concat(c.drop_sym).concat("(ptr ").concat(old).concat(")\n") }
+
 let cg_reuse_drops (tys: Array[typecheck.ITy]) (old: String) (i: Int) (n: Int) (acc: String): CopyEmit =
     if i >= tys.len() { CopyEmit { code: acc, n: n } }
     else if !cg_is_heap(cg_of_ity(tys[i])) { cg_reuse_drops(tys, old, i + 1, n, acc) }
@@ -4554,7 +4554,50 @@ let cg_emit_rel_fns (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Str
     Array.concat_all(cg_emit_rel_fns_acc(p, ts, 0, []))
 
 let cg_emit_rel_fns_acc (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= ts.len() { acc } else { cg_emit_rel_fns_acc(p, ts, i + 1, acc.push(cg_emit_rel_fn(p, ts[i]))) }
+    if i >= ts.len() { acc } else {
+        cg_emit_rel_fns_acc(p, ts, i + 1, acc.push(cg_emit_rel_fn(p, ts[i])).push(cg_emit_relc_fn(p, ts[i])))
+    }
+
+// The companion to a release function: drop this cell's children and
+// leave the cell alone. Reuse needs it and nothing else does.
+//
+// Emitted only for ENUMS that own references. A struct's children are
+// dropped inline at the reuse site, because its layout is fixed and the
+// drops are three instructions per heap field; an enum's depend on the
+// runtime TAG, so the same walk would mean emitting the whole switch at
+// every reuse site. Generating it once per type is the trade, and
+// restricting it to enums that own something keeps a mostly-dead
+// parallel family of 301 functions from appearing in every module.
+//
+// No refcount check and no null check on the payloads beyond what
+// `cg_rel_children` already emits: this is only ever called under a
+// runtime `rc == 1`, so the cell is live and solely owned by
+// definition.
+let cg_emit_relc_fn (p: CgProgram) (t: typecheck.ITy): String =
+    match t {
+        ITEnum(name, args) => {
+            let vs = cg_find_enum(p, name).variants;
+            if cg_enum_owns(p, vs, args, 0) {
+                "define void ".concat(cg_relc_sym(t)).concat("(ptr %p) {\nentry:\n")
+                    .concat("  %isnull = icmp eq ptr %p, null\n")
+                    .concat("  br i1 %isnull, label %done, label %live\n")
+                    .concat("live:\n")
+                    .concat("  %tp = getelementptr i8, ptr %p, i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
+                    .concat("  %tag = load i64, ptr %tp\n")
+                    .concat("  switch i64 %tag, label %done [\n").concat(cg_rel_cases(p, vs, args, 0, "")).concat("  ]\n")
+                    .concat(cg_rel_blocks(p, vs, args, 0, 0, ""))
+                    .concat("done:\n  ret void\n}\n\n")
+            } else { "" }
+        },
+        _ => "",
+    }
+
+let cg_enum_owns (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int): Bool =
+    if i >= vs.len() { false }
+    else if cg_variant_owns(p, vs[i], args) { true }
+    else { cg_enum_owns(p, vs, args, i + 1) }
+
+let cg_relc_sym (t: typecheck.ITy): String = "@plum_relc_".concat(cg_ity_mangle(t))
 
 // Every release function has the same shape: decrement, and on reaching
 // zero release the children and free the cell.
