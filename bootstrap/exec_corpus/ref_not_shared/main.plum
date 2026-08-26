@@ -1,0 +1,30 @@
+// `ref()` is the one genuinely mutable cell in the language, and it
+// must never be a hoisted constant even when its initial value is one.
+//
+// `ref(0)` and `ref(Point { x: 0, y: 0 })` both have constant
+// arguments. The ARGUMENT may be shared -- the `Point` is a static cell
+// and stays untouched, because `.set()` replaces the pointer rather
+// than writing through it -- but the `Ref` around it must be freshly
+// allocated at every evaluation. Share that and two calls to
+// `fresh_counter` would return 1 then 2.
+//
+// This is the one place where the constant-hoisting rule would be
+// observable if it were wrong, which is why it is a fixture and not a
+// comment in the folder.
+struct Point { x: Int, y: Int }
+
+let fresh_counter (): Int = {
+    let c = ref(0);
+    c.set(c.get() + 1);
+    c.get()
+}
+
+let fresh_point (): Int = {
+    let p = ref(Point { x: 0, y: 0 });
+    p.set(Point { x: p.get().x + 10, y: 0 });
+    p.get().x
+}
+
+let main (): Unit =
+    println(fresh_counter().to_string().concat(fresh_counter().to_string())
+        .concat(" ").concat(fresh_point().to_string()).concat(fresh_point().to_string()))
