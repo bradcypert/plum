@@ -1,12 +1,12 @@
 Plum is a small, statically typed, compiled language.
 
-**Upgrade if you are on 0.0.2.** It shipped three defects, one of them
-silent and platform-specific — details under Fixes below.
+**Upgrade if you are on 0.0.3.** It shipped two comparison bugs that
+give wrong answers silently, described under Fixes.
 
 The compiler is written in Plum. It compiles itself to a fixed point —
 the compiler it produces emits byte-for-byte identical output to the
 compiler that produced it — and building it needs no toolchain beyond
-`clang`. As of this release there is no Rust in the repository at all.
+`clang`.
 
 ## Install
 
@@ -17,103 +17,101 @@ shims Plum programs use are embedded in the compiler itself.
 
 | Platform | Archive |
 |---|---|
-| Linux x86_64 | `plum-0.0.3-x86_64-linux.tar.gz` |
-| macOS Apple Silicon | `plum-0.0.3-arm64-macos.tar.gz` |
-| macOS Intel | `plum-0.0.3-x86_64-macos.tar.gz` |
-| Windows x86_64 | `plum-0.0.3-x86_64-windows.tar.gz` |
+| Linux x86_64 | `plum-0.0.4-x86_64-linux.tar.gz` |
+| macOS Apple Silicon | `plum-0.0.4-arm64-macos.tar.gz` |
+| macOS Intel | `plum-0.0.4-x86_64-macos.tar.gz` |
+| Windows x86_64 | `plum-0.0.4-x86_64-windows.tar.gz` |
 
 ```sh
-tar -xzf plum-0.0.3-arm64-macos.tar.gz
-./plum-0.0.3-arm64-macos/plum version
+tar -xzf plum-0.0.4-arm64-macos.tar.gz
+./plum-0.0.4-arm64-macos/plum version
 ```
 
 Windows binaries are built for MSYS2/MinGW and the archive contains
 `plum.exe`.
 
-## Breaking
-
-**`String.join` is now `Array.join`, and `String.concat_all` is now
-`Array.concat_all`.** Both take an `Array[String]`, so both were filed
-under the wrong namespace. That mattered once a namespace started
-meaning something — see below.
-
-## Method calls are namespaced functions
-
-`x.f(a)` now means `T.f(x, a)`, where `T` is `x`'s type.
-
-```
-"  padded  ".trim_end()      // String.trim_end
-"abcdef".slice(1, 3)         // String.slice
-xs.map(|n| n * 2)            // Array.map
-xs.contains(2)               // Array.contains
-Some(7).unwrap_or(0)         // Option.unwrap_or
-["a", "b"].join("-")         // Array.join
-```
-
-Before this, each method was hand-wired into the type checker
-individually, so `s.trim()` worked and `s.trim_end()` did not — eight
-did and six did not, with no rule to predict which.
-
-It applies to your own types too. Declaring `let Box.bump (b: Box) (n:
-Int): Box` makes `myBox.bump(1)` work; there is nothing special about
-the standard library here.
-
-A namespace names the type of the first parameter. `Os.` has no
-receiver and therefore has no methods. A struct field holding a closure
-wins over a namespaced function of the same name.
-
 ## Fixes
 
-- **`parse_int` rejected `Int`'s own minimum.**
-  `String.parse_int("-9223372036854775808")` returned "integer out of
-  range" in 0.0.2. The magnitude was accumulated as a positive number
-  and negated at the end, and that magnitude is one larger than `Int`'s
-  maximum, so it overflowed while still positive.
-- **`parse_float` was not correctly rounded.** `9.21258e-07` parsed to a
-  double one ulp away, so `parse_float(x.to_string()) != x`. The value
-  was computed as `mantissa * 10^exp` in floating point; it now comes
-  from `strtod`, which is the same thing `to_string` checks its own
-  output against.
-- **The Windows language server could not open a file.** `file:///C:/…`
-  became `/C:/…`, which opens nothing, so every hover, diagnostic and
-  go-to-definition failed against a real Windows editor. macOS and
-  Linux were unaffected. If you used the 0.0.2 Windows binary with an
-  editor, this is why.
+**Ordered comparison of Strings compared ADDRESSES, not contents.**
+`<`, `<=`, `>` and `>=` on `String` fell through to a pointer
+comparison. It never crashed; it returned whatever the allocator
+happened to arrange. `"p" > "a"` was `false`, while the same
+comparison on two computed strings was `true` — the split being that a
+literal is a global constant and a computed string is a heap cell.
+
+Sorting was unaffected: `Array.sort_string` uses an internal helper
+rather than the operators, which is exactly why the bug survived. The
+one place the language orders strings in anger never used the operators
+that were broken.
+
+**Ordered comparison of anything else was incoherent.** The checker
+accepted `<` on any type at all, so the same pointer comparison applied
+to arrays, structs, enums and `Bool`:
+
+```
+[1] < [2]   was true
+[2] < [1]   was ALSO true
+true < false was true
+```
+
+Both directions true at once is not a wrong ordering, it is no ordering
+at all. These are now **compile errors** naming the type:
+
+```
+'<' needs an ordered type -- Int, Float or String -- but got Array[Int]
+```
+
+Equality is unaffected and still structural, all the way down: arrays,
+structs, enums and their payloads.
+
+`Int`, `Float` and `String` are ordered; nothing else is. Arrays and
+structs could be given a lexicographic order and deliberately have not
+been — enums have no obvious answer, nothing needs it, and rejecting
+can be relaxed later while the reverse cannot.
+
+**Hover could answer for the wrong node.** The prelude was parsed
+without a source path of its own, so its items inherited the path of
+whichever file was read last. Positions then collided: hovering a
+`p: Point` could report `o: Option[T]`, an identifier from inside the
+prelude.
 
 ## Editor support
 
-**Completion**, new in this release: every top-level name in your
-project, the standard library's public functions, and every enum
-variant, each with its signature as the detail. It does not resolve `.`
-— that needs the type of whatever precedes the dot — so there is no
-field completion yet.
+**Completion after `.`** offers the members of whatever precedes the
+dot: a struct's fields with their declared types, and every function
+namespaced under that type. `p.` on a `Point` offers `x`, `y` and your
+own `Point.shift`; `s.` on a `String` offers the nineteen `String.`
+functions. The type comes from the checker, so it works on a local
+whose type was never written down.
 
-The language server is now exercised by a real LSP session in CI on
-Linux, macOS and Windows. In 0.0.2 it was tested on Linux only.
+**Hover resolves fields and methods**, not just identifiers. `x` in
+`p.x` reports `Int`; `trim_end` in `s.trim_end()` reports its whole
+signature. Previously hovering a field answered for the value it
+belonged to.
+
+Both have the same limit: the base must be a plain identifier.
+`p.x.to_string()` answers nothing for `to_string` rather than guessing,
+and completion falls back to the whole-project name list.
 
 ## What is checked
 
-Linux runs the full suite: 63 corpus fixtures — 44 that must run and
+Linux runs the full suite: 64 corpus fixtures — 44 that must run and
 print exactly the right bytes, 7 that must abort with the right
-message, 12 that the type checker must reject — all under
-AddressSanitizer with `detect_leaks=1`, plus 10 property tests.
+message, 13 that the type checker must reject — all under
+AddressSanitizer with `detect_leaks=1`, plus 11 property tests.
 
 macOS and Windows run the 44 execution fixtures and a language-server
-session. They do not run leak checking: Plum is reference counted, so a
-leak is a miscompile rather than untidiness, and LeakSanitizer does not
-exist on macOS at all.
+session.
 
-**The Rust implementation was retired in this release** — 44,698 lines.
-It had been kept as a test oracle, comparing an independent
-implementation of the semantics against the compiler. Two of the three
-bugs above were ones it had *identically*, and an oracle can only find
-disagreements. Property tests replaced it: they are written in Plum, so
-they track the language instead of lagging it.
+The property tests are what found both comparison bugs' neighbours and
+pin them now. `test_string_ordering` checks trichotomy, mirroring and
+reflexivity, and checks the literal cases explicitly — a property
+written only with computed values would have passed on half the bug.
 
 ## Known limits
 
-- **No field completion after `.`**, and hover does not resolve fields
-  or variants — hovering `.x` in `p.x` answers for `p`.
+- **Completion and hover need a plain identifier before the `.`.**
+- **No completion of keywords or locals in scope.**
 - **Linux arm64 is not published.** It is expected to work; nothing
   tests it.
 - This is a 0.0.x release. There is no compatibility promise.
