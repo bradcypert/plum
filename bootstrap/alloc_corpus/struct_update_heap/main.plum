@@ -1,0 +1,15 @@
+// `struct_update`, plus one String field -- which used to be the
+// difference between 2 allocations and 1002.
+//
+// A cell holding a reference can be recycled too, but only if the
+// reference it held is released first. That release sits under the
+// runtime `rc == 1` branch, because it is only correct when nothing
+// else can see the cell. This fixture is the number that says the
+// branch is there; `reuse_replaced_field` is the one that says it
+// releases the right thing.
+struct Entity { name: String, x: Int, hp: Int }
+
+let step (e: Entity) (n: Int): Entity =
+    if n <= 0 { e } else { step(Entity { name: e.name, x: e.x + 1, hp: e.hp }, n - 1) }
+
+let main (): Unit = println(step(Entity { name: "hero", x: 0, hp: 100 }, 1000).x.to_string())

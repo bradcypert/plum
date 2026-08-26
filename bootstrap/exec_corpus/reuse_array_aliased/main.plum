@@ -1,0 +1,20 @@
+// `Array.map` recycling its source, when the caller can still see it.
+//
+// `xs` is read once in `twice` and dead afterwards, so the backend
+// moves it in and offers its cell for the result. The caller is still
+// holding the same array, so the refcount is 2 and the runtime
+// declines: `a` must be untouched and this prints "1 2", not "2 2".
+//
+// The declining path is the interesting one. `@plum_array_reuse` does
+// NOT release the source when it refuses -- the loop is about to read
+// it -- so the caller releases it afterwards, and only when the
+// returned cell is a different one. Release it unconditionally and the
+// reuse path frees what it just returned; forget to and every declined
+// map leaks its source, which `detect_leaks=1` catches here.
+let twice (xs: Array[Int]): Array[Int] = Array.map(xs, |v| v * 2)
+
+let main (): Unit = {
+    let a = [1, 2, 3];
+    let b = twice(a);
+    println(a[0].to_string().concat(" ").concat(b[0].to_string()))
+}

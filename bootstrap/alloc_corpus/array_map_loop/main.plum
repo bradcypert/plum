@@ -1,0 +1,13 @@
+// A map inside a loop -- the case a single `Array.map` does not show.
+// Each iteration's source is dead the moment the next result exists, so
+// the whole chain runs in ONE array cell instead of a thousand.
+//
+// The count is not 2, and the remainder is not array cells: `array=1`
+// in the runtime stats is the whole story for arrays. What is left is
+// one closure cell per iteration, because `|v| v + 1` is a literal
+// inside the loop body. That is a separate piece of work and a separate
+// mechanism; this fixture holds the array number still while it waits.
+let go (xs: Array[Int]) (n: Int): Array[Int] =
+    if n <= 0 { xs } else { go(Array.map(xs, |v| v + 1), n - 1) }
+
+let main (): Unit = println(go([1, 2, 3, 4, 5], 1000).len().to_string())

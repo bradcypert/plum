@@ -138,6 +138,13 @@ pub enum TNode {
     TMethodCall(String, TExpr, Array[TExpr]),
     // `Array.map`/`filter`/`fold` — a namespace call, not a method.
     TArrayNs(String, Array[TExpr]),
+    // `Array.map(xs, f)` where `xs` is a local the last-use pass found
+    // DEAD afterwards, so its cell can be recycled for the result. The
+    // `String` is that local, and it is always the first argument --
+    // not a list like `TStructReuse`, because an array's cell has to be
+    // the right LENGTH as well as the right size, and the source is the
+    // only candidate guaranteed to be.
+    TArrayNsReuse(String, Array[TExpr], String),
     // `ref(v)` — allocates a fresh `Ref[T]` cell holding `v`. Its own
     // node rather than a `TMethodCall`, because it is a CONSTRUCTOR:
     // the operand is the value going in, not a receiver.

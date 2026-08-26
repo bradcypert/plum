@@ -14588,6 +14588,10 @@ needed nothing.
 
 ### What is still not covered
 
+*(Both gaps named here were closed later the same day — see the next
+section. Left as written because the reasoning about what each would
+cost is what the next section is measured against.)*
+
 Arrays. `array_map` remains at 11: an array cell carries a length and a
 capacity and its elements may need releasing, none of which the current
 `@plum_alloc_reuse` contract covers. Structs with heap fields are the
@@ -14595,3 +14599,95 @@ other gap, and they need the thing this deliberately avoided — a branch,
 so the old fields can be dropped on the reuse path only, and a per-type
 release symbol to drop them with. Both are worth doing; neither is
 required for the case VISION.md names first.
+
+## Reuse for heap-bearing structs, and for arrays (2026-08-26)
+
+The two gaps named above closed the same day. A struct with a `String`
+field went from 1002 allocations to 2 — one field was the difference
+between the whole optimisation applying and not — and a chain of
+`Array.map` went from 1001 array allocations to 1.
+
+### The runtime helper became a predicate
+
+The scalar version was branch-free: `@plum_alloc_reuse` decided and
+returned a cell either way. That only worked because the candidate's
+release needed no type information. Once a cell can hold references,
+the two answers need *different* work, and only the backend knows what:
+
+- **reuse**: drop the old cell's children, keep the cell.
+- **give up**: release the whole cell through its generated release
+  function, and allocate.
+
+So `@plum_alloc_reuse` became `@plum_reuse_ok`, an `i1` predicate, and
+the branch moved into `cg_reuse_cell`. The scalar case did not regress
+from acquiring a branch it always logically had — it just stopped being
+hidden inside a call.
+
+Dropping the children inline, rather than generating a second family of
+"release children only" functions, is a size decision: there are 301
+release functions in the seed and they are 4.7% of the module, almost
+all of which a parallel family would duplicate for types that are never
+reuse candidates. A struct's drops are three instructions per heap
+field, emitted only where a reuse actually happens.
+
+### Ordering is what makes the drop safe, not care
+
+`name: e.name` reads a field out of the very cell about to be recycled.
+That is safe because `cg_field_read` increments what it loads and the
+field values are all computed *before* the reuse decision — so the
+copied-across pointer is already at two references when the old cell's
+is dropped. Inc-before-dec, obtained from the order the emitter already
+had. `reuse_replaced_field` covers the other case, where the new value
+is a different string and the old one genuinely has to go.
+
+Enums are still refused when they hold references, and for a reason
+that does not apply to structs: which children an enum cell holds
+depends on its runtime **tag**, so dropping them inline would mean
+emitting the whole tag switch at every reuse site.
+
+### Arrays: the helper must not consume what the loop still reads
+
+The obvious shape — a helper that recycles or else releases-and-
+allocates — is a use-after-free for `Array.map`. The loop reads the
+source while filling the result, so releasing the source on the
+declining path frees the memory the loop is about to read. Caught while
+writing it, not by a test, which is worth recording as luck rather than
+method.
+
+`@plum_array_reuse` therefore never releases. The caller compares the
+returned pointer against the one it passed and releases the source only
+when they differ. Reading `src[i]` and writing `out[i]` in the same cell
+is safe for `map` alone because it is elementwise and in order — which
+is why `filter` (writes a shorter result, needs its length header
+patched) and `fold` (builds no array) are not included.
+
+### One analysis nearly strangled the other
+
+`cg_movable_params` — "parameters read at most once on any path" — is
+consulted by the reuse analysis, which refuses to touch a name it has
+claimed. An array parameter mapped once per call is exactly such a
+name, so `array_map_loop` would not fire.
+
+The first fix was to filter `cg_movable_params` by type, on the theory
+that its consumer `cg_move_or_own` only serves `cg_concat`. It has two
+callers. The other is `cg_array_push`, and the filter took `array_push`
+from 10 allocations to 1002. **Nothing failed.** 68 corpus fixtures, the
+bootstrap, the property tests and the self-hosting fixed point were all
+green; `alloc-check` was the only thing that noticed, which is the
+entire argument for having built it.
+
+The real answer was that the interlock is unnecessary for arrays and
+saying why is short: if a name is in `movable`, it has at most one read
+on this path, and that read is the `map` — one read is emitted by one
+emitter, so there is no second site left to move it at. Structs and
+enums keep the interlock, because `cg_reads_max` counts their candidate
+list as an extra read and the arithmetic there is less obvious.
+
+### What is still not covered
+
+Enums holding references. Mapping an array of them — the loop would
+have to release element `i` after the closure has taken its own
+reference, which is a different loop body rather than a different
+allocation. `Array.filter`. And the thousand closure cells in
+`array_map_loop`, which are a literal inside a loop body and an
+entirely separate mechanism.

@@ -1,9 +1,12 @@
-// `Array.map` builds a new array. Whether the SOURCE can be reused
-// when it is dead is a real FBIP question, and the last-use analysis
-// now answers it -- but nothing acts on the answer yet: reuse is wired
-// into struct and enum cells only. An array cell carries a length and
-// a capacity and its elements may need releasing, none of which the
-// current `@plum_alloc_reuse` contract covers. Still 11.
+// `Array.map` builds a new array, and when the SOURCE is dead it now
+// builds into the source's own cell. Here that saves exactly one
+// allocation out of eleven, because this fixture's cost is dominated by
+// `grow` building the input. `array_map_loop` is where the same
+// optimisation is worth 1000.
+//
+// Kept as the single-map case precisely because it is unimpressive:
+// it catches a reuse that fires when it should not just as well as one
+// that fires when it should.
 let main (): Unit = {
     let xs = grow([], 500);
     println(Array.map(xs, |n| n * 2).len().to_string())

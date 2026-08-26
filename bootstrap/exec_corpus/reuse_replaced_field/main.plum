@@ -1,0 +1,20 @@
+// A recycled cell whose String field is REPLACED rather than copied
+// across. `reuse_heap_fields` covers the copied case, where the old and
+// new pointers are the same and the drop cancels an increment. Here
+// they differ: every iteration builds a longer string and the previous
+// one has to be released as the cell is reused, or it leaks.
+//
+// Under `detect_leaks=1` a missing drop shows up as 8 leaked strings.
+// Releasing too eagerly -- before the new value took its own reference
+// -- would instead be a use-after-free, which ASan catches in the same
+// run. The window between those two mistakes is what the ordering in
+// `cg_reuse_cell` is for.
+struct Box { s: String, k: Int }
+
+let go (b: Box) (i: Int): Box =
+    if i <= 0 { b } else { go(Box { s: b.s.concat("x"), k: b.k + 1 }, i - 1) }
+
+let main (): Unit = {
+    let r = go(Box { s: "", k: 0 }, 8);
+    println(r.s.concat(" ").concat(r.k.to_string()))
+}

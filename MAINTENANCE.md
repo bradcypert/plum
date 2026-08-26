@@ -169,12 +169,22 @@ If you add a third thing that moves, it belongs in that same
 arrangement — do not reason about why the shapes cannot overlap, they
 overlapped once already.
 
-**A reuse candidate must hold no heap fields.** `@plum_alloc_reuse`
-releases the candidate on the path it cannot reuse, with no type
-information, so a cell with children would leak them. `reuse_heap_fields`
-in the exec corpus fails under leak detection if that check lapses, and
-`reuse_aliased` catches the runtime `rc == 1` guard going missing. Both
-are cheap; neither is redundant.
+**`cg_movable_params` is not filtered by type, on purpose.** It looks
+like it should be -- its consumer `cg_move_or_own` seems to serve only
+`cg_concat` -- but it has two callers, and the other is `cg_array_push`,
+whose in-place growth depends on it. Narrowing the set to String-shaped
+parameters took `array_push` from 10 allocations to 1002 and nothing
+failed; only `alloc-check` noticed.
+
+**Each reuse path decides its own drop.** A struct's children are
+dropped inline under the `rc == 1` branch, because its layout is fixed.
+An enum's are not dropped at all, which is why enums holding references
+are refused: which children a cell has depends on its runtime tag.
+`@plum_array_reuse` deliberately does NOT release the source when it
+declines, because the caller is about to read it -- the caller compares
+pointers and releases only when they differ. Four exec fixtures hold
+these apart (`reuse_aliased`, `reuse_heap_fields`, `reuse_replaced_field`,
+`reuse_array_aliased`); each fails a different way, none is redundant.
 
 **Duplicate `declare`.** A symbol belongs in the runtime's declare list
 OR in a user `extern` block, never both. LLVM rejects the second one.

@@ -1,12 +1,15 @@
-// A struct with a String field is NOT a reuse candidate. Its cell holds
-// a reference, and recycling the cell would mean overwriting that
-// reference without releasing it -- a leak -- while the `n` read out of
-// it in the same literal is a borrowed pointer into memory about to be
-// reused.
+// A struct with a String field, rebuilt in a loop. Its cell IS
+// recycled -- the reuse path drops the old field before the new one is
+// stored -- and the point of the fixture is that the drop and the
+// increment cancel exactly.
 //
-// The corpus runs under `detect_leaks=1`, which is what makes this a
-// test rather than a comment: if the candidate check ever stops
-// excluding heap fields, this fixture leaks three strings.
+// `n: v.n` copies the field straight across, so the old and the new
+// value are the same pointer. `cg_field_read` increments what it loads
+// and the reuse drops what the cell held, in that order. Get the order
+// backwards and the string is freed while the literal is still storing
+// it; skip the drop and it leaks. The corpus runs under
+// `detect_leaks=1`, which is what makes this a test rather than a
+// comment.
 struct Named { n: String, k: Int }
 
 let go (v: Named) (i: Int): Named =

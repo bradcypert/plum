@@ -917,16 +917,22 @@ substantially complete (scalars, control flow, closures, generics,
 arrays, strings, concurrency, FFI), and there is one implementation of
 all of it — the Rust one was retired on 2026-08-25.
 
-Rebuilding a struct or an enum — `Entity { x: e.x + 1, ..}` in a loop —
-recycles the old cell instead of allocating a new one when nothing else
-is holding it, so an update loop that reads as pure allocates a constant
-number of times rather than once per iteration. Arrays and strings
-already did this; structs and enums joined them on 2026-08-26. Structs
-with `String` or `Array` fields do not yet.
+Rebuilding a value — `Entity { x: e.x + 1, ..}` in a loop, or
+`Array.map` over an array nothing else is holding — recycles the old
+cell instead of allocating a new one, so an update loop that reads as
+pure allocates a constant number of times rather than once per
+iteration. It applies to structs (including ones with `String` or
+`Array` fields), enums whose payloads are scalars, arrays under
+`.push()` and `Array.map`, and strings under `.concat()`. It does not
+apply to enums that hold references, or to mapping an array of them.
 
-What is actually checked, rather than claimed: 66 corpus fixtures under
+Nothing about this is visible in the source: it is a runtime check on
+whether anything else can see the value, so it is never wrong, only
+sometimes unavailable.
+
+What is actually checked, rather than claimed: 68 corpus fixtures under
 AddressSanitizer with leak detection, 102 lexer/parser goldens, 11
-property tests, recorded allocation counts for five memory-model
+property tests, recorded allocation counts for seven memory-model
 fixtures, every project in `examples/` against its recorded output, and
 a real language-server session — on Linux x86_64 and arm64, macOS, and
 Windows. Running `./bootstrap/` is the honest answer to "what works";
