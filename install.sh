@@ -98,7 +98,17 @@ printf 'installing plum %s (%s)\n' "$version" "$slug"
 tmp="$(mktemp -d 2>/dev/null || mktemp -d -t pluminstall)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-fetch "$url" "$tmp/archive.tar.gz" || die "could not download $url"
+# A 404 here almost always means the platform is supported NOW but was
+# not when this release was cut -- the docs and the release move
+# independently, and the docs move first. Say that, rather than leaving
+# someone staring at a curl error code.
+fetch "$url" "$tmp/archive.tar.gz" || die "no ${slug} archive in release ${tag}.
+     That platform may have been added after this release was cut. Try
+     the newest release explicitly, or build from source:
+       PLUM_VERSION=<newer tag> ...
+       git clone https://github.com/$REPO && cd plum
+       ./bootstrap/from-seed -o plum && ./plum build bootstrap/self_host -o plum
+     (url was $url)"
 
 # Verification is not optional when it is possible. A checksum is
 # published beside every archive; skipping the check would make this
