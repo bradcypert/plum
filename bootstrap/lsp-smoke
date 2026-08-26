@@ -69,7 +69,7 @@ printf 'let helper (): String = "ok"\nlet oops (): Int = "wrong"\n' > "$multi/ot
 # any project above would shift the line numbers the hover and
 # definition assertions depend on.
 compl=$(native_path "$(mktemp -d)")
-printf 'enum Shape { Circle(Int), Square(Int) }\nlet area (s: Shape): Int = match s { Circle(r) => r, Square(w) => w }\n' > "$compl/main.plum"
+printf 'enum Shape { Circle(Int), Square(Int) }\nlet area (s: Shape): Int = match s { Circle(r) => r, Square(w) => w }\nstruct Vec { x: Int, y: Int }\nlet sum (v: Vec): Int = v.x + v.y\n' > "$compl/main.plum"
 
 "$PY_BIN" - "$work" "$live" "$multi" "$compl" > "$work/session.bin" <<'PY'
 import json, sys
@@ -84,6 +84,11 @@ msgs = [
   # three sources -- the project, the prelude, and enum variants.
   {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % compl}}},
   {"jsonrpc":"2.0","id":7,"method":"textDocument/completion","params":{"textDocument":{"uri":"file://%s/main.plum" % compl},"position":{"line":1,"character":0}}},
+  # DOT completion: line 4 is `let sum (v: Vec): Int = v.x + v.y`, and
+  # character 26 is just after the `.`. The answer must be Vec's
+  # FIELDS, not the project-wide name list -- which is the whole
+  # difference between the two kinds of completion.
+  {"jsonrpc":"2.0","id":8,"method":"textDocument/completion","params":{"textDocument":{"uri":"file://%s/main.plum" % compl},"position":{"line":3,"character":26}}},
   {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % d}}},
   # hover and go-to-definition on `P` in `let f (p: P)` -- line 2, char 11
   {"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://%s/main.plum" % d},"position":{"line":2,"character":10}}},
@@ -130,6 +135,20 @@ echo "$out" | grep -q '"label":"println","kind":3' || { echo "FAIL: completion m
 # renders as `()`. It read `((tuple))` until 2026-08-25, in hover too.
 echo "$out" | grep -q '"detail":"let main (): Unit"' && { echo "note: unit-param rendering checked"; :; }
 echo "$out" | grep -q '"detail":"Shape.Circle(Int)"' || { echo "FAIL: variant detail lost its payload"; fail=1; }
+# --- dot completion ---
+echo "$out" | grep -q '"triggerCharacters":\["\."\]' || { echo 'FAIL: the dot is not a completion trigger'; fail=1; }
+# The dot-completion reply, isolated: everything from its own id to the
+# end. It is the LAST completion request, so nothing earlier is caught
+# and the negative assertion below means what it says.
+dot_reply="$(printf '%s' "$out" | grep -o '"id":8.*' | head -1)"
+# Kind 5 is the protocol's Field. A struct field offered as anything
+# else gets the wrong icon in every editor.
+printf '%s' "$dot_reply" | grep -q '"label":"x","kind":5' || { echo "FAIL: dot completion did not offer the struct's fields"; fail=1; }
+printf '%s' "$dot_reply" | grep -q '"label":"y","kind":5' || { echo "FAIL: dot completion missed a field"; fail=1; }
+printf '%s' "$dot_reply" | grep -q '"detail":"x: Int"' || { echo "FAIL: a field's detail is not its declared type"; fail=1; }
+# ...and NOT the whole-project list, which is what it falls back to
+# when the cursor is not after a dot.
+printf '%s' "$dot_reply" | grep -q '"label":"area"' && { echo "FAIL: dot completion returned project-wide names"; fail=1; }
 echo "$out" | grep -q 'has no field named nope' || { echo "FAIL: no diagnostic"; fail=1; }
 echo "$out" | grep -q '"line":2' || { echo "FAIL: wrong line"; fail=1; }
 echo "$out" | grep -q '"id":2,"result":null' || { echo "FAIL: no shutdown reply"; fail=1; }

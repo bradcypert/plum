@@ -128,6 +128,12 @@ pub let capabilities (): JsonValue =
             // documentation, because the detail IS the signature.
             JsonEntry { key: "completionProvider", value: JsonObject([
                 JsonEntry { key: "resolveProvider", value: JsonBool(false) },
+                // `.` is a trigger character now that there is
+                // something to say about it: the members of whatever
+                // precedes the dot. Without it an editor only asks
+                // while an identifier is being typed, and `p.` is not
+                // an identifier.
+                JsonEntry { key: "triggerCharacters", value: JsonArray([JsonString(".")]) },
             ]) },
         ]) },
     ])
@@ -304,6 +310,7 @@ let parse_completions_acc (items: Array[JsonValue]) (i: Int) (acc: Array[Complet
 // wrong one is a wrong picture next to a right name.
 let completion_kind (kind: String): Float =
     if kind == "function" { 3.0 }
+    else if kind == "field" { 5.0 }
     else if kind == "struct" { 22.0 }
     else if kind == "enum" { 13.0 }
     else if kind == "variant" { 20.0 }

@@ -334,3 +334,58 @@ let float_laws (seed: Int) (left: Int): Unit =
     }
 
 pub let test_float_laws (): Unit = float_laws(2718, 150)
+
+// --- String ordering ---
+
+// The trichotomy and its consequences: for any two strings exactly one
+// of `<`, `==`, `>` holds, and the operators agree with each other.
+//
+// These were WRONG until 2026-08-26, and wrong in a way no existing
+// test could see. Ordered comparison of Strings emitted `icmp slt ptr`
+// -- a comparison of ADDRESSES. It always produced an answer, so
+// nothing crashed; the answer was whatever the allocator happened to
+// do. `"p" > "a"` was false while `id("p") > id("a")` was true.
+//
+// The corpus could not catch it because the prelude works around it:
+// `Array.sort_string` calls `string_le`, not `<=`. So the one place
+// strings are ordered in anger never used the operators.
+//
+// The literal/runtime split is the reason both forms appear below. A
+// property written only with literals, or only with values, would have
+// passed on half the bug.
+let str_order (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let a = ascii_string(seed, rand_between(seed, 0, 5), "");
+        let b = ascii_string(next_seed(seed), rand_between(next_seed(seed), 0, 5), "");
+        let case = "[".concat(a).concat("] vs [").concat(b).concat("]");
+
+        // Exactly one of the three holds.
+        let lt = if a < b { 1 } else { 0 };
+        let eq = if a == b { 1 } else { 0 };
+        let gt = if a > b { 1 } else { 0 };
+        check_eq("exactly one of < == >", case, (lt + eq + gt).to_string(), "1");
+
+        // Each operator is the mirror of its opposite.
+        check_eq("< mirrors >", case, (a < b).to_string(), (b > a).to_string());
+        check_eq("<= mirrors >=", case, (a <= b).to_string(), (b >= a).to_string());
+        check_eq("<= is not >", case, (a <= b).to_string(), (!(a > b)).to_string());
+
+        // And a value compares to itself the way it must.
+        check_eq("reflexive <=", case, (a <= a).to_string(), "true");
+        check_eq("irreflexive <", case, (a < a).to_string(), "false");
+        str_order(next_seed(seed), left - 1)
+    }
+
+pub let test_string_ordering (): Unit = {
+    str_order(90210, 150);
+    // LITERAL operands, the half that was broken while runtime values
+    // happened to work.
+    check_eq("literal >", "p vs a", ("p" > "a").to_string(), "true");
+    check_eq("literal >=", "p vs p", ("p" >= "p").to_string(), "true");
+    check_eq("literal <", "a vs p", ("a" < "p").to_string(), "true");
+    check_eq("literal longer", "ab vs aa", ("ab" > "aa").to_string(), "true");
+    check_eq("literal prefix", "ab vs a", ("ab" > "a").to_string(), "true");
+    // The operators and the sort must agree, since the prelude sorts
+    // with a helper rather than with `<=`.
+    check_eq("sort agrees", "cba", Array.sort_string(["c", "a", "b"]).to_string(), "[\"a\", \"b\", \"c\"]")
+}

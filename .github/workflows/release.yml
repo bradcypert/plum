@@ -39,7 +39,32 @@ permissions:
   contents: write
 
 jobs:
+  # Fails a mis-tagged release in SECONDS, before three platforms each
+  # spend minutes building something that can never be published.
+  #
+  # `v0.0.3` was first tagged on a commit whose `plum_version` still
+  # said 0.0.2. The Linux job caught it -- that check has always been
+  # there -- but only after macOS and Windows had built and packaged
+  # 0.0.2-named artifacts. Nothing wrong was published, because
+  # `publish` needs all three; it was just nine minutes of work that
+  # could not have led anywhere.
+  #
+  # Source against tag only. A stale BINARY is invisible to that, which
+  # is why the full three-way check still runs in `linux` below.
+  version:
+    name: tag and version agree
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: source declares the tagged version
+        run: ./bootstrap/check-version --source-only "${{ github.event.inputs.tag || github.ref_name }}"
+
   linux:
+    needs: version
     name: linux x86_64
     runs-on: ubuntu-latest
     # A runner that never arrives must fail fast rather than hold the
@@ -78,10 +103,12 @@ jobs:
           ./bootstrap/from-seed -o sh.seed
           ./sh.seed build bootstrap/self_host -o sh.real
 
-      # A tag that disagrees with the version the binary REPORTS would
-      # publish a release that lies about itself. Checked before
-      # anything is uploaded, and checked HERE only -- there is one
-      # version string and one tag, so checking it once is enough.
+      # The FULL three-way check: source, tag, and the version the
+      # built binary actually reports. The `version` job above already
+      # compared source against tag; what it could not do is notice a
+      # STALE BINARY, because it has no compiler. This is the half that
+      # can, which is why it stays here rather than moving into the
+      # gate.
       - name: tag and version agree
         run: ./bootstrap/check-version "${{ github.event.inputs.tag || github.ref_name }}"
 
@@ -108,6 +135,7 @@ jobs:
           if-no-files-found: error
 
   macos:
+    needs: version
     name: macos ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     # A runner that never arrives must fail fast rather than hold the
@@ -165,6 +193,7 @@ jobs:
           if-no-files-found: error
 
   windows:
+    needs: version
     name: windows x86_64
     runs-on: windows-latest
     # A runner that never arrives must fail fast rather than hold the

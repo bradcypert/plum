@@ -287,6 +287,14 @@ version the binary reports, and adds `.exe` for Windows.
 reports, not just against the source — checking the source alone passes
 on a stale binary.
 
+The release workflow runs it twice, at different strengths. A `version`
+job gates all three builds with `--source-only`, which needs no
+compiler and so fails a mis-tagged commit in seconds; the `linux` job
+then runs the full three-way check. Both exist because they catch
+different mistakes: `v0.0.3` was first tagged on a commit still saying
+0.0.2, and without the gate, macOS and Windows each built and packaged
+a wrongly-named artifact before Linux noticed.
+
 Update `RELEASE_NOTES.md`; it becomes the release body. Check its
 claims by running them. Two of the 0.0.1 notes were wrong when drafted
 from memory.

@@ -736,6 +736,23 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
                 Emit { code: code.concat(cmp.code).concat(drop_operands).concat("  ").concat(neg).concat(" = xor i1 ").concat(cmp.val).concat(", true\n"), allocas: allocas, releases: releases, globals: globals, val: neg, ty: CgBool, n: cmp.n + 1 }
             },
         }
+    } else if cg_ty_eq(a.ty, CgStr) {
+        // ORDERED comparison of Strings, by CONTENT.
+        //
+        // Without this the generic emitter below produced `icmp slt
+        // ptr` -- a comparison of ADDRESSES. It gave an answer, it was
+        // silent, and it was whatever the allocator happened to do:
+        // `"p" > "a"` was false while `id("p") > id("a")` was true.
+        // The prelude never noticed because it works around it --
+        // `Array.sort_string` calls `string_le`, not `<=`.
+        //
+        // `@plum_str_cmp_raw` is the same comparison `string_le` uses,
+        // so the operator and the helper can no longer disagree.
+        let cmp = cg_reg(b.n);
+        let res = cg_reg(b.n + 1);
+        let line = "  ".concat(cmp).concat(" = call i64 @plum_str_cmp_raw(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n")
+            .concat("  ").concat(res).concat(" = ").concat(cg_str_rel_pred(op)).concat(" i64 ").concat(cmp).concat(", 0\n");
+        Emit { code: code.concat(line).concat(a.drop).concat(b.drop), allocas: allocas, releases: releases, globals: globals, val: res, ty: CgBool, n: b.n + 2 }
     } else if cg_is_checked_arith(op, a.ty) {
         // CHECKED. `+`, `-` and `*` on Int stop the program on overflow
         // rather than wrapping -- see `cg_overflow_guard`.
@@ -754,6 +771,17 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
         Emit { code: code.concat(line), allocas: allocas, releases: releases, globals: globals, val: reg, ty: ty, n: b.n + 1 }
     }
 }
+
+// `strcmp`-shaped result against zero. Only the four ordered
+// comparisons reach here; equality went through `cg_eq_code` above.
+let cg_str_rel_pred (op: parser.BOp): String =
+    match op {
+        BLt => "icmp slt",
+        BLe => "icmp sle",
+        BGt => "icmp sgt",
+        BGe => "icmp sge",
+        _ => { cg_fail("internal: non-ordered operator on String"); "icmp slt" },
+    }
 
 let cg_is_checked_arith (op: parser.BOp) (t: CgTy): Bool =
     if cg_ty_eq(t, CgFloat) { false } else { match op { BAdd => true, BSub => true, BMul => true, _ => false } }
@@ -4079,8 +4107,31 @@ let cg_of_ann (t: parser.Ty): CgTy =
         _ => { cg_fail("extern declarations can only use simple types"); CgInt },
     }
 
-pub let cg_with_prelude (program: parser.ProgramNode): parser.ProgramNode =
-    parser.ProgramNode { items: Array.concat(parser.parse_program(lexer.tokenize(cg_prelude_src(()))).items, program.items) }
+// The prelude is parsed under its OWN source path, not whatever file
+// happened to be parsed last.
+//
+// `parse_program` stamps `parser.current_path()` onto every item it
+// produces, and nothing here set one -- so prelude items inherited the
+// path of the last user file `collect_project` read. Harmless for
+// compiling, and wrong for anything that looks up a source POSITION:
+// the checker's recorded-type table keyed prelude identifiers to the
+// user's file at prelude offsets, so `plum query` could answer a
+// position in your code with a prelude local. It reported `o:
+// Option[T]` for a `p: Point`.
+//
+// `<prelude>` is not a path any file can have, so those entries can no
+// longer collide with a real one. The context is restored afterwards
+// because callers parse the prelude in the middle of handling a file
+// and reasonably expect diagnostics to keep naming it.
+pub let cg_with_prelude (program: parser.ProgramNode): parser.ProgramNode = {
+    let saved = parser.current_path(());
+    let src = cg_prelude_src(());
+    let lexed = lexer.tokenize_spanned(src);
+    parser.set_source_context("<prelude>", src, lexed.starts);
+    let items = parser.parse_program(lexed.tokens).items;
+    parser.set_source_context(saved, "", []);
+    parser.ProgramNode { items: Array.concat(items, program.items) }
+}
 
 pub let cg_emit_program (program0: parser.ProgramNode): String = cg_emit_program_entry(program0, "main")
 

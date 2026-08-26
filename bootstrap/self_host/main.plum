@@ -124,6 +124,105 @@ let cmd_defs (dir: String): Unit = {
     println(json_stringify(JsonArray(defs_of(items, 0, []))));
 }
 
+// Members of whatever is immediately before a `.` -- the struct's own
+// fields, and every function namespaced under its type.
+//
+// The type comes from the CHECKER, the same recorded-type table hover
+// reads, so `p.` after `let p = make_point()` knows what `p` is without
+// the user having written it down. Deliberately narrow: the base must
+// be a plain identifier. `foo().bar.` needs the type of an arbitrary
+// expression, which is a different problem, and returning nothing there
+// is better than returning something wrong -- the caller falls back to
+// the whole-project name list.
+//
+// Prints `[]` for anything it cannot answer, including "the cursor is
+// not after a dot at all", which is how the language server decides
+// which kind of completion this is without duplicating the lexing.
+let cmd_members (dir: String) (path: String) (line: Int) (col: Int): Unit = {
+    typecheck.record_types(true);
+    let items = codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }).items;
+    typecheck.check_program(parser.ProgramNode { items: items });
+    match read_file(path) {
+        Err(_) => println("[]"),
+        Ok(src) => {
+            let cs = chars_of(src);
+            let off = lexer.offset_of(src, line, col);
+            // `off` sits just after the `.`; step back over it, then
+            // over the identifier that owns it.
+            let dot = off - 1;
+            if dot < 0 || dot >= cs.len() || cs[dot] != "." { println("[]") }
+            else {
+                let end = dot;
+                let start = ident_start(cs, end - 1);
+                if start >= end { println("[]") }
+                else {
+                    match recorded_type_at(typecheck.recorded_types(()), path, start, 0) {
+                        None => println("[]"),
+                        Some(ty) => println(json_stringify(JsonArray(
+                            members_of(items, type_namespace(ty), 0, [])))),
+                    }
+                }
+            }
+        },
+    }
+}
+
+// Walks back over identifier characters, returning the offset one past
+// the last non-identifier character -- i.e. where the name starts.
+let ident_start (cs: Array[String]) (i: Int): Int =
+    if i < 0 { 0 }
+    else if is_ident_char(cs[i]) { ident_start(cs, i - 1) }
+    else { i + 1 }
+
+let is_ident_char (c: String): Bool =
+    (c >= "a" && c <= "z") || (c >= "A" && c <= "Z") || (c >= "0" && c <= "9") || c == "_"
+
+// The recorded entry that BEGINS at this offset. `query_answer` looks
+// for one that contains an offset; here the start is known exactly.
+let recorded_type_at (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (i: Int): Option[String] =
+    if i >= nodes.len() { None }
+    else if nodes[i].path == path && nodes[i].offset == off { Some(nodes[i].ty) }
+    else { recorded_type_at(nodes, path, off, i + 1) }
+
+// `Array[Int]` -> `Array`, `Point` -> `Point`. A namespace is the type
+// CONSTRUCTOR, not the instantiation: `Array.map` serves every
+// `Array[T]`.
+let type_namespace (ty: String): String =
+    match String.index_of(ty, "[") {
+        Some(i) => String.slice(ty, 0, i),
+        None => ty,
+    }
+
+let members_of (items: Array[parser.ItemNode]) (ns: String) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+    if i >= items.len() { acc }
+    else {
+        let next = match items[i].kind {
+            // A field is offered as a field, with its declared type as
+            // the detail -- `x: Int`, not a signature.
+            IKStruct(decl) => if decl.name == ns { fields_of(decl, 0, acc) } else { acc },
+            IKLet(def) => if def.name.starts_with(ns.concat(".")) {
+                acc.push(completion_json(method_name_of(def.name), "function", def_signature(def)))
+            } else { acc },
+            _ => acc,
+        };
+        members_of(items, ns, i + 1, next)
+    }
+
+let fields_of (decl: parser.StructDeclNode) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+    if i >= decl.fields.len() { acc }
+    else {
+        fields_of(decl, i + 1, acc.push(completion_json(decl.fields[i].name, "field",
+            decl.fields[i].name.concat(": ").concat(parser.render_type(decl.fields[i].ty)))))
+    }
+
+// `String.trim_end` is offered as `trim_end`: the receiver is already
+// typed, so inserting the namespace again would produce
+// `s.String.trim_end()`.
+let method_name_of (full: String): String = {
+    let parts = full.split(".");
+    parts[parts.len() - 1]
+}
+
 // Completion candidates: every name a user can write, which is their
 // own project's items plus the prelude's public surface plus the
 // VARIANTS of every enum in either.
@@ -462,8 +561,16 @@ let lsp_handle (body: String): Bool =
             } else if req.method == "exit" {
                 false
             } else if req.method == "textDocument/completion" {
+                let path = lsp.uri_to_path(lsp.document_uri(req.params));
+                // MEMBERS first. `plum members` answers with an empty
+                // list for anything that is not a position just after a
+                // dot, so this one call decides which kind of
+                // completion the request is -- the lexing lives in the
+                // compiler, where the lexer is, rather than being
+                // reimplemented over here.
+                let members = lsp_members(path, lsp.params_line(req.params), lsp.params_col(req.params));
                 lsp_reply(req.id, lsp.completion_result(
-                    lsp_completions(lsp.uri_to_path(lsp.document_uri(req.params)))));
+                    if Array.is_empty(members) { lsp_completions(path) } else { members }));
                 true
             } else if req.method == "textDocument/hover" || req.method == "textDocument/definition" {
                 lsp_reply(req.id, lsp_answer_query(req.method, req.params));
@@ -564,6 +671,14 @@ let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
         }
     }
 }
+
+// The members of whatever sits before the cursor's `.`, or an empty
+// list when the cursor is not after a dot at all.
+let lsp_members (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
+    match run_process(self_exe(), ["members", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
+        Err(_) => [],
+        Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
+    }
 
 // Candidates for the project the edited file belongs to.
 //
@@ -1101,6 +1216,10 @@ let main (): Unit = {
         cmd_defs(argv[1]);
     } else if argv[0] == "complete" {
         cmd_complete(argv[1]);
+    } else if argv[0] == "members" && argv.len() >= 5 {
+        cmd_members(argv[1], argv[2],
+            Result.unwrap_or(String.parse_int(argv[3]), 1),
+            Result.unwrap_or(String.parse_int(argv[4]), 1));
     } else if argv[0] == "new" {
         cmd_new(argv[1]);
     } else if argv[0] == "check" {

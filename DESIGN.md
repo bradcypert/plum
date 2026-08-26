@@ -14235,3 +14235,77 @@ both told readers to `cargo install --path crates/plumc`.
 DESIGN.md keeps its Rust sections. They are a log of how this got built,
 not a description of what is here — do not copy IR out of them, since
 the runtimes were never interchangeable.
+
+## Dot completion, and two bugs found on the way (2026-08-26)
+
+`p.` now completes to the members of whatever precedes the dot: a
+struct's fields with their declared types, and every function
+namespaced under that type. The type comes from the CHECKER's recorded
+type table — the same one hover reads — so it works on a local whose
+type was never written down.
+
+Deliberately narrow: the base must be a plain identifier. `foo().bar.`
+needs the type of an arbitrary expression, which is a different
+problem, and `plum members` returns an empty list there. The language
+server treats empty as "not a dot context" and falls back to the
+whole-project name list, so one subcommand decides which kind of
+completion a request is and the lexing stays in the compiler, where the
+lexer is.
+
+Building it turned up two bugs that had nothing to do with completion.
+
+### The prelude was parsed under the user's file path
+
+`parse_program` stamps `parser.current_path()` onto every item, and
+`cg_with_prelude` never set one — so prelude items inherited the path
+of the last file `collect_project` happened to read.
+
+Harmless for compiling, and wrong for anything that looks up a source
+POSITION. The checker's recorded-type table keyed prelude identifiers to
+the user's file, at prelude offsets. `plum query` — which is what hover
+runs — answered a position in the user's code with a prelude local: for
+a `p: Point` it reported `o: Option[T]`.
+
+The prelude is now parsed under `<prelude>`, which is not a path any
+file can have, and the previous context is restored afterwards because
+callers parse the prelude in the middle of handling a real file.
+
+**Nothing caught this.** `lsp-smoke` asserts hover on specific
+positions in small fixtures, and those happened not to collide.
+
+### Ordered comparison of Strings compared ADDRESSES
+
+`<`, `<=`, `>` and `>=` on `String` fell through to the generic binary
+emitter, which produced `icmp slt ptr`. It always gave an answer, so
+nothing crashed; the answer was whatever the allocator did. `"p" > "a"`
+was false, while `id("p") > id("a")` was true — the literal/runtime
+split, because a literal is a global constant and a computed string is
+a heap cell.
+
+Equality was never affected: `==` and `!=` route through `cg_eq_code`,
+which is structural. Only the four ordered comparisons fell through.
+
+**The corpus could not have caught it, because the prelude works around
+it.** `Array.sort_string` sorts with `string_le`, not `<=`. The one
+place in the whole language where strings are ordered in anger never
+used the operators, so they were wrong for as long as they existed and
+every test passed.
+
+Found by writing `is_ident_char` — `c >= "a" && c <= "z"` — for the
+completion lexing, and watching it return false for `p`. Fixed by
+emitting a call to `@plum_str_cmp_raw`, the same comparison `string_le`
+uses, so the operator and the helper can no longer disagree.
+
+`test_string_ordering` in `bootstrap/properties` pins it: trichotomy,
+mirroring, reflexivity, and the literal cases explicitly, since a
+property written only with values would have passed on half the bug.
+It fails against the previous compiler.
+
+### A two-generation confusion worth recording
+
+After fixing the comparison, dot completion still returned nothing. The
+fix was in the compiler's OUTPUT, but the compiler doing the building
+predated it — so the new compiler's own `is_ident_char`, compiled by
+the old one, was still broken. The fix only reached the code that
+needed it a generation later. This is the same rule prelude changes
+follow, arriving from a direction that does not look like the prelude.

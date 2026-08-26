@@ -235,7 +235,7 @@ published binary, on Linux, macOS and Windows.
 | diagnostics | live, as you edit, against the unsaved buffer |
 | hover | the inferred type of any identifier |
 | go-to-definition | locals, params, top-level names |
-| completion | project names, the stdlib, enum variants |
+| completion | project names, the stdlib, enum variants; fields and methods after `.` |
 
 It asks the TYPE CHECKER, so hovering a local or a parameter shows the
 type it was actually inferred to have — `doubled: Point` — and
@@ -246,23 +246,29 @@ hover.
 
 Completion offers every top-level name in your project, the standard
 library's 100-odd public functions, and every enum variant, each with
-its signature as the detail. It deliberately does **not** resolve `.` —
-that needs the type of whatever precedes the dot, which is a different
-kind of work — so there is no field completion. The whole list is
-returned and your editor filters it, which is what LSP clients do
-anyway.
+its signature as the detail. The whole list is returned and your editor
+filters it, which is what LSP clients do anyway.
+
+**After a `.`** it offers the members of whatever precedes the dot
+instead: a struct's fields with their declared types, and every
+function namespaced under that type — so `p.` on a `Point` offers `x`,
+`y` and your own `Point.shift`, while `s.` on a `String` offers the
+nineteen `String.` functions. The type comes from the checker, so this
+works on a local whose type was never written down. The base must be a
+plain identifier; `foo().bar.` returns nothing rather than guessing,
+and the editor falls back to the whole-project list.
 
 Known limits: hover and go-to-definition need the project to type-check
 cleanly, and the server re-checks per request (26ms on a small project,
-~0.9s on the compiler's own 14k lines). Field names and enum variants
-are not resolved for hover — hovering `.x` in `p.x` answers for `p`.
-Completion is unaffected by both, since it reads names from disk rather
-than inferring anything. The language server is exercised by a real LSP
+~0.9s on the compiler's own 14k lines). Hover still does not resolve
+fields or variants — hovering `.x` in `p.x` answers for `p`, even
+though completion after that same dot now knows what `x` is. The language server is exercised by a real LSP
 session in CI on all three platforms.
 
-The Rust implementation had a deeper completion — keywords, locals in
-scope, and fields after `.` — and was retired with the rest of the Rust
-code on 2026-08-25. What it did is recorded below as the specification
+The Rust implementation had a deeper completion — keywords and locals
+in scope as well as fields after `.` — and was retired with the rest of
+the Rust code on 2026-08-25. Fields after `.` are done; keywords and
+locals in scope are not. What it did is recorded below as the specification
 this server is being brought up to, not as something you can run.
 
 Two pieces, independent of each other:

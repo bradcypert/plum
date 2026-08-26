@@ -13,23 +13,41 @@
 # the same drift this project has spent its time closing everywhere
 # else: two copies of one fact, kept in step by remembering to.
 #
-#   bootstrap/check-version            # tag = $GITHUB_REF_NAME, or HEAD's tag
-#   bootstrap/check-version v0.0.1     # explicit
+#   bootstrap/check-version                  # tag from the ref, or HEAD's tag
+#   bootstrap/check-version v0.0.1           # explicit
+#   bootstrap/check-version --source-only v0.0.1
+#
+# `--source-only` skips the built-binary half, which is the half that
+# needs a compiler. It exists so a release can reject a mis-tagged
+# commit in SECONDS rather than after three platforms have each spent
+# minutes building something that can never be published. That is not
+# hypothetical: `v0.0.3` was first tagged on a commit whose
+# `plum_version` still said 0.0.2, and macOS and Windows built and
+# packaged 0.0.2-named artifacts before the Linux job noticed.
+#
+# It is strictly weaker, and both are run: the fast one gates the
+# builds, the full one still runs on Linux, because a stale BINARY is
+# invisible to a source check.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
+
+source_only=0
+if [ "${1:-}" = "--source-only" ]; then source_only=1; shift; fi
 
 declared="$(grep -oE 'pub let plum_version \(\): String = "[^"]+"' bootstrap/self_host/main.plum | grep -oE '"[^"]+"' | tr -d '"')"
 [ -n "$declared" ] || { echo "could not read plum_version from bootstrap/self_host/main.plum" >&2; exit 1; }
 
 # What the built compiler actually prints, which is the claim that
 # reaches a user. Checking the source alone would miss a stale binary.
-reported="$(./sh version 2>/dev/null | awk '{print $2}')"
-if [ "$reported" != "$declared" ]; then
-    echo "MISMATCH: source says $declared, the built compiler reports ${reported:-<nothing>}" >&2
-    echo "the binary is stale -- rebuild with ./sh build bootstrap/self_host -o sh.real" >&2
-    exit 1
+if [ $source_only -eq 0 ]; then
+    reported="$(./sh version 2>/dev/null | awk '{print $2}')"
+    if [ "$reported" != "$declared" ]; then
+        echo "MISMATCH: source says $declared, the built compiler reports ${reported:-<nothing>}" >&2
+        echo "the binary is stale -- rebuild with ./sh build bootstrap/self_host -o sh.real" >&2
+        exit 1
+    fi
 fi
 
 # `GITHUB_REF_NAME` is NOT a tag name in general -- on a push to a
@@ -45,7 +63,7 @@ if [ -z "$tag" ]; then
     esac
 fi
 if [ -z "$tag" ]; then
-    echo "version ok: $declared (no tag to compare -- HEAD is not tagged)"
+    echo "version ok: $declared$([ $source_only -eq 1 ] && echo " (source only)") (no tag to compare -- HEAD is not tagged)"
     exit 0
 fi
 
@@ -56,4 +74,8 @@ if [ "${tag#v}" != "$declared" ]; then
     exit 1
 fi
 
-echo "version ok: $declared, tag $tag, and the built compiler all agree"
+if [ $source_only -eq 1 ]; then
+    echo "version ok: source says $declared and the tag is $tag (binary NOT checked)"
+else
+    echo "version ok: $declared, tag $tag, and the built compiler all agree"
+fi
