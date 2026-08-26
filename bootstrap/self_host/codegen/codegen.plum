@@ -548,6 +548,8 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TIndex(base, idx) => cg_index(p, env, n, base, idx, cg_ty(p, e)),
         TClosure(params, body) => cg_closure(p, env, n, params, body, cg_concrete(p, typecheck.texpr_ty(p.subst, e))),
         TStructLit(name, fields, spread) => cg_struct_lit(p, env, n, name, fields, spread),
+        TStructReuse(name, fields, cands) => cg_struct_reuse(p, env, n, name, fields, cands),
+        TVariantReuse(tag, args, cands) => cg_variant_reuse(p, env, n, tag, args, cands),
         TVariantNew(tag, args) => cg_variant_call(p, env, n, tag, args),
         TFnCall(m, name, args, targs) => cg_fn_call(p, env, n, m, name, args, targs, cg_ty(p, e)),
         TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
@@ -1272,6 +1274,11 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TFnCall(_, _, xs, _) => cg_reads_max_list(name, xs, 0, 0),
         TArrayNs(_, xs) => cg_reads_max_list(name, xs, 0, 0),
         TStructLit(_, fs, sp) => cg_cap2(cg_reads_max_fields(name, fs, 0, 0) + match sp { Some(b) => cg_reads_max(name, b), None => 0 }),
+        // A reuse's candidates are counted as reads: only one of them is
+        // actually moved, but which one is a decision the backend makes
+        // later, and over-counting only ever refuses a move.
+        TStructReuse(_, fs, cands) => cg_cap2(cg_reads_max_fields(name, fs, 0, 0) + (if cg_name_in(cands, name, 0) { 1 } else { 0 })),
+        TVariantReuse(_, xs, cands) => cg_cap2(cg_reads_max_list(name, xs, 0, 0) + (if cg_name_in(cands, name, 0) { 1 } else { 0 })),
         TMethodCall(_, b, xs) => cg_cap2(cg_reads_max(name, b) + cg_reads_max_list(name, xs, 0, 0)),
         TClosureCall(f, xs) => cg_cap2(cg_reads_max(name, f) + cg_reads_max_list(name, xs, 0, 0)),
         // Branches are ALTERNATIVES: only one runs, so their contribution
@@ -1337,6 +1344,268 @@ let cg_max2 (a: Int) (b: Int): Int = if a > b { a } else { b }
 
 let cg_params_shadow (ps: Array[String]) (name: String) (i: Int): Bool =
     if i >= ps.len() { false } else { if ps[i] == name { true } else { cg_params_shadow(ps, name, i + 1) } }
+
+// --- Last use ---
+//
+// `cg_reads_max` answers "how many times does this body read `name`",
+// which is a property of a WHOLE body. Reuse needs a different
+// question, asked at a POINT: at this allocation, is `v` ever read
+// again? A count cannot answer it. `Entity { x: e.x + 1, y: e.y, hp:
+// e.hp }` reads `e` three times and `e` is dead at the closing brace
+// all the same -- and that shape, a field read from the very value
+// being rebuilt, is what every struct update looks like. The case a
+// use count rejects is the normal case.
+//
+// So this pass walks the body carrying its CONTINUATION: the subtrees
+// that will be evaluated after the one it is looking at. A name is dead
+// if none of them reads it.
+//
+// The continuation is carried as EXPRESSIONS rather than as a set of
+// names, so that `cg_reads_max` -- already here, already trusted -- is
+// what answers "reads it". A second definition of what counts as a read
+// would be a second thing to keep in step with the first.
+//
+// Why a pass, rather than a field on `CgProgram` threaded through the
+// emitters the way `movable` is: a continuation that FORGETS a sibling
+// does not miss an optimisation, it miscompiles. Here every recursion
+// site is in one function and auditing them is reading it top to
+// bottom. Spread across thirty emitters, the same audit is thirty
+// places where a missing `lv_with` looks exactly like correct code.
+struct LvCtx { exprs: Array[typecheck.TExpr], names: Array[String], scope: Array[String] }
+
+// Names bound and still in scope, innermost LAST -- `lv_pick` searches
+// backwards so a shadowed outer name is never chosen over the inner one
+// the backend would resolve.
+let lv_dead (ctx: LvCtx) (v: String): Bool =
+    if cg_name_in(ctx.names, v, 0) { false } else { lv_none_read(ctx.exprs, v, 0) }
+
+let lv_none_read (xs: Array[typecheck.TExpr]) (v: String) (i: Int): Bool =
+    if i >= xs.len() { true }
+    else if cg_reads_max(v, xs[i]) > 0 { false }
+    else { lv_none_read(xs, v, i + 1) }
+
+let lv_with (ctx: LvCtx) (extra: Array[typecheck.TExpr]): LvCtx =
+    LvCtx { exprs: lv_cat(ctx.exprs, extra, 0), names: ctx.names, scope: ctx.scope }
+
+let lv_cat (a: Array[typecheck.TExpr]) (b: Array[typecheck.TExpr]) (i: Int): Array[typecheck.TExpr] =
+    if i >= b.len() { a } else { lv_cat(a.push(b[i]), b, i + 1) }
+
+let lv_cat_names (a: Array[String]) (b: Array[String]) (i: Int): Array[String] =
+    if i >= b.len() { a } else { lv_cat_names(a.push(b[i]), b, i + 1) }
+
+let lv_scoped (ctx: LvCtx) (names: Array[String]): LvCtx =
+    LvCtx { exprs: ctx.exprs, names: ctx.names, scope: lv_cat_names(ctx.scope, names, 0) }
+
+let lv_rest (xs: Array[typecheck.TExpr]) (from: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
+    if from >= xs.len() { acc } else { lv_rest(xs, from + 1, acc.push(xs[from])) }
+
+// A list evaluated LEFT TO RIGHT: element `i`'s continuation is
+// everything after it, plus whatever follows the list itself.
+let lv_seq (ctx: LvCtx) (xs: Array[typecheck.TExpr]) (i: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
+    if i >= xs.len() { acc }
+    else { lv_seq(ctx, xs, i + 1, acc.push(lv_expr(lv_with(ctx, lv_rest(xs, i + 1, [])), xs[i]))) }
+
+let lv_opt (ctx: LvCtx) (o: Option[typecheck.TExpr]): Option[typecheck.TExpr] =
+    match o { None => None, Some(x) => Some(lv_expr(ctx, x)) }
+
+let lv_opt_list (o: Option[typecheck.TExpr]): Array[typecheck.TExpr] =
+    match o { None => [], Some(x) => [x] }
+
+let lv_expr (ctx: LvCtx) (e: typecheck.TExpr): typecheck.TExpr =
+    typecheck.TExpr { ty: e.ty, node: lv_node(ctx, e.node) }
+
+let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
+    match node {
+        // Leaves: nothing to rewrite, nothing evaluated after them.
+        TInt(_) => node,
+        TFloat(_) => node,
+        TStr(_) => node,
+        TBool(_) => node,
+        TUnitLit => node,
+        TIdent(_) => node,
+        TGlobalRef(_, _) => node,
+        TUnsupported(_) => node,
+        TChannelNew => node,
+        TUnary(op, a) => TUnary(op, lv_expr(ctx, a)),
+        TFieldGet(a, f) => TFieldGet(lv_expr(ctx, a), f),
+        TPrintln(a) => TPrintln(lv_expr(ctx, a)),
+        TTaskJoin(a) => TTaskJoin(lv_expr(ctx, a)),
+        TChannelRecv(a) => TChannelRecv(lv_expr(ctx, a)),
+        TAsCStr(a) => TAsCStr(lv_expr(ctx, a)),
+        TAsString(a) => TAsString(lv_expr(ctx, a)),
+        TRefNew(a) => TRefNew(lv_expr(ctx, a)),
+        TBinary(op, a, b) => TBinary(op, lv_expr(lv_with(ctx, [b]), a), lv_expr(ctx, b)),
+        TIndex(a, b) => TIndex(lv_expr(lv_with(ctx, [b]), a), lv_expr(ctx, b)),
+        TChannelSend(a, b) => TChannelSend(lv_expr(lv_with(ctx, [b]), a), lv_expr(ctx, b)),
+        TArrayLit(xs) => TArrayLit(lv_seq(ctx, xs, 0, [])),
+        TTupleLit(xs) => TTupleLit(lv_seq(ctx, xs, 0, [])),
+        // An enum rebuild names its candidate nowhere in its own
+        // arguments -- `match c { Count(k) => Count(k + 1) }` reads `k`,
+        // not `c`. The cell to recycle is the SCRUTINEE, which is why
+        // candidacy is deadness alone and not "mentioned here".
+        TVariantNew(nm, xs) => {
+            let xs2 = lv_seq(ctx, xs, 0, []);
+            let cands = lv_candidates(ctx, ctx.scope.len() - 1, []);
+            if Array.is_empty(cands) { TVariantNew(nm, xs2) } else { TVariantReuse(nm, xs2, cands) }
+        },
+        TFnCall(m, nm, xs, targs) => TFnCall(m, nm, lv_seq(ctx, xs, 0, []), targs),
+        TArrayNs(nm, xs) => TArrayNs(nm, lv_seq(ctx, xs, 0, [])),
+        TExternCall(nm, xs) => TExternCall(nm, lv_seq(ctx, xs, 0, [])),
+        TClosureCall(f, xs) => TClosureCall(lv_expr(lv_with(ctx, xs), f), lv_seq(ctx, xs, 0, [])),
+        TMethodCall(m, b, xs) => TMethodCall(m, lv_expr(lv_with(ctx, xs), b), lv_seq(ctx, xs, 0, [])),
+        // Branches are ALTERNATIVES, so each is rewritten under the
+        // continuation of the `if` ITSELF -- what the other branch reads
+        // is irrelevant to it, because the two never both run. The
+        // condition, which runs before either, sees both.
+        TIf(c, t, e2) => TIf(lv_expr(lv_with(ctx, lv_cat([t], lv_opt_list(e2), 0)), c),
+            lv_expr(ctx, t), lv_opt(ctx, e2)),
+        TMatch(sc, arms) => TMatch(lv_expr(lv_with(ctx, lv_arm_exprs(arms, 0, [])), sc), lv_arms(ctx, arms, 0, [])),
+        TBlockE(b) => TBlockE(lv_block(ctx, b, 0, ctx.scope, [])),
+        // A loop body and a closure body can run AGAIN. Pushing the body
+        // into its own continuation is the back edge: anything the body
+        // reads is live at the end of the body, so nothing read in a
+        // loop is ever dead inside it.
+        TFor(pat, lo, hi, body) => TFor(pat,
+            lv_expr(lv_with(ctx, [hi, body]), lo),
+            lv_expr(lv_with(ctx, [body]), hi),
+            lv_expr(lv_scoped(lv_with(ctx, [body]), lv_pat_names(pat, [])), body)),
+        TForArray(pat, arr, body) => TForArray(pat,
+            lv_expr(lv_with(ctx, [body]), arr),
+            lv_expr(lv_scoped(lv_with(ctx, [body]), lv_pat_names(pat, [])), body)),
+        TClosure(ps, body) => TClosure(ps, lv_expr(lv_scoped(lv_with(ctx, [body]), ps), body)),
+        // `spawn` runs its block on another thread, at a time nothing
+        // here orders. Everything it touches stays live.
+        TSpawn(a) => TSpawn(lv_expr(lv_with(ctx, [a]), a)),
+        // Already a reuse -- the pass is not run twice, but an arm is
+        // cheaper than an assumption.
+        TStructReuse(_, _, _) => node,
+        TVariantReuse(_, _, _) => node,
+        TStructLit(sname, fs, sp) => {
+            let fs2 = lv_fields(ctx, fs, 0, [], lv_opt_list(sp));
+            match sp {
+                // A spread base is itself released after its fields are
+                // copied out. Reusing it as the cell would mean moving
+                // and releasing the same reference; left alone until
+                // that is expressed properly.
+                Some(b) => TStructLit(sname, fs2, Some(lv_expr(ctx, b))),
+                None => {
+                    let cands = lv_candidates(ctx, ctx.scope.len() - 1, []);
+                    if Array.is_empty(cands) { TStructLit(sname, fs2, None) } else { TStructReuse(sname, fs2, cands) }
+                },
+            }
+        },
+    }
+
+// Field values are evaluated left to right, then the spread base.
+let lv_fields (ctx: LvCtx) (fs: Array[typecheck.TFieldInit]) (i: Int) (acc: Array[typecheck.TFieldInit]) (after: Array[typecheck.TExpr]): Array[typecheck.TFieldInit] =
+    if i >= fs.len() { acc }
+    else {
+        let rest = lv_cat(lv_field_rest(fs, i + 1, []), after, 0);
+        lv_fields(ctx, fs, i + 1,
+            acc.push(typecheck.TFieldInit { name: fs[i].name, value: lv_expr(lv_with(ctx, rest), fs[i].value) }), after)
+    }
+
+let lv_field_rest (fs: Array[typecheck.TFieldInit]) (from: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
+    if from >= fs.len() { acc } else { lv_field_rest(fs, from + 1, acc.push(fs[from].value)) }
+
+// Every in-scope name dead at this point, innermost FIRST -- the
+// backend takes the first it can represent, and innermost-first is what
+// stops a shadowed outer name being offered ahead of the inner one the
+// backend would resolve.
+//
+// Whether a candidate CLASHES with the other move analysis is settled
+// in `cg_reuse_slot`, not here -- this pass has no types and cannot
+// tell which of these names the backend would even accept.
+let lv_candidates (ctx: LvCtx) (i: Int) (acc: Array[String]): Array[String] =
+    if i < 0 { acc }
+    else if lv_dead(ctx, ctx.scope[i]) { lv_candidates(ctx, i - 1, acc.push(ctx.scope[i])) }
+    else { lv_candidates(ctx, i - 1, acc) }
+
+let lv_arm_exprs (arms: Array[typecheck.TArm]) (i: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
+    if i >= arms.len() { acc }
+    else { lv_arm_exprs(arms, i + 1, lv_cat(acc.push(arms[i].body), lv_opt_list(arms[i].guard), 0)) }
+
+let lv_arms (ctx: LvCtx) (arms: Array[typecheck.TArm]) (i: Int) (acc: Array[typecheck.TArm]): Array[typecheck.TArm] =
+    if i >= arms.len() { acc }
+    else {
+        let inner = lv_scoped(ctx, lv_pat_names(arms[i].pattern, []));
+        lv_arms(ctx, arms, i + 1, acc.push(typecheck.TArm {
+            pattern: arms[i].pattern,
+            guard: lv_opt(lv_with(inner, [arms[i].body]), arms[i].guard),
+            body: lv_expr(inner, arms[i].body),
+        }))
+    }
+
+// Statement `i`'s continuation is every LATER statement's value, then
+// the tail. A later ASSIGNMENT to a name is not a read, but treating it
+// as one costs nothing and removes a case to be wrong about.
+let lv_block (ctx: LvCtx) (b: typecheck.TBlock) (i: Int) (scope: Array[String]) (acc: Array[typecheck.TStmt]): typecheck.TBlock =
+    if i >= b.stmts.len() {
+        typecheck.TBlock { stmts: acc, tail: lv_opt(LvCtx { exprs: ctx.exprs, names: ctx.names, scope: scope }, b.tail) }
+    } else {
+        let sctx = LvCtx {
+            exprs: lv_cat(lv_cat(ctx.exprs, lv_stmt_rest(b.stmts, i + 1, []), 0), lv_opt_list(b.tail), 0),
+            names: lv_cat_names(ctx.names, lv_assigned(b.stmts, i + 1, []), 0),
+            scope: scope,
+        };
+        match b.stmts[i] {
+            TSLet(pat, v) => lv_block(ctx, b, i + 1, lv_cat_names(scope, lv_pat_names(pat, []), 0),
+                acc.push(TSLet(pat, lv_expr(sctx, v)))),
+            TSAssign(nm, v) => lv_block(ctx, b, i + 1, scope, acc.push(TSAssign(nm, lv_expr(sctx, v)))),
+            TSExpr(v) => lv_block(ctx, b, i + 1, scope, acc.push(TSExpr(lv_expr(sctx, v)))),
+        }
+    }
+
+let lv_stmt_rest (stmts: Array[typecheck.TStmt]) (from: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
+    if from >= stmts.len() { acc }
+    else {
+        lv_stmt_rest(stmts, from + 1, acc.push(match stmts[from] {
+            TSLet(_, v) => v,
+            TSAssign(_, v) => v,
+            TSExpr(v) => v,
+        }))
+    }
+
+let lv_assigned (stmts: Array[typecheck.TStmt]) (from: Int) (acc: Array[String]): Array[String] =
+    if from >= stmts.len() { acc }
+    else {
+        lv_assigned(stmts, from + 1, match stmts[from] {
+            TSAssign(nm, _) => acc.push(nm),
+            TSLet(_, _) => acc,
+            TSExpr(_) => acc,
+        })
+    }
+
+let lv_pat_names (pat: parser.PPattern) (acc: Array[String]): Array[String] =
+    match pat {
+        PIdent(v, _) => acc.push(v),
+        PTuple(ps) => lv_pat_names_all(ps, 0, acc),
+        PVariant(_, ps) => lv_pat_names_all(ps, 0, acc),
+        POr(ps) => lv_pat_names_all(ps, 0, acc),
+        PStruct(_, fps, _) => lv_field_pat_names(fps, 0, acc),
+        PInt(_) => acc,
+        PFloat(_) => acc,
+        PStr(_) => acc,
+        PBool(_) => acc,
+        PWildcard => acc,
+    }
+
+let lv_pat_names_all (ps: Array[parser.PPattern]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= ps.len() { acc } else { lv_pat_names_all(ps, i + 1, lv_pat_names(ps[i], acc)) }
+
+let lv_field_pat_names (fps: Array[parser.FieldPatternNode]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= fps.len() { acc } else { lv_field_pat_names(fps, i + 1, lv_pat_names(fps[i].pattern, acc)) }
+
+// A function body, rewritten. Its parameters are the outermost scope
+// and there is nothing after the body, so the continuation starts
+// empty: whatever the body's last expression reads, nothing reads
+// afterwards.
+let lv_fn (params: Array[typecheck.TParam]) (body: typecheck.TExpr): typecheck.TExpr =
+    lv_expr(LvCtx { exprs: [], names: [], scope: lv_param_names(params, 0, []) }, body)
+
+let lv_param_names (params: Array[typecheck.TParam]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= params.len() { acc } else { lv_param_names(params, i + 1, acc.push(params[i].name)) }
+
 
 let cg_reads_max_list (name: String) (xs: Array[typecheck.TExpr]) (i: Int) (acc: Int): Int =
     if i >= xs.len() { cg_cap2(acc) } else { cg_reads_max_list(name, xs, i + 1, cg_cap2(acc + cg_reads_max(name, xs[i]))) }
@@ -2521,29 +2790,190 @@ let cg_store_tuple (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (
 // declared index. Fields are stored in DECLARATION order regardless of
 // the order they were written in the literal, which is what makes a
 // field read a fixed offset.
+// The cell is allocated AFTER every field value and the spread base
+// have been computed, not before. Nothing about the emitted code
+// depends on the order -- LLVM sees the same stores either way -- but
+// the ORDER is what makes reuse expressible: a cell can only be handed
+// over to a literal once everything that reads the old one has read it.
+// Allocating first, as this did, meant the answer to "is there a dead
+// cell of the right size here?" was always "not yet".
 let cg_struct_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (fields: Array[typecheck.TFieldInit]) (spread: Option[typecheck.TExpr]): Emit = {
     let field_names = typecheck.ctx_field_names(p.ctx, name);
-    let cell = cg_reg(n);
-    let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((8 + 8 * field_names.len()).to_string()).concat(")\n");
-    let f = cg_store_fields(p, env, n + 1, field_names, cell, fields, 0, "", "", "", "");
+    let ev = cg_eval_fields(p, env, field_names, fields, 0,
+        EvalFields { code: "", allocas: "", releases: "", globals: "", vals: [], n: n });
     match spread {
-        None => Emit { code: head.concat(f.code), allocas: f.allocas, releases: f.releases,globals: f.globals, val: cell, ty: CgStruct(name), n: f.n },
+        None => {
+            let cell = cg_reg(ev.n);
+            let st = cg_store_evald(cell, ev.vals, 0, ev.n + 1, "");
+            Emit { code: ev.code.concat(cg_cell_alloc(cell, field_names.len())).concat(st.code),
+                allocas: ev.allocas, releases: ev.releases, globals: ev.globals,
+                val: cell, ty: CgStruct(name), n: st.n }
+        },
         // `..base` fills in every position the literal did not mention.
         // The base is evaluated ONCE, each copied field is incremented
         // as it is stored -- the new cell owns its own reference to a
         // shared field, exactly as if it had been written out -- and the
         // base is then released.
         Some(base) => {
-            let b = cg_expr(p, env, f.n, base);
+            let b = cg_expr(p, env, ev.n, base);
             let ity = cg_concrete(p, typecheck.texpr_ty(p.subst, base));
-            let copies = cg_copy_missing_fields(p, field_names, cg_struct_field_itys(p, ity, name), fields, cell, b.val, 0, b.n, "");
+            let cell = cg_reg(b.n);
+            let st = cg_store_evald(cell, ev.vals, 0, b.n + 1, "");
+            let copies = cg_copy_missing_fields(p, field_names, cg_struct_field_itys(p, ity, name), fields, cell, b.val, 0, st.n, "");
             Emit {
-                code: head.concat(f.code).concat(b.code).concat(copies.code).concat(cg_dec(ity, b.val)),
-                allocas: f.allocas.concat(b.allocas), releases: f.releases.concat(b.releases), globals: f.globals.concat(b.globals),
+                code: ev.code.concat(b.code).concat(cg_cell_alloc(cell, field_names.len())).concat(st.code)
+                    .concat(copies.code).concat(cg_dec(ity, b.val)),
+                allocas: ev.allocas.concat(b.allocas), releases: ev.releases.concat(b.releases), globals: ev.globals.concat(b.globals),
                 val: cell, ty: CgStruct(name), n: copies.n,
             }
         },
     }
+}
+
+let cg_cell_alloc (cell: String) (nfields: Int): String =
+    "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((8 + 8 * nfields).to_string()).concat(")\n")
+
+// A struct literal that may RECYCLE a dead local's cell instead of
+// allocating one.
+//
+// Eligibility is decided here rather than in the pass, because it is a
+// question about REPRESENTATION -- how big the old cell is, and whether
+// it holds references somebody would have to release -- and the pass
+// deals in names. A candidate that does not qualify simply falls back
+// to an ordinary literal, so proposing one costs nothing.
+//
+// There is no branch in the emitted code. `@plum_alloc_reuse` decides
+// at runtime and returns a cell either way, which is only possible
+// because the candidate's own release needs no per-type knowledge --
+// see `cg_reuse_slot` for the restriction that buys that.
+let cg_struct_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (fields: Array[typecheck.TFieldInit]) (cands: Array[String]): Emit = {
+    let field_names = typecheck.ctx_field_names(p.ctx, name);
+    match cg_first_reuse_slot(p, env, cands, 0, 8 + 8 * field_names.len()) {
+        None => cg_struct_lit(p, env, n, name, fields, None),
+        Some(slot) => {
+            let ev = cg_eval_fields(p, env, field_names, fields, 0,
+                EvalFields { code: "", allocas: "", releases: "", globals: "", vals: [], n: n });
+            let old = cg_reg(ev.n);
+            let cell = cg_reg(ev.n + 1);
+            let st = cg_store_evald(cell, ev.vals, 0, ev.n + 2, "");
+            // Nulling the slot is what makes the move need no path
+            // analysis of its own: the slot's release at function exit
+            // still runs and is null-safe, so it is a no-op on exactly
+            // the paths where the reference left. The same trick as
+            // `cg_move_or_own`, for the same reason.
+            let take = "  ".concat(old).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
+                .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
+                .concat("  ").concat(cell).concat(" = call ptr @plum_alloc_reuse(ptr ").concat(old)
+                .concat(", i64 ").concat((8 + 8 * field_names.len()).to_string()).concat(")\n");
+            Emit { code: ev.code.concat(take).concat(st.code),
+                allocas: ev.allocas, releases: ev.releases, globals: ev.globals,
+                val: cell, ty: CgStruct(name), n: st.n }
+        },
+    }
+}
+
+// The first candidate whose cell can stand in for a fresh one of
+// `want` bytes.
+//
+// A cell qualifies when it is at least as big and holds NO heap
+// fields. The second condition is the one that matters:
+// `@plum_alloc_reuse` releases the candidate on the path where it
+// cannot be reused, and a release that carries no type information can
+// only be right for a cell with no children to release. It is also what
+// makes the payloads read out of the old cell safe to keep -- a scalar
+// read is a COPY, where a String field would leave a borrowed pointer
+// into memory about to be overwritten.
+//
+// Generic types are excluded outright: their field types are templates
+// here, and a type variable's representation is not settled enough to
+// promise it is not heap-shaped.
+let cg_first_reuse_slot (p: CgProgram) (env: Array[CgSlot]) (cands: Array[String]) (i: Int) (want: Int): Option[CgSlot] =
+    if i >= cands.len() { None }
+    else {
+        match cg_reuse_slot(p, env, cands[i], want) {
+            Some(slot) => Some(slot),
+            None => cg_first_reuse_slot(p, env, cands, i + 1, want),
+        }
+    }
+
+// A name the concat move already claimed is left to it. Nothing can be
+// both today -- that one takes a String base, this one takes a struct
+// or an enum -- but "nothing can be both" is a fact about two other
+// functions, and it is cheaper to enforce it here than to notice later
+// that one of them changed.
+let cg_reuse_slot (p: CgProgram) (env: Array[CgSlot]) (cand: String) (want: Int): Option[CgSlot] =
+    if cg_rc_enabled(()) && !cg_is_movable(p, cand) {
+        match cg_lookup(env, cand) {
+            None => None,
+            Some(slot) => match slot.ty {
+                CgStruct(sname) =>
+                    if 8 + 8 * typecheck.ctx_field_names(p.ctx, sname).len() >= want
+                        && Array.is_empty(typecheck.ctx_struct_generics(p.ctx, sname))
+                        && cg_all_plain(typecheck.ctx_field_types(p.ctx, sname), 0) { Some(slot) }
+                    else { None },
+                CgEnum(ename) =>
+                    if cg_enum_cell_size(p, ename) >= want && cg_enum_all_plain(p, ename) { Some(slot) }
+                    else { None },
+                _ => None,
+            },
+        }
+    } else { None }
+
+// Every payload of every variant, scalar. One heap payload ANYWHERE in
+// the enum disqualifies the whole type: which variant a cell holds is a
+// runtime fact and the reuse decision is a compile-time one, so the
+// only safe question is about the type as a whole.
+let cg_enum_all_plain (p: CgProgram) (ename: String): Bool =
+    match typecheck.ctx_enum_tags(p.ctx, ename) {
+        None => false,
+        Some(tags) => cg_tags_plain(p, tags, 0),
+    }
+
+let cg_tags_plain (p: CgProgram) (tags: Array[String]) (i: Int): Bool =
+    if i >= tags.len() { true }
+    else if Array.is_empty(typecheck.ctx_variant_generics(p.ctx, tags[i]))
+        && cg_all_plain(typecheck.ctx_variant_payload(p.ctx, tags[i]), 0) { cg_tags_plain(p, tags, i + 1) }
+    else { false }
+
+let cg_all_plain (tys: Array[typecheck.ITy]) (i: Int): Bool =
+    if i >= tys.len() { true }
+    else if cg_is_heap(cg_of_ity(tys[i])) { false }
+    else { cg_all_plain(tys, i + 1) }
+
+// `Count(k + 1)` recycling the cell `c` that `k` was matched out of.
+// The enum case needs no reordering the way the struct case did:
+// `cg_variant_build` already evaluates its arguments before it
+// allocates, so the move slots straight in between.
+//
+// The new tag and payloads overwrite the old ones. Payload slots the
+// NEW variant does not use keep whatever the old one left there, which
+// is unreadable -- a payload is only ever loaded under a matching tag
+// -- and harmless, because nothing in a qualifying cell is a reference.
+let cg_variant_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (tag: String) (args: Array[typecheck.TExpr]) (cands: Array[String]): Emit =
+    match cg_find_variant(p, tag) {
+        None => { cg_fail("internal: unknown variant reached codegen: ".concat(tag)); cg_unit_emit(n) },
+        Some(v) => {
+            let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
+            match cg_first_reuse_slot(p, env, cands, 0, cg_enum_cell_size(p, cg_enum_of_variant(p, v.name))) {
+                None => cg_variant_build(p, v, a),
+                Some(slot) => cg_variant_build_reuse(p, v, a, slot),
+            }
+        },
+    }
+
+let cg_variant_build_reuse (p: CgProgram) (v: CgVariant) (a: ArgVals) (slot: CgSlot): Emit = {
+    let enum_name = cg_enum_of_variant(p, v.name);
+    let old = cg_reg(a.n);
+    let cell = cg_reg(a.n + 1);
+    let head = "  ".concat(old).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
+        .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
+        .concat("  ").concat(cell).concat(" = call ptr @plum_alloc_reuse(ptr ").concat(old)
+        .concat(", i64 ").concat(cg_enum_cell_size(p, enum_name).to_string()).concat(")\n")
+        .concat("  ").concat(cell).concat("_t = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
+        .concat("  store i64 ").concat(v.tag.to_string()).concat(", ptr ").concat(cell).concat("_t\n");
+    let stores = cg_store_payload(cell, a.vals, 0, a.n + 2, "");
+    Emit { code: a.code.concat(head).concat(stores.code), allocas: a.allocas, releases: a.releases, globals: a.globals,
+        val: cell, ty: CgEnum(enum_name), n: stores.n }
 }
 
 struct CopyEmit { code: String, n: Int }
@@ -2576,17 +3006,32 @@ let cg_struct_field_itys (p: CgProgram) (ity: typecheck.ITy) (name: String): Arr
 
 struct FieldsEmit { code: String, allocas: String, releases: String, globals: String, n: Int }
 
-let cg_store_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (field_names: Array[String]) (cell: String) (fields: Array[typecheck.TFieldInit]) (i: Int) (code: String) (allocas: String) (releases: String) (globals: String): FieldsEmit =
-    if i >= fields.len() { FieldsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
+// A field value already computed into a register, waiting to be stored.
+// Splitting EVALUATION from STORING is the whole point: the two used to
+// be one recursive walk that computed a value and immediately wrote it
+// into a cell that therefore had to exist already.
+struct EvaldField { idx: Int, lty: String, val: String }
+
+struct EvalFields { code: String, allocas: String, releases: String, globals: String, vals: Array[EvaldField], n: Int }
+
+let cg_eval_fields (p: CgProgram) (env: Array[CgSlot]) (field_names: Array[String]) (fields: Array[typecheck.TFieldInit]) (i: Int) (acc: EvalFields): EvalFields =
+    if i >= fields.len() { acc }
     else {
-        let idx = cg_field_index(field_names, fields[i].name, 0);
-        let r = cg_expr(p, env, n, fields[i].value);
-        let fp = cg_reg(r.n);
-        let line = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(idx).to_string()).concat("
-")
-            .concat("  store ").concat(cg_llvm_ty(r.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(fp).concat("
-");
-        cg_store_fields(p, env, r.n + 1, field_names, cell, fields, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
+        let r = cg_expr(p, env, acc.n, fields[i].value);
+        cg_eval_fields(p, env, field_names, fields, i + 1,
+            EvalFields { code: acc.code.concat(r.code), allocas: acc.allocas.concat(r.allocas),
+                releases: acc.releases.concat(r.releases), globals: acc.globals.concat(r.globals),
+                vals: acc.vals.push(EvaldField { idx: cg_field_index(field_names, fields[i].name, 0), lty: cg_llvm_ty(r.ty), val: r.val }),
+                n: r.n })
+    }
+
+let cg_store_evald (cell: String) (vals: Array[EvaldField]) (i: Int) (n: Int) (acc: String): CopyEmit =
+    if i >= vals.len() { CopyEmit { code: acc, n: n } }
+    else {
+        let fp = cg_reg(n);
+        let line = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(vals[i].idx).to_string()).concat("\n")
+            .concat("  store ").concat(vals[i].lty).concat(" ").concat(vals[i].val).concat(", ptr ").concat(fp).concat("\n");
+        cg_store_evald(cell, vals, i + 1, n + 1, acc.concat(line))
     }
 
 // `ref(v)`: a two-word cell, `{ i64 refcount, i64 value }`. The value
@@ -3098,12 +3543,24 @@ struct FnEmit { text: String, next: Int }
 // during its inference. Each function was inferred independently, so
 // each has its own.
 let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0: Int): FnEmit = {
+    // The body the backend emits is the body the LAST-USE pass rewrote:
+    // the same program, with allocations that can recycle a dead cell
+    // marked as such.
+    //
+    // `movable` is derived from the REWRITTEN body, because a reuse ADDS
+    // a read -- the candidate is moved out of its slot -- and a name
+    // counted on the original could look read-once while the emitted
+    // code reads it twice. `cg_reads_max` counts a node's whole
+    // candidate LIST as a read for that reason: it over-counts, since
+    // only one is ever taken, and over-counting only refuses a move.
+    let lbody = lv_fn(def.params, def.body);
+    let mov = cg_movable_params(lbody, def.params, 0, []);
     let p = CgProgram { fns: p0.fns, globals: p0.globals, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs,
-        movable: cg_movable_params(def.body, def.params, 0, []) };
+        movable: mov };
     let params = cg_params_of(p, def.params, 0, []);
     let entry = cg_param_slots(params, Array.map(def.params, |q| cg_concrete(p, q.ty)), 0, [], "", "");
     let ret = cg_of_ity(cg_concrete(p, def.ret));
-    let body = cg_expr(p, entry.env, n0, def.body);
+    let body = cg_expr(p, entry.env, n0, lbody);
     let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(cg_sym(def.module, def.name, targs)).concat("(").concat(cg_param_decls(params)).concat(") {\nentry:\n");
     // Every `alloca` is hoisted here, at the top of the entry block,
     // ahead of any instruction that could branch — see `Emit`'s own
@@ -4296,6 +4753,8 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TForArray(_, arr, body) => cg_rel_in(p, body, cg_rel_in(p, arr, here)),
         TClosure(_, body) => cg_rel_in(p, body, here),
         TStructLit(_, fields, sp) => cg_rel_in_fields(p, fields, 0, match sp { Some(b) => cg_rel_in(p, b, here), None => here }),
+        TStructReuse(_, fields, _) => cg_rel_in_fields(p, fields, 0, here),
+        TVariantReuse(_, xs, _) => cg_rel_in_list(p, xs, 0, here),
         TInt(_) => here, TFloat(_) => here, TStr(_) => here, TBool(_) => here,
         TUnitLit => here, TIdent(_) => here, TGlobalRef(_, _) => here, TUnsupported(_) => here,
     }
@@ -4381,6 +4840,8 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TForArray(_, arr, body) => cg_eq_in(p, body, cg_eq_in(p, arr, acc)),
         TClosure(_, body) => cg_eq_in(p, body, acc),
         TStructLit(_, fields, sp) => cg_eq_in_fields(p, fields, 0, match sp { Some(b) => cg_eq_in(p, b, acc), None => acc }),
+        TStructReuse(_, fields, _) => cg_eq_in_fields(p, fields, 0, acc),
+        TVariantReuse(_, xs, _) => cg_eq_in_list(p, xs, 0, acc),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
         TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
     }
@@ -4470,6 +4931,8 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TForArray(_, arr, body) => cg_calls_in(p, body, cg_calls_in(p, arr, acc)),
         TClosure(_, body) => cg_calls_in(p, body, acc),
         TStructLit(_, fields, sp) => cg_calls_in_fields(p, fields, 0, match sp { Some(b) => cg_calls_in(p, b, acc), None => acc }),
+        TStructReuse(_, fields, _) => cg_calls_in_fields(p, fields, 0, acc),
+        TVariantReuse(_, xs, _) => cg_calls_in_list(p, xs, acc),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
         TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
     }

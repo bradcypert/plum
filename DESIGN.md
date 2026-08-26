@@ -14378,3 +14378,220 @@ identifier. `p.x.to_string()` answers nothing for `to_string`, because
 the thing before that dot is an expression rather than a name. Nothing
 is better than a guess here, and the fallback is the ordinary
 identifier lookup, so hovering `p` in `p.x` still answers about `p`.
+
+## FBIP does not apply to user types (2026-08-26)
+
+> Superseded the same day by "FBIP, landed for scalar structs and
+> enums" at the end of this file. The measurement below was correct;
+> the conclusion about what it would take to fix was too pessimistic.
+
+Measured, not assumed. `PLUM_RT_STATS=1` counts allocations; each of
+these runs the operation 1000 times:
+
+| operation | allocations |
+|---|---|
+| `s.concat("x")` — String | 65 |
+| `xs.push(n)` — Array | 10 |
+| `P { x: p.x + 1, y: p.y }` — a user struct | **1002** |
+
+Strings and arrays reuse their allocation in place. A user struct
+allocates once per update, every time.
+
+That matters more than a missing optimisation, because it is the
+language's stated reason to exist. VISION.md: *"You write code that
+looks like it assumes a garbage collector exists. The compiler makes it
+behave like it doesn't"* — via *"reference counting plus
+compiler-driven functional-but-in-place optimization"*. The refcounting
+half is real. The compiler-driven-in-place half exists for exactly two
+built-in types, as a runtime `rc == 1` check inside
+`@plum_str_concat_reuse` and the array growth path, and not at all for
+the data users define. The case VISION.md names first — game entity
+updates, frame-time predictability — is the case that allocates.
+
+### Why a reuse branch is not enough
+
+The obvious fix is to emit, at a `P { ..., ..base }` site, a runtime
+check on `base`'s refcount: if it is 1, write the changed fields into
+it and return it; otherwise allocate and copy as now.
+
+That cannot fire. Reading a variable RETAINS it, so at the check
+`base`'s count is already at least 2 — its own slot plus the temporary.
+The check would be dead code in exactly the case it exists for.
+
+Making it fire requires knowing that this read is the LAST use of the
+variable, so the read can MOVE rather than retain. That is the general
+last-use analysis, and it is the actual work.
+
+This codebase already knows. `cg_reads_max`, capped at 2, is a
+narrow version of exactly that question, and it is why `s = s.concat(x)`
+and `xs = xs.push(v)` reuse at all — they are hand-recognised
+statement shapes. The comment beside them says so:
+
+> worth special-casing even though a general last-use analysis would
+> subsume it
+
+Three separate accidental O(n²) blowups drove those special cases. A
+general analysis would have prevented all three and would extend to
+every user type for free.
+
+### Sequencing
+
+The order is: last-use analysis first, reuse second. A reuse branch
+built before the analysis is untestable — it would compile, pass every
+fixture, and never execute its own fast path, which is the worst
+possible state for a compiler optimisation to be in.
+
+`PLUM_RT_STATS` is the measurement that makes this checkable at all,
+and any work here should pin those three numbers in a harness before
+changing anything, so "did it help" is a diff rather than an opinion.
+
+### The analysis has to be liveness, not a use count (2026-08-26)
+
+The first instinct is to reuse `cg_reads_max`: if a variable is read
+exactly once in the function, that read is its last use, so it can move
+instead of retaining and the reuse check will fire.
+
+That is too weak to catch anything real. Take the update this is
+supposed to optimise:
+
+```plum
+let step (e: Entity) (n: Int): Entity =
+    if n <= 0 { e } else { step(Entity { x: e.x + 1, ..e }, n - 1) }
+```
+
+`e` is read once in the `then` branch and twice in the `else` branch —
+`e.x`, and again as the spread base. A use count says "read more than
+once, cannot move" and gives up, and the fixture still allocates 1002
+times. But the `e.x` read *completes before* the spread does: at the
+spread, `e` is genuinely dead. Every realistic update reads a field of
+the thing it is rebuilding, so the case a use count rejects is the
+normal case, not an edge one.
+
+What is needed is liveness at each PROGRAM POINT — is this variable
+read again *after here* — which is a dataflow question over the typed
+tree, not a property of the whole body. `cg_reads_max` cannot be
+extended into it; it answers a different question.
+
+### Shape of the work
+
+1. **Liveness over `TExpr`/`TStmt`.** For each variable read, is there
+   a later read on any path? Only the ones with no later read may move.
+2. **Move instead of retain at those reads**, and drop the matching
+   release. This is where miscompiles would come from: a move that is
+   wrong by one path leaks or double-frees, and the corpus runs under
+   `detect_leaks=1`, which is the reason to trust it.
+3. **Reuse tokens.** Perceus proper does not pair a spread with its
+   base; it pairs a DROP with a later allocation of the same size —
+   `token = drop_reuse(v)` yields `v`'s memory if its count hit zero,
+   and `alloc_reuse(token, size)` takes it or falls back to `malloc`.
+   That subsumes the spread case and also catches
+   `Entity { x: e.x + 1, y: e.y, hp: e.hp }`, which mentions no spread
+   at all and is what `bootstrap/alloc_corpus/struct_update` actually
+   contains.
+
+Steps 1 and 2 are the risky half and carry no visible win on their own.
+Step 3 is where `alloc-check` finally moves, which is the argument for
+having built it first: there is now a number to watch while the
+dangerous part lands, instead of a correctness suite that would stay
+green whether or not any of it worked.
+
+## FBIP, landed for scalar structs and enums (2026-08-26)
+
+`struct_update` and `enum_rebuild` went from 1002 allocations to 2. The
+three steps above turned out to collapse into fewer moving parts than
+the plan expected, and the reason is worth recording, because it is the
+same reason the string accumulator worked a year earlier.
+
+### The runtime check does the work the static analysis was going to
+
+The plan called for proving a cell dead. It does not need proving.
+`@plum_alloc_reuse` checks `rc == 1` at runtime, exactly as
+`@plum_str_concat_reuse` already did, so being wrong about reuse is
+impossible — only useless. What the static side has to supply is much
+weaker: the candidate's reference must be **moved** into the
+allocation, not lent, or the count it sees is never 1.
+
+That is why step 2 stopped being the dangerous half. Moving is the
+existing `cg_move_or_own` trick — load the slot, store null back — and
+the null is what makes it need no path analysis: the slot's release at
+function exit still runs and every release is null-safe, so it is a
+no-op on exactly the paths where the reference left.
+
+So the liveness question shrank from "mark every last-use read" to
+"which names are dead at this ALLOCATION". Only allocation sites ask,
+and there are two kinds.
+
+### The pass carries continuations, not sets
+
+`lv_*` in `codegen.plum` walks the body carrying the subtrees that will
+be evaluated *after* the one it is looking at. A name is dead if none of
+them reads it, and "reads it" is answered by `cg_reads_max` — already
+there, already trusted. Carrying expressions rather than a set of names
+is what avoids a second definition of what a read is.
+
+It is a pass rather than a field threaded through the emitters the way
+`movable` is, and that was a deliberate reversal of the usual habit
+here. A continuation that forgets a sibling does not miss an
+optimisation, it miscompiles. In one function every recursion site can
+be read top to bottom; spread across thirty emitters, a missing
+`lv_with` looks exactly like correct code.
+
+### The candidate is a list, because deadness and layout are known in
+### different places
+
+The pass knows what is still reachable. Only the backend knows how big a
+cell is, or whether it holds references somebody has to release. So the
+pass proposes every dead name, innermost first, and the backend takes
+the first it can represent. Proposing is free.
+
+This is not a refinement — it is what makes the enum case work at all.
+`match c { Count(k) => Count(k + 1) }` rebuilds `c` without mentioning
+it: the arm reads `k`. A rule that looked for the candidate inside the
+allocation finds nothing. `bootstrap/alloc_corpus/enum_rebuild` exists
+to hold that distinction still.
+
+### What is excluded, and why it is the whole safety argument
+
+A candidate must hold **no heap fields**. Two things depend on it:
+
+- `@plum_alloc_reuse` releases the candidate on the path where it
+  cannot be reused, and a release carrying no type information is only
+  right for a cell with no children.
+- The values read out of the old cell in the same literal — `e.x`,
+  `e.y` — are copies when they are scalars. A `String` field would
+  leave a borrowed pointer into memory about to be overwritten.
+
+Generic types are excluded outright: their field types are templates at
+this point, and a type variable's representation is not settled enough
+to promise it is not heap-shaped. `reuse_heap_fields` in the exec
+corpus fails under `detect_leaks=1` if that exclusion ever lapses, and
+`reuse_aliased` prints `2 2` instead of `1 2` if the runtime guard does.
+
+### Two analyses that both move
+
+`cg_movable_params` and this pass can both claim a name, and a name
+moved twice is a double free. They are kept apart at the point of use:
+`cg_reuse_slot` declines anything `cg_movable_params` already took, and
+`movable` is now derived from the REWRITTEN body so that the read a
+reuse adds is counted. Nothing can be both today — one takes a `String`
+base, the other a struct or an enum — but that is a fact about two
+other functions, and it is cheaper to enforce here than to discover
+later that one of them changed.
+
+### One reordering was required
+
+`cg_struct_lit` allocated the cell *before* evaluating field values, so
+the answer to "is there a dead cell here?" was always "not yet".
+Splitting `cg_store_fields` into `cg_eval_fields` and `cg_store_evald`
+fixed it. `cg_variant_build` already evaluated its arguments first and
+needed nothing.
+
+### What is still not covered
+
+Arrays. `array_map` remains at 11: an array cell carries a length and a
+capacity and its elements may need releasing, none of which the current
+`@plum_alloc_reuse` contract covers. Structs with heap fields are the
+other gap, and they need the thing this deliberately avoided — a branch,
+so the old fields can be dropped on the reuse path only, and a per-type
+release symbol to drop them with. Both are worth doing; neither is
+required for the case VISION.md names first.

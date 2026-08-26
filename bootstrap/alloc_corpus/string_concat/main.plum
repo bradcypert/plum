@@ -1,0 +1,6 @@
+// Already reuses: `@plum_str_concat_reuse` checks `rc == 1` and grows
+// in place when the allocation has room. Here to catch a REGRESSION,
+// not because it needs improving.
+let build (s: String) (n: Int): String = if n <= 0 { s } else { build(s.concat("x"), n - 1) }
+
+let main (): Unit = println(build("", 1000).len().to_string())

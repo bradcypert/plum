@@ -92,6 +92,12 @@ jobs:
       - name: the tutorial still works
         run: ./bootstrap/doc-check
 
+      # Allocation counts. Refcount churn creeps back in silently, and
+      # the language's central claim is a number nobody was looking at
+      # until this existed. Fails on a rise, reports a fall.
+      - name: allocations have not risen
+        run: ./bootstrap/alloc-check
+
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke
 

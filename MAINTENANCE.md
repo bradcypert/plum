@@ -11,7 +11,7 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version check-shims cross-check lsp-smoke test-smoke net-smoke \
-         property-check doc-check \
+         property-check doc-check alloc-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
     ./bootstrap/$h || echo "FAILED: $h"
@@ -31,6 +31,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
 | `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |
 | `doc-check` | every snippet in `TUTORIAL.md` compiles, runs, and prints what the tutorial says it prints | 6s |
+| `alloc-check` | allocation counts have not RISEN -- the only harness that measures the memory model rather than correctness | 2s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |
 | `platform-smoke` | a compiler *binary* builds and runs every execution fixture on the machine it is sitting on | 21s |
@@ -157,6 +158,23 @@ this is usually why: `String.parse_float`'s precision fix took two
 generations to reach the compiler's own lexer.
 
 ## Traps that have bitten more than once
+
+**Two analyses now move values out of slots.**
+`cg_movable_params` hands a slot's reference to a `concat`; the
+last-use pass (`lv_*`) hands one to `@plum_alloc_reuse`. A slot moved
+twice is a double free. They are kept apart in `cg_reuse_slot`, which
+declines any name `cg_movable_params` already claimed, and `movable` is
+computed from the REWRITTEN body so the read a reuse adds is counted.
+If you add a third thing that moves, it belongs in that same
+arrangement — do not reason about why the shapes cannot overlap, they
+overlapped once already.
+
+**A reuse candidate must hold no heap fields.** `@plum_alloc_reuse`
+releases the candidate on the path it cannot reuse, with no type
+information, so a cell with children would leak them. `reuse_heap_fields`
+in the exec corpus fails under leak detection if that check lapses, and
+`reuse_aliased` catches the runtime `rc == 1` guard going missing. Both
+are cheap; neither is redundant.
 
 **Duplicate `declare`.** A symbol belongs in the runtime's declare list
 OR in a user `extern` block, never both. LLVM rejects the second one.

@@ -1,0 +1,6 @@
+// Already reuses, via the same runtime check plus capacity derived
+// from `malloc_usable_size`. Amortised doubling, so the count should
+// be logarithmic in the number of pushes.
+let grow (xs: Array[Int]) (n: Int): Array[Int] = if n <= 0 { xs } else { grow(xs.push(n), n - 1) }
+
+let main (): Unit = println(grow([], 1000).len().to_string())

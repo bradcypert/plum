@@ -500,7 +500,10 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
             ir_leaf(ITStruct("Task", [body_ty]), r.subst, r.state,
                 TSpawn(TExpr { ty: ITFunction([], body_ty), node: TClosure([], r.texpr) }))
         },
-        ESelect(_) => { fail_tc("select/channels aren't supported yet"); ir_unsupported(acc, state, "select") },
+        // Channels ARE supported -- `channel[T]()`, `send`, `recv`. Only
+        // `select` is not, and saying "select/channels" sent people
+        // looking for a channel bug that was not there.
+        ESelect(_) => { fail_tc("`select` is not implemented yet; `channel[T]()`, `.send()` and `.recv()` do work"); ir_unsupported(acc, state, "select") },
     }
 
 // A closure literal's params get FRESH type variables (no annotations

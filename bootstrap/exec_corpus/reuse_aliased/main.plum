@@ -1,0 +1,18 @@
+// Cell reuse must not be visible. `bump`'s parameter is dead after the
+// literal that rebuilds it, so the backend MOVES it in and offers its
+// cell to `@plum_alloc_reuse` -- but the caller is still holding the
+// same cell, so its refcount is 2 and the runtime declines.
+//
+// If the guard were ever dropped, or the move taken without it, `a`
+// would be overwritten in place and this would print "2 2" instead of
+// "1 2". That is the whole safety argument for reuse in one line of
+// output.
+struct P { x: Int, y: Int }
+
+let bump (p: P): P = P { x: p.x + 1, y: p.y }
+
+let main (): Unit = {
+    let a = P { x: 1, y: 2 };
+    let b = bump(a);
+    println(a.x.to_string().concat(" ").concat(b.x.to_string()))
+}

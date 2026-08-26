@@ -1,0 +1,12 @@
+// `Array.map` builds a new array. Whether the SOURCE can be reused
+// when it is dead is a real FBIP question, and the last-use analysis
+// now answers it -- but nothing acts on the answer yet: reuse is wired
+// into struct and enum cells only. An array cell carries a length and
+// a capacity and its elements may need releasing, none of which the
+// current `@plum_alloc_reuse` contract covers. Still 11.
+let main (): Unit = {
+    let xs = grow([], 500);
+    println(Array.map(xs, |n| n * 2).len().to_string())
+}
+
+let grow (xs: Array[Int]) (n: Int): Array[Int] = if n <= 0 { xs } else { grow(xs.push(n), n - 1) }

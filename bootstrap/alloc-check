@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# How many times does a program allocate?
+#
+# The compiler's whole pitch is refcounting plus compiler-driven
+# in-place mutation -- VISION.md's "you write code that looks like it
+# assumes a garbage collector exists; the compiler makes it behave like
+# it doesn't". Whether that is TRUE is a number, and until this harness
+# existed nobody was looking at it. It turned out to be true for
+# strings and arrays and false for every type a user defines: a struct
+# update allocated once per update, 1002 times in a 1000-iteration
+# loop. See DESIGN.md's "FBIP does not apply to user types".
+#
+# The runtime counts allocations when `PLUM_RT_STATS=1` is set. Each
+# fixture records the count it currently produces.
+#
+# **Asymmetric on purpose.** A count that went UP fails: that is a
+# regression, and refcount churn is exactly the kind of thing that
+# creeps back in unnoticed. A count that went DOWN does not fail -- it
+# is the point of the exercise -- but it is reported loudly and asks to
+# be re-recorded, so an improvement is a deliberate commit rather than
+# a number that quietly drifts.
+#
+# An exact-match harness would have been worse than useless here: every
+# successful optimisation would break the build.
+#
+#   bootstrap/alloc-check            # check
+#   bootstrap/alloc-check --record   # accept the current counts
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+record=0
+[ "${1:-}" = "--record" ] && record=1
+
+work="$(mktemp -d 2>/dev/null || mktemp -d -t plum-alloc)"
+trap 'rm -rf "$work"' EXIT
+
+fail=0
+improved=0
+
+for dir in bootstrap/alloc_corpus/*/; do
+    name="$(basename "$dir")"
+    [ -f "$dir/main.plum" ] || continue
+
+    if ! ./sh build "$dir" -o "$work/$name.bin" > "$work/$name.err" 2>&1; then
+        printf 'FAIL  %-16s did not build: %s\n' "$name" "$(head -n 1 "$work/$name.err")"
+        fail=$((fail + 1)); continue
+    fi
+
+    # The count goes to stderr; the program's own output is irrelevant
+    # here and is discarded.
+    got="$(PLUM_RT_STATS=1 "$work/$name.bin" 2>&1 >/dev/null | grep -oE 'alloc n=[0-9]+' | grep -oE '[0-9]+')"
+    if [ -z "$got" ]; then
+        printf 'FAIL  %-16s produced no allocation count -- is PLUM_RT_STATS still wired up?\n' "$name"
+        fail=$((fail + 1)); continue
+    fi
+
+    if [ $record -eq 1 ]; then
+        printf '%s\n' "$got" > "$dir/allocs.txt"
+        printf 'recorded %-16s %s\n' "$name" "$got"
+        continue
+    fi
+
+    if [ ! -f "$dir/allocs.txt" ]; then
+        printf 'FAIL  %-16s no allocs.txt -- run bootstrap/alloc-check --record\n' "$name"
+        fail=$((fail + 1)); continue
+    fi
+
+    want="$(cat "$dir/allocs.txt")"
+    if [ "$got" -gt "$want" ]; then
+        printf 'FAIL  %-16s allocations rose: %s -> %s\n' "$name" "$want" "$got"
+        fail=$((fail + 1))
+    elif [ "$got" -lt "$want" ]; then
+        printf 'BETTER %-15s allocations fell: %s -> %s   (re-record to lock it in)\n' "$name" "$want" "$got"
+        improved=$((improved + 1))
+    else
+        printf 'ok    %-16s %s\n' "$name" "$got"
+    fi
+done
+
+echo
+if [ $fail -ne 0 ]; then
+    echo "alloc-check: $fail regression(s)" >&2
+    exit 1
+fi
+if [ $improved -ne 0 ]; then
+    echo "alloc-check: no regressions, $improved improvement(s) -- run --record to lock them in"
+else
+    echo "alloc-check: no regressions"
+fi

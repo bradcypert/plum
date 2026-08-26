@@ -88,7 +88,26 @@ pub enum TNode {
     // where `cg_store_fields` requires owned ones, and the refcount
     // would come out one short per field.
     TStructLit(String, Array[TFieldInit], Option[TExpr]),
+    // A `TStructLit` whose cell may be RECYCLED instead of allocated.
+    // The names are locals the backend's last-use pass found DEAD at
+    // this point, innermost first; whichever of them turns out to have
+    // a cell of the right shape is moved here and its slot nulled.
+    //
+    // A list rather than one name because deadness and REPRESENTATION
+    // are known in different places: the pass knows what is still
+    // reachable, only the backend knows how big a cell is or whether it
+    // holds references somebody has to release. Proposing is free --
+    // an empty list, or one nothing in it qualifies, is an ordinary
+    // allocation.
+    //
+    // Installed by the backend, never by the checker: reuse is not a
+    // fact about the program's meaning, it is a fact about what is
+    // still reachable, which only something that knows the evaluation
+    // order can decide.
+    TStructReuse(String, Array[TFieldInit], Array[String]),
     TVariantNew(String, Array[TExpr]),
+    // `TVariantNew` with the same reuse candidates as `TStructReuse`.
+    TVariantReuse(String, Array[TExpr], Array[String]),
     // --- The five resolved call shapes ---
     // A named function: a user's own, or a prelude signature from
     // `builtin_sig`. The name is the SIGNATURE's name, so a

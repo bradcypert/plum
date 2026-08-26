@@ -1,0 +1,18 @@
+// A struct with a String field is NOT a reuse candidate. Its cell holds
+// a reference, and recycling the cell would mean overwriting that
+// reference without releasing it -- a leak -- while the `n` read out of
+// it in the same literal is a borrowed pointer into memory about to be
+// reused.
+//
+// The corpus runs under `detect_leaks=1`, which is what makes this a
+// test rather than a comment: if the candidate check ever stops
+// excluding heap fields, this fixture leaks three strings.
+struct Named { n: String, k: Int }
+
+let go (v: Named) (i: Int): Named =
+    if i <= 0 { v } else { go(Named { n: v.n, k: v.k + 1 }, i - 1) }
+
+let main (): Unit = {
+    let r = go(Named { n: "x", k: 0 }, 3);
+    println(r.n.concat(r.k.to_string()))
+}

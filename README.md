@@ -642,10 +642,19 @@ block (no trailing `;`) is its value. `else` always requires either
 
 ### Concurrency
 
-`spawn`/`.join()` for tasks, channels (`Sender`/`Receiver`) with
-`send`/`recv`/`select` for communication between them. See DESIGN.md's
-"Concurrency" section for the full memory-ownership story around
-sending heap values across task boundaries.
+`spawn`/`.join()` for tasks, and channels (`Sender`/`Receiver`) with
+`send`/`recv` for communication between them. `channel[T]()` needs its
+type argument written out — there is nothing else in the expression to
+infer it from.
+
+**`select` is not implemented.** The keyword parses and the checker
+then rejects it, which is the worst of both: the syntax looks
+supported. It needs a runtime primitive that waits on several channels
+at once, which the current one-mutex-and-condvar-per-channel design has
+no way to express. Tracked, not shipped.
+
+See DESIGN.md's "Concurrency" section for the full memory-ownership
+story around sending heap values across task boundaries.
 
 ### FFI
 
@@ -908,10 +917,17 @@ substantially complete (scalars, control flow, closures, generics,
 arrays, strings, concurrency, FFI), and there is one implementation of
 all of it — the Rust one was retired on 2026-08-25.
 
-What is actually checked, rather than claimed: 64 corpus fixtures under
+Rebuilding a struct or an enum — `Entity { x: e.x + 1, ..}` in a loop —
+recycles the old cell instead of allocating a new one when nothing else
+is holding it, so an update loop that reads as pure allocates a constant
+number of times rather than once per iteration. Arrays and strings
+already did this; structs and enums joined them on 2026-08-26. Structs
+with `String` or `Array` fields do not yet.
+
+What is actually checked, rather than claimed: 66 corpus fixtures under
 AddressSanitizer with leak detection, 102 lexer/parser goldens, 11
-property tests, every project in `examples/` against its recorded
-output, and a real language-server session — on Linux x86_64 and
-arm64, macOS, and Windows. Running `./bootstrap/` is the honest answer
-to "what works"; no list kept by hand is. See DESIGN.md for the full
-history.
+property tests, recorded allocation counts for five memory-model
+fixtures, every project in `examples/` against its recorded output, and
+a real language-server session — on Linux x86_64 and arm64, macOS, and
+Windows. Running `./bootstrap/` is the honest answer to "what works";
+no list kept by hand is. See DESIGN.md for the full history.
