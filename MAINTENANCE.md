@@ -32,7 +32,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |
-| `platform-smoke` | a compiler *binary* builds and runs 43 real programs on the machine it is sitting on | 21s |
+| `platform-smoke` | a compiler *binary* builds and runs every execution fixture on the machine it is sitting on | 21s |
 | `example-sweep` | every `examples/` project matches its recorded output | 5s |
 | `bootstrap-check` | the compiler compiled by itself is the same compiler | 14s |
 | `check-seed` | the checked-in seed still bootstraps to today's compiler | 26s |

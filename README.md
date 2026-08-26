@@ -47,9 +47,9 @@ programs on it. Nothing here is merely expected to work.
 | Platform | Status |
 |---|---|
 | Linux x86_64 | Full test suite, including leak checking under ASan |
-| macOS arm64 | 43 programs built and run in CI, plus the language server |
+| macOS arm64 | the whole execution corpus built and run in CI, plus the language server |
 | macOS x86_64 | Same, checked on release tags |
-| Windows x86_64 | 43 programs built and run in CI. The language server is untested |
+| Windows x86_64 | the whole execution corpus built and run in CI, plus the language server |
 | Linux arm64 | Untested, unpublished |
 
 macOS is a step down from Linux and it is worth knowing why: Plum is
@@ -257,8 +257,8 @@ cleanly, and the server re-checks per request (26ms on a small project,
 ~0.9s on the compiler's own 14k lines). Field names and enum variants
 are not resolved for hover — hovering `.x` in `p.x` answers for `p`.
 Completion is unaffected by both, since it reads names from disk rather
-than inferring anything. The language server is tested on Linux and
-macOS; it is untested on Windows.
+than inferring anything. The language server is exercised by a real LSP
+session in CI on all three platforms.
 
 The Rust implementation had a deeper completion — keywords, locals in
 scope, and fields after `.` — and was retired with the rest of the Rust

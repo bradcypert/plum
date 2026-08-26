@@ -104,7 +104,7 @@ jobs:
   # Correctness is still established on Linux. What this leg answers is
   # narrower and is the question that does not transfer: does the
   # bootstrap path work, does the shell-out to `clang` work, do the
-  # embedded C shims compile against a different libc, and do 43 real
+  # embedded C shims compile against a different libc, and do real
   # programs still print the right thing.
   #
   # macos-15 is arm64, which is also the second CPU architecture this
@@ -166,7 +166,8 @@ jobs:
 
   # Windows, under MSYS2/MinGW. This was `continue-on-error` while the
   # port was being written blind; it went green on 2026-08-25 -- 43 of
-  # 43 programs -- and the marker came off in the same commit. A failure
+  # 43 programs at the time -- and the marker came off in the same
+  # commit. A failure
   # here is now a real failure.
   #
   # MSYS2 rather than MSVC: MinGW keeps `dirent.h`, pthreads and bash

@@ -91,8 +91,8 @@ remains available later as ordinary cleanup.
 | `process_shim.c` | ✅ fork/waitpid | ✅ `CreateProcess` |
 | `net_shim.c` | ✅ BSD sockets | ✅ Winsock, `-lws2_32` |
 
-Every ✅ above is exercised by a CI leg that builds and runs 43 real
-programs on that platform. `dir_shim.c` and `thread_shim.c` needed no
+Every ✅ above is exercised by a CI leg that builds and runs every
+execution fixture on that platform. `dir_shim.c` and `thread_shim.c` needed no
 Windows code at all — MinGW-w64 supplies `dirent.h` and pthreads, which
 is why neither is on the list of things that had to be written.
 
@@ -143,7 +143,7 @@ in-process type error would take the language server down.
   *produces*, which is invisible to this class of bug on Linux — every
   harness passed while the seed was, in fact, unusable on macOS.
 - `bootstrap/platform-smoke`: POSIX `sh`, no ASan, no GNU `timeout`, no
-  `./sh` wrapper. Builds and runs all 43 execution fixtures through
+  `./sh` wrapper. Builds and runs every execution fixture through
   `plum build` — the path a user takes.
 - `bootstrap/package-release`: packaging plus unpack-and-use
   verification, extracted from inline YAML because `sha256sum` is
@@ -160,8 +160,8 @@ in-process type error would take the language server down.
   the tree.
 
 **macOS arm64 is verified.** The `macos-15` CI leg is green: the seed
-bootstraps a compiler, that compiler builds a compiler, and 43 real
-programs build and print the right answer on Apple Silicon. It took two
+bootstraps a compiler, that compiler builds a compiler, and every
+execution fixture builds and prints the right answer on Apple Silicon. It took two
 runs — the first found the locale bug described above.
 
 The guess about what would break was wrong, which is worth recording.
@@ -175,14 +175,27 @@ good at.
 
 ### Windows — done
 
-Windows x86_64 went green on **2026-08-25**: 43 of 43 programs build
+Windows x86_64 went green on **2026-08-25**: 44 of 44 programs build
 and run under MSYS2/MinGW, and the `continue-on-error` marker came off
-the CI leg in the same commit.
+the CI leg in the same commit. The language server followed the same
+day, once `lsp-smoke` could run there — and turned up a bug on its
+first attempt.
 
-What remains is one gap, stated rather than glossed: **the language
-server is untested on Windows.** `lsp-smoke` needs `python3` to build
-the LSP session and the MSYS2 environment would have to install it. It
-runs on Linux and macOS.
+**`uri_to_path` stripped a fixed seven characters from `file://`.**
+Right on Unix, where the path component's leading `/` is the root; and
+wrong on Windows, where a client sends `file:///C:/x/a.plum` and gets
+back `/C:/x/a.plum`, which opens nothing. `path_to_uri` had the mirror
+bug, producing `file://C:/x` and making `C:` the URI's AUTHORITY. Any
+real Windows editor would have hit this. Nothing but the Windows CI leg
+exercises that path, so nothing but the Windows CI leg would have found
+it.
+
+The harness had its own version of the same confusion: it handed the
+compiler MSYS paths. Under MSYS2 an `/tmp/...` path is translated when
+passed as an ARGUMENT and not when it is buried inside a JSON string,
+which is where an LSP session puts it — so `platform-smoke` was never
+affected while `lsp-smoke` could not open a single file. Every path in
+that harness is now converted with `cygpath -m` up front.
 
 The toolchain reasoning, kept because it is the decision everything
 else followed from:
