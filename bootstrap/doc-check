@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Compiles and runs every code snippet in TUTORIAL.md, and checks each
+# against the output the document claims.
+#
+# Documentation rots silently, and this project has proved it more than
+# once: the README described an interpreter for a day after the
+# interpreter was deleted, and its own text contained a note that a
+# previous claim "stopped being true in 2026-08 and the sentence
+# stayed". Prose cannot be tested. A snippet with its output beside it
+# can be, so the tutorial is written that way on purpose -- every
+# example is a COMPLETE program rather than a fragment.
+#
+# Three kinds of block are understood:
+#
+#   * a ```plum block followed by a plain ``` block -- built, run, and
+#     its output compared exactly
+#   * a ```plum block followed by a plain ``` block starting with
+#     `error:` -- expected NOT to compile, with that message
+#   * anything else -- built only, to prove it at least compiles
+#
+# Writing the first draft, this caught a paraphrased error message:
+# the doc said `non-exhaustive match: missing Rect` and the compiler
+# says `match is not exhaustive — missing variant(s): Rect`.
+#
+# Usage:  bootstrap/doc-check [path-to-plum-binary]     (default: ./sh)
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+plum="${1:-./sh}"
+
+PY_BIN="$(command -v python3 || command -v python)"
+[ -n "$PY_BIN" ] || { echo "doc-check: needs python3 to extract the snippets" >&2; exit 1; }
+
+"$PY_BIN" bootstrap/doc_check.py TUTORIAL.md "$plum"

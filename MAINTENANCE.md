@@ -11,7 +11,7 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version check-shims cross-check lsp-smoke test-smoke net-smoke \
-         property-check \
+         property-check doc-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
     ./bootstrap/$h || echo "FAILED: $h"
@@ -30,6 +30,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
 | `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |
+| `doc-check` | every snippet in `TUTORIAL.md` compiles, runs, and prints what the tutorial says it prints | 6s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |
 | `platform-smoke` | a compiler *binary* builds and runs every execution fixture on the machine it is sitting on | 21s |

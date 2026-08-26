@@ -1,7 +1,10 @@
 # Plum Grammar (EBNF)
 
-This is the formal grammar to implement `plum-syntax`'s lexer and parser
-against. It's derived directly from the decisions recorded in
+This is the formal grammar the compiler's own lexer and parser
+(`bootstrap/self_host/lexer/` and `bootstrap/self_host/parser/`) are
+implemented against, and it is checked by
+`bootstrap/bootstrap-check` — 102 fixtures in `bootstrap/corpus/`, each
+with a recorded token stream and AST. It's derived directly from the decisions recorded in
 `DESIGN.md` and exercised in `examples/overview.plum` — if this document
 and `DESIGN.md` ever disagree, that's a bug in one of them, not a
 license to pick either.

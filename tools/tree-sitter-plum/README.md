@@ -5,9 +5,9 @@ A [tree-sitter](https://tree-sitter.github.io/) grammar for
 indentation — **not** a second implementation of the language for any
 correctness-bearing purpose. See `grammar.js`'s own header comment for
 the full scope note and the (few, documented) places this grammar makes
-a different implementation choice than `plum-syntax`'s real
-hand-written parser for a genuinely context-free-grammar-unresolvable
-ambiguity.
+a different implementation choice than the compiler's own
+hand-written parser (`bootstrap/self_host/parser/`) for a genuinely
+context-free-grammar-unresolvable ambiguity.
 
 ## Layout
 

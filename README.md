@@ -4,9 +4,9 @@ Plum is a small ML-family language: expression-oriented, statically and
 mostly-inferred typed, no null anywhere, algebraic data types with
 exhaustive pattern matching, and refcounted (not garbage-collected)
 memory management with a Perceus-style functional-but-in-place
-optimizer. It runs two ways: an interpreter for fast iteration, and a
-native LLVM backend for compiled binaries — both are kept behaviorally
-identical and are tested independently.
+optimizer. It compiles through LLVM to a native binary — there is no
+interpreter and no VM, so `plum run` and `plum build` are the same path
+and cannot disagree.
 
 **Plum is self-hosted**: the compiler is written in Plum
 (`bootstrap/self_host/`), compiles itself to a fixed point, and needs no
@@ -42,9 +42,15 @@ Or take an archive from
 [Releases](https://github.com/bradcypert/plum/releases) directly — it
 is a single binary.
 
-Archives are published for Linux x86_64, macOS on Apple Silicon and
-Intel, and Windows x86_64. The Windows one contains `plum.exe` and is
-built for MSYS2/MinGW.
+**New to Plum?** [TUTORIAL.md](TUTORIAL.md) is a twenty-minute tour
+from `plum new` to a program with tests. Every snippet in it is a
+complete program, and `bootstrap/doc-check` compiles and runs each one
+against the output it claims. The rest of this README is the
+reference.
+
+Archives are published for Linux on x86_64 and arm64, macOS on Apple
+Silicon and Intel, and Windows x86_64. The Windows one contains
+`plum.exe` and is built for MSYS2/MinGW.
 
 ```sh
 tar -xzf plum-0.0.4-arm64-macos.tar.gz
@@ -59,15 +65,17 @@ programs on it. Nothing here is merely expected to work.
 | Platform | Status |
 |---|---|
 | Linux x86_64 | Full test suite, including leak checking under ASan |
+| Linux arm64 | Full test suite, including leak checking under ASan |
 | macOS arm64 | the whole execution corpus built and run in CI, plus the language server |
 | macOS x86_64 | Same, checked on release tags |
 | Windows x86_64 | the whole execution corpus built and run in CI, plus the language server |
-| Linux arm64 | Untested, unpublished |
 
-macOS is a step down from Linux and it is worth knowing why: Plum is
-refcounted, so a leak is a miscompile rather than untidiness, and
-LeakSanitizer does not exist on Darwin. Correctness is established on
-Linux. See [PORTING.md](PORTING.md) for what that costs and what is
+macOS and Windows are a step down from Linux and it is worth knowing
+why: Plum is refcounted, so a leak is a miscompile rather than
+untidiness, and LeakSanitizer does not exist on Darwin. Both Linux
+targets run it, which is why arm64 — a different architecture, and so
+the likeliest place for a refcounting or alignment miscompile — is
+held to the same bar as x86_64 rather than a lower one. See [PORTING.md](PORTING.md) for what that costs and what is
 left.
 
 ## Building the toolchain
@@ -133,7 +141,7 @@ myapp/
 let main (): Unit = println("hello, plum")
 ```
 
-Run it directly, through the interpreter:
+Compile and run it in one step:
 
 ```sh
 plum run myapp
@@ -143,7 +151,7 @@ plum run myapp
 compatibility; `plum run` is the recommended, explicit spelling,
 symmetric with `plum build`.)
 
-Or compile it to a real native executable and run that:
+Or keep the binary:
 
 ```sh
 plum build myapp -o myapp/out
@@ -154,12 +162,15 @@ plum build myapp -o myapp/out
 binary is named after the project directory itself (written to the
 current working directory), mirroring `go build`/`cargo build --bin`.
 
-Both paths run the exact same `main` entry point — a single `Unit`-
-typed parameter (`let main (): ... = ...`, invoked by the CLI itself,
-not called from your own source) returning `Unit` or any printable
-value (the CLI prints whatever `main` returns). Use the interpreter
-while iterating (no `clang` round trip, instant feedback) and `build`
-when you want a real binary to ship or benchmark.
+`run` and `build` are the SAME path: both compile to a native binary
+and differ only in whether it is kept. Nothing can behave one way under
+`run` and another under `build`, because there is no second engine for
+it to behave differently in.
+
+Both use the same `main` entry point — a single `Unit`-typed parameter
+(`let main (): ... = ...`, invoked by the CLI itself, not called from
+your own source) returning `Unit` or any printable value (the CLI
+prints whatever `main` returns).
 
 With no arguments at all, `plum` runs a built-in one-expression smoke
 test — useful as a zero-setup sanity check that the toolchain itself is
@@ -230,11 +241,12 @@ qualified name is used.
 process — a runtime failure is a hard abort with no way to keep going
 in the same process, so isolation is not optional.
 
-The Rust `plum test` interprets instead, one process for the whole run.
-Both are exercised by `bootstrap/test-smoke`, and are expected to agree
-on the same project; if they ever don't, that is a real bug worth
-reporting. (There was a `plum test --native` flag on the Rust side
-until 2026-08-21; it went with the backend.)
+`bootstrap/test-smoke` exercises it against a fixture that
+deliberately uses the things a smoke test is tempted to skip — the
+prelude's assertions, a `Ref`, a zero-argument call, a partial
+application — and asserts that a failing test both fails and does not
+stop the ones after it. `plum test` was silently broken for months
+before that fixture existed.
 
 ## Editor support
 
@@ -278,44 +290,40 @@ methods as well as identifiers — `x` in `p.x` reports `Int`, and
 when the base is a plain identifier, the same limit dot completion has.
 Hovering `to_string` in `p.x.to_string()` answers nothing rather than
 guessing. The language server is exercised by a real LSP
-session in CI on all three platforms.
-
-The Rust implementation had a deeper completion — keywords and locals
-in scope as well as fields after `.` — and was retired with the rest of
-the Rust code on 2026-08-25. Fields after `.` are done; keywords and
-locals in scope are not. What it did is recorded below as the specification
-this server is being brought up to, not as something you can run.
+session in CI on Linux, macOS and Windows.
 
 Two pieces, independent of each other:
 
 - **`plum lsp`** — an LSP server served straight out of the `plum`
-  binary itself, speaking LSP over stdio. Diagnostics (parse/resolution/type errors, reported live
-  as you edit), hover (shows the resolved type under your cursor),
-  go-to-definition (variables, params, `let`s, function/global calls,
-  struct/enum names, `.field` access, enum variant references), and
-  completion — keywords + every function/global/struct/enum/extern
-  name in scope (including the whole standard library) generally, and
-  a struct's own fields right after typing `.`. Every file that fails
-  to PARSE gets its own diagnostic simultaneously (fix three broken
-  files, see all three); module-resolution/type errors still cap out
-  at one at a time — a later function's error can genuinely depend on
-  an earlier one's real, resolved signature (mutual recursion), so
-  reporting more than one there risks a misleading cascade, not just
-  extra convenience — this matches how the rest of the compiler
-  reports errors today (every `CompileError` surface in this codebase
-  stops at the first, not just the LSP), not an LSP-specific
-  limitation; hover/go-to-definition need the project to type-check
-  cleanly first, same reason. General completion falls back to the
-  last successfully checked snapshot when the current buffer doesn't
-  (typing itself usually leaves it that way); dot completion works
-  around this differently — see DESIGN.md's "Completion" and "Multiple
-  diagnostics" sections for the details.
-  Fix-and-recheck is fast in
-  practice.
+  binary itself, speaking LSP over stdio.
+
+  **Diagnostics** are live, against the unsaved buffer rather than the
+  file on disk, and are attributed to the file the error is IN — which
+  is not always the file being edited. Fixing an error publishes an
+  empty list for that file, so it clears rather than lingering. One
+  error at a time: the checker stops at the first, because a later
+  function's error can genuinely depend on an earlier one's resolved
+  signature, and reporting a cascade would be worse than reporting one
+  real thing.
+
+  **Hover** gives the inferred type of an identifier, a field or a
+  method. **Go-to-definition** covers locals, parameters and top-level
+  names — a local jumps to its binding, not to whatever top-level name
+  it shadows.
+
+  **Completion** offers project names, the standard library, enum
+  variants, keywords and the locals in scope; after a `.` it offers
+  the members of whatever precedes the dot instead. Names and keywords
+  survive a buffer that does not type-check, because they are read
+  without checking it; locals do not, since finding them requires the
+  check to succeed.
+
+  Hover and go-to-definition need the project to type-check cleanly.
+  Fix-and-recheck is fast in practice — 26ms on a small project.
 - **[`tools/tree-sitter-plum`](tools/tree-sitter-plum)** — a
   [tree-sitter](https://tree-sitter.github.io/) grammar for syntax
   highlighting/indentation, transcribed from `GRAMMAR.md`. A genuinely
-  separate implementation from `plum-syntax`'s real parser (see that
+  separate implementation from the compiler's own parser (see that
   directory's own README for the scope note and its two documented,
   deliberate simplifications) — exists purely to drive editor
   highlighting, not a second source of truth for the language's actual
@@ -344,10 +352,9 @@ let sum n acc = if n == 0 { acc } else { sum(n - 1, acc + n) }
 let double (n: Int): Int = n * 2
 ```
 
-Tail calls are guaranteed eliminated by the native backend (compiled to
-a real LLVM `musttail` call, i.e. a loop, not a growing call stack).
-The interpreter does not share this guarantee — see "Interpreter vs.
-native codegen" below.
+Tail calls are guaranteed eliminated (compiled to a real LLVM
+`musttail` call, i.e. a loop, not a growing call stack), so a
+tail-recursive function runs in constant stack space.
 
 ### Types: `Int`, `Float`, `Bool`, `String`, `Unit`
 
@@ -784,9 +791,7 @@ program's prelude):
   `Transfer-Encoding` (chunked) response is also rejected with a clear
   `Err` rather than mis-parsed — only `Content-Length`-framed or
   read-until-close responses are supported. See DESIGN.md's "HTTP
-  client" section for the full scope writeup, including a real
-  interpreter-only recursion-depth caveat for very large responses
-  under the Rust `plum run` (compiled code has no such limit).
+  client" section for the full scope writeup.
 - **HTTP server** — `http_serve_once(port, handler): Result[Unit,
   String]` (listens, handles exactly one connection, returns — a real
   one-shot server on its own) and `http_serve(port, handler): Result
@@ -795,11 +800,10 @@ program's prelude):
   `HttpRequest { method: String, path: String, headers: Array
   [HttpHeader], body: String }`. **Concurrent — spawn-per-connection**:
   `http_serve`/`http_serve_loop` spawn a real OS-thread task per
-  accepted connection (both backends), so one slow client can't stall
-  another behind it; `handler` must be a plain top-level function or a
-  closure capturing nothing (a closure that closes over live local
-  state can't cross the `spawn` boundary — a clear error in the
-  interpreter, a clean runtime abort in native codegen). Every request
+  accepted connection, so one slow client can't stall another behind
+  it; `handler` must be a plain top-level function or a closure
+  capturing nothing (a closure that closes over live local state can't
+  cross the `spawn` boundary — a clean runtime abort). Every request
   gets exactly one response, connection always closed afterward (no
   keep-alive). See DESIGN.md's "HTTP server" and "Native-codegen
   zero-capture closure fix" sections for the full writeup, including a
@@ -817,7 +821,7 @@ program's prelude):
   DESIGN.md's "OS module" section for the full writeup, including a
   real, SEPARATE bug found (and filed, not fixed here) while testing
   this: a top-level global `let` used twice with a heap-consuming
-  operation like `.as_cstr()` corrupts under native codegen.
+  operation like `.as_cstr()` corrupts the value.
 - **Methods are namespaced functions.** `x.f(a)` means `T.f(x, a)`,
   where `T` is `x`'s type — so `"  hi  ".trim_end()` and
   `String.trim_end("  hi  ")` are the same call, and declaring
@@ -850,39 +854,6 @@ All of the above are ordinary Plum source, not compiler magic — you
 could write equivalents yourself. They currently live in a shared
 prelude rather than real `use`-based modules; that's a known, deliberate
 v1 simplification (see DESIGN.md), not a permanent design point.
-
-## Interpreter vs. native codegen
-
-This section describes the RUST implementation, which has both an
-interpreter and a native backend. The self-hosted compiler has only the
-native backend: its `plum run` COMPILES to a temporary binary and
-executes it, so `run` and `build` cannot disagree there — they are the
-same path. (It once had a tree-walking interpreter too. Keeping two
-implementations of the semantics in one compiler meant every feature had
-to be written twice, and the second half kept not happening: `run` fell
-seven features behind `build` before anyone noticed.)
-
-`plum <project>` and `plum build <project>` COMPILE the same way and
-differ only in whether the binary is kept.
-
-The Rust `plum run` interprets, and `bootstrap/interp-check` requires
-it to agree with the compiled answer on every execution fixture. Two
-deliberate exceptions:
-
-- **Tail-call elimination** is a compiled-only guarantee (real LLVM
-  `musttail`). The interpreter's evaluator has none and can exhaust the
-  native stack on deeply recursive programs the compiled version runs
-  in constant space.
-- **OS error message text** (e.g. a failed `read_file`) legitimately
-  differs in wording — the interpreter surfaces Rust's own
-  `std::io::Error` text, compiled code surfaces glibc's `strerror`.
-  Both describe the same real OS error.
-
-A third exception used to be listed here — that `Ref[T]` was
-interpreter-only because native codegen had no representation for it.
-That stopped being true in 2026-08 and the sentence stayed. It is
-exercised compiled by `bootstrap/exec_corpus/refs` and by the
-`shared_mutability` example.
 
 ## Examples
 
@@ -934,10 +905,13 @@ Plum is a work in progress, and self-hosted: the compiler is written in
 Plum, compiles itself to a byte-identical fixed point, and builds
 without a Rust toolchain. The core language and LLVM backend are
 substantially complete (scalars, control flow, closures, generics,
-arrays, strings, concurrency, FFI), and the standard library reaches
-parity between the two implementations.
+arrays, strings, concurrency, FFI), and there is one implementation of
+all of it — the Rust one was retired on 2026-08-25.
 
-Every project in `examples/` builds and runs identically under both,
-which `./bootstrap/example-sweep` checks — that sweep, rather than any
-list kept by hand, is the honest answer to "what still differs". See
-DESIGN.md for the full history.
+What is actually checked, rather than claimed: 64 corpus fixtures under
+AddressSanitizer with leak detection, 102 lexer/parser goldens, 11
+property tests, every project in `examples/` against its recorded
+output, and a real language-server session — on Linux x86_64 and
+arm64, macOS, and Windows. Running `./bootstrap/` is the honest answer
+to "what works"; no list kept by hand is. See DESIGN.md for the full
+history.

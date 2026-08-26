@@ -85,6 +85,13 @@ jobs:
       - name: properties hold
         run: ./bootstrap/property-check
 
+      # The tutorial's snippets are compiled and run against the output
+      # it claims. Documentation is the one part of this repository
+      # that has rotted repeatedly, and it is the only part prose alone
+      # cannot test.
+      - name: the tutorial still works
+        run: ./bootstrap/doc-check
+
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke
 

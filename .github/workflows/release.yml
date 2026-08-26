@@ -192,6 +192,49 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # Linux arm64 earned this by being green in `ci.yml` first, on
+  # 2026-08-26 -- the documented rule, and the same one that kept
+  # Windows out of here until it worked.
+  linux-arm64:
+    needs: version
+    name: linux arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+
+      - name: seed -> compiler -> compiler
+        run: |
+          ./bootstrap/from-seed -o sh.seed
+          ./sh.seed build bootstrap/self_host -o sh.real
+
+      # More than the macOS and Windows legs run, because this is Linux
+      # and so AddressSanitizer with `detect_leaks=1` works here. See
+      # the matching job in `ci.yml`.
+      - name: validate
+        run: |
+          ./bootstrap/corpus-check
+          ./bootstrap/platform-smoke ./sh.real
+          ./bootstrap/lsp-smoke ./sh.real
+          ./bootstrap/property-check ./sh.real
+
+      - name: package
+        run: ./bootstrap/package-release sh.real arm64-linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plum-arm64-linux
+          path: dist/*
+          if-no-files-found: error
+
   windows:
     needs: version
     name: windows x86_64
@@ -243,7 +286,7 @@ jobs:
 
   publish:
     name: publish
-    needs: [linux, macos, windows]
+    needs: [linux, linux-arm64, macos, windows]
     runs-on: ubuntu-latest
     # A runner that never arrives must fail fast rather than hold the
     # release for GitHub's 24-hour default. See the macos-13 note above.

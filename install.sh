@@ -47,13 +47,11 @@ slug="${arch_slug}-${os_slug}"
 # Only these four are built and tested. Anything else is refused with
 # the honest reason rather than a 404 from the download.
 case "$slug" in
-    x86_64-linux|arm64-macos|x86_64-macos|x86_64-windows) ;;
-    arm64-linux)
-        die "Linux on arm64 has no published binary -- it is expected to work but nothing tests it.
-     Build it instead (needs only clang):
+    x86_64-linux|arm64-linux|arm64-macos|x86_64-macos|x86_64-windows) ;;
+    *) die "no published binary for $slug.
+     Build one instead -- it needs only clang:
        git clone https://github.com/$REPO && cd plum
        ./bootstrap/from-seed -o plum && ./plum build bootstrap/self_host -o plum" ;;
-    *) die "no published binary for $slug" ;;
 esac
 
 # --- tools ---

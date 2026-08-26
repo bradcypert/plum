@@ -15,9 +15,9 @@ work.
 
 | Tier | Meaning | Platforms |
 |---|---|---|
-| 1 | Full harness suite green in CI. Binaries published. | Linux x86_64 |
+| 1 | Full harness suite green in CI. Binaries published. | Linux x86_64, Linux arm64 |
 | 2 | `bootstrap/platform-smoke` green in CI. Binaries published. | macOS arm64, macOS x86_64, Windows x86_64 |
-| 3 | Expected to work. Untested, unpublished, no promise. | Linux arm64 |
+| 3 | Expected to work. Untested, unpublished, no promise. | — |
 
 macOS arm64 and Windows x86_64 run on every push. macOS x86_64 runs
 only on a release tag: Intel Mac runners are scarce enough that the job
@@ -260,7 +260,7 @@ enough instead of ten:
   error sentinel and a one-time init. `bootstrap/net-smoke` still opens
   real TCP and HTTP connections on Linux afterwards.
 
-### Linux arm64 — CI added 2026-08-26, not yet published
+### Linux arm64 — tier 1 as of 2026-08-26
 
 A `linux-arm64` job runs on `ubuntu-24.04-arm`. It is deliberately the
 HEAVIEST of the non-reference legs: bootstrap-check, the full corpus
@@ -279,9 +279,12 @@ bytes would miss the class of bug most worth looking for here.
 Linux x86_64 box, which is free and catches the shim-portability class
 without waiting for CI.
 
-**Nothing is published for it yet.** The rule stands: a platform earns
-a release job by being green in CI first. When that leg has passed, add
-it to `release.yml` and move it up the tier table.
+It went green on the first run — bootstrap-check, 64 corpus fixtures
+under ASan, 102 goldens, platform-smoke, lsp-smoke and the properties,
+in 2m30s — so it earned its release job by the documented rule and has
+one. `install.sh` accepts `arm64-linux` too; it had been refusing it
+with a build-from-source message, which would have been wrong the
+moment the first binary was published.
 
 ### Linux arm64 — the original note
 
