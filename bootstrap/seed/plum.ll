@@ -27666,7 +27666,7 @@ entry:
   ret ptr %t674
 }
 
-@.str675 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"0.0.2\00" }
+@.str675 = private global { i64, i64, [6 x i8] } { i64 -1, i64 5, [6 x i8] c"0.0.3\00" }
 define ptr @plum_plum_version() {
 entry:
   ret ptr @.str675

@@ -35,8 +35,8 @@ Intel, and Windows x86_64. The Windows one contains `plum.exe` and is
 built for MSYS2/MinGW.
 
 ```sh
-tar -xzf plum-0.0.2-arm64-macos.tar.gz
-./plum-0.0.2-arm64-macos/plum version
+tar -xzf plum-0.0.3-arm64-macos.tar.gz
+./plum-0.0.3-arm64-macos/plum version
 ```
 
 ### Platforms
