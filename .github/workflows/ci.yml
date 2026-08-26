@@ -164,6 +164,53 @@ jobs:
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke ./sh.real
 
+  # Linux on arm64 -- a second ARCHITECTURE on the reference OS.
+  #
+  # It runs MORE than the macOS and Windows legs, not less, and that is
+  # the point: this is Linux, so AddressSanitizer with
+  # `detect_leaks=1` works here. Plum is reference counted, so a leak
+  # is a miscompile, and a miscompile is exactly what a new
+  # architecture is most likely to produce. Checking only that programs
+  # print the right bytes would miss the class of bug worth looking for.
+  #
+  # Nothing is PUBLISHED for this platform yet. The rule is that a
+  # platform earns a release job by being green here first; when it
+  # has been, add it to `release.yml` and move it up the tier table in
+  # README.md.
+  linux-arm64:
+    name: linux arm64 builds and runs real programs
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+
+      - name: seed -> compiler
+        run: |
+          ./bootstrap/from-seed -o sh.seed
+          ./sh.seed build bootstrap/self_host -o sh.real
+
+      - name: the compiler reproduces itself
+        run: ./bootstrap/bootstrap-check
+
+      # The leak oracle, which only Linux has.
+      - name: corpus
+        run: ./bootstrap/corpus-check
+
+      - name: the compiler it built works
+        run: ./bootstrap/platform-smoke ./sh.real
+
+      - name: the language server answers a real session
+        run: ./bootstrap/lsp-smoke ./sh.real
+
+      - name: properties hold
+        run: ./bootstrap/property-check ./sh.real
+
   # Windows, under MSYS2/MinGW. This was `continue-on-error` while the
   # port was being written blind; it went green on 2026-08-25 -- 43 of
   # 43 programs at the time -- and the marker came off in the same

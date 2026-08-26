@@ -260,7 +260,30 @@ enough instead of ten:
   error sentinel and a one-time init. `bootstrap/net-smoke` still opens
   real TCP and HTTP connections on Linux afterwards.
 
-### Linux arm64
+### Linux arm64 — CI added 2026-08-26, not yet published
+
+A `linux-arm64` job runs on `ubuntu-24.04-arm`. It is deliberately the
+HEAVIEST of the non-reference legs: bootstrap-check, the full corpus
+under AddressSanitizer with `detect_leaks=1`, platform-smoke,
+lsp-smoke and the properties.
+
+That is the opposite of how macOS and Windows are treated, and for a
+reason. Those platforms cannot run leak checking at all — LeakSanitizer
+does not exist on Darwin. This one is Linux, so it can. A new
+ARCHITECTURE is exactly where a refcounting or alignment miscompile
+would appear, and a leak in a refcounted language is a miscompile
+rather than untidiness. Checking only that programs print the right
+bytes would miss the class of bug most worth looking for here.
+
+`bootstrap/cross-check` also compile-checks `aarch64-linux-gnu` from a
+Linux x86_64 box, which is free and catches the shim-portability class
+without waiting for CI.
+
+**Nothing is published for it yet.** The rule stands: a platform earns
+a release job by being green in CI first. When that leg has passed, add
+it to `release.yml` and move it up the tier table.
+
+### Linux arm64 — the original note
 
 Nearly free once macOS arm64 is green, since that proves the compiler
 produces correct code for the architecture. Mostly a runner change.

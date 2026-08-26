@@ -46,7 +46,11 @@ seed_shims=(native_stdlib/compat_shim.c native_stdlib/dir_shim.c
             native_stdlib/io_shim.c native_stdlib/os_shim.c
             native_stdlib/process_shim.c native_stdlib/thread_shim.c)
 
-targets=(aarch64-macos x86_64-macos x86_64-windows-gnu)
+# `aarch64-linux-gnu` is here even though nothing publishes a binary
+# for it: a compile check is cheap, and it is the target most likely to
+# be broken by a change nobody thought about, being a different
+# architecture with the same libc as the reference platform.
+targets=(aarch64-macos x86_64-macos x86_64-windows-gnu aarch64-linux-gnu)
 
 echo "zig $(zig version), cross-compiling for: ${targets[*]}"
 echo
