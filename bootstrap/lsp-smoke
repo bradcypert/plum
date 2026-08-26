@@ -100,6 +100,10 @@ msgs = [
   # (line 3) -- the name index cannot do this, it only knows top-level
   # definitions
   {"jsonrpc":"2.0","id":6,"method":"textDocument/definition","params":{"textDocument":{"uri":"file://%s/ok/main.plum" % d},"position":{"line":4,"character":4}}},
+  # hover on a FIELD -- the `x` in `p.x`, line 4, char 14. The checker
+  # records identifiers, and a field is not one, so this used to answer
+  # for `p` and report `p: P` while the cursor sat on `x`.
+  {"jsonrpc":"2.0","id":9,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://%s/ok/main.plum" % d},"position":{"line":3,"character":14}}},
   # --- live diagnostics, on unsaved text ---
   {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % live}}},
   # an UNSAVED edit that BREAKS the file; disk still holds the good one
@@ -155,6 +159,7 @@ echo "$out" | grep -q '"id":2,"result":null' || { echo "FAIL: no shutdown reply"
 echo "$out" | grep -q '"value":"struct P"' || { echo "FAIL: hover did not report the struct"; fail=1; }
 echo "$out" | grep -q '"id":4,"result":{"uri"' || { echo "FAIL: no definition location"; fail=1; }
 echo "$out" | grep -q '"value":"n: Int"' || { echo "FAIL: hover did not infer the local's type"; fail=1; }
+echo "$out" | grep -q '"value":"x: Int"' || { echo "FAIL: hover on a FIELD did not report the field's type"; fail=1; }
 echo "$out" | grep -q '"id":6,"result":{"uri":[^}]*"line":3' || { echo "FAIL: go-to-definition did not reach the local's binding"; fail=1; }
 # --- live diagnostics ---
 # The error text can ONLY have come from the buffer: the file on disk

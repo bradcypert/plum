@@ -72,15 +72,77 @@ use shims;
 // is the state most likely to be broken.
 let cmd_query (dir: String) (path: String) (line: Int) (col: Int): Unit = {
     typecheck.record_types(true);
-    typecheck.check_program(codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }));
+    let items = codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }).items;
+    typecheck.check_program(parser.ProgramNode { items: items });
     match read_file(path) {
         Err(_) => println("{}"),
         Ok(src) => {
             let off = lexer.offset_of(src, line, col);
-            println(query_answer(typecheck.recorded_types(()), path, off, 0));
+            // A FIELD or METHOD -- the `x` in `p.x` -- is answered from
+            // what owns it, because the checker records identifiers and
+            // a field is not one. Hovering `.x` used to answer for `p`,
+            // which is the sort of almost-right that reads as a bug in
+            // the type rather than in the hover.
+            match member_answer(items, chars_of(src), path, off) {
+                Some(js) => println(js),
+                None => println(query_answer(typecheck.recorded_types(()), path, off, 0)),
+            }
         },
     }
 }
+
+// `Some(json)` when the cursor is on an identifier that is immediately
+// preceded by a dot AND the thing before that dot has a known type.
+// `None` for everything else, which falls through to the ordinary
+// identifier lookup -- including for the BASE of an access, so
+// hovering `p` in `p.x` still answers about `p`.
+let member_answer (items: Array[parser.ItemNode]) (cs: Array[String]) (path: String) (off: Int): Option[String] =
+    if off < 0 || off >= cs.len() || !is_ident_char(cs[off]) { None }
+    else {
+        let start = ident_start(cs, off);
+        let dot = start - 1;
+        if dot < 0 || cs[dot] != "." { None }
+        else {
+            let base_start = ident_start(cs, dot - 1);
+            if base_start >= dot { None }
+            else {
+                match recorded_type_at(typecheck.recorded_types(()), path, base_start, 0) {
+                    None => None,
+                    Some(base_ty) => {
+                        let name = ident_text(cs, start, "");
+                        match member_detail(items, type_namespace(base_ty), name, 0) {
+                            None => None,
+                            Some(detail) => Some(json_stringify(JsonObject([
+                                JsonEntry { key: "name", value: JsonString(name) },
+                                JsonEntry { key: "type", value: JsonString(detail) },
+                            ]))),
+                        }
+                    },
+                }
+            }
+        }
+    }
+
+let ident_text (cs: Array[String]) (i: Int) (acc: String): String =
+    if i >= cs.len() || !is_ident_char(cs[i]) { acc }
+    else { ident_text(cs, i + 1, acc.concat(cs[i])) }
+
+// A struct field's DECLARED TYPE, or a namespaced function's signature.
+let member_detail (items: Array[parser.ItemNode]) (ns: String) (name: String) (i: Int): Option[String] =
+    if i >= items.len() { None }
+    else {
+        let here = match items[i].kind {
+            IKStruct(decl) => if decl.name == ns { field_type_named(decl, name, 0) } else { None },
+            IKLet(def) => if def.name == ns.concat(".").concat(name) { Some(def_signature(def)) } else { None },
+            _ => None,
+        };
+        match here { Some(d) => Some(d), None => member_detail(items, ns, name, i + 1) }
+    }
+
+let field_type_named (decl: parser.StructDeclNode) (name: String) (i: Int): Option[String] =
+    if i >= decl.fields.len() { None }
+    else if decl.fields[i].name == name { Some(parser.render_type(decl.fields[i].ty)) }
+    else { field_type_named(decl, name, i + 1) }
 
 // The recorded entry whose identifier CONTAINS the offset. Recorded
 // entries store the identifier's start; its length is its own name.

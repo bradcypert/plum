@@ -14357,3 +14357,24 @@ evidence: no legitimate use of ordered comparison on an unordered type
 existed. `bootstrap/typecheck_corpus/unordered_comparison` pins the
 rejection, and `test_string_ordering` in `bootstrap/properties` pins
 the three types that DO compare, including the literal cases.
+
+## Hover answers for fields and methods (2026-08-26)
+
+Hovering the `x` in `p.x` reported `p: P`. The checker records
+IDENTIFIERS and their inferred types, and a field is not an identifier
+— so the lookup found the nearest thing it did know about and answered
+confidently for the wrong node. That is worse than answering nothing:
+it reads as a bug in the type rather than a gap in the hover.
+
+`plum query` now checks first whether the cursor sits on an identifier
+immediately preceded by a dot. If it does, the answer comes from the
+OWNER's type — a struct's field gives its declared type, a namespaced
+function gives its signature — reusing exactly the machinery
+`plum members` was built from a few hours earlier. Nothing changed in
+the language server: hover already read `type` out of the query answer.
+
+The same limit applies as to dot completion: the base must be a plain
+identifier. `p.x.to_string()` answers nothing for `to_string`, because
+the thing before that dot is an expression rather than a name. Nothing
+is better than a guess here, and the fallback is the ordinary
+identifier lookup, so hovering `p` in `p.x` still answers about `p`.

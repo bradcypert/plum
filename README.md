@@ -233,7 +233,7 @@ published binary, on Linux, macOS and Windows.
 | | |
 |---|---|
 | diagnostics | live, as you edit, against the unsaved buffer |
-| hover | the inferred type of any identifier |
+| hover | the inferred type of any identifier, field or method |
 | go-to-definition | locals, params, top-level names |
 | completion | project names, the stdlib, enum variants; fields and methods after `.` |
 
@@ -260,9 +260,12 @@ and the editor falls back to the whole-project list.
 
 Known limits: hover and go-to-definition need the project to type-check
 cleanly, and the server re-checks per request (26ms on a small project,
-~0.9s on the compiler's own 14k lines). Hover still does not resolve
-fields or variants — hovering `.x` in `p.x` answers for `p`, even
-though completion after that same dot now knows what `x` is. The language server is exercised by a real LSP
+~0.9s on the compiler's own 14k lines). Hover resolves fields and
+methods as well as identifiers — `x` in `p.x` reports `Int`, and
+`trim_end` in `s.trim_end()` reports its whole signature — but only
+when the base is a plain identifier, the same limit dot completion has.
+Hovering `to_string` in `p.x.to_string()` answers nothing rather than
+guessing. The language server is exercised by a real LSP
 session in CI on all three platforms.
 
 The Rust implementation had a deeper completion — keywords and locals
