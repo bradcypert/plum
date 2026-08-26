@@ -83,7 +83,10 @@ msgs = [
   # and the client filters. What matters is that the list covers all
   # three sources -- the project, the prelude, and enum variants.
   {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % compl}}},
-  {"jsonrpc":"2.0","id":7,"method":"textDocument/completion","params":{"textDocument":{"uri":"file://%s/main.plum" % compl},"position":{"line":1,"character":0}}},
+  # Position is INSIDE `area`'s body, past its parameter: locals are
+  # offered only where they are bound at or before the cursor, so the
+  # start of the line would legitimately offer none.
+  {"jsonrpc":"2.0","id":7,"method":"textDocument/completion","params":{"textDocument":{"uri":"file://%s/main.plum" % compl},"position":{"line":1,"character":30}}},
   # DOT completion: line 4 is `let sum (v: Vec): Int = v.x + v.y`, and
   # character 26 is just after the `.`. The answer must be Vec's
   # FIELDS, not the project-wide name list -- which is the whole
@@ -135,6 +138,11 @@ echo "$out" | grep -q '"label":"Shape","kind":13' || { echo "FAIL: completion mi
 echo "$out" | grep -q '"label":"Circle","kind":20' || { echo "FAIL: completion missing an enum VARIANT"; fail=1; }
 echo "$out" | grep -q '"label":"String.trim_end","kind":3' || { echo "FAIL: completion missing the prelude"; fail=1; }
 echo "$out" | grep -q '"label":"println","kind":3' || { echo "FAIL: completion missing the checker builtins"; fail=1; }
+# Kind 14 is Keyword, kind 6 is Variable. Keywords come from a static
+# list; locals need the project type-checked, and come from a separate
+# process for exactly that reason.
+echo "$out" | grep -q '"label":"let","kind":14' || { echo "FAIL: completion missing keywords"; fail=1; }
+echo "$out" | grep -q '"label":"s","kind":6' || { echo "FAIL: completion missing locals in scope"; fail=1; }
 # The detail is the SIGNATURE, and a zero-argument function's parameter
 # renders as `()`. It read `((tuple))` until 2026-08-25, in hover too.
 echo "$out" | grep -q '"detail":"let main (): Unit"' && { echo "note: unit-param rendering checked"; :; }

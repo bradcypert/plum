@@ -311,6 +311,8 @@ let parse_completions_acc (items: Array[JsonValue]) (i: Int) (acc: Array[Complet
 let completion_kind (kind: String): Float =
     if kind == "function" { 3.0 }
     else if kind == "field" { 5.0 }
+    else if kind == "variable" { 6.0 }
+    else if kind == "keyword" { 14.0 }
     else if kind == "struct" { 22.0 }
     else if kind == "enum" { 13.0 }
     else if kind == "variant" { 20.0 }

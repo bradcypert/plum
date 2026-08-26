@@ -24,11 +24,23 @@ it" companion.
 
 ## Installing
 
-Grab a release from
-[Releases](https://github.com/bradcypert/plum/releases) — a single
-binary. You need **`clang`** on your `PATH`; the compiler shells out to
-it to assemble and link what it emits. Nothing else is required: the C
-shims Plum programs use are embedded in the compiler itself.
+```sh
+curl -fsSL https://raw.githubusercontent.com/bradcypert/plum/main/install.sh | sh
+```
+
+That picks the right archive for your platform, checks it against the
+published checksum, installs `plum` into `~/.local/bin`, and runs it to
+prove it works. It **does not edit your shell configuration** — if that
+directory is not on your `PATH` it prints the line to add and stops.
+`PLUM_PREFIX` and `PLUM_VERSION` override where and which.
+
+You need **`clang`** on your `PATH`; the compiler shells out to it to
+assemble and link what it emits. Nothing else is required: the C shims
+Plum programs use are embedded in the compiler itself.
+
+Or take an archive from
+[Releases](https://github.com/bradcypert/plum/releases) directly — it
+is a single binary.
 
 Archives are published for Linux x86_64, macOS on Apple Silicon and
 Intel, and Windows x86_64. The Windows one contains `plum.exe` and is
