@@ -29,9 +29,9 @@
 
 use parser;
 
-pub struct TExpr { ty: ITy, node: TNode }
+pub struct TExpr { pub ty: ITy, pub node: TNode }
 
-pub struct TBlock { stmts: Array[TStmt], tail: Option[TExpr] }
+pub struct TBlock { pub stmts: Array[TStmt], pub tail: Option[TExpr] }
 
 pub enum TStmt {
     TSLet(parser.PPattern, TExpr),
@@ -39,8 +39,8 @@ pub enum TStmt {
     TSExpr(TExpr),
 }
 
-pub struct TArm { pattern: parser.PPattern, guard: Option[TExpr], body: TExpr }
-pub struct TFieldInit { name: String, value: TExpr }
+pub struct TArm { pub pattern: parser.PPattern, pub guard: Option[TExpr], pub body: TExpr }
+pub struct TFieldInit { pub name: String, pub value: TExpr }
 
 pub enum TNode {
     TInt(Int),
@@ -189,11 +189,11 @@ pub let texpr_ty (subst: Subst) (e: TExpr): ITy = subst_apply(subst, e.ty)
 
 // A checked top-level function, with its body typed and the
 // substitution needed to read those types.
-pub struct TParam { name: String, ty: ITy }
+pub struct TParam { pub name: String, pub ty: ITy }
 // `generics` are the function's own declared type parameters, by name
 // and in declared order. A backend that monomorphizes needs them to
 // know WHAT to substitute; `TFnCall`'s type arguments say what to
 // substitute IN.
 // `module` is where the function was declared — needed by a backend so
 // that two modules' same-named functions get distinct SYMBOLS.
-pub struct TFn { name: String, module: String, generics: Array[String], params: Array[TParam], ret: ITy, body: TExpr, subst: Subst }
+pub struct TFn { pub name: String, pub module: String, pub generics: Array[String], pub params: Array[TParam], pub ret: ITy, pub body: TExpr, pub subst: Subst }

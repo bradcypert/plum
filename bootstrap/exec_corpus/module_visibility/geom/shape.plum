@@ -1,0 +1,33 @@
+// The POSITIVE half of the visibility rules: everything a module marks
+// `pub` must still work across the boundary, and everything it keeps
+// private must still work WITHIN the boundary. A check that only ever
+// says no is indistinguishable from a check that says no to everything.
+
+// One field visible, one not: `radius` is the interface, `cached` is
+// representation. A struct with any private field cannot be built from
+// outside its module -- a literal has to name every field -- so this
+// one has a constructor, which is the point of hiding the field.
+pub struct Circle { pub radius: Float, cached: Float }
+
+pub let circle (radius: Float): Circle = Circle { radius: radius, cached: 3.14159 * radius * radius }
+
+pub enum Kind { Round, Pointy }
+
+// Private, and used by two public functions in this same module. A
+// call inside one module is not a boundary crossing however the item
+// was declared -- that is what keeps a module's own helpers working.
+let square (x: Float): Float = x * x
+
+// Private TYPE, used freely inside its own module.
+struct Scratch { doubled: Float }
+
+let scratch_of (c: Circle): Scratch = Scratch { doubled: c.radius * 2.0 }
+
+// Reads the private field from inside its own module.
+pub let area (c: Circle): Float = c.cached
+
+pub let perimeter (c: Circle): Float = 2.0 * 3.14159 * c.radius
+
+pub let diameter (c: Circle): Float = scratch_of(c).doubled
+
+pub let kind_name (k: Kind): String = match k { Round => "round", Pointy => "pointy" }

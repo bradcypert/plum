@@ -15397,7 +15397,110 @@ and a private one from the same module in the same program, so it
 proves the check rejects the private one specifically rather than
 refusing every qualified call.
 
-### What `pub` still does not do, and why it is a bigger job
+### Types followed, without changing what identifies a type
+
+The first cut enforced `pub` for functions only, and stopped at types
+because a type's identity is its bare name — `ITStruct(name, args)`,
+threaded through 88 sites in the checker and backend. Scoping type
+IDENTITY is still that wide a change and still has not been made.
+
+Visibility turned out not to need it. `StructInfo`/`EnumInfo` gained
+`module` and `is_pub`, and three paths learned to check them:
+
+- **annotations**, via `resolve_named` — which needed a "viewer"
+  parameter threaded through `resolve_ann`. The old signature is kept
+  as a wrapper passing `ANY_MODULE`, so context BUILDING (where every
+  annotation belongs to the declaration it came from, and is visible by
+  construction) is unaffected and only the sites that should check
+  opted in.
+- **construction**, via the struct-literal and variant paths, which
+  resolve through `find_struct`/`find_variant` and never touch
+  `resolve_ann`.
+- **destructuring**, via the struct-pattern and variant-pattern paths.
+
+The third is the one worth arguing about. A `pub` function may return a
+type its own module keeps private, and nothing stops it. Checking the
+pattern paths means the value that comes back is OPAQUE outside that
+module: holdable, passable, not takeable-apart, because taking it apart
+means naming the type. That is a coherent position rather than a
+half-measure — it is exactly how a handle type behaves — and the
+alternative (rejecting the signature, as Rust's `private_interfaces`
+lint does) forbids a pattern that is actually useful.
+
+### A flat namespace made visibility order-dependent, briefly
+
+Caught by `lsp-smoke`, which failed with "no diagnostic" after the
+change. Its fixture has a project root declaring `struct P` and a
+SUBDIRECTORY also declaring `struct P` — two types, one name, two
+modules. `find_struct` returns whichever is first in a flat list, so
+the root file was being told that `P` was private to the subdirectory:
+a module informed that its own type belongs to someone else.
+
+Fixed by making the visibility lookup prefer the viewer's own module,
+then the root, then anything — the same current-then-root order
+`find_sig` has always used for functions, for the same reason.
+
+That fixes the visibility decision and NOT the underlying problem: the
+type the checker then uses is still whichever the flat lookup finds,
+and its fields may come from the other declaration. Two modules
+genuinely cannot share a type name. That is the identity change, still
+outstanding, and this is now the second symptom of it worth writing
+down.
+
+### Fields, and the thing that makes them worth having
+
+`StructFieldNode` had carried `is_pub` all along and `StructFieldTemplate`
+dropped it, which is why `pub` on a field did nothing. Carrying it
+through took five sites, not three: reads (`infer_field_read`),
+literals, named patterns, POSITIONAL patterns, and nested update
+(`a.b: v`).
+
+The positional one is the one that would have been missed. `Point(x, y)`
+names no field and binds every one, so it needs all of them visible —
+otherwise the positional form is a documented way around the check the
+named form enforces.
+
+**A struct with any private field cannot be constructed from outside
+its module**, because a literal has to name every field. That is the
+point rather than a consequence: it makes a constructor function the
+only way in, which is the entire reason to hide a field. It does mean
+such a struct needs one, and `exec_corpus/module_visibility` is written
+that way deliberately.
+
+### The motivation only half lands, and the notes say so
+
+The case for doing this was concrete: `Map.buckets` was public API, so
+Plum's bucket count and hashing strategy were observable and therefore
+frozen. Field privacy does not fix that, because the prelude lives in
+module `""` and so does every root-level user file — `collect_root_entries`
+stamps `""` on anything not in a subdirectory. Same module, no check.
+
+Measured after the change:
+
+```
+// a root-level main.plum
+m.buckets.len()   // 8 -- still visible
+
+// the same read from a module of your own
+field Map.buckets is private to the root module
+```
+
+So the leak is closed against user modules and open against root files.
+Closing it properly means giving the prelude a module of its own, which
+changes every prelude symbol's mangled name and needs the seed
+regenerated. Sequenced separately and stated plainly in the release
+notes rather than implying the leak is gone.
+
+`Map`, `Set` and `MapEntry` were deliberately left with private fields
+when the rest of the prelude's structs were opened up, so that the
+protection exists the moment the prelude moves.
+
+### What `pub` still does not cover
+
+Two modules declaring the same type name. That is the identity change
+described above, and it remains the one outstanding piece.
+
+### The original argument for stopping at functions, kept for the record
 
 `pub` on a `struct`, an `enum`, or a struct field is still accepted and
 ignored. The reason is not that the check was skipped — it is that

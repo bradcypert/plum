@@ -52,7 +52,7 @@ pub enum Ty {
 pub enum UOp { UNeg, UNot }
 pub enum BOp { BAdd, BSub, BMul, BDiv, BRem, BEq, BNe, BLt, BGt, BLe, BGe, BAnd, BOr, BRange, BPipe }
 
-pub struct FieldInitNode { name: String, extra_path: Array[String], value: PExpr }
+pub struct FieldInitNode { pub name: String, pub extra_path: Array[String], pub value: PExpr }
 
 pub enum PExpr {
     EInt(Int),
@@ -92,7 +92,7 @@ pub enum PExpr {
 // working. A statement is the granularity a type error is reported at;
 // see `typecheck/infer.plum`'s `fail_tc` for what that does and does
 // not buy versus the real compiler's expression-precise spans.
-pub struct PBlock { stmts: Array[PStmt], tail: Option[PExpr], starts: Array[Int] }
+pub struct PBlock { pub stmts: Array[PStmt], pub tail: Option[PExpr], pub starts: Array[Int] }
 
 pub enum PStmt {
     // The `Option[Ty]` is the OPTIONAL annotation in `let x: Int = ..`.
@@ -108,9 +108,9 @@ pub enum PStmt {
     SExpr(PExpr),
 }
 
-pub struct MatchArmNode { pattern: PPattern, guard: Option[PExpr], body: PExpr }
-pub struct SelectArmNode { pattern: PPattern, expr: PExpr, body: PExpr }
-pub struct FieldPatternNode { name: String, pattern: PPattern }
+pub struct MatchArmNode { pub pattern: PPattern, pub guard: Option[PExpr], pub body: PExpr }
+pub struct SelectArmNode { pub pattern: PPattern, pub expr: PExpr, pub body: PExpr }
+pub struct FieldPatternNode { pub name: String, pub pattern: PPattern }
 
 pub enum PPattern {
     PInt(Int),
@@ -129,22 +129,22 @@ pub enum PPattern {
     POr(Array[PPattern]),
 }
 
-pub struct GenericParamNode { name: String, bound: Array[String] }
+pub struct GenericParamNode { pub name: String, pub bound: Array[String] }
 
 pub enum ParamNode {
     ParamIdent(String),
     ParamPatternTy(PPattern, Option[Ty]),
 }
 
-pub struct LetDefNode { name: String, generics: Array[GenericParamNode], params: Array[ParamNode], ret_ty: Option[Ty], body: PExpr }
-pub struct StructFieldNode { is_pub: Bool, name: String, ty: Ty }
-pub struct StructDeclNode { name: String, generics: Array[GenericParamNode], fields: Array[StructFieldNode] }
-pub struct EnumVariantNode { name: String, payload: Array[Ty] }
-pub struct EnumDeclNode { name: String, generics: Array[GenericParamNode], variants: Array[EnumVariantNode] }
-pub struct ExternParamNode { name: String, ty: Ty }
-pub struct ExternFnNode { name: String, params: Array[ExternParamNode], ret_ty: Option[Ty] }
-pub struct ExternBlockNode { abi: String, fns: Array[ExternFnNode] }
-pub struct UseDeclNode { path: Array[String] }
+pub struct LetDefNode { pub name: String, pub generics: Array[GenericParamNode], pub params: Array[ParamNode], pub ret_ty: Option[Ty], pub body: PExpr }
+pub struct StructFieldNode { pub is_pub: Bool, pub name: String, pub ty: Ty }
+pub struct StructDeclNode { pub name: String, pub generics: Array[GenericParamNode], pub fields: Array[StructFieldNode] }
+pub struct EnumVariantNode { pub name: String, pub payload: Array[Ty] }
+pub struct EnumDeclNode { pub name: String, pub generics: Array[GenericParamNode], pub variants: Array[EnumVariantNode] }
+pub struct ExternParamNode { pub name: String, pub ty: Ty }
+pub struct ExternFnNode { pub name: String, pub params: Array[ExternParamNode], pub ret_ty: Option[Ty] }
+pub struct ExternBlockNode { pub abi: String, pub fns: Array[ExternFnNode] }
+pub struct UseDeclNode { pub path: Array[String] }
 
 pub enum ItemKindNode {
     IKLet(LetDefNode),
@@ -168,12 +168,12 @@ pub enum ItemKindNode {
 // concatenated into one flat list -- so by the time a type error is
 // reported there is no ambient "current file" left to attribute it to.
 // See `typecheck/infer.plum`'s `fail_tc`.
-pub struct ItemNode { is_pub: Bool, module: String, kind: ItemKindNode, path: String, start: Int }
+pub struct ItemNode { pub is_pub: Bool, pub module: String, pub kind: ItemKindNode, pub path: String, pub start: Int }
 
 // Stamps a module name onto every item parsed from one file.
 pub let with_module (items: Array[ItemNode]) (m: String): Array[ItemNode] =
     Array.map(items, |it| ItemNode { is_pub: it.is_pub, module: m, kind: it.kind, path: it.path, start: it.start })
-pub struct ProgramNode { items: Array[ItemNode] }
+pub struct ProgramNode { pub items: Array[ItemNode] }
 
 // The stdlib modules a program can `use`. THE list -- `codegen`'s
 // `cg_std_modules` looks its source up by these names and fails loudly
@@ -209,7 +209,7 @@ let fail (msg: String): Unit = panic_raw(msg)
 // When it is unset -- a unit test, a caller that never set it -- the
 // message falls back to exactly what it printed before, so nothing
 // depends on this having been done.
-pub struct SourceContext { path: String, source: String, starts: Array[Int] }
+pub struct SourceContext { pub path: String, pub source: String, pub starts: Array[Int] }
 
 let CTX: Ref[SourceContext] = ref(SourceContext { path: "", source: "", starts: [] })
 

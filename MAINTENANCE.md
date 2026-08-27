@@ -435,12 +435,32 @@ Worth knowing before you "fix" them:
   needs `Net`. Adding an edge means adding it to `cg_std_needs`;
   forgetting produces a module whose body references something never
   injected, which surfaces as a confusing user-facing type error.
-- **`pub` is enforced for functions, ignored for types.** The check is
-  `check_visible` in `typecheck/infer.plum`, at the one site that
-  resolves a module-qualified call. Types are not module-scoped at all
-  (`ITStruct` identifies a type by bare name), so `pub struct` and
-  `pub` on a field are accepted and do nothing — see DESIGN.md. Do not
-  read a `pub` on a type as a guarantee.
+- **`pub` is enforced for functions, types and fields.** Functions:
+  `check_visible` in `typecheck/infer.plum`. Types:
+  `check_type_visible` in `typecheck/context.plum`, from annotations
+  (`resolve_named`), construction (literal, variant) and destructuring
+  (both pattern forms). Fields: `check_field_visible`, from reads,
+  literals, named patterns, POSITIONAL patterns and nested update.
+  Miss one and the hole is silent, so add a `typecheck_corpus/` fixture
+  for any new path. The positional pattern is the easy one to forget —
+  it names no field and reaches every one.
+- **Marking a `pub struct`'s fields is not automatic.** `Map`, `Set`
+  and `MapEntry` keep private fields on purpose; every other prelude
+  and compiler struct had its fields opened when this landed. If you
+  add a `pub struct` meant to cross a module boundary, its fields need
+  `pub` too. `bootstrap/gen-shims` also emits a struct declaration —
+  keep it in step or `check-shims` fails.
+- **Type IDENTITY is still the bare name.** `ITStruct(name, args)`
+  carries no module, so two modules cannot share a type name. The
+  visibility lookup prefers the viewer's own module precisely so that a
+  duplicate name cannot make a module think its own type is private —
+  but the type the checker then uses is still whichever the flat lookup
+  finds. `lsp-smoke` has a fixture with two `struct P` and is the thing
+  that catches regressions here.
+- **`resolve_ann` does not check; `resolve_ann_seen` does.** The
+  wrapper passes `ANY_MODULE` so context building is exempt. If you add
+  a site where user source names a type, call the `_seen` form with the
+  right viewer, or it silently will not be checked.
 - **A new cross-module call needs `pub` on the callee.** The compiler
   had zero violations when this landed, so a failure here is almost
   certainly a genuinely missing `pub` rather than a false positive.

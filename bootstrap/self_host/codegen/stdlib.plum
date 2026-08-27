@@ -29,7 +29,7 @@ use parser;
 // `use Http;` must get `Net` too whether it asked for it or not --
 // otherwise the module's own body would reference something that was
 // never injected, which is a compiler bug reported as a user error.
-pub struct StdModule { name: String, source: String, needs: Array[String] }
+pub struct StdModule { pub name: String, pub source: String, pub needs: Array[String] }
 
 // Every stdlib module, built from `parser.std_module_names` so the
 // name list has exactly one home. A name with no source here is a
@@ -197,13 +197,13 @@ let cg_http_src (): String = Array.join([
     // eta-expanded by hand because this compiler had no
     // function-as-value support. That gap is closed, and the source
     // matches the real prelude line for line again.
-    "pub struct Header { name: String, value: String }",
-    "pub struct Response { status: Int, headers: Array[Header], body: String }",
-    "pub struct UrlParts { host: String, port: Int, path: String }",
-    "pub struct Head { status: Int, headers: Array[Header], leftover_body: String }",
-    "pub struct Request { method: String, path: String, headers: Array[Header], body: String }",
-    "pub struct RequestLine { method: String, path: String }",
-    "pub struct RequestHead { method: String, path: String, headers: Array[Header], leftover_body: String }",
+    "pub struct Header { pub name: String, pub value: String }",
+    "pub struct Response { pub status: Int, pub headers: Array[Header], pub body: String }",
+    "pub struct UrlParts { pub host: String, pub port: Int, pub path: String }",
+    "pub struct Head { pub status: Int, pub headers: Array[Header], pub leftover_body: String }",
+    "pub struct Request { pub method: String, pub path: String, pub headers: Array[Header], pub body: String }",
+    "pub struct RequestLine { pub method: String, pub path: String }",
+    "pub struct RequestHead { pub method: String, pub path: String, pub headers: Array[Header], pub leftover_body: String }",
     "",
     "let http_parse_url (url: String): Result[UrlParts, String] =",
     "    if String.index_of(url, \"https://\") == Some(0) { Err(\"http client: https:// is not supported yet\") }",
@@ -639,7 +639,7 @@ let cg_os_src (): String = Array.join([
     "let process_stderr_raw (handle: Int): String = \"\"",
     "let process_free_raw (handle: Int): Bool = false",
     "",
-    "pub struct ProcessResult { exit_code: Int, stdout: String, stderr: String }",
+    "pub struct ProcessResult { pub exit_code: Int, pub stdout: String, pub stderr: String }",
     "",
     "// NO leading separator: `process_run` points argv[1] at the WHOLE",
     "// joined string, so a leading tab makes argv[1] empty and pushes the",
@@ -744,9 +744,9 @@ let cg_time_src (): String = Array.join([
     "",
     "// A civil date and time, as UTC. `weekday` is 0 for Sunday.",
     "pub struct DateTime {",
-    "    year: Int, month: Int, day: Int,",
-    "    hour: Int, minute: Int, second: Int,",
-    "    weekday: Int,",
+    "    pub year: Int, pub month: Int, pub day: Int,",
+    "    pub hour: Int, pub minute: Int, pub second: Int,",
+    "    pub weekday: Int,",
     "}",
     "",
     "// Howard Hinnant's `civil_from_days`: exact for every date in the",

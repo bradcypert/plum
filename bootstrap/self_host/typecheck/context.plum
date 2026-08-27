@@ -22,14 +22,26 @@
 
 use parser;
 
-struct StructFieldTemplate { name: String, ty: ITy }
-struct StructInfo { name: String, generics: Array[String], fields: Array[StructFieldTemplate] }
+// `is_pub` was parsed into `StructFieldNode` and dropped here until
+// 2026-08-27, which is why `pub` on a field did nothing.
+struct StructFieldTemplate { name: String, ty: ITy, is_pub: Bool }
+// `module`/`is_pub` are carried for VISIBILITY only. A type's identity
+// is still its bare name (`ITStruct(name, args)`), so two modules
+// still cannot declare the same type name -- that is unchanged, and is
+// its own piece of work. What these add is the ability to say no.
+struct StructInfo { name: String, generics: Array[String], fields: Array[StructFieldTemplate], module: String, is_pub: Bool }
 struct VariantInfo { tag: String, enum_name: String, payload: Array[ITy] }
-struct EnumInfo { name: String, generics: Array[String], variants: Array[VariantInfo] }
+struct EnumInfo { name: String, generics: Array[String], variants: Array[VariantInfo], module: String, is_pub: Bool }
 
-pub struct TyContext { structs: Array[StructInfo], enums: Array[EnumInfo] }
+pub struct TyContext { pub structs: Array[StructInfo], pub enums: Array[EnumInfo] }
 
 let fail_ctx (msg: String): Unit = panic_raw("self-hosted type checker: ".concat(msg))
+
+// The root module is spelled `""` internally -- it holds the prelude
+// and every file not in a subdirectory. Printing "module ``" in a
+// diagnostic is not something a reader can act on.
+pub let module_label (m: String): String =
+    if m == "" { "the root module" } else { "module `".concat(m).concat("`") }
 
 // --- Building the context from a whole program's declarations ---
 
@@ -89,12 +101,12 @@ let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext):
     else {
         match items[i].kind {
             IKStruct(decl) => collect_names_acc(items, i + 1, TyContext {
-                structs: ctx.structs.push(StructInfo { name: decl.name, generics: Array.map(decl.generics, |g| g.name), fields: [] }),
+                structs: ctx.structs.push(StructInfo { name: decl.name, generics: Array.map(decl.generics, |g| g.name), fields: [], module: items[i].module, is_pub: items[i].is_pub }),
                 enums: ctx.enums,
             }),
             IKEnum(decl) => collect_names_acc(items, i + 1, TyContext {
                 structs: ctx.structs,
-                enums: ctx.enums.push(EnumInfo { name: decl.name, generics: Array.map(decl.generics, |g| g.name), variants: [] }),
+                enums: ctx.enums.push(EnumInfo { name: decl.name, generics: Array.map(decl.generics, |g| g.name), variants: [], module: items[i].module, is_pub: items[i].is_pub }),
             }),
             _ => collect_names_acc(items, i + 1, ctx),
         }
@@ -104,8 +116,8 @@ let resolve_decls_acc (items: Array[parser.ItemNode]) (i: Int) (names: TyContext
     if i >= items.len() { out }
     else {
         match items[i].kind {
-            IKStruct(decl) => resolve_decls_acc(items, i + 1, names, add_struct(names, out, decl)),
-            IKEnum(decl) => resolve_decls_acc(items, i + 1, names, add_enum(names, out, decl)),
+            IKStruct(decl) => resolve_decls_acc(items, i + 1, names, add_struct(names, out, decl, items[i].module, items[i].is_pub)),
+            IKEnum(decl) => resolve_decls_acc(items, i + 1, names, add_enum(names, out, decl, items[i].module, items[i].is_pub)),
             _ => resolve_decls_acc(items, i + 1, names, out),
         }
     }
@@ -114,28 +126,118 @@ let resolve_decls_acc (items: Array[parser.ItemNode]) (i: Int) (names: TyContext
 // AGAINST; `out` is the fully-resolved context being accumulated. Two
 // separate contexts on purpose — resolving against `out` would
 // reintroduce the in-order dependency this split exists to remove.
-let add_struct (names: TyContext) (out: TyContext) (decl: parser.StructDeclNode): TyContext = {
+let add_struct (names: TyContext) (out: TyContext) (decl: parser.StructDeclNode) (module_name: String) (is_pub: Bool): TyContext = {
     // A struct's OWN declared generic names are already fully known
     // from its own declaration — resolving its fields' annotations
     // needs no fresh-var bootstrapping the way a mutually-recursive
     // FUNCTION signature would (see `infer.plum`'s own top comment for
     // that same reasoning, applied to functions instead of structs).
     let generic_names = Array.map(decl.generics, |g| g.name);
-    let fields = Array.map(decl.fields, |f| StructFieldTemplate { name: f.name, ty: resolve_ann(names, generic_names, f.ty) });
-    TyContext { structs: out.structs.push(StructInfo { name: decl.name, generics: generic_names, fields: fields }), enums: out.enums }
+    let fields = Array.map(decl.fields, |f| StructFieldTemplate { name: f.name, ty: resolve_ann_seen(names, module_name, generic_names, f.ty), is_pub: f.is_pub });
+    TyContext { structs: out.structs.push(StructInfo { name: decl.name, generics: generic_names, fields: fields, module: module_name, is_pub: is_pub }), enums: out.enums }
 }
 
-let add_enum (names: TyContext) (out: TyContext) (decl: parser.EnumDeclNode): TyContext = {
+let add_enum (names: TyContext) (out: TyContext) (decl: parser.EnumDeclNode) (module_name: String) (is_pub: Bool): TyContext = {
     let generic_names = Array.map(decl.generics, |g| g.name);
     let variants = Array.map(decl.variants, |v| VariantInfo {
         tag: v.name,
         enum_name: decl.name,
-        payload: Array.map(v.payload, |t| resolve_ann(names, generic_names, t)),
+        payload: Array.map(v.payload, |t| resolve_ann_seen(names, module_name, generic_names, t)),
     });
-    TyContext { structs: out.structs, enums: out.enums.push(EnumInfo { name: decl.name, generics: generic_names, variants: variants }) }
+    TyContext { structs: out.structs, enums: out.enums.push(EnumInfo { name: decl.name, generics: generic_names, variants: variants, module: module_name, is_pub: is_pub }) }
 }
 
 // --- Lookups ---
+
+// Visibility for the places a type is named WITHOUT an annotation: a
+// struct literal, a struct pattern, a variant constructor. Those
+// resolve through `find_struct`/`find_variant` rather than through
+// `resolve_ann`, so they need their own call rather than inheriting
+// the annotation path's check.
+// A FIELD is private unless declared `pub`, independently of its
+// struct: `pub struct Circle { pub radius: Float, cached: Float }` is
+// a visible type with one visible field.
+//
+// The consequence worth stating out loud: a struct with any private
+// field cannot be CONSTRUCTED from outside its module, because a
+// literal has to name every field. That is deliberate -- it is what
+// makes a constructor function the only way in, which is the whole
+// point of hiding the field -- but it means such a struct needs one.
+pub let check_field_visible (ctx: TyContext) (viewer: String) (struct_name: String) (field: String): Unit =
+    match best_struct(ctx, viewer, struct_name) {
+        None => (),
+        Some(info) => if viewer == ANY_MODULE() || viewer == info.module { () }
+            else { match find_field_pub(info.fields, field, 0) {
+                None => (),
+                Some(is_pub) => if is_pub { () } else {
+                    fail_ctx("field ".concat(struct_name).concat(".").concat(field)
+                        .concat(" is private to ").concat(module_label(info.module))
+                        .concat(". Add `pub` to it to use it from ").concat(module_label(viewer)))
+                },
+            } },
+    }
+
+let find_field_pub (fields: Array[StructFieldTemplate]) (name: String) (i: Int): Option[Bool] =
+    if i >= fields.len() { None }
+    else if fields[i].name == name { Some(fields[i].is_pub) }
+    else { find_field_pub(fields, name, i + 1) }
+
+pub let check_struct_named (ctx: TyContext) (viewer: String) (name: String): Unit =
+    match best_struct(ctx, viewer, name) {
+        Some(info) => check_type_visible(viewer, info.module, info.is_pub, "struct", name),
+        None => (),
+    }
+
+// A type's identity is still its bare NAME, so two modules declaring
+// the same name both land in one flat list and `find_struct` returns
+// whichever is first. That was harmless while nothing read the extra
+// fields; it is not harmless for visibility, because it would let a
+// module be told that its OWN type is private to somebody else.
+//
+// So the visibility lookup prefers the viewer's own module, then the
+// root, then anything -- the same current-then-root order `find_sig`
+// uses for functions, for the same reason.
+//
+// This does NOT make duplicate type names work properly: the type the
+// checker then uses is still whichever the flat lookup finds, and its
+// FIELDS may come from the other declaration. Fixing that means giving
+// a type a module-qualified identity, which is a separate and much
+// wider change (see DESIGN.md).
+let best_struct (ctx: TyContext) (viewer: String) (name: String): Option[StructInfo] =
+    match find_struct_in(ctx.structs, viewer, name, 0) {
+        Some(info) => Some(info),
+        None => match find_struct_in(ctx.structs, "", name, 0) {
+            Some(info) => Some(info),
+            None => find_struct_acc(ctx.structs, name, 0),
+        },
+    }
+
+let find_struct_in (structs: Array[StructInfo]) (module_name: String) (name: String) (i: Int): Option[StructInfo] =
+    if i >= structs.len() { None }
+    else if structs[i].name == name && structs[i].module == module_name { Some(structs[i]) }
+    else { find_struct_in(structs, module_name, name, i + 1) }
+
+// Checked against the ENUM, not the variant: `Hidden.A` is private
+// because `Hidden` is, and a variant has no visibility of its own.
+pub let check_enum_named (ctx: TyContext) (viewer: String) (enum_name: String): Unit =
+    match best_enum(ctx, viewer, enum_name) {
+        Some(info) => check_type_visible(viewer, info.module, info.is_pub, "enum", enum_name),
+        None => (),
+    }
+
+let best_enum (ctx: TyContext) (viewer: String) (name: String): Option[EnumInfo] =
+    match find_enum_in(ctx.enums, viewer, name, 0) {
+        Some(info) => Some(info),
+        None => match find_enum_in(ctx.enums, "", name, 0) {
+            Some(info) => Some(info),
+            None => find_enum_acc(ctx.enums, name, 0),
+        },
+    }
+
+let find_enum_in (enums: Array[EnumInfo]) (module_name: String) (name: String) (i: Int): Option[EnumInfo] =
+    if i >= enums.len() { None }
+    else if enums[i].name == name && enums[i].module == module_name { Some(enums[i]) }
+    else { find_enum_in(enums, module_name, name, i + 1) }
 
 pub let find_struct (ctx: TyContext) (name: String): Option[StructInfo] = find_struct_acc(ctx.structs, name, 0)
 let find_struct_acc (structs: Array[StructInfo]) (name: String) (i: Int): Option[StructInfo] =
@@ -151,7 +253,7 @@ let find_enum_acc (enums: Array[EnumInfo]) (name: String) (i: Int): Option[EnumI
 // flat, global namespace" precedent — DESIGN.md's module-system
 // section documents this as a deliberate, pre-existing v1 scope
 // boundary, not something specific to this checker).
-pub struct VariantLookup { enum_name: String, enum_generics: Array[String], payload: Array[ITy] }
+pub struct VariantLookup { pub enum_name: String, pub enum_generics: Array[String], pub payload: Array[ITy] }
 
 pub let find_variant (ctx: TyContext) (tag: String): Option[VariantLookup] = find_variant_in_enums(ctx.enums, tag, 0)
 let find_variant_in_enums (enums: Array[EnumInfo]) (tag: String) (i: Int): Option[VariantLookup] =
@@ -167,15 +269,37 @@ let find_variant_acc (variants: Array[VariantInfo]) (tag: String) (i: Int): Opti
 
 // --- AST annotation -> `ITy` ---
 
+// The module doing the LOOKING, when there is one to check against.
+// `ANY_MODULE` means "do not check": used while the context is still
+// being built, where every annotation belongs to the declaration it
+// came from and so is visible by construction.
+// `*` cannot collide with a real module: a module name comes from a
+// directory and has to be a legal identifier in `use X;`.
+pub let ANY_MODULE (): String = "*"
+
 pub let resolve_ann (ctx: TyContext) (in_scope: Array[String]) (t: parser.Ty): ITy =
-    match t {
-        TyFunction(params, ret) => ITFunction(Array.map(params, |p| resolve_ann(ctx, in_scope, p)), resolve_ann(ctx, in_scope, ret)),
-        TyGeneric(base, args) => resolve_named(ctx, in_scope, base[base.len() - 1], Array.map(args, |a| resolve_ann(ctx, in_scope, a))),
-        TyPath(segments) => resolve_named(ctx, in_scope, segments[segments.len() - 1], []),
-        TyTuple(elems) => ITTuple(Array.map(elems, |e| resolve_ann(ctx, in_scope, e))),
+    resolve_ann_seen(ctx, ANY_MODULE(), in_scope, t)
+
+// A type is private unless declared `pub`, exactly as a function is.
+// The identity of a type is still its bare name, so this cannot make
+// two same-named types coexist -- it can only refuse to resolve one
+// that the looking module has no business naming.
+pub let check_type_visible (viewer: String) (owner: String) (is_pub: Bool) (kind: String) (name: String): Unit =
+    if is_pub || viewer == ANY_MODULE() || viewer == owner { () }
+    else {
+        fail_ctx(kind.concat(" ").concat(name).concat(" is private to ").concat(module_label(owner))
+            .concat(". Add `pub` to its declaration to use it from ").concat(module_label(viewer)))
     }
 
-let resolve_named (ctx: TyContext) (in_scope: Array[String]) (name: String) (args: Array[ITy]): ITy =
+pub let resolve_ann_seen (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (t: parser.Ty): ITy =
+    match t {
+        TyFunction(params, ret) => ITFunction(Array.map(params, |p| resolve_ann_seen(ctx, viewer, in_scope, p)), resolve_ann_seen(ctx, viewer, in_scope, ret)),
+        TyGeneric(base, args) => resolve_named(ctx, viewer, in_scope, base[base.len() - 1], Array.map(args, |a| resolve_ann_seen(ctx, viewer, in_scope, a))),
+        TyPath(segments) => resolve_named(ctx, viewer, in_scope, segments[segments.len() - 1], []),
+        TyTuple(elems) => ITTuple(Array.map(elems, |e| resolve_ann_seen(ctx, viewer, in_scope, e))),
+    }
+
+let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (name: String) (args: Array[ITy]): ITy =
     if name == "Int" { ITInt }
     else if name == "Float" { ITFloat }
     else if name == "Bool" { ITBool }
@@ -190,8 +314,8 @@ let resolve_named (ctx: TyContext) (in_scope: Array[String]) (name: String) (arg
     else if name == "Sender" { ITStruct("Sender", args) }
     else if name == "Receiver" { ITStruct("Receiver", args) }
     else if Array.contains(in_scope, name) { ITParam(name) }
-    else if Option.is_some(find_struct(ctx, name)) { ITStruct(name, args) }
-    else if Option.is_some(find_enum(ctx, name)) { ITEnum(name, args) }
+    else if Option.is_some(find_struct(ctx, name)) { check_struct_named(ctx, viewer, name); ITStruct(name, args) }
+    else if Option.is_some(find_enum(ctx, name)) { check_enum_named(ctx, viewer, name); ITEnum(name, args) }
     else { { fail_ctx("unknown type: ".concat(name)); ITUnit } }
 
 // --- Instantiating a declaration's template at a concrete use site ---

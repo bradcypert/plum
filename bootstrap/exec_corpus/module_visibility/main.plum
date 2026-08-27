@@ -1,0 +1,15 @@
+use geom;
+
+let main (): Unit = {
+    // Built through the module's constructor, because `Circle` has a
+    // private field and so cannot be written as a literal from here.
+    let c = geom.circle(2.0);
+    // The PUBLIC field is readable from outside; `cached` is not.
+    println(c.radius.to_string());
+    println(geom.area(c).to_string());
+    println(geom.perimeter(c).to_string());
+    println(geom.diameter(c).to_string());
+    // A pub enum's variants, referenced bare and matched.
+    println(geom.kind_name(Round).concat("/").concat(geom.kind_name(Pointy)));
+    println(match Round { Round => "matched", Pointy => "no" })
+}

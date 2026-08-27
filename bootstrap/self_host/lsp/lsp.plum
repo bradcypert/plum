@@ -76,7 +76,7 @@ pub let frame (body: String): String =
 
 // --- Requests ---
 
-pub struct Request { method: String, id: Option[JsonValue], params: JsonValue }
+pub struct Request { pub method: String, pub id: Option[JsonValue], pub params: JsonValue }
 
 pub let parse_request (body: String): Option[Request] =
     match json_parse(body) {
@@ -146,7 +146,7 @@ pub let capabilities (): JsonValue =
 // `-->` line and thrown away, so every diagnostic was attributed to
 // whatever document triggered the check -- harmless when that only
 // happened on save, actively misleading once it happens per keystroke.
-pub struct Diagnostic { path: String, line: Int, col: Int, message: String }
+pub struct Diagnostic { pub path: String, pub line: Int, pub col: Int, pub message: String }
 
 // The checker's own output, parsed back. It looks like
 //
@@ -284,7 +284,7 @@ let last_slash (cs: Array[String]) (i: Int): Int =
 // No path or line, unlike `Def`: completion inserts a name, it does not
 // navigate to one. Most candidates come from the prelude, which has no
 // file to navigate to at all.
-pub struct Completion { name: String, kind: String, detail: String }
+pub struct Completion { pub name: String, pub kind: String, pub detail: String }
 
 pub let parse_completions (text: String): Array[Completion] =
     match json_parse(text) {
@@ -338,7 +338,7 @@ let completion_items (items: Array[Completion]) (i: Int) (acc: Array[JsonValue])
         ])))
     }
 
-pub struct Def { name: String, path: String, line: Int, col: Int, kind: String, detail: String }
+pub struct Def { pub name: String, pub path: String, pub line: Int, pub col: Int, pub kind: String, pub detail: String }
 
 pub let parse_defs (text: String): Array[Def] =
     match json_parse(text) {

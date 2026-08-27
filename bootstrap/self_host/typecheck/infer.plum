@@ -89,7 +89,7 @@ let UNSAFE: Ref[Bool] = ref(false)
 // `def_offset` is where the identifier's binding is, or -1 when it has
 // none recorded -- a top-level name, which the name index answers for
 // instead.
-pub struct NodeType { path: String, offset: Int, name: String, ty: String, def_offset: Int }
+pub struct NodeType { pub path: String, pub offset: Int, pub name: String, pub ty: String, pub def_offset: Int }
 
 let RECORD: Ref[Bool] = ref(false)
 // `ref([])` cannot pin the element type from the annotation alone --
@@ -145,7 +145,7 @@ let fail_tc (msg: String): Unit = {
 
 // --- Fresh type variables ---
 
-pub struct FreshState { next: Int }
+pub struct FreshState { pub next: Int }
 pub let fresh_state_new (unit: Unit): FreshState = FreshState { next: 0 }
 
 struct Fresh { ty: ITy, state: FreshState }
@@ -164,7 +164,7 @@ let fresh_list_acc (state: FreshState) (n: Int) (acc: Array[ITy]): FreshListResu
 // from. A local's binding is always in the same file as its use (a
 // function body does not span files), so no path is needed alongside it.
 struct EnvBinding { name: String, ty: ITy, def_offset: Int }
-pub struct TyEnv { bindings: Array[EnvBinding] }
+pub struct TyEnv { pub bindings: Array[EnvBinding] }
 pub let tyenv_empty (unit: Unit): TyEnv = TyEnv { bindings: [] }
 pub let tyenv_extend (env: TyEnv) (name: String) (ty: ITy) (def_offset: Int): TyEnv =
     TyEnv { bindings: env.bindings.push(EnvBinding { name: name, ty: ty, def_offset: def_offset }) }
@@ -184,7 +184,7 @@ let tyenv_lookup_acc (bindings: Array[EnvBinding]) (name: String) (i: Int): Opti
 // `is_pub` is read by ONE rule: a module-qualified call may only reach
 // a `pub` item. Everything reached unqualified is in the caller's own
 // module or the root, where privacy does not apply.
-pub struct FnSig { name: String, module: String, generics: Array[String], params: Array[ITy], ret: ITy, is_extern: Bool, is_pub: Bool }
+pub struct FnSig { pub name: String, pub module: String, pub generics: Array[String], pub params: Array[ITy], pub ret: ITy, pub is_extern: Bool, pub is_pub: Bool }
 // `current` is the module whose body is being checked right now. It is
 // swapped per function rather than threaded as a parameter, for the
 // same reason `CgProgram` carries the current substitution: it would
@@ -194,9 +194,9 @@ pub struct FnSig { name: String, module: String, generics: Array[String], params
 // `let x: T = ..` inside a generic function resolves `T` to `ITParam`
 // rather than failing as an unknown type. Everything else here was
 // already threaded through every inference call; this rides along.
-pub struct Program2 { sigs: Array[FnSig], globals: Array[GlobalDef], ctx: TyContext, current: String, generics: Array[String] }
+pub struct Program2 { pub sigs: Array[FnSig], pub globals: Array[GlobalDef], pub ctx: TyContext, pub current: String, pub generics: Array[String] }
 
-pub struct GlobalDef { module: String, def: parser.LetDefNode }
+pub struct GlobalDef { pub module: String, pub def: parser.LetDefNode }
 
 pub let build_sigs (ctx: TyContext) (program: parser.ProgramNode): Program2 = collect_sigs_acc(ctx, program.items, 0, [], [])
 
@@ -221,9 +221,9 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
                 if Array.is_empty(def.params) { collect_sigs_acc(ctx, items, i + 1, sigs, globals.push(GlobalDef { module: items[i].module, def: def })) }
                 else {
                     let generic_names = Array.map(def.generics, |g| g.name);
-                    let params = Array.map(def.params, |p| resolve_param_ty(ctx, generic_names, p));
+                    let params = Array.map(def.params, |p| resolve_param_ty(ctx, items[i].module, generic_names, p));
                     let ret = match def.ret_ty {
-                        Some(t) => resolve_ann(ctx, generic_names, t),
+                        Some(t) => resolve_ann_seen(ctx, items[i].module, generic_names, t),
                         None => { fail_tc("top-level function ".concat(def.name).concat(" needs an explicit return type annotation")); ITUnit },
                     };
                     collect_sigs_acc(ctx, items, i + 1, sigs.push(FnSig { name: def.name, module: items[i].module, generics: generic_names, params: params, ret: ret , is_extern: false, is_pub: items[i].is_pub }), globals)
@@ -244,11 +244,11 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
 // names: `f()` sugar unifies against `Function([Unit], ret)`, which
 // only makes sense if `()` really does mean "one Unit-typed
 // parameter").
-let resolve_param_ty (ctx: TyContext) (in_scope: Array[String]) (p: parser.ParamNode): ITy =
+let resolve_param_ty (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (p: parser.ParamNode): ITy =
     match p {
         ParamIdent(name) => { fail_tc("parameter ".concat(name).concat(" needs an explicit type annotation")); ITUnit },
         ParamPatternTy(pattern, ann) => match ann {
-            Some(t) => resolve_ann(ctx, in_scope, t),
+            Some(t) => resolve_ann_seen(ctx, viewer, in_scope, t),
             None => match pattern {
                 PTuple(elems) => if Array.is_empty(elems) { ITUnit } else { { fail_tc("destructuring parameters aren't supported yet"); ITUnit } },
                 _ => { fail_tc("parameter needs an explicit type annotation"); ITUnit },
@@ -322,9 +322,8 @@ let find_sig (p2: Program2) (name: String): Option[FnSig] =
 pub let check_visible (p2: Program2) (sig: FnSig) (ns: String) (name: String): Unit =
     if sig.is_pub || ns == p2.current { () }
     else {
-        fail_tc(ns.concat(".").concat(name).concat(" is private to module `").concat(ns)
-            .concat("`. Add `pub` to its declaration to use it from ")
-            .concat(if p2.current == "" { "outside" } else { "module `".concat(p2.current).concat("`") }))
+        fail_tc(ns.concat(".").concat(name).concat(" is private to ").concat(module_label(ns))
+            .concat(". Add `pub` to its declaration to use it from ").concat(module_label(p2.current)))
     }
 
 let find_sig_in (sigs: Array[FnSig]) (module_name: String) (name: String) (i: Int): Option[FnSig] =
@@ -451,7 +450,7 @@ let bind_params (env: TyEnv) (params: Array[parser.ParamNode]) (tys: Array[ITy])
 // `texpr` is the TYPED tree for the expression just inferred — see
 // `texpr.plum` for what it is and why the checker publishes it. Every
 // arm of `infer_expr` builds one; nothing else about inference changed.
-pub struct InferResult { ty: ITy, subst: Subst, state: FreshState, texpr: TExpr }
+pub struct InferResult { pub ty: ITy, pub subst: Subst, pub state: FreshState, pub texpr: TExpr }
 
 // Building an `InferResult` whose node needs no children.
 let ir_leaf (ty: ITy) (subst: Subst) (state: FreshState) (node: TNode): InferResult =
@@ -916,7 +915,10 @@ let infer_field_read (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     match base_ty {
         ITStruct(struct_name, args) => match find_struct(p2.ctx, struct_name) {
             Some(info) => match find_field_template(info.fields, name) {
-                Some(field_ty) => ir_leaf(instantiate_template(info.generics, args, field_ty), r.subst, r.state, TFieldGet(r.texpr, name)),
+                Some(field_ty) => {
+                    check_field_visible(p2.ctx, p2.current, struct_name, name);
+                    ir_leaf(instantiate_template(info.generics, args, field_ty), r.subst, r.state, TFieldGet(r.texpr, name))
+                },
                 None => { fail_tc("struct ".concat(struct_name).concat(" has no field named ").concat(name)); ir_unsupported(r.subst, r.state, "bad field access") },
             },
             // Naming the FIELD matters: reaching here with `Array`
@@ -927,6 +929,13 @@ let infer_field_read (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
         _ => { fail_tc("field access requires a struct value with a statically known type, found ".concat(render_ty(base_ty))); ir_unsupported(r.subst, r.state, "field access on a non-struct") },
     }
 }
+
+let check_all_fields_visible (p2: Program2) (info: StructInfo) (i: Int): Unit =
+    if i >= info.fields.len() { () }
+    else {
+        check_field_visible(p2.ctx, p2.current, info.name, info.fields[i].name);
+        check_all_fields_visible(p2, info, i + 1)
+    }
 
 let find_field_template (fields: Array[StructFieldTemplate]) (name: String): Option[ITy] = find_field_template_acc(fields, name, 0)
 let find_field_template_acc (fields: Array[StructFieldTemplate]) (name: String) (i: Int): Option[ITy] =
@@ -954,6 +963,7 @@ let infer_variant_ref (p2: Program2) (state: FreshState) (acc: Subst) (tag: Stri
     match find_variant(p2.ctx, tag) {
         None => { fail_tc(unbound_message(tag)); ir_unsupported(acc, state, "unbound variant ".concat(tag)) },
         Some(v) => {
+            check_enum_named(p2.ctx, p2.current, v.enum_name);
             let fr = fresh_list(state, v.enum_generics.len());
             let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
             if Array.is_empty(payload) { infer_variant(p2, state, acc, tag, [], []) }
@@ -972,6 +982,7 @@ let infer_variant_ref (p2: Program2) (state: FreshState) (acc: Subst) (tag: Stri
 let infer_variant (p2: Program2) (state: FreshState) (acc: Subst) (tag: String) (arg_tys: Array[ITy]) (arg_texprs: Array[TExpr]): InferResult =
     match find_variant(p2.ctx, tag) {
         Some(v) => {
+            check_enum_named(p2.ctx, p2.current, v.enum_name);
             let fr = fresh_list(state, v.enum_generics.len());
             let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
             let subst2 = unify_variant_args(payload, arg_tys, acc);
@@ -1753,7 +1764,7 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
                 let checked = match ann {
                     None => LetTy { ty: vty, subst: r.subst },
                     Some(t) => {
-                        let want = resolve_ann(p2.ctx, p2.generics, t);
+                        let want = resolve_ann_seen(p2.ctx, p2.current, p2.generics, t);
                         match unify(vty, want) {
                             Ok(sub) => LetTy { ty: subst_apply(sub, want), subst: subst_compose(r.subst, sub) },
                             Err(e) => {
@@ -1857,6 +1868,7 @@ let expand_nested_acc (p2: Program2) (info: StructInfo) (fields: Array[parser.Fi
     else if Array.is_empty(fields[i].extra_path) { expand_nested_acc(p2, info, fields, base, i + 1, acc.push(fields[i])) }
     else {
         let outer = fields[i].name;
+        check_field_visible(p2.ctx, p2.current, info.name, outer);
         let inner_name = match find_field_template(info.fields, outer) {
             Some(ITStruct(sn, _)) => sn,
             _ => { fail_tc("'".concat(outer).concat(".") .concat(fields[i].extra_path[0]).concat("' needs '").concat(outer).concat("' to be a struct")); "" },
@@ -1874,6 +1886,7 @@ let expand_nested_acc (p2: Program2) (info: StructInfo) (fields: Array[parser.Fi
 
 let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields0: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): InferResult = {
     let name = path[path.len() - 1];
+    check_struct_named(p2.ctx, p2.current, name);
     match find_struct(p2.ctx, name) {
         Some(info) => {
             let fields = expand_nested_updates(p2, info, fields0, spread);
@@ -1919,6 +1932,7 @@ let infer_struct_fields (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
             ITFunction(ptys, _) => infer_closure_seeded(p2, state, env, acc, fields[i].value, ptys),
             _ => infer_expr(p2, state, env, acc, fields[i].value),
         };
+        check_field_visible(p2.ctx, p2.current, info.name, fields[i].name);
         let field_ty = match find_field_template(info.fields, fields[i].name) {
             Some(t) => instantiate_template(info.generics, gen_args, t),
             None => { fail_tc("struct ".concat(info.name).concat(" has no field named ").concat(fields[i].name)); ITUnit },
@@ -2074,9 +2088,16 @@ let bind_pattern_list (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEn
         bind_pattern_list(p2, r.state, r.subst, r.env, pats, tys, i + 1)
     }
 
+// A `pub` function may return a type its own module keeps private, and
+// nothing stops it. The value that comes back is then OPAQUE outside
+// that module: it can be held and passed on, but not taken apart,
+// because taking it apart means naming the type. That is a coherent
+// position -- it is how a handle type behaves -- and it is why the
+// PATTERN paths check visibility as well as the construction ones.
 let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (tag: String) (arg_pats: Array[parser.PPattern]) (scrutinee_ty: ITy): BindResult =
     match find_variant(p2.ctx, tag) {
         Some(v) => {
+            check_enum_named(p2.ctx, p2.current, v.enum_name);
             let fr = fresh_list(state, v.enum_generics.len());
             let s1 = match unify(subst_apply(acc, scrutinee_ty), ITEnum(v.enum_name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
             let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
@@ -2090,12 +2111,18 @@ let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: T
         // `exec_corpus/refs`), so this checker has to as well.
         None => match find_struct(p2.ctx, tag) {
             Some(info) => {
+                check_struct_named(p2.ctx, p2.current, tag);
                 let fr = fresh_list(state, info.generics.len());
                 let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(tag, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
                 if arg_pats.len() != info.fields.len() {
                     fail_tc("struct ".concat(tag).concat(" has ").concat(info.fields.len().to_string()).concat(" field(s), pattern binds ").concat(arg_pats.len().to_string()));
                     BindResult { env: env, subst: s1, state: fr.state }
                 } else {
+                    // `Point(x, y)` names no field and binds all of
+                    // them, so every one has to be visible -- otherwise
+                    // positional form would be a way around the check
+                    // that the named form enforces.
+                    check_all_fields_visible(p2, info, 0);
                     let tys = Array.map(info.fields, |f| instantiate_template(info.generics, fr.tys, f.ty));
                     bind_pattern_list(p2, fr.state, s1, env, arg_pats, tys, 0)
                 }
@@ -2104,7 +2131,8 @@ let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: T
         },
     }
 
-let bind_struct_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (name: String) (field_pats: Array[parser.FieldPatternNode]) (scrutinee_ty: ITy): BindResult =
+let bind_struct_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (name: String) (field_pats: Array[parser.FieldPatternNode]) (scrutinee_ty: ITy): BindResult = {
+    check_struct_named(p2.ctx, p2.current, name);
     match find_struct(p2.ctx, name) {
         Some(info) => {
             let fr = fresh_list(state, info.generics.len());
@@ -2113,10 +2141,12 @@ let bind_struct_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: Ty
         },
         None => { fail_tc("unknown struct: ".concat(name)); BindResult { env: env, subst: acc, state: state } },
     }
+}
 
 let bind_struct_field_pats (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (info: StructInfo) (gen_args: Array[ITy]) (field_pats: Array[parser.FieldPatternNode]) (i: Int): BindResult =
     if i >= field_pats.len() { BindResult { env: env, subst: acc, state: state } }
     else {
+        check_field_visible(p2.ctx, p2.current, info.name, field_pats[i].name);
         let field_ty = match find_field_template(info.fields, field_pats[i].name) {
             Some(t) => instantiate_template(info.generics, gen_args, t),
             None => { fail_tc("struct ".concat(info.name).concat(" has no field named ").concat(field_pats[i].name)); ITUnit },

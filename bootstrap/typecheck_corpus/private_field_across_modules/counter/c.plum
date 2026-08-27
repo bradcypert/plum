@@ -1,0 +1,8 @@
+// The type is public and one field is; `n` is not. This is the shape
+// field privacy exists for: a visible type whose representation is
+// not part of its interface.
+pub struct Counter { pub label: String, n: Int }
+
+pub let start (label: String): Counter = Counter { label: label, n: 0 }
+pub let bump (c: Counter): Counter = Counter { label: c.label, n: c.n + 1 }
+pub let count (c: Counter): Int = c.n

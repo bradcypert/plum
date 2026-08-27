@@ -1,0 +1,14 @@
+// Rejected: `n` is private.
+//
+// Everything else here is deliberately legal, so the fixture proves
+// the check is about the one field and not about the type: `Counter`
+// is nameable, `label` is readable, and `count` reaches `n` from
+// inside its own module on the caller's behalf.
+use counter;
+
+let main (): Unit = {
+    let c: counter.Counter = counter.bump(counter.start("hits"));
+    println(c.label);
+    println(counter.count(c).to_string());
+    println(c.n.to_string())
+}

@@ -1,0 +1,5 @@
+// `pub` on the constructor, NOT on the type it returns. The value can
+// cross the boundary; the name cannot.
+struct Secret { n: Int }
+
+pub let make (): Secret = Secret { n: 7 }

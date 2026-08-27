@@ -812,15 +812,61 @@ shapes.secret_helper is private to module `shapes`. Add `pub` to its
 declaration to use it from outside
 ```
 
-**Types are not scoped to modules yet, and `pub` on a `struct`/`enum`
-or on a struct field is currently accepted and ignored.** Type names
-live in one program-wide namespace: a `struct Secret` declared in
-`shapes/` is reachable as a bare `Secret` from anywhere, whether or not
-it says `pub`. That is a real gap, not a design choice — a type's
-identity in the checker is its bare name, so scoping types means
-changing what identifies a type throughout the checker and backend. It
-is the next piece of this work; until it lands, treat `pub` on a type
-as documentation of intent.
+**Types are private by default too.** `pub struct` and `pub enum` opt
+one into being named from outside its module — in an annotation, in a
+literal, and in a pattern:
+
+```
+// shapes/s.plum
+struct Secret { n: Int }
+pub let make (): Secret = Secret { n: 7 }
+```
+
+```
+use shapes;
+let s = shapes.make();        // fine — the VALUE may cross
+let t: Secret = shapes.make() // rejected — the NAME may not
+```
+
+A private type that escapes through a `pub` function is **opaque**
+outside its module: you can hold it and pass it on, but not take it
+apart, because taking it apart means naming it. That is the same shape
+a handle type has.
+
+**Fields are private by default too**, independently of their struct:
+
+```
+// counter/c.plum
+pub struct Counter { pub label: String, n: Int }
+pub let start (label: String): Counter = Counter { label: label, n: 0 }
+pub let count (c: Counter): Int = c.n
+```
+
+```
+use counter;
+let c = counter.start("hits");
+c.label            // fine
+c.n                // rejected
+```
+
+A struct with any private field **cannot be constructed from outside
+its module**, because a literal has to name every field. That is the
+point rather than a side effect: it makes a constructor function the
+only way in. The same applies to destructuring — `Counter { label, n }`
+and the positional `Counter(label, n)` both name `n`, so both are
+refused.
+
+One thing `pub` does not cover: **two modules still cannot declare the
+same type name.** A type's identity in the checker is its bare name, so
+the type namespace is flat. Visibility prefers your own module's
+declaration, so you will never be told your own type is private, but
+genuinely duplicated names still resolve to one of them arbitrarily.
+
+Note also that the prelude shares the root module with your own
+top-level files, so the standard library's internals — `Map`'s buckets,
+say — are still visible from a root-level file, though not from a
+module of your own. Giving the prelude its own module is a separate
+piece of work.
 `use shapes.Circle;` (importing one specific name unqualified) is
 available as an escape hatch for names used constantly in a file.
 

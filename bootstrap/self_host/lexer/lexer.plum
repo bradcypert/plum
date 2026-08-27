@@ -478,7 +478,7 @@ pub let tokenize (source: String): Array[Token] = tokenize_spanned(source).token
 // space this whole lexer works in (`chars_of`). `line_col` reads the
 // source the same way, so the two agree by construction; nothing here
 // ever needs a byte offset.
-pub struct LexedSource { tokens: Array[Token], starts: Array[Int] }
+pub struct LexedSource { pub tokens: Array[Token], pub starts: Array[Int] }
 
 pub let tokenize_spanned (source: String): LexedSource = {
     let chars = chars_of(source);
@@ -501,7 +501,7 @@ pub let tokenize_spanned (source: String): LexedSource = {
 
 // --- Source positions ---
 
-pub struct LineCol { line: Int, col: Int }
+pub struct LineCol { pub line: Int, pub col: Int }
 
 // 1-based, matching every compiler diagnostic anyone has ever read (and
 // `plum_syntax::span`'s own rendering). `offset` is a character index;

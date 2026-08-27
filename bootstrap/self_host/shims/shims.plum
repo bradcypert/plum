@@ -17,7 +17,7 @@
 // beside the point: a compiled PROGRAM calls `tcp_*`, and without the
 // shim embedded here it cannot be linked.
 
-pub struct ShimFile { name: String, source: String }
+pub struct ShimFile { pub name: String, pub source: String }
 
 pub let shim_files (): Array[ShimFile] = [
     ShimFile {

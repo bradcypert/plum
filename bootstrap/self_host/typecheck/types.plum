@@ -54,7 +54,7 @@ pub enum ITy {
 // --- Substitution ---
 
 struct SubstEntry { id: Int, ty: ITy }
-pub struct Subst { entries: Array[SubstEntry] }
+pub struct Subst { pub entries: Array[SubstEntry] }
 
 pub let subst_empty (unit: Unit): Subst = Subst { entries: [] }
 pub let subst_single (id: Int) (ty: ITy): Subst = Subst { entries: [SubstEntry { id: id, ty: ty }] }

@@ -1,0 +1,11 @@
+// Rejected: `Secret` is not `pub`.
+//
+// Calling `shapes.make()` on its own is FINE -- a private type may be
+// returned across a boundary, and the value is then opaque: holdable,
+// passable, not takeable-apart. Naming the type is what is refused.
+use shapes;
+
+let main (): Unit = {
+    let s: Secret = shapes.make();
+    println(s.n.to_string())
+}

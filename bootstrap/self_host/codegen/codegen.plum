@@ -176,8 +176,8 @@ let cg_ty_eq (a: CgTy) (b: CgTy): Bool = cg_ty_name(a) == cg_ty_name(b)
 // already get everywhere else in this bootstrap (see DESIGN.md's
 // module-system section, which documents that as a deliberate v1
 // boundary).
-pub struct CgVariant { name: String, tag: Int, arity: Int }
-pub struct CgEnumDecl { name: String, variants: Array[CgVariant] }
+pub struct CgVariant { pub name: String, pub tag: Int, pub arity: Int }
+pub struct CgEnumDecl { pub name: String, pub variants: Array[CgVariant] }
 
 // Field and payload TYPES are no longer resolved here at all: every
 // use site reads its own type off the typed tree instead. What the
@@ -284,7 +284,7 @@ let cg_mangle (name: String): String = "plum_".concat(Array.concat_all(Array.map
 // stop being true if this backend ever specialized on values.
 // A function is identified by MODULE and name: two modules may declare
 // the same name, and they must not share a symbol.
-pub struct CgInst { module: String, name: String, targs: Array[typecheck.ITy] }
+pub struct CgInst { pub module: String, pub name: String, pub targs: Array[typecheck.ITy] }
 
 // A symbol name that is unique per instantiation. Monomorphic functions
 // keep their plain mangled name, so the entry point stays `@plum_main`
