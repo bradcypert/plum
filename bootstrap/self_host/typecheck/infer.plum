@@ -181,7 +181,10 @@ let tyenv_lookup_acc (bindings: Array[EnvBinding]) (name: String) (i: Int): Opti
 // `is_extern` marks a signature declared in an `extern "C"` block:
 // there is no Plum body to call, the backend emits a `declare` and a
 // direct call instead, and reaching one outside `unsafe` is an error.
-pub struct FnSig { name: String, module: String, generics: Array[String], params: Array[ITy], ret: ITy, is_extern: Bool }
+// `is_pub` is read by ONE rule: a module-qualified call may only reach
+// a `pub` item. Everything reached unqualified is in the caller's own
+// module or the root, where privacy does not apply.
+pub struct FnSig { name: String, module: String, generics: Array[String], params: Array[ITy], ret: ITy, is_extern: Bool, is_pub: Bool }
 // `current` is the module whose body is being checked right now. It is
 // swapped per function rather than threaded as a parameter, for the
 // same reason `CgProgram` carries the current substitution: it would
@@ -207,7 +210,7 @@ let extern_sigs (ctx: TyContext) (fns: Array[parser.ExternFnNode]) (i: Int) (acc
     else {
         let params = Array.map(fns[i].params, |q| resolve_ann(ctx, [], q.ty));
         let ret = match fns[i].ret_ty { Some(t) => resolve_ann(ctx, [], t), None => ITUnit };
-        extern_sigs(ctx, fns, i + 1, acc.push(FnSig { name: fns[i].name, module: "", generics: [], params: params, ret: ret, is_extern: true }))
+        extern_sigs(ctx, fns, i + 1, acc.push(FnSig { name: fns[i].name, module: "", generics: [], params: params, ret: ret, is_extern: true, is_pub: true }))
     }
 
 let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (sigs: Array[FnSig]) (globals: Array[GlobalDef]): Program2 =
@@ -223,7 +226,7 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
                         Some(t) => resolve_ann(ctx, generic_names, t),
                         None => { fail_tc("top-level function ".concat(def.name).concat(" needs an explicit return type annotation")); ITUnit },
                     };
-                    collect_sigs_acc(ctx, items, i + 1, sigs.push(FnSig { name: def.name, module: items[i].module, generics: generic_names, params: params, ret: ret , is_extern: false }), globals)
+                    collect_sigs_acc(ctx, items, i + 1, sigs.push(FnSig { name: def.name, module: items[i].module, generics: generic_names, params: params, ret: ret , is_extern: false, is_pub: items[i].is_pub }), globals)
                 }
             },
             // `extern "C" { fn sin(x: Float) -> Float; }` -- a signature
@@ -279,16 +282,16 @@ let tp (name: String): ITy = ITParam(name)
 let builtin_sig (name: String): Option[FnSig] =
     // A built-in ARRAY operation, not a prelude function: there is no
     // `let Array.push` anywhere to read.
-    if name == "Array.push" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) , is_extern: false }) }
+    if name == "Array.push" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) , is_extern: false, is_pub: true }) }
     // Both are runtime primitives the backend intercepts and emits
     // directly (`cg_runtime_fn`), so neither has a Plum body to declare.
-    else if name == "chars_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) , is_extern: false }) }
-    else if name == "panic_raw" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITUnit , is_extern: false }) }
+    else if name == "chars_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) , is_extern: false, is_pub: true }) }
+    else if name == "panic_raw" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITUnit , is_extern: false, is_pub: true }) }
     // `args()` is written with empty parentheses, which this parser
     // turns into a ZERO-argument call (it implements no `f()`-means-
     // `f(())` sugar), so the signature has to be zero-param to match
     // the real call shape.
-    else if name == "args" { Some(FnSig { name: name, module: "", generics: [], params: [], ret: arr_of(ITStr) , is_extern: false }) }
+    else if name == "args" { Some(FnSig { name: name, module: "", generics: [], params: [], ret: arr_of(ITStr) , is_extern: false, is_pub: true }) }
     else { None }
 
 // An UNQUALIFIED name resolves in the CURRENT module first, then in the
@@ -304,6 +307,24 @@ let find_sig (p2: Program2) (name: String): Option[FnSig] =
     match find_sig_in(p2.sigs, p2.current, name, 0) {
         Some(sig) => Some(sig),
         None => find_sig_in(p2.sigs, "", name, 0),
+    }
+
+// Naming a module and reaching into it is the ONLY way to cross a
+// boundary, so it is the only place privacy can be violated. An
+// unqualified name never leaves the current module or the root
+// (`find_sig` above), and a call within one module is not a crossing
+// however the item was declared.
+//
+// `pub` was parsed into `ItemNode.is_pub` from the beginning and read
+// by nothing until 2026-08-27, which made "everything is private by
+// default" a documented guarantee that was not true. This is that
+// sentence becoming true.
+pub let check_visible (p2: Program2) (sig: FnSig) (ns: String) (name: String): Unit =
+    if sig.is_pub || ns == p2.current { () }
+    else {
+        fail_tc(ns.concat(".").concat(name).concat(" is private to module `").concat(ns)
+            .concat("`. Add `pub` to its declaration to use it from ")
+            .concat(if p2.current == "" { "outside" } else { "module `".concat(p2.current).concat("`") }))
     }
 
 let find_sig_in (sigs: Array[FnSig]) (module_name: String) (name: String) (i: Int): Option[FnSig] =
@@ -356,7 +377,7 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
     // its generics can be put INTO the real one: `sig.generics` is what
     // makes `let x: T = ..` resolve inside a generic function.
     let p2x = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name, generics: [] };
-    let sig = Option.unwrap_or(find_sig(p2x, def.name), FnSig { name: def.name, module: module_name, generics: [], params: [], ret: ITUnit , is_extern: false });
+    let sig = Option.unwrap_or(find_sig(p2x, def.name), FnSig { name: def.name, module: module_name, generics: [], params: [], ret: ITUnit , is_extern: false, is_pub: true });
     let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name, generics: sig.generics };
     let env = bind_params(tyenv_empty(()), def.params, sig.params, 0);
     let r = infer_expr(p2, fresh_state_new(()), env, subst_empty(()), def.body);
@@ -1069,7 +1090,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                         // `lexer.tokenize` and `parser.tokenize` were
                         // the same function.
                         None => match find_sig_in(p2.sigs, ns, method_name, 0) {
-                            Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
+                            Some(sig) => { check_visible(p2, sig, ns, method_name); infer_fn_call(p2, state, env, acc, sig, args) },
                             None => infer_method_call(p2, state, env, acc, base, method_name, args),
                         },
                     } }

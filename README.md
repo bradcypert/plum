@@ -799,10 +799,28 @@ use shapes;
 let main (): Unit = println(shapes.area(shapes.Circle { radius: 2.0 }))
 ```
 
-Everything is private by default; `pub` opts a `let`/`struct`/`enum`/
-individual struct field into visibility outside its own module. `use`
-is qualify-by-default (Go-style) — `shapes.area`, not a bare `area` —
-so call sites stay self-explanatory without cross-referencing imports.
+`use` is qualify-by-default (Go-style) — `shapes.area`, not a bare
+`area` — so call sites stay self-explanatory without cross-referencing
+imports.
+
+**Functions are private by default.** `pub let` opts one into being
+callable from outside its module; without it, a qualified call is
+rejected:
+
+```
+shapes.secret_helper is private to module `shapes`. Add `pub` to its
+declaration to use it from outside
+```
+
+**Types are not scoped to modules yet, and `pub` on a `struct`/`enum`
+or on a struct field is currently accepted and ignored.** Type names
+live in one program-wide namespace: a `struct Secret` declared in
+`shapes/` is reachable as a bare `Secret` from anywhere, whether or not
+it says `pub`. That is a real gap, not a design choice — a type's
+identity in the checker is its bare name, so scoping types means
+changing what identifies a type throughout the checker and backend. It
+is the next piece of this work; until it lands, treat `pub` on a type
+as documentation of intent.
 `use shapes.Circle;` (importing one specific name unqualified) is
 available as an escape hatch for names used constantly in a file.
 

@@ -1,0 +1,8 @@
+pub struct Circle { radius: Float }
+
+// No `pub`: reachable from anywhere inside module `shapes`, and
+// nowhere else. Before 2026-08-27 `pub` was parsed and read by
+// nothing, so this was callable from `main.plum` and printed 198.
+let secret_helper (c: Circle): Float = c.radius * 99.0
+
+pub let area (c: Circle): Float = 3.14159 * c.radius * c.radius

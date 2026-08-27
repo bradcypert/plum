@@ -1,0 +1,11 @@
+// Rejected: `shapes.secret_helper` is not `pub`.
+//
+// The PUBLIC neighbour in the same file is called first, so this
+// fixture also proves the check rejects the private one specifically
+// rather than refusing every qualified call.
+use shapes;
+
+let main (): Unit = {
+    println(shapes.area(shapes.Circle { radius: 2.0 }).to_string());
+    println(shapes.secret_helper(shapes.Circle { radius: 2.0 }).to_string())
+}

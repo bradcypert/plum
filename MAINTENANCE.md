@@ -435,3 +435,12 @@ Worth knowing before you "fix" them:
   needs `Net`. Adding an edge means adding it to `cg_std_needs`;
   forgetting produces a module whose body references something never
   injected, which surfaces as a confusing user-facing type error.
+- **`pub` is enforced for functions, ignored for types.** The check is
+  `check_visible` in `typecheck/infer.plum`, at the one site that
+  resolves a module-qualified call. Types are not module-scoped at all
+  (`ITStruct` identifies a type by bare name), so `pub struct` and
+  `pub` on a field are accepted and do nothing — see DESIGN.md. Do not
+  read a `pub` on a type as a guarantee.
+- **A new cross-module call needs `pub` on the callee.** The compiler
+  had zero violations when this landed, so a failure here is almost
+  certainly a genuinely missing `pub` rather than a false positive.

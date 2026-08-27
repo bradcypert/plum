@@ -15348,3 +15348,73 @@ from user code anyway — which is how it shipped for weeks without
 anyone noticing. Moving it into a module forced the question, and the
 four `Http` entry points and seven structs now carry real `pub`. The
 underlying leniency is untouched and is its own decision.
+
+## `pub` starts doing something (2026-08-27)
+
+Found while auditing what 0.0.9 had just shipped. `pub` was parsed into
+`ItemNode.is_pub` and read by nothing — the same shape `use` had been
+in a week earlier. README.md said, in as many words, "everything is
+private by default; `pub` opts a `let`/`struct`/`enum`/individual
+struct field into visibility outside its own module."
+
+That is worse than a missing feature. A missing feature is a gap; a
+documented guarantee that does not hold is a trap, and it had become
+load-bearing: 0.0.9 shipped four modules whose internals were all
+reachable — `Time.plum__floor_div`, `Http.http_parse_headers`,
+`Os.join_args_acc`, `Os.dir_read_all_acc`. Every one callable, and by
+Hyrum's law each would eventually have a caller.
+
+### One rule, in one place
+
+Crossing a module boundary requires naming the module, so that is the
+only place privacy can be violated. `find_sig` already resolves an
+unqualified name in the current module and then the root and never
+reaches sideways; a *qualified* call is the single site that does.
+`check_visible` sits there and nowhere else.
+
+A call within one module is not a crossing however the item was
+declared, which is what keeps a module's own private helpers working
+without exception cases.
+
+### The compiler was already clean
+
+The interesting result: enforcing it broke nothing. Seven modules,
+16,000 lines, and not one cross-module call to an unexported name —
+the discipline had been kept by hand all along.
+
+That made the check hard to trust, so it was negative-tested: dropping
+`pub` from `lexer.render_token` produced
+
+```
+error: lexer.render_token is private to module `lexer`. Add `pub` to
+its declaration to use it from module `parser`
+  --> bootstrap/self_host/parser/parser.plum:245:14
+```
+
+and restoring it went back to `ok`. `typecheck_corpus/
+private_across_modules` keeps that honest: it calls a public function
+and a private one from the same module in the same program, so it
+proves the check rejects the private one specifically rather than
+refusing every qualified call.
+
+### What `pub` still does not do, and why it is a bigger job
+
+`pub` on a `struct`, an `enum`, or a struct field is still accepted and
+ignored. The reason is not that the check was skipped — it is that
+**types are not scoped to modules at all**. A `struct Secret` declared
+in `shapes/` resolves as a bare `Secret` from any file in the program,
+with no qualification and no `pub`.
+
+The blocker is type identity. A function is identified by `(module,
+name)` — `FnSig` has carried a `module` field since modules existed,
+which is why adding `is_pub` beside it was a one-line change. A type is
+identified by its bare name: `ITStruct(name, args)`, threaded through
+the checker, monomorphization and symbol mangling. Scoping types means
+changing what identifies a type everywhere those flow, which is a
+different size of change and deserves its own release.
+
+One measurement to size it: the compiler declares 159 structs and enums
+across seven modules and **no two share a name**. The flat namespace
+has been kept unique by hand, the same way `plum__` prefixes keep the
+prelude's helpers out of the way. So the change would not have to
+disambiguate anything that exists today — it is mechanical, just wide.
