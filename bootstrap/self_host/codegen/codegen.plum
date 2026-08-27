@@ -4999,7 +4999,9 @@ pub let cg_with_prelude (program: parser.ProgramNode): parser.ProgramNode = {
     parser.set_source_context("<prelude>", src, lexed.starts);
     let items = parser.parse_program(lexed.tokens).items;
     parser.set_source_context(saved, "", []);
-    parser.ProgramNode { items: Array.concat(items, program.items) }
+    // Prelude, then whichever stdlib modules the program asked for by
+    // `use`, then the program itself.
+    parser.ProgramNode { items: Array.concat(Array.concat(items, cg_std_items(program.items)), program.items) }
 }
 
 pub let cg_emit_program (program0: parser.ProgramNode): String = cg_emit_program_entry(program0, "main")

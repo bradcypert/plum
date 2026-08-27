@@ -1,0 +1,36 @@
+use Time;
+
+// `Time.utc` and the two formatters, on the dates that break calendar
+// arithmetic rather than on a comfortable one.
+//
+// Every value here was checked against Python's `datetime` when the
+// functions were written -- 48 timestamps spanning 1900 to 2100 agreed
+// exactly. These are the ones worth keeping as a golden:
+//
+//   0            the epoch itself, a Thursday
+//   -1           one second BEFORE it, which is where truncating
+//                division puts the answer in 1970 instead of 1969
+//   951782400    2000-02-29, the leap day of the century-leap-year
+//                exception that a naive `year % 4` gets right by luck
+//                and a naive `year % 100` gets wrong
+//   1709164800   2024-02-29, an ordinary leap day
+//   4102444800   2100-01-01, just past a century that is NOT a leap
+//                year, which is the case a lookup table gets wrong
+let show (epoch: Int): Unit =
+    println(Time.iso8601(epoch).concat("  ").concat(Time.rfc7231(epoch)))
+
+let main (): Unit = {
+    show(0);
+    show(-1);
+    show(-86400);
+    show(951782400);
+    show(1709164800);
+    show(4102444800);
+    show(1756258828);
+    // The struct itself, not just the rendered forms.
+    let t = Time.utc(1756258828);
+    println("${t.year}-${t.month}-${t.day} ${t.hour}:${t.minute}:${t.second} wd=${t.weekday}");
+    // Names are bounds-safe on any Int, which is what keeps them from
+    // being a panic waiting in a formatting path.
+    println(Time.weekday_name(0).concat(Time.weekday_name(6)).concat(Time.month_name(1)).concat(Time.month_name(12)))
+}

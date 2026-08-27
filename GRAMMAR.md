@@ -298,9 +298,24 @@ PrimaryExpr ::= Literal
               | UnsafeExpr
               | SpawnExpr
               | StructLiteral
+              | BuiltinCall
 
 ArrayLiteral ::= "[" [ Expr { "," Expr } [ "," ] ] "]"
+BuiltinCall  ::= BuiltinName Arguments
 ```
+
+`BuiltinName` is a single TOKEN, not `"@"` followed by an identifier:
+`@` and the name are lexed together, so there is no bare `@` in the
+language and `@ foo` is a lex error rather than something the grammar
+has to reject. The name is matched against a closed set — one entry,
+`@embed_file` — and anything else is an error naming what exists.
+
+A builtin runs at COMPILE time and its call never reaches the type
+checker: `@embed_file("x")` is replaced during parsing by a string
+literal holding that file's contents, so the tree that leaves the
+parser contains no trace of it. Its argument must therefore be a
+literal, which the grammar cannot express and the parser checks —
+an interpolated string is a `concat` chain by then, not a literal.
 
 `[e1, e2, ...]` is an `Array[T]` literal — every element must unify to
 the same type `T` (checked downstream, not by the parser); `[]` is

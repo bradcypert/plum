@@ -15010,3 +15010,207 @@ architecture gate, because it genuinely is 64-bit, and then fails in
 the C driver for want of a sysroot. That is the error the user should
 get, and it names the compiler that produced it (`zig cc failed`, not
 `clang failed`) so the next move is obvious.
+
+## `@embed_file`, and why it lives in the parser (2026-08-27)
+
+The third thing the adl port asked for. Zig pulled four template files
+in with `@embedFile`; Plum had no equivalent, so 64 lines of template
+text sat in the source as string literals — which is also what made
+the port's line count look worse than it was, since the Zig side got to
+exclude the same text.
+
+`embed_file("templates/adr.md")` is replaced by that file's contents
+while the source is being **parsed**. Nothing downstream ever sees a
+call: the type checker, the backend and the AST dump all see the same
+`EStr` they would have seen had the text been typed out by hand.
+
+### The parser is the only stage that knows which file it is reading
+
+That is the whole argument for the placement. `embed_file` resolves
+against the source file's own directory — not the working directory,
+which would make a build depend on where it was launched from, and not
+the project root, which would break a module that moved. The parser
+already carries the current path in a module-level cell (`CTX`), put
+there so parse errors could quote their source line, and
+`current_path()` reads it.
+
+The second benefit fell out of the first: a bad `embed_file` is a
+mistake in the source text, so it deserves the caret diagnostic
+`fail_at` already produces. All four failure modes point at the call
+and quote the line — a missing file, a non-literal argument, an
+interpolated argument, and the wrong arity.
+
+The interpolation case is the one a user will actually hit:
+
+```
+embed_file("templates/${name}.md")
+```
+
+`"${...}"` is parsed into a `concat` chain, so this is not an `EStr` at
+all and lands in the same branch as `embed_file(f())`. Caught here, it
+gets an explanation. Left to the type checker, it would have been a
+perfectly ordinary `String` and no error at all.
+
+### Text, not bytes
+
+The result is a `String`. That covers templates, schemas, SQL, help
+text and fixtures; it does not cover images. Plum has no byte-array
+type to hand one back as, and inventing one to serve this would be the
+tail wagging the dog.
+
+Embedded text is data and is never re-lexed, so `${...}` inside an
+embedded file stays exactly as written — verified in the fixture, along
+with quotes, a backslash, a tab and a multi-byte character surviving
+the round trip through a re-emitted string literal.
+
+### The sigil, added the same day
+
+The first cut spelled it `embed_file("x")`, a plain call the parser
+intercepted by name. That worked and read wrong: a compile-time
+substitution looked exactly like every other call on the page, and
+`embed_file` became a reserved identifier — a user function by that
+name would have been intercepted and never reached.
+
+`@` fixes both. It says "the compiler does this while reading your
+source" at a glance, and it puts builtins in a namespace no identifier
+can enter, so nothing is reserved and `embed_file` is an ordinary name
+again. Verified: a program can define its own `embed_file` and call
+both in the same expression.
+
+`@` and `#` were both free in the lexer. `@` was chosen over `#`
+because `#` reads as a line-oriented preprocessor directive, and over
+Rust's `name!(...)` because `!` there means macro expansion of
+arbitrary syntax — this takes one string literal and expands to one
+string literal.
+
+`@name` is lexed as ONE token, not `@` followed by an identifier.
+There is no bare `@` in Plum, so the lexer is the right place to say
+so: `@ 5` fails there rather than reaching a parser that would have to
+invent a message for it.
+
+The set of builtin names is closed, and an unknown one lists what
+exists:
+
+```
+error: unknown builtin `@nope`. Plum has one: `@embed_file("path")`
+```
+
+## Calendars in the prelude, and a line that moved (2026-08-27)
+
+The 0.0.7 notes argued that turning epoch seconds into a date "is a
+library on top of this rather than a runtime concern". Then the adl
+port put 40 lines of Howard Hinnant's `civil_from_days` into an ADR
+tool that wanted one timestamp in a README, which is what that argument
+looks like when a real program has to live with it.
+
+The line moved, but it moved to the **prelude** — ordinary Plum, no new
+primitive. `Time.now()` is still the only part that needed the runtime,
+which is the distinction the original argument was actually about.
+
+Two things worth recording:
+
+**Floor division, not `/`.** Plum's `/` and `%` truncate toward zero,
+so `-1 / 86400` is `0` and the second before the epoch lands in 1970
+rather than 1969. Every calendar function goes through
+`plum__floor_div`/`plum__floor_mod` instead. Dates before 1970 are real
+dates and this is not a corner worth getting wrong quietly.
+
+**Checked against a reference, not against reasoning.** 48 timestamps
+spanning 1900 to 2100 — including both leap-day cases, the epoch, and
+negative epochs — were compared against Python's `datetime`, and all 48
+agreed exactly. Five of them are kept as `exec_corpus/time_calendar`.
+The century-leap-year cases are the ones that matter: 2000-02-29 exists
+and 2100-02-29 does not, and an implementation can get the first right
+by luck while getting the second wrong.
+
+## `String.char_len`, and a distinction the docs had backwards (2026-08-27)
+
+Padding was the smallest of the three additions and turned up the most
+interesting bug — in the documentation rather than the code.
+
+`String.len` counts BYTES. Every other string function counts
+codepoints; the prelude's own section comment says so, and says it is
+what makes `String.slice` unable to split a character in half. Both
+statements are true, and together they mean `String.slice(s, 0,
+s.len())` is not `s` for anything non-ASCII.
+
+The README was worse than silent on this: it claimed "there is
+currently no substring/slice primitive", which stopped being true when
+`String.slice` was added. Corrected, along with a worked example of the
+two counts disagreeing.
+
+`String.pad_left`/`pad_right` therefore count characters, via the new
+`String.char_len`. Padding exists to line text up in columns, and a
+byte count puts an accented name in the wrong place — which is the
+entire reason to prefer the slower count here.
+
+Both refuse rather than surprise: a string already at least `width`
+wide comes back unchanged rather than truncated, and a `fill` that is
+not exactly one character comes back unchanged rather than panicking. A
+formatting helper that returns a `Result` is a formatting helper nobody
+uses.
+
+## `Time` as a module, and `use` becoming load-bearing (2026-08-27)
+
+Prompted by a plain question: should `Time` be in the prelude at all?
+Chasing it turned up a cleaner rule than the case that prompted it.
+
+### The prelude holds types; a module holds a namespace
+
+Here is what the prelude actually contained, by namespace size:
+
+```
+23 Array   22 String   11 Float   7 Result   7 Option   4 Int    <- types
+ 7 Os       6 Time                                               <- not types
+```
+
+The first group cannot move. `T.f(x)` **is** the method-call
+mechanism — `xs.map(f)` is `Array.map(xs, f)` — so a type's namespace
+being in scope is not a convenience, it is what makes methods work.
+
+The second group names no type and nothing dispatches to it. The
+README had already said so without drawing the conclusion: "a
+namespace names the type of the first parameter; `Os.` has no receiver
+and so has no methods." Those two are modules wearing a namespace's
+clothes.
+
+`Time` moved. `Os` did not, and that is a scheduling decision rather
+than an inconsistency: `Time` is unreleased, so moving it breaks
+nothing, while `Os` is reachable from every program written so far
+including this compiler. It moves as a deliberate, announced break.
+
+### `use` did nothing until now
+
+Worth recording plainly, because it was a surprise. `use` was parsed
+into an `IKUse` item and then **never read again** — `IKUse` appears
+nowhere outside the parser. Module membership came entirely from the
+directory an item was found in, so `use shapes;` documented an
+intention the compiler never checked, and omitting it changed nothing.
+
+A stdlib module has no directory to be found in, so `use Time;` is the
+only thing that can pull it in. That makes the declaration load-bearing
+for the first time, and it is what gives the module its point: a file
+that does not ask for `Time` does not get `Time`.
+
+### One list of names, in `parser`
+
+The names live in `parser.std_module_names()` and nowhere else.
+`codegen` looks a module's source up by that name and fails loudly on
+one it cannot find; `typecheck` uses the same list to turn an unbound
+name into a message worth reading:
+
+```
+unbound variant/function: Time -- `Time` is a standard library module;
+add `use Time;` to this file
+```
+
+It lives in `parser` for the dull reason that both of the others import
+it and neither imports the other. Two copies of that list is exactly
+the drift this project keeps closing everywhere else.
+
+### What it cost
+
+The discoverability. `Time.now()` in a file without the `use` is now an
+error where it used to work, and someone reading a tutorial written a
+week ago will hit it. That error message is the whole mitigation, which
+is why it names the fix rather than just the problem.

@@ -1,3 +1,5 @@
+use Time;
+
 // `Time.now()` reads the system clock, so its value cannot be a golden
 // -- but its SHAPE can. A wall clock that is monotonic-ish, past a date
 // already in the past, and not wildly in the future catches the three

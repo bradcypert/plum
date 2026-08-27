@@ -1,0 +1,181 @@
+// Standard-library MODULES -- source that is compiled into a program
+// only when that program says `use <Name>;`.
+//
+// The prelude and a stdlib module answer two different questions.
+// `Array.map` and `String.pad_left` have to be in the prelude, because
+// `T.f(x)` IS the method-call mechanism: `xs.map(f)` is `Array.map(xs,
+// f)`, so a type's namespace cannot be optional. `Time` has no
+// receiver -- it names no type, and nothing dispatches to it -- so it
+// is a module wearing a namespace's clothes, and it is spelled like
+// one.
+//
+// (`Os` is in exactly the same position and has not moved. It is
+// reachable from every program written so far, including this
+// compiler, so that is a deliberate break to schedule rather than a
+// tidy-up to slip in.)
+//
+// Gating on `use` is what makes the declaration LOAD-BEARING. Until
+// now `use` was parsed and then ignored by every later stage -- module
+// membership came entirely from the directory an item was found in, so
+// `use shapes;` documented an intent the compiler never checked. A
+// stdlib module has no directory to be found in, so `use Time;` is the
+// only thing that can bring it in.
+
+use lexer;
+use parser;
+
+pub struct StdModule { name: String, source: String }
+
+// Every stdlib module, built from `parser.std_module_names` so the
+// name list has exactly one home. A name with no source here is a
+// compiler bug, not a user error, and says so.
+pub let cg_std_modules (): Array[StdModule] =
+    Array.map(parser.std_module_names(()), |n| StdModule { name: n, source: cg_std_source(n) })
+
+let cg_std_source (name: String): String =
+    if name == "Time" { cg_time_src(()) }
+    else { { cg_fail("no source for stdlib module ".concat(name)); "" } }
+
+// The items a program's `use` declarations actually ask for, stamped
+// with their module name the same way a directory would have stamped
+// them.
+pub let cg_std_items (user: Array[parser.ItemNode]): Array[parser.ItemNode] =
+    cg_std_items_acc(cg_std_modules(()), user, 0, [])
+
+let cg_std_items_acc (mods: Array[StdModule]) (user: Array[parser.ItemNode]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
+    if i >= mods.len() { acc }
+    else if cg_uses_module(user, mods[i].name, 0) {
+        cg_std_items_acc(mods, user, i + 1, Array.concat(acc, cg_parse_std(mods[i].name, mods[i].source)))
+    } else { cg_std_items_acc(mods, user, i + 1, acc) }
+
+// `use Time;` and `use Time.rfc7231;` both count -- the second is the
+// import-one-name form, and it names the same module.
+let cg_uses_module (items: Array[parser.ItemNode]) (name: String) (i: Int): Bool =
+    if i >= items.len() { false }
+    else {
+        match items[i].kind {
+            IKUse(u) => if !Array.is_empty(u.path) && u.path[0] == name { true }
+                        else { cg_uses_module(items, name, i + 1) },
+            _ => cg_uses_module(items, name, i + 1),
+        }
+    }
+
+// Parsed with its own source context, so an error inside a stdlib
+// module quotes the module rather than whatever file was being read
+// when it was pulled in.
+let cg_parse_std (name: String) (src: String): Array[parser.ItemNode] = {
+    let saved = parser.current_path(());
+    let lexed = lexer.tokenize_spanned(src);
+    parser.set_source_context("<".concat(name).concat(">"), src, lexed.starts);
+    let items = parser.with_module(parser.parse_program(lexed.tokens).items, name);
+    parser.set_source_context(saved, "", []);
+    items
+}
+
+// --- The `Time` module ---
+//
+// Written unqualified: inside the module these are `now`, `utc`,
+// `rfc7231`, and the module stamp makes them `Time.now` and the rest
+// at every call site.
+let cg_time_src (): String = Array.join([
+    "// The runtime primitive. Intercepted by `cg_runtime_fn`, which keys",
+    "// on the bare name and so does not care that it now lives in a",
+    "// module rather than in the prelude.",
+    "let os_time_raw (ignored: Bool): Int = 0",
+    "",
+    "// Seconds since the Unix epoch, from the system clock.",
+    "//",
+    "// Seconds, and an `Int`, because that is what every platform's",
+    "// `time()` agrees on. Anything richer -- a calendar date, a",
+    "// timezone, a formatted string -- is a library on top of this and",
+    "// not a runtime concern; the primitive is the part a program",
+    "// cannot write for itself.",
+    "pub let now (): Int = os_time_raw(true)",
+    "",
+    "// --- Calendars ---",
+    "//",
+    "// Everything below is ordinary Plum on top of `Time.now()`, which is",
+    "// the line the 0.0.7 notes drew and this keeps: the CLOCK is the part",
+    "// a program cannot write for itself, and the CALENDAR is arithmetic",
+    "// anyone could write but nobody should have to. Porting a real CLI",
+    "// produced 40 lines of `civil_from_days` in a program that wanted a",
+    "// timestamp in a README, which is what moved it here.",
+    "//",
+    "// UTC only. A timezone database is a data-shipping problem, not an",
+    "// arithmetic one, and Plum ships no data.",
+    "",
+    "// Floor division and modulo, which is NOT what `/` and `%` do: those",
+    "// truncate toward zero, so `-1 / 86400` is `0` and the day before the",
+    "// epoch would land in 1970. Every calendar function below needs the",
+    "// floor, and dates before 1970 are real dates.",
+    "let plum__floor_div (a: Int) (b: Int): Int = {",
+    "    let q = a / b;",
+    "    if a - q * b != 0 && (a < 0) != (b < 0) { q - 1 } else { q }",
+    "}",
+    "",
+    "let plum__floor_mod (a: Int) (b: Int): Int = a - plum__floor_div(a, b) * b",
+    "",
+    "// A civil date and time, as UTC. `weekday` is 0 for Sunday.",
+    "pub struct DateTime {",
+    "    year: Int, month: Int, day: Int,",
+    "    hour: Int, minute: Int, second: Int,",
+    "    weekday: Int,",
+    "}",
+    "",
+    "// Howard Hinnant's `civil_from_days`: exact for every date in the",
+    "// proleptic Gregorian calendar, with no lookup table and no leap-year",
+    "// special case. It shifts the year to start in March so the leap day",
+    "// falls at the END of the cycle, which is what removes the special",
+    "// case rather than hiding it.",
+    "//",
+    "// The inner divisions all operate on non-negative values, so plain `/`",
+    "// is right there; only `era` can go negative and it uses the floor.",
+    "pub let utc (epoch: Int): DateTime = {",
+    "    let days = plum__floor_div(epoch, 86400);",
+    "    let secs = plum__floor_mod(epoch, 86400);",
+    "    let z = days + 719468;",
+    "    let era = plum__floor_div(z, 146097);",
+    "    let doe = z - era * 146097;",
+    "    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;",
+    "    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);",
+    "    let mp = (5 * doy + 2) / 153;",
+    "    let d = doy - (153 * mp + 2) / 5 + 1;",
+    "    let m = if mp < 10 { mp + 3 } else { mp - 9 };",
+    "    DateTime {",
+    "        year: yoe + era * 400 + (if m <= 2 { 1 } else { 0 }),",
+    "        month: m,",
+    "        day: d,",
+    "        hour: secs / 3600,",
+    "        minute: secs / 60 - secs / 3600 * 60,",
+    "        second: secs - secs / 60 * 60,",
+    "        // 1970-01-01 was a Thursday, which is index 4.",
+    "        weekday: plum__floor_mod(days + 4, 7),",
+    "    }",
+    "}",
+    "",
+    "pub let weekday_name (weekday: Int): String =",
+    "    [\"Sun\", \"Mon\", \"Tue\", \"Wed\", \"Thu\", \"Fri\", \"Sat\"][plum__floor_mod(weekday, 7)]",
+    "",
+    "pub let month_name (month: Int): String =",
+    "    [\"Jan\", \"Feb\", \"Mar\", \"Apr\", \"May\", \"Jun\", \"Jul\", \"Aug\", \"Sep\", \"Oct\", \"Nov\", \"Dec\"][plum__floor_mod(month - 1, 12)]",
+    "",
+    "let plum__two (n: Int): String = String.pad_left(n.to_string(), 2, \"0\")",
+    "",
+    "// `2026-08-27T01:40:28Z` -- ISO 8601, which is the one to reach for",
+    "// when a machine reads it back or when it needs to sort as text.",
+    "pub let iso8601 (epoch: Int): String = {",
+    "    let t = utc(epoch);",
+    "    let date = String.pad_left(t.year.to_string(), 4, \"0\").concat(\"-\").concat(plum__two(t.month)).concat(\"-\").concat(plum__two(t.day));",
+    "    date.concat(\"T\").concat(plum__two(t.hour)).concat(\":\").concat(plum__two(t.minute)).concat(\":\").concat(plum__two(t.second)).concat(\"Z\")",
+    "}",
+    "",
+    "// `Thu, 27 Aug 2026 01:40:28 GMT` -- the HTTP date format (RFC 7231),",
+    "// which is what a `Last-Modified` header and a good many generated",
+    "// files want.",
+    "pub let rfc7231 (epoch: Int): String = {",
+    "    let t = utc(epoch);",
+    "    let head = weekday_name(t.weekday).concat(\", \").concat(plum__two(t.day)).concat(\" \").concat(month_name(t.month));",
+    "    let time = plum__two(t.hour).concat(\":\").concat(plum__two(t.minute)).concat(\":\").concat(plum__two(t.second));",
+    "    head.concat(\" \").concat(t.year.to_string()).concat(\" \").concat(time).concat(\" GMT\")",
+    "}",
+], "\n")

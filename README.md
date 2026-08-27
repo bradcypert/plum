@@ -632,10 +632,29 @@ s.runes()                  // Array[Int] — Unicode codepoints
 s[0]                       // indexing returns a raw byte, not a character
 ```
 
-There is currently no substring/slice primitive and no codepoint-to-
-string conversion in either direction — see the standard library's
-JSON implementation for the `chars_of`/one-character-`String`-array
-pattern used to work around this.
+**Bytes or characters?** `.len()` counts BYTES; everything else in the
+string library counts characters. `String.slice` can never split a
+multi-byte character in half, because it works on codepoints and never
+sees bytes at all. When you need a count that matches, use
+`String.char_len`:
+
+```
+"café".len()               // 5 — bytes
+String.char_len("café")    // 4 — characters
+String.slice("café", 0, 3) // "caf"
+```
+
+Padding counts characters too, which is the point of it — text lined
+up in columns by byte count puts an accented name in the wrong place:
+
+```
+String.pad_left("7", 5, "0")     // "00007"
+String.pad_right("ab", 5, ".")   // "ab..."
+```
+
+Both return the string unchanged rather than truncating it when it is
+already at least that wide, and unchanged rather than panicking when
+the fill is not exactly one character.
 
 **Interpolation**: `"${...}"` inside any double-quoted string, no
 prefix needed —
@@ -672,6 +691,47 @@ let go (): Int = {
 `if`/`match`/blocks are all expressions — the last expression in a
 block (no trailing `;`) is its value. `else` always requires either
 `else if` or a `{ }` block; a bare `else <expr>` isn't valid syntax.
+
+### Compile-time builtins: `@name(...)`
+
+A leading `@` marks a call the **compiler** performs while reading your
+source, rather than one your program performs while running. There is
+one today:
+
+`@embed_file("path")` is replaced by that file's contents, as a
+`String`, while the source is being parsed:
+
+```
+let template (): String = @embed_file("templates/adr.md")
+```
+
+The path resolves against **the source file's own directory**, not the
+working directory the compiler was launched from, so a build does not
+depend on where you started it. A module in a subdirectory embeds
+relative to itself.
+
+The argument must be a literal string. The file is read at compile
+time, so it cannot depend on a value — and an interpolated string
+counts as a value, not a literal:
+
+```
+@embed_file("templates/${name}.md")   // error, and says why
+```
+
+Embedded text is data. It is never re-lexed as Plum, so `${...}` inside
+an embedded file stays exactly as written.
+
+The sigil also keeps builtins out of the identifier namespace, so
+nothing is reserved — `embed_file` remains an ordinary name you are
+free to define:
+
+```
+let embed_file (p: String): String = read_or_default(p)   // fine
+```
+
+Text only: the result is a `String`, so this covers templates, schemas,
+SQL, fixtures and help text, but not images. A missing file is a
+compile error pointing at the call.
 
 ### Concurrency
 
@@ -743,6 +803,33 @@ is qualify-by-default (Go-style) — `shapes.area`, not a bare `area` —
 so call sites stay self-explanatory without cross-referencing imports.
 `use shapes.Circle;` (importing one specific name unqualified) is
 available as an escape hatch for names used constantly in a file.
+
+### Standard-library modules
+
+Most of the standard library is in the prelude, with no `use` needed —
+and for the type namespaces that is not a convenience, it is required:
+`T.f(x)` *is* the method-call mechanism, so `xs.map(f)` only works
+because `Array.map` is always in scope.
+
+A namespace that names no type is a different thing. `Time` has no
+receiver and nothing dispatches to it, so it is a module, and a file
+that wants it says so:
+
+```
+use Time;
+let stamp (): String = Time.rfc7231(Time.now())
+```
+
+Without the `use`, the error says what to do:
+
+```
+unbound variant/function: Time -- `Time` is a standard library module;
+add `use Time;` to this file
+```
+
+(`Os` is in the same position and has not moved yet — it is reachable
+from every program written so far, so that is a deliberate break to
+schedule rather than a tidy-up to slip in.)
 
 ## Standard library
 
@@ -871,6 +958,24 @@ program's prelude):
   A namespace names the type of the first parameter; `Os.` has no
   receiver and so has no methods. A struct field holding a closure
   wins over a namespaced function of the same name.
+
+- **`use Time;` — the clock, and the calendar on top of it.** The
+  first standard-library MODULE rather than a prelude namespace: it
+  names no type and nothing dispatches to it, so it is spelled like the
+  module it is, and a file that does not `use` it does not get it.
+
+  `Time.now(): Int` is seconds since the Unix epoch and is the only
+  part that needs the runtime. Everything else is ordinary Plum over
+  it: `Time.utc(epoch): DateTime` (a struct of `year`/`month`/`day`/
+  `hour`/`minute`/`second`/`weekday`, with `weekday` 0 for Sunday),
+  `Time.iso8601(epoch)` → `2026-08-27T01:40:28Z`, `Time.rfc7231(epoch)`
+  → `Thu, 27 Aug 2026 01:40:28 GMT`, and `Time.weekday_name`/
+  `Time.month_name`.
+
+  UTC only — a timezone database is a data-shipping problem, and Plum
+  ships no data. Dates before 1970 work: the arithmetic uses floor
+  division rather than `/`, which truncates toward zero and would
+  otherwise put the second before the epoch in 1970.
 
 - **`Os.`: filesystem and self-location** — `Os.temp_dir(): Result
   [String, String]` (a fresh private directory the caller owns and must

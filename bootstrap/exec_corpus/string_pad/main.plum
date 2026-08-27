@@ -1,0 +1,24 @@
+// Padding, and specifically the cases where it is asked to do
+// something it should refuse.
+//
+// The CHARACTER-count case is the one that matters: `.len()` is bytes
+// and everything else in the string section is codepoints, so padding
+// computed the obvious way lines accented text up wrong. `é` is two
+// bytes and one character; padded to 3 it must gain two fill
+// characters, not one.
+let main (): Unit = {
+    println(String.pad_left("7", 5, "0"));
+    println(String.pad_right("ab", 5, ".").concat("|"));
+    // Already wide enough: unchanged, never truncated.
+    println(String.pad_left("toolong", 3, "0"));
+    // A fill that is not one character: unchanged, not a panic.
+    println(String.pad_left("x", 4, "ab"));
+    println(String.pad_left("x", 4, ""));
+    // Zero and negative widths are just "already wide enough".
+    println(String.pad_left("x", 0, "-").concat("|"));
+    println(String.pad_left("x", -3, "-").concat("|"));
+    // Codepoints, not bytes.
+    println(String.pad_left("é", 3, "-"));
+    println(String.pad_right("日本", 4, "*"));
+    println(String.char_len("日本語").to_string().concat(" ").concat("日本語".len().to_string()))
+}

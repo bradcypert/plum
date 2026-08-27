@@ -918,9 +918,19 @@ let find_field_template_acc (fields: Array[StructFieldTemplate]) (name: String) 
 // Without this the bare reference reached `infer_variant` with no
 // arguments and reported "variant expects a different number of
 // arguments", which describes a call nobody wrote.
+// A name that is not bound but IS a stdlib module is almost always a
+// missing `use`, not a typo -- most often in code written before the
+// module existed, or copied from documentation that predates it.
+// Saying so is the whole cost of having gated the module behind `use`.
+let unbound_message (tag: String): String =
+    if Array.contains(parser.std_module_names(), tag) {
+        "unbound variant/function: ".concat(tag).concat(" -- `").concat(tag)
+            .concat("` is a standard library module; add `use ").concat(tag).concat(";` to this file")
+    } else { "unbound variant/function: ".concat(tag) }
+
 let infer_variant_ref (p2: Program2) (state: FreshState) (acc: Subst) (tag: String): InferResult =
     match find_variant(p2.ctx, tag) {
-        None => { fail_tc("unbound variant/function: ".concat(tag)); ir_unsupported(acc, state, "unbound variant ".concat(tag)) },
+        None => { fail_tc(unbound_message(tag)); ir_unsupported(acc, state, "unbound variant ".concat(tag)) },
         Some(v) => {
             let fr = fresh_list(state, v.enum_generics.len());
             let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
@@ -945,7 +955,7 @@ let infer_variant (p2: Program2) (state: FreshState) (acc: Subst) (tag: String) 
             let subst2 = unify_variant_args(payload, arg_tys, acc);
             ir_leaf(ITEnum(v.enum_name, fr.tys), subst2, fr.state, TVariantNew(tag, arg_texprs))
         },
-        None => { fail_tc("unbound variant/function: ".concat(tag)); ir_unsupported(acc, state, "unbound variant ".concat(tag)) },
+        None => { fail_tc(unbound_message(tag)); ir_unsupported(acc, state, "unbound variant ".concat(tag)) },
     }
 
 let unify_variant_args (payload: Array[ITy]) (args: Array[ITy]) (acc: Subst): Subst =

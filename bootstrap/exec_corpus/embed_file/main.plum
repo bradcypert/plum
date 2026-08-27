@@ -1,0 +1,20 @@
+// `@embed_file` is replaced by the file's contents at PARSE time, so
+// what reaches the rest of the compiler is an ordinary string literal.
+//
+// The template deliberately holds every character that could be
+// mangled on the way through: quotes and a backslash (which must be
+// re-escaped when the literal is emitted), a tab, a multi-byte
+// character, and `${...}` -- which must NOT be interpolated, because
+// embedded text is data and is never re-lexed as Plum source.
+//
+// The path resolves against THIS FILE's directory, not the working
+// directory the compiler was launched from.
+let template (): String = @embed_file("template.md")
+
+let main (): Unit = {
+    print(template());
+    println("--");
+    // Same contents on every call: the literal is shared, not re-read.
+    println(if template() == template() { "stable" } else { "UNSTABLE" });
+    println(template().len().to_string().concat(" bytes"))
+}

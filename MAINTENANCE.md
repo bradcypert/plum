@@ -389,3 +389,29 @@ Worth knowing before you "fix" them:
   execute what they build. For `run`, everything after the project
   directory belongs to the program being run, so a `--target` there is
   the program's argument and must stay that way.
+- **`embed_file` is handled in the PARSER, not codegen.** It has to be:
+  it resolves against the source file's own directory, and the parser
+  is the only stage that knows which file it is reading. A consequence
+  is that `embed_file` is a reserved name — a user function by that
+  name is intercepted and never reached.
+- **The calendar functions use `plum__floor_div`, never `/`.** Plum's
+  `/` truncates toward zero, which silently moves every date before
+  1970 into 1970. If you add a calendar function, use the floor
+  helpers, and add a timestamp before the epoch to
+  `exec_corpus/time_calendar`.
+- **`String.len` is bytes; everything else in that section is
+  codepoints.** `String.char_len` is the character count. Padding uses
+  the character count deliberately — that is what padding is for.
+- **Builtins are `@name`, lexed as ONE token.** Adding one means a
+  branch in `builtin_expr` and an entry in the error message that lists
+  what exists. There is deliberately no bare `@` token — `@ 5` is a lex
+  error, not a parse error.
+- **`parser.std_module_names()` is THE list of stdlib modules.**
+  `codegen` looks source up by those names; `typecheck` uses them for
+  the missing-`use` hint. Adding a module means adding the name there
+  and the source in `codegen/stdlib.plum` — a name with no source fails
+  the build loudly, which is the intended direction.
+- **`use` is load-bearing for stdlib modules only.** For directory
+  modules it is still documentation the compiler does not check; module
+  membership comes from the directory. Do not assume removing a `use`
+  will break a directory-module call, because it will not.

@@ -51,6 +51,11 @@ pub enum Token {
     TokTrue,
     TokFalse,
     TokUnderscore,
+    // `@embed_file` -- the whole thing, sigil and name, as ONE token.
+    // Lexing `@` separately would let `@ 5` and `@ foo` through to the
+    // parser as something it has to reject; there is no such thing as a
+    // bare `@` in Plum, so the lexer is the right place to say so.
+    TokBuiltin(String),
     TokLet,
     TokMut,
     TokFn,
@@ -320,6 +325,28 @@ let keyword_or_ident (text: String): Token = match text {
     _ => TokIdent(text),
 }
 
+// `@name` -- a COMPILE-TIME builtin, and the sigil is the point.
+//
+// It marks the call as something the compiler performs while reading
+// the source rather than something the program performs while running,
+// which is a distinction no amount of naming conveys on its own. It
+// also keeps builtins out of the identifier namespace entirely: an
+// `@`-name can never collide with a user function, so `embed_file`
+// stays an ordinary name anyone is free to define.
+//
+// A keyword after `@` is accepted here and rejected in the parser as an
+// unknown builtin -- `@match` should say "there is no builtin called
+// match", not "expected an identifier".
+let lex_builtin (chars: Array[String]) (pos: Int): IdentResult = {
+    let end = scan_ident_chars(chars, pos + 1);
+    if end == pos + 1 {
+        panic_raw("expected a builtin name after `@`");
+        IdentResult { token: TokEof, next_pos: pos + 1 }
+    } else {
+        IdentResult { token: TokBuiltin(chars_join(Array.slice(chars, pos + 1, end))), next_pos: end }
+    }
+}
+
 let lex_ident_or_keyword (chars: Array[String]) (pos: Int): IdentResult = {
     let end = scan_ident_chars(chars, pos);
     let text = chars_join(Array.slice(chars, pos, end));
@@ -402,6 +429,7 @@ let lex_one (chars: Array[String]) (pos: Int): FullTokResult =
     if pos >= chars.len() { FullTokResult { token: TokEof, next_pos: pos } }
     else if is_digit_char(chars[pos]) { let r = lex_number(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
     else if chars[pos] == "\"" { let r = lex_string(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
+    else if chars[pos] == "@" { let r = lex_builtin(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
     else if is_ident_start_char(chars[pos]) { let r = lex_ident_or_keyword(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
     else { let r = lex_operator(chars, pos); FullTokResult { token: r.token, next_pos: r.next_pos } }
 
@@ -617,6 +645,7 @@ let render_interp_piece (p: InterpPiece): String = match p {
 
 pub let render_token (t: Token): String = match t {
     TokIdent(s) => "Ident(".concat(quote(s)).concat(")"),
+    TokBuiltin(s) => "Builtin(".concat(quote(s)).concat(")"),
     TokInt(n) => "Int(".concat(n.to_string()).concat(")"),
     TokFloat(f) => "Float(".concat(f.to_string()).concat(")"),
     TokStr(s) => "Str(".concat(quote(s)).concat(")"),
