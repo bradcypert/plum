@@ -15214,3 +15214,137 @@ The discoverability. `Time.now()` in a file without the `use` is now an
 error where it used to work, and someone reading a tutorial written a
 week ago will hit it. That error message is the whole mitigation, which
 is why it names the fix rather than just the problem.
+
+## `Os` moves too, and what the rule still does not reach (2026-08-27)
+
+The break scheduled when `Time` moved, taken one release later so it
+would arrive on its own. Same mechanism, no new machinery: a name added
+to `parser.std_module_names()`, the source moved into
+`codegen/stdlib.plum`, the `Os.` prefixes dropped inside the module
+because the module stamp restores them.
+
+### The bootstrap handled it without being asked to
+
+Worth recording, because it is the case a two-generation bootstrap
+exists for. The compiler's own source now says `use Os;` and calls
+`Os.temp_dir()` — but the compiler COMPILING it still had `Os` in its
+prelude, where `use Os;` names no stdlib module and is simply ignored.
+So generation 1 builds. Generation 1 then has the new prelude and the
+new module, and compiles the same source with `use Os;` doing real
+work. `check-seed` and `self-sufficiency` both pass unchanged.
+
+A prelude change that removed something the compiler needs would
+normally be exactly the shape that requires a staged commit. It did not
+here, because the old and new resolutions of `Os.temp_dir` agree on
+everything except where the source came from.
+
+### The error message was tested by accident, which is the best way
+
+`bootstrap/cross-check` builds a small program to prove `--target`
+works, and that program called `Os.platform()`. It failed:
+
+```
+self-hosted type checker: unbound variant/function: Os -- `Os` is a
+standard library module; add `use Os;` to this file
+```
+
+That is a real user hitting a real break, with no advance knowledge,
+and the message told them what to do. The ADR tool ported in 0.0.8
+broke the same way and was fixed the same way.
+
+One thing that did NOT work: the check confirming the tool still
+behaved identically passed while the build was failing, because the
+build left the previous binary in place and the comparison ran against
+it. A verification step that cannot distinguish "unchanged" from "did
+not run" is worse than no verification step, and this one now fails if
+the binary is missing.
+
+### The rest of the flat prelude went too
+
+Asked directly whether `read_file`, `tcp_*` and the loose `string_*`
+helpers belonged in `Fs`, `Env`, `Net` and `String` packages. Mostly
+yes, with three corrections that changed the shape of the answer.
+
+**`String` is not a package.** It is a type namespace, and those have
+to stay in the prelude — `T.f(x)` is the method-call mechanism. So
+those four were renames into a namespace that already existed, not a
+move. And two of them were not misplaced at all: `string_le` is `<=`
+spelled out, and `chars_join` duplicates `Array.concat_all` by the
+slower route. Both deleted; ten call sites in the compiler stop paying
+for the second one.
+
+**`Fs` and `Env` would have split the filesystem.** `Os` already owned
+`make_dir`, `remove_tree`, `copy_tree` and `temp_dir`. An `Fs` module
+holding `read_file` would have meant `Fs.read_file` alongside
+`Os.make_dir`, which is worse than the inconsistency it was meant to
+fix; the alternative — moving those four out of `Os` — breaks `Os`
+twice in consecutive releases and leaves it holding two functions. Go
+and Rust genuinely disagree here (`os` versus `std::fs`/`std::env`),
+and Go's shape is the one that fits a language that already committed
+to `Os`.
+
+**`Net` could not move alone.** The prelude's 18-function HTTP layer
+is built on `tcp_*`, so extracting the sockets would have left it
+referencing a module that might never be injected. That is what
+`StdModule.needs` is for.
+
+### Modules that depend on modules
+
+`Http` is ordinary Plum over `Net` — no IR, no backend, no extern
+surface of its own — which is exactly the argument for it being a
+SEPARATE module rather than more of `Net`, and exactly why the
+injection had to learn about dependencies. `use Http;` now pulls `Net`
+in transitively.
+
+The closure is deliberately dumb: one pass per module over the whole
+list, which cannot miss a chain shorter than the list, on a graph with
+four nodes and one edge. Modules are emitted in `std_module_names`
+order rather than in the order a program happened to `use` them, so
+the same program always produces the same IR.
+
+### A rename is not a move, and the bootstrap knows the difference
+
+Moving `Os` cost nothing at bootstrap: the old compiler had `Os` in its
+prelude, ignored the new `use Os;`, and built generation 1 happily.
+
+Renaming `chars_join` to `Array.concat_all` is a different animal. A
+compiler carries the prelude it was BUILT with, so source calling
+`String.is_ascii_ws` cannot be compiled by a compiler whose prelude has
+never heard of it. The build failed exactly there:
+
+```
+error: unbound variant/function: String
+  --> bootstrap/self_host/lexer/lexer.plum:153:29
+```
+
+Three builds, then: one with BOTH names in the prelude and the call
+sites still on the old ones; one with the call sites switched; one with
+the old names deleted. Then `bootstrap/gen-seed`, because the checked-in
+seed's prelude predates the rename and `check-seed` fails until it
+does not — which it says itself, by name.
+
+The second half of this change needed only ONE of those builds, and the
+reason is worth keeping: the compiler uses `Os.read_file` but nothing in
+it uses `Net` or `Http`, so those two had no call sites to migrate, and
+the compiler's own migration went through the module that generation 1
+already carried.
+
+### What is left in the flat prelude, and why
+
+After this, the unnamespaced prelude holds:
+
+```
+println  print  assert  assert_eq  assert_ne  chars_of  args  panic_raw
+```
+
+plus `Json` and the type namespaces. That list is defensible in a way
+the old one was not: output and assertions are things any program does
+regardless of domain, and `chars_of`/`args`/`panic_raw` are primitives
+the language itself is defined in terms of.
+
+One inconsistency survives on purpose. `pub` is not enforced on prelude
+items: `http_get` was declared `let`, not `pub let`, and was callable
+from user code anyway — which is how it shipped for weeks without
+anyone noticing. Moving it into a module forced the question, and the
+four `Http` entry points and seven structs now carry real `pub`. The
+underlying leniency is untouched and is its own decision.

@@ -524,9 +524,11 @@ yourself at the top of the file. There's no `?`-operator/early-return
 sugar yet; propagate a `Result` with an explicit `match`:
 
 ```
-let read_two (): Result[String, String] = match read_file("a.txt") {
+use Os;
+
+let read_two (): Result[String, String] = match Os.read_file("a.txt") {
     Err(e) => Err(e),
-    Ok(a) => match read_file("b.txt") {
+    Ok(a) => match Os.read_file("b.txt") {
         Err(e) => Err(e),
         Ok(b) => Ok(a.concat(b)),
     },
@@ -546,7 +548,7 @@ the full list:
 
 ```
 let doubled = Option.map(Some(21), |x| x * 2);          // Some(42)
-let total = Result.unwrap_or(read_file("a.txt"), "");    // "" if the file is missing
+let total = Result.unwrap_or(Os.read_file("a.txt"), "");    // "" if the file is missing
 ```
 
 ### Arrays
@@ -605,7 +607,7 @@ statement the language doesn't have at all, plus a `From`-style error-
 conversion mechanism the closed trait set has no room for):
 
 ```
-tcp_write(fd, request)
+Net.write(fd, request)
     |> Result.and_then(_, |ignored| read_response(fd))
     |> Result.and_then(_, parse_response)
 ```
@@ -811,14 +813,28 @@ and for the type namespaces that is not a convenience, it is required:
 `T.f(x)` *is* the method-call mechanism, so `xs.map(f)` only works
 because `Array.map` is always in scope.
 
-A namespace that names no type is a different thing. `Time` has no
-receiver and nothing dispatches to it, so it is a module, and a file
-that wants it says so:
+A namespace that names no type is a different thing. Those are
+modules, and a file that wants one says so:
+
+| module | what is in it |
+|---|---|
+| `Os` | files, directories, environment, subprocesses, platform, exit |
+| `Time` | the clock, and the calendar on top of it |
+| `Net` | TCP sockets |
+| `Http` | HTTP client and server, built on `Net` |
 
 ```
+use Os;
 use Time;
+
 let stamp (): String = Time.rfc7231(Time.now())
+let here (): String = Os.platform()
+let conf (): Result[String, String] = Os.read_file("app.conf")
 ```
+
+A module can depend on another. `Http` is ordinary Plum over `Net`'s
+sockets, so `use Http;` brings `Net` in with it — you do not have to
+know what a module is built on to use it.
 
 Without the `use`, the error says what to do:
 
@@ -827,9 +843,13 @@ unbound variant/function: Time -- `Time` is a standard library module;
 add `use Time;` to this file
 ```
 
-(`Os` is in the same position and has not moved yet — it is reachable
-from every program written so far, so that is a deliberate break to
-schedule rather than a tidy-up to slip in.)
+`Time` moved in 0.0.8 and the rest in 0.0.9. `Os` was held back
+deliberately: unlike `Time`, it was reachable from every program
+already written, so the break got a release of its own rather than
+being slipped in beside the feature that revealed it.
+
+What stayed in the prelude, with no `use` needed: `println`/`print`,
+the `assert` family, `Json`, and every type namespace.
 
 ## Standard library
 
@@ -870,7 +890,7 @@ program's prelude):
   String]`.
 - **`println(x)`/`print(x)`** — print any value's `.to_string()`
   (`print` with no trailing newline, `println` with one).
-- **`read_file(path): Result[String, String]`** / **`write_file(path,
+- **`use Os;` — whole-file I/O.** **`Os.read_file(path): Result[String, String]`** / **`Os.write_file(path,
   contents): Result[Unit, String]`** — whole-file I/O, no streaming/
   stateful file handle. Failure surfaces as `Err`, never a crash.
 - **`Map[K, V]`** — `Map.new`, `Map.insert`, `Map.get: Option[V]`,
@@ -896,24 +916,23 @@ program's prelude):
   Supports the escapes Plum's own string-literal lexer can itself
   produce (`\"`, `\\`, `\/`, `\n`, `\r`, `\t`); `\uXXXX`/`\b`/`\f` are
   rejected with a clear `Err` on parse rather than mishandled silently.
-- **TCP sockets** — `tcp_listen_on(port): Result[Int, String]`, `tcp_
-  connect_to(host, port): Result[Int, String]`, `tcp_accept_connection
-  (fd): Result[Int, String]`, `tcp_write(fd, data): Result[Int, String]`,
-  `tcp_read(fd, max_len): String`, `tcp_close_connection(fd): Unit` —
+- **`use Net;` — TCP sockets.** `Net.listen_on(port): Result[Int, String]`, `tcp_
+  connect_to(host, port): Result[Int, String]`, `Net.accept(fd): Result[Int, String]`, `Net.write(fd, data): Result[Int, String]`,
+  `Net.read(fd, max_len): String`, `Net.close(fd): Unit` —
   blocking, fd-based (an `Int` is the connection). **Unix-only (Linux/
   macOS)**, same documented scope as extern-symbol-resolution has
-  elsewhere (see DESIGN.md). `tcp_read` is NUL-terminated (not binary-
+  elsewhere (see DESIGN.md). `Net.read` is NUL-terminated (not binary-
   safe — fine for line-oriented protocols like HTTP, not arbitrary
   binary payloads) and returns `""` on both a clean peer-close and a
   hard socket error — a real, deliberate v1 scope trade, not a bug (see
   DESIGN.md's "TCP sockets" section for the full reasoning). UDP isn't
   in yet — deferred pending its own design for `recvfrom`'s sender-
   address problem.
-- **HTTP client** — `http_get(url): Result[HttpResponse, String]`,
-  `http_post(url, body): Result[HttpResponse, String]`, and the general
-  `http_request(method, url, headers, body): Result[HttpResponse,
-  String]` (`headers: Array[HttpHeader]`), where `HttpResponse { status:
-  Int, headers: Array[HttpHeader], body: String }`. Built entirely on
+- **`use Http;` — HTTP client.** `Http.get(url): Result[Http.Response, String]`,
+  `Http.post(url, body): Result[Http.Response, String]`, and the general
+  `Http.request(method, url, headers, body): Result[Http.Response,
+  String]` (`headers: Array[Http.Header]`), where `Http.Response { status:
+  Int, headers: Array[Http.Header], body: String }`. Built entirely on
   top of the TCP module above, no compiler magic. **`http://` only —
   `https://` is rejected with a clear `Err`**, not silently attempted;
   TLS is deliberately deferred as its own future design question. A
@@ -921,13 +940,13 @@ program's prelude):
   `Err` rather than mis-parsed — only `Content-Length`-framed or
   read-until-close responses are supported. See DESIGN.md's "HTTP
   client" section for the full scope writeup.
-- **HTTP server** — `http_serve_once(port, handler): Result[Unit,
+- **`use Http;` — HTTP server.** `Http.serve_once(port, handler): Result[Unit,
   String]` (listens, handles exactly one connection, returns — a real
-  one-shot server on its own) and `http_serve(port, handler): Result
+  one-shot server on its own) and `Http.serve(port, handler): Result
   [Unit, String]` (the real long-running server: accept, handle, close,
-  repeat, forever). `handler: (HttpRequest) -> HttpResponse`, where
-  `HttpRequest { method: String, path: String, headers: Array
-  [HttpHeader], body: String }`. **Concurrent — spawn-per-connection**:
+  repeat, forever). `handler: (Http.Request) -> Http.Response`, where
+  `Http.Request { method: String, path: String, headers: Array
+  [Http.Header], body: String }`. **Concurrent — spawn-per-connection**:
   `http_serve`/`http_serve_loop` spawn a real OS-thread task per
   accepted connection, so one slow client can't stall another behind
   it; `handler` must be a plain top-level function or a closure
@@ -939,9 +958,9 @@ program's prelude):
   real request/response body-framing asymmetry bug found via an actual
   deadlock (a bodyless `GET` with no `Content-Length` means different
   things on the two sides of a connection).
-- **OS: directory listing + subprocess exec** — `list_dir(path): Result
+- **`use Os;` — directory listing and subprocess exec.** `Os.list_dir(path): Result
   [Array[String], String]` (entry names, `.`/`..` already skipped),
-  `is_directory(path): Result[Bool, String]`, and `run_process(program,
+  `Os.is_directory(path): Result[Bool, String]`, and `Os.run_process(program,
   args): Result[ProcessResult, String]` where `ProcessResult { exit_
   code: Int, stdout: String, stderr: String }` — a non-zero exit code
   is an ordinary `Ok`, `Err` only means the process could never even be
@@ -955,8 +974,9 @@ program's prelude):
   where `T` is `x`'s type — so `"  hi  ".trim_end()` and
   `String.trim_end("  hi  ")` are the same call, and declaring
   `let Box.bump (b: Box) (n: Int): Box` makes `myBox.bump(1)` work.
-  A namespace names the type of the first parameter; `Os.` has no
-  receiver and so has no methods. A struct field holding a closure
+  A namespace names the type of the first parameter, which is why
+  `Os` and `Time` are modules rather than prelude namespaces — neither
+  has a receiver, so neither has methods. A struct field holding a closure
   wins over a namespaced function of the same name.
 
 - **`use Time;` — the clock, and the calendar on top of it.** The
@@ -977,7 +997,9 @@ program's prelude):
   division rather than `/`, which truncates toward zero and would
   otherwise put the second before the epoch in 1970.
 
-- **`Os.`: filesystem and self-location** — `Os.temp_dir(): Result
+- **`use Os;` — filesystem and self-location.** A module for the same
+  reason `Time` is: it names no type and nothing dispatches to it.
+  `Os.temp_dir(): Result
   [String, String]` (a fresh private directory the caller owns and must
   clean up), `Os.make_dir(path)`, `Os.remove_file(path)`,
   `Os.remove_tree(path)`, `Os.copy_tree(src, dst)` (copies the CONTENTS

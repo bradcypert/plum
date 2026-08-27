@@ -51,6 +51,7 @@
 // interpreter scaling limit hit while validating Stage 1, not a
 // correctness bug).
 
+use Os;
 use lexer;
 use parser;
 use lsp;
@@ -74,7 +75,7 @@ let cmd_query (dir: String) (path: String) (line: Int) (col: Int): Unit = {
     typecheck.record_types(true);
     let items = codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }).items;
     typecheck.check_program(parser.ProgramNode { items: items });
-    match read_file(path) {
+    match Os.read_file(path) {
         Err(_) => println("{}"),
         Ok(src) => {
             let off = lexer.offset_of(src, line, col);
@@ -162,7 +163,7 @@ let query_answer (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (i
     else { query_answer(nodes, path, off, i + 1) }
 
 let def_position_fields (path: String) (off: Int): Array[JsonEntry] =
-    match read_file(path) {
+    match Os.read_file(path) {
         Err(_) => [],
         Ok(src) => {
             let lc = lexer.line_col(src, off);
@@ -204,7 +205,7 @@ let cmd_members (dir: String) (path: String) (line: Int) (col: Int): Unit = {
     typecheck.record_types(true);
     let items = codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(dir) }).items;
     typecheck.check_program(parser.ProgramNode { items: items });
-    match read_file(path) {
+    match Os.read_file(path) {
         Err(_) => println("[]"),
         Ok(src) => {
             let cs = chars_of(src);
@@ -381,7 +382,7 @@ let cmd_complete (dir: String): Unit = {
 // costs the locals and nothing else; the language server merges what
 // it gets.
 let cmd_locals (dir: String) (path: String) (line: Int) (col: Int): Unit =
-    match read_file(path) {
+    match Os.read_file(path) {
         Err(_) => println("[]"),
         Ok(src) => {
             typecheck.record_types(true);
@@ -482,7 +483,7 @@ let def_entry (item: parser.ItemNode): Option[JsonValue] =
 // from. Read per item: an index is built once per request, and a
 // project is a handful of files.
 let def_json (item: parser.ItemNode) (name: String) (kind: String) (detail: String): JsonValue = {
-    let lc = match read_file(item.path) {
+    let lc = match Os.read_file(item.path) {
         Ok(src) => lexer.line_col(src, item.start),
         Err(_) => lexer.LineCol { line: 1, col: 1 },
     };
@@ -609,7 +610,7 @@ let self_exe (): String =
 // `cmd_test` uses -- no path to look up, and no chance of running a
 // different build than this one.
 let lsp_check (dir: String): Option[lsp.Diagnostic] =
-    match run_process(self_exe(), ["check", dir]) {
+    match Os.run_process(self_exe(), ["check", dir]) {
         Err(_) => None,
         Ok(r) => if r.exit_code == 0 { None } else { lsp.parse_diagnostic(r.stdout.concat(r.stderr)) },
     }
@@ -645,7 +646,7 @@ let lsp_check_buffer (path: String) (text: String): BufferCheck =
             // which meant the same thing and needed a `cp` binary.
             let copied = Os.copy_tree(dir, scratch);
             let target = scratch.concat("/").concat(lsp.base_of(path));
-            match write_file(target, text) {
+            match Os.write_file(target, text) {
                 Err(_) => { let c = Os.remove_tree(scratch); BufferCheck { diagnostic: None, scratch: "" } },
                 Ok(_) => BufferCheck { diagnostic: lsp_check(scratch), scratch: scratch },
             }
@@ -779,7 +780,7 @@ let lsp_handle (body: String): Bool =
 // give. Empty when the position is not on an identifier USE, or when
 // the project does not currently type-check.
 let lsp_query (path: String) (line: Int) (col: Int): String =
-    match run_process(self_exe(), ["query", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
+    match Os.run_process(self_exe(), ["query", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
         Err(_) => "",
         Ok(r) => if r.exit_code == 0 { String.trim_end(r.stdout) } else { "" },
     }
@@ -789,7 +790,7 @@ let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
     let path = lsp.uri_to_path(uri);
     if uri == "" { JsonNull }
     else {
-        match read_file(path) {
+        match Os.read_file(path) {
             Err(_) => JsonNull,
             Ok(src) => {
                 let off = lexer.offset_of(src, lsp.params_line(params), lsp.params_col(params));
@@ -826,7 +827,7 @@ let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
 }
 
 let lsp_locals (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
-    match run_process(self_exe(), ["locals", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
+    match Os.run_process(self_exe(), ["locals", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
     }
@@ -834,7 +835,7 @@ let lsp_locals (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
 // The members of whatever sits before the cursor's `.`, or an empty
 // list when the cursor is not after a dot at all.
 let lsp_members (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
-    match run_process(self_exe(), ["members", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
+    match Os.run_process(self_exe(), ["members", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
     }
@@ -848,13 +849,13 @@ let lsp_members (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
 // completion is most wanted. The cost is that a function added and not
 // yet saved is missing from the list until you save.
 let lsp_completions (path: String): Array[lsp.Completion] =
-    match run_process(self_exe(), ["complete", lsp.dir_of(path)]) {
+    match Os.run_process(self_exe(), ["complete", lsp.dir_of(path)]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
     }
 
 let lsp_defs (path: String): Array[lsp.Def] =
-    match run_process(self_exe(), ["defs", lsp.dir_of(path)]) {
+    match Os.run_process(self_exe(), ["defs", lsp.dir_of(path)]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_defs(r.stdout) } else { [] },
     }
@@ -866,7 +867,7 @@ let lsp_reply (id: Option[JsonValue]) (result: JsonValue): Unit =
 // fails if a release tag disagrees with it, so a `v0.0.2` tag can
 // never ship a binary that says 0.0.1 -- the same class of drift this
 // project has been closing everywhere else.
-pub let plum_version (): String = "0.0.8"
+pub let plum_version (): String = "0.0.9"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
@@ -934,7 +935,7 @@ struct TestRun { failed: Int, detail: String }
 let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): TestRun =
     if i >= names.len() { acc }
     else {
-        let r = run_process(bin, [names[i]]);
+        let r = Os.run_process(bin, [names[i]]);
         let outcome = match r {
             Err(e) => TestRun { failed: 1, detail: e },
             Ok(pr) => if pr.exit_code == 0 { TestRun { failed: 0, detail: "" } }
@@ -979,7 +980,7 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
             let bin = scratch.concat("/tests");
             let ll = bin.concat(".ll");
             let ir = codegen.cg_emit_program_entry(program, "__plum_test_main");
-            let outcome = match write_file(ll, ir) {
+            let outcome = match Os.write_file(ll, ir) {
                 Err(e) => TestRun { failed: 1, detail: "could not write test IR: ".concat(e) },
                 Ok(_) => {
                     let cfiles = write_shims(scratch);
@@ -987,7 +988,7 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
                     // runs as a child of this binary.
                     let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), ["-O2", "-Wno-override-module", ll]), cfiles),
                         Array.concat(link_args([], dir), Array.concat(platform_libs(native_target()), ["-o", bin])));
-                    match run_process(cc_program(), argv) {
+                    match Os.run_process(cc_program(), argv) {
                         Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
                         Ok(r) => if r.exit_code == 0 { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
                             else { TestRun { failed: 1, detail: "could not link tests:\n".concat(r.stderr) } },
@@ -1031,7 +1032,7 @@ let cmd_test (dir: String): Unit = {
         // the language had -- and it printed its (empty) message,
         // leaving a stray blank line the real compiler's report does
         // not have. `exit_with` was added for this.
-        exit_with(1);
+        Os.exit_with(1);
     }
 }
 
@@ -1059,7 +1060,7 @@ let test_dispatch_arms (names: Array[String]) (i: Int) (acc: String): String =
 // them. Discovered rather than hard-coded as a list, since the set has
 // grown before and the directory is the authority.
 let native_c_files (dir: String): Array[String] =
-    match list_dir(dir) {
+    match Os.list_dir(dir) {
         Err(_) => [],
         Ok(entries) => Array.fold(entries, [], |acc, e|
             if e.ends_with(".c") { acc.push(dir.concat("/").concat(e)) } else { acc }),
@@ -1202,7 +1203,7 @@ let target_error (triple: String): String =
 // arguments separately and does not go through a shell, so a single
 // string would be looked up as one long filename.
 let cc_words (): Array[String] =
-    match env_var("PLUM_CC") {
+    match Os.env_var("PLUM_CC") {
         None => ["clang"],
         Some(v) => {
             let words = non_empty(v.split(" "), 0, []);
@@ -1248,7 +1249,7 @@ let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (i: Int) (acc: 
     if i >= files.len() { acc }
     else {
         let path = dir.concat("/").concat(files[i].name);
-        match write_file(path, files[i].source) {
+        match Os.write_file(path, files[i].source) {
             Err(_) => write_shims_acc(files, dir, i + 1, acc),
             Ok(_) => write_shims_acc(files, dir, i + 1, acc.push(path)),
         }
@@ -1272,7 +1273,7 @@ let compile_project (dir: String) (out: String) (extra: Array[String]) (target: 
 let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scratch: String) (target: String): String = {
     let ll = out.concat(".ll");
     let ir = codegen.cg_emit_program(parser.ProgramNode { items: collect_project(dir) });
-    match write_file(ll, ir) {
+    match Os.write_file(ll, ir) {
         Err(e) => "build failed: ".concat(e),
         Ok(_) => {
             // The shims are EMBEDDED and written out per build, not read
@@ -1282,7 +1283,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
             let cfiles = write_shims(scratch);
             let base = Array.concat(target_args(target), ["-O2", "-Wno-override-module", ll]);
             let argv2 = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), base), cfiles), extra), Array.concat(platform_libs(target), ["-o", out]));
-            match run_process(cc_program(), argv2) {
+            match Os.run_process(cc_program(), argv2) {
                 Err(e) => "build failed: ".concat(e),
                 Ok(r) => if r.exit_code == 0 {
                     // The scratch `.ll` is removed on SUCCESS and kept on
@@ -1388,7 +1389,7 @@ let run_project (argv: Array[String]): Unit = {
 // current rule. DESIGN.md's module-system section documents the flat
 // tag namespace as a deliberate boundary.
 let parse_file_items (path: String) (module_name: String): Array[parser.ItemNode] =
-    match read_file(path) {
+    match Os.read_file(path) {
         // The source context is set per FILE, immediately before that
         // file is parsed, so a parse error can report `path:line:col`
         // with a caret instead of a bare message. See
@@ -1408,8 +1409,8 @@ let parse_file_items (path: String) (module_name: String): Array[parser.ItemNode
 // which matches how the sources are actually laid out and avoids
 // inventing a path syntax nothing writes.
 let collect_path_items (path: String) (module_name: String): Array[parser.ItemNode] =
-    if Result.unwrap_or(is_directory(path), false) {
-        collect_entries(path, module_name, Result.unwrap_or(list_dir(path), []), 0, [])
+    if Result.unwrap_or(Os.is_directory(path), false) {
+        collect_entries(path, module_name, Result.unwrap_or(Os.list_dir(path), []), 0, [])
     } else if path.ends_with(".plum") {
         parse_file_items(path, module_name)
     } else {
@@ -1419,8 +1420,8 @@ let collect_path_items (path: String) (module_name: String): Array[parser.ItemNo
 // The project ROOT: each subdirectory names a module, each root-level
 // file belongs to `""`.
 let collect_project (root: String): Array[parser.ItemNode] =
-    if Result.unwrap_or(is_directory(root), false) {
-        collect_root_entries(root, Result.unwrap_or(list_dir(root), []), 0, [])
+    if Result.unwrap_or(Os.is_directory(root), false) {
+        collect_root_entries(root, Result.unwrap_or(Os.list_dir(root), []), 0, [])
     } else {
         collect_path_items(root, "")
     }
@@ -1430,7 +1431,7 @@ let collect_root_entries (root: String) (entries: Array[String]) (i: Int) (acc: 
     else if entries[i] == "." || entries[i] == ".." { collect_root_entries(root, entries, i + 1, acc) }
     else {
         let full = root.concat("/").concat(entries[i]);
-        let m = if Result.unwrap_or(is_directory(full), false) { entries[i] } else { "" };
+        let m = if Result.unwrap_or(Os.is_directory(full), false) { entries[i] } else { "" };
         collect_root_entries(root, entries, i + 1, Array.concat(acc, collect_path_items(full, m)))
     }
 
@@ -1463,12 +1464,12 @@ let collect_entries (dir: String) (module_name: String) (entries: Array[String])
 let new_template (unit: Unit): String = "// Generated by `plum new`.\n\nlet greet (who: String): String = \"hello, \".concat(who)\n\nlet main (): Unit = println(greet(\"plum\"))\n\n// `plum test` runs every zero-argument function whose name starts with\n// `test_`, each in its own process.\nlet test_greet (): Unit = assert_eq(greet(\"plum\"), \"hello, plum\")\n"
 
 let cmd_new (name: String): Unit =
-    if Result.unwrap_or(is_directory(name), false) {
+    if Result.unwrap_or(Os.is_directory(name), false) {
         new_failed(name.concat(" already exists — refusing to overwrite it"))
     } else if !mkdir_ok(name) {
         new_failed("failed to create ".concat(name))
     } else {
-        match write_file(name.concat("/main.plum"), new_template(())) {
+        match Os.write_file(name.concat("/main.plum"), new_template(())) {
             Err(e) => new_failed("failed to write main.plum: ".concat(e)),
             // The three commands, named at the moment they are wanted.
             // A scaffold that leaves you at a prompt with one line of
@@ -1545,19 +1546,19 @@ let main (): Unit = {
         // wrong answers.
         typecheck.check_program(codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(argv[1]) }));
         println("ok");
-    } else if argv[0] == "test" && Result.unwrap_or(is_directory(argv[1]), false) {
+    } else if argv[0] == "test" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
         cmd_test(argv[1]);
-    } else if argv[0] == "build" && Result.unwrap_or(is_directory(argv[1]), false) {
+    } else if argv[0] == "build" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
         build_project(argv);
-    } else if argv[0] == "emit-llvm" && Result.unwrap_or(is_directory(argv[1]), false) {
+    } else if argv[0] == "emit-llvm" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
         // Same directory loading `check` and `run` use. A real Plum
         // project is several modules, so a backend that only accepted
         // one file could never compile one.
         println(codegen.cg_emit_program(parser.ProgramNode { items: collect_project(argv[1]) }));
-    } else if argv[0] == "run" && Result.unwrap_or(is_directory(argv[1]), false) {
+    } else if argv[0] == "run" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
         run_project(argv);
     } else {
-        match read_file(argv[1]) {
+        match Os.read_file(argv[1]) {
             Err(e) => println("failed to read file: ".concat(e)),
             Ok(src) => {
                 // Same source context the project path sets, so a parse

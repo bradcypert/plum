@@ -103,6 +103,7 @@ else
     proj="$work/proj"
     mkdir -p "$proj"
     cat > "$proj/main.plum" <<'PLUM'
+use Os;
 let main (): Unit = println("cross ok on ".concat(Os.platform()))
 PLUM
 

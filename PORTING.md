@@ -150,7 +150,7 @@ in-process type error would take the language server down.
   GNU-only.
 - `ci.yml` gained a `platforms` matrix (macos-15 arm64, macos-13 x86_64).
 - `release.yml` split into `linux` / `macos` / `publish`.
-- `native_stdlib/os_shim.c` and an `Os.` prelude namespace
+- `native_stdlib/os_shim.c` and the `Os` standard-library module
   (`temp_dir`, `self_exe`, `make_dir`, `remove_file`, `remove_tree`,
   `copy_tree`), replacing all 16 shell-out sites. This needed a
   **two-generation** bootstrap — generation 1 carries the new prelude,

@@ -261,7 +261,7 @@ let cg_global_module_acc (gs: Array[typecheck.TFn]) (name: String) (i: Int): Str
 
 let cg_global_slot (module_name: String) (name: String): String = "@g.".concat(cg_sym(module_name, name, []))
 
-let cg_mangle (name: String): String = "plum_".concat(chars_join(Array.map(chars_of(name), |c| if c == "." { "_" } else { c })))
+let cg_mangle (name: String): String = "plum_".concat(Array.concat_all(Array.map(chars_of(name), |c| if c == "." { "_" } else { c })))
 
 // --- Monomorphization ---
 //
@@ -476,7 +476,7 @@ let cg_label (n: Int): String = "L".concat(n.to_string())
 // escaped. Everything else — including multi-byte UTF-8 — passes
 // through as raw bytes, which is exactly right: `c"..."` is a byte
 // string, and a codepoint's own bytes need no special handling.
-let cg_escape_llvm (s: String): String = chars_join(Array.map(chars_of(s), |c| cg_escape_char(c)))
+let cg_escape_llvm (s: String): String = Array.concat_all(Array.map(chars_of(s), |c| cg_escape_char(c)))
 
 let cg_escape_char (c: String): String =
     if c == "\"" { "\\22" }

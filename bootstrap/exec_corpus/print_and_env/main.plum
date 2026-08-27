@@ -1,3 +1,5 @@
+use Os;
+
 // `print` and `env_var`, which the real compiler had and the
 // self-hosted one did not until 2026-08-21. Found by diffing the two
 // preludes' public surfaces -- the same sweep that turned up the
@@ -19,9 +21,9 @@ let main (): Unit = {
     print("");
     println("empty print leaves no trace");
 
-    println(match env_var("PLUM_DEFINITELY_NOT_SET_4f3a9") {
+    println(match Os.env_var("PLUM_DEFINITELY_NOT_SET_4f3a9") {
         Some(v) => "unexpectedly set: ".concat(v),
         None => "unset reads as None",
     });
-    println(Option.unwrap_or(env_var("PLUM_DEFINITELY_NOT_SET_4f3a9"), "fallback"))
+    println(Option.unwrap_or(Os.env_var("PLUM_DEFINITELY_NOT_SET_4f3a9"), "fallback"))
 }

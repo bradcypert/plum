@@ -33,6 +33,7 @@
 //   The corpus is 100% valid Plum by construction; there's nothing
 //   here that needs to parse malformed input gracefully yet.
 
+use Os;
 use lexer;
 
 // --- AST ---
@@ -180,7 +181,7 @@ pub struct ProgramNode { items: Array[ItemNode] }
 // variant/function: Time" into a message that says what to do about
 // it. Kept here because both of those import `parser` and neither
 // imports the other.
-pub let std_module_names (): Array[String] = ["Time"]
+pub let std_module_names (): Array[String] = ["Net", "Http", "Os", "Time"]
 
 // --- lexer.Token-stream helpers (the `(tokens, pos) -> (value, next_pos)`
 // idiom this whole self-hosting effort has used since the lexer) ---
@@ -999,7 +1000,7 @@ let embed_file_expr (args: Array[PExpr]) (pos: Int): PExpr =
     }
 
 let embed_read (full: String) (pos: Int): PExpr =
-    match read_file(full) {
+    match Os.read_file(full) {
         Ok(text) => EStr(text),
         Err(e) => {
             // `e` already names the path, so this does not repeat it.

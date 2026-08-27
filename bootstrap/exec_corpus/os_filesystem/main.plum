@@ -1,4 +1,6 @@
-// The `Os.` prelude namespace: temp directories, directory creation,
+use Os;
+
+// The `Os` standard-library module: temp directories, directory creation,
 // file and tree removal, tree copying, and self-location.
 //
 // These replaced the compiler shelling out to `mktemp`, `rm`, `cp` and
@@ -24,7 +26,7 @@ let main (): Unit =
             let src = root.concat("/src");
             report("make_dir", Os.make_dir(src));
             report("make_dir nested", Os.make_dir(src.concat("/inner")));
-            report("write", write_file(src.concat("/inner/a.txt"), "contents"));
+            report("write", Os.write_file(src.concat("/inner/a.txt"), "contents"));
 
             // `copy_tree` copies the CONTENTS of src into dst, so
             // `inner/a.txt` lands at `dst/inner/a.txt` and NOT at
@@ -33,14 +35,14 @@ let main (): Unit =
             let dst = root.concat("/dst");
             report("make_dir dst", Os.make_dir(dst));
             report("copy_tree", Os.copy_tree(src, dst));
-            match read_file(dst.concat("/inner/a.txt")) {
+            match Os.read_file(dst.concat("/inner/a.txt")) {
                 Err(e) => println("copied file: ".concat(e)),
                 Ok(text) => println("copied file: ".concat(text)),
             };
 
             // Removing a file leaves its directory behind.
             report("remove_file", Os.remove_file(dst.concat("/inner/a.txt")));
-            match read_file(dst.concat("/inner/a.txt")) {
+            match Os.read_file(dst.concat("/inner/a.txt")) {
                 Err(_) => println("file is gone: yes"),
                 Ok(_) => println("file is gone: no"),
             };
@@ -51,7 +53,7 @@ let main (): Unit =
 
             // `remove_tree` takes the whole thing, nested and all.
             report("remove_tree", Os.remove_tree(root));
-            match is_directory(root) {
+            match Os.is_directory(root) {
                 Err(_) => println("tree is gone: yes"),
                 Ok(still) => println(if still { "tree is gone: no" } else { "tree is gone: yes" }),
             };

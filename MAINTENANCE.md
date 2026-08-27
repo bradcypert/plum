@@ -415,3 +415,23 @@ Worth knowing before you "fix" them:
   modules it is still documentation the compiler does not check; module
   membership comes from the directory. Do not assume removing a `use`
   will break a directory-module call, because it will not.
+- **`Os`, `Time`, `Net` and `Http` are modules; the type namespaces
+  are not, and cannot be.** `T.f(x)` is the method-call mechanism, so
+  `Array.map` being in scope is what makes `xs.map(f)` work. Adding a
+  module means a name in `parser.std_module_names()` and source in
+  `codegen/stdlib.plum`.
+- **A new fixture that calls `Os.` needs `use Os;`.** The harnesses
+  will catch it, but the error is a type error at build time rather
+  than something obviously about the fixture.
+- **A prelude RENAME needs three builds; a prelude MOVE needs one.** A
+  compiler carries the prelude it was built with, so source using a new
+  prelude name cannot be compiled until a compiler knows it: build with
+  both names, switch the call sites, build, delete the old names, build
+  again. Then run `bootstrap/gen-seed` — `check-seed` fails until you
+  do, and says so. A move behind `use` needs none of this, because the
+  old compiler simply ignores the `use` and resolves from its own
+  prelude.
+- **`StdModule.needs` is how one stdlib module uses another.** `Http`
+  needs `Net`. Adding an edge means adding it to `cg_std_needs`;
+  forgetting produces a module whose body references something never
+  injected, which surfaces as a confusing user-facing type error.

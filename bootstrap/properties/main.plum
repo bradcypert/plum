@@ -1,3 +1,5 @@
+use Os;
+
 // Property tests: invariants that must hold for MANY inputs, checked
 // against values generated here rather than against answers recorded
 // from a previous run.

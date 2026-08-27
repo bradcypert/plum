@@ -34,46 +34,50 @@ fail=0
 # anything can connect, and only then spawns the acceptor.
 mkdir -p "$work/tcp"
 cat > "$work/tcp/main.plum" <<'PLUM'
-let main (): Unit = match tcp_listen_on(18733) {
+use Net;
+let main (): Unit = match Net.listen_on(18733) {
     Err(e) => println("listen: ".concat(e)),
     Ok(srv) => {
         let acceptor = spawn {
-            match tcp_accept_connection(srv) {
+            match Net.accept(srv) {
                 Err(e) => "accept: ".concat(e),
                 Ok(conn) => {
-                    let got = tcp_read(conn, 1024);
-                    match tcp_write(conn, "pong") { Ok(_) => (), Err(_) => () };
-                    tcp_close_connection(conn);
+                    let got = Net.read(conn, 1024);
+                    match Net.write(conn, "pong") { Ok(_) => (), Err(_) => () };
+                    Net.close(conn);
                     got
                 },
             }
         };
-        match tcp_connect_to("127.0.0.1", 18733) {
+        match Net.connect_to("127.0.0.1", 18733) {
             Err(e) => println("connect: ".concat(e)),
             Ok(fd) => {
-                match tcp_write(fd, "ping") { Ok(_) => (), Err(_) => () };
-                let reply = tcp_read(fd, 1024);
-                tcp_close_connection(fd);
+                match Net.write(fd, "ping") { Ok(_) => (), Err(_) => () };
+                let reply = Net.read(fd, 1024);
+                Net.close(fd);
                 println(acceptor.join().concat("/").concat(reply))
             },
         };
-        tcp_close_connection(srv)
+        Net.close(srv)
     },
 }
 PLUM
 
 # --- HTTP --------------------------------------------------------
-# `http_serve_once` listens AND accepts internally, so the race cannot
+# `Http.serve_once` listens AND accepts internally, so the race cannot
 # be removed the way it can for raw TCP. The client retries instead: a
 # refused connection returns immediately, so a bounded retry covers the
 # server's startup window without needing a sleep primitive, and a
 # server that never comes up ends the loop rather than hanging it.
 mkdir -p "$work/http"
 cat > "$work/http/main.plum" <<'PLUM'
+use Net;
+use Http;
+
 let attempt (n: Int): String =
     if n <= 0 { "client: gave up" }
     else {
-        match http_get("http://127.0.0.1:18734/world") {
+        match Http.get("http://127.0.0.1:18734/world") {
             Ok(r) => r.status.to_string().concat(" ").concat(r.body),
             Err(e) => attempt(n - 1),
         }
@@ -81,18 +85,18 @@ let attempt (n: Int): String =
 
 let main (): Unit = {
     let server = spawn {
-        http_serve_once(18734, |req| HttpResponse {
+        Http.serve_once(18734, |req| Http.Response {
             status: 200,
-            headers: [HttpHeader { name: "Content-Type", value: "text/plain" }],
+            headers: [Http.Header { name: "Content-Type", value: "text/plain" }],
             body: "hello ".concat(req.path),
         })
     };
     let got = attempt(200);
     match server.join() { Ok(_) => println(got), Err(e) => println("server: ".concat(e)) };
     // Failure paths, which need no listener and so cannot be flaky.
-    println(match tcp_connect_to("127.0.0.1", 1) { Ok(_) => "?", Err(e) => e });
-    println(match http_get("https://example.com/") { Ok(_) => "?", Err(e) => e });
-    println(match http_get("nope://example.com/") { Ok(_) => "?", Err(e) => e })
+    println(match Net.connect_to("127.0.0.1", 1) { Ok(_) => "?", Err(e) => e });
+    println(match Http.get("https://example.com/") { Ok(_) => "?", Err(e) => e });
+    println(match Http.get("nope://example.com/") { Ok(_) => "?", Err(e) => e })
 }
 PLUM
 
@@ -118,7 +122,7 @@ check() {
 
 check tcp "ping/pong"
 check http "200 hello /world
-tcp_connect_to: could not connect to 127.0.0.1:1
+Net.connect_to: could not connect to 127.0.0.1:1
 http client: https:// is not supported yet
 http client: url must start with http://"
 

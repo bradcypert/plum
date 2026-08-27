@@ -1,167 +1,87 @@
 Plum is a small, statically typed, compiled language.
 
-This release is about **shipping a program you wrote in Plum**. Every
-item in it came from porting a real CLI — an ADR management tool — and
-running into the wall where the port stopped looking like the original.
+A breaking release, and the one that finishes a job 0.0.8 started. The
+standard library now has modules, and the flat prelude holds only what
+genuinely has to be there.
 
-## Cross-compiling: `--target`
-
-```sh
-PLUM_CC="zig cc" plum build myapp --target aarch64-linux-musl
-```
-
-Plum does not implement cross-compilation so much as stop preventing
-it. Two things were already true and neither was on purpose: the IR
-carries no target triple and no datalayout, so `clang --target=`
-retargets it directly; and `Os.platform()` is compiled in by the C
-compiler's own `#ifdef`, so it reports the *target's* platform without
-being asked to. Exactly one line was host-specific — the list of
-libraries to link read the compiler's own platform instead of the
-target's.
-
-What Plum still does **not** ship is a sysroot. `clang` can emit code
-for any target but cannot link one without that target's libc, so
-`--target` needs a C driver that has one, and `PLUM_CC` is where you
-name it. That is the same arrangement Rust's ecosystem settled on with
-`cargo-zigbuild`, and it is why a native build still needs nothing but
-`clang`: nobody pays for a feature they do not use.
-
-Two details worth knowing. A Windows target gets a `.exe` suffix when
-you do not pass `-o`, because a PE not named `.exe` will not run and
-nothing downstream would say why. And a non-64-bit target is refused
-outright rather than built — cell layout assumes 8-byte slots, so a
-32-bit target would not fail to link, it would silently miscompile.
-The architecture list is an allow-list for that reason: an unfamiliar
-name gets a clear refusal instead of a wrong binary.
-
-`plum run` and `plum test` are always native. They execute what they
-build.
-
-Verified from an x86_64 Linux box: `aarch64-linux-musl`,
-`x86_64-windows-gnu` and `aarch64-macos` all built and identified by
-object format, with the aarch64 binary **run under qemu**.
-
-## Compile-time builtins: `@embed_file`
+## Four modules
 
 ```plum
-let template (): String = @embed_file("templates/adr.md")
-```
-
-The `@` is the point as much as the function is. A builtin runs while
-the **compiler reads your source**, not while your program runs, and
-nothing about a plain call conveys that — `embed_file("x")` looks like
-every other call on the page.
-
-Replaced by the file's contents while the source is parsed. Nothing
-downstream sees a call — the type checker and the backend see the same
-string literal they would have seen had you typed the text out.
-
-The path resolves against **the source file's own directory**, not the
-working directory, so a build does not depend on where you launched it.
-A module in a subdirectory embeds relative to itself.
-
-The argument must be a literal string, since the file is read at
-compile time — and an interpolated string is a value, not a literal, so
-`embed_file("templates/${name}.md")` is an error that says so. All four
-failure modes point at the call and quote the line.
-
-Embedded text is data: it is never re-lexed, so `${...}` inside an
-embedded file stays exactly as written. Text only — the result is a
-`String`, which covers templates, schemas, SQL and help text, not
-images.
-
-The sigil also keeps builtins out of the identifier namespace, so
-nothing is reserved: `embed_file` remains an ordinary name you are free
-to define, and both can appear in the same expression.
-
-The set of builtin names is closed, and an unknown one lists what
-exists — `unknown builtin @nope. Plum has one: @embed_file("path")`.
-
-## `use Time;` — and the first standard-library module
-
-```plum
+use Os;
 use Time;
 
-Time.rfc7231(Time.now())   // Thu, 27 Aug 2026 01:40:28 GMT
-Time.iso8601(Time.now())   // 2026-08-27T01:40:28Z
-Time.utc(epoch)            // DateTime { year, month, day, hour, ... }
+let stamp (): String = Time.rfc7231(Time.now())
+let conf (): Result[String, String] = Os.read_file("app.conf")
 ```
 
-`Time` is a **module**, not a prelude namespace, and the distinction is
-now a rule rather than a preference. `Array`, `String`, `Option` and
-the rest have to be in the prelude, because `T.f(x)` is the method-call
-mechanism — `xs.map(f)` only works because `Array.map` is in scope. A
-namespace that names no type and dispatches to nothing is a module
-wearing a namespace's clothes, and is now spelled like one.
-
-A side effect worth knowing: this makes `use` **load-bearing** for the
-first time. Until now it was parsed and then ignored — module
-membership came from the directory an item was found in, so `use
-shapes;` documented an intention nothing checked. A stdlib module has
-no directory, so the `use` is the only thing that can bring it in.
-
-Without it the error names the fix:
-
-```
-unbound variant/function: Time -- `Time` is a standard library module;
-add `use Time;` to this file
-```
-
-`Os` is in exactly the same position and has **not** moved. It is
-reachable from every program written so far, so that is a deliberate
-break to schedule rather than a tidy-up to slip into a point release.
-
-The 0.0.7 notes argued that turning epoch seconds into a date "is a
-library on top of this rather than a runtime concern". That was right,
-and this is that library — ordinary Plum in the prelude, no new
-primitive. `Time.now()` is still the only part that needed the runtime.
-What changed the mind was seeing what the argument costs in practice:
-40 lines of calendar arithmetic in an ADR tool that wanted one
-timestamp in a README.
-
-UTC only; a timezone database is a data-shipping problem and Plum ships
-no data. Dates before 1970 work — the arithmetic uses floor division
-rather than `/`, which truncates toward zero and would otherwise put
-the second before the epoch in 1970.
-
-Checked against Python's `datetime` on 48 timestamps spanning 1900 to
-2100, including both century-leap-year cases. All 48 agreed exactly.
-
-## Padding, and a distinction that was documented backwards
-
-```plum
-String.pad_left("7", 5, "0")     // "00007"
-String.pad_right("ab", 5, ".")   // "ab..."
-String.char_len("café")          // 4  ("café".len() is 5 — bytes)
-```
-
-`String.len` counts bytes; every other string function counts
-codepoints. Both halves were true and the combination was a trap, so
-`String.char_len` now gives the count that matches the rest of the
-library, and padding uses it — text lined up by byte count puts an
-accented name in the wrong place.
-
-The README claimed "there is currently no substring/slice primitive",
-which stopped being true when `String.slice` was added. Fixed.
-
-Padding refuses rather than surprises: a string already wide enough
-comes back unchanged rather than truncated, and a fill that is not one
-character comes back unchanged rather than panicking.
-
-## What this did to the program that asked for it
-
-The ADR tool, counting non-blank non-comment lines with template files
-excluded on both sides:
-
-| | lines |
+| module | what is in it |
 |---|---|
-| Zig original | 109 |
-| Plum, before this release | 135 |
-| Plum, after | **67** |
+| `Os` | files, directories, environment, subprocesses, platform, exit |
+| `Time` | the clock, and the calendar on top of it |
+| `Net` | TCP sockets |
+| `Http` | HTTP client and server, built on `Net` |
 
-The comparison only became fair in this release. Before `embed_file`,
-the Zig side got to keep 64 lines of template text in separate files
-while Plum had to carry them as string literals in the source.
+The rule, unchanged from 0.0.8: `Array`, `String`, `Option`, `Result`,
+`Int`, `Float` stay in the prelude because `T.f(x)` **is** the
+method-call mechanism — `xs.map(f)` only works because `Array.map` is
+in scope. A namespace that names no type and dispatches to nothing is a
+module.
 
-The rewrite is output-identical to the version before it, checked by
-diffing a full exercise of every command.
+Still in the prelude, needing no `use`: `println`/`print`, the `assert`
+family, `Json`, and every type namespace.
+
+### What moved where
+
+| was | is now |
+|---|---|
+| `read_file` `write_file` `list_dir` `is_directory` | `Os.read_file` and friends |
+| `env_var` `run_process` `exit_with` | `Os.env_var` `Os.run_process` `Os.exit_with` |
+| `tcp_listen_on` `tcp_connect_to` `tcp_accept_connection` | `Net.listen_on` `Net.connect_to` `Net.accept` |
+| `tcp_read` `tcp_write` `tcp_close_connection` | `Net.read` `Net.write` `Net.close` |
+| `http_get` `http_post` `http_request` `http_serve` | `Http.get` `Http.post` `Http.request` `Http.serve` |
+| `HttpResponse` `HttpRequest` `HttpHeader` | `Http.Response` `Http.Request` `Http.Header` |
+
+The names lost their prefixes because the module supplies one:
+`Net.connect_to` rather than `Net.tcp_connect_to`, `Http.Response`
+rather than `Http.HttpResponse`.
+
+`read_file` went into `Os` rather than a new `Fs`, because `Os` already
+owned `make_dir`, `remove_tree` and `copy_tree` — a separate `Fs` would
+have split the filesystem across two modules. This is the shape Go
+settled on: `os.ReadFile`, `os.Getenv`, `os.Exit`, `os.MkdirAll` in one
+place, `net` separate, string helpers on the type.
+
+## Modules can depend on modules
+
+`Http` is ordinary Plum over `Net`'s sockets — no IR, no backend, no
+extern surface of its own — so it is a separate module rather than more
+of `Net`. That needed a mechanism: `use Http;` pulls `Net` in with it.
+You do not have to know what a module is built on to use it.
+
+## Four `String` functions, two of which were redundant
+
+- `string_le(a, b)` **removed.** It was `<=` spelled out. The operator
+  agrees with it on every case tried, including prefixes, empty
+  strings and non-ASCII.
+- `chars_join(cs)` **removed.** It duplicated `Array.concat_all`, and
+  was the slower of the two — a fold of `.concat()` against a runtime
+  primitive. The compiler had ten call sites paying for that.
+- `string_reverse` → **`String.reverse`**
+- `string_is_ascii_ws` → **`String.is_ascii_ws`** (which also retired a
+  byte-identical private copy sitting eight lines away)
+
+## Upgrading
+
+Add the `use` line the error asks for:
+
+```
+unbound variant/function: Os -- `Os` is a standard library module;
+add `use Os;` to this file
+```
+
+For the renamed functions the error names the old spelling as unbound,
+and the table above says what to write instead.
+
+The bootstrap seed was regenerated, which is a large but purely
+generated diff — `bootstrap/check-seed` requires it after a prelude
+rename, and says so itself when it fails.

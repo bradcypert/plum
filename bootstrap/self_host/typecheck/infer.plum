@@ -37,6 +37,7 @@
 // reject behavior, just not to recover and keep checking past one
 // error.
 
+use Os;
 use parser;
 use lexer;
 
@@ -135,7 +136,7 @@ let fail_tc (msg: String): Unit = {
             .concat(if e.fn_name == "" { "" } else { " (checking '".concat(e.fn_name).concat("')") }))
     }
     else {
-        match read_file(e.path) {
+        match Os.read_file(e.path) {
             Ok(src) => panic_raw(lexer.render_at(src, e.path, e.offset, msg)),
             Err(_) => panic_raw("self-hosted type checker: ".concat(msg)),
         }

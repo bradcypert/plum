@@ -1,3 +1,5 @@
+use Os;
+
 // JSON + file I/O: build a value, stringify it, write it to disk, then
 // read it back and parse it — a real round trip, no glue code needed
 // on either library's part (they compose through ordinary `Result`
@@ -33,10 +35,10 @@ let main (): Unit = {
     println(text);
 
     let path = "plum_demo_config.json";
-    match write_file(path, text) {
+    match Os.write_file(path, text) {
         Err(e) => println("write failed: ".concat(e)),
         Ok(_) => {
-            match read_file(path) {
+            match Os.read_file(path) {
                 Err(e) => println("read failed: ".concat(e)),
                 Ok(contents) => match json_parse(contents) {
                     Err(e) => println("parse failed: ".concat(e)),
