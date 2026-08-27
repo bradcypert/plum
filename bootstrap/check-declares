@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Fails if the runtime declares an external symbol it never calls.
+#
+# An unused `declare` is not dead weight, it is a USER-FACING bug: the
+# symbol is taken, so an `extern "C"` block naming it is rejected by
+# LLVM as a duplicate declaration. The user can then neither call the
+# function through the stdlib (nothing exposes it) nor bind it
+# themselves. `time` sat like that until a program that needed the
+# clock tried both and found neither worked.
+#
+# Either wire the declare to something, or delete it.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+rt="bootstrap/self_host/codegen/runtime.plum"
+cg="bootstrap/self_host/codegen/codegen.plum"
+fail=0
+
+for sym in $(grep -oE 'declare [^@]*@[a-zA-Z_][a-zA-Z0-9_]*\(' "$rt" \
+             | grep -oE '@[a-zA-Z_][a-zA-Z0-9_]*\(' | tr -d '@(' | sort -u); do
+    if [ "$(grep -oE "call [^@]*@$sym\(" "$rt" "$cg" 2>/dev/null | wc -l)" -eq 0 ]; then
+        printf 'FAIL  @%s is declared but never called\n' "$sym"
+        fail=$((fail + 1))
+    fi
+done
+
+if [ "$fail" -ne 0 ]; then
+    printf '\ncheck-declares: %d unused declare(s) -- each one silently blocks a user `extern "C"` block\n' "$fail"
+    exit 1
+fi
+echo "check-declares: every declared symbol is called"

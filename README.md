@@ -53,8 +53,8 @@ Silicon and Intel, and Windows x86_64. The Windows one contains
 `plum.exe` and is built for MSYS2/MinGW.
 
 ```sh
-tar -xzf plum-0.0.6-arm64-macos.tar.gz
-./plum-0.0.6-arm64-macos/plum version
+tar -xzf plum-0.0.7-arm64-macos.tar.gz
+./plum-0.0.7-arm64-macos/plum version
 ```
 
 ### Platforms
@@ -938,7 +938,7 @@ Nothing about this is visible in the source: reuse is a runtime check on
 whether anything else can see the value, so it is never wrong, only
 sometimes unavailable.
 
-What is actually checked, rather than claimed: 73 corpus fixtures under
+What is actually checked, rather than claimed: 74 corpus fixtures under
 AddressSanitizer with leak detection, 102 lexer/parser goldens, 11
 property tests, recorded allocation counts for ten memory-model
 fixtures, every project in `examples/` against its recorded output, and

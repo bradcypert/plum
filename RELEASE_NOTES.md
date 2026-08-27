@@ -1,31 +1,43 @@
 Plum is a small, statically typed, compiled language.
 
-**This release is about memory.** A loop that rebuilds a value —
-the ordinary functional shape, `Entity { x: e.x + 1, ..e }` in a
-recursion — used to allocate once per iteration. It now allocates a
-constant number of times, because the old cell is recycled when nothing
-else can see it.
+A small release, and an honest one about why it exists: 0.0.6 shipped a
+language you could not read the clock from.
 
-On a benchmark of 2,000,000 struct updates and 200,000 `Array.map`
-passes, the same program went from **251 ms to 22 ms** — and the new
-build reports **five allocations** for the whole run. The old figure is
-around 2.4 million, extrapolated from the per-iteration rates rather
-than measured, because the 0.0.5 compiler predates the allocation
-counter this release added.
+## `Time.now()`
 
-That benchmark is shaped like the thing being optimised and real
-programs will see less; it is included in full below so you can judge
-it for yourself.
+Seconds since the Unix epoch, from the system clock.
 
-Nothing about this is visible in the source. There are no annotations
-and no new syntax: the decision is a runtime check on whether anything
-else still holds the value, so it is never wrong, only sometimes
-unavailable.
+```plum
+let main (): Unit = println(Time.now().to_string())
+```
 
-The compiler is written in Plum. It compiles itself to a fixed point —
-the compiler it produces emits byte-for-byte identical output to the
-compiler that produced it — and building it needs no toolchain beyond
-`clang`.
+Seconds, and an `Int`, because that is what every platform's `time()`
+agrees on. Anything richer — a calendar date, a timezone, a formatted
+string — is a library on top of this rather than a runtime concern. The
+primitive is the part a program cannot write for itself; turning epoch
+seconds into `Thu, 27 Aug 2026 01:40:28 GMT` is about forty lines of
+ordinary Plum, and belongs in the program that wants it.
+
+## Why it was missing, which is the more useful half
+
+The runtime **declared** `time` and never called it. That is worse than
+simply not having the function, because the symbol was taken: an
+`extern "C"` block naming `time` was rejected by LLVM as a duplicate
+declaration. So the clock was unreachable through the standard library
+*and* unreachable through the FFI, and the error pointed at the user's
+own code.
+
+This was found by porting a real program — a small ADR management CLI —
+from Zig, which is a better test of a language than any amount of
+staring at its standard library. Everything else that program needed
+existed and composed on the first type-check: `Result` propagation,
+`Array.filter`/`sort_string`/`fold`/`join`, `String.replace`,
+`list_dir`, `Os.make_dir`, `args()`.
+
+**`bootstrap/check-declares` is new** and fails the build if the runtime
+declares a symbol it never calls. `time` was the only one. It is a
+one-line check for a bug that costs a user an afternoon, and it now
+runs in CI on every push.
 
 ## Install
 
@@ -43,104 +55,31 @@ Or download an archive directly:
 
 | Platform | Archive |
 |---|---|
-| Linux x86_64 | `plum-0.0.6-x86_64-linux.tar.gz` |
-| Linux arm64 | `plum-0.0.6-arm64-linux.tar.gz` |
-| macOS Apple Silicon | `plum-0.0.6-arm64-macos.tar.gz` |
-| macOS Intel | `plum-0.0.6-x86_64-macos.tar.gz` |
-| Windows x86_64 | `plum-0.0.6-x86_64-windows.tar.gz` |
+| Linux x86_64 | `plum-0.0.7-x86_64-linux.tar.gz` |
+| Linux arm64 | `plum-0.0.7-arm64-linux.tar.gz` |
+| macOS Apple Silicon | `plum-0.0.7-arm64-macos.tar.gz` |
+| macOS Intel | `plum-0.0.7-x86_64-macos.tar.gz` |
+| Windows x86_64 | `plum-0.0.7-x86_64-windows.tar.gz` |
 
 You need **`clang`** on your PATH; the compiler shells out to it to
 assemble and link. Nothing else is required.
 
-## What got cheaper
+## Everything from 0.0.6 is still here
 
-Five separate things, each measured by a fixture in
-`bootstrap/alloc_corpus/` whose allocation count is recorded and
-checked on every build.
+0.0.6 was the memory release: rebuilding a struct or an enum recycles
+the old cell, `Array.map` builds into its source, capture-free closures
+and constant literals are not allocated at all. A benchmark of
+2,000,000 struct updates and 200,000 `Array.map` passes runs in 22 ms
+and allocates five times. Nothing in this release changes any of that.
 
-**Rebuilding a struct or an enum** recycles the old cell. This works
-whatever the value holds — a `String` field, an `Array` field, an enum
-payload — not only scalars. 1002 allocations to 2 over a thousand
-iterations, and an enum rebuilt from a string literal to 1.
+## What is actually checked
 
-**`Array.map`** builds its result into the source array's cell when
-nothing else is holding it. A thousand chained maps allocate one array
-cell rather than a thousand.
+74 corpus fixtures under AddressSanitizer with leak detection, 102
+lexer/parser goldens, 11 property tests, ten recorded allocation
+counts, every project in `examples/` against its recorded output, and a
+real language-server session — on Linux x86_64 and arm64, macOS, and
+Windows.
 
-**A closure that captures nothing is no longer allocated at all.** It
-is the same three words every time, so it becomes a module-level
-constant. `|v| v + 1` inside a loop body was costing an allocation per
-iteration.
-
-**Closures now capture their free variables**, not the whole enclosing
-scope. This is what made the previous item possible, and it makes every
-closure cell smaller. It is not observable in behaviour — an unused
-capture never was — and it removed 1.8% of the compiler's own emitted
-code.
-
-**Literals that cannot differ between evaluations are not allocated.**
-`[1, 2, 3]`, `Point { x: 1, y: 2 }`, `None` — each becomes a
-module-level constant. In practice the nullary variants matter most:
-`None` and its kind appear inside loops everywhere. This one alone
-removed 4.8% of the compiler's emitted code, since the compiler is
-itself full of them.
-
-`Array.push` and `String.concat` already grew in place when uniquely
-held; that has not changed.
-
-## What did not get cheaper
-
-Stated plainly, because a performance release should say where it stops:
-
-- **`Array.filter`.** It writes a shorter result than its source, so
-  reusing the cell needs the length header patched, which is not done.
-- **Mapping an array whose elements are themselves references.** The
-  loop would have to release each old element after the closure has
-  taken its own — a different loop body, not a different allocation.
-- **Literals whose contents vary.** `[n, n + 1]` in a loop still
-  allocates each time. Recycling it needs a dead cell of the right
-  shape in scope, and a loop that consumes its literal immediately has
-  none.
-
-## The benchmark
-
-```plum
-struct Entity { name: String, x: Int, y: Int, hp: Int }
-
-let step (e: Entity) (n: Int): Entity =
-    if n <= 0 { e }
-    else { step(Entity { name: e.name, x: e.x + 1, y: e.y, hp: e.hp }, n - 1) }
-
-let pipeline (xs: Array[Int]) (n: Int): Array[Int] =
-    if n <= 0 { xs } else { pipeline(Array.map(xs, |v| v + 1), n - 1) }
-
-let main (): Unit = {
-    let e = step(Entity { name: "hero", x: 0, y: 0, hp: 100 }, 2000000);
-    let xs = pipeline([1, 2, 3, 4, 5, 6, 7, 8], 200000);
-    println(e.x.to_string().concat(" ").concat(Array.fold(xs, 0, |a, v| a + v).to_string()))
-}
-```
-
-Set `PLUM_RT_STATS=1` when running any compiled program to see its
-allocation count on stderr.
-
-## Correctness
-
-Recycling a cell is only safe if nothing else can see it, and that is
-checked at runtime rather than proved, so being wrong about it is
-impossible — the check simply declines and the program allocates. What
-had to be got right is what happens on each answer, and that is what
-the new fixtures cover: a value the caller still holds, a field copied
-across versus replaced, an enum changing to a variant with a different
-payload, and `ref()`, which must never be shared no matter how constant
-its initial value looks.
-
-What is actually checked, rather than claimed: 73 corpus fixtures under
-AddressSanitizer with leak detection, 102 lexer/parser goldens, 11
-property tests, ten recorded allocation counts, every project in
-`examples/` against its recorded output, and a real language-server
-session — on Linux x86_64 and arm64, macOS, and Windows.
-
-Plum is reference counted, so a leak is a miscompile. That is why the
-corpus runs under leak detection on both Linux architectures, and why
-this release added fixtures before it added optimisations.
+`Time.now()` has its own fixture, which checks the three ways a clock
+binding actually breaks: not being wired to `time()` at all and
+returning 0, being truncated to 32 bits, and two calls disagreeing.

@@ -10,7 +10,7 @@ are. This is the operating manual.
 
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
-for h in check-version check-shims cross-check lsp-smoke test-smoke net-smoke \
+for h in check-version check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
          property-check doc-check alloc-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
@@ -27,6 +27,7 @@ About two minutes. If you only run two, run `corpus-check` and
 |---|---|---|
 | `check-version` | the version string, the tag and the built binary agree | <1s |
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
+| `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
 | `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |

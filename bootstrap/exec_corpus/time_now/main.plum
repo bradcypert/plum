@@ -1,0 +1,14 @@
+// `Time.now()` reads the system clock, so its value cannot be a golden
+// -- but its SHAPE can. A wall clock that is monotonic-ish, past a date
+// already in the past, and not wildly in the future catches the three
+// ways this actually breaks: the symbol not being wired to `time()` at
+// all (returns 0), the result being truncated to 32 bits, and the two
+// calls not agreeing.
+//
+// 1735689600 is 2025-01-01; 4102444800 is 2100-01-01.
+let main (): Unit = {
+    let a = Time.now();
+    let b = Time.now();
+    println(if a > 1735689600 && a < 4102444800 { "in range" } else { "OUT OF RANGE" });
+    println(if b >= a { "non-decreasing" } else { "WENT BACKWARDS" })
+}

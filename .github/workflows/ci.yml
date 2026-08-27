@@ -74,6 +74,9 @@ jobs:
       - name: embedded C shims match native_stdlib/
         run: ./bootstrap/check-shims
 
+      - name: no runtime declare goes unused
+        run: ./bootstrap/check-declares
+
       - name: plum test really runs tests
         run: ./bootstrap/test-smoke
 
