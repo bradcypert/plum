@@ -14896,3 +14896,117 @@ iteration. Recycling those needs a dead cell of the right shape to be
 in scope, and in a loop that consumes its literal immediately there
 isn't one — which makes it an escape-analysis question rather than a
 last-use one, and a different piece of work from anything done today.
+
+## Cross-compilation: not bundled, and not blocked either (2026-08-26)
+
+Prompted by porting a real CLI to Plum. Its Zig release workflow
+cross-compiled five targets from one Linux runner; the Plum port could
+not, and the question was what it would take.
+
+### The IR was never the problem
+
+The emitted `.ll` carries **no target triple and no datalayout**, so
+`clang` applies whatever `--target` it is handed. Nothing in codegen is
+host-specific.
+
+`Os.platform()` is correct across targets too, which was a surprise —
+the prelude says it is "compiled in, not detected at runtime", and it
+is, but it is compiled in by the **C compiler** via `#ifdef` in
+`compat_shim.c`. Cross-compile and it returns `"windows"` on its own,
+verified by checking which platform string each binary contains.
+
+Proven by prototype, from a Linux x86_64 host with unmodified IR and
+unmodified shims: `x86_64-windows-gnu` produced a PE32+, `aarch64-macos`
+a Mach-O, `aarch64-linux-musl` an ELF that **ran correctly under qemu**.
+
+### What actually blocks it is one line
+
+`platform_libs()` reads `Os.platform()` — the *compiler's* platform, not
+the target's — so a Windows cross-build is handed the host's `-lm` and
+fails on `__declspec`. Adding `-lpthread -lws2_32` links it. That is the
+whole of the obstruction.
+
+### Why Zig's approach is not available to us
+
+Zig cross-compiles by shipping a sysroot. Measured: 391 MB installed,
+170 MB of `lib/libc`, of which 139 MB is headers for 76 target
+directories, 18 MB is mingw sources, and 9.4 MB is 1,206 musl `.c`
+files compiled on demand. glibc ships as ABI lists with no `.so` at all;
+macOS as a single 332 KB `libSystem.tbd`.
+
+Plum's published archive is 712 KB. Bundling that is a ~240x size
+increase on a project whose entire pitch is "no toolchain beyond
+clang".
+
+The split is instructive though: **linking is cheap, compiling is
+expensive.** Stubs suffice to link because linking needs only symbol
+names; the 139 MB exists to compile C. A Plum-sized version therefore
+does exist — ship prebuilt shim objects per target, roughly 1 MB, plus
+link stubs — but it would not cross-compile user FFI (`native/*.c`,
+`--link-c`), which needs real headers, and the objects would need
+rebuilding per target per release. Recorded as considered and rejected.
+
+### What everyone else does
+
+Languages that cross-compile freely either avoid libc entirely (Go,
+until cgo) or bundle it (Zig). C-backend languages — Nim, Crystal —
+inherit C's problem, and Plum is one of those. Rust is the telling
+case: it could bundle a sysroot and does not, and its ecosystem's
+answer is `cargo-zigbuild`, which shells out to `zig cc`.
+
+### The decision
+
+Plum does not implement cross-compilation. It stops preventing it:
+a `--target` flag, `platform_libs()` keyed off the target rather than
+the host, a `PLUM_CC` hook so the C driver can be `zig cc` or a
+corporate cross toolchain, and a rejection for non-64-bit targets
+(cell layout assumes 8-byte slots and would otherwise miscompile
+silently).
+
+Native builds keep needing only `clang`. Nobody pays for a feature they
+do not use, and Plum ships no sysroot it would have to maintain.
+
+### Shipped 2026-08-27, and what it turned out to cost
+
+All four pieces, in `main.plum`, and the estimate held: the diff is
+under 150 lines and most of it is comment.
+
+- `target_os(triple)` matches by SUBSTRING, not by position. The
+  component count varies in the wild and all three spellings are real:
+  `aarch64-macos`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`.
+  An unrecognized OS is treated as Linux-shaped, which is what a BSD or
+  a bare `aarch64-none-elf` wants from a list that is only `-lm`.
+- `platform_libs` now takes the target. That was the whole obstruction.
+- `known_64_bit_arches()` is an ALLOW-list, and that direction is the
+  point. A block-list lets an unrecognized architecture through, and
+  the failure mode being guarded against is not a link error — it is a
+  silent miscompile that reads half a pointer. Being wrong about the
+  name costs one line here; being wrong about the width is
+  unrecoverable.
+- `PLUM_CC` splits on spaces, because the useful value is two words
+  (`zig cc`). `run_process` takes a program and its arguments
+  separately and does not go through a shell, so the tail becomes
+  leading arguments rather than part of the program name.
+
+Two things fell out that were not in the plan. A Windows target with no
+`-o` gets a `.exe` suffix — a PE not named `.exe` will not run there
+and nothing downstream would say why. And `run`/`test` are pinned
+native rather than accepting the flag: both EXECUTE what they build, so
+a cross-build is not a thing they could do with the result. For `run`
+that also removes an ambiguity, since everything after the project
+directory is the program's own arguments.
+
+Verified end to end by `bootstrap/cross-check`, which now drives the
+real flag after its existing per-shim compile checks: three targets
+built from x86_64 Linux and identified by object format via `file`
+(a compiler that quietly ignored `--target` would emit an ELF and be
+caught, which exit status alone would not catch), the aarch64 one RUN
+under qemu printing `cross ok on linux` — which is simultaneously the
+check that `Os.platform()` was compiled for the target — and a 32-bit
+target confirmed refused.
+
+`sparc64-linux-gnu` is the honest shape of the limit: it passes the
+architecture gate, because it genuinely is 64-bit, and then fails in
+the C driver for want of a sysroot. That is the error the user should
+get, and it names the compiler that produced it (`zig cc failed`, not
+`clang failed`) so the next move is obvious.

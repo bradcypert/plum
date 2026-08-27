@@ -870,7 +870,11 @@ pub let plum_version (): String = "0.0.7"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
-    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] | test <project-dir> | new <name> | version | lsp | complete <project-dir>")
+    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--target <triple>] | test <project-dir> | new <name> | version | lsp | complete <project-dir>");
+    println("");
+    println("  --target <triple>   build for another platform, e.g. aarch64-linux-musl.");
+    println("                      Needs a C compiler that can link for it: set PLUM_CC,");
+    println("                      e.g. PLUM_CC=\"zig cc\". Plum ships no sysroot.")
 }
 
 // Every top-level `let` whose name's LAST segment starts with `test_`.
@@ -979,9 +983,11 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
                 Err(e) => TestRun { failed: 1, detail: "could not write test IR: ".concat(e) },
                 Ok(_) => {
                     let cfiles = write_shims(scratch);
-                    let argv = Array.concat(Array.concat(["-O2", "-Wno-override-module", ll], cfiles),
-                        Array.concat(link_args([], dir), Array.concat(platform_libs(), ["-o", bin])));
-                    match run_process("clang", argv) {
+                    // Native, for the same reason `run` is: each test
+                    // runs as a child of this binary.
+                    let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), ["-O2", "-Wno-override-module", ll]), cfiles),
+                        Array.concat(link_args([], dir), Array.concat(platform_libs(native_target()), ["-o", bin])));
+                    match run_process(cc_program(), argv) {
                         Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
                         Ok(r) => if r.exit_code == 0 { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
                             else { TestRun { failed: 1, detail: "could not link tests:\n".concat(r.stderr) } },
@@ -1064,10 +1070,17 @@ let native_c_files (dir: String): Array[String] =
 // `-o` is found wherever it appears, not just at position 2: link
 // flags may precede it, and a positional check silently ignored the
 // output name the moment they did.
-let output_path (argv: Array[String]): String =
+// An explicit `-o` is taken literally. Without one the binary is named
+// after the project directory -- plus `.exe` when the TARGET is
+// Windows, because a PE that is not named `.exe` will not run there and
+// nothing downstream would have told you why.
+let output_path (argv: Array[String]) (target: String): String =
     match find_flag_value(argv, "-o", 0) {
         Some(v) => v,
-        None => basename_of(argv[1]),
+        None => {
+            let base = basename_of(argv[1]);
+            if target_os(target) == "windows" && !base.ends_with(".exe") { base.concat(".exe") } else { base }
+        },
     }
 
 let find_flag_value (argv: Array[String]) (flag: String) (i: Int): Option[String] =
@@ -1096,6 +1109,35 @@ let collect_flag (argv: Array[String]) (flag: String) (i: Int) (acc: Array[Strin
     else if argv[i] == flag { collect_flag(argv, flag, i + 2, acc.push(argv[i + 1])) }
     else { collect_flag(argv, flag, i + 1, acc) }
 
+// --- Targets ---
+//
+// Plum does not IMPLEMENT cross-compilation; it stops preventing it.
+// See DESIGN.md's "Cross-compilation: not bundled, and not blocked
+// either" section for the measurements behind that split. The short
+// version: the emitted IR carries no target triple and no datalayout,
+// so `clang --target=X` retargets it with no help from us, and
+// `Os.platform()` is compiled in by the C compiler's own `#ifdef` in
+// `compat_shim.c` -- so it, too, is already right on a cross-build.
+// The single thing that was host-specific was `platform_libs` below.
+//
+// The empty string means "this machine", and is what every native
+// build passes. It is NOT a valid triple and never reaches clang.
+let native_target (): String = ""
+
+// The OS component of a target triple, as one of the strings
+// `Os.platform()` itself returns.
+//
+// Matched by SUBSTRING rather than by position, because the number of
+// components varies in the wild and all three spellings are real:
+// `aarch64-macos`, `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`.
+// Anything unrecognized is treated as Linux-shaped, which is what a
+// bare `aarch64-none-elf` or a BSD wants from this list anyway.
+let target_os (triple: String): String =
+    if triple == native_target() { Os.platform() }
+    else if triple.contains("windows") { "windows" }
+    else if triple.contains("macos") || triple.contains("darwin") || triple.contains("apple") { "macos" }
+    else { "linux" }
+
 // The libraries every produced binary links against, which are not the
 // same on every platform.
 //
@@ -1108,8 +1150,82 @@ let collect_flag (argv: Array[String]) (flag: String) (i: Int) (acc: Array[Strin
 //
 // A C `#ifdef` cannot reach here -- this is Plum source building a
 // command line -- which is the whole reason `Os.platform` exists.
-let platform_libs (): Array[String] =
-    if Os.platform() == "windows" { ["-lm", "-lpthread", "-lws2_32"] } else { ["-lm"] }
+//
+// Keyed off the TARGET, not the host. Reading `Os.platform()` here was
+// the one line that made a cross-build impossible: a Windows binary
+// built on Linux was handed the host's bare `-lm` and failed to link.
+let platform_libs (target: String): Array[String] =
+    if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32"] } else { ["-lm"] }
+
+// Every 64-bit architecture this compiler is willing to emit for.
+//
+// An ALLOW-list, deliberately, and the one piece of this feature that
+// is a real restriction rather than a pass-through. Cell layout assumes
+// 8-byte slots throughout codegen, so a 32-bit target does not fail --
+// it MISCOMPILES, silently, into a binary that reads half a pointer.
+// An unknown architecture is refused for the same reason: being wrong
+// about the width is unrecoverable, and being wrong about the name
+// costs one line here.
+let known_64_bit_arches (): Array[String] =
+    ["x86_64", "amd64", "aarch64", "arm64", "riscv64", "powerpc64", "powerpc64le", "ppc64", "ppc64le", "s390x", "loongarch64", "mips64", "mips64el", "sparc64"]
+
+// The architecture component of a triple: everything before the first
+// `-`, which is the one position that IS fixed across every spelling.
+let target_arch (triple: String): String = {
+    let parts = triple.split("-");
+    if Array.is_empty(parts) { triple } else { parts[0] }
+}
+
+// An error message for a target we must not build, or "" to proceed.
+let target_error (triple: String): String =
+    if triple == native_target() { "" }
+    else if Array.contains(known_64_bit_arches(), target_arch(triple)) { "" }
+    else {
+        "unsupported target `".concat(triple).concat("`: Plum emits 64-bit code only, and `")
+            .concat(target_arch(triple))
+            .concat("` is not a 64-bit architecture this compiler knows.\n")
+            .concat("Known: ").concat(Array.join(known_64_bit_arches(), ", "))
+    }
+
+// --- The C driver ---
+//
+// `clang` unless `PLUM_CC` says otherwise. A native build needs nothing
+// but clang and that is unchanged; the hook exists because clang can
+// EMIT code for any target but cannot LINK one without that target's
+// libc, and Plum ships no sysroot. In practice this is set to
+// `zig cc`, or to a corporate cross toolchain:
+//
+//   PLUM_CC="zig cc" plum build . --target aarch64-linux-musl
+//
+// Split on spaces, because the useful values are two words. The tail
+// becomes leading arguments; `run_process` takes a program and its
+// arguments separately and does not go through a shell, so a single
+// string would be looked up as one long filename.
+let cc_words (): Array[String] =
+    match env_var("PLUM_CC") {
+        None => ["clang"],
+        Some(v) => {
+            let words = non_empty(v.split(" "), 0, []);
+            if Array.is_empty(words) { ["clang"] } else { words }
+        },
+    }
+
+let non_empty (xs: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= xs.len() { acc }
+    else { non_empty(xs, i + 1, if xs[i] == "" { acc } else { acc.push(xs[i]) }) }
+
+let cc_program (): String = cc_words()[0]
+
+// The rest of `PLUM_CC` -- the `cc` in `zig cc` -- as leading arguments.
+let cc_prefix_args (): Array[String] = {
+    let words = cc_words();
+    Array.slice(words, 1, words.len())
+}
+
+// The `--target=` flag itself, as zero or one argument. Empty for a
+// native build, so nothing changes on the path everyone uses.
+let target_args (target: String): Array[String] =
+    if target == native_target() { [] } else { ["--target=".concat(target)] }
 
 let link_args (argv: Array[String]) (dir: String): Array[String] = {
     let libs = Array.map(collect_flag(argv, "--link-lib", 0, []), |l| "-l".concat(l));
@@ -1138,17 +1254,22 @@ let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (i: Int) (acc: 
         }
     }
 
-let compile_project (dir: String) (out: String) (extra: Array[String]): String =
-    match Os.temp_dir() {
-        Err(e) => "build failed: ".concat(e),
-        Ok(scratch) => {
-            let err = compile_with_scratch(dir, out, extra, scratch);
-            let cleaned = Os.remove_tree(scratch);
-            err
-        },
+let compile_project (dir: String) (out: String) (extra: Array[String]) (target: String): String = {
+    let bad = target_error(target);
+    if bad != "" { bad }
+    else {
+        match Os.temp_dir() {
+            Err(e) => "build failed: ".concat(e),
+            Ok(scratch) => {
+                let err = compile_with_scratch(dir, out, extra, scratch, target);
+                let cleaned = Os.remove_tree(scratch);
+                err
+            },
+        }
     }
+}
 
-let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scratch: String): String = {
+let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scratch: String) (target: String): String = {
     let ll = out.concat(".ll");
     let ir = codegen.cg_emit_program(parser.ProgramNode { items: collect_project(dir) });
     match write_file(ll, ir) {
@@ -1159,9 +1280,9 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
             // the current directory, so this compiler only worked when
             // run from the repo root. See `shims/shims.plum`.
             let cfiles = write_shims(scratch);
-            let base = ["-O2", "-Wno-override-module", ll];
-            let argv2 = Array.concat(Array.concat(Array.concat(base, cfiles), extra), Array.concat(platform_libs(), ["-o", out]));
-            match run_process("clang", argv2) {
+            let base = Array.concat(target_args(target), ["-O2", "-Wno-override-module", ll]);
+            let argv2 = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), base), cfiles), extra), Array.concat(platform_libs(target), ["-o", out]));
+            match run_process(cc_program(), argv2) {
                 Err(e) => "build failed: ".concat(e),
                 Ok(r) => if r.exit_code == 0 {
                     // The scratch `.ll` is removed on SUCCESS and kept on
@@ -1171,7 +1292,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
                     let cleaned = Os.remove_file(ll);
                     ""
                 } else {
-                    "clang failed (exit ".concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
+                    Array.join(cc_words(), " ").concat(" failed (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
                         .concat("\nIR left at ").concat(ll)
                 },
             }
@@ -1180,8 +1301,9 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
 }
 
 let build_project (argv: Array[String]): Unit = {
-    let out = output_path(argv);
-    let err = compile_project(argv[1], out, link_args(argv, argv[1]));
+    let target = match find_flag_value(argv, "--target", 0) { Some(t) => t, None => native_target() };
+    let out = output_path(argv, target);
+    let err = compile_project(argv[1], out, link_args(argv, argv[1]), target);
     if err == "" { println("wrote ".concat(out)) } else { println(err) }
 }
 
@@ -1215,7 +1337,11 @@ let run_project (argv: Array[String]): Unit = {
         Err(e) => println("run failed: ".concat(e)),
         Ok(dir) => {
             let out = dir.concat("/a.out");
-            let err = compile_project(argv[1], out, link_args(argv, argv[1]));
+            // Always NATIVE: `run` executes what it builds, and this
+            // machine cannot execute a foreign binary. Anything that
+            // looks like `--target` after the project directory is one
+            // of the PROGRAM's own arguments, not ours.
+            let err = compile_project(argv[1], out, link_args(argv, argv[1]), native_target());
             if err != "" { println(err) }
             else {
                 let args = Array.slice(argv, 2, argv.len());

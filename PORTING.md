@@ -314,6 +314,18 @@ a different toolchain than the one the tests ran under. The current
 arrangement builds each platform's binary on that platform, right after
 the harness passed there, which is the property worth keeping.
 
+Since 2026-08-27 the harness also drives `plum build --target` on a
+real program, and one leg of that DOES run: the aarch64 binary executes
+under qemu. That is a stronger check than the compile-only ones above,
+but it does not move the tier rule either — one architecture under
+emulation is not macOS, and it is not Windows.
+
+The rule against cross-building release artifacts matters *more* now
+that users can cross-build, not less. `--target` exists so a user can
+ship their own program from one machine; Plum's own binaries are still
+built on the platform whose test suite just passed, which is the
+property worth keeping.
+
 What it *is* worth: closing the compile-error feedback loop from a CI
 round trip down to a second. Three of this port's failures were compile
 errors of one shape — a POSIX header or call left outside a platform

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Does the C in `native_stdlib/` still COMPILE for macOS and Windows?
+# Does the C in `native_stdlib/` still COMPILE for macOS and Windows,
+# and does `plum build --target` actually drive a cross-build?
 #
 # Answered from a Linux box in under a minute, using `zig cc` as a
 # cross-compiler. Zig vendors libc headers and link stubs for both
@@ -86,9 +87,95 @@ for tgt in "${targets[@]}"; do
     echo
 done
 
+# --- `plum build --target`, end to end -------------------------------
+#
+# Everything above cross-compiles by calling `zig cc` directly, which
+# proves the C is portable but says nothing about whether the COMPILER
+# will drive it. This section drives the real flag on a real program.
+#
+# Skipped when `./sh.real` is missing: `bootstrap/from-seed` builds it,
+# and the shim checks above are worth running on their own without it.
+if [ ! -x "$root/sh.real" ]; then
+    echo "plum build --target: SKIPPED -- no ./sh.real (run bootstrap/from-seed)"
+else
+    echo "--- plum build --target ---"
+
+    proj="$work/proj"
+    mkdir -p "$proj"
+    cat > "$proj/main.plum" <<'PLUM'
+let main (): Unit = println("cross ok on ".concat(Os.platform()))
+PLUM
+
+    # Each entry is `triple|expected-substring-of-file(1)`. `file` is the
+    # check because it reads the actual object format out of the header
+    # -- a compiler that quietly ignored `--target` would produce an ELF
+    # here and be caught, which a successful exit code alone would not.
+    cases=("aarch64-linux-musl|ELF 64-bit.*aarch64"
+           "x86_64-windows-gnu|PE32+"
+           "aarch64-macos|Mach-O 64-bit arm64")
+
+    for case in "${cases[@]}"; do
+        tgt="${case%%|*}"
+        want="${case#*|}"
+        printf '  %-20s ' "$tgt"
+        out="$work/out-$tgt"
+        # A generous timeout, not the wrapper's 25s default: the FIRST
+        # cross-build for a target compiles musl (or mingw) from source
+        # into zig's cache and takes far longer than every later one.
+        if ! PLUM_CC="zig cc" SH_TIMEOUT=600 SH_MEM=4G \
+                "$root/sh" build "$proj" -o "$out" --target "$tgt" \
+                > "$work/err" 2>&1; then
+            echo "FAILED to build"
+            head -n 4 "$work/err" | sed 's/^/      /'
+            fail=$((fail + 1))
+            continue
+        fi
+        # `--target` on a Windows build appends `.exe` when no `-o` is
+        # given; `-o` is explicit here, so the path is exactly as asked.
+        got="$(file -b "$out" 2>/dev/null || echo "unreadable")"
+        if echo "$got" | grep -qE "$want"; then
+            echo "built ($(echo "$got" | cut -d, -f1,2))"
+        else
+            echo "WRONG FORMAT"
+            echo "      wanted /$want/, got: $got"
+            fail=$((fail + 1))
+        fi
+    done
+
+    # The one target this machine can actually EXECUTE, which is the
+    # only place the produced binary is proven to work rather than
+    # merely to have the right header. `Os.platform()` is compiled in by
+    # the C compiler's `#ifdef`, so the printed name is also a check
+    # that the shim was built for the target and not for the host.
+    printf '  %-20s ' "aarch64 under qemu"
+    if ! command -v qemu-aarch64 > /dev/null 2>&1; then
+        echo "skipped (no qemu-aarch64)"
+    elif out_text="$(qemu-aarch64 "$work/out-aarch64-linux-musl" 2>&1)" \
+            && [ "$out_text" = "cross ok on linux" ]; then
+        echo "ran: $out_text"
+    else
+        echo "FAILED"
+        echo "      wanted 'cross ok on linux', got: $out_text"
+        fail=$((fail + 1))
+    fi
+
+    # A 32-bit target must be REFUSED, not built. Cell layout assumes
+    # 8-byte slots, so this is the one case where a silent success
+    # would be a miscompile rather than a link error.
+    printf '  %-20s ' "i686 refused"
+    if SH_TIMEOUT=120 "$root/sh" build "$proj" -o "$work/out-i686" --target i686-linux-gnu 2>&1 \
+            | grep -q "64-bit code only"; then
+        echo "refused, as it must be"
+    else
+        echo "FAILED -- a 32-bit target was not refused"
+        fail=$((fail + 1))
+    fi
+    echo
+fi
+
 if [ $fail -eq 0 ]; then
     echo "cross-check: every shim compiles and the compiler links for all ${#targets[@]} targets"
-    echo "  (nothing was RUN -- see bootstrap/platform-smoke and the CI platform legs)"
+    echo "  (only the aarch64 leg is RUN -- see bootstrap/platform-smoke and the CI platform legs)"
 else
     echo "cross-check: $fail failures" >&2
     exit 1

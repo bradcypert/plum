@@ -162,6 +162,39 @@ plum build myapp -o myapp/out
 binary is named after the project directory itself (written to the
 current working directory), mirroring `go build`/`cargo build --bin`.
 
+### Building for another platform
+
+`plum build` takes a `--target <triple>`:
+
+```sh
+PLUM_CC="zig cc" plum build myapp --target aarch64-linux-musl
+```
+
+Plum does not implement cross-compilation so much as get out of its
+way. The IR it emits carries no target triple and no datalayout, so
+`clang --target=` retargets it directly, and `Os.platform()` is
+compiled in by the C compiler's own `#ifdef` — so it reports the
+target's platform, not the build machine's, with no work on our part.
+
+What Plum does **not** ship is a sysroot. `clang` can emit code for any
+target but cannot link one without that target's libc, so `--target`
+needs a C driver that has one. `PLUM_CC` is where you name it — `zig cc`
+above, or a corporate cross toolchain. This is the same arrangement
+Rust's ecosystem settled on with `cargo-zigbuild`, and it is why a
+native build still needs nothing but `clang`: nobody pays for a feature
+they do not use. See [DESIGN.md](DESIGN.md)'s cross-compilation section
+for the measurements behind that choice (bundling Zig's sysroot would
+be a ~240x increase on a 712 KB archive).
+
+Two conveniences: a Windows target gets a `.exe` suffix when you do not
+pass `-o`, and a non-64-bit target is refused outright rather than
+built. The second is not politeness — cell layout assumes 8-byte slots,
+so a 32-bit target would not fail to link, it would silently
+miscompile.
+
+`plum run` and `plum test` are always native. They execute what they
+build, and this machine cannot run a foreign binary.
+
 `run` and `build` are the SAME path: both compile to a native binary
 and differ only in whether it is kept. Nothing can behave one way under
 `run` and another under `build`, because there is no second engine for

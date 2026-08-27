@@ -374,3 +374,18 @@ Worth knowing before you "fix" them:
 - **The guard wrapper degrades.** `./sh` uses a cgroup memory cap where
   one is available and a plain timeout where it is not. The cap exists
   because of a real 44.9GB OOM that killed a terminal.
+- **`known_64_bit_arches()` is an allow-list, on purpose.** Adding a
+  new architecture means adding its name there, and forgetting to is a
+  clear refusal rather than a bug. Inverting it into a block-list would
+  read as more permissive and be strictly worse: cell layout assumes
+  8-byte slots, so an unrecognized 32-bit target would not fail to
+  link, it would silently miscompile. See DESIGN.md's
+  cross-compilation section.
+- **`platform_libs` takes the TARGET, never `Os.platform()`.** Reading
+  the host's platform there was the single line that made a cross-build
+  impossible, and it is an easy one to reintroduce because on a native
+  build the two are the same and nothing fails.
+- **`plum run` and `plum test` ignore `--target` by design.** Both
+  execute what they build. For `run`, everything after the project
+  directory belongs to the program being run, so a `--target` there is
+  the program's argument and must stay that way.
