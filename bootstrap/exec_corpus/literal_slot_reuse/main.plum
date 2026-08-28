@@ -53,10 +53,43 @@ let shadowed (): String = {
     p.name.concat(p.x.to_string())
 }
 
+// An ARRAY literal goes through `@plum_array_reuse` rather than the
+// cell path, and its old ELEMENTS have to be released before the cell
+// is offered up -- `@plum_array_clear` -- or they leak.
+let words (n: Int): Int = {
+    let mut t = 0;
+    let mut xs = ["a", "b"];
+    for i in 0..n {
+        xs = [i.to_string(), "z"];
+        t = t + xs[0].len() + xs[1].len();
+    };
+    t
+}
+
+// Reads out of the very array cell being recycled.
+let grow_word (n: Int): String = {
+    let mut zs = ["m"];
+    for i in 0..n {
+        zs = [zs[0].concat("!")];
+    };
+    zs[0]
+}
+
+// An alias still holds the array, so its cell must not be recycled.
+let aliased_array (): String = {
+    let mut ys = ["p", "q"];
+    let keep = ys;
+    ys = ["r", "s"];
+    keep[0].concat(keep[1]).concat("/").concat(ys[0]).concat(ys[1])
+}
+
 let main (): Unit = {
     println(bump(1000));
     println(aliased());
     println(lets(1000).to_string());
     println(steps(500));
-    println(shadowed())
+    println(shadowed());
+    println(words(1000).to_string());
+    println(grow_word(3));
+    println(aliased_array())
 }

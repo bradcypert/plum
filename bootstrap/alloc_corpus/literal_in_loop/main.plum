@@ -5,17 +5,19 @@
 // What makes them free anyway is that each one is stored into a slot
 // whose previous value the store was about to release: `p` here holds
 // last iteration's cell, and nothing can read it any more. Three
-// allocations: the two slots' first cells, and the string printed.
+// allocations: the three slots' first cells, and the string printed.
 struct P { x: Int, y: Int }
 enum Step { Idle, Moving(Int) }
 
 let main (): Unit = {
     let mut t = 0;
     let mut s = Idle;
+    let mut xs = [0, 0];
     for i in 0..1000 {
         let p = P { x: i, y: 2 };
         s = Moving(p.x);
-        t = t + p.x + p.y + match s { Idle => 0, Moving(k) => k };
+        xs = [p.x, p.y];
+        t = t + xs[0] + xs[1] + match s { Idle => 0, Moving(k) => k };
     };
     println(t.to_string())
 }

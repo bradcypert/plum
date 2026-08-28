@@ -60,6 +60,12 @@ pub enum TNode {
     // once, into a slot.
     TGlobalRef(String, String),
     TArrayLit(Array[TExpr]),
+    // `TArrayLit` with the reuse candidates `TStructReuse` carries. Its
+    // own node rather than a flag because an array is recycled through
+    // `@plum_array_reuse`, not the cell path the others share: an
+    // array's SIZE depends on its length, and the length lives in the
+    // cell's own header.
+    TArrayLitReuse(Array[TExpr], Array[String]),
     TTupleLit(Array[TExpr]),
     TUnary(parser.UOp, TExpr),
     TBinary(parser.BOp, TExpr, TExpr),

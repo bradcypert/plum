@@ -15911,15 +15911,44 @@ A struct and an enum built per iteration: 2001 allocations to 3.
 -- an alias still reading the cell, a field read out of the cell being
 recycled, and a shadowed `let` reading the outer binding.
 
-### What it does not cover
+### Array literals, which took a second emitter
 
-Array literals. `cg_reuse_of_ity` refuses `Array` outright, because an
-array cell's size depends on its length and its header has to be
-written -- which is what `@plum_array_reuse` exists for. Recycling into
-one needs that call rather than the generic `@plum_reuse_ok` path, so
-it is a separate emitter, not a wider condition. `let xs = [i, i + 1]`
-in a loop still allocates every iteration.
+`cg_reuse_of_ity` refuses `Array` outright, and that is not squeamish-
+ness. A struct's size is a property of its TYPE, so the generic
+`@plum_reuse_ok` path can ask for a byte count and be done. An array's
+size is a property of the individual CELL, written in the cell's own
+header -- which is exactly what `@plum_array_reuse` already sizes,
+writes and declines on. So `TArrayLitReuse` is its own node with its
+own emitter, `cg_array_lit_reuse`, and the shared path is left alone.
 
-The compiler's own count went the wrong way by about 200 out of
-193,000. It is written in a recursive style with almost no assignment
-in loops, so it gains nothing here and pays for the check.
+Two things it has to do that the struct path does not:
+
+- **Evaluate the elements first.** `cg_array_lit` allocates the cell
+  and then fills it, which is fine when the cell is new and wrong when
+  it is the one `xs = [xs[0] + 1]` is reading. The reuse emitter
+  computes every element into a register before the cell is decided,
+  which is the same discipline the struct path follows for fields.
+- **Empty the old cell before offering it.** The elements it holds are
+  all about to be replaced, and after the offer it is too late to tell
+  whether they are still reachable. `@plum_array_clear` releases them
+  and sets the length to 0, so whichever way the offer goes -- recycled
+  here, or released on the decline path -- nothing is released twice. A
+  zero-length array releases no children, which is what makes the
+  decline path safe with one store rather than a second walk.
+
+Only emitted for heap element types; `[i, i + 1]` clears nothing and
+calls nothing.
+
+### What it costs
+
+The compiler's own count went the wrong way by about 1,200 out of
+199,000 across the whole memory-model batch -- roughly half of that
+from the array emitter, measured at a fixed point. It is written in a
+recursive style with almost no assignment in loops, so it gains
+nothing from any of this and pays for the checks. The likely cause of
+the array half is the changed evaluation order: holding every element
+in a register before the cell is decided keeps more values live at
+once, and a value that is live is one some other reuse will decline.
+That is a hypothesis, not a measurement -- no fixture in `alloc_corpus`
+regressed, which is the guard that actually matters, so it was not
+chased further.

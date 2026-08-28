@@ -560,6 +560,8 @@ let cg_const_of (p: CgProgram) (n: Int) (e: typecheck.TExpr): Option[ConstVal] =
         // inside a constant aggregate costs nothing but its pointer.
         TStr(v) => Some(ConstVal { ty: "ptr", val: "@.str".concat(n.to_string()), globals: cg_str_constant(n, v), n: n + 2 }),
         TArrayLit(xs) => cg_const_array(p, n, xs),
+        // Hoisting still beats recycling, exactly as for the others.
+        TArrayLitReuse(xs, _) => cg_const_array(p, n, xs),
         TStructLit(sname, fs, sp) => match sp { Some(_) => None, None => cg_const_struct(p, n, fs) },
         // A literal that the last-use pass offered a reuse candidate is
         // still a literal. Hoisting beats recycling: no allocation, and
@@ -690,6 +692,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TFor(pattern, lo, hi, body) => cg_for(p, env, n, pattern, lo, hi, body),
         TForArray(pattern, arr, body) => cg_for_array(p, env, n, pattern, arr, body),
         TArrayLit(elems) => cg_or_const(p, n, e, cg_array_lit(p, env, n, elems, cg_ty(p, e))),
+        TArrayLitReuse(elems, cands) => cg_or_const(p, n, e, cg_array_lit_reuse(p, env, n, elems, cands, cg_ty(p, e))),
         TIndex(base, idx) => cg_index(p, env, n, base, idx, cg_ty(p, e)),
         TClosure(params, body) => cg_closure(p, env, n, params, body, cg_concrete(p, typecheck.texpr_ty(p.subst, e))),
         TStructLit(name, fields, spread) => cg_or_const(p, n, e, cg_struct_lit(p, env, n, name, fields, spread)),
@@ -1420,6 +1423,7 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TBinary(_, a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
         TIndex(a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
         TArrayLit(xs) => cg_reads_max_list(name, xs, 0, 0),
+        TArrayLitReuse(xs, cands) => cg_cap2(cg_reads_max_list(name, xs, 0, 0) + (if cg_name_in(cands, name, 0) { 1 } else { 0 })),
         TTupleLit(xs) => cg_reads_max_list(name, xs, 0, 0),
         TVariantNew(_, _, xs) => cg_reads_max_list(name, xs, 0, 0),
         TFnCall(_, _, xs, _) => cg_reads_max_list(name, xs, 0, 0),
@@ -1599,6 +1603,7 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         TIndex(a, b) => TIndex(lv_expr(lv_with(ctx, [b]), a), lv_expr(ctx, b)),
         TChannelSend(a, b) => TChannelSend(lv_expr(lv_with(ctx, [b]), a), lv_expr(ctx, b)),
         TArrayLit(xs) => TArrayLit(lv_seq(ctx, xs, 0, [])),
+        TArrayLitReuse(_, _) => node,
         TTupleLit(xs) => TTupleLit(lv_seq(ctx, xs, 0, [])),
         // An enum rebuild names its candidate nowhere in its own
         // arguments -- `match c { Count(k) => Count(k + 1) }` reads `k`,
@@ -1778,6 +1783,8 @@ let lv_self_slot (): String = "<slot>"
 // 167 apart, which was the measurement generation, not the code.
 let lv_self_reuse (nm: String) (e: typecheck.TExpr): typecheck.TExpr =
     match e.node {
+        TArrayLit(xs) => typecheck.TExpr { ty: e.ty, node: TArrayLitReuse(xs, [nm]) },
+        TArrayLitReuse(xs, cands) => typecheck.TExpr { ty: e.ty, node: TArrayLitReuse(xs, lv_cat_names([nm], cands, 0)) },
         TStructLit(sname, fs, None) => typecheck.TExpr { ty: e.ty, node: TStructReuse(sname, fs, [nm]) },
         TStructReuse(sname, fs, cands) => typecheck.TExpr { ty: e.ty, node: TStructReuse(sname, fs, lv_cat_names([nm], cands, 0)) },
         TVariantNew(en, tag, xs) => typecheck.TExpr { ty: e.ty, node: TVariantReuse(en, tag, xs, [nm]) },
@@ -2328,6 +2335,83 @@ let cg_array_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[type
     let st = cg_array_store_elems(p, env, n + 1, cell, elems, 0, "", "", "", "");
     Emit { code: head.concat(st.code), allocas: st.allocas, releases: st.releases,globals: st.globals, val: cell, ty: ty, n: st.n }
 }
+
+// `[a, b]` built into the cell the slot it is about to fill already
+// holds.
+//
+// The elements are evaluated FIRST, before the cell is decided, for
+// exactly the reason a struct's fields are: `xs = [xs[0] + 1]` reads
+// the very cell about to be recycled, and a value already in a
+// register cannot be disturbed by what happens to the cell after.
+//
+// Arrays cannot go through `cg_reuse_cell` like a struct or an enum.
+// A struct's size is a property of its TYPE; an array's is a property
+// of the individual cell, written in the cell's own header. So
+// recycling one means `@plum_array_reuse`, which sizes it, writes the
+// header, and declines when anybody else can still see it.
+let cg_array_lit_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[typecheck.TExpr]) (cands: Array[String]) (ty: CgTy): Emit =
+    match cg_array_lit_cand(p, env, cands, 0) {
+        None => cg_array_lit(p, env, n, elems, ty),
+        Some(slot) => {
+            let a = cg_args(p, env, n, elems, 0, "", "", "", "", []);
+            let old = cg_reg(a.n);
+            let cell = cg_reg(a.n + 1);
+            let same = cg_reg(a.n + 2);
+            let ldrop = cg_label(a.n + 3);
+            let ljoin = cg_label(a.n + 4);
+            Emit {
+                code: a.code
+                    .concat("  ").concat(old).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
+                    .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
+                    // The old elements are released and the length
+                    // zeroed BEFORE the cell is offered up, so that
+                    // whichever way the offer goes -- recycled here, or
+                    // released below -- nothing releases them twice.
+                    .concat(cg_array_clear_call(p, slot, old))
+                    .concat("  ").concat(cell).concat(" = call ptr @plum_array_reuse(ptr ").concat(old).concat(", i64 ").concat(elems.len().to_string()).concat(")\n")
+                    .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(cell).concat(", ").concat(old).concat("\n")
+                    .concat("  br i1 ").concat(same).concat(", label %").concat(ljoin).concat(", label %").concat(ldrop).concat("\n")
+                    .concat(ldrop).concat(":\n")
+                    // Null-safe and static-safe, both of which happen:
+                    // the slot is null on the first pass, and may hold
+                    // a hoisted constant cell.
+                    .concat(cg_dec(cg_concrete(p, slot.ity), old))
+                    .concat("  br label %").concat(ljoin).concat("\n")
+                    .concat(ljoin).concat(":\n")
+                    .concat(cg_store_elem_vals(cell, a.vals, 0, "")),
+                allocas: a.allocas, releases: a.releases, globals: a.globals,
+                val: cell, ty: ty, n: a.n + 5,
+            }
+        },
+    }
+
+// Nothing to release when the elements are scalars, which is the
+// common case and emits no call at all.
+let cg_array_clear_call (p: CgProgram) (slot: CgSlot) (old: String): String =
+    if cg_is_heap(cg_elem_ty(slot.ty)) {
+        "  call void @plum_array_clear(ptr ".concat(old).concat(", ptr ").concat(cg_rel_sym(cg_array_elem_ity(p, slot.ity))).concat(")\n")
+    } else { "" }
+
+let cg_store_elem_vals (cell: String) (vals: Array[String]) (i: Int) (acc: String): String =
+    if i >= vals.len() { acc }
+    else {
+        let ep = cell.concat("_e").concat(i.to_string());
+        cg_store_elem_vals(cell, vals, i + 1, acc
+            .concat("  ").concat(ep).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_array_elem_offset(i).to_string()).concat("\n")
+            .concat("  store ").concat(vals[i]).concat(", ptr ").concat(ep).concat("\n"))
+    }
+
+// An array slot the move analysis has not already claimed. Unlike
+// `cg_reuse_cand` there is no size test: `@plum_array_reuse` does that
+// itself, against the cell's real capacity rather than its type.
+let cg_array_lit_cand (p: CgProgram) (env: Array[CgSlot]) (cands: Array[String]) (i: Int): Option[CgSlot] =
+    if i >= cands.len() { None }
+    else if cg_rc_enabled(()) && !cg_is_movable(p, cands[i]) {
+        match cg_lookup(env, cands[i]) {
+            Some(slot) => match slot.ty { CgArray(_) => Some(slot), _ => cg_array_lit_cand(p, env, cands, i + 1) },
+            None => cg_array_lit_cand(p, env, cands, i + 1),
+        }
+    } else { cg_array_lit_cand(p, env, cands, i + 1) }
 
 let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (elems: Array[typecheck.TExpr]) (i: Int) (code: String) (allocas: String) (releases: String) (globals: String): FieldsEmit =
     if i >= elems.len() { FieldsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
@@ -5383,6 +5467,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TFieldGet(a, _) => cg_rel_in(p, a, here),
         TIndex(a, b) => cg_rel_in(p, b, cg_rel_in(p, a, here)),
         TArrayLit(elems) => cg_rel_in_list(p, elems, 0, here),
+        TArrayLitReuse(elems, _) => cg_rel_in_list(p, elems, 0, here),
         TTupleLit(elems) => cg_rel_in_list(p, elems, 0, here),
         TBlockE(block) => cg_rel_in_block(p, block, here),
         TIf(c, t, e2) => match e2 {
@@ -5468,6 +5553,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TFieldGet(a, _) => cg_eq_in(p, a, acc),
         TIndex(a, b) => cg_eq_in(p, b, cg_eq_in(p, a, acc)),
         TArrayLit(elems) => cg_eq_in_list(p, elems, 0, acc),
+        TArrayLitReuse(elems, _) => cg_eq_in_list(p, elems, 0, acc),
         TTupleLit(elems) => cg_eq_in_list(p, elems, 0, acc),
         TBlockE(block) => cg_eq_in_block(p, block, acc),
         TIf(c, t, e2) => match e2 {
@@ -5563,6 +5649,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TFieldGet(a, _) => cg_calls_in(p, a, acc),
         TIndex(a, b) => cg_calls_in(p, b, cg_calls_in(p, a, acc)),
         TArrayLit(elems) => cg_calls_in_list(p, elems, acc),
+        TArrayLitReuse(elems, _) => cg_calls_in_list(p, elems, acc),
         TTupleLit(elems) => cg_calls_in_list(p, elems, acc),
         TBlockE(block) => cg_calls_in_block(p, block, acc),
         TIf(c, t, e2) => match e2 {
