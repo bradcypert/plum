@@ -1,0 +1,62 @@
+// A literal stored into a slot builds into the cell that slot is about
+// to release. Every case here is about when it must NOT, or must do so
+// without losing a reference -- run under ASan with leak detection by
+// `corpus-check`, which is the only reason the fixture is worth having.
+
+struct P { x: Int, name: String }
+enum Step { Idle, Moving(String) }
+
+// Reads a field out of the very cell being recycled. Safe because the
+// field values are all computed before the reuse decision.
+let bump (n: Int): String = {
+    let mut p = P { x: 0, name: "a" };
+    for i in 0..n {
+        p = P { x: p.x + 1, name: p.name };
+    };
+    p.name.concat(p.x.to_string())
+}
+
+// An ALIAS is still holding the cell, so it must not be recycled --
+// decided at runtime by the refcount, not by anything static.
+let aliased (): String = {
+    let mut p = P { x: 1, name: "first" };
+    let q = p;
+    p = P { x: 2, name: "second" };
+    q.name.concat("/").concat(p.name)
+}
+
+// The `let` form: a fresh binding each iteration, storing into the
+// same slot.
+let lets (n: Int): Int = {
+    let mut t = 0;
+    for i in 0..n {
+        let p = P { x: i, name: "x" };
+        t = t + p.x + p.name.len();
+    };
+    t
+}
+
+// A variant payload, which the same rule covers.
+let steps (n: Int): String = {
+    let mut s = Idle;
+    for i in 0..n {
+        s = Moving(i.to_string());
+    };
+    match s { Idle => "idle", Moving(k) => k }
+}
+
+// Shadowing: the inner `let` reads the OUTER binding, which lives in a
+// different slot, so recycling this one cannot disturb it.
+let shadowed (): String = {
+    let p = P { x: 7, name: "outer" };
+    let p = P { x: p.x + 1, name: p.name };
+    p.name.concat(p.x.to_string())
+}
+
+let main (): Unit = {
+    println(bump(1000));
+    println(aliased());
+    println(lets(1000).to_string());
+    println(steps(500));
+    println(shadowed())
+}

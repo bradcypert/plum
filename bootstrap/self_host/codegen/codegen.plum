@@ -1298,18 +1298,23 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
                     env: rest.env, n: rest.n,
                 }
             } else {
-                let r = cg_expr(p, env, n, value);
+                // The slot register is claimed BEFORE the initializer is
+                // emitted, so the initializer can be handed it as a
+                // reuse candidate (`lv_self_slot`). It is only in scope
+                // under that reserved name, never under `name`, so
+                // shadowing is unaffected.
+                let vty = cg_concrete(p, typecheck.texpr_ty(p.subst, value));
+                let slot = cg_reg(n);
+                let r = cg_expr(p, env.push(CgSlot { name: lv_self_slot(()), ptr: slot, ty: cg_of_ity(vty), ity: vty }), n + 1, value);
                 let name = cg_let_name(pattern);
-                let slot = cg_reg(r.n);
                 let lty = cg_llvm_ty(r.ty);
                 // Rule 2: the slot takes ownership of `r`'s +1. Any
                 // value already in the slot -- a previous iteration's,
                 // if this `let` is inside a loop -- is released first.
-                let vty = cg_concrete(p, typecheck.texpr_ty(p.subst, value));
                 let head = r.code
                     .concat(cg_release_slot(vty, slot, "_pre"))
                     .concat("  store ").concat(lty).concat(" ").concat(r.val).concat(", ptr ").concat(slot).concat("\n");
-                let rest = cg_stmts(p, env.push(CgSlot { name: name, ptr: slot, ty: r.ty, ity: vty }), r.n + 1, stmts, i + 1);
+                let rest = cg_stmts(p, env.push(CgSlot { name: name, ptr: slot, ty: r.ty, ity: vty }), r.n, stmts, i + 1);
                 BlockEmit {
                     code: head.concat(rest.code),
                     // The null-init and the exit release are as much a
@@ -1725,11 +1730,59 @@ let lv_block (ctx: LvCtx) (b: typecheck.TBlock) (i: Int) (scope: Array[String]) 
             scope: scope,
         };
         match b.stmts[i] {
+            // A `let` in a loop body stores into the SAME slot every
+            // iteration, so the previous iteration's cell is sitting
+            // there waiting to be released by this very store -- the
+            // same position `TSAssign` is in, reached differently. It
+            // is offered under `lv_self_slot`, not under the bound
+            // name, because the bound name does not mean this slot
+            // yet.
             TSLet(pat, v) => lv_block(ctx, b, i + 1, lv_cat_names(scope, lv_pat_names(pat, []), 0),
-                acc.push(TSLet(pat, lv_expr(sctx, v)))),
-            TSAssign(nm, v) => lv_block(ctx, b, i + 1, scope, acc.push(TSAssign(nm, lv_expr(sctx, v)))),
+                acc.push(TSLet(pat, if cg_is_ident_pattern(pat) { lv_self_reuse(lv_self_slot(()), lv_expr(sctx, v)) } else { lv_expr(sctx, v) }))),
+            TSAssign(nm, v) => lv_block(ctx, b, i + 1, scope, acc.push(TSAssign(nm, lv_self_reuse(nm, lv_expr(sctx, v))))),
             TSExpr(v) => lv_block(ctx, b, i + 1, scope, acc.push(TSExpr(lv_expr(sctx, v)))),
         }
+    }
+
+// A `let`'s own slot, under a name no source identifier can spell, so
+// the initializer can be offered the slot it is about to fill without
+// that slot becoming VISIBLE to it. `let x = x + 1` must still read the
+// outer `x`, and it does: this name is not `x`.
+let lv_self_slot (): String = "<slot>"
+
+// The slot's current value is dead the instant the slot is overwritten
+// -- the principle `cg_self_concat` and `cg_self_push` already exploit
+// for `acc = acc.concat(x)` and `xs = xs.push(x)`. It holds just as
+// well when the value is an aggregate LITERAL, which is what
+// `p = P { .. }` in a loop is, so the slot's own cell is offered as
+// the first candidate to build the new value into.
+//
+// This is the one candidate that needs no liveness analysis at all,
+// which is why the ordinary one never finds it: `p` is read later in
+// the loop body, so the back-edge rule calls it live, and it IS live
+// -- the NAME is. The CELL currently in the slot is not, because the
+// store about to happen is what would have released it.
+//
+// Only the TOP-LEVEL literal of the assigned expression. A nested one
+// is not what the slot is about to hold, and handing it the slot's
+// cell would give it the wrong bytes.
+//
+// Everything else is unchanged: `cg_reuse_cand` still decides whether
+// the cell may be moved at all, `cg_reuse_of_ity` whether it is big
+// enough, and `@plum_reuse_ok` whether anybody else can still see it.
+// Returns `e` untouched when there is nothing to add. Rebuilding it
+// unconditionally measures exactly the same (193,339 allocations to
+// compile a fixture, either way), so the cheaper-looking one is kept --
+// but only after measuring at a bootstrap FIXED POINT. Comparing a
+// freshly-changed compiler against a converged one made the two look
+// 167 apart, which was the measurement generation, not the code.
+let lv_self_reuse (nm: String) (e: typecheck.TExpr): typecheck.TExpr =
+    match e.node {
+        TStructLit(sname, fs, None) => typecheck.TExpr { ty: e.ty, node: TStructReuse(sname, fs, [nm]) },
+        TStructReuse(sname, fs, cands) => typecheck.TExpr { ty: e.ty, node: TStructReuse(sname, fs, lv_cat_names([nm], cands, 0)) },
+        TVariantNew(en, tag, xs) => typecheck.TExpr { ty: e.ty, node: TVariantReuse(en, tag, xs, [nm]) },
+        TVariantReuse(en, tag, xs, cands) => typecheck.TExpr { ty: e.ty, node: TVariantReuse(en, tag, xs, lv_cat_names([nm], cands, 0)) },
+        _ => e,
     }
 
 let lv_stmt_rest (stmts: Array[typecheck.TStmt]) (from: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
@@ -2869,14 +2922,10 @@ let cg_array_ns_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (fn_name: Stri
 
 // `Array.map(xs, f)` building its result into `xs`'s own cell.
 //
-// Eligible only when NEITHER element type needs releasing -- the
-// source's, because the loop overwrites each slot without dropping what
-// was there, and the result's for the same reason. An array of Strings
-// mapped in place would leak every element it overwrote. Fixing that
-// needs the loop to release element `i` after the closure has taken its
-// own reference, which is a different loop BODY, not a different
-// allocation, so it is a separate piece of work rather than a wider
-// condition here.
+// Element types that need releasing are handled, not refused. The loop
+// drops the source's own reference to element `i` once the closure has
+// taken its own -- see `cg_reuse_elem_drop`, which is also why `same`
+// is computed BEFORE the loop rather than after it.
 //
 // The source is MOVED out of its slot before anything else, which is
 // what lets its refcount reach 1 and the reuse fire at all.
@@ -2889,35 +2938,46 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
         None => cg_array_ns_call(p, env, n, nm, args),
         Some(slot) => {
             let elem = cg_elem_ty(slot.ty);
+            let elem_ity = cg_array_elem_ity(p, slot.ity);
             let old = cg_reg(n);
             let f = cg_expr(p, env, n + 1, args[1]);
             let ret = cg_closure_ret(f.ty);
             let len = cg_reg(f.n);
             let out = cg_reg(f.n + 1);
             let iv = cg_reg(f.n + 2);
-            let lp = cg_array_loop(iv, len, f.n + 3);
+            let same = cg_reg(f.n + 3);
+            let lp = cg_array_loop(iv, len, f.n + 4);
             let b = lp.body_n;
             let ev = cg_reg(b + 3);
             let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
                 .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
                 .concat(cg_inc(elem, ev))
                 .concat(cg_invoke(f.val, ret, ", ".concat(cg_llvm_ty(elem)).concat(" ").concat(ev), b + 4))
+                // Before the store, so the slot is not left holding a
+                // reference nobody owns. Safe when the closure returned
+                // the element it was given: that value carries the
+                // reference the `cg_inc` above added, so it survives
+                // this drop and the store below re-homes it.
+                .concat(cg_reuse_elem_drop(elem_ity, same, ev, b + 9))
                 .concat(cg_elem_ptr_lines(out, lp.idx_reg, b + 6))
                 .concat("  store ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(b + 5)).concat(", ptr ").concat(cg_elem_ptr_reg(b + 6)).concat("\n");
-            let same = cg_reg(b + 9);
-            let ldrop = cg_label(b + 10);
-            let lskip = cg_label(b + 11);
+            let ldrop = cg_label(b + 11);
+            let lskip = cg_label(b + 12);
             Emit {
                 code: "  ".concat(old).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
                     .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
                     .concat(f.code)
                     .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
                     .concat("  ").concat(out).concat(" = call ptr @plum_array_reuse(ptr ").concat(old).concat(", i64 ").concat(len).concat(")\n")
+                    // Hoisted above the loop because the BODY needs it
+                    // too: whether each element's source reference is
+                    // this loop's to drop is the same question as
+                    // whether the cell was recycled.
+                    .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(out).concat(", ").concat(old).concat("\n")
                     .concat(lp.pre).concat(body).concat(lp.post)
                     // The source is only released when it was NOT reused.
                     // When it was, the cell IS the result and releasing it
                     // would free what is being returned.
-                    .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(out).concat(", ").concat(old).concat("\n")
                     .concat("  br i1 ").concat(same).concat(", label %").concat(lskip).concat(", label %").concat(ldrop).concat("\n")
                     .concat(ldrop).concat(":\n")
                     .concat(cg_dec(cg_concrete(p, slot.ity), old))
@@ -2925,10 +2985,51 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
                     .concat(lskip).concat(":\n")
                     .concat(cg_dec_cg(f.ty, f.val)),
                 allocas: "  ".concat(iv).concat(" = alloca i64\n").concat(f.allocas),
-                releases: f.releases, globals: f.globals, val: out, ty: CgArray(ret), n: b + 12,
+                releases: f.releases, globals: f.globals, val: out, ty: CgArray(ret), n: b + 13,
             }
         },
     }
+
+// The element type an `Array[T]` holds, as an `ITy` -- which is what
+// picking a release function needs, and what a `CgTy` cannot say.
+let cg_array_elem_ity (p: CgProgram) (arr: typecheck.ITy): typecheck.ITy = {
+    let args = cg_ity_args(cg_concrete(p, arr));
+    if Array.is_empty(args) { ITUnit } else { args[0] }
+}
+
+// Dropping the SOURCE array's own reference to element `i`, and only
+// when the cell was actually recycled.
+//
+// `@plum_array_reuse` hands back the pointer it was given only when the
+// refcount was 1, so `same` means "we are the sole owner, and this cell
+// IS the result". The reference the source held in slot `i` then has
+// nowhere left to live: the slot is about to hold something else
+// (`map`), or the element is being dropped or moved forward
+// (`filter`). Releasing it here is what stops it leaking, and this is
+// the whole of the loop-body change that lets arrays of strings and
+// structs be recycled at all.
+//
+// When the cell was NOT recycled, the source is still a live array --
+// either somebody else holds a reference, or it simply did not fit --
+// and its elements are accounted for by the whole-array release after
+// the loop. Dropping them here would corrupt an array another owner is
+// still reading, which is the one way this goes wrong invisibly, so the
+// branch is not an optimisation and must not be hoisted away.
+//
+// Emitted only for element types that need releasing, so an array of
+// scalars produces exactly the instructions it did before.
+let cg_reuse_elem_drop (elem_ity: typecheck.ITy) (same: String) (ev: String) (n: Int): String = {
+    let drop = cg_dec(elem_ity, ev);
+    if drop == "" { "" }
+    else {
+        let ldo = cg_label(n);
+        let lend = cg_label(n + 1);
+        "  br i1 ".concat(same).concat(", label %").concat(ldo).concat(", label %").concat(lend).concat("\n")
+            .concat(ldo).concat(":\n").concat(drop)
+            .concat("  br label %").concat(lend).concat("\n")
+            .concat(lend).concat(":\n")
+    }
+}
 
 let cg_array_ns_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String) (args: Array[typecheck.TExpr]) (cand: String): Emit =
     if nm == "filter" { cg_array_filter_reuse(p, env, n, nm, args, cand) }
@@ -2949,24 +3050,26 @@ let cg_array_ns_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String) 
 // over-allocated cell. A cell whose header says 3 when it has room for
 // 8 is what an array literally is here, so nothing else has to change.
 //
-// Eligible only when the element type needs no releasing, the same
-// condition `map` carries and for a sharper reason: the elements that
-// are filtered OUT have their slots compacted over without being
-// released, and the source cell is not released either, because it IS
-// the result. An `Array[String]` filtered in place would leak every
-// element it dropped.
+// The elements filtered OUT are the sharp case: their slots are
+// compacted over, and the cell is not released either because it IS the
+// result, so nothing else would ever drop them. The loop drops the
+// source's reference to EVERY element it visits, kept or not -- a kept
+// one has already taken a second reference for its new slot by then.
+// See `cg_reuse_elem_drop`.
 let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String) (args: Array[typecheck.TExpr]) (cand: String): Emit =
     match cg_array_reuse_slot(p, env, cand, args) {
         None => cg_array_ns_call(p, env, n, nm, args),
         Some(slot) => {
             let elem = cg_elem_ty(slot.ty);
+            let elem_ity = cg_array_elem_ity(p, slot.ity);
             let old = cg_reg(n);
             let f = cg_expr(p, env, n + 1, args[1]);
             let len = cg_reg(f.n);
             let out = cg_reg(f.n + 1);
             let iv = cg_reg(f.n + 2);
             let cnt = cg_reg(f.n + 3);
-            let lp = cg_array_loop(iv, len, f.n + 4);
+            let same = cg_reg(f.n + 4);
+            let lp = cg_array_loop(iv, len, f.n + 5);
             let b = lp.body_n;
             let ev = cg_reg(b + 3);
             let keep_label = cg_label(b + 6);
@@ -2986,17 +3089,21 @@ let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: Stri
                 .concat("  ").concat(next_cnt).concat(" = add i64 ").concat(cur_cnt).concat(", 1\n")
                 .concat("  store i64 ").concat(next_cnt).concat(", ptr ").concat(cnt).concat("\n")
                 .concat("  br label %").concat(skip_label).concat("\n")
-                .concat(skip_label).concat(":\n");
-            let final_cnt = cg_reg(b + 13);
-            let same = cg_reg(b + 14);
-            let ldrop = cg_label(b + 15);
-            let lskip = cg_label(b + 16);
+                .concat(skip_label).concat(":\n")
+                // After the join, so it runs once per element whether
+                // it was kept or dropped. A kept element already holds
+                // the second reference stored into its new slot.
+                .concat(cg_reuse_elem_drop(elem_ity, same, ev, b + 13));
+            let final_cnt = cg_reg(b + 15);
+            let ldrop = cg_label(b + 16);
+            let lskip = cg_label(b + 17);
             Emit {
                 code: "  ".concat(old).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
                     .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
                     .concat(f.code)
                     .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
                     .concat("  ").concat(out).concat(" = call ptr @plum_array_reuse(ptr ").concat(old).concat(", i64 ").concat(len).concat(")\n")
+                    .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(out).concat(", ").concat(old).concat("\n")
                     .concat("  store i64 0, ptr ").concat(cnt).concat("\n")
                     .concat(lp.pre).concat(body).concat(lp.post)
                     .concat("  ").concat(final_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
@@ -3004,7 +3111,6 @@ let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: Stri
                     .concat("  store i64 ").concat(final_cnt).concat(", ptr ").concat(final_cnt).concat("p\n")
                     // Released only when the cell was NOT reused. When
                     // it was, the cell IS the result.
-                    .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(out).concat(", ").concat(old).concat("\n")
                     .concat("  br i1 ").concat(same).concat(", label %").concat(lskip).concat(", label %").concat(ldrop).concat("\n")
                     .concat(ldrop).concat(":\n")
                     .concat(cg_dec(cg_concrete(p, slot.ity), old))
@@ -3012,7 +3118,7 @@ let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: Stri
                     .concat(lskip).concat(":\n")
                     .concat(cg_dec_cg(f.ty, f.val)),
                 allocas: "  ".concat(iv).concat(" = alloca i64\n").concat("  ").concat(cnt).concat(" = alloca i64\n").concat(f.allocas),
-                releases: f.releases, globals: f.globals, val: out, ty: CgArray(elem), n: b + 17,
+                releases: f.releases, globals: f.globals, val: out, ty: CgArray(elem), n: b + 18,
             }
         },
     }
@@ -3029,22 +3135,12 @@ let cg_array_reuse_slot (p: CgProgram) (env: Array[CgSlot]) (cand: String) (args
     if cg_rc_enabled(()) && args.len() == 2 {
         match cg_lookup(env, cand) {
             None => None,
-            Some(slot) => match slot.ty {
-                CgArray(elem) =>
-                    if !cg_is_heap(elem) && cg_map_ret_plain(p, args[1]) { Some(slot) } else { None },
-                _ => None,
-            },
+            // No condition on the ELEMENT type any more: the loop
+            // body drops what it overwrites. What is left is only
+            // "is this actually an array slot".
+            Some(slot) => match slot.ty { CgArray(_) => Some(slot), _ => None },
         }
     } else { None }
-
-// The mapped-to element type, read off the closure's recorded type. An
-// operand that is not a function at all cannot be reasoned about, so it
-// is refused rather than assumed harmless.
-let cg_map_ret_plain (p: CgProgram) (f_e: typecheck.TExpr): Bool =
-    match cg_concrete(p, typecheck.texpr_ty(p.subst, f_e)) {
-        ITFunction(_, r) => !cg_is_heap(cg_of_ity(cg_concrete(p, r))),
-        _ => false,
-    }
 
 let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.TExpr) (f_e: typecheck.TExpr): Emit = {
     let a = cg_expr(p, env, n, arr_e);

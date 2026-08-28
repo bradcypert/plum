@@ -1,0 +1,11 @@
+// The case array reuse could not touch until the loop body learned to
+// release each element it passes: an array whose ELEMENTS need
+// releasing, filtered once per iteration. Before that, every iteration
+// allocated a fresh array because heap element types were refused
+// outright.
+let grow (xs: Array[String]) (n: Int): Array[String] = if n <= 0 { xs } else { grow(xs.push("x"), n - 1) }
+
+let keep (xs: Array[String]) (n: Int): Array[String] =
+    if n <= 0 { xs } else { keep(Array.filter(xs, |s| s.len() > 0), n - 1) }
+
+let main (): Unit = println(keep(grow([], 200), 500).len().to_string())

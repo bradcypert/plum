@@ -15768,3 +15768,158 @@ memory-model backlog item are really one question — releasing element
 `i` inside the loop once the closure has taken its reference — and
 until that is answered, array reuse applies to scalar arrays and to
 nothing a real program spends its time on.
+
+## Array reuse learns to release as it goes (2026-08-28)
+
+Reuse for `map` and `filter` applied only to arrays of scalars. The
+condition read as a safety check and was recorded as one:
+
+> Eligible only when NEITHER element type needs releasing -- the
+> source's, because the loop overwrites each slot without dropping what
+> was there, and the result's for the same reason.
+
+That was true of the loop as written, and it was the whole value of the
+optimisation, because the arrays a real program maps and filters hold
+strings and structs. `filter` reuse shipped earlier the same day and
+moved the compiler's own allocation count by nothing at all.
+
+### The fix is three instructions, guarded
+
+The loop already increments element `i` before handing it to the
+closure. It now also drops the SOURCE array's own reference to that
+element:
+
+```
+ev = load old[i]
+inc ev                 ; the closure's reference
+rv = call f(ev)
+<drop ev>              ; the source array's reference
+store rv -> out[i]
+```
+
+Dropping before the store is what keeps a slot from ever holding a
+reference nobody owns, and it is safe in the case that looks most
+dangerous. When the closure hands back the element it was given
+(`|s| s`), the value it returns carries the reference the `inc` added,
+so the drop takes the array's and the store re-homes the closure's.
+
+For `filter` the drop goes after the keep/skip join, so it runs once
+per element either way -- a kept element has already taken a second
+reference for its new slot.
+
+### The guard is the entire difficulty
+
+`@plum_array_reuse` returns the pointer it was given only when the
+refcount was 1. So the drop is correct only when it did:
+
+- **Reused** -- we are the sole owner, the cell IS the result, and
+  nothing else will ever release these elements. Drop them.
+- **Declined** -- either somebody else holds the array, or it did not
+  fit. Dropping its elements corrupts an array another owner is still
+  reading.
+
+The condition is loop-invariant, so it is computed once above the loop
+and branched on inside it. That branch is exactly the shape of thing a
+later reader deletes as obviously hoistable, which is why it is now
+written down in MAINTENANCE.md as a correctness requirement rather than
+left to read as a missed optimisation.
+
+### What it is worth
+
+A filter per iteration over 200 strings: 508 allocations to 8. A map
+over the same, with a closure that allocates nothing itself: 508 to 8.
+Both were previously refused outright.
+
+### What it is still not worth
+
+The compiler's own allocation count while compiling a program did not
+move (193,130 to 193,147). Its 105 `map`/`filter` sites are over arrays
+of three or five elements, so a saved allocation each is invisible
+against 193,000 -- the win needs the same array mapped or filtered
+repeatedly, and the compiler has no loop shaped like that. The
+optimisation is real and now applies to the types real programs use;
+this particular program is just not one that cares.
+
+Two eligibility conditions disappeared with the restriction, and
+`cg_map_ret_plain` -- the helper enforcing the second -- was deleted
+rather than left unused. An unused helper encoding a rule that no
+longer holds is what the variant work spent a day untangling.
+
+## Literals in a loop (2026-08-28)
+
+The backlog said `[1]` in a loop body still allocates per iteration. It
+does not -- "Constant literals are not allocated" fixed that two days
+earlier. What still allocated was the case the note's example could not
+show: a literal whose contents are NOT constant, so there are no
+constant bytes to hoist.
+
+```plum
+for i in 0..1000 {
+    let p = P { x: i, y: 2 };   // 1001 allocations
+    ...
+}
+```
+
+### The candidate was already named, one function away
+
+The `TSAssign` arm of the backend carries this comment, from the work
+that made `acc = acc.concat(x)` append in place:
+
+> the slot's current value is dead the instant the slot is overwritten,
+> which is the one place ownership can be transferred into an operation
+> without any liveness analysis
+
+That is exactly the situation a literal in a loop is in, and it had
+been exploited only for `concat` and `push`. The generalisation is
+`lv_self_reuse`: the slot being written is offered as the FIRST reuse
+candidate for the literal being written into it.
+
+The ordinary candidate search could never find this. `p` is read later
+in the loop body, so the back-edge rule calls it live -- and it is
+live. The NAME is. The CELL in the slot is not, because the store about
+to happen is what would have released it. Those are different
+questions, and only one of them had a function.
+
+### `let` needed the slot before the name existed
+
+A `let` in a loop stores into the same slot every iteration, so it is
+in the same position, reached differently: the slot exists but the name
+does not mean it yet. Handing the initializer the slot under its own
+name would break shadowing outright -- `let x = x + 1` must read the
+outer `x`.
+
+So the slot is offered under `<slot>`, a name no source identifier can
+spell. The backend claims the slot register before emitting the
+initializer and puts it in scope under that name only. Nothing else
+about lookup changes.
+
+### Measured wrong once, worth writing down
+
+An "obvious" tidy-up -- return the node unchanged instead of rebuilding
+it when nothing is added -- appeared to cost 167 allocations per
+compile. It costs nothing. The 167 was the comparison: a compiler
+one generation after a change, measured against one at a bootstrap
+fixed point. A self-hosted compiler's own numbers only mean anything
+once the generations have converged, and it took building three
+generations of each variant to see that both are identical at 193,339.
+
+### What it is worth
+
+A struct and an enum built per iteration: 2001 allocations to 3.
+`alloc_corpus/literal_in_loop` records it, and
+`exec_corpus/literal_slot_reuse` holds the cases that must NOT recycle
+-- an alias still reading the cell, a field read out of the cell being
+recycled, and a shadowed `let` reading the outer binding.
+
+### What it does not cover
+
+Array literals. `cg_reuse_of_ity` refuses `Array` outright, because an
+array cell's size depends on its length and its header has to be
+written -- which is what `@plum_array_reuse` exists for. Recycling into
+one needs that call rather than the generic `@plum_reuse_ok` path, so
+it is a separate emitter, not a wider condition. `let xs = [i, i + 1]`
+in a loop still allocates every iteration.
+
+The compiler's own count went the wrong way by about 200 out of
+193,000. It is written in a recursive style with almost no assignment
+in loops, so it gains nothing here and pays for the check.

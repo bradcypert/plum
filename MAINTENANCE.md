@@ -216,16 +216,25 @@ only when they differ. Six exec fixtures hold these apart
 `reuse_array_aliased`, `reuse_enum_payload`, `reuse_enum_aliased`);
 each fails a different way, none is redundant.
 
-**Array reuse is refused for heap ELEMENT types, and that is not a
-missing check to tighten -- it is the condition that keeps `map` and
-`filter` correct.** The loop overwrites slot after slot without
-releasing what was there, and on the reuse path the cell is never
-released either, because it IS the result. `filter` makes the reason
-sharpest: an element that fails the predicate is compacted over and its
-reference is simply gone. Widening this needs the loop BODY to release
-element `i` once the closure has taken its own reference -- a different
-loop, not a wider condition. `exec_corpus/array_filter_reuse` holds the
-refusal in place under ASan.
+**Array reuse releases each source element INSIDE the loop, and the
+branch guarding that must not be hoisted away.** `map` and `filter`
+recycle a dead source cell, so nothing else will ever release the
+elements it held: the slots are overwritten (`map`) or compacted over
+(`filter`), and the cell itself becomes the result and is never
+released. So the loop drops the source's reference to element `i` as it
+passes -- `cg_reuse_elem_drop`.
+
+It does that **only when `@plum_array_reuse` returned the pointer it
+was given**, which is the loop-invariant `same`. A declined reuse means
+either another owner still holds the array or it did not fit; in the
+first case dropping its elements corrupts an array somebody else is
+still reading, and nothing would catch it but a crash somewhere else
+later. The branch looks like something an optimiser pass should hoist,
+and hoisting it is a correctness bug.
+
+`exec_corpus/array_reuse_heap_elems` covers this under ASan with leak
+detection, which is the only way any of it is visible: every case in
+that fixture prints the right answer while leaking.
 
 **Duplicate `declare`.** A symbol belongs in the runtime's declare list
 OR in a user `extern` block, never both. LLVM rejects the second one.

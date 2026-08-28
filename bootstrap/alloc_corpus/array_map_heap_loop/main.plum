@@ -1,0 +1,13 @@
+// `map`'s half of the same change, with a closure that allocates
+// nothing of its own so the number is the ARRAY cost and nothing else.
+//
+// The closure hands back the element it was given, which is also the
+// case the loop's release has to get exactly right: the reference
+// added before the call is the one that survives the drop and ends up
+// owned by the slot.
+let grow (xs: Array[String]) (n: Int): Array[String] = if n <= 0 { xs } else { grow(xs.push("x"), n - 1) }
+
+let again (xs: Array[String]) (n: Int): Array[String] =
+    if n <= 0 { xs } else { again(Array.map(xs, |s| s), n - 1) }
+
+let main (): Unit = println(again(grow([], 200), 500).len().to_string())

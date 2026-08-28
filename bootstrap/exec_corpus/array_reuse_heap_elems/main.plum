@@ -1,0 +1,47 @@
+// `Array.map`/`Array.filter` recycling a dead source cell whose
+// ELEMENTS need releasing. Every case here is a refcount question, so
+// the fixture earns its keep only under `corpus-check`'s ASan build
+// with leak detection -- the outputs below would all be produced
+// correctly by a version that leaks every element it drops.
+
+struct Item { name: String, n: Int }
+
+// The plain cases: the source is dead, the elements are heap.
+let shout (xs: Array[String]): Array[String] = Array.map(xs, |s| s.concat("!"))
+let longs (xs: Array[String]): Array[String] = Array.filter(xs, |s| s.len() > 2)
+
+// The closure hands back the very element it was given. The reference
+// the loop adds before the call is the one that survives the drop.
+let same_again (xs: Array[String]): Array[String] = Array.map(xs, |s| s)
+
+// Heap elements in, scalars out: the source's references still have to
+// go somewhere.
+let lengths (xs: Array[String]): Array[Int] = Array.map(xs, |s| s.len())
+
+// Scalars in, heap out: the slot ends up owning something it did not
+// before.
+let labels (xs: Array[Int]): Array[String] = Array.map(xs, |n| n.to_string())
+
+// A struct element, so the release goes through a generated function
+// rather than the runtime's string one.
+let names (xs: Array[Item]): Array[String] = Array.map(xs, |i| i.name)
+
+// The source is read after the call, so the cell must NOT be recycled
+// and its elements must not be touched.
+let both (xs: Array[String]): String =
+    Array.fold(Array.filter(xs, |s| s.len() > 1), "", |a, s| a.concat(s))
+        .concat("/").concat(Array.fold(xs, "", |a, s| a.concat(s)))
+
+let main (): Unit = {
+    println(Array.fold(shout(["a", "bb"]), "", |a, s| a.concat(s)));
+    println(Array.fold(longs(["ann", "bo", "cy", "dee"]), "", |a, s| a.concat(s)));
+    println(Array.fold(same_again(["p", "q"]), "", |a, s| a.concat(s)));
+    println(Array.fold(lengths(["ann", "bo"]), 0, |a, n| a + n).to_string());
+    println(Array.fold(labels([1, 2, 3]), "", |a, s| a.concat(s)));
+    println(Array.fold(names([Item { name: "x", n: 1 }, Item { name: "y", n: 2 }]), "", |a, s| a.concat(s)));
+    // Nothing kept: every element is dropped by the loop and none is
+    // carried forward.
+    println(Array.filter(["a", "b"], |s| s.len() > 5).len().to_string());
+    println(both(["m", "nn", "ooo"]));
+    println(both(["m", "nn", "ooo"]))
+}

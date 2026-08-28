@@ -1,0 +1,21 @@
+// Aggregate literals in a loop whose contents are NOT constant, so the
+// hoisting `const_literal_loop` records cannot apply -- the bytes are
+// different every iteration.
+//
+// What makes them free anyway is that each one is stored into a slot
+// whose previous value the store was about to release: `p` here holds
+// last iteration's cell, and nothing can read it any more. Three
+// allocations: the two slots' first cells, and the string printed.
+struct P { x: Int, y: Int }
+enum Step { Idle, Moving(Int) }
+
+let main (): Unit = {
+    let mut t = 0;
+    let mut s = Idle;
+    for i in 0..1000 {
+        let p = P { x: i, y: 2 };
+        s = Moving(p.x);
+        t = t + p.x + p.y + match s { Idle => 0, Moving(k) => k };
+    };
+    println(t.to_string())
+}
