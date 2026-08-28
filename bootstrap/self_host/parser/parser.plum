@@ -183,6 +183,18 @@ pub struct ProgramNode { pub items: Array[ItemNode] }
 // imports the other.
 pub let std_module_names (): Array[String] = ["Net", "Http", "Os", "Time"]
 
+// The module the PRELUDE's own items live in.
+//
+// Deliberately unspellable: a module name comes from a directory and
+// has to be a legal identifier in `use X;`, so no program can name
+// this one, and nobody can write `prelude.println(..)`. Prelude names
+// are reached the way they always were -- unqualified -- and the
+// module exists so that `pub` on a prelude item finally means
+// something. Before this, the prelude shared the ROOT module with
+// every top-level user file, so a `let` in the prelude was visible to
+// any `main.plum` and `pub` was decoration.
+pub let PRELUDE_MODULE (): String = "<prelude>"
+
 // --- lexer.Token-stream helpers (the `(tokens, pos) -> (value, next_pos)`
 // idiom this whole self-hosting effort has used since the lexer) ---
 

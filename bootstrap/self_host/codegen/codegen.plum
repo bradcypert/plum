@@ -261,7 +261,22 @@ let cg_global_module_acc (gs: Array[typecheck.TFn]) (name: String) (i: Int): Str
 
 let cg_global_slot (module_name: String) (name: String): String = "@g.".concat(cg_sym(module_name, name, []))
 
-let cg_mangle (name: String): String = "plum_".concat(Array.concat_all(Array.map(chars_of(name), |c| if c == "." { "_" } else { c })))
+// Everything that is not a letter, a digit or `_` becomes `_`. It used
+// to replace `.` alone, which was enough while every module name came
+// from a directory that happened to be a plain identifier -- and was
+// not enough for the prelude's own `<prelude>`, whose angle brackets
+// are not legal in an LLVM symbol. A directory named `my-mod` would
+// have hit the same wall.
+//
+// This is NOT injective (`a.b` and `a-b` mangle alike), which is
+// tolerable only because a module name still comes from a directory
+// and two sibling directories cannot differ by punctuation alone.
+let cg_mangle (name: String): String =
+    "plum_".concat(Array.concat_all(Array.map(chars_of(name), |c| if cg_sym_char_ok(c) { c } else { "_" })))
+
+let CG_SYM_CHARS: Array[String] = chars_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+
+let cg_sym_char_ok (c: String): Bool = Array.contains(CG_SYM_CHARS, c)
 
 // --- Monomorphization ---
 //
@@ -4997,7 +5012,7 @@ pub let cg_with_prelude (program: parser.ProgramNode): parser.ProgramNode = {
     let src = cg_prelude_src(());
     let lexed = lexer.tokenize_spanned(src);
     parser.set_source_context("<prelude>", src, lexed.starts);
-    let items = parser.parse_program(lexed.tokens).items;
+    let items = parser.with_module(parser.parse_program(lexed.tokens).items, parser.PRELUDE_MODULE(()));
     parser.set_source_context(saved, "", []);
     // Prelude, then whichever stdlib modules the program asked for by
     // `use`, then the program itself.

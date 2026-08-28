@@ -306,7 +306,17 @@ let builtin_sig (name: String): Option[FnSig] =
 let find_sig (p2: Program2) (name: String): Option[FnSig] =
     match find_sig_in(p2.sigs, p2.current, name, 0) {
         Some(sig) => Some(sig),
-        None => find_sig_in(p2.sigs, "", name, 0),
+        None => match find_sig_in(p2.sigs, "", name, 0) {
+            Some(sig) => Some(sig),
+            // ...and finally the PRELUDE, which is its own module and
+            // so exports only what it marks `pub`. A private prelude
+            // helper is simply not found, and reads as unbound -- which
+            // is what it now is from outside.
+            None => match find_sig_in(p2.sigs, parser.PRELUDE_MODULE(()), name, 0) {
+                Some(sig) => if sig.is_pub { Some(sig) } else { None },
+                None => None,
+            },
+        },
     }
 
 // Naming a module and reaching into it is the ONLY way to cross a

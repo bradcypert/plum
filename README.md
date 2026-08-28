@@ -862,11 +862,14 @@ the type namespace is flat. Visibility prefers your own module's
 declaration, so you will never be told your own type is private, but
 genuinely duplicated names still resolve to one of them arbitrarily.
 
-Note also that the prelude shares the root module with your own
-top-level files, so the standard library's internals — `Map`'s buckets,
-say — are still visible from a root-level file, though not from a
-module of your own. Giving the prelude its own module is a separate
-piece of work.
+The prelude is a module of its own, so `pub` applies to the standard
+library too: `Map.get` is part of the interface, `Map`'s buckets are
+not, and reaching for the latter is an error wherever you are.
+
+Its module cannot be named — there is no `use prelude;` and no
+`prelude.println(..)`. Prelude names are reached the way they always
+were, unqualified; the module exists so that what the prelude does not
+export is genuinely unavailable rather than merely undocumented.
 `use shapes.Circle;` (importing one specific name unqualified) is
 available as an escape hatch for names used constantly in a file.
 

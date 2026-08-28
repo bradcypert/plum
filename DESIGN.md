@@ -15467,33 +15467,66 @@ only way in, which is the entire reason to hide a field. It does mean
 such a struct needs one, and `exec_corpus/module_visibility` is written
 that way deliberately.
 
-### The motivation only half lands, and the notes say so
+### The motivation landed one release later
 
-The case for doing this was concrete: `Map.buckets` was public API, so
-Plum's bucket count and hashing strategy were observable and therefore
-frozen. Field privacy does not fix that, because the prelude lives in
-module `""` and so does every root-level user file — `collect_root_entries`
-stamps `""` on anything not in a subdirectory. Same module, no check.
+Field privacy shipped with a caveat: `Map.buckets` was closed against
+user modules and still open from a root-level file, because the prelude
+lived in module `""` and so does every top-level user file. Same
+module, no check.
 
-Measured after the change:
+The prelude now has a module of its own, and the caveat is gone:
 
 ```
-// a root-level main.plum
-m.buckets.len()   // 8 -- still visible
-
-// the same read from a module of your own
-field Map.buckets is private to the root module
+field Map.buckets is private to the prelude.
+Add `pub` to it to use it from the root module
 ```
 
-So the leak is closed against user modules and open against root files.
-Closing it properly means giving the prelude a module of its own, which
-changes every prelude symbol's mangled name and needs the seed
-regenerated. Sequenced separately and stated plainly in the release
-notes rather than implying the leak is gone.
+**The module cannot be named.** `<prelude>` is not a legal identifier
+in `use X;`, so no program can write `use prelude;` or
+`prelude.println(..)`. Prelude names are still reached unqualified —
+`find_sig` falls back current, then root, then prelude — and that last
+fallback returns only `pub` items, so a private helper is simply not
+found and reads as unbound. Which is what it now is.
 
-`Map`, `Set` and `MapEntry` were deliberately left with private fields
-when the rest of the prelude's structs were opened up, so that the
-protection exists the moment the prelude moves.
+### What it cost: a symbol mangler that was not general enough
+
+The prelude's module name reaches `cg_sym`, which mangles
+`module.name`. The build failed on:
+
+```
+@g.plum_<prelude>_MAP_INITIAL_BUCKETS = global i64 0
+     ^ expected '=' in global variable
+```
+
+`cg_mangle` replaced `.` with `_` and passed everything else through,
+which was enough while every module name came from a directory that
+happened to be a plain identifier. It now replaces anything that is not
+a letter, digit or `_`. Worth noting the bug was NOT specific to the
+prelude: a user directory named `my-mod` would have produced the same
+invalid IR, and nothing would have caught it.
+
+The mangling is not injective (`a.b` and `a-b` collide), which is
+tolerable only because module names come from directories and two
+siblings cannot differ by punctuation alone. Written down rather than
+left as a trap.
+
+### The fallout was the prelude's own missing `pub`s
+
+Twenty-one functions the README documents as standard library — every
+`Map.*`, every `Set.*`, `json_stringify`, `json_parse` — were declared
+`let`. They had worked for exactly the reason this change removes: root
+code shared their module. Marked `pub`.
+
+Two more were subtler. `__contract_require`/`__contract_ensure` are
+called by code the PARSER generates when it desugars
+`requires`/`ensures`, and that generated code lands in the user's own
+module — so they are public whether or not anyone would write them by
+hand. `example-sweep` and `corpus-check` both caught it, on a fixture
+nobody had touched.
+
+Everything else stayed private, and is now genuinely private: the JSON
+parser's internals, the map's bucket arithmetic, the `*_raw` runtime
+stubs.
 
 ### What `pub` still does not cover
 

@@ -464,3 +464,10 @@ Worth knowing before you "fix" them:
 - **A new cross-module call needs `pub` on the callee.** The compiler
   had zero violations when this landed, so a failure here is almost
   certainly a genuinely missing `pub` rather than a false positive.
+- **The prelude is its own module, `parser.PRELUDE_MODULE()`.** A new
+  prelude function that user code should reach needs `pub`, or it will
+  read as unbound from outside. That includes anything the PARSER
+  generates a call to — see `__contract_require`.
+- **`cg_mangle` sanitizes every non-identifier character, not just
+  `.`.** Do not narrow it back: module names come from directory names,
+  and a directory with a dash in it produced invalid LLVM before this.

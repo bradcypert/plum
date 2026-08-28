@@ -41,7 +41,9 @@ let fail_ctx (msg: String): Unit = panic_raw("self-hosted type checker: ".concat
 // and every file not in a subdirectory. Printing "module ``" in a
 // diagnostic is not something a reader can act on.
 pub let module_label (m: String): String =
-    if m == "" { "the root module" } else { "module `".concat(m).concat("`") }
+    if m == "" { "the root module" }
+    else if m == parser.PRELUDE_MODULE(()) { "the prelude" }
+    else { "module `".concat(m).concat("`") }
 
 // --- Building the context from a whole program's declarations ---
 
@@ -208,7 +210,10 @@ let best_struct (ctx: TyContext) (viewer: String) (name: String): Option[StructI
         Some(info) => Some(info),
         None => match find_struct_in(ctx.structs, "", name, 0) {
             Some(info) => Some(info),
-            None => find_struct_acc(ctx.structs, name, 0),
+            None => match find_struct_in(ctx.structs, parser.PRELUDE_MODULE(()), name, 0) {
+                Some(info) => Some(info),
+                None => find_struct_acc(ctx.structs, name, 0),
+            },
         },
     }
 
@@ -230,7 +235,10 @@ let best_enum (ctx: TyContext) (viewer: String) (name: String): Option[EnumInfo]
         Some(info) => Some(info),
         None => match find_enum_in(ctx.enums, "", name, 0) {
             Some(info) => Some(info),
-            None => find_enum_acc(ctx.enums, name, 0),
+            None => match find_enum_in(ctx.enums, parser.PRELUDE_MODULE(()), name, 0) {
+                Some(info) => Some(info),
+                None => find_enum_acc(ctx.enums, name, 0),
+            },
         },
     }
 
