@@ -856,11 +856,19 @@ only way in. The same applies to destructuring — `Counter { label, n }`
 and the positional `Counter(label, n)` both name `n`, so both are
 refused.
 
-One thing `pub` does not cover: **two modules still cannot declare the
-same type name.** A type's identity in the checker is its bare name, so
-the type namespace is flat. Visibility prefers your own module's
-declaration, so you will never be told your own type is private, but
-genuinely duplicated names still resolve to one of them arbitrarily.
+**Two modules may declare the same type name.** A type is identified by
+the module that declared it, so `shapes.Circle` and `render.Circle` are
+different types, and a bare `Circle` means the one declared where you
+wrote it — your own module first, then the root, then the prelude. A
+root declaration shadows a prelude one of the same name rather than
+colliding with it.
+
+They do not silently unify:
+
+```
+let a: P = inner.make();
+// let a: declared type P doesn't match value type inner.P (inner.P != P)
+```
 
 The prelude is a module of its own, so `pub` applies to the standard
 library too: `Map.get` is part of the interface, `Map`'s buckets are

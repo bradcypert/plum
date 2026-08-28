@@ -195,6 +195,40 @@ pub let std_module_names (): Array[String] = ["Net", "Http", "Os", "Time"]
 // any `main.plum` and `pub` was decoration.
 pub let PRELUDE_MODULE (): String = "<prelude>"
 
+// A type's IDENTITY: the module that declared it, plus its name.
+//
+// Types used to be identified by their bare name alone, which meant
+// two modules could not declare the same one -- and worse, whichever
+// declaration the flat lookup found first won for EVERYBODY. A `struct
+// P` added in a subdirectory would break an unrelated root file that
+// had never referenced it, with an error blaming the innocent file.
+//
+// Root-module types stay bare so that the common case reads unchanged
+// and so a root declaration SHADOWS a prelude one of the same name
+// rather than being confused with it.
+//
+// The one rule, used by the checker and the backend alike -- two
+// copies of it would be exactly the drift this project keeps closing.
+pub let qualify_type (module_name: String) (name: String): String =
+    if module_name == "" { name } else { module_name.concat(".").concat(name) }
+
+// The same name as a HUMAN should read it. The prelude's own module is
+// an implementation detail nobody can name, so it never appears in a
+// diagnostic; a real module does, because when two types share a name
+// the module is the only thing telling them apart.
+// The declaration's own name, with any module qualifier dropped. This
+// is what an ASSOCIATED FUNCTION is named after: `let Circle.area (..)`
+// is written with the bare type name whichever module it lives in.
+pub let bare_type_name (qname: String): String = {
+    let parts = qname.split(".");
+    if Array.is_empty(parts) { qname } else { parts[parts.len() - 1] }
+}
+
+pub let display_type_name (qname: String): String = {
+    let prefix = PRELUDE_MODULE(()).concat(".");
+    if qname.starts_with(prefix) { String.slice(qname, String.char_len(prefix), String.char_len(qname)) } else { qname }
+}
+
 // --- lexer.Token-stream helpers (the `(tokens, pos) -> (value, next_pos)`
 // idiom this whole self-hosting effort has used since the lexer) ---
 
@@ -1468,7 +1502,7 @@ pub let render_type (ty: Ty): String = match ty {
     TyTuple(elems) => "(tup ".concat(join_space(Array.map(elems, |t| render_type(t)))).concat(")"),
 }
 
-let join_dot (segments: Array[String]): String = Array.fold(segments, "", |acc, s| if acc == "" { s } else { acc.concat(".").concat(s) })
+pub let join_dot (segments: Array[String]): String = Array.fold(segments, "", |acc, s| if acc == "" { s } else { acc.concat(".").concat(s) })
 
 let render_expr (e: PExpr): String = match e {
     EInt(n) => n.to_string(),

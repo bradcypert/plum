@@ -1,0 +1,4 @@
+verdict 7
+verdict bad
+result 3
+err

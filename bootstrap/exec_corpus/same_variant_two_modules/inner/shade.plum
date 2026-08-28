@@ -1,0 +1,2 @@
+pub enum Shade { Light, Dark }
+pub let dim (): Shade = Dark

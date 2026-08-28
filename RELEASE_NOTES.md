@@ -1,67 +1,111 @@
 Plum is a small, statically typed, compiled language.
 
-0.0.10 made `pub` mean something for functions, types and fields, and
-shipped with one caveat: it did not apply to the standard library,
-because the prelude shared a module with your own top-level files. This
-closes that.
+Two changes, and together they close the module system. Both were filed
+as missing conveniences. Both were bugs, and the second one
+miscompiled.
 
-## The prelude is a module
+## Two modules may declare the same type name
 
 ```plum
-let m: Map[String, Int] = Map.from_arrays(["k"], [1]);
+// main.plum                    // inner/i.plum
+pub struct P { pub x: Int }     pub struct P { pub y: String }
 
-Map.len(m)     // fine — part of the interface
-m.buckets      // rejected
+println(P { x: 42 }.x.to_string())
 ```
 
-```
-field Map.buckets is private to the prelude.
-Add `pub` to it to use it from the root module
-```
-
-Before this, `Map`'s bucket array was public API from any root-level
-file — which meant Plum's bucket count and hashing strategy were
-observable, and so effectively frozen. They are now implementation
-details that can change.
-
-**The module cannot be named.** There is no `use prelude;` and no
-`prelude.println(..)`. Prelude names are reached exactly as before,
-unqualified. The module exists so that what the prelude does not export
-is genuinely unavailable rather than merely undocumented — a private
-JSON helper or a `*_raw` runtime stub now reads as unbound, which is
-what it is.
-
-## Twenty-three functions gained the `pub` they always needed
-
-Every `Map.*`, every `Set.*`, `json_stringify` and `json_parse` were
-declared `let`. They worked for precisely the reason this release
-removes, and they are now marked properly. If you use the standard
-library, nothing changes.
-
-`__contract_require`/`__contract_ensure` are the interesting pair: the
-parser generates calls to them when it desugars `requires`/`ensures`,
-and that generated code lands in your module, so they are public
-whether or not anyone would write them by hand. Two harnesses caught
-that on a fixture nobody had touched.
-
-## A symbol-mangling bug that was never about the prelude
-
-The prelude's module name reaches the symbol mangler, and the build
-failed on invalid LLVM:
+Before this release:
 
 ```
-@g.plum_<prelude>_MAP_INITIAL_BUCKETS = global i64 0
+struct P has no field named x
 ```
 
-`cg_mangle` replaced `.` with `_` and passed everything else through.
-That was fine while every module name came from a directory that
-happened to be a plain identifier — and it means **a project with a
-directory like `my-mod/` would have emitted invalid IR**, with nothing
-to catch it. It now sanitizes every character that is not a letter,
-digit or `_`.
+**Adding a struct in a subdirectory broke an unrelated root file that
+had never referenced it**, and the error blamed the file that had done
+nothing wrong. Types were identified by their bare name, so whichever
+declaration the lookup found first won — for everybody.
+
+A type is now identified by the module that declared it. `shapes.Circle`
+and `render.Circle` are different types, and a bare `Circle` means the
+one declared where you wrote it: your own module first, then the root,
+then the prelude. A root declaration **shadows** a prelude one of the
+same name rather than being confused with it.
+
+They also no longer silently unify, which was the quieter half of the
+same bug — before, both were `ITStruct("P")`, so this type-checked and
+then read a field that was not there:
+
+```
+let a: P = inner.make();
+// let a: declared type P doesn't match value type inner.P (inner.P != P)
+```
+
+Nothing changes for code that does not reuse a name. Root-module type
+names are unchanged, and a module appears in a diagnostic only when it
+is the thing telling two types apart.
+
+## Two enums may declare the same variant name
+
+```plum
+// main.plum                    // inner/shade.plum
+enum Weight { Light, Heavy }    pub enum Shade { Light, Dark }
+
+match inner.dim() { Light => "shade light", Dark => "shade dark" }
+```
+
+Before this release that was `Weight != inner.Shade`: a tag was looked
+up by scanning every enum, and the scan stopped at the first one that
+declared it, whatever the value being matched actually was.
+
+A pattern now resolves against **the scrutinee's type**, which is
+already known where the arm is written. `Light` matched on an
+`inner.Shade` is that enum's `Light`, however many other enums declare
+one.
+
+### It was also a miscompile
+
+```plum
+enum Verdict { Ok, Bad }
+println(match Bad { Ok => "ok", Bad => "bad" })
+```
+
+This type-checked and then crashed. The backend resolved variant tags
+independently of the checker, by the same flat scan — so the two could
+answer differently, and here they did: the checker meant `Verdict.Ok`
+and the generated code meant the prelude's `Result.Ok`. The compiler's
+IR now carries the enum the checker chose, and nothing downstream
+resolves a tag a second time.
+
+### Saying which one you mean
+
+`Enum.Variant` works in expressions and in patterns:
+
+```plum
+let v = Verdict.Ok(7);
+match r { Result.Ok(n) => n.to_string(), Err(e) => e }
+```
+
+A tag you write unqualified means, in order: the scrutinee's enum in a
+pattern; then an enum declared in **your** module, so a local `Ok`
+shadows the prelude's exactly as a local type name does; then the only
+enum that declares it. If more than one still fits, that is now an
+error rather than a guess:
+
+```
+`Light` is a variant of Weight and Shade -- write Weight.Light to say
+which one you mean
+```
 
 ## Upgrading
 
-Nothing to do unless you were reaching into the standard library's
-internals, in which case the error names the field or function. The
-public API is unchanged.
+Nothing to do for either change.
+
+If you were relying on two same-named types being interchangeable, they
+are not — but that only ever worked by accident, and produced the wrong
+field rather than an error.
+
+If your module declares an enum with a variant named like a prelude one
+(`Ok`, `Err`, `Some`, `None`), a bare use of that tag in that module now
+means **yours**. Write `Result.Ok` or `Option.Some` for the prelude's.
+Programs where two enums in the same module share a tag name and nothing
+says which is meant are now rejected instead of silently compiled
+against whichever was declared first.

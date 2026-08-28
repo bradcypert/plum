@@ -1,0 +1,18 @@
+// `Ok` is the prelude's, until a module declares one. Then it is that
+// module's, and the prelude's is still reachable by name -- the same
+// shadowing rule types get.
+//
+// This used to type-check as `Result` and then MISCOMPILE: the checker
+// picked one enum and the backend, resolving the tag all over again,
+// picked the other. Hence `TVariantNew` carrying the enum.
+enum Verdict { Ok(Int), Bad }
+
+let describe (r: Result[Int, String]): String =
+    match r { Result.Ok(n) => "result ".concat(n.to_string()), Err(e) => e }
+
+let main (): Unit = {
+    println(match Verdict.Ok(7) { Ok(n) => "verdict ".concat(n.to_string()), Bad => "bad" });
+    println(match Bad { Ok(_) => "ok", Bad => "verdict bad" });
+    println(describe(Result.Ok(3)));
+    println(describe(Err("err")))
+}

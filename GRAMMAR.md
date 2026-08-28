@@ -422,6 +422,7 @@ OrPattern      ::= PrimaryPattern { "|" PrimaryPattern }
 PrimaryPattern ::= Literal
                   | "_"
                   | Identifier
+                  | PathType
                   | PathType "(" [ Pattern { "," Pattern } ] ")"
                   | PathType "{" [ FieldPatternList ] "}"
                   | "(" [ Pattern { "," Pattern } [ "," ] ] ")"
@@ -441,6 +442,24 @@ grammatical position.
 `Option[T]`/`Result[T, E]` patterns (`Some(x)`, `None`, `Ok(v)`,
 `Err(e)`) fall directly out of the enum-variant pattern production
 (`PathType "(" ... ")"`) — nothing type-specific is needed for them.
+
+A bare `PathType` is a nullary variant only when it has more than one
+segment (`Shade.Light`); a single capitalized `Identifier` is
+ambiguous between a nullary variant and a binding, and is resolved as
+one or the other by name, not by grammar.
+
+`PathType`'s multi-segment form is how a variant says which enum it
+belongs to (`Shade.Light`, `Result.Ok(n)`). Which enum an UNQUALIFIED
+tag means is a resolution question, not a grammatical one: see
+DESIGN.md, "A variant tag stops being a global name".
+
+In a PATTERN the path must begin with a capitalized segment, since that
+is what tells a path-shaped pattern from an identifier binding — so the
+enum may be named (`Shade.Light`) but the module may not
+(`inner.Shade.Light` does not parse, though it does in an expression).
+The enum name alone resolves through the declaring module, the root and
+then the prelude, so the module qualifier is only missed when two
+enums of the same bare NAME are visible at once.
 
 ## Known ambiguities and implementation notes
 

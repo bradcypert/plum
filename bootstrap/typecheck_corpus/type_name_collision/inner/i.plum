@@ -1,0 +1,2 @@
+pub struct P { pub y: String }
+pub let make (): P = P { y: "inner" }

@@ -1,0 +1,13 @@
+// Rejected: two enums in the SAME module declare `Light`, and nothing
+// at this use site says which. Neither the scrutinee (there is none)
+// nor the module (both are here) narrows it, so the program has to.
+//
+// Picking the first-declared one is what this did before, and it is
+// how a program could mean one enum and be compiled as the other.
+enum Weight { Light, Heavy }
+enum Shade { Light, Dark }
+
+let main (): Unit = {
+    let x = Light;
+    println("built")
+}

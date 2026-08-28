@@ -1459,7 +1459,9 @@ top-level functions/globals, and extern functions — NOT for individual
 struct fields (`is_pub` exists per-field in the AST, but nothing reads
 it yet, a separate smaller gap) or for enum variant TAGS (see below).
 
-**Known v1 scope boundary, not an accidental gap**: enum variant tags
+**Known v1 scope boundary, not an accidental gap** (closed 2026-08-28,
+see "A variant tag stops being a global name" -- tags now resolve by
+qualifier, scrutinee, then declaring module): enum variant tags
 (`Circle`, `Some`, `None`, ...) are NOT module-qualified or `pub`-
 checked at all — they stay in the SAME flat, global, look-up-by-bare-
 tag-name-alone namespace that predates the module system entirely (a
@@ -15554,3 +15556,155 @@ across seven modules and **no two share a name**. The flat namespace
 has been kept unique by hand, the same way `plum__` prefixes keep the
 prelude's helpers out of the way. So the change would not have to
 disambiguate anything that exists today — it is mechanical, just wide.
+
+## Types carry the module that declared them (2026-08-27)
+
+The last gap in `pub`, and it turned out to be a bug report rather than
+a feature request. Two modules could not declare the same type name,
+which sounds like an inconvenience. What it actually did:
+
+```
+// main.plum          // inner/i.plum
+pub struct P { x: Int }   pub struct P { y: String }
+
+println(P { x: 42 }.x)
+// struct P has no field named x
+```
+
+**Adding a struct in a subdirectory broke an unrelated root file that
+had never referenced it**, and the error blamed the innocent file. The
+flat lookup returned whichever declaration came first, for everybody.
+
+### Qualified NAMES, not a wider `ITy`
+
+The estimate quoted for three releases was "88 `ITStruct`/`ITEnum`
+sites", on the assumption that identity meant `ITStruct(module, name,
+args)`. It did not. Putting the QUALIFIED NAME in the existing field
+does the same work:
+
+- `ITStruct("inner.P", [])` and `ITStruct("P", [])` are already
+  distinct to `unify`, with no change to arity or to the 88 sites that
+  match on it.
+- Builtins (`Array`, `Task`, `Sender`, `Receiver`, `Box`) are the only
+  hardcoded names, and they have no declaring module, so they stay
+  bare and every `name == "Array"` test keeps working.
+- Root-module types stay bare, which keeps the common case reading
+  unchanged AND makes a root declaration SHADOW a prelude one of the
+  same name rather than being confused with it.
+
+`parser.qualify_type` is the single rule, in `parser` because both the
+checker and the backend import it and neither imports the other. Two
+copies of that rule is exactly the drift this project keeps closing.
+
+### Three things that broke, and what each taught
+
+**Invalid LLVM.** `cg_ity_mangle` returned a type's name raw, so an
+ordinary `Array.zip` emitted
+`@plum_rel_Array_<prelude>.Zipped_Int_Str`. The sanitizer added for
+module names a release earlier was the fix; it is now shared as
+`cg_sanitize` and used by both. The lesson is narrow and worth keeping:
+every name that reaches a symbol has to go through one sanitizer, and
+there was no reason to have two paths.
+
+**Method resolution.** `T.f(x)` derives its namespace from the type,
+and the type's name is now qualified — so `Option.unwrap_or` was being
+looked up as `<prelude>.Option.unwrap_or`. An associated function is
+DECLARED with the bare name (`let Circle.area (..)`) whatever module it
+lives in, so the namespace uses `parser.bare_type_name`.
+
+**Field visibility went quiet.** `check_field_visible` looked its
+struct up with `best_struct`, which takes a BARE name; handed a
+qualified one it found nothing and skipped the check. A check that
+fails open is worse than no check, and only
+`typecheck_corpus/private_field_across_modules` caught it — a fixture
+written for a different reason two hours earlier. It now tries the
+identity first and the bare name second.
+
+### What is still flat
+
+(Closed the next day -- see "A variant tag stops being a global name".
+The paragraph below is what was believed at the time, and two thirds of
+it was wrong: it had been hit, and it was not a syntax question.)
+
+A variant TAG. `find_variant` searches every enum by tag, so two
+modules cannot declare a variant of the same name — `Light` in one and
+`Light` in another still collide. The enums themselves are distinct;
+only the bare tag lookup is not. Nobody has hit it, and fixing it means
+qualified variant references, which is a syntax question rather than a
+representation one.
+
+## A variant tag stops being a global name (2026-08-28)
+
+The tail of the previous entry said a variant tag was still flat, that
+nobody had hit it, and that fixing it was a syntax question. Two of
+those three were wrong.
+
+It was not only a collision. `find_variant` searched every enum by tag
+and so did the BACKEND, separately, in `cg_find_variant`. As long as
+both scans were the same flat first-wins scan they agreed by accident.
+The moment the checker resolved a tag any other way, they stopped:
+
+```plum
+enum Verdict { Ok, Bad }
+println(match Bad { Ok => "ok", Bad => "bad" })
+```
+
+The checker said the root's `Verdict.Ok`, the backend said the
+prelude's `Result.Ok`, and the program type-checked and then crashed
+reading a payload that was not there. That is the same failure
+`TStructLit` had, fixed the same way: **whoever resolved the name says
+what it resolved to, and nothing downstream resolves it again.**
+
+### The order the four pieces had to land in
+
+An earlier attempt did the visible part first -- prefer the writer's
+own module -- and produced exactly that crash. The invisible part is
+the prerequisite:
+
+1. **The IR carries the enum.** `TVariantNew(enum, tag, args)` and
+   `TVariantReuse` likewise; `CgVariant` knows its own enum instead of
+   being searched for by tag; a resolved pattern's path is rewritten to
+   `[enum, tag]`, both qualified, by the binder that resolved it.
+   `ctx_variant_payload`/`ctx_variant_generics` take the enum too --
+   they were reverse-searching by tag to find the payload types the
+   refcounting code generates from. Nothing about this is visible in
+   any program, and everything else depends on it.
+2. **The scrutinee decides a pattern.** `match s { Light => .. }` on an
+   `inner.Shade` means that enum's `Light`, and the type is known right
+   there -- it is what the arm is about to be unified against. This is
+   the primary mechanism, not a refinement: preferring the reader's own
+   module gets this case actively WRONG, because the reader's module is
+   not what the value came from.
+3. **Ambiguity is reported, not guessed.** Only where nothing else
+   decided: one candidate is an answer, and the writer's own module
+   breaks a tie the way it does for type names. Both together are what
+   make an error possible at all -- an unconditional ambiguity check
+   fails on the prelude's own `Ok` the moment any program declares one.
+4. **`Shade.Light` says which**, in expressions and in patterns. The
+   escape hatch has to exist before shadowing does, so it landed before
+   the rule that makes a local `Ok` shadow the prelude's.
+
+### What a tag now means
+
+In order: an explicit qualifier; the scrutinee's type, in a pattern;
+the module doing the writing; and a scan of every enum, reached only
+when exactly one enum declares the tag. More than one and the program
+is asked to say which:
+
+```
+`Light` is a variant of Weight and Shade -- write Weight.Light to say
+which one you mean
+```
+
+A local declaration shadowing a prelude tag is now the same rule types
+already had, and `Result.Ok(3)` still reaches the prelude from a module
+that declares an `Ok` of its own.
+
+### The estimate
+
+This was quoted as an afternoon for the diagnostic alone. The
+diagnostic alone cannot ship: making ambiguity an error requires that
+the prelude never be ambiguous, which needs the resolution rules, which
+need the backend to stop resolving independently. Where a change looks
+small because only its visible half was counted, the invisible half is
+usually the part that has to be right.

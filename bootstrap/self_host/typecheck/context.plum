@@ -103,12 +103,12 @@ let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext):
     else {
         match items[i].kind {
             IKStruct(decl) => collect_names_acc(items, i + 1, TyContext {
-                structs: ctx.structs.push(StructInfo { name: decl.name, generics: Array.map(decl.generics, |g| g.name), fields: [], module: items[i].module, is_pub: items[i].is_pub }),
+                structs: ctx.structs.push(StructInfo { name: parser.qualify_type(items[i].module, decl.name), generics: Array.map(decl.generics, |g| g.name), fields: [], module: items[i].module, is_pub: items[i].is_pub }),
                 enums: ctx.enums,
             }),
             IKEnum(decl) => collect_names_acc(items, i + 1, TyContext {
                 structs: ctx.structs,
-                enums: ctx.enums.push(EnumInfo { name: decl.name, generics: Array.map(decl.generics, |g| g.name), variants: [], module: items[i].module, is_pub: items[i].is_pub }),
+                enums: ctx.enums.push(EnumInfo { name: parser.qualify_type(items[i].module, decl.name), generics: Array.map(decl.generics, |g| g.name), variants: [], module: items[i].module, is_pub: items[i].is_pub }),
             }),
             _ => collect_names_acc(items, i + 1, ctx),
         }
@@ -136,17 +136,17 @@ let add_struct (names: TyContext) (out: TyContext) (decl: parser.StructDeclNode)
     // that same reasoning, applied to functions instead of structs).
     let generic_names = Array.map(decl.generics, |g| g.name);
     let fields = Array.map(decl.fields, |f| StructFieldTemplate { name: f.name, ty: resolve_ann_seen(names, module_name, generic_names, f.ty), is_pub: f.is_pub });
-    TyContext { structs: out.structs.push(StructInfo { name: decl.name, generics: generic_names, fields: fields, module: module_name, is_pub: is_pub }), enums: out.enums }
+    TyContext { structs: out.structs.push(StructInfo { name: parser.qualify_type(module_name, decl.name), generics: generic_names, fields: fields, module: module_name, is_pub: is_pub }), enums: out.enums }
 }
 
 let add_enum (names: TyContext) (out: TyContext) (decl: parser.EnumDeclNode) (module_name: String) (is_pub: Bool): TyContext = {
     let generic_names = Array.map(decl.generics, |g| g.name);
     let variants = Array.map(decl.variants, |v| VariantInfo {
         tag: v.name,
-        enum_name: decl.name,
+        enum_name: parser.qualify_type(module_name, decl.name),
         payload: Array.map(v.payload, |t| resolve_ann_seen(names, module_name, generic_names, t)),
     });
-    TyContext { structs: out.structs, enums: out.enums.push(EnumInfo { name: decl.name, generics: generic_names, variants: variants, module: module_name, is_pub: is_pub }) }
+    TyContext { structs: out.structs, enums: out.enums.push(EnumInfo { name: parser.qualify_type(module_name, decl.name), generics: generic_names, variants: variants, module: module_name, is_pub: is_pub }) }
 }
 
 // --- Lookups ---
@@ -166,7 +166,15 @@ let add_enum (names: TyContext) (out: TyContext) (decl: parser.EnumDeclNode) (mo
 // makes a constructor function the only way in, which is the whole
 // point of hiding the field -- but it means such a struct needs one.
 pub let check_field_visible (ctx: TyContext) (viewer: String) (struct_name: String) (field: String): Unit =
-    match best_struct(ctx, viewer, struct_name) {
+    // Callers pass either an identity (qualified, straight out of an
+    // `ITStruct`) or a name as written in source (bare). Try the
+    // identity first: `best_struct` would fail to match a qualified
+    // name and silently skip the check, which is how this went quiet
+    // the first time.
+    match match find_struct(ctx, struct_name) {
+        Some(info) => Some(info),
+        None => best_struct(ctx, viewer, struct_name),
+    } {
         None => (),
         Some(info) => if viewer == ANY_MODULE() || viewer == info.module { () }
             else { match find_field_pub(info.fields, field, 0) {
@@ -205,21 +213,25 @@ pub let check_struct_named (ctx: TyContext) (viewer: String) (name: String): Uni
 // FIELDS may come from the other declaration. Fixing that means giving
 // a type a module-qualified identity, which is a separate and much
 // wider change (see DESIGN.md).
-let best_struct (ctx: TyContext) (viewer: String) (name: String): Option[StructInfo] =
+pub let best_struct (ctx: TyContext) (viewer: String) (name: String): Option[StructInfo] =
     match find_struct_in(ctx.structs, viewer, name, 0) {
         Some(info) => Some(info),
         None => match find_struct_in(ctx.structs, "", name, 0) {
             Some(info) => Some(info),
             None => match find_struct_in(ctx.structs, parser.PRELUDE_MODULE(()), name, 0) {
                 Some(info) => Some(info),
-                None => find_struct_acc(ctx.structs, name, 0),
+                // Last resort: any module at all, matched on the bare name.
+            // Reached when a name is not declared by the viewer, the
+            // root or the prelude -- a qualified `inner.P` written out
+            // in full lands here too.
+            None => find_struct_bare(ctx.structs, name, 0),
             },
         },
     }
 
 let find_struct_in (structs: Array[StructInfo]) (module_name: String) (name: String) (i: Int): Option[StructInfo] =
     if i >= structs.len() { None }
-    else if structs[i].name == name && structs[i].module == module_name { Some(structs[i]) }
+    else if structs[i].name == parser.qualify_type(module_name, name) && structs[i].module == module_name { Some(structs[i]) }
     else { find_struct_in(structs, module_name, name, i + 1) }
 
 // Checked against the ENUM, not the variant: `Hidden.A` is private
@@ -230,23 +242,41 @@ pub let check_enum_named (ctx: TyContext) (viewer: String) (enum_name: String): 
         None => (),
     }
 
-let best_enum (ctx: TyContext) (viewer: String) (name: String): Option[EnumInfo] =
+pub let best_enum (ctx: TyContext) (viewer: String) (name: String): Option[EnumInfo] =
     match find_enum_in(ctx.enums, viewer, name, 0) {
         Some(info) => Some(info),
         None => match find_enum_in(ctx.enums, "", name, 0) {
             Some(info) => Some(info),
             None => match find_enum_in(ctx.enums, parser.PRELUDE_MODULE(()), name, 0) {
                 Some(info) => Some(info),
-                None => find_enum_acc(ctx.enums, name, 0),
+                None => find_enum_bare(ctx.enums, name, 0),
             },
         },
     }
 
 let find_enum_in (enums: Array[EnumInfo]) (module_name: String) (name: String) (i: Int): Option[EnumInfo] =
     if i >= enums.len() { None }
-    else if enums[i].name == name && enums[i].module == module_name { Some(enums[i]) }
+    else if enums[i].name == parser.qualify_type(module_name, name) && enums[i].module == module_name { Some(enums[i]) }
     else { find_enum_in(enums, module_name, name, i + 1) }
 
+// Matches the bare LAST SEGMENT, for the last-resort lookup only. Two
+// modules declaring the same name both match here and the first wins,
+// which is exactly the old behaviour -- but it is now reached only
+// after the viewer, the root and the prelude have all been tried, so
+// it can no longer make a module lose its own type.
+let find_struct_bare (structs: Array[StructInfo]) (name: String) (i: Int): Option[StructInfo] =
+    if i >= structs.len() { None }
+    else if structs[i].name == parser.qualify_type(structs[i].module, name) { Some(structs[i]) }
+    else { find_struct_bare(structs, name, i + 1) }
+
+let find_enum_bare (enums: Array[EnumInfo]) (name: String) (i: Int): Option[EnumInfo] =
+    if i >= enums.len() { None }
+    else if enums[i].name == parser.qualify_type(enums[i].module, name) { Some(enums[i]) }
+    else { find_enum_bare(enums, name, i + 1) }
+
+// `find_struct`/`find_enum` take a QUALIFIED name -- the one carried in
+// `ITStruct`/`ITEnum`. Resolving a name written in SOURCE goes through
+// `best_struct`/`best_enum` instead, which take the bare form.
 pub let find_struct (ctx: TyContext) (name: String): Option[StructInfo] = find_struct_acc(ctx.structs, name, 0)
 let find_struct_acc (structs: Array[StructInfo]) (name: String) (i: Int): Option[StructInfo] =
     if i >= structs.len() { None } else if structs[i].name == name { Some(structs[i]) } else { find_struct_acc(structs, name, i + 1) }
@@ -255,25 +285,65 @@ pub let find_enum (ctx: TyContext) (name: String): Option[EnumInfo] = find_enum_
 let find_enum_acc (enums: Array[EnumInfo]) (name: String) (i: Int): Option[EnumInfo] =
     if i >= enums.len() { None } else if enums[i].name == name { Some(enums[i]) } else { find_enum_acc(enums, name, i + 1) }
 
-// A variant tag's owning enum + declared generics + payload template
-// — tags are looked up by bare name alone, no owning-enum qualifier
-// needed (mirrors the real compiler's own "variant tags live in one
-// flat, global namespace" precedent — DESIGN.md's module-system
-// section documents this as a deliberate, pre-existing v1 scope
-// boundary, not something specific to this checker).
+// A variant tag's owning enum + declared generics + payload template.
+//
+// Tags no longer live in one flat global namespace. A tag is resolved
+// by, in order: an explicit qualifier (`Shade.Light`), the SCRUTINEE's
+// type in a pattern, the module doing the writing, and only then a
+// scan of every enum -- which is now reached just when exactly one
+// enum declares the tag, because more than one is reported instead of
+// guessed. `find_variant` is that last scan and is no longer the way
+// anything resolves a tag on its own.
 pub struct VariantLookup { pub enum_name: String, pub enum_generics: Array[String], pub payload: Array[ITy] }
 
-pub let find_variant (ctx: TyContext) (tag: String): Option[VariantLookup] = find_variant_in_enums(ctx.enums, tag, 0)
-let find_variant_in_enums (enums: Array[EnumInfo]) (tag: String) (i: Int): Option[VariantLookup] =
-    if i >= enums.len() { None }
-    else {
-        match find_variant_acc(enums[i].variants, tag, 0) {
-            Some(v) => Some(VariantLookup { enum_name: enums[i].name, enum_generics: enums[i].generics, payload: v.payload }),
-            None => find_variant_in_enums(enums, tag, i + 1),
-        }
-    }
 let find_variant_acc (variants: Array[VariantInfo]) (tag: String) (i: Int): Option[VariantInfo] =
     if i >= variants.len() { None } else if variants[i].tag == tag { Some(variants[i]) } else { find_variant_acc(variants, tag, i + 1) }
+
+// Resolution that NAMES the enum instead of searching for it. Every
+// caller that already knows which enum it means should use this:
+// `find_variant` answers by tag alone, so two enums sharing a tag
+// name make it a coin toss -- and the checker and the backend can
+// toss differently, which type-checks and then miscompiles.
+// Every enum that declares this tag, in declaration order. One
+// candidate is an answer; more than one is a question the program has
+// to answer for itself.
+pub let variant_candidates (ctx: TyContext) (tag: String): Array[VariantLookup] = variant_candidates_acc(ctx.enums, tag, 0, [])
+let variant_candidates_acc (enums: Array[EnumInfo]) (tag: String) (i: Int) (acc: Array[VariantLookup]): Array[VariantLookup] =
+    if i >= enums.len() { acc }
+    else {
+        match find_variant_acc(enums[i].variants, tag, 0) {
+            Some(v) => variant_candidates_acc(enums, tag, i + 1, acc.push(VariantLookup { enum_name: enums[i].name, enum_generics: enums[i].generics, payload: v.payload })),
+            None => variant_candidates_acc(enums, tag, i + 1, acc),
+        }
+    }
+
+// The candidates declared in one module. `module_of_type` splits a
+// qualified name back into the module that owns it.
+pub let variants_in_module (cands: Array[VariantLookup]) (module_name: String) (i: Int) (acc: Array[VariantLookup]): Array[VariantLookup] =
+    if i >= cands.len() { acc }
+    else if module_of_type(cands[i].enum_name) == module_name { variants_in_module(cands, module_name, i + 1, acc.push(cands[i])) }
+    else { variants_in_module(cands, module_name, i + 1, acc) }
+
+// "" for a name with no qualifier -- a builtin like `Array`, which no
+// module declares.
+pub let module_of_type (qname: String): String = {
+    let parts = qname.split(".");
+    if parts.len() < 2 { "" } else { join_but_last(parts, 0, "") }
+}
+
+let join_but_last (parts: Array[String]) (i: Int) (acc: String): String =
+    if i >= parts.len() - 1 { acc }
+    else if acc == "" { join_but_last(parts, i + 1, parts[i]) }
+    else { join_but_last(parts, i + 1, acc.concat(".").concat(parts[i])) }
+
+pub let find_variant_in (ctx: TyContext) (enum_name: String) (tag: String): Option[VariantLookup] =
+    match find_enum(ctx, enum_name) {
+        None => None,
+        Some(info) => match find_variant_acc(info.variants, tag, 0) {
+            Some(v) => Some(VariantLookup { enum_name: info.name, enum_generics: info.generics, payload: v.payload }),
+            None => None,
+        },
+    }
 
 // --- AST annotation -> `ITy` ---
 
@@ -322,9 +392,15 @@ let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (n
     else if name == "Sender" { ITStruct("Sender", args) }
     else if name == "Receiver" { ITStruct("Receiver", args) }
     else if Array.contains(in_scope, name) { ITParam(name) }
-    else if Option.is_some(find_struct(ctx, name)) { check_struct_named(ctx, viewer, name); ITStruct(name, args) }
-    else if Option.is_some(find_enum(ctx, name)) { check_enum_named(ctx, viewer, name); ITEnum(name, args) }
-    else { { fail_ctx("unknown type: ".concat(name)); ITUnit } }
+    // Resolved through the VIEWER's own module first, so a name means
+    // what it means where it was written.
+    else { match best_struct(ctx, viewer, name) {
+        Some(info) => { check_struct_named(ctx, viewer, name); ITStruct(info.name, args) },
+        None => match best_enum(ctx, viewer, name) {
+            Some(info) => { check_enum_named(ctx, viewer, name); ITEnum(info.name, args) },
+            None => { fail_ctx("unknown type: ".concat(name)); ITUnit },
+        },
+    } }
 
 // --- Instantiating a declaration's template at a concrete use site ---
 
@@ -369,10 +445,10 @@ pub let ctx_field_types (ctx: TyContext) (name: String): Array[ITy] =
         None => { fail_ctx("unknown struct: ".concat(name).concat(" (asked for its field types)")); [] },
     }
 
-pub let ctx_variant_payload (ctx: TyContext) (tag: String): Array[ITy] =
-    match find_variant(ctx, tag) {
+pub let ctx_variant_payload (ctx: TyContext) (enum_name: String) (tag: String): Array[ITy] =
+    match find_variant_in(ctx, enum_name, tag) {
         Some(v) => v.payload,
-        None => { fail_ctx("unknown variant: ".concat(tag)); [] },
+        None => { fail_ctx("unknown variant: ".concat(enum_name).concat(".").concat(tag)); [] },
     }
 
 // The declared type-parameter names of a struct, and of the enum a
@@ -386,10 +462,10 @@ pub let ctx_struct_generics (ctx: TyContext) (name: String): Array[String] =
         None => { fail_ctx("unknown struct: ".concat(name).concat(" (asked for its generics)")); [] },
     }
 
-pub let ctx_variant_generics (ctx: TyContext) (tag: String): Array[String] =
-    match find_variant(ctx, tag) {
+pub let ctx_variant_generics (ctx: TyContext) (enum_name: String) (tag: String): Array[String] =
+    match find_variant_in(ctx, enum_name, tag) {
         Some(v) => v.enum_generics,
-        None => { fail_ctx("unknown variant: ".concat(tag)); [] },
+        None => { fail_ctx("unknown variant: ".concat(enum_name).concat(".").concat(tag)); [] },
     }
 
 // Every variant tag of an enum, in declaration order — what

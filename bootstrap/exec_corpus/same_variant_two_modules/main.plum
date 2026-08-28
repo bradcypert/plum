@@ -1,0 +1,14 @@
+// Two enums, in two modules, each with a `Light`. Which one an arm
+// means is decided by the SCRUTINEE's type, not by a scan that stops
+// at the first enum declaring the tag -- that scan used to answer
+// `Weight` here and reject the program with `Weight != inner.Shade`.
+use inner;
+
+enum Weight { Light, Heavy }
+
+let describe (s: Shade): String = match s { Light => "shade light", Dark => "shade dark" }
+
+let main (): Unit = {
+    println(describe(inner.dim()));
+    println(match Heavy { Light => "weight light", Heavy => "weight heavy" })
+}

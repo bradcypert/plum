@@ -176,7 +176,7 @@ let cg_ty_eq (a: CgTy) (b: CgTy): Bool = cg_ty_name(a) == cg_ty_name(b)
 // already get everywhere else in this bootstrap (see DESIGN.md's
 // module-system section, which documents that as a deliberate v1
 // boundary).
-pub struct CgVariant { pub name: String, pub tag: Int, pub arity: Int }
+pub struct CgVariant { pub name: String, pub enum_name: String, pub tag: Int, pub arity: Int }
 pub struct CgEnumDecl { pub name: String, pub variants: Array[CgVariant] }
 
 // Field and payload TYPES are no longer resolved here at all: every
@@ -271,8 +271,14 @@ let cg_global_slot (module_name: String) (name: String): String = "@g.".concat(c
 // This is NOT injective (`a.b` and `a-b` mangle alike), which is
 // tolerable only because a module name still comes from a directory
 // and two sibling directories cannot differ by punctuation alone.
-let cg_mangle (name: String): String =
-    "plum_".concat(Array.concat_all(Array.map(chars_of(name), |c| if cg_sym_char_ok(c) { c } else { "_" })))
+let cg_mangle (name: String): String = "plum_".concat(cg_sanitize(name))
+
+// Anything that is not a letter, a digit or `_` becomes `_`. Every
+// name that reaches an LLVM symbol goes through here: module names,
+// which come from directories, and type names, which are qualified
+// with the module that declared them.
+pub let cg_sanitize (name: String): String =
+    Array.concat_all(Array.map(chars_of(name), |c| if cg_sym_char_ok(c) { c } else { "_" }))
 
 let CG_SYM_CHARS: Array[String] = chars_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
 
@@ -328,8 +334,14 @@ let cg_ity_mangle (t: typecheck.ITy): String =
         ITStr => "Str",
         ITCStr => "CStr",
         ITUnit => "Unit",
-        ITStruct(name, args) => if Array.is_empty(args) { name } else { name.concat("_").concat(cg_targ_suffix(args, 0, "")) },
-        ITEnum(name, args) => if Array.is_empty(args) { name } else { name.concat("_").concat(cg_targ_suffix(args, 0, "")) },
+        // A declared type's name is QUALIFIED (`inner.P`,
+        // `<prelude>.Zipped`), and this feeds symbol names -- so it is
+        // sanitized here for the same reason `cg_mangle` sanitizes a
+        // module name. Without it a perfectly ordinary `Array.zip`
+        // emitted `@plum_rel_Array_<prelude>.Zipped_Int_Str`, which is
+        // not an LLVM identifier.
+        ITStruct(name, args) => if Array.is_empty(args) { cg_sanitize(name) } else { cg_sanitize(name).concat("_").concat(cg_targ_suffix(args, 0, "")) },
+        ITEnum(name, args) => if Array.is_empty(args) { cg_sanitize(name) } else { cg_sanitize(name).concat("_").concat(cg_targ_suffix(args, 0, "")) },
         ITFunction(ptys, ret) => "fn".concat(cg_targ_suffix(ptys, 0, "")).concat("_to_").concat(cg_ity_mangle(ret)),
         ITTuple(elems) => "tup".concat(cg_targ_suffix(elems, 0, "")),
         ITRef(inner) => "Ref_".concat(cg_ity_mangle(inner)),
@@ -378,18 +390,21 @@ let cg_collect_enums (items: Array[parser.ItemNode]) (i: Int) (next_tag: Int) (a
                 // machine type of a payload LOAD varies, and that comes
                 // from the scrutinee's own type arguments at the use
                 // site (`cg_pat_variant`).
-                let vs = cg_variants_of(decl.variants, 0, next_tag, []);
-                cg_collect_enums(items, i + 1, next_tag + decl.variants.len(), acc.push(CgEnumDecl { name: decl.name, variants: vs }))
+                let vs = cg_variants_of(parser.qualify_type(items[i].module, decl.name), decl.variants, 0, next_tag, []);
+                // Keyed by the same QUALIFIED name the checker puts in
+                // `ITEnum`, via the one shared rule. Keying it by the
+                // bare name would look right and fail to resolve.
+                cg_collect_enums(items, i + 1, next_tag + decl.variants.len(), acc.push(CgEnumDecl { name: parser.qualify_type(items[i].module, decl.name), variants: vs }))
             },
             _ => cg_collect_enums(items, i + 1, next_tag, acc),
         }
     }
 
-let cg_variants_of (variants: Array[parser.EnumVariantNode]) (i: Int) (next_tag: Int) (acc: Array[CgVariant]): Array[CgVariant] =
+let cg_variants_of (enum_name: String) (variants: Array[parser.EnumVariantNode]) (i: Int) (next_tag: Int) (acc: Array[CgVariant]): Array[CgVariant] =
     if i >= variants.len() { acc }
     else {
-        cg_variants_of(variants, i + 1, next_tag + 1,
-            acc.push(CgVariant { name: variants[i].name, tag: next_tag, arity: variants[i].payload.len() }))
+        cg_variants_of(enum_name, variants, i + 1, next_tag + 1,
+            acc.push(CgVariant { name: variants[i].name, enum_name: enum_name, tag: next_tag, arity: variants[i].payload.len() }))
     }
 
 // --- Declaration lookup ---
@@ -399,21 +414,15 @@ let cg_field_index (fields: Array[String]) (name: String) (i: Int): Int =
     else if fields[i] == name { i }
     else { cg_field_index(fields, name, i + 1) }
 
-// The enum a variant NAME belongs to, found by scanning every enum —
-// variant names are globally unique in this v1 (same flat scoping the
-// tags themselves get), so the first match is the only match.
-let cg_find_variant (p: CgProgram) (name: String): Option[CgVariant] = cg_find_variant_acc(p.enums, name, 0)
-let cg_find_variant_acc (es: Array[CgEnumDecl]) (name: String) (i: Int): Option[CgVariant] =
-    if i >= es.len() { None }
-    else { match cg_find_variant_in(es[i].variants, name, 0) { Some(v) => Some(v), None => cg_find_variant_acc(es, name, i + 1) } }
+// Lookup that NAMES the enum. The checker already decided which enum
+// a tag belongs to and says so in the node, so the backend has nothing
+// left to decide -- see `TVariantNew`'s comment for what went wrong
+// when both ends decided separately.
+let cg_variant_of (p: CgProgram) (enum_name: String) (tag: String): Option[CgVariant] =
+    cg_find_variant_in(cg_find_enum(p, enum_name).variants, tag, 0)
 
 let cg_find_variant_in (vs: Array[CgVariant]) (name: String) (i: Int): Option[CgVariant] =
     if i >= vs.len() { None } else if vs[i].name == name { Some(vs[i]) } else { cg_find_variant_in(vs, name, i + 1) }
-
-let cg_enum_of_variant (p: CgProgram) (name: String): String = cg_enum_of_variant_acc(p.enums, name, 0)
-let cg_enum_of_variant_acc (es: Array[CgEnumDecl]) (name: String) (i: Int): String =
-    if i >= es.len() { { cg_fail("unknown variant: ".concat(name)); "" } }
-    else { match cg_find_variant_in(es[i].variants, name, 0) { Some(_) => es[i].name, None => cg_enum_of_variant_acc(es, name, i + 1) } }
 
 // An enum cell is sized for the widest variant — see `cg_payload_
 // offset`'s own comment for why that is a correctness requirement.
@@ -556,8 +565,8 @@ let cg_const_of (p: CgProgram) (n: Int) (e: typecheck.TExpr): Option[ConstVal] =
         // still a literal. Hoisting beats recycling: no allocation, and
         // no runtime check either.
         TStructReuse(_, fs, _) => cg_const_struct(p, n, fs),
-        TVariantNew(tag, args) => cg_const_variant(p, n, tag, args),
-        TVariantReuse(tag, args, _) => cg_const_variant(p, n, tag, args),
+        TVariantNew(ename, tag, args) => cg_const_variant(p, n, ename, tag, args),
+        TVariantReuse(ename, tag, args, _) => cg_const_variant(p, n, ename, tag, args),
         _ => None,
     }
 
@@ -618,13 +627,13 @@ let cg_field_values (fs: Array[typecheck.TFieldInit]) (i: Int) (acc: Array[typec
 // matching loads a payload BEFORE it has confirmed the tag -- the load
 // is only safe because every enum cell is allocated for the widest
 // variant -- so a short static cell would be read past its end.
-let cg_const_variant (p: CgProgram) (n: Int) (tag: String) (args: Array[typecheck.TExpr]): Option[ConstVal] =
-    match cg_find_variant(p, tag) {
+let cg_const_variant (p: CgProgram) (n: Int) (ename: String) (tag: String) (args: Array[typecheck.TExpr]): Option[ConstVal] =
+    match cg_variant_of(p, ename, tag) {
         None => None,
         Some(v) => match cg_const_list(p, args, 0, cg_const_empty(n)) {
             None => None,
             Some(c) => Some(cg_const_cell(c, "i64, i64", "i64 -1, i64 ".concat(v.tag.to_string()),
-                cg_enum_cell_size(p, cg_enum_of_variant(p, v.name)) - 16 - 8 * args.len())),
+                cg_enum_cell_size(p, v.enum_name) - 16 - 8 * args.len())),
         },
     }
 
@@ -685,8 +694,8 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TClosure(params, body) => cg_closure(p, env, n, params, body, cg_concrete(p, typecheck.texpr_ty(p.subst, e))),
         TStructLit(name, fields, spread) => cg_or_const(p, n, e, cg_struct_lit(p, env, n, name, fields, spread)),
         TStructReuse(name, fields, cands) => cg_or_const(p, n, e, cg_struct_reuse(p, env, n, name, fields, cands)),
-        TVariantReuse(tag, args, cands) => cg_or_const(p, n, e, cg_variant_reuse(p, env, n, tag, args, cands)),
-        TVariantNew(tag, args) => cg_or_const(p, n, e, cg_variant_call(p, env, n, tag, args)),
+        TVariantReuse(ename, tag, args, cands) => cg_or_const(p, n, e, cg_variant_reuse(p, env, n, ename, tag, args, cands)),
+        TVariantNew(ename, tag, args) => cg_or_const(p, n, e, cg_variant_call(p, env, n, ename, tag, args)),
         TFnCall(m, name, args, targs) => cg_fn_call(p, env, n, m, name, args, targs, cg_ty(p, e)),
         TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
@@ -1407,7 +1416,7 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TIndex(a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
         TArrayLit(xs) => cg_reads_max_list(name, xs, 0, 0),
         TTupleLit(xs) => cg_reads_max_list(name, xs, 0, 0),
-        TVariantNew(_, xs) => cg_reads_max_list(name, xs, 0, 0),
+        TVariantNew(_, _, xs) => cg_reads_max_list(name, xs, 0, 0),
         TFnCall(_, _, xs, _) => cg_reads_max_list(name, xs, 0, 0),
         TArrayNs(_, xs) => cg_reads_max_list(name, xs, 0, 0),
         // The candidate is the first argument, so it is ALREADY counted
@@ -1419,7 +1428,7 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         // actually moved, but which one is a decision the backend makes
         // later, and over-counting only ever refuses a move.
         TStructReuse(_, fs, cands) => cg_cap2(cg_reads_max_fields(name, fs, 0, 0) + (if cg_name_in(cands, name, 0) { 1 } else { 0 })),
-        TVariantReuse(_, xs, cands) => cg_cap2(cg_reads_max_list(name, xs, 0, 0) + (if cg_name_in(cands, name, 0) { 1 } else { 0 })),
+        TVariantReuse(_, _, xs, cands) => cg_cap2(cg_reads_max_list(name, xs, 0, 0) + (if cg_name_in(cands, name, 0) { 1 } else { 0 })),
         TMethodCall(_, b, xs) => cg_cap2(cg_reads_max(name, b) + cg_reads_max_list(name, xs, 0, 0)),
         TClosureCall(f, xs) => cg_cap2(cg_reads_max(name, f) + cg_reads_max_list(name, xs, 0, 0)),
         // Branches are ALTERNATIVES: only one runs, so their contribution
@@ -1590,10 +1599,10 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         // arguments -- `match c { Count(k) => Count(k + 1) }` reads `k`,
         // not `c`. The cell to recycle is the SCRUTINEE, which is why
         // candidacy is deadness alone and not "mentioned here".
-        TVariantNew(nm, xs) => {
+        TVariantNew(en, nm, xs) => {
             let xs2 = lv_seq(ctx, xs, 0, []);
             let cands = lv_candidates(ctx, ctx.scope.len() - 1, []);
-            if Array.is_empty(cands) { TVariantNew(nm, xs2) } else { TVariantReuse(nm, xs2, cands) }
+            if Array.is_empty(cands) { TVariantNew(en, nm, xs2) } else { TVariantReuse(en, nm, xs2, cands) }
         },
         TFnCall(m, nm, xs, targs) => TFnCall(m, nm, lv_seq(ctx, xs, 0, []), targs),
         // `Array.map(xs, f)` can build its result into `xs`'s own cell
@@ -1634,7 +1643,7 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         // Already a reuse -- the pass is not run twice, but an arm is
         // cheaper than an assumption.
         TStructReuse(_, _, _) => node,
-        TVariantReuse(_, _, _) => node,
+        TVariantReuse(_, _, _, _) => node,
         TArrayNsReuse(_, _, _) => node,
         TStructLit(sname, fs, sp) => {
             let fs2 = lv_fields(ctx, fs, 0, [], lv_opt_list(sp));
@@ -3336,12 +3345,12 @@ let cg_reuse_drops (tys: Array[typecheck.ITy]) (old: String) (i: Int) (n: Int) (
 // left there, which is unreadable -- a payload is only ever loaded
 // under a matching tag -- and harmless, because a qualifying enum holds
 // no references at all.
-let cg_variant_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (tag: String) (args: Array[typecheck.TExpr]) (cands: Array[String]): Emit =
-    match cg_find_variant(p, tag) {
+let cg_variant_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ename: String) (tag: String) (args: Array[typecheck.TExpr]) (cands: Array[String]): Emit =
+    match cg_variant_of(p, ename, tag) {
         None => { cg_fail("internal: unknown variant reached codegen: ".concat(tag)); cg_unit_emit(n) },
         Some(v) => {
             let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
-            let want = cg_enum_cell_size(p, cg_enum_of_variant(p, v.name));
+            let want = cg_enum_cell_size(p, v.enum_name);
             match cg_first_reuse_cand(p, env, cands, 0, want) {
                 None => cg_variant_build(p, v, a),
                 Some(c) => cg_variant_build_reuse(p, v, a, c, want),
@@ -3350,7 +3359,7 @@ let cg_variant_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (tag: String) 
     }
 
 let cg_variant_build_reuse (p: CgProgram) (v: CgVariant) (a: ArgVals) (c: ReuseCand) (want: Int): Emit = {
-    let enum_name = cg_enum_of_variant(p, v.name);
+    let enum_name = v.enum_name;
     let r = cg_reuse_cell(p, c, want, a.n);
     let tagged = "  ".concat(r.cell).concat("_t = getelementptr i8, ptr ").concat(r.cell).concat(", i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
         .concat("  store i64 ").concat(v.tag.to_string()).concat(", ptr ").concat(r.cell).concat("_t\n");
@@ -3500,14 +3509,14 @@ let cg_field_read (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.
 
 // A variant constructor call, `Circle(2)`. The cell is sized for the
 // enum's WIDEST variant, not this one — see `cg_payload_offset`.
-let cg_variant_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (tag: String) (args: Array[typecheck.TExpr]): Emit =
-    match cg_find_variant(p, tag) {
+let cg_variant_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ename: String) (tag: String) (args: Array[typecheck.TExpr]): Emit =
+    match cg_variant_of(p, ename, tag) {
         Some(v) => cg_variant_build(p, v, cg_args(p, env, n, args, 0, "", "", "", "", [])),
         None => { cg_fail("internal: unknown variant reached codegen: ".concat(tag)); cg_unit_emit(n) },
     }
 
 let cg_variant_build (p: CgProgram) (v: CgVariant) (a: ArgVals): Emit = {
-    let enum_name = cg_enum_of_variant(p, v.name);
+    let enum_name = v.enum_name;
     let cell = cg_reg(a.n);
     let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat(cg_enum_cell_size(p, enum_name).to_string()).concat(")\n")
         .concat("  ").concat(cell).concat("_t = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
@@ -3736,7 +3745,7 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
         PFloat(v) => cg_pat_cmp(env, n, "fcmp oeq double ", sval, cg_float_text(v)),
         PBool(v) => cg_pat_cmp(env, n, "icmp eq i1 ", sval, if v { "1" } else { "0" }),
         PStr(v) => cg_pat_str(env, n, sval, v),
-        PVariant(path, arg_pats) => cg_pat_variant(p, env, n, path[path.len() - 1], arg_pats, sval, sity),
+        PVariant(path, arg_pats) => cg_pat_variant(p, env, n, path, arg_pats, sval, sity),
         PStruct(path, field_pats, _) => cg_pat_struct(p, env, n, path[path.len() - 1], field_pats, sval, sity),
         // A tuple pattern always matches its own type — there is only
         // one shape — so it contributes no test of its own, only the
@@ -3762,37 +3771,58 @@ let cg_pat_str (env: Array[CgSlot]) (n: Int) (sval: String) (lit: String): PatEm
     PatEmit { code: code, binds: "", allocas: "", releases: "",globals: cg_str_constant(n, lit), test: test, env: env, n: n + 3 }
 }
 
-let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (arg_pats: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy): PatEmit =
-    match cg_find_variant(p, name) {
+// `path` is what the CHECKER resolved the pattern head to:
+// `[enum, tag]` for a variant, `[struct, tag]` for a positional struct
+// pattern, both qualified. A one-element path is a pattern that never
+// reached the checker; it falls back to the flat scan, which is what
+// every pattern used to get.
+let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (path: Array[String]) (arg_pats: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy): PatEmit = {
+    let name = path[path.len() - 1];
+    let head = if path.len() >= 2 { path[0] } else { "" };
+    match cg_pat_head_variant(p, head, name) {
         // Not a variant — a STRUCT destructured positionally,
         // `Point(x, y)`. The parser can't tell the two apart; the name
         // decides. Reuses the struct path by pairing each position
         // with its declared field name, exactly the way the tuple case
         // just below reuses it by pairing with an index.
         None => {
-            let fnames = typecheck.ctx_field_names(p.ctx, name);
+            let fnames = typecheck.ctx_field_names(p.ctx, head_or(head, name));
             if Array.is_empty(fnames) {
                 cg_fail("unknown variant in pattern: ".concat(name));
                 PatEmit { code: "", binds: "", allocas: "", releases: "",globals: "", test: "0", env: env, n: n }
             } else {
-                cg_pat_struct(p, env, n, name, cg_positional_field_pats(fnames, arg_pats, 0, []), sval, sity)
+                cg_pat_struct(p, env, n, head_or(head, name), cg_positional_field_pats(fnames, arg_pats, 0, []), sval, sity)
             }
         },
         Some(v) => {
             let tag = cg_reg(n);
             let tag_ok = cg_reg(n + 1);
-            let head = "  ".concat(tag).concat("p = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
+            let load = "  ".concat(tag).concat("p = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
                 .concat("  ").concat(tag).concat(" = load i64, ptr ").concat(tag).concat("p\n")
                 .concat("  ").concat(tag_ok).concat(" = icmp eq i64 ").concat(tag).concat(", ").concat(v.tag.to_string()).concat("\n");
             // Payload templates instantiated against the SCRUTINEE's
             // own type arguments — `Yes(v)` matched on a `Maybe[Int]`
             // binds `v` as an `Int`, and on a `Maybe[String]` as a
             // pointer, from one unspecialized enum declaration.
-            let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, name), cg_ity_args(sity), t));
+            let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, v.enum_name, name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, v.enum_name, name), cg_ity_args(sity), t));
             let sub = cg_pat_payloads(p, env, n + 2, payload, arg_pats, 0, sval, tag_ok, "", "", "", "", "");
-            PatEmit { code: head.concat(sub.code), binds: sub.binds, allocas: sub.allocas, releases: sub.releases, globals: sub.globals, test: sub.test, env: sub.env, n: sub.n }
+            PatEmit { code: load.concat(sub.code), binds: sub.binds, allocas: sub.allocas, releases: sub.releases, globals: sub.globals, test: sub.test, env: sub.env, n: sub.n }
         },
     }
+}
+
+let head_or (head: String) (name: String): String = if head == "" { name } else { head }
+
+// `None` covers both "this head names a struct, not an enum" and "no
+// such variant", which are the same answer to the caller: not a
+// variant, try the struct path.
+let cg_pat_head_variant (p: CgProgram) (head: String) (tag: String): Option[CgVariant] =
+    if head == "" { { cg_fail("internal: pattern head reached codegen unresolved: ".concat(tag)); None } }
+    else { match cg_enum_opt(p, head) { None => None, Some(e) => cg_find_variant_in(e.variants, tag, 0) } }
+
+let cg_enum_opt (p: CgProgram) (name: String): Option[CgEnumDecl] = cg_enum_opt_acc(p.enums, name, 0)
+let cg_enum_opt_acc (es: Array[CgEnumDecl]) (name: String) (i: Int): Option[CgEnumDecl] =
+    if i >= es.len() { None } else if es[i].name == name { Some(es[i]) } else { cg_enum_opt_acc(es, name, i + 1) }
 
 // Each payload's own sub-pattern is tested and AND-ed into the running
 // result. Plain `and`, not a short-circuit branch: every operand is
@@ -4109,7 +4139,7 @@ let cg_eq_close_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: Ar
 let cg_eq_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= vs.len() { acc }
     else {
-        let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].name), args, t));
+        let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].enum_name, vs[i].name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].enum_name, vs[i].name), args, t));
         cg_eq_close_variants(p, vs, args, i + 1, cg_eq_close_list(p, payload, 0, acc))
     }
 
@@ -4444,7 +4474,7 @@ let cg_enum_eq_blocks (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typeche
     if i >= vs.len() { acc }
     else if vs[i].arity == 0 { cg_enum_eq_blocks(p, vs, args, i + 1, n, acc) }
     else {
-        let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].name), |q| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].name), args, q));
+        let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].enum_name, vs[i].name), |q| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].enum_name, vs[i].name), args, q));
         let body = cg_eq_payloads(payload, 0, n, "1", "");
         let block = "V".concat(vs[i].tag.to_string()).concat(":\n").concat(body.code).concat("  ret i1 ").concat(body.val).concat("\n");
         cg_enum_eq_blocks(p, vs, args, i + 1, body.n, acc.concat(block))
@@ -4740,7 +4770,7 @@ let cg_rel_close_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc: A
 let cg_rel_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= vs.len() { acc }
     else {
-        let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].name), args, t));
+        let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].enum_name, vs[i].name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].enum_name, vs[i].name), args, t));
         cg_rel_close_variants(p, vs, args, i + 1, cg_rel_close_list(p, payload, 0, acc))
     }
 
@@ -4882,7 +4912,7 @@ let cg_variant_owns (p: CgProgram) (v: CgVariant) (args: Array[typecheck.ITy]): 
     Array.any(cg_variant_payload_tys(p, v, args), |t| cg_is_heap(cg_of_ity(t)))
 
 let cg_variant_payload_tys (p: CgProgram) (v: CgVariant) (args: Array[typecheck.ITy]): Array[typecheck.ITy] =
-    Array.map(typecheck.ctx_variant_payload(p.ctx, v.name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, v.name), args, t))
+    Array.map(typecheck.ctx_variant_payload(p.ctx, v.enum_name, v.name), |t| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, v.enum_name, v.name), args, t))
 
 let cg_rel_blocks (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (n: Int) (acc: String): String =
     if i >= vs.len() { acc }
@@ -5155,7 +5185,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TClosureCall(callee, args) => cg_rel_in_list(p, args, 0, cg_rel_in(p, callee, here)),
         TMethodCall(_, base, args) => cg_rel_in_list(p, args, 0, cg_rel_in(p, base, here)),
         TArrayNs(_, args) => cg_rel_in_list(p, args, 0, here),
-        TVariantNew(_, args) => cg_rel_in_list(p, args, 0, here),
+        TVariantNew(_, _, args) => cg_rel_in_list(p, args, 0, here),
         TPrintln(a) => cg_rel_in(p, a, here),
         TSpawn(a) => cg_rel_in(p, a, here),
         TChannelNew => here,
@@ -5184,7 +5214,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TStructLit(_, fields, sp) => cg_rel_in_fields(p, fields, 0, match sp { Some(b) => cg_rel_in(p, b, here), None => here }),
         TStructReuse(_, fields, _) => cg_rel_in_fields(p, fields, 0, here),
         TArrayNsReuse(_, xs, _) => cg_rel_in_list(p, xs, 0, here),
-        TVariantReuse(_, xs, _) => cg_rel_in_list(p, xs, 0, here),
+        TVariantReuse(_, _, xs, _) => cg_rel_in_list(p, xs, 0, here),
         TInt(_) => here, TFloat(_) => here, TStr(_) => here, TBool(_) => here,
         TUnitLit => here, TIdent(_) => here, TGlobalRef(_, _) => here, TUnsupported(_) => here,
     }
@@ -5241,7 +5271,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TClosureCall(callee, args) => cg_eq_in_list(p, args, 0, cg_eq_in(p, callee, acc)),
         TMethodCall(_, base, args) => cg_eq_in_list(p, args, 0, cg_eq_in(p, base, acc)),
         TArrayNs(_, args) => cg_eq_in_list(p, args, 0, acc),
-        TVariantNew(_, args) => cg_eq_in_list(p, args, 0, acc),
+        TVariantNew(_, _, args) => cg_eq_in_list(p, args, 0, acc),
         TPrintln(a) => cg_eq_in(p, a, acc),
         TSpawn(a) => cg_eq_in(p, a, acc),
         TChannelNew => acc,
@@ -5272,7 +5302,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TStructLit(_, fields, sp) => cg_eq_in_fields(p, fields, 0, match sp { Some(b) => cg_eq_in(p, b, acc), None => acc }),
         TStructReuse(_, fields, _) => cg_eq_in_fields(p, fields, 0, acc),
         TArrayNsReuse(_, xs, _) => cg_eq_in_list(p, xs, 0, acc),
-        TVariantReuse(_, xs, _) => cg_eq_in_list(p, xs, 0, acc),
+        TVariantReuse(_, _, xs, _) => cg_eq_in_list(p, xs, 0, acc),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
         TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
     }
@@ -5335,7 +5365,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TClosureCall(callee, args) => cg_calls_in_list(p, args, cg_calls_in(p, callee, acc)),
         TMethodCall(_, base, args) => cg_calls_in_list(p, args, cg_calls_in(p, base, acc)),
         TArrayNs(_, args) => cg_calls_in_list(p, args, acc),
-        TVariantNew(_, args) => cg_calls_in_list(p, args, acc),
+        TVariantNew(_, _, args) => cg_calls_in_list(p, args, acc),
         TPrintln(a) => cg_calls_in(p, a, acc),
         TSpawn(a) => cg_calls_in(p, a, acc),
         TChannelNew => acc,
@@ -5364,7 +5394,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TStructLit(_, fields, sp) => cg_calls_in_fields(p, fields, 0, match sp { Some(b) => cg_calls_in(p, b, acc), None => acc }),
         TStructReuse(_, fields, _) => cg_calls_in_fields(p, fields, 0, acc),
         TArrayNsReuse(_, xs, _) => cg_calls_in_list(p, xs, acc),
-        TVariantReuse(_, xs, _) => cg_calls_in_list(p, xs, acc),
+        TVariantReuse(_, _, xs, _) => cg_calls_in_list(p, xs, acc),
         TInt(_) => acc, TFloat(_) => acc, TStr(_) => acc, TBool(_) => acc,
         TUnitLit => acc, TIdent(_) => acc, TGlobalRef(_, _) => acc, TUnsupported(_) => acc,
     }

@@ -105,9 +105,15 @@ pub enum TNode {
     // still reachable, which only something that knows the evaluation
     // order can decide.
     TStructReuse(String, Array[TFieldInit], Array[String]),
-    TVariantNew(String, Array[TExpr]),
+    // The enum FIRST, then the tag. Both, because a tag alone does not
+    // identify a variant once two modules can each declare one called
+    // `Ok`: the backend would have to search for the enum by tag, and
+    // a search can land somewhere the checker didn't. Same rule as
+    // `TStructLit` -- whoever resolved the name says what it resolved
+    // to, and nothing downstream resolves it a second time.
+    TVariantNew(String, String, Array[TExpr]),
     // `TVariantNew` with the same reuse candidates as `TStructReuse`.
-    TVariantReuse(String, Array[TExpr], Array[String]),
+    TVariantReuse(String, String, Array[TExpr], Array[String]),
     // --- The five resolved call shapes ---
     // A named function: a user's own, or a prelude signature from
     // `builtin_sig`. The name is the SIGNATURE's name, so a

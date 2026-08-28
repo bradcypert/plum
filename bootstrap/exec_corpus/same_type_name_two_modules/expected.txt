@@ -1,0 +1,4 @@
+root P x=42
+from inner
+root Warm
+inner Dark

@@ -1,0 +1,13 @@
+// Rejected: two DIFFERENT types that happen to share a name.
+//
+// Before types carried the module that declared them, both were
+// `ITStruct("P")`, so this unified happily and then read a field that
+// was not there. The names in the error are what tell them apart.
+use inner;
+
+pub struct P { pub x: Int }
+
+let main (): Unit = {
+    let a: P = inner.make();
+    println(a.x.to_string())
+}

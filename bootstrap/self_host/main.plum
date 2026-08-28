@@ -867,7 +867,7 @@ let lsp_reply (id: Option[JsonValue]) (result: JsonValue): Unit =
 // fails if a release tag disagrees with it, so a `v0.0.2` tag can
 // never ship a binary that says 0.0.1 -- the same class of drift this
 // project has been closing everywhere else.
-pub let plum_version (): String = "0.0.11"
+pub let plum_version (): String = "0.0.12"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));

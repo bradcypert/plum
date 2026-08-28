@@ -471,3 +471,15 @@ Worth knowing before you "fix" them:
 - **`cg_mangle` sanitizes every non-identifier character, not just
   `.`.** Do not narrow it back: module names come from directory names,
   and a directory with a dash in it produced invalid LLVM before this.
+- **A type's identity is its QUALIFIED name**, via
+  `parser.qualify_type` — the one rule, used by the checker and the
+  backend. Root-module types stay bare; builtins (`Array`, `Task`,
+  `Sender`, `Receiver`, `Box`) have no module and stay bare too, which
+  is why `name == "Array"` tests still work.
+- **`find_struct`/`find_enum` take a QUALIFIED name;
+  `best_struct`/`best_enum` take a bare one** and resolve it the way
+  the viewer should see it. Passing the wrong form does not error, it
+  returns `None` — which for a visibility check means it silently
+  passes. Check both forms when a lookup is on a checking path.
+- **`ity_namespace` must return the BARE name.** An associated function
+  is declared `let Circle.area (..)` whatever module it lives in.

@@ -1,0 +1,10 @@
+// A type whose name the root module ALSO uses. Before types carried
+// the module that declared them, whichever declaration the flat lookup
+// found first won for everybody -- so adding this file broke a root
+// file that had never referenced it.
+pub struct P { pub y: String }
+
+pub enum Shade { Light, Dark }
+
+pub let make (): P = P { y: "from inner" }
+pub let shade (): Shade = Dark

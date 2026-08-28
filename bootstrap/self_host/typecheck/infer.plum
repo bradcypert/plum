@@ -832,7 +832,7 @@ let first_function_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Optio
                 if Option.is_some(inner) { inner }
                 else {
                     match ctx_enum_tags(ctx, name) {
-                        Some(tags) => first_function_in_variants(ctx, tags, args, seen.push(name), 0),
+                        Some(tags) => first_function_in_variants(ctx, name, tags, args, seen.push(name), 0),
                         None => None,
                     }
                 }
@@ -849,13 +849,13 @@ let first_function_in_list (ctx: TyContext) (ts: Array[ITy]) (seen: Array[String
         }
     }
 
-let first_function_in_variants (ctx: TyContext) (tags: Array[String]) (args: Array[ITy]) (seen: Array[String]) (i: Int): Option[ITy] =
+let first_function_in_variants (ctx: TyContext) (enum_name: String) (tags: Array[String]) (args: Array[ITy]) (seen: Array[String]) (i: Int): Option[ITy] =
     if i >= tags.len() { None }
     else {
-        let payload = Array.map(ctx_variant_payload(ctx, tags[i]), |pt| instantiate_template(ctx_variant_generics(ctx, tags[i]), args, pt));
+        let payload = Array.map(ctx_variant_payload(ctx, enum_name, tags[i]), |pt| instantiate_template(ctx_variant_generics(ctx, enum_name, tags[i]), args, pt));
         match first_function_in_list(ctx, payload, seen, 0) {
             Some(f) => Some(f),
-            None => first_function_in_variants(ctx, tags, args, seen, i + 1),
+            None => first_function_in_variants(ctx, enum_name, tags, args, seen, i + 1),
         }
     }
 
@@ -902,7 +902,40 @@ let infer_field (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
     // legal, and `Thing.field` on one must stay a field read.
     match qualified_fn_ref(p2, env, base, name) {
         Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
-        None => infer_field_read(p2, state, env, acc, base, name),
+        None => match qualified_variant(p2, env, base, name) {
+            Some(v) => infer_variant_ref_v(p2, state, acc, name, v),
+            None => infer_field_read(p2, state, env, acc, base, name),
+        },
+    }
+
+// A dotted expression read back as a NAME: `Shade` from `Shade.Light`,
+// `inner.Shade` from `inner.Shade.Light`. `None` for anything that is
+// not a chain of plain identifiers, which is everything that could be
+// a real value.
+let enum_path_name (base: parser.PExpr): Option[String] =
+    match base {
+        EIdent(ns, _) => Some(ns),
+        EField(inner, seg) => match enum_path_name(inner) { Some(pre) => Some(pre.concat(".").concat(seg)), None => None },
+        _ => None,
+    }
+
+// `Shade.Light` -- a variant said with its enum, which is the way to
+// say which `Light` you mean when two enums declare one. The enum name
+// resolves the way a TYPE annotation does (the viewer's module, then
+// the root, then the prelude), so `Result.Ok` still reaches the
+// prelude from a module that declares an `Ok` of its own.
+//
+// A LOCAL shadows this, the same as `qualified_fn_ref`: `Shade` could
+// name a value.
+let qualified_variant (p2: Program2) (env: TyEnv) (base: parser.PExpr) (tag: String): Option[VariantLookup] =
+    match enum_path_name(base) {
+        None => None,
+        Some(ns) =>
+            if Option.is_some(tyenv_lookup(env, ns)) { None }
+            else { match best_enum(p2.ctx, p2.current, ns) {
+                None => None,
+                Some(info) => find_variant_in(p2.ctx, info.name, tag),
+            } },
     }
 
 // The signature `Ns.name` names, when `base` is a bare capitalized
@@ -969,37 +1002,77 @@ let unbound_message (tag: String): String =
             .concat("` is a standard library module; add `use ").concat(tag).concat(";` to this file")
     } else { "unbound variant/function: ".concat(tag) }
 
-let infer_variant_ref (p2: Program2) (state: FreshState) (acc: Subst) (tag: String): InferResult =
-    match find_variant(p2.ctx, tag) {
-        None => { fail_tc(unbound_message(tag)); ir_unsupported(acc, state, "unbound variant ".concat(tag)) },
-        Some(v) => {
-            check_enum_named(p2.ctx, p2.current, v.enum_name);
-            let fr = fresh_list(state, v.enum_generics.len());
-            let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
-            if Array.is_empty(payload) { infer_variant(p2, state, acc, tag, [], []) }
-            else {
-                let names = partial_param_names(payload.len(), 0, []);
-                let ret_ty = ITEnum(v.enum_name, fr.tys);
-                let fn_ty = ITFunction(payload, ret_ty);
-                InferResult {
-                    ty: fn_ty, subst: acc, state: fr.state,
-                    texpr: TExpr { ty: fn_ty, node: TClosure(names, TExpr { ty: ret_ty, node: TVariantNew(tag, partial_param_refs(names, payload, 0, [])) }) },
-                }
-            }
-        },
+// An UNQUALIFIED tag, resolved with no scrutinee to point at one enum.
+// One candidate is the answer. More than one is decided by the module
+// doing the writing -- a `Verdict.Ok` declared here shadows the
+// prelude's `Result.Ok` the same way a type declared here shadows a
+// prelude type -- and if that does not narrow it to one, the program
+// has to say which, because guessing is how the checker and the
+// backend came to disagree in the first place.
+let resolve_variant (p2: Program2) (tag: String): Option[VariantLookup] = {
+    let cands = variant_candidates(p2.ctx, tag);
+    if Array.is_empty(cands) { None }
+    else if cands.len() == 1 { Some(cands[0]) }
+    else {
+        let mine = variants_in_module(cands, p2.current, 0, []);
+        if mine.len() == 1 { Some(mine[0]) }
+        else if Array.is_empty(mine) { { fail_tc(ambiguous_tag_message(tag, cands)); Some(cands[0]) } }
+        else { { fail_tc(ambiguous_tag_message(tag, mine)); Some(mine[0]) } }
+    }
+}
+
+let ambiguous_tag_message (tag: String) (cands: Array[VariantLookup]): String =
+    "`".concat(tag).concat("` is a variant of ").concat(join_enum_names(cands, 0, ""))
+        .concat(" -- write ").concat(parser.display_type_name(cands[0].enum_name)).concat(".").concat(tag)
+        .concat(" to say which one you mean")
+
+let join_enum_names (cands: Array[VariantLookup]) (i: Int) (acc: String): String =
+    if i >= cands.len() { acc }
+    else {
+        let name = parser.display_type_name(cands[i].enum_name);
+        if acc == "" { join_enum_names(cands, i + 1, name) }
+        else if i == cands.len() - 1 { join_enum_names(cands, i + 1, acc.concat(" and ").concat(name)) }
+        else { join_enum_names(cands, i + 1, acc.concat(", ").concat(name)) }
     }
 
+let infer_variant_ref (p2: Program2) (state: FreshState) (acc: Subst) (tag: String): InferResult =
+    match resolve_variant(p2, tag) {
+        None => { fail_tc(unbound_message(tag)); ir_unsupported(acc, state, "unbound variant ".concat(tag)) },
+        Some(v) => infer_variant_ref_v(p2, state, acc, tag, v),
+    }
+
+// The same, for a variant that has ALREADY been resolved -- `Shade.
+// Light` names its enum outright, so there is nothing left to look up
+// and nothing that could look it up differently.
+let infer_variant_ref_v (p2: Program2) (state: FreshState) (acc: Subst) (tag: String) (v: VariantLookup): InferResult = {
+    check_enum_named(p2.ctx, p2.current, v.enum_name);
+    let fr = fresh_list(state, v.enum_generics.len());
+    let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
+    if Array.is_empty(payload) { infer_variant_v(p2, state, acc, tag, [], [], v) }
+    else {
+        let names = partial_param_names(payload.len(), 0, []);
+        let ret_ty = ITEnum(v.enum_name, fr.tys);
+        let fn_ty = ITFunction(payload, ret_ty);
+        InferResult {
+            ty: fn_ty, subst: acc, state: fr.state,
+            texpr: TExpr { ty: fn_ty, node: TClosure(names, TExpr { ty: ret_ty, node: TVariantNew(v.enum_name, tag, partial_param_refs(names, payload, 0, [])) }) },
+        }
+    }
+}
+
 let infer_variant (p2: Program2) (state: FreshState) (acc: Subst) (tag: String) (arg_tys: Array[ITy]) (arg_texprs: Array[TExpr]): InferResult =
-    match find_variant(p2.ctx, tag) {
-        Some(v) => {
-            check_enum_named(p2.ctx, p2.current, v.enum_name);
-            let fr = fresh_list(state, v.enum_generics.len());
-            let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
-            let subst2 = unify_variant_args(payload, arg_tys, acc);
-            ir_leaf(ITEnum(v.enum_name, fr.tys), subst2, fr.state, TVariantNew(tag, arg_texprs))
-        },
+    match resolve_variant(p2, tag) {
+        Some(v) => infer_variant_v(p2, state, acc, tag, arg_tys, arg_texprs, v),
         None => { fail_tc(unbound_message(tag)); ir_unsupported(acc, state, "unbound variant ".concat(tag)) },
     }
+
+let infer_variant_v (p2: Program2) (state: FreshState) (acc: Subst) (tag: String) (arg_tys: Array[ITy]) (arg_texprs: Array[TExpr]) (v: VariantLookup): InferResult = {
+    check_enum_named(p2.ctx, p2.current, v.enum_name);
+    let fr = fresh_list(state, v.enum_generics.len());
+    let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
+    let subst2 = unify_variant_args(payload, arg_tys, acc);
+    ir_leaf(ITEnum(v.enum_name, fr.tys), subst2, fr.state, TVariantNew(v.enum_name, tag, arg_texprs))
+}
 
 let unify_variant_args (payload: Array[ITy]) (args: Array[ITy]) (acc: Subst): Subst =
     if payload.len() != args.len() { { fail_tc("variant expects a different number of arguments"); acc } }
@@ -1112,7 +1185,18 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                         // the same function.
                         None => match find_sig_in(p2.sigs, ns, method_name, 0) {
                             Some(sig) => { check_visible(p2, sig, ns, method_name); infer_fn_call(p2, state, env, acc, sig, args) },
-                            None => infer_method_call(p2, state, env, acc, base, method_name, args),
+                            // `Shade.Light(x)` -- a payload variant
+                            // said with its enum. After the function
+                            // lookups, so a declared `Ns.name` still
+                            // wins, and before the method fallback,
+                            // whose error would name the wrong thing.
+                            None => match qualified_variant(p2, env, base, method_name) {
+                                Some(v) => {
+                                    let ar = infer_list(p2, state, env, acc, args, 0, [], []);
+                                    infer_variant_v(p2, ar.state, ar.subst, method_name, ar.tys, ar.texprs, v)
+                                },
+                                None => infer_method_call(p2, state, env, acc, base, method_name, args),
+                            },
                         },
                     } }
                 }
@@ -1257,8 +1341,11 @@ let ity_namespace (t: ITy): Option[String] =
         ITInt => Some("Int"),
         ITFloat => Some("Float"),
         ITBool => Some("Bool"),
-        ITStruct(name, _) => Some(name),
-        ITEnum(name, _) => Some(name),
+        // The BARE name: an associated function is declared
+        // `let Circle.area (..)`, so the namespace is the type name as
+        // written, not the qualified identity the checker carries.
+        ITStruct(name, _) => Some(parser.bare_type_name(name)),
+        ITEnum(name, _) => Some(parser.bare_type_name(name)),
         _ => None,
     }
 
@@ -1785,7 +1872,7 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
                     },
                 };
                 let br = bind_pattern_ty(p2, r.state, checked.subst, env, pattern, checked.ty);
-                infer_stmts(p2, br.state, br.env, br.subst, stmts, i + 1, tstmts.push(TSLet(pattern, r.texpr)), starts)
+                infer_stmts(p2, br.state, br.env, br.subst, stmts, i + 1, tstmts.push(TSLet(br.pattern, r.texpr)), starts)
             },
             SAssign(name, value) => {
                 let r = infer_expr(p2, state, env, acc, value);
@@ -1833,7 +1920,7 @@ let infer_for (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (patt
             let s2 = match unify(subst_apply(hr.subst, hr.ty), ITInt) { Ok(s) => subst_compose(s, hr.subst), Err(e) => { fail_tc("'for' range end: ".concat(e)); hr.subst } };
             let br = bind_pattern_ty(p2, hr.state, s2, env, pattern, ITInt);
             let bodyr = infer_block(p2, br.state, br.env, br.subst, body);
-            ir_leaf(ITUnit, bodyr.subst, bodyr.state, TFor(pattern, lr.texpr, hr.texpr, bodyr.texpr))
+            ir_leaf(ITUnit, bodyr.subst, bodyr.state, TFor(br.pattern, lr.texpr, hr.texpr, bodyr.texpr))
         },
         // `for x in xs` over an array. The element type comes from
         // unifying the iterand against `Array[?]`, so a non-array
@@ -1849,7 +1936,7 @@ let infer_for (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (patt
             let elem = subst_apply(s1, ef.ty);
             let br = bind_pattern_ty(p2, ef.state, s1, env, pattern, elem);
             let bodyr = infer_block(p2, br.state, br.env, br.subst, body);
-            ir_leaf(ITUnit, bodyr.subst, bodyr.state, TForArray(pattern, ir.texpr, bodyr.texpr))
+            ir_leaf(ITUnit, bodyr.subst, bodyr.state, TForArray(br.pattern, ir.texpr, bodyr.texpr))
         },
     }
 
@@ -1897,23 +1984,23 @@ let expand_nested_acc (p2: Program2) (info: StructInfo) (fields: Array[parser.Fi
 let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields0: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): InferResult = {
     let name = path[path.len() - 1];
     check_struct_named(p2.ctx, p2.current, name);
-    match find_struct(p2.ctx, name) {
+    match best_struct(p2.ctx, p2.current, name) {
         Some(info) => {
             let fields = expand_nested_updates(p2, info, fields0, spread);
             let fr = fresh_list(state, info.generics.len());
             let r = infer_struct_fields(p2, fr.state, env, acc, info, fr.tys, fields, 0, []);
-            let lit_ty = ITStruct(name, Array.map(fr.tys, |t| subst_apply(r.subst, t)));
+            let lit_ty = ITStruct(info.name, Array.map(fr.tys, |t| subst_apply(r.subst, t)));
             // The spread base must be the SAME struct type -- `Game {
             // ..point }` is a type error, not a partial copy.
             match spread {
-                None => ir_leaf(lit_ty, r.subst, r.state, TStructLit(name, cg_zip_field_inits(fields, r.texprs, 0, []), None)),
+                None => ir_leaf(lit_ty, r.subst, r.state, TStructLit(info.name, cg_zip_field_inits(fields, r.texprs, 0, []), None)),
                 Some(base) => {
                     let br = infer_expr(p2, r.state, env, r.subst, base);
                     let s2 = match unify(subst_apply(br.subst, br.ty), subst_apply(br.subst, lit_ty)) {
                         Ok(x) => subst_compose(x, br.subst),
                         Err(e) => { fail_tc("struct-literal '..' base: ".concat(e)); br.subst },
                     };
-                    ir_leaf(subst_apply(s2, lit_ty), s2, br.state, TStructLit(name, cg_zip_field_inits(fields, r.texprs, 0, []), Some(br.texpr)))
+                    ir_leaf(subst_apply(s2, lit_ty), s2, br.state, TStructLit(info.name, cg_zip_field_inits(fields, r.texprs, 0, []), Some(br.texpr)))
                 },
             }
         },
@@ -2058,7 +2145,7 @@ let infer_match_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
             },
         };
         infer_match_arms(p2, bodyr.state, env, bodyr.subst, scrutinee_ty, arms, i + 1, Some(new_result),
-            tarms.push(TArm { pattern: arms[i].pattern, guard: gr.tguard, body: bodyr.texpr }))
+            tarms.push(TArm { pattern: br.pattern, guard: gr.tguard, body: bodyr.texpr }))
     }
 
 struct GuardCheckResult { subst: Subst, state: FreshState, tguard: Option[TExpr] }
@@ -2066,20 +2153,44 @@ struct GuardCheckResult { subst: Subst, state: FreshState, tguard: Option[TExpr]
 // --- Pattern typing: binds pattern-introduced names into `env`,
 // unifying the pattern's own shape against `scrutinee_ty` ---
 
-struct BindResult { env: TyEnv, subst: Subst, state: FreshState }
+// `pattern` is the pattern REWRITTEN with what the names in it
+// resolved to: a variant path becomes `[enum, tag]` and a struct path
+// becomes `[struct]`, both fully qualified. The backend then reads the
+// answer instead of searching for one -- see `TVariantNew` in
+// texpr.plum for what went wrong when both ends searched separately.
+struct BindResult { env: TyEnv, subst: Subst, state: FreshState, pattern: parser.PPattern }
+struct BindListResult { env: TyEnv, subst: Subst, state: FreshState, pats: Array[parser.PPattern] }
 
 let bind_pattern_ty (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (pattern: parser.PPattern) (scrutinee_ty: ITy): BindResult =
     match pattern {
-        PWildcard => BindResult { env: env, subst: acc, state: state },
-        PIdent(name, off) => { note_binding(name, off, scrutinee_ty); BindResult { env: tyenv_extend(env, name, scrutinee_ty, off), subst: acc, state: state } },
-        PInt(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITInt), state: state },
-        PFloat(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITFloat), state: state },
-        PStr(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITStr), state: state },
-        PBool(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITBool), state: state },
+        PWildcard => BindResult { env: env, subst: acc, state: state, pattern: pattern },
+        PIdent(name, off) => { note_binding(name, off, scrutinee_ty); BindResult { env: tyenv_extend(env, name, scrutinee_ty, off), subst: acc, state: state, pattern: pattern } },
+        PInt(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITInt), state: state, pattern: pattern },
+        PFloat(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITFloat), state: state, pattern: pattern },
+        PStr(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITStr), state: state, pattern: pattern },
+        PBool(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITBool), state: state, pattern: pattern },
         PTuple(elems) => bind_tuple_pattern(p2, state, acc, env, elems, scrutinee_ty),
-        PVariant(path, arg_pats) => bind_variant_pattern(p2, state, acc, env, path[path.len() - 1], arg_pats, scrutinee_ty),
-        PStruct(path, field_pats, _) => bind_struct_pattern(p2, state, acc, env, path[path.len() - 1], field_pats, scrutinee_ty),
-        POr(alts) => bind_pattern_ty(p2, state, acc, env, alts[0], scrutinee_ty),
+        PVariant(path, arg_pats) => bind_variant_pattern(p2, state, acc, env, path, arg_pats, scrutinee_ty),
+        PStruct(path, field_pats, rest) => bind_struct_pattern(p2, state, acc, env, path[path.len() - 1], field_pats, rest, scrutinee_ty),
+        // Only the FIRST alternative binds -- they all bind the same
+        // names at the same types, so one pass is enough for the
+        // environment. Every alternative is still RESOLVED, because
+        // each one reaches the backend as its own test.
+        POr(alts) => {
+            let r = bind_pattern_ty(p2, state, acc, env, alts[0], scrutinee_ty);
+            BindResult { env: r.env, subst: r.subst, state: r.state,
+                pattern: POr(bind_or_alts(p2, r.state, r.subst, env, alts, scrutinee_ty, 1, [r.pattern])) }
+        },
+    }
+
+// Resolves the alternatives after the first, keeping their rewritten
+// form and DISCARDING the environment: `Light | Dark` binds nothing,
+// and where an alternative binds, the first one already bound it.
+let bind_or_alts (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy) (i: Int) (out: Array[parser.PPattern]): Array[parser.PPattern] =
+    if i >= alts.len() { out }
+    else {
+        let r = bind_pattern_ty(p2, state, acc, env, alts[i], scrutinee_ty);
+        bind_or_alts(p2, state, acc, env, alts, scrutinee_ty, i + 1, out.push(r.pattern))
     }
 
 let unify_pattern_prim (acc: Subst) (scrutinee_ty: ITy) (prim: ITy): Subst =
@@ -2088,14 +2199,15 @@ let unify_pattern_prim (acc: Subst) (scrutinee_ty: ITy) (prim: ITy): Subst =
 let bind_tuple_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (elems: Array[parser.PPattern]) (scrutinee_ty: ITy): BindResult = {
     let fr = fresh_list(state, elems.len());
     let s1 = match unify(subst_apply(acc, scrutinee_ty), ITTuple(fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
-    bind_pattern_list(p2, fr.state, s1, env, elems, fr.tys, 0)
+    let r = bind_pattern_list(p2, fr.state, s1, env, elems, fr.tys, 0, []);
+    BindResult { env: r.env, subst: r.subst, state: r.state, pattern: PTuple(r.pats) }
 }
 
-let bind_pattern_list (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (pats: Array[parser.PPattern]) (tys: Array[ITy]) (i: Int): BindResult =
-    if i >= pats.len() { BindResult { env: env, subst: acc, state: state } }
+let bind_pattern_list (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (pats: Array[parser.PPattern]) (tys: Array[ITy]) (i: Int) (out: Array[parser.PPattern]): BindListResult =
+    if i >= pats.len() { BindListResult { env: env, subst: acc, state: state, pats: out } }
     else {
         let r = bind_pattern_ty(p2, state, acc, env, pats[i], subst_apply(acc, tys[i]));
-        bind_pattern_list(p2, r.state, r.subst, r.env, pats, tys, i + 1)
+        bind_pattern_list(p2, r.state, r.subst, r.env, pats, tys, i + 1, out.push(r.pattern))
     }
 
 // A `pub` function may return a type its own module keeps private, and
@@ -2104,14 +2216,42 @@ let bind_pattern_list (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEn
 // because taking it apart means naming the type. That is a coherent
 // position -- it is how a handle type behaves -- and it is why the
 // PATTERN paths check visibility as well as the construction ones.
-let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (tag: String) (arg_pats: Array[parser.PPattern]) (scrutinee_ty: ITy): BindResult =
-    match find_variant(p2.ctx, tag) {
+// What the SCRUTINEE's type already says, before any search by tag.
+// `match s { Light => ... }` on an `inner.Shade` means that enum's
+// `Light` however many other enums declare one, and the type is
+// known here in every case that matters -- it is what the arm is
+// about to be unified against. Falls through to the flat scan only
+// when the scrutinee is still a variable, or is an enum with no such
+// tag, where the flat scan's answer produces the error message this
+// has always produced.
+let variant_by_scrutinee (ctx: TyContext) (scrutinee_ty: ITy) (tag: String): Option[VariantLookup] =
+    match scrutinee_ty { ITEnum(name, _) => find_variant_in(ctx, name, tag), _ => None }
+
+// `Shade.Light` in a pattern: the qualifier is the whole answer, and
+// it overrides the scrutinee -- naming the wrong enum should report
+// the mismatch, not be quietly corrected to the right one.
+let resolve_pattern_variant (p2: Program2) (acc: Subst) (scrutinee_ty: ITy) (path: Array[String]) (tag: String): Option[VariantLookup] =
+    if path.len() >= 2 {
+        match best_enum(p2.ctx, p2.current, parser.join_dot(Array.slice(path, 0, path.len() - 1))) {
+            Some(info) => find_variant_in(p2.ctx, info.name, tag),
+            None => None,
+        }
+    }
+    else { match variant_by_scrutinee(p2.ctx, subst_apply(acc, scrutinee_ty), tag) {
+        Some(v) => Some(v),
+        None => resolve_variant(p2, tag),
+    } }
+
+let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (path: Array[String]) (arg_pats: Array[parser.PPattern]) (scrutinee_ty: ITy): BindResult = {
+    let tag = path[path.len() - 1];
+    match resolve_pattern_variant(p2, acc, scrutinee_ty, path, tag) {
         Some(v) => {
             check_enum_named(p2.ctx, p2.current, v.enum_name);
             let fr = fresh_list(state, v.enum_generics.len());
             let s1 = match unify(subst_apply(acc, scrutinee_ty), ITEnum(v.enum_name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
             let payload = Array.map(v.payload, |t| instantiate_template(v.enum_generics, fr.tys, t));
-            bind_pattern_list(p2, fr.state, s1, env, arg_pats, payload, 0)
+            let r = bind_pattern_list(p2, fr.state, s1, env, arg_pats, payload, 0, []);
+            BindResult { env: r.env, subst: r.subst, state: r.state, pattern: PVariant([v.enum_name, tag], r.pats) }
         },
         // Not a variant — try a STRUCT of that name. `Point(x, y)`
         // destructures a struct POSITIONALLY, binding its fields in
@@ -2119,14 +2259,14 @@ let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: T
         // indistinguishable from a variant one until the name is
         // resolved here. The real compiler accepts it (see
         // `exec_corpus/refs`), so this checker has to as well.
-        None => match find_struct(p2.ctx, tag) {
+        None => match (if path.len() >= 2 { None } else { struct_by_scrutinee(p2.ctx, p2.current, subst_apply(acc, scrutinee_ty), tag) }) {
             Some(info) => {
                 check_struct_named(p2.ctx, p2.current, tag);
                 let fr = fresh_list(state, info.generics.len());
-                let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(tag, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
+                let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(info.name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
                 if arg_pats.len() != info.fields.len() {
                     fail_tc("struct ".concat(tag).concat(" has ").concat(info.fields.len().to_string()).concat(" field(s), pattern binds ").concat(arg_pats.len().to_string()));
-                    BindResult { env: env, subst: s1, state: fr.state }
+                    BindResult { env: env, subst: s1, state: fr.state, pattern: PVariant([info.name, tag], arg_pats) }
                 } else {
                     // `Point(x, y)` names no field and binds all of
                     // them, so every one has to be visible -- otherwise
@@ -2134,27 +2274,51 @@ let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: T
                     // that the named form enforces.
                     check_all_fields_visible(p2, info, 0);
                     let tys = Array.map(info.fields, |f| instantiate_template(info.generics, fr.tys, f.ty));
-                    bind_pattern_list(p2, fr.state, s1, env, arg_pats, tys, 0)
+                    let r = bind_pattern_list(p2, fr.state, s1, env, arg_pats, tys, 0, []);
+                    // A positional STRUCT pattern, still spelled as a
+                    // variant one. The head names the struct, so the
+                    // backend can tell the two apart the same way this
+                    // did: by what the name resolved to.
+                    BindResult { env: r.env, subst: r.subst, state: r.state, pattern: PVariant([info.name, tag], r.pats) }
                 }
             },
-            None => { fail_tc("unbound variant: ".concat(tag)); BindResult { env: env, subst: acc, state: state } },
+            None => { fail_tc("unbound variant: ".concat(tag)); BindResult { env: env, subst: acc, state: state, pattern: PVariant([tag], arg_pats) } },
         },
-    }
-
-let bind_struct_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (name: String) (field_pats: Array[parser.FieldPatternNode]) (scrutinee_ty: ITy): BindResult = {
-    check_struct_named(p2.ctx, p2.current, name);
-    match find_struct(p2.ctx, name) {
-        Some(info) => {
-            let fr = fresh_list(state, info.generics.len());
-            let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
-            bind_struct_field_pats(p2, fr.state, s1, env, info, fr.tys, field_pats, 0)
-        },
-        None => { fail_tc("unknown struct: ".concat(name)); BindResult { env: env, subst: acc, state: state } },
     }
 }
 
-let bind_struct_field_pats (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (info: StructInfo) (gen_args: Array[ITy]) (field_pats: Array[parser.FieldPatternNode]) (i: Int): BindResult =
-    if i >= field_pats.len() { BindResult { env: env, subst: acc, state: state } }
+// The same rule as `variant_by_scrutinee`, for the two struct pattern
+// forms. Two modules may each declare a `Point`, and which one a
+// pattern means is not a question about who is looking -- the
+// scrutinee already answered it.
+let struct_by_scrutinee (ctx: TyContext) (current: String) (scrutinee_ty: ITy) (name: String): Option[StructInfo] =
+    match scrutinee_ty {
+        ITStruct(sname, _) => match find_struct(ctx, sname) {
+            Some(info) => if bare_type_name_of(info.name) == name { Some(info) } else { best_struct(ctx, current, name) },
+            None => best_struct(ctx, current, name),
+        },
+        _ => best_struct(ctx, current, name),
+    }
+
+let bare_type_name_of (qname: String): String = parser.bare_type_name(qname)
+
+let bind_struct_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (name: String) (field_pats: Array[parser.FieldPatternNode]) (rest: Bool) (scrutinee_ty: ITy): BindResult = {
+    check_struct_named(p2.ctx, p2.current, name);
+    match struct_by_scrutinee(p2.ctx, p2.current, subst_apply(acc, scrutinee_ty), name) {
+        Some(info) => {
+            let fr = fresh_list(state, info.generics.len());
+            let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(info.name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
+            let r = bind_struct_field_pats(p2, fr.state, s1, env, info, fr.tys, field_pats, 0, []);
+            BindResult { env: r.env, subst: r.subst, state: r.state, pattern: PStruct([info.name], r.fields, rest) }
+        },
+        None => { fail_tc("unknown struct: ".concat(name)); BindResult { env: env, subst: acc, state: state, pattern: PStruct([name], field_pats, rest) } },
+    }
+}
+
+struct BindFieldsResult { env: TyEnv, subst: Subst, state: FreshState, fields: Array[parser.FieldPatternNode] }
+
+let bind_struct_field_pats (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (info: StructInfo) (gen_args: Array[ITy]) (field_pats: Array[parser.FieldPatternNode]) (i: Int) (out: Array[parser.FieldPatternNode]): BindFieldsResult =
+    if i >= field_pats.len() { BindFieldsResult { env: env, subst: acc, state: state, fields: out } }
     else {
         check_field_visible(p2.ctx, p2.current, info.name, field_pats[i].name);
         let field_ty = match find_field_template(info.fields, field_pats[i].name) {
@@ -2162,5 +2326,6 @@ let bind_struct_field_pats (p2: Program2) (state: FreshState) (acc: Subst) (env:
             None => { fail_tc("struct ".concat(info.name).concat(" has no field named ").concat(field_pats[i].name)); ITUnit },
         };
         let r = bind_pattern_ty(p2, state, acc, env, field_pats[i].pattern, subst_apply(acc, field_ty));
-        bind_struct_field_pats(p2, r.state, r.subst, r.env, info, gen_args, field_pats, i + 1)
+        bind_struct_field_pats(p2, r.state, r.subst, r.env, info, gen_args, field_pats, i + 1,
+            out.push(parser.FieldPatternNode { name: field_pats[i].name, pattern: r.pattern }))
     }
