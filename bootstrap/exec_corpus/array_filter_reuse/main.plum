@@ -1,0 +1,32 @@
+// `Array.filter` building into the source's own cell when the source
+// is dead. Everything here is about the cases where that must NOT
+// happen, or must happen without losing a reference -- run under ASan
+// with leak detection by `corpus-check`, which is the point of it
+// being an execution fixture rather than an allocation one.
+
+// The plain reuse case: `xs` is dead after the call.
+let evens (xs: Array[Int]): Array[Int] = Array.filter(xs, |x| x % 2 == 0)
+
+// Heap elements are refused: the elements filtered OUT are compacted
+// over without being released, and the cell itself becomes the result
+// and so is never released either. Reusing here would leak both.
+let long_names (xs: Array[String]): Array[String] = Array.filter(xs, |s| s.len() > 2)
+
+// The source is read after the filter, so it is not dead and the cell
+// must not be recycled out from under the second read.
+let sum_and_kept (xs: Array[Int]): String = {
+    let kept = Array.filter(xs, |x| x > 2);
+    Array.fold(xs, 0, |a, x| a + x).to_string().concat("/").concat(Array.fold(kept, 0, |a, x| a + x).to_string())
+}
+
+let main (): Unit = {
+    println(Array.fold(evens([1, 2, 3, 4, 5, 6]), 0, |a, x| a + x).to_string());
+    // Nothing kept: the header has to be patched down to 0, not left
+    // at the source's length.
+    println(Array.filter([1, 2, 3], |x| x > 10).len().to_string());
+    // Everything kept: every slot is written back where it came from.
+    println(Array.fold(Array.filter([1, 2, 3], |x| x > 0), 0, |a, x| a + x).to_string());
+    println(Array.fold(long_names(["ann", "bo", "cy", "dee"]), "", |a, s| a.concat(s)));
+    println(sum_and_kept([1, 2, 3, 4]));
+    println(sum_and_kept([1, 2, 3, 4]))
+}

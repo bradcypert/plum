@@ -15708,3 +15708,63 @@ the prelude never be ambiguous, which needs the resolution rules, which
 need the backend to stop resolving independently. Where a change looks
 small because only its visible half was counted, the invisible half is
 usually the part that has to be right.
+
+## `Array.filter` reuses its source cell too (2026-08-28)
+
+`map` had built into a dead source's own cell since 2026-08-26.
+`filter` was excluded, and the code said why:
+
+> `filter` and `fold` are deliberately not included: `filter` writes a
+> shorter result and would need its length header patched on the reuse
+> path too, and `fold` builds no array at all.
+
+Half of that was already solved. The ALLOCATING `filter` over-allocates
+a cell of the source's length, fills the front of it, and patches the
+header down at the end — an array whose header says 3 while the cell
+has room for 8 is what `filter` has always produced. The reuse path
+needed the same three instructions, not a new idea.
+
+`fold` remains genuinely excluded: it builds no array, so there is
+nothing for a recycled cell to become.
+
+### Why compaction in place is safe
+
+Element `i` is read before anything is written for it, and the write
+goes to slot `j`, the number kept so far. `j <= i` always, so a slot is
+only ever overwritten after it has been read, and `j == i` — nothing
+filtered out yet — stores the element back where it came from. This is
+a stronger version of the argument `map` already relied on, where `j`
+is always exactly `i`.
+
+### The condition that does the real work
+
+Eligibility is unchanged from `map`: the element type must need no
+releasing. `filter` makes the reason sharper than `map` did. An element
+that fails the predicate has its slot compacted over without being
+released, and the cell itself is never released either, because it is
+the result — so an `Array[String]` filtered in place would leak every
+element it dropped. The refusal is held in place by an execution
+fixture rather than an allocation one, because `corpus-check` runs
+those under ASan with leak detection, which is the only thing that
+would actually catch a regression here.
+
+### What it is worth
+
+1009 allocations to 9 for a filter per iteration over 500 elements —
+the same shape of win `array_map_loop` records for `map`. A single
+filter saves exactly one allocation, which is why `alloc_corpus/
+array_filter` is kept alongside the loop case: an unimpressive fixture
+catches a reuse firing when it should not, which an impressive one
+hides.
+
+### What it is NOT worth, yet
+
+The compiler's own allocation count while compiling a program did not
+move (193,132 to 193,139 — the difference is the larger backend, not
+the optimisation). Its `filter` calls are over arrays of structs and
+strings, and heap element types are exactly what the eligibility
+condition refuses. The same is true of `map`. Both halves of the
+memory-model backlog item are really one question — releasing element
+`i` inside the loop once the closure has taken its reference — and
+until that is answered, array reuse applies to scalar arrays and to
+nothing a real program spends its time on.

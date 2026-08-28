@@ -216,6 +216,17 @@ only when they differ. Six exec fixtures hold these apart
 `reuse_array_aliased`, `reuse_enum_payload`, `reuse_enum_aliased`);
 each fails a different way, none is redundant.
 
+**Array reuse is refused for heap ELEMENT types, and that is not a
+missing check to tighten -- it is the condition that keeps `map` and
+`filter` correct.** The loop overwrites slot after slot without
+releasing what was there, and on the reuse path the cell is never
+released either, because it IS the result. `filter` makes the reason
+sharpest: an element that fails the predicate is compacted over and its
+reference is simply gone. Widening this needs the loop BODY to release
+element `i` once the closure has taken its own reference -- a different
+loop, not a wider condition. `exec_corpus/array_filter_reuse` holds the
+refusal in place under ASan.
+
 **Duplicate `declare`.** A symbol belongs in the runtime's declare list
 OR in a user `extern` block, never both. LLVM rejects the second one.
 This has happened five times — `memcmp`, `strlen`, `stdout_flush`,

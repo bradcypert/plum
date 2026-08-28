@@ -1,0 +1,9 @@
+// Where filter reuse is actually worth something: a filter per
+// iteration, whose source is dead the moment the next one runs. Before
+// the reuse path existed this allocated once per iteration.
+let keep (xs: Array[Int]) (n: Int): Array[Int] =
+    if n <= 0 { xs } else { keep(Array.filter(xs, |x| x > 0), n - 1) }
+
+let grow (xs: Array[Int]) (n: Int): Array[Int] = if n <= 0 { xs } else { grow(xs.push(n), n - 1) }
+
+let main (): Unit = println(keep(grow([], 500), 1000).len().to_string())

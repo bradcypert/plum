@@ -1,0 +1,11 @@
+// The single-filter case, kept for the same reason `array_map`'s is:
+// it is unimpressive on purpose. One allocation saved out of a count
+// dominated by `grow` building the input, which catches a reuse that
+// fires when it should not just as well as one that fires when it
+// should.
+let main (): Unit = {
+    let xs = grow([], 500);
+    println(Array.filter(xs, |n| n % 2 == 0).len().to_string())
+}
+
+let grow (xs: Array[Int]) (n: Int): Array[Int] = if n <= 0 { xs } else { grow(xs.push(n), n - 1) }

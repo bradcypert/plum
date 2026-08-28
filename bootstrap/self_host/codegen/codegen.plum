@@ -700,7 +700,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
         TArrayNs(name, args) => cg_array_ns_call(p, env, n, name, args),
-        TArrayNsReuse(name, args, cand) => cg_array_map_reuse(p, env, n, name, args, cand),
+        TArrayNsReuse(name, args, cand) => cg_array_ns_reuse(p, env, n, name, args, cand),
         TExternCall(name, args) => cg_extern_call(p, env, n, name, args, cg_ty(p, e)),
         TAsCStr(inner) => cg_as_cstr(p, env, n, inner),
         TAsString(inner) => cg_as_string(p, env, n, inner),
@@ -1681,12 +1681,11 @@ let lv_field_rest (fs: Array[typecheck.TFieldInit]) (from: Int) (acc: Array[type
 // Whether a candidate CLASHES with the other move analysis is settled
 // in `cg_reuse_cand`, not here -- this pass has no types and cannot
 // tell which of these names the backend would even accept.
-// The source array of a `map`, when it is a name that nothing reads
-// after this call. `filter` and `fold` are deliberately not included:
-// `filter` writes a shorter result and would need its length header
-// patched on the reuse path too, and `fold` builds no array at all.
+// The source array of a `map` or a `filter`, when it is a name that
+// nothing reads after this call. `fold` is not included and cannot be:
+// it builds no array at all, so there is nothing for a cell to become.
 let lv_array_cand (ctx: LvCtx) (nm: String) (xs: Array[typecheck.TExpr]): String =
-    if nm == "map" && xs.len() == 2 {
+    if (nm == "map" || nm == "filter") && xs.len() == 2 {
         match xs[0].node {
             TIdent(v) => if lv_dead(ctx, v) { v } else { "" },
             _ => "",
@@ -2927,6 +2926,93 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
                     .concat(cg_dec_cg(f.ty, f.val)),
                 allocas: "  ".concat(iv).concat(" = alloca i64\n").concat(f.allocas),
                 releases: f.releases, globals: f.globals, val: out, ty: CgArray(ret), n: b + 12,
+            }
+        },
+    }
+
+let cg_array_ns_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String) (args: Array[typecheck.TExpr]) (cand: String): Emit =
+    if nm == "filter" { cg_array_filter_reuse(p, env, n, nm, args, cand) }
+    else { cg_array_map_reuse(p, env, n, nm, args, cand) }
+
+// `Array.filter(xs, pred)` compacting its result into `xs`'s own cell.
+//
+// Safe for the same reason `map` is, and for one more. Element `i` is
+// read before anything is written for it, and the write goes to slot
+// `j` where `j` is the number kept SO FAR -- so `j <= i` always, and a
+// slot is only ever overwritten after it has been read. The equal case
+// (`j == i`, nothing filtered out yet) stores the element back where
+// it came from.
+//
+// The result is SHORTER than the cell, which is the only real
+// difference from `map`: the length header is patched down at the end,
+// exactly as the allocating `cg_array_filter` already patches its own
+// over-allocated cell. A cell whose header says 3 when it has room for
+// 8 is what an array literally is here, so nothing else has to change.
+//
+// Eligible only when the element type needs no releasing, the same
+// condition `map` carries and for a sharper reason: the elements that
+// are filtered OUT have their slots compacted over without being
+// released, and the source cell is not released either, because it IS
+// the result. An `Array[String]` filtered in place would leak every
+// element it dropped.
+let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String) (args: Array[typecheck.TExpr]) (cand: String): Emit =
+    match cg_array_reuse_slot(p, env, cand, args) {
+        None => cg_array_ns_call(p, env, n, nm, args),
+        Some(slot) => {
+            let elem = cg_elem_ty(slot.ty);
+            let old = cg_reg(n);
+            let f = cg_expr(p, env, n + 1, args[1]);
+            let len = cg_reg(f.n);
+            let out = cg_reg(f.n + 1);
+            let iv = cg_reg(f.n + 2);
+            let cnt = cg_reg(f.n + 3);
+            let lp = cg_array_loop(iv, len, f.n + 4);
+            let b = lp.body_n;
+            let ev = cg_reg(b + 3);
+            let keep_label = cg_label(b + 6);
+            let skip_label = cg_label(b + 7);
+            let cur_cnt = cg_reg(b + 8);
+            let next_cnt = cg_reg(b + 9);
+            let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
+                .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
+                .concat(cg_inc(elem, ev))
+                .concat(cg_invoke(f.val, CgBool, ", ".concat(cg_llvm_ty(elem)).concat(" ").concat(ev), b + 4))
+                .concat("  br i1 ").concat(cg_reg(b + 5)).concat(", label %").concat(keep_label).concat(", label %").concat(skip_label).concat("\n")
+                .concat(keep_label).concat(":\n")
+                .concat("  ").concat(cur_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
+                .concat(cg_elem_ptr_lines(out, cur_cnt, b + 10))
+                .concat(cg_inc(elem, ev))
+                .concat("  store ").concat(cg_llvm_ty(elem)).concat(" ").concat(ev).concat(", ptr ").concat(cg_elem_ptr_reg(b + 10)).concat("\n")
+                .concat("  ").concat(next_cnt).concat(" = add i64 ").concat(cur_cnt).concat(", 1\n")
+                .concat("  store i64 ").concat(next_cnt).concat(", ptr ").concat(cnt).concat("\n")
+                .concat("  br label %").concat(skip_label).concat("\n")
+                .concat(skip_label).concat(":\n");
+            let final_cnt = cg_reg(b + 13);
+            let same = cg_reg(b + 14);
+            let ldrop = cg_label(b + 15);
+            let lskip = cg_label(b + 16);
+            Emit {
+                code: "  ".concat(old).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
+                    .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
+                    .concat(f.code)
+                    .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
+                    .concat("  ").concat(out).concat(" = call ptr @plum_array_reuse(ptr ").concat(old).concat(", i64 ").concat(len).concat(")\n")
+                    .concat("  store i64 0, ptr ").concat(cnt).concat("\n")
+                    .concat(lp.pre).concat(body).concat(lp.post)
+                    .concat("  ").concat(final_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
+                    .concat("  ").concat(final_cnt).concat("p = getelementptr i8, ptr ").concat(out).concat(", i64 8\n")
+                    .concat("  store i64 ").concat(final_cnt).concat(", ptr ").concat(final_cnt).concat("p\n")
+                    // Released only when the cell was NOT reused. When
+                    // it was, the cell IS the result.
+                    .concat("  ").concat(same).concat(" = icmp eq ptr ").concat(out).concat(", ").concat(old).concat("\n")
+                    .concat("  br i1 ").concat(same).concat(", label %").concat(lskip).concat(", label %").concat(ldrop).concat("\n")
+                    .concat(ldrop).concat(":\n")
+                    .concat(cg_dec(cg_concrete(p, slot.ity), old))
+                    .concat("  br label %").concat(lskip).concat("\n")
+                    .concat(lskip).concat(":\n")
+                    .concat(cg_dec_cg(f.ty, f.val)),
+                allocas: "  ".concat(iv).concat(" = alloca i64\n").concat("  ").concat(cnt).concat(" = alloca i64\n").concat(f.allocas),
+                releases: f.releases, globals: f.globals, val: out, ty: CgArray(elem), n: b + 17,
             }
         },
     }
