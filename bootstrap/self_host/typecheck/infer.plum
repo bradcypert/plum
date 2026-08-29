@@ -226,7 +226,7 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
                         Some(t) => resolve_ann_seen(ctx, items[i].module, generic_names, t),
                         None => { fail_tc("top-level function ".concat(def.name).concat(" needs an explicit return type annotation")); ITUnit },
                     };
-                    collect_sigs_acc(ctx, items, i + 1, sigs.push(FnSig { name: def.name, module: items[i].module, generics: generic_names, params: params, ret: ret , is_extern: false, is_pub: items[i].is_pub }), globals)
+                    collect_sigs_acc(ctx, items, i + 1, sigs.push(FnSig { name: def.name, module: items[i].module, generics: generic_names, params: params, ret: ret, is_extern: false, is_pub: items[i].is_pub }), globals)
                 }
             },
             // `extern "C" { fn sin(x: Float) -> Float; }` -- a signature
@@ -282,16 +282,16 @@ let tp (name: String): ITy = ITParam(name)
 let builtin_sig (name: String): Option[FnSig] =
     // A built-in ARRAY operation, not a prelude function: there is no
     // `let Array.push` anywhere to read.
-    if name == "Array.push" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")) , is_extern: false, is_pub: true }) }
+    if name == "Array.push" { Some(FnSig { name: name, module: "", generics: ["T"], params: [arr_of(tp("T")), tp("T")], ret: arr_of(tp("T")), is_extern: false, is_pub: true }) }
     // Both are runtime primitives the backend intercepts and emits
     // directly (`cg_runtime_fn`), so neither has a Plum body to declare.
-    else if name == "chars_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr) , is_extern: false, is_pub: true }) }
-    else if name == "panic_raw" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITUnit , is_extern: false, is_pub: true }) }
+    else if name == "chars_of" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: arr_of(ITStr), is_extern: false, is_pub: true }) }
+    else if name == "panic_raw" { Some(FnSig { name: name, module: "", generics: [], params: [ITStr], ret: ITUnit, is_extern: false, is_pub: true }) }
     // `args()` is written with empty parentheses, which this parser
     // turns into a ZERO-argument call (it implements no `f()`-means-
     // `f(())` sugar), so the signature has to be zero-param to match
     // the real call shape.
-    else if name == "args" { Some(FnSig { name: name, module: "", generics: [], params: [], ret: arr_of(ITStr) , is_extern: false, is_pub: true }) }
+    else if name == "args" { Some(FnSig { name: name, module: "", generics: [], params: [], ret: arr_of(ITStr), is_extern: false, is_pub: true }) }
     else { None }
 
 // An UNQUALIFIED name resolves in the CURRENT module first, then in the
@@ -386,7 +386,7 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
     // its generics can be put INTO the real one: `sig.generics` is what
     // makes `let x: T = ..` resolve inside a generic function.
     let p2x = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name, generics: [] };
-    let sig = Option.unwrap_or(find_sig(p2x, def.name), FnSig { name: def.name, module: module_name, generics: [], params: [], ret: ITUnit , is_extern: false, is_pub: true });
+    let sig = Option.unwrap_or(find_sig(p2x, def.name), FnSig { name: def.name, module: module_name, generics: [], params: [], ret: ITUnit, is_extern: false, is_pub: true });
     let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name, generics: sig.generics };
     let env = bind_params(tyenv_empty(()), def.params, sig.params, 0);
     let r = infer_expr(p2, fresh_state_new(()), env, subst_empty(()), def.body);

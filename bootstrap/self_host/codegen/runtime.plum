@@ -1296,7 +1296,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "  call void @dir_close(i64 %h)",
     "  ret i1 0",
     "}",
-    "",    "; The shim returns a NUL-terminated C string in a STATIC buffer, so",
+    "", "; The shim returns a NUL-terminated C string in a STATIC buffer, so",
     "; this must copy it into a Plum cell before anything else can call",
     "; back in. Empty means failure -- see `os_shim.c` on why a null",
     "; return is not an option here. The `ignored` parameter mirrors",

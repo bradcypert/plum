@@ -1,0 +1,18 @@
+// Spacing around commas, normalized between TOKENS -- which is why the
+// commas inside the string literals below are untouched. A gap is by
+// definition not inside a string, so the rule cannot reach one.
+let nums (): Array[Int] = [1,2,3]
+
+let pair (a: Int) (b: Int): Int = a + b
+
+let sep (): String = ",".concat("a,b").concat(",,")
+
+let call (): Int = pair(1,2) + pair(3 , 4)
+
+let tup (): Tuple[Int, Int] = (1 ,2)
+
+// A gap holding a newline belongs to the indent pass, so a broken
+// argument list keeps its shape.
+let broken (): Int = pair(
+    1,
+    2)

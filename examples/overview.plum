@@ -26,8 +26,8 @@ let sum n acc =
 let double (n: Int): Int = n * 2
 let double n = n * 2
 
-let x = Array.map([1,2,3], |x| x.to_string())
-let y = Array.map([1,2,3], _.to_string())
+let x = Array.map([1, 2, 3], |x| x.to_string())
+let y = Array.map([1, 2, 3], _.to_string())
 
 // --- Algebraic data types + exhaustive pattern matching ---
 //
@@ -90,7 +90,7 @@ let swap (a, b) = (b, a)
 
 // A one-element tuple needs a trailing comma to distinguish it from a
 // plain parenthesized expression: `(5)` is just `5`, `(5,)` is a tuple.
-let one_tuple = (5,)
+let one_tuple = (5, )
 
 // Closures: `|params| expr`, no `move` keyword needed — there's nothing
 // to borrow-check, so captures just work. (Array/list literals and a

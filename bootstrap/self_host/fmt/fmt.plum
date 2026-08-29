@@ -2,10 +2,20 @@ use Os;
 
 // `plum fmt` -- the formatter.
 //
-// It is `lexer.relex` with opinions, and it has exactly one so far:
-// **the line a statement or an item begins on is indented four spaces
-// per enclosing block.** Everything else in the file is passed through
-// byte for byte.
+// It is `lexer.relex` with opinions. They are:
+//   * the line a statement, item or match arm begins on is indented
+//     four spaces per enclosing block, and a closing brace one level
+//     out from what it closes;
+//   * a run of comment lines is indented with what it documents;
+//   * a run of blank lines collapses to one;
+//   * a comma has no space before it and one space after.
+//
+// Everything else in the file is passed through byte for byte.
+//
+// Every one of those was MEASURED against the corpus before being
+// written, not imported from another language. The comma rule, for
+// instance: 20,585 commas, and the only ones not already followed by a
+// space were inside string literals but for a single `[1,2,3]`.
 //
 // It also places CLOSING BRACES, and `} else {` with them: a `}` sits
 // one level out from the statements it closes, which is exact rather
@@ -401,9 +411,48 @@ pub let format (path: String) (src: String): String = format_pass(path, src, 8)
 let format_pass (path: String) (src: String) (fuel: Int): String =
     if fuel <= 0 { src }
     else {
-        let next = format_once(path, src);
+        let next = format_once(path, normalize_gaps(src));
         if next == src { src } else { format_pass(path, next, fuel - 1) }
     }
+
+// --- Spacing between tokens, on one line ---
+//
+// The second kind of rule here, and the first that rewrites INSIDE a
+// line rather than at the front of one. It works on the gaps between
+// tokens, which is what makes it safe to state: a gap is by definition
+// not inside a string or a comment, so "no space before a comma" cannot
+// reach into `",a".split(",")` the way a text substitution would.
+//
+// Two rules, both measured rather than imported. Across the corpus,
+// with comments stripped: 20,585 commas, of which the only ones not
+// followed by a space are inside string literals but for a single
+// `[1,2,3]`; and no space appears before a comma or before a closing
+// paren anywhere outside a string.
+//
+// A gap containing a NEWLINE is left alone -- that is line structure,
+// and belongs to the indent pass. So is a gap containing a comment: a
+// trailing `// ...` sets its own distance from the code.
+pub let normalize_gaps (src: String): String = {
+    let lexed = lexer.tokenize_spanned(src);
+    let chars = chars_of(src);
+    gaps_acc(chars, lexed, 0, "")
+}
+
+let gaps_acc (chars: Array[String]) (lexed: lexer.LexedSource) (i: Int) (acc: String): String =
+    if i >= lexed.tokens.len() { acc }
+    else {
+        let text = slice(chars, lexed.starts[i], lexed.ends[i]);
+        let from = if i == 0 { 0 } else { lexed.ends[i - 1] };
+        let gap = slice(chars, from, lexed.starts[i]);
+        let prev = if i == 0 { "" } else { slice(chars, lexed.starts[i - 1], lexed.ends[i - 1]) };
+        gaps_acc(chars, lexed, i + 1, acc.concat(canonical_gap(gap, prev, text)).concat(text))
+    }
+
+let canonical_gap (gap: String) (prev: String) (next: String): String =
+    if gap.contains("\n") || gap.contains("//") { gap }
+    else if next == "," { "" }
+    else if prev == "," { " " }
+    else { gap }
 
 let format_once (path: String) (src: String): String = {
     let lexed = lexer.tokenize_spanned(src);

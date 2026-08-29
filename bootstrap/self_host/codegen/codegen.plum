@@ -673,9 +673,9 @@ let cg_or_const (p: CgProgram) (n: Int) (e: typecheck.TExpr) (otherwise: Emit): 
 // of decision for itself.
 let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): Emit =
     match e.node {
-        TInt(v) => Emit { code: "", allocas: "", releases: "",globals: "", val: v.to_string(), ty: CgInt, n: n },
+        TInt(v) => Emit { code: "", allocas: "", releases: "", globals: "", val: v.to_string(), ty: CgInt, n: n },
         TFloat(v) => cg_float_literal(v, n),
-        TBool(v) => Emit { code: "", allocas: "", releases: "",globals: "", val: if v { "1" } else { "0" }, ty: CgBool, n: n },
+        TBool(v) => Emit { code: "", allocas: "", releases: "", globals: "", val: if v { "1" } else { "0" }, ty: CgBool, n: n },
         TUnitLit => cg_unit_emit(n),
         // No allocation and no copy: the literal IS the cell.
         TStr(v) => Emit {
@@ -790,7 +790,7 @@ let cg_of_ity (t: typecheck.ITy): CgTy =
         ITParam(name) => { cg_fail("internal: generic parameter ".concat(name).concat(" reached codegen — generics aren't supported")); CgUnit },
     }
 
-let cg_unit_emit (n: Int): Emit = Emit { code: "", allocas: "", releases: "",globals: "", val: "0", ty: CgUnit, n: n }
+let cg_unit_emit (n: Int): Emit = Emit { code: "", allocas: "", releases: "", globals: "", val: "0", ty: CgUnit, n: n }
 
 // LLVM accepts a decimal float literal only when it is exactly
 // representable; `%.15g`-style text can silently round. Emitting the
@@ -798,7 +798,7 @@ let cg_unit_emit (n: Int): Emit = Emit { code: "", allocas: "", releases: "",glo
 // float literal in it is exact), and this is the one place Stage 5
 // would need a bit-pattern (`0x...`) form to be fully general — flagged
 // here rather than left as a lurking rounding bug.
-let cg_float_literal (v: Float) (n: Int): Emit = Emit { code: "", allocas: "", releases: "",globals: "", val: cg_float_text(v), ty: CgFloat, n: n }
+let cg_float_literal (v: Float) (n: Int): Emit = Emit { code: "", allocas: "", releases: "", globals: "", val: cg_float_text(v), ty: CgFloat, n: n }
 
 // LLVM's float literal syntax needs a decimal POINT, not just digits:
 // `double 5` is rejected, `double 5.0` is fine. Appending `.0` when
@@ -852,7 +852,7 @@ let cg_unary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.UOp) (inne
         },
         UNot => "  ".concat(reg).concat(" = xor i1 ").concat(r.val).concat(", true\n"),
     };
-    Emit { code: r.code.concat(line), allocas: r.allocas, releases: r.releases,globals: r.globals, val: reg, ty: r.ty, n: r.n + 1 }
+    Emit { code: r.code.concat(line), allocas: r.allocas, releases: r.releases, globals: r.globals, val: reg, ty: r.ty, n: r.n + 1 }
 }
 
 // --- Binary operators ---
@@ -1097,7 +1097,7 @@ let cg_shortcircuit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (lhs: typecheck
         .concat("  br label %").concat(end_label).concat("\n")
         .concat(end_label).concat(":\n")
         .concat("  ").concat(res).concat(" = load i1, ptr ").concat(slot).concat("\n");
-    Emit { code: code, allocas: "  ".concat(slot).concat(" = alloca i1\n").concat(a.allocas).concat(b.allocas), releases: a.releases.concat(b.releases),globals: a.globals.concat(b.globals), val: res, ty: CgBool, n: b.n + 1 }
+    Emit { code: code, allocas: "  ".concat(slot).concat(" = alloca i1\n").concat(a.allocas).concat(b.allocas), releases: a.releases.concat(b.releases), globals: a.globals.concat(b.globals), val: res, ty: CgBool, n: b.n + 1 }
 }
 
 // --- if/else ---
@@ -1130,7 +1130,7 @@ let cg_if (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cond: typecheck.TExpr) (
         .concat("  br label %").concat(end_label).concat("\n")
         .concat(end_label).concat(":\n")
         .concat("  ").concat(res).concat(" = load ").concat(lty).concat(", ptr ").concat(slot).concat("\n");
-    Emit { code: code, allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(c.allocas).concat(t.allocas).concat(e.allocas), releases: c.releases.concat(t.releases).concat(e.releases),globals: c.globals.concat(t.globals).concat(e.globals), val: res, ty: ty, n: e.n + 1 }
+    Emit { code: code, allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(c.allocas).concat(t.allocas).concat(e.allocas), releases: c.releases.concat(t.releases).concat(e.releases), globals: c.globals.concat(t.globals).concat(e.globals), val: res, ty: ty, n: e.n + 1 }
 }
 
 // --- for loops ---
@@ -1278,14 +1278,14 @@ let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.T
     match block.tail {
         Some(t) => {
             let r = cg_expr(p, s.env, s.n, t);
-            Emit { code: s.code.concat(r.code), allocas: s.allocas.concat(r.allocas), releases: s.releases.concat(r.releases),globals: s.globals.concat(r.globals), val: r.val, ty: ty, n: r.n }
+            Emit { code: s.code.concat(r.code), allocas: s.allocas.concat(r.allocas), releases: s.releases.concat(r.releases), globals: s.globals.concat(r.globals), val: r.val, ty: ty, n: r.n }
         },
-        None => Emit { code: s.code, allocas: s.allocas, releases: s.releases,globals: s.globals, val: "0", ty: CgUnit, n: s.n },
+        None => Emit { code: s.code, allocas: s.allocas, releases: s.releases, globals: s.globals, val: "0", ty: CgUnit, n: s.n },
     }
 }
 
 let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int): BlockEmit =
-    if i >= stmts.len() { BlockEmit { code: "", allocas: "", releases: "",globals: "", env: env, n: n } }
+    if i >= stmts.len() { BlockEmit { code: "", allocas: "", releases: "", globals: "", env: env, n: n } }
     else {
         match stmts[i] {
             // A DESTRUCTURING `let` is an irrefutable one-arm match,
@@ -1373,7 +1373,7 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
                 let r = cg_expr(p, env, n, e);
                 let rest = cg_stmts(p, env, r.n, stmts, i + 1);
                 // Rule 1: the value is owned, and nothing takes it.
-                BlockEmit { code: r.code.concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, e)), r.val)).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: r.releases.concat(rest.releases),globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
+                BlockEmit { code: r.code.concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, e)), r.val)).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: r.releases.concat(rest.releases), globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
             },
         }
     }
@@ -2004,7 +2004,7 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExp
         let reg = cg_reg(a.n);
         Emit {
             code: a.code.concat("  ").concat(reg).concat(" = call i1 @plum_println(ptr ").concat(a.val).concat(")\n").concat(a.drop),
-            allocas: a.allocas, releases: a.releases,globals: a.globals, val: reg, ty: CgUnit, n: a.n + 1,
+            allocas: a.allocas, releases: a.releases, globals: a.globals, val: reg, ty: CgUnit, n: a.n + 1,
         }
     } else {
         let s = cg_to_string(p, env, n, arg);
@@ -2208,7 +2208,7 @@ let cg_to_float (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TE
     let reg = cg_reg(b.n);
     Emit {
         code: b.code.concat("  ").concat(reg).concat(" = sitofp i64 ").concat(b.val).concat(" to double\n"),
-        allocas: b.allocas, releases: b.releases,globals: b.globals, val: reg, ty: CgFloat, n: b.n + 1,
+        allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgFloat, n: b.n + 1,
     }
 }
 
@@ -2255,7 +2255,7 @@ let cg_str_binop (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
     Emit {
         code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(fn_name).concat("(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n")
             .concat(a.drop).concat(b.drop),
-        allocas: a.allocas.concat(b.allocas), releases: a.releases.concat(b.releases),globals: a.globals.concat(b.globals), val: reg, ty: ret, n: b.n + 1,
+        allocas: a.allocas.concat(b.allocas), releases: a.releases.concat(b.releases), globals: a.globals.concat(b.globals), val: reg, ty: ret, n: b.n + 1,
     }
 }
 
@@ -2278,7 +2278,7 @@ let cg_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExp
     Emit {
         code: a.code.concat(b.code).concat("  ").concat(reg).concat(" = call ptr @plum_str_concat_reuse(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n")
             .concat(b.drop),
-        allocas: a.allocas.concat(b.allocas), releases: a.releases.concat(b.releases),globals: a.globals.concat(b.globals), val: reg, ty: CgStr, n: b.n + 1,
+        allocas: a.allocas.concat(b.allocas), releases: a.releases.concat(b.releases), globals: a.globals.concat(b.globals), val: reg, ty: CgStr, n: b.n + 1,
     }
 }
 
@@ -2355,7 +2355,7 @@ let cg_array_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[type
     let cell = cg_reg(n);
     let head = "  ".concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(elems.len().to_string()).concat(")\n");
     let st = cg_array_store_elems(p, env, n + 1, cell, elems, 0, "", "", "", "");
-    Emit { code: head.concat(st.code), allocas: st.allocas, releases: st.releases,globals: st.globals, val: cell, ty: ty, n: st.n }
+    Emit { code: head.concat(st.code), allocas: st.allocas, releases: st.releases, globals: st.globals, val: cell, ty: ty, n: st.n }
 }
 
 // `[a, b]` built into the cell the slot it is about to fill already
@@ -2549,7 +2549,7 @@ let cg_array_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.
         .concat(cg_elem_ptr_lines(cell, idx, v.n + 3))
         // The pushed value's own +1 moves into the array (rule 5).
         .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 3)).concat("\n");
-    Emit { code: code, allocas: b.allocas.concat(v.allocas), releases: b.releases.concat(v.releases),globals: b.globals.concat(v.globals), val: cell, ty: ty, n: v.n + 6 }
+    Emit { code: code, allocas: b.allocas.concat(v.allocas), releases: b.releases.concat(v.releases), globals: b.globals.concat(v.globals), val: cell, ty: ty, n: v.n + 6 }
 }
 
 let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr) (idx: typecheck.TExpr) (value: typecheck.TExpr) (ty: CgTy): Emit = {
@@ -2571,7 +2571,7 @@ let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, value)), cell.concat("_old")))
         .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 3)).concat("\n")
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, base)), b.val));
-    Emit { code: code, allocas: b.allocas.concat(i.allocas).concat(v.allocas), releases: b.releases.concat(i.releases).concat(v.releases),globals: b.globals.concat(i.globals).concat(v.globals), val: cell, ty: ty, n: v.n + 6 }
+    Emit { code: code, allocas: b.allocas.concat(i.allocas).concat(v.allocas), releases: b.releases.concat(i.releases).concat(v.releases), globals: b.globals.concat(i.globals).concat(v.globals), val: cell, ty: ty, n: v.n + 6 }
 }
 
 // `xs.remove(i)`: the runtime does the copy, this does the counting.
@@ -3046,7 +3046,7 @@ let cg_call_closure_value (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: Emi
         // the release pointer in the cell header were correct all
         // along and simply never reached.
         .concat(cg_dec_cg(clo.ty, clo.val));
-    Emit { code: code, allocas: clo.allocas.concat(a.allocas), releases: clo.releases.concat(a.releases),globals: clo.globals.concat(a.globals), val: out, ty: ret, n: a.n + 2 }
+    Emit { code: code, allocas: clo.allocas.concat(a.allocas), releases: clo.releases.concat(a.releases), globals: clo.globals.concat(a.globals), val: out, ty: ret, n: a.n + 2 }
 }
 
 let cg_prefix_commas (vals: Array[String]): String = cg_prefix_acc(vals, 0, "")
@@ -3366,7 +3366,7 @@ let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.
         // used once, real the moment one is folded over twice.
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), a.val))
         .concat(cg_dec_cg(f.ty, f.val));
-    Emit { code: code, allocas: "  ".concat(iv).concat(" = alloca i64\n").concat(a.allocas).concat(f.allocas), releases: a.releases.concat(f.releases),globals: a.globals.concat(f.globals), val: out, ty: CgArray(ret), n: b + 9 }
+    Emit { code: code, allocas: "  ".concat(iv).concat(" = alloca i64\n").concat(a.allocas).concat(f.allocas), releases: a.releases.concat(f.releases), globals: a.globals.concat(f.globals), val: out, ty: CgArray(ret), n: b + 9 }
 }
 
 // The output array is allocated at the INPUT's length and its length
@@ -3901,7 +3901,7 @@ let cg_variant_build (p: CgProgram) (v: CgVariant) (a: ArgVals): Emit = {
         .concat("  ").concat(cell).concat("_t = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
         .concat("  store i64 ").concat(v.tag.to_string()).concat(", ptr ").concat(cell).concat("_t\n");
     let stores = cg_store_payload(cell, a.vals, 0, a.n + 1, "");
-    Emit { code: a.code.concat(head).concat(stores.code), allocas: a.allocas, releases: a.releases,globals: a.globals, val: cell, ty: CgEnum(enum_name), n: stores.n }
+    Emit { code: a.code.concat(head).concat(stores.code), allocas: a.allocas, releases: a.releases, globals: a.globals, val: cell, ty: CgEnum(enum_name), n: stores.n }
 }
 
 struct StoreEmit { code: String, n: Int }
@@ -4081,7 +4081,7 @@ let cg_zero_of (t: CgTy): String =
         CgHandle(_) => "null",
     }
 
-struct ArmsEmit { code: String, allocas: String, releases: String,globals: String, n: Int }
+struct ArmsEmit { code: String, allocas: String, releases: String, globals: String, n: Int }
 
 let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TArm]) (i: Int) (sval: String) (sity: typecheck.ITy) (slot: String) (lty: String) (end_label: String) (fail_label: String) (code: String) (allocas: String) (releases: String) (globals: String): ArmsEmit =
     if i >= arms.len() { ArmsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
@@ -4194,7 +4194,7 @@ struct PatEmit { code: String, binds: String, allocas: String, releases: String,
 // can.
 let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPattern) (sval: String) (sity: typecheck.ITy): PatEmit =
     match pattern {
-        PWildcard => PatEmit { code: "", binds: "", allocas: "", releases: "",globals: "", test: "1", env: env, n: n },
+        PWildcard => PatEmit { code: "", binds: "", allocas: "", releases: "", globals: "", test: "1", env: env, n: n },
         // A binding always matches; the slot it introduces is what the
         // arm body reads.
         PIdent(name, _) => {
@@ -4230,7 +4230,7 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
         // one shape — so it contributes no test of its own, only the
         // sub-patterns'.
         PTuple(pats) => cg_pat_fields(p, env, n, cg_tuple_index_names(pats, 0, []), cg_tuple_elem_itys(sity), cg_tuple_field_pats(pats, 0, []), 0, sval, "1", "", "", "", "", ""),
-        POr(_) => { cg_fail("or-patterns aren't supported yet"); PatEmit { code: "", binds: "", allocas: "", releases: "",globals: "", test: "0", env: env, n: n } },
+        POr(_) => { cg_fail("or-patterns aren't supported yet"); PatEmit { code: "", binds: "", allocas: "", releases: "", globals: "", test: "0", env: env, n: n } },
     }
 
 let cg_pat_cmp (env: Array[CgSlot]) (n: Int) (op: String) (sval: String) (lit: String): PatEmit = {
@@ -4247,7 +4247,7 @@ let cg_pat_str (env: Array[CgSlot]) (n: Int) (sval: String) (lit: String): PatEm
     let gname = "@.str".concat(n.to_string());
     let test = cg_reg(n + 2);
     let code = "  ".concat(test).concat(" = call i1 @plum_str_eq(ptr ").concat(sval).concat(", ptr ").concat(gname).concat(")\n");
-    PatEmit { code: code, binds: "", allocas: "", releases: "",globals: cg_str_constant(n, lit), test: test, env: env, n: n + 3 }
+    PatEmit { code: code, binds: "", allocas: "", releases: "", globals: cg_str_constant(n, lit), test: test, env: env, n: n + 3 }
 }
 
 // `path` is what the CHECKER resolved the pattern head to:
@@ -4268,7 +4268,7 @@ let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (path: Array[Str
             let fnames = typecheck.ctx_field_names(p.ctx, head_or(head, name));
             if Array.is_empty(fnames) {
                 cg_fail("unknown variant in pattern: ".concat(name));
-                PatEmit { code: "", binds: "", allocas: "", releases: "",globals: "", test: "0", env: env, n: n }
+                PatEmit { code: "", binds: "", allocas: "", releases: "", globals: "", test: "0", env: env, n: n }
             } else {
                 cg_pat_struct(p, env, n, head_or(head, name), cg_positional_field_pats(fnames, arg_pats, 0, []), sval, sity)
             }
