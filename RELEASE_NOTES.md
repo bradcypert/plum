@@ -1,84 +1,81 @@
 Plum is a small, statically typed, compiled language.
 
-Two changes. `select` works, so a task can wait on several channels at
-once. And channels and tasks now clean up after themselves, which they
-never have: this is the first release where nothing in the test corpus
-is allowed to leak.
+This release adds a formatter.
 
-## `select` waits on several channels at once
+## `plum fmt`
 
-```plum
-let got = select {
-    n = numbers => n,
-    s = words   => s.len(),
-};
+```sh
+plum fmt --check src/     # list what needs formatting, non-zero exit
+plum fmt --write src/     # format in place
+plum fmt one.plum         # to stdout
 ```
 
-`select` blocks until one of its channels has a value, binds it, and
-runs that arm. Without it you had to pick one channel and wait on it —
-and if the message arrived on the other one, you sat there.
+A file or a directory; a directory is walked for every `.plum` file
+under it. `--check` is the CI shape and `--write` is the everyday one.
 
-Arms are tried in the order you wrote them, so if two channels are ready
-at the same moment the earlier arm wins. A channel that is always busy
-can therefore starve one written below it.
+### What it decides
 
-It really blocks. It does not wake up periodically to check, so there is
-no polling cost while it waits and no delay once a message lands.
+Five things, and nothing else:
 
-An empty `select {}` is rejected. Go allows it as a way to block
-forever; nothing else in Plum spells "hang", so here it is an error.
+- the line a statement, item or match arm begins on is indented four
+  spaces per enclosing block;
+- a closing brace sits one level out from what it closes;
+- a run of comment lines is indented with the code it documents;
+- a run of blank lines collapses to one;
+- a comma has no space before it and exactly one space after.
 
-## Channels and tasks clean up after themselves
+Every other character in the file is passed through untouched.
 
-Before this release, every `channel[T]()` leaked its queue and every
-task you never joined leaked its handle and result. Not a slow leak — a
-permanent one, for the life of the program.
+### Where the rules came from
 
-The cause was that `Sender`, `Receiver` and `Task` were plain integers
-underneath. An integer has no lifetime, so nothing could run when one
-went out of scope, and nothing could free what it pointed at. They are
-proper values now: when the last reference to a channel end goes, the
-queue is freed, and anything still sitting unread in it is released too.
+They were measured, not chosen. Across the 243 `.plum` files in the
+compiler's own repository, indentation was already a multiple of four
+everywhere, with no tabs and no trailing whitespace; there were 1,586
+runs of a single blank line against two runs of a double; and of 20,585
+commas the only one not already followed by a space was inside an array
+literal. The formatter encodes what the code already did.
 
-The test corpus used to carry one fixture excused from leak checking.
-It leaked 608 bytes, then 288 after a related fix, and now leaks
-nothing. There are no excused fixtures left.
+The test of that is that `plum fmt` leaves all 243 of those files
+byte-identical.
 
-### Dropping a task without joining detaches it
+### What it will not do
+
+It does not move a line belonging to a construct with no braces of its
+own — the `=` continuation of a long `let`, a `|>` chain broken across
+lines, the arguments of a multi-line call. Those are alignment choices
+inside an expression, and the compiler does not yet record where an
+expression begins, so a formatter guessing at them would be moving code
+whose shape it cannot see. It leaves them exactly as written.
+
+It also does not reflow: nothing is joined onto one line or split
+across two. Line breaks are yours.
+
+### It will not corrupt a file
+
+Before writing anything, `--write` re-lexes its own output and compares
+the token sequence against the original's. Whitespace and comments are
+exactly what lies between tokens, so two files whose tokens agree in
+order differ only in formatting. If a rule ever changed the tokens,
+`fmt` refuses to write and exits non-zero.
+
+Writes go to a temporary file beside the original and are renamed into
+place, which is atomic: the path is either the old file or the new one,
+never half of each.
+
+## `Os.rename_file`
 
 ```plum
-let t = spawn { work() };
-// t goes out of scope, never joined
+Os.rename_file(from, to)   // Result[Unit, String]
 ```
 
-The thread keeps running and its result is discarded — the same
-fire-and-forget behaviour `spawn` always had, except that now nothing
-leaks. The alternative, blocking at the end of the scope until the task
-finished, would have meant `{ spawn { forever() }; }` never exiting,
-with nothing at the call site saying so.
-
-### Joining twice is now an error instead of undefined
-
-```plum
-let a = t.join();
-let b = t.join();   // panic: task already joined
-```
-
-This was previously prevented by `.join()` consuming the task, which
-only held while a `Task` was an integer nobody could copy. Now that it
-is a real value, the check moved somewhere it can actually be enforced.
+Atomic within a filesystem, and an error rather than a silent copy
+across two. Added for the formatter's own writes, and useful anywhere
+a file has to be replaced without a window where it is incomplete.
 
 ## Upgrading
 
-**One thing stops compiling.** `.to_string()` on a `Task`, `Sender` or
-`Receiver` is now an error. It used to print the raw address of the
-underlying handle, which was never meaningful and never stable, and it
-only "worked" because these were integers.
+Nothing breaks. `plum fmt` is new, `Os.rename_file` is new, and no
+existing behaviour changed.
 
-It is reported by `plum build`, not by `plum check` — the same as
-`.to_string()` on a tuple, a `Ref` or a closure, which have always been
-refused at code generation rather than by the type checker. If your CI
-runs `check` alone it will not see this one.
-
-Everything else is source-compatible. Programs that used channels or
-spawned tasks will use less memory without being changed.
+If you adopt the formatter on an existing codebase, `plum fmt --check`
+first: it tells you what would move without touching anything.

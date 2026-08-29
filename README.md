@@ -281,6 +281,35 @@ application — and asserts that a failing test both fails and does not
 stop the ones after it. `plum test` was silently broken for months
 before that fixture existed.
 
+## Formatting
+
+```sh
+plum fmt --check src/     # list what needs formatting, non-zero exit
+plum fmt --write src/     # format in place
+plum fmt one.plum         # to stdout
+```
+
+`plum fmt` has five opinions -- indentation of statements, items and
+match arms at four spaces per block, closing braces one level out,
+comment runs indented with what they document, blank runs collapsed to
+one, and one space after a comma and none before. Everything else is
+passed through untouched. It does not reflow: no line is joined or
+split, and a line belonging to a construct with no braces of its own
+(a broken `|>` chain, a multi-line call's arguments) is left exactly as
+written, because nothing yet records where an expression begins.
+
+The rules were measured against this repository rather than chosen, and
+the test of that is `bootstrap/fmt-check`: every `.plum` file here is
+already formatted, so `plum fmt` changes none of them.
+
+**It cannot corrupt a file.** Before writing, `--write` re-lexes its own
+output and compares the token sequence to the original's -- whitespace
+and comments are exactly what lies between tokens, so files whose tokens
+agree in order differ only in formatting. A rule that changed the tokens
+would be refused rather than written. Writes go to a temporary file
+beside the original and are renamed into place, so an interrupted run
+cannot leave a half-written source file.
+
 ## Editor support
 
 `plum lsp` serves an LSP out of the `plum` binary itself (the same
