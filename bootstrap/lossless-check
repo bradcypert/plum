@@ -46,17 +46,31 @@ while IFS= read -r f; do
         printf 'FAIL  %-58s relex errored: %s\n' "$f" "$(head -n 1 "$work/err")"
         fail=$((fail + 1)); continue
     fi
-    if cmp -s "$f" "$work/out"; then
-        ok=$((ok + 1))
-    else
-        printf 'FAIL  %-58s round-trip differs\n' "$f"
+    if ! cmp -s "$f" "$work/out"; then
+        printf 'FAIL  %-58s token round-trip differs\n' "$f"
         diff "$f" "$work/out" | head -n 6 | sed 's/^/        /'
-        fail=$((fail + 1))
+        fail=$((fail + 1)); continue
     fi
+
+    # The same property one level up: the file rebuilt from ITEM spans
+    # and the gaps between them. This is what a formatter actually walks,
+    # and it is checked separately because an item span can be wrong
+    # while every token span is right -- `pub` sat outside its own item's
+    # span until this found it.
+    if ! SH_TIMEOUT="${SH_TIMEOUT:-60}" "$plum" relex "$f" --items > "$work/items" 2>"$work/err"; then
+        printf 'FAIL  %-58s relex --items errored: %s\n' "$f" "$(head -n 1 "$work/err")"
+        fail=$((fail + 1)); continue
+    fi
+    if ! cmp -s "$f" "$work/items"; then
+        printf 'FAIL  %-58s item-span round-trip differs\n' "$f"
+        head -n 1 "$work/items" | sed 's/^/        /'
+        fail=$((fail + 1)); continue
+    fi
+    ok=$((ok + 1))
 done < <(find . -name '*.plum' -not -path './.git/*' | sort)
 
 if [ "$fail" -ne 0 ]; then
     printf '\nlossless-check: %d file(s) do NOT round-trip, %d do\n' "$fail" "$ok"
     exit 1
 fi
-printf 'lossless-check: %d .plum files round-trip byte-for-byte through the token stream\n' "$ok"
+printf 'lossless-check: %d .plum files round-trip byte-for-byte, through the token stream AND through item spans\n' "$ok"

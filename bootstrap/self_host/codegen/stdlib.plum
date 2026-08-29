@@ -105,9 +105,9 @@ let cg_uses_module (items: Array[parser.ItemNode]) (name: String) (i: Int): Bool
 let cg_parse_std (name: String) (src: String): Array[parser.ItemNode] = {
     let saved = parser.current_path(());
     let lexed = lexer.tokenize_spanned(src);
-    parser.set_source_context("<".concat(name).concat(">"), src, lexed.starts);
+    parser.set_source_context("<".concat(name).concat(">"), src, lexed.starts, lexed.ends);
     let items = parser.with_module(parser.parse_program(lexed.tokens).items, name);
-    parser.set_source_context(saved, "", []);
+    parser.set_source_context(saved, "", [], []);
     items
 }
 

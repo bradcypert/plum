@@ -1396,10 +1396,41 @@ let parse_file_items (path: String) (module_name: String): Array[parser.ItemNode
         // `parser.set_source_context`.
         Ok(src) => {
             let lexed = lexer.tokenize_spanned(src);
-            parser.set_source_context(path, src, lexed.starts);
+            parser.set_source_context(path, src, lexed.starts, lexed.ends);
             parser.with_module(parser.parse_program(lexed.tokens).items, module_name)
         },
         Err(e) => { panic_raw("failed to read ".concat(path).concat(": ").concat(e)); [] },
+    }
+
+// The same reconstruction as `lexer.relex`, one level up: the file
+// rebuilt from ITEM spans and the gaps between them, rather than from
+// token spans.
+//
+// Same argument, same falsifiability. An item whose end is wrong
+// donates the missing text to the next gap and the file still comes
+// back byte-identical -- so the gap between two items is also checked
+// to be trivia, which is what a wrong boundary would break. An item
+// that overlaps its neighbour is caught by the same check, from the
+// other side: the gap would be negative-width and the slice would
+// repeat text.
+let relex_items (path: String) (src: String): String = {
+    let lexed = lexer.tokenize_spanned(src);
+    parser.set_source_context(path, src, lexed.starts, lexed.ends);
+    let items = parser.parse_program(lexed.tokens).items;
+    let chars = chars_of(src);
+    relex_items_acc(chars, items, 0, 0, "")
+}
+
+let relex_items_acc (chars: Array[String]) (items: Array[parser.ItemNode]) (i: Int) (at: Int) (acc: String): String =
+    if i >= items.len() { acc.concat(Array.concat_all(Array.slice(chars, at, chars.len()))) }
+    else {
+        let it = items[i];
+        if it.start < at { panic_raw("item ".concat(i.to_string()).concat(" overlaps the one before it")) } else { () };
+        if !lexer.gap_is_trivia(chars, at, it.start) {
+            panic_raw("item ".concat(i.to_string()).concat(" has non-trivia before it: an item boundary is wrong"))
+        } else { () };
+        relex_items_acc(chars, items, i + 1, it.end,
+            acc.concat(Array.concat_all(Array.slice(chars, at, it.end))))
     }
 
 // A project's MODULES are its immediate subdirectories, Go-style: every
@@ -1567,7 +1598,7 @@ let main (): Unit = {
         // reproduce a file byte for byte, the version with them has
         // nothing sound to build on.
         match Os.read_file(argv[1]) {
-            Ok(src) => print(lexer.relex(src)),
+            Ok(src) => if argv.len() > 2 && argv[2] == "--items" { print(relex_items(argv[1], src)) } else { print(lexer.relex(src)) },
             Err(e) => { println("relex: ".concat(e)); Os.exit_with(1) },
         };
     } else if argv[0] == "run" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
@@ -1579,7 +1610,7 @@ let main (): Unit = {
                 // Same source context the project path sets, so a parse
                 // error in a single file reports its location too.
                 let lexed0 = lexer.tokenize_spanned(src);
-                parser.set_source_context(argv[1], src, lexed0.starts);
+                parser.set_source_context(argv[1], src, lexed0.starts, lexed0.ends);
                 if argv[0] == "tokens" || argv[0] == "dump-tokens" {
                     println(lexer.render_tokens(lexer.tokenize(src)));
                 } else if argv[0] == "ast" || argv[0] == "dump-ast" {

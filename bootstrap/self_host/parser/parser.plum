@@ -92,7 +92,7 @@ pub enum PExpr {
 // working. A statement is the granularity a type error is reported at;
 // see `typecheck/infer.plum`'s `fail_tc` for what that does and does
 // not buy versus the real compiler's expression-precise spans.
-pub struct PBlock { pub stmts: Array[PStmt], pub tail: Option[PExpr], pub starts: Array[Int] }
+pub struct PBlock { pub stmts: Array[PStmt], pub tail: Option[PExpr], pub starts: Array[Int], pub ends: Array[Int] }
 
 pub enum PStmt {
     // The `Option[Ty]` is the OPTIONAL annotation in `let x: Int = ..`.
@@ -168,11 +168,11 @@ pub enum ItemKindNode {
 // concatenated into one flat list -- so by the time a type error is
 // reported there is no ambient "current file" left to attribute it to.
 // See `typecheck/infer.plum`'s `fail_tc`.
-pub struct ItemNode { pub is_pub: Bool, pub module: String, pub kind: ItemKindNode, pub path: String, pub start: Int }
+pub struct ItemNode { pub is_pub: Bool, pub module: String, pub kind: ItemKindNode, pub path: String, pub start: Int, pub end: Int }
 
 // Stamps a module name onto every item parsed from one file.
 pub let with_module (items: Array[ItemNode]) (m: String): Array[ItemNode] =
-    Array.map(items, |it| ItemNode { is_pub: it.is_pub, module: m, kind: it.kind, path: it.path, start: it.start })
+    Array.map(items, |it| ItemNode { is_pub: it.is_pub, module: m, kind: it.kind, path: it.path, start: it.start, end: it.end })
 pub struct ProgramNode { pub items: Array[ItemNode] }
 
 // The stdlib modules a program can `use`. THE list -- `codegen`'s
@@ -255,12 +255,12 @@ let fail (msg: String): Unit = panic_raw(msg)
 // When it is unset -- a unit test, a caller that never set it -- the
 // message falls back to exactly what it printed before, so nothing
 // depends on this having been done.
-pub struct SourceContext { pub path: String, pub source: String, pub starts: Array[Int] }
+pub struct SourceContext { pub path: String, pub source: String, pub starts: Array[Int], pub ends: Array[Int] }
 
-let CTX: Ref[SourceContext] = ref(SourceContext { path: "", source: "", starts: [] })
+let CTX: Ref[SourceContext] = ref(SourceContext { path: "", source: "", starts: [], ends: [] })
 
-pub let set_source_context (path: String) (source: String) (starts: Array[Int]): Unit =
-    CTX.set(SourceContext { path: path, source: source, starts: starts })
+pub let set_source_context (path: String) (source: String) (starts: Array[Int]) (ends: Array[Int]): Unit =
+    CTX.set(SourceContext { path: path, source: source, starts: starts, ends: ends })
 
 // Where the token at `pos` starts, as a character offset -- or -1 when
 // no source context is set, which is what every AST position degrades
@@ -270,6 +270,20 @@ pub let set_source_context (path: String) (source: String) (starts: Array[Int]):
 pub let offset_at (pos: Int): Int = {
     let ctx = CTX.get();
     if pos >= ctx.starts.len() { 0 - 1 } else { ctx.starts[pos] }
+}
+
+// Where the token at `pos` STOPS. Spans are half-open in characters,
+// so an item's or a statement's end is the end of the last token it
+// consumed -- `end_offset_at(next_pos - 1)`, since `next_pos` is
+// already one past it.
+//
+// `-1` for a synthetic node, matching `offset_at`. Contract sugar
+// builds statements no token ever produced, and a span that claims to
+// cover source those statements never came from would be worse than
+// admitting there is none.
+pub let end_offset_at (pos: Int): Int = {
+    let ctx = CTX.get();
+    if pos < 0 || pos >= ctx.ends.len() { 0 - 1 } else { ctx.ends[pos] }
 }
 
 pub let current_path (unit: Unit): String = CTX.get().path
@@ -328,16 +342,22 @@ let parse_items_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[ItemNode
 
 struct ItemResult { value: ItemNode, next_pos: Int }
 
+// The item's SPAN starts at `pos`, not at `start`: `start` is where the
+// declaration keyword is, one past a `pub` if there was one, and a span
+// that began there would leave the item's own `pub` outside it. For
+// error reporting that was merely imprecise; for anything reconstructing
+// source from spans it is a hole, and `plum relex --items` reports it as
+// one -- which is how it was found.
 let parse_item (tokens: Array[lexer.Token]) (pos: Int): ItemResult = {
     let pub_bump = bump_if(tokens, pos, TokPub);
     let start = pub_bump.next_pos;
     match tokens[start] {
-        TokLet => { let r = parse_let_def(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKLet(r.value), path: current_path(()), start: offset_at(start) }, next_pos: r.next_pos } },
-        TokStruct => { let r = parse_struct_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKStruct(r.value), path: current_path(()), start: offset_at(start) }, next_pos: r.next_pos } },
-        TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKEnum(r.value), path: current_path(()), start: offset_at(start) }, next_pos: r.next_pos } },
-        TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKExtern(r.value), path: current_path(()), start: offset_at(start) }, next_pos: r.next_pos } },
-        TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKUse(r.value), path: current_path(()), start: offset_at(start) }, next_pos: r.next_pos } },
-        _ => { fail_at(start, "expected an item (let/struct/enum/extern/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), start: offset_at(start) }, next_pos: start } },
+        TokLet => { let r = parse_let_def(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKLet(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
+        TokStruct => { let r = parse_struct_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKStruct(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
+        TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKEnum(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
+        TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKExtern(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
+        TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKUse(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
+        _ => { fail_at(start, "expected an item (let/struct/enum/extern/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start } },
     }
 }
 
@@ -461,11 +481,11 @@ let desugar_contracts (params: Array[ParamNode]) (requires: Array[ContractClause
         };
         let require_stmts = Array.map(requires, |c| SExpr(contract_check_call("__contract_require", "precondition failed", c)));
         if Array.is_empty(ensures) {
-            EBlock(PBlock { stmts: require_stmts, tail: Some(raw_body), starts: synthetic_starts(require_stmts.len() + 1, 0, []) })
+            EBlock(PBlock { stmts: require_stmts, tail: Some(raw_body), starts: synthetic_starts(require_stmts.len() + 1, 0, []), ends: synthetic_starts(require_stmts.len() + 1, 0, []) })
         } else {
             let with_let = require_stmts.push(SLet(false, PIdent("result", 0 - 1), None, raw_body));
             let ensure_stmts = Array.map(ensures, |c| SExpr(contract_check_call("__contract_ensure", "postcondition failed", c)));
-            EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result", 0 - 1)), starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []) })
+            EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result", 0 - 1)), starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []), ends: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []) })
         }
     }
 
@@ -1405,11 +1425,11 @@ struct BlockResult { value: PBlock, next_pos: Int }
 
 let parse_block (tokens: Array[lexer.Token]) (pos: Int): BlockResult = {
     let open = expect(tokens, pos, TokLBrace, "'{'");
-    let r = parse_block_items_acc(tokens, open, [], None, []);
-    BlockResult { value: PBlock { stmts: r.stmts, tail: r.tail, starts: r.starts }, next_pos: expect(tokens, r.next_pos, TokRBrace, "'}'") }
+    let r = parse_block_items_acc(tokens, open, [], None, [], []);
+    BlockResult { value: PBlock { stmts: r.stmts, tail: r.tail, starts: r.starts, ends: r.ends }, next_pos: expect(tokens, r.next_pos, TokRBrace, "'}'") }
 }
 
-struct BlockItemsResult { stmts: Array[PStmt], tail: Option[PExpr], next_pos: Int, starts: Array[Int] }
+struct BlockItemsResult { stmts: Array[PStmt], tail: Option[PExpr], next_pos: Int, starts: Array[Int], ends: Array[Int] }
 
 // `no_tail(())` instead of a bare `None` at each recursive call below —
 // a real, narrow type-inference gap found while building this file:
@@ -1429,27 +1449,27 @@ let synthetic_starts (n: Int) (i: Int) (acc: Array[Int]): Array[Int] =
 
 let no_tail (unit: Unit): Option[PExpr] = None
 
-let parse_block_items_acc (tokens: Array[lexer.Token]) (pos: Int) (stmts: Array[PStmt]) (tail: Option[PExpr]) (starts: Array[Int]): BlockItemsResult =
-    if check(tokens, pos, TokRBrace) { BlockItemsResult { stmts: stmts, tail: tail, next_pos: pos, starts: starts } }
+let parse_block_items_acc (tokens: Array[lexer.Token]) (pos: Int) (stmts: Array[PStmt]) (tail: Option[PExpr]) (starts: Array[Int]) (ends: Array[Int]): BlockItemsResult =
+    if check(tokens, pos, TokRBrace) { BlockItemsResult { stmts: stmts, tail: tail, next_pos: pos, starts: starts, ends: ends } }
     else if check(tokens, pos, TokLet) {
         let stmt_r = parse_let_stmt(tokens, pos);
         let semi_pos = expect(tokens, stmt_r.next_pos, TokSemicolon, "';'");
-        parse_block_items_acc(tokens, semi_pos, stmts.push(stmt_r.value), no_tail(()), starts.push(offset_at(pos)))
+        parse_block_items_acc(tokens, semi_pos, stmts.push(stmt_r.value), no_tail(()), starts.push(offset_at(pos)), ends.push(end_offset_at(semi_pos - 1)))
     } else {
         let expr_r = parse_expr(tokens, pos);
         if check(tokens, expr_r.next_pos, TokEq) {
             let name = match expr_r.value { EIdent(n, _) => n, _ => { fail_at(pos, "invalid assignment target"); "" } };
             let value_r = parse_expr(tokens, expr_r.next_pos + 1);
             let semi_pos = expect(tokens, value_r.next_pos, TokSemicolon, "';'");
-            parse_block_items_acc(tokens, semi_pos, stmts.push(SAssign(name, value_r.value)), no_tail(()), starts.push(offset_at(pos)))
+            parse_block_items_acc(tokens, semi_pos, stmts.push(SAssign(name, value_r.value)), no_tail(()), starts.push(offset_at(pos)), ends.push(end_offset_at(semi_pos - 1)))
         } else {
             let semi_b = bump_if(tokens, expr_r.next_pos, TokSemicolon);
-            if semi_b.matched { parse_block_items_acc(tokens, semi_b.next_pos, stmts.push(SExpr(expr_r.value)), no_tail(()), starts.push(offset_at(pos))) }
+            if semi_b.matched { parse_block_items_acc(tokens, semi_b.next_pos, stmts.push(SExpr(expr_r.value)), no_tail(()), starts.push(offset_at(pos)), ends.push(end_offset_at(semi_b.next_pos - 1))) }
             // The TAIL expression's own position rides along in `starts`
             // too: it is the last thing checked in the block, so a type
             // error in it would otherwise fall back to the enclosing
             // item's position.
-            else { BlockItemsResult { stmts: stmts, tail: Some(expr_r.value), next_pos: expr_r.next_pos, starts: starts.push(offset_at(pos)) } }
+            else { BlockItemsResult { stmts: stmts, tail: Some(expr_r.value), next_pos: expr_r.next_pos, starts: starts.push(offset_at(pos)), ends: ends.push(end_offset_at(expr_r.next_pos - 1)) } }
         }
     }
 

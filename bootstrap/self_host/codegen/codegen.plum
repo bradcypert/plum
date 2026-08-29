@@ -5579,9 +5579,9 @@ pub let cg_with_prelude (program: parser.ProgramNode): parser.ProgramNode = {
     let saved = parser.current_path(());
     let src = cg_prelude_src(());
     let lexed = lexer.tokenize_spanned(src);
-    parser.set_source_context("<prelude>", src, lexed.starts);
+    parser.set_source_context("<prelude>", src, lexed.starts, lexed.ends);
     let items = parser.with_module(parser.parse_program(lexed.tokens).items, parser.PRELUDE_MODULE(()));
-    parser.set_source_context(saved, "", []);
+    parser.set_source_context(saved, "", [], []);
     // Prelude, then whichever stdlib modules the program asked for by
     // `use`, then the program itself.
     parser.ProgramNode { items: Array.concat(Array.concat(items, cg_std_items(program.items)), program.items) }

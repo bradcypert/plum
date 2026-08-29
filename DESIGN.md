@@ -16114,3 +16114,77 @@ Verified under `-fsanitize=thread` as well as ASan: 200 tasks spawned
 and dropped without joining (`exec_corpus/task_dropped_unjoined`), where
 the drop and the thread finishing race on the same refcount directly --
 no races, nothing leaked.
+
+## Losslessness, and what it cost to find out (2026-08-29)
+
+The formatter has been deferred on one sentence for months: the lexer is
+lossy, so the real project is a lossless syntax tree. Both halves turned
+out to be smaller than that made them sound.
+
+### The lexer was already most of the way there
+
+The file's own header still said it was "deliberately span-free". It had
+not been for some time -- `tokenize_spanned` records where every token
+STARTS, added for parse-error carets. And where each one ENDS was
+already computed and thrown away: `lex_one` returns `next_pos`.
+
+Recording it costs one field and changes what the token stream is.
+With both ends known, everything the lexer discards -- comments, blank
+lines, indentation -- is exactly the GAP between one token's end and the
+next one's start, and can be read back out of the source by slicing.
+There is no trivia structure to build, and none to keep in step.
+
+It also recovers a token's ORIGINAL SPELLING, which the token itself
+does not carry. `TokInt(1000)` is what both `1000` and `1_000` lex to,
+and `TokStr` holds decoded text rather than the escapes that produced
+it. A formatter reprinting from token VALUES would silently rewrite
+both; one slicing the source cannot.
+
+### A round trip proves less than it looks like it proves
+
+`plum relex` rebuilds a file from its token stream, and all 242 `.plum`
+files in the repo come back byte-identical. That is a weaker claim than
+it sounds, and the distinction is the interesting part:
+
+reconstruction SLICES the original source, so a token whose end is one
+character short simply donates that character to the following gap, and
+the file still comes back byte-identical. The round trip proves
+COVERAGE -- every character is in a token or in a gap -- not that any
+boundary is where it should be.
+
+What pins the boundaries is checking that every gap contains only
+whitespace and line comments. A short end puts CODE in a gap, and code
+in a gap is precisely what a formatter would then treat as whitespace it
+may reflow at will.
+
+Verified by fault injection rather than by argument: shortening every
+token's end by one character round-trips byte-identically and is caught
+by the gap check, reporting `token 1 has non-trivia before it`.
+
+### Spans went on items and statements, not on expressions
+
+The parser already had the idiom, twice: token offsets as an array
+parallel to the tokens, and statement offsets as an array parallel to a
+block's statements -- both justified the same way, that the thing being
+positioned is matched on in dozens of places that have no use for a
+position and should not have to unwrap a wrapper.
+
+So this followed it rather than inventing anything: `ends` alongside the
+existing `starts` on blocks, and an `end` beside the existing `start` on
+items. Expressions still have no spans, and do not need them yet -- a
+formatter's decisions are about lines and indentation, which are
+statement-level and item-level questions. Within a statement the token
+stream is enough, because the tokens carry their own text.
+
+### The item span had a hole in it, and `pub` was in it
+
+`ItemNode.start` was recorded AFTER the `pub` keyword was consumed, so a
+`pub let` item's span began at `let`. For error reporting that was
+merely imprecise. For anything rebuilding source from spans it is a
+hole: `pub` sat in the gap, where a formatter is entitled to treat it as
+whitespace.
+
+`plum relex --items` -- the same reconstruction one level up -- reported
+it on the first file it was pointed at, before any of this was believed
+to work. That is the whole argument for building the checker before the
+formatter.
