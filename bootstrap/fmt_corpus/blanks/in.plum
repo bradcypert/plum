@@ -1,0 +1,13 @@
+// A run of blank lines collapses to one.
+let a (): Int = 1
+
+
+
+let b (): Int = 2
+
+let c (): Int = {
+    let x = a();
+
+
+    x + b()
+}

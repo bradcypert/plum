@@ -557,6 +557,22 @@ pub let gap_is_trivia (chars: Array[String]) (from: Int) (to: Int): Bool =
 // The reason to have it is that a formatter is this function with
 // opinions -- if the version with no opinions cannot reproduce a file
 // byte for byte, the version with them has nothing sound to build on.
+// Every token's own source text, one per line, trivia excluded.
+//
+// The sequence of these IS the program: whitespace and comments are
+// exactly what lies between them, so two files with the same token
+// texts in the same order differ only in formatting. That is the
+// property a formatter has to preserve, and the only one it has to.
+pub let token_texts (source: String): String = {
+    let lexed = tokenize_spanned(source);
+    let chars = chars_of(source);
+    token_texts_acc(chars, lexed, 0, "")
+}
+
+let token_texts_acc (chars: Array[String]) (lexed: LexedSource) (i: Int) (acc: String): String =
+    if i >= lexed.tokens.len() { acc }
+    else { token_texts_acc(chars, lexed, i + 1, acc.concat(slice_chars(chars, lexed.starts[i], lexed.ends[i])).concat("\n")) }
+
 pub let relex (source: String): String = {
     let lexed = tokenize_spanned(source);
     let chars = chars_of(source);

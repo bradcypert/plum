@@ -1860,7 +1860,6 @@ let lv_fn (params: Array[typecheck.TParam]) (body: typecheck.TExpr): typecheck.T
 let lv_param_names (params: Array[typecheck.TParam]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= params.len() { acc } else { lv_param_names(params, i + 1, acc.push(params[i].name)) }
 
-
 let cg_reads_max_list (name: String) (xs: Array[typecheck.TExpr]) (i: Int) (acc: Int): Int =
     if i >= xs.len() { cg_cap2(acc) } else { cg_reads_max_list(name, xs, i + 1, cg_cap2(acc + cg_reads_max(name, xs[i]))) }
 

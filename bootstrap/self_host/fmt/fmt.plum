@@ -285,7 +285,7 @@ pub let spaces (n: Int): String = if n <= 0 { "" } else { " ".concat(spaces(n - 
 pub let apply_edits (chars: Array[String]) (edits: Array[Edit]): String = {
     let empty: Map[Int, Int] = Map.new(());
     let by_line = index_edits(with_comment_runs(chars, edits, 0, edits), 0, empty);
-    walk_lines(chars, by_line, 0, "")
+    walk_lines(chars, by_line, 0, false, "")
 }
 
 // A comment belongs to what it documents, so it is indented with it.
@@ -329,13 +329,26 @@ let index_edits (edits: Array[Edit]) (i: Int) (m: Map[Int, Int]): Map[Int, Int] 
 // One pass over the source. At the start of each line, either the line
 // has an edit -- in which case its existing leading spaces are dropped
 // and the wanted indent written instead -- or it is copied untouched.
-let walk_lines (chars: Array[String]) (by_line: Map[Int, Int]) (at: Int) (acc: String): String =
+// `prev_blank` carries the second opinion: a run of blank lines
+// collapses to one.
+//
+// The corpus is nearly unanimous -- 1,586 runs of a single blank line
+// against two runs of a double -- which is why this is a rule at all
+// rather than a preference. It is also the first rule here that changes
+// something other than leading whitespace, which is why `fmt-check`
+// checks the TOKEN sequence rather than comparing stripped lines.
+let walk_lines (chars: Array[String]) (by_line: Map[Int, Int]) (at: Int) (prev_blank: Bool) (acc: String): String =
     if at >= chars.len() { acc }
+    else if is_blank_line(chars, at) {
+        let e = line_end(chars, at);
+        if prev_blank { walk_lines(chars, by_line, e, true, acc) }
+        else { walk_lines(chars, by_line, e, true, acc.concat(slice(chars, at, e))) }
+    }
     else {
         match Map.get(by_line, at) {
             None => {
                 let e = line_end(chars, at);
-                walk_lines(chars, by_line, e, acc.concat(slice(chars, at, e)))
+                walk_lines(chars, by_line, e, false, acc.concat(slice(chars, at, e)))
             },
             Some(indent) => {
                 let sp = count_spaces(chars, at, 0);
@@ -343,11 +356,23 @@ let walk_lines (chars: Array[String]) (by_line: Map[Int, Int]) (at: Int) (acc: S
                 // A blank line is left alone: it has no content to
                 // indent, and writing spaces into it would be the
                 // trailing whitespace this repo does not have.
-                if at + sp >= e { walk_lines(chars, by_line, e, acc.concat(slice(chars, at, e))) }
-                else { walk_lines(chars, by_line, e, acc.concat(spaces(indent)).concat(slice(chars, at + sp, e))) }
+                if at + sp >= e { walk_lines(chars, by_line, e, false, acc.concat(slice(chars, at, e))) }
+                else { walk_lines(chars, by_line, e, false, acc.concat(spaces(indent)).concat(slice(chars, at + sp, e))) }
             },
         }
     }
+
+// Whitespace to the end of the line, and nothing else.
+let is_blank_line (chars: Array[String]) (at: Int): Bool = at + count_spaces_ws(chars, at, 0) >= line_end_no_nl(chars, at)
+
+let count_spaces_ws (chars: Array[String]) (at: Int) (n: Int): Int =
+    if at + n >= chars.len() { n }
+    else if chars[at + n] == "\n" { n }
+    else if String.is_ascii_ws(chars[at + n]) { count_spaces_ws(chars, at, n + 1) }
+    else { n }
+
+let line_end_no_nl (chars: Array[String]) (at: Int): Int =
+    if at >= chars.len() { at } else if chars[at] == "\n" { at } else { line_end_no_nl(chars, at + 1) }
 
 // Through the newline, so the caller always resumes at a line start.
 let line_end (chars: Array[String]) (at: Int): Int =

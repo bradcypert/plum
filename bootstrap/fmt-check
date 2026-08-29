@@ -13,10 +13,16 @@
 #
 #   1. FIXED POINT -- formatting changes nothing. A file that changes is
 #      either misindented or a rule is wrong, and both are worth a look.
-#   2. INDENTATION ONLY -- with leading whitespace stripped, the output
-#      is byte-identical to the input. Plum has no significant
-#      indentation, so a change confined to leading whitespace cannot
-#      change the token stream, and therefore cannot change the program.
+#   2. SAME PROGRAM -- the formatted file's TOKEN sequence is identical
+#      to the original's, token text by token text. Whitespace and
+#      comments are exactly what lies between tokens, so two files whose
+#      tokens agree in order differ only in formatting.
+#
+#      This started as the narrower "only leading whitespace changed",
+#      which was true while indentation was the only opinion `fmt` had.
+#      Collapsing a run of blank lines is not a leading-whitespace
+#      change, so the check had to become the real property rather than
+#      a proxy for it.
 #   3. IDEMPOTENT -- formatting twice is formatting once. This failed
 #      when first checked: a block anchors to the indent of the line its
 #      brace is on, so moving an outer construct leaves everything
@@ -42,8 +48,16 @@ while IFS= read -r f; do
 
     # 2, checked even when the file is already formatted: a rule that
     # rewrote code would show here rather than in a diff nobody reads.
-    if [ "$(sed 's/^[[:space:]]*//' "$f" | md5sum)" != "$(sed 's/^[[:space:]]*//' "$work/out" | md5sum)" ]; then
-        printf 'FAIL  %-58s fmt changed more than indentation\n' "$f"
+    #
+    # The formatted text is written BESIDE the original, because
+    # `@embed_file` resolves relative to the file being compiled.
+    side="$(dirname "$f")/.fmt-check-tok-$$.plum"
+    cp "$work/out" "$side"
+    "$plum" relex "$f" --tokens > "$work/tok-before" 2>/dev/null
+    "$plum" relex "$side" --tokens > "$work/tok-after" 2>/dev/null
+    rm -f "$side"
+    if ! cmp -s "$work/tok-before" "$work/tok-after"; then
+        printf 'FAIL  %-58s fmt changed the token stream\n' "$f"
         fail=$((fail + 1)); continue
     fi
 

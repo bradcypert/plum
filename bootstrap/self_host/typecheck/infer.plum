@@ -1431,7 +1431,6 @@ let infer_println_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Sub
     ir_leaf(ITUnit, r.subst, r.state, TPrintln(r.texpr))
 }
 
-
 // Instantiates `sig`'s own declared generics as fresh vars (a no-op
 // substitution walk when `sig.generics` is empty — an ordinary
 // monomorphic call), unifies each argument against the corresponding
