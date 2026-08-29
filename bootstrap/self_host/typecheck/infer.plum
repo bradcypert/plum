@@ -534,7 +534,7 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
         // Channels ARE supported -- `channel[T]()`, `send`, `recv`. Only
         // `select` is not, and saying "select/channels" sent people
         // looking for a channel bug that was not there.
-        ESelect(_) => { fail_tc("`select` is not implemented yet; `channel[T]()`, `.send()` and `.recv()` do work"); ir_unsupported(acc, state, "select") },
+        ESelect(arms) => infer_select(p2, state, env, acc, arms),
     }
 
 // A closure literal's params get FRESH type variables (no annotations
@@ -2046,6 +2046,51 @@ let infer_match (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (sc
 }
 
 struct ArmsResult { ty: ITy, subst: Subst, state: FreshState, tarms: Array[TArm] }
+
+// --- `select` ---
+//
+// Each arm waits on its OWN receiver, so unlike `match` there is no one
+// scrutinee: every arm brings its own `Receiver[T]` and binds a value
+// of that arm's own `T`. What the arms do share is a result type, the
+// same way `match` arms do, because the whole `select` is one
+// expression.
+//
+// An arm with no receiver to wait on cannot ever be chosen, and a
+// `select` with no arms at all blocks forever with nothing that could
+// wake it -- Go allows exactly that as a deliberate idiom, but nothing
+// else in this language is a way to spell "hang", so it is rejected.
+let infer_select (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arms: Array[parser.SelectArmNode]): InferResult =
+    if Array.is_empty(arms) {
+        fail_tc("`select` needs at least one arm; a select with none can never proceed");
+        ir_unsupported(acc, state, "empty select")
+    } else {
+        let r = infer_select_arms(p2, state, env, acc, arms, 0, None, []);
+        ir_leaf(Option.unwrap_or(r.ty, ITUnit), r.subst, r.state, TSelect(r.tarms))
+    }
+
+struct SelectArmsResult { ty: Option[ITy], subst: Subst, state: FreshState, tarms: Array[TSelectArm] }
+
+let infer_select_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arms: Array[parser.SelectArmNode]) (i: Int) (result_ty: Option[ITy]) (tarms: Array[TSelectArm]): SelectArmsResult =
+    if i >= arms.len() { SelectArmsResult { ty: result_ty, subst: acc, state: state, tarms: tarms } }
+    else {
+        let cr = infer_expr(p2, state, env, acc, arms[i].expr);
+        let ef = fresh(cr.state);
+        let s1 = match unify(subst_apply(cr.subst, cr.ty), ITStruct("Receiver", [ef.ty])) {
+            Ok(s) => subst_compose(s, cr.subst),
+            Err(e) => { fail_tc("a `select` arm waits on a Receiver: ".concat(e)); cr.subst },
+        };
+        let br = bind_pattern_ty(p2, ef.state, s1, env, arms[i].pattern, subst_apply(s1, ef.ty));
+        let bodyr = infer_expr(p2, br.state, br.env, br.subst, arms[i].body);
+        let new_result = match result_ty {
+            None => subst_apply(bodyr.subst, bodyr.ty),
+            Some(prev) => match unify(subst_apply(bodyr.subst, prev), subst_apply(bodyr.subst, bodyr.ty)) {
+                Ok(s) => subst_apply(subst_compose(s, bodyr.subst), bodyr.ty),
+                Err(e) => { fail_tc("`select` arms: ".concat(e)); bodyr.ty },
+            },
+        };
+        infer_select_arms(p2, bodyr.state, env, bodyr.subst, arms, i + 1, Some(new_result),
+            tarms.push(TSelectArm { chan: cr.texpr, pattern: br.pattern, body: bodyr.texpr }))
+    }
 
 // --- Exhaustiveness ---
 //

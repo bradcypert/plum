@@ -15952,3 +15952,165 @@ once, and a value that is live is one some other reuse will decline.
 That is a hypothesis, not a measurement -- no fixture in `alloc_corpus`
 regressed, which is the guard that actually matters, so it was not
 chased further.
+
+## `select`, and the primitive it was missing (2026-08-28)
+
+The backlog called this a runtime redesign. It was not: the retired
+Rust backend shipped `select` years of commits ago, and DESIGN's own
+account of it says how.
+
+> `select` uses a busy-poll matching the interpreter's own algorithm
+> exactly: [...] `usleep(1000)` (matching the interpreter's 1ms sleep)
+> and retry from arm 0 if nothing was ready
+
+The same paragraph is pointed about why:
+
+> `.recv()` uses a REAL blocking `pthread_cond_wait` loop, not a
+> busy-poll -- a single channel has a genuine primitive for this,
+> unlike `select`.
+
+So the gap was never the algorithm. It was that no primitive existed
+for "wait until ANY of these channels has something", and one channel's
+condvar cannot be it.
+
+### One condvar for the whole process
+
+`channel_select` takes the arms' handles, sweeps them in index order,
+and sleeps on a single process-wide condvar that every `channel_send`
+broadcasts on. Roughly thirty lines of C, no polling, no latency floor.
+
+What it costs is one uncontended mutex on every send, including in
+programs that never select. The alternative that avoids that -- each
+select registering a waiter on each of its channels -- is also the only
+one with cross-channel lock ordering to get wrong, and this queue is
+unbounded and mutex-based already. It was not the place to spend that
+risk.
+
+The lock order is `sel_lock` then a channel's own `lock`, one way only:
+`channel_select` holds `sel_lock` across its sweep and takes each
+channel lock inside it, while `channel_send` takes its channel lock and
+RELEASES it before taking `sel_lock`. Holding `sel_lock` across the
+sweep is also what closes the missed-wakeup window -- a send that
+arrives after its channel was looked at cannot broadcast until the
+selecting thread is already waiting.
+
+### The backend contributes almost nothing
+
+Every channel payload already crosses as a `void *` box, so the entire
+poll-and-wait loop is type-independent and lives in C. `channel_select`
+returns the winning arm's INDEX and its box, and the generated code is
+one stack array, one call, and a `switch` into per-arm blocks -- each
+of which loads the box at ITS OWN payload type, which is the reason the
+unboxing cannot be hoisted above the switch.
+
+Arms are swept in index order, so an earlier arm wins a tie and a hot
+arm 0 can starve arm 1. That is the same fairness the retired backend
+had, and it is a choice rather than an oversight.
+
+`select {}` is rejected. Go allows it deliberately as a way to block
+forever; nothing else in this language spells "hang", so an empty
+select is an error here.
+
+### Two leaks it did not cause, one of which is now fixed
+
+`exec_corpus/select_channels` is the corpus's second entry in the
+leaks-by-design list, and neither leak is select's:
+
+- **A channel is never freed** -- 104 bytes per `channel[T]()`,
+  reproducible in four lines with no `select` and no `spawn`. There is
+  no answer yet to "when is a channel dead", which is the same question
+  disconnect detection asks and which was deferred with it.
+- **A capturing `spawn` closure was not freed even when the task IS
+  joined** -- 32 bytes, and this one was news. The existing allowlist
+  entry blames unjoined tasks, which is a different bug; this
+  reproduced in six lines with the join present. A capture-FREE spawn
+  leaked nothing, because a closure with no captures is a module-level
+  constant and never allocated at all.
+
+Both were invisible until now because the only fixture using channels
+was already exempt from the leak check for the unjoined-task reason.
+
+The closure one is fixed. The generated task entry function now
+releases the closure after running the body -- there, and not at
+`.join()`, because a task nobody joins still runs, and joining is the
+only moment the spawning side gets control back. Doing it at the end of
+the body means the captures die when the body that reads them is
+finished, joined or not. It has to be after the call, since the body
+reads its own captures, and the returned value is unaffected because it
+arrives owning its own reference.
+
+`exec_corpus/concurrency` went from 608 bytes leaked to 288, and what
+is left there is only channels and genuinely unjoined tasks.
+
+## Handles that own something (2026-08-28)
+
+`Sender[T]`, `Receiver[T]` and `Task[T]` were bare `i64` handles --
+`CgInt` on the backend side, with a comment explaining that a `Task` is
+"an `Int`'s shape, with no cell, no fields and nothing to release".
+That was true, and it was the bug: **an `Int` has no lifetime, so
+nothing runs when one dies.** A channel was never freed and an unjoined
+task was never reclaimed, and neither could be fixed in the shim,
+because C cannot know when a Plum value goes out of scope.
+
+Each is now a refcounted cell of `{ rc, handle }`. The cell is the
+death the resource can hook onto.
+
+### Two cells over one queue
+
+A channel's two ends are separate cells over the same handle, and the
+queue carries its own count of 2. Whichever end is dropped first
+decrements it; the second frees the queue. That is why the ends could
+not be one shared cell: a program that keeps only the receiver must
+still be able to receive.
+
+Draining a dead queue releases what is still IN it -- values sent and
+never received own references of their own -- so `channel_release`
+takes the element's release function. Same for a task's result box when
+nobody joined. `null` for an element type that owns nothing.
+
+### Dropping a task detaches it
+
+The alternative was joining on drop, which is deterministic and never
+kills anything mid-flight. It was rejected because a scope exit would
+then block for an unbounded time with nothing at the call site saying
+so -- `{ spawn { forever() }; }` would simply never exit. Detaching
+keeps `spawn` fire-and-forget, which is also what it already was.
+
+The task struct is freed by whichever of the thread and the handle lets
+go LAST, through a refcount of 2. That makes "the task outlives the
+handle" and "the handle outlives the task" both work without either
+side knowing which happened.
+
+### Joining twice became expressible, so it became an error
+
+The old guarantee was that `.join()` CONSUMED the task -- true only
+while a `Task` was an integer nobody could copy. A refcounted cell can
+be copied, so the guarantee moved into the shim where it can be
+enforced: a second join aborts with `panic: task already joined`
+(`abort_corpus/double_join`) instead of calling `pthread_join` on an
+already-joined thread, which is undefined.
+
+### What it cost to make them heap
+
+Turning three types heap put them into the whole ownership system,
+which mostly worked, and needed four stops added where a structural
+walk would otherwise have asked a handle for its fields: reuse
+candidacy, the equality closure, the `to_string` closure and the
+release closure. A handle has no fields to walk and no declaration to
+find them in -- `unknown struct: Task (asked for its field types)` is
+what that looks like when you forget one.
+
+`.to_string()` on a handle is now an error rather than printing a raw
+shim pointer, which is what it used to do by accident.
+
+### The corpus has no leak exemptions left
+
+`exec_corpus/concurrency` had been on the leaks-by-design list since
+the day it was written. The list is now empty, and kept as an empty
+declaration rather than deleted, so that needing one again is a
+question somebody has to ask out loud.
+
+Verified under `-fsanitize=thread` as well as ASan: 200 tasks spawned
+and dropped without joining (`exec_corpus/task_dropped_unjoined`), where
+the drop and the thread finishing race on the same refcount directly --
+no races, nothing leaked.

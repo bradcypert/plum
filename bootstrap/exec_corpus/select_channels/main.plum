@@ -1,0 +1,59 @@
+// `select` waits on several channels at once and takes whichever is
+// ready first.
+//
+// A single channel's condvar cannot express that, so there is one
+// process-wide condvar that every send broadcasts on and a blocked
+// select sleeps on -- see `channel_select` in native_stdlib/
+// thread_shim.c. The retired backend busy-polled with a 1ms sleep
+// instead; this does not.
+//
+// Everything printed here is ORDER-INDEPENDENT on purpose. Which arm
+// wins a given sweep depends on thread scheduling, so a fixture that
+// printed arrival order would be flaky by construction; a sum and a
+// count are not.
+
+let pump_ints (tx: Sender[Int]) (n: Int): Unit =
+    if n <= 0 { () } else { tx.send(n); pump_ints(tx, n - 1) }
+
+let pump_strs (tx: Sender[String]) (n: Int): Unit =
+    if n <= 0 { () } else { tx.send("abc"); pump_strs(tx, n - 1) }
+
+// Blocks in `select` before either producer has sent anything, which is
+// the case a busy-poll would spin through and a broken wakeup would
+// hang on.
+let drain (rx1: Receiver[Int]) (rx2: Receiver[String]) (left: Int) (acc: Int): Int =
+    if left <= 0 { acc }
+    else {
+        let got = select {
+            n = rx1 => n,
+            s = rx2 => s.len(),
+        };
+        drain(rx1, rx2, left - 1, acc + got)
+    }
+
+// A heap payload, so the arm's binding has a reference to account for.
+let first_word (rx: Receiver[String]) (other: Receiver[Int]): String =
+    select {
+        s = rx => s.concat("!"),
+        n = other => n.to_string(),
+    }
+
+let main (): Unit = {
+    let (tx1, rx1) = channel[Int]();
+    let (tx2, rx2) = channel[String]();
+    let a = spawn { pump_ints(tx1, 10) };
+    let b = spawn { pump_strs(tx2, 5) };
+    // 1..10 summed is 55, plus five strings of length 3.
+    println(drain(rx1, rx2, 15, 0).to_string());
+    a.join();
+    b.join();
+
+    let (tx3, rx3) = channel[String]();
+    let (tx4, rx4) = channel[Int]();
+    let c = spawn { tx3.send("word") };
+    println(first_word(rx3, rx4));
+    c.join();
+    // The unused end still type-checks and is never selected on again.
+    tx4.send(1);
+    println(rx4.recv().to_string())
+}

@@ -57,9 +57,13 @@ shims=(native_stdlib/compat_shim.c native_stdlib/dir_shim.c
 # the reason belongs next to the exception, which is the lesson the old
 # DESIGN.md gap table taught the hard way. They are still built, run and
 # output-compared -- only the leak check is off.
-declare -A leaks=(
-    [concurrency]="a task nobody joins is never freed; the REAL compiler leaks more on this same program (734 bytes to 608) -- see the fixture's own header"
-)
+# EMPTY, and worth keeping as an empty declaration rather than deleting:
+# `concurrency` sat here from the day it was written -- 608 bytes, then
+# 288 -- because a channel and an unjoined task had no lifetime to hook
+# a release onto. Giving `Sender`/`Receiver`/`Task` refcounted cells took
+# the corpus to zero exemptions. A fixture that needs one again is a
+# question worth asking out loud.
+declare -A leaks=()
 
 if [ $asan -eq 1 ]; then
     cflags=(-O1 -g -fsanitize=address)

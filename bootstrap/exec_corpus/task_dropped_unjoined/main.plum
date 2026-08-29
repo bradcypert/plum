@@ -1,0 +1,24 @@
+// Tasks spawned and never joined, two hundred of them.
+//
+// Dropping a `Task` without joining DETACHES the thread: the body keeps
+// running, its result is discarded, and the task struct is freed by
+// whichever of the two sides lets go last. The alternative -- joining on
+// drop -- would make a scope exit block for an unbounded time with
+// nothing at the call site saying so.
+//
+// This is the case the refcount actually has to survive, because the
+// drop and the thread finishing race on it directly. Verified under
+// both `-fsanitize=thread` (no races) and `-fsanitize=address` with
+// leak detection (nothing leaked), which `corpus-check` runs for the
+// second half automatically.
+let busy (n: Int): String = if n <= 0 { "done" } else { busy(n - 1) }
+
+let churn (n: Int): Int =
+    if n <= 0 { 0 }
+    else {
+        let k = n;
+        let t = spawn { busy(k) };
+        churn(n - 1)
+    }
+
+let main (): Unit = println(churn(200).to_string())

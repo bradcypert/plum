@@ -1,0 +1,8 @@
+// Rejected: a select arm waits on a Receiver. A Sender is the other end
+// and has nothing to wait for -- the same asymmetry that makes `.send`
+// on a Receiver a type error rather than a runtime one.
+let main (): Unit = {
+    let (tx, rx) = channel[Int]();
+    let n = select { v = tx => v };
+    println(n.to_string())
+}

@@ -1,0 +1,15 @@
+// Joining the same task twice.
+//
+// This used to be prevented by `.join()` CONSUMING the task, which was
+// only true while a `Task` was a bare integer nobody could copy. A
+// `Task` is a refcounted cell now, so the second join is expressible --
+// and it is a defined abort rather than the undefined `pthread_join`
+// that would otherwise happen on an already-joined thread.
+let work (): Int = 6 * 7
+let main (): Unit = {
+    let t = spawn { work() };
+    println("before");
+    println(t.join().to_string());
+    println(t.join().to_string());
+    println("unreachable")
+}

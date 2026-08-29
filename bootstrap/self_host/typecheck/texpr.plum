@@ -40,6 +40,12 @@ pub enum TStmt {
 }
 
 pub struct TArm { pub pattern: parser.PPattern, pub guard: Option[TExpr], pub body: TExpr }
+
+// One `select` arm: the RECEIVER to wait on, the pattern its value is
+// bound by, and the body. No guard -- an arm that can decline after
+// winning would have to put the value back, and this queue has no
+// un-pop.
+pub struct TSelectArm { pub chan: TExpr, pub pattern: parser.PPattern, pub body: TExpr }
 pub struct TFieldInit { pub name: String, pub value: TExpr }
 
 pub enum TNode {
@@ -183,6 +189,9 @@ pub enum TNode {
     TChannelNew,
     TChannelSend(TExpr, TExpr),
     TChannelRecv(TExpr),
+    // `select { v = rx => .. , w = ry => .. }`: block until one of the
+    // receivers has a value, bind it, run that arm.
+    TSelect(Array[TSelectArm]),
     TPrintln(TExpr),
     TUnsupported(String),
 }

@@ -12,12 +12,18 @@
 // differ, which is what makes `.send` on a Receiver a type error rather
 // than a runtime one.
 //
-// This fixture is the corpus's one expected LEAK. A task nobody joins
-// is never freed -- its handle struct, its boxed result and its closure
-// all outlive the program -- and that is true of BOTH compilers: the
-// real one leaks 734 bytes to this backend's 608 on exactly this
-// program. Fixing it needs the Plum side to signal that a `Task` value
-// died unjoined, which a bare handle cannot do.
+// This fixture LEAKED BY DESIGN for most of its life -- 608 bytes, then
+// 288 -- and now leaks nothing.
+//
+// What changed is that `Sender`, `Receiver` and `Task` stopped being
+// bare integers. An integer has no lifetime, so nothing ran when one
+// died: the channel was never freed and an unjoined task was never
+// reclaimed. They are refcounted cells now, and the last reference
+// dying is what frees the queue or detaches the thread. See DESIGN.md,
+// "Handles that own something".
+//
+// For scale, the retired real compiler leaked 734 bytes on this same
+// program and never stopped.
 
 let square (n: Int): Int = n * n
 

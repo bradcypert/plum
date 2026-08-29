@@ -108,6 +108,15 @@ pub enum CgTy {
     // are. Nothing about it needs a declaration, which is the whole
     // difference — the element types come from the type itself.
     CgTuple(Array[CgTy]),
+    // `Task`, `Sender`, `Receiver`: a refcounted cell of `{ rc, handle }`
+    // wrapping the opaque `i64` the thread shim hands out.
+    //
+    // These were a bare `CgInt` until the resources behind them needed
+    // lifetimes. An `Int` has none -- nothing runs when one dies -- so a
+    // channel was never freed and an unjoined task never reclaimed. The
+    // cell is what gives the handle a death to hook onto; the NAME says
+    // which shim function that death calls.
+    CgHandle(String),
     // `Ref[T]`: a `ptr` to a REFCOUNTED two-word cell,
     // `{ i64 refcount, i64 value }`, allocated by `@plum_alloc_ref`.
     // The inner representation is carried so `.get()`/`.set()` know
@@ -137,6 +146,7 @@ let cg_llvm_ty (t: CgTy): String =
         CgRef(_) => "ptr",
         CgClosure(_, _) => "ptr",
         CgTuple(_) => "ptr",
+        CgHandle(_) => "ptr",
     }
 
 let cg_ty_name (t: CgTy): String =
@@ -153,6 +163,7 @@ let cg_ty_name (t: CgTy): String =
         CgRef(inner) => "Ref[".concat(cg_ty_name(inner)).concat("]"),
         CgClosure(_, ret) => "(..) -> ".concat(cg_ty_name(ret)),
         CgTuple(elems) => "(".concat(cg_ty_name_list(elems, 0, "")).concat(")"),
+        CgHandle(name) => name,
     }
 
 let cg_ty_name_list (ts: Array[CgTy]) (i: Int) (acc: String): String =
@@ -710,6 +721,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TChannelNew => cg_channel_new(p, env, n, cg_ty(p, e)),
         TChannelSend(ch, v) => cg_channel_send(p, env, n, ch, v),
         TChannelRecv(ch) => cg_channel_recv(p, env, n, ch, cg_ty(p, e)),
+        TSelect(arms) => cg_select(p, env, n, arms, cg_ty(p, e)),
         TSpawn(clo) => cg_spawn(p, env, n, clo),
         TTaskJoin(t) => cg_task_join(p, env, n, t, cg_ty(p, e)),
         TPrintln(arg) => cg_println(p, env, n, arg),
@@ -756,7 +768,7 @@ let cg_of_ity (t: typecheck.ITy): CgTy =
         // shape, with no cell, no fields and nothing to release. Mapping
         // it to `CgStruct("Task")` would send every field/release path
         // looking for a declaration that does not exist.
-        ITStruct(name, args) => if name == "Task" || name == "Sender" || name == "Receiver" { CgInt } else if name == "Array" { CgArray(cg_of_ity(args[0])) } else { CgStruct(name) },
+        ITStruct(name, args) => if name == "Task" || name == "Sender" || name == "Receiver" { CgHandle(name) } else if name == "Array" { CgArray(cg_of_ity(args[0])) } else { CgStruct(name) },
         ITRef(inner) => CgRef(cg_of_ity(inner)),
         ITEnum(name, _) => CgEnum(name),
         ITFunction(ptys, ret) => CgClosure(Array.map(ptys, |q| cg_of_ity(q)), cg_of_ity(ret)),
@@ -1415,6 +1427,7 @@ let cg_reads_max (name: String) (e: typecheck.TExpr): Int =
         TChannelNew => 0,
         TChannelSend(a, b) => cg_cap2(cg_reads_max(name, a) + cg_reads_max(name, b)),
         TChannelRecv(a) => cg_reads_max(name, a),
+        TSelect(arms) => cg_reads_max_select(name, arms, 0, 0),
         TTaskJoin(a) => cg_reads_max(name, a),
         TExternCall(_, xs) => cg_reads_max_list(name, xs, 0, 0),
         TAsCStr(a) => cg_reads_max(name, a),
@@ -1596,6 +1609,11 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         TPrintln(a) => TPrintln(lv_expr(ctx, a)),
         TTaskJoin(a) => TTaskJoin(lv_expr(ctx, a)),
         TChannelRecv(a) => TChannelRecv(lv_expr(ctx, a)),
+        // Every arm's RECEIVER is evaluated before any body runs, and
+        // exactly one body then runs -- so the receivers are a
+        // left-to-right sequence and the bodies are alternatives, the
+        // same shape `TIf` has.
+        TSelect(arms) => TSelect(lv_select_arms(ctx, arms, 0, [])),
         TAsCStr(a) => TAsCStr(lv_expr(ctx, a)),
         TAsString(a) => TAsString(lv_expr(ctx, a)),
         TRefNew(a) => TRefNew(lv_expr(ctx, a)),
@@ -2175,6 +2193,11 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         CgRef(_) => { cg_fail(".to_string() on a Ref isn't supported — use .get().to_string()"); cg_unit_emit(b.n) },
         CgClosure(_, _) => { cg_fail("a closure has no .to_string()"); cg_unit_emit(b.n) },
         CgTuple(_) => { cg_fail(".to_string() on a tuple isn't supported yet"); cg_unit_emit(b.n) },
+        // A handle's only readable content is an address, which is the
+        // same reason a `Ref` refuses. Printing one used to "work"
+        // because these were plain `Int`s -- printing the raw shim
+        // pointer, which was never useful and is now not even stable.
+        CgHandle(name) => { cg_fail(".to_string() on a ".concat(name).concat(" isn't supported")); cg_unit_emit(b.n) },
     }
 }
 
@@ -2413,6 +2436,49 @@ let cg_array_lit_cand (p: CgProgram) (env: Array[CgSlot]) (cands: Array[String])
         }
     } else { cg_array_lit_cand(p, env, cands, i + 1) }
 
+// Every arm's RECEIVER is evaluated, so those SUM. Exactly one body
+// then runs, so those are alternatives and only the largest counts --
+// the same split `TIf` makes between its condition and its branches.
+let cg_reads_max_select (name: String) (arms: Array[typecheck.TSelectArm]) (i: Int) (acc: Int): Int =
+    cg_cap2(cg_reads_select_chans(name, arms, 0, acc) + cg_reads_select_bodies(name, arms, 0, 0))
+
+let cg_reads_select_chans (name: String) (arms: Array[typecheck.TSelectArm]) (i: Int) (acc: Int): Int =
+    if i >= arms.len() { acc }
+    else { cg_reads_select_chans(name, arms, i + 1, cg_cap2(acc + cg_reads_max(name, arms[i].chan))) }
+
+let cg_reads_select_bodies (name: String) (arms: Array[typecheck.TSelectArm]) (i: Int) (best: Int): Int =
+    if i >= arms.len() { best }
+    else {
+        let here = if cg_pattern_binds(arms[i].pattern, name) { 0 } else { cg_reads_max(name, arms[i].body) };
+        cg_reads_select_bodies(name, arms, i + 1, cg_max2(best, here))
+    }
+
+let lv_select_arms (ctx: LvCtx) (arms: Array[typecheck.TSelectArm]) (i: Int) (acc: Array[typecheck.TSelectArm]): Array[typecheck.TSelectArm] =
+    if i >= arms.len() { acc }
+    else {
+        let inner = lv_scoped(lv_with(ctx, lv_select_rest(arms, i + 1, [])), lv_pat_names(arms[i].pattern, []));
+        lv_select_arms(ctx, arms, i + 1, acc.push(typecheck.TSelectArm {
+            chan: lv_expr(lv_with(ctx, lv_select_rest(arms, i + 1, [])), arms[i].chan),
+            pattern: arms[i].pattern,
+            body: lv_expr(inner, arms[i].body),
+        }))
+    }
+
+let lv_select_rest (arms: Array[typecheck.TSelectArm]) (from: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
+    if from >= arms.len() { acc } else { lv_select_rest(arms, from + 1, acc.push(arms[from].chan)) }
+
+let cg_rel_in_select (p: CgProgram) (arms: Array[typecheck.TSelectArm]) (i: Int) (here: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= arms.len() { here }
+    else { cg_rel_in_select(p, arms, i + 1, cg_rel_in(p, arms[i].body, cg_rel_in(p, arms[i].chan, here))) }
+
+let cg_eq_in_select (p: CgProgram) (arms: Array[typecheck.TSelectArm]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= arms.len() { acc }
+    else { cg_eq_in_select(p, arms, i + 1, cg_eq_in(p, arms[i].body, cg_eq_in(p, arms[i].chan, acc))) }
+
+let cg_calls_in_select (p: CgProgram) (arms: Array[typecheck.TSelectArm]) (i: Int) (acc: Array[CgInst]): Array[CgInst] =
+    if i >= arms.len() { acc }
+    else { cg_calls_in_select(p, arms, i + 1, cg_calls_in(p, arms[i].body, cg_calls_in(p, arms[i].chan, acc))) }
+
 let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (elems: Array[typecheck.TExpr]) (i: Int) (code: String) (allocas: String) (releases: String) (globals: String): FieldsEmit =
     if i >= elems.len() { FieldsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
     else {
@@ -2626,16 +2692,33 @@ let cg_spawn (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: typecheck.TExpr)
     let ret = cg_of_ity(ret_ity);
     let entry = "@plum_task_entry".concat(c.n.to_string());
     let lty = cg_llvm_ty(ret);
+    // The closure is the TASK's to release, and it is released here
+    // rather than at `.join()` for the reason that a task nobody joins
+    // still runs: joining is the only place the spawning side gets
+    // control back, and it may never come. Doing it at the end of the
+    // body means the closure's captures die when the body that reads
+    // them is finished, joined or not.
+    //
+    // After the call, never before -- the body reads its own captures.
+    // The returned value is unaffected: it arrives owned, carrying its
+    // own reference, so releasing the captures cannot free it.
+    //
+    // A capture-FREE closure is a module-level constant with an
+    // immortal refcount, and `@plum_rel_closure` skips those, so the
+    // common `spawn { f(3) }` is unchanged.
     let fn_text = "define ptr ".concat(entry).concat("(ptr %clo) {\nentry:\n")
         .concat(cg_invoke("%clo", ret, "", 0))
+        .concat("  call void @plum_rel_closure(ptr %clo)\n")
         .concat("  %box = call ptr @malloc(i64 8)\n")
         .concat("  store ").concat(lty).concat(" ").concat(cg_reg(1)).concat(", ptr %box\n")
         .concat("  ret ptr %box\n}\n\n");
     let h = cg_reg(c.n + 1);
+    let cell = cg_reg(c.n + 2);
     Emit {
-        code: c.code.concat("  ").concat(h).concat(" = call i64 @thread_spawn(ptr ").concat(entry).concat(", ptr ").concat(c.val).concat(")\n"),
+        code: c.code.concat("  ").concat(h).concat(" = call i64 @thread_spawn(ptr ").concat(entry).concat(", ptr ").concat(c.val).concat(")\n")
+            .concat(cg_handle_cell(cell, h)),
         allocas: c.allocas, releases: c.releases, globals: c.globals.concat(fn_text),
-        val: h, ty: CgInt, n: c.n + 2,
+        val: cell, ty: CgHandle("Task"), n: c.n + 3,
     }
 }
 
@@ -2648,27 +2731,50 @@ let cg_task_join (p: CgProgram) (env: Array[CgSlot]) (n: Int) (task: typecheck.T
     let lty = cg_llvm_ty(ret);
     Emit {
         code: t.code
-            .concat("  ").concat(box).concat(" = call ptr @thread_join(i64 ").concat(t.val).concat(")\n")
+            .concat(cg_handle_load(cg_reg(t.n + 2), t.val))
+            .concat("  ").concat(box).concat(" = call ptr @thread_join(i64 ").concat(cg_reg(t.n + 2)).concat(")\n")
             .concat("  ").concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(box).concat("\n")
-            .concat("  call void @free(ptr ").concat(box).concat(")\n"),
-        allocas: t.allocas, releases: t.releases, globals: t.globals, val: v, ty: ret, n: t.n + 2,
+            .concat("  call void @free(ptr ").concat(box).concat(")\n")
+            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, task)), t.val)),
+        allocas: t.allocas, releases: t.releases, globals: t.globals, val: v, ty: ret, n: t.n + 3,
     }
 }
 
-// `channel[T]()` -- one handle, returned as BOTH ends. The tuple's two
-// components are the same integer; only their types differ, which is
+// `channel[T]()` -- one queue, returned as BOTH ends. The tuple's two
+// components are separate cells over the same queue handle; only their
+// types differ, which is
 // what makes `.send` on a `Receiver` a type error rather than a runtime
 // one.
+// A handle CELL is `{ rc, i64 handle }`: the refcount that gives the
+// thing behind the handle a lifetime, and the opaque shim value itself.
+let cg_handle_cell (cell: String) (handle: String): String =
+    "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 16)\n")
+        .concat("  ").concat(cell).concat("_h = getelementptr i8, ptr ").concat(cell).concat(", i64 8\n")
+        .concat("  store i64 ").concat(handle).concat(", ptr ").concat(cell).concat("_h\n")
+
+// The shim handle back out of a cell. Every call into the thread shim
+// goes through this, because the shim knows nothing about cells.
+let cg_handle_load (reg: String) (cell: String): String =
+    "  ".concat(reg).concat("_p = getelementptr i8, ptr ").concat(cell).concat(", i64 8\n")
+        .concat("  ").concat(reg).concat(" = load i64, ptr ").concat(reg).concat("_p\n")
+
 let cg_channel_new (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ty: CgTy): Emit = {
     let h = cg_reg(n);
-    let cell = cg_reg(n + 1);
+    let tx = cg_reg(n + 1);
+    let rx = cg_reg(n + 2);
+    let cell = cg_reg(n + 3);
+    // The queue is created with TWO references, one for each end's
+    // cell, so it outlives whichever end is dropped first and is freed
+    // when the second goes.
     let code = "  ".concat(h).concat(" = call i64 @channel_new()\n")
+        .concat(cg_handle_cell(tx, h))
+        .concat(cg_handle_cell(rx, h))
         .concat("  ").concat(cell).concat(" = call ptr @plum_alloc(i64 24)\n")
         .concat("  ").concat(cell).concat("_a = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(0).to_string()).concat("\n")
-        .concat("  store i64 ").concat(h).concat(", ptr ").concat(cell).concat("_a\n")
+        .concat("  store ptr ").concat(tx).concat(", ptr ").concat(cell).concat("_a\n")
         .concat("  ").concat(cell).concat("_b = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(1).to_string()).concat("\n")
-        .concat("  store i64 ").concat(h).concat(", ptr ").concat(cell).concat("_b\n");
-    Emit { code: code, allocas: "", releases: "", globals: "", val: cell, ty: ty, n: n + 2 }
+        .concat("  store ptr ").concat(rx).concat(", ptr ").concat(cell).concat("_b\n");
+    Emit { code: code, allocas: "", releases: "", globals: "", val: cell, ty: ty, n: n + 4 }
 }
 
 // Values cross a channel BOXED, one malloc'd word, for the same reason
@@ -2682,9 +2788,11 @@ let cg_channel_send (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.
         code: c.code.concat(x.code)
             .concat("  ").concat(box).concat(" = call ptr @malloc(i64 8)\n")
             .concat("  store ").concat(lty).concat(" ").concat(x.val).concat(", ptr ").concat(box).concat("\n")
-            .concat("  call void @channel_send(i64 ").concat(c.val).concat(", ptr ").concat(box).concat(")\n"),
+            .concat(cg_handle_load(cg_reg(x.n + 1), c.val))
+            .concat("  call void @channel_send(i64 ").concat(cg_reg(x.n + 1)).concat(", ptr ").concat(box).concat(")\n")
+            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val)),
         allocas: c.allocas.concat(x.allocas), releases: c.releases.concat(x.releases), globals: c.globals.concat(x.globals),
-        val: "0", ty: CgUnit, n: x.n + 1,
+        val: "0", ty: CgUnit, n: x.n + 2,
     }
 }
 
@@ -2695,10 +2803,12 @@ let cg_channel_recv (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ch: typecheck.
     let lty = cg_llvm_ty(ret);
     Emit {
         code: c.code
-            .concat("  ").concat(box).concat(" = call ptr @channel_recv(i64 ").concat(c.val).concat(")\n")
+            .concat(cg_handle_load(cg_reg(c.n + 2), c.val))
+            .concat("  ").concat(box).concat(" = call ptr @channel_recv(i64 ").concat(cg_reg(c.n + 2)).concat(")\n")
             .concat("  ").concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(box).concat("\n")
-            .concat("  call void @free(ptr ").concat(box).concat(")\n"),
-        allocas: c.allocas, releases: c.releases, globals: c.globals, val: v, ty: ret, n: c.n + 2,
+            .concat("  call void @free(ptr ").concat(box).concat(")\n")
+            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, ch)), c.val)),
+        allocas: c.allocas, releases: c.releases, globals: c.globals, val: v, ty: ret, n: c.n + 3,
     }
 }
 
@@ -3506,6 +3616,10 @@ let cg_reuse_of_ity (p: CgProgram) (slot: CgSlot) (ity: typecheck.ITy) (want: In
     match ity {
         ITStruct(sname, args) =>
             if sname == "Array" { None }
+            // A handle cell is never recycled INTO. Its one word is a
+            // shim handle, not a field, and dropping it means telling
+            // the shim -- which the generic child-drop cannot do.
+            else if cg_is_handle_name(sname) { None }
             else {
                 let bytes = 8 + 8 * typecheck.ctx_field_names(p.ctx, sname).len();
                 if bytes >= want {
@@ -3852,6 +3966,105 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
     }
 }
 
+// `select { v = rx => .., w = ry => .. }`.
+//
+// Every arm's RECEIVER is evaluated first, in order and exactly once,
+// then their handles go into one stack array and `@channel_select`
+// blocks until one of them has a value. It comes back as the winning
+// arm's INDEX plus the boxed payload, so the only thing left here is a
+// `switch` into that arm's block -- which is why none of the waiting
+// logic is in this file.
+//
+// The result is merged through a stack slot rather than a `phi`, the
+// same way `cg_match` merges its arms.
+let cg_select (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TSelectArm]) (body_ty: CgTy): Emit = {
+    let hs = cg_reg(n);
+    let outp = cg_reg(n + 1);
+    let slot = cg_reg(n + 2);
+    let idx = cg_reg(n + 3);
+    let box = cg_reg(n + 4);
+    let end_label = cg_label(n + 5);
+    let fail_label = cg_label(n + 6);
+    let lty = cg_llvm_ty(body_ty);
+    let c = cg_select_chans(p, env, n + 7, arms, 0, hs, "", "", "", "");
+    let a = cg_select_arms(p, env, c.n, arms, 0, c.n, box, slot, lty, end_label, "", "", "", "");
+    let res = cg_reg(a.n);
+    Emit {
+        code: c.code
+            .concat("  ").concat(idx).concat(" = call i64 @channel_select(ptr ").concat(hs).concat(", i64 ").concat(arms.len().to_string()).concat(", ptr ").concat(outp).concat(")\n")
+            .concat("  ").concat(box).concat(" = load ptr, ptr ").concat(outp).concat("\n")
+            .concat("  switch i64 ").concat(idx).concat(", label %").concat(fail_label).concat(" [\n")
+            .concat(cg_select_cases(arms, 0, c.n, ""))
+            .concat("  ]\n")
+            .concat(a.code)
+            // Unreachable in practice: `@channel_select` only returns
+            // an index it was given, and a `select` with no arms is
+            // rejected by the checker. It exists because a `switch`
+            // needs a default and a block needs a terminator.
+            .concat(fail_label).concat(":\n")
+            .concat("  store ").concat(lty).concat(" ").concat(cg_zero_of(body_ty)).concat(", ptr ").concat(slot).concat("\n")
+            .concat("  br label %").concat(end_label).concat("\n")
+            .concat(end_label).concat(":\n")
+            .concat("  ").concat(res).concat(" = load ").concat(lty).concat(", ptr ").concat(slot).concat("\n"),
+        allocas: "  ".concat(hs).concat(" = alloca i64, i64 ").concat(arms.len().to_string()).concat("\n")
+            .concat("  ").concat(outp).concat(" = alloca ptr\n")
+            .concat("  ").concat(slot).concat(" = alloca ").concat(lty).concat("\n")
+            .concat(c.allocas).concat(a.allocas),
+        releases: c.releases.concat(a.releases), globals: c.globals.concat(a.globals),
+        val: res, ty: body_ty, n: a.n + 1,
+    }
+}
+
+// Each arm's receiver, evaluated in order, its handle stored into the
+// array `@channel_select` reads.
+let cg_select_chans (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TSelectArm]) (i: Int) (hs: String) (code: String) (allocas: String) (releases: String) (globals: String): FieldsEmit =
+    if i >= arms.len() { FieldsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
+    else {
+        let r = cg_expr(p, env, n, arms[i].chan);
+        let ep = hs.concat("_h").concat(i.to_string());
+        let line = cg_handle_load(cg_reg(r.n), r.val)
+            .concat("  ").concat(ep).concat(" = getelementptr i8, ptr ").concat(hs).concat(", i64 ").concat((8 * i).to_string()).concat("\n")
+            .concat("  store i64 ").concat(cg_reg(r.n)).concat(", ptr ").concat(ep).concat("\n")
+            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arms[i].chan)), r.val));
+        cg_select_chans(p, env, r.n + 1, arms, i + 1, hs, code.concat(r.code).concat(line),
+            allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
+    }
+
+let cg_select_cases (arms: Array[typecheck.TSelectArm]) (i: Int) (base: Int) (acc: String): String =
+    if i >= arms.len() { acc }
+    else { cg_select_cases(arms, i + 1, base, acc.concat("    i64 ").concat(i.to_string()).concat(", label %").concat(cg_select_label(base, i)).concat("\n")) }
+
+// Arm blocks are labelled off a base the caller already knows, so a
+// `switch` can name a block that has not been emitted yet.
+let cg_select_label (base: Int) (i: Int): String = cg_label(base).concat("_s").concat(i.to_string())
+
+let cg_select_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TSelectArm]) (i: Int) (base: Int) (box: String) (slot: String) (lty: String) (end_label: String) (code: String) (allocas: String) (releases: String) (globals: String): FieldsEmit =
+    if i >= arms.len() { FieldsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
+    else {
+        // The payload's type is the RECEIVER's type argument, and each
+        // arm has its own, which is the whole reason the unboxing load
+        // lives in the arm's block rather than before the switch.
+        let elem = cg_array_elem_ity(p, typecheck.texpr_ty(p.subst, arms[i].chan));
+        let vty = cg_of_ity(elem);
+        let v = cg_reg(n);
+        let pat = cg_pattern(p, env, n + 1, arms[i].pattern, v, elem);
+        let b = cg_expr(p, pat.env, pat.n, arms[i].body);
+        let this_code = cg_select_label(base, i).concat(":\n")
+            .concat("  ").concat(v).concat(" = load ").concat(cg_llvm_ty(vty)).concat(", ptr ").concat(box).concat("\n")
+            .concat("  call void @free(ptr ").concat(box).concat(")\n")
+            .concat(pat.code).concat(pat.binds)
+            // The value arrived OWNED -- the sender transferred its
+            // reference into the box -- and the binding took its own,
+            // so this call's is spent. Same accounting as a `let`.
+            .concat(cg_dec(elem, v))
+            .concat(b.code)
+            .concat("  store ").concat(lty).concat(" ").concat(b.val).concat(", ptr ").concat(slot).concat("\n")
+            .concat("  br label %").concat(end_label).concat("\n");
+        cg_select_arms(p, env, b.n, arms, i + 1, base, box, slot, lty, end_label,
+            code.concat(this_code), allocas.concat(pat.allocas).concat(b.allocas),
+            releases.concat(pat.releases).concat(b.releases), globals.concat(pat.globals).concat(b.globals))
+    }
+
 let cg_zero_of (t: CgTy): String =
     match t {
         CgInt => "0",
@@ -3866,6 +4079,7 @@ let cg_zero_of (t: CgTy): String =
         CgRef(_) => "null",
         CgClosure(_, _) => "null",
         CgTuple(_) => "null",
+        CgHandle(_) => "null",
     }
 
 struct ArmsEmit { code: String, allocas: String, releases: String,globals: String, n: Int }
@@ -4389,6 +4603,11 @@ let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): A
         match t {
             ITStruct(name, args) =>
                 if name == "Array" { cg_eq_close(p, args[0], acc2) }
+                // A handle has no structure to compare and no fields to
+                // walk into. Reached when one is a FIELD of something
+                // being compared, which is why this is a stop rather
+                // than an error.
+                else if cg_is_handle_name(name) { acc2 }
                 else { cg_eq_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2) },
             ITEnum(name, args) => cg_eq_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2),
             ITTuple(elems) => cg_eq_close_list(p, elems, 0, acc2),
@@ -4535,6 +4754,7 @@ let cg_emit_str_fn (p: CgProgram) (t: typecheck.ITy): String =
     match t {
         ITStruct(name, args) =>
             if name == "Array" { cg_emit_array_str(t, args[0]) }
+            else if cg_is_handle_name(name) { "" }
             else { cg_emit_struct_str(p, t, name, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
         ITEnum(name, args) => cg_emit_enum_str(p, t, name, args),
         _ => "",
@@ -4671,6 +4891,7 @@ let cg_emit_eq_fn (p: CgProgram) (t: typecheck.ITy): String =
     match t {
         ITStruct(name, args) =>
             if name == "Array" { cg_emit_array_eq(t, args[0]) }
+            else if cg_is_handle_name(name) { "" }
             else { cg_emit_struct_eq(t, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
         ITEnum(name, args) => cg_emit_enum_eq(p, t, cg_find_enum(p, name).variants, args),
         ITTuple(elems) => cg_emit_struct_eq(t, elems),
@@ -4899,6 +5120,7 @@ let cg_is_heap (t: CgTy): Bool =
         // produced it -- a string cell that outlives the call, or the C
         // side. Nothing here increments or frees one.
         CgCStr => false,
+        CgHandle(_) => true,
         CgStr => true, CgStruct(_) => true, CgEnum(_) => true, CgArray(_) => true, CgClosure(_, _) => true, CgRef(_) => true,
         CgTuple(_) => true,
     }
@@ -5014,7 +5236,13 @@ let cg_rel_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): 
                 let acc2 = acc.push(t);
                 match t {
                     ITStruct(name, args) =>
-                        if name == "Array" { cg_rel_close(p, args[0], acc2) }
+                        // A handle owns no FIELDS -- there is no
+                        // declaration to look them up in -- but its
+                        // release function names the ELEMENT's, to
+                        // clean up values still in flight, so that one
+                        // has to exist.
+                        if cg_is_handle_name(name) { cg_rel_close(p, args[0], acc2) }
+                        else if name == "Array" { cg_rel_close(p, args[0], acc2) }
                         else { cg_rel_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2) },
                     ITEnum(name, args) => cg_rel_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2),
                     ITTuple(elems) => cg_rel_close_list(p, elems, 0, acc2),
@@ -5110,10 +5338,54 @@ let cg_rel_head (t: typecheck.ITy): String =
 
 let cg_rel_tail (unit: Unit): String = "  call void @free(ptr %p)\n  ret void\n}\n\n"
 
+pub let cg_is_handle_name (name: String): Bool = name == "Sender" || name == "Receiver" || name == "Task"
+
+// Releasing a handle cell is the ordinary dec-and-free, plus the one
+// thing that made this whole change worth doing: at zero, the resource
+// BEHIND the handle is told to go.
+//
+// `Sender` and `Receiver` are two cells over one queue, which is why
+// the queue carries its own count and `@channel_release` frees it only
+// when the second end lets go. A `Task` has one cell, and letting go
+// of it without joining detaches the thread.
+//
+// The element's release function is passed along because values may
+// still be IN FLIGHT -- queued and never received, or a result nobody
+// joined -- and freeing the queue has to release them too. `null` for
+// an element type that owns nothing, which the shim checks for.
+let cg_handle_release_call (name: String) (rel: String): String =
+    if name == "Task" { "  call void @task_release(i64 %h, ptr ".concat(rel).concat(")\n") }
+    else { "  call void @channel_release(i64 %h, ptr ".concat(rel).concat(")\n") }
+
+let cg_emit_handle_rel (p: CgProgram) (t: typecheck.ITy) (name: String) (elem: typecheck.ITy): String = {
+    let rel = if cg_is_heap(cg_of_ity(cg_concrete(p, elem))) { cg_rel_sym(cg_concrete(p, elem)) } else { "null" };
+    "define void ".concat(cg_rel_sym(t)).concat("(ptr %p) {\nentry:\n")
+        .concat("  %isnull = icmp eq ptr %p, null\n")
+        .concat("  br i1 %isnull, label %skip, label %live\n")
+        .concat("skip:\n  ret void\n")
+        .concat("live:\n")
+        .concat("  %rc = load i64, ptr %p\n")
+        .concat("  %static = icmp slt i64 %rc, 0\n")
+        .concat("  br i1 %static, label %skip, label %dec\n")
+        .concat("dec:\n")
+        .concat("  %rc1 = sub i64 %rc, 1\n")
+        .concat("  store i64 %rc1, ptr %p\n")
+        .concat("  %dead = icmp sle i64 %rc1, 0\n")
+        .concat("  br i1 %dead, label %gone, label %alive\n")
+        .concat("alive:\n  ret void\n")
+        .concat("gone:\n")
+        .concat("  %hp = getelementptr i8, ptr %p, i64 8\n")
+        .concat("  %h = load i64, ptr %hp\n")
+        .concat(cg_handle_release_call(name, rel))
+        .concat("  call void @free(ptr %p)\n")
+        .concat("  ret void\n}\n\n")
+}
+
 let cg_emit_rel_fn (p: CgProgram) (t: typecheck.ITy): String =
     match t {
         ITStruct(name, args) =>
-            if name == "Array" { cg_emit_array_rel(t, args[0]) }
+            if cg_is_handle_name(name) { cg_emit_handle_rel(p, t, name, args[0]) }
+            else if name == "Array" { cg_emit_array_rel(t, args[0]) }
             else { cg_emit_struct_rel(t, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
         ITEnum(name, args) => cg_emit_enum_rel(p, t, cg_find_enum(p, name).variants, args),
         ITTuple(elems) => cg_emit_struct_rel(t, elems),
@@ -5457,6 +5729,7 @@ let cg_rel_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): A
         TChannelNew => here,
         TChannelSend(a, b) => cg_rel_in(p, b, cg_rel_in(p, a, here)),
         TChannelRecv(a) => cg_rel_in(p, a, here),
+        TSelect(arms) => cg_rel_in_select(p, arms, 0, here),
         TTaskJoin(a) => cg_rel_in(p, a, here),
         TExternCall(_, xs) => cg_rel_in_list(p, xs, 0, here),
         TAsCStr(a) => cg_rel_in(p, a, here),
@@ -5544,6 +5817,7 @@ let cg_eq_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[typecheck.ITy]): Ar
         TChannelNew => acc,
         TChannelSend(a, b) => cg_eq_in(p, b, cg_eq_in(p, a, acc)),
         TChannelRecv(a) => cg_eq_in(p, a, acc),
+        TSelect(arms) => cg_eq_in_select(p, arms, 0, acc),
         TTaskJoin(a) => cg_eq_in(p, a, acc),
         TExternCall(_, xs) => cg_eq_in_list(p, xs, 0, acc),
         TAsCStr(a) => cg_eq_in(p, a, acc),
@@ -5639,6 +5913,7 @@ let cg_calls_in (p: CgProgram) (e: typecheck.TExpr) (acc: Array[CgInst]): Array[
         TChannelNew => acc,
         TChannelSend(a, b) => cg_calls_in(p, b, cg_calls_in(p, a, acc)),
         TChannelRecv(a) => cg_calls_in(p, a, acc),
+        TSelect(arms) => cg_calls_in_select(p, arms, 0, acc),
         TTaskJoin(a) => cg_calls_in(p, a, acc),
         TExternCall(_, xs) => cg_calls_in_list(p, xs, acc),
         TAsCStr(a) => cg_calls_in(p, a, acc),

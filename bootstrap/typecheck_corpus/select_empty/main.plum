@@ -1,0 +1,7 @@
+// Rejected: a select with no arms has nothing that could ever wake it.
+// Go allows exactly this as a way to block forever; nothing else in
+// this language spells "hang", so it is an error rather than an idiom.
+let main (): Unit = {
+    let x = select {};
+    println("unreachable")
+}
