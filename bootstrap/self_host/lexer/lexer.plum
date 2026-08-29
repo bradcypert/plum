@@ -478,26 +478,101 @@ pub let tokenize (source: String): Array[Token] = tokenize_spanned(source).token
 // space this whole lexer works in (`chars_of`). `line_col` reads the
 // source the same way, so the two agree by construction; nothing here
 // ever needs a byte offset.
-pub struct LexedSource { pub tokens: Array[Token], pub starts: Array[Int] }
+//
+// `ends` is what makes the token stream LOSSLESS, and it costs one
+// field: `lex_one` already computes where a token stops. With both
+// ends recorded, everything the lexer throws away -- comments, blank
+// lines, indentation -- is exactly the GAP between one token's end and
+// the next one's start, and can be read straight back out of the
+// source. So there is no trivia structure to build or keep in step;
+// there is a slice.
+//
+// It also recovers a token's ORIGINAL SPELLING, which the token itself
+// does not carry: `TokInt(1000)` is what `1_000` and `1000` both lex
+// to, and `TokStr` holds the decoded text, not the escapes. A
+// formatter that reprinted from the token would silently rewrite both.
+// `slice_of` reads the source instead.
+pub struct LexedSource { pub tokens: Array[Token], pub starts: Array[Int], pub ends: Array[Int] }
 
 pub let tokenize_spanned (source: String): LexedSource = {
     let chars = chars_of(source);
     let mut pos = 0;
     let mut acc = [];
     let mut starts = [];
+    let mut ends = [];
     let mut done = false;
     for tok_step in 0..(chars.len() + 1) {
         if !done {
             let start = skip_ws_and_comments(chars, pos);
             let r = lex_one(chars, start);
             match r.token {
-                TokEof => { acc = acc.push(TokEof); starts = starts.push(start); done = true; },
-                _ => { acc = acc.push(r.token); starts = starts.push(start); pos = r.next_pos; },
+                // EOF is empty and sits at the very end, so the final
+                // gap -- a trailing comment, a trailing newline -- is
+                // the span before it like any other.
+                TokEof => { acc = acc.push(TokEof); starts = starts.push(start); ends = ends.push(start); done = true; },
+                _ => { acc = acc.push(r.token); starts = starts.push(start); ends = ends.push(r.next_pos); pos = r.next_pos; },
             }
         };
     };
-    LexedSource { tokens: acc, starts: starts }
+    LexedSource { tokens: acc, starts: starts, ends: ends }
 }
+
+// The source text a token covers, and the trivia before it. Together
+// these are the whole of what "lossless" means here: walk the tokens in
+// order, emit the gap then the token, and you have the file back.
+pub let token_text (source: String) (lexed: LexedSource) (i: Int): String =
+    slice_chars(chars_of(source), lexed.starts[i], lexed.ends[i])
+
+pub let trivia_before (source: String) (lexed: LexedSource) (i: Int): String =
+    slice_chars(chars_of(source), if i == 0 { 0 } else { lexed.ends[i - 1] }, lexed.starts[i])
+
+let slice_chars (chars: Array[String]) (from: Int) (to: Int): String =
+    Array.concat_all(Array.slice(chars, from, to))
+
+// Every gap between two tokens contains only trivia -- whitespace and
+// line comments -- and nothing else.
+//
+// This is the half the round-trip CANNOT prove. Reconstruction slices
+// the original source, so the gaps absorb any error in a token's end:
+// if `ends[i]` stopped short, the missing characters would simply
+// reappear as part of the next gap and the file would still come back
+// byte-identical. Coverage is not the same claim as correct boundaries.
+//
+// Checking the gaps is what pins them. A short `ends[i]` puts CODE in a
+// gap, and code in a gap is exactly what a formatter would then treat
+// as whitespace it may reflow at will.
+pub let gap_is_trivia (chars: Array[String]) (from: Int) (to: Int): Bool =
+    if from >= to { true }
+    else if String.is_ascii_ws(chars[from]) { gap_is_trivia(chars, from + 1, to) }
+    else if chars[from] == "/" && from + 1 < to && chars[from + 1] == "/" {
+        gap_is_trivia(chars, skip_line_comment(chars, from + 2), to)
+    }
+    else { false }
+
+// Reconstructs the source from the token stream alone, and checks the
+// gaps on the way through. Together they are the PROPERTY that says the
+// stream lost nothing: every character is accounted for, and every
+// character NOT in a token is trivia.
+//
+// The reason to have it is that a formatter is this function with
+// opinions -- if the version with no opinions cannot reproduce a file
+// byte for byte, the version with them has nothing sound to build on.
+pub let relex (source: String): String = {
+    let lexed = tokenize_spanned(source);
+    let chars = chars_of(source);
+    relex_acc(chars, lexed, 0, "")
+}
+
+let relex_acc (chars: Array[String]) (lexed: LexedSource) (i: Int) (acc: String): String =
+    if i >= lexed.tokens.len() { acc }
+    else {
+        let from = if i == 0 { 0 } else { lexed.ends[i - 1] };
+        if !gap_is_trivia(chars, from, lexed.starts[i]) {
+            panic_raw("token ".concat(i.to_string()).concat(" has non-trivia before it: a token boundary is wrong"))
+        } else { () };
+        let gap = slice_chars(chars, from, lexed.starts[i]);
+        relex_acc(chars, lexed, i + 1, acc.concat(gap).concat(slice_chars(chars, lexed.starts[i], lexed.ends[i])))
+    }
 
 // --- Source positions ---
 

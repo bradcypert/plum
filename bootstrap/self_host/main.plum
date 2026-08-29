@@ -1555,6 +1555,21 @@ let main (): Unit = {
         // project is several modules, so a backend that only accepted
         // one file could never compile one.
         println(codegen.cg_emit_program(parser.ProgramNode { items: collect_project(argv[1]) }));
+    } else if argv[0] == "relex" {
+        // Reads a FILE and writes back what the token stream says it
+        // was. The identity formatter: no opinions, no reflow, just
+        // proof that nothing between the tokens was lost.
+        //
+        // A development command, not a user-facing one -- it exists so
+        // `bootstrap/lossless-check` can diff the answer against the
+        // input, and because `plum fmt` will be this function with
+        // opinions added. If the version WITHOUT opinions cannot
+        // reproduce a file byte for byte, the version with them has
+        // nothing sound to build on.
+        match Os.read_file(argv[1]) {
+            Ok(src) => print(lexer.relex(src)),
+            Err(e) => { println("relex: ".concat(e)); Os.exit_with(1) },
+        };
     } else if argv[0] == "run" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
         run_project(argv);
     } else {

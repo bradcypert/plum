@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Does the token stream still contain the whole file?
+#
+# `plum relex FILE` writes back what the tokens say the file was: for
+# each token, the GAP before it and then its own source text, both read
+# straight out of the original by character offset. Nothing is
+# reprinted from a token's VALUE, which is the point -- `TokInt(1000)`
+# is what both `1000` and `1_000` lex to, and `TokStr` holds decoded
+# text rather than the escapes that produced it.
+#
+# A byte-identical answer proves COVERAGE: every character of the file
+# is either inside a token or inside a gap, and the gaps come back
+# untouched.
+#
+# It does NOT prove the boundaries are right, and it is worth being
+# precise about that. Reconstruction slices the original source, so a
+# token whose end is one character short simply donates that character
+# to the next gap and the file still comes back identical. `relex` also
+# checks that every gap contains only whitespace and line comments,
+# which is what pins the boundary -- a short end puts CODE in a gap.
+#
+# Verified by fault injection rather than by argument: an `ends` offset
+# deliberately shortened by one character round-trips byte-identically
+# and is caught by the gap check, reporting `token 1 has non-trivia
+# before it`.
+#
+# This is the floor a formatter stands on. `plum fmt` is `relex` with
+# opinions about the gaps; if the version with NO opinions cannot
+# reproduce a file, the version with them is rewriting code it does not
+# understand. Every `.plum` file in the repo is a test case, which is
+# several hundred real files rather than a handful of contrived ones.
+#
+# Usage:  bootstrap/lossless-check [path-to-plum-binary]   (default: ./sh)
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+plum="${1:-./sh}"
+
+work="$(mktemp -d 2>/dev/null || mktemp -d -t plum-lossless)"
+trap 'rm -rf "$work"' EXIT
+
+ok=0; fail=0
+while IFS= read -r f; do
+    if ! SH_TIMEOUT="${SH_TIMEOUT:-60}" "$plum" relex "$f" > "$work/out" 2>"$work/err"; then
+        printf 'FAIL  %-58s relex errored: %s\n' "$f" "$(head -n 1 "$work/err")"
+        fail=$((fail + 1)); continue
+    fi
+    if cmp -s "$f" "$work/out"; then
+        ok=$((ok + 1))
+    else
+        printf 'FAIL  %-58s round-trip differs\n' "$f"
+        diff "$f" "$work/out" | head -n 6 | sed 's/^/        /'
+        fail=$((fail + 1))
+    fi
+done < <(find . -name '*.plum' -not -path './.git/*' | sort)
+
+if [ "$fail" -ne 0 ]; then
+    printf '\nlossless-check: %d file(s) do NOT round-trip, %d do\n' "$fail" "$ok"
+    exit 1
+fi
+printf 'lossless-check: %d .plum files round-trip byte-for-byte through the token stream\n' "$ok"
