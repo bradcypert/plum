@@ -2029,12 +2029,12 @@ let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String
     let sym = match cg_array_concat_sym(p, name, targs) {
         Some(rt) => rt,
         None => match cg_runtime_fn(name) {
-        Some(rt) => rt,
-        None =>
+            Some(rt) => rt,
+            None =>
             if false { "" }
             else if cg_has_fn_in(p, module_name, name, 0) { "@".concat(cg_sym(module_name, name, cg_concrete_list(p, targs, 0, []))) }
             else { { cg_fail("prelude function ".concat(name).concat(" has no implementation in this backend's runtime yet")); "@plum_missing" } },
-    } };
+        } };
     let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
     let reg = cg_reg(a.n);
     let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(sym).concat("(").concat(cg_join_commas(a.vals)).concat(")\n")

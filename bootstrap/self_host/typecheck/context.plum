@@ -221,10 +221,10 @@ pub let best_struct (ctx: TyContext) (viewer: String) (name: String): Option[Str
             None => match find_struct_in(ctx.structs, parser.PRELUDE_MODULE(()), name, 0) {
                 Some(info) => Some(info),
                 // Last resort: any module at all, matched on the bare name.
-            // Reached when a name is not declared by the viewer, the
-            // root or the prelude -- a qualified `inner.P` written out
-            // in full lands here too.
-            None => find_struct_bare(ctx.structs, name, 0),
+                // Reached when a name is not declared by the viewer, the
+                // root or the prelude -- a qualified `inner.P` written out
+                // in full lands here too.
+                None => find_struct_bare(ctx.structs, name, 0),
             },
         },
     }

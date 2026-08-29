@@ -11,12 +11,17 @@ use Os;
 // one level out from the statements it closes, which is exact rather
 // than guessed because `PBlock` records where its own braces are.
 //
-// What it does NOT do is move a MATCH ARM. An arm is not a statement
-// and not a block, so nothing gives it a span, and a formatter that
-// guessed at its position would be moving a line whose shape it cannot
-// see. On well-formed code this is invisible -- all 243 files in this
-// repo are unchanged by `fmt`. On badly-formed code the statements and
-// braces are fixed and the arms stay where they were.
+// Match and `select` arms are placed by the SAME rule and the same
+// function. An arm sits inside braces exactly as a statement does, so
+// once `MatchArmNode` carried a start offset and `EMatch` carried its
+// closing brace, arms needed no rule of their own -- they call
+// `block_indent` and inherit its refusals too.
+//
+// What is left unplaced is a line belonging to a construct with no
+// braces of its own: the `=` continuation of a long `let`, a `|>` chain
+// broken across lines, a multi-line call's arguments. Those are
+// alignment choices inside an expression, and no span describes them.
+// All 244 files in this repo are unchanged by `fmt`.
 //
 // That restraint is not modesty, it is what the spans support.
 // Statements and items carry source ranges; expressions do not. A
@@ -65,8 +70,8 @@ let expr_edits (chars: Array[String]) (e: parser.PExpr) (depth: Int) (acc: Array
             let a2 = block_edits(chars, t, depth, a1);
             match els { Some(x) => expr_edits(chars, x, depth, a2), None => a2 }
         },
-        EMatch(sc, arms) => arm_edits(chars, arms, 0, depth, expr_edits(chars, sc, depth, acc)),
-        ESelect(arms) => select_edits(chars, arms, 0, depth, acc),
+        EMatch(sc, arms, close) => arm_edits(chars, arms, 0, depth, arm_line_edits(chars, arm_starts(arms, 0, []), close, expr_edits(chars, sc, depth, acc))),
+        ESelect(arms, close) => select_edits(chars, arms, 0, depth, arm_line_edits(chars, select_arm_starts(arms, 0, []), close, acc)),
         EFor(_, iter, body) => block_edits(chars, body, depth, expr_edits(chars, iter, depth, acc)),
         EUnsafe(b) => block_edits(chars, b, depth, acc),
         ESpawn(b) => block_edits(chars, b, depth, acc),
@@ -211,6 +216,27 @@ let list_edits (chars: Array[String]) (xs: Array[parser.PExpr]) (i: Int) (depth:
 
 let field_edits (chars: Array[String]) (fs: Array[parser.FieldInitNode]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= fs.len() { acc } else { field_edits(chars, fs, i + 1, depth, expr_edits(chars, fs[i].value, depth, acc)) }
+
+// An arm is positioned exactly the way a statement is, and by the same
+// function: arms sit inside braces, so the indent is the one their
+// opening brace's line implies. `block_indent` already knows how to
+// work that out, and how to REFUSE when the brace is on a continuation
+// line -- so arms inherit both behaviours instead of getting a second,
+// slightly different rule.
+let arm_line_edits (chars: Array[String]) (starts: Array[Int]) (close: Int) (acc: Array[Edit]): Array[Edit] =
+    match block_indent(chars, starts) {
+        None => acc,
+        // And the match's own closing brace, one level out from its
+        // arms -- the same relationship a block's `}` has to its
+        // statements, so the same call closes it.
+        Some(indent) => close_brace_edit(chars, close, indent - 4, stmt_line_edits(chars, starts, 0, indent, acc)),
+    }
+
+let arm_starts (arms: Array[parser.MatchArmNode]) (i: Int) (acc: Array[Int]): Array[Int] =
+    if i >= arms.len() { acc } else { arm_starts(arms, i + 1, acc.push(arms[i].start)) }
+
+let select_arm_starts (arms: Array[parser.SelectArmNode]) (i: Int) (acc: Array[Int]): Array[Int] =
+    if i >= arms.len() { acc } else { select_arm_starts(arms, i + 1, acc.push(arms[i].start)) }
 
 let arm_edits (chars: Array[String]) (arms: Array[parser.MatchArmNode]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= arms.len() { acc }

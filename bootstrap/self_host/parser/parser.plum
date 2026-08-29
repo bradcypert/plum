@@ -76,13 +76,16 @@ pub enum PExpr {
     EIndex(PExpr, PExpr),
     EBlock(PBlock),
     EIf(PExpr, PBlock, Option[PExpr]),
-    EMatch(PExpr, Array[MatchArmNode]),
+    // The `Int` is where the match's CLOSING BRACE is. A match's braces
+    // are not a `PBlock`, so without this nothing records them and a
+    // formatter can place the arms but not the `}` that ends them.
+    EMatch(PExpr, Array[MatchArmNode], Int),
     EFor(PPattern, PExpr, PBlock),
     EClosure(Array[String], PExpr),
     EUnsafe(PBlock),
     ESpawn(PBlock),
     EStructLit(Array[String], Array[FieldInitNode], Option[PExpr]),
-    ESelect(Array[SelectArmNode]),
+    ESelect(Array[SelectArmNode], Int),
 }
 
 // `starts` is one character offset per entry in `stmts`, parallel to it
@@ -112,8 +115,12 @@ pub enum PStmt {
     SExpr(PExpr),
 }
 
-pub struct MatchArmNode { pub pattern: PPattern, pub guard: Option[PExpr], pub body: PExpr }
-pub struct SelectArmNode { pub pattern: PPattern, pub expr: PExpr, pub body: PExpr }
+// `start` is where the arm's PATTERN begins. An arm is not a statement
+// and not a block, so this is the only thing that says where it is --
+// and without it a formatter can indent everything around a `match` and
+// not the arms themselves.
+pub struct MatchArmNode { pub pattern: PPattern, pub guard: Option[PExpr], pub body: PExpr, pub start: Int }
+pub struct SelectArmNode { pub pattern: PPattern, pub expr: PExpr, pub body: PExpr, pub start: Int }
 pub struct FieldPatternNode { pub name: String, pub pattern: PPattern }
 
 pub enum PPattern {
@@ -1342,10 +1349,10 @@ let parse_if_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
 let parse_match_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
     let scrutinee_r = parse_expr_no_struct(tokens, pos + 1);
     let open = expect(tokens, scrutinee_r.next_pos, TokLBrace, "'{'");
-    if check(tokens, open, TokRBrace) { ExprResult { value: EMatch(scrutinee_r.value, []), next_pos: open + 1 } }
+    if check(tokens, open, TokRBrace) { ExprResult { value: EMatch(scrutinee_r.value, [], offset_at(open)), next_pos: open + 1 } }
     else {
         let arms_r = parse_match_arms_acc(tokens, open, []);
-        ExprResult { value: EMatch(scrutinee_r.value, arms_r.value), next_pos: expect(tokens, arms_r.next_pos, TokRBrace, "'}'") }
+        ExprResult { value: EMatch(scrutinee_r.value, arms_r.value, offset_at(arms_r.next_pos)), next_pos: expect(tokens, arms_r.next_pos, TokRBrace, "'}'") }
     }
 }
 
@@ -1359,7 +1366,7 @@ let parse_match_arms_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[Mat
         let guard_r = if if_b.matched { let g = parse_expr(tokens, if_b.next_pos); GuardResult { value: Some(g.value), next_pos: g.next_pos } } else { GuardResult { value: None, next_pos: if_b.next_pos } };
         let arrow_pos = expect(tokens, guard_r.next_pos, TokFatArrow, "'=>'");
         let body_r = parse_expr(tokens, arrow_pos);
-        let new_acc = acc.push(MatchArmNode { pattern: pat_r.value, guard: guard_r.value, body: body_r.value });
+        let new_acc = acc.push(MatchArmNode { pattern: pat_r.value, guard: guard_r.value, body: body_r.value, start: offset_at(pos) });
         let comma_b = bump_if(tokens, body_r.next_pos, TokComma);
         if !comma_b.matched { MatchArmsResult { value: new_acc, next_pos: comma_b.next_pos } }
         else { parse_match_arms_acc(tokens, comma_b.next_pos, new_acc) }
@@ -1369,10 +1376,10 @@ struct GuardResult { value: Option[PExpr], next_pos: Int }
 
 let parse_select_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
     let open = expect(tokens, pos + 1, TokLBrace, "'{'");
-    if check(tokens, open, TokRBrace) { ExprResult { value: ESelect([]), next_pos: open + 1 } }
+    if check(tokens, open, TokRBrace) { ExprResult { value: ESelect([], offset_at(open)), next_pos: open + 1 } }
     else {
         let arms_r = parse_select_arms_acc(tokens, open, []);
-        ExprResult { value: ESelect(arms_r.value), next_pos: expect(tokens, arms_r.next_pos, TokRBrace, "'}'") }
+        ExprResult { value: ESelect(arms_r.value, offset_at(arms_r.next_pos)), next_pos: expect(tokens, arms_r.next_pos, TokRBrace, "'}'") }
     }
 }
 
@@ -1386,7 +1393,7 @@ let parse_select_arms_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[Se
         let expr_r = parse_expr(tokens, eq_pos);
         let arrow_pos = expect(tokens, expr_r.next_pos, TokFatArrow, "'=>'");
         let body_r = parse_expr(tokens, arrow_pos);
-        let new_acc = acc.push(SelectArmNode { pattern: pat_r.value, expr: expr_r.value, body: body_r.value });
+        let new_acc = acc.push(SelectArmNode { pattern: pat_r.value, expr: expr_r.value, body: body_r.value, start: offset_at(pos) });
         let comma_b = bump_if(tokens, body_r.next_pos, TokComma);
         if !comma_b.matched { SelectArmsResult { value: new_acc, next_pos: comma_b.next_pos } }
         else { parse_select_arms_acc(tokens, comma_b.next_pos, new_acc) }
@@ -1553,7 +1560,7 @@ let render_expr (e: PExpr): String = match e {
         let parts = match else_branch { Some(e) => base.push(render_expr(e)), None => base };
         sexpr(parts)
     },
-    EMatch(scrutinee, arms) => sexpr(Array.concat(["match", render_expr(scrutinee)], Array.map(arms, |a| render_arm(a)))),
+    EMatch(scrutinee, arms, _) => sexpr(Array.concat(["match", render_expr(scrutinee)], Array.map(arms, |a| render_arm(a)))),
     EFor(pattern, iter, body) => "(for ".concat(render_pattern(pattern)).concat(" ").concat(render_expr(iter)).concat(" ").concat(render_block(body)).concat(")"),
     EClosure(params, body) => sexpr(["closure", paren(join_space(params)), render_expr(body)]),
     EUnsafe(block) => "(unsafe ".concat(render_block(block)).concat(")"),
@@ -1564,7 +1571,7 @@ let render_expr (e: PExpr): String = match e {
         let parts = match spread { Some(s) => base.push("..".concat(render_expr(s))), None => base };
         sexpr(parts)
     },
-    ESelect(arms) => sexpr(Array.concat(["select"], Array.map(arms, |a| render_select_arm(a)))),
+    ESelect(arms, _) => sexpr(Array.concat(["select"], Array.map(arms, |a| render_select_arm(a)))),
 }
 
 let render_field_init (f: FieldInitNode): String = {

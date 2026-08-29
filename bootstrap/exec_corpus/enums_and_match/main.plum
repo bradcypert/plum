@@ -1,7 +1,7 @@
 enum Shape { Circle(Int), Square(Int) }
 let area (s: Shape): Int = match s {
-  Circle(r) => r * r * 3,
-  Square(side) => side * side,
+    Circle(r) => r * r * 3,
+    Square(side) => side * side,
 }
 let main (): Unit = {
     println(area(Circle(2)).to_string());

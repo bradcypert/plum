@@ -489,7 +489,7 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
         ECall(callee, args) => infer_call(p2, state, env, acc, callee, args),
         EBlock(block) => infer_block(p2, state, env, acc, block),
         EIf(cond, then_branch, else_branch) => infer_if(p2, state, env, acc, cond, then_branch, else_branch),
-        EMatch(scrutinee, arms) => infer_match(p2, state, env, acc, scrutinee, arms),
+        EMatch(scrutinee, arms, _) => infer_match(p2, state, env, acc, scrutinee, arms),
         EFor(pattern, iter, body) => infer_for(p2, state, env, acc, pattern, iter, body),
         EStructLit(path, fields, spread) => infer_struct_lit(p2, state, env, acc, path, fields, spread),
         // `f[T](x)` -- explicit type arguments -- is NOT a feature the
@@ -534,7 +534,7 @@ pub let infer_expr (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) 
         // Channels ARE supported -- `channel[T]()`, `send`, `recv`. Only
         // `select` is not, and saying "select/channels" sent people
         // looking for a channel bug that was not there.
-        ESelect(arms) => infer_select(p2, state, env, acc, arms),
+        ESelect(arms, _) => infer_select(p2, state, env, acc, arms),
     }
 
 // A closure literal's params get FRESH type variables (no annotations
@@ -1166,39 +1166,39 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                     match find_sig(p2, ns.concat(".").concat(method_name)) {
                         Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
                         None => match builtin_sig(ns.concat(".").concat(method_name)) {
-                        Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
-                        // A MODULE-qualified call (`lexer.tokenize(src)`).
-                        // `main.plum` merges every module's items into one
-                        // program, so the callee is just an ordinary
-                        // top-level signature by this point — the
-                        // qualifier carries no additional meaning, exactly
-                        // as `resolve_named` already treats a qualified
-                        // TYPE path by its last segment. Reached only when
-                        // `ns` isn't a bound value and isn't a builtin
-                        // namespace, so it can't capture a genuine
-                        // record-of-closures field call.
-                        // A MODULE-qualified call, `lexer.tokenize(src)`:
-                        // resolved IN module `ns`, not by ignoring the
-                        // qualifier. Before modules existed this looked
-                        // the bare name up in one flat table, so
-                        // `lexer.tokenize` and `parser.tokenize` were
-                        // the same function.
-                        None => match find_sig_in(p2.sigs, ns, method_name, 0) {
-                            Some(sig) => { check_visible(p2, sig, ns, method_name); infer_fn_call(p2, state, env, acc, sig, args) },
-                            // `Shade.Light(x)` -- a payload variant
-                            // said with its enum. After the function
-                            // lookups, so a declared `Ns.name` still
-                            // wins, and before the method fallback,
-                            // whose error would name the wrong thing.
-                            None => match qualified_variant(p2, env, base, method_name) {
-                                Some(v) => {
-                                    let ar = infer_list(p2, state, env, acc, args, 0, [], []);
-                                    infer_variant_v(p2, ar.state, ar.subst, method_name, ar.tys, ar.texprs, v)
+                            Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
+                            // A MODULE-qualified call (`lexer.tokenize(src)`).
+                            // `main.plum` merges every module's items into one
+                            // program, so the callee is just an ordinary
+                            // top-level signature by this point — the
+                            // qualifier carries no additional meaning, exactly
+                            // as `resolve_named` already treats a qualified
+                            // TYPE path by its last segment. Reached only when
+                            // `ns` isn't a bound value and isn't a builtin
+                            // namespace, so it can't capture a genuine
+                            // record-of-closures field call.
+                            // A MODULE-qualified call, `lexer.tokenize(src)`:
+                            // resolved IN module `ns`, not by ignoring the
+                            // qualifier. Before modules existed this looked
+                            // the bare name up in one flat table, so
+                            // `lexer.tokenize` and `parser.tokenize` were
+                            // the same function.
+                            None => match find_sig_in(p2.sigs, ns, method_name, 0) {
+                                Some(sig) => { check_visible(p2, sig, ns, method_name); infer_fn_call(p2, state, env, acc, sig, args) },
+                                // `Shade.Light(x)` -- a payload variant
+                                // said with its enum. After the function
+                                // lookups, so a declared `Ns.name` still
+                                // wins, and before the method fallback,
+                                // whose error would name the wrong thing.
+                                None => match qualified_variant(p2, env, base, method_name) {
+                                    Some(v) => {
+                                        let ar = infer_list(p2, state, env, acc, args, 0, [], []);
+                                        infer_variant_v(p2, ar.state, ar.subst, method_name, ar.tys, ar.texprs, v)
+                                    },
+                                    None => infer_method_call(p2, state, env, acc, base, method_name, args),
                                 },
-                                None => infer_method_call(p2, state, env, acc, base, method_name, args),
                             },
-                        },
-                    } }
+                        } }
                 }
             },
             _ => infer_method_call(p2, state, env, acc, base, method_name, args),

@@ -4,19 +4,19 @@
 // known exactly rather than guessed: `PBlock` records where its own
 // braces are, so the brace's indent is the statement indent minus four.
 //
-// The MATCH ARMS here are already where they belong, deliberately. An
-// arm is not a statement and not a block, so nothing gives it a span,
-// and `fmt` leaves it alone rather than guess. See fmt.plum's note.
+// Match arms are placed by the SAME rule and the same function: an arm
+// sits inside braces exactly as a statement does, so once `MatchArmNode`
+// carried a start offset, arms needed no rule of their own.
 enum Shape { Dot, Line(Int) }
 
 let describe (s: Shape) (n: Int): Int = {
 let total = match s {
-        Dot => 0,
-        Line(k) => {
+  Dot => 0,
+            Line(k) => {
     let doubled = k * 2;
                 doubled + n
-        },
-    };
+    },
+        };
 if total > 10 {
       total
 } else {
