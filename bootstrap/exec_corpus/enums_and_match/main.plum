@@ -4,6 +4,6 @@ let area (s: Shape): Int = match s {
   Square(side) => side * side,
 }
 let main (): Unit = {
-  println(area(Circle(2)).to_string());
-  println(area(Square(3)).to_string());
+    println(area(Circle(2)).to_string());
+    println(area(Square(3)).to_string());
 }

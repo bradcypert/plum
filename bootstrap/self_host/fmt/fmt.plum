@@ -1,0 +1,301 @@
+use Os;
+
+// `plum fmt` -- the formatter.
+//
+// It is `lexer.relex` with opinions, and it has exactly one so far:
+// **the line a statement or an item begins on is indented four spaces
+// per enclosing block.** Everything else in the file is passed through
+// byte for byte.
+//
+// That restraint is not modesty, it is what the spans support.
+// Statements and items carry source ranges; expressions do not. A
+// formatter that reflowed inside an expression would be deciding where
+// to break lines it cannot see the shape of, and the first thing it
+// would do is move code it had mis-attributed. So this reindents the
+// lines it can name and leaves every other character alone.
+//
+// The rule is not invented. Across the 242 `.plum` files in this repo,
+// indentation is already a multiple of four everywhere, there is not one
+// tab, not one line with trailing whitespace, and not one file missing
+// its final newline. The corpus IS the style guide; this encodes what it
+// already does. The test of that is `bootstrap/fmt-check`: formatting
+// every file in the repo must change nothing.
+
+pub struct Edit { pub line_start: Int, pub old_indent: Int, pub indent: Int }
+
+// The indentation edits an item implies, innermost last. An item's own
+// line goes to column zero; the statements of a block found at depth `d`
+// go to `4 * d`.
+pub let item_edits (chars: Array[String]) (it: parser.ItemNode) (acc: Array[Edit]): Array[Edit] =
+    if it.start < 0 { acc }
+    else {
+        let a = acc.push(edit_at(chars, it.start, 0));
+        match it.kind {
+            IKLet(def) => expr_edits(chars, def.body, 1, a),
+            _ => a,
+        }
+    }
+
+// `depth` is the indent level for statements of a block encountered
+// HERE. A block's own statements sit at `depth`, and anything nested
+// inside one of them at `depth + 1`.
+let expr_edits (chars: Array[String]) (e: parser.PExpr) (depth: Int) (acc: Array[Edit]): Array[Edit] =
+    match e {
+        EBlock(b) => block_edits(chars, b, depth, acc),
+        EIf(c, t, els) => {
+            let a1 = expr_edits(chars, c, depth, acc);
+            let a2 = block_edits(chars, t, depth, a1);
+            match els { Some(x) => expr_edits(chars, x, depth, a2), None => a2 }
+        },
+        EMatch(sc, arms) => arm_edits(chars, arms, 0, depth, expr_edits(chars, sc, depth, acc)),
+        ESelect(arms) => select_edits(chars, arms, 0, depth, acc),
+        EFor(_, iter, body) => block_edits(chars, body, depth, expr_edits(chars, iter, depth, acc)),
+        EUnsafe(b) => block_edits(chars, b, depth, acc),
+        ESpawn(b) => block_edits(chars, b, depth, acc),
+        EClosure(_, body) => expr_edits(chars, body, depth, acc),
+        EUnary(_, a) => expr_edits(chars, a, depth, acc),
+        EBinary(_, l, r) => expr_edits(chars, r, depth, expr_edits(chars, l, depth, acc)),
+        EField(b, _) => expr_edits(chars, b, depth, acc),
+        ECall(callee, args) => list_edits(chars, args, 0, depth, expr_edits(chars, callee, depth, acc)),
+        EGenericInst(b, _) => expr_edits(chars, b, depth, acc),
+        EIndex(b, i) => expr_edits(chars, i, depth, expr_edits(chars, b, depth, acc)),
+        ETuple(xs) => list_edits(chars, xs, 0, depth, acc),
+        EArray(xs) => list_edits(chars, xs, 0, depth, acc),
+        EStructLit(_, fields, spread) => {
+            let a = field_edits(chars, fields, 0, depth, acc);
+            match spread { Some(x) => expr_edits(chars, x, depth, a), None => a }
+        },
+        EInt(_) => acc,
+        EFloat(_) => acc,
+        EStr(_) => acc,
+        EBool(_) => acc,
+        EIdent(_, _) => acc,
+    }
+
+// A block's statements all share one indent, and it is read from the
+// source rather than counted: it is the indent of the line the block's
+// OPENING BRACE sits on, plus four.
+//
+// Counting depth instead was the first attempt and it was wrong, in a
+// way worth recording. It assumed a construct begins at `4 * depth`,
+// which is false the moment a body is written on a continuation line:
+//
+//     let drain (..): Int =
+//         if left <= 0 { acc }
+//         else {
+//             let got = select { .. };
+//
+// The `else` block is at depth 1 by the tree and at column 8 on the
+// page, because the author put the `if` on its own line at column 4 --
+// an indent chosen by hand that no span records. Anchoring to the brace
+// needs no expression spans at all, and gets both shapes right.
+//
+// If the character before the first statement is not a brace, this
+// block's shape is not one we can position, and it is left alone.
+// Refusing is always available and never wrong.
+let block_edits (chars: Array[String]) (b: parser.PBlock) (depth: Int) (acc: Array[Edit]): Array[Edit] = {
+    let a = match block_indent(chars, b.starts) {
+        None => acc,
+        Some(indent) => stmt_line_edits(chars, b.starts, 0, indent, acc),
+    };
+    let a2 = stmt_body_edits(chars, b.stmts, 0, depth + 1, a);
+    match b.tail { Some(t) => expr_edits(chars, t, depth + 1, a2), None => a2 }
+}
+
+let block_indent (chars: Array[String]) (starts: Array[Int]): Option[Int] =
+    if Array.is_empty(starts) || starts[0] < 0 { None }
+    else {
+        let brace = back_over_trivia(chars, starts[0] - 1);
+        if brace < 0 { None }
+        else if chars[brace] != "{" { None }
+        else {
+            let col = count_spaces(chars, line_start_of(chars, brace), 0);
+            // A brace whose line is indented off the four-space grid is
+            // sitting on a CONTINUATION line, not on the line its
+            // construct began:
+            //
+            //     else if nodes[i].path == path && nodes[i].def_offset >= 0
+            //          && nodes[i].def_offset <= off && !seen.contains(..) {
+            //
+            // That `{` is on a line indented nine, aligned under the
+            // condition by hand. Anchoring to it would indent the body
+            // to thirteen. The construct really begins on the `else if`
+            // line, which is four -- and finding THAT needs to know
+            // where the `if` starts, which is an expression span and
+            // does not exist.
+            //
+            // So this refuses. Every statement indent in the corpus is a
+            // multiple of four; a brace line that is not is one of these
+            // alignment lines, and a formatter that cannot name the
+            // construct should leave the body alone rather than move it
+            // somewhere confidently wrong.
+            if col % 4 != 0 { None } else { Some(col + 4) }
+        }
+    }
+
+// Backwards over whitespace and whole comment LINES. A `//` comment
+// runs to the end of its line, so anything to the left of one on the
+// same line is code -- which is why this steps to the line start and
+// keeps going rather than trying to scan a comment right to left.
+let back_over_trivia (chars: Array[String]) (at: Int): Int =
+    if at < 0 { 0 - 1 }
+    else if String.is_ascii_ws(chars[at]) { back_over_trivia(chars, at - 1) }
+    else if in_line_comment(chars, line_start_of(chars, at), at) { back_over_trivia(chars, line_start_of(chars, at) - 1) }
+    else { at }
+
+let in_line_comment (chars: Array[String]) (ls: Int) (at: Int): Bool =
+    if ls >= at { false }
+    else if chars[ls] == "/" && ls + 1 <= at && chars[ls + 1] == "/" { true }
+    else { in_line_comment(chars, ls + 1, at) }
+
+let stmt_line_edits (chars: Array[String]) (starts: Array[Int]) (i: Int) (indent: Int) (acc: Array[Edit]): Array[Edit] =
+    if i >= starts.len() { acc }
+    // A synthetic statement -- contract sugar builds those -- has no
+    // source to indent.
+    else if starts[i] < 0 { stmt_line_edits(chars, starts, i + 1, indent, acc) }
+    // Only a statement that BEGINS its line owns that line's indent.
+    // `if n <= 0 { xs } else { .. }` has a block whose one statement
+    // shares a line with the brace and with the `if`; moving that line
+    // would be moving the `if`, which this cannot see and does not own.
+    else if !first_on_line(chars, starts[i]) { stmt_line_edits(chars, starts, i + 1, indent, acc) }
+    else { stmt_line_edits(chars, starts, i + 1, indent, acc.push(edit_at(chars, starts[i], indent))) }
+
+let first_on_line (chars: Array[String]) (offset: Int): Bool = {
+    let ls = line_start_of(chars, offset);
+    ls + count_spaces(chars, ls, 0) == offset
+}
+
+let stmt_body_edits (chars: Array[String]) (stmts: Array[parser.PStmt]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
+    if i >= stmts.len() { acc }
+    else {
+        let a = match stmts[i] {
+            SLet(_, _, _, v) => expr_edits(chars, v, depth, acc),
+            SAssign(_, v) => expr_edits(chars, v, depth, acc),
+            SExpr(v) => expr_edits(chars, v, depth, acc),
+        };
+        stmt_body_edits(chars, stmts, i + 1, depth, a)
+    }
+
+let list_edits (chars: Array[String]) (xs: Array[parser.PExpr]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
+    if i >= xs.len() { acc } else { list_edits(chars, xs, i + 1, depth, expr_edits(chars, xs[i], depth, acc)) }
+
+let field_edits (chars: Array[String]) (fs: Array[parser.FieldInitNode]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
+    if i >= fs.len() { acc } else { field_edits(chars, fs, i + 1, depth, expr_edits(chars, fs[i].value, depth, acc)) }
+
+let arm_edits (chars: Array[String]) (arms: Array[parser.MatchArmNode]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
+    if i >= arms.len() { acc }
+    else {
+        let a = match arms[i].guard { Some(g) => expr_edits(chars, g, depth, acc), None => acc };
+        arm_edits(chars, arms, i + 1, depth, expr_edits(chars, arms[i].body, depth + 1, a))
+    }
+
+let select_edits (chars: Array[String]) (arms: Array[parser.SelectArmNode]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
+    if i >= arms.len() { acc }
+    else {
+        let a = expr_edits(chars, arms[i].expr, depth, acc);
+        select_edits(chars, arms, i + 1, depth, expr_edits(chars, arms[i].body, depth + 1, a))
+    }
+
+// --- Applying edits ---
+
+// The edit for the line `offset` sits on. `old_indent` is how many
+// leading spaces that line already has, so applying an edit is a
+// splice rather than a re-render.
+let edit_at (chars: Array[String]) (offset: Int) (indent: Int): Edit = {
+    let ls = line_start_of(chars, offset);
+    Edit { line_start: ls, old_indent: count_spaces(chars, ls, 0), indent: indent }
+}
+
+let line_start_of (chars: Array[String]) (offset: Int): Int =
+    if offset <= 0 { 0 } else if chars[offset - 1] == "\n" { offset } else { line_start_of(chars, offset - 1) }
+
+let count_spaces (chars: Array[String]) (at: Int) (n: Int): Int =
+    if at + n >= chars.len() { n } else if chars[at + n] == " " { count_spaces(chars, at, n + 1) } else { n }
+
+pub let spaces (n: Int): String = if n <= 0 { "" } else { " ".concat(spaces(n - 1)) }
+
+// Rebuilds the source with each edited line's leading spaces replaced.
+//
+// The walk produces edits depth-first, not in source order, so rather
+// than sorting them they go into a map keyed by the line they affect
+// and the SOURCE is walked once, in order, asking each line whether it
+// has an edit. That also settles duplicates for free: an item whose
+// whole body is on one line produces an edit for that line from the
+// item and another from the block, and the first one written wins,
+// which is the outer construct -- the one that decides where the line
+// starts.
+pub let apply_edits (chars: Array[String]) (edits: Array[Edit]): String = {
+    let empty: Map[Int, Int] = Map.new(());
+    let by_line = index_edits(edits, 0, empty);
+    walk_lines(chars, by_line, 0, "")
+}
+
+let index_edits (edits: Array[Edit]) (i: Int) (m: Map[Int, Int]): Map[Int, Int] =
+    if i >= edits.len() { m }
+    else if Map.contains(m, edits[i].line_start) { index_edits(edits, i + 1, m) }
+    else { index_edits(edits, i + 1, Map.insert(m, edits[i].line_start, edits[i].indent)) }
+
+// One pass over the source. At the start of each line, either the line
+// has an edit -- in which case its existing leading spaces are dropped
+// and the wanted indent written instead -- or it is copied untouched.
+let walk_lines (chars: Array[String]) (by_line: Map[Int, Int]) (at: Int) (acc: String): String =
+    if at >= chars.len() { acc }
+    else {
+        match Map.get(by_line, at) {
+            None => {
+                let e = line_end(chars, at);
+                walk_lines(chars, by_line, e, acc.concat(slice(chars, at, e)))
+            },
+            Some(indent) => {
+                let sp = count_spaces(chars, at, 0);
+                let e = line_end(chars, at);
+                // A blank line is left alone: it has no content to
+                // indent, and writing spaces into it would be the
+                // trailing whitespace this repo does not have.
+                if at + sp >= e { walk_lines(chars, by_line, e, acc.concat(slice(chars, at, e))) }
+                else { walk_lines(chars, by_line, e, acc.concat(spaces(indent)).concat(slice(chars, at + sp, e))) }
+            },
+        }
+    }
+
+// Through the newline, so the caller always resumes at a line start.
+let line_end (chars: Array[String]) (at: Int): Int =
+    if at >= chars.len() { at } else if chars[at] == "\n" { at + 1 } else { line_end(chars, at + 1) }
+
+let slice (chars: Array[String]) (from: Int) (to: Int): String =
+    Array.concat_all(Array.slice(chars, from, to))
+
+// The whole formatter: parse, collect what the spans say each line's
+// indent should be, apply -- and repeat until nothing moves.
+//
+// One pass is not enough, and the reason is worth stating. A block
+// anchors to the indent of the line its brace is on, read from the
+// SOURCE. So when a pass moves an outer construct, every block inside
+// it was anchored to where that construct used to be, and needs another
+// pass to follow. Each pass settles one more level of nesting, so this
+// converges; the cap is there because a formatter that does not
+// terminate is worse than one that gives up.
+//
+// Threading the newly ASSIGNED indent down instead of re-reading the
+// source would settle it in one pass. That is the better design and it
+// is not this one: it needs to know which line a block's brace will end
+// up on, which is an expression-span question again.
+pub let format (path: String) (src: String): String = format_pass(path, src, 8)
+
+let format_pass (path: String) (src: String) (fuel: Int): String =
+    if fuel <= 0 { src }
+    else {
+        let next = format_once(path, src);
+        if next == src { src } else { format_pass(path, next, fuel - 1) }
+    }
+
+let format_once (path: String) (src: String): String = {
+    let lexed = lexer.tokenize_spanned(src);
+    parser.set_source_context(path, src, lexed.starts, lexed.ends);
+    let items = parser.parse_program(lexed.tokens).items;
+    let chars = chars_of(src);
+    apply_edits(chars, all_item_edits(chars, items, 0, []))
+}
+
+let all_item_edits (chars: Array[String]) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
+    if i >= items.len() { acc } else { all_item_edits(chars, items, i + 1, item_edits(chars, items[i], acc)) }

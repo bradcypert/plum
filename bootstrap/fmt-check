@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# Is every `.plum` file in the repo already formatted?
+#
+# `plum fmt` has exactly one opinion: the line a statement or an item
+# begins on is indented four spaces per enclosing block. That rule was
+# not invented, it was MEASURED -- across this repo indentation is
+# already a multiple of four everywhere, with no tabs, no trailing
+# whitespace and no missing final newline. The corpus is the style
+# guide and this asserts the formatter agrees with it.
+#
+# Three properties, and the second is the one that makes a formatter
+# safe to run on somebody's code:
+#
+#   1. FIXED POINT -- formatting changes nothing. A file that changes is
+#      either misindented or a rule is wrong, and both are worth a look.
+#   2. INDENTATION ONLY -- with leading whitespace stripped, the output
+#      is byte-identical to the input. Plum has no significant
+#      indentation, so a change confined to leading whitespace cannot
+#      change the token stream, and therefore cannot change the program.
+#   3. IDEMPOTENT -- formatting twice is formatting once. This failed
+#      when first checked: a block anchors to the indent of the line its
+#      brace is on, so moving an outer construct leaves everything
+#      inside anchored to where it used to be. `fmt` iterates to a fixed
+#      point for that reason.
+#
+# Usage:  bootstrap/fmt-check [path-to-plum-binary]   (default: ./sh.real)
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+plum="${1:-./sh.real}"
+
+work="$(mktemp -d 2>/dev/null || mktemp -d -t plum-fmt)"
+trap 'rm -rf "$work"' EXIT
+
+ok=0; fail=0
+while IFS= read -r f; do
+    if ! "$plum" fmt "$f" > "$work/out" 2>"$work/err"; then
+        printf 'FAIL  %-58s fmt errored: %s\n' "$f" "$(head -n 1 "$work/err")"
+        fail=$((fail + 1)); continue
+    fi
+
+    # 2, checked even when the file is already formatted: a rule that
+    # rewrote code would show here rather than in a diff nobody reads.
+    if [ "$(sed 's/^[[:space:]]*//' "$f" | md5sum)" != "$(sed 's/^[[:space:]]*//' "$work/out" | md5sum)" ]; then
+        printf 'FAIL  %-58s fmt changed more than indentation\n' "$f"
+        fail=$((fail + 1)); continue
+    fi
+
+    if ! cmp -s "$f" "$work/out"; then
+        printf 'FAIL  %-58s not formatted\n' "$f"
+        diff "$f" "$work/out" | head -n 4 | sed 's/^/        /'
+        fail=$((fail + 1)); continue
+    fi
+
+    # The second pass runs BESIDE the original, not in a temp dir:
+    # `@embed_file` resolves relative to the file being compiled, so a
+    # copy somewhere else cannot find what it embeds. That is a real
+    # property of the language and the harness has to respect it.
+    twice="$(dirname "$f")/.fmt-check-$$.plum"
+    "$plum" fmt "$f" > "$twice" 2>/dev/null
+    "$plum" fmt "$twice" > "$work/twice" 2>/dev/null
+    same=0; cmp -s "$twice" "$work/twice" || same=1
+    rm -f "$twice"
+    if [ $same -ne 0 ]; then
+        printf 'FAIL  %-58s fmt is not idempotent\n' "$f"
+        fail=$((fail + 1)); continue
+    fi
+    ok=$((ok + 1))
+done < <(find . -name '*.plum' -not -path './.git/*' | sort)
+
+if [ "$fail" -ne 0 ]; then
+    printf '\nfmt-check: %d file(s) failed, %d already formatted\n' "$fail" "$ok"
+    exit 1
+fi
+printf 'fmt-check: %d .plum files are already formatted, and fmt touches only indentation\n' "$ok"
