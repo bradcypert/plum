@@ -1,111 +1,84 @@
 Plum is a small, statically typed, compiled language.
 
-Two changes, and together they close the module system. Both were filed
-as missing conveniences. Both were bugs, and the second one
-miscompiled.
+Three changes, and they are all the same change: the compiler stops
+allocating in three more places. Nothing about how you write Plum
+changes, and no program produces a different answer. The programs just
+do less work.
 
-## Two modules may declare the same type name
+The pitch this is serving is VISION.md's — you write code that looks
+like it assumes a garbage collector exists, and the compiler makes it
+behave like it doesn't.
 
-```plum
-// main.plum                    // inner/i.plum
-pub struct P { pub x: Int }     pub struct P { pub y: String }
-
-println(P { x: 42 }.x.to_string())
-```
-
-Before this release:
-
-```
-struct P has no field named x
-```
-
-**Adding a struct in a subdirectory broke an unrelated root file that
-had never referenced it**, and the error blamed the file that had done
-nothing wrong. Types were identified by their bare name, so whichever
-declaration the lookup found first won — for everybody.
-
-A type is now identified by the module that declared it. `shapes.Circle`
-and `render.Circle` are different types, and a bare `Circle` means the
-one declared where you wrote it: your own module first, then the root,
-then the prelude. A root declaration **shadows** a prelude one of the
-same name rather than being confused with it.
-
-They also no longer silently unify, which was the quieter half of the
-same bug — before, both were `ITStruct("P")`, so this type-checked and
-then read a field that was not there:
-
-```
-let a: P = inner.make();
-// let a: declared type P doesn't match value type inner.P (inner.P != P)
-```
-
-Nothing changes for code that does not reuse a name. Root-module type
-names are unchanged, and a module appears in a diagnostic only when it
-is the thing telling two types apart.
-
-## Two enums may declare the same variant name
+## `Array.filter` recycles its source, like `Array.map` already did
 
 ```plum
-// main.plum                    // inner/shade.plum
-enum Weight { Light, Heavy }    pub enum Shade { Light, Dark }
-
-match inner.dim() { Light => "shade light", Dark => "shade dark" }
+let evens = Array.filter(xs, |x| x % 2 == 0)   // xs not used again
 ```
 
-Before this release that was `Weight != inner.Shade`: a tag was looked
-up by scanning every enum, and the scan stopped at the first one that
-declared it, whatever the value being matched actually was.
+When the array you filter is finished with, the result is built into
+its memory instead of a new allocation. `map` has worked this way since before
+0.0.8; `filter` sitting next to it and not doing so was a gap people
+would trip on.
 
-A pattern now resolves against **the scrutinee's type**, which is
-already known where the arm is written. `Light` matched on an
-`inner.Shade` is that enum's `Light`, however many other enums declare
-one.
+A filter per iteration over 500 numbers: **1009 allocations to 9.**
 
-### It was also a miscompile
+## Both of them now work on arrays of strings and structs
+
+Before this release, recycling applied only to arrays of numbers. That
+is the restriction that mattered, because the arrays real programs map
+and filter hold strings and structs — and it meant the optimisation
+almost never fired in practice.
+
+The loop now releases each element as it passes, so:
 
 ```plum
-enum Verdict { Ok, Bad }
-println(match Bad { Ok => "ok", Bad => "bad" })
+let long = Array.filter(names, |s| s.len() > 2)   // names not used again
 ```
 
-This type-checked and then crashed. The backend resolved variant tags
-independently of the checker, by the same flat scan — so the two could
-answer differently, and here they did: the checker meant `Verdict.Ok`
-and the generated code meant the prelude's `Result.Ok`. The compiler's
-IR now carries the enum the checker chose, and nothing downstream
-resolves a tag a second time.
+A filter per iteration over 200 strings: **508 allocations to 8.** The
+same for `map`.
 
-### Saying which one you mean
-
-`Enum.Variant` works in expressions and in patterns:
+## Building a value in a loop reuses the last one's memory
 
 ```plum
-let v = Verdict.Ok(7);
-match r { Result.Ok(n) => n.to_string(), Err(e) => e }
+for i in 0..1000 {
+    let p = P { x: i, y: 2 };
+    ...
+}
 ```
 
-A tag you write unqualified means, in order: the scrutinee's enum in a
-pattern; then an enum declared in **your** module, so a local `Ok`
-shadows the prelude's exactly as a local type name does; then the only
-enum that declares it. If more than one still fits, that is now an
-error rather than a guess:
+Every `p` used to be a fresh allocation. The moment you store into `p`,
+whatever was there is finished with — so the new value is built into
+it. This works for structs, enum variants and array literals, and for
+both `let` and assignment.
 
-```
-`Light` is a variant of Weight and Shade -- write Weight.Light to say
-which one you mean
-```
+**1001 allocations to 2**, for each of those shapes.
+
+Constant literals were already free — they have been hoisted to static
+cells since before 0.0.8. This is the case that could not be hoisted,
+because the contents are different every iteration.
+
+## What this cost
+
+The compiler's own allocation count went the **wrong way**: about 1,200
+more out of 199,000, or 0.6%, measured compiling a fixture.
+
+It gains nothing from any of the three changes. It is written in a
+recursive style with almost no assignment inside loops, so it does not
+contain the shapes being optimised — it only pays for the checks that
+look for them. The array case is the larger half of the regression, and
+the likely reason is that recycling an array literal means computing
+every element before deciding the cell, which keeps more values alive
+at once, and a value that is alive is one some other recycling
+declines. That is a hypothesis and it is labelled as one in DESIGN.md;
+no allocation fixture regressed, which is the check that guards this,
+so it was not chased further.
+
+It is a real cost and it is in the release notes because it is a real
+cost. If your program looks more like the compiler than like the
+examples above, this release is very slightly worse for you.
 
 ## Upgrading
 
-Nothing to do for either change.
-
-If you were relying on two same-named types being interchangeable, they
-are not — but that only ever worked by accident, and produced the wrong
-field rather than an error.
-
-If your module declares an enum with a variant named like a prelude one
-(`Ok`, `Err`, `Some`, `None`), a bare use of that tag in that module now
-means **yours**. Write `Result.Ok` or `Option.Some` for the prelude's.
-Programs where two enums in the same module share a tag name and nothing
-says which is meant are now rejected instead of silently compiled
-against whichever was declared first.
+Nothing to do. No syntax changed, no API changed, and no program
+computes anything different.
