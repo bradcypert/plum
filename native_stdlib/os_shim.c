@@ -111,6 +111,19 @@ long long os_remove_file(const char *path) {
     return remove(path) == 0 ? 0 : -1;
 }
 
+// `rename`, which is ATOMIC within a filesystem: the destination is
+// either the old file or the new one, never a half-written mixture.
+// That is the whole reason this exists -- `plum fmt --write` builds the
+// formatted text beside the original and renames it into place, so an
+// interrupted run cannot leave somebody's source truncated.
+//
+// Across filesystems `rename` fails rather than copying, and the
+// caller is told so rather than being silently given a slower,
+// non-atomic fallback it did not ask for.
+long long os_rename_file(const char *from, const char *to) {
+    return rename(from, to) == 0 ? 0 : -1;
+}
+
 static int plum_is_dir(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return 0;
