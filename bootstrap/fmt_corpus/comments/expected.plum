@@ -1,0 +1,13 @@
+// An item comment, already at column zero.
+let f (n: Int): Int = {
+    // This comment documents the statement below it and follows it
+    // to column four. A RUN of comment lines moves together.
+    let a = n + 1;
+
+    // Separated from the code below by a blank line above it, but the
+    // run still ends at that blank line -- it attaches DOWNWARD, to
+    // the statement it precedes.
+    let b = a * 2;
+    let c = b - 1; // A trailing comment shares a line with code, so the
+    a + b + c
+}

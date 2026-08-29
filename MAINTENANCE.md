@@ -11,7 +11,7 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
-         property-check doc-check alloc-check lossless-check \
+         property-check doc-check alloc-check lossless-check fmt-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
     ./bootstrap/$h || echo "FAILED: $h"
@@ -37,6 +37,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |
 | `platform-smoke` | a compiler *binary* builds and runs every execution fixture on the machine it is sitting on | 21s |
 | `example-sweep` | every `examples/` project matches its recorded output | 5s |
+| `fmt-check` | every repo file is already formatted, `fmt` touches only leading whitespace, and `fmt_corpus` reformats as recorded | 40s |
 | `lossless-check` | every `.plum` file survives a round trip through the token stream, and nothing but trivia sits between tokens -- the floor a formatter stands on | 30s |
 | `bootstrap-check` | the compiler compiled by itself is the same compiler | 14s |
 | `check-seed` | the checked-in seed still bootstraps to today's compiler | 26s |

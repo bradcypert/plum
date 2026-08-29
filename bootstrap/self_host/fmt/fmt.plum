@@ -7,6 +7,14 @@ use Os;
 // per enclosing block.** Everything else in the file is passed through
 // byte for byte.
 //
+// What it does NOT do, and cannot yet: move a closing brace, an `else`,
+// or a match arm. None of those is a statement, so nothing gives them a
+// source span, and a formatter that guessed at their position would be
+// moving lines whose shape it cannot see. On code that is already
+// well-formed this is invisible -- all 243 files in this repo are
+// unchanged by it. On badly-formed code it improves the statements and
+// leaves those lines where they were.
+//
 // That restraint is not modesty, it is what the spans support.
 // Statements and items carry source ranges; expressions do not. A
 // formatter that reflowed inside an expression would be deciding where
@@ -226,8 +234,40 @@ pub let spaces (n: Int): String = if n <= 0 { "" } else { " ".concat(spaces(n - 
 // starts.
 pub let apply_edits (chars: Array[String]) (edits: Array[Edit]): String = {
     let empty: Map[Int, Int] = Map.new(());
-    let by_line = index_edits(edits, 0, empty);
+    let by_line = index_edits(with_comment_runs(chars, edits, 0, edits), 0, empty);
     walk_lines(chars, by_line, 0, "")
+}
+
+// A comment belongs to what it documents, so it is indented with it.
+//
+// For every line this is about to indent, the run of comment-ONLY lines
+// directly above it gets the same indent. The run stops at anything
+// that is not a comment, and so at a blank line -- a blank line is how
+// people separate a comment from the code below it, so a comment above
+// one is documenting something else, or nothing.
+//
+// A comment sharing a line with code is not touched: that line's indent
+// belongs to the code, and has already been decided.
+let with_comment_runs (chars: Array[String]) (edits: Array[Edit]) (i: Int) (acc: Array[Edit]): Array[Edit] =
+    if i >= edits.len() { acc }
+    else { with_comment_runs(chars, edits, i + 1, run_above(chars, edits[i].line_start, edits[i].indent, acc)) }
+
+let run_above (chars: Array[String]) (line_start: Int) (indent: Int) (acc: Array[Edit]): Array[Edit] =
+    if line_start <= 0 { acc }
+    else {
+        let prev = line_start_of(chars, line_start - 1);
+        if !is_comment_line(chars, prev) { acc }
+        else {
+            run_above(chars, prev, indent,
+                acc.push(Edit { line_start: prev, old_indent: count_spaces(chars, prev, 0), indent: indent }))
+        }
+    }
+
+// Comment-only: the first thing on the line is `//`. A blank line is
+// NOT one, which is what stops a run at a paragraph break.
+let is_comment_line (chars: Array[String]) (ls: Int): Bool = {
+    let at = ls + count_spaces(chars, ls, 0);
+    at + 1 < chars.len() && chars[at] == "/" && chars[at + 1] == "/"
 }
 
 let index_edits (edits: Array[Edit]) (i: Int) (m: Map[Int, Int]): Map[Int, Int] =

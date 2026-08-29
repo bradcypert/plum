@@ -1,0 +1,27 @@
+// Statement indentation is what `fmt` normalizes, at every depth.
+//
+// The braces, the `else` and the match arms here are ALREADY where they
+// belong -- deliberately. `fmt` does not move them: a closing brace, an
+// `else`, and a match arm are not statements, so nothing gives them a
+// source span, and a formatter that guessed at their position would be
+// moving lines it cannot see the shape of. See fmt.plum's own note.
+enum Shape { Dot, Line(Int) }
+
+let describe (s: Shape) (n: Int): Int = {
+let total = match s {
+        Dot => 0,
+        Line(k) => {
+    let doubled = k * 2;
+                doubled + n
+        },
+    };
+if total > 10 {
+      total
+    } else {
+        for i in 0..n {
+   let step = i + total;
+              println(step.to_string());
+        };
+  total + 1
+    }
+}

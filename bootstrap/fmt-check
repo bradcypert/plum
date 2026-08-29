@@ -67,10 +67,29 @@ while IFS= read -r f; do
         fail=$((fail + 1)); continue
     fi
     ok=$((ok + 1))
-done < <(find . -name '*.plum' -not -path './.git/*' | sort)
+done < <(find . -name '*.plum' -not -path './.git/*' -not -path './bootstrap/fmt_corpus/*' | sort)
+
+# `fmt_corpus` is the other half, and it is what stops this harness from
+# passing vacuously. The sweep above proves `fmt` leaves correct code
+# alone -- which a formatter that did NOTHING would also pass. These are
+# inputs where it has to act, with the answer written down.
+for dir in bootstrap/fmt_corpus/*/; do
+    name="$(basename "$dir")"
+    [ -f "$dir/in.plum" ] || continue
+    if ! "$plum" fmt "$dir/in.plum" > "$work/fixed" 2>"$work/err"; then
+        printf 'FAIL  %-58s fmt errored: %s\n' "$name" "$(head -n 1 "$work/err")"
+        fail=$((fail + 1)); continue
+    fi
+    if ! cmp -s "$dir/expected.plum" "$work/fixed"; then
+        printf 'FAIL  %-58s does not match expected.plum\n' "$name"
+        diff "$dir/expected.plum" "$work/fixed" | head -n 6 | sed 's/^/        /'
+        fail=$((fail + 1)); continue
+    fi
+    ok=$((ok + 1))
+done
 
 if [ "$fail" -ne 0 ]; then
     printf '\nfmt-check: %d file(s) failed, %d already formatted\n' "$fail" "$ok"
     exit 1
 fi
-printf 'fmt-check: %d .plum files are already formatted, and fmt touches only indentation\n' "$ok"
+printf 'fmt-check: %d checks pass -- every repo file already formatted, and fmt_corpus reformatted as recorded\n' "$ok"
