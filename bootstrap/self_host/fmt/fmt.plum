@@ -7,13 +7,16 @@ use Os;
 // per enclosing block.** Everything else in the file is passed through
 // byte for byte.
 //
-// What it does NOT do, and cannot yet: move a closing brace, an `else`,
-// or a match arm. None of those is a statement, so nothing gives them a
-// source span, and a formatter that guessed at their position would be
-// moving lines whose shape it cannot see. On code that is already
-// well-formed this is invisible -- all 243 files in this repo are
-// unchanged by it. On badly-formed code it improves the statements and
-// leaves those lines where they were.
+// It also places CLOSING BRACES, and `} else {` with them: a `}` sits
+// one level out from the statements it closes, which is exact rather
+// than guessed because `PBlock` records where its own braces are.
+//
+// What it does NOT do is move a MATCH ARM. An arm is not a statement
+// and not a block, so nothing gives it a span, and a formatter that
+// guessed at its position would be moving a line whose shape it cannot
+// see. On well-formed code this is invisible -- all 243 files in this
+// repo are unchanged by `fmt`. On badly-formed code the statements and
+// braces are fixed and the arms stay where they were.
 //
 // That restraint is not modesty, it is what the spans support.
 // Statements and items carry source ranges; expressions do not. A
@@ -29,7 +32,14 @@ use Os;
 // already does. The test of that is `bootstrap/fmt-check`: formatting
 // every file in the repo must change nothing.
 
-pub struct Edit { pub line_start: Int, pub old_indent: Int, pub indent: Int }
+// `owns_comments` says whether the run of comment lines above this one
+// belongs to it. A statement and an item own theirs -- a comment above
+// them documents them. A CLOSING BRACE does not: the comments above a
+// `}` are the last thing inside the block, documenting the code they
+// follow, and pulling them out to the brace's level moves them out of
+// the body they belong to. That is a regression this had before the
+// flag existed, and five files in the repo caught it.
+pub struct Edit { pub line_start: Int, pub old_indent: Int, pub indent: Int, pub owns_comments: Bool }
 
 // The indentation edits an item implies, innermost last. An item's own
 // line goes to column zero; the statements of a block found at depth `d`
@@ -104,11 +114,23 @@ let expr_edits (chars: Array[String]) (e: parser.PExpr) (depth: Int) (acc: Array
 let block_edits (chars: Array[String]) (b: parser.PBlock) (depth: Int) (acc: Array[Edit]): Array[Edit] = {
     let a = match block_indent(chars, b.starts) {
         None => acc,
-        Some(indent) => stmt_line_edits(chars, b.starts, 0, indent, acc),
+        // The closing brace belongs one level OUT from the statements
+        // it closes -- which is known exactly, because it is the indent
+        // just computed minus four. No scanning and no guessing: the
+        // block records where its own brace is.
+        Some(indent) => close_brace_edit(chars, b.close, indent - 4, stmt_line_edits(chars, b.starts, 0, indent, acc)),
     };
     let a2 = stmt_body_edits(chars, b.stmts, 0, depth + 1, a);
     match b.tail { Some(t) => expr_edits(chars, t, depth + 1, a2), None => a2 }
 }
+
+// Only when the brace BEGINS its line. A `}` that shares a line with
+// code -- `if a { b } else { c }` -- has no indent of its own, exactly
+// as a statement in that position has none.
+let close_brace_edit (chars: Array[String]) (close: Int) (indent: Int) (acc: Array[Edit]): Array[Edit] =
+    if close < 0 || indent < 0 { acc }
+    else if !first_on_line(chars, close) { acc }
+    else { acc.push(edit_kind(chars, close, indent, false)) }
 
 let block_indent (chars: Array[String]) (starts: Array[Int]): Option[Int] =
     if Array.is_empty(starts) || starts[0] < 0 { None }
@@ -209,9 +231,11 @@ let select_edits (chars: Array[String]) (arms: Array[parser.SelectArmNode]) (i: 
 // The edit for the line `offset` sits on. `old_indent` is how many
 // leading spaces that line already has, so applying an edit is a
 // splice rather than a re-render.
-let edit_at (chars: Array[String]) (offset: Int) (indent: Int): Edit = {
+let edit_at (chars: Array[String]) (offset: Int) (indent: Int): Edit = edit_kind(chars, offset, indent, true)
+
+let edit_kind (chars: Array[String]) (offset: Int) (indent: Int) (owns: Bool): Edit = {
     let ls = line_start_of(chars, offset);
-    Edit { line_start: ls, old_indent: count_spaces(chars, ls, 0), indent: indent }
+    Edit { line_start: ls, old_indent: count_spaces(chars, ls, 0), indent: indent, owns_comments: owns }
 }
 
 let line_start_of (chars: Array[String]) (offset: Int): Int =
@@ -250,6 +274,7 @@ pub let apply_edits (chars: Array[String]) (edits: Array[Edit]): String = {
 // belongs to the code, and has already been decided.
 let with_comment_runs (chars: Array[String]) (edits: Array[Edit]) (i: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= edits.len() { acc }
+    else if !edits[i].owns_comments { with_comment_runs(chars, edits, i + 1, acc) }
     else { with_comment_runs(chars, edits, i + 1, run_above(chars, edits[i].line_start, edits[i].indent, acc)) }
 
 let run_above (chars: Array[String]) (line_start: Int) (indent: Int) (acc: Array[Edit]): Array[Edit] =
@@ -259,7 +284,7 @@ let run_above (chars: Array[String]) (line_start: Int) (indent: Int) (acc: Array
         if !is_comment_line(chars, prev) { acc }
         else {
             run_above(chars, prev, indent,
-                acc.push(Edit { line_start: prev, old_indent: count_spaces(chars, prev, 0), indent: indent }))
+                acc.push(Edit { line_start: prev, old_indent: count_spaces(chars, prev, 0), indent: indent, owns_comments: true }))
         }
     }
 

@@ -1,10 +1,12 @@
-// Statement indentation is what `fmt` normalizes, at every depth.
+// Statement indentation at every depth, and the closing braces with it.
 //
-// The braces, the `else` and the match arms here are ALREADY where they
-// belong -- deliberately. `fmt` does not move them: a closing brace, an
-// `else`, and a match arm are not statements, so nothing gives them a
-// source span, and a formatter that guessed at their position would be
-// moving lines it cannot see the shape of. See fmt.plum's own note.
+// A `}` sits one level OUT from the statements it closes, which is
+// known exactly rather than guessed: `PBlock` records where its own
+// braces are, so the brace's indent is the statement indent minus four.
+//
+// The MATCH ARMS here are already where they belong, deliberately. An
+// arm is not a statement and not a block, so nothing gives it a span,
+// and `fmt` leaves it alone rather than guess. See fmt.plum's note.
 enum Shape { Dot, Line(Int) }
 
 let describe (s: Shape) (n: Int): Int = {
@@ -17,11 +19,11 @@ let total = match s {
     };
 if total > 10 {
       total
-    } else {
+} else {
         for i in 0..n {
    let step = i + total;
               println(step.to_string());
-        };
+                };
   total + 1
-    }
+        }
 }

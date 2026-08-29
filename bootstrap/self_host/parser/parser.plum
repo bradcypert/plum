@@ -92,7 +92,11 @@ pub enum PExpr {
 // working. A statement is the granularity a type error is reported at;
 // see `typecheck/infer.plum`'s `fail_tc` for what that does and does
 // not buy versus the real compiler's expression-precise spans.
-pub struct PBlock { pub stmts: Array[PStmt], pub tail: Option[PExpr], pub starts: Array[Int], pub ends: Array[Int] }
+// `open` and `close` are where the block's own BRACES are, which is
+// the one thing about a block's shape that no statement span records.
+// Everything a formatter could not previously place -- a closing brace,
+// a `} else {` -- is a brace, and this is where they are.
+pub struct PBlock { pub stmts: Array[PStmt], pub tail: Option[PExpr], pub starts: Array[Int], pub ends: Array[Int], pub open: Int, pub close: Int }
 
 pub enum PStmt {
     // The `Option[Ty]` is the OPTIONAL annotation in `let x: Int = ..`.
@@ -481,11 +485,11 @@ let desugar_contracts (params: Array[ParamNode]) (requires: Array[ContractClause
         };
         let require_stmts = Array.map(requires, |c| SExpr(contract_check_call("__contract_require", "precondition failed", c)));
         if Array.is_empty(ensures) {
-            EBlock(PBlock { stmts: require_stmts, tail: Some(raw_body), starts: synthetic_starts(require_stmts.len() + 1, 0, []), ends: synthetic_starts(require_stmts.len() + 1, 0, []) })
+            EBlock(PBlock { stmts: require_stmts, tail: Some(raw_body), starts: synthetic_starts(require_stmts.len() + 1, 0, []), ends: synthetic_starts(require_stmts.len() + 1, 0, []), open: 0 - 1, close: 0 - 1 })
         } else {
             let with_let = require_stmts.push(SLet(false, PIdent("result", 0 - 1), None, raw_body));
             let ensure_stmts = Array.map(ensures, |c| SExpr(contract_check_call("__contract_ensure", "postcondition failed", c)));
-            EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result", 0 - 1)), starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []), ends: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []) })
+            EBlock(PBlock { stmts: Array.concat(with_let, ensure_stmts), tail: Some(EIdent("result", 0 - 1)), starts: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []), ends: synthetic_starts(with_let.len() + ensure_stmts.len() + 1, 0, []), open: 0 - 1, close: 0 - 1 })
         }
     }
 
@@ -1426,7 +1430,9 @@ struct BlockResult { value: PBlock, next_pos: Int }
 let parse_block (tokens: Array[lexer.Token]) (pos: Int): BlockResult = {
     let open = expect(tokens, pos, TokLBrace, "'{'");
     let r = parse_block_items_acc(tokens, open, [], None, [], []);
-    BlockResult { value: PBlock { stmts: r.stmts, tail: r.tail, starts: r.starts, ends: r.ends }, next_pos: expect(tokens, r.next_pos, TokRBrace, "'}'") }
+    // `open` is one PAST the brace token, and `r.next_pos` is AT the
+    // closing one -- so the offsets come from `pos` and `r.next_pos`.
+    BlockResult { value: PBlock { stmts: r.stmts, tail: r.tail, starts: r.starts, ends: r.ends, open: offset_at(pos), close: offset_at(r.next_pos) }, next_pos: expect(tokens, r.next_pos, TokRBrace, "'}'") }
 }
 
 struct BlockItemsResult { stmts: Array[PStmt], tail: Option[PExpr], next_pos: Int, starts: Array[Int], ends: Array[Int] }

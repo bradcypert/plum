@@ -1521,14 +1521,14 @@ let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
     } else {
         if !Array.is_empty(args) && args.len() < sig.params.len() {
             infer_partial_call(p2, state, env, acc, sig, args)
-    } else {
-        if sig.params.len() != args.len() { fail_tc("call to ".concat(sig.name).concat(": expected ").concat(sig.params.len().to_string()).concat(" argument(s), found ").concat(args.len().to_string())) };
-        let fr = fresh_list(state, sig.generics.len());
-        let inst_params = Array.map(sig.params, |t| instantiate_template(sig.generics, fr.tys, t));
-        let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
-        let ar = infer_call_args(p2, fr.state, env, acc, args, inst_params, 0, []);
-        ir_leaf(subst_apply(ar.subst, inst_ret), ar.subst, ar.state, TFnCall(sig.module, sig.name, ar.texprs, fr.tys))
-    }
+        } else {
+            if sig.params.len() != args.len() { fail_tc("call to ".concat(sig.name).concat(": expected ").concat(sig.params.len().to_string()).concat(" argument(s), found ").concat(args.len().to_string())) };
+            let fr = fresh_list(state, sig.generics.len());
+            let inst_params = Array.map(sig.params, |t| instantiate_template(sig.generics, fr.tys, t));
+            let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
+            let ar = infer_call_args(p2, fr.state, env, acc, args, inst_params, 0, []);
+            ir_leaf(subst_apply(ar.subst, inst_ret), ar.subst, ar.state, TFnCall(sig.module, sig.name, ar.texprs, fr.tys))
+        }
     }
 }
 
