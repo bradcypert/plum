@@ -367,7 +367,13 @@ let check_all_fns (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): Unit 
     if i >= items.len() { () }
     else {
         match items[i].kind {
-            IKLet(def) => if Array.is_empty(def.params) { check_all_fns(p2, items, i + 1) } else { { set_err_pos(items[i].path, items[i].start, def.name); check_fn(p2, def, items[i].module); check_all_fns(p2, items, i + 1) } },
+            // A zero-parameter `let` is a GLOBAL, and it used to be
+            // skipped here entirely -- so `plum check` said "ok" to
+            // `let M: Int = "hello"` and only `plum build` caught it.
+            // A checker that misses what the compiler rejects is worse
+            // than no checker, because it is the one people run.
+            IKLet(def) => if Array.is_empty(def.params) { { set_err_pos(items[i].path, items[i].start, def.name); check_global(p2, def, items[i].module); check_all_fns(p2, items, i + 1) } }
+                else { { set_err_pos(items[i].path, items[i].start, def.name); check_fn(p2, def, items[i].module); check_all_fns(p2, items, i + 1) } },
             _ => check_all_fns(p2, items, i + 1),
         }
     }
@@ -631,8 +637,26 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
         None => match find_global_def(p2, name) {
             Some(def) => {
                 let r = infer_expr(p2, state, tyenv_empty(()), acc, def.body);
-                note_ident(name, offset, r.ty, 0 - 1);
-                ir_leaf(r.ty, r.subst, r.state, TGlobalRef(global_module_of(p2, name), name))
+                // The DECLARED type decides, when there is one.
+                //
+                // Inferring the body was the only source of type here,
+                // and for a body that does not determine its own type
+                // parameters that is not enough: `let O: Option[String]
+                // = None` re-infers `None` at every mention, gets
+                // `Option[?]` with `?` free, and the backend DEFAULTS a
+                // free variable to a scalar. The payload then loads as
+                // an `i1` while the rest of the expression is a `ptr`,
+                // and LLVM refuses the module -- with a message naming
+                // a register, which is no help at all in finding this.
+                //
+                // A global is not generic, so there is nothing to
+                // instantiate: the annotation is the type. Unifying
+                // rather than simply substituting keeps the body's own
+                // inference consistent with it, and reports a
+                // definition whose value does not match what it claims.
+                let g = global_ref_ty(p2, name, def, r);
+                note_ident(name, offset, g.ty, 0 - 1);
+                ir_leaf(g.ty, g.subst, r.state, TGlobalRef(global_module_of(p2, name), name))
             },
             // A bare name that turns out to be a FUNCTION is that
             // function as a VALUE -- `Array.map(xs, double)`,
@@ -666,6 +690,41 @@ let infer_ident (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (na
 // order `find_global_def` uses, so the two always agree.
 let global_module_of (p2: Program2) (name: String): String =
     match find_global_in(p2.globals, p2.current, name, 0) { Some(_) => p2.current, None => "" }
+
+struct GlobalTy { ty: ITy, subst: Subst }
+
+let global_ref_ty (p2: Program2) (name: String) (def: parser.LetDefNode) (r: InferResult): GlobalTy =
+    match def.ret_ty {
+        None => GlobalTy { ty: r.ty, subst: r.subst },
+        Some(t) => {
+            let declared = resolve_ann_seen(p2.ctx, global_module_of(p2, name), [], t);
+            match unify(subst_apply(r.subst, r.ty), declared) {
+                Ok(s) => GlobalTy { ty: declared, subst: subst_compose(s, r.subst) },
+                // Already reported against the DEFINITION by
+                // `typed_globals_acc`; saying it again at every mention
+                // would bury the one that names the line at fault.
+                Err(e) => GlobalTy { ty: declared, subst: r.subst },
+            }
+        },
+    }
+
+// The same unification `typed_globals_acc` does for the backend, run
+// for its errors alone.
+let check_global (p20: Program2) (def: parser.LetDefNode) (module_name: String): Unit = {
+    let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: module_name, generics: [] };
+    let r = infer_expr(p2, fresh_state_new(()), tyenv_empty(()), subst_empty(()), def.body);
+    match def.ret_ty {
+        None => (),
+        Some(t) => {
+            let declared = resolve_ann_seen(p2.ctx, module_name, [], t);
+            match unify(subst_apply(r.subst, r.ty), declared) {
+                Ok(_) => (),
+                Err(e) => fail_tc("global ".concat(def.name).concat(": declared type ").concat(render_ty(declared))
+                    .concat(" doesn't match its value's type ").concat(render_ty(subst_apply(r.subst, r.ty))).concat(" (").concat(e).concat(")")),
+            }
+        },
+    }
+}
 
 let find_global_def (p2: Program2) (name: String): Option[parser.LetDefNode] =
     match find_global_in(p2.globals, p2.current, name, 0) {

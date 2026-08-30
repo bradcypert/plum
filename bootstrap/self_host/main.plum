@@ -807,14 +807,10 @@ let lsp_handle (body: String): Bool =
 // ONE document, not a map of them. An editor formats the document it is
 // showing, so the one that matters is the one last touched.
 //
-// It is also a way around a compiler bug found writing this: a GLOBAL
-// whose declared type is `Ref[Map[String, String]]` does not constrain
-// its own initializer, so `Map.new(())` has its type variables
-// DEFAULTED instead of unified with the annotation, and reading a
-// `String` value back out emits `store ptr %t, ptr %p` where `%t` is an
-// `i1`. Five lines reproduce it; the same code with a local instead of
-// a global is fine. See DESIGN.md, "A global's type does not reach its
-// initializer".
+// A `Ref[Map[String, String]]` would work now -- the compiler bug that
+// first forced this shape is fixed (see DESIGN.md, "A global's type
+// does not reach its uses"). It stays one document because that is the
+// right amount: an editor formats what it is showing.
 let BUFFER_URI: Ref[String] = ref("")
 let BUFFER_TEXT: Ref[String] = ref("")
 

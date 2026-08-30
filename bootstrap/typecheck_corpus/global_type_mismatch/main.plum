@@ -1,0 +1,8 @@
+// Rejected: a global's declared type has to match its value.
+//
+// The annotation was parsed and then ignored entirely -- this exact
+// program was accepted in full, and the declared type was not even
+// consulted when the global was USED.
+let M: Int = "hello"
+
+let main (): Unit = println(M.to_string())

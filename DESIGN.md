@@ -16225,7 +16225,7 @@ rewrite a program, so the handler re-lexes its own output and compares
 the token stream before answering; if a rule ever changed the tokens it
 returns no edits rather than a rewrite.
 
-### A global's type does not reach its initializer
+### A global's type does not reach its uses
 
 The buffer started as `Ref[Map[String, String]]` and produced invalid
 LLVM -- `store ptr %t29, ptr %t17` where `%t29` is an `i1`. Five lines
@@ -16276,15 +16276,34 @@ constrained it -- `let M: Int = "hello"` was accepted in full. It is now
 unified, which reports the mismatch and threads the resulting
 substitution into the `TFn` the backend reads.
 
-That fixed the checking half. **It did not fix the defaulting.** The
-unification demonstrably runs -- a wrong annotation is now an error --
-and `g.subst` is threaded correctly into both `cg_global_roots` and the
-emit path, so the substitution is available everywhere it should be.
-Something between those two facts still loses the binding: the most
-likely candidate is the `Option[V]` scrutinee of a `match` on
-`Map.get`, whose payload type is read through `ctx_variant_payload` and
-would default to `Bool` -- which is `i1`, the type in the error -- if
-its argument were still free at that point. Not yet confirmed.
+**A reference to a global re-inferred its body.** This was the root
+cause, and it was in neither place I had been looking. The `Map` was a
+red herring; so was `Ref`. Four lines reproduce it:
+
+```plum
+let O: Option[String] = None
+let main (): Unit = println(match O { Some(v) => v, None => "absent" })
+```
+
+`infer_ident`'s global arm inferred `def.body` and returned that as the
+type -- the comment above it said so plainly, "its BODY is still
+inferred, that is where its type comes from" -- and never consulted
+`def.ret_ty`. For a body that determines its own type that is correct
+and cheap. For `None`, or `Map.new(())`, or `[]`, it is not: the type
+parameter is free, and the backend defaults a free variable to a
+scalar. The payload then loads as an `i1` beside a `ptr`.
+
+A global is not generic, so there is nothing to instantiate: the
+annotation IS the type. Unifying rather than substituting keeps the
+body's own inference consistent with it.
+
+The narrowing is the part worth keeping. The first repro was a
+`Ref[Map[String, String]]` global read through a `match`, which
+suggested `Ref`, or `Map`, or the interaction. Building the nearest
+PASSING neighbours -- a local instead of a global, `Map.len` instead of
+`Map.get`, `Array` instead of `Map` -- took it to four lines with
+neither `Ref` nor `Map` in them, and at that size the cause was one
+function.
 
 **`plum check` does not check globals at all**, incidentally:
 `check_all_fns` skips every zero-parameter `let`, so the new mismatch
