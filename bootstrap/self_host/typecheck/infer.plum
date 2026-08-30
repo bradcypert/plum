@@ -439,8 +439,43 @@ let typed_globals_acc (p20: Program2) (globals: Array[GlobalDef]) (i: Int) (acc:
     else {
         let p2 = Program2 { sigs: p20.sigs, globals: p20.globals, ctx: p20.ctx, current: globals[i].module, generics: [] };
         let r = infer_expr(p2, fresh_state_new(()), tyenv_empty(()), subst_empty(()), globals[i].def.body);
+        // The declared type, unified with what the initializer inferred.
+        //
+        // This was missing entirely: a global's annotation was parsed
+        // and then ignored, so it neither CHECKED the initializer nor
+        // CONSTRAINED it. The second half is the one that bit. A
+        // generic initializer -- `Map.new(())`, `ref([])` -- still has
+        // free type variables when its instantiation is recorded for
+        // the backend, and free variables get DEFAULTED to a scalar. So
+        // `let M: Map[String, String] = Map.new(())` produced a map
+        // monomorphized for something else, and reading a `String` back
+        // out emitted `store ptr %t, ptr %p` with an `i1` in hand.
+        //
+        // The compiler worked around this twice in its own source
+        // before it was understood -- see `NODES` in this file, a
+        // global whose element type is pinned by a helper function's
+        // declared return type because its own annotation could not do
+        // it.
+        //
+        // Unifying here fixes both halves at once, and the substitution
+        // that comes out is what the body's recorded instantiations are
+        // resolved through.
+        let s2 = match globals[i].def.ret_ty {
+            None => r.subst,
+            Some(t) => {
+                let declared = resolve_ann(p2.ctx, [], t);
+                match unify(subst_apply(r.subst, r.ty), declared) {
+                    Ok(s) => subst_compose(s, r.subst),
+                    Err(e) => {
+                        fail_tc("global ".concat(globals[i].def.name).concat(": declared type ").concat(render_ty(declared))
+                            .concat(" doesn't match its value's type ").concat(render_ty(subst_apply(r.subst, r.ty))).concat(" (").concat(e).concat(")"));
+                        r.subst
+                    },
+                }
+            },
+        };
         typed_globals_acc(p20, globals, i + 1,
-            acc.push(TFn { name: globals[i].def.name, module: globals[i].module, generics: [], params: [], ret: subst_apply(r.subst, r.ty), body: r.texpr, subst: r.subst }))
+            acc.push(TFn { name: globals[i].def.name, module: globals[i].module, generics: [], params: [], ret: subst_apply(s2, r.ty), body: r.texpr, subst: s2 }))
     }
 
 let typed_fns_acc (p2: Program2) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[TFn]): Array[TFn] =

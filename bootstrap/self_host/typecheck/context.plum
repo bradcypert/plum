@@ -391,6 +391,12 @@ let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (n
     else if name == "Task" { ITStruct("Task", args) }
     else if name == "Sender" { ITStruct("Sender", args) }
     else if name == "Receiver" { ITStruct("Receiver", args) }
+    // `Ref[T]` is a TYPE you can write, not only one inference can
+    // produce. `ITRef` has always existed and `ref(v)` has always made
+    // one; there was simply no way to NAME it, so `let r: Ref[Int] =
+    // ref(1)` failed with "unknown type: Ref" while the identical line
+    // without the annotation compiled.
+    else if name == "Ref" && args.len() == 1 { ITRef(args[0]) }
     else if Array.contains(in_scope, name) { ITParam(name) }
     // Resolved through the VIEWER's own module first, so a name means
     // what it means where it was written.

@@ -117,6 +117,10 @@ pub let capabilities (): JsonValue =
             JsonEntry { key: "textDocumentSync", value: JsonNumber(1.0) },
             JsonEntry { key: "hoverProvider", value: JsonBool(true) },
             JsonEntry { key: "definitionProvider", value: JsonBool(true) },
+            // `plum fmt`, over LSP. The formatter is a pure
+            // `String -> String`, so the whole of this capability is
+            // one whole-file `TextEdit` -- see `format_result`.
+            JsonEntry { key: "documentFormattingProvider", value: JsonBool(true) },
             // No `triggerCharacters`: this server offers NAMES, so
             // completion is invoked the ordinary way -- as an
             // identifier is typed, or explicitly. A trigger character
@@ -460,12 +464,50 @@ pub let path_to_uri (path: String): String =
 // document in the last content change, which is why full sync is what
 // this server asks for: an incremental range would have to be applied
 // to a buffer this server does not keep.
+// One `TextEdit` replacing the entire document.
+//
+// A minimal diff would be less text on the wire and is not worth it:
+// the edits an editor applies have to be computed against the exact
+// text the server formatted, and a whole-file replacement is the one
+// shape that cannot be wrong about a range. Editors preserve the
+// cursor across it.
+//
+// The end position is `(lines, 0)` -- one past the last line, column
+// zero -- which is how LSP spells "to the end" for a document that
+// ends in a newline. Overshooting the line count is legal and clients
+// clamp, but being exact means a client that does not clamp is not
+// relying on charity.
+pub let format_result (formatted: String) (lines: Int): JsonValue =
+    JsonArray([
+        JsonObject([
+            JsonEntry { key: "range", value: JsonObject([
+                JsonEntry { key: "start", value: position_json(0, 0) },
+                JsonEntry { key: "end", value: position_json(lines, 0) },
+            ]) },
+            JsonEntry { key: "newText", value: JsonString(formatted) },
+        ]),
+    ])
+
+let position_json (line: Int) (col: Int): JsonValue =
+    JsonObject([
+        JsonEntry { key: "line", value: JsonNumber(line.to_float()) },
+        JsonEntry { key: "character", value: JsonNumber(col.to_float()) },
+    ])
+
 pub let change_text (params: JsonValue): Option[String] =
     match json_field(params, "contentChanges") {
         Some(JsonArray(changes)) =>
             if Array.is_empty(changes) { None }
             else { Some(json_field_str(changes[changes.len() - 1], "text")) },
         _ => None,
+    }
+
+// The full text a `didOpen` carries. `didChange` has its own shape --
+// an array of content changes -- which is why the two are separate.
+pub let open_text (params: JsonValue): Option[String] =
+    match json_field(params, "textDocument") {
+        Some(doc) => match json_field(doc, "text") { Some(JsonString(t)) => Some(t), _ => None },
+        None => None,
     }
 
 pub let document_uri (params: JsonValue): String =

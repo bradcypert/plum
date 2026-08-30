@@ -16188,3 +16188,104 @@ whitespace.
 it on the first file it was pointed at, before any of this was believed
 to work. That is the whole argument for building the checker before the
 formatter.
+
+## Formatting over LSP, and a global's type not reaching its initializer (2026-08-30)
+
+`plum fmt` existed but nobody was going to run it. A formatter gets used
+when the editor runs it on save, so the LSP grew
+`documentFormattingProvider` and a `textDocument/formatting` handler.
+
+The work was small because `fmt.format` is a pure `String -> String`.
+What was not small was deciding WHICH string.
+
+### The buffer is the point
+
+This server deliberately keeps no buffer for diagnostics: full sync
+means every `didChange` carries the whole file, so a check runs against
+what arrived and nothing needs remembering.
+
+Formatting cannot work that way. An editor asks to format the buffer it
+is SHOWING, which for format-on-save is dirty -- the file on disk is one
+edit behind, or several. Formatting the disk copy and answering with a
+whole-file replacement would revert whatever had just been typed. That
+is not a stale answer, it is data loss, and it would look like the
+formatter eating your work.
+
+So the last text seen for a document is kept, and formatting uses it.
+One document, not a map of them: an editor formats what it is showing.
+
+The `lsp-smoke` case is built so it cannot pass by accident. The file on
+disk starts already formatted and the buffer sent is not, so an answer
+computed from disk contains no edits at all. Checked both ways: dirty
+buffer gives one edit, no buffer gives zero.
+
+The `--write` guarantee is repeated here for the same reason it exists
+there. A whole-file replacement is exactly the shape that can silently
+rewrite a program, so the handler re-lexes its own output and compares
+the token stream before answering; if a rule ever changed the tokens it
+returns no edits rather than a rewrite.
+
+### A global's type does not reach its initializer
+
+The buffer started as `Ref[Map[String, String]]` and produced invalid
+LLVM -- `store ptr %t29, ptr %t17` where `%t29` is an `i1`. Five lines
+reproduce it:
+
+```plum
+let B: Ref[Map[String, String]] = ref(Map.new(()))
+let main (): Unit = {
+    B.set(Map.insert(B.get(), "a", "one"));
+    println(match Map.get(B.get(), "a") { Some(v) => v, None => "MISSING" })
+}
+```
+
+The same code with a LOCAL instead of a global is fine.
+
+The cause is the infer-then-unify order this checker has everywhere: a
+`let x: T = e` infers `e` first and unifies with `T` afterwards, and no
+expected type flows down. For an ordinary local that is harmless,
+because the unification still constrains the result. For a GLOBAL whose
+initializer is generic it is not: `Map.new(())` has its type variables
+free at the moment the instantiation is recorded for the backend, they
+are DEFAULTED to a scalar, and the monomorphized `Map` the global gets
+is not the one its annotation asked for. Reading a `String` value back
+out then loads an `i1`.
+
+It is loud rather than silent -- LLVM refuses the module -- which is the
+only comfortable thing about it.
+
+### Two things fixed, one still open
+
+Chasing it turned up that it is not one bug but several, and that it is
+reachable without `Ref` at all. A plain module-level lookup table does
+it:
+
+```plum
+let M: Map[String, String] = Map.new(())
+```
+
+**`Ref` was not a nameable type.** `ITRef` has always existed and
+`ref(v)` has always made one, but `resolve_named` had no arm for it, so
+`let r: Ref[Int] = ref(1)` failed with `unknown type: Ref` while the
+same line without the annotation compiled. One arm, fixed.
+
+**A global's declared type was parsed and then ignored.**
+`typed_globals_acc` inferred the initializer and never looked at
+`def.ret_ty`, so the annotation neither checked the value nor
+constrained it -- `let M: Int = "hello"` was accepted in full. It is now
+unified, which reports the mismatch and threads the resulting
+substitution into the `TFn` the backend reads.
+
+That fixed the checking half. **It did not fix the defaulting.** The
+unification demonstrably runs -- a wrong annotation is now an error --
+and `g.subst` is threaded correctly into both `cg_global_roots` and the
+emit path, so the substitution is available everywhere it should be.
+Something between those two facts still loses the binding: the most
+likely candidate is the `Option[V]` scrutinee of a `match` on
+`Map.get`, whose payload type is read through `ctx_variant_payload` and
+would default to `Bool` -- which is `i1`, the type in the error -- if
+its argument were still free at that point. Not yet confirmed.
+
+**`plum check` does not check globals at all**, incidentally:
+`check_all_fns` skips every zero-parameter `let`, so the new mismatch
+error only appears on `build`. That is its own gap and its own fix.

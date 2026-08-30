@@ -41,6 +41,11 @@ native_path() {
 }
 
 work=$(native_path "$(mktemp -d)")
+# A project for the FORMATTING half. It starts already formatted on
+# disk, so an answer computed from the file would contain no edits --
+# only an answer computed from the unsaved buffer can produce any.
+mkdir -p "$work/fmt"
+printf 'let g (): Int = {\n    let q = [1, 2];\n    q[0]\n}\n' > "$work/fmt/main.plum"
 printf 'struct P { x: Int }\n\nlet f (p: P): Int = p.nope\n' > "$work/main.plum"
 # A second, well-typed project: hover on a LOCAL needs the project to
 # check cleanly, which the one above deliberately does not.
@@ -71,12 +76,13 @@ printf 'let helper (): String = "ok"\nlet oops (): Int = "wrong"\n' > "$multi/ot
 compl=$(native_path "$(mktemp -d)")
 printf 'enum Shape { Circle(Int), Square(Int) }\nlet area (s: Shape): Int = match s { Circle(r) => r, Square(w) => w }\nstruct Vec { x: Int, y: Int }\nlet sum (v: Vec): Int = v.x + v.y\n' > "$compl/main.plum"
 
-"$PY_BIN" - "$work" "$live" "$multi" "$compl" > "$work/session.bin" <<'PY'
+"$PY_BIN" - "$work" "$live" "$multi" "$compl" "$work/fmt" > "$work/session.bin" <<'PY'
 import json, sys
 d = sys.argv[1]
 live = sys.argv[2]
 multi = sys.argv[3]
 compl = sys.argv[4]
+fmtd = sys.argv[5]
 msgs = [
   {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
   # --- completion. The position is ignored: this server offers NAMES,
@@ -118,6 +124,17 @@ msgs = [
   # editing one file while the error is in ANOTHER
   {"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file://%s/main.plum" % multi},
     "contentChanges":[{"text":'let main (): Unit = println(helper())\n'}]}},
+  # --- formatting, on an UNSAVED buffer ---
+  #
+  # The buffer sent here is misindented; the file on disk is not. So an
+  # answer computed from disk would return no edits, and one computed
+  # from the buffer returns the reindented text. That is the whole
+  # hazard: an editor asks to format what it is showing, and formatting
+  # stale text would hand back a whole-file replacement that reverts
+  # whatever was just typed.
+  {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % fmtd,
+    "text":'let g (): Int = {\n      let q = [1,2];\n  q[0]\n}\n'}}},
+  {"jsonrpc":"2.0","id":10,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file://%s/main.plum" % fmtd},"options":{"tabSize":4,"insertSpaces":True}}},
   {"jsonrpc":"2.0","id":2,"method":"shutdown"},
   {"jsonrpc":"2.0","method":"exit"},
 ]
@@ -130,6 +147,11 @@ out=$(SH_MEM=4G SH_TIMEOUT=60 "$plum" lsp < "$work/session.bin" 2>&1)
 fail=0
 echo "$out" | grep -q '"textDocumentSync":1' || { echo "FAIL: no capabilities"; fail=1; }
 echo "$out" | grep -q '"completionProvider"' || { echo "FAIL: completion not advertised"; fail=1; }
+echo "$out" | grep -q '"documentFormattingProvider":true' || { echo "FAIL: formatting not advertised"; fail=1; }
+# The edit must carry the REINDENTED buffer. Checking for the formatted
+# line proves both that the buffer was used (disk was already clean, so
+# there would be nothing to send) and that `fmt` ran over it.
+echo "$out" | grep -q 'let q = \[1, 2\];' || { echo "FAIL: formatting did not reindent the unsaved buffer"; fail=1; }
 # All three sources, because each comes from a different place and any
 # one of them can break alone: the project's own items, the prelude's
 # public surface, and a checker builtin that no source file declares.
