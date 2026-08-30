@@ -196,7 +196,11 @@ pub struct FnSig { pub name: String, pub module: String, pub generics: Array[Str
 // already threaded through every inference call; this rides along.
 pub struct Program2 { pub sigs: Array[FnSig], pub globals: Array[GlobalDef], pub ctx: TyContext, pub current: String, pub generics: Array[String] }
 
-pub struct GlobalDef { pub module: String, pub def: parser.LetDefNode }
+// `is_pub` is carried because a global can be reached from another
+// module now, and something has to be able to refuse. It was not
+// carried before because nothing could reach one -- `pub` on a global
+// was a keyword with no effect.
+pub struct GlobalDef { pub module: String, pub def: parser.LetDefNode, pub is_pub: Bool }
 
 pub let build_sigs (ctx: TyContext) (program: parser.ProgramNode): Program2 = collect_sigs_acc(ctx, program.items, 0, [], [])
 
@@ -218,7 +222,7 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
     else {
         match items[i].kind {
             IKLet(def) => {
-                if Array.is_empty(def.params) { collect_sigs_acc(ctx, items, i + 1, sigs, globals.push(GlobalDef { module: items[i].module, def: def })) }
+                if Array.is_empty(def.params) { collect_sigs_acc(ctx, items, i + 1, sigs, globals.push(GlobalDef { module: items[i].module, def: def, is_pub: items[i].is_pub })) }
                 else {
                     let generic_names = Array.map(def.generics, |g| g.name);
                     let params = Array.map(def.params, |p| resolve_param_ty(ctx, items[i].module, generic_names, p));
@@ -694,10 +698,13 @@ let global_module_of (p2: Program2) (name: String): String =
 struct GlobalTy { ty: ITy, subst: Subst }
 
 let global_ref_ty (p2: Program2) (name: String) (def: parser.LetDefNode) (r: InferResult): GlobalTy =
+    global_ref_ty_in(p2, global_module_of(p2, name), def, r)
+
+let global_ref_ty_in (p2: Program2) (module_name: String) (def: parser.LetDefNode) (r: InferResult): GlobalTy =
     match def.ret_ty {
         None => GlobalTy { ty: r.ty, subst: r.subst },
         Some(t) => {
-            let declared = resolve_ann_seen(p2.ctx, global_module_of(p2, name), [], t);
+            let declared = resolve_ann_seen(p2.ctx, module_name, [], t);
             match unify(subst_apply(r.subst, r.ty), declared) {
                 Ok(s) => GlobalTy { ty: declared, subst: subst_compose(s, r.subst) },
                 // Already reported against the DEFINITION by
@@ -996,9 +1003,16 @@ let infer_field (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (ba
     // legal, and `Thing.field` on one must stay a field read.
     match qualified_fn_ref(p2, env, base, name) {
         Some(sig) => infer_partial_call(p2, state, env, acc, sig, []),
-        None => match qualified_variant(p2, env, base, name) {
-            Some(v) => infer_variant_ref_v(p2, state, acc, name, v),
-            None => infer_field_read(p2, state, env, acc, base, name),
+        None => match qualified_global(p2, env, base, name) {
+            Some(g) => {
+                let r = infer_expr(p2, state, tyenv_empty(()), acc, g.def.body);
+                let t = global_ref_ty_in(p2, g.module, g.def, r);
+                ir_leaf(t.ty, t.subst, r.state, TGlobalRef(g.module, name))
+            },
+            None => match qualified_variant(p2, env, base, name) {
+                Some(v) => infer_variant_ref_v(p2, state, acc, name, v),
+                None => infer_field_read(p2, state, env, acc, base, name),
+            },
         },
     }
 
@@ -1031,6 +1045,37 @@ let qualified_variant (p2: Program2) (env: TyEnv) (base: parser.PExpr) (tag: Str
                 Some(info) => find_variant_in(p2.ctx, info.name, tag),
             } },
     }
+
+// `inner.COUNT` -- a global reached through its module.
+//
+// Only the QUALIFIED form resolves, exactly as for a function: an
+// unqualified `COUNT` written in another module stays unbound, because
+// a module's names do not leak into whoever imported it.
+//
+// This did not resolve at all until now. A `pub` global was unreachable
+// by every spelling, so `pub` on one meant nothing, which is the sort
+// of gap that survives because nobody writes the program that would
+// notice.
+let qualified_global (p2: Program2) (env: TyEnv) (base: parser.PExpr) (name: String): Option[GlobalDef] =
+    match base {
+        EIdent(ns, _) =>
+            if Option.is_some(tyenv_lookup(env, ns)) { None }
+            else { match find_global_in_module(p2.globals, ns, name, 0) {
+                None => None,
+                Some(g) => {
+                    if !g.is_pub && ns != p2.current {
+                        fail_tc("global ".concat(ns).concat(".").concat(name).concat(" is private to module ").concat(ns))
+                    } else { () };
+                    Some(g)
+                },
+            } },
+        _ => None,
+    }
+
+let find_global_in_module (globals: Array[GlobalDef]) (module_name: String) (name: String) (i: Int): Option[GlobalDef] =
+    if i >= globals.len() { None }
+    else if globals[i].def.name == name && globals[i].module == module_name { Some(globals[i]) }
+    else { find_global_in_module(globals, module_name, name, i + 1) }
 
 // The signature `Ns.name` names, when `base` is a bare capitalized
 // identifier that is not a local.

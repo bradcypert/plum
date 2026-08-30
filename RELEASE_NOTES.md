@@ -1,81 +1,89 @@
 Plum is a small, statically typed, compiled language.
 
-This release adds a formatter.
+Format-on-save, and four fixes — one of which was producing wrong code.
 
-## `plum fmt`
+## Formatting in your editor
 
-```sh
-plum fmt --check src/     # list what needs formatting, non-zero exit
-plum fmt --write src/     # format in place
-plum fmt one.plum         # to stdout
-```
+`plum lsp` now advertises `documentFormattingProvider`, so any editor
+that speaks LSP can format a Plum file, including on save. The rules are
+the ones `plum fmt` already had.
 
-A file or a directory; a directory is walked for every `.plum` file
-under it. `--check` is the CI shape and `--write` is the everyday one.
+It formats the buffer you are looking at, not the file on disk. That
+distinction is the whole of the work: an editor asks to format what it
+is showing, which when you save is a document the file system has not
+seen yet. Formatting the saved copy and replacing the whole file with
+the result would revert whatever you had just typed.
 
-### What it decides
-
-Five things, and nothing else:
-
-- the line a statement, item or match arm begins on is indented four
-  spaces per enclosing block;
-- a closing brace sits one level out from what it closes;
-- a run of comment lines is indented with the code it documents;
-- a run of blank lines collapses to one;
-- a comma has no space before it and exactly one space after.
-
-Every other character in the file is passed through untouched.
-
-### Where the rules came from
-
-They were measured, not chosen. Across the 243 `.plum` files in the
-compiler's own repository, indentation was already a multiple of four
-everywhere, with no tabs and no trailing whitespace; there were 1,586
-runs of a single blank line against two runs of a double; and of 20,585
-commas the only one not already followed by a space was inside an array
-literal. The formatter encodes what the code already did.
-
-The test of that is that `plum fmt` leaves all 243 of those files
-byte-identical.
-
-### What it will not do
-
-It does not move a line belonging to a construct with no braces of its
-own — the `=` continuation of a long `let`, a `|>` chain broken across
-lines, the arguments of a multi-line call. Those are alignment choices
-inside an expression, and the compiler does not yet record where an
-expression begins, so a formatter guessing at them would be moving code
-whose shape it cannot see. It leaves them exactly as written.
-
-It also does not reflow: nothing is joined onto one line or split
-across two. Line breaks are yours.
-
-### It will not corrupt a file
-
-Before writing anything, `--write` re-lexes its own output and compares
-the token sequence against the original's. Whitespace and comments are
-exactly what lies between tokens, so two files whose tokens agree in
-order differ only in formatting. If a rule ever changed the tokens,
-`fmt` refuses to write and exits non-zero.
-
-Writes go to a temporary file beside the original and are renamed into
-place, which is atomic: the path is either the old file or the new one,
-never half of each.
-
-## `Os.rename_file`
+## `Ref[T]` can be written down
 
 ```plum
-Os.rename_file(from, to)   // Result[Unit, String]
+let r: Ref[Int] = ref(1)
 ```
 
-Atomic within a filesystem, and an error rather than a silent copy
-across two. Added for the formatter's own writes, and useful anywhere
-a file has to be replaced without a window where it is incomplete.
+`ref(v)` has always produced a `Ref`, and the type has always existed
+inside the compiler — but it could not be NAMED. Annotating one failed
+with `unknown type: Ref` while the identical line without the annotation
+compiled.
+
+## A global's declared type is used
+
+```plum
+let NOTHING: Option[String] = None
+```
+
+This produced **wrong code**. A reference to a global re-inferred the
+global's body at every mention and took the type from that, ignoring the
+annotation. For a value that determines its own type — `let N: Int = 3`
+— that is fine. For `None`, or `Map.new(())`, or `[]`, it is not: the
+type parameter stays unknown, and the compiler fell back to a default.
+Reading a `String` out of that `Option` loaded a boolean-shaped slot, and
+the build failed with an LLVM error naming a register number.
+
+Locals were always fine, which is what made it puzzling: the same two
+lines inside a function worked.
+
+Annotated globals of `Option`, `Map`, `Array` and `Ref` types are all
+covered by a new fixture.
+
+## `plum check` checks globals
+
+`check` skipped every top-level `let` with no parameters, so
+
+```plum
+let M: Int = "hello"
+```
+
+passed `plum check` and failed `plum build`. A checker that misses what
+the compiler rejects is worse than no checker, because it is the one
+people run in an editor.
+
+## A `pub` global can be reached from another module
+
+```plum
+// inner/table.plum          // main.plum
+pub let LIMIT: Int = 3       use inner;
+                             println(inner.LIMIT.to_string())
+```
+
+This did not work by any spelling. `inner.LIMIT` reported `unbound
+variable: inner`, and a bare `LIMIT` reported `unbound variant/function`
+— so a `pub` global was visible to its own module and to nobody else,
+and `pub` on one meant nothing at all.
+
+A global without `pub` is now private to its module, like a function or
+a type, and says so.
+
+An unqualified `LIMIT` from another module is still unbound, on purpose:
+that is how functions already behave, and a module's names should not
+leak into whoever imported it.
 
 ## Upgrading
 
-Nothing breaks. `plum fmt` is new, `Os.rename_file` is new, and no
-existing behaviour changed.
+Nothing that worked before stops working.
 
-If you adopt the formatter on an existing codebase, `plum fmt --check`
-first: it tells you what would move without touching anything.
+The `pub` rule for globals cannot break existing code, because reaching
+a global across a module boundary did not compile at all until now.
+
+One thing that used to be accepted is now rejected: a global whose
+declared type does not match its value, like `let M: Int = "hello"`.
+That was never doing what it said.

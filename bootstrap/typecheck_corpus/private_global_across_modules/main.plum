@@ -1,0 +1,6 @@
+// Rejected: a global without `pub` is private to its module, the same
+// as a function or a type. Nothing enforced this before, because
+// nothing could reach a global across a module boundary at all.
+use inner;
+
+let main (): Unit = println(inner.SECRET.to_string())

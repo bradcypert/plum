@@ -312,6 +312,11 @@ cannot leave a half-written source file.
 
 ## Editor support
 
+Formatting is served over LSP as well as on the command line, so an
+editor can format on save. It formats the buffer being edited, not the
+file on disk -- see the Formatting section above for what the formatter
+will and will not do.
+
 `plum lsp` serves an LSP out of the `plum` binary itself (the same
 shape `gopls` takes for Go), speaking LSP over stdio. It is in every
 published binary, on Linux, macOS and Windows.

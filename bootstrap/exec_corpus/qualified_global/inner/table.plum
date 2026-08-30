@@ -1,0 +1,4 @@
+pub let LIMIT: Int = 3
+pub let EMPTY: Option[String] = None
+let SECRET: Int = 99
+pub let secret_plus (n: Int): Int = SECRET + n

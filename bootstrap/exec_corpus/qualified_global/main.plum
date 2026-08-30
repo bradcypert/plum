@@ -1,0 +1,19 @@
+// A global reached through its module.
+//
+// This did not resolve at all until 2026-08-30: `inner.LIMIT` reported
+// `unbound variable: inner`, and an unqualified `LIMIT` reported
+// `unbound variant/function`. So a `pub` global was unreachable by
+// every spelling, and `pub` on one meant nothing. A module's own code
+// could see it and nobody else could.
+//
+// The unqualified form is still unbound on purpose -- that is how
+// functions behave too, and a module's names do not leak into whoever
+// imported it.
+use inner;
+
+let main (): Unit = {
+    println(inner.LIMIT.to_string());
+    println(match inner.EMPTY { Some(v) => v, None => "empty" });
+    // The module's own private global, used from inside the module.
+    println(inner.secret_plus(1).to_string())
+}
