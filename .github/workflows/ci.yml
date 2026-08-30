@@ -101,6 +101,23 @@ jobs:
       - name: allocations have not risen
         run: ./bootstrap/alloc-check
 
+      # Two properties about SOURCE rather than about behaviour, and
+      # neither was gated here until 2026-08-30 -- so a formatting drift
+      # or a broken token span could land on main while every local run
+      # stayed green.
+      #
+      # `lossless-check` is the floor the formatter stands on: every
+      # `.plum` file round-trips through the token stream byte for byte,
+      # and nothing but whitespace and comments sits between tokens.
+      # `fmt-check` is the formatter itself -- every file already
+      # formatted, `fmt` changing only what it claims to, and the
+      # `fmt_corpus` fixtures reformatted as recorded.
+      - name: the token stream loses nothing
+        run: ./bootstrap/lossless-check
+
+      - name: everything is already formatted
+        run: ./bootstrap/fmt-check
+
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke
 

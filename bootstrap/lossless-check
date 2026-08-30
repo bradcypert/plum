@@ -30,12 +30,17 @@
 # understand. Every `.plum` file in the repo is a test case, which is
 # several hundred real files rather than a handful of contrived ones.
 #
-# Usage:  bootstrap/lossless-check [path-to-plum-binary]   (default: ./sh)
+# Usage:  bootstrap/lossless-check [path-to-plum-binary]  (default: ./sh.real)
+#
+# `./sh.real` rather than the `./sh` wrapper, matching `fmt-check`. The
+# wrapper exists to cap memory on a runaway compile; this relexes a file
+# and prints it, and paying the wrapper's per-invocation cost 486 times
+# took the harness from 1.5 seconds to 8.2.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
-plum="${1:-./sh}"
+plum="${1:-./sh.real}"
 
 work="$(mktemp -d 2>/dev/null || mktemp -d -t plum-lossless)"
 trap 'rm -rf "$work"' EXIT
