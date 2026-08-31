@@ -16785,3 +16785,56 @@ the guess about where the rot was concentrated was wrong.
 A name is only checked when its namespace is one the compiler knows,
 which is what stops `Point.add` in a worked example from being read as
 a standard-library claim.
+
+## A builtin method claiming a name it does not own (2026-08-31)
+
+`T.f(x)` is the method-call mechanism -- `xs.map(f)` works because
+`Array.map` exists, and DESIGN says so. It did not hold:
+
+    m.len()        error: .len(): Map[String, Int] != Array[T0]
+    s.len()        error: .len(): Set[Int] != Array[T0]
+    a.concat(b)    error: .concat() receiver: Array[Int] != String
+    m.remove(k)    error: .remove() requires an Array
+
+`Map.len`, `Set.len`, `Array.concat` and `Map.remove` all exist and all
+work written the long way. Only the dot form failed, and the error named
+a type the author had not mentioned.
+
+### It was a known bug, fixed once
+
+A builtin method is matched by NAME before the receiver's type is
+known -- it has to be, since each needs its own unification. So an arm
+that matches `len` and then demands an Array denies the name to every
+other type. The comment above the `contains` arm has said this since
+`contains` was fixed for it:
+
+> `contains` is the case that forced this: it is a string primitive AND
+> `Array.contains` exists, so `xs.contains(2)` used to report
+> "Array[Int] != String" -- the built-in arm claiming a method name for
+> one type and denying it to every other.
+
+The fix -- fall through to the namespaced rule when the receiver does
+not unify -- was applied to `contains` and the String primitives, and
+not to `len`, `concat` or `remove`. A fix applied to the instance that
+prompted it rather than to the class, which is the same shape as the
+LSP subprocess bug three entries above: the reason given was general and
+the change was not.
+
+`remove`'s own comment argued it was safe -- "arity is what separates it
+from `Map.remove`/`Set.remove`". All three take one argument. The
+comment was wrong and the code did what the comment said.
+
+### What stops it recurring
+
+The names at risk are derivable rather than remembered: a builtin method
+that shares its name with a declared `Ns.name`. `plum complete` lists
+every declared name, so `bootstrap/check-builtins` computes that set and
+requires each of them to appear as a DOT CALL in
+`exec_corpus/dot_methods` -- which runs, so the check is that the answer
+is right and not merely that it compiles.
+
+There are six such names today (`concat`, `contains`, `get`, `len`,
+`map`, `remove`) and a new builtin that shadows a seventh cannot ship
+untested. Both halves of the harness were verified by breaking them:
+deleting `Array.map` from the table, and removing every `.concat(` from
+the fixture.

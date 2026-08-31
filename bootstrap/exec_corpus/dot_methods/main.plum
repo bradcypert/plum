@@ -1,0 +1,50 @@
+// `T.f(x)` is the method-call mechanism, so `m.len()` has to mean
+// `Map.len(m)` for the same reason `xs.map(f)` means `Array.map(xs, f)`.
+//
+// It did not. A builtin method is matched by NAME before the receiver
+// is known, so `len` -- an Array primitive -- claimed the name and
+// denied it to every other type: `m.len()` on a Map reported
+// "Map[String, Int] != Array[T0]", naming a type the author never
+// mentioned. `.concat()` did it to arrays and `.remove()` to maps and
+// sets.
+//
+// `contains` had exactly this bug and was fixed for it; the fix was
+// never applied to the other three. Each line below is one that used to
+// be a type error.
+let double (n: Int): Int = n * 2
+let upper (s: String): String = s.to_upper()
+
+let main (): Unit = {
+    let m = Map.insert(Map.new(()), "a", 1);
+    let s = Set.insert(Set.new(()), 7);
+
+    // Was: ".len(): Map[String, Int] != Array[T0]"
+    println(m.len().to_string());
+    println(s.len().to_string());
+
+    // Was: ".concat() receiver: Array[Int] != String"
+    println(Array.join(["a", "b"].concat(["c"]), ","));
+
+    // Was: ".remove() requires an Array"
+    println(Map.len(m.remove("a")).to_string());
+    println(Set.len(s.remove(7)).to_string());
+
+    // The other names a builtin shares with a declared function.
+    // `contains` was the one this bug was FOUND on and fixed for;
+    // `get` and `map` are separated by arity and by namespace and were
+    // never broken. They are here so that the fixture covers every
+    // shared name rather than only the three that failed.
+    println(if m.contains("a") { "map-has" } else { "map-hasnt" });
+    println(if s.contains(7) { "set-has" } else { "set-hasnt" });
+    println(if "abc".contains("b") { "str-has" } else { "str-hasnt" });
+    println(if [1, 2].contains(2) { "arr-has" } else { "arr-hasnt" });
+    println(match m.get("a") { Some(v) => v.to_string(), None => "none" });
+    println(match Option.map(Some(2), double) { Some(v) => v.to_string(), None => "none" });
+    println(Array.join(Array.map(["p"], upper), ","));
+
+    // And the forms that already worked still do.
+    println("ab".concat("c"));
+    println([1, 2, 3].len().to_string());
+    println(Array.join(["x", "y"].remove(0), ","));
+    println("hello".len().to_string())
+}

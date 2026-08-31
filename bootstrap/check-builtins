@@ -44,4 +44,44 @@ if [ -n "$missing" ]; then
     exit 1
 fi
 
-printf 'check-builtins: %d builtin methods, every one offered by completion\n' "$(printf '%s\n' "$chain" | wc -l | tr -d ' ')"
+# --- and every SHARED name is exercised as a dot call ---
+#
+# A builtin arm matches on NAME before the receiver is known, so a name
+# that another type also declares must hand back what it does not own.
+# `contains` was fixed for that; `len`, `concat` and `remove` were not,
+# and `m.len()` on a Map reported "Map[String, Int] != Array[T0]" until
+# 2026-08-31.
+#
+# The names at risk are exactly those a builtin shares with a declared
+# function, and they are derivable: `plum complete` lists every declared
+# `Ns.name`. Each one has to appear as a dot call in the fixture, so a
+# new builtin that shadows something cannot ship untested.
+plum="${1:-./sh}"
+fixture=bootstrap/exec_corpus/dot_methods/main.plum
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+printf 'use Os;\nuse Time;\nuse Net;\nuse Http;\nlet main (): Unit = println("x")\n' > "$work/main.plum"
+
+if "$plum" complete "$work" > "$work/names.json" 2>/dev/null; then
+    # Distinct `Ns.name` pairs FIRST -- completion lists a builtin and a
+    # prelude declaration of the same name separately, and counting those
+    # as two namespaces would flag every String primitive.
+    shared="$(grep -o '"name":"[A-Z][A-Za-z0-9_]*\.[a-z_][A-Za-z0-9_]*"' "$work/names.json" \
+        | sed 's/"name":"//;s/"$//' | sort -u \
+        | sed 's/^[A-Za-z0-9_]*\.//' | sort | uniq -d)"
+    untested=""
+    for m in $shared; do
+        printf '%s\n' "$chain" | grep -qx "$m" || continue
+        grep -q "\.$m(" "$fixture" || untested="$untested $m"
+    done
+    if [ -n "$untested" ]; then
+        echo "check-builtins: these builtin methods share a name with a declared function" >&2
+        echo "and are not exercised as a dot call in $fixture:" >&2
+        printf '  %s\n' $untested >&2
+        exit 1
+    fi
+else
+    echo "check-builtins: \`plum complete\` failed; skipping the shared-name half" >&2
+fi
+
+printf 'check-builtins: %d builtin methods, every one offered by completion and every shared name exercised\n' "$(printf '%s\n' "$chain" | wc -l | tr -d ' ')"

@@ -2016,12 +2016,22 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
     if method_name == "to_string" {
         let r = infer_expr(p2, state, env, acc, base);
         ir_leaf(ITStr, r.subst, r.state, TMethodCall("to_string", r.texpr, []))
-    } else if method_name == "concat" {
+    } else if method_name == "concat" && args.len() == 1 {
+        // String concatenation is a primitive; `Array.concat` is an
+        // ordinary declared function. A non-String receiver goes to the
+        // namespaced rule rather than failing here -- `a.concat(b)` on
+        // two arrays used to report "Array[Int] != String".
         let br = infer_expr(p2, state, env, acc, base);
-        let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".concat() receiver: ".concat(e)); br.subst } };
-        let ar = infer_expr(p2, br.state, env, s1, args[0]);
-        let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".concat() argument: ".concat(e)); ar.subst } };
-        ir_leaf(ITStr, s2, ar.state, TMethodCall("concat", br.texpr, [ar.texpr]))
+        let bt = subst_apply(br.subst, br.ty);
+        match unify(bt, ITStr) {
+            Err(_) => infer_namespaced_method(p2, br.state, env, br.subst, bt, base, "concat", args),
+            Ok(s0) => {
+                let s1 = subst_compose(s0, br.subst);
+                let ar = infer_expr(p2, br.state, env, s1, args[0]);
+                let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".concat() argument: ".concat(e)); ar.subst } };
+                ir_leaf(ITStr, s2, ar.state, TMethodCall("concat", br.texpr, [ar.texpr]))
+            },
+        }
     } else if (method_name == "ends_with" || method_name == "starts_with" || method_name == "contains") && args.len() == 1 {
         // Compiler PRIMITIVES lowered straight to IR nodes (`StrEndsWith`
         // and friends), not prelude functions — so they have no entry in
@@ -2127,23 +2137,28 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         let s1 = match unify(subst_apply(r.subst, r.ty), ITCStr) { Ok(x) => subst_compose(x, r.subst), Err(e) => { fail_tc(".as_string() requires a CStr: ".concat(e)); r.subst } };
         ir_leaf(ITStr, s1, r.state, TAsString(r.texpr))
     } else if method_name == "remove" && args.len() == 1 {
-        // `xs.remove(i)` -- a new array without element `i`. Arity is
-        // what separates it from `Map.remove`/`Set.remove`, which are
-        // ordinary declared functions reached through `find_sig` -- the
-        // same split `.set` already uses to tell `Array.set(i, v)` from
-        // `Ref.set(v)`.
+        // `xs.remove(i)` -- a new array without element `i`.
+        //
+        // This comment used to say arity separates it from
+        // `Map.remove`/`Set.remove`. It does not: all three take one
+        // argument, and `m.remove(k)` reported ".remove() requires an
+        // Array". The RECEIVER separates them, which means falling
+        // through when it is not an array.
         let br = infer_expr(p2, state, env, acc, base);
+        let bt = subst_apply(br.subst, br.ty);
         let ef = fresh(br.state);
-        let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [ef.ty])) {
-            Ok(s) => subst_compose(s, br.subst),
-            Err(e) => { fail_tc(".remove() requires an Array: ".concat(e)); br.subst },
-        };
-        let ir = infer_expr(p2, ef.state, env, s1, args[0]);
-        let s2 = match unify(subst_apply(ir.subst, ir.ty), ITInt) {
-            Ok(s) => subst_compose(s, ir.subst),
-            Err(e) => { fail_tc(".remove() index: ".concat(e)); ir.subst },
-        };
-        ir_leaf(subst_apply(s2, ITStruct("Array", [ef.ty])), s2, ir.state, TMethodCall("remove", br.texpr, [ir.texpr]))
+        match unify(bt, ITStruct("Array", [ef.ty])) {
+            Err(_) => infer_namespaced_method(p2, ef.state, env, br.subst, bt, base, "remove", args),
+            Ok(s0) => {
+                let s1 = subst_compose(s0, br.subst);
+                let ir = infer_expr(p2, ef.state, env, s1, args[0]);
+                let s2 = match unify(subst_apply(ir.subst, ir.ty), ITInt) {
+                    Ok(s) => subst_compose(s, ir.subst),
+                    Err(e) => { fail_tc(".remove() index: ".concat(e)); ir.subst },
+                };
+                ir_leaf(subst_apply(s2, ITStruct("Array", [ef.ty])), s2, ir.state, TMethodCall("remove", br.texpr, [ir.texpr]))
+            },
+        }
     } else if method_name == "push" && args.len() == 1 {
         infer_array_push(p2, state, env, acc, base, args[0])
     } else if method_name == "set" && args.len() == 2 {
@@ -2217,14 +2232,26 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
 // bias, chosen because it preserves every pre-existing array-`.len()`
 // inference exactly, and because a genuinely unresolved receiver at
 // this point can only come from an unannotated closure parameter.
+// `.len()` on a String or an Array is a compiler primitive. On anything
+// else it is an ordinary `Ns.len(x)` reached through `find_sig` --
+// `Map.len`, `Set.len`, or a user's own -- and this used to REFUSE it:
+// `m.len()` on a `Map` reported "Map[String, Int] != Array[T0]", an
+// error naming a type the author had not mentioned.
+//
+// That is the trap `contains` was fixed for, with the same fix: a
+// built-in arm matches on NAME before the receiver is known, so it must
+// hand back anything it turns out not to own instead of failing for it.
 let infer_len (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr): InferResult = {
     let br = infer_expr(p2, state, env, acc, base);
-    match subst_apply(br.subst, br.ty) {
+    let bt = subst_apply(br.subst, br.ty);
+    match bt {
         ITStr => ir_leaf(ITInt, br.subst, br.state, TMethodCall("len", br.texpr, [])),
         _ => {
             let elem_fresh = fresh(br.state);
-            let s1 = match unify(subst_apply(br.subst, br.ty), ITStruct("Array", [elem_fresh.ty])) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".len(): ".concat(e)); br.subst } };
-            ir_leaf(ITInt, s1, elem_fresh.state, TMethodCall("len", br.texpr, []))
+            match unify(bt, ITStruct("Array", [elem_fresh.ty])) {
+                Ok(s) => ir_leaf(ITInt, subst_compose(s, br.subst), elem_fresh.state, TMethodCall("len", br.texpr, [])),
+                Err(_) => infer_namespaced_method(p2, elem_fresh.state, env, br.subst, bt, base, "len", []),
+            }
         },
     }
 }
