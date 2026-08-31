@@ -220,11 +220,17 @@ pub let best_struct (ctx: TyContext) (viewer: String) (name: String): Option[Str
             Some(info) => Some(info),
             None => match find_struct_in(ctx.structs, parser.PRELUDE_MODULE(()), name, 0) {
                 Some(info) => Some(info),
-                // Last resort: any module at all, matched on the bare name.
-                // Reached when a name is not declared by the viewer, the
-                // root or the prelude -- a qualified `inner.P` written out
-                // in full lands here too.
-                None => find_struct_bare(ctx.structs, name, 0),
+                // A name already written with its module -- see
+                // `find_type_exact` below `best_enum` for why this sits
+                // fourth and not first.
+                None => match find_type_exact(struct_names(ctx.structs, 0, []), name, 0) {
+                    Some(i) => Some(ctx.structs[i]),
+                    // Last resort: any module at all, matched on the bare
+                    // name. Reached when a name is not declared by the
+                    // viewer, the root or the prelude, and is not a
+                    // qualified name either.
+                    None => find_struct_bare(ctx.structs, name, 0),
+                },
             },
         },
     }
@@ -249,10 +255,46 @@ pub let best_enum (ctx: TyContext) (viewer: String) (name: String): Option[EnumI
             Some(info) => Some(info),
             None => match find_enum_in(ctx.enums, parser.PRELUDE_MODULE(()), name, 0) {
                 Some(info) => Some(info),
-                None => find_enum_bare(ctx.enums, name, 0),
+                None => match find_type_exact(enum_names(ctx.enums, 0, []), name, 0) {
+                    Some(i) => Some(ctx.enums[i]),
+                    None => find_enum_bare(ctx.enums, name, 0),
+                },
             },
         },
     }
+
+let enum_names (enums: Array[EnumInfo]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= enums.len() { acc } else { enum_names(enums, i + 1, acc.push(enums[i].name)) }
+
+let struct_names (structs: Array[StructInfo]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= structs.len() { acc } else { struct_names(structs, i + 1, acc.push(structs[i].name)) }
+
+// A name that IS a declaration's full name, module and all: `a.Shade`
+// for the `Shade` declared in module `a`.
+//
+// The three lookups above all ask "what does this BARE name mean to
+// this viewer", qualifying it with a module before comparing. None of
+// them can match a name the author already qualified, so `a.Shade.Light`
+// did not resolve -- in an expression or in a pattern -- even though
+// `enum_path_name` had read `a.Shade` out of it correctly and the
+// ambiguity error told people to write exactly that. The advice named a
+// spelling the compiler rejected.
+//
+// It sits fourth on purpose, after the viewer, the root and the
+// prelude. Ahead of them it would change what an UNQUALIFIED name means:
+// a module `a` that declares `Shade` and a root that also declares one
+// both answer to the bare `Shade`, and the viewer's own must keep
+// winning. A fully qualified name reaches none of the first three, so
+// by the time it gets here nothing else wanted it.
+//
+// It sits ahead of the bare last-resort scan for the opposite reason:
+// `find_enum_bare` matches on the last segment and takes the first
+// module that has one, so it would answer `a.Shade` with `b.Shade` --
+// the very confusion the qualifier was written to settle.
+let find_type_exact (names: Array[String]) (name: String) (i: Int): Option[Int] =
+    if i >= names.len() { None }
+    else if names[i] == name { Some(i) }
+    else { find_type_exact(names, name, i + 1) }
 
 let find_enum_in (enums: Array[EnumInfo]) (module_name: String) (name: String) (i: Int): Option[EnumInfo] =
     if i >= enums.len() { None }
@@ -359,9 +401,8 @@ pub let resolve_ann (ctx: TyContext) (in_scope: Array[String]) (t: parser.Ty): I
     resolve_ann_seen(ctx, ANY_MODULE(), in_scope, t)
 
 // A type is private unless declared `pub`, exactly as a function is.
-// The identity of a type is still its bare name, so this cannot make
-// two same-named types coexist -- it can only refuse to resolve one
-// that the looking module has no business naming.
+// This only ever refuses to resolve a name the looking module has no
+// business naming; it never changes which type a name means.
 pub let check_type_visible (viewer: String) (owner: String) (is_pub: Bool) (kind: String) (name: String): Unit =
     if is_pub || viewer == ANY_MODULE() || viewer == owner { () }
     else {
@@ -372,8 +413,16 @@ pub let check_type_visible (viewer: String) (owner: String) (is_pub: Bool) (kind
 pub let resolve_ann_seen (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (t: parser.Ty): ITy =
     match t {
         TyFunction(params, ret) => ITFunction(Array.map(params, |p| resolve_ann_seen(ctx, viewer, in_scope, p)), resolve_ann_seen(ctx, viewer, in_scope, ret)),
-        TyGeneric(base, args) => resolve_named(ctx, viewer, in_scope, base[base.len() - 1], Array.map(args, |a| resolve_ann_seen(ctx, viewer, in_scope, a))),
-        TyPath(segments) => resolve_named(ctx, viewer, in_scope, segments[segments.len() - 1], []),
+        // The WHOLE path, not its last segment. Taking the last segment
+        // meant `a.Shade` and `b.Shade` resolved to the same enum --
+        // whichever the bare-name scan reached first -- so this
+        // type-checked, and should never have:
+        //
+        //     let mix (s: b.Shade): a.Shade = s
+        //
+        // A single-segment name is unaffected: joined, it is itself.
+        TyGeneric(base, args) => resolve_named(ctx, viewer, in_scope, parser.join_dot(base), Array.map(args, |a| resolve_ann_seen(ctx, viewer, in_scope, a))),
+        TyPath(segments) => resolve_named(ctx, viewer, in_scope, parser.join_dot(segments), []),
         TyTuple(elems) => ITTuple(Array.map(elems, |e| resolve_ann_seen(ctx, viewer, in_scope, e))),
     }
 

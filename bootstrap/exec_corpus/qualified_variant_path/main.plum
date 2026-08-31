@@ -1,0 +1,37 @@
+// A variant said with its MODULE as well as its enum.
+//
+// Two modules each declare a `Shade` with an `On`. Neither `On` nor
+// `Shade.On` can say which one is meant, and the checker said so:
+//
+//   `On` is a variant of light.Shade and dark.Shade
+//   -- write light.Shade.On to say which one you mean
+//
+// That advice named a spelling the compiler REJECTED, in an expression
+// with `unbound variable: light` and in a pattern with a parse error at
+// the second dot. Both halves work now, and this fixture is the advice
+// taken literally.
+use light;
+use dark;
+
+let describe (s: light.Shade): String = match s {
+    light.Shade.On => "light on",
+    light.Shade.Off => "light off",
+}
+
+let describe_dark (s: dark.Shade): String = match s {
+    dark.Shade.On => "dark on",
+    dark.Shade.Off => "dark off",
+}
+
+// A struct said with its module, built and then destructured. Same
+// path shape, same fix: the qualifier used to be parsed and dropped, so
+// `dark.Lamp { .. }` built a `light.Lamp`.
+let watts (l: dark.Lamp): Int = match l { dark.Lamp { watts } => watts }
+
+let main (): Unit = {
+    println(describe(light.Shade.On));
+    println(describe(light.Shade.Off));
+    println(describe_dark(dark.Shade.On));
+    println(describe_dark(dark.Shade.Off));
+    println(watts(dark.Lamp { watts: 60 }).to_string())
+}

@@ -1,0 +1,13 @@
+// Rejected: a struct literal keeps the module it was written with.
+//
+// This ACCEPTED before 2026-08-30, and its error message was the giveaway.
+// `infer_struct_lit` resolved `path[path.len() - 1]` -- the bare `P` --
+// so `dark.P { y: "no" }` built a `light.P` and the checker complained
+// that "struct light.P has no field named y". The author never wrote
+// `light`, and the struct they DID name has that field.
+use light;
+use dark;
+
+let bad (): light.P = dark.P { y: "no" }
+
+let main (): Unit = println(bad().x.to_string())

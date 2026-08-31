@@ -1,0 +1,5 @@
+light on
+light off
+dark on
+dark off
+60

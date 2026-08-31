@@ -1,0 +1,17 @@
+// Rejected: `light.Shade` and `dark.Shade` are different types.
+//
+// This ACCEPTED before 2026-08-30. A type annotation resolved only its
+// LAST segment, so `dark.Shade` and `light.Shade` were the same lookup
+// -- for the bare name `Shade` -- and whichever module the scan reached
+// first answered for both. The module qualifier was parsed, carried
+// around, and then dropped on the floor.
+//
+// It surfaced while making `light.Shade.On` resolve in a pattern: the
+// pattern correctly produced `dark.Shade` and the annotation claimed
+// `light.Shade`, and the mismatch was the annotation's fault.
+use light;
+use dark;
+
+let mix (s: dark.Shade): light.Shade = s
+
+let main (): Unit = println(match mix(dark.Shade.On) { light.Shade.On => "on", light.Shade.Off => "off" })

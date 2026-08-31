@@ -16381,3 +16381,64 @@ in one place and four in another with `= a / b` at column zero in both.
 span it wanted exists. A block brace on a hand-aligned line still leaves
 its body alone: the measurement supports refusing there, and having the
 span available is not a reason to use it.
+
+## A module qualifier that was parsed and then dropped
+
+The backlog carried this as a small, known, deliberate gap: "a pattern
+path may name the enum (`Shade.Light`) but not the module
+(`inner.Shade.Light` parses in an expression, not in a pattern)."
+
+Two of those three clauses were wrong, which is why it is worth writing
+down. `inner.Shade.Light` did not resolve in an expression either -- it
+parsed and then reported `unbound variable: inner`. And the gap was not
+small: it reached type annotations, struct literals and struct patterns
+as well, where it was not a missing feature but WRONG ACCEPTANCE.
+
+The starting point was the pattern parser, which is genuinely one line:
+`parse_primary_pattern` dispatched on `is_capitalized`, so a lowercase
+module name was read as a binding and the path stopped at the first dot.
+A lowercase name followed by a dot is a qualifier, and a binding never
+has a dot after it, so the two cannot be confused. `PVariant` has always
+carried an `Array[String]`, and `resolve_pattern_variant` has always
+joined all but the last segment back into a type name.
+
+That exposed the real bug. Every lookup ran through `best_enum` /
+`best_struct`, which ask "what does this BARE name mean to this viewer"
+-- viewer's module, then root, then prelude, then a loose last-segment
+scan. None of the four can match a name the author already qualified, so
+`a.Shade` reached the loose scan and got whichever module came first.
+`find_type_exact` is the fix, and where it sits in the cascade is the
+whole of its design: fourth, after the viewer, the root and the prelude,
+because ahead of them it would change what an unqualified name means;
+ahead of the loose scan, because that scan answers `a.Shade` with
+`b.Shade` -- the exact confusion the qualifier was written to settle.
+
+Then the same shape turned up three more times, and these had been
+accepting bad programs:
+
+```plum
+let mix (s: dark.Shade): light.Shade = s      // compiled
+let bad (): light.P = dark.P { y: "no" }      // compiled
+```
+
+`resolve_ann_seen` resolved `segments[segments.len() - 1]`, so
+`light.Shade` and `dark.Shade` were one lookup. `infer_struct_lit` and
+the `PStruct` arm did the same. In each case the qualifier was parsed,
+carried through the AST, and discarded at the point of lookup -- and a
+comment above `check_type_visible` asserted the opposite, that "the
+identity of a type is still its bare name, so this cannot make two
+same-named types coexist." That was true before types carried their
+module; it had been false since, and it was the sentence that made the
+behaviour look intended.
+
+The struct-literal case is the one worth remembering, because it was
+visible all along in the error message: `dark.P { y: "no" }` reported
+`struct light.P has no field named y`. An error that names a module the
+author did not write, about a struct that does have the field, is a
+report that the lookup went somewhere else. Nobody read it that way,
+including me, until a fixture made it happen on purpose.
+
+The README, meanwhile, already documented the behaviour the compiler did
+not have: "they do not silently unify", with an example. Documentation
+written ahead of a check is a claim, not a test -- `corpus-check` has the
+two rejections now.

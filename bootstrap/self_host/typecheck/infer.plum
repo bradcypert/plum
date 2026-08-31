@@ -2120,7 +2120,11 @@ let expand_nested_acc (p2: Program2) (info: StructInfo) (fields: Array[parser.Fi
     }
 
 let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (path: Array[String]) (fields0: Array[parser.FieldInitNode]) (spread: Option[parser.PExpr]): InferResult = {
-    let name = path[path.len() - 1];
+    // The WHOLE path. Taking the last segment meant `dark.P { y: .. }`
+    // resolved to `light.P` and then reported "struct light.P has no
+    // field named y" -- an error about the wrong struct, naming a
+    // module the author had not written.
+    let name = parser.join_dot(path);
     check_struct_named(p2.ctx, p2.current, name);
     match best_struct(p2.ctx, p2.current, name) {
         Some(info) => {
@@ -2354,7 +2358,7 @@ let bind_pattern_ty (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv)
         PBool(_) => BindResult { env: env, subst: unify_pattern_prim(acc, scrutinee_ty, ITBool), state: state, pattern: pattern },
         PTuple(elems) => bind_tuple_pattern(p2, state, acc, env, elems, scrutinee_ty),
         PVariant(path, arg_pats) => bind_variant_pattern(p2, state, acc, env, path, arg_pats, scrutinee_ty),
-        PStruct(path, field_pats, rest) => bind_struct_pattern(p2, state, acc, env, path[path.len() - 1], field_pats, rest, scrutinee_ty),
+        PStruct(path, field_pats, rest) => bind_struct_pattern(p2, state, acc, env, path, field_pats, rest, scrutinee_ty),
         // Only the FIRST alternative binds -- they all bind the same
         // names at the same types, so one pass is enough for the
         // environment. Every alternative is still RESOLVED, because
@@ -2485,9 +2489,18 @@ let struct_by_scrutinee (ctx: TyContext) (current: String) (scrutinee_ty: ITy) (
 
 let bare_type_name_of (qname: String): String = parser.bare_type_name(qname)
 
-let bind_struct_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (name: String) (field_pats: Array[parser.FieldPatternNode]) (rest: Bool) (scrutinee_ty: ITy): BindResult = {
+// `light.P { x }` in a pattern: the qualifier is the whole answer and
+// it overrides the scrutinee, exactly as `resolve_pattern_variant` has
+// it for a variant. Naming the wrong struct should report the mismatch,
+// not be quietly corrected to the right one.
+let resolve_pattern_struct (p2: Program2) (acc: Subst) (scrutinee_ty: ITy) (path: Array[String]): Option[StructInfo] =
+    if path.len() >= 2 { best_struct(p2.ctx, p2.current, parser.join_dot(path)) }
+    else { struct_by_scrutinee(p2.ctx, p2.current, subst_apply(acc, scrutinee_ty), path[0]) }
+
+let bind_struct_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (path: Array[String]) (field_pats: Array[parser.FieldPatternNode]) (rest: Bool) (scrutinee_ty: ITy): BindResult = {
+    let name = parser.join_dot(path);
     check_struct_named(p2.ctx, p2.current, name);
-    match struct_by_scrutinee(p2.ctx, p2.current, subst_apply(acc, scrutinee_ty), name) {
+    match resolve_pattern_struct(p2, acc, scrutinee_ty, path) {
         Some(info) => {
             let fr = fresh_list(state, info.generics.len());
             let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(info.name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };

@@ -1,89 +1,153 @@
 Plum is a small, statically typed, compiled language.
 
-Format-on-save, and four fixes — one of which was producing wrong code.
+The formatter learned where expressions begin, and a module qualifier now means something everywhere a type can be named.
 
-## Formatting in your editor
+## Lines the formatter used to leave alone
 
-`plum lsp` now advertises `documentFormattingProvider`, so any editor
-that speaks LSP can format a Plum file, including on save. The rules are
-the ones `plum fmt` already had.
+`plum fmt` could indent anything a brace positioned — statements, match
+arms, closing braces — and nothing else. A `let` body written on the
+next line, a `|>` chain broken across lines, a multi-line call's
+arguments: those were left exactly as typed, because nothing in the
+compiler recorded where an expression BEGAN, so there was no way to name
+the construct such a line belonged to.
 
-It formats the buffer you are looking at, not the file on disk. That
-distinction is the whole of the work: an editor asks to format what it
-is showing, which when you save is a document the file system has not
-seen yet. Formatting the saved copy and replacing the whole file with
-the result would revert whatever you had just typed.
-
-## `Ref[T]` can be written down
-
-```plum
-let r: Ref[Int] = ref(1)
-```
-
-`ref(v)` has always produced a `Ref`, and the type has always existed
-inside the compiler — but it could not be NAMED. Annotating one failed
-with `unknown type: Ref` while the identical line without the annotation
-compiled.
-
-## A global's declared type is used
+The parser records that now, and one rule covers all three shapes: a
+line that continues a construct begun on an earlier line is indented
+four past the line that construct started on.
 
 ```plum
-let NOTHING: Option[String] = None
+let describe (n: Int): String =        let bounds (xs: Array[String]) =
+    if n > 10 {                            xs
+        "big"                                  |> Array.map(_, String.trim)
+    } else {                                   |> Array.join(_, ", ")
+        "small"
+    }
 ```
 
-This produced **wrong code**. A reference to a global re-inferred the
-global's body at every mention and took the type from that, ignoring the
-annotation. For a value that determines its own type — `let N: Int = 3`
-— that is fine. For `None`, or `Map.new(())`, or `[]`, it is not: the
-type parameter stays unknown, and the compiler fell back to a default.
-Reading a `String` out of that `Option` loaded a boolean-shaped slot, and
-the build failed with an LLVM error naming a register number.
+Both links of that chain sit inside the one expression that began at
+`xs`, so both are indented from that line — not from each other.
 
-Locals were always fine, which is what made it puzzling: the same two
-lines inside a function worked.
-
-Annotated globals of `Option`, `Map`, `Array` and `Ref` types are all
-covered by a new fixture.
-
-## `plum check` checks globals
-
-`check` skipped every top-level `let` with no parameters, so
+## Three spacing rules
 
 ```plum
-let M: Int = "hello"
+n*2 + (n-1)/3        becomes    n * 2 + (n - 1) / 3
+P { x:n, y:n+1 }     becomes    P { x: n, y: n + 1 }
+xs[ 0 ]              becomes    xs[0]
 ```
 
-passed `plum check` and failed `plum build`. A checker that misses what
-the compiler rejects is worse than no checker, because it is the one
-people run in an editor.
+A binary operator gets one space on each side; a unary minus does not,
+so `-n` and `max(-5, -3)` are left alone. A colon gets one space after
+it — but the space BEFORE a colon is left as written, because `require
+b != 0 : "message"` uses a colon as a separator and nothing at the token
+level distinguishes that from `x: Int`.
 
-## A `pub` global can be reached from another module
+None of this reaches inside a string literal. The rules work on the gaps
+between tokens, and a gap is by definition not inside one, so
+`",".concat("a,b")` is untouched.
+
+## What the formatter will not do
+
+It still does not reflow: no line is ever joined or split.
+
+It also declines to place four kinds of line, each because this
+repository either said nothing about them or disagreed with itself:
+
+* a line that begins inside a multi-line string literal, where the
+  leading spaces are part of your program;
+* a line whose enclosing construct starts partway along the line above,
+  where the only guide is a column somebody typed;
+* a hand-aligned line sitting deeper than the grid answer — aligning
+  under an opening bracket or a condition is what that always is;
+* an item's `require`, `ensure` and `=` header lines.
+
+## Every rule here was measured
+
+The rules are not imported from another language. Each was counted
+against the 249 `.plum` files in the compiler's own repository before it
+was written, and the test of that is that formatting all of them changes
+nothing.
+
+The continuation rule came from 1,484 continuation lines, of which 936
+are indented four past the line above and 526 are level with it — 98.5%,
+and both fall out of the single sentence above. Where files disagreed,
+the majority decided: arm bodies written on their own line run 26 to 1
+in favour of indenting, and operator continuation lines 632 to 16.
+
+The colon rule was corrected by that process. "No space before a colon"
+is the obvious rule and it rewrote every contract in the repository, so
+it is not the rule.
+
+## A module qualifier is part of the name
+
+When two modules declare the same enum, neither `On` nor `Shade.On` can
+say which one you mean, and the checker said so:
+
+```
+`On` is a variant of light.Shade and dark.Shade
+-- write light.Shade.On to say which one you mean
+```
+
+That advice named a spelling the compiler rejected. In an expression it
+reported `unbound variable: light`; in a pattern it failed to parse at
+the second dot. Both work now, and so does the same shape for a struct:
 
 ```plum
-// inner/table.plum          // main.plum
-pub let LIMIT: Int = 3       use inner;
-                             println(inner.LIMIT.to_string())
+use light;
+use dark;
+
+let describe (s: light.Shade): String = match s {
+    light.Shade.On  => "on",
+    light.Shade.Off => "off",
+}
+
+let lamp (): dark.Lamp = dark.Lamp { watts: 60 }
 ```
 
-This did not work by any spelling. `inner.LIMIT` reported `unbound
-variable: inner`, and a bare `LIMIT` reported `unbound variant/function`
-— so a `pub` global was visible to its own module and to nobody else,
-and `pub` on one meant nothing at all.
+Naming the wrong module reports the mismatch rather than being quietly
+corrected to the right one.
 
-A global without `pub` is now private to its module, like a function or
-a type, and says so.
+## Two types that shared a name could be confused
 
-An unqualified `LIMIT` from another module is still unbound, on purpose:
-that is how functions already behave, and a module's names should not
-leak into whoever imported it.
+The above turned out to be the smaller half. **A type annotation
+resolved only its LAST segment**, so `light.Shade` and `dark.Shade` were
+the same lookup -- for the bare name `Shade` -- and whichever module the
+scan reached first answered for both. This compiled, and should never
+have:
+
+```plum
+let mix (s: dark.Shade): light.Shade = s
+```
+
+Struct literals had it too: `dark.P { y: "no" }` built a `light.P` and
+then reported `struct light.P has no field named y` -- an error naming a
+module the author had not written, about a struct that does have that
+field. Struct patterns were the same.
+
+The qualifier was being parsed, carried around, and dropped at the point
+of lookup. It is used now, in annotations, expressions and patterns.
+
+This is the sort of gap that survives because the program that would
+notice is one nobody writes: it needs two modules, the same type name in
+both, and a value crossing between them.
 
 ## Upgrading
 
-Nothing that worked before stops working.
+The formatting rules change no semantics.
 
-The `pub` rule for globals cannot break existing code, because reaching
-a global across a module boundary did not compile at all until now.
+The module-qualifier fixes do reject some programs that used to compile,
+and every one of them was wrong: a program that assigned one module's
+type to another module's same-named type, or built a struct literal with
+a module qualifier that was being ignored. If your code compiles, it was
+never relying on this — the two types have to have the same name and
+different modules for the confusion to arise at all.
 
-One thing that used to be accepted is now rejected: a global whose
-declared type does not match its value, like `let M: Int = "hello"`.
-That was never doing what it said.
+`plum fmt --check` will now report files that were passing before, if
+they contain any of the shapes above. `plum fmt --write` updates them.
+
+**It still cannot corrupt a file.** Before writing, `--write` re-lexes
+its own output and compares the token sequence to the original's; a rule
+that changed the tokens is refused rather than written. That check
+earned its keep this release: the first version of the continuation rule
+indented a line that began inside a multi-line string literal, which
+would have added spaces to the string's contents, and the check caught
+it on two files.

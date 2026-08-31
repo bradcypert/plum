@@ -769,8 +769,20 @@ let parse_primary_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult =
         TokTrue => PatResult { value: PBool(true), next_pos: pos + 1 },
         TokFalse => PatResult { value: PBool(false), next_pos: pos + 1 },
         TokUnderscore => PatResult { value: PWildcard, next_pos: pos + 1 },
+        // Capitalized means a type or a variant. Lowercase means a
+        // BINDING -- unless a dot follows it, in which case it is a
+        // module qualifier and the path continues: `inner.Shade.Light`.
+        // A binding is a single bare name and never has a dot after it,
+        // so the two cannot be confused.
+        //
+        // This is the whole of the gap that made a pattern path unable
+        // to name a module while the identical path in an expression
+        // could. `PVariant` has always carried an `Array[String]`, and
+        // `resolve_pattern_variant` has always joined everything but
+        // the last segment back into a type name -- the parser stopped
+        // at the first dot and never gave them the segments.
         TokIdent(name) => {
-            if is_capitalized(name) { parse_path_shaped_pattern(tokens, pos) }
+            if is_capitalized(name) || check(tokens, pos + 1, TokDot) { parse_path_shaped_pattern(tokens, pos) }
             else { PatResult { value: PIdent(name, offset_at(pos)), next_pos: pos + 1 } }
         },
         TokLParen => parse_tuple_pattern(tokens, pos),

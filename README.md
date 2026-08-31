@@ -289,18 +289,47 @@ plum fmt --write src/     # format in place
 plum fmt one.plum         # to stdout
 ```
 
-`plum fmt` has five opinions -- indentation of statements, items and
-match arms at four spaces per block, closing braces one level out,
-comment runs indented with what they document, blank runs collapsed to
-one, and one space after a comma and none before. Everything else is
-passed through untouched. It does not reflow: no line is joined or
-split, and a line belonging to a construct with no braces of its own
-(a broken `|>` chain, a multi-line call's arguments) is left exactly as
-written, because nothing yet records where an expression begins.
+`plum fmt` has seven opinions:
+
+* statements, items and match arms are indented four spaces per block,
+  and a closing brace sits one level out from what it closes;
+* a run of comment lines is indented with whatever it documents;
+* a run of blank lines collapses to one;
+* a comma has no space before it and one after, and so does a colon --
+  though a colon's LEADING space is left alone, because `require b != 0
+  : "message"` spells it that way;
+* nothing sits just inside a bracket, so `f( a )` becomes `f(a)`;
+* a binary operator gets one space on each side, while a unary minus
+  does not: `a-b` becomes `a - b` and `-n` is left alone;
+* a line that CONTINUES a construct begun on an earlier line is indented
+  four past the line that construct started on.
+
+That last one covers the shapes the formatter used to leave alone -- a
+`let` body written on the next line, a `|>` chain broken across lines, a
+multi-line call's arguments:
+
+```plum
+let bounds (xs: Array[String]): String =
+    xs
+        |> Array.map(_, String.trim)
+        |> Array.join(_, ", ")
+```
+
+Every link of the chain is inside the one expression that began at `xs`,
+so every link is indented from that line.
+
+Everything else is passed through untouched, and it does not reflow: no
+line is ever joined or split.
 
 The rules were measured against this repository rather than chosen, and
 the test of that is `bootstrap/fmt-check`: every `.plum` file here is
 already formatted, so `plum fmt` changes none of them.
+
+It also declines to place lines it cannot name -- a line inside a
+multi-line string literal, a hand-aligned line sitting deeper than the
+grid answer, an item's `require`/`ensure`/`=` header lines. Those are
+places where this repository either says nothing or disagrees with
+itself, and a formatter with no evidence should leave your code alone.
 
 **It cannot corrupt a file.** Before writing, `--write` re-lexes its own
 output and compares the token sequence to the original's -- whitespace
@@ -903,6 +932,27 @@ They do not silently unify:
 let a: P = inner.make();
 // let a: declared type P doesn't match value type inner.P (inner.P != P)
 ```
+
+**Anywhere a type or variant can be named, the module can be part of
+the name.** When two modules declare the same enum, that is the only
+way to say which one you mean -- in an annotation, an expression, and a
+pattern alike:
+
+```
+use light;
+use dark;
+
+let describe (s: light.Shade): String = match s {
+    light.Shade.On  => "on",
+    light.Shade.Off => "off",
+}
+
+let lamp (): dark.Lamp = dark.Lamp { watts: 60 }
+```
+
+Naming the wrong module is an error rather than a correction: a
+`dark.Shade.On` pattern matched against a `light.Shade` reports the
+mismatch.
 
 The prelude is a module of its own, so `pub` applies to the standard
 library too: `Map.get` is part of the interface, `Map`'s buckets are
