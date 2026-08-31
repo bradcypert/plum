@@ -15941,17 +15941,64 @@ calls nothing.
 
 ### What it costs
 
-The compiler's own count went the wrong way by about 1,200 out of
-199,000 across the whole memory-model batch -- roughly half of that
-from the array emitter, measured at a fixed point. It is written in a
-recursive style with almost no assignment in loops, so it gains
-nothing from any of this and pays for the checks. The likely cause of
-the array half is the changed evaluation order: holding every element
-in a register before the cell is decided keeps more values live at
-once, and a value that is live is one some other reuse will decline.
-That is a hypothesis, not a measurement -- no fixture in `alloc_corpus`
-regressed, which is the guard that actually matters, so it was not
-chased further.
+The compiler's own count goes the wrong way, because it is written in a
+recursive style with almost no assignment in loops: it gains nothing
+from any of this and pays for the checks. How MUCH was recorded here as
+"about 1,200 out of 199,000 -- roughly half of that from the array
+emitter", with the array half explained by a hypothesis about
+evaluation order.
+
+**Both halves of that were wrong, and the correction is below.**
+Measured 2026-08-31 by building four variants of the compiler, each to
+a bootstrap fixed point (`g2` and `g3` emitting byte-identical IR), and
+running each on six workloads. The variants are two toggles in
+`codegen.plum`: `lv_self_reuse` (literal slot reuse for arrays, structs
+and enums -- disable per-case or wholesale) and `lv_array_cand`
+(`Array.map`/`filter` source reuse). Measurement is
+`PLUM_RT_STATS=1 <compiler> emit-llvm <workload>`, and all four
+compilers emit byte-identical IR for every workload, so only their own
+cost differs:
+
+| workload | whole batch | array literals | map/filter | struct/enum |
+|---|---|---|---|---|
+| `generics_and_assoc_fns` | +435 | 0 | +64 | +371 |
+| `shared_mutability` | +187 | 0 | +25 | +162 |
+| `adts_and_matching` | +284 | +69 | +37 | +178 |
+| `asteroids` | +531 | 0 | +65 | +466 |
+| `properties` | +227 | 0 | −5 | +232 |
+| `json_and_files` | +270 | 0 | +63 | +207 |
+
+**The magnitude was overstated.** The whole batch costs 187 to 531
+allocations, against totals of 197,000 to 815,000 -- 0.06% to 0.12%,
+not 0.6%. It is also not one number: it varies by workload, and stating
+it as a single figure hid that.
+
+**The attribution was backwards.** The array emitter -- the half the
+hypothesis was about -- costs NOTHING on five of the six workloads and
+69 on the sixth. The cost is struct and enum literal reuse, which is 75%
+to 90% of it everywhere. `map`/`filter` source reuse is a rounding
+error, and on `properties` it is a small saving.
+
+The evaluation-order hypothesis was not wrong about the mechanism, only
+about which emitter it applied to. Splitting `asteroids`' +531 by kind
+gives +245 in struct/enum/closure cells, +179 concat, +71 str, +36
+array -- diffuse across every allocation kind, which is what "a value
+held live is one some other reuse will decline" predicts, and not what
+"the array emitter is doing something specific" predicts.
+
+**The trade is still right**, and now it is right for a stated reason
+rather than an assumed one: a user's loop building a struct and an enum
+per iteration goes from 2001 allocations to 3, and the compiler pays
+about a tenth of a percent for a feature its own style cannot use.
+
+**Why the original number was wrong is the same lesson this file
+already records twice.** These variants each needed three generations
+before they could be compared; the numbers at generation one differ
+from the settled ones by more than the effect being measured. A
+"measured at a fixed point" note in prose is not the same as having
+built the generations, and this file's own `lv_self_reuse` entry -- 167
+allocations that turned out to be zero -- is the same mistake caught
+one step earlier.
 
 ## `select`, and the primitive it was missing (2026-08-28)
 
