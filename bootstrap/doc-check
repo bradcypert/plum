@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Compiles and runs every code snippet in TUTORIAL.md, and checks each
-# against the output the document claims.
+# Compiles and runs every code snippet in TUTORIAL.md and README.md,
+# and checks each against the output the document claims.
 #
 # Documentation rots silently, and this project has proved it more than
 # once: the README described an interpreter for a day after the
@@ -18,6 +18,11 @@
 #     `error:` -- expected NOT to compile, with that message
 #   * anything else -- built only, to prove it at least compiles
 #
+# A RUN of consecutive ```plum blocks is ONE project, so a module
+# example -- which cannot be a single file -- can be checked too: a
+# block headed `// shapes/circle.plum` becomes that file, and a block
+# with no such header becomes `main.plum`.
+#
 # Writing the first draft, this caught a paraphrased error message:
 # the doc said `non-exhaustive match: missing Rect` and the compiler
 # says `match is not exhaustive — missing variant(s): Rect`.
@@ -33,4 +38,12 @@ plum="${1:-./sh}"
 PY_BIN="$(command -v python3 || command -v python)"
 [ -n "$PY_BIN" ] || { echo "doc-check: needs python3 to extract the snippets" >&2; exit 1; }
 
-"$PY_BIN" bootstrap/doc_check.py TUTORIAL.md "$plum"
+fail=0
+"$PY_BIN" bootstrap/doc_check.py TUTORIAL.md "$plum" || fail=1
+# The README too, since 2026-08-31. It had ONE checked snippet against
+# the tutorial's twelve, and in the same week two of its claims turned
+# out to be false -- bounded type parameters "are supported" (they
+# parsed and were discarded) and two same-named types "do not silently
+# unify" (they did). A document nothing runs is a document that drifts.
+"$PY_BIN" bootstrap/doc_check.py README.md "$plum" || fail=1
+exit $fail

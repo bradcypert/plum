@@ -16655,3 +16655,70 @@ typed node -- one place that knows all 44 `TNode` variants. `codegen.plum`
 already had three passes each enumerating the same variants for its own
 purpose, each a place a new node can be forgotten. This check needed two
 more traversals and got them in five lines each.
+
+## The README was checked by nothing (2026-08-31)
+
+`doc-check` compiles and runs every snippet in `TUTORIAL.md` and
+compares the output against what the document claims. It did not look at
+`README.md` at all, and the README had ONE `plum`-tagged block against
+the tutorial's twelve. Forty-odd code examples, verified by nobody.
+
+That is the explanation for a run of false claims found by accident in a
+single week -- bounded type parameters "are supported" (they parsed and
+were discarded), two same-named types "do not silently unify" (they
+did). Prose is a claim; a snippet with its output beside it is a test.
+
+Pointing the checker at the README found four more:
+
+**Parameter types are not optional.** The README's first language
+example opened "No mandatory parameter types -- full inference fills
+them in from how the function is used and its own body", and showed
+`let sum n acc = ...`. The checker rejects that: a top-level signature
+needs parameter types AND a return type. Inference works inside a
+function -- local bindings and closure parameters -- not across its
+boundary. The sentence describes the retired Rust compiler.
+
+**The headline module example does not compile.** It constructs
+`shapes.Circle { radius: 2.0 }` from `main.plum` while `radius` has no
+`pub` -- which the README itself documents forty lines further down,
+under "Fields are private by default too". The example contradicts the
+rule stated on the same page.
+
+**A quoted error message was paraphrased.** "Add `pub` to its
+declaration to use it from outside"; the compiler says "from the root
+module". The same class of drift the tutorial's own doc-check caught on
+its first run.
+
+**`examples/overview.plum` does not compile, and no harness runs it.**
+`example-sweep` iterates DIRECTORIES under `examples/`, and
+`overview.plum` is a loose file beside them, so it is silently skipped
+-- the sweep reports "8 matching, 1 emit-only, 0 failing" and never
+mentions it. It uses untyped parameters, destructuring parameters,
+`Ref.new` and `sqrt`, none of which this compiler has. It is a tour of
+an older language.
+
+### What changed
+
+`doc_check.py` now understands a MULTI-FILE project: a run of
+consecutive ```plum blocks is one project, and a block whose first line
+is `// shapes/circle.plum` becomes that file. Without it a module
+example could not be checked at all, and module examples are exactly
+where two of the false claims were.
+
+Nine README snippets are checked now, three of them expected REJECTIONS
+compared against the compiler's exact message. The harness earned its
+keep immediately: the first example it checked caught an arithmetic
+error in the expected output I had just written.
+
+`overview.plum` is DELETED rather than repaired. `TUTORIAL.md` covers
+the same ground and every snippet in it is compiled and run; keeping a
+second tour meant keeping a second source of truth, and the second one
+had already rotted past compiling. `GRAMMAR.md` said the grammar was
+"exercised in `examples/overview.plum`" and now says it is exercised by
+the tutorial, which is true and checkable.
+
+`example-sweep` reports a loose `.plum` file under `examples/` as a
+failure instead of skipping it. That is the gap that hid this: a project
+is a directory, the sweep walked directories, and a file beside them was
+swept up by nothing. Verified by dropping a stray file in and watching
+it fail, rather than by reading the loop.

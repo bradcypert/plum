@@ -313,6 +313,12 @@ let bounds (xs: Array[String]): String =
     xs
         |> Array.map(_, String.trim)
         |> Array.join(_, ", ")
+
+let main (): Unit = println(bounds([" a ", " b "]))
+```
+
+```
+a, b
 ```
 
 Every link of the chain is inside the one expression that began at `xs`,
@@ -443,15 +449,25 @@ directly, but that hasn't been tried.
 
 ### Functions, inference, recursion
 
-```
-// No `return`. No mandatory parameter types — full inference fills
-// them in from how the function is used and its own body.
-let sum n acc = if n == 0 { acc } else { sum(n - 1, acc + n) }
+```plum
+// No `return` — a function's body IS its value.
+//
+// A top-level signature is written out in full: parameter types and a
+// return type. Inference works INSIDE a function, not across its
+// boundary, so a public API is pinned on purpose rather than drifting
+// with whatever currently infers.
+let sum (n: Int) (acc: Int): Int = if n == 0 { acc } else { sum(n - 1, acc + n) }
 
-// Explicit annotations are legal and equivalent — recommended for
-// top-level/exported signatures so the public API is pinned on
-// purpose rather than drifting with whatever currently infers.
-let double (n: Int): Int = n * 2
+let main (): Unit = {
+    // Local bindings and closure parameters ARE inferred -- neither
+    // `total` nor `v` says what it is.
+    let total = Array.fold([1, 2, 3], 0, |a, v| a + v);
+    println(sum(3, total).to_string())
+}
+```
+
+```
+12
 ```
 
 Tail calls are guaranteed eliminated (compiled to a real LLVM
@@ -552,12 +568,19 @@ known.** `<` needs an ordered type and `==` needs one that is not a
 function, and both rules apply inside a generic just as they do outside
 it:
 
-```
+```plum
+struct Point { x: Int }
+
 let biggest [T] (a: T) (b: T): T = if a > b { a } else { b }
 
-biggest(3, 7)                       // fine
-biggest(Point { x: 1 }, origin)     // call to biggest: T is Point, but
-                                    // biggest requires T to be ordered
+let fine (): Int = biggest(3, 7)
+let broken (): Point = biggest(Point { x: 1 }, Point { x: 2 })
+
+let main (): Unit = println(fine().to_string())
+```
+
+```
+error: call to biggest: T is Point, but biggest requires T to be ordered
 ```
 
 The error lands on the **call**, because that is where the type is
@@ -873,17 +896,21 @@ myapp/
     rectangle.plum   // both files are just the `shapes` module
 ```
 
-```
+```plum
 // shapes/circle.plum
-pub struct Circle { radius: Float }
+pub struct Circle { pub radius: Float }
 pub let area (c: Circle): Float = 3.14159 * c.radius * c.radius
 let internal_helper (c: Circle): Float = c.radius * 2.0   // private, no `pub`
 ```
 
-```
+```plum
 // main.plum
 use shapes;
-let main (): Unit = println(shapes.area(shapes.Circle { radius: 2.0 }))
+let main (): Unit = println(shapes.area(shapes.Circle { radius: 2.0 }).to_string())
+```
+
+```
+12.56636
 ```
 
 `use` is qualify-by-default (Go-style) — `shapes.area`, not a bare
@@ -894,25 +921,47 @@ imports.
 callable from outside its module; without it, a qualified call is
 rejected:
 
+```plum
+// shapes/circle.plum
+let secret_helper (): Int = 1
 ```
-shapes.secret_helper is private to module `shapes`. Add `pub` to its
-declaration to use it from outside
+
+```plum
+// main.plum
+use shapes;
+let main (): Unit = println(shapes.secret_helper().to_string())
+```
+
+```
+error: shapes.secret_helper is private to module `shapes`. Add `pub` to its declaration to use it from the root module
 ```
 
 **Types are private by default too.** `pub struct` and `pub enum` opt
 one into being named from outside its module — in an annotation, in a
 literal, and in a pattern:
 
-```
-// shapes/s.plum
+```plum
+// secrets/s.plum
 struct Secret { n: Int }
 pub let make (): Secret = Secret { n: 7 }
+pub let read (s: Secret): Int = s.n
+```
+
+```plum
+// main.plum
+use secrets;
+
+// Fine -- the VALUE may cross. `hold` never names the type.
+let hold (): Int = secrets.read(secrets.make())
+
+// Rejected -- the NAME may not.
+let named (): secrets.Secret = secrets.make()
+
+let main (): Unit = println(hold().to_string())
 ```
 
 ```
-use shapes;
-let s = shapes.make();        // fine — the VALUE may cross
-let t: Secret = shapes.make() // rejected — the NAME may not
+error: struct secrets.Secret is private to module `secrets`
 ```
 
 A private type that escapes through a `pub` function is **opaque**
@@ -922,18 +971,25 @@ a handle type has.
 
 **Fields are private by default too**, independently of their struct:
 
-```
+```plum
 // counter/c.plum
 pub struct Counter { pub label: String, n: Int }
 pub let start (label: String): Counter = Counter { label: label, n: 0 }
 pub let count (c: Counter): Int = c.n
 ```
 
-```
+```plum
+// main.plum
 use counter;
-let c = counter.start("hits");
-c.label            // fine
-c.n                // rejected
+
+let label_of (c: counter.Counter): String = c.label   // fine
+let count_of (c: counter.Counter): Int = c.n          // rejected
+
+let main (): Unit = println(label_of(counter.start("hits")))
+```
+
+```
+error: field counter.Counter.n is private to module `counter`
 ```
 
 A struct with any private field **cannot be constructed from outside
@@ -952,9 +1008,26 @@ colliding with it.
 
 They do not silently unify:
 
+```plum
+// inner/p.plum
+pub struct P { pub v: Int }
+pub let make (): P = P { v: 1 }
 ```
-let a: P = inner.make();
-// let a: declared type P doesn't match value type inner.P (inner.P != P)
+
+```plum
+// main.plum
+use inner;
+
+pub struct P { pub v: Int }
+
+// `P` here is the root module's own, which is not `inner.P`.
+let a (): P = inner.make()
+
+let main (): Unit = println("unreachable")
+```
+
+```
+error: declared return type P doesn't match body type inner.P
 ```
 
 **Anywhere a type or variant can be named, the module can be part of
@@ -962,16 +1035,32 @@ the name.** When two modules declare the same enum, that is the only
 way to say which one you mean -- in an annotation, an expression, and a
 pattern alike:
 
+```plum
+// light/shade.plum
+pub enum Shade { On, Off }
 ```
+
+```plum
+// dark/lamp.plum
+pub struct Lamp { pub watts: Int }
+```
+
+```plum
 use light;
 use dark;
 
 let describe (s: light.Shade): String = match s {
-    light.Shade.On  => "on",
+    light.Shade.On => "on",
     light.Shade.Off => "off",
 }
 
 let lamp (): dark.Lamp = dark.Lamp { watts: 60 }
+
+let main (): Unit = println(describe(light.Shade.On).concat(" at ").concat(lamp().watts.to_string()))
+```
+
+```
+on at 60
 ```
 
 Naming the wrong module is an error rather than a correction: a
@@ -1247,9 +1336,6 @@ is only built, not run — see its own entry below):
   README](examples/asteroids/README.md) for install/build steps and
   controls). The most complete demonstration of functional
   game-state-as-value-not-mutation in the whole repo.
-
-`examples/overview.plum` is a separate, older syntax sketch from early
-in the project's design — illustrative only, not a runnable project.
 
 ## Status
 

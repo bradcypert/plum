@@ -5,9 +5,10 @@ This is the formal grammar the compiler's own lexer and parser
 implemented against, and it is checked by
 `bootstrap/bootstrap-check` — 102 fixtures in `bootstrap/corpus/`, each
 with a recorded token stream and AST. It's derived directly from the decisions recorded in
-`DESIGN.md` and exercised in `examples/overview.plum` — if this document
-and `DESIGN.md` ever disagree, that's a bug in one of them, not a
-license to pick either.
+`DESIGN.md` and exercised by `TUTORIAL.md`, every snippet of which is
+compiled and run by `bootstrap/doc-check` — if this document and
+`DESIGN.md` ever disagree, that's a bug in one of them, not a license to
+pick either.
 
 Notation: `::=` defines a rule, `|` is alternation, `[ x ]` is optional,
 `{ x }` is zero-or-more, `( x )` is grouping, `"x"` is a literal token.
@@ -512,7 +513,7 @@ implementation decisions, not open language-design questions:
   currying existed, `f`'s own multi-param arity made `f(a)` alone an
   arity-mismatch type error — a loud failure, at least, even though the
   syntax LOOKED like a valid two-argument call (found by parsing
-  `examples/overview.plum`'s original `sum (n - 1) (acc + n)`, which
+  an early overview sketch's `sum (n - 1) (acc + n)`, which
   looked like an OCaml-style two-argument call but actually meant
   something else entirely — the example was corrected to
   `sum(n - 1, acc + n)`, and the "always use one comma-separated

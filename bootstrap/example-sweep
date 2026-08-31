@@ -70,6 +70,25 @@ fail=0
 skipped_link=0
 emit_only=0
 
+# A project is a DIRECTORY, so this walks directories -- and for a long
+# time it walked ONLY directories, which meant a loose `.plum` file
+# sitting beside them was swept up by nothing at all. `overview.plum`
+# lived there for months, did not compile against the language as it now
+# is, and the sweep reported "8 matching, 0 failing" the whole time
+# without mentioning it existed.
+#
+# A file here is either a project that lost its directory or something
+# nobody is checking. Either way it should be said out loud rather than
+# skipped in silence.
+loose="$(find examples -maxdepth 1 -name '*.plum' 2>/dev/null)"
+if [ -n "$loose" ]; then
+    for f in $loose; do
+        printf 'FAIL  %-24s a loose .plum file under examples/ is checked by nothing
+' "$(basename "$f")"
+        fail=$((fail + 1))
+    done
+fi
+
 for dir in examples/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
