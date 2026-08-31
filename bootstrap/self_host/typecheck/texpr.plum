@@ -217,4 +217,94 @@ pub struct TParam { pub name: String, pub ty: ITy }
 // substitute IN.
 // `module` is where the function was declared — needed by a backend so
 // that two modules' same-named functions get distinct SYMBOLS.
-pub struct TFn { pub name: String, pub module: String, pub generics: Array[String], pub params: Array[TParam], pub ret: ITy, pub body: TExpr, pub subst: Subst }
+// `path` and `offset` are where the function was WRITTEN. Inference
+// reports through `ERR`, a cell set just before each function is
+// checked, which works while checking happens one function at a time.
+// A pass that runs over all the typed functions AFTERWARDS -- the
+// ordered-bound check is the first -- has no such cell to read, and
+// without these it reported every error against whichever function
+// happened to be checked last.
+pub struct TFn { pub name: String, pub module: String, pub path: String, pub offset: Int, pub generics: Array[String], pub params: Array[TParam], pub ret: ITy, pub body: TExpr, pub subst: Subst }
+
+// --- Walking a typed tree ---
+//
+// The immediate sub-expressions of a node, in evaluation order. One
+// place that knows the shape of all 44 `TNode` variants, so a pass that
+// only wants to FIND something in a body -- rather than to rebuild it --
+// is five lines on top of this instead of a fourth 44-arm match.
+//
+// `codegen.plum` has three of those already (`cg_rel_in`, `cg_eq_in`,
+// `cg_calls_in`), each enumerating the same variants for its own
+// purpose, and each a place a new node can be forgotten. They predate
+// this and are left alone; new passes should start here.
+//
+// Patterns and type arguments are NOT children: they are not `TExpr`,
+// and a caller that wants them is looking at a specific node anyway.
+pub let t_children (e: TExpr): Array[TExpr] =
+    match e.node {
+        TInt(_) => [],
+        TFloat(_) => [],
+        TStr(_) => [],
+        TBool(_) => [],
+        TUnitLit => [],
+        TIdent(_) => [],
+        TGlobalRef(_, _) => [],
+        TChannelNew => [],
+        TUnsupported(_) => [],
+        TArrayLit(xs) => xs,
+        TArrayLitReuse(xs, _) => xs,
+        TTupleLit(xs) => xs,
+        TUnary(_, a) => [a],
+        TBinary(_, l, r) => [l, r],
+        TFieldGet(b, _) => [b],
+        TIndex(b, i) => [b, i],
+        TBlockE(b) => t_block_children(b),
+        TIf(c, t, els) => match els { Some(x) => [c, t, x], None => [c, t] },
+        TMatch(sc, arms) => Array.concat([sc], t_arm_children(arms, 0, [])),
+        TFor(_, a, b, c) => [a, b, c],
+        TForArray(_, a, b) => [a, b],
+        TClosure(_, body) => [body],
+        TStructLit(_, fs, spread) => Array.concat(t_field_children(fs, 0, []), match spread { Some(x) => [x], None => [] }),
+        TStructReuse(_, fs, _) => t_field_children(fs, 0, []),
+        TVariantNew(_, _, xs) => xs,
+        TVariantReuse(_, _, xs, _) => xs,
+        TFnCall(_, _, xs, _) => xs,
+        TClosureCall(f, xs) => Array.concat([f], xs),
+        TMethodCall(_, b, xs) => Array.concat([b], xs),
+        TArrayNs(_, xs) => xs,
+        TArrayNsReuse(_, xs, _) => xs,
+        TRefNew(a) => [a],
+        TExternCall(_, xs) => xs,
+        TAsCStr(a) => [a],
+        TAsString(a) => [a],
+        TSpawn(a) => [a],
+        TTaskJoin(a) => [a],
+        TChannelSend(a, b) => [a, b],
+        TChannelRecv(a) => [a],
+        TSelect(arms) => t_select_children(arms, 0, []),
+        TPrintln(a) => [a],
+    }
+
+let t_block_children (b: TBlock): Array[TExpr] =
+    Array.concat(t_stmt_children(b.stmts, 0, []), match b.tail { Some(x) => [x], None => [] })
+
+let t_stmt_children (ss: Array[TStmt]) (i: Int) (acc: Array[TExpr]): Array[TExpr] =
+    if i >= ss.len() { acc }
+    else {
+        let e = match ss[i] { TSLet(_, v) => v, TSAssign(_, v) => v, TSExpr(v) => v };
+        t_stmt_children(ss, i + 1, acc.push(e))
+    }
+
+let t_arm_children (arms: Array[TArm]) (i: Int) (acc: Array[TExpr]): Array[TExpr] =
+    if i >= arms.len() { acc }
+    else {
+        let with_guard = match arms[i].guard { Some(g) => acc.push(g), None => acc };
+        t_arm_children(arms, i + 1, with_guard.push(arms[i].body))
+    }
+
+let t_select_children (arms: Array[TSelectArm]) (i: Int) (acc: Array[TExpr]): Array[TExpr] =
+    if i >= arms.len() { acc }
+    else { t_select_children(arms, i + 1, acc.push(arms[i].chan).push(arms[i].body)) }
+
+let t_field_children (fs: Array[TFieldInit]) (i: Int) (acc: Array[TExpr]): Array[TExpr] =
+    if i >= fs.len() { acc } else { t_field_children(fs, i + 1, acc.push(fs[i].value)) }

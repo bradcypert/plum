@@ -1,6 +1,6 @@
 Plum is a small, statically typed, compiled language.
 
-The formatter learned where expressions begin, the editor gained expand-selection and real ranges, and a module qualifier now means something everywhere a type can be named.
+Comparisons through a generic are checked, declared bounds mean something, the editor gained expand-selection and real ranges, and a module qualifier now means something everywhere a type can be named.
 
 ## Lines the formatter used to leave alone
 
@@ -76,6 +76,48 @@ in favour of indenting, and operator continuation lines 632 to 16.
 The colon rule was corrected by that process. "No space before a colon"
 is the obvious rule and it rewrote every contract in the repository, so
 it is not the rule.
+
+## Comparisons through a generic are checked
+
+`a > b` on two structs has always been an error. The same comparison
+reached through a type parameter was not — it compiled, and gave a
+**wrong answer**:
+
+```plum
+let biggest [T] (a: T) (b: T): T = if a > b { a } else { b }
+
+biggest(P { x: 5 }, P { x: 2 })     // answered P { x: 2 }
+```
+
+`>` on two structs is always false, so `biggest` returned its second
+argument whichever one was larger. `==` on functions had the identical
+hole. Both are now caught, at the **call** — which is where the type is
+chosen, and where the mistake actually is:
+
+```
+call to biggest: T is P, but biggest requires T to be ordered
+-- Int, Float or String
+```
+
+The definition stays legal. `biggest(3, 7)` and `biggest("b", "a")` are
+correct code and keep compiling; it is only using it on something
+unorderable that is not.
+
+It follows the type parameter through delegation, so a function that
+compares nothing itself but hands its `T` to one that does is caught
+too. Without that the fix would have been exactly one level deep.
+
+## Declared bounds mean something now
+
+`[T: Ord]` and `[T: Eq]` have always parsed, and nothing read them — so
+declaring a bound and declaring none were the same thing, and
+`[T: Nonsense]` was accepted in silence. A declared bound is now
+required of callers whether or not the body compares anything, and an
+unknown one is rejected.
+
+Writing a bound stays optional: the checker infers what a body needs.
+What declaring buys is a signature that pins the requirement, so a body
+that stops comparing does not silently widen what callers may pass.
 
 ## Expand-selection, and ranges that are actually ranges
 
@@ -170,6 +212,13 @@ both, and a value crossing between them.
 ## Upgrading
 
 The formatting rules change no semantics.
+
+The generic-comparison check rejects some programs that used to compile,
+and every one of them was getting a wrong answer: comparing values that
+have no ordering, or functions that have no equality, through a type
+parameter. If a call is rejected, it was not doing what it looked like
+it was doing. A `[T: Nonsense]` bound is also now an error rather than
+being ignored.
 
 The module-qualifier fixes do reject some programs that used to compile,
 and every one of them was wrong: a program that assigned one module's

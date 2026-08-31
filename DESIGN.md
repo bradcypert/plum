@@ -16558,3 +16558,100 @@ of its own reason will be applied to that instance only.
 matters: not that the format reply is empty, but that a `shutdown` sent
 AFTER it is still answered. Every new assertion was run against the
 previous compiler first and fails there.
+
+## A comparison that escaped through a type parameter (2026-08-31)
+
+`a > b` on two structs is rejected. The same comparison reached through
+a generic was not:
+
+```plum
+let biggest [T] (a: T) (b: T): T = if a > b { a } else { b }
+biggest(P { x: 5 }, P { x: 2 })     // compiled; answered P { x: 2 }
+```
+
+Not a crash -- a wrong answer. `>` on two heap values compares
+ADDRESSES, which for two fresh cells is arbitrary and here was always
+false, so `biggest` returned its second argument whichever was larger.
+`==` on functions had the identical hole, and the same one-line shape:
+`let same [T] (a: T) (b: T): Bool = a == b`.
+
+### The reasoning that left it open, and where it went wrong
+
+`reject_unordered_comparison` let an unresolved type variable through on
+purpose, and said why:
+
+> An unresolved type variable is ALLOWED through. This checker has no
+> bounds (its own documented v1 cut), so a `T` cannot be known to be
+> ordered or not, and rejecting every one would reject correct generic
+> code to catch a case nothing writes.
+
+The first half is right: rejecting `a > b` inside a generic body would
+reject `biggest(1, 2)`, which is correct. The second half was the
+mistake, and it is the interesting part -- "a case nothing writes"
+described the single most ordinary generic function there is.
+
+### The fix is a place, not a rule
+
+The rule did not change. `is_known_unordered` and
+`first_function_within` are the same predicates, and a generic call and
+a direct comparison can never disagree about what is allowed because
+both arms call them. What moved is WHERE the question is asked: at the
+CALL, where the type argument is concrete, rather than in the body,
+where it cannot be.
+
+That means a pass over the typed tree after everything is checked,
+because a caller may be checked before the function it calls -- during
+inference the requirement is not known yet. Afterwards both halves are
+facts to look up: which parameters a body compares, and which calls bind
+them to what.
+
+**It has to propagate.** A function that compares nothing itself but
+hands its own type parameter to one that does is the same wrong answer
+one call away:
+
+```plum
+let pick [T] (a: T) (b: T): T = biggest(a, b)
+```
+
+Requirements are closed to a fixed point over the call graph. Without
+that the fix is exactly one level deep, which is the shape of fix that
+looks done and is not -- and the first version of this WAS that shape,
+until a two-line fixture showed it.
+
+### Declared bounds fell out of it
+
+`[T: Ord]` has always parsed and always been stored, and nothing read
+it: `[T: Ord]`, `[T: Nonsense]` and `[T]` were three spellings of the
+same declaration. The README said bounded type parameters "are
+supported".
+
+A declared bound now seeds the same requirement table the body's own
+comparisons fill in, which is the entire implementation -- the
+call-site half cannot tell an inferred requirement from a declared one.
+An unknown bound name is rejected rather than ignored.
+
+Declaring stays optional, and that is a deliberate cut. Requiring it
+would reject `biggest [T]` as written above, which is correct code that
+compiles today, and inference does not need the help. What declaring
+buys is a signature that pins the requirement, so a body that stops
+comparing does not silently widen what callers may pass.
+
+### Two documentation claims were ahead of the code again
+
+The README said bounds "are supported"; they parsed and did nothing.
+That is the second instance this week -- the module-qualifier entry
+above has the same shape, where "they do not silently unify" was
+documented with an example while annotations silently unified.
+
+Prose describing behaviour is a claim. `corpus-check` has six fixtures
+for this one: three rejections for the holes, one for the unknown bound,
+one for a violated declared bound, and an executable one for everything
+that must keep working.
+
+### One walker, not a fourth
+
+`t_children` in `texpr.plum` returns the immediate sub-expressions of a
+typed node -- one place that knows all 44 `TNode` variants. `codegen.plum`
+already had three passes each enumerating the same variants for its own
+purpose, each a place a new node can be forgotten. This check needed two
+more traversals and got them in five lines each.

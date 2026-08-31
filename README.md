@@ -547,9 +547,27 @@ struct Pair[T] { first: T, second: T }
 let swap[T] (p: Pair[T]): Pair[T] = Pair { first: p.second, second: p.first }
 ```
 
-Bounded type parameters (`[T: Eq]`) are supported where a generic
-function needs `==` on its parameter — see `Map`/`Set` in the standard
-library below for real examples.
+**A comparison through a type parameter is checked where the type is
+known.** `<` needs an ordered type and `==` needs one that is not a
+function, and both rules apply inside a generic just as they do outside
+it:
+
+```
+let biggest [T] (a: T) (b: T): T = if a > b { a } else { b }
+
+biggest(3, 7)                       // fine
+biggest(Point { x: 1 }, origin)     // call to biggest: T is Point, but
+                                    // biggest requires T to be ordered
+```
+
+The error lands on the **call**, because that is where the type is
+chosen. The definition is correct code and stays legal — it is only the
+attempt to use it on something unorderable that is not.
+
+Bounds may also be written down, `[T: Ord]` and `[T: Eq]`, and are then
+required of callers whether or not the body compares anything. Writing
+one is optional: it pins the requirement into the signature so a body
+that stops comparing does not silently widen what callers may pass.
 
 ### Associated functions: `Type.func(args)`
 

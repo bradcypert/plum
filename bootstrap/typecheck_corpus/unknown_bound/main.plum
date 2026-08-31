@@ -1,0 +1,8 @@
+// Rejected: a bound Plum does not have.
+//
+// A typo here used to do nothing, silently -- `[T: Nonsense]` and `[T]`
+// were the same declaration. Quietly meaning nothing is the worst of
+// the three options.
+let f [T: Nonsense] (a: T): T = a
+
+let main (): Unit = println(f("x"))

@@ -1,0 +1,9 @@
+// Rejected: `==` on functions, reached through a type parameter.
+//
+// The same hole ordering had, and it compiled the same way. `f == g` on
+// two functions directly has always been rejected -- a function has no
+// meaningful equality, and the two backends used to disagree about what
+// it meant. Through a generic it slipped past.
+let same [T] (a: T) (b: T): Bool = a == b
+
+let main (): Unit = println(if same(|x: Int| x + 1, |y: Int| y + 1) { "eq" } else { "ne" })

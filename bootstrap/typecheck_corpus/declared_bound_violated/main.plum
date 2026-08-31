@@ -1,0 +1,14 @@
+// Rejected: a DECLARED bound, violated at the call.
+//
+// `choose` compares nothing at all, so nothing about its body requires
+// an ordered type. It says so in its signature instead, and that is
+// enough -- a declared bound seeds the same requirement the body's own
+// comparisons would have.
+//
+// Until 2026-08-31 the parser stored `[T: Ord]` and nothing read it, so
+// declaring a bound and declaring none meant exactly the same thing.
+struct P { x: Int }
+
+let choose [T: Ord] (a: T) (b: T) (flag: Bool): T = if flag { a } else { b }
+
+let main (): Unit = println(choose(P { x: 1 }, P { x: 2 }, true).x.to_string())

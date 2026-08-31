@@ -1,0 +1,12 @@
+// Rejected: the same thing one call further away.
+//
+// `pick` compares nothing itself. It hands its own type parameter to a
+// function that does, so requiring `T` to be ordered has to propagate
+// to it -- otherwise the fix is exactly one level deep, which is the
+// shape of fix that looks done and is not.
+struct P { x: Int }
+
+let biggest [T] (a: T) (b: T): T = if a > b { a } else { b }
+let pick [T] (a: T) (b: T): T = biggest(a, b)
+
+let main (): Unit = println(pick(P { x: 5 }, P { x: 2 }).x.to_string())

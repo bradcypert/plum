@@ -1,0 +1,18 @@
+// Rejected: a generic compared with `>`, called with a struct.
+//
+// This COMPILED before 2026-08-31, and gave a wrong answer rather than
+// an error: `>` on two structs is always false, so `biggest` returned
+// its second argument whichever one was larger.
+//
+// `a > b` on two `P`s directly has always been rejected. Reaching the
+// same comparison through a type parameter was the hole, and it was
+// deliberate -- the checker allowed an unresolved type variable through
+// on the grounds that "rejecting every one would reject correct generic
+// code to catch a case nothing writes". `biggest` is what people write.
+//
+// The check moved to the CALL, where the type argument is concrete.
+struct P { x: Int }
+
+let biggest [T] (a: T) (b: T): T = if a > b { a } else { b }
+
+let main (): Unit = println(biggest(P { x: 5 }, P { x: 2 }).x.to_string())

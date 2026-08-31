@@ -364,11 +364,261 @@ let bind_param (env: TyEnv) (p: parser.ParamNode) (ty: ITy): TyEnv =
 pub let check_program (program: parser.ProgramNode): Unit = {
     let ctx = build_context(program);
     let p2 = build_sigs(ctx, program);
-    check_all_fns(p2, program.items, 0)
+    check_ordered_bounds(ctx, program.items, check_all_fns(p2, program.items, 0, []))
 }
 
-let check_all_fns (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): Unit =
-    if i >= items.len() { () }
+// --- Ordered comparisons through a generic ---
+//
+// `a > b` on a struct is rejected. The SAME comparison reached through
+// a type parameter was not:
+//
+//     let biggest [T] (a: T) (b: T): T = if a > b { a } else { b }
+//     biggest(P { x: 5 }, P { x: 2 })     // compiled, answered P{x:2}
+//
+// It compiled and gave a wrong answer -- `>` on two structs is always
+// false, so `biggest` returned its second argument whichever was
+// "bigger". Not a crash; a silently wrong result from the most ordinary
+// generic function there is.
+//
+// `reject_unordered_comparison` let it through on purpose, and said why:
+// "an unresolved type variable is ALLOWED through ... rejecting every
+// one would reject correct generic code to catch a case nothing
+// writes." The first half is right -- rejecting `a > b` inside a
+// generic body would reject `biggest(1, 2)`, which is correct code. The
+// second half was the mistake: this is exactly what people write.
+//
+// So the check moves to the CALL, where the type argument is concrete.
+// A body may compare a `T`; a call that binds that `T` to something
+// unordered is the error, and it is reported where the wrong type was
+// supplied.
+//
+// It runs over the TYPED tree, after everything is checked, for one
+// reason: a caller may be checked before the function it calls, so
+// during inference the requirement is not known yet. Afterwards both
+// halves are just facts to look up.
+//
+// This is also the machinery an explicit bound would use. `[T: Ord]`
+// would DECLARE what this infers; the call-site half would not change.
+// `kind` is "Ord" or "Eq" -- the two things a comparison can need of a
+// type, and the two the checker already rejects for concrete types.
+// `<` needs an ORDER, which only Int, Float and String have; `==` needs
+// a value that is not, and does not contain, a function.
+//
+// Both had the same hole and it is the same fix, so they share the one
+// table rather than getting a mechanism each.
+pub struct OrdReq { pub module: String, pub name: String, pub param: String, pub kind: String }
+
+let check_ordered_bounds (ctx: TyContext) (items: Array[parser.ItemNode]) (fns: Array[TFn]): Unit =
+    check_calls_in_fns(ctx, fns, close_ord_reqs(fns, ord_reqs(fns, 0, declared_reqs(items, 0, [])), 32), 0)
+
+// --- Declared bounds: `[T: Ord]` ---
+//
+// The parser has always accepted a bound and stored it, and `render_type`
+// has always printed it back. Nothing read it, so `[T: Ord]` and
+// `[T: Nonsense]` meant exactly the same thing as `[T]`: nothing.
+//
+// A declared bound now SEEDS the same requirement table the body's own
+// comparisons fill in. That is the whole of it -- a bound is a
+// requirement stated instead of inferred, and the call-site check
+// cannot tell the two apart.
+//
+// Declaring stays OPTIONAL. Requiring it would reject `let biggest [T]
+// (a: T) (b: T): T = if a > b { a } else { b }`, which is correct code
+// that compiles today, and the inference does not need the help. What
+// declaring buys is a function that pins the requirement into its
+// SIGNATURE, so a body that stops comparing does not silently widen
+// what callers may pass.
+let declared_reqs (items: Array[parser.ItemNode]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
+    if i >= items.len() { acc }
+    else {
+        match items[i].kind {
+            IKLet(def) => {
+                set_err_pos(items[i].path, items[i].start, def.name);
+                declared_reqs(items, i + 1, generic_bounds(items[i].module, def.name, def.generics, 0, acc))
+            },
+            _ => declared_reqs(items, i + 1, acc),
+        }
+    }
+
+let generic_bounds (module_name: String) (fn_name: String) (gs: Array[parser.GenericParamNode]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
+    if i >= gs.len() { acc }
+    else { generic_bounds(module_name, fn_name, gs, i + 1, bound_names(module_name, fn_name, gs[i].name, gs[i].bound, 0, acc)) }
+
+let bound_names (module_name: String) (fn_name: String) (param: String) (bs: Array[String]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
+    if i >= bs.len() { acc }
+    else if bs[i] != "Ord" && bs[i] != "Eq" {
+        // A typo in a bound used to do nothing at all, silently. A name
+        // this does not know is rejected rather than ignored, for the
+        // same reason an unknown type is: quietly meaning nothing is
+        // the worst of the three options.
+        fail_tc("unknown bound `".concat(bs[i]).concat("` on ").concat(param)
+            .concat(". Plum has two: `Ord` and `Eq`"));
+        bound_names(module_name, fn_name, param, bs, i + 1, acc)
+    }
+    else if has_req(acc, module_name, fn_name, param, bs[i], 0) { bound_names(module_name, fn_name, param, bs, i + 1, acc) }
+    else { bound_names(module_name, fn_name, param, bs, i + 1, acc.push(OrdReq { module: module_name, name: fn_name, param: param, kind: bs[i] })) }
+
+// A requirement PROPAGATES to whoever passes its own type parameter
+// along. `pick` compares nothing itself:
+//
+//     let pick [T] (a: T) (b: T): T = biggest(a, b)
+//
+// but it hands its `T` to a function that does, so `pick(P {..}, ..)`
+// is the same wrong answer one call further away. Without this the fix
+// would be exactly one level deep, which is the shape of fix that looks
+// done and is not.
+//
+// Repeated to a FIXED POINT, because propagation can chain: a caller of
+// `pick` inherits it too. The fuel is a cap, not an expectation -- each
+// round either adds a (function, parameter) pair or stops, so it
+// terminates on its own; the cap is there because a checker that does
+// not terminate is worse than one that gives up.
+let close_ord_reqs (fns: Array[TFn]) (reqs: Array[OrdReq]) (fuel: Int): Array[OrdReq] =
+    if fuel <= 0 { reqs }
+    else {
+        let grown = propagate_reqs(fns, reqs, 0, reqs);
+        if grown.len() == reqs.len() { reqs } else { close_ord_reqs(fns, grown, fuel - 1) }
+    }
+
+let propagate_reqs (fns: Array[TFn]) (reqs: Array[OrdReq]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
+    if i >= fns.len() { acc }
+    else { propagate_reqs(fns, reqs, i + 1, propagate_in(fns, reqs, fns[i], fns[i].body, acc)) }
+
+let propagate_in (fns: Array[TFn]) (reqs: Array[OrdReq]) (f: TFn) (e: TExpr) (acc: Array[OrdReq]): Array[OrdReq] = {
+    let here = match e.node {
+        TFnCall(m, n, _, targs) => propagate_call(fns, reqs, f, m, n, targs, 0, acc),
+        _ => acc,
+    };
+    propagate_children(fns, reqs, f, t_children(e), 0, here)
+}
+
+let propagate_children (fns: Array[TFn]) (reqs: Array[OrdReq]) (f: TFn) (cs: Array[TExpr]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
+    if i >= cs.len() { acc }
+    else { propagate_children(fns, reqs, f, cs, i + 1, propagate_in(fns, reqs, f, cs[i], acc)) }
+
+let propagate_call (fns: Array[TFn]) (reqs: Array[OrdReq]) (f: TFn) (m: String) (n: String) (targs: Array[ITy]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
+    if i >= reqs.len() { acc }
+    else if reqs[i].module != m || reqs[i].name != n { propagate_call(fns, reqs, f, m, n, targs, i + 1, acc) }
+    else {
+        let idx = generic_index(fns, m, n, reqs[i].param);
+        let supplied = if idx >= 0 && idx < targs.len() { subst_apply(f.subst, targs[idx]) } else { ITUnit };
+        propagate_call(fns, reqs, f, m, n, targs, i + 1, add_param_req(f, reqs[i].kind, supplied, acc))
+    }
+
+// Only when the caller passed one of its OWN type parameters. Anything
+// else is either concrete -- and checked at this call directly -- or a
+// variable that will be resolved by the time it is.
+let add_param_req (f: TFn) (kind: String) (t: ITy) (acc: Array[OrdReq]): Array[OrdReq] =
+    match t {
+        ITParam(pn) =>
+            if Array.contains(f.generics, pn) && !has_req(acc, f.module, f.name, pn, kind, 0) {
+                acc.push(OrdReq { module: f.module, name: f.name, param: pn, kind: kind })
+            } else { acc },
+        _ => acc,
+    }
+
+let has_req (reqs: Array[OrdReq]) (m: String) (n: String) (param: String) (kind: String) (i: Int): Bool =
+    if i >= reqs.len() { false }
+    else if reqs[i].module == m && reqs[i].name == n && reqs[i].param == param && reqs[i].kind == kind { true }
+    else { has_req(reqs, m, n, param, kind, i + 1) }
+
+// Which of a function's own type parameters its body compares.
+let ord_reqs (fns: Array[TFn]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
+    if i >= fns.len() { acc }
+    else { ord_reqs(fns, i + 1, ord_reqs_in(fns[i], fns[i].body, acc)) }
+
+let ord_reqs_in (f: TFn) (e: TExpr) (acc: Array[OrdReq]): Array[OrdReq] = {
+    let here = match e.node {
+        TBinary(op, l, r) =>
+            if is_ordered_op(op) { ord_req_for(f, "Ord", l.ty, ord_req_for(f, "Ord", r.ty, acc)) }
+            else if is_equality_op(op) { ord_req_for(f, "Eq", l.ty, ord_req_for(f, "Eq", r.ty, acc)) }
+            else { acc },
+        _ => acc,
+    };
+    ord_reqs_children(f, t_children(e), 0, here)
+}
+
+let ord_reqs_children (f: TFn) (cs: Array[TExpr]) (i: Int) (acc: Array[OrdReq]): Array[OrdReq] =
+    if i >= cs.len() { acc } else { ord_reqs_children(f, cs, i + 1, ord_reqs_in(f, cs[i], acc)) }
+
+let is_equality_op (op: parser.BOp): Bool = match op { BEq => true, BNe => true, _ => false }
+
+let ord_req_for (f: TFn) (kind: String) (t: ITy) (acc: Array[OrdReq]): Array[OrdReq] =
+    match t {
+        ITParam(n) => if Array.contains(f.generics, n) && !has_req(acc, f.module, f.name, n, kind, 0) { acc.push(OrdReq { module: f.module, name: f.name, param: n, kind: kind }) } else { acc },
+        _ => acc,
+    }
+
+// Whether a concrete type fails `kind`. Both arms delegate to the check
+// that already existed for concrete types, so a generic call and a
+// direct comparison can never disagree about what is allowed.
+let violates_bound (ctx: TyContext) (kind: String) (t: ITy): Bool =
+    if kind == "Ord" { is_known_unordered(t) }
+    else if kind == "Eq" { Option.is_some(first_function_within(ctx, t, [])) }
+    else { false }
+
+let bound_needs (kind: String): String =
+    if kind == "Ord" { " to be ordered -- Int, Float or String" }
+    else { " to have equality, and a function has none" }
+
+// And which calls bind one of those parameters to a type that cannot be
+// ordered.
+let check_calls_in_fns (ctx: TyContext) (fns: Array[TFn]) (reqs: Array[OrdReq]) (i: Int): Unit =
+    if i >= fns.len() { () }
+    else {
+        set_err_pos(fns[i].path, fns[i].offset, fns[i].name);
+        check_calls_in(ctx, fns, reqs, fns[i].subst, fns[i].body);
+        check_calls_in_fns(ctx, fns, reqs, i + 1)
+    }
+
+// `sub` is the ENCLOSING function's substitution. A call records the
+// fresh type variables it instantiated with, not the types they were
+// later unified against, so `targs` here reads as `?3` until the
+// substitution is applied -- which is exactly what `cg_concrete` does
+// before the backend mangles a symbol name. Without this the check
+// looked at a variable every time and never fired.
+let check_calls_in (ctx: TyContext) (fns: Array[TFn]) (reqs: Array[OrdReq]) (sub: Subst) (e: TExpr): Unit = {
+    match e.node {
+        TFnCall(m, n, _, targs) => check_call_targs(ctx, fns, reqs, sub, m, n, targs, 0),
+        _ => (),
+    };
+    check_calls_children(ctx, fns, reqs, sub, t_children(e), 0)
+}
+
+let check_calls_children (ctx: TyContext) (fns: Array[TFn]) (reqs: Array[OrdReq]) (sub: Subst) (cs: Array[TExpr]) (i: Int): Unit =
+    if i >= cs.len() { () }
+    else { { check_calls_in(ctx, fns, reqs, sub, cs[i]); check_calls_children(ctx, fns, reqs, sub, cs, i + 1) } }
+
+let check_call_targs (ctx: TyContext) (fns: Array[TFn]) (reqs: Array[OrdReq]) (sub: Subst) (m: String) (n: String) (targs: Array[ITy]) (i: Int): Unit =
+    if i >= reqs.len() { () }
+    else {
+        if reqs[i].module == m && reqs[i].name == n {
+            let idx = generic_index(fns, m, n, reqs[i].param);
+            let got = if idx >= 0 && idx < targs.len() { subst_apply(sub, targs[idx]) } else { ITUnit };
+            if idx >= 0 && idx < targs.len() && violates_bound(ctx, reqs[i].kind, got) {
+                fail_tc("call to ".concat(n).concat(": ").concat(reqs[i].param).concat(" is ")
+                    .concat(render_ty(got)).concat(", but ").concat(n).concat(" requires ")
+                    .concat(reqs[i].param).concat(bound_needs(reqs[i].kind)))
+            } else { () }
+        } else { () };
+        check_call_targs(ctx, fns, reqs, sub, m, n, targs, i + 1)
+    }
+
+let generic_index (fns: Array[TFn]) (m: String) (n: String) (param: String): Int =
+    generic_index_acc(fns, m, n, param, 0)
+
+let generic_index_acc (fns: Array[TFn]) (m: String) (n: String) (param: String) (i: Int): Int =
+    if i >= fns.len() { 0 - 1 }
+    else if fns[i].module == m && fns[i].name == n { index_of_name(fns[i].generics, param, 0) }
+    else { generic_index_acc(fns, m, n, param, i + 1) }
+
+let index_of_name (names: Array[String]) (name: String) (i: Int): Int =
+    if i >= names.len() { 0 - 1 }
+    else if names[i] == name { i }
+    else { index_of_name(names, name, i + 1) }
+
+let check_all_fns (p2: Program2) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[TFn]): Array[TFn] =
+    if i >= items.len() { acc }
     else {
         match items[i].kind {
             // A zero-parameter `let` is a GLOBAL, and it used to be
@@ -376,9 +626,9 @@ let check_all_fns (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): Unit 
             // `let M: Int = "hello"` and only `plum build` caught it.
             // A checker that misses what the compiler rejects is worse
             // than no checker, because it is the one people run.
-            IKLet(def) => if Array.is_empty(def.params) { { set_err_pos(items[i].path, items[i].start, def.name); check_global(p2, def, items[i].module); check_all_fns(p2, items, i + 1) } }
-                else { { set_err_pos(items[i].path, items[i].start, def.name); check_fn(p2, def, items[i].module); check_all_fns(p2, items, i + 1) } },
-            _ => check_all_fns(p2, items, i + 1),
+            IKLet(def) => if Array.is_empty(def.params) { { set_err_pos(items[i].path, items[i].start, def.name); check_global(p2, def, items[i].module); check_all_fns(p2, items, i + 1, acc) } }
+                else { { set_err_pos(items[i].path, items[i].start, def.name); check_all_fns(p2, items, i + 1, acc.push(check_fn_typed(p2, def, items[i].module))) } },
+            _ => check_all_fns(p2, items, i + 1, acc),
         }
     }
 
@@ -406,7 +656,7 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
         Ok(_) => (),
         Err(e) => fail_tc("function ".concat(def.name).concat(": declared return type ").concat(render_ty(ret_ty)).concat(" doesn't match body type ").concat(render_ty(body_ty)).concat(" (").concat(e).concat(")")),
     };
-    TFn { name: def.name, module: module_name, generics: sig.generics, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
+    TFn { name: def.name, module: module_name, path: ERR.get().path, offset: ERR.get().offset, generics: sig.generics, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
 }
 
 // Parameter names paired with their (now resolved) declared types.
@@ -432,7 +682,15 @@ let typed_params (params: Array[parser.ParamNode]) (tys: Array[ITy]) (subst: Sub
 pub let typed_program (program: parser.ProgramNode): Array[TFn] = {
     let ctx = build_context(program);
     let p2 = build_sigs(ctx, program);
-    typed_fns_acc(p2, program.items, 0, [])
+    let fns = typed_fns_acc(p2, program.items, 0, []);
+    // Run on the BUILD path too, not only in `check`. A rule the
+    // compiler enforces and the checker does not is the gap that let
+    // `let M: Int = "hello"` through until v0.0.16; a rule the checker
+    // enforces and the compiler does not would be the same gap facing
+    // the other way, and would mean `plum build` compiled a program
+    // `plum check` had rejected.
+    check_ordered_bounds(ctx, program.items, fns);
+    fns
 }
 
 // Every top-level 0-parameter binding, typed, in declaration order —
@@ -485,7 +743,7 @@ let typed_globals_acc (p20: Program2) (globals: Array[GlobalDef]) (i: Int) (acc:
             },
         };
         typed_globals_acc(p20, globals, i + 1,
-            acc.push(TFn { name: globals[i].def.name, module: globals[i].module, generics: [], params: [], ret: subst_apply(s2, r.ty), body: r.texpr, subst: s2 }))
+            acc.push(TFn { name: globals[i].def.name, module: globals[i].module, path: ERR.get().path, offset: ERR.get().offset, generics: [], params: [], ret: subst_apply(s2, r.ty), body: r.texpr, subst: s2 }))
     }
 
 let typed_fns_acc (p2: Program2) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[TFn]): Array[TFn] =

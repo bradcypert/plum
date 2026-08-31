@@ -1,0 +1,32 @@
+// The other half of the ordered-bound check: what it must NOT reject.
+//
+// Every one of these compares through a type parameter, which is the
+// shape the check is about. Int, Float and String are ordered, so all
+// of them are correct code and have to keep compiling -- a check that
+// rejected these would be worse than the hole it closes.
+struct P { x: Int }
+
+let biggest [T] (a: T) (b: T): T = if a > b { a } else { b }
+let pick [T] (a: T) (b: T): T = biggest(a, b)
+
+// A generic that never orders anything may take any type at all,
+// including one that cannot be ordered.
+let second [A, B] (a: A) (b: B): B = b
+
+// Equality through a type parameter is the same mechanism. These types
+// all have equality, so all of these are correct code.
+let same [T] (a: T) (b: T): Bool = a == b
+
+// A bound declared rather than inferred, and satisfied.
+let choose [T: Ord] (a: T) (b: T) (flag: Bool): T = if flag { a } else { b }
+
+let main (): Unit = {
+    println(biggest(3, 7).to_string());
+    println(biggest(1.5, 2.5).to_string());
+    println(biggest("b", "a"));
+    println(pick(10, 4).to_string());
+    println(second(P { x: 1 }, "unordered is fine here"));
+    println(if same(2, 2) { "same" } else { "differ" });
+    println(if same(P { x: 1 }, P { x: 1 }) { "structs compare" } else { "differ" });
+    println(choose("a", "b", false))
+}
