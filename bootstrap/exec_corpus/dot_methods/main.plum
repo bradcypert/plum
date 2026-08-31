@@ -12,6 +12,7 @@
 // never applied to the other three. Each line below is one that used to
 // be a type error.
 let double (n: Int): Int = n * 2
+let double_str (n: Int): String = n.to_string()
 let upper (s: String): String = s.to_upper()
 
 let main (): Unit = {
@@ -41,6 +42,13 @@ let main (): Unit = {
     println(match m.get("a") { Some(v) => v.to_string(), None => "none" });
     println(match Option.map(Some(2), double) { Some(v) => v.to_string(), None => "none" });
     println(Array.join(Array.map(["p"], upper), ","));
+
+    // `set` is shared between `Array.set(i, v)` and `Ref.set(v)`, and
+    // they are told apart by arity rather than by receiver.
+    let r = ref(1);
+    r.set(2);
+    println(r.get().to_string());
+    println(Array.join(Array.map([1, 2].set(0, 9), double_str), ","));
 
     // And the forms that already worked still do.
     println("ab".concat("c"));

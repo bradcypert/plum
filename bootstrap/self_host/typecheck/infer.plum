@@ -1562,7 +1562,31 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                     // root.
                     match find_sig(p2, ns.concat(".").concat(method_name)) {
                         Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
-                        None => match builtin_sig(ns.concat(".").concat(method_name)) {
+                        // `Array.len(xs)` IS `xs.len()`. `T.f(x)` is the
+                        // method-call mechanism, so a namespaced call to
+                        // a builtin method has to mean the method call --
+                        // and since the only implementation of a builtin
+                        // method is `infer_method_call`, it has to BE
+                        // that call rather than a second signature
+                        // describing the same thing.
+                        //
+                        // Ten builtins had no long form at all before
+                        // this (`Array.len`, `String.concat`,
+                        // `Int.to_float`, `Ref.get` ...). `Array.push`
+                        // was worse: `builtin_sig` gave it a signature,
+                        // so it type-CHECKED and then failed in the
+                        // backend with "prelude function Array.push has
+                        // no implementation in this backend's runtime
+                        // yet". A checker that accepts what the compiler
+                        // rejects is the failure this project treats as
+                        // most serious, and it was reachable by writing
+                        // `Array.push(xs, x)`.
+                        //
+                        // After the declared-function lookup above, so a
+                        // real `let Array.reverse` still wins.
+                        None => if builtin_ns_method(ns, method_name) && args.len() >= 1 {
+                            infer_method_call(p2, state, env, acc, args[0], method_name, Array.slice(args, 1, args.len()))
+                        } else { match builtin_sig(ns.concat(".").concat(method_name)) {
                             Some(sig) => infer_fn_call(p2, state, env, acc, sig, args),
                             // A MODULE-qualified call (`lexer.tokenize(src)`).
                             // `main.plum` merges every module's items into one
@@ -1595,7 +1619,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                                     None => infer_method_call(p2, state, env, acc, base, method_name, args),
                                 },
                             },
-                        } }
+                        } } }
                 }
             },
             _ => infer_method_call(p2, state, env, acc, base, method_name, args),
@@ -1983,6 +2007,16 @@ let infer_call_args (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst)
 // `recv` is the type the method is called ON -- "" means any receiver.
 pub struct BuiltinMethod { pub recv: String, pub name: String, pub detail: String }
 
+// Whether `Ns.name` names one of the methods below -- which is what
+// makes `Ns.name(x, ..)` mean `x.name(..)`.
+pub let builtin_ns_method (ns: String) (name: String): Bool =
+    has_builtin_method(builtin_methods(), ns, name, 0)
+
+let has_builtin_method (ms: Array[BuiltinMethod]) (ns: String) (name: String) (i: Int): Bool =
+    if i >= ms.len() { false }
+    else if ms[i].recv == ns && ms[i].name == name { true }
+    else { has_builtin_method(ms, ns, name, i + 1) }
+
 pub let builtin_methods (): Array[BuiltinMethod] = [
     BuiltinMethod { recv: "", name: "to_string", detail: "to_string(): String" },
     BuiltinMethod { recv: "Array", name: "map", detail: "map(f: (T) -> U): Array[U]" },
@@ -2010,6 +2044,8 @@ pub let builtin_methods (): Array[BuiltinMethod] = [
     BuiltinMethod { recv: "Map", name: "get", detail: "get(key: K): Option[V]" },
     BuiltinMethod { recv: "Map", name: "remove", detail: "remove(key: K): Map[K, V]" },
     BuiltinMethod { recv: "Array", name: "join", detail: "join(sep: String): String" },
+    BuiltinMethod { recv: "Array", name: "remove", detail: "remove(i: Int): Array[T]" },
+    BuiltinMethod { recv: "Array", name: "set", detail: "set(i: Int) (v: T): Array[T]" },
 ]
 
 let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): InferResult =

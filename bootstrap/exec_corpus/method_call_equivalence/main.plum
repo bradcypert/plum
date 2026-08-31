@@ -1,0 +1,40 @@
+// `T.f(x)` and `x.f()` are the same call. The README calls the first
+// one THE method-call mechanism -- `xs.map(f)` works because
+// `Array.map` exists -- so every builtin has to be writable both ways.
+//
+// It wasn't. Ten builtins had no long form at all: `Array.len(xs)`,
+// `String.concat(a, b)`, `Int.to_float(n)`, `Ref.get(r)` and the rest
+// reported "unbound variant/function: Array".
+//
+// `Array.push(xs, x)` was worse than unbound. It had a signature, so it
+// type-CHECKED, and then the backend refused it:
+//
+//     self-hosted codegen: prelude function Array.push has no
+//     implementation in this backend's runtime yet
+//
+// A checker that accepts what the compiler rejects is the failure this
+// project treats as most serious, and `plum check` is the one people
+// run in an editor.
+//
+// Each line prints the two spellings side by side. They have to agree.
+let show (n: Int): String = n.to_string()
+
+let pair (a: String) (b: String): String = a.concat("/").concat(b)
+
+let joined (xs: Array[Int]): String = Array.join(Array.map(xs, show), ",")
+
+let main (): Unit = {
+    let xs = [1, 2, 3];
+    let s = "ab";
+    let r = ref(7);
+
+    println(pair(Array.len(xs).to_string(), xs.len().to_string()));
+    println(pair(joined(Array.push(xs, 4)), joined(xs.push(4))));
+    println(pair(joined(Array.remove(xs, 0)), joined(xs.remove(0))));
+    println(pair(joined(Array.set(xs, 0, 9)), joined(xs.set(0, 9))));
+    println(pair(Array.join(Array.map(xs, show), ","), Array.join(xs.map(show), ",")));
+    println(pair(String.concat(s, "c"), s.concat("c")));
+    println(pair(String.len(s).to_string(), s.len().to_string()));
+    println(pair(Int.to_float(3).to_string(), 3.to_float().to_string()));
+    println(pair(Ref.get(r).to_string(), r.get().to_string()))
+}

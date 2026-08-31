@@ -16838,3 +16838,55 @@ There are six such names today (`concat`, `contains`, `get`, `len`,
 untested. Both halves of the harness were verified by breaking them:
 deleting `Array.map` from the table, and removing every `.concat(` from
 the fixture.
+
+## `T.f(x)` and `x.f()`, in both directions (2026-08-31)
+
+The entry above fixed the dot form: `m.len()` on a Map used to fail
+because a builtin arm claimed the name `len` and refused it to every
+other type. The equivalence broke the other way too, and worse.
+
+**Ten builtins had no long form at all.** `Array.len(xs)`,
+`Array.remove(xs, i)`, `Array.set(xs, i, v)`, `String.concat(a, b)`,
+`String.as_cstr(s)`, `CStr.as_string(c)`, `Int.to_float(n)`,
+`Ref.get(r)`, `Ref.set(r, v)`, and the channel operations all reported
+`unbound variant/function: Array`. They existed only as `xs.len()`.
+
+**And `Array.push(xs, x)` type-checked and would not compile.**
+`builtin_sig` gave it a signature, so `plum check` said `ok`; the
+backend then refused it with "prelude function Array.push has no
+implementation in this backend's runtime yet". That is the failure this
+project treats as most serious -- the checker is the one people run in
+an editor, and it was accepting a program the compiler rejects. It was
+reachable by writing the most ordinary thing imaginable.
+
+### The fix is the rule, not a table of exceptions
+
+A namespaced call to a builtin method IS the method call:
+`Ns.name(x, rest)` is inferred as `x.name(rest)` when `Ns.name` names a
+builtin. One line in the call chain, placed after declared functions so
+a real `let Array.reverse` still wins, and before `builtin_sig` so
+`Array.push` takes this route rather than the broken one.
+
+The alternative -- give each of the ten a signature in `builtin_sig` --
+is what `Array.push` already had, and `Array.push` is the one that
+compiled to nothing. A second description of a builtin is a second thing
+that can disagree with the first. Routing to the single implementation
+cannot.
+
+Because the routing reads `builtin_methods()`, the long form is now
+DERIVED: adding a method to that table gives you the dot form, the long
+form and the completion entry together. The existing `check-builtins`
+requirement -- every name the checker's chain matches must be in the
+table -- therefore covers all three.
+
+### The harness caught the author
+
+Adding `Array.set` to the table made `set` a name shared between
+`Array.set(i, v)` and `Ref.set(v)`, and `check-builtins` failed because
+the new shared name was not exercised as a dot call. That is the check
+written yesterday catching a gap introduced today, in the same session,
+without anyone remembering it existed.
+
+`exec_corpus/method_call_equivalence` prints both spellings of nine
+calls side by side and requires them to agree, so this is checked by
+running rather than by compiling.
