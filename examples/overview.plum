@@ -90,7 +90,7 @@ let swap (a, b) = (b, a)
 
 // A one-element tuple needs a trailing comma to distinguish it from a
 // plain parenthesized expression: `(5)` is just `5`, `(5,)` is a tuple.
-let one_tuple = (5, )
+let one_tuple = (5,)
 
 // Closures: `|params| expr`, no `move` keyword needed — there's nothing
 // to borrow-check, so captures just work. (Array/list literals and a

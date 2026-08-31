@@ -8,7 +8,13 @@ use Os;
 //     out from what it closes;
 //   * a run of comment lines is indented with what it documents;
 //   * a run of blank lines collapses to one;
-//   * a comma has no space before it and one space after.
+//   * a comma has no space before it and one space after, and so does
+//     a colon -- except that a colon's LEADING space is left alone,
+//     because `require c : "msg"` spells it that way and nothing at the
+//     token level separates that from `x: Int`;
+//   * nothing sits just inside a bracket: `f( a )` becomes `f(a)`;
+//   * a binary operator gets one space on each side, and a UNARY minus
+//     does not -- `a-b` becomes `a - b` while `-n` is left alone.
 //
 // Everything else in the file is passed through byte for byte.
 //
@@ -445,14 +451,65 @@ let gaps_acc (chars: Array[String]) (lexed: lexer.LexedSource) (i: Int) (acc: St
         let from = if i == 0 { 0 } else { lexed.ends[i - 1] };
         let gap = slice(chars, from, lexed.starts[i]);
         let prev = if i == 0 { "" } else { slice(chars, lexed.starts[i - 1], lexed.ends[i - 1]) };
-        gaps_acc(chars, lexed, i + 1, acc.concat(canonical_gap(gap, prev, text)).concat(text))
+        // Two tokens back, because deciding whether `prev` was a BINARY
+        // operator needs what came before IT -- `a - 1` and `(-1)`
+        // differ only there.
+        let prev2 = if i < 2 { "" } else { slice(chars, lexed.starts[i - 2], lexed.ends[i - 2]) };
+        gaps_acc(chars, lexed, i + 1, acc.concat(canonical_gap(gap, prev, text, prev2)).concat(text))
     }
 
-let canonical_gap (gap: String) (prev: String) (next: String): String =
+let canonical_gap (gap: String) (prev: String) (next: String) (prev2: String): String =
     if gap.contains("\n") || gap.contains("//") { gap }
-    else if next == "," { "" }
-    else if prev == "," { " " }
+    // Nothing before a separator or a closing bracket, and nothing
+    // after an opening one. Unanimous in the corpus: not one space
+    // appears after `(` or before `)` outside a string.
+    //
+    // `:` is NOT in this list, and the corpus is why. A colon is a type
+    // annotation in `x: Int` and a SEPARATOR in `require b != 0 :
+    // "message"`, and every contract in the repository writes the
+    // second one spaced. Nothing at the token level tells the two
+    // apart, so the space before a colon is left as written and only
+    // the space after it is normalised.
+    else if next == "," || next == ")" || next == "]" { "" }
+    else if prev == "(" || prev == "[" { "" }
+    // One after. `x: Int` and `f(a, b)`.
+    else if prev == "," || prev == ":" { " " }
+    // A BINARY operator gets one space on each side. `a+b` becomes
+    // `a + b`, and `n*2 + (n-1)/3` becomes `n * 2 + (n - 1) / 3`.
+    else if is_binary_op(next, prev) || is_binary_op(prev, prev2) { " " }
     else { gap }
+
+// Is this token a binary operator HERE?
+//
+// `-` is the whole difficulty. It is binary in `a - 1` and unary in
+// `-1`, and the difference is entirely what comes before it: an
+// operand, or something that cannot end one. `(`, `,`, `=`, another
+// operator and the start of the file all mean unary, so `let x = -1`
+// keeps its shape while `a-1` gains its spaces.
+//
+// `|` is excluded outright. It opens and closes a closure's parameter
+// list -- `|x| x + 1` -- and spacing that as an operator would give
+// `| x | x + 1`. `.` is excluded because `a.b` is not an expression
+// with operands, it is a name.
+let is_binary_op (tok: String) (before: String): Bool =
+    if tok == "-" { ends_an_operand(before) }
+    else { tok == "+" || tok == "*" || tok == "/" || tok == "%"
+        || tok == "==" || tok == "!=" || tok == "<" || tok == ">"
+        || tok == "<=" || tok == ">=" || tok == "&&" || tok == "||"
+        || tok == "|>" }
+
+// Can this token END an operand? Only then is a following `-` binary.
+let ends_an_operand (tok: String): Bool =
+    tok != "" && tok != "(" && tok != "[" && tok != "{" && tok != ","
+        && tok != ";" && tok != "=" && tok != "=>" && tok != ":"
+        && tok != "return" && tok != "|"
+        // An operator cannot end an operand, so `a * -1` keeps the `-`
+        // unary. `is_binary_op` is not consulted here because it would
+        // recurse; the list is the operators that are never unary.
+        && tok != "+" && tok != "*" && tok != "/" && tok != "%"
+        && tok != "==" && tok != "!=" && tok != "<" && tok != ">"
+        && tok != "<=" && tok != ">=" && tok != "&&" && tok != "||"
+        && tok != "|>" && tok != "-"
 
 let format_once (path: String) (src: String): String = {
     let lexed = lexer.tokenize_spanned(src);

@@ -1,18 +1,39 @@
-// Spacing around commas, normalized between TOKENS -- which is why the
-// commas inside the string literals below are untouched. A gap is by
-// definition not inside a string, so the rule cannot reach one.
+// Spacing between TOKENS -- which is why the commas and colons inside
+// the string literals below are untouched. A gap is by definition not
+// inside a string, so no rule here can reach one.
 let nums (): Array[Int] = [1, 2, 3]
 
 let pair (a: Int) (b: Int): Int = a + b
 
-let sep (): String = ",".concat("a,b").concat(",,")
+let sep (): String = ",".concat("a,b").concat("k:v")
+
+let mix (n: Int): Int = n * 2 + (n - 1) / 3
+
+let fields (n: Int): P = P { x: n, y: n + 1 }
+
+struct P { x: Int, y: Int }
+
+let idx (xs: Array[Int]): Int = xs[0]
 
 let call (): Int = pair(1, 2) + pair(3, 4)
 
-let tup (): Tuple[Int, Int] = (1, 2)
+// `-` is unary or binary depending on what precedes it, and only what
+// precedes it. Every one of these is left or spaced accordingly.
+let neg (n: Int): Int = -n
+let sub (a: Int) (b: Int): Int = a - b
+let both (n: Int): Int = -n + (0 - n) * -1
+let negs (): Array[Int] = [-1, -2]
+let cmp (n: Int): Bool = n >= -1 && n < 0
 
-// A gap holding a newline belongs to the indent pass, so a broken
-// argument list keeps its shape.
+// A colon is a type annotation in `x: Int` and a SEPARATOR here, and
+// every contract in the corpus writes this one spaced. Nothing at the
+// token level tells them apart, so the space before a colon is left as
+// written.
+let half (n: Int): Int
+    require n > 0 : "n must be positive"
+= n / 2
+
+// A gap holding a newline belongs to the indent pass.
 let broken (): Int = pair(
     1,
     2)
