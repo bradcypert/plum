@@ -594,22 +594,37 @@ that stops comparing does not silently widen what callers may pass.
 
 ### Associated functions: `Type.func(args)`
 
-```
+```plum
 struct Point { x: Int, y: Int }
 
 let Point.add (a: Point) (b: Point): Point = Point { x: a.x + b.x, y: a.y + b.y }
+let Point.show (p: Point): String = p.x.to_string().concat(",").concat(p.y.to_string())
 
-let main (): Unit = println(Point.add(Point { x: 1, y: 2 }, Point { x: 10, y: 20 }))
+let main (): Unit = {
+    let p = Point { x: 1, y: 2 };
+    let q = Point { x: 10, y: 20 };
+    // The same call, written both ways.
+    println(Point.show(Point.add(p, q)));
+    println(Point.show(p.add(q)))
+}
+```
+
+```
+11,22
+11,22
 ```
 
 `let Type.func (...) = ...` declares a real, per-type associated
-function — called as `Type.func(args)`, with the "receiver" passed as
-an ordinary first argument, not `receiver.func(args)` method-dispatch
-syntax. This works for any struct/enum you declare, not just the
-standard library's own types (which is exactly how `Option.map`,
+function. It can be called either way: `Type.func(receiver, args)` with
+the receiver as an ordinary first argument, or `receiver.func(args)`.
+The two are the same call — the second is defined as the first, which is
+why `xs.map(f)` works at all (see [Standard
+library](#standard-library)).
+
+This works for any struct/enum you declare, not just the standard
+library's own types — which is exactly how `Option.map`,
 `Array.reverse`, `Map.get`, and the rest of the standard library below
-are themselves built — see the [Standard
-library](#standard-library) section).
+are themselves built.
 
 Two types can each declare a function with the same name (`Point.add`
 and `Circle.add` coexist fine) — there's no collision, since each
