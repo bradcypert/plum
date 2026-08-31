@@ -16722,3 +16722,66 @@ failure instead of skipping it. That is the gap that hid this: a project
 is a directory, the sweep walked directories, and a file beside them was
 swept up by nothing. Verified by dropping a stray file in and watching
 it fail, rather than by reading the loop.
+
+## The editor did not know about the compiler's own methods (2026-08-31)
+
+Typing `xs.` in an editor offered twenty-three methods on an array and
+not `map`, `filter`, `fold`, `len` or `push` -- the five a person
+reaches for first. Typing `Array.` offered `Array.push` and none of the
+other four.
+
+### Why
+
+Completion is built by reading the prelude's SOURCE, so everything
+written in Plum appears automatically. `map` and friends are not written
+in Plum: `infer_method_call` recognises them as a chain of name
+comparisons, because each needs its own unification and its own IR node.
+There is no signature to look up, so there was nothing for completion to
+read.
+
+There WAS a hand-written list of builtins in `main.plum`. It had seven
+entries, none of those five, and it fed only the `Array.` path and not
+the `xs.` one -- which is why `push` was offered under one spelling and
+not the other. A hand-kept list beside an authoritative one is the
+pattern this project keeps removing; here it had simply stopped being
+maintained, silently, because nothing compared them.
+
+`typecheck.builtin_methods()` is that list, moved next to the chain it
+has to agree with, and `bootstrap/check-builtins` fails when the chain
+matches a name the table does not carry. The chain stays the authority.
+The table stays honest about being a second copy, and is checked against
+the first -- verified by deleting `Array.map` from it and watching the
+harness fail.
+
+### And a second gap under it
+
+`use Os;` put nothing in the completion list either. `cmd_complete`
+called `cg_with_prelude` with an EMPTY program to get "the prelude on
+its own" -- and that function's other half resolves the program's `use`
+declarations, which an empty program has none of. So no standard-library
+module appeared in any project, ever. `cmd_members` passed the real
+project all along, which is why this showed only on the namespace path.
+
+Fixing it exposed a third: `push_completion` labelled every item with
+its BARE name, so a module member would have been offered as
+`read_file`, which is not how it can be written. Names are qualified by
+their module now, the prelude excepted -- prelude names are written
+bare, and until stdlib modules reached this list there was nothing else
+here with a module to speak of.
+
+### Prose that names a function can be checked
+
+`doc-check` compiles the code BLOCKS. The prose around them names
+sixty-seven standard-library functions in README.md, and nothing looked
+at those. `bootstrap/check-doc-names` now does, against the same list
+the editor offers -- so it fails if a document names something that does
+not exist, AND if completion stops reporting something a document names.
+
+All sixty-seven were real. That is worth recording as the null result it
+is: the stdlib names were the part of the README that had NOT rotted,
+while its language claims had. Checking cheaply is still worth it, but
+the guess about where the rot was concentrated was wrong.
+
+A name is only checked when its namespace is one the compiler knows,
+which is what stops `Point.add` in a worked example from being read as
+a standard-library claim.

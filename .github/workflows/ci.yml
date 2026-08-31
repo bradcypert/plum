@@ -94,6 +94,10 @@ jobs:
       # cannot test.
       - name: the tutorial still works
         run: ./bootstrap/doc-check
+      - name: every builtin method is offered by completion
+        run: ./bootstrap/check-builtins
+      - name: every stdlib name the docs mention exists
+        run: ./bootstrap/check-doc-names
 
       # Allocation counts. Refcount churn creeps back in silently, and
       # the language's central claim is a number nobody was looking at

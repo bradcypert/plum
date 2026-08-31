@@ -1960,6 +1960,58 @@ let infer_call_args (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst)
         infer_call_args(p2, r.state, env, s2, args, param_tys, i + 1, texprs.push(r.texpr))
     }
 
+// --- Builtin methods, as DATA ---
+//
+// The methods below this comment are recognised by `infer_method_call`
+// as a chain of name comparisons, because each one needs its own
+// unification and its own IR node -- there is no signature to look up.
+// That works for CHECKING and is invisible to everything else, which is
+// how the editor came to offer 23 methods on an array and not `map`,
+// `filter`, `fold`, `len` or `push`.
+//
+// Completion read the prelude's SOURCE, so anything written in Plum
+// appeared automatically and anything the compiler implements itself
+// did not, unless someone had typed it into a list by hand. There was
+// such a list, in `main.plum`; it had seven entries, none of the five
+// above, and it fed only the `Array.` path and not the `xs.` one.
+//
+// This is that list, moved next to the code it has to agree with, and
+// `bootstrap/check-builtins` fails if a name the chain matches is
+// missing from it. The chain stays the authority; this stays honest
+// about being a second copy, and is checked against the first.
+//
+// `recv` is the type the method is called ON -- "" means any receiver.
+pub struct BuiltinMethod { pub recv: String, pub name: String, pub detail: String }
+
+pub let builtin_methods (): Array[BuiltinMethod] = [
+    BuiltinMethod { recv: "", name: "to_string", detail: "to_string(): String" },
+    BuiltinMethod { recv: "Array", name: "map", detail: "map(f: (T) -> U): Array[U]" },
+    BuiltinMethod { recv: "Array", name: "filter", detail: "filter(f: (T) -> Bool): Array[T]" },
+    BuiltinMethod { recv: "Array", name: "fold", detail: "fold(init: U) (f: (U, T) -> U): U" },
+    BuiltinMethod { recv: "Array", name: "len", detail: "len(): Int" },
+    BuiltinMethod { recv: "Array", name: "push", detail: "push(x: T): Array[T]" },
+    BuiltinMethod { recv: "String", name: "concat", detail: "concat(other: String): String" },
+    BuiltinMethod { recv: "String", name: "len", detail: "len(): Int" },
+    BuiltinMethod { recv: "String", name: "split", detail: "split(sep: String): Array[String]" },
+    BuiltinMethod { recv: "String", name: "trim", detail: "trim(): String" },
+    BuiltinMethod { recv: "String", name: "contains", detail: "contains(needle: String): Bool" },
+    BuiltinMethod { recv: "String", name: "starts_with", detail: "starts_with(prefix: String): Bool" },
+    BuiltinMethod { recv: "String", name: "ends_with", detail: "ends_with(suffix: String): Bool" },
+    BuiltinMethod { recv: "String", name: "replace", detail: "replace(from: String) (to: String): String" },
+    BuiltinMethod { recv: "String", name: "to_lower", detail: "to_lower(): String" },
+    BuiltinMethod { recv: "String", name: "to_upper", detail: "to_upper(): String" },
+    BuiltinMethod { recv: "String", name: "as_cstr", detail: "as_cstr(): CStr" },
+    BuiltinMethod { recv: "Int", name: "to_float", detail: "to_float(): Float" },
+    BuiltinMethod { recv: "CStr", name: "as_string", detail: "as_string(): String" },
+    BuiltinMethod { recv: "Ref", name: "get", detail: "get(): T" },
+    BuiltinMethod { recv: "Ref", name: "set", detail: "set(value: T): Unit" },
+    BuiltinMethod { recv: "Sender", name: "send", detail: "send(value: T): Unit" },
+    BuiltinMethod { recv: "Receiver", name: "recv", detail: "recv(): T" },
+    BuiltinMethod { recv: "Map", name: "get", detail: "get(key: K): Option[V]" },
+    BuiltinMethod { recv: "Map", name: "remove", detail: "remove(key: K): Map[K, V]" },
+    BuiltinMethod { recv: "Array", name: "join", detail: "join(sep: String): String" },
+]
+
 let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): InferResult =
     if method_name == "to_string" {
         let r = infer_expr(p2, state, env, acc, base);

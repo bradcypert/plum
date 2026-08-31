@@ -186,7 +186,7 @@ let main (): Unit = {
 
 `xs.map(f)` and `Array.map(xs, f)` are the same call. **A method is a
 namespaced function whose first parameter is the receiver** — so
-anything named `Array.something` is a method on arrays, `String.something`
+anything named `Array.<name>` is a method on arrays, `String.<name>`
 is a method on strings, and a function you write yourself is no
 different:
 

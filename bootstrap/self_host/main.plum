@@ -222,7 +222,8 @@ let cmd_members (dir: String) (path: String) (line: Int) (col: Int): Unit = {
                     match recorded_type_at(typecheck.recorded_types(()), path, start, 0) {
                         None => println("[]"),
                         Some(ty) => println(json_stringify(JsonArray(
-                            members_of(items, type_namespace(ty), 0, [])))),
+                            members_of(items, type_namespace(ty), 0,
+                                builtin_members(typecheck.builtin_methods(), type_namespace(ty), 0, []))))),
                     }
                 }
             }
@@ -270,6 +271,15 @@ let members_of (items: Array[parser.ItemNode]) (ns: String) (i: Int) (acc: Array
         };
         members_of(items, ns, i + 1, next)
     }
+
+// The compiler's own methods for this receiver, which no source item
+// declares. Without these, typing `xs.` offered twenty-three prelude
+// functions and not `map`.
+let builtin_members (ms: Array[typecheck.BuiltinMethod]) (ns: String) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+    if i >= ms.len() { acc }
+    else if ms[i].recv == ns || ms[i].recv == "" {
+        builtin_members(ms, ns, i + 1, acc.push(completion_json(ms[i].name, "function", ms[i].detail)))
+    } else { builtin_members(ms, ns, i + 1, acc) }
 
 let fields_of (decl: parser.StructDeclNode) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
     if i >= decl.fields.len() { acc }
@@ -365,8 +375,18 @@ let cmd_complete (dir: String): Unit = {
     // own. Reusing it means this does not need a second copy of the
     // knowledge of where the prelude lives or how it is parsed.
     let prelude = codegen.cg_with_prelude(parser.ProgramNode { items: [] }).items;
+    // The stdlib modules this project actually asked for by `use`.
+    //
+    // The line above passes an EMPTY program on purpose -- it wants the
+    // prelude alone -- and that quietly discarded the other half of
+    // what `cg_with_prelude` does. `use Os;` put nothing in the
+    // completion list, so `Os.read_file` was not offered in any project,
+    // ever. `cmd_members` passed the real project all along and was
+    // fine, which is why this showed up only on the namespace path.
+    let std = codegen.cg_std_items(project);
     let mine = completions_of(project, 0, [], false);
-    let with_prelude = completions_of(prelude, 0, mine, true);
+    let with_std = completions_of(std, 0, mine, true);
+    let with_prelude = completions_of(prelude, 0, with_std, true);
     let with_builtins = Array.concat(with_prelude, builtin_completions(()));
     println(json_stringify(JsonArray(Array.concat(with_builtins, keyword_completions(())))))
 }
@@ -404,15 +424,27 @@ let cmd_locals (dir: String) (path: String) (line: Int) (col: Int): Unit =
 // not here, completion shows a stale signature; it cannot cause a
 // miscompile, which is why this is an acceptable trade rather than a
 // good one. Sorted to match the order they appear in the checker.
-let builtin_completions (ignored: Unit): Array[JsonValue] = [
-    completion_json("println", "function", "println(value: T): Unit"),
-    completion_json("args", "function", "args(): Array[String]"),
-    completion_json("panic_raw", "function", "panic_raw(message: String): Unit"),
-    completion_json("chars_of", "function", "chars_of(s: String): Array[String]"),
-    completion_json("Array.push", "function", "Array.push(xs: Array[T]) (x: T): Array[T]"),
-    completion_json("ref", "function", "ref(value: T): Ref[T]"),
-    completion_json("channel", "function", "channel(): (Sender[T], Receiver[T])"),
-]
+let builtin_completions (ignored: Unit): Array[JsonValue] =
+    Array.concat([
+        completion_json("println", "function", "println(value: T): Unit"),
+        completion_json("args", "function", "args(): Array[String]"),
+        completion_json("panic_raw", "function", "panic_raw(message: String): Unit"),
+        completion_json("chars_of", "function", "chars_of(s: String): Array[String]"),
+        completion_json("ref", "function", "ref(value: T): Ref[T]"),
+        completion_json("channel", "function", "channel(): (Sender[T], Receiver[T])"),
+    ], builtin_method_items(typecheck.builtin_methods(), 0, []))
+
+// The compiler's own methods, offered under the type they belong to:
+// `Array.map`, `String.split`. A method with no receiver type -- only
+// `to_string` -- belongs to every type and to no namespace, so it is
+// offered bare.
+let builtin_method_items (ms: Array[typecheck.BuiltinMethod]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+    if i >= ms.len() { acc }
+    else {
+        let label = if ms[i].recv == "" { ms[i].name } else { ms[i].recv.concat(".").concat(ms[i].name) };
+        let detail = if ms[i].recv == "" { ms[i].detail } else { ms[i].recv.concat(".").concat(ms[i].detail) };
+        builtin_method_items(ms, i + 1, acc.push(completion_json(label, "function", detail)))
+    }
 
 // `pub_only` is true for the prelude: a non-`pub` prelude item is an
 // implementation detail no user program may name. Everything in the
@@ -422,14 +454,25 @@ let completions_of (items: Array[parser.ItemNode]) (i: Int) (acc: Array[JsonValu
     else if pub_only && !items[i].is_pub { completions_of(items, i + 1, acc, pub_only) }
     else { completions_of(items, i + 1, push_completion(items[i], acc), pub_only) }
 
+// A name is offered the way it has to be WRITTEN. A module's members
+// are qualified -- `use Os;` then `Os.read_file`, never a bare
+// `read_file` -- so a completion labelled with the bare name is one the
+// user cannot type. The prelude is the exception, and the reason it
+// went unnoticed: prelude names ARE written bare, and until stdlib
+// modules reached this list at all there was nothing else here with a
+// module to speak of.
+let completion_label (item: parser.ItemNode) (name: String): String =
+    if item.module == "" || item.module == parser.PRELUDE_MODULE(()) { name }
+    else { item.module.concat(".").concat(name) }
+
 let push_completion (item: parser.ItemNode) (acc: Array[JsonValue]): Array[JsonValue] =
     match item.kind {
-        IKLet(def) => acc.push(completion_json(def.name, "function", def_signature(def))),
-        IKStruct(decl) => acc.push(completion_json(decl.name, "struct", "struct ".concat(decl.name))),
+        IKLet(def) => acc.push(completion_json(completion_label(item, def.name), "function", def_signature(def))),
+        IKStruct(decl) => acc.push(completion_json(completion_label(item, decl.name), "struct", "struct ".concat(decl.name))),
         // An enum offers its own name AND each variant. Without the
         // variants you can complete `Shape` and then have to remember
         // `Circle` yourself, which is the half you actually write.
-        IKEnum(decl) => variants_of(decl, 0, acc.push(completion_json(decl.name, "enum", "enum ".concat(decl.name)))),
+        IKEnum(decl) => variants_of(decl, 0, acc.push(completion_json(completion_label(item, decl.name), "enum", "enum ".concat(decl.name)))),
         _ => acc,
     }
 

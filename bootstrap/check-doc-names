@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Every standard-library name the documentation mentions in PROSE exists.
+#
+# `bootstrap/doc-check` compiles the code BLOCKS. The prose around them
+# is full of names too -- `Array.filter`, `Os.read_file`, `Map.insert` --
+# and nothing looked at those. Sixty-seven of them in README.md alone.
+#
+# This project has been bitten by unchecked prose three times in a week:
+# bounded type parameters "are supported" (they parsed and were
+# discarded), two same-named types "do not silently unify" (they did),
+# and "no mandatory parameter types" (there are). A named function is
+# the part of prose that CAN be checked mechanically, so it is.
+#
+# The name set is whatever `plum complete` reports for a project that
+# `use`s every standard-library module -- the same list the editor
+# offers, so this also fails if completion stops reporting something.
+# A name is only checked when its namespace is one the compiler knows,
+# which is what keeps `Point.add` in a worked example from being
+# mistaken for a standard-library claim.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+plum="${1:-./sh}"
+PY_BIN="$(command -v python3 || command -v python)"
+[ -n "$PY_BIN" ] || { echo "check-doc-names: needs python3" >&2; exit 1; }
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+printf 'use Os;\nuse Time;\nuse Net;\nuse Http;\nlet main (): Unit = println("x")\n' > "$work/main.plum"
+
+if ! "$plum" complete "$work" > "$work/names.json" 2>"$work/err"; then
+    echo "check-doc-names: \`plum complete\` failed: $(head -n 1 "$work/err")" >&2
+    exit 1
+fi
+
+"$PY_BIN" - "$work/names.json" README.md TUTORIAL.md <<'PY'
+import re, json, sys
+names = set(x["name"] for x in json.load(open(sys.argv[1])))
+spaces = set(n.split(".")[0] for n in names if "." in n)
+fails = 0
+for doc in sys.argv[2:]:
+    prose = re.sub(r"```.*?```", "", open(doc).read(), flags=re.S)
+    claimed = sorted(set(re.findall(r"`([A-Z][A-Za-z0-9_]*\.[a-z_][A-Za-z0-9_]*)`", prose)))
+    checkable = [c for c in claimed if c.split(".")[0] in spaces]
+    missing = [c for c in checkable if c not in names]
+    for m in missing:
+        print("FAIL %s names `%s`, which does not exist" % (doc, m))
+    fails += len(missing)
+    if not missing:
+        print("ok   %-12s %d standard-library names in prose, all real" % (doc + ":", len(checkable)))
+sys.exit(1 if fails else 0)
+PY

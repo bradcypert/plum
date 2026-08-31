@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Every method the CHECKER recognises is offered by COMPLETION.
+#
+# `infer_method_call` recognises builtin methods as a chain of name
+# comparisons -- each needs its own unification and its own IR node, so
+# there is no signature table to look up. Completion cannot read a chain
+# of `if`s, and it was reading the prelude's SOURCE instead: everything
+# written in Plum appeared, everything the compiler implements itself
+# did not.
+#
+# The result was an editor that offered twenty-three methods on an array
+# and not `map`, `filter`, `fold`, `len` or `push` -- the five a person
+# reaches for first. There WAS a hand-written list of builtins for
+# completion; it had seven entries, none of those five, and it fed only
+# the `Array.` path and not the `xs.` one.
+#
+# `typecheck.builtin_methods()` is that list, moved next to the chain it
+# has to agree with. This is what stops it drifting again: the chain is
+# the authority, and a name it matches that the table does not carry is
+# a failure. A hand-kept list is only safe when something checks it.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+infer=bootstrap/self_host/typecheck/infer.plum
+
+# Names the checker matches on, and names the table declares. The table
+# is read from `name:` fields inside the `builtin_methods` literal.
+chain="$(grep -o 'method_name == "[a-z_]*"' "$infer" | sed 's/.*"\(.*\)"/\1/' | sort -u)"
+table="$(sed -n '/pub let builtin_methods /,/^]/p' "$infer" | grep -o 'name: "[a-z_]*"' | sed 's/.*"\(.*\)"/\1/' | sort -u)"
+
+if [ -z "$chain" ] || [ -z "$table" ]; then
+    echo "check-builtins: found no names -- has infer.plum's shape changed?" >&2
+    exit 1
+fi
+
+missing="$(comm -23 <(printf '%s\n' "$chain") <(printf '%s\n' "$table"))"
+
+if [ -n "$missing" ]; then
+    echo "check-builtins: the checker accepts these methods and completion does not offer them:" >&2
+    printf '  %s\n' $missing >&2
+    echo "add them to \`builtin_methods\` in $infer" >&2
+    exit 1
+fi
+
+printf 'check-builtins: %d builtin methods, every one offered by completion\n' "$(printf '%s\n' "$chain" | wc -l | tr -d ' ')"
