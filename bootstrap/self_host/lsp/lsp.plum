@@ -1,11 +1,22 @@
 // A Language Server, in Plum.
 //
-// **v1 scope: diagnostics.** Parse and type errors, published on open
-// and on save. No hover, no go-to-definition, no completion — those are
-// position QUERIES, and answering them needs spans on every expression,
-// where this compiler currently records them per statement (see
-// DESIGN.md's "AST positions"). Diagnostics need only the position of
-// the error itself, which is exactly what it has.
+// Diagnostics, hover, go-to-definition, completion, formatting, and
+// expand-selection.
+//
+// This header used to say the scope was diagnostics ALONE, because the
+// position queries "need spans on every expression, where this compiler
+// records them per statement". Hover, definition and completion arrived
+// before that was true, answered from the name index and from the
+// checker's recorded types -- neither of which needs to know where an
+// expression begins.
+//
+// `textDocument/selectionRange` is the one that did need it, and it is
+// the reason expression spans were worth building: the chain it returns
+// IS the nesting of expressions around a cursor. It arrived with them.
+//
+// Spans also ended the other half of that sentence's legacy. Every range
+// this server produced was ZERO WIDTH -- legal LSP, and the reason a
+// diagnostic underlined nothing and a jump selected nothing.
 //
 // **Diagnostics come from a SUBPROCESS**, not from calling the checker
 // in-process. `fail_tc` reports by aborting (`panic_raw`), so an
@@ -14,6 +25,16 @@
 // The same reason `test` runs each test in its own process. The child
 // is this binary re-invoked as `check`, and its own diagnostic text,
 // already carrying `path:line:col`, is what becomes the diagnostic.
+//
+// That rule is not only about the CHECKER, which is what it took a
+// crash to notice. The PARSER aborts the same way, so anything in this
+// server that parses has to be a subprocess too. Formatting was not,
+// and a format request on a buffer with a syntax error exited the
+// process mid-session -- after printing a compiler error onto the
+// JSON-RPC stream. Format-on-save runs while you are still typing.
+// `plum fmt` and `plum spans` are both children now, and
+// `bootstrap/lsp-smoke` asserts the server answers a `shutdown` sent
+// after an unformattable buffer.
 //
 // **Synchronous, one message at a time.** A language server is a
 // request loop; nothing here needs concurrency, and the debouncing the
@@ -121,6 +142,16 @@ pub let capabilities (): JsonValue =
             // `String -> String`, so the whole of this capability is
             // one whole-file `TextEdit` -- see `format_result`.
             JsonEntry { key: "documentFormattingProvider", value: JsonBool(true) },
+            // Expand-selection. The editor asks for a position and gets
+            // back the chain of constructs around it, innermost first,
+            // so pressing the key repeatedly grows the selection by one
+            // real construct at a time rather than by a word or a line.
+            //
+            // It is the one request that could not be answered at all
+            // until expression spans existed -- the chain IS the nesting
+            // of expressions, and nothing else in the server needs the
+            // whole of it.
+            JsonEntry { key: "selectionRangeProvider", value: JsonBool(true) },
             // No `triggerCharacters`: this server offers NAMES, so
             // completion is invoked the ordinary way -- as an
             // identifier is typed, or explicitly. A trigger character
@@ -150,7 +181,15 @@ pub let capabilities (): JsonValue =
 // `-->` line and thrown away, so every diagnostic was attributed to
 // whatever document triggered the check -- harmless when that only
 // happened on save, actively misleading once it happens per keystroke.
-pub struct Diagnostic { pub path: String, pub line: Int, pub col: Int, pub message: String }
+// `end_line`/`end_col` start out equal to `line`/`col`: the checker's
+// text reports one position and that is all it reports. `widen` fills
+// them in from the spans, and a diagnostic nobody widened is exactly
+// the zero-width point this published before.
+pub struct Diagnostic { pub path: String, pub line: Int, pub col: Int, pub end_line: Int, pub end_col: Int, pub message: String }
+
+// The same diagnostic, ending somewhere else.
+pub let with_end (d: Diagnostic) (line: Int) (col: Int): Diagnostic =
+    Diagnostic { path: d.path, line: d.line, col: d.col, end_line: line, end_col: col, message: d.message }
 
 // The checker's own output, parsed back. It looks like
 //
@@ -173,7 +212,7 @@ let find_arrow (lines: Array[String]) (message: String) (i: Int): Option[Diagnos
     if i >= lines.len() {
         // A message with no `-->` still deserves to be reported; it just
         // has nowhere better to point than the top of the file.
-        Some(Diagnostic { path: "", line: 1, col: 1, message: message })
+        Some(Diagnostic { path: "", line: 1, col: 1, end_line: 1, end_col: 1, message: message })
     } else {
         let t = String.trim_start(lines[i]);
         if t.starts_with("--> ") {
@@ -187,31 +226,69 @@ let find_arrow (lines: Array[String]) (message: String) (i: Int): Option[Diagnos
                     path: Array.join(Array.slice(parts, 0, parts.len() - 2), ":"),
                     line: Result.unwrap_or(String.parse_int(parts[parts.len() - 2]), 1),
                     col: Result.unwrap_or(String.parse_int(parts[parts.len() - 1]), 1),
+                    end_line: Result.unwrap_or(String.parse_int(parts[parts.len() - 2]), 1),
+                    end_col: Result.unwrap_or(String.parse_int(parts[parts.len() - 1]), 1),
                     message: message,
                 })
-            } else { Some(Diagnostic { path: "", line: 1, col: 1, message: message }) }
+            } else { Some(Diagnostic { path: "", line: 1, col: 1, end_line: 1, end_col: 1, message: message }) }
         } else { find_arrow(lines, message, i + 1) }
     }
 
 let strip_prefix (s: String) (p: String): String =
     if s.starts_with(p) { String.slice(s, p.len(), s.len()) } else { s }
 
-// LSP positions are 0-based; the compiler's are 1-based.
-pub let diagnostic_json (d: Diagnostic): JsonValue = {
-    let pos = JsonObject([
-        JsonEntry { key: "line", value: JsonNumber((d.line - 1).to_float()) },
-        JsonEntry { key: "character", value: JsonNumber((d.col - 1).to_float()) },
-    ]);
+// A source range, 1-based and half-open at the end, the way the
+// compiler counts everywhere else. `pos_json` does the conversion to
+// LSP's 0-based line and character exactly once, here.
+//
+// Every range this server produced before 2026-08-31 was ZERO WIDTH --
+// `start` and `end` the same point. That is legal LSP and it is why a
+// diagnostic underlined nothing, a jump-to-definition selected nothing,
+// and hover highlighted nothing. Spans are what makes a real range
+// available; this is the type that carries one.
+pub struct Rng { pub sl: Int, pub sc: Int, pub el: Int, pub ec: Int }
+
+pub let pos_json (line: Int) (col: Int): JsonValue =
     JsonObject([
-        JsonEntry { key: "range", value: JsonObject([
-            JsonEntry { key: "start", value: pos },
-            JsonEntry { key: "end", value: pos },
-        ]) },
+        JsonEntry { key: "line", value: JsonNumber((line - 1).to_float()) },
+        JsonEntry { key: "character", value: JsonNumber((col - 1).to_float()) },
+    ])
+
+pub let range_json (r: Rng): JsonValue =
+    JsonObject([
+        JsonEntry { key: "start", value: pos_json(r.sl, r.sc) },
+        JsonEntry { key: "end", value: pos_json(r.el, r.ec) },
+    ])
+
+// A `SelectionRange` is a range plus its PARENT, nested all the way
+// out, so the whole chain is one object. `chain` is innermost first,
+// which means this builds from the outside in and hands back the head.
+pub let selection_range_json (chain: Array[Rng]) (i: Int): JsonValue =
+    if i >= chain.len() { JsonNull }
+    else {
+        let parent = selection_range_json(chain, i + 1);
+        match parent {
+            JsonNull => JsonObject([JsonEntry { key: "range", value: range_json(chain[i]) }]),
+            p => JsonObject([
+                JsonEntry { key: "range", value: range_json(chain[i]) },
+                JsonEntry { key: "parent", value: p },
+            ]),
+        }
+    }
+
+// LSP positions are 0-based; the compiler's are 1-based.
+// `end_col` is where the reported construct STOPS -- the caller works
+// it out from the spans, and passes the start column again when it
+// cannot, which reproduces the old zero-width point exactly. A
+// diagnostic that underlines nothing is still better than one that
+// underlines the wrong thing.
+pub let diagnostic_json (d: Diagnostic): JsonValue =
+    JsonObject([
+        JsonEntry { key: "range", value: range_json(Rng { sl: d.line, sc: d.col, el: d.end_line, ec: d.end_col }) },
         JsonEntry { key: "severity", value: JsonNumber(1.0) },
         JsonEntry { key: "source", value: JsonString("plum") },
         JsonEntry { key: "message", value: JsonString(d.message) },
     ])
-}
 
 pub let publish_message (uri: String) (diagnostics: Array[JsonValue]): String =
     notification("textDocument/publishDiagnostics", JsonObject([
@@ -400,49 +477,48 @@ pub let query_int (out: String) (key: String): Int =
 
 // A location in a file the client already has open, from a line and
 // column rather than from an indexed definition.
-pub let location_at (path: String) (line: Int) (col: Int): JsonValue = {
-    let pos = JsonObject([
-        JsonEntry { key: "line", value: JsonNumber((line - 1).to_float()) },
-        JsonEntry { key: "character", value: JsonNumber((col - 1).to_float()) },
-    ]);
+// `len` is the length of the name being jumped to, so the editor lands
+// with that name SELECTED rather than with a bare caret before it.
+pub let location_at (path: String) (line: Int) (col: Int) (len: Int): JsonValue =
     JsonObject([
         JsonEntry { key: "uri", value: JsonString("file://".concat(path)) },
-        JsonEntry { key: "range", value: JsonObject([
-            JsonEntry { key: "start", value: pos },
-            JsonEntry { key: "end", value: pos },
-        ]) },
+        JsonEntry { key: "range", value: range_json(Rng { sl: line, sc: col, el: line, ec: col + len }) },
     ])
-}
 
-pub let hover_text (text: String): JsonValue =
+// The optional `range` on a hover says WHAT is being described, and
+// editors highlight it while the tooltip is up. Without it the user is
+// told a type and left to guess which of the three names under the
+// pointer it belongs to.
+pub let hover_text (text: String) (r: Rng): JsonValue =
     JsonObject([
         JsonEntry { key: "contents", value: JsonObject([
             JsonEntry { key: "kind", value: JsonString("plaintext") },
             JsonEntry { key: "value", value: JsonString(text) },
         ]) },
+        JsonEntry { key: "range", value: range_json(r) },
     ])
 
-pub let hover_result (d: Def): JsonValue =
+pub let hover_result (d: Def) (r: Rng): JsonValue =
     JsonObject([
         JsonEntry { key: "contents", value: JsonObject([
             JsonEntry { key: "kind", value: JsonString("plaintext") },
             JsonEntry { key: "value", value: JsonString(d.detail) },
         ]) },
+        JsonEntry { key: "range", value: range_json(r) },
     ])
 
-pub let location_result (d: Def): JsonValue = {
-    let pos = JsonObject([
-        JsonEntry { key: "line", value: JsonNumber((d.line - 1).to_float()) },
-        JsonEntry { key: "character", value: JsonNumber((d.col - 1).to_float()) },
-    ]);
-    JsonObject([
-        JsonEntry { key: "uri", value: JsonString("file://".concat(d.path)) },
-        JsonEntry { key: "range", value: JsonObject([
-            JsonEntry { key: "start", value: pos },
-            JsonEntry { key: "end", value: pos },
-        ]) },
-    ])
-}
+pub let location_result (d: Def): JsonValue = location_at(d.path, d.line, d.col, d.name.len())
+
+// `selectionRange` asks about SEVERAL positions at once and expects one
+// chain back per position, in order.
+pub let params_positions (params: JsonValue): Array[JsonValue] =
+    match json_field(params, "positions") {
+        Some(JsonArray(items)) => items,
+        _ => [],
+    }
+
+pub let position_line (p: JsonValue): Int = json_field_int(p, "line") + 1
+pub let position_col (p: JsonValue): Int = json_field_int(p, "character") + 1
 
 // LSP positions are 0-based; everything inside the compiler is 1-based.
 pub let params_line (params: JsonValue): Int =

@@ -1,6 +1,6 @@
 Plum is a small, statically typed, compiled language.
 
-The formatter learned where expressions begin, and a module qualifier now means something everywhere a type can be named.
+The formatter learned where expressions begin, the editor gained expand-selection and real ranges, and a module qualifier now means something everywhere a type can be named.
 
 ## Lines the formatter used to leave alone
 
@@ -76,6 +76,43 @@ in favour of indenting, and operator continuation lines 632 to 16.
 The colon rule was corrected by that process. "No space before a colon"
 is the obvious rule and it rewrote every contract in the repository, so
 it is not the rule.
+
+## Expand-selection, and ranges that are actually ranges
+
+Put the cursor on a name and press expand-selection; the selection grows
+one construct at a time:
+
+```plum
+let total (xs: Array[Int]): Int = Array.fold(xs, 0, |a, v| a + v * 2)
+```
+
+From `v`: `v` → `v * 2` → `a + v * 2` → `|a, v| a + v * 2` →
+`Array.fold(xs, 0, |a, v| a + v * 2)` → the whole declaration. The chain
+is the nesting of expressions around the cursor, so this is the request
+that could not be answered at all until expression spans existed.
+
+Every range the server produced before this release was **zero width** --
+`start` and `end` the same point. That is legal LSP, and it is why a
+diagnostic underlined nothing, a jump-to-definition selected nothing,
+and a hover highlighted nothing. Now a diagnostic underlines the
+construct it is about, hover highlights the name it is describing, and
+go-to-definition lands on the name with it selected rather than on the
+`pub` in front of it.
+
+## The language server no longer dies while you type
+
+Asking to format a buffer with a syntax error **killed the server**. It
+exited mid-session, after printing a compiler error onto the JSON-RPC
+stream, and every later request went unanswered until the editor
+restarted it. Format-on-save runs while you are still typing, so a
+half-written expression is the normal case rather than an exotic one.
+
+The cause is a rule this server already followed everywhere else and had
+not followed here: the parser reports errors by aborting the process, so
+anything that parses has to run in a child. Diagnostics always did.
+Formatting did not. It does now, and an unformattable buffer answers
+"no edits" -- which is what a formatter should say about a file it
+cannot read.
 
 ## A module qualifier is part of the name
 

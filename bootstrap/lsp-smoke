@@ -60,7 +60,7 @@ printf 'struct P { x: Int }\n\nlet f (p: P): Int = {\n    let n = p.x;\n    n + 
 # part of `$work`'s own project and poisons the diagnostics the earlier
 # assertions look for. That is exactly what happened on the first
 # attempt.
-live=$(native_path "$(mktemp -d)"); trap 'rm -rf "$work" "$live" "$multi" "$compl"' EXIT
+live=$(native_path "$(mktemp -d)"); trap 'rm -rf "$work" "$live" "$multi" "$compl" "$sel"' EXIT
 printf 'let main (): Unit = println("clean on disk")\n' > "$live/main.plum"
 # A multi-file project: the error lives in `other.plum` while the edit
 # happens in `main.plum`. The diagnostic must be attributed to the file
@@ -75,14 +75,19 @@ printf 'let helper (): String = "ok"\nlet oops (): Int = "wrong"\n' > "$multi/ot
 # definition assertions depend on.
 compl=$(native_path "$(mktemp -d)")
 printf 'enum Shape { Circle(Int), Square(Int) }\nlet area (s: Shape): Int = match s { Circle(r) => r, Square(w) => w }\nstruct Vec { x: Int, y: Int }\nlet sum (v: Vec): Int = v.x + v.y\n' > "$compl/main.plum"
+# A FIFTH project, for expand-selection and for the crash below. Its own
+# root for the same reason `live` has one.
+sel=$(native_path "$(mktemp -d)")
+printf 'let total (xs: Array[Int]): Int = Array.fold(xs, 0, |a, v| a + v * 2)\n' > "$sel/main.plum"
 
-"$PY_BIN" - "$work" "$live" "$multi" "$compl" "$work/fmt" > "$work/session.bin" <<'PY'
+"$PY_BIN" - "$work" "$live" "$multi" "$compl" "$work/fmt" "$sel" > "$work/session.bin" <<'PY'
 import json, sys
 d = sys.argv[1]
 live = sys.argv[2]
 multi = sys.argv[3]
 compl = sys.argv[4]
 fmtd = sys.argv[5]
+sel = sys.argv[6]
 msgs = [
   {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
   # --- completion. The position is ignored: this server offers NAMES,
@@ -135,6 +140,28 @@ msgs = [
   {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % fmtd,
     "text":'let g (): Int = {\n      let q = [1,2];\n  q[0]\n}\n'}}},
   {"jsonrpc":"2.0","id":10,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file://%s/main.plum" % fmtd},"options":{"tabSize":4,"insertSpaces":True}}},
+  # --- expand-selection ---
+  #
+  # The chain around the `v` in `a + v * 2`: the name, then the
+  # multiplication, then the addition, then the closure, then the call,
+  # then the item. This is the request that could not be answered at all
+  # before expression spans existed.
+  {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % sel,
+    "text":'let total (xs: Array[Int]): Int = Array.fold(xs, 0, |a, v| a + v * 2)\n'}}},
+  {"jsonrpc":"2.0","id":11,"method":"textDocument/selectionRange","params":{"textDocument":{"uri":"file://%s/main.plum" % sel},
+    "positions":[{"line":0,"character":63}]}},
+  # --- a format request on a buffer that does NOT parse ---
+  #
+  # This used to KILL the server: `fmt` parses, a parse error is a
+  # `panic_raw`, and the process exited mid-session after printing a
+  # compiler error onto the JSON-RPC stream. Format-on-save runs while
+  # you are still typing, so a half-written expression is the normal
+  # case, not an exotic one. The reply must be an empty edit list, and
+  # -- what the crash actually broke -- the shutdown below must still be
+  # answered.
+  {"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file://%s/main.plum" % sel},
+    "contentChanges":[{"text":'let f (x: Int): Int = x +\n'}]}},
+  {"jsonrpc":"2.0","id":12,"method":"textDocument/formatting","params":{"textDocument":{"uri":"file://%s/main.plum" % sel},"options":{}}},
   {"jsonrpc":"2.0","id":2,"method":"shutdown"},
   {"jsonrpc":"2.0","method":"exit"},
 ]
@@ -148,6 +175,7 @@ fail=0
 echo "$out" | grep -q '"textDocumentSync":1' || { echo "FAIL: no capabilities"; fail=1; }
 echo "$out" | grep -q '"completionProvider"' || { echo "FAIL: completion not advertised"; fail=1; }
 echo "$out" | grep -q '"documentFormattingProvider":true' || { echo "FAIL: formatting not advertised"; fail=1; }
+echo "$out" | grep -q '"selectionRangeProvider":true' || { echo "FAIL: selectionRange not advertised"; fail=1; }
 # The edit must carry the REINDENTED buffer. Checking for the formatted
 # line proves both that the buffer was used (disk was already clean, so
 # there would be nothing to send) and that `fmt` ran over it.
@@ -191,6 +219,29 @@ echo "$out" | grep -q '"id":4,"result":{"uri"' || { echo "FAIL: no definition lo
 echo "$out" | grep -q '"value":"n: Int"' || { echo "FAIL: hover did not infer the local's type"; fail=1; }
 echo "$out" | grep -q '"value":"x: Int"' || { echo "FAIL: hover on a FIELD did not report the field's type"; fail=1; }
 echo "$out" | grep -q '"id":6,"result":{"uri":[^}]*"line":3' || { echo "FAIL: go-to-definition did not reach the local's binding"; fail=1; }
+# --- ranges are no longer zero-width ---
+#
+# Every range this server produced used to have `start` == `end`, so a
+# diagnostic underlined nothing and a jump selected nothing. Hover must
+# now carry a range, and go-to-definition must return one that is WIDER
+# than a point -- `n` is one character, so `character:8` to `character:9`.
+echo "$out" | grep -q '"id":3,"result":{"contents":[^}]*}[^}]*"range"' || { echo "FAIL: hover carries no range"; fail=1; }
+echo "$out" | grep -q '"id":6,"result":{"uri":[^}]*"character":8}[^}]*"character":9}' || { echo "FAIL: definition range is not the width of the name"; fail=1; }
+# --- expand-selection ---
+#
+# A chain, not a single range: `parent` is what makes the second keypress
+# grow the selection. The outermost step is the whole item, which ends at
+# character 68 on line 0.
+echo "$out" | grep -q '"id":11,"result":\[{"range"' || { echo "FAIL: no selectionRange result"; fail=1; }
+echo "$out" | grep -q '"id":11,"result":\[{"range"[^]]*"parent"' || { echo "FAIL: selectionRange returned no parent chain"; fail=1; }
+echo "$out" | grep -q '"id":11[^]]*"line":0,"character":68' || { echo "FAIL: selectionRange chain does not reach the whole item"; fail=1; }
+# --- the server SURVIVES a format request it cannot answer ---
+#
+# The empty edit list is the polite half. The assertion that matters is
+# the one after it: a reply to `shutdown` proves the process was still
+# alive, which it was not before this was fixed.
+echo "$out" | grep -q '"id":12,"result":\[\]' || { echo "FAIL: formatting an unparseable buffer did not answer 'no edits'"; fail=1; }
+echo "$out" | grep -q '"id":2,"result":null' || { echo "FAIL: server did not survive a format request on an unparseable buffer"; fail=1; }
 # --- live diagnostics ---
 # The error text can ONLY have come from the buffer: the file on disk
 # says `println("clean on disk")` and nothing else.

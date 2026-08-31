@@ -346,6 +346,12 @@ editor can format on save. It formats the buffer being edited, not the
 file on disk -- see the Formatting section above for what the formatter
 will and will not do.
 
+Expand-selection is served too (`textDocument/selectionRange`): put the
+cursor on a name and grow the selection one construct at a time --
+`v`, then `v * 2`, then `a + v * 2`, then the closure, then the call,
+then the whole declaration. The chain is the nesting of expressions
+around the cursor, which is what the compiler's expression spans record.
+
 `plum lsp` serves an LSP out of the `plum` binary itself (the same
 shape `gopls` takes for Go), speaking LSP over stdio. It is in every
 published binary, on Linux, macOS and Windows.

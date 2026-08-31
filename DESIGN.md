@@ -16489,3 +16489,72 @@ The README, meanwhile, already documented the behaviour the compiler did
 not have: "they do not silently unify", with an example. Documentation
 written ahead of a check is a claim, not a test -- `corpus-check` has the
 two rejections now.
+
+## What expression spans bought the editor (2026-08-31)
+
+Spans were built for the formatter. Three things in the language server
+were waiting on them, and one bug was found by going to collect them.
+
+### Expand-selection is the feature that needed them
+
+`textDocument/selectionRange` hands the editor the chain of constructs
+around a cursor, so pressing one key repeatedly grows the selection by a
+real construct at a time rather than by a word or a line:
+
+    v  ->  v * 2  ->  a + v * 2  ->  |a, v| a + v * 2
+       ->  Array.fold(xs, 0, |a, v| a + v * 2)
+       ->  let total (xs: Array[Int]): Int = ...
+
+That chain IS the nesting of expression spans around an offset, which is
+why this could not be answered before them and needs almost no code now:
+the span table already contains every level, and the chain is built by
+repeatedly taking the narrowest span wider than the last one taken. That
+also drops the duplicates the precedence chain records, for free.
+
+The one step spans do NOT supply is the innermost: the word under the
+cursor comes from the lexer, so the first keypress still works in a file
+that does not parse.
+
+### Every range this server produced was zero width
+
+Not a span problem, just one nobody had looked at: `start` and `end`
+were the same point in the diagnostic, definition and format-edit
+builders. It is legal LSP and it is why a diagnostic underlined nothing
+and a jump selected nothing. A diagnostic now underlines the construct
+it is about -- the narrowest span containing the reported position,
+CLAMPED to the end of that construct's first line, because most type
+errors are reported at an item's own position and squiggling forty lines
+of a function body says less than underlining its signature.
+
+Go-to-definition also stopped landing on the wrong character. It used
+`item.start`, which has been the `pub` rather than the name since `pub`
+joined the item's span; the caret sat before a keyword, and a
+name-width range would have highlighted the keyword's first letter.
+
+### The bug: the subprocess rule was about the parser too
+
+This server has always run the CHECKER in a child process, and its
+header said why: `fail_tc` reports by `panic_raw`, so an in-process
+check would take the server down with the first type error a user typed.
+
+The parser aborts exactly the same way, and formatting called it
+in-process. So a format request on a buffer with a syntax error **killed
+the language server** -- it exited mid-session, after printing a
+compiler error onto the JSON-RPC stream, and every later request went
+unanswered. Format-on-save runs while you are still typing.
+
+It had been shipping since v0.0.16 and no harness caught it, because
+`lsp-smoke` only ever formatted a buffer that parsed. The fix is to
+apply the rule that was already written down: `plum fmt` and the new
+`plum spans` are both children now, and an unformattable buffer answers
+"no edits".
+
+The lesson is not "add a subprocess". It is that the rule in the header
+named the checker, and the reason it gave -- reporting by aborting --
+was never specific to the checker. A stated rule that names one instance
+of its own reason will be applied to that instance only.
+
+`lsp-smoke` asserts the crash directly, and asserts it the way that
+matters: not that the format reply is empty, but that a `shutdown` sent
+AFTER it is still answered. Every new assertion was run against the
+previous compiler first and fails there.

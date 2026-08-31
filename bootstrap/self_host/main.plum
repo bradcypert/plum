@@ -484,7 +484,7 @@ let def_entry (item: parser.ItemNode): Option[JsonValue] =
 // project is a handful of files.
 let def_json (item: parser.ItemNode) (name: String) (kind: String) (detail: String): JsonValue = {
     let lc = match Os.read_file(item.path) {
-        Ok(src) => lexer.line_col(src, item.start),
+        Ok(src) => lexer.line_col(src, name_offset(src, item.start, item.end, name)),
         Err(_) => lexer.LineCol { line: 1, col: 1 },
     };
     JsonObject([
@@ -496,6 +496,20 @@ let def_json (item: parser.ItemNode) (name: String) (kind: String) (detail: Stri
         JsonEntry { key: "detail", value: JsonString(detail) },
     ])
 }
+
+// Where the item's NAME is written. `item.start` is the `let`, the
+// `struct`, or -- since `pub` joined the item's span -- the `pub`, so
+// jumping there put the caret before a keyword and the range this now
+// returns would have highlighted the keyword's first letter.
+//
+// Scanned forward from the item's start rather than recorded, because
+// the name follows its keyword immediately and the scan is over a dozen
+// characters. Bounded by the item's own end so a name that somehow is
+// not there stops at the item rather than running into the next one.
+let name_offset (src: String) (from: Int) (to: Int) (name: String): Int =
+    if from >= to { from }
+    else if lexer.ident_at(src, from) == name { from }
+    else { name_offset(src, from + 1, to, name) }
 
 // What hover shows: the declaration as written, near enough to be
 // recognisable without re-rendering the whole AST.
@@ -653,6 +667,46 @@ let lsp_check_buffer (path: String) (text: String): BufferCheck =
         },
     }
 
+// A diagnostic underlines the construct it is about, rather than
+// marking a point.
+//
+// The checker reports ONE position. Which construct starts there is a
+// span question, so this asks the span table for the narrowest one
+// containing it -- and CLAMPS the answer to the end of that construct's
+// first line. Most type errors are reported at the item's own position,
+// and squiggling forty lines of a function body says less than
+// underlining its signature does.
+//
+// Everything here degrades to the old zero-width point: a file that
+// does not parse has no spans, and an error with no construct around it
+// keeps the position it came with.
+let widen (d: lsp.Diagnostic) (scratch: String) (dir: String): lsp.Diagnostic = {
+    let real = lsp_real_path(d, scratch, dir);
+    if real == "" { d }
+    else {
+        match Os.read_file(if scratch == "" { real } else { d.path }) {
+            Err(_) => d,
+            Ok(src) => {
+                let off = lexer.offset_of(src, d.line, d.col);
+                let chain = span_chain(lsp_spans(real, src), off, 0 - 1, []);
+                if Array.is_empty(chain) { d }
+                else {
+                    let e = lexer.line_col(src, chain[0].end);
+                    if e.line == d.line { lsp.with_end(d, e.line, e.col) }
+                    else { lsp.with_end(d, d.line, line_width(src, d.line) + 1) }
+                }
+            },
+        }
+    }
+}
+
+// How many characters line `line` has, so a multi-line construct can be
+// underlined to the end of the line it starts on and no further.
+let line_width (src: String) (line: Int): Int = {
+    let ls = String.lines(src);
+    if line - 1 >= ls.len() || line < 1 { 1 } else { ls[line - 1].len() }
+}
+
 // A diagnostic reported inside the scratch copy, mapped back to the
 // file the user is actually editing. Without this every error would
 // point at a temp directory that will not exist a moment later.
@@ -668,8 +722,9 @@ let lsp_real_path (d: lsp.Diagnostic) (scratch: String) (dir: String): String =
 // keeps showing the last diagnostics it was given until it is told
 // otherwise, so a fixed mistake stays on screen unless the fix
 // publishes an empty list.
-let lsp_publish (uri: String) (d: Option[lsp.Diagnostic]) (scratch: String): Unit = {
+let lsp_publish (uri: String) (d0: Option[lsp.Diagnostic]) (scratch: String): Unit = {
     let dir = lsp.dir_of(lsp.uri_to_path(uri));
+    let d = match d0 { Some(x) => Some(widen(x, scratch, dir)), None => None };
     match d {
         None => lsp_send(lsp.publish_message(uri, [])),
         Some(diag) => {
@@ -736,7 +791,19 @@ let lsp_handle (body: String): Bool =
                     // which is true.
                     None => lsp_reply(req.id, JsonArray([])),
                     Some(text) => {
-                        let out = fmt.format(path, text);
+                        // Formatted by a CHILD process, not here. `fmt`
+                        // parses, and a parse error is a `panic_raw`
+                        // that would take the server down -- which it
+                        // did: a format request on a buffer with a
+                        // syntax error exited the process mid-session,
+                        // after printing a compiler error onto the
+                        // JSON-RPC stream. Format-on-save runs while you
+                        // are still typing, so that is not a rare state.
+                        //
+                        // An unformattable buffer now answers "no
+                        // edits", which is what a formatter should say
+                        // about a file it cannot read.
+                        let out = lsp_fmt(path, text);
                         // The same guarantee `plum fmt --write` gives,
                         // for the same reason: this hands the editor a
                         // replacement for the WHOLE file, so a rule
@@ -747,6 +814,9 @@ let lsp_handle (body: String): Bool =
                         else { lsp_reply(req.id, lsp.format_result(out, count_lines(text, 0, 0))) }
                     },
                 };
+                true
+            } else if req.method == "textDocument/selectionRange" {
+                lsp_reply(req.id, lsp_selection_ranges(req.params));
                 true
             } else if req.method == "textDocument/hover" || req.method == "textDocument/definition" {
                 lsp_reply(req.id, lsp_answer_query(req.method, req.params));
@@ -866,18 +936,23 @@ let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
                     let answer = lsp_query(path, lsp.params_line(params), lsp.params_col(params));
                     let inferred = lsp.query_field(answer, "type");
                     let def_line = lsp.query_int(answer, "defLine");
-                    if method == "textDocument/hover" && inferred != "" { lsp.hover_text(name.concat(": ").concat(inferred)) }
+                    // What the answer is ABOUT: the name under the
+                    // cursor. `ident_at` already found it, so its extent
+                    // is the cursor's line and the name's own length --
+                    // no span table needed for this one, and no parse.
+                    let here = ident_range(src, off, name);
+                    if method == "textDocument/hover" && inferred != "" { lsp.hover_text(name.concat(": ").concat(inferred), here) }
                     // A LOCAL's binding site, which the name index does
                     // not have: it only knows top-level definitions, so
                     // without this a local jumps to whatever top-level
                     // name it happens to share.
                     else if method == "textDocument/definition" && def_line > 0 {
-                        lsp.location_at(path, def_line, lsp.query_int(answer, "defCol"))
+                        lsp.location_at(path, def_line, lsp.query_int(answer, "defCol"), name.len())
                     }
                     else {
                         match lsp.find_def(lsp_defs(path), name, 0) {
                             None => JsonNull,
-                            Some(d) => if method == "textDocument/hover" { lsp.hover_result(d) } else { lsp.location_result(d) },
+                            Some(d) => if method == "textDocument/hover" { lsp.hover_result(d, here) } else { lsp.location_result(d) },
                         }
                     }
                 }
@@ -885,6 +960,23 @@ let lsp_answer_query (method: String) (params: JsonValue): JsonValue = {
         }
     }
 }
+
+// The extent of the identifier that `lexer.ident_at` matched. It starts
+// at or before `off` -- the cursor may be in the middle of the word --
+// so this walks back to the name's first character rather than assuming
+// the cursor is on it.
+let ident_range (src: String) (off: Int) (name: String): lsp.Rng = {
+    let start = name_start(src, off, name);
+    let a = lexer.line_col(src, start);
+    lsp.Rng { sl: a.line, sc: a.col, el: a.line, ec: a.col + name.len() }
+}
+
+let name_start (src: String) (off: Int) (name: String): Int = name_start_acc(src, off, name, 0)
+
+let name_start_acc (src: String) (off: Int) (name: String) (back: Int): Int =
+    if back >= name.len() || off - back < 0 { off }
+    else if lexer.ident_at(src, off - back) == name && (off - back == 0 || lexer.ident_at(src, off - back - 1) != name) { off - back }
+    else { name_start_acc(src, off, name, back + 1) }
 
 let lsp_locals (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
     match Os.run_process(self_exe(), ["locals", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
@@ -912,6 +1004,162 @@ let lsp_completions (path: String): Array[lsp.Completion] =
     match Os.run_process(self_exe(), ["complete", lsp.dir_of(path)]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
+    }
+
+// --- Construct spans, for the LSP ---
+//
+// Every span the parser recorded for one file, as `start,end` character
+// offsets, innermost-finished first. `plum spans <file>` exists so the
+// LANGUAGE SERVER can have them without parsing in its own process.
+//
+// That is not a style preference. `fail_at` reports by `panic_raw`, so
+// a parse error takes the whole process down -- which is why
+// diagnostics have always come from a subprocess, and it is why the
+// formatting handler below now does too. A user pressing
+// expand-selection is a user in the middle of an edit, which is exactly
+// when the buffer does not parse.
+pub let cmd_spans (path: String): Unit =
+    match Os.read_file(path) {
+        Err(_) => (),
+        Ok(src) => {
+            let lexed = lexer.tokenize_spanned(src);
+            parser.set_source_context(path, src, lexed.starts, lexed.ends);
+            parser.record_spans(true);
+            let prog = parser.parse_program(lexed.tokens);
+            let sp = parser.recorded_spans();
+            parser.record_spans(false);
+            // `prog` is not used for anything -- parsing is what fills
+            // the table. Naming it keeps the call from looking dead.
+            if Array.is_empty(prog.items) { () } else { () };
+            print(spans_text(sp, 0, ""))
+        },
+    }
+
+let spans_text (sp: Array[parser.ExprSpan]) (i: Int) (acc: String): String =
+    if i >= sp.len() { acc }
+    else { spans_text(sp, i + 1, acc.concat(sp[i].start.to_string()).concat(",").concat(sp[i].end.to_string()).concat("\n")) }
+
+pub struct OffSpan { pub start: Int, pub end: Int }
+
+// The spans of `text`, obtained by writing it to a scratch file and
+// asking a CHILD process for them. An empty answer -- the child failed,
+// the text does not parse -- means every caller here falls back to what
+// it did before spans existed, which is a narrower answer and never a
+// wrong one.
+let lsp_spans (path: String) (text: String): Array[OffSpan] =
+    match Os.temp_dir() {
+        Err(_) => [],
+        Ok(scratch) => {
+            let target = scratch.concat("/").concat(lsp.base_of(path));
+            let out = match Os.write_file(target, text) {
+                Err(_) => [],
+                Ok(_) => match Os.run_process(self_exe(), ["spans", target]) {
+                    Err(_) => [],
+                    Ok(r) => if r.exit_code == 0 { parse_off_spans(String.lines(r.stdout), 0, []) } else { [] },
+                },
+            };
+            let c = Os.remove_tree(scratch);
+            out
+        },
+    }
+
+let parse_off_spans (lines: Array[String]) (i: Int) (acc: Array[OffSpan]): Array[OffSpan] =
+    if i >= lines.len() { acc }
+    else {
+        let parts = lines[i].split(",");
+        if parts.len() != 2 { parse_off_spans(lines, i + 1, acc) }
+        else {
+            let a = Result.unwrap_or(String.parse_int(parts[0]), 0 - 1);
+            let b = Result.unwrap_or(String.parse_int(parts[1]), 0 - 1);
+            if a < 0 || b <= a { parse_off_spans(lines, i + 1, acc) }
+            else { parse_off_spans(lines, i + 1, acc.push(OffSpan { start: a, end: b })) }
+        }
+    }
+
+// The constructs containing `off`, INNERMOST FIRST -- which is the
+// order `textDocument/selectionRange` wants, and the order a chain of
+// enclosing scopes reads in.
+//
+// Built by repeatedly taking the narrowest span wider than the last one
+// taken, rather than by sorting: the list is short (one entry per level
+// of nesting), and this drops the duplicates that the precedence chain
+// records for free.
+let span_chain (spans: Array[OffSpan]) (off: Int) (last_w: Int) (acc: Array[OffSpan]): Array[OffSpan] = {
+    let best = narrowest_wider(spans, off, last_w, 0, 0 - 1);
+    if best < 0 { acc }
+    else { span_chain(spans, off, spans[best].end - spans[best].start, acc.push(spans[best])) }
+}
+
+let narrowest_wider (spans: Array[OffSpan]) (off: Int) (last_w: Int) (i: Int) (best: Int): Int =
+    if i >= spans.len() { best }
+    else {
+        let w = spans[i].end - spans[i].start;
+        let holds = spans[i].start <= off && spans[i].end > off && w > last_w;
+        if holds && (best < 0 || w < spans[best].end - spans[best].start) { narrowest_wider(spans, off, last_w, i + 1, i) }
+        else { narrowest_wider(spans, off, last_w, i + 1, best) }
+    }
+
+// `plum fmt` in a child process, so a buffer that does not parse
+// answers with no edits instead of killing the server.
+let lsp_fmt (path: String) (text: String): String =
+    match Os.temp_dir() {
+        Err(_) => text,
+        Ok(scratch) => {
+            let target = scratch.concat("/").concat(lsp.base_of(path));
+            let out = match Os.write_file(target, text) {
+                Err(_) => text,
+                Ok(_) => match Os.run_process(self_exe(), ["fmt", target]) {
+                    Err(_) => text,
+                    // A non-zero exit is a file the formatter refused.
+                    // Handing back the input unchanged makes the caller's
+                    // `out == text` test answer "no edits".
+                    Ok(r) => if r.exit_code == 0 { r.stdout } else { text },
+                },
+            };
+            let c = Os.remove_tree(scratch);
+            out
+        },
+    }
+
+// One chain of enclosing constructs per requested position.
+let lsp_selection_ranges (params: JsonValue): JsonValue = {
+    let uri = lsp.document_uri(params);
+    let path = lsp.uri_to_path(uri);
+    match buffer_text(uri, path) {
+        None => JsonArray([]),
+        Some(text) => {
+            let spans = lsp_spans(path, text);
+            JsonArray(selection_acc(text, spans, lsp.params_positions(params), 0, []))
+        },
+    }
+}
+
+let selection_acc (text: String) (spans: Array[OffSpan]) (ps: Array[JsonValue]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+    if i >= ps.len() { acc }
+    else {
+        let off = lexer.offset_of(text, lsp.position_line(ps[i]), lsp.position_col(ps[i]));
+        selection_acc(text, spans, ps, i + 1, acc.push(lsp.selection_range_json(chain_rngs(text, spans, off), 0)))
+    }
+
+// The word under the cursor is the innermost step, ahead of any
+// expression: selecting `xs` before `xs.len()` is what makes the first
+// keypress useful. It comes from the LEXER, so it is there even when
+// the file does not parse and the span table came back empty.
+let chain_rngs (text: String) (spans: Array[OffSpan]) (off: Int): Array[lsp.Rng] = {
+    let name = lexer.ident_at(text, off);
+    let seed = if name == "" { [] } else { [ident_range(text, off, name)] };
+    // Seeded with the NAME's own width, so a recorded span that is
+    // exactly the identifier -- the leaf the precedence chain also
+    // records -- is not offered again as a second, identical step.
+    rngs_of(text, span_chain(spans, off, if name == "" { 0 - 1 } else { name.len() }, []), 0, seed)
+}
+
+let rngs_of (text: String) (sp: Array[OffSpan]) (i: Int) (acc: Array[lsp.Rng]): Array[lsp.Rng] =
+    if i >= sp.len() { acc }
+    else {
+        let a = lexer.line_col(text, sp[i].start);
+        let b = lexer.line_col(text, sp[i].end);
+        rngs_of(text, sp, i + 1, acc.push(lsp.Rng { sl: a.line, sc: a.col, el: b.line, ec: b.col }))
     }
 
 let lsp_defs (path: String): Array[lsp.Def] =
@@ -1755,6 +2003,10 @@ let main (): Unit = {
         println(codegen.cg_emit_program(parser.ProgramNode { items: collect_project(argv[1]) }));
     } else if argv[0] == "fmt" {
         cmd_fmt(argv);
+    } else if argv[0] == "spans" {
+        // Every construct span in one file, `start,end` per line. Read
+        // by the LSP out of a child process -- see `cmd_spans`.
+        if argv.len() < 2 { usage() } else { cmd_spans(argv[1]) };
     } else if argv[0] == "relex" {
         // Reads a FILE and writes back what the token stream says it
         // was. The identity formatter: no opinions, no reflow, just
