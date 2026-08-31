@@ -1,0 +1,66 @@
+// A body written on its own line, at an indent nobody chose.
+let describe (n: Int): String =
+        if n > 10 {
+        "big"
+    } else {
+            "small"
+        }
+
+// A pipe chain broken across lines: every link is inside the one
+// extent that began at `xs`, so every link lands in the same place.
+let chain (xs: Array[String]): String =
+    xs
+            |> Array.map(_, |s| s)
+  |> Array.join(_, ", ")
+
+let add3 (a: Int) (b: Int) (c: Int): Int = a + b + c
+
+// A call's arguments answer to the CALL, not to the statement.
+let call (a: Int) (b: Int) (c: Int): Int =
+    add3(
+            a,
+        b,
+  c)
+
+// An `else` continues the `if` without going inside it.
+let bump (n: Int) (acc: Int): Int =
+    if n <= 0 { acc }
+        else { bump(n - 1, acc + n) }
+
+// An arm body on its own line sits four past the arm.
+let label (n: Int): String =
+    match n {
+        0 =>
+        "none",
+        _ =>
+                "some",
+    }
+
+let nested (xs: Array[Int]): Int = {
+    let total =
+        Array.fold(
+        xs,
+                0,
+            |a, v| a + v);
+    total
+}
+
+// A line whose own indent is off the grid AND deeper than the grid
+// answer was aligned by hand, and is left exactly as written. The rule
+// would say eight; this line says nine, under the condition above it.
+let aligned (a: Int) (b: Int) (c: Int): Bool =
+    a > 0 && b > 0
+         && a != b && b != c
+
+// Contract clauses and the `=` that follows them are item header
+// lines, and no rule here claims them.
+let divide (a: Int) (b: Int): Int
+  require b != 0 : "b must be non-zero"
+= a / b
+
+// The line after this one begins INSIDE a string literal, so its
+// leading spaces are part of the program and are never touched.
+let newline_in_string (): String = "a".concat("
+").concat("b")
+
+let main (): Unit = print(describe(3).concat(chain(["a"])).concat(label(0)))

@@ -16308,3 +16308,76 @@ function.
 **`plum check` does not check globals at all**, incidentally:
 `check_all_fns` skips every zero-parameter `let`, so the new mismatch
 error only appears on `build`. That is its own gap and its own fix.
+
+## Expression spans, and the continuation rule they bought
+
+`fmt`'s header used to say that a line belonging to a construct with no
+braces of its own could not be placed -- the `=` continuation of a long
+`let`, a `|>` chain broken across lines, a multi-line call's arguments.
+Statements, items, match arms and block braces carried source ranges;
+expressions did not, so there was nothing to name those lines with.
+
+The parser records expression spans now. Three decisions shaped it.
+
+**A module-level cell, not a threaded accumulator, and not a wrapper
+around `PExpr`.** Wrapping the node was the obvious design and the
+expensive one: `PExpr` is matched on in about 180 places across three
+files, most of which have no use for a position, and the compiler's own
+inference path would pay an indirection per node. Threading an
+accumulator meant a parameter on every function in the precedence chain,
+for one consumer. So spans go into a `Ref` beside `CTX`, which is the
+same shape `infer.plum` already uses to record `NODES` for the LSP --
+gate and all.
+
+**The gate is load-bearing.** Recording is one push per expression and a
+build parses hundreds of thousands of them, so `plum build` would pay,
+in allocations `alloc-check` watches, for a table only the formatter
+reads. It is off unless someone asks; `alloc-check` reports no
+regression.
+
+**Ten recording sites, not ninety.** Each level of the precedence chain
+records the extent it returns, rather than each site that builds a node.
+A level that combines nothing returns its operand untouched and
+re-records that operand's extent, eight or nine times over for a bare
+identifier -- but those arrive consecutively, innermost first, so
+dropping a repeat of the last entry removes all of them for one
+comparison. It also means a bare call is recorded once, by the postfix
+level that knows it is a call, and the binary levels above it are
+dropped as duplicates.
+
+The rule the spans bought was measured, not chosen. Of the 1,484
+continuation lines in the repo, 936 are indented four past the line
+above and 526 are level with it -- and BOTH fall out of one sentence: a
+continuation line is indented four past the line its innermost enclosing
+construct started on. A `|>` chain shows why. Every link is inside the
+one extent that began at the first operand, so every link gets that
+line's indent plus four; "+4 then +0" without either number appearing in
+the rule.
+
+Two corpus-wide counts settled the cases where files disagreed. Arm
+bodies written on their own line: 26 at +4 against 1 at +0. Operator
+continuation lines: 632 at +4 against 16 at +0. `fmt` now reformats
+those two outliers, which is the first time it has changed a line in
+this repo rather than agreeing with it.
+
+**What it still refuses, and why each refusal is written down.** A line
+inside a multi-line string token -- `.concat("` followed by `")` -- is
+never touched, because its leading spaces are program text. That one was
+not foreseen: `fmt-check`'s token-sequence property caught it on
+`codegen.plum` and `shims.plum` the first time the rule ran, which is
+precisely the failure that property exists to catch, and the first rule
+here to work from raw lines rather than AST offsets was always going to
+be the one that found it. A line whose anchor construct starts partway
+along its own line is refused because the corpus writes that shape two
+ways in two files and a rule that has to pick a side is not one the
+corpus dictated. A hand-aligned line is refused only when it sits DEEPER
+than the grid answer, which is what alignment always is -- all four
+off-grid lines in the repo are; an off-grid line that is shallower
+aligns with nothing and gets fixed. And an item's `require`/`ensure`/`=`
+header lines are left alone, the corpus writing `require` at two spaces
+in one place and four in another with `= a / b` at column zero in both.
+
+`block_indent`'s own refusal stays, too, and its comment now says the
+span it wanted exists. A block brace on a hand-aligned line still leaves
+its body alone: the measurement supports refusing there, and having the
+span available is not a reason to use it.

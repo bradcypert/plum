@@ -14,7 +14,9 @@ use Os;
 //     token level separates that from `x: Int`;
 //   * nothing sits just inside a bracket: `f( a )` becomes `f(a)`;
 //   * a binary operator gets one space on each side, and a UNARY minus
-//     does not -- `a-b` becomes `a - b` while `-n` is left alone.
+//     does not -- `a-b` becomes `a - b` while `-n` is left alone;
+//   * a line that CONTINUES a construct begun on an earlier line is
+//     indented four past the line that construct started on.
 //
 // Everything else in the file is passed through byte for byte.
 //
@@ -33,18 +35,32 @@ use Os;
 // closing brace, arms needed no rule of their own -- they call
 // `block_indent` and inherit its refusals too.
 //
-// What is left unplaced is a line belonging to a construct with no
-// braces of its own: the `=` continuation of a long `let`, a `|>` chain
-// broken across lines, a multi-line call's arguments. Those are
-// alignment choices inside an expression, and no span describes them.
-// All 244 files in this repo are unchanged by `fmt`.
+// The last of those rules is newer than the rest, and for most of this
+// file's life the header said the opposite: that a line belonging to a
+// construct with no braces of its own -- the `=` continuation of a long
+// `let`, a `|>` chain broken across lines, a multi-line call's
+// arguments -- could not be placed, because statements and items carried
+// source ranges and EXPRESSIONS DID NOT. That was true, and it was the
+// right restraint while it held: a formatter that reflows inside an
+// expression it cannot see the shape of will move code it has
+// mis-attributed.
 //
-// That restraint is not modesty, it is what the spans support.
-// Statements and items carry source ranges; expressions do not. A
-// formatter that reflowed inside an expression would be deciding where
-// to break lines it cannot see the shape of, and the first thing it
-// would do is move code it had mis-attributed. So this reindents the
-// lines it can name and leaves every other character alone.
+// `parser.ExprSpan` is what changed. The parser now records where every
+// expression begins and ends, so the construct a continuation line
+// belongs to has a name, and the line can be placed by measuring rather
+// than guessed at.
+//
+// What did NOT change is the stance. This still only moves lines it can
+// name, and it still refuses four kinds it cannot: a line inside a
+// multi-line string token, a line whose anchor construct starts partway
+// along its own line, a hand-aligned line sitting deeper than the grid
+// answer, and an item's `require`/`ensure`/`=` header lines. Each
+// refusal is there because the corpus either said nothing or disagreed
+// with itself, and each is written down where it happens.
+//
+// It still REFLOWS nothing: no line is ever split or joined. Every rule
+// here changes leading whitespace and the gaps between tokens on a
+// line, and that is the whole of it.
 //
 // The rule is not invented. Across the 242 `.plum` files in this repo,
 // indentation is already a multiple of four everywhere, there is not one
@@ -171,9 +187,15 @@ let block_indent (chars: Array[String]) (starts: Array[Int]): Option[Int] =
             // That `{` is on a line indented nine, aligned under the
             // condition by hand. Anchoring to it would indent the body
             // to thirteen. The construct really begins on the `else if`
-            // line, which is four -- and finding THAT needs to know
-            // where the `if` starts, which is an expression span and
-            // does not exist.
+            // line, which is four -- and finding THAT means knowing
+            // where the `if` starts.
+            //
+            // That span EXISTS now (`parser.ExprSpan`), and this still
+            // refuses, on purpose. The body of such a block is written
+            // relative to a column its author chose; the corpus has two
+            // of these and they are consistent with themselves and with
+            // nothing else. Refusing leaves them exactly as written,
+            // which is the outcome the measurement supports.
             //
             // So this refuses. Every statement indent in the corpus is a
             // multiple of four; a brace line that is not is one of these
@@ -514,10 +536,218 @@ let ends_an_operand (tok: String): Bool =
 let format_once (path: String) (src: String): String = {
     let lexed = lexer.tokenize_spanned(src);
     parser.set_source_context(path, src, lexed.starts, lexed.ends);
+    parser.record_spans(true);
     let items = parser.parse_program(lexed.tokens).items;
+    let spans = parser.recorded_spans();
+    parser.record_spans(false);
     let chars = chars_of(src);
-    apply_edits(chars, all_item_edits(chars, items, 0, []))
+    // Structural edits FIRST, continuation edits after, because
+    // `index_edits` keeps the first edit it sees for a line. A line that
+    // a block or an arm can place is placed by that, and the
+    // continuation rule only ever speaks for lines nothing else claims.
+    apply_edits(chars, continuation_edits(chars, lexed, spans, all_item_edits(chars, items, 0, [])))
 }
+
+// --- Continuation lines ---
+//
+// A line that continues a construct begun on an earlier line, and that
+// no brace positions: the `=` body of a `let` written on the next line,
+// a `|>` chain broken across lines, a multi-line call's arguments.
+// These are the lines the header above used to say were unplaceable,
+// and they were -- until the parser recorded where each expression
+// begins.
+//
+// The rule is one sentence: a continuation line is indented four past
+// the line its innermost enclosing construct STARTED on.
+//
+// It was measured, not chosen. Of the 1,484 continuation lines in this
+// repo, 936 are indented four past the line above and 526 are level
+// with it -- 98.5% between them, and both fall out of that one
+// sentence. A `|>` chain is the case that shows why:
+//
+//     xs                            <- the chain starts here, at four
+//         |> Array.map(f)           <- inside it, so four past: eight
+//         |> Array.join(", ")       <- inside the SAME chain: eight
+//
+// The second and third lines are both inside the one extent that began
+// at `xs`, so both get eight -- "+4 then +0" without either number
+// appearing in the rule.
+//
+// "Innermost" is the enclosing extent with the LATEST start, which is
+// what makes nesting work: an argument inside a call inside a statement
+// answers to the call, not to the statement.
+//
+// Three refusals, each for a reason the corpus gave:
+//
+//   * a comment-only line is left to `run_above`, which already
+//     indents a comment with the thing below it;
+//   * a line beginning `=`, `require` or `ensure` is an item HEADER
+//     line, not part of any expression -- and the corpus does not agree
+//     with itself about them, writing `require` at two spaces in
+//     `bootstrap/corpus/contracts` and four in `examples/contracts`,
+//     with `= a / b` at column zero in both. A rule that has to pick a
+//     side of a disagreement is not a rule the corpus dictated;
+//   * an anchor line that is not on the four-space grid is a hand
+//     aligned line, and `block_indent` already refuses those for the
+//     same reason. Whatever a construct is doing under such a line, it
+//     was not put there by counting.
+let continuation_edits (chars: Array[String]) (lexed: lexer.LexedSource) (spans: Array[parser.ExprSpan]) (acc: Array[Edit]): Array[Edit] =
+    cont_acc(chars, multiline_only(chars, spans, 0, []), spanning_tokens(chars, lexed, 0, []), 0, acc)
+
+// Tokens that themselves cross a line -- which in Plum means one thing,
+// a string literal with a real newline in it:
+//
+//     .concat("
+//     ")
+//
+// The second line begins INSIDE that token. Writing an indent there
+// would put the spaces between the newline and the closing quote, so
+// the string would gain characters and the program would print
+// something different. `fmt-check`'s token-sequence property caught
+// this on `codegen.plum` and `shims.plum` the first time the
+// continuation rule ran, which is exactly what that property is for.
+//
+// Every rule before this one worked from AST offsets, which are always
+// at token boundaries; this is the first that walks raw lines, so it is
+// the first that has to know a line start can be inside a token.
+let spanning_tokens (chars: Array[String]) (lexed: lexer.LexedSource) (i: Int) (acc: Array[parser.ExprSpan]): Array[parser.ExprSpan] =
+    if i >= lexed.tokens.len() || i >= lexed.starts.len() { acc }
+    else if lexed.ends[i] > lexed.starts[i] && line_start_of(chars, lexed.starts[i]) != line_start_of(chars, lexed.ends[i] - 1) {
+        spanning_tokens(chars, lexed, i + 1, acc.push(parser.ExprSpan { start: lexed.starts[i], end: lexed.ends[i] }))
+    } else { spanning_tokens(chars, lexed, i + 1, acc) }
+
+let inside_token (toks: Array[parser.ExprSpan]) (i: Int) (ls: Int): Bool =
+    if i >= toks.len() { false }
+    else if toks[i].start < ls && toks[i].end > ls { true }
+    else { inside_token(toks, i + 1, ls) }
+
+// Only extents that CROSS a line can anchor a continuation line -- a
+// span that opens and closes on one line has nothing below it. Almost
+// every recorded span is single-line, so dropping them here is what
+// keeps the per-line scan short.
+let multiline_only (chars: Array[String]) (spans: Array[parser.ExprSpan]) (i: Int) (acc: Array[parser.ExprSpan]): Array[parser.ExprSpan] =
+    if i >= spans.len() { acc }
+    else {
+        let last = if spans[i].end >= chars.len() { chars.len() - 1 } else { spans[i].end };
+        if last <= spans[i].start || line_start_of(chars, spans[i].start) == line_start_of(chars, last) {
+            multiline_only(chars, spans, i + 1, acc)
+        } else { multiline_only(chars, spans, i + 1, acc.push(spans[i])) }
+    }
+
+let cont_acc (chars: Array[String]) (spans: Array[parser.ExprSpan]) (toks: Array[parser.ExprSpan]) (at: Int) (acc: Array[Edit]): Array[Edit] =
+    if at >= chars.len() { acc }
+    else { cont_acc(chars, spans, toks, line_end(chars, at), cont_line(chars, spans, toks, at, acc)) }
+
+let cont_line (chars: Array[String]) (spans: Array[parser.ExprSpan]) (toks: Array[parser.ExprSpan]) (ls: Int) (acc: Array[Edit]): Array[Edit] = {
+    let ind = count_spaces(chars, ls, 0);
+    let first = ls + ind;
+    if is_blank_line(chars, ls) { acc }
+    else if is_comment_line(chars, ls) { acc }
+    else if is_header_line(chars, first) { acc }
+    else if is_closer_line(chars, first) { acc }
+    else if inside_token(toks, 0, ls) { acc }
+    // A line whose own indent is off the four-space grid was aligned by
+    // hand, under an opening bracket or a condition:
+    //
+    //     else if nodes[i].path == path && nodes[i].def_offset >= 0
+    //          && nodes[i].def_offset <= off {
+    //
+    // Nine spaces, chosen to put `&&` under the `if`'s condition. The
+    // grid has no opinion about that column and moving the line to four
+    // would destroy the alignment without improving anything -- the
+    // same reason `block_indent` refuses a brace on such a line.
+    //
+    // But only when the line sits DEEPER than the grid answer, which is
+    // what alignment always is: you align to a column of something on
+    // the line above, and that column is to the right of where nesting
+    // would have put you. All four off-grid lines in this repo are.
+    // An off-grid line that is SHALLOWER aligns with nothing -- it is
+    // just mis-indented, and refusing to fix it would be refusing to do
+    // the job.
+    else if ind % 4 != 0 && ind > anchor_indent(chars, spans, ls, first) { acc }
+    else {
+        let want = anchor_indent(chars, spans, ls, first);
+        if want < 0 { acc }
+        else { acc.push(Edit { line_start: ls, old_indent: ind, indent: want, owns_comments: true }) }
+    }
+}
+
+// `else` is the one word that continues a construct WITHOUT going
+// inside it, so it is the one line that takes its anchor's own indent
+// rather than four past:
+//
+//     if n <= 0 { c }
+//     else { bump(..) }
+//
+// The `else` line is inside the `if` expression's extent -- the extent
+// ends after it -- so without this it would be indented as if it were
+// part of the body, which is what the first version of this did to
+// three files. An `else if` chain falls out of the same rule: each
+// `else` answers to the nearest `if` that began on an earlier line,
+// which is the one it belongs to.
+let continues_level (chars: Array[String]) (at: Int): Int = if word_at(chars, at, "else") { 0 } else { 4 }
+
+// A line that OPENS with a closing bracket is left alone. `}` is placed
+// by `close_brace_edit`, which knows exactly what it closes because
+// `PBlock` records its braces; the ones that reach here are the braces
+// of a `struct`, `enum` or `extern` declaration, which are not
+// expressions and have no extent of their own. Pushing them in by the
+// continuation rule indented the closing brace of every extern block in
+// the corpus.
+//
+// The measurement never covered these -- it excluded lines beginning
+// with a closing bracket, so it said nothing about them, and a rule the
+// corpus did not dictate is not one to guess at.
+let is_closer_line (chars: Array[String]) (at: Int): Bool =
+    at < chars.len() && (chars[at] == "}" || chars[at] == ")" || chars[at] == "]")
+
+// What the continuation rule WOULD say this line's indent is, or -1
+// where it has nothing to say. Consulted by the off-grid guard above,
+// which needs the answer before deciding whether to allow it.
+let anchor_indent (chars: Array[String]) (spans: Array[parser.ExprSpan]) (ls: Int) (first: Int): Int = {
+    let anchor = innermost_start(spans, 0, ls, first, 0 - 1);
+    // An anchor that does not BEGIN its own line has no indent of its
+    // own to measure from, only a column someone typed:
+    //
+    //     IKUse(u) => if !Array.is_empty(u.path) .. { true }
+    //                 else { cg_uses_module(items, name, i + 1) },
+    //
+    // That `else` is under the `if`, at column 24, and the `if` starts a
+    // third of the way along the line above. `infer.plum` writes the
+    // same shape the other way, putting `else` four past the ARM's
+    // indent. Two files, two answers -- and where the corpus does not
+    // agree with itself, this does not choose. It refuses rather than
+    // falling back to the next anchor out, because falling back would
+    // be picking one of the two sides.
+    if anchor < 0 || !first_on_line(chars, anchor) { 0 - 1 }
+    else {
+        let col = count_spaces(chars, line_start_of(chars, anchor), 0);
+        if col % 4 != 0 { 0 - 1 } else { col + continues_level(chars, first) }
+    }
+}
+
+// The enclosing extent that begins latest: it started before this line
+// and has not ended by this line's first character.
+let innermost_start (spans: Array[parser.ExprSpan]) (i: Int) (ls: Int) (first: Int) (best: Int): Int =
+    if i >= spans.len() { best }
+    else if spans[i].start < ls && spans[i].end > first && spans[i].start > best {
+        innermost_start(spans, i + 1, ls, first, spans[i].start)
+    } else { innermost_start(spans, i + 1, ls, first, best) }
+
+// A contract clause, or the `=` that introduces a body after one. They
+// sit between an item's first token and its body, inside no expression
+// at all -- so nothing would place them anyway were it not for the
+// item's own extent, which covers them.
+let is_header_line (chars: Array[String]) (at: Int): Bool =
+    at < chars.len() && (chars[at] == "=" || word_at(chars, at, "require") || word_at(chars, at, "ensure"))
+
+let word_at (chars: Array[String]) (at: Int) (w: String): Bool = word_eq(chars, at, chars_of(w), 0)
+
+let word_eq (chars: Array[String]) (at: Int) (w: Array[String]) (i: Int): Bool =
+    if i >= w.len() { true }
+    else if at + i >= chars.len() { false }
+    else if chars[at + i] != w[i] { false }
+    else { word_eq(chars, at, w, i + 1) }
 
 let all_item_edits (chars: Array[String]) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= items.len() { acc } else { all_item_edits(chars, items, i + 1, item_edits(chars, items[i], acc)) }
