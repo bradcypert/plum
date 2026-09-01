@@ -126,6 +126,8 @@ pub let set_err_pos (path: String) (offset: Int) (fn_name: String): Unit =
 // A statement offset of -1 means "synthesized, or parsed without a
 // source context" — keep whatever the enclosing item set instead of
 // overwriting it with a position that points nowhere.
+pub let current_err_offset (unit: Unit): Int = ERR.get().offset
+
 pub let set_stmt_pos (offset: Int): Unit =
     if offset >= 0 { ERR.set(ErrPos { path: ERR.get().path, offset: offset, fn_name: ERR.get().fn_name }) } else { () }
 
@@ -2621,8 +2623,14 @@ let infer_struct_fields (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
     }
 
 let infer_match (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee: parser.PExpr) (arms: Array[parser.MatchArmNode]): InferResult = {
+    // The position to come BACK to. The arms move it, and an error
+    // raised after them -- exhaustiveness, or anything later in the
+    // enclosing statement -- would otherwise be reported against
+    // whichever arm happened to be checked last.
+    let here = current_err_offset(());
     let sr = infer_expr(p2, state, env, acc, scrutinee);
     let ar = infer_match_arms(p2, sr.state, env, sr.subst, subst_apply(sr.subst, sr.ty), arms, 0, None, []);
+    set_stmt_pos(here);
     check_exhaustive(p2, subst_apply(ar.subst, sr.ty), arms);
     ir_leaf(ar.ty, ar.subst, ar.state, TMatch(sr.texpr, ar.tarms))
 }
@@ -2646,7 +2654,9 @@ let infer_select (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (a
         fail_tc("`select` needs at least one arm; a select with none can never proceed");
         ir_unsupported(acc, state, "empty select")
     } else {
+        let here = current_err_offset(());
         let r = infer_select_arms(p2, state, env, acc, arms, 0, None, []);
+        set_stmt_pos(here);
         ir_leaf(Option.unwrap_or(r.ty, ITUnit), r.subst, r.state, TSelect(r.tarms))
     }
 
@@ -2655,6 +2665,8 @@ struct SelectArmsResult { ty: Option[ITy], subst: Subst, state: FreshState, tarm
 let infer_select_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arms: Array[parser.SelectArmNode]) (i: Int) (result_ty: Option[ITy]) (tarms: Array[TSelectArm]): SelectArmsResult =
     if i >= arms.len() { SelectArmsResult { ty: result_ty, subst: acc, state: state, tarms: tarms } }
     else {
+        // Same as `match`: an arm's errors belong to the arm.
+        set_stmt_pos(arms[i].start);
         let cr = infer_expr(p2, state, env, acc, arms[i].expr);
         let ef = fresh(cr.state);
         let s1 = match unify(subst_apply(cr.subst, cr.ty), ITStruct("Receiver", [ef.ty])) {
@@ -2754,6 +2766,20 @@ let join_tags (tags: Array[String]) (i: Int) (acc: String): String =
 let infer_match_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (scrutinee_ty: ITy) (arms: Array[parser.MatchArmNode]) (i: Int) (result_ty: Option[ITy]) (tarms: Array[TArm]): ArmsResult =
     if i >= arms.len() { ArmsResult { ty: Option.unwrap_or(result_ty, ITUnit), subst: acc, state: state, tarms: tarms } }
     else {
+        // Errors from HERE belong to this arm. A `match` is one
+        // expression, so without this everything inside forty arms was
+        // reported at the position of the `match` itself -- and since a
+        // `match` is usually a function's whole body, that meant the
+        // function's first line:
+        //
+        //     error: match arms: Int != String
+        //       --> main.plum:2:1
+        //
+        // The arm's own offset has been in the tree since the formatter
+        // needed it (`MatchArmNode.start`); nothing had ever read it for
+        // a diagnostic. The message still does not name the arm, but the
+        // caret now does, which is the half a reader acts on.
+        set_stmt_pos(arms[i].start);
         let br = bind_pattern_ty(p2, state, acc, env, arms[i].pattern, scrutinee_ty);
         let gr = match arms[i].guard {
             Some(g) => {

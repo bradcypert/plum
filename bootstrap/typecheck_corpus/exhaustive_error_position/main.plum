@@ -1,0 +1,16 @@
+// And an error raised AFTER the arms belongs to the `match` again.
+//
+// The arms move the reported position; this is the fixture that fails
+// if they forget to move it back, which would blame the last arm for a
+// missing one.
+enum E { A, B, C }
+
+let f (e: E): Int = {
+    let n = 1;
+    match e {
+        A => 1,
+        B => 2,
+    }
+}
+
+let main (): Unit = println(f(A).to_string())

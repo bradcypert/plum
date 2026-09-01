@@ -1,0 +1,2 @@
+error: match arms: Int != String
+main.plum:13:5

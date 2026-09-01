@@ -1,0 +1,2 @@
+error: match is not exhaustive
+main.plum:10:5

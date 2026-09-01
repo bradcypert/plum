@@ -1,0 +1,16 @@
+// The error belongs to the ARM, and the caret has to say so.
+//
+// A `match` is one expression and is usually a whole function body, so
+// reporting arm errors at the `match` meant reporting them at the
+// function's first line -- however many arms down the real problem was.
+// `MatchArmNode.start` had been in the tree since the formatter needed
+// it and no diagnostic had ever read it.
+enum E { A, B, C }
+
+let f (e: E): Int = match e {
+    A => 1,
+    B => 2,
+    C => "no",
+}
+
+let main (): Unit = println(f(A).to_string())

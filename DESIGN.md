@@ -17043,3 +17043,46 @@ error, with wording that names the thing to write instead
 (`.get().to_string()`); `is_unrenderable` is the same rule as a
 predicate for the call-site check. One rule, two places, no chance of
 them disagreeing about what a text form is.
+
+## An arm's errors belong to the arm (2026-09-01)
+
+A type error inside a `match` was reported at the `match` itself. A
+`match` is usually a whole function body, so that meant the function's
+first line, however many arms down the real problem was:
+
+    error: match arms: Int != String
+      --> main.plum:2:1        (the arm is on line 6)
+
+The message does not name the arm either, so between them the two told
+the reader almost nothing about WHERE.
+
+The offset had been sitting in the tree since the formatter needed it --
+`MatchArmNode.start`, added when arms had to be indented -- and no
+diagnostic had ever read it. Setting the reported position per arm is
+one line, and `select` arms took the same one.
+
+### The half that needed care
+
+The reported position is a module-level cell, so moving it for an arm
+moves it for whatever comes next. Exhaustiveness is checked AFTER the
+arms, and would have been blamed on whichever arm was checked last --
+"missing variant C", pointing at arm B. `infer_match` saves the position
+before the arms and restores it after; the fixture for that failure
+exists precisely because the bug is invisible otherwise.
+
+### The corpus could not have caught this
+
+`typecheck_corpus` asserted one thing: that `check` exits non-zero. That
+cannot tell a good diagnostic from a bad one, and this diagnostic was
+wrong for months with every fixture passing, because a bad position is
+still a rejection.
+
+A fixture may now pin what it is rejected WITH: every line of an
+optional `expected-error.txt` must appear in the output, so a fixture
+can assert the message, the position (`main.plum:13:5`), or both. The
+two new fixtures assert both, and the position one was verified by
+setting it to `10:1` -- the line the OLD behaviour reported -- and
+watching it fail.
+
+That is the shape worth copying: when a fixture pins a diagnostic,
+pin it to what the bug produced, so the fixture would have caught it.
