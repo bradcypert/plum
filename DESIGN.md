@@ -17086,3 +17086,55 @@ watching it fail.
 
 That is the shape worth copying: when a fixture pins a diagnostic,
 pin it to what the bug produced, so the fixture would have caught it.
+
+## Debug and release builds (2026-09-01)
+
+`plum build` had one mode. `-O2` was hardcoded at both link sites and
+there was no way to ask for anything else, so a program that failed at
+runtime printed one line and exited and a debugger could say nothing
+about it -- the binary carried no debug information at all.
+
+`--release` is now the opt-in and debug is the default. The asymmetry is
+the argument: someone who wanted the fast binary and got the debuggable
+one has a slow program and a flag to learn; someone who wanted to debug
+and got the optimised one has inlined frames and no way to know why.
+
+A flag rather than a manifest key, because a Plum project is a directory
+with no configuration file, and adding one to hold a single boolean
+would be the tail wagging the dog.
+
+### What Stage 1 does and does not buy
+
+`-O0 -g` gives frames that still exist and DWARF for the C shims. It
+does NOT give Plum line information: the emitted IR carries no `!dbg`
+metadata, so a debugger shows the runtime's lines and not the user's.
+That is Stage 3, and it needs positions on the typed tree -- the same
+parser work precise argument errors need.
+
+What made the plan cheaper than expected was measuring first. Plum
+functions become REAL symbols (`plum_outer`, `plum_middle`), at `-O0`
+and `-O2` alike, so a stack trace can print Plum names from the symbol
+table with no DWARF at all -- it needs `-rdynamic`, verified: 0 of 3
+names visible to `dladdr` without it, 3 of 3 with. That is Stage 2, and
+it is a linker flag and a `backtrace()` call rather than a debug-info
+project.
+
+The measurement corrected a wrong assumption twice over, and once
+because I read a stale binary: the first check said user functions were
+absent, which was true of the binary I happened to have and false of
+the program I meant. Re-running against a freshly built one is what
+turned a "needs DWARF" plan into a "needs one flag" plan.
+
+### What it costs
+
+`alloc-check` was the one to watch, since it builds fixtures through
+`plum build` and its numbers are the memory model's own. They did not
+move: allocations are decided in Plum codegen, and LLVM does not remove
+a call with side effects. So it stays on the default, unpinned, and the
+absence of a change is recorded here so nobody pins it later "to be
+safe" without knowing it was checked.
+
+`bootstrap/check-build-modes` asserts the OUTCOME rather than the flags
+-- that the default build carries DWARF, that `--release` does not, and
+that both binaries run. Asserting the flags would pass even if clang
+ignored them. Verified against the 0.0.19 binary, where it fails.

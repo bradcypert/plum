@@ -919,6 +919,24 @@ function's returned string data — e.g. a socket's `tcp_recv` — into a
 real, usable Plum value). `CStr` otherwise has no operations of its
 own.
 
+## Debug and release builds
+
+```sh
+plum build myapp            # debug: -O0 -g, keeps frames and debug info
+plum build myapp --release  # optimised: -O2
+plum test myapp --release   # the same choice for tests
+```
+
+**Debug is the default**, and the asymmetry is the reason: someone who
+wanted the fast binary and got the debuggable one has a slow program and
+a flag to learn, while someone who wanted to debug and got the optimised
+one has inlined frames and nothing to tell them why.
+
+A debug binary keeps its frames and carries DWARF, so a debugger can
+follow it. What it does not yet carry is Plum line information — the
+emitted IR has no `!dbg` metadata, so a debugger shows the C runtime's
+lines, not yours. Plum function names are real symbols in both modes.
+
 ## Modules
 
 A directory *is* a module — no `mod foo;` declaration anywhere. Every

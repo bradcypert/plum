@@ -100,6 +100,8 @@ jobs:
         run: ./bootstrap/check-doc-names
       - name: the stdlib reference matches the compiler
         run: ./bootstrap/check-stdlib-reference
+      - name: debug and release builds differ
+        run: ./bootstrap/check-build-modes
 
       # Allocation counts. Refcount churn creeps back in silently, and
       # the language's central claim is a number nobody was looking at

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# `plum build` produces a DEBUG binary by default and an optimised one
+# with `--release`.
+#
+# Until 2026-09-01 there was one mode: `-O2`, hardcoded at both link
+# sites, with no way to ask for anything else. A Plum program that
+# failed at runtime printed one line and exited, and a debugger could
+# tell you nothing about it, because the binary carried no debug
+# information at all.
+#
+# Debug is the DEFAULT deliberately, and the reason is asymmetric: a
+# person who wanted the fast binary and got the debuggable one has a
+# slow program and a flag to learn; a person who wanted to debug and got
+# the optimised one has inlined frames and no way to know why.
+#
+# What this asserts is the OUTCOME rather than the flags -- that the
+# default build carries DWARF and the release build does not, and that
+# both actually run. Asserting the flags would pass even if clang
+# ignored them.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+plum="${1:-./sh}"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+mkdir -p "$work/p"
+printf 'let main (): Unit = println("mode check")\n' > "$work/p/main.plum"
+
+fail=0
+
+build_one() {   # <label> <outfile> [flags...]
+    local label="$1" out="$2"; shift 2
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/p" -o "$out" "$@" > "$work/$label.err" 2>&1; then
+        echo "FAIL: $label build failed: $(head -n 1 "$work/$label.err")" >&2
+        fail=1
+        return 1
+    fi
+    if [ "$("$out" 2>&1)" != "mode check" ]; then
+        echo "FAIL: $label binary did not run correctly" >&2
+        fail=1
+        return 1
+    fi
+    return 0
+}
+
+build_one debug "$work/debug.bin"
+build_one release "$work/release.bin" --release
+
+# `grep -a` rather than `readelf`: this has to work wherever a build
+# does, and binutils is not guaranteed on every platform the compiler
+# targets.
+if [ $fail -eq 0 ]; then
+    if ! grep -aq debug_info "$work/debug.bin"; then
+        echo "FAIL: the DEFAULT build carries no debug information" >&2
+        fail=1
+    fi
+    if grep -aq debug_info "$work/release.bin"; then
+        echo "FAIL: --release carries debug information; it should not" >&2
+        fail=1
+    fi
+fi
+
+[ $fail -ne 0 ] && exit 1
+printf 'check-build-modes: default build carries debug info, --release does not, both run\n'
