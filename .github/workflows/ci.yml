@@ -98,6 +98,8 @@ jobs:
         run: ./bootstrap/check-builtins
       - name: every stdlib name the docs mention exists
         run: ./bootstrap/check-doc-names
+      - name: the stdlib reference matches the compiler
+        run: ./bootstrap/check-stdlib-reference
 
       # Allocation counts. Refcount churn creeps back in silently, and
       # the language's central claim is a number nobody was looking at

@@ -1628,6 +1628,32 @@ pub let render_type (ty: Ty): String = match ty {
     TyTuple(elems) => "(tup ".concat(join_space(Array.map(elems, |t| render_type(t)))).concat(")"),
 }
 
+// The way a person WRITES a type. `render_type` above prints the parse
+// TREE -- `(gt Array T)` for `Array[T]` -- which is right for
+// `dump-ast` and for the corpus goldens that record it, and wrong in
+// front of a person.
+//
+// `main.plum` already made this exact distinction for PATTERNS, and
+// said why: "`render_pattern` produces S-EXPRESSIONS. That is correct
+// for what it was written for -- `dump-ast` -- and wrong for a
+// signature shown to a person." Types were left on the dump renderer,
+// so hovering `Os.read_file` in an editor answered
+//
+//     let read_file (path: String): (gt Result String String)
+//
+// The reason given for the pattern fix was never about patterns.
+pub let render_type_source (ty: Ty): String = match ty {
+    TyPath(segments) => join_dot(segments),
+    TyGeneric(base, args) => join_dot(base).concat("[").concat(join_list(Array.map(args, |t| render_type_source(t)))).concat("]"),
+    TyFunction(params, ret) => "(".concat(join_list(Array.map(params, |t| render_type_source(t)))).concat(") -> ").concat(render_type_source(ret)),
+    // A tuple of one is not a tuple; `(Int)` is how a parenthesised
+    // type is written, and the parser produces `TyTuple` for both.
+    TyTuple(elems) => "(".concat(join_list(Array.map(elems, |t| render_type_source(t)))).concat(")"),
+}
+
+let join_list (strs: Array[String]): String =
+    Array.fold(strs, "", |acc, s| if acc == "" { s } else { acc.concat(", ").concat(s) })
+
 pub let join_dot (segments: Array[String]): String = Array.fold(segments, "", |acc, s| if acc == "" { s } else { acc.concat(".").concat(s) })
 
 let render_expr (e: PExpr): String = match e {

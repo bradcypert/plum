@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# STDLIB.md is what the compiler says the standard library is.
+#
+# The library was documented only as hand-written prose in README.md,
+# which can be incomplete without looking incomplete: 32 of 142
+# functions were never mentioned there, including `Ref.get`, `Ref.set`,
+# `Sender.send` and `Receiver.recv` -- both halves of two headline
+# features.
+#
+# `bootstrap/check-doc-names` proves every name the documentation
+# mentions is real. It cannot prove the reverse, because until now
+# "everything that exists" was not written down anywhere a check could
+# read. `plum stdlib-reference` writes it down, from the same items
+# completion reads, so a function that exists is in the document by
+# construction and carries the signature it actually has.
+#
+# This fails when the checked-in file and the compiler disagree --
+# which is what makes the file a CHECK rather than a snapshot.
+#
+#   bootstrap/check-stdlib-reference            # verify
+#   bootstrap/check-stdlib-reference --record   # regenerate
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+plum=./sh
+record=0
+[ "${1:-}" = "--record" ] && record=1
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+if ! "$plum" stdlib-reference > "$work/STDLIB.md" 2>"$work/err"; then
+    echo "check-stdlib-reference: \`plum stdlib-reference\` failed: $(head -n 1 "$work/err")" >&2
+    exit 1
+fi
+
+if [ ! -s "$work/STDLIB.md" ]; then
+    echo "check-stdlib-reference: generated an EMPTY reference -- the command is broken" >&2
+    exit 1
+fi
+
+if [ $record -eq 1 ]; then
+    cp "$work/STDLIB.md" STDLIB.md
+    printf 'check-stdlib-reference: recorded %d entries\n' "$(grep -c '^- `' STDLIB.md)"
+    exit 0
+fi
+
+if ! diff -u STDLIB.md "$work/STDLIB.md" > "$work/diff"; then
+    echo "check-stdlib-reference: STDLIB.md is out of date. Regenerate with:" >&2
+    echo "    bootstrap/check-stdlib-reference --record" >&2
+    head -n 40 "$work/diff" >&2
+    exit 1
+fi
+
+printf 'check-stdlib-reference: %d entries, and STDLIB.md matches the compiler\n' "$(grep -c '^- `' STDLIB.md)"

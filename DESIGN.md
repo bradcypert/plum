@@ -16890,3 +16890,64 @@ without anyone remembering it existed.
 `exec_corpus/method_call_equivalence` prints both spellings of nine
 calls side by side and requires them to agree, so this is checked by
 running rather than by compiling.
+
+## The standard library, listed by the compiler (2026-08-31)
+
+Two problems, one cause. The library was documented as hand-written
+prose in README.md, so it could be incomplete without looking
+incomplete -- and the signatures shown in an editor came from the
+AST-DUMP renderer, so hovering `Os.read_file` answered
+
+    let read_file (path: String): (gt Result String String)
+
+### The renderer, for the second time
+
+`render_type` prints the parse tree. That is correct for `dump-ast` and
+for the ~100 corpus goldens that record its output, and wrong in front
+of a person. `main.plum` had already made exactly this distinction for
+PATTERNS, and said why:
+
+> `render_pattern` produces S-EXPRESSIONS. That is correct for what it
+> was written for -- `dump-ast` -- and wrong for a signature shown to a
+> person.
+
+Types were left on the dump renderer. The reason given for the pattern
+fix was never about patterns -- the fourth instance this week of a fix
+applied to the case that prompted it while the reason written down was
+general. `render_type_source` is the type half; `render_type` is
+untouched, so the goldens are too.
+
+### The reference is generated, not maintained
+
+32 of 142 standard-library functions were never mentioned in the README,
+including `Ref.get`, `Ref.set`, `Sender.send` and `Receiver.recv` --
+both halves of two headline features.
+
+`check-doc-names` proves every name the docs MENTION is real. It cannot
+prove the reverse, and the reason is worth stating: "everything that
+exists" was not written down anywhere a check could read. A checker
+needs both sides to be data.
+
+`plum stdlib-reference` writes that side down, from the same items
+completion reads, so a function that exists is in `STDLIB.md` by
+construction with the signature it actually has. 161 entries across 18
+sections, including the compiler's own builtin methods -- which are not
+source items and so are invisible to anything that reads declarations,
+the same gap that hid `Array.map` from completion.
+
+`bootstrap/check-stdlib-reference` fails when the file and the compiler
+disagree. That is what makes it a check rather than a snapshot; a
+generated file nobody regenerates is just a stale file with a better
+excuse.
+
+### `check-seed` earned its keep
+
+The first version of the generator sorted with `Array.set(xs, i, v)` --
+a spelling that became legal in 0.0.18, the release that shipped hours
+earlier. `bootstrap/seed/plum.ll` is an OLDER compiler that has to be
+able to build the current source, so the compiler cannot use a spelling
+it has only just started accepting. The seed check failed with "unbound
+variant/function: Array" and the fix was to write the dot form.
+
+Worth keeping because the mistake is easy and invisible: nothing about
+the source says which constructs the seed understands.
