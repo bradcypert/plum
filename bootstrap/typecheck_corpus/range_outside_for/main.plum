@@ -1,0 +1,8 @@
+// Rejected: `..` builds a range only as a `for` iterand.
+//
+// Anywhere else the backend refuses it, and used to refuse it after
+// `plum check` had said the program was fine.
+let main (): Unit = {
+    let r = 1..5;
+    ()
+}

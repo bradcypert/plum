@@ -1,0 +1,13 @@
+// Rejected: an or-pattern.
+//
+// The grammar has them, the parser builds them and the type checker
+// binds them -- and the backend has never emitted one. So this passed
+// `plum check` and then failed the build with "or-patterns aren't
+// supported yet", which is the disagreement this project rates worst:
+// `check` is the one people run on every keystroke.
+//
+// Rejecting here removes no capability. The program did not compile
+// before either; the checker simply said otherwise.
+let f (n: Int): Bool = match n { 1 | 2 => true, _ => false }
+
+let main (): Unit = println(f(1).to_string())

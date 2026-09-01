@@ -1,0 +1,5 @@
+// Rejected: a closure has no text form.
+let main (): Unit = {
+    let f = |x: Int| x;
+    println(f.to_string())
+}

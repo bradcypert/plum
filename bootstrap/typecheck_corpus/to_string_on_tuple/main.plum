@@ -1,0 +1,6 @@
+// Rejected: the backend has no tuple renderer.
+//
+// Tuples themselves work fully -- nested, in arrays, as struct fields,
+// out of generic functions. Only `.to_string()` on one is missing, and
+// the checker now says so instead of the build.
+let main (): Unit = println((1, 2).to_string())

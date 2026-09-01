@@ -1,0 +1,8 @@
+// Rejected: a `CStr` is a raw `char*` with no length header and no
+// ownership, so rendering it means deciding who owns the copy.
+// `.as_string()` is that decision, written explicitly -- which is what
+// the message says, and it now says it in the editor.
+let main (): Unit = {
+    let c = "x".as_cstr();
+    println(c.to_string())
+}

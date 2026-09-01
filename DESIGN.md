@@ -16951,3 +16951,62 @@ variant/function: Array" and the fix was to write the dot form.
 
 Worth keeping because the mistake is easy and invisible: nothing about
 the source says which constructs the seed understands.
+
+## Programs the checker accepted and the compiler refused (2026-09-01)
+
+`Array.push(xs, x)` type-checking and then failing to compile was fixed
+yesterday as one bug. It was an instance of a class, and the class had
+seven members:
+
+| written | `plum check` | `plum build` |
+|---|---|---|
+| `match n { 1 \| 2 => .. }` | ok | or-patterns aren't supported yet |
+| `(1, 2).to_string()` | ok | .to_string() on a tuple isn't supported |
+| `().to_string()` | ok | Unit has no .to_string() |
+| `r.to_string()` on a `Ref` | ok | use .get().to_string() |
+| `f.to_string()` on a closure | ok | a closure has no .to_string() |
+| `c.to_string()` on a `CStr` | ok | use .as_string() |
+| `let r = 1..5;` | ok | '..' is only supported as a 'for' iterand |
+
+`plum check` is what runs on every keystroke in an editor. A rule the
+backend enforces and the checker does not is a rule that fires as late
+as it possibly can.
+
+### Two causes
+
+Four are one bug: `.to_string()` is typed as working on ANY type, and
+the backend implements it for `Int`, `Float`, `Bool`, `String`, structs,
+enums and arrays. The backend's messages were good ones -- they name the
+thing to write instead -- arriving at the wrong time. They are copied
+into the checker verbatim, suggestions included.
+
+Two are constructs the parser and checker support and codegen never got:
+or-patterns, and `..` outside a `for` iterand. Rejecting them in the
+checker removes no capability, because the programs did not compile
+before either. It only stops the checker from claiming otherwise.
+
+### How the class was found, so it can be found again
+
+Not by reading. `codegen.plum` has 39 distinct failure messages; the
+reachable ones are those a TYPE-CORRECT program can produce. Writing one
+small program per candidate message and running `check` then `emit-llvm`
+took about ten minutes and turned seven up. The probe is worth repeating
+whenever the backend gains a refusal.
+
+`typecheck_corpus` has a fixture per case now, so `check` rejecting them
+is asserted rather than remembered. The two corpora together already
+assert the other half: every `exec_corpus` fixture must both type-check
+AND build, so anything accepted has to compile.
+
+### The lesson, for the fifth time this week
+
+The `Array.push` fix was applied to `Array.push`. The `contains` method
+fallthrough was not applied to `len`, `concat` and `remove`. The LSP
+subprocess rule named the checker and not the parser. The
+render-for-people split was made for patterns and not for types. The
+module qualifier was fixed for variants and not for annotations.
+
+Each time the reason written down was general and the change was not.
+The habit worth keeping: after fixing something, re-read the reason and
+ask what ELSE it covers -- and then go and check, since in every one of
+these the answer was "more than was fixed".

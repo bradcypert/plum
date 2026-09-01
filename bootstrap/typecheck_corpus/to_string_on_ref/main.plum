@@ -1,0 +1,8 @@
+// Rejected: a `Ref` has no text form of its own.
+//
+// The suggestion is the backend's own wording. It was a good message
+// arriving at the wrong time: at build, rather than in the editor.
+let main (): Unit = {
+    let r = ref(1);
+    println(r.to_string())
+}

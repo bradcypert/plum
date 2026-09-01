@@ -1,0 +1,7 @@
+// Rejected: `.to_string()` on a value that has no text form.
+//
+// `.to_string()` was typed as working on ANYTHING while the backend
+// implements it for Int, Float, Bool, String, structs, enums and
+// arrays only. Four types reached codegen and were refused there --
+// after `plum check` had already approved them.
+let main (): Unit = println(().to_string())

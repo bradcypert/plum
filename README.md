@@ -474,6 +474,23 @@ Tail calls are guaranteed eliminated (compiled to a real LLVM
 `musttail` call, i.e. a loop, not a growing call stack), so a
 tail-recursive function runs in constant stack space.
 
+### Tuples
+
+```plum
+let pair (): (Int, String) = (1, "a")
+let swap (p: (Int, String)): (String, Int) = match p { (n, s) => (s, n) }
+
+let main (): Unit = println(match swap(pair()) { (s, n) => s.concat(n.to_string()) })
+```
+
+```
+a1
+```
+
+Tuples work anywhere a type does — nested, inside arrays, as struct
+fields, returned from generic functions. The one thing they lack is
+`.to_string()`; render the elements instead, as above.
+
 ### Types: `Int`, `Float`, `Bool`, `String`, `Unit`
 
 `String` is the surface-syntax keyword for text (its type is
@@ -1171,8 +1188,8 @@ program's prelude):
   `Eq`-bounded), `Array.sort_by(arr, |a, b| ...)` (takes an explicit
   "is `a` less-or-equal `b`" comparator — no generic `Ord` bound
   exists), `Array.zip: Array[Zipped[A, B]]` (`Zipped { first, second }`,
-  a plain struct — no tuple codegen support yet), `Array.sum_int`/
-  `Array.sum_float`.
+  a plain struct — it predates tuple support and has not been changed
+  since, to avoid breaking callers), `Array.sum_int`/`Array.sum_float`.
 - **`String`** — `String.is_empty`, `String.slice` (codepoint-safe, not
   raw byte indexing — never splits a multi-byte character), `String.
   repeat(s, n)`, `String.trim_start`/`String.trim_end` (ASCII
