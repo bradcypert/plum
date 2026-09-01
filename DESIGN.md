@@ -17010,3 +17010,36 @@ Each time the reason written down was general and the change was not.
 The habit worth keeping: after fixing something, re-read the reason and
 ask what ELSE it covers -- and then go and check, since in every one of
 these the answer was "more than was fixed".
+
+## `Show`, the third bound (2026-09-01)
+
+The entry above moved seven backend refusals into the checker. One of
+them survived a single function of indirection:
+
+```plum
+let show [T] (x: T): String = x.to_string()
+show(ref(1))            // checked ok, then failed the build
+```
+
+The direct case is caught where it is written, because the type is
+visible there. Inside `show` the type is only `T`.
+
+This is the shape `0.0.17` already solved twice. `a > b` and `a == b` on
+a type parameter had the same hole, and the answer was to ask at the
+CALL, where the type argument is concrete, and to follow the requirement
+through functions that pass their parameter along. `OrdReq` carries a
+`kind`, `violates_bound` dispatches on it, and adding a third kind was
+about fifteen lines: the propagation, the declared-bound syntax
+(`[T: Show]`) and the call-site error all came from the existing
+machinery unchanged.
+
+That is the argument for having built it as a table rather than as two
+special cases. The first version of the ordered check could have been an
+`if is_ordered_op` in one place; it would have had to be written a third
+time here, and the propagation with it.
+
+The rule itself is stated once. `reject_unrenderable` gives the direct
+error, with wording that names the thing to write instead
+(`.get().to_string()`); `is_unrenderable` is the same rule as a
+predicate for the call-site check. One rule, two places, no chance of
+them disagreeing about what a text form is.

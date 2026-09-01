@@ -1,0 +1,9 @@
+// Rejected: and it follows the type parameter.
+//
+// `via` renders nothing itself. It hands its own `T` to something that
+// does, so the requirement is its as well -- otherwise the fix would be
+// exactly one level deep.
+let show [T] (x: T): String = x.to_string()
+let via [T] (x: T): String = show(x)
+
+let main (): Unit = println(via(ref(1)))

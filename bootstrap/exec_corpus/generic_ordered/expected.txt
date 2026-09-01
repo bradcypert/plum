@@ -6,3 +6,4 @@ unordered is fine here
 same
 structs compare
 b
+42 <[1, 2]>

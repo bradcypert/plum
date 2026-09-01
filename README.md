@@ -604,10 +604,15 @@ The error lands on the **call**, because that is where the type is
 chosen. The definition is correct code and stays legal — it is only the
 attempt to use it on something unorderable that is not.
 
-Bounds may also be written down, `[T: Ord]` and `[T: Eq]`, and are then
-required of callers whether or not the body compares anything. Writing
-one is optional: it pins the requirement into the signature so a body
-that stops comparing does not silently widen what callers may pass.
+The same applies to `.to_string()`: rendering a type parameter requires
+the type argument to have a text form, so `show(ref(1))` is rejected at
+the call rather than accepted and then refused by the build.
+
+Bounds may also be written down — `[T: Ord]`, `[T: Eq]` and `[T: Show]`
+— and are then required of callers whether or not the body compares or
+renders anything. Writing one is optional: it pins the requirement into
+the signature so a body that stops needing it does not silently widen
+what callers may pass.
 
 ### Associated functions: `Type.func(args)`
 

@@ -1,0 +1,12 @@
+// Rejected: rendering a type parameter that has no text form.
+//
+// The DIRECT case -- `r.to_string()` where `r` is visibly a `Ref` --
+// was caught where it is written. One function of indirection hid it
+// again: inside `show` the type is only `T`, so `plum check` approved
+// this and the build then refused it.
+//
+// Same answer as `<` and `==` before it: ask at the CALL, where the
+// type argument is concrete.
+let show [T] (x: T): String = x.to_string()
+
+let main (): Unit = println(show(ref(1)))

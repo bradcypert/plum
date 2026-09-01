@@ -20,6 +20,11 @@ let same [T] (a: T) (b: T): Bool = a == b
 // A bound declared rather than inferred, and satisfied.
 let choose [T: Ord] (a: T) (b: T) (flag: Bool): T = if flag { a } else { b }
 
+// `Show` is the third bound, and the same machinery: rendering a type
+// parameter requires the type argument to have a text form.
+let show [T] (x: T): String = x.to_string()
+let labelled [T: Show] (x: T): String = "<".concat(show(x)).concat(">")
+
 let main (): Unit = {
     println(biggest(3, 7).to_string());
     println(biggest(1.5, 2.5).to_string());
@@ -28,5 +33,6 @@ let main (): Unit = {
     println(second(P { x: 1 }, "unordered is fine here"));
     println(if same(2, 2) { "same" } else { "differ" });
     println(if same(P { x: 1 }, P { x: 1 }) { "structs compare" } else { "differ" });
-    println(choose("a", "b", false))
+    println(choose("a", "b", false));
+    println(show(42).concat(" ").concat(labelled([1, 2])))
 }
