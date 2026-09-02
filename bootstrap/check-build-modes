@@ -96,6 +96,110 @@ tail_recursion() {   # <label> [flags...]
 
 tail_recursion debug
 tail_recursion release --release
+# WITH tracing too. A shadow call stack whose pop sat before the `ret`
+# put a side-effecting call between the recursive call and the return of
+# its value, which stops the optimiser rewriting the recursion as a
+# loop: this same program segfaulted. Each path now pays its own pop and
+# a self-call pops BEFORE calling, so there is nothing in between. See
+# TRACING.md section 6.
+tail_recursion traced --trace
+
+# --- `--trace` ---
+#
+# A stack trace on stderr, and stdout untouched: the abort MESSAGE is
+# compared byte-for-byte by `bootstrap/abort_corpus`, so a trace must
+# not land in it.
+mkdir -p "$work/tr"
+cat > "$work/tr/main.plum" <<'PLUM'
+let deepest (xs: Array[Int]): Int = xs[99]
+let middle (xs: Array[Int]): Int = deepest(xs)
+let main (): Unit = println(middle([1, 2, 3]).to_string())
+PLUM
+
+for label in plain traced; do
+    if [ "$label" = traced ]; then set -- --trace; else set --; fi
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tr" -o "$work/tr.bin" "$@" > "$work/tr-$label.err" 2>&1; then
+        echo "FAIL: $label trace build failed: $(head -n 1 "$work/tr-$label.err")" >&2
+        fail=1
+        continue
+    fi
+    "$work/tr.bin" > "$work/tr-$label.out" 2> "$work/tr-$label.trace"
+    if [ "$(cat "$work/tr-$label.out")" != "array index out of bounds" ]; then
+        echo "FAIL: $label build's stdout is not the abort message" >&2
+        fail=1
+    fi
+    if [ "$label" = traced ]; then
+        grep -q '^  at deepest$' "$work/tr-$label.trace" || { echo "FAIL: --trace printed no frame for the failing function" >&2; fail=1; }
+        grep -q '^  at middle$' "$work/tr-$label.trace"  || { echo "FAIL: --trace printed no caller frame" >&2; fail=1; }
+    elif [ -s "$work/tr-$label.trace" ]; then
+        echo "FAIL: a build without --trace wrote to stderr; it should be silent there" >&2
+        fail=1
+    fi
+done
+
+# --- the shadow stack BALANCES across a tail-recursive chain ---
+#
+# Two failures this catches, both of which a trace that merely looks
+# plausible would hide.
+#
+# STALE FRAMES. Pushing on entry and popping only before the recursive
+# call leaves the chain's final iteration -- the one that takes the
+# value branch -- returning without ever popping. One frame is stranded
+# per completed recursion and shows up in every LATER trace, naming a
+# function that returned long ago. So: recurse three million deep,
+# return, and only then fail somewhere else.
+#
+# COLLAPSE. The surviving trace names `boom` and `main` and NOT `count`,
+# which is the accurate description: a tail call replaces its caller's
+# frame, so the shadow stack replaces the entry too.
+mkdir -p "$work/tb"
+cat > "$work/tb/main.plum" <<'PLUM'
+let count (n: Int) (acc: Int): Int = if n == 0 { acc } else { count(n - 1, acc + n) }
+let boom (xs: Array[Int]): Int = xs[99]
+let main (): Unit = {
+    println(count(3000000, 0).to_string());
+    println(boom([1, 2, 3]).to_string());
+}
+PLUM
+
+if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tb" -o "$work/tb.bin" --trace > "$work/tb.err" 2>&1; then
+    echo "FAIL: traced balance build failed: $(head -n 1 "$work/tb.err")" >&2
+    fail=1
+else
+    "$work/tb.bin" > "$work/tb.out" 2> "$work/tb.trace"
+    if ! head -n 1 "$work/tb.out" | grep -q '^4500001500000$'; then
+        echo "FAIL: deep tail recursion did not return in a traced build" >&2
+        fail=1
+    fi
+    grep -q '^  at boom$' "$work/tb.trace" || { echo "FAIL: trace after a deep recursion names no failing frame" >&2; fail=1; }
+    grep -q '^  at main$' "$work/tb.trace" || { echo "FAIL: trace after a deep recursion lost main" >&2; fail=1; }
+    if grep -q '^  at count$' "$work/tb.trace"; then
+        echo "FAIL: a frame from the returned recursion is still on the shadow stack" >&2
+        fail=1
+    fi
+fi
+
+# The same chain aborting AT ITS BASE shows exactly ONE frame for the
+# recursive function -- the collapse is deliberate, so pin it. A count
+# other than one means the pops and pushes are not pairing per
+# iteration.
+mkdir -p "$work/td"
+cat > "$work/td/main.plum" <<'PLUM'
+let count (n: Int) (acc: Int): Int = if n == 0 { acc / (acc - acc) } else { count(n - 1, acc + n) }
+let main (): Unit = println(count(3000000, 0).to_string())
+PLUM
+
+if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/td" -o "$work/td.bin" --trace > "$work/td.err" 2>&1; then
+    echo "FAIL: traced collapse build failed: $(head -n 1 "$work/td.err")" >&2
+    fail=1
+else
+    "$work/td.bin" > "$work/td.out" 2> "$work/td.trace"
+    frames="$(grep -c '^  at count$' "$work/td.trace" || true)"
+    if [ "$frames" != "1" ]; then
+        echo "FAIL: a tail-recursive chain should show exactly one frame, showed $frames" >&2
+        fail=1
+    fi
+fi
 
 [ $fail -ne 0 ] && exit 1
-printf 'check-build-modes: default carries debug info, --release does not, both run, and deep tail recursion survives both\n'
+printf 'check-build-modes: modes differ as recorded, tail recursion survives all three, and traces balance across a tail-recursive chain\n'

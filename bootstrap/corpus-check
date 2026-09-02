@@ -139,7 +139,11 @@ for dir in bootstrap/abort_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
 
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh emit-llvm "$dir" > "$work/ab-$name.ll" 2>"$work/ab-$name.err"; then
+    # `--release`, so no shadow call stack: these fixtures assert the
+    # abort MESSAGE, and a debug build also prints a stack trace to
+    # stderr, which this comparison captures. The trace is asserted by
+    # `bootstrap/check-build-modes`, where the modes are the subject.
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh emit-llvm "$dir" --release > "$work/ab-$name.ll" 2>"$work/ab-$name.err"; then
         fail_with "$name" "emit failed: $(head -n 1 "$work/ab-$name.err")"; continue
     fi
     # These fixtures ABORT, so ASan's leak check would report whatever

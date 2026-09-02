@@ -1366,10 +1366,12 @@ pub let plum_version (): String = "0.0.19"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
-    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--target <triple>] | test <project-dir> [--release] | new <name> | version | lsp | complete <project-dir>");
+    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | new <name> | version | lsp | complete <project-dir>");
     println("");
+    println("  --trace             a stack trace on stderr when the program dies.");
+    println("                      Tail recursion still runs in constant stack space.");
     println("  --release           optimise (-O2). The default is a DEBUG build:");
-    println("                      -O0 -g, which keeps frames and debug information.");
+    println("                      -Og -g, which keeps frames and debug information.");
     println("  --target <triple>   build for another platform, e.g. aarch64-linux-musl.");
     println("                      Needs a C compiler that can link for it: set PLUM_CC,");
     println("                      e.g. PLUM_CC=\"zig cc\". Plum ships no sysroot.")
@@ -1470,12 +1472,13 @@ let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): Test
 // failure and cannot report the rest. That was the original reason for
 // the design and it is unchanged -- only the child is different, an
 // argument to a compiled binary rather than an interpreter invocation.
-let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Array[String]) (release: Bool): TestRun =
+let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Array[String]) (release: Bool) (trace: Bool): TestRun =
     match Os.temp_dir() {
         Err(e) => TestRun { failed: 1, detail: "could not create a scratch directory: ".concat(e) },
         Ok(scratch) => {
             let bin = scratch.concat("/tests");
             let ll = bin.concat(".ll");
+            codegen.set_debug_frames(trace);
             let ir = codegen.cg_emit_program_entry(program, "__plum_test_main");
             let outcome = match Os.write_file(ll, ir) {
                 Err(e) => TestRun { failed: 1, detail: "could not write test IR: ".concat(e) },
@@ -1497,7 +1500,7 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
         },
     }
 
-let cmd_test (dir: String) (release: Bool): Unit = {
+let cmd_test (dir: String) (release: Bool) (trace: Bool): Unit = {
     let items = collect_project(dir);
     let names = discover_tests(items, 0, []);
     let src = test_dispatcher_src(names);
@@ -1509,7 +1512,7 @@ let cmd_test (dir: String) (release: Bool): Unit = {
     // every call to a prelude function, `assert_eq` first among them.
     // The same note `emit-llvm` already carries, for the same reason.
     println("running ".concat(names.len().to_string()).concat(" tests"));
-    let run = compile_and_run_tests(dir, program, names, release);
+    let run = compile_and_run_tests(dir, program, names, release, trace);
     println("");
     if run.failed == 0 {
         println("test result: ok. ".concat(names.len().to_string()).concat(" passed; 0 failed"));
@@ -1797,14 +1800,25 @@ let cc_mode_args (release: Bool): Array[String] =
 // dog.
 pub let wants_release (argv: Array[String]): Bool = Array.contains(argv, "--release")
 
-let compile_project (dir: String) (out: String) (extra: Array[String]) (target: String) (release: Bool): String = {
+// `--trace`: a stack trace when the program dies.
+//
+// A flag rather than part of the debug build, because a shadow call
+// stack costs a push and a pop per call. It does NOT cost tail-call
+// elimination any more: the pop is paid per PATH, and a self-call in
+// tail position pops before calling rather than after returning, so
+// nothing sits between that call and the `ret`. TRACING.md section 6
+// has the measurements, `cg_expr_t` in `codegen/codegen.plum` the
+// emission, and `native_stdlib/io_shim.c` the runtime.
+pub let wants_trace (argv: Array[String]): Bool = Array.contains(argv, "--trace")
+
+let compile_project (dir: String) (out: String) (extra: Array[String]) (target: String) (release: Bool) (trace: Bool): String = {
     let bad = target_error(target);
     if bad != "" { bad }
     else {
         match Os.temp_dir() {
             Err(e) => "build failed: ".concat(e),
             Ok(scratch) => {
-                let err = compile_with_scratch(dir, out, extra, scratch, target, release);
+                let err = compile_with_scratch(dir, out, extra, scratch, target, release, trace);
                 let cleaned = Os.remove_tree(scratch);
                 err
             },
@@ -1812,8 +1826,10 @@ let compile_project (dir: String) (out: String) (extra: Array[String]) (target: 
     }
 }
 
-let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
+let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool) (trace: Bool): String = {
     let ll = out.concat(".ll");
+    // Debug builds carry the shadow call stack; release builds do not.
+    codegen.set_debug_frames(trace);
     let ir = codegen.cg_emit_program(parser.ProgramNode { items: collect_project(dir) });
     match Os.write_file(ll, ir) {
         Err(e) => "build failed: ".concat(e),
@@ -1846,7 +1862,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
 let build_project (argv: Array[String]): Unit = {
     let target = match find_flag_value(argv, "--target", 0) { Some(t) => t, None => native_target() };
     let out = output_path(argv, target);
-    let err = compile_project(argv[1], out, link_args(argv, argv[1]), target, wants_release(argv));
+    let err = compile_project(argv[1], out, link_args(argv, argv[1]), target, wants_release(argv), wants_trace(argv));
     if err == "" { println("wrote ".concat(out)) } else { println(err) }
 }
 
@@ -1884,7 +1900,7 @@ let run_project (argv: Array[String]): Unit = {
             // machine cannot execute a foreign binary. Anything that
             // looks like `--target` after the project directory is one
             // of the PROGRAM's own arguments, not ours.
-            let err = compile_project(argv[1], out, link_args(argv, argv[1]), native_target(), wants_release(argv));
+            let err = compile_project(argv[1], out, link_args(argv, argv[1]), native_target(), wants_release(argv), wants_trace(argv));
             if err != "" { println(err) }
             else {
                 let args = Array.slice(argv, 2, argv.len());
@@ -2232,13 +2248,14 @@ let main (): Unit = {
         typecheck.check_program(codegen.cg_with_prelude(parser.ProgramNode { items: collect_project(argv[1]) }));
         println("ok");
     } else if argv[0] == "test" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
-        cmd_test(argv[1], wants_release(argv));
+        cmd_test(argv[1], wants_release(argv), wants_trace(argv));
     } else if argv[0] == "build" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
         build_project(argv);
     } else if argv[0] == "emit-llvm" && Result.unwrap_or(Os.is_directory(argv[1]), false) {
         // Same directory loading `check` and `run` use. A real Plum
         // project is several modules, so a backend that only accepted
         // one file could never compile one.
+        codegen.set_debug_frames(wants_trace(argv));
         println(codegen.cg_emit_program(parser.ProgramNode { items: collect_project(argv[1]) }));
     } else if argv[0] == "fmt" {
         cmd_fmt(argv);

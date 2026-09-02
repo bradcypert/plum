@@ -212,7 +212,15 @@ pub struct CgProgram { fns: Array[typecheck.TFn], globals: Array[typecheck.TFn],
     // may hand its reference over instead of lending it — see
     // `cg_reads_max`. Set per function by `cg_fn`; empty elsewhere, which
     // simply means nothing moves.
-    movable: Array[String] }
+    movable: Array[String],
+    // The SYMBOL of the function being emitted, and whether it pushed a
+    // shadow-stack frame on entry. `cur_sym` is what lets a call site
+    // recognise a SELF-call — the same monomorphization, since a symbol
+    // is per-instantiation — and `cur_frame` gates every pop this
+    // function emits: a function that pushed nothing must pop nothing.
+    // Set per function by `cg_fn`; empty/false elsewhere, which simply
+    // means no frames.
+    cur_sym: String, cur_frame: Bool }
 
 // --- Cell layouts ---
 //
@@ -386,6 +394,8 @@ pub let cg_build_program (program: parser.ProgramNode): CgProgram =
         generics: [],
         targs: [],
         movable: [],
+        cur_sym: "",
+        cur_frame: false,
     }
 
 // `next_tag` runs across the whole program, so every variant in every
@@ -533,6 +543,60 @@ let cg_escape_char (c: String): String =
 // touched and never freed. A sentinel rather than a huge positive
 // number, because "negative means static" cannot be reached by
 // counting.
+// --- `--trace`: the shadow call stack ---
+//
+// A `--trace` build pushes each function's own name on entry and pops
+// it on the way out, so the runtime can print a stack trace when the
+// program dies. Any other build emits none of this and the runtime's
+// depth stays zero. Tied to the FLAG, not to debug-versus-release: a
+// debug build without `--trace` carries no frames.
+//
+// A module-level cell rather than a field threaded through `CgProgram`,
+// for the reason `parser.plum`'s `CTX` gives: it would be a parameter on
+// every function in the emitter to serve one of them. Set once per
+// program, before emission.
+let DEBUG_FRAMES: Ref[Bool] = ref(false)
+
+pub let set_debug_frames (on: Bool): Unit = DEBUG_FRAMES.set(on)
+
+// The name a TRACE shows -- what the user wrote, not the mangled
+// symbol. `Array.map` rather than `plum__prelude__Array_map__Int`.
+// Keeping the shadow stack means never having to decode the other one.
+let cg_frame_name (module_name: String) (name: String): String =
+    if module_name == "" { name } else { module_name.concat(".").concat(name) }
+
+// One private constant per emitted function, keyed by its SYMBOL, which
+// is already unique per monomorphization.
+let cg_frame_global (sym: String) (shown: String): String =
+    "@.fname_".concat(sym).concat(" = private constant [").concat((shown.len() + 1).to_string())
+        .concat(" x i8] c\"").concat(cg_escape_llvm(shown)).concat("\\00\"\n")
+
+// A COMPILER-GENERATED function is not a frame a reader wants. Contract
+// desugaring calls `__contract_require`, and a failed precondition
+// showed it at the top of the trace -- above `divide`, which is the
+// frame the person is actually looking for. The double-underscore
+// prefix is the same one every synthesized name carries and the same
+// rule `stdlib-reference` uses to hide them.
+let cg_frame_visible (name: String): Bool = !parser.bare_type_name(name).starts_with("__")
+
+// Pushed on entry. The matching pop is NOT in the epilogue: every path
+// through the body pays its own pop (see `cg_expr_t`), because a pop
+// sitting between a self-recursive call and the `ret` is exactly what
+// stops LLVM turning that recursion into a loop. TRACING.md §6 records
+// the measurements behind this shape.
+let cg_frame_push (sym: String) (shown: String): String =
+    if DEBUG_FRAMES.get() && cg_frame_visible(shown) {
+        "  call void @plum_frame_push(ptr @.fname_".concat(sym).concat(")\n")
+    } else { "" }
+
+// The pop a TAIL-POSITION expression owes, or nothing if this function
+// pushed no frame. Appended after a tail expression's value is
+// computed — so an aborting check inside it (bounds, div-zero) still
+// traces with the frame present — except before a SELF-call, where
+// `cg_fn_call` emits it ahead of the call instead.
+let cg_tail_pop (p: CgProgram) (tail: Bool): String =
+    if tail && p.cur_frame { "  call void @plum_frame_pop()\n" } else { "" }
+
 let cg_str_constant (n: Int) (s: String): String = {
     let bytes = s.len();
     let arr = bytes + 1;
@@ -665,6 +729,44 @@ let cg_or_const (p: CgProgram) (n: Int) (e: typecheck.TExpr) (otherwise: Emit): 
 
 // --- Expression emission ---
 
+// Tail-position emission: one frame pop per path, never at the `ret`.
+//
+// Under `--trace` every path through a function owes exactly one pop.
+// Paying it at the shared `ret` puts a side-effecting call between a
+// self-recursive call and the return of its value, which is precisely
+// what blocks LLVM's tail-recursion elimination — measured in
+// TRACING.md §4–5. Paying it per path dissolves the conflict:
+//
+//   * a SELF-call in tail position pops BEFORE the call (`cg_fn_call`),
+//     leaving nothing between the call and the `ret`, so the recursion
+//     becomes a loop again — and the loop stays balanced, because TRE
+//     hoists only the allocas into its new entry block, so the push
+//     rides inside the loop with the pop (§6b);
+//   * every other tail expression pops AFTER its value, in its own
+//     branch, before the jump to the merge block.
+//
+// Only `if`, `match`, blocks and direct calls FORWARD tail position;
+// every other construct is a leaf and takes the append. That default
+// fails safe: a construct not taught to forward merely emits any inner
+// self-call as an ordinary call with the pop after it — a missed loop,
+// never an unbalanced stack.
+let cg_expr_t (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr) (tail: Bool): Emit =
+    match e.node {
+        TIf(cond, then_branch, else_branch) => cg_if(p, env, n, cond, then_branch, else_branch, cg_ty(p, e), tail),
+        TBlockE(block) => cg_block_ty(p, env, n, block, cg_ty(p, e), tail),
+        TMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms, cg_ty(p, e), tail),
+        TFnCall(m, name, args, targs) => cg_fn_call(p, env, n, m, name, args, targs, cg_ty(p, e), tail),
+        // Every other node is a LEAF for this purpose: emit it the
+        // ordinary way and append the pop after its value.
+        _ => cg_leaf_tail(p, tail, cg_expr(p, env, n, e)),
+    }
+
+let cg_leaf_tail (p: CgProgram) (tail: Bool) (r: Emit): Emit = {
+    let pop = cg_tail_pop(p, tail);
+    if pop == "" { r }
+    else { Emit { code: r.code.concat(pop), allocas: r.allocas, releases: r.releases, globals: r.globals, val: r.val, ty: r.ty, n: r.n } }
+}
+
 // The backend's single dispatch. Every case reads the node's own TYPE
 // from the checker (`cg_ty(p, e)`) rather than re-deriving it, and
 // every CALL arrives already classified — `infer_call` decided whether
@@ -695,11 +797,11 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         },
         TUnary(op, inner) => cg_unary(p, env, n, op, inner),
         TBinary(op, lhs, rhs) => cg_binary(p, env, n, op, lhs, rhs, cg_ty(p, e)),
-        TIf(cond, then_branch, else_branch) => cg_if(p, env, n, cond, then_branch, else_branch, cg_ty(p, e)),
-        TBlockE(block) => cg_block_ty(p, env, n, block, cg_ty(p, e)),
+        TIf(cond, then_branch, else_branch) => cg_if(p, env, n, cond, then_branch, else_branch, cg_ty(p, e), false),
+        TBlockE(block) => cg_block_ty(p, env, n, block, cg_ty(p, e), false),
         TFieldGet(base, name) => cg_field_read(p, env, n, base, name, cg_ty(p, e)),
         TRefNew(inner) => cg_ref_new(p, env, n, inner),
-        TMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms, cg_ty(p, e)),
+        TMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms, cg_ty(p, e), false),
         TFor(pattern, lo, hi, body) => cg_for(p, env, n, pattern, lo, hi, body),
         TForArray(pattern, arr, body) => cg_for_array(p, env, n, pattern, arr, body),
         TArrayLit(elems) => cg_or_const(p, n, e, cg_array_lit(p, env, n, elems, cg_ty(p, e))),
@@ -710,7 +812,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TStructReuse(name, fields, cands) => cg_or_const(p, n, e, cg_struct_reuse(p, env, n, name, fields, cands)),
         TVariantReuse(ename, tag, args, cands) => cg_or_const(p, n, e, cg_variant_reuse(p, env, n, ename, tag, args, cands)),
         TVariantNew(ename, tag, args) => cg_or_const(p, n, e, cg_variant_call(p, env, n, ename, tag, args)),
-        TFnCall(m, name, args, targs) => cg_fn_call(p, env, n, m, name, args, targs, cg_ty(p, e)),
+        TFnCall(m, name, args, targs) => cg_fn_call(p, env, n, m, name, args, targs, cg_ty(p, e), false),
         TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
         TArrayNs(name, args) => cg_array_ns_call(p, env, n, name, args),
@@ -1105,16 +1207,22 @@ let cg_shortcircuit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (lhs: typecheck
 // Both arms store into one slot; the merge block loads it. An `else`-
 // less `if` is `Unit`-typed and stores the unit value in the implicit
 // else, so the slot is always initialized on every path.
-let cg_if (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cond: typecheck.TExpr) (then_branch: typecheck.TExpr) (else_branch: Option[typecheck.TExpr]) (ty: CgTy): Emit = {
+// `tail`: this `if` is the function's result, so each BRANCH is in tail
+// position and pays its own frame pop. The condition never is.
+//
+// An `if` with no `else` in tail position still owes a pop on the
+// missing branch -- `cg_unit_emit` produces no code, so the pop is
+// appended to it explicitly.
+let cg_if (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cond: typecheck.TExpr) (then_branch: typecheck.TExpr) (else_branch: Option[typecheck.TExpr]) (ty: CgTy) (tail: Bool): Emit = {
     let c = cg_expr(p, env, n, cond);
     let slot = cg_reg(c.n);
     let then_label = cg_label(c.n + 1);
     let else_label = cg_label(c.n + 2);
     let end_label = cg_label(c.n + 3);
-    let t = cg_expr(p, env, c.n + 4, then_branch);
+    let t = cg_expr_t(p, env, c.n + 4, then_branch, tail);
     let e = match else_branch {
-        Some(x) => cg_expr(p, env, t.n, x),
-        None => cg_unit_emit(t.n),
+        Some(x) => cg_expr_t(p, env, t.n, x, tail),
+        None => cg_leaf_tail(p, tail, cg_unit_emit(t.n)),
     };
     let res = cg_reg(e.n);
     let lty = cg_llvm_ty(ty);
@@ -1273,14 +1381,18 @@ let cg_elem_ity (p: CgProgram) (arr_e: typecheck.TExpr): typecheck.ITy =
 // environment by value: `cg_block` never returns its inner `env`.
 struct BlockEmit { code: String, allocas: String, releases: String, globals: String, env: Array[CgSlot], n: Int }
 
-let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.TBlock) (ty: CgTy): Emit = {
+// `tail`: only the block's FINAL expression inherits tail position --
+// its statements each have something after them by definition. A block
+// that ENDS in a statement still owes the pop, appended after the last
+// one.
+let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.TBlock) (ty: CgTy) (tail: Bool): Emit = {
     let s = cg_stmts(p, env, n, block.stmts, 0);
     match block.tail {
         Some(t) => {
-            let r = cg_expr(p, s.env, s.n, t);
+            let r = cg_expr_t(p, s.env, s.n, t, tail);
             Emit { code: s.code.concat(r.code), allocas: s.allocas.concat(r.allocas), releases: s.releases.concat(r.releases), globals: s.globals.concat(r.globals), val: r.val, ty: ty, n: r.n }
         },
-        None => Emit { code: s.code, allocas: s.allocas, releases: s.releases, globals: s.globals, val: "0", ty: CgUnit, n: s.n },
+        None => Emit { code: s.code.concat(cg_tail_pop(p, tail)), allocas: s.allocas, releases: s.releases, globals: s.globals, val: "0", ty: CgUnit, n: s.n },
     }
 }
 
@@ -2024,7 +2136,14 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExp
 // concrete type arguments into it — so a call site needs no knowledge
 // of monomorphization beyond resolving those arguments through the
 // enclosing specialization.
-let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy): Emit = {
+// `tail`: this call is the function's result. A SELF-call then pops the
+// frame BEFORE calling, which is the whole point of threading tail
+// position through this file -- it leaves nothing between the call and
+// the `ret`, so LLVM can turn the recursion back into a loop, and the
+// trace it produces (one frame, not three million) is what the machine
+// actually did. Any OTHER call pops after, so a callee that dies still
+// shows this frame as its caller.
+let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy) (tail: Bool): Emit = {
     let sym = match cg_array_concat_sym(p, name, targs) {
         Some(rt) => rt,
         None => match cg_runtime_fn(name) {
@@ -2036,9 +2155,15 @@ let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String
         } };
     let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
     let reg = cg_reg(a.n);
+    // Symbol equality, so under monomorphization a call to a DIFFERENT
+    // instantiation of the same generic function is correctly not a
+    // self-call: it is a different symbol and a real frame.
+    let is_self = p.cur_frame && sym == "@".concat(p.cur_sym);
     let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(sym).concat("(").concat(cg_join_commas(a.vals)).concat(")\n")
         .concat(if Option.is_some(cg_runtime_fn(name)) || name == "Array.concat" { cg_dec_args(p, args, a.vals, 0, "") } else { "" });
-    Emit { code: a.code.concat(call), allocas: a.allocas, releases: a.releases, globals: a.globals, val: reg, ty: ret, n: a.n + 1 }
+    let code = if tail && is_self { a.code.concat(cg_tail_pop(p, tail)).concat(call) }
+        else { a.code.concat(call).concat(cg_tail_pop(p, tail)) };
+    Emit { code: code, allocas: a.allocas, releases: a.releases, globals: a.globals, val: reg, ty: ret, n: a.n + 1 }
 }
 
 // Prelude functions the RUNTIME implements directly, rather than as
@@ -3932,7 +4057,10 @@ let cg_store_payload (cell: String) (vals: Array[String]) (i: Int) (n: Int) (acc
 // exhaustiveness and this one does not, so this is a deliberate,
 // documented v1 gap rather than a silent one: an inexhaustive `match`
 // produces a defined-but-meaningless value instead of a diagnostic.
-let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.TExpr) (arms: Array[typecheck.TArm]) (body_ty: CgTy): Emit = {
+// `tail`: each ARM BODY is in tail position and pays its own pop; the
+// scrutinee and the patterns are not. The `fail_label` block pays one
+// too -- see there.
+let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.TExpr) (arms: Array[typecheck.TArm]) (body_ty: CgTy) (tail: Bool): Emit = {
     let sity = cg_concrete(p, typecheck.texpr_ty(p.subst, scrutinee));
     // The arms only READ the scrutinee — every binding takes its own
     // reference in the arm body — so matching on a variable borrows it.
@@ -3941,7 +4069,7 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
     let end_label = cg_label(sc.n + 1);
     let fail_label = cg_label(sc.n + 2);
     let lty = cg_llvm_ty(body_ty);
-    let a = cg_match_arms(p, env, sc.n + 3, arms, 0, sc.val, sity, slot, lty, end_label, fail_label, "", "", "", "");
+    let a = cg_match_arms(p, env, sc.n + 3, arms, 0, sc.val, sity, slot, lty, end_label, fail_label, "", "", "", "", tail);
     let res = cg_reg(a.n);
     let code = sc.code
         .concat("  br label %").concat(cg_label(sc.n + 3)).concat("
@@ -3951,6 +4079,12 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
 ")
         .concat("  store ").concat(lty).concat(" ").concat(cg_zero_of(body_ty)).concat(", ptr ").concat(slot).concat("
 ")
+        // This block RETURNS rather than aborting, so in tail position
+        // it is a path like any other and owes its own pop. Unreachable
+        // in a checked program -- the checker rejects a non-exhaustive
+        // match -- but one instruction in a dead block is cheaper than
+        // a caveat on "every path pops exactly once".
+        .concat(cg_tail_pop(p, tail))
         .concat("  br label %").concat(end_label).concat("
 ")
         .concat(end_label).concat(":
@@ -4084,7 +4218,7 @@ let cg_zero_of (t: CgTy): String =
 
 struct ArmsEmit { code: String, allocas: String, releases: String, globals: String, n: Int }
 
-let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TArm]) (i: Int) (sval: String) (sity: typecheck.ITy) (slot: String) (lty: String) (end_label: String) (fail_label: String) (code: String) (allocas: String) (releases: String) (globals: String): ArmsEmit =
+let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TArm]) (i: Int) (sval: String) (sity: typecheck.ITy) (slot: String) (lty: String) (end_label: String) (fail_label: String) (code: String) (allocas: String) (releases: String) (globals: String) (tail: Bool): ArmsEmit =
     if i >= arms.len() { ArmsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
     else {
         let test_label = cg_label(n);
@@ -4092,7 +4226,7 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
         match arms[i].guard {
             None => {
                 let body_label = cg_label(pat.n);
-                let b = cg_expr(p, pat.env, pat.n + 1, arms[i].body);
+                let b = cg_expr_t(p, pat.env, pat.n + 1, arms[i].body, tail);
                 // The NEXT arm's test label, or the fail block if this is the
                 // last arm — computed before recursing so the branch can name
                 // it, which is why the arm counter is threaded rather than
@@ -4113,7 +4247,7 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                     .concat("  br label %").concat(end_label).concat("
 ");
                 cg_match_arms(p, env, b.n, arms, i + 1, sval, sity, slot, lty, end_label, fail_label,
-                    code.concat(this_code), allocas.concat(pat.allocas).concat(b.allocas), releases.concat(pat.releases).concat(b.releases), globals.concat(pat.globals).concat(b.globals))
+                    code.concat(this_code), allocas.concat(pat.allocas).concat(b.allocas), releases.concat(pat.releases).concat(b.releases), globals.concat(pat.globals).concat(b.globals), tail)
             },
             // `Rect(a, b) if a.x == b.x => ..` — the tag matched, but the
             // arm still has to earn the body. This emitter used to drop
@@ -4134,7 +4268,9 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                 let guard_label = cg_label(pat.n);
                 let g = cg_expr(p, pat.env, pat.n + 1, gexpr);
                 let body_label = cg_label(g.n);
-                let b = cg_expr(p, pat.env, g.n + 1, arms[i].body);
+                // The GUARD is not in tail position -- it decides which
+                // arm runs, so the body still follows it.
+                let b = cg_expr_t(p, pat.env, g.n + 1, arms[i].body, tail);
                 let next_label = if i + 1 >= arms.len() { fail_label } else { cg_label(b.n) };
                 let this_code = test_label.concat(":
 ")
@@ -4161,7 +4297,7 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                     code.concat(this_code),
                     allocas.concat(pat.allocas).concat(g.allocas).concat(b.allocas),
                     releases.concat(pat.releases).concat(g.releases).concat(b.releases),
-                    globals.concat(pat.globals).concat(g.globals).concat(b.globals))
+                    globals.concat(pat.globals).concat(g.globals).concat(b.globals), tail)
             },
         }
     }
@@ -4449,19 +4585,27 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     // only one is ever taken, and over-counting only refuses a move.
     let lbody = lv_fn(def.params, def.body);
     let mov = cg_movable_params(lbody, def.params, 0, []);
+    let sym = cg_sym(def.module, def.name, targs);
+    let shown = cg_frame_name(def.module, def.name);
+    let framed = DEBUG_FRAMES.get() && cg_frame_visible(shown);
     let p = CgProgram { fns: p0.fns, globals: p0.globals, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs,
-        movable: mov };
+        movable: mov, cur_sym: sym, cur_frame: framed };
     let params = cg_params_of(p, def.params, 0, []);
     let entry = cg_param_slots(params, Array.map(def.params, |q| cg_concrete(p, q.ty)), 0, [], "", "");
     let ret = cg_of_ity(cg_concrete(p, def.ret));
-    let body = cg_expr(p, entry.env, n0, lbody);
-    let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(cg_sym(def.module, def.name, targs)).concat("(").concat(cg_param_decls(params)).concat(") {\nentry:\n");
+    // The body is in TAIL POSITION: every path through it emits its own
+    // frame pop (see `cg_expr_t`), which is why nothing pops before the
+    // `ret` below.
+    let body = cg_expr_t(p, entry.env, n0, lbody, true);
+    let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(sym).concat("(").concat(cg_param_decls(params)).concat(") {\nentry:\n");
     // Every `alloca` is hoisted here, at the top of the entry block,
     // ahead of any instruction that could branch — see `Emit`'s own
     // comment for why that is a correctness requirement inside loops
     // and not just a tidiness preference.
     let text = body.globals
+        .concat(if framed { cg_frame_global(sym, shown) } else { "" })
         .concat(header)
+        .concat(cg_frame_push(sym, shown))
         .concat(entry.code)
         .concat(body.allocas)
         .concat(body.code)
@@ -4470,6 +4614,10 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
         // any slot (rule 3), so returning a parameter's value and then
         // releasing that parameter is balanced rather than a
         // use-after-free.
+        //
+        // The frame pop already happened, per path, before these
+        // releases — which is fine, because a release only decrements
+        // and frees; nothing here can abort and want a trace.
         .concat(body.releases)
         .concat(entry.releases)
         .concat("  ret ").concat(cg_llvm_ty(ret)).concat(" ").concat(body.val).concat("\n")
@@ -5649,7 +5797,7 @@ let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: Stri
         cg_emit_globals(p, i + 1, n, slots, body)
     } else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [] };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false };
         let ty = cg_of_ity(cg_concrete(gp, g.ret));
         let r = cg_expr(gp, [], n, g.body);
         let slot = cg_global_slot(g.module, g.name).concat(" = global ").concat(cg_llvm_ty(ty)).concat(" ").concat(cg_zero_of(ty)).concat("\n");
@@ -5688,7 +5836,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
                     done
                 },
                 Some(def) => {
-                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs, movable: [] };
+                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false };
                     cg_reachable(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), done.push(head), fuel + 1)
                 },
             }
@@ -5706,7 +5854,7 @@ let cg_rel_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[t
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_rel_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [] };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false };
                 let withparams = cg_rel_close_list(inner, Array.map(def.params, |q| cg_concrete(inner, q.ty)), 0, acc);
                 let withret = cg_rel_close(inner, cg_concrete(inner, def.ret), withparams);
                 cg_rel_types_of(p, insts, i + 1, cg_rel_in(inner, def.body, withret))
@@ -5795,7 +5943,7 @@ let cg_eq_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[ty
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_eq_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [] };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false };
                 cg_eq_types_of(p, insts, i + 1, cg_eq_in(inner, def.body, acc))
             },
         }
@@ -5882,7 +6030,7 @@ let cg_global_roots (p: CgProgram) (i: Int) (acc: Array[CgInst]): Array[CgInst] 
     if i >= p.globals.len() { acc }
     else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [] };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false };
         cg_global_roots(p, i + 1, Array.concat(acc, cg_calls_in(gp, g.body, [])))
     }
 

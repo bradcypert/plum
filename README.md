@@ -942,6 +942,56 @@ follow it. What it does not yet carry is Plum line information — the
 emitted IR has no `!dbg` metadata, so a debugger shows the C runtime's
 lines, not yours. Plum function names are real symbols in both modes.
 
+### Stack traces
+
+```sh
+plum build myapp --trace
+```
+
+A program built with `--trace` prints a stack trace to **stderr** when
+it dies — for a failed bounds check, a division by zero, an overflow, a
+broken contract, or an explicit `panic_raw`:
+
+```
+array index out of bounds        <- stdout, the same in every mode
+stack trace:                     <- stderr, only with --trace
+  at deepest
+  at middle
+  at outer
+  at main
+```
+
+Innermost first, with your own function names. Compiler-generated frames
+are hidden, so a failed precondition starts at the function you wrote.
+Deep recursion is capped at 256 frames with a count of the rest.
+
+**Tail recursion still runs in constant stack space under `--trace`.**
+The trace is a shadow call stack — a frame pushed on entry, popped on
+the way out — and where that pop goes decides whether the optimiser can
+still turn a tail-recursive call into a loop. Each path through a
+function pops its own frame, and a call to the function *itself* in tail
+position pops *before* calling, so nothing sits between that call and
+the return. The investigation, including two designs that failed, is in
+[TRACING.md](TRACING.md).
+
+One consequence is worth knowing: a tail-recursive chain shows **one**
+frame, not one per iteration.
+
+```
+division by zero
+stack trace:
+  at count      <- three million calls deep; one frame
+  at main
+```
+
+That is an accurate description rather than a lost frame. A tail call
+really does replace its caller's frame, so the shadow stack replaces
+the entry too. A call to a *different* function in tail position keeps
+both frames, as `middle` does above.
+
+It remains a flag rather than something the debug build always does,
+because a shadow stack still costs a push and a pop per call.
+
 ## Modules
 
 A directory *is* a module — no `mod foo;` declaration anywhere. Every

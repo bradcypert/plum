@@ -17176,3 +17176,177 @@ argument so every build failed silently and re-ran the previous binary,
 reporting that every optimisation level passed. Both were caught by a
 result that did not fit the previous one. A measurement that contradicts
 an earlier measurement is not noise to average out.
+
+## Stack traces, and the thing they cost (2026-09-01)
+
+`plum build --trace` gives a program a stack trace when it dies:
+
+    array index out of bounds        (stdout, the same in every mode)
+    stack trace:                     (stderr, only with --trace)
+      at deepest
+      at middle
+      at outer
+      at main
+
+Innermost first, with the names the user wrote. Compiler-generated
+frames are hidden, so a failed precondition starts at the function the
+person wrote rather than at `__contract_require`. Capped at 256 with a
+count of the rest, because a runaway recursion must not overflow the
+thing reporting it.
+
+A SHADOW CALL STACK, not an unwinder. `backtrace()` is glibc and macOS,
+`_Unwind_Backtrace` needs a library on musl, and Windows has its own
+API -- three implementations, two of which CI can only cross-compile and
+never run. This is one for every target, and it prints better names: an
+unwinder hands back the mangled symbol to be decoded again, while this
+prints what codegen already knew.
+
+It lives in C rather than emitted IR because the trace goes to STDERR
+and `stderr` cannot be named portably from LLVM text (`__stderrp` on
+macOS). Stderr and not stdout because the abort MESSAGE is on stdout,
+where `abort_corpus` compares it byte for byte.
+
+### Why it is a flag
+
+The pop. It lands after the call a function ends with, so that call is
+no longer the last thing the function does and the optimiser cannot turn
+it into a loop. Measured: three million deep, returns without `--trace`,
+segfaults with it. So traces and tail calls cannot both be the default,
+and the default keeps the promise the language already made.
+
+Two ways round it were tried, and the record matters more than the
+result:
+
+  * **Reclaim dead frames by comparing an `alloca` address, so nothing
+    pops.** Tail calls still died -- an escaping stack address stops
+    LLVM reusing the frame, which is the same optimisation refusing for
+    a different reason.
+  * **Ask for the caller's frame address from inside the runtime
+    instead**, so nothing escapes. Tail calls survived. The addresses do
+    not order: a four-deep chain reported 2b0, 2a0, 2a0, 2b0, so a
+    "frames above this one are dead" rule reclaims live frames. The
+    premise was wrong, and a six-line C program said so in a way no
+    amount of reasoning had.
+
+What would give both is knowing which calls are in TAIL POSITION and
+popping before them -- correct, because a tail call really does replace
+its caller's frame. That is a change to expression emission, not to the
+runtime, and it is the honest next step rather than a fourth trick.
+
+`TRACING.md` is the long form: the emitted IR before and after, the
+`tailrecurse` block that appears in one and not the other, both failed
+designs with their measurements, and what `check-build-modes` asserts so
+none of it drifts.
+
+### The habit that kept this from shipping broken
+
+Every one of the three designs looked right when written. Each was
+caught by running a program rather than by reading the code: the pop
+version by a three-million-deep recursion, the `alloca` version by the
+same, the frame-address version by printing four addresses. Two of the
+runs were themselves wrong first -- a stale binary, and a quoting bug
+that fed `"-O0 -g"` as one argument so every build failed silently and
+re-ran the previous binary. Both showed up as a result that contradicted
+an earlier one, which is the only reason they were noticed.
+
+## Traces AND tail calls: one pop per path (2026-09-02)
+
+The previous entry closed by saying the honest next step was to know
+which calls are in TAIL POSITION and pop before them. That is now done,
+and the flag no longer costs tail-call elimination:
+
+    plum build deep --trace && ./deep      # three million deep, returns
+
+The plan as written was wrong in one detail, and only running it showed
+which. "Pop before the tail call" says nothing about the pop already
+sitting before the `ret`. Keeping both double-pops the call path and
+still blocks the optimiser; removing the second one strands a frame,
+because the recursion's FINAL iteration leaves through the value branch
+and never pops at all. Measured: the deep recursion returned, and then
+an unrelated failure printed
+
+    stack trace:
+      at boom
+      at count      <- returned long ago
+      at main
+
+one stale entry per completed recursion, in every later trace.
+
+### The rule that works
+
+Every path owes exactly one pop, paid on the path rather than at the
+shared exit:
+
+  * a SELF-call in tail position pops BEFORE the call;
+  * every other tail expression pops AFTER its value, in its own branch;
+  * the epilogue pops nothing.
+
+Balance holds in both worlds, and the second one is the one that looked
+impossible. If LLVM turns the recursion into a loop, a push in `entry:`
+would run once against three million pops. It does not: tail-recursion
+elimination hoists only the static allocas into its new entry block, so
+the push lands INSIDE the loop and pairs with the pop on the back edge.
+
+    tailrecurse:                     ; preds = %L27, %entry
+      %p0.tr = phi i64 [ %p0, %entry ], [ %t16, %L27 ]
+      tail call void @plum_frame_push(ptr nonnull @.fname_plum_count)
+      ...
+    L27:
+      tail call void @plum_frame_pop()
+      br label %tailrecurse
+
+That is a property of how the pass is built, not luck about one
+function, and it is why this design can be sound rather than merely
+lucky.
+
+### What it cost to implement
+
+Less than the previous entry feared. `cg_expr` was not threaded with a
+new parameter; `cg_expr_t` was added beside it and `cg_expr` left alone,
+so the ~40 existing call sites kept their meaning untouched. Only four
+constructs FORWARD tail position -- `if` branches, `match` arm bodies, a
+block's final expression, and a direct call -- and everything else is a
+leaf that takes the pop appended after its value. `CgProgram` gained
+`cur_sym` and `cur_frame`, carried per function the way `subst` already
+was, and a self-call is symbol equality, which under monomorphization
+correctly treats a different instantiation as a different function.
+
+The default FAILS SAFE, which is what makes the small forwarding set
+defensible: a construct not taught to forward emits its inner self-call
+as an ordinary call with the pop after it. A missed loop, never an
+unbalanced stack.
+
+### A trace of a tail-recursive chain shows ONE frame
+
+Not a lost frame -- an accurate one. A tail call really does replace its
+caller's frame, so the shadow stack replaces the entry too:
+
+    division by zero
+    stack trace:
+      at count      <- three million calls; one frame
+      at main
+
+`check-build-modes` pins all of it: the deep recursion must RETURN under
+`--trace`, a later failure must not name the returned function, that
+chain must show exactly one frame, and `middle` must still appear in
+`deepest`'s trace since a call to a DIFFERENT function keeps both.
+
+The stale-frame assertion was checked non-vacuously by injection --
+building a compiler whose `if` does not forward tail position to its
+then-branch, which is exactly the first wrong version, and confirming
+the harness fails with "a frame from the returned recursion is still on
+the shadow stack".
+
+### `musttail` would be stronger, and is not needed here
+
+A hand-edited variant emitting `musttail call` + `ret` passed everything
+the shipped rule passes AND survived three million deep at `-O0`,
+because `musttail` is a guarantee at every optimisation level rather
+than a request. That is the eventual answer to this backend's real
+weakness -- constant stack space is still a property of the optimisation
+level, not of the compiler -- but it needs the branch to emit its own
+early `ret` (today every path funnels through a merge slot, and an
+`Emit` cannot say "this path terminated") and forbids anything after the
+call, which pending releases violate. Recorded so the measurement is not
+lost; the two compose, since `musttail` only tightens the case the
+per-path rule already handles.

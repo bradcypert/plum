@@ -29,7 +29,12 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ll="$(mktemp -t plum-shbuild-XXXXXX.ll)"
 trap 'rm -f "$ll"' EXIT
 
-SH_TIMEOUT="${SH_TIMEOUT:-60}" SH_MEM="${SH_MEM:-2G}" "$root/sh" emit-llvm "$src" > "$ll"
+# `--release`: the compiler SHIPS as a release build. A debug build
+# carries the shadow call stack, and the compiler is a Plum program like
+# any other -- so `plum check` on an ill-typed program printed a trace of
+# the COMPILER's own internals alongside the diagnostic. Useful when
+# debugging the compiler, noise for everyone else.
+SH_TIMEOUT="${SH_TIMEOUT:-60}" SH_MEM="${SH_MEM:-2G}" "$root/sh" emit-llvm "$src" --release > "$ll"
 
 # The self-hosted compiler reports errors via `panic_raw`, which writes
 # to STDOUT -- so a failure lands in the .ll file rather than on stderr,

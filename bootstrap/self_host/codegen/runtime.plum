@@ -48,6 +48,36 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "; --- Stage 5 runtime (self-hosted backend) ---",
     "declare ptr @malloc(i64)",
     "declare i32 @printf(ptr, ...)",
+    // --- The shadow call stack ---
+    //
+    // A stack trace, without DWARF and without an unwinder.
+    //
+    // `backtrace()` exists on glibc and macOS, `_Unwind_Backtrace`
+    // needs a library on musl, and Windows has its own API entirely --
+    // three implementations, two of which CI can only cross-compile and
+    // never run. This is one implementation that works everywhere,
+    // because the runtime keeps the stack itself.
+    //
+    // It also prints BETTER names. An unwinder would hand back the
+    // mangled symbol (`plum__prelude__Option_unwrap_or__Int`) to be
+    // decoded again; these are the names codegen already knows.
+    //
+    // Only `--trace` builds push and pop -- anything else emits no calls
+    // to these at all, so the depth stays zero and `plum_trace` prints
+    // nothing.
+    //
+    // The array is FIXED and the depth is counted past its end: a
+    // runaway recursion must not itself overflow, and "the innermost
+    // 256" is what a reader wants from a million-deep one anyway.
+    //
+    // Defined in `native_stdlib/io_shim.c` rather than emitted here,
+    // because the trace goes to STDERR and no LLVM text can name
+    // `stderr` portably -- it is `stderr` on glibc and musl and
+    // `__stderrp` on macOS. That file also records where the POPS go
+    // and why the placement is what lets tail recursion survive.
+    "declare void @plum_frame_push(ptr)",
+    "declare void @plum_frame_pop()",
+    "declare void @plum_trace()",
     "declare i32 @snprintf(ptr, i64, ptr, ...)",
     "declare double @strtod(ptr, ptr)",
     // `getenv` is NOT declared here: the runtime already declares it
@@ -955,6 +985,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "entry:",
     "  %d = getelementptr i8, ptr %s, i64 16",
     "  %r = call i32 (ptr, ...) @printf(ptr @.plum_fmt_line, ptr %d)",
+    "  call void @plum_trace()",
     "  call void @exit(i32 1)",
     "  ret i1 0",
     "}",
@@ -1396,6 +1427,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "define void @plum_bounds_fail() {",
     "entry:",
     "  %r = call i32 (ptr, ...) @printf(ptr @.plum_fmt_line, ptr @.plum_oob)",
+    "  call void @plum_trace()",
     "  call void @exit(i32 1)",
     "  ret void",
     "}",
@@ -1418,6 +1450,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "define void @plum_div_zero_fail() {",
     "entry:",
     "  %r = call i32 (ptr, ...) @printf(ptr @.plum_fmt_line, ptr @.plum_divzero)",
+    "  call void @plum_trace()",
     "  call void @exit(i32 1)",
     "  ret void",
     "}",
@@ -1425,6 +1458,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "define void @plum_div_overflow_fail() {",
     "entry:",
     "  %r = call i32 (ptr, ...) @printf(ptr @.plum_fmt_line, ptr @.plum_overflow)",
+    "  call void @plum_trace()",
     "  call void @exit(i32 1)",
     "  ret void",
     "}",
