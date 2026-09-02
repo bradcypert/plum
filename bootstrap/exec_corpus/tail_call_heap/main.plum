@@ -1,0 +1,53 @@
+// Tail recursion whose slots need RELEASING, which is the case that
+// segfaulted.
+//
+// A function's releases are emitted just before its single `ret`, so
+// for a heap-typed parameter or `let` they sat between a recursive call
+// and the return of its value -- exactly what stops the optimiser
+// rewriting the recursion as a loop. `count(n, acc)` over `Int` has
+// nothing to release and always worked, which is why every earlier
+// tail-recursion test missed this. A self-call in tail position now
+// releases first and returns the call's result directly.
+//
+// Two things are being checked at once and the fixture is built for
+// both: the DEPTH here is small because `bootstrap/check-build-modes`
+// owns the three-million-deep stack-space assertion, while this file
+// runs under ASan with leak checking, which that harness does not do.
+// What it pins is that returning early still releases everything --
+// the first version of the fix leaked one cell per iteration.
+
+// A heap PARAMETER, threaded through untouched.
+let through (n: Int) (s: String): Int =
+    if n == 0 { s.len() } else { through(n - 1, s) }
+
+// A heap LET, freshly allocated every iteration and dead after it.
+let via_let (n: Int) (s: String): Int =
+    if n == 0 { s.len() } else { let t = s.concat(""); via_let(n - 1, t) }
+
+// The shape that leaked: the self-call sits in a MATCH ARM, and the
+// scrutinee is an owned temporary whose drop the ordinary path emits
+// after the arms merge -- which an arm returning early never reaches.
+let in_match (n: Int) (s: String): Int =
+    match Some(s.concat("a")) {
+        Some(t) => if n == 0 { t.len() } else { in_match(n - 1, t) },
+        None => 0,
+    }
+
+// Nested scrutinees and a guard, to check the drops run innermost
+// first rather than merely all running.
+let nested (n: Int) (s: String): Int =
+    match Some(s.concat("a")) {
+        Some(t) => match Some(t.concat("b")) {
+            Some(u) if n > 3 => nested(n - 1, u),
+            Some(u) => if n == 0 { u.len() } else { nested(n - 1, u) },
+            None => 0,
+        },
+        None => 0,
+    }
+
+let main (): Unit = {
+    println(through(2000, "abc").to_string());
+    println(via_let(2000, "abc").to_string());
+    println(in_match(200, "abc").to_string());
+    println(nested(100, "abc").to_string());
+}

@@ -470,14 +470,20 @@ let main (): Unit = {
 12
 ```
 
-A tail-recursive function runs in constant stack space: the emitted
-call chain becomes a loop, in `--release` and in the default debug build
-alike. `bootstrap/check-build-modes` runs a three-million-deep tail
-recursion in both modes, so this cannot regress quietly.
+A tail-recursive function runs in constant stack space. A call to the
+function itself in tail position is emitted as an LLVM `musttail` call
+that returns the result directly, which is a **guarantee at every
+optimisation level** rather than something the optimiser may or may not
+do for you. `bootstrap/check-build-modes` runs a three-million-deep tail
+recursion in the default, `--release` and `--trace` builds, so this
+cannot regress quietly.
 
-It is not enforced by the compiler itself — no `musttail` is emitted, so
-this is a property of the optimisation level rather than a promise the
-language keeps for you.
+This holds whatever the parameter types are. Until 2026-09-02 it did
+not: a function's slot releases are emitted on the way out, so with a
+heap-typed parameter or `let` they sat between the recursive call and
+the return of its value, which stopped the recursion becoming a loop.
+`count` over two `Int`s was fine while the same function over a `String`
+overflowed. Those releases now happen before the call.
 
 ### Tuples
 

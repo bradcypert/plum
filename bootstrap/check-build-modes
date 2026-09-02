@@ -96,6 +96,37 @@ tail_recursion() {   # <label> [flags...]
 
 tail_recursion debug
 tail_recursion release --release
+
+# The same depth with a HEAP-TYPED parameter, which is the case that
+# silently did not work. A function's slot releases are emitted just
+# before its single `ret`, so for a heap parameter they sat between the
+# recursive call and the return of its value -- the same thing the frame
+# pop did, arriving from reference counting. `count` over `Int` has
+# nothing to release and passed throughout, which is exactly why the
+# original fixture never caught this. A self-call in tail position now
+# releases first and returns the call's result directly.
+mkdir -p "$work/th"
+cat > "$work/th/main.plum" <<'PLUM'
+let go (n: Int) (s: String): Int = if n == 0 { s.len() } else { let t = s.concat(""); go(n - 1, t) }
+let main (): Unit = println(go(3000000, "ab".concat("c")).to_string())
+PLUM
+
+heap_tail_recursion() {   # <label> [flags...]
+    local label="$1"; shift
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/th" -o "$work/th.bin" "$@" > "$work/th-$label.err" 2>&1; then
+        echo "FAIL: $label heap tail-recursion build failed: $(head -n 1 "$work/th-$label.err")" >&2
+        fail=1
+        return
+    fi
+    if [ "$("$work/th.bin" 2>&1)" != "3" ]; then
+        echo "FAIL: deep tail recursion over a HEAP parameter does not run in the $label build (stack overflow?)" >&2
+        fail=1
+    fi
+}
+
+heap_tail_recursion debug
+heap_tail_recursion release --release
+heap_tail_recursion traced --trace
 # WITH tracing too. A shadow call stack whose pop sat before the `ret`
 # put a side-effecting call between the recursive call and the return of
 # its value, which stops the optimiser rewriting the recursion as a

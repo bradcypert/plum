@@ -17350,3 +17350,98 @@ early `ret` (today every path funnels through a merge slot, and an
 call, which pending releases violate. Recorded so the measurement is not
 lost; the two compose, since `musttail` only tightens the case the
 per-path rule already handles.
+
+## The tail-call fix found a segfault that predated it (2026-09-02)
+
+Sizing up the `musttail` follow-up from the previous entry turned up a
+live bug in ordinary builds, with no `--trace` involved:
+
+```plum
+let go (n: Int) (s: String): Int = if n == 0 { s.len() } else { go(n - 1, s) }
+```
+
+Three million deep, this SEGFAULTED in the default build and in
+`--release`. The same function over `Int` had always been fine.
+
+**Slot releases are the frame pop again.** Reference counting emits a
+function's releases just before its single `ret`, so with a heap-typed
+parameter or `let` they sit between the recursive call and the return of
+its value -- the identical position, for the identical reason, arriving
+from RC instead of from tracing. Every tail-recursion fixture in the
+repo used `count(n, acc)` over two `Int`s, which is the one shape with
+nothing to release, so nothing caught it. The README promised constant
+stack space unqualified and had been wrong for as long as RC has
+existed.
+
+A self-call in tail position now releases first and returns directly:
+
+    %t28 = ...                          ; argument, holding its own reference
+    %t16_end.t0 = load ptr, ptr %t16    ; every slot released HERE
+    call void @plum_rel_str(ptr %t16_end.t0)
+    %s1_end.t0 = load ptr, ptr %s1
+    call void @plum_rel_str(ptr %s1_end.t0)
+    %t29 = musttail call i64 @plum_go(i64 %t23, ptr %t28)
+    ret i64 %t29
+    Ltail0:                             ; dead: catches the parent's merge
+
+Safe because an argument takes its own reference before the call, and
+`movable` nulls any slot it moves out of, which every release tolerates.
+Nothing reads a slot afterwards -- the next instruction returns.
+
+`musttail` earned its place on measurement, not tidiness:
+
+| | -O0 | -Og | -O2 |
+|---|---|---|---|
+| epilogue release (before) | segfault | segfault | segfault |
+| hoisted, plain call | segfault | returns | returns |
+| hoisted, `musttail` | returns | returns | returns |
+
+So constant stack space is now a property of the COMPILER rather than of
+the optimisation level, which is what the previous entry said was still
+missing.
+
+### Two things kept it small
+
+**The dead label.** `Emit` never gained a "this path returned" field.
+`cg_if` and `cg_match` append a store-and-branch after a branch's code,
+and instructions after a `ret` in one block are invalid IR -- so the
+tail-call site opens a fresh label for that appended code to land in,
+unreachable and dropped by the optimiser. One line, versus editing all
+139 places an `Emit` is built to serve the four that merge.
+
+**Two passes instead of a predictor.** The releases to hoist are only
+known once the body is emitted -- they are what it accumulated -- so
+`cg_fn` emits the body twice, once to discover them and once to use
+them. Predicting them from the typed tree was rejected: a predictor that
+drifted from what emission actually produces would silently drop a
+release. The two passes must number registers identically for the first
+pass's text to mean the same thing in the second, so nothing in the
+second draws from the register counter, and `cg_fn` CHECKS the two agree
+rather than trusting it, falling back to the un-hoisted body otherwise.
+
+### The corpus caught what the analysis missed
+
+The first working version passed every hand-written test and leaked one
+cell per iteration on two fixtures. `cg_match` drops its scrutinee
+temporary AFTER the arms merge, in `code` rather than in `releases`, and
+an arm that returns early never reaches the merge. Releases are
+function-wide and easy to reason about; this cleanup is
+per-enclosing-construct, and "what runs on the way out" had silently
+meant only the first kind. Tail position now carries a `pending` string
+of exactly that cleanup, accumulated innermost-first because an inner
+value may be borrowed from an outer one.
+
+Third time in this project that a design correct about OWNERSHIP was
+wrong about WHERE the work was written down.
+
+A related near-miss worth recording: the first attempt to show the hoist
+was memory-safe used a string LITERAL, which is a static cell with
+`rc = -1` that every release skips. It exercised no reference counting
+at all and looked like a pass.
+
+`bootstrap/exec_corpus/tail_call_heap` now pins the ownership half under
+ASan (deliberately shallow), and `check-build-modes` the stack-space
+half at three million deep over a heap parameter in all three modes.
+Both were confirmed non-vacuous by rebuilding the broken compilers: the
+old one fails the depth assertions in all three modes, the leaky
+intermediate fails the ASan fixture.
