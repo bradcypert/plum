@@ -17138,3 +17138,41 @@ safe" without knowing it was checked.
 -- that the default build carries DWARF, that `--release` does not, and
 that both binaries run. Asserting the flags would pass even if clang
 ignored them. Verified against the 0.0.19 binary, where it fails.
+
+### `-Og`, not `-O0`, and why that is not a preference
+
+The first version of debug mode used `-O0`, and it introduced a crash.
+
+This backend emits no `musttail`. A tail-recursive function is a real
+call chain in the IR and stays one unless the C compiler turns it into a
+loop, so constant stack space is a property of the OPTIMISATION LEVEL,
+not something the compiler guarantees. `-O0` does not do the transform:
+
+    let count (n: Int) (acc: Int): Int =
+        if n == 0 { acc } else { count(n - 1, acc + n) }
+
+segfaults at three million deep in an `-O0` build and returns in `-O2`.
+Making debug the default with `-O0` would have put that crash into every
+default build, for a language whose README promised constant stack
+space. Measured with `-g` throughout: `-O0` crashes, `-Og` and `-O1`
+return, all three carry DWARF. `-Og` is the one that means "optimise for
+debugging", so that is the one.
+
+The README's claim was wrong in its own right and is corrected: it said
+tail calls are "guaranteed eliminated (compiled to a real LLVM
+`musttail` call)". No `musttail` is emitted anywhere in this backend.
+The behaviour is real, the mechanism named for it was not, and nothing
+had ever run a deep tail recursion to find out. `check-build-modes` runs
+one in BOTH modes now, and was verified by putting `-O0` back and
+watching it fail.
+
+Two process notes, both about verification rather than about builds.
+The regression was found by testing the FEATURE, not the flags: nothing
+about "-O0 -g" looks dangerous, and it took running a real
+tail-recursive program to see it. And two of the measurements along the
+way were wrong before they were right -- a stale binary in the scratch
+directory, and a shell quoting bug that passed `"-O0 -g"` as one
+argument so every build failed silently and re-ran the previous binary,
+reporting that every optimisation level passed. Both were caught by a
+result that did not fit the previous one. A measurement that contradicts
+an earlier measurement is not noise to average out.

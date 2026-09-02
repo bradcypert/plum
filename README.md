@@ -470,9 +470,14 @@ let main (): Unit = {
 12
 ```
 
-Tail calls are guaranteed eliminated (compiled to a real LLVM
-`musttail` call, i.e. a loop, not a growing call stack), so a
-tail-recursive function runs in constant stack space.
+A tail-recursive function runs in constant stack space: the emitted
+call chain becomes a loop, in `--release` and in the default debug build
+alike. `bootstrap/check-build-modes` runs a three-million-deep tail
+recursion in both modes, so this cannot regress quietly.
+
+It is not enforced by the compiler itself — no `musttail` is emitted, so
+this is a property of the optimisation level rather than a promise the
+language keeps for you.
 
 ### Tuples
 

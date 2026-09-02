@@ -1767,10 +1767,29 @@ let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (i: Int) (acc: 
 //
 // `-g` alone gives a debugger the C shims and not much else: the
 // emitted IR carries no `!dbg` metadata yet, so there is no Plum line
-// information for it to read. What `-O0` DOES buy immediately is
-// frames that still exist, which is the half a stack trace needs.
+// information for it to read. What the debug build DOES buy immediately
+// is frames that still exist, which is the half a stack trace needs.
+//
+// `-Og`, not `-O0`, and the difference is not a preference. This
+// backend emits no `musttail`, so a tail-recursive function is a real
+// call chain in the IR and stays one unless the C compiler turns it
+// into a loop. `-O0` does not, and
+//
+//     let count (n: Int) (acc: Int): Int =
+//         if n == 0 { acc } else { count(n - 1, acc + n) }
+//
+// segfaults at three million deep in a `-O0` build and returns in an
+// `-O2` one. Making debug the default with `-O0` would have introduced
+// that crash into every default build -- for a language whose README
+// promises tail calls run in constant stack space.
+//
+// `-Og` is "optimise for debugging experience": it keeps the debug
+// information and does the sibling-call transform. Measured, all with
+// `-g`: `-O0` crashes, `-Og` and `-O1` return, and all three carry
+// DWARF. `bootstrap/check-build-modes` runs that program in BOTH modes
+// so this cannot regress quietly.
 let cc_mode_args (release: Bool): Array[String] =
-    if release { ["-O2"] } else { ["-O0", "-g"] }
+    if release { ["-O2"] } else { ["-Og", "-g"] }
 
 // `--release` anywhere in the argument list. A flag, not a manifest
 // key: a Plum project is a directory with no configuration file, and

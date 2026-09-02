@@ -63,5 +63,39 @@ if [ $fail -eq 0 ]; then
     fi
 fi
 
+# --- deep tail recursion, in BOTH modes ---
+#
+# This backend emits no `musttail`. A tail-recursive function is a real
+# call chain in the IR and stays one unless the C compiler turns it into
+# a loop -- so running in constant stack space is a property of the
+# optimisation level, not a guarantee the language enforces.
+#
+# That made the debug flags load-bearing rather than cosmetic. The first
+# version of debug mode used `-O0`, and this program segfaulted in a
+# default build while returning in a release one. For a language whose
+# README promises constant stack space, a default build that overflows
+# is not a debug build, it is a broken one.
+mkdir -p "$work/tc"
+cat > "$work/tc/main.plum" <<'PLUM'
+let count (n: Int) (acc: Int): Int = if n == 0 { acc } else { count(n - 1, acc + n) }
+let main (): Unit = println(count(3000000, 0).to_string())
+PLUM
+
+tail_recursion() {   # <label> [flags...]
+    local label="$1"; shift
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tc" -o "$work/tc.bin" "$@" > "$work/tc-$label.err" 2>&1; then
+        echo "FAIL: $label tail-recursion build failed: $(head -n 1 "$work/tc-$label.err")" >&2
+        fail=1
+        return
+    fi
+    if [ "$("$work/tc.bin" 2>&1)" != "4500001500000" ]; then
+        echo "FAIL: deep tail recursion does not run in the $label build (stack overflow?)" >&2
+        fail=1
+    fi
+}
+
+tail_recursion debug
+tail_recursion release --release
+
 [ $fail -ne 0 ] && exit 1
-printf 'check-build-modes: default build carries debug info, --release does not, both run\n'
+printf 'check-build-modes: default carries debug info, --release does not, both run, and deep tail recursion survives both\n'
