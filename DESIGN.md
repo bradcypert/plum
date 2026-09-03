@@ -17601,6 +17601,42 @@ assertion nobody has watched fail is a guess about what it tests.
 `bootstrap/cross-check` is deliberately left at 4G -- it drives
 `zig cc`, whose footprint has not been measured here, and inventing a
 number for it would be exactly the guess this entry is about.
+
+### The correction: none of this runs on CI
+
+Written a day later, after checking rather than assuming. `./sh` reaches
+for `systemd-run --user --scope`, which needs a user session bus that no
+CI runner has. The wrapper notices, degrades to a plain `timeout`, and
+says nothing -- which is the right behaviour and was designed in
+deliberately, but it means **every `SH_MEM` above is inert on CI**. The
+ceilings were retuned to catch a regression, and the one place a
+regression arrives from somebody else's branch is the one place they do
+not apply.
+
+So the tuning above is a developer-desktop guard, and `bootstrap/mem-check`
+is the assertion. It measures peak RSS with `getrusage`, which needs no
+cgroup, no root and no session bus, and it runs on the Linux x86_64,
+Linux arm64 and macOS jobs.
+
+It checks only `emit-llvm` and `check` -- the operations the compiler
+performs ALONE. Anything that links shells out to clang, whose footprint
+dwarfs ours and varies by version, so a ceiling over `build` would be
+measuring clang and would fail on an unlucky runner.
+
+Its ceilings are ~2.4x what each operation measures, which is tighter
+than it first looks: the first draft used round numbers twice as large,
+and the `check` ceiling then sailed straight over the 83 MB the pre-fix
+compiler actually used. A threshold that misses the regression it was
+written for is decoration. Both ceilings were confirmed to fire by
+running the harness against the old binary:
+
+    emit-llvm, whole compiler             744 MB   (ceiling 128 MB)   FAIL
+    check, whole compiler                  83 MB   (ceiling  64 MB)   FAIL
+
+The lesson generalises past memory. `SH_MEM` had been in every harness
+for months, and the question "does this actually apply where it
+matters?" had never been asked -- the same shape as an assertion nobody
+has watched fail.
 ## Structured process execution, without a shell (2026-09-03)
 
 Issue #2. `Os.run_process(program, args)` already ran a child via

@@ -62,6 +62,14 @@ jobs:
       - name: the compiler reproduces itself
         run: ./bootstrap/bootstrap-check
 
+      # Peak RSS, asserted. `./sh`'s cgroup ceiling needs a user session
+      # bus that no runner has, so it silently degrades here and every
+      # `SH_MEM` in `bootstrap/` is inert on CI. This uses `getrusage`
+      # instead, and is the only thing standing between a memory
+      # regression and nobody noticing.
+      - name: the compiler stays within its memory ceilings
+        run: ./bootstrap/mem-check
+
       - name: it can build itself with no Rust, from any directory
         run: ./bootstrap/self-sufficiency
 
@@ -195,6 +203,14 @@ jobs:
       - name: the compiler it built works
         run: ./bootstrap/platform-smoke ./sh.real
 
+      # Peak RSS, asserted. `./sh`'s cgroup ceiling needs a user session
+      # bus that no runner has, so it silently degrades here and every
+      # `SH_MEM` in `bootstrap/` is inert on CI. This uses `getrusage`
+      # instead, and is the only thing standing between a memory
+      # regression and nobody noticing.
+      - name: the compiler stays within its memory ceilings
+        run: ./bootstrap/mem-check
+
       # The language server is the one feature that was BROKEN on macOS
       # and fixed blind: it re-invokes the compiler through
       # `/proc/self/exe`, which does not exist here, so it could never
@@ -241,6 +257,14 @@ jobs:
 
       - name: the compiler reproduces itself
         run: ./bootstrap/bootstrap-check
+
+      # Peak RSS, asserted. `./sh`'s cgroup ceiling needs a user session
+      # bus that no runner has, so it silently degrades here and every
+      # `SH_MEM` in `bootstrap/` is inert on CI. This uses `getrusage`
+      # instead, and is the only thing standing between a memory
+      # regression and nobody noticing.
+      - name: the compiler stays within its memory ceilings
+        run: ./bootstrap/mem-check
 
       # The leak oracle, which only Linux has.
       - name: corpus
