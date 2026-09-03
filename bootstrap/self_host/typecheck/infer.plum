@@ -764,7 +764,15 @@ let typed_fns_acc (p2: Program2) (items: Array[parser.ItemNode]) (i: Int) (acc: 
     if i >= items.len() { acc }
     else {
         match items[i].kind {
-            IKLet(def) => if Array.is_empty(def.params) { typed_fns_acc(p2, items, i + 1, acc) } else { typed_fns_acc(p2, items, i + 1, acc.push(check_fn_typed(p2, def, items[i].module))) },
+            // The same `set_err_pos` `check_all_fns` does, and for two
+            // reasons. `TFn` records the position from here, so without
+            // it every function on the BUILD path carried whatever
+            // offset the previous phase happened to leave behind -- a
+            // stale one, identical for all of them, which is what a
+            // debug-info probe found. And a type error raised during
+            // `plum build` reported that same stale position, while the
+            // identical error under `plum check` pointed correctly.
+            IKLet(def) => if Array.is_empty(def.params) { typed_fns_acc(p2, items, i + 1, acc) } else { { set_err_pos(items[i].path, items[i].start, def.name); typed_fns_acc(p2, items, i + 1, acc.push(check_fn_typed(p2, def, items[i].module))) } },
             _ => typed_fns_acc(p2, items, i + 1, acc),
         }
     }

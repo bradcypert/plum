@@ -17668,3 +17668,78 @@ The fixture `exec_corpus/process_run` re-invokes itself so the same
 binary works on every platform, and the `--echo` cases are the ones
 that fail if anyone routes this through `system()` / `cmd.exe`.
 
+
+## Plum line information: `!dbg` (2026-09-03)
+
+A debug build now carries DWARF line tables for the Plum source, so
+`addr2line`, `gdb` and `perf` name the file and line a person wrote:
+
+    plum_codegen_cg_parse_std   ->  bootstrap/self_host/codegen/stdlib.plum:112
+
+The compiler's own binary carries tables for all ten of its source
+files, which is the point: profiling it has meant reading mangled
+symbols, and the last few weeks of memory and tail-call work were done
+by hand-instrumenting because a profiler could not attribute a sample.
+
+**Line tables only** (`emissionKind: LineTablesOnly`) -- where code came
+from, and nothing about its types. A debugger can step, break on a line
+and attribute a profile; it cannot print a local. Full type debug info
+means describing every Plum type in DWARF, which is a project several
+times this one for something nobody has asked for.
+
+### It cost far less than the estimate, because the positions existed
+
+The plan called this "a plumbing job through parser and inference
+before a line of codegen", on the belief that positions would have to be
+threaded onto the typed tree. They were already there: `TFn` carries
+`path` and `offset` because the CHECKER needs them to point at a bad
+function. A per-function location needed no new plumbing at all, only
+reading what inference already recorded.
+
+That is the second time in this project that reading the code first
+turned a multi-week estimate into a contained change -- the earlier one
+being the stack-trace plan, where measuring showed Plum functions were
+already real symbols and turned "needs DWARF" into "needs one linker
+flag".
+
+### The bug it surfaced
+
+`typed_fns_acc`, the BUILD path, called `check_fn_typed` without
+`set_err_pos`, so every `TFn` it produced carried whatever position the
+previous phase happened to leave behind. A probe put the same stale
+offset -- 37886, with an empty path -- on every function in the program.
+
+That was not only a debug-info problem. `plum build` raising a type
+error reported that stale position, while `plum check` on the same
+program pointed correctly, because only the `check` path set it. Fixed
+by doing there what `check_all_fns` already did.
+
+Worth noting how it was found: not by reading, but by putting a
+`println` in the guard that was rejecting every function and looking at
+what it printed. Two earlier guesses -- that the flag was not set, and
+that the emitter was not reached -- were both wrong.
+
+### Two details that bite
+
+**Attachment is a pass over the emitted text**, not a change at the
+hundreds of places an instruction is built -- the same trade this
+backend makes everywhere, since it is a string builder. Three things
+must not be annotated and all three are load-bearing: a label is not an
+instruction, a `;` comment is not either, and a `switch` spans several
+lines between `[` and `]`, so annotating its cases would put metadata
+inside an operand list and produce IR that does not parse.
+
+**`!0` to `!4` are five nodes, not four.** The id counter started at 4
+and collided with the shared `!{null}`, which clang reports as
+`Metadata id is already used`. Caught immediately because the IR stopped
+assembling; worth recording only because the off-by-one is invisible
+when reading the code that emits them.
+
+`bootstrap/debug-info-check` pins it, and asserts LINE NUMBERS against a
+fixture it writes itself rather than merely asserting metadata exists --
+which would pass just as happily with every function pointing at line 1,
+the likeliest way for this to break. Confirmed non-vacuous against the
+pre-`!dbg` compiler, which fails all five of its assertions. It checks
+the emitted IR everywhere and the linked binary through `addr2line`
+where binutils exists, since the IR is what we wrote and the DWARF is
+what a debugger actually reads.

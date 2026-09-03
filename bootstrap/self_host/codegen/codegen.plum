@@ -651,6 +651,194 @@ let cg_tail_pop (p: CgProgram) (tail: Bool): String =
 // and dropped by the optimiser. The alternative was a "this path
 // returned" flag on `Emit`, which would have meant editing all 139
 // places one is built to serve the four that merge.
+// --- Debug information: DWARF line tables ---
+//
+// A debug build carries `-g`, which until now bought DWARF for the C
+// SHIMS and nothing for the program: the emitted IR had no `!dbg`
+// metadata, so a debugger stopped in `io_shim.c` and could say nothing
+// about the Plum that got there, and a profiler could only report
+// mangled symbols.
+//
+// **Line tables only, deliberately.** `emissionKind: LineTablesOnly`
+// describes where code CAME FROM and says nothing about types or
+// variables, so `gdb` can step, break on a line and attribute a
+// profile, but cannot print a local. Full type debug info would mean
+// describing every Plum type in DWARF -- a project several times this
+// one, for a feature nobody has asked for. This is the 90% that costs
+// 10%.
+//
+// Positions were already here. `TFn` carries `path` and `offset`
+// because the CHECKER needs them to point at a bad function, so a
+// per-function location needs no new plumbing at all -- only reading
+// them. That is why this lands as one file's worth of emission rather
+// than the pass through parser and inference it looked like.
+//
+// Only functions compiled FROM PLUM SOURCE get a `DISubprogram`. The
+// runtime's hand-written IR, the generated equality and release
+// functions, and `@plum_init_globals` have no source to point at, so
+// they carry no debug info and no `!dbg` -- which is also why the
+// attachment pass below runs over one function's body at a time rather
+// than the finished module.
+pub struct DbgFile { pub path: String, pub id: Int, pub starts: Array[Int] }
+
+let DEBUG_INFO: Ref[Bool] = ref(false)
+
+pub let set_debug_info (on: Bool): Unit = DEBUG_INFO.set(on)
+
+let no_dbg_files (unit: Unit): Array[DbgFile] = []
+let DBG_FILES: Ref[Array[DbgFile]] = ref(no_dbg_files(()))
+let DBG_META: Ref[String] = ref("")
+// `!0` to `!4` are the fixed nodes `cg_dbg_module` emits -- five of
+// them, not four, which is exactly the off-by-one that first produced
+// `Metadata id is already used`. Everything else is allocated here.
+let DBG_ID: Ref[Int] = ref(5)
+
+pub let cg_dbg_reset (unit: Unit): Unit = {
+    DBG_FILES.set(no_dbg_files(()));
+    DBG_META.set("");
+    DBG_ID.set(5)
+}
+
+let cg_dbg_next (unit: Unit): Int = {
+    let k = DBG_ID.get();
+    DBG_ID.set(k + 1);
+    k
+}
+
+let cg_dbg_emit (line: String): Unit = DBG_META.set(DBG_META.get().concat(line))
+
+// Where every line of a file begins, computed ONCE per file. The
+// obvious `lexer.line_col` cannot be used here: it calls `chars_of` on
+// the whole source and walks it per call, which is fine for one error
+// message and quadratic across the thousands of functions a build
+// emits.
+let cg_line_starts (src: String): Array[Int] = cg_line_starts_acc(chars_of(src), 0, [0])
+
+let cg_line_starts_acc (cs: Array[String]) (i: Int) (acc: Array[Int]): Array[Int] =
+    if i >= cs.len() { acc }
+    else if cs[i] == "\n" { cg_line_starts_acc(cs, i + 1, acc.push(i + 1)) }
+    else { cg_line_starts_acc(cs, i + 1, acc) }
+
+// The 1-based line holding `offset`, by binary search over the starts.
+let cg_line_at (starts: Array[Int]) (offset: Int): Int = cg_line_search(starts, offset, 0, starts.len() - 1)
+
+let cg_line_search (starts: Array[Int]) (offset: Int) (lo: Int) (hi: Int): Int =
+    if lo >= hi { lo + 1 }
+    else {
+        let mid = lo + (hi - lo + 1) / 2;
+        if starts[mid] <= offset { cg_line_search(starts, offset, mid, hi) }
+        else { cg_line_search(starts, offset, lo, mid - 1) }
+    }
+
+let cg_dbg_find (fs: Array[DbgFile]) (path: String) (i: Int): Option[DbgFile] =
+    if i >= fs.len() { None }
+    else if fs[i].path == path { Some(fs[i]) }
+    else { cg_dbg_find(fs, path, i + 1) }
+
+// A `DIFile` per source path, with its line table, created on first
+// sight. A file the compiler cannot read gets a table of one line,
+// which degrades to "line 1" rather than failing a build over debug
+// info -- the program is still correct, it is only harder to step.
+let cg_dbg_file (path: String): DbgFile =
+    match cg_dbg_find(DBG_FILES.get(), path, 0) {
+        Some(f) => f,
+        None => {
+            let starts = match Os.read_file(path) { Ok(src) => cg_line_starts(src), Err(e) => [0] };
+            let id = cg_dbg_next(());
+            let f = DbgFile { path: path, id: id, starts: starts };
+            cg_dbg_emit("!".concat(id.to_string()).concat(" = !DIFile(filename: \"")
+                .concat(cg_escape_llvm(path)).concat("\", directory: \"\")\n"));
+            DBG_FILES.set(DBG_FILES.get().push(f));
+            f
+        },
+    }
+
+// The `!dbg` a function's `define` carries, and the location every
+// instruction in its body gets. Both are `-1` when this build has no
+// debug info, or when the function came from no source the compiler
+// can point at -- a prelude function, or one the parser synthesized.
+pub struct DbgRef { pub sp: Int, pub loc: Int }
+
+let cg_dbg_none (unit: Unit): DbgRef = DbgRef { sp: 0 - 1, loc: 0 - 1 }
+
+let cg_dbg_fn (shown: String) (path: String) (offset: Int): DbgRef =
+    if !DEBUG_INFO.get() || path == "" || offset < 0 { cg_dbg_none(()) }
+    else {
+        let f = cg_dbg_file(path);
+        let line = cg_line_at(f.starts, offset);
+        let sp = cg_dbg_next(());
+        let loc = cg_dbg_next(());
+        // `distinct`, because two instantiations of one generic
+        // function share a name, a file and a line, and metadata is
+        // uniqued by content -- without it they would collapse into one
+        // subprogram and a debugger would attribute both to whichever
+        // it saw first.
+        cg_dbg_emit("!".concat(sp.to_string())
+            .concat(" = distinct !DISubprogram(name: \"").concat(cg_escape_llvm(shown))
+            .concat("\", scope: !").concat(f.id.to_string())
+            .concat(", file: !").concat(f.id.to_string())
+            .concat(", line: ").concat(line.to_string())
+            .concat(", type: !3, scopeLine: ").concat(line.to_string())
+            .concat(", spFlags: DISPFlagDefinition, unit: !1)\n"));
+        cg_dbg_emit("!".concat(loc.to_string())
+            .concat(" = !DILocation(line: ").concat(line.to_string())
+            .concat(", column: 1, scope: !").concat(sp.to_string()).concat(")\n"));
+        DbgRef { sp: sp, loc: loc }
+    }
+
+// Attach `loc` to every instruction in one function body.
+//
+// Done as a pass over the emitted text rather than at each of the
+// hundreds of places an instruction is built. That is the same
+// trade-off the rest of this backend makes -- it is a string builder,
+// and this is a string transformation.
+//
+// Three things must NOT be annotated, and all three are why this is not
+// a one-line `replace`: a label opens a block and is not an
+// instruction; a `;` comment is not either; and a `switch` spans
+// several lines between `[` and `]`, so annotating its cases would put
+// metadata inside an operand list and produce IR that does not parse.
+let cg_dbg_attach (body: String) (loc: Int): String =
+    if loc < 0 { body }
+    else { cg_dbg_lines(String.split(body, "\n"), 0, loc, false, "") }
+
+let cg_dbg_lines (ls: Array[String]) (i: Int) (loc: Int) (in_list: Bool) (acc: String): String =
+    if i >= ls.len() { acc }
+    else {
+        let l = ls[i];
+        // The last element of a split on a trailing newline is empty;
+        // re-emitting it would double the newline.
+        if i == ls.len() - 1 && l == "" { acc }
+        else if in_list {
+            cg_dbg_lines(ls, i + 1, loc, !(String.trim_end(l) == "  ]"), acc.concat(l).concat("\n"))
+        }
+        else if l.starts_with("  ") && !l.starts_with("  ;") && String.trim_end(l) != "" {
+            let opens = l.ends_with("[");
+            cg_dbg_lines(ls, i + 1, loc, opens,
+                acc.concat(l).concat(if opens { "" } else { ", !dbg !".concat(loc.to_string()) }).concat("\n"))
+        }
+        else { cg_dbg_lines(ls, i + 1, loc, false, acc.concat(l).concat("\n")) }
+    }
+
+// The fixed nodes, and the compile unit every subprogram points at.
+// Emitted only when something actually produced debug info, so a
+// release build's module carries none of this.
+pub let cg_dbg_module (unit: Unit): String =
+    if !DEBUG_INFO.get() || DBG_META.get() == "" { "" }
+    else {
+        "\n!llvm.module.flags = !{!0}\n!llvm.dbg.cu = !{!1}\n"
+            .concat("!0 = !{i32 2, !\"Debug Info Version\", i32 3}\n")
+            // `LineTablesOnly`: where code came from, and nothing about
+            // its types. See this section's own comment.
+            .concat("!1 = distinct !DICompileUnit(language: DW_LANG_C99, file: !2, producer: \"plum\", isOptimized: false, runtimeVersion: 0, emissionKind: LineTablesOnly)\n")
+            .concat("!2 = !DIFile(filename: \"<plum>\", directory: \"\")\n")
+            // Every subprogram shares one empty signature type: with
+            // line tables only, nothing reads it.
+            .concat("!3 = !DISubroutineType(types: !4)\n")
+            .concat("!4 = !{null}\n")
+            .concat(DBG_META.get())
+    }
+
 let TAIL_SITE: Ref[Int] = ref(0)
 
 // Unique per hoist site, and deliberately NOT drawn from the emitter's
@@ -4836,7 +5024,12 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     // trusting it: on any disagreement the first pass is used, which is
     // simply the previous behaviour.
     let body = if wet.releases == dry.releases && wet.allocas == dry.allocas { wet } else { dry };
-    let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(sym).concat("(").concat(cg_param_decls(params)).concat(") {\nentry:\n");
+    // One subprogram per emitted function, so a debugger and a profiler
+    // can name it and its file. `shown` is the name a person wrote, the
+    // same one a stack trace prints.
+    let dbg = cg_dbg_fn(shown, def.path, def.offset);
+    let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(sym).concat("(").concat(cg_param_decls(params))
+        .concat(if dbg.sp >= 0 { ") !dbg !".concat(dbg.sp.to_string()).concat(" {\nentry:\n") } else { ") {\nentry:\n" });
     // Every `alloca` is hoisted here, at the top of the entry block,
     // ahead of any instruction that could branch — see `Emit`'s own
     // comment for why that is a correctness requirement inside loops
@@ -4844,7 +5037,7 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     let text = body.globals
         .concat(if framed { cg_frame_global(sym, shown) } else { "" })
         .concat(header)
-        .concat(cg_frame_push(sym, shown))
+        .concat(cg_dbg_attach(cg_frame_push(sym, shown)
         .concat(entry.code)
         .concat(body.allocas)
         .concat(body.code)
@@ -4859,7 +5052,7 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
         // and frees; nothing here can abort and want a trace.
         .concat(body.releases)
         .concat(entry.releases)
-        .concat("  ret ").concat(cg_llvm_ty(ret)).concat(" ").concat(body.val).concat("\n")
+        .concat("  ret ").concat(cg_llvm_ty(ret)).concat(" ").concat(body.val).concat("\n"), dbg.loc))
         .concat("}\n\n");
     FnEmit { text: text, next: body.n }
 }
@@ -5981,6 +6174,7 @@ pub let cg_emit_program (program0: parser.ProgramNode): String = cg_emit_program
 // interpreting each test -- which is what it used to do, and why every
 // test that touched the prelude failed.
 pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): String = {
+    cg_dbg_reset(());
     let program = cg_with_prelude(program0);
     let p = cg_build_program(program);
     if !cg_has_fn(p, entry) { cg_fail("no top-level '".concat(entry).concat("' function to compile")) };
@@ -6006,6 +6200,9 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
         .concat(cg_emit_insts(p, insts, 0, 0, ""))
         .concat(gl.init)
         .concat(cg_entry_named("@".concat(cg_sym("", entry, []))))
+        // Last, because the nodes are allocated as functions are
+        // emitted and nothing knows the full set until they are.
+        .concat(cg_dbg_module(()))
 }
 
 // Each top-level 0-parameter binding gets a module-level SLOT and one

@@ -70,6 +70,11 @@ jobs:
       - name: the compiler stays within its memory ceilings
         run: ./bootstrap/mem-check
 
+      # Wrong line info does not crash, it misleads -- so it needs a
+      # test more than most things, not less.
+      - name: debug builds carry Plum line information
+        run: ./bootstrap/debug-info-check
+
       - name: it can build itself with no Rust, from any directory
         run: ./bootstrap/self-sufficiency
 

@@ -34,6 +34,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |
 | `doc-check` | every snippet in `TUTORIAL.md` compiles, runs, and prints what the tutorial says it prints | 6s |
 | `alloc-check` | allocation counts have not RISEN -- the only harness that measures the memory model rather than correctness | 2s |
+| `debug-info-check` | a debug build carries Plum line information at the right LINES, and a release build carries none | 2s |
 | `mem-check` | peak RSS of `emit-llvm` and `check` is under a ceiling -- the `SH_MEM` cgroup guard is inert on CI, so this is the only memory assertion that runs there | 3s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |

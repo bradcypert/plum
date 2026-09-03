@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# A DEBUG build carries Plum line information, and a release build does
+# not.
+#
+# This is the harness that has to exist for `!dbg` to be worth emitting.
+# Wrong debug info does not crash: it points a debugger or a profiler at
+# the wrong line and is believed. Every other invariant here is pinned
+# by something that fails loudly, and a feature whose failure mode is
+# "quietly misleads you" needs it more than most, not less.
+#
+# What is asserted is the LINE NUMBERS, against a fixture whose contents
+# this script writes and therefore knows the answer for. Asserting that
+# metadata merely EXISTS would pass just as happily with every function
+# pointing at line 1, which is the most likely way for this to break.
+#
+# Two layers, because they fail differently:
+#
+#   1. The emitted IR -- portable, runs everywhere, and catches a
+#      regression in what this compiler produces.
+#   2. The linked binary through `addr2line` -- the real question, since
+#      it is DWARF a debugger reads rather than metadata we wrote. Only
+#      when binutils is present: `bootstrap/check-build-modes` already
+#      avoids `readelf` because "binutils is not guaranteed on every
+#      platform the compiler targets", and the same applies here.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+plum="${1:-./sh}"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+fail=0
+
+# Line 1 is a comment, so `top` is on 2 and `nested` on 3. Written out
+# rather than derived, so the expectation is independent of the file.
+mkdir -p "$work/p"
+cat > "$work/p/main.plum" <<'PLUM'
+// deliberately here, so the functions below start at known lines
+let top (n: Int): Int = n + 1
+let nested (n: Int): Int = top(n) + 1
+let main (): Unit = println(nested(1).to_string())
+PLUM
+
+if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" emit-llvm "$work/p" > "$work/dbg.ll" 2> "$work/dbg.err"; then
+    echo "FAIL: debug emit failed: $(head -n 1 "$work/dbg.err")" >&2
+    exit 1
+fi
+
+# `top` is declared on line 2 and `nested` on line 3. A subprogram
+# claiming anything else is the bug this harness exists for.
+for pair in "top 2" "nested 3" "main 4"; do
+    set -- $pair
+    name="$1"; want="$2"
+    got="$(grep -oE "DISubprogram\(name: \"$name\", scope: ![0-9]+, file: ![0-9]+, line: [0-9]+" "$work/dbg.ll" | grep -oE 'line: [0-9]+$' | grep -oE '[0-9]+' | head -n 1)"
+    if [ -z "$got" ]; then
+        echo "FAIL: no DISubprogram for '$name' in a debug build" >&2
+        fail=1
+    elif [ "$got" != "$want" ]; then
+        echo "FAIL: '$name' is on line $want, its debug info says $got" >&2
+        fail=1
+    fi
+done
+
+# Every instruction in a function that HAS debug info needs a location:
+# LLVM's verifier rejects an inlinable call without one, so this would
+# already have failed the build -- but it fails as a clang error about
+# metadata, which reads like a bug in the shims. Asserting it here names
+# the actual cause.
+if ! grep -q '!dbg !' "$work/dbg.ll"; then
+    echo "FAIL: a debug build attached no locations to any instruction" >&2
+    fail=1
+fi
+
+# A release build is compiled without `-g` and has nothing to read this,
+# so emitting it would be dead weight in every shipped binary.
+if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" emit-llvm "$work/p" --release > "$work/rel.ll" 2> "$work/rel.err"; then
+    echo "FAIL: release emit failed: $(head -n 1 "$work/rel.err")" >&2
+    fail=1
+elif grep -qE "DISubprogram|DICompileUnit|!dbg !" "$work/rel.ll"; then
+    echo "FAIL: a --release build carries debug information; it should not" >&2
+    fail=1
+fi
+
+# --- the linked binary, where it actually matters ---
+if command -v addr2line > /dev/null 2>&1; then
+    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/p" -o "$work/p.bin" > "$work/build.err" 2>&1; then
+        echo "FAIL: debug build failed: $(head -n 1 "$work/build.err")" >&2
+        fail=1
+    else
+        addr="$(nm "$work/p.bin" 2>/dev/null | grep -E ' T plum_top$' | head -n 1 | awk '{print $1}')"
+        if [ -z "$addr" ]; then
+            echo "  (skipped addr2line: no plum_top symbol -- stripped?)"
+        else
+            line="$(addr2line -e "$work/p.bin" "0x$addr" 2>/dev/null)"
+            case "$line" in
+                *main.plum:2) ;;
+                *) echo "FAIL: addr2line puts plum_top at '$line', expected main.plum:2" >&2; fail=1 ;;
+            esac
+        fi
+    fi
+else
+    echo "  (skipped addr2line: binutils not present)"
+fi
+
+[ $fail -ne 0 ] && exit 1
+printf 'debug-info-check: debug builds carry Plum line information, release builds carry none\n'

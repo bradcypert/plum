@@ -976,10 +976,24 @@ wanted the fast binary and got the debuggable one has a slow program and
 a flag to learn, while someone who wanted to debug and got the optimised
 one has inlined frames and nothing to tell them why.
 
-A debug binary keeps its frames and carries DWARF, so a debugger can
-follow it. What it does not yet carry is Plum line information — the
-emitted IR has no `!dbg` metadata, so a debugger shows the C runtime's
-lines, not yours. Plum function names are real symbols in both modes.
+A debug binary keeps its frames and carries DWARF **line tables for
+your Plum source**, so a debugger stops on the line you wrote and a
+profiler attributes samples to it:
+
+```sh
+addr2line -e ./myapp 0x5320      # myapp/main.plum:14
+perf report ./myapp              # samples land on Plum lines
+```
+
+Line tables only — where code came from, not what its types are. `gdb`
+can step, break on a line and profile; it cannot print a local, because
+describing every Plum type in DWARF is a much larger project than this
+and nobody has needed it yet. Functions the compiler generates rather
+than compiles (equality, release, the runtime) carry none, which is why
+they show as `??` rather than pointing somewhere wrong.
+
+`--release` carries none of this. Plum function names are real symbols
+in both modes.
 
 ### Stack traces
 
