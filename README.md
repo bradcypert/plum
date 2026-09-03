@@ -503,12 +503,33 @@ occasionally referred to as `Str` in compiler-internal contexts, but
 `String` is what you write in source). `Int`/`Float` conversions are
 explicit, never implicit: `n.to_float()` (widening — always succeeds,
 though not always *exact* for very large `Int` values, since `Float`'s
-53-bit mantissa can't represent every `i64` value precisely), `x.
-to_int()` (truncates toward zero), `x.round_to_int()` (rounds to the
+53-bit mantissa can't represent every `i64` value precisely),
+`x.to_int()` (truncates toward zero), `x.round_to_int()` (rounds to the
 nearest integer first, same convention `Float.round()` itself uses).
 Both `Float`-to-`Int` conversions are saturating, never undefined
 behavior — `NaN` becomes `0`, and a value outside `Int`'s range becomes
-whichever bound it overshot.
+whichever bound it overshot. `Float.to_int(x)` and `x.to_int()` are
+the same call.
+
+```plum
+let z (): Float = 0.0
+
+let main (): Unit = {
+    println((3.7).to_int().to_string());
+    println((0.0 - 3.7).to_int().to_string());
+    println((3.5).round_to_int().to_string());
+    println((z() / z()).to_int().to_string());
+    println((1.0 / z()).to_int().to_string())
+}
+```
+
+```
+3
+-3
+4
+0
+9223372036854775807
+```
 
 **`==` works on anything; `<`, `<=`, `>` and `>=` need an ordered
 type.** Equality is structural — arrays, structs, enums and their

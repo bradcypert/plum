@@ -36,5 +36,7 @@ let main (): Unit = {
     println(pair(String.concat(s, "c"), s.concat("c")));
     println(pair(String.len(s).to_string(), s.len().to_string()));
     println(pair(Int.to_float(3).to_string(), 3.to_float().to_string()));
+    println(pair(Float.to_int(3.7).to_string(), (3.7).to_int().to_string()));
+    println(pair(Float.round_to_int(3.5).to_string(), (3.5).round_to_int().to_string()));
     println(pair(Ref.get(r).to_string(), r.get().to_string()))
 }

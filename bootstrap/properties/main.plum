@@ -378,6 +378,35 @@ let str_order (seed: Int) (left: Int): Unit =
         str_order(next_seed(seed), left - 1)
     }
 
+// --- Float to Int ---
+//
+// Integers inside the exact-float range round-trip through `to_float`
+// then `to_int`. Truncation toward zero does not move a value that is
+// already whole. `round_to_int` agrees with `Float.round` then `to_int`.
+let float_to_int_rt (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let v = rand_between(seed, 0 - 1000000000, 1000000000);
+        check_eq("int via float", v.to_string(), v.to_float().to_int().to_string(), v.to_string());
+        let frac = 0.25;
+        let truncated = if v >= 0 { (v.to_float() + frac).to_int() } else { (v.to_float() - frac).to_int() };
+        check_eq("trunc toward zero", v.to_string(), truncated.to_string(), v.to_string());
+        let x = v.to_float() + frac;
+        check_eq("round_to_int matches round", x.to_string(), x.round_to_int().to_string(), Float.round(x).to_int().to_string());
+        float_to_int_rt(next_seed(seed), left - 1)
+    }
+
+pub let test_float_to_int (): Unit = {
+    float_to_int_rt(777, 200);
+    check_eq("trunc 3.7", "3.7", (3.7).to_int().to_string(), "3");
+    check_eq("trunc -3.7", "-3.7", (0.0 - 3.7).to_int().to_string(), "-3");
+    check_eq("round 3.5", "3.5", (3.5).round_to_int().to_string(), "4");
+    check_eq("round -3.5", "-3.5", (0.0 - 3.5).round_to_int().to_string(), "-4");
+    let z = 0.0;
+    check_eq("nan", "nan", (z / z).to_int().to_string(), "0");
+    check_eq("+inf", "+inf", (1.0 / z).to_int().to_string(), "9223372036854775807");
+    check_eq("-inf", "-inf", (0.0 - 1.0 / z).to_int().to_string(), "-9223372036854775808")
+}
+
 pub let test_string_ordering (): Unit = {
     str_order(90210, 150);
     // LITERAL operands, the half that was broken while runtime values

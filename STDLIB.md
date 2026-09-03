@@ -74,6 +74,8 @@ See README.md for the prose introduction.
 - `let Float.round (x: Float): Float`
 - `let Float.random (): Float`
 - `let Float.random_range (lo: Float) (hi: Float): Float`
+- `Float.to_int(): Int`  (built in)
+- `Float.round_to_int(): Int`  (built in)
 
 ## Http
 

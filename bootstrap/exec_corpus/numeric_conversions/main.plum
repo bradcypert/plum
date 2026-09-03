@@ -1,0 +1,41 @@
+// Public numeric conversions. README documents `Int.to_float()`,
+// `Float.to_int()` (truncate toward zero) and `Float.round_to_int()`
+// (round first, same convention as `Float.round`). Both Float-to-Int
+// paths are saturating: NaN becomes 0, and a value outside Int's range
+// becomes the bound it overshot.
+//
+// Values that are not finite go through FUNCTIONS so they cannot be
+// constant-folded into a literal at compile time -- the same trick
+// `float_formatting` uses. Infinities and NaN are built as `1.0 / 0.0`
+// and `0.0 / 0.0` at runtime, matching `float_notation`.
+
+let z (): Float = 0.0
+let ten (): Float = 10.0
+let up (b: Float) (n: Int): Float = if n <= 0 { 1.0 } else { b * up(b, n - 1) }
+let pair (a: String) (b: String): String = a.concat("/").concat(b)
+
+let main (): Unit = {
+    // Truncation toward zero, both spellings.
+    println(pair(Float.to_int(3.7).to_string(), (3.7).to_int().to_string()));
+    println((0.0 - 3.7).to_int().to_string());
+    println((3.2).to_int().to_string());
+    println(0.0.to_int().to_string());
+
+    // Round half away from zero, matching `Float.round`.
+    println(pair(Float.round_to_int(3.5).to_string(), (3.5).round_to_int().to_string()));
+    println((3.2).round_to_int().to_string());
+    println((0.0 - 3.5).round_to_int().to_string());
+    println((0.0 - 3.2).round_to_int().to_string());
+
+    // Widening, then back. Exact for every Int a 53-bit mantissa holds.
+    println(pair(Int.to_float(42).to_string(), 42.to_float().to_string()));
+    println(42.to_float().to_int().to_string());
+
+    // NaN, +inf, -inf, and a magnitude past Int::MAX.
+    println((z() / z()).to_int().to_string());
+    println((1.0 / z()).to_int().to_string());
+    println((0.0 - 1.0 / z()).to_int().to_string());
+    println(up(ten(), 20).to_int().to_string());
+    println((0.0 - up(ten(), 20)).to_int().to_string());
+    println(up(ten(), 20).round_to_int().to_string())
+}
