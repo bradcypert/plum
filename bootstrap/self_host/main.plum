@@ -1655,6 +1655,32 @@ let target_os (triple: String): String =
 // Keyed off the TARGET, not the host. Reading `Os.platform()` here was
 // the one line that made a cross-build impossible: a Windows binary
 // built on Linux was handed the host's bare `-lm` and failed to link.
+// Mach-O keeps DEBUG INFORMATION somewhere else than ELF does, and
+// this is the one line that accounts for it.
+//
+// A Mach-O linker does not copy DWARF into the executable. It leaves it
+// in the `.o` files and writes a debug map pointing at them, and
+// `dsymutil` is what follows that map and produces the `.dSYM` bundle a
+// debugger reads. `plum build` compiles and links in ONE clang
+// invocation with the objects in a scratch directory it then removes,
+// so without this the map points at files that no longer exist and the
+// line information is gone the moment a build finishes.
+//
+// Measured rather than assumed, and the assumption would have been
+// wrong in both directions: clang's driver does NOT do this for a
+// one-step compile-and-link, and `bootstrap/debug-info-check` on the
+// macOS runner is what said so -- "no Plum line information, in itself
+// or a .dSYM", after passing every check on the IR.
+//
+// Failure is deliberately NOT fatal. The binary is already built,
+// correct and runnable; a missing debugger convenience must not fail a
+// build over it. What stops that from being the silent degradation
+// this project keeps getting bitten by is that CI asserts the result on
+// a real Mac, so a `dsymutil` that stops working is caught there rather
+// than discovered by someone trying to debug.
+let run_dsymutil (out: String): Unit =
+    match Os.run_process("dsymutil", [out]) { Ok(r) => (), Err(e) => () }
+
 let platform_libs (target: String): Array[String] =
     if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32"] } else { ["-lm"] }
 
@@ -1854,6 +1880,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
                     // Leaving it always is the same leak `plum build` had
                     // (see DESIGN.md) -- several MB per build, forever.
                     let cleaned = Os.remove_file(ll);
+                    let bundled = if !release && target_os(target) == "macos" { run_dsymutil(out) } else { () };
                     ""
                 } else {
                     Array.join(cc_words(), " ").concat(" failed (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)

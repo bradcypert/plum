@@ -17813,8 +17813,29 @@ lost". True of one guard and not the other. Both degrade now, and the
 decorative: macOS ships bash 3.2, where expanding an empty array under
 `set -u` is itself an error.
 
-**The dsymutil question is still open.** Nothing reached the point of
-looking at a linked binary.
+### The answer: yes, and now it is measured
+
+The next run got past the wrapper and failed exactly where the question
+was aimed. macOS passed every check on the IR -- subprogram lines,
+statement granularity, a clean release build -- and then:
+
+    FAIL: the built binary has no Plum line information, in itself or a .dSYM.
+
+So clang's driver does NOT produce a `.dSYM` for a one-step
+compile-and-link, and the debug map it leaves points at objects `plum
+build` has already deleted. `plum build` now runs `dsymutil` on a macOS
+debug build.
+
+Failure there is deliberately not fatal: the binary is already built,
+correct and runnable, and a missing debugger convenience must not fail
+a build. What keeps that from being the silent degradation this project
+keeps getting caught by is that CI asserts the result on a real Mac.
+
+Worth stating plainly, because it is the whole argument for having
+asked: had this been added on the original hunch, it would have been
+right for a reason nobody had checked, and had it been skipped as
+"clang probably handles it", macOS debug builds would have shipped with
+no line information at all and nothing would have said so.
 
 The rewrite immediately produced a false FAIL on Linux, on a binary that
 plainly had the information. `printf '%s' "$lines" | grep -q main.plum`
