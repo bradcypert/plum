@@ -60,10 +60,24 @@ fail=0
 # the same field, a factor of 1024 apart, which is exactly the kind of
 # difference that makes a threshold look fine on one platform and absurd
 # on the other.
+#
+# `timeout` is GNU coreutils and is NOT on macOS, which ships neither it
+# nor an equivalent under that name; Homebrew installs it as `gtimeout`.
+# The first version of this harness called it unconditionally and the
+# macOS job died with `FileNotFoundError: 'timeout'` before measuring a
+# single byte -- this file was the first macOS-reachable harness ever to
+# reach for it, so nothing had caught the assumption. Same GNU/BSD split
+# `bootstrap/package-release` documents for `sha256sum` vs `shasum`.
+#
+# Running WITHOUT one is the fallback rather than an error: the timeout
+# is belt-and-braces against a hung compiler, and CI already caps the
+# whole job. Losing it costs a slower failure, not a wrong measurement.
 peak_kb() {
     python3 - "$@" <<'PY'
-import resource, subprocess, sys
-rc = subprocess.run(["timeout", "600"] + sys.argv[1:],
+import resource, shutil, subprocess, sys
+runner = next((t for t in ("timeout", "gtimeout") if shutil.which(t)), None)
+argv = ([runner, "600"] if runner else []) + sys.argv[1:]
+rc = subprocess.run(argv,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
 kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
 if sys.platform == "darwin":
