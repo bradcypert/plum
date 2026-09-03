@@ -105,7 +105,7 @@ for dir in examples/*/; do
     fi
 
     # 1. self-hosted emit
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh emit-llvm "$dir" > "$work/$name.ll" 2>"$work/$name.emit_err"; then
+    if ! SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh emit-llvm "$dir" > "$work/$name.ll" 2>"$work/$name.emit_err"; then
         reason="$(head -n 1 "$work/$name.emit_err" 2>/dev/null)"
         [ -n "$reason" ] || reason="$(grep -m1 -v '^;' "$work/$name.ll" 2>/dev/null)"
         printf 'FAIL  %-24s %s%s\n' "$name" "${reason:-emit failed}" "${known[$name]:+  [known: ${known[$name]}]}"

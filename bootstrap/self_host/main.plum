@@ -1806,9 +1806,10 @@ pub let wants_release (argv: Array[String]): Bool = Array.contains(argv, "--rele
 // stack costs a push and a pop per call. It does NOT cost tail-call
 // elimination any more: the pop is paid per PATH, and a self-call in
 // tail position pops before calling rather than after returning, so
-// nothing sits between that call and the `ret`. TRACING.md section 6
-// has the measurements, `cg_expr_t` in `codegen/codegen.plum` the
-// emission, and `native_stdlib/io_shim.c` the runtime.
+// nothing sits between that call and the `ret`. DESIGN.md's "Traces
+// AND tail calls" entry has the measurements, `cg_expr_t` in
+// `codegen/codegen.plum` the emission, and `native_stdlib/io_shim.c`
+// the runtime.
 pub let wants_trace (argv: Array[String]): Bool = Array.contains(argv, "--trace")
 
 let compile_project (dir: String) (out: String) (extra: Array[String]) (target: String) (release: Bool) (trace: Bool): String = {

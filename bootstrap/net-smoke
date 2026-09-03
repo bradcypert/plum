@@ -102,7 +102,7 @@ PLUM
 
 check() {
     local name="$1" expected="$2"
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh build "$work/$name" -o "$work/$name.bin" > "$work/$name.err" 2>&1; then
+    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh build "$work/$name" -o "$work/$name.bin" > "$work/$name.err" 2>&1; then
         echo "FAIL [$name]: did not compile: $(head -1 "$work/$name.err")"; fail=1; return
     fi
     local out

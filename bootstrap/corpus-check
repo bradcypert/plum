@@ -84,12 +84,12 @@ for dir in bootstrap/exec_corpus/*/; do
     # The checker's verdict, first. `emit-llvm` reports checker errors on
     # stdout and still exits 0, so a fixture the checker hates would
     # otherwise reach clang as garbage and be reported as a link error.
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh check "$dir" > "$work/$name.chk" 2>&1; then
+    if ! SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh check "$dir" > "$work/$name.chk" 2>&1; then
         fail_with "$name" "runs, but the checker REJECTS it: $(grep -m1 -v '^\s*$' "$work/$name.chk")"
         continue
     fi
 
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh emit-llvm "$dir" > "$work/$name.ll" 2>"$work/$name.err"; then
+    if ! SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh emit-llvm "$dir" > "$work/$name.ll" 2>"$work/$name.err"; then
         fail_with "$name" "emit failed: $(head -n 1 "$work/$name.err")"
         continue
     fi
@@ -143,7 +143,7 @@ for dir in bootstrap/abort_corpus/*/; do
     # abort MESSAGE, and a debug build also prints a stack trace to
     # stderr, which this comparison captures. The trace is asserted by
     # `bootstrap/check-build-modes`, where the modes are the subject.
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh emit-llvm "$dir" --release > "$work/ab-$name.ll" 2>"$work/ab-$name.err"; then
+    if ! SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh emit-llvm "$dir" --release > "$work/ab-$name.ll" 2>"$work/ab-$name.err"; then
         fail_with "$name" "emit failed: $(head -n 1 "$work/ab-$name.err")"; continue
     fi
     # These fixtures ABORT, so ASan's leak check would report whatever
@@ -174,7 +174,7 @@ for dir in bootstrap/typecheck_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
 
-    if SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh check "$dir" > "$work/tc-$name.out" 2>&1; then
+    if SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh check "$dir" > "$work/tc-$name.out" 2>&1; then
         fail_with "$name" "ACCEPTED an ill-typed program"
         continue
     fi

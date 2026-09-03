@@ -170,7 +170,7 @@ for m in msgs:
     b=json.dumps(m).encode()
     out.write(b"Content-Length: %d\r\n\r\n" % len(b)); out.write(b)
 PY
-out=$(SH_MEM=4G SH_TIMEOUT=60 "$plum" lsp < "$work/session.bin" 2>&1)
+out=$(SH_MEM=256M SH_TIMEOUT=60 "$plum" lsp < "$work/session.bin" 2>&1)
 fail=0
 echo "$out" | grep -q '"textDocumentSync":1' || { echo "FAIL: no capabilities"; fail=1; }
 echo "$out" | grep -q '"completionProvider"' || { echo "FAIL: completion not advertised"; fail=1; }

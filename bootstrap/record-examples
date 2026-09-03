@@ -42,7 +42,7 @@ for dir in examples/*/; do
         for c in "$dir"/native/*.c; do [ -e "$c" ] && native_flag="$native_flag --link-c $c"; done
     fi
 
-    SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh emit-llvm "$dir" > "$work/ir.ll" 2>"$work/err" || {
+    SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh emit-llvm "$dir" > "$work/ir.ll" 2>"$work/err" || {
         printf '  FAIL  %-24s %s\n' "$name" "$(head -1 "$work/err")"; continue; }
     clang_flags="$(printf '%s %s' "${link_flags[$name]:-}" "$native_flag" | sed 's/--link-lib */-l/g; s/--link-c *//g')"
     clang -O2 -Wno-override-module "$work/ir.ll" \

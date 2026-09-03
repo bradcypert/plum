@@ -33,7 +33,7 @@ fail=0
 
 build_one() {   # <label> <outfile> [flags...]
     local label="$1" out="$2"; shift 2
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/p" -o "$out" "$@" > "$work/$label.err" 2>&1; then
+    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/p" -o "$out" "$@" > "$work/$label.err" 2>&1; then
         echo "FAIL: $label build failed: $(head -n 1 "$work/$label.err")" >&2
         fail=1
         return 1
@@ -65,16 +65,16 @@ fi
 
 # --- deep tail recursion, in BOTH modes ---
 #
-# This backend emits no `musttail`. A tail-recursive function is a real
-# call chain in the IR and stays one unless the C compiler turns it into
-# a loop -- so running in constant stack space is a property of the
-# optimisation level, not a guarantee the language enforces.
+# A self-call in tail position is now emitted as a `musttail` call, so
+# constant stack space is a guarantee of the compiler rather than of the
+# optimisation level. It did not used to be, which is why this exists:
+# the first version of debug mode used `-O0`, and this program
+# segfaulted in a default build while returning in a release one. For a
+# language whose README promises constant stack space, a default build
+# that overflows is not a debug build, it is a broken one.
 #
-# That made the debug flags load-bearing rather than cosmetic. The first
-# version of debug mode used `-O0`, and this program segfaulted in a
-# default build while returning in a release one. For a language whose
-# README promises constant stack space, a default build that overflows
-# is not a debug build, it is a broken one.
+# Kept at every mode anyway. The claim is about the LANGUAGE, and a
+# guarantee only checked where it is easiest to hold is not checked.
 mkdir -p "$work/tc"
 cat > "$work/tc/main.plum" <<'PLUM'
 let count (n: Int) (acc: Int): Int = if n == 0 { acc } else { count(n - 1, acc + n) }
@@ -83,7 +83,7 @@ PLUM
 
 tail_recursion() {   # <label> [flags...]
     local label="$1"; shift
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tc" -o "$work/tc.bin" "$@" > "$work/tc-$label.err" 2>&1; then
+    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tc" -o "$work/tc.bin" "$@" > "$work/tc-$label.err" 2>&1; then
         echo "FAIL: $label tail-recursion build failed: $(head -n 1 "$work/tc-$label.err")" >&2
         fail=1
         return
@@ -96,6 +96,13 @@ tail_recursion() {   # <label> [flags...]
 
 tail_recursion debug
 tail_recursion release --release
+# WITH tracing too. A shadow call stack whose pop sat before the `ret`
+# put a side-effecting call between the recursive call and the return of
+# its value, which stopped the optimiser rewriting the recursion as a
+# loop: this same program segfaulted. Each path now pays its own pop and
+# a self-call pops BEFORE calling, so there is nothing in between. See
+# DESIGN.md, "Traces AND tail calls: one pop per path".
+tail_recursion traced --trace
 
 # The same depth with a HEAP-TYPED parameter, which is the case that
 # silently did not work. A function's slot releases are emitted just
@@ -113,7 +120,7 @@ PLUM
 
 heap_tail_recursion() {   # <label> [flags...]
     local label="$1"; shift
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/th" -o "$work/th.bin" "$@" > "$work/th-$label.err" 2>&1; then
+    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/th" -o "$work/th.bin" "$@" > "$work/th-$label.err" 2>&1; then
         echo "FAIL: $label heap tail-recursion build failed: $(head -n 1 "$work/th-$label.err")" >&2
         fail=1
         return
@@ -142,7 +149,7 @@ PLUM
 
 mutual_tail_recursion() {   # <label> [flags...]
     local label="$1"; shift
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tm" -o "$work/tm.bin" "$@" > "$work/tm-$label.err" 2>&1; then
+    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tm" -o "$work/tm.bin" "$@" > "$work/tm-$label.err" 2>&1; then
         echo "FAIL: $label mutual tail-recursion build failed: $(head -n 1 "$work/tm-$label.err")" >&2
         fail=1
         return
@@ -156,13 +163,6 @@ mutual_tail_recursion() {   # <label> [flags...]
 mutual_tail_recursion debug
 mutual_tail_recursion release --release
 mutual_tail_recursion traced --trace
-# WITH tracing too. A shadow call stack whose pop sat before the `ret`
-# put a side-effecting call between the recursive call and the return of
-# its value, which stops the optimiser rewriting the recursion as a
-# loop: this same program segfaulted. Each path now pays its own pop and
-# a self-call pops BEFORE calling, so there is nothing in between. See
-# TRACING.md section 6.
-tail_recursion traced --trace
 
 # --- `--trace` ---
 #
@@ -178,7 +178,7 @@ PLUM
 
 for label in plain traced; do
     if [ "$label" = traced ]; then set -- --trace; else set --; fi
-    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tr" -o "$work/tr.bin" "$@" > "$work/tr-$label.err" 2>&1; then
+    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tr" -o "$work/tr.bin" "$@" > "$work/tr-$label.err" 2>&1; then
         echo "FAIL: $label trace build failed: $(head -n 1 "$work/tr-$label.err")" >&2
         fail=1
         continue
@@ -222,7 +222,7 @@ let main (): Unit = {
 }
 PLUM
 
-if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tb" -o "$work/tb.bin" --trace > "$work/tb.err" 2>&1; then
+if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tb" -o "$work/tb.bin" --trace > "$work/tb.err" 2>&1; then
     echo "FAIL: traced balance build failed: $(head -n 1 "$work/tb.err")" >&2
     fail=1
 else
@@ -249,7 +249,7 @@ let count (n: Int) (acc: Int): Int = if n == 0 { acc / (acc - acc) } else { coun
 let main (): Unit = println(count(3000000, 0).to_string())
 PLUM
 
-if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/td" -o "$work/td.bin" --trace > "$work/td.err" 2>&1; then
+if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/td" -o "$work/td.bin" --trace > "$work/td.err" 2>&1; then
     echo "FAIL: traced collapse build failed: $(head -n 1 "$work/td.err")" >&2
     fail=1
 else

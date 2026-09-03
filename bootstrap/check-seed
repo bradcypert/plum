@@ -72,13 +72,13 @@ echo "seed -> compiler (clang only) ..."
     echo "clang could not build the seed:" >&2; cat "$work/build.log" >&2; exit 1; }
 
 echo "seed compiler -> today's source ..."
-(cd "$work" && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh.seed build "$root/bootstrap/self_host" -o "$work/sh.next" > "$work/next.log" 2>&1) || {
+(cd "$work" && SH_MEM="${SH_MEM:-1G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh.seed build "$root/bootstrap/self_host" -o "$work/sh.next" > "$work/next.log" 2>&1) || {
     echo "the seed compiler could not build today's source -- run bootstrap/gen-seed:" >&2
     head -20 "$work/next.log" >&2; exit 1; }
 
 echo "comparing what it produces against the current compiler ..."
-(cd "$work" && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh.next emit-llvm "$root/bootstrap/self_host" > "$work/next.ll" 2>&1)
-SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > "$work/cur.ll" 2>&1
+(cd "$work" && SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh.next emit-llvm "$root/bootstrap/self_host" > "$work/next.ll" 2>&1)
+SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > "$work/cur.ll" 2>&1
 
 if cmp -s "$work/next.ll" "$work/cur.ll"; then
     echo "SEED OK: bootstraps to a compiler identical to the current one"

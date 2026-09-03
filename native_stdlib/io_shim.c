@@ -125,7 +125,8 @@ void stdout_flush(void) { fflush(stdout); }
 // STACK ADDRESS instead both failed -- an `alloca` handed out escapes
 // and blocks the same optimisation, and `__builtin_frame_address(1)`
 // does not order by call depth (a four-deep chain reported 2b0, 2a0,
-// 2a0, 2b0). TRACING.md has both in full.
+// 2a0, 2b0). DESIGN.md has both in full, under "Stack traces, and
+// the thing they cost".
 #include <stdio.h>
 
 #define PLUM_TRACE_CAP 256

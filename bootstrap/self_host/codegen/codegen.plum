@@ -594,8 +594,8 @@ let cg_frame_visible (name: String): Bool = !parser.bare_type_name(name).starts_
 // Pushed on entry. The matching pop is NOT in the epilogue: every path
 // through the body pays its own pop (see `cg_expr_t`), because a pop
 // sitting between a self-recursive call and the `ret` is exactly what
-// stops LLVM turning that recursion into a loop. TRACING.md §6 records
-// the measurements behind this shape.
+// stops LLVM turning that recursion into a loop. DESIGN.md's "Traces
+// AND tail calls" entry records the measurements behind this shape.
 let cg_frame_push (sym: String) (shown: String): String =
     if DEBUG_FRAMES.get() && cg_frame_visible(shown) {
         "  call void @plum_frame_push(ptr @.fname_".concat(sym).concat(")\n")
@@ -680,7 +680,7 @@ let cg_tail_site (unit: Unit): Int = {
 // trade for a feature that exists to produce stack traces.
 //
 // So only cyclic tail calls return early. Everything else keeps the
-// behaviour section 6 established.
+// behaviour the per-path pop rule established.
 //
 // The search is FUEL-BOUNDED and gives up by answering "not cyclic",
 // which is the safe direction: a missed cycle keeps today's behaviour
@@ -880,13 +880,14 @@ let cg_or_const (p: CgProgram) (n: Int) (e: typecheck.TExpr) (otherwise: Emit): 
 // Paying it at the shared `ret` puts a side-effecting call between a
 // self-recursive call and the return of its value, which is precisely
 // what blocks LLVM's tail-recursion elimination — measured in
-// TRACING.md §4–5. Paying it per path dissolves the conflict:
+// DESIGN.md, "Stack traces, and the thing they cost". Paying it per
+// path dissolves the conflict:
 //
 //   * a SELF-call in tail position pops BEFORE the call (`cg_fn_call`),
 //     leaving nothing between the call and the `ret`, so the recursion
 //     becomes a loop again — and the loop stays balanced, because TRE
 //     hoists only the allocas into its new entry block, so the push
-//     rides inside the loop with the pop (§6b);
+//     rides inside the loop with the pop;
 //   * every other tail expression pops AFTER its value, in its own
 //     branch, before the jump to the merge block.
 //

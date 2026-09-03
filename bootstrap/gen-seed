@@ -12,7 +12,7 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
-SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > bootstrap/seed/plum.ll
+SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > bootstrap/seed/plum.ll
 echo "wrote bootstrap/seed/plum.ll ($(wc -l < bootstrap/seed/plum.ll) lines, $(du -h bootstrap/seed/plum.ll | cut -f1))"
 
 # A fingerprint of the shim sources baked into the seed just now.

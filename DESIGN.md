@@ -17143,10 +17143,19 @@ ignored them. Verified against the 0.0.19 binary, where it fails.
 
 The first version of debug mode used `-O0`, and it introduced a crash.
 
-This backend emits no `musttail`. A tail-recursive function is a real
-call chain in the IR and stays one unless the C compiler turns it into a
-loop, so constant stack space is a property of the OPTIMISATION LEVEL,
-not something the compiler guarantees. `-O0` does not do the transform:
+**Superseded 2026-09-02** in the part that matters most: this backend
+now DOES emit `musttail`, and constant stack space is a guarantee of the
+compiler rather than of the optimisation level. See "Traces AND tail
+calls" and the two entries after it. The reasoning below is why `-Og`
+was chosen at the time and is kept because the measurement habit it
+records is the point; the flag choice still stands, it is simply no
+longer load-bearing.
+
+At the time, this backend emitted no `musttail`. A tail-recursive
+function was a real call chain in the IR and stayed one unless the C
+compiler turned it into a loop, so constant stack space was a property
+of the OPTIMISATION LEVEL, not something the compiler guaranteed. `-O0`
+does not do the transform:
 
     let count (n: Int) (acc: Int): Int =
         if n == 0 { acc } else { count(n - 1, acc + n) }
@@ -17160,9 +17169,11 @@ debugging", so that is the one.
 
 The README's claim was wrong in its own right and is corrected: it said
 tail calls are "guaranteed eliminated (compiled to a real LLVM
-`musttail` call)". No `musttail` is emitted anywhere in this backend.
-The behaviour is real, the mechanism named for it was not, and nothing
-had ever run a deep tail recursion to find out. `check-build-modes` runs
+`musttail` call)". At the time no `musttail` was emitted anywhere in
+this backend. The behaviour was real, the mechanism named for it was
+not, and nothing had ever run a deep tail recursion to find out. (The
+claim became true later, on purpose and with tests, which is a different
+thing from having been right by accident.) `check-build-modes` runs
 one in BOTH modes now, and was verified by putting `-O0` back and
 watching it fail.
 
@@ -17233,10 +17244,10 @@ popping before them -- correct, because a tail call really does replace
 its caller's frame. That is a change to expression emission, not to the
 runtime, and it is the honest next step rather than a fourth trick.
 
-`TRACING.md` is the long form: the emitted IR before and after, the
-`tailrecurse` block that appears in one and not the other, both failed
-designs with their measurements, and what `check-build-modes` asserts so
-none of it drifts.
+The three entries that follow are what happened when that next step was
+taken, and they end somewhere this one does not anticipate: with
+`musttail` emitted, with the optimisation level no longer load-bearing,
+and with a segfault fixed that had nothing to do with tracing.
 
 ### The habit that kept this from shipping broken
 
@@ -17499,3 +17510,94 @@ Asserted at three million in all three modes by `check-build-modes`
 (non-vacuous: the pre-fix compiler fails all three), and for ownership
 by `exec_corpus/tail_call_heap`, which now also carries a mutual pair
 and a mismatched-prototype pair under ASan.
+
+### What all four entries are pinned by, in one place
+
+Tracing and tail calls are now asserted by two harnesses with a clean
+division of labour, and it is worth stating once rather than four times.
+
+`bootstrap/check-build-modes` owns the STACK-SPACE claims, all at three
+million deep, and fails if any overflows:
+
+  * `count` over two `Int`s, in the default, `--release` and `--trace`
+    builds;
+  * the same over a heap-typed parameter with a heap `let`, which is the
+    shape that segfaulted;
+  * a MUTUAL pair over a heap parameter, at the same depth in the same
+    three modes.
+
+It owns the TRACE SHAPES too: that a trace appears only with `--trace`,
+that it names the failing function and its caller, that no stale frame
+survives a returned recursion, that a tail-recursive chain shows exactly
+one frame, that an ACYCLIC tail call keeps its frame (`middle` still
+appears in `deepest`'s trace), and that **stdout is byte-identical with
+and without the flag** -- `bootstrap/abort_corpus` compares the abort
+message exactly, so a trace must stay on stderr.
+
+`bootstrap/exec_corpus/tail_call_heap` owns the OWNERSHIP claim, which
+that harness cannot check: it runs under ASan with leak detection and
+pins that returning early still releases everything, including a match
+scrutinee dropped after the arms merge. Deliberately shallow -- depth
+belongs to the harness, ownership to the fixture.
+
+Every one of these was confirmed NON-VACUOUS by rebuilding the broken
+compiler and watching the assertion fail: the pre-fix binary fails the
+depth assertions in all three modes, and the leaky intermediate fails
+the ASan fixture. An assertion nobody has seen fail is a guess about
+what it tests.
+
+And the reason there are two harnesses rather than one: the `-O0`
+regression, the heap-parameter segfault, and the mutual-recursion
+segfault were each found AFTER the fact by a test that ran the feature
+rather than inspected the flags. Three fixtures reached for `Int`
+parameters, and `Int` is precisely the type with nothing to release.
+
+## The memory guard was 22x too loose to be a test (2026-09-03)
+
+`./sh` runs the compiler under a cgroup `MemoryMax`, and the harnesses
+passed `SH_MEM=4G` or `8G`. Peak RSS was then measured per invocation
+across every harness, and the worst case anywhere was **369 MB**. The
+ceilings were 22x that.
+
+That is fine for one of the guard's two jobs and useless for the other.
+Stopping a runaway before it takes the terminal down -- the 44.9 GB OOM
+that motivated this wrapper -- needs any ceiling below RAM. CATCHING A
+REGRESSION needs one close to what the work actually costs. A guard that
+never fires is not a guard; it is a comment with a syscall.
+
+Measured, with a recorder around `sh.real` reading
+`getrusage(RUSAGE_CHILDREN)`:
+
+| operation | peak RSS | what is in it |
+|---|---|---|
+| `check`, whole compiler | 28 MB | Plum only |
+| `emit-llvm`, whole compiler | 57 MB | Plum only |
+| most corpus fixtures | 13 MB | Plum only |
+| `build`, small program | ~160 MB | Plum + clang |
+| `build`, whole compiler | 369 MB | Plum + clang on 264K lines |
+
+Two facts set the tiers. clang runs INSIDE the guarded cgroup, so it
+counts against the ceiling -- which is why anything that builds needs
+loose headroom that is really clang's, not ours. And the harnesses that
+never invoke clang are therefore the ones that can be tight.
+
+  * **256M** -- compiler only (`emit-llvm`, `check`, `lsp`, `complete`).
+  * **512M** -- builds a small program.
+  * **1G** -- builds the whole compiler; also `./sh`'s own default,
+    since that is what a person gets running `./sh build` by hand.
+
+**The 256M tier is the one with a job.** Before tail calls in a cycle
+started returning early, whole-compiler `emit-llvm` peaked at 731 MB;
+it is 57 MB now. Only a ceiling in that range notices if it comes back,
+and this was confirmed rather than assumed -- the pre-fix binary is
+KILLED at 256M and the current one is not:
+
+    pre-fix compiler (731MB)     KILLED at 256M (guard fired)
+    current compiler (57MB)      SURVIVED 256M
+
+Which is the same standard applied to every assertion in this area: an
+assertion nobody has watched fail is a guess about what it tests.
+
+`bootstrap/cross-check` is deliberately left at 4G -- it drives
+`zig cc`, whose footprint has not been measured here, and inventing a
+number for it would be exactly the guess this entry is about.

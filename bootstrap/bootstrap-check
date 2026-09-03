@@ -27,7 +27,7 @@ work="$(mktemp -d -t plum-bootstrap-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
 echo "stage 1 -> IR ..."
-SH_TIMEOUT="${SH_TIMEOUT:-300}" SH_MEM="${SH_MEM:-8G}" ./sh emit-llvm bootstrap/self_host > "$work/stage2.ll"
+SH_TIMEOUT="${SH_TIMEOUT:-300}" SH_MEM="${SH_MEM:-256M}" ./sh emit-llvm bootstrap/self_host > "$work/stage2.ll"
 if ! head -n 1 "$work/stage2.ll" | grep -q "Stage 5 runtime"; then
     echo "stage 1 failed to emit:" >&2
     grep -m 1 "self-hosted" "$work/stage2.ll" >&2 || head -n 3 "$work/stage2.ll" >&2

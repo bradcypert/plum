@@ -30,7 +30,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
 plum="${1:-./sh}"
-out="$(SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$plum" test bootstrap/properties 2>&1)"
+out="$(SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$plum" test bootstrap/properties 2>&1)"
 rc=$?
 
 if [ $rc -ne 0 ] || ! printf '%s' "$out" | grep -q "0 failed"; then

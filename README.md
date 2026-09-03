@@ -990,7 +990,7 @@ still turn a tail-recursive call into a loop. Each path through a
 function pops its own frame, and a call to the function *itself* in tail
 position pops *before* calling, so nothing sits between that call and
 the return. The investigation, including two designs that failed, is in
-[TRACING.md](TRACING.md).
+[DESIGN.md](DESIGN.md).
 
 One consequence is worth knowing: a tail-recursive chain shows **one**
 frame, not one per iteration.

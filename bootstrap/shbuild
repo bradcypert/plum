@@ -34,7 +34,7 @@ trap 'rm -f "$ll"' EXIT
 # any other -- so `plum check` on an ill-typed program printed a trace of
 # the COMPILER's own internals alongside the diagnostic. Useful when
 # debugging the compiler, noise for everyone else.
-SH_TIMEOUT="${SH_TIMEOUT:-60}" SH_MEM="${SH_MEM:-2G}" "$root/sh" emit-llvm "$src" --release > "$ll"
+SH_TIMEOUT="${SH_TIMEOUT:-60}" SH_MEM="${SH_MEM:-256M}" "$root/sh" emit-llvm "$src" --release > "$ll"
 
 # The self-hosted compiler reports errors via `panic_raw`, which writes
 # to STDOUT -- so a failure lands in the .ll file rather than on stderr,

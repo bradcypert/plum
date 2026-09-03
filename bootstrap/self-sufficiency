@@ -30,19 +30,19 @@ cp sh.real "$work/gen1"
 # path resolved relative to `.` fails here rather than in someone's
 # install.
 echo "gen1 -> gen2 (from $work) ..."
-(cd "$work" && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./gen1 build "$root/bootstrap/self_host" -o "$work/gen2" > "$work/gen2.log" 2>&1) || {
+(cd "$work" && SH_MEM="${SH_MEM:-1G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./gen1 build "$root/bootstrap/self_host" -o "$work/gen2" > "$work/gen2.log" 2>&1) || {
     echo "gen1 could not build gen2:" >&2; cat "$work/gen2.log" >&2; exit 1; }
 
 echo "gen2 -> gen3 (from /tmp) ..."
-(cd /tmp && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/gen2" build "$root/bootstrap/self_host" -o "$work/gen3" > "$work/gen3.log" 2>&1) || {
+(cd /tmp && SH_MEM="${SH_MEM:-1G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/gen2" build "$root/bootstrap/self_host" -o "$work/gen3" > "$work/gen3.log" 2>&1) || {
     echo "gen2 could not build gen3:" >&2; cat "$work/gen3.log" >&2; exit 1; }
 
 # The binaries themselves are not compared: clang embeds paths and build
 # ids, so two runs differ for reasons that say nothing about the
 # compiler. The IR each one EMITS is the real artifact.
 echo "comparing what gen2 and gen3 emit ..."
-(cd /tmp && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/gen2" emit-llvm "$root/bootstrap/self_host" > "$work/g2.ll" 2>&1)
-(cd /tmp && SH_MEM="${SH_MEM:-8G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/gen3" emit-llvm "$root/bootstrap/self_host" > "$work/g3.ll" 2>&1)
+(cd /tmp && SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/gen2" emit-llvm "$root/bootstrap/self_host" > "$work/g2.ll" 2>&1)
+(cd /tmp && SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/gen3" emit-llvm "$root/bootstrap/self_host" > "$work/g3.ll" 2>&1)
 
 if cmp -s "$work/g2.ll" "$work/g3.ll"; then
     echo "SELF-SUFFICIENT: gen2 and gen3 emit byte-identical IR ($(wc -l < "$work/g2.ll") lines), no Rust compiler involved"
