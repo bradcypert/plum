@@ -112,24 +112,71 @@ elif grep -qE "DISubprogram|DICompileUnit|!dbg !" "$work/rel.ll"; then
 fi
 
 # --- the linked binary, where it actually matters ---
-if command -v addr2line > /dev/null 2>&1; then
-    if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/p" -o "$work/p.bin" > "$work/build.err" 2>&1; then
-        echo "FAIL: debug build failed: $(head -n 1 "$work/build.err")" >&2
-        fail=1
-    else
-        addr="$(nm "$work/p.bin" 2>/dev/null | grep -E ' T plum_top$' | head -n 1 | awk '{print $1}')"
-        if [ -z "$addr" ]; then
-            echo "  (skipped addr2line: no plum_top symbol -- stripped?)"
-        else
-            line="$(addr2line -e "$work/p.bin" "0x$addr" 2>/dev/null)"
-            case "$line" in
-                *main.plum:2) ;;
-                *) echo "FAIL: addr2line puts plum_top at '$line', expected main.plum:2" >&2; fail=1 ;;
-            esac
-        fi
-    fi
+#
+# The IR above is what this compiler WROTE. This is what a debugger
+# actually reads, and the two can differ -- most importantly on macOS,
+# where the linker leaves DWARF in the `.o` files and only a debug map
+# in the executable. `plum build` pipes IR through one clang invocation
+# into a temp directory and keeps no `.o`, so if nothing resolves that
+# map the line information is gone by the time anyone looks for it.
+# Whether clang's driver already runs `dsymutil` for a compile-and-link
+# in one step is exactly the question this is here to answer, on a real
+# Mac, rather than be assumed either way.
+if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/p" -o "$work/p.bin" > "$work/build.err" 2>&1; then
+    echo "FAIL: debug build failed: $(head -n 1 "$work/build.err")" >&2
+    fail=1
 else
-    echo "  (skipped addr2line: binutils not present)"
+    # Whichever dumper this platform has. macOS ships `dwarfdump` and no
+    # `addr2line`; Linux is usually the other way round.
+    dwarf_lines() {
+        if command -v llvm-dwarfdump > /dev/null 2>&1; then llvm-dwarfdump --debug-line "$1" 2>/dev/null
+        elif command -v dwarfdump > /dev/null 2>&1; then dwarfdump --debug-line "$1" 2>/dev/null
+        elif command -v objdump > /dev/null 2>&1; then objdump --dwarf=decodedline "$1" 2>/dev/null
+        fi
+    }
+
+    lines="$(dwarf_lines "$work/p.bin")"
+    where="the executable"
+    # A `.dSYM` beside it counts: that is where a Mach-O toolchain puts
+    # line information, and lldb finds it there.
+    # `case`, not `printf | grep -q`: grep exits on its first match and
+    # closes the pipe, printf dies of SIGPIPE, and `set -o pipefail`
+    # then reports the whole pipeline as failed -- so the check said
+    # "no line information" about output that plainly contained it.
+    case "$lines" in *main.plum*) ;; *)
+        if [ -d "$work/p.bin.dSYM" ]; then
+            lines="$(dwarf_lines "$work/p.bin.dSYM/Contents/Resources/DWARF/p.bin")"
+            where="its .dSYM bundle"
+        fi ;;
+    esac
+
+    if [ -z "$(command -v llvm-dwarfdump)$(command -v dwarfdump)$(command -v objdump)" ]; then
+        echo "  (skipped the binary: no DWARF dumper on this platform)"
+    else
+        case "$lines" in
+            *main.plum*) printf '  line information reaches %s\n' "$where" ;;
+            *)
+        echo "FAIL: the built binary has no Plum line information, in itself or a .dSYM." >&2
+        echo "      On Mach-O this means the debug map was never resolved -- 'plum build'" >&2
+        echo "      keeps no .o files, so it needs to run dsymutil." >&2
+        fail=1 ;;
+        esac
+    fi
+fi
+
+# The precise question -- does one address resolve to the right line --
+# where a tool that answers it exists.
+if command -v addr2line > /dev/null 2>&1 && [ -f "$work/p.bin" ]; then
+    addr="$(nm "$work/p.bin" 2>/dev/null | grep -E ' T plum_top$' | head -n 1 | awk '{print $1}')"
+    if [ -z "$addr" ]; then
+        echo "  (skipped addr2line: no plum_top symbol -- stripped?)"
+    else
+        line="$(addr2line -e "$work/p.bin" "0x$addr" 2>/dev/null)"
+        case "$line" in
+            *main.plum:2) ;;
+            *) echo "FAIL: addr2line puts plum_top at '$line', expected main.plum:2" >&2; fail=1 ;;
+        esac
+    fi
 fi
 
 [ $fail -ne 0 ] && exit 1

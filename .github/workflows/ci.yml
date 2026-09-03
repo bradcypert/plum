@@ -216,6 +216,14 @@ jobs:
       - name: the compiler stays within its memory ceilings
         run: ./bootstrap/mem-check
 
+      # Here above all, because Mach-O is where line information is most
+      # likely to go missing: the linker leaves DWARF in the `.o` files
+      # and `plum build` keeps none. Whether clang's driver already runs
+      # `dsymutil` for a one-step compile-and-link is a question about a
+      # real Mac, so it is asked on one.
+      - name: debug builds carry Plum line information
+        run: ./bootstrap/debug-info-check
+
       # The language server is the one feature that was BROKEN on macOS
       # and fixed blind: it re-invokes the compiler through
       # `/proc/self/exe`, which does not exist here, so it could never

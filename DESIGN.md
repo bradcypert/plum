@@ -17771,3 +17771,30 @@ what a debugger actually reads. It also asserts a location exists for
 each STATEMENT line -- the function-level version passed every
 subprogram assertion while putting all four statements on one line,
 which is what that check would have missed.
+
+### macOS is asked, not assumed
+
+On Mach-O the linker leaves DWARF in the `.o` files and puts only a
+debug map in the executable; `dsymutil` is what resolves it. `plum
+build` pipes IR through one clang invocation into a temp directory and
+keeps no `.o`, so if nothing runs `dsymutil` the line information is
+gone before anyone looks for it.
+
+Whether clang's driver already does that for a compile-and-link in one
+step is a question about a real Mac. Rather than add a `dsymutil` step
+on the strength of a belief -- two beliefs about macOS have already been
+wrong here, `timeout` and the platform's memory numbers -- the harness
+was made able to ASK, and added to the macOS job.
+
+That meant its binary check could no longer depend on `addr2line`,
+which macOS does not ship. It now takes whichever dumper exists and
+accepts line information found either in the executable or in a `.dSYM`
+beside it, which is where a Mach-O toolchain would put it.
+
+The rewrite immediately produced a false FAIL on Linux, on a binary that
+plainly had the information. `printf '%s' "$lines" | grep -q main.plum`
+looks total and is not: `grep -q` exits at its first match and closes
+the pipe, `printf` dies of SIGPIPE, and `set -o pipefail` reports the
+pipeline as failed. Replaced with `case`, which needs no pipe. The same
+mistake truncated the evidence when the `!dbg` guard was first being
+diagnosed, an hour earlier, in a `grep | head -4`.
