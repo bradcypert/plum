@@ -226,7 +226,10 @@ pub struct CgProgram { fns: Array[typecheck.TFn], globals: Array[typecheck.TFn],
     // funnelling through the shared epilogue. See `cg_tail_self_call`.
     // `tail_ok` is false on the first of `cg_fn`'s two passes, so the
     // release text is discovered before anything relies on it.
-    tail_rel: String, tail_ok: Bool }
+    tail_rel: String, tail_ok: Bool,
+    // This function's own LLVM prototype, so a cyclic tail call can
+    // tell whether `musttail` is legal against the callee's.
+    cur_proto: String }
 
 // --- Cell layouts ---
 //
@@ -404,6 +407,7 @@ pub let cg_build_program (program: parser.ProgramNode): CgProgram =
         cur_frame: false,
         tail_rel: "",
         tail_ok: false,
+        cur_proto: "",
     }
 
 // `next_tag` runs across the whole program, so every variant in every
@@ -658,6 +662,74 @@ let cg_tail_site (unit: Unit): Int = {
     TAIL_SITE.set(k + 1);
     k
 }
+
+// --- Is this tail call part of a recursion CYCLE? ---
+//
+// A self-call always is. A call to a DIFFERENT function is one only if
+// that function can call back, directly or through others -- `ping`
+// tail-calling `pong` tail-calling `ping`.
+//
+// The distinction decides whether the caller's frame may be replaced,
+// and it is the same argument the self-call case makes. A cyclic tail
+// chain repeats without bound, so its frames are noise: collapsing
+// three million alternating `ping`/`pong` entries into one loses
+// nothing a reader wanted. An ACYCLIC tail call happens once, so its
+// frame is real information -- `middle` genuinely called `deepest` and
+// a trace should say so. Replacing frames there would quietly delete
+// every one-line delegation from every stack trace, which is a bad
+// trade for a feature that exists to produce stack traces.
+//
+// So only cyclic tail calls return early. Everything else keeps the
+// behaviour section 6 established.
+//
+// The search is FUEL-BOUNDED and gives up by answering "not cyclic",
+// which is the safe direction: a missed cycle keeps today's behaviour
+// for that call, while a false positive would delete a frame that
+// should have been kept. Real mutual recursion is two or three
+// functions, so the bound is generous relative to what it must find.
+let CYCLE_FUEL: Int = 400
+
+let cg_reaches (p: CgProgram) (pending: Array[CgInst]) (target: String) (seen: Array[String]) (fuel: Int): Bool =
+    if Array.is_empty(pending) || fuel > CYCLE_FUEL { false }
+    else {
+        let head = pending[0];
+        let rest = Array.slice(pending, 1, pending.len());
+        let s = cg_sym(head.module, head.name, head.targs);
+        if s == target { true }
+        else if Array.contains(seen, s) { cg_reaches(p, rest, target, seen, fuel + 1) }
+        // A runtime-implemented name has no Plum body to walk, so it
+        // cannot lead back to anything.
+        else if Option.is_some(cg_runtime_fn(head.name)) || head.name == "Array.concat" {
+            cg_reaches(p, rest, target, seen.push(s), fuel + 1)
+        }
+        else { match cg_find_tfn(p, head.module, head.name, 0) {
+            None => cg_reaches(p, rest, target, seen.push(s), fuel + 1),
+            Some(def) => {
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst,
+                    generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+                cg_reaches(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), target, seen.push(s), fuel + 1)
+            },
+        } }
+    }
+
+// `musttail` is only legal when the two prototypes match exactly, which
+// a self-call has by construction and a mutual one only sometimes. When
+// they differ the call is emitted as an ordinary one followed by `ret`,
+// which still lets the optimiser reuse the frame from `-Og` up -- the
+// same partial guarantee mutual recursion over `Int` has always had.
+let cg_proto (ret: CgTy) (ptys: Array[CgTy]): String =
+    cg_llvm_ty(ret).concat("(").concat(cg_join_commas(Array.map(ptys, |t| cg_llvm_ty(t)))).concat(")")
+
+let cg_callee_proto (p: CgProgram) (module_name: String) (name: String) (targs: Array[typecheck.ITy]): Option[String] =
+    match cg_find_tfn(p, module_name, name, 0) {
+        None => None,
+        Some(def) => {
+            let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst,
+                generics: def.generics, targs: targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
+            Some(cg_proto(cg_of_ity(cg_concrete(inner, def.ret)),
+                Array.map(def.params, |q| cg_of_ity(cg_concrete(inner, q.ty)))))
+        },
+    }
 
 // The releases, renamed for this site. Each one names a temporary after
 // its slot (`%s1_end`), so emitting the same text twice in one function
@@ -2240,9 +2312,22 @@ let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String
     // instantiation of the same generic function is correctly not a
     // self-call: it is a different symbol and a real frame.
     let is_self = p.cur_sym != "" && sym == "@".concat(p.cur_sym);
+    // A tail call may return early only if it is part of a recursion
+    // CYCLE -- see `cg_reaches`. The graph walk is gated behind
+    // everything cheap: it runs only on the emitting pass, only in tail
+    // position, and only for a call that is not already a self-call.
+    let cyclic = tail && p.tail_ok && p.cur_sym != ""
+        && (is_self || (cg_has_fn_in(p, module_name, name, 0)
+            && cg_reaches(p, [CgInst { module: module_name, name: name, targs: cg_concrete_list(p, targs, 0, []) }], p.cur_sym, [], 0)));
+    // `musttail` needs the prototypes to match, which a self-call has by
+    // construction. A mutual one that does not still returns directly,
+    // which is what lets the optimiser reuse the frame.
+    let kw = if is_self || Option.unwrap_or(Option.map(cg_callee_proto(p, module_name, name, cg_concrete_list(p, targs, 0, [])), |q| q == p.cur_proto), false) {
+        "musttail call "
+    } else { "call " };
     let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(sym).concat("(").concat(cg_join_commas(a.vals)).concat(")\n")
         .concat(if Option.is_some(cg_runtime_fn(name)) || name == "Array.concat" { cg_dec_args(p, args, a.vals, 0, "") } else { "" });
-    let code = if tail && is_self && p.tail_ok {
+    let code = if cyclic {
         // Releases first, then return the call's own result -- see
         // `cg_tail_site` for why this shape and why the dead label.
         let k = cg_tail_site(());
@@ -2253,7 +2338,7 @@ let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String
             // uses, just earlier.
             .concat(pending)
             .concat(cg_tail_releases(p, k))
-            .concat("  ").concat(reg).concat(" = musttail call ").concat(cg_llvm_ty(ret)).concat(" ").concat(sym)
+            .concat("  ").concat(reg).concat(" = ").concat(kw).concat(cg_llvm_ty(ret)).concat(" ").concat(sym)
             .concat("(").concat(cg_join_commas(a.vals)).concat(")\n")
             .concat("  ret ").concat(cg_llvm_ty(ret)).concat(" ").concat(reg).concat("\n")
             .concat("Ltail").concat(k.to_string()).concat(":\n")
@@ -4689,7 +4774,7 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     let shown = cg_frame_name(def.module, def.name);
     let framed = DEBUG_FRAMES.get() && cg_frame_visible(shown);
     let p = CgProgram { fns: p0.fns, globals: p0.globals, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs,
-        movable: mov, cur_sym: sym, cur_frame: framed, tail_rel: "", tail_ok: false };
+        movable: mov, cur_sym: sym, cur_frame: framed, tail_rel: "", tail_ok: false, cur_proto: "" };
     let params = cg_params_of(p, def.params, 0, []);
     let entry = cg_param_slots(params, Array.map(def.params, |q| cg_concrete(p, q.ty)), 0, [], "", "");
     let ret = cg_of_ity(cg_concrete(p, def.ret));
@@ -4709,7 +4794,8 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     let dry = cg_expr_t(p, entry.env, n0, lbody, true, "");
     let rel_all = dry.releases.concat(entry.releases);
     let p2 = CgProgram { fns: p0.fns, globals: p0.globals, ctx: p0.ctx, enums: p0.enums, subst: def.subst, generics: def.generics, targs: targs,
-        movable: mov, cur_sym: sym, cur_frame: framed, tail_rel: rel_all, tail_ok: true };
+        movable: mov, cur_sym: sym, cur_frame: framed, tail_rel: rel_all, tail_ok: true,
+        cur_proto: cg_proto(ret, Array.map(def.params, |q| cg_of_ity(cg_concrete(p, q.ty)))) };
     let wet = cg_expr_t(p2, entry.env, n0, lbody, true, "");
     // Both passes must number their registers identically, or the
     // release text taken from the first would name slots that mean
@@ -5919,7 +6005,7 @@ let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: Stri
         cg_emit_globals(p, i + 1, n, slots, body)
     } else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
         let ty = cg_of_ity(cg_concrete(gp, g.ret));
         let r = cg_expr(gp, [], n, g.body);
         let slot = cg_global_slot(g.module, g.name).concat(" = global ").concat(cg_llvm_ty(ty)).concat(" ").concat(cg_zero_of(ty)).concat("\n");
@@ -5958,7 +6044,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
                     done
                 },
                 Some(def) => {
-                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false };
+                    let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: head.targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
                     cg_reachable(p, Array.concat(rest, cg_calls_in(inner, def.body, [])), done.push(head), fuel + 1)
                 },
             }
@@ -5976,7 +6062,7 @@ let cg_rel_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[t
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_rel_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
                 let withparams = cg_rel_close_list(inner, Array.map(def.params, |q| cg_concrete(inner, q.ty)), 0, acc);
                 let withret = cg_rel_close(inner, cg_concrete(inner, def.ret), withparams);
                 cg_rel_types_of(p, insts, i + 1, cg_rel_in(inner, def.body, withret))
@@ -6065,7 +6151,7 @@ let cg_eq_types_of (p: CgProgram) (insts: Array[CgInst]) (i: Int) (acc: Array[ty
         match cg_find_tfn(p, insts[i].module, insts[i].name, 0) {
             None => cg_eq_types_of(p, insts, i + 1, acc),
             Some(def) => {
-                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false };
+                let inner = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: def.subst, generics: def.generics, targs: insts[i].targs, movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
                 cg_eq_types_of(p, insts, i + 1, cg_eq_in(inner, def.body, acc))
             },
         }
@@ -6152,7 +6238,7 @@ let cg_global_roots (p: CgProgram) (i: Int) (acc: Array[CgInst]): Array[CgInst] 
     if i >= p.globals.len() { acc }
     else {
         let g = p.globals[i];
-        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false };
+        let gp = CgProgram { fns: p.fns, globals: p.globals, ctx: p.ctx, enums: p.enums, subst: g.subst, generics: [], targs: [], movable: [], cur_sym: "", cur_frame: false, tail_rel: "", tail_ok: false, cur_proto: "" };
         cg_global_roots(p, i + 1, Array.concat(acc, cg_calls_in(gp, g.body, [])))
     }
 

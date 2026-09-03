@@ -17445,3 +17445,57 @@ half at three million deep over a heap parameter in all three modes.
 Both were confirmed non-vacuous by rebuilding the broken compilers: the
 old one fails the depth assertions in all three modes, the leaky
 intermediate fails the ASan fixture.
+
+## Mutual recursion, and the rule that only CYCLES return early (2026-09-02)
+
+The self-recursion fix left the same bug one step out:
+
+```plum
+let ping (n: Int) (s: String): Int = if n == 0 { s.len() } else { pong(n - 1, s) }
+let pong (n: Int) (s: String): Int = if n == 0 { s.len() } else { ping(n - 1, s) }
+```
+
+Segfault at three million, both modes. `ping`'s release sits between its
+tail call to `pong` and the `ret`, for the identical reason. The same
+pair over `Int` was fine -- the THIRD time that asymmetry has hidden
+this bug, since every fixture reached for `Int` parameters.
+
+The mechanism was already built. What needed deciding was WHICH tail
+calls may return early, because returning early means popping the
+caller's frame before the call, and for a call to a different function
+that deletes something a trace wanted.
+
+**The rule is cycles, not tail calls.** A tail call returns early only
+when the callee can reach the caller again. That is the self-call
+argument applied honestly: a cyclic chain repeats without bound so its
+frames are noise, an acyclic one happens once so its frame is fact.
+Both halves measured:
+
+    acyclic (middle -> deepest)      cyclic (ping <-> pong)
+    stack trace:                     stack trace:
+      at deepest                       at ping
+      at middle    <- kept              at main
+      at main
+
+Collapsing `middle` out of `deepest`'s trace would have deleted every
+one-line delegation from every stack trace -- a bad trade for the
+feature that exists to produce stack traces. This keeps them.
+
+`cg_reaches` walks the call graph the monomorphization worklist already
+builds. It is FUEL-BOUNDED and gives up by answering "not cyclic",
+which is the safe direction: a missed cycle keeps the old behaviour for
+that call, while a false positive would delete a frame that should have
+been kept. Gated to the emitting pass, tail position, and non-self calls
+only; whole-compiler build time went 30s -> 31s.
+
+`musttail` needs matching prototypes -- self-calls have them by
+construction, mutual ones only sometimes. Where they differ the call is
+an ordinary one followed by `ret`, which still lets the optimiser reuse
+the frame from `-Og` up. So the all-levels guarantee covers
+self-recursion and prototype-compatible mutual recursion, not every
+cycle; the README says exactly that rather than implying more.
+
+Asserted at three million in all three modes by `check-build-modes`
+(non-vacuous: the pre-fix compiler fails all three), and for ownership
+by `exec_corpus/tail_call_heap`, which now also carries a mutual pair
+and a mismatched-prototype pair under ASan.

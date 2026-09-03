@@ -127,6 +127,35 @@ heap_tail_recursion() {   # <label> [flags...]
 heap_tail_recursion debug
 heap_tail_recursion release --release
 heap_tail_recursion traced --trace
+
+# MUTUAL recursion over a heap parameter -- the same bug one step out.
+# `ping`'s release sat between its tail call to `pong` and the `ret`, so
+# this overflowed while the same pair over `Int` was fine, for exactly
+# the reason the single-function version was. A tail call inside a
+# recursion CYCLE now returns early too.
+mkdir -p "$work/tm"
+cat > "$work/tm/main.plum" <<'PLUM'
+let ping (n: Int) (s: String): Int = if n == 0 { s.len() } else { pong(n - 1, s) }
+let pong (n: Int) (s: String): Int = if n == 0 { s.len() } else { ping(n - 1, s) }
+let main (): Unit = println(ping(3000000, "ab".concat("c")).to_string())
+PLUM
+
+mutual_tail_recursion() {   # <label> [flags...]
+    local label="$1"; shift
+    if ! SH_MEM="${SH_MEM:-4G}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" build "$work/tm" -o "$work/tm.bin" "$@" > "$work/tm-$label.err" 2>&1; then
+        echo "FAIL: $label mutual tail-recursion build failed: $(head -n 1 "$work/tm-$label.err")" >&2
+        fail=1
+        return
+    fi
+    if [ "$("$work/tm.bin" 2>&1)" != "3" ]; then
+        echo "FAIL: deep MUTUAL tail recursion over a heap parameter does not run in the $label build (stack overflow?)" >&2
+        fail=1
+    fi
+}
+
+mutual_tail_recursion debug
+mutual_tail_recursion release --release
+mutual_tail_recursion traced --trace
 # WITH tracing too. A shadow call stack whose pop sat before the `ret`
 # put a side-effecting call between the recursive call and the return of
 # its value, which stops the optimiser rewriting the recursion as a

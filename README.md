@@ -478,12 +478,24 @@ do for you. `bootstrap/check-build-modes` runs a three-million-deep tail
 recursion in the default, `--release` and `--trace` builds, so this
 cannot regress quietly.
 
+**Mutual recursion counts too.** `ping` tail-calling `pong` tail-calling
+`ping` runs in constant stack space as well — any tail call that is part
+of a recursion cycle returns directly. Where the two prototypes happen
+to match it is also a `musttail`; where they do not, the frame is still
+reused from `-Og` up.
+
 This holds whatever the parameter types are. Until 2026-09-02 it did
 not: a function's slot releases are emitted on the way out, so with a
 heap-typed parameter or `let` they sat between the recursive call and
 the return of its value, which stopped the recursion becoming a loop.
 `count` over two `Int`s was fine while the same function over a `String`
 overflowed. Those releases now happen before the call.
+
+One visible consequence, in `--trace` builds: a recursive chain shows
+**one** frame rather than one per call, because a tail call really does
+replace its caller's frame. A tail call that is *not* part of a cycle —
+an ordinary one-line delegation — keeps its frame and still appears in
+traces.
 
 ### Tuples
 

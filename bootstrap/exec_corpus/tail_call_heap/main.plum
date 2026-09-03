@@ -45,9 +45,26 @@ let nested (n: Int) (s: String): Int =
         None => 0,
     }
 
+// MUTUAL recursion, which is the same bug one step out: `ping`'s
+// release sat between its tail call to `pong` and the `ret`. Only tail
+// calls inside a recursion CYCLE return early -- an acyclic one keeps
+// its frame, so ordinary delegations still appear in stack traces.
+let ping (n: Int) (s: String): Int =
+    match Some(s.concat("a")) { Some(t) => if n == 0 { t.len() } else { pong(n - 1, t) }, None => 0 }
+let pong (n: Int) (s: String): Int =
+    match Some(s.concat("b")) { Some(t) => if n == 0 { t.len() } else { ping(n - 1, t) }, None => 0 }
+
+// The two sides have DIFFERENT prototypes, so `musttail` is not legal
+// and the call is an ordinary one followed by `ret`. It still has to
+// release correctly, which is what this checks.
+let odd_a (n: Int) (s: String): Int = if n == 0 { s.len() } else { odd_b(n - 1, [s.concat("c")]) }
+let odd_b (n: Int) (xs: Array[String]): Int = if n == 0 { xs.len() } else { odd_a(n - 1, xs[0]) }
+
 let main (): Unit = {
     println(through(2000, "abc").to_string());
     println(via_let(2000, "abc").to_string());
     println(in_match(200, "abc").to_string());
     println(nested(100, "abc").to_string());
+    println(ping(300, "x").to_string());
+    println(odd_a(300, "x").to_string());
 }
