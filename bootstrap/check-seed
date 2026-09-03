@@ -76,8 +76,19 @@ echo "seed compiler -> today's source ..."
     echo "the seed compiler could not build today's source -- run bootstrap/gen-seed:" >&2
     head -20 "$work/next.log" >&2; exit 1; }
 
+# BOTH from this directory, naming the source the SAME way. That is not
+# tidiness: since debug builds carry line tables, the emitted IR records
+# the path it was given -- `DIFile(filename: ..)` -- so naming the same
+# source `bootstrap/self_host` and `$root/bootstrap/self_host` produces
+# two files that differ in every filename and compare unequal. This ran
+# one side from `$work` with an absolute path and reported a stale seed
+# for a compiler that was byte-identical.
+#
+# Whether the compiler works from another directory is
+# `bootstrap/self-sufficiency`'s question, and it asks it properly by
+# varying the directory on BOTH sides.
 echo "comparing what it produces against the current compiler ..."
-(cd "$work" && SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh.next emit-llvm "$root/bootstrap/self_host" > "$work/next.ll" 2>&1)
+SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$work/sh.next" emit-llvm bootstrap/self_host > "$work/next.ll" 2>&1
 SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > "$work/cur.ll" 2>&1
 
 if cmp -s "$work/next.ll" "$work/cur.ll"; then

@@ -229,6 +229,27 @@ generations to reach the compiler's own lexer.
 
 ## Traps that have bitten more than once
 
+### Emitted IR depends on the PATH you name, not just the source
+
+Since debug builds carry line tables, the IR records the path it was
+given: `DIFile(filename: "bootstrap/self_host/parser/parser.plum")`.
+Name the same source `$PWD/bootstrap/self_host` instead and every
+filename in the output differs, so two emissions compare unequal for a
+compiler that is byte-identical.
+
+Anything diffing two `emit-llvm` runs must therefore name the source
+the SAME way on both sides, from the same directory. `check-seed` did
+not -- it ran one side from a scratch directory with an absolute path --
+and reported a stale seed twice for a compiler that was fine, including
+once immediately after `gen-seed` had just refreshed it, which is the
+tell: a genuinely stale seed does not survive being regenerated.
+
+`bootstrap-check` and `self-sufficiency` were already consistent.
+Whether the compiler works from another directory is
+`self-sufficiency`'s question, and it varies the directory on both
+sides rather than one.
+
+
 **A static cell is only safe because every in-place path tests
 `rc == 1` exactly.** There are four -- `@plum_reuse_ok`,
 `@plum_array_reuse`, `@plum_str_concat_reuse`, `@plum_array_push_grow`

@@ -17837,6 +17837,28 @@ right for a reason nobody had checked, and had it been skipped as
 "clang probably handles it", macOS debug builds would have shipped with
 no line information at all and nothing would have said so.
 
+### The property this quietly changed
+
+Emitted IR used to be a pure function of source CONTENT. It is not any
+more: a line table records the path it was given, so naming the same
+source `bootstrap/self_host` or `$PWD/bootstrap/self_host` produces
+output that differs in every `DIFile` and compares unequal.
+
+That is inherent to debug information and every compiler does it, but
+three harnesses here diff two `emit-llvm` runs and one of them --
+`check-seed` -- ran one side from a scratch directory with an absolute
+path. It reported a stale seed for a compiler that was byte-identical,
+and kept reporting it after `gen-seed` had just refreshed it. That
+second part is the tell worth remembering: a genuinely stale seed does
+not survive being regenerated, so "the remedy did not work" meant the
+diagnosis was wrong, not that the remedy needed repeating.
+
+Fixed in the harness rather than the compiler, because the compiler is
+doing the right thing and the harness was varying an input it did not
+mean to. `bootstrap-check` and `self-sufficiency` were already
+consistent -- the latter varies the directory on BOTH sides, which is
+how to ask that question.
+
 The rewrite immediately produced a false FAIL on Linux, on a binary that
 plainly had the information. `printf '%s' "$lines" | grep -q main.plum`
 looks total and is not: `grep -q` exits at its first match and closes
