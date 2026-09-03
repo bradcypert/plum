@@ -57,11 +57,29 @@
 set -u
 real="$(dirname "$(readlink -f "$0")")/sh.real"
 
+# BOTH guards degrade, and until 2026-09-03 only one of them did.
+# `timeout` is GNU coreutils: macOS ships nothing under that name and
+# Homebrew installs it as `gtimeout`, so this script did not merely lose
+# its time limit there, it failed outright with "exec: timeout: not
+# found" and took every harness that runs through it with it. Nothing
+# noticed because every macOS CI step invoked `sh.seed` or `sh.real`
+# directly; `bootstrap/debug-info-check` was the first to use this
+# wrapper on a Mac, and it broke on the first run.
+#
+# Built up as a list so the four combinations of "have a cgroup" and
+# "have a timeout" do not become four copies of the exec line. The
+# `${wrap[@]+...}` guard is not decoration: macOS ships bash 3.2, where
+# expanding an empty array under `set -u` is an error.
+wrap=()
 if [ "${SH_NO_CGROUP:-0}" != "1" ] && command -v systemd-run >/dev/null 2>&1 \
    && systemd-run --user --scope -q -- true >/dev/null 2>&1; then
-    exec systemd-run --user --scope -q \
-      -p MemoryMax="${SH_MEM:-1G}" -p MemorySwapMax=0 \
-      -- timeout "${SH_TIMEOUT:-25}" "$real" "$@"
+    wrap+=(systemd-run --user --scope -q -p MemoryMax="${SH_MEM:-1G}" -p MemorySwapMax=0 --)
 fi
 
-exec timeout "${SH_TIMEOUT:-25}" "$real" "$@"
+if command -v timeout > /dev/null 2>&1; then
+    wrap+=(timeout "${SH_TIMEOUT:-25}")
+elif command -v gtimeout > /dev/null 2>&1; then
+    wrap+=(gtimeout "${SH_TIMEOUT:-25}")
+fi
+
+exec ${wrap[@]+"${wrap[@]}"} "$real" "$@"

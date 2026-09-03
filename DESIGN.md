@@ -17791,6 +17791,31 @@ which macOS does not ship. It now takes whichever dumper exists and
 accepts line information found either in the executable or in a `.dSYM`
 beside it, which is where a Mach-O toolchain would put it.
 
+### And the answer was: the harness could not even run there
+
+The macOS job failed, but not on the question it was sent to ask:
+
+    FAIL: debug emit failed: ./sh: line 67: exec: timeout: not found
+
+`./sh` -- the guard wrapper every harness goes through -- called
+`timeout` unconditionally. It is GNU coreutils; macOS has nothing under
+that name. So the wrapper did not lose its time limit on a Mac, it
+failed outright and took anything invoking it along. Nothing had
+noticed because every macOS CI step invoked `sh.seed` or `sh.real`
+DIRECTLY; `debug-info-check` was the first to use the wrapper there, and
+it broke immediately.
+
+That file's own header had claimed the right behaviour for years --
+"the guard DEGRADES rather than failing", "where the cgroup is
+unavailable the `timeout` still applies; only the memory ceiling is
+lost". True of one guard and not the other. Both degrade now, and the
+`${wrap[@]+...}` guard around the expansion is load-bearing rather than
+decorative: macOS ships bash 3.2, where expanding an empty array under
+`set -u` is itself an error.
+
+**The dsymutil question is still open.** Nothing reached the point of
+looking at a linked binary.
+
 The rewrite immediately produced a false FAIL on Linux, on a binary that
 plainly had the information. `printf '%s' "$lines" | grep -q main.plum`
 looks total and is not: `grep -q` exits at its first match and closes
