@@ -761,11 +761,40 @@ pub struct DbgRef { pub sp: Int, pub loc: Int }
 
 let cg_dbg_none (unit: Unit): DbgRef = DbgRef { sp: 0 - 1, loc: 0 - 1 }
 
+pub struct DbgLoc { pub line: Int, pub id: Int }
+
+let no_dbg_locs (unit: Unit): Array[DbgLoc] = []
+let DBG_LOCS: Ref[Array[DbgLoc]] = ref(no_dbg_locs(()))
+
+let cg_dbg_loc_seen (ls: Array[DbgLoc]) (line: Int) (i: Int): Int =
+    if i >= ls.len() { 0 - 1 } else if ls[i].line == line { ls[i].id } else { cg_dbg_loc_seen(ls, line, i + 1) }
+
+// The location for one statement. Cached per function -- `DBG_LOCS` is
+// cleared by `cg_dbg_fn` -- because a block of ten statements in a loop
+// would otherwise emit a metadata node per instruction rather than per
+// line.
+let cg_dbg_loc (sp: Int) (f: DbgFile) (off: Int): Int = {
+    let line = cg_line_at(f.starts, off);
+    let seen = cg_dbg_loc_seen(DBG_LOCS.get(), line, 0);
+    if seen >= 0 { seen }
+    else {
+        let id = cg_dbg_next(());
+        cg_dbg_emit("!".concat(id.to_string()).concat(" = !DILocation(line: ").concat(line.to_string())
+            .concat(", column: 1, scope: !").concat(sp.to_string()).concat(")\n"));
+        DBG_LOCS.set(DBG_LOCS.get().push(DbgLoc { line: line, id: id }));
+        id
+    }
+}
+
 let cg_dbg_fn (shown: String) (path: String) (offset: Int): DbgRef =
     if !DEBUG_INFO.get() || path == "" || offset < 0 { cg_dbg_none(()) }
     else {
         let f = cg_dbg_file(path);
         let line = cg_line_at(f.starts, offset);
+        // Locations are cached per FUNCTION: two functions may sit on
+        // the same line of different files, and a node's scope is its
+        // own subprogram.
+        DBG_LOCS.set(no_dbg_locs(()));
         let sp = cg_dbg_next(());
         let loc = cg_dbg_next(());
         // `distinct`, because two instantiations of one generic
@@ -798,26 +827,39 @@ let cg_dbg_fn (shown: String) (path: String) (offset: Int): DbgRef =
 // instruction; a `;` comment is not either; and a `switch` spans
 // several lines between `[` and `]`, so annotating its cases would put
 // metadata inside an operand list and produce IR that does not parse.
-let cg_dbg_attach (body: String) (loc: Int): String =
+let cg_dbg_attach (body: String) (loc: Int) (sp: Int) (f: DbgFile): String =
     if loc < 0 { body }
-    else { cg_dbg_lines(String.split(body, "\n"), 0, loc, false, "") }
+    else { cg_dbg_lines(String.split(body, "\n"), 0, loc, false, "", sp, f) }
 
-let cg_dbg_lines (ls: Array[String]) (i: Int) (loc: Int) (in_list: Bool) (acc: String): String =
+// A `; plum.off N` marker moves the current location to the line
+// holding offset N; every instruction after it is attributed there.
+// Before the first marker -- a function's parameter stores, its frame
+// push -- instructions keep the function's own declaration line, which
+// is where a debugger should stop on entry anyway.
+let cg_dbg_marker_off (l: String): Int =
+    if l.starts_with("  ; plum.off ") { Result.unwrap_or(String.parse_int(String.trim_end(String.slice(l, 13, l.len()))), 0 - 1) }
+    else { 0 - 1 }
+
+let cg_dbg_lines (ls: Array[String]) (i: Int) (loc: Int) (in_list: Bool) (acc: String) (sp: Int) (f: DbgFile): String =
     if i >= ls.len() { acc }
     else {
         let l = ls[i];
+        let off = cg_dbg_marker_off(l);
         // The last element of a split on a trailing newline is empty;
         // re-emitting it would double the newline.
         if i == ls.len() - 1 && l == "" { acc }
         else if in_list {
-            cg_dbg_lines(ls, i + 1, loc, !(String.trim_end(l) == "  ]"), acc.concat(l).concat("\n"))
+            cg_dbg_lines(ls, i + 1, loc, !(String.trim_end(l) == "  ]"), acc.concat(l).concat("\n"), sp, f)
+        }
+        else if off >= 0 {
+            cg_dbg_lines(ls, i + 1, cg_dbg_loc(sp, f, off), false, acc.concat(l).concat("\n"), sp, f)
         }
         else if l.starts_with("  ") && !l.starts_with("  ;") && String.trim_end(l) != "" {
             let opens = l.ends_with("[");
             cg_dbg_lines(ls, i + 1, loc, opens,
-                acc.concat(l).concat(if opens { "" } else { ", !dbg !".concat(loc.to_string()) }).concat("\n"))
+                acc.concat(l).concat(if opens { "" } else { ", !dbg !".concat(loc.to_string()) }).concat("\n"), sp, f)
         }
-        else { cg_dbg_lines(ls, i + 1, loc, false, acc.concat(l).concat("\n")) }
+        else { cg_dbg_lines(ls, i + 1, loc, false, acc.concat(l).concat("\n"), sp, f) }
     }
 
 // The fixed nodes, and the compile unit every subprogram points at.
@@ -1728,7 +1770,7 @@ struct BlockEmit { code: String, allocas: String, releases: String, globals: Str
 // that ENDS in a statement still owes the pop, appended after the last
 // one.
 let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.TBlock) (ty: CgTy) (tail: Bool) (pending: String): Emit = {
-    let s = cg_stmts(p, env, n, block.stmts, 0);
+    let s = cg_stmts(p, env, n, block.stmts, 0, block.starts);
     match block.tail {
         Some(t) => {
             let r = cg_expr_t(p, s.env, s.n, t, tail, pending);
@@ -1738,7 +1780,32 @@ let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.T
     }
 }
 
-let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int): BlockEmit =
+// Each statement's code is preceded by a marker naming the character
+// offset it came from. `cg_dbg_attach` turns those into `!dbg`
+// locations; without debug info they are not emitted at all.
+//
+// A marker rather than a location computed here, because the offset ->
+// line conversion needs the enclosing FUNCTION's file, which this does
+// not know and should not have to be told. Keeping it an offset also
+// means the two passes `cg_fn` runs stay byte-identical, which it
+// checks.
+let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int) (starts: Array[Int]): BlockEmit =
+    if i >= stmts.len() { BlockEmit { code: "", allocas: "", releases: "", globals: "", env: env, n: n } }
+    else {
+        let r = cg_stmts_at(p, env, n, stmts, i, starts);
+        BlockEmit { code: cg_dbg_marker(starts, i).concat(r.code), allocas: r.allocas, releases: r.releases,
+            globals: r.globals, env: r.env, n: r.n }
+    }
+
+// `  ; plum.off N` before a statement, or nothing. A comment is legal
+// anywhere in LLVM text, so a build that never reads these is unharmed
+// by them -- but they are gated anyway, since a release build should
+// carry no trace of debug information.
+let cg_dbg_marker (starts: Array[Int]) (i: Int): String =
+    if !DEBUG_INFO.get() || i >= starts.len() || starts[i] < 0 { "" }
+    else { "  ; plum.off ".concat(starts[i].to_string()).concat("\n") }
+
+let cg_stmts_at (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int) (starts: Array[Int]): BlockEmit =
     if i >= stmts.len() { BlockEmit { code: "", allocas: "", releases: "", globals: "", env: env, n: n } }
     else {
         match stmts[i] {
@@ -1758,7 +1825,7 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
                 // reference (see `cg_pattern`'s `PIdent` arm), so the
                 // scrutinee's own reference is released once they have.
                 let head = r.code.concat(pat.code).concat(pat.binds).concat(cg_dec(vty, r.val));
-                let rest = cg_stmts(p, pat.env, pat.n, stmts, i + 1);
+                let rest = cg_stmts(p, pat.env, pat.n, stmts, i + 1, starts);
                 BlockEmit {
                     code: head.concat(rest.code),
                     allocas: r.allocas.concat(pat.allocas).concat(rest.allocas),
@@ -1783,7 +1850,7 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
                 let head = r.code
                     .concat(cg_release_slot(vty, slot, "_pre"))
                     .concat("  store ").concat(lty).concat(" ").concat(r.val).concat(", ptr ").concat(slot).concat("\n");
-                let rest = cg_stmts(p, env.push(CgSlot { name: name, ptr: slot, ty: r.ty, ity: vty }), r.n, stmts, i + 1);
+                let rest = cg_stmts(p, env.push(CgSlot { name: name, ptr: slot, ty: r.ty, ity: vty }), r.n, stmts, i + 1, starts);
                 BlockEmit {
                     code: head.concat(rest.code),
                     // The null-init and the exit release are as much a
@@ -1811,21 +1878,21 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
             // worth special-casing even though a general last-use
             // analysis would subsume it.
             TSAssign(name, value) => if cg_is_self_method(name, value, "concat") {
-                cg_self_concat(p, env, n, name, value, stmts, i)
+                cg_self_concat(p, env, n, name, value, stmts, i, starts)
             } else if cg_is_self_method(name, value, "push") {
-                cg_self_push(p, env, n, name, value, stmts, i)
+                cg_self_push(p, env, n, name, value, stmts, i, starts)
             } else {
                 let r = cg_expr(p, env, n, value);
                 let store = match cg_lookup(env, name) {
                     Some(slot) => cg_release_slot(cg_concrete(p, typecheck.texpr_ty(p.subst, value)), slot.ptr, "_a".concat(r.n.to_string())).concat("  store ").concat(cg_llvm_ty(slot.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(slot.ptr).concat("\n"),
                     None => { cg_fail("assignment to an unbound name: ".concat(name)); "" },
                 };
-                let rest = cg_stmts(p, env, r.n + 1, stmts, i + 1);
+                let rest = cg_stmts(p, env, r.n + 1, stmts, i + 1, starts);
                 BlockEmit { code: r.code.concat(store).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: r.releases.concat(rest.releases), globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
             },
             TSExpr(e) => {
                 let r = cg_expr(p, env, n, e);
-                let rest = cg_stmts(p, env, r.n, stmts, i + 1);
+                let rest = cg_stmts(p, env, r.n, stmts, i + 1, starts);
                 // Rule 1: the value is owned, and nothing takes it.
                 BlockEmit { code: r.code.concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, e)), r.val)).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: r.releases.concat(rest.releases), globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
             },
@@ -2199,7 +2266,7 @@ let lv_arms (ctx: LvCtx) (arms: Array[typecheck.TArm]) (i: Int) (acc: Array[type
 // as one costs nothing and removes a case to be wrong about.
 let lv_block (ctx: LvCtx) (b: typecheck.TBlock) (i: Int) (scope: Array[String]) (acc: Array[typecheck.TStmt]): typecheck.TBlock =
     if i >= b.stmts.len() {
-        typecheck.TBlock { stmts: acc, tail: lv_opt(LvCtx { exprs: ctx.exprs, names: ctx.names, scope: scope }, b.tail) }
+        typecheck.TBlock { stmts: acc, tail: lv_opt(LvCtx { exprs: ctx.exprs, names: ctx.names, scope: scope }, b.tail), starts: b.starts }
     } else {
         let sctx = LvCtx {
             exprs: lv_cat(lv_cat(ctx.exprs, lv_stmt_rest(b.stmts, i + 1, []), 0), lv_opt_list(b.tail), 0),
@@ -2366,10 +2433,10 @@ let cg_is_self_method (name: String) (value: typecheck.TExpr) (method: String): 
         _ => false,
     }
 
-let cg_self_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (value: typecheck.TExpr) (stmts: Array[typecheck.TStmt]) (i: Int): BlockEmit =
+let cg_self_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (value: typecheck.TExpr) (stmts: Array[typecheck.TStmt]) (i: Int) (starts: Array[Int]): BlockEmit =
     match value.node {
         TMethodCall(_, base, args) => match cg_lookup(env, name) {
-            None => { cg_fail("assignment to an unbound name: ".concat(name)); cg_stmts(p, env, n, stmts, i + 1) },
+            None => { cg_fail("assignment to an unbound name: ".concat(name)); cg_stmts(p, env, n, stmts, i + 1, starts) },
             Some(slot) => {
                 // The receiver is loaded WITHOUT incrementing and
                 // handed to the reusing concat, which consumes it. No
@@ -2383,11 +2450,11 @@ let cg_self_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
                     .concat("  ").concat(out).concat(" = call ptr @plum_str_concat_reuse(ptr ").concat(recv).concat(", ptr ").concat(arg.val).concat(")\n")
                     .concat(arg.drop)
                     .concat("  store ptr ").concat(out).concat(", ptr ").concat(slot.ptr).concat("\n");
-                let rest = cg_stmts(p, env, arg.n + 1, stmts, i + 1);
+                let rest = cg_stmts(p, env, arg.n + 1, stmts, i + 1, starts);
                 BlockEmit { code: code.concat(rest.code), allocas: arg.allocas.concat(rest.allocas), releases: arg.releases.concat(rest.releases), globals: arg.globals.concat(rest.globals), env: rest.env, n: rest.n }
             },
         },
-        _ => { cg_fail("internal: cg_self_concat on a non-concat"); cg_stmts(p, env, n, stmts, i + 1) },
+        _ => { cg_fail("internal: cg_self_concat on a non-concat"); cg_stmts(p, env, n, stmts, i + 1, starts) },
     }
 
 // `acc = acc.push(x)` — an accumulator loop, and the single largest
@@ -2395,10 +2462,10 @@ let cg_self_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
 // the whole array, making an n-element accumulation cost O(n^2). Here
 // the old array is dead, so it can grow in place whenever malloc
 // already gave it the room.
-let cg_self_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (value: typecheck.TExpr) (stmts: Array[typecheck.TStmt]) (i: Int): BlockEmit =
+let cg_self_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (value: typecheck.TExpr) (stmts: Array[typecheck.TStmt]) (i: Int) (starts: Array[Int]): BlockEmit =
     match value.node {
         TMethodCall(_, base, args) => match cg_lookup(env, name) {
-            None => { cg_fail("assignment to an unbound name: ".concat(name)); cg_stmts(p, env, n, stmts, i + 1) },
+            None => { cg_fail("assignment to an unbound name: ".concat(name)); cg_stmts(p, env, n, stmts, i + 1, starts) },
             Some(slot) => {
                 let elem = cg_elem_ty(slot.ty);
                 let recv = cg_reg(n);
@@ -2414,11 +2481,11 @@ let cg_self_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (va
                     .concat(cg_elem_ptr_lines(cell, idx, v.n + 3))
                     .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 3)).concat("\n")
                     .concat("  store ptr ").concat(cell).concat(", ptr ").concat(slot.ptr).concat("\n");
-                let rest = cg_stmts(p, env, v.n + 6, stmts, i + 1);
+                let rest = cg_stmts(p, env, v.n + 6, stmts, i + 1, starts);
                 BlockEmit { code: code.concat(rest.code), allocas: v.allocas.concat(rest.allocas), releases: v.releases.concat(rest.releases), globals: v.globals.concat(rest.globals), env: rest.env, n: rest.n }
             },
         },
-        _ => { cg_fail("internal: cg_self_push on a non-push"); cg_stmts(p, env, n, stmts, i + 1) },
+        _ => { cg_fail("internal: cg_self_push on a non-push"); cg_stmts(p, env, n, stmts, i + 1, starts) },
     }
 
 // A plain `let x = ..` binds one name and needs no pattern machinery;
@@ -5028,6 +5095,10 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     // can name it and its file. `shown` is the name a person wrote, the
     // same one a stack trace prints.
     let dbg = cg_dbg_fn(shown, def.path, def.offset);
+    // Already cached by `cg_dbg_fn`; the placeholder is never read,
+    // since `cg_dbg_attach` returns the body untouched without a
+    // location.
+    let dfile = if dbg.sp >= 0 { cg_dbg_file(def.path) } else { DbgFile { path: "", id: 0, starts: [0] } };
     let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(sym).concat("(").concat(cg_param_decls(params))
         .concat(if dbg.sp >= 0 { ") !dbg !".concat(dbg.sp.to_string()).concat(" {\nentry:\n") } else { ") {\nentry:\n" });
     // Every `alloca` is hoisted here, at the top of the entry block,
@@ -5052,7 +5123,7 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
         // and frees; nothing here can abort and want a trace.
         .concat(body.releases)
         .concat(entry.releases)
-        .concat("  ret ").concat(cg_llvm_ty(ret)).concat(" ").concat(body.val).concat("\n"), dbg.loc))
+        .concat("  ret ").concat(cg_llvm_ty(ret)).concat(" ").concat(body.val).concat("\n"), dbg.loc, dbg.sp, dfile))
         .concat("}\n\n");
     FnEmit { text: text, next: body.n }
 }

@@ -17735,6 +17735,31 @@ and collided with the shared `!{null}`, which clang reports as
 assembling; worth recording only because the off-by-one is invisible
 when reading the code that emits them.
 
+### Statement granularity
+
+Function-level locations put every instruction in a function on its
+declaration line, which is enough for a profiler to name a function and
+not enough to `break main.plum:9`. Statements now carry their own.
+
+`PBlock` already recorded one offset per statement -- the checker uses
+them to point an error at the right one -- so `TBlock` keeps the same
+numbers instead of discarding them at typing, which is four
+construction sites.
+
+Codegen emits `; plum.off N` before each statement and the attachment
+pass turns markers into locations, rather than computing a line at the
+point each statement is emitted. Two reasons: the offset -> line
+conversion needs the enclosing FUNCTION's file, which `cg_stmts` does
+not know and should not be told; and an offset keeps the two passes
+`cg_fn` runs byte-identical, which it checks. Locations are cached per
+line per function, or a loop body would emit a metadata node per
+instruction rather than per line.
+
+Measured on a four-statement function, the line table now holds an
+entry per statement:
+
+    main.plum lines in the table:  2 3 4 5 7
+
 `bootstrap/debug-info-check` pins it, and asserts LINE NUMBERS against a
 fixture it writes itself rather than merely asserting metadata exists --
 which would pass just as happily with every function pointing at line 1,
@@ -17742,4 +17767,7 @@ the likeliest way for this to break. Confirmed non-vacuous against the
 pre-`!dbg` compiler, which fails all five of its assertions. It checks
 the emitted IR everywhere and the linked binary through `addr2line`
 where binutils exists, since the IR is what we wrote and the DWARF is
-what a debugger actually reads.
+what a debugger actually reads. It also asserts a location exists for
+each STATEMENT line -- the function-level version passed every
+subprogram assertion while putting all four statements on one line,
+which is what that check would have missed.

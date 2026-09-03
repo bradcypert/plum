@@ -63,6 +63,34 @@ for pair in "top 2" "nested 3" "main 4"; do
     fi
 done
 
+# STATEMENT granularity, not just function. A block's statements each
+# get their own location, which is what makes `break main.plum:9` land
+# where a person means rather than at the top of the enclosing function.
+# Asserting only the subprograms above would pass with every instruction
+# in a function sharing one line, which is what the first version did.
+mkdir -p "$work/s"
+cat > "$work/s/main.plum" <<'PLUM'
+let work (n: Int): Int = {
+    let a = n + 1;
+    let b = a * 2;
+    let c = b - 3;
+    c
+}
+let main (): Unit = println(work(5).to_string())
+PLUM
+
+if ! SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" emit-llvm "$work/s" > "$work/stmt.ll" 2> "$work/stmt.err"; then
+    echo "FAIL: statement-granularity emit failed: $(head -n 1 "$work/stmt.err")" >&2
+    fail=1
+else
+    for want in 2 3 4 5; do
+        if ! grep -qE "DILocation\(line: $want," "$work/stmt.ll"; then
+            echo "FAIL: no location for the statement on line $want -- granularity is coarser than a statement" >&2
+            fail=1
+        fi
+    done
+fi
+
 # Every instruction in a function that HAS debug info needs a location:
 # LLVM's verifier rejects an inlinable call without one, so this would
 # already have failed the build -- but it fails as a clang error about

@@ -31,7 +31,12 @@ use parser;
 
 pub struct TExpr { pub ty: ITy, pub node: TNode }
 
-pub struct TBlock { pub stmts: Array[TStmt], pub tail: Option[TExpr] }
+// `starts` mirrors `PBlock.starts`: one character offset per
+// statement, so a backend can say which LINE each one came from.
+// The checker already had these -- it threads them to point an
+// error at the right statement -- and this is the same numbers kept
+// rather than discarded once the block is typed.
+pub struct TBlock { pub stmts: Array[TStmt], pub tail: Option[TExpr], pub starts: Array[Int] }
 
 pub enum TStmt {
     TSLet(parser.PPattern, TExpr),

@@ -2406,9 +2406,9 @@ let infer_block (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (bl
             // The tail's own position is the last entry in `starts`.
             set_stmt_pos(block_start_at(block.starts, block.stmts.len()));
             let tr = infer_expr(p2, r.state, r.env, r.subst, t);
-            ir_leaf(tr.ty, tr.subst, tr.state, TBlockE(TBlock { stmts: r.tstmts, tail: Some(tr.texpr) }))
+            ir_leaf(tr.ty, tr.subst, tr.state, TBlockE(TBlock { stmts: r.tstmts, tail: Some(tr.texpr), starts: block.starts }))
         },
-        None => ir_leaf(ITUnit, r.subst, r.state, TBlockE(TBlock { stmts: r.tstmts, tail: None })),
+        None => ir_leaf(ITUnit, r.subst, r.state, TBlockE(TBlock { stmts: r.tstmts, tail: None, starts: block.starts })),
     }
 }
 
