@@ -2205,6 +2205,11 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "string_cmp_raw" { Some("@plum_str_cmp_raw") }
     else if name == "string_concat_all_raw" { Some("@plum_str_concat_all") }
     else if name == "process_run_raw" { Some("@plum_process_run_raw") }
+    else if name == "process_run_ex_raw" { Some("@plum_process_run_ex_raw") }
+    else if name == "process_ex_exit_code_raw" { Some("@plum_process_exit_code_raw") }
+    else if name == "process_ex_stdout_raw" { Some("@plum_process_stdout_raw") }
+    else if name == "process_ex_stderr_raw" { Some("@plum_process_stderr_raw") }
+    else if name == "process_ex_free_raw" { Some("@plum_process_free_raw") }
     else if name == "process_exit_code_raw" { Some("@plum_process_exit_code_raw") }
     else if name == "process_stdout_raw" { Some("@plum_process_stdout_raw") }
     else if name == "process_stderr_raw" { Some("@plum_process_stderr_raw") }

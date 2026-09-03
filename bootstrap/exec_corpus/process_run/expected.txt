@@ -1,0 +1,7 @@
+echo: exit=0 out=[hello world :: $HOME :: a;echo pwned :: $(whoami) :: x|y :: * :: "quoted"] err=[]
+exit0: exit=0 out=[] err=[]
+exit3: exit=3 out=[] err=[]
+missing: err
+stdin: exit=0 out=[hello from stdin] err=[]
+env: exit=0 out=[from-parent] err=[]
+path: exit=0 out=[set] err=[]
