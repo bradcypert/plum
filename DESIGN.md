@@ -17382,3 +17382,15 @@ The fixture `exec_corpus/process_run` re-invokes itself so the same
 binary works on every platform, and the `--echo` cases are the ones
 that fail if anyone routes this through `system()` / `cmd.exe`.
 
+## The compiler moves onto `Process.run` (2026-09-03)
+
+The generation after the module landed. Every `Os.run_process` in
+`main.plum` -- LSP re-invokes, `plum test` children, the `clang` link
+-- now goes through `Process.run`. A local two-argument helper keeps
+the call sites from growing an options struct they do not use.
+
+`Os.run_process` stays as the public two-argument convenience. C
+`process_run` stays because that convenience still calls it; retiring
+the symbol is a later cut once `Os.run_process` itself is a wrapper
+over `process_run_ex`.
+
