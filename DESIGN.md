@@ -17934,6 +17934,23 @@ pipeline as failed. Replaced with `case`, which needs no pipe. The same
 mistake truncated the evidence when the `!dbg` guard was first being
 diagnosed, an hour earlier, in a `grep | head -4`.
 
+## The compiler moves onto `Process.run` (2026-09-03)
+
+The generation after the module landed. Every `Os.run_process` in
+`main.plum` -- LSP re-invokes, `plum test` children, the `clang` link
+-- now goes through `Process.run`. A local two-argument helper keeps
+the call sites from growing an options struct they do not use.
+
+The macOS two-phase debug path -- `clang -c` per object, then
+`dsymutil` -- arrived after this change was written and went the
+same way when it was rebased: it is the same clang link, in a branch
+that did not exist yet.
+
+`Os.run_process` stays as the public two-argument convenience. C
+`process_run` stays because that convenience still calls it; retiring
+the symbol is a later cut once `Os.run_process` itself is a wrapper
+over `process_run_ex`.
+
 ## `Bytes`, and which type is the special case (2026-09-04)
 
 Every I/O path in this stdlib was text and whole-value: `Os.read_file`
