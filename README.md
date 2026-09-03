@@ -205,9 +205,9 @@ Both use the same `main` entry point — a single `Unit`-typed parameter
 your own source) returning `Unit` or any printable value (the CLI
 prints whatever `main` returns).
 
-With no arguments at all, `plum` runs a built-in one-expression smoke
-test — useful as a zero-setup sanity check that the toolchain itself is
-working, not something real programs rely on.
+`plum help` (also `--help` and `-h`) prints usage. With no arguments
+at all, `plum` does the same. Extra arguments after `help` are ignored
+rather than treated as a file to compile.
 
 Errors from either path point at real source locations:
 
@@ -521,12 +521,33 @@ occasionally referred to as `Str` in compiler-internal contexts, but
 `String` is what you write in source). `Int`/`Float` conversions are
 explicit, never implicit: `n.to_float()` (widening — always succeeds,
 though not always *exact* for very large `Int` values, since `Float`'s
-53-bit mantissa can't represent every `i64` value precisely), `x.
-to_int()` (truncates toward zero), `x.round_to_int()` (rounds to the
+53-bit mantissa can't represent every `i64` value precisely),
+`x.to_int()` (truncates toward zero), `x.round_to_int()` (rounds to the
 nearest integer first, same convention `Float.round()` itself uses).
 Both `Float`-to-`Int` conversions are saturating, never undefined
 behavior — `NaN` becomes `0`, and a value outside `Int`'s range becomes
-whichever bound it overshot.
+whichever bound it overshot. `Float.to_int(x)` and `x.to_int()` are
+the same call.
+
+```plum
+let z (): Float = 0.0
+
+let main (): Unit = {
+    println((3.7).to_int().to_string());
+    println((0.0 - 3.7).to_int().to_string());
+    println((3.5).round_to_int().to_string());
+    println((z() / z()).to_int().to_string());
+    println((1.0 / z()).to_int().to_string())
+}
+```
+
+```
+3
+-3
+4
+0
+9223372036854775807
+```
 
 **`==` works on anything; `<`, `<=`, `>` and `>=` need an ordered
 type.** Equality is structural — arrays, structs, enums and their
@@ -1375,6 +1396,15 @@ program's prelude):
   real, SEPARATE bug found (and filed, not fixed here) while testing
   this: a top-level global `let` used twice with a heap-consuming
   operation like `.as_cstr()` corrupts the value.
+- **`use Process;` — structured process execution without a shell.**
+  `Process.run(Process.Options { program, args, env, stdin }):
+  Result[Process.ProcessResult, String]`. Arguments are an array passed
+  to the child (`execvp` / quoted `CreateProcess`), never concatenated
+  into a shell command. `env` is `NAME=value` overlays on the inherited
+  environment (`[]` inherits as-is). `stdin: None` is empty stdin;
+  `Some(s)` feeds `s`. A missing program is `Err`; a non-zero exit is
+  `Ok` with `exit_code`. `Os.run_process(program, args)` remains the
+  two-argument convenience.
 - **Methods are namespaced functions.** `x.f(a)` means `T.f(x, a)`,
   where `T` is `x`'s type — so `"  hi  ".trim_end()` and
   `String.trim_end("  hi  ")` are the same call, and declaring

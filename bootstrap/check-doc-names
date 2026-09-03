@@ -28,7 +28,7 @@ PY_BIN="$(command -v python3 || command -v python)"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-printf 'use Os;\nuse Time;\nuse Net;\nuse Http;\nlet main (): Unit = println("x")\n' > "$work/main.plum"
+printf 'use Os;\nuse Time;\nuse Net;\nuse Http;\nuse Process;\nlet main (): Unit = println("x")\n' > "$work/main.plum"
 
 if ! "$plum" complete "$work" > "$work/names.json" 2>"$work/err"; then
     echo "check-doc-names: \`plum complete\` failed: $(head -n 1 "$work/err")" >&2

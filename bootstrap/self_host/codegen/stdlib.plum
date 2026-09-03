@@ -45,6 +45,7 @@ let cg_std_source (name: String): String =
     else if name == "Os" { cg_os_src(()) }
     else if name == "Net" { cg_net_src(()) }
     else if name == "Http" { cg_http_src(()) }
+    else if name == "Process" { cg_process_src(()) }
     else { { cg_fail("no source for stdlib module ".concat(name)); "" } }
 
 // The items a program's `use` declarations actually ask for, stamped
@@ -704,6 +705,59 @@ let cg_os_src (): String = Array.join([
     "    let r = path_is_dir_raw(path);",
     "    if r < 0 { Err(\"Os.is_directory: path does not exist: \".concat(path)) }",
     "    else { Ok(r == 1) }",
+    "}",
+], "\n")
+
+// --- The `Process` module ---
+//
+// Structured process execution: an executable plus an argument array,
+// not a shell command string. `Os.run_process` stays as the two-argument
+// convenience used by the compiler itself; this is the options-struct
+// form with env overlay and stdin, which that one does not have.
+//
+// `process_run` is left alone on purpose. The compiler binary calling
+// `Os.run_process` was compiled against the three-argument C ABI, and
+// changing that signature would crash the next generation. `process_run_ex`
+// is a new entry point.
+let cg_process_src (): String = Array.join([
+    "// argv is passed to the child. A TAB join is only the extern",
+    "// packing -- see `native_stdlib/process_shim.c`. Empty `env` means",
+    "// inherit the parent environment; non-empty entries are `NAME=value`",
+    "// overlays. `stdin: None` is an empty stdin, not the parent's.",
+    "",
+    "let process_run_ex_raw (program: String) (args_joined: String) (argc: Int) (env_joined: String) (envc: Int) (stdin: String) (stdin_len: Int) (has_stdin: Int): Int = 0",
+    "let process_ex_exit_code_raw (handle: Int): Int = 0",
+    "let process_ex_stdout_raw (handle: Int): String = \"\"",
+    "let process_ex_stderr_raw (handle: Int): String = \"\"",
+    "let process_ex_free_raw (handle: Int): Bool = false",
+    "",
+    "pub struct Options { pub program: String, pub args: Array[String], pub env: Array[String], pub stdin: Option[String] }",
+    "pub struct ProcessResult { pub exit_code: Int, pub stdout: String, pub stderr: String }",
+    "",
+    "let join_args_acc (args: Array[String]) (i: Int) (acc: String): String =",
+    "    if i >= args.len() { acc }",
+    "    else if i == 0 { join_args_acc(args, i + 1, args[i]) }",
+    "    else { join_args_acc(args, i + 1, acc.concat(\"\\t\").concat(args[i])) }",
+    "",
+    "// A non-zero exit code is an ordinary `Ok`. `Err` means the process",
+    "// could not be started at all -- including a program that was not found.",
+    "pub let run (opts: Options): Result[ProcessResult, String] = {",
+    "    let joined = join_args_acc(opts.args, 0, \"\");",
+    "    let env_joined = join_args_acc(opts.env, 0, \"\");",
+    "    let stdin_s = Option.unwrap_or(opts.stdin, \"\");",
+    "    let stdin_len = stdin_s.len();",
+    "    let has_stdin = if Option.is_some(opts.stdin) { 1 } else { 0 };",
+    "    let handle = process_run_ex_raw(opts.program, joined, opts.args.len(), env_joined, opts.env.len(), stdin_s, stdin_len, has_stdin);",
+    "    if handle < 0 { Err(\"Process.run: could not start process: \".concat(opts.program)) }",
+    "    else {",
+    "        let result = ProcessResult {",
+    "            exit_code: process_ex_exit_code_raw(handle),",
+    "            stdout: process_ex_stdout_raw(handle),",
+    "            stderr: process_ex_stderr_raw(handle),",
+    "        };",
+    "        let freed = process_ex_free_raw(handle);",
+    "        Ok(result)",
+    "    }",
     "}",
 ], "\n")
 

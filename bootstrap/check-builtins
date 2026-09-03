@@ -60,7 +60,7 @@ plum="${1:-./sh}"
 fixture=bootstrap/exec_corpus/dot_methods/main.plum
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-printf 'use Os;\nuse Time;\nuse Net;\nuse Http;\nlet main (): Unit = println("x")\n' > "$work/main.plum"
+printf 'use Os;\nuse Time;\nuse Net;\nuse Http;\nuse Process;\nlet main (): Unit = println("x")\n' > "$work/main.plum"
 
 if "$plum" complete "$work" > "$work/names.json" 2>/dev/null; then
     # Distinct `Ns.name` pairs FIRST -- completion lists a builtin and a

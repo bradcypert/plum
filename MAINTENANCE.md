@@ -10,7 +10,7 @@ are. This is the operating manual.
 
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
-for h in check-version check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
+for h in check-version help-check check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
          property-check doc-check alloc-check lossless-check fmt-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
@@ -26,6 +26,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | script | what it proves | time |
 |---|---|---|
 | `check-version` | the version string, the tag and the built binary agree | <1s |
+| `help-check` | `plum help`/`--help`/`-h` print usage, extra args ignored | <1s |
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
@@ -437,7 +438,7 @@ Worth knowing before you "fix" them:
   modules it is still documentation the compiler does not check; module
   membership comes from the directory. Do not assume removing a `use`
   will break a directory-module call, because it will not.
-- **`Os`, `Time`, `Net` and `Http` are modules; the type namespaces
+- **`Os`, `Time`, `Net`, `Http` and `Process` are modules; the type namespaces
   are not, and cannot be.** `T.f(x)` is the method-call mechanism, so
   `Array.map` being in scope is what makes `xs.map(f)` work. Adding a
   module means a name in `parser.std_module_names()` and source in

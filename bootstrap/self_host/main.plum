@@ -394,7 +394,7 @@ pub let cmd_stdlib_reference (unit: Unit): Unit = {
     println("`bootstrap/check-stdlib-reference` fails when it is out of date.");
     println("");
     println("Everything here is available with no `use` unless its section says");
-    println("otherwise -- `Os`, `Time`, `Net` and `Http` are modules and need one.");
+    println("otherwise -- `Os`, `Time`, `Net`, `Http` and `Process` are modules and need one.");
     println("");
     println("A declared function is shown as it is written, receiver first:");
     println("`let Array.reverse (xs: Array[T]): Array[T]`. A function the compiler");
@@ -409,7 +409,7 @@ pub let cmd_stdlib_reference (unit: Unit): Unit = {
 // A program that `use`s every stdlib module, so `cg_std_items` yields
 // all of them rather than the none an empty program asks for.
 let all_std_uses (unit: Unit): Array[parser.ItemNode] = {
-    let src = "use Os;\nuse Time;\nuse Net;\nuse Http;\nlet main (): Unit = ()";
+    let src = "use Os;\nuse Time;\nuse Net;\nuse Http;\nuse Process;\nlet main (): Unit = ()";
     let lexed = lexer.tokenize_spanned(src);
     parser.set_source_context("<stdlib-reference>", src, lexed.starts, lexed.ends);
     let items = parser.parse_program(lexed.tokens).items;
@@ -1366,7 +1366,7 @@ pub let plum_version (): String = "0.0.19"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
-    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | new <name> | version | lsp | complete <project-dir>");
+    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | new <name> | version | help | lsp | complete <project-dir>");
     println("");
     println("  --trace             a stack trace on stderr when the program dies.");
     println("                      Tail recursion still runs in constant stack space.");
@@ -2202,6 +2202,12 @@ let main (): Unit = {
     // instead.
     if argv.len() >= 1 && (argv[0] == "version" || argv[0] == "--version" || argv[0] == "-V") {
         println("plum ".concat(plum_version()));
+    } else if argv.len() >= 1 && (argv[0] == "help" || argv[0] == "--help" || argv[0] == "-h") {
+        // Same placement as `version`: a command complete with no
+        // second argument. Without this branch, `plum help` happens
+        // to print usage because argv.len() is 1, but `plum help
+        // build` tries to open `build` as a file.
+        usage(());
     } else if argv.len() >= 1 && argv[0] == "lsp" {
         // No file argument: the server talks over stdin/stdout.
         lsp_serve(())

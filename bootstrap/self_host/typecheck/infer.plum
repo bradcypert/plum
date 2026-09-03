@@ -2104,6 +2104,8 @@ pub let builtin_methods (): Array[BuiltinMethod] = [
     BuiltinMethod { recv: "String", name: "to_upper", detail: "to_upper(): String" },
     BuiltinMethod { recv: "String", name: "as_cstr", detail: "as_cstr(): CStr" },
     BuiltinMethod { recv: "Int", name: "to_float", detail: "to_float(): Float" },
+    BuiltinMethod { recv: "Float", name: "to_int", detail: "to_int(): Int" },
+    BuiltinMethod { recv: "Float", name: "round_to_int", detail: "round_to_int(): Int" },
     BuiltinMethod { recv: "CStr", name: "as_string", detail: "as_string(): String" },
     BuiltinMethod { recv: "Ref", name: "get", detail: "get(): T" },
     BuiltinMethod { recv: "Ref", name: "set", detail: "set(value: T): Unit" },
@@ -2192,6 +2194,14 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         let r = infer_expr(p2, state, env, acc, base);
         let s1 = match unify(subst_apply(r.subst, r.ty), ITInt) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc(".to_float() receiver: ".concat(e)); r.subst } };
         ir_leaf(ITFloat, s1, r.state, TMethodCall("to_float", r.texpr, []))
+    } else if (method_name == "to_int" || method_name == "round_to_int") && Array.is_empty(args) {
+        // Documented saturating Float-to-Int. `to_int` truncates toward
+        // zero; `round_to_int` rounds first with the same convention as
+        // `Float.round`. NaN becomes 0; overflow saturates. Recognised
+        // here by name and arity, like `to_float` above.
+        let r = infer_expr(p2, state, env, acc, base);
+        let s1 = match unify(subst_apply(r.subst, r.ty), ITFloat) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() receiver: ").concat(e)); r.subst } };
+        ir_leaf(ITInt, s1, r.state, TMethodCall(method_name, r.texpr, []))
     } else if method_name == "len" && Array.is_empty(args) {
         infer_len(p2, state, env, acc, base)
     } else if method_name == "send" && args.len() == 1 {

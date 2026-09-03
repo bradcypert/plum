@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# Proves `plum help` is a real command.
+#
+# Until this existed, `plum help` printed usage only because a single
+# argument that is not `version`/`lsp`/`stdlib-reference` falls through
+# to `argv.len() < 2`. That is an accident: `plum help build` tried to
+# open `build` as a source file, and `help` was not a command the usage
+# text itself named.
+#
+# What this asserts is the OUTCOME a user can type:
+#   - `help`, `--help` and `-h` all print usage and exit 0
+#   - the three spellings print the same thing
+#   - extra arguments are ignored rather than treated as a file
+#   - the usage text names `help` as a command
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+plum="${1:-./sh}"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+fail=0
+
+run() { # <label> <file> [args...]
+    local label="$1" out="$2"; shift 2
+    set +e
+    "$plum" "$@" > "$out" 2>"$out.err"
+    local st=$?
+    set -e
+    if [ "$st" -ne 0 ]; then
+        echo "FAIL [$label]: exit $st (expected 0)" >&2
+        fail=1
+        return 1
+    fi
+    if [ -s "$out.err" ]; then
+        echo "FAIL [$label]: wrote to stderr: $(head -n 1 "$out.err")" >&2
+        fail=1
+        return 1
+    fi
+    if ! grep -q 'usage: plum' "$out"; then
+        echo "FAIL [$label]: stdout does not contain 'usage: plum'" >&2
+        fail=1
+        return 1
+    fi
+    return 0
+}
+
+run help "$work/help" help
+run --help "$work/dashdash" --help
+run -h "$work/dash" -h
+run "help extra" "$work/extra" help extra
+run "--help extra" "$work/ddash-extra" --help extra
+run "-h extra" "$work/dash-extra" -h extra
+
+if [ $fail -eq 0 ]; then
+    if ! cmp -s "$work/help" "$work/dashdash"; then
+        echo "FAIL: --help does not match help" >&2
+        fail=1
+    fi
+    if ! cmp -s "$work/help" "$work/dash"; then
+        echo "FAIL: -h does not match help" >&2
+        fail=1
+    fi
+    if ! cmp -s "$work/help" "$work/extra"; then
+        echo "FAIL: help extra does not match help (extra args were not ignored)" >&2
+        fail=1
+    fi
+    if ! cmp -s "$work/help" "$work/ddash-extra"; then
+        echo "FAIL: --help extra does not match help (extra args were not ignored)" >&2
+        fail=1
+    fi
+    if ! cmp -s "$work/help" "$work/dash-extra"; then
+        echo "FAIL: -h extra does not match help (extra args were not ignored)" >&2
+        fail=1
+    fi
+    if grep -qi 'failed to read file' "$work/extra" "$work/ddash-extra" "$work/dash-extra"; then
+        echo "FAIL: a help spelling with extra args tried to open a file" >&2
+        fail=1
+    fi
+    # Named as a command, not merely mentioned in a flag description.
+    if ! grep -E 'usage: plum .* help' "$work/help" >/dev/null; then
+        echo "FAIL: usage text does not name help as a command" >&2
+        fail=1
+    fi
+fi
+
+if [ $fail -ne 0 ]; then
+    exit 1
+fi
+echo "help ok: help/--help/-h agree, extra args ignored, usage names the command"
