@@ -135,6 +135,70 @@ platform where a shim supplies a libc name that is genuinely absent
 (`compat_shim.c` on macOS and Windows), as an unresolved-symbol error
 with nothing connecting it to the seed.
 
+## Merge conflicts in generated files
+
+Four checked-in files are build OUTPUTS, and every one of them conflicts
+whenever two branches touch the compiler:
+
+| file | produced by |
+|---|---|
+| `sh.real` | `./sh build bootstrap/self_host -o sh.real` |
+| `bootstrap/seed/plum.ll` | `./bootstrap/gen-seed` |
+| `bootstrap/seed/shims.sha256` | `./bootstrap/gen-seed` |
+| `bootstrap/self_host/shims/shims.plum` | `python3 bootstrap/gen-shims` |
+
+**Never resolve one by choosing a side, and never hand-edit one.**
+Picking "ours" or "theirs" gives you an artifact built from source that
+no longer exists — a compiler binary missing half the merge, or a seed
+that disagrees with `native_stdlib/`. Neither fails at merge time. Both
+fail later, somewhere confusing.
+
+`sh.real` makes this obvious because git cannot even pretend: it is a
+binary, so you get `warning: Cannot merge binary files` and whichever
+side git happened to leave in the tree. The other three are text and
+will happily produce a "clean" result that is garbage — `plum.ll` is a
+quarter of a million lines of generated IR, and a three-way merge of it
+means nothing at all.
+
+So: **resolve the real source first, then rebuild the outputs from it**,
+in dependency order, because each one feeds the next.
+
+```sh
+# 1. Resolve every hand-written conflict (source, docs) and check it.
+git status --short | grep '^UU'
+./sh check bootstrap/self_host
+
+# 2. Shims first -- the compiler EMBEDS them, so they must be right
+#    before it is built. Needed whenever native_stdlib/ changed on
+#    either side.
+python3 bootstrap/gen-shims
+
+# 3. The compiler, from the merged source, using whatever working
+#    compiler you have (the conflicted `sh.real` in your tree is fine
+#    -- it only has to compile the merge, not contain it).
+./sh build bootstrap/self_host -o sh.real.new && mv sh.real.new sh.real
+
+# 4. The seed, from the compiler you just built.
+./bootstrap/gen-seed
+
+git add sh.real bootstrap/seed bootstrap/self_host/shims/shims.plum
+```
+
+Then **verify before committing**, because a merge is the one moment
+when two sets of compiler changes run together for the first time and
+nothing has ever tested that combination:
+
+```sh
+./bootstrap/bootstrap-check     # the fixed point is the real test
+./bootstrap/corpus-check
+./bootstrap/check-seed
+./bootstrap/check-shims
+```
+
+A merge that compiles is not a merge that works. The fixed point is
+what catches a compiler that builds but miscompiles itself, which is
+exactly the failure a bad artifact resolution produces.
+
 ## Bootstrap generations
 
 **A compiler carries the prelude it was built with.** So
