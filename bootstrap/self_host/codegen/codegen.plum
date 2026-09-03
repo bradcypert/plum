@@ -2266,6 +2266,8 @@ let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (method_name: St
     else if method_name == "set" { cg_ref_set(p, env, n, base, args[0]) }
     else if method_name == "get" { cg_ref_get(p, env, n, base) }
     else if method_name == "to_float" { cg_to_float(p, env, n, base) }
+    else if method_name == "to_int" { cg_to_int(p, env, n, base) }
+    else if method_name == "round_to_int" { cg_round_to_int(p, env, n, base) }
     else if method_name == "ends_with" { cg_str_binop(p, env, n, base, args[0], "@plum_str_ends_with", CgBool) }
     else if method_name == "starts_with" { cg_str_binop(p, env, n, base, args[0], "@plum_str_starts_with", CgBool) }
     else if method_name == "contains" { cg_str_binop(p, env, n, base, args[0], "@plum_str_contains", CgBool) }
@@ -2335,6 +2337,29 @@ let cg_to_float (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TE
     Emit {
         code: b.code.concat("  ").concat(reg).concat(" = sitofp i64 ").concat(b.val).concat(" to double\n"),
         allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgFloat, n: b.n + 1,
+    }
+}
+
+// Saturating Float-to-Int. LLVM's own `fptosi` is undefined on NaN,
+// infinities and out-of-range values; `@plum_float_to_int` is the
+// documented conversion instead (truncate toward zero, NaN -> 0,
+// overflow saturates). `round_to_int` rounds first, same as
+// `Float.round`.
+let cg_to_int (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
+    let b = cg_expr(p, env, n, base);
+    let reg = cg_reg(b.n);
+    Emit {
+        code: b.code.concat("  ").concat(reg).concat(" = call i64 @plum_float_to_int(double ").concat(b.val).concat(")\n"),
+        allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgInt, n: b.n + 1,
+    }
+}
+
+let cg_round_to_int (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr): Emit = {
+    let b = cg_expr(p, env, n, base);
+    let reg = cg_reg(b.n);
+    Emit {
+        code: b.code.concat("  ").concat(reg).concat(" = call i64 @plum_float_round_to_int(double ").concat(b.val).concat(")\n"),
+        allocas: b.allocas, releases: b.releases, globals: b.globals, val: reg, ty: CgInt, n: b.n + 1,
     }
 }
 
