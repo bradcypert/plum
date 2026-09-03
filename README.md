@@ -1378,6 +1378,15 @@ program's prelude):
   real, SEPARATE bug found (and filed, not fixed here) while testing
   this: a top-level global `let` used twice with a heap-consuming
   operation like `.as_cstr()` corrupts the value.
+- **`use Process;` — structured process execution without a shell.**
+  `Process.run(Process.Options { program, args, env, stdin }):
+  Result[Process.ProcessResult, String]`. Arguments are an array passed
+  to the child (`execvp` / quoted `CreateProcess`), never concatenated
+  into a shell command. `env` is `NAME=value` overlays on the inherited
+  environment (`[]` inherits as-is). `stdin: None` is empty stdin;
+  `Some(s)` feeds `s`. A missing program is `Err`; a non-zero exit is
+  `Ok` with `exit_code`. `Os.run_process(program, args)` remains the
+  two-argument convenience.
 - **Methods are namespaced functions.** `x.f(a)` means `T.f(x, a)`,
   where `T` is `x`'s type — so `"  hi  ".trim_end()` and
   `String.trim_end("  hi  ")` are the same call, and declaring

@@ -438,7 +438,7 @@ Worth knowing before you "fix" them:
   modules it is still documentation the compiler does not check; module
   membership comes from the directory. Do not assume removing a `use`
   will break a directory-module call, because it will not.
-- **`Os`, `Time`, `Net` and `Http` are modules; the type namespaces
+- **`Os`, `Time`, `Net`, `Http` and `Process` are modules; the type namespaces
   are not, and cannot be.** `T.f(x)` is the method-call mechanism, so
   `Array.map` being in scope is what makes `xs.map(f)` work. Adding a
   module means a name in `parser.std_module_names()` and source in

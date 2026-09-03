@@ -17350,3 +17350,35 @@ early `ret` (today every path funnels through a merge slot, and an
 call, which pending releases violate. Recorded so the measurement is not
 lost; the two compose, since `musttail` only tightens the case the
 per-path rule already handles.
+
+## Structured process execution, without a shell (2026-09-03)
+
+Issue #2. `Os.run_process(program, args)` already ran a child via
+`execvp` / quoted `CreateProcess` and captured stdout/stderr through
+temp files. What it did not have: an options struct, an env overlay,
+stdin, a launch error when the program was not found (that was exit
+127), or a test that arguments containing spaces and shell
+metacharacters survive as one argv slot.
+
+A new `Process` stdlib module, gated on `use Process;`:
+
+```
+Process.run(Process.Options {
+    program: "gh",
+    args: ["api", "graphql"],
+    env: [],
+    stdin: None,
+})
+```
+
+`process_run`'s three-argument C ABI is unchanged. The compiler binary
+calls `Os.run_process` compiled against that signature; widening it
+would crash the next generation. `process_run_ex` is a new entry
+point. Empty `env` inherits; non-empty `NAME=value` entries overlay.
+`stdin: None` is an empty stdin, not the parent's -- a captured run
+that inherited a TTY would hang. Exec failure is `Err`, not 127.
+
+The fixture `exec_corpus/process_run` re-invokes itself so the same
+binary works on every platform, and the `--echo` cases are the ones
+that fail if anyone routes this through `system()` / `cmd.exe`.
+
