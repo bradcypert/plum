@@ -24,18 +24,29 @@
 # The measured value is printed whether or not it passes, so drift is
 # visible in the log before it becomes a failure.
 #
-# Each ceiling is about 2.4x what the operation measures today, chosen
-# so it actually CATCHES that operation's known regression rather than
-# merely sitting above it. A first pass used round numbers twice as
-# large and the `check` ceiling sailed straight over the 83 MB the old
-# compiler really used -- a threshold that misses the regression it was
-# written for is decoration. Platform variance for one program is tens
-# of percent, not the 140% that would be needed to trip these; the
-# printed numbers from the first run on each platform are the check on
-# that reasoning, and a too-tight ceiling fails loudly rather than
-# silently, which is the right way round.
+# Each ceiling is chosen so it actually CATCHES that operation's known
+# regression rather than merely sitting above it. A first pass used
+# round numbers twice as large and the `check` ceiling sailed straight
+# over the 83 MB the old compiler really used -- a threshold that misses
+# the regression it was written for is decoration.
 #
-# Windows is skipped: `resource.getrusage` is POSIX.
+# Measured on every platform that runs this, 2026-09-03:
+#
+#             emit-llvm   check      ceiling headroom
+#   linux x86_64   55 MB   26 MB      2.3x / 2.5x
+#   linux arm64    55 MB   24 MB      2.3x / 2.7x
+#   macOS arm64    66 MB   39 MB      1.9x / 1.6x
+#
+# macOS costs ~20% more to emit and ~50% more to check than Linux, so
+# its `check` has the least room of anything here. That is still the
+# right ceiling rather than a too-tight one: 39 MB would have to grow by
+# 64% to trip it, which is a regression and not noise, and raising it
+# past 83 MB would stop it catching the thing it exists for. Worth
+# knowing before anyone reads the slack as spare.
+#
+# The Windows job does not run this at all -- it is a separate job with
+# its own steps. The `resource` guard below is defensive rather than
+# load-bearing, for anyone who adds it there later.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
