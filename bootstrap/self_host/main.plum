@@ -52,6 +52,7 @@
 // correctness bug).
 
 use Os;
+use Process;
 use lexer;
 use parser;
 use lsp;
@@ -805,13 +806,26 @@ let self_exe (): String =
         Err(_) => "/proc/self/exe",
     }
 
+// The compiler's own subprocesses go through `Process.run`, not
+// `Os.run_process`. Same two-argument shape the call sites already
+// have; env inherited, stdin empty. This is the follow-up to the
+// `Process` module: generation 1 shipped the API, this generation
+// is the first that can call it from the compiler's own source.
+let run_process (program: String) (args: Array[String]): Result[Process.ProcessResult, String] =
+    Process.run(Process.Options {
+        program: program,
+        args: args,
+        env: [],
+        stdin: None,
+    })
+
 // Diagnostics come from a SUBPROCESS: `fail_tc` reports by aborting, so
 // checking in-process would take the server down on the first type
 // error a user typed. Re-invoking THIS executable is the same trick
 // `cmd_test` uses -- no path to look up, and no chance of running a
 // different build than this one.
 let lsp_check (dir: String): Option[lsp.Diagnostic] =
-    match Os.run_process(self_exe(), ["check", dir]) {
+    match run_process(self_exe(), ["check", dir]) {
         Err(_) => None,
         Ok(r) => if r.exit_code == 0 { None } else { lsp.parse_diagnostic(r.stdout.concat(r.stderr)) },
     }
@@ -1097,7 +1111,7 @@ let count_lines (s: String) (i: Int) (n: Int): Int =
 // give. Empty when the position is not on an identifier USE, or when
 // the project does not currently type-check.
 let lsp_query (path: String) (line: Int) (col: Int): String =
-    match Os.run_process(self_exe(), ["query", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
+    match run_process(self_exe(), ["query", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
         Err(_) => "",
         Ok(r) => if r.exit_code == 0 { String.trim_end(r.stdout) } else { "" },
     }
@@ -1166,7 +1180,7 @@ let name_start_acc (src: String) (off: Int) (name: String) (back: Int): Int =
     else { name_start_acc(src, off, name, back + 1) }
 
 let lsp_locals (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
-    match Os.run_process(self_exe(), ["locals", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
+    match run_process(self_exe(), ["locals", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
     }
@@ -1174,7 +1188,7 @@ let lsp_locals (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
 // The members of whatever sits before the cursor's `.`, or an empty
 // list when the cursor is not after a dot at all.
 let lsp_members (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
-    match Os.run_process(self_exe(), ["members", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
+    match run_process(self_exe(), ["members", lsp.dir_of(path), path, line.to_string(), col.to_string()]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
     }
@@ -1188,7 +1202,7 @@ let lsp_members (path: String) (line: Int) (col: Int): Array[lsp.Completion] =
 // completion is most wanted. The cost is that a function added and not
 // yet saved is missing from the list until you save.
 let lsp_completions (path: String): Array[lsp.Completion] =
-    match Os.run_process(self_exe(), ["complete", lsp.dir_of(path)]) {
+    match run_process(self_exe(), ["complete", lsp.dir_of(path)]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_completions(r.stdout) } else { [] },
     }
@@ -1240,7 +1254,7 @@ let lsp_spans (path: String) (text: String): Array[OffSpan] =
             let target = scratch.concat("/").concat(lsp.base_of(path));
             let out = match Os.write_file(target, text) {
                 Err(_) => [],
-                Ok(_) => match Os.run_process(self_exe(), ["spans", target]) {
+                Ok(_) => match run_process(self_exe(), ["spans", target]) {
                     Err(_) => [],
                     Ok(r) => if r.exit_code == 0 { parse_off_spans(String.lines(r.stdout), 0, []) } else { [] },
                 },
@@ -1295,7 +1309,7 @@ let lsp_fmt (path: String) (text: String): String =
             let target = scratch.concat("/").concat(lsp.base_of(path));
             let out = match Os.write_file(target, text) {
                 Err(_) => text,
-                Ok(_) => match Os.run_process(self_exe(), ["fmt", target]) {
+                Ok(_) => match run_process(self_exe(), ["fmt", target]) {
                     Err(_) => text,
                     // A non-zero exit is a file the formatter refused.
                     // Handing back the input unchanged makes the caller's
@@ -1350,7 +1364,7 @@ let rngs_of (text: String) (sp: Array[OffSpan]) (i: Int) (acc: Array[lsp.Rng]): 
     }
 
 let lsp_defs (path: String): Array[lsp.Def] =
-    match Os.run_process(self_exe(), ["defs", lsp.dir_of(path)]) {
+    match run_process(self_exe(), ["defs", lsp.dir_of(path)]) {
         Err(_) => [],
         Ok(r) => if r.exit_code == 0 { lsp.parse_defs(r.stdout) } else { [] },
     }
@@ -1434,7 +1448,7 @@ struct TestRun { failed: Int, detail: String }
 let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): TestRun =
     if i >= names.len() { acc }
     else {
-        let r = Os.run_process(bin, [names[i]]);
+        let r = run_process(bin, [names[i]]);
         let outcome = match r {
             Err(e) => TestRun { failed: 1, detail: e },
             Ok(pr) => if pr.exit_code == 0 { TestRun { failed: 0, detail: "" } }
@@ -1488,7 +1502,7 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
                     // runs as a child of this binary.
                     let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll])), cfiles),
                         Array.concat(link_args([], dir), Array.concat(platform_libs(native_target()), ["-o", bin])));
-                    match Os.run_process(cc_program(), argv) {
+                    match run_process(cc_program(), argv) {
                         Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
                         Ok(r) => if r.exit_code == 0 { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
                             else { TestRun { failed: 1, detail: "could not link tests:\n".concat(r.stderr) } },
@@ -1841,7 +1855,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
             let cfiles = write_shims(scratch);
             let base = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll]));
             let argv2 = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), base), cfiles), extra), Array.concat(platform_libs(target), ["-o", out]));
-            match Os.run_process(cc_program(), argv2) {
+            match run_process(cc_program(), argv2) {
                 Err(e) => "build failed: ".concat(e),
                 Ok(r) => if r.exit_code == 0 {
                     // The scratch `.ll` is removed on SUCCESS and kept on
