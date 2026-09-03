@@ -205,9 +205,9 @@ Both use the same `main` entry point — a single `Unit`-typed parameter
 your own source) returning `Unit` or any printable value (the CLI
 prints whatever `main` returns).
 
-With no arguments at all, `plum` runs a built-in one-expression smoke
-test — useful as a zero-setup sanity check that the toolchain itself is
-working, not something real programs rely on.
+`plum help` (also `--help` and `-h`) prints usage. With no arguments
+at all, `plum` does the same. Extra arguments after `help` are ignored
+rather than treated as a file to compile.
 
 Errors from either path point at real source locations:
 

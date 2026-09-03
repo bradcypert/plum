@@ -135,6 +135,9 @@ jobs:
       - name: the version string is consistent
         run: ./bootstrap/check-version
 
+      - name: plum help is a real command
+        run: ./bootstrap/help-check
+
   # Does the compiler work somewhere that is not the developer's Linux
   # box? Only `bootstrap/platform-smoke` runs here, deliberately -- see
   # that script's header. The rest of `bootstrap/` is Linux-only
