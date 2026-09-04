@@ -17837,6 +17837,38 @@ right for a reason nobody had checked, and had it been skipped as
 "clang probably handles it", macOS debug builds would have shipped with
 no line information at all and nothing would have said so.
 
+### Running it afterwards was not enough, and the diagnosis was printed
+
+The macOS job failed again with the same message. Rather than guess a
+third time -- the first two guesses about macOS this week were both
+wrong -- the harness was made to report what was actually true there:
+
+    dsymutil: /usr/bin/dsymutil
+    .dSYM beside the binary: .../p.bin.dSYM
+    debug map (OSO) entries: 7
+    dsymutil says: warning: (arm64) /var/.../compat_shim-e25a27.o
+                   unable to open object file: No such file or directory
+
+Every line of that matters. The tool exists, our call ran and produced a
+bundle, and the executable carries a debug map -- but the OBJECTS the
+map names are gone. `plum build` handed clang everything in ONE
+invocation, so those objects lived in clang's own temporary directory
+and were deleted as it exited. `dsymutil` running afterwards is
+structurally too late, and no way of running it differently would have
+helped.
+
+So a Mach-O debug build now COMPILES, LINKS and runs `dsymutil` as three
+steps, with the objects in the build's own scratch directory, which
+outlives them long enough for the map to resolve. The scratch is removed
+after, by which point the bundle has copied the DWARF it needs. Every
+other platform keeps the single, faster invocation.
+
+Three CI rounds went into this, and the one that cost nothing was the
+round that printed four facts instead of testing a hypothesis. The two
+before it each tested a guess and came back with the same unhelpful
+message. The lesson is not "macOS is hard" -- it is that a failing check
+which cannot say WHY is worth less than one round of making it able to.
+
 ### The property this quietly changed
 
 Emitted IR used to be a pure function of source CONTENT. It is not any
