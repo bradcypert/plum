@@ -23,7 +23,7 @@ jobs:
     # GitHub's default 24 hours. See the retired-image note above.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: install clang
         run: |
@@ -192,7 +192,7 @@ jobs:
       matrix:
         os: [macos-15]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # clang ships with the Xcode command line tools, already present
       # on every GitHub macOS runner. Printed rather than installed so
@@ -255,7 +255,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: install clang
         run: |
@@ -316,7 +316,7 @@ jobs:
       run:
         shell: msys2 {0}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: msys2/setup-msys2@v2
         with:
