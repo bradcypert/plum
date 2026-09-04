@@ -1678,6 +1678,67 @@ let target_os (triple: String): String =
 // this project keeps getting bitten by is that CI asserts the result on
 // a real Mac, so a `dsymutil` that stops working is caught there rather
 // than discovered by someone trying to debug.
+// COMPILE, then LINK, then `dsymutil` -- the Mach-O debug path, and
+// the only place this compiler does not hand clang everything at once.
+//
+// A Mach-O linker does not copy DWARF into the executable. It writes a
+// DEBUG MAP naming the object files it came from, and `dsymutil`
+// follows that map to build the `.dSYM` bundle a debugger reads. Doing
+// the whole build in one clang invocation puts those objects in clang's
+// own temporary directory, which clang deletes as it exits -- so
+// `dsymutil` afterwards follows the map to files that are already gone.
+//
+// That is not a guess. Running `dsymutil` after a one-shot build on a
+// real Mac produced a bundle and this, which is what sent this code
+// here:
+//
+//     debug map (OSO) entries: 7
+//     warning: (arm64) /var/.../compat_shim-e25a27.o
+//              unable to open object file: No such file or directory
+//
+// Compiling to objects in the build's OWN scratch directory keeps them
+// alive until `dsymutil` has copied their DWARF into the bundle. The
+// scratch is removed afterwards, by which point the bundle no longer
+// needs them.
+//
+// Only here: every other platform links debug information into the
+// executable and wants the single faster invocation.
+struct ObjBuild { err: String, objs: Array[String] }
+
+let compile_objs (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[String]) (acc: Array[String]): ObjBuild =
+    if i >= srcs.len() { ObjBuild { err: "", objs: acc } }
+    else {
+        let obj = scratch.concat("/obj").concat(i.to_string()).concat(".o");
+        let argv = Array.concat(Array.concat(cc_prefix_args(), flags), ["-c", srcs[i], "-o", obj]);
+        match Os.run_process(cc_program(), argv) {
+            Err(e) => ObjBuild { err: "build failed: ".concat(e), objs: acc },
+            Ok(r) => if r.exit_code == 0 { compile_objs(srcs, i + 1, scratch, flags, acc.push(obj)) }
+                else { ObjBuild { err: Array.join(cc_words(), " ").concat(" failed on ").concat(srcs[i])
+                    .concat(" (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr), objs: acc } },
+        }
+    }
+
+let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
+    let flags = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module"]));
+    let built = compile_objs(srcs, 0, scratch, flags, []);
+    if built.err != "" { built.err }
+    else {
+        let argv = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), target_args(target)), built.objs), extra),
+            Array.concat(platform_libs(target), ["-o", out]));
+        match Os.run_process(cc_program(), argv) {
+            Err(e) => "build failed: ".concat(e),
+            Ok(r) => if r.exit_code != 0 {
+                Array.join(cc_words(), " ").concat(" failed to link (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
+            } else {
+                // The objects are still in `scratch`, so the map resolves.
+                let bundled = run_dsymutil(out);
+                let cleaned = Os.remove_file(srcs[0]);
+                ""
+            },
+        }
+    }
+}
+
 let run_dsymutil (out: String): Unit =
     match Os.run_process("dsymutil", [out]) { Ok(r) => (), Err(e) => () }
 
@@ -1872,21 +1933,27 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
             let cfiles = write_shims(scratch);
             let base = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll]));
             let argv2 = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), base), cfiles), extra), Array.concat(platform_libs(target), ["-o", out]));
-            match Os.run_process(cc_program(), argv2) {
-                Err(e) => "build failed: ".concat(e),
-                Ok(r) => if r.exit_code == 0 {
-                    // The scratch `.ll` is removed on SUCCESS and kept on
-                    // failure, where it is the thing you want to look at.
-                    // Leaving it always is the same leak `plum build` had
-                    // (see DESIGN.md) -- several MB per build, forever.
-                    let cleaned = Os.remove_file(ll);
-                    let bundled = if !release && target_os(target) == "macos" { run_dsymutil(out) } else { () };
-                    ""
-                } else {
-                    Array.join(cc_words(), " ").concat(" failed (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
-                        .concat("\nIR left at ").concat(ll)
-                },
-            }
+            // Mach-O debug builds take a different route entirely -- see
+            // `compile_two_phase`. Everything else compiles and links in
+            // one clang invocation, which is both faster and what every
+            // platform but this one wants.
+            if !release && target_os(target) == "macos" {
+                compile_two_phase(Array.concat([ll], cfiles), out, extra, scratch, target, release)
+            } else {
+                match Os.run_process(cc_program(), argv2) {
+                    Err(e) => "build failed: ".concat(e),
+                    Ok(r) => if r.exit_code == 0 {
+                        // The scratch `.ll` is removed on SUCCESS and kept on
+                        // failure, where it is the thing you want to look at.
+                        // Leaving it always is the same leak `plum build` had
+                        // (see DESIGN.md) -- several MB per build, forever.
+                        let cleaned = Os.remove_file(ll);
+                        ""
+                    } else {
+                        Array.join(cc_words(), " ").concat(" failed (exit ").concat(r.exit_code.to_string()).concat("):\n").concat(r.stderr)
+                            .concat("\nIR left at ").concat(ll)
+                    },
+                } }
         },
     }
 }
