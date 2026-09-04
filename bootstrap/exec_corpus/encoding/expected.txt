@@ -1,0 +1,25 @@
+6869
+hex round trip: hi
+hex mixed case: 6f6f
+hex odd: Encoding.hex_decode: odd number of hex digits
+hex invalid: Encoding.hex_decode: not a hex digit at byte 2
+hex empty: []
+aGV5
+aGk=
+aA==
+[]
+//79
+__79
+b64 round trip: hey
+b64 padded: 68
+b64 unpadded: 68
+b64 truncated: Encoding.base64_decode: truncated input
+b64 invalid: Encoding.base64_decode: invalid character at byte 2
+a%20b%26c%3Dd
+safe-._~
+%C3%A9
+pct round trip: a b&c
+pct utf8: é
+pct plus is literal: a+b
+pct invalid: Encoding.percent_decode: invalid escape at byte 1
+pct truncated: Encoding.percent_decode: truncated escape at byte 1

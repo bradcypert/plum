@@ -18140,3 +18140,69 @@ against three targets it will never run on locally.
 every existing user of `Http.Response.body` reads it as text, so that is
 an API break to schedule rather than slip in. File handles remain
 deferred behind the questions of what a handle is and how one closes.
+
+## `Encoding`, and the property that cannot catch itself (2026-09-04)
+
+Hex, base64 and percent-encoding, as a module gated on `use Encoding;`.
+Deliberately not a crypto suite -- no hashing, no ciphers, no HMAC.
+
+**Everything takes and returns `Bytes`**, which is why this waited for
+the `Bytes` work rather than shipping on `String` first. Encoding is a
+byte operation: base64 "of a string" means base64 of its bytes, and
+hex-decoding arbitrary input cannot produce a `String` at all, because
+the result is whatever bytes were written down. A `String`-shaped API
+has to either lie about that or return a `Result` on the ENCODE side
+too, which is backwards. `String.as_bytes` is total and one call, so the
+text case reads `Encoding.base64_encode(s.as_bytes())` and stays honest
+about what it is doing.
+
+`hex_encode` DELEGATES to the prelude's `Bytes.to_hex`. Hex has to exist
+in the prelude regardless -- it is what the checker's `.to_string()`
+rejection tells people to reach for, so it cannot require an import --
+and this module's own brief was not to invent a second encoder. One
+implementation, two spellings, the same shape as `String.len(s) =
+s.len()` elsewhere in the prelude.
+
+### The property that cannot catch itself
+
+`decode(encode(b)) == b` over generated buffers is the obvious property,
+and it is **blind to the bug that matters most**. A round trip is
+self-consistent by construction: if the encoder and the decoder shared a
+wrong alphabet -- two characters transposed -- every round trip would
+still pass, and every byte the program ever exchanged with anything else
+would be wrong.
+
+So the properties pair round trips with the published RFC 4648 vectors,
+and with an explicit check that the two base64 alphabets differ at the
+62nd and 63rd characters and nowhere else. The round trips check
+internal consistency; the vectors check against the world. Only the
+second kind can catch a symmetric error, and that is the same reason
+`property-check` exists at all: `interp-check` compared two
+implementations and was blind, by construction, to a bug both shared.
+
+Every expected value in the corpus fixture was also verified against GNU
+`base64` and Python's `urllib.parse` before being checked in, rather
+than recorded from this compiler's own output.
+
+### A generated document that was hand-maintained in one spot
+
+`Encoding` was implemented, `use Encoding;` worked, the fixture passed
+-- and `plum stdlib-reference` did not list it.
+
+`cmd_stdlib_reference` builds a program that `use`s every stdlib module
+so that `cg_std_items` yields all of them. That program was the literal
+string `"use Os;\nuse Time;\nuse Net;\nuse Http;\nuse Process;"`: a
+hand-maintained second copy of `parser.std_module_names()`, sitting
+directly beneath a comment promising that a function which exists
+appears in the document "by construction".
+
+`check-stdlib-reference` could not have caught it either. It compares
+the generated output against the checked-in file, and both were missing
+the module, so both agreed. The header prose naming the modules was a
+third copy of the same list.
+
+Both now derive from `std_module_names()`. This is the same failure the
+`builtin_methods` table was built to end -- a hand-kept list is only
+safe when something checks it -- and it is worth noting that the fix
+there (move the list next to the code and check it) did not generalise
+on its own to the next hand-kept list twenty lines away.

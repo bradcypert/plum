@@ -1,0 +1,88 @@
+use Encoding;
+
+// Hex, base64 and percent-encoding.
+//
+// Every expected value here was checked against an independent
+// implementation (GNU `base64`, Python's `urllib.parse.quote`) rather
+// than against what this compiler happened to print -- a recording of
+// your own output proves only that you are consistent.
+//
+// Everything works on `Bytes`, not `String`: encoding is a byte
+// operation, and hex-decoding arbitrary input cannot produce a `String`
+// at all. `String.as_bytes` is total, so the text case is one extra
+// call and stays honest about what it is doing.
+
+let show (label: String) (r: Result[Bytes, String]): Unit =
+    println(label.concat(": ").concat(match r {
+        Ok(b) => b.to_hex(),
+        Err(e) => e,
+    }))
+
+// A decoded buffer read back as text, for the cases that really are text.
+let show_text (label: String) (r: Result[Bytes, String]): Unit =
+    println(label.concat(": ").concat(match r {
+        Ok(b) => match b.as_string() { Ok(s) => s, Err(e) => e },
+        Err(e) => e,
+    }))
+
+let main (): Unit = {
+    // --- Hex ---
+    //
+    // The encoder is the prelude's `Bytes.to_hex`; this is a wrapper, so
+    // that hex has one implementation and two spellings rather than two
+    // implementations. Hex has to live in the prelude regardless -- it
+    // is what the checker's `.to_string()` rejection points at, so it
+    // cannot require an import.
+    println(Encoding.hex_encode("hi".as_bytes()));
+    show_text("hex round trip", Encoding.hex_decode("6869"));
+    // Upper and lower case both decode.
+    show("hex mixed case", Encoding.hex_decode("6F6f"));
+    // An odd digit count has no reading, and guessing one would
+    // silently produce different bytes than the writer intended.
+    show("hex odd", Encoding.hex_decode("686"));
+    show("hex invalid", Encoding.hex_decode("68zz"));
+    // Bracketed so the empty result is visible, and so no expected file
+    // has to carry a trailing space.
+    println("hex empty: [".concat(match Encoding.hex_decode("") {
+        Ok(b) => b.to_hex(),
+        Err(e) => e,
+    }).concat("]"));
+
+    // --- Base64 ---
+    //
+    // All three tail lengths, which is where every base64 bug lives.
+    println(Encoding.base64_encode("hey".as_bytes()));
+    println(Encoding.base64_encode("hi".as_bytes()));
+    println(Encoding.base64_encode("h".as_bytes()));
+    println("[".concat(Encoding.base64_encode("".as_bytes())).concat("]"));
+
+    // Bytes that are not text at all, and the two alphabets diverging.
+    println(Encoding.base64_encode(Bytes.from_array([255, 254, 253])));
+    println(Encoding.base64_url_encode(Bytes.from_array([255, 254, 253])));
+
+    show_text("b64 round trip", Encoding.base64_decode("aGV5"));
+    show("b64 padded", Encoding.base64_decode("aA=="));
+    // Padding is optional on the way in; the URL form omits it.
+    show("b64 unpadded", Encoding.base64_decode("aA"));
+    // Six bits cannot encode a byte, so a tail of one is truncation.
+    show("b64 truncated", Encoding.base64_decode("a"));
+    show("b64 invalid", Encoding.base64_decode("aG*5"));
+
+    // --- Percent-encoding ---
+    //
+    // Unreserved is `A-Z a-z 0-9 - . _ ~` and passes through untouched;
+    // everything else becomes `%XX` with uppercase hex.
+    println(Encoding.percent_encode("a b&c=d".as_bytes()));
+    println(Encoding.percent_encode("safe-._~".as_bytes()));
+    // Multi-byte characters are encoded per BYTE, which is what a URL
+    // carries -- "é" is two bytes and so two escapes.
+    println(Encoding.percent_encode("é".as_bytes()));
+    show_text("pct round trip", Encoding.percent_decode("a%20b%26c"));
+    show_text("pct utf8", Encoding.percent_decode("%C3%A9"));
+    // A space is `%20`, never `+`: the `+` convention belongs to HTML
+    // form bodies, and treating it as a space here would corrupt a
+    // literal `+` in a query value.
+    show_text("pct plus is literal", Encoding.percent_decode("a+b"));
+    show("pct invalid", Encoding.percent_decode("a%zz"));
+    show("pct truncated", Encoding.percent_decode("a%2"))
+}

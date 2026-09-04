@@ -1395,6 +1395,21 @@ program's prelude):
   empty one is a clean peer close, and `Err` is a real socket error. UDP isn't
   in yet — deferred pending its own design for `recvfrom`'s sender-
   address problem.
+- **`use Encoding;` — hex, base64, and percent-encoding.**
+  `Encoding.hex_encode(b: Bytes): String` / `Encoding.hex_decode(s):
+  Result[Bytes, String]`, `Encoding.base64_encode`/`base64_decode`,
+  `Encoding.base64_url_encode`/`base64_url_decode` (URL-safe alphabet,
+  no padding — what JWTs and data URLs expect), and
+  `Encoding.percent_encode`/`percent_decode` (RFC 3986: unreserved is
+  `A-Z a-z 0-9 - . _ ~`, everything else `%XX` in uppercase, and a
+  space is `%20` and never `+`). Everything takes and returns `Bytes`,
+  because encoding is a byte operation and hex-decoding arbitrary input
+  cannot produce a `String` at all — `String.as_bytes` is total, so the
+  text case is `Encoding.base64_encode(s.as_bytes())`. Decoders return
+  `Result` and reject rather than guess. Not a crypto suite: no
+  hashing, no ciphers, no HMAC. `Bytes.to_hex` remains in the prelude
+  as the always-available rendering, and `Encoding.hex_encode` is a
+  wrapper over it rather than a second encoder.
 - **`use Http;` — HTTP client.** `Http.get(url): Result[Http.Response, String]`,
   `Http.post(url, body): Result[Http.Response, String]`, and the general
   `Http.request(method, url, headers, body): Result[Http.Response,

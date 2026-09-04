@@ -394,7 +394,7 @@ pub let cmd_stdlib_reference (unit: Unit): Unit = {
     println("`bootstrap/check-stdlib-reference` fails when it is out of date.");
     println("");
     println("Everything here is available with no `use` unless its section says");
-    println("otherwise -- `Os`, `Time`, `Net`, `Http` and `Process` are modules and need one.");
+    println("otherwise -- ".concat(module_list_prose(())).concat(" are modules and need one."));
     println("");
     println("A declared function is shown as it is written, receiver first:");
     println("`let Array.reverse (xs: Array[T]): Array[T]`. A function the compiler");
@@ -406,10 +406,41 @@ pub let cmd_stdlib_reference (unit: Unit): Unit = {
     reference_sections(Array.concat(prelude, std))
 }
 
+// The module names, prose-joined and backticked, for the header.
+//
+// Derived rather than typed out, for the same reason `all_std_uses`
+// below is: this document's whole claim is that it is generated, and a
+// hand-written list of the modules is a second copy that can fall
+// behind the first.
+let module_list_prose (unit: Unit): String = {
+    let names = parser.std_module_names(());
+    module_list_acc(names, 0, "")
+}
+
+let module_list_acc (names: Array[String]) (i: Int) (acc: String): String =
+    if i >= names.len() { acc }
+    else {
+        let quoted = "`".concat(names[i]).concat("`");
+        let sep = if i == 0 { "" } else if i == names.len() - 1 { " and " } else { ", " };
+        module_list_acc(names, i + 1, acc.concat(sep).concat(quoted))
+    }
+
 // A program that `use`s every stdlib module, so `cg_std_items` yields
 // all of them rather than the none an empty program asks for.
+//
+// Built FROM `parser.std_module_names()` rather than spelled out. It
+// used to be the literal string `"use Os;\nuse Time;\nuse Net;\nuse
+// Http;\nuse Process;"` -- a hand-maintained second copy of that list,
+// sitting directly under a comment promising that a function which
+// exists appears here "by construction". It did not: a module added to
+// `std_module_names` and not to this string was invisible to the
+// generated reference AND to `check-stdlib-reference`, which compares
+// this output against the checked-in file and so would have agreed that
+// nothing was missing. Found when `Encoding` landed and silently did
+// not appear.
 let all_std_uses (unit: Unit): Array[parser.ItemNode] = {
-    let src = "use Os;\nuse Time;\nuse Net;\nuse Http;\nuse Process;\nlet main (): Unit = ()";
+    let src = Array.fold(parser.std_module_names(()), "", |acc, m| acc.concat("use ").concat(m).concat(";\n"))
+        .concat("let main (): Unit = ()");
     let lexed = lexer.tokenize_spanned(src);
     parser.set_source_context("<stdlib-reference>", src, lexed.starts, lexed.ends);
     let items = parser.parse_program(lexed.tokens).items;
