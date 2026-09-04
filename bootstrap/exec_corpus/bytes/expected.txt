@@ -1,0 +1,26 @@
+len: 2
+hex: 6869
+bad len: 2
+bad hex: fffe
+bad is_utf8: false
+bad as_string: Bytes.as_string: not valid UTF-8
+nul len: 3
+nul hex: 680069
+nul is_utf8: true
+empty len: 0
+empty hex: []
+empty is_utf8: true
+empty is_empty: true
+accented chars: 1
+accented bytes: 2
+accented hex: c3a9
+half hex: c3
+half is_utf8: false
+at 0: 104
+at 9: none
+concat hex: 6869fffe
+to_array: 104,105
+eq: true
+ne: false
+as_string: hi
+as_bytes hex: 6869

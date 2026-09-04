@@ -1,0 +1,12 @@
+// Rejected: bytes are not text, so there is no honest `String` for
+// them. Rendering them raw would produce a string that lies about its
+// encoding -- which is the one thing `Bytes` exists to prevent -- and
+// silently choosing hex would make `.to_string()` mean something
+// different on this type than on every other.
+//
+// Both alternatives are named in the message, because which one is
+// wanted is the caller's decision.
+let main (): Unit = {
+    let b = Bytes.from_string("x");
+    println(b.to_string())
+}

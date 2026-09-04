@@ -12,6 +12,9 @@ arr-has
 P
 2
 9,2
+cs
+by
+not-utf8
 abc
 3
 y

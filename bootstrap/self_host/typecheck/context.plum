@@ -432,6 +432,7 @@ let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (n
     else if name == "Bool" { ITBool }
     else if name == "String" { ITStr }
     else if name == "CStr" { ITCStr }
+    else if name == "Bytes" { ITBytes }
     else if name == "Unit" { ITUnit }
     else if name == "Array" { ITStruct("Array", args) }
     // Handles, not declarations: `Task`/`Sender`/`Receiver` have no

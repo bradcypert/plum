@@ -1,0 +1,91 @@
+// `Bytes` -- the byte buffer, and the type `String` is a constrained
+// form of.
+//
+// The layering is the point. A `String` cell and a `Bytes` cell are the
+// SAME cell at runtime (`{i64 rc, i64 len, bytes.., NUL}`), and always
+// were: `plum_str_new` memcpys raw bytes, `plum_str_eq` is a length
+// check plus `memcmp`, and nothing in the cell knows about UTF-8. What
+// made a `String` textual was never the representation -- it was the
+// FUNCTION SET, which decodes codepoints (`chars_of`), refuses to split
+// a character in half (`String.slice`), and stops at a NUL
+// (`.as_cstr()`).
+//
+// So `Bytes` is not `String` with something added. `String` is `Bytes`
+// with a promise attached, and `Bytes.as_string` is where that promise
+// is checked. This fixture pins both directions of that conversion, and
+// the cases where the two types genuinely disagree.
+
+let main (): Unit = {
+    // --- Text in, bytes out ---
+    let hi = Bytes.from_string("hi");
+    println("len: ".concat(hi.len().to_string()));
+    println("hex: ".concat(hi.to_hex()));
+
+    // --- Bytes that are not text ---
+    //
+    // 0xFF can never begin a UTF-8 sequence, so this buffer has no
+    // `String` reading at all. `as_string` is the only place that can
+    // say so, which is why it returns a `Result` and `as_bytes` does
+    // not: every String is bytes, not every Bytes is a String.
+    let bad = Bytes.from_array([255, 254]);
+    println("bad len: ".concat(bad.len().to_string()));
+    println("bad hex: ".concat(bad.to_hex()));
+    println("bad is_utf8: ".concat(bad.is_utf8().to_string()));
+    match bad.as_string() {
+        Ok(_) => println("bad as_string: UNEXPECTEDLY OK"),
+        Err(e) => println("bad as_string: ".concat(e)),
+    };
+
+    // --- An embedded NUL is ordinary data ---
+    //
+    // And it IS valid UTF-8 -- U+0000 is a character. A NUL is fatal to
+    // a `CStr`, which is length-free and stops there; it is nothing at
+    // all to a `Bytes`, which carries its length.
+    let nul = Bytes.from_array([104, 0, 105]);
+    println("nul len: ".concat(nul.len().to_string()));
+    println("nul hex: ".concat(nul.to_hex()));
+    println("nul is_utf8: ".concat(nul.is_utf8().to_string()));
+
+    // --- Empty ---
+    let blank = Bytes.empty();
+    println("empty len: ".concat(blank.len().to_string()));
+    println("empty hex: [".concat(blank.to_hex()).concat("]"));
+    println("empty is_utf8: ".concat(blank.is_utf8().to_string()));
+    println("empty is_empty: ".concat(blank.is_empty().to_string()));
+
+    // --- Byte indexing is BYTES, not characters ---
+    //
+    // The one place the two types visibly part company. "é" is one
+    // character and two bytes, and slicing it at 1 splits it in half --
+    // legal on `Bytes`, and impossible on `String` by construction,
+    // because `String.slice` is defined over `chars_of` and never sees
+    // a byte to cut at.
+    let accented = Bytes.from_string("é");
+    println("accented chars: ".concat("é".char_len().to_string()));
+    println("accented bytes: ".concat(accented.len().to_string()));
+    println("accented hex: ".concat(accented.to_hex()));
+    let half = accented.slice(0, 1);
+    println("half hex: ".concat(half.to_hex()));
+    println("half is_utf8: ".concat(half.is_utf8().to_string()));
+
+    // --- at / concat / to_array / equality ---
+    match hi.at(0) {
+        Some(b) => println("at 0: ".concat(b.to_string())),
+        None => println("at 0: none"),
+    };
+    match hi.at(9) {
+        Some(b) => println("at 9: ".concat(b.to_string())),
+        None => println("at 9: none"),
+    };
+    println("concat hex: ".concat(hi.concat(bad).to_hex()));
+    println("to_array: ".concat(Array.join(Array.map(hi.to_array(), |b| b.to_string()), ",")));
+    println("eq: ".concat((hi == Bytes.from_string("hi")).to_string()));
+    println("ne: ".concat((hi == bad).to_string()));
+
+    // --- Round trip, for bytes that ARE text ---
+    match hi.as_string() {
+        Ok(s) => println("as_string: ".concat(s)),
+        Err(e) => println("as_string: ".concat(e)),
+    };
+    println("as_bytes hex: ".concat("hi".as_bytes().to_hex()))
+}

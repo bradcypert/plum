@@ -1,0 +1,15 @@
+// Rejected: `Bytes` and `String` are the same cell at runtime and
+// still do not unify.
+//
+// That refusal is the entire point of the type. If a `Bytes` passed
+// silently where a `String` was wanted, the UTF-8 promise would be back
+// to being trusted rather than checked, and every function taking a
+// `String` would quietly start accepting payloads it cannot decode.
+// `.as_string()` is the conversion, and it returns a `Result` precisely
+// because it can fail.
+let takes_text (s: String): Int = s.len()
+
+let main (): Unit = {
+    let b = Bytes.from_array([255, 254]);
+    println(takes_text(b).to_string())
+}

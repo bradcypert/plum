@@ -1,0 +1,13 @@
+write: ok
+len: 6
+hex: 00ff0a0d8041
+round trip: true
+is_utf8: false
+append: ok
+after append: 00ff0a0d804142
+append fresh: ok
+fresh hex: 0102
+write empty: ok
+empty len: 0
+missing: err
+cleanup: ok

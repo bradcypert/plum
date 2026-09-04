@@ -17933,3 +17933,123 @@ the pipe, `printf` dies of SIGPIPE, and `set -o pipefail` reports the
 pipeline as failed. Replaced with `case`, which needs no pipe. The same
 mistake truncated the evidence when the `!dbg` guard was first being
 diagnosed, an hour earlier, in a `grep | head -4`.
+
+## `Bytes`, and which type is the special case (2026-09-04)
+
+Every I/O path in this stdlib was text and whole-value: `Os.read_file`
+and `Os.write_file` move a whole `String`, HTTP bodies are `String`, and
+`Net.read` is documented as NUL-terminated and not binary-safe. That
+blocks images, gzip, protobuf and any C ABI that is not text, and it is
+the dependency under HTTPS bodies, base64/hex encoding, and a public
+stdin API.
+
+The obvious shape for a fix is a wrapper: `struct Bytes { raw: String }`,
+private field, opaque by construction. It would have worked, needed no
+new `ITy` case, and inherited refcounting, equality and release from
+machinery that already exists and is already tested.
+
+It is also backwards, and that is the whole reason it was not built.
+
+### The runtime already agreed
+
+A `String` cell is `{i64 rc, i64 len, bytes.., NUL}`. `plum_str_new`
+memcpys raw bytes and stores a length. `plum_str_eq` is a length check
+plus `memcmp`. `plum_str_concat` is two memcpys. `plum_read_file_raw`
+reads with `fread` and the file's real size; `plum_write_file_raw`
+writes with `fwrite` and the cell's stored length. **Nothing in the cell,
+and nothing in any of those operations, has ever known about UTF-8.**
+
+What made a `String` textual was never the representation -- it was the
+FUNCTION SET. `chars_of` decodes codepoints; `String.slice` is defined
+over `chars_of` and so cannot split a character in half; `.as_cstr()`
+stops at a NUL. Text semantics are imposed from above, on a buffer that
+is bytes all the way down.
+
+So `struct Bytes { raw: String }` would have written down, in the
+stdlib, that bytes are a special case of text -- when in this
+implementation text is the special case of bytes. Every reader would
+have had to un-learn it. `Bytes` is a primitive here (`ITBytes`/
+`CgBytes`) and `String` is documented as bytes carrying a UTF-8
+invariant, which is the `String`/`Vec<u8>` relationship expressed as two
+primitives and a checked conversion rather than as containment.
+
+`Bytes.as_string` is where that invariant is established, and it is the
+only place. It returns a `Result`; `String.as_bytes` is total. The
+asymmetry is the design: every String is bytes, not every Bytes is a
+String.
+
+### What the shared cell bought, and what it did not
+
+Sharing the layout made most of this free. `Bytes` reuses
+`@plum_str_len`, `@plum_str_eq`, `@plum_str_concat` and `@plum_rel_str`
+unchanged -- not binary-safe variants of them, the same symbols, because
+they were never text-aware to begin with. `Os.read_bytes` and
+`Os.write_bytes` reuse the whole-file symbols outright: `Array[Bytes]`
+and `Array[String]` have identical layout and identical element release,
+so one piece of IR serves both. Conversion in either direction is
+`@plum_bytes_retag` -- one refcount increment, no copy, the same pointer
+back.
+
+Only three operations genuinely did not exist for `String`: a
+byte-indexed read, a byte-indexed slice, and construction from
+`Array[Int]`. Plus `@plum_os_append_file`, which is the existing write
+with `ab` instead of `wb`.
+
+The UTF-8 validator is written in **Plum**, not IR, because it needs
+nothing beyond those primitives -- this prelude's standing rule is that
+only what cannot be written in Plum goes into hand-written IR. It is a
+full validator rather than a lead-byte check: it rejects overlong forms
+(`C0`/`C1`, and `E0`/`F0` with a too-small second byte), the UTF-16
+surrogate block (`ED A0..BF`), and everything past U+10FFFF. Each of
+those is a real way for a decoder downstream to disagree about what a
+buffer says, and a continuation-bytes-only check accepts all four.
+
+The retag's increment is not an optimisation detail. A runtime primitive
+BORROWS its arguments and the call site releases them afterwards, while
+a return value carries +1 out -- so returning the argument pointer
+unchanged would let the call site's release free a cell the caller is
+still holding. Same convention mismatch that cost 12x in the RC work,
+one function later.
+
+### What the checker had to be told, and what it was not
+
+`ITBytes` does not unify with `ITStr`, despite the identical cell. That
+refusal IS the type: a `Bytes` that passed silently where a `String` was
+wanted would put the UTF-8 promise back to being trusted.
+
+`.to_string()` on `Bytes` is REFUSED rather than given a default.
+Dumping bytes raw produces a string that lies about its encoding, which
+is the thing this type exists to stop; quietly choosing hex would make
+`.to_string()` mean something different on this type than on every
+other. `Bytes.to_hex` renders and `Bytes.as_string` decodes, both named,
+and the caller picks. This is the one part of the design that a wrapper
+struct could not have expressed either -- it would have inherited the
+derived struct rendering.
+
+Almost nothing else needed touching, and the reason is worth recording:
+`infer_len`, `concat`, `contains` and `remove` already fall through to
+the namespaced rule when the receiver is not the type the builtin arm
+owns. So `Bytes.len`, `Bytes.slice`, `Bytes.concat` and the rest are
+ORDINARY prelude functions found through `ity_namespace`, with no arm in
+the builtin chain at all. The one arm that did not fall through was
+`as_string`, which failed outright on a non-`CStr` receiver -- the exact
+trap `contains` had been fixed for, in the exact place the file's own
+comment predicted the next one would be.
+
+`bootstrap/check-builtins` then caught what that fix implied: `as_string`
+now names both a builtin and a declared function, and every shared name
+has to be exercised as a dot call in `dot_methods/`. It was right to.
+The two readings of that name are opposites -- `CStr` -> `String` is
+total, `Bytes` -> `String` is fallible -- and a fixture that covers only
+one of them proves nothing about dispatch.
+
+### Scope
+
+Whole-file only. `Net.read_bytes`/`Net.write_bytes` need a
+length-returning recv shim, because today's `tcp_recv` returns a `CStr`
+and a `CStr` structurally cannot carry a NUL; that widens a C ABI the
+compiler binary still calls, and belongs in its own change alongside
+`net-smoke` and `cross-check`. File handles wait on the questions of
+what a handle IS (opaque native handles) and how one gets closed
+(scope-based cleanup) -- committing to `File = Int` now is a decision
+that would be unwound.

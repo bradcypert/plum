@@ -87,6 +87,15 @@ pub enum CgTy {
     // refcounted Plum cell: nothing increments it, releases it, or reads
     // a length header off it.
     CgCStr,
+    // A byte buffer. Structurally IDENTICAL to `CgStr` -- the same
+    // refcounted `{rc, len, bytes.., NUL}` cell, so it shares
+    // `@plum_str_eq`, `@plum_rel_str` and every allocation path -- and a
+    // separate case anyway, because the difference is what the byte
+    // buffer PROMISES, and that distinction is the type's whole job.
+    // Sharing the representation is what makes `String`/`Bytes`
+    // conversion free at runtime; keeping the case is what stops the
+    // conversion being implicit.
+    CgBytes,
     // Both are a `ptr` to a heap cell; the NAME is carried so field
     // offsets and variant tags can be looked up in the declaration
     // tables. Nothing else about the type is needed at this level —
@@ -140,6 +149,7 @@ let cg_llvm_ty (t: CgTy): String =
         CgUnit => "i1",
         CgStr => "ptr",
         CgCStr => "ptr",
+        CgBytes => "ptr",
         CgStruct(_) => "ptr",
         CgEnum(_) => "ptr",
         CgArray(_) => "ptr",
@@ -157,6 +167,7 @@ let cg_ty_name (t: CgTy): String =
         CgUnit => "Unit",
         CgStr => "String",
         CgCStr => "CStr",
+        CgBytes => "Bytes",
         CgStruct(name) => name,
         CgEnum(name) => name,
         CgArray(elem) => "Array[".concat(cg_ty_name(elem)).concat("]"),
@@ -361,6 +372,7 @@ let cg_ity_mangle (t: typecheck.ITy): String =
         ITBool => "Bool",
         ITStr => "Str",
         ITCStr => "CStr",
+        ITBytes => "Bytes",
         ITUnit => "Unit",
         // A declared type's name is QUALIFIED (`inner.P`,
         // `<prelude>.Zipped`), and this feeds symbol names -- so it is
@@ -1285,6 +1297,7 @@ let cg_of_ity (t: typecheck.ITy): CgTy =
         ITBool => CgBool,
         ITStr => CgStr,
         ITCStr => CgCStr,
+        ITBytes => CgBytes,
         ITUnit => CgUnit,
         // A `Task` is a bare handle from `thread_spawn` -- an `Int`'s
         // shape, with no cell, no fields and nothing to release. Mapping
@@ -2668,6 +2681,34 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "env_var_raw" { Some("@plum_env_var_raw") }
     else if name == "read_file_raw" { Some("@plum_read_file_raw") }
     else if name == "write_file_raw" { Some("@plum_write_file_raw") }
+    // --- Bytes ---
+    //
+    // Half of these name a symbol that ALREADY EXISTED for `String`,
+    // because a `Bytes` cell is a string cell and the operations were
+    // never text-aware: `@plum_str_len` reads a stored length,
+    // `@plum_str_concat` is two `memcpy`s. Only a byte-indexed read, a
+    // byte-indexed slice and construction from integers needed new IR.
+    //
+    // Both retag directions share one symbol, which is the honest
+    // spelling: `String` -> `Bytes` and `Bytes` -> `String` are the
+    // same no-op at runtime, and differ only in what the type system
+    // will then let you do with the result.
+    else if name == "bytes_of_str_raw" { Some("@plum_bytes_retag") }
+    else if name == "str_of_bytes_raw" { Some("@plum_bytes_retag") }
+    else if name == "bytes_len_raw" { Some("@plum_str_len") }
+    else if name == "bytes_concat_raw" { Some("@plum_str_concat") }
+    else if name == "bytes_at_raw" { Some("@plum_bytes_at") }
+    else if name == "bytes_slice_raw" { Some("@plum_bytes_slice") }
+    else if name == "bytes_from_array_raw" { Some("@plum_bytes_from_array") }
+    // `read`/`write` reuse the whole-file symbols unchanged. Those
+    // already read with `fread` and the file's real size, and write with
+    // `fwrite` and the cell's stored length -- neither has ever
+    // truncated at a NUL. Only the TYPE differs, and `Array[Bytes]` and
+    // `Array[String]` have identical layout and identical element
+    // release, so the same IR serves both.
+    else if name == "read_file_bytes_raw" { Some("@plum_read_file_raw") }
+    else if name == "write_file_bytes_raw" { Some("@plum_write_file_raw") }
+    else if name == "append_file_bytes_raw" { Some("@plum_os_append_file") }
     else if name == "string_hash_raw" { Some("@plum_str_hash_raw") }
     else if name == "sqrt_raw" { Some("@plum_sqrt_raw") }
     else if name == "pow_raw" { Some("@plum_pow_raw") }
@@ -2784,6 +2825,10 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         // rendering it means deciding who owns the copy. `.as_string()`
         // is that decision, written explicitly.
         CgCStr => { cg_fail(".to_string() on a CStr isn't supported -- use .as_string()"); cg_unit_emit(b.n) },
+        // Rejected by `reject_unrenderable` before this can be reached;
+        // kept in step with it so the backend can never be the one that
+        // decides bytes have a text form.
+        CgBytes => { cg_fail(".to_string() on Bytes isn't supported -- use .to_hex() or .as_string()"); cg_unit_emit(b.n) },
         // Dispatched to the per-type renderer emitted by
         // `cg_emit_str_fn`, chosen by the base's own ITy -- the CgTy
         // alone cannot name the function, since `CgStruct("Box")` has
@@ -4714,6 +4759,7 @@ let cg_zero_of (t: CgTy): String =
         CgUnit => "0",
         CgStr => "null",
         CgCStr => "null",
+        CgBytes => "null",
         CgStruct(_) => "null",
         CgEnum(_) => "null",
         CgArray(_) => "null",
@@ -5254,6 +5300,9 @@ let cg_eq_sym (t: typecheck.ITy): String = "@plum_eq_".concat(cg_ity_mangle(t))
 let cg_eq_is_primitive (t: typecheck.ITy): Bool =
     match t {
         ITInt => true, ITFloat => true, ITBool => true, ITUnit => true, ITStr => true, ITCStr => true,
+        // Compared by the same length-then-`memcmp` the runtime already
+        // does for a String, so it needs no generated function.
+        ITBytes => true,
         ITVar(_) => true,
         _ => false,
     }
@@ -5266,6 +5315,9 @@ let cg_eq_code (t: typecheck.ITy) (av: String) (bv: String) (n: Int): EqEmit = {
     let lty = cg_llvm_ty(cg_of_ity(t));
     let line = match t {
         ITStr => "  ".concat(reg).concat(" = call i1 @plum_str_eq(ptr ").concat(av).concat(", ptr ").concat(bv).concat(")\n"),
+        // Byte-for-byte, which is what `@plum_str_eq` already is: a
+        // length check and a `memcmp`, with no encoding anywhere in it.
+        ITBytes => "  ".concat(reg).concat(" = call i1 @plum_str_eq(ptr ").concat(av).concat(", ptr ").concat(bv).concat(")\n"),
         ITFloat => "  ".concat(reg).concat(" = fcmp oeq double ").concat(av).concat(", ").concat(bv).concat("\n"),
         ITInt => "  ".concat(reg).concat(" = icmp eq i64 ").concat(av).concat(", ").concat(bv).concat("\n"),
         ITBool => "  ".concat(reg).concat(" = icmp eq i1 ").concat(av).concat(", ").concat(bv).concat("\n"),
@@ -5355,6 +5407,12 @@ let cg_render_val (owner: typecheck.ITy) (t: typecheck.ITy) (val: String) (n: In
         // Unreachable in practice: `.to_string()` on a `CStr` is
         // rejected in `cg_to_string`, so nothing gets this far with one.
         ITCStr => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<cstr>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
+        // Unreachable for the same reason as `ITCStr` above: rejected in
+        // `cg_to_string`, and before that by the checker. Present so a
+        // `Bytes` nested inside a struct being rendered has a defined
+        // answer rather than falling into the `ITStr` arm and printing
+        // bytes as if they were text.
+        ITBytes => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<bytes>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
         // Quoted, and the intermediate concat released so a nested
         // string costs no leak.
         ITStr => {
@@ -5808,6 +5866,10 @@ let cg_is_heap (t: CgTy): Bool =
         // side. Nothing here increments or frees one.
         CgCStr => false,
         CgHandle(_) => true,
+        // Heap, unlike `CgCStr` above and for the opposite reason: a
+        // `Bytes` IS a refcounted cell -- the same one a `String` is --
+        // so it is incremented, released and freed like any other.
+        CgBytes => true,
         CgStr => true, CgStruct(_) => true, CgEnum(_) => true, CgArray(_) => true, CgClosure(_, _) => true, CgRef(_) => true,
         CgTuple(_) => true,
     }
@@ -5906,7 +5968,9 @@ let cg_dec (t: typecheck.ITy) (val: String): String =
 // A `String` needs no generated function (it owns nothing), so it uses
 // the runtime's plain one.
 let cg_rel_sym (t: typecheck.ITy): String =
-    match t { ITStr => "@plum_rel_str", _ => "@plum_rel_".concat(cg_ity_mangle(t)) }
+    // A `Bytes` owns nothing either, and its cell is a string cell, so
+    // it releases through the same runtime function.
+    match t { ITStr => "@plum_rel_str", ITBytes => "@plum_rel_str", _ => "@plum_rel_".concat(cg_ity_mangle(t)) }
 
 // Types needing a generated release function, transitively. Same
 // `seen`-guarded closure as `cg_eq_close`, and terminating for the same
@@ -5917,8 +5981,10 @@ let cg_rel_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): 
     else if cg_ty_in(acc, t, 0) { acc }
     else {
         match t {
-            // A string owns nothing; the runtime releases it.
+            // A string owns nothing; the runtime releases it. Nor does
+            // a `Bytes`, which is the same cell.
             ITStr => acc,
+            ITBytes => acc,
             _ => {
                 let acc2 = acc.push(t);
                 match t {

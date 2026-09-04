@@ -57,6 +57,21 @@ See README.md for the prose introduction.
 - `Array.remove(i: Int): Array[T]`  (built in)
 - `Array.set(i: Int) (v: T): Array[T]`  (built in)
 
+## Bytes
+
+- `let Bytes.empty (): Bytes`
+- `let Bytes.len (b: Bytes): Int`
+- `let Bytes.is_empty (b: Bytes): Bool`
+- `let Bytes.from_string (s: String): Bytes`
+- `let Bytes.is_utf8 (b: Bytes): Bool`
+- `let Bytes.as_string (b: Bytes): Result[String, String]`
+- `let Bytes.slice (b: Bytes) (start: Int) (end: Int): Bytes`
+- `let Bytes.concat (a: Bytes) (b: Bytes): Bytes`
+- `let Bytes.at (b: Bytes) (i: Int): Option[Int]`
+- `let Bytes.from_array (xs: Array[Int]): Bytes`
+- `let Bytes.to_array (b: Bytes): Array[Int]`
+- `let Bytes.to_hex (b: Bytes): String`
+
 ## CStr
 
 - `CStr.as_string(): String`  (built in)
@@ -140,6 +155,9 @@ See README.md for the prose introduction.
 - `let env_var (name: String): Option[String]`
 - `let read_file (path: String): Result[String, String]`
 - `let write_file (path: String) (contents: String): Result[Unit, String]`
+- `let read_bytes (path: String): Result[Bytes, String]`
+- `let write_bytes (path: String) (data: Bytes): Result[Unit, String]`
+- `let append_bytes (path: String) (data: Bytes): Result[Unit, String]`
 - `let run_process (program: String) (args: Array[String]): Result[ProcessResult, String]`
 - `let list_dir (path: String): Result[Array[String], String]`
 - `let is_directory (path: String): Result[Bool, String]`
@@ -205,6 +223,7 @@ See README.md for the prose introduction.
 - `let String.to_upper (s: String): String`
 - `let String.to_lower (s: String): String`
 - `let String.trim (s: String): String`
+- `let String.as_bytes (s: String): Bytes`
 - `let String.parse_int (s: String): Result[Int, String]`
 - `let String.parse_float (s: String): Result[Float, String]`
 - `let String.trim_start (s: String): String`

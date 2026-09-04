@@ -50,6 +50,17 @@ let main (): Unit = {
     println(r.get().to_string());
     println(Array.join(Array.map([1, 2].set(0, 9), double_str), ","));
 
+    // `as_string` is shared between the `CStr` builtin and the declared
+    // `Bytes.as_string`, and the two are not variations on a theme --
+    // they are opposites. A `CStr` -> `String` is total: the bytes are
+    // already whatever they are, and the NUL was checked on the way in.
+    // A `Bytes` -> `String` is a `Result`, because that conversion is
+    // the one place the UTF-8 promise is established rather than
+    // assumed. Both readings, and both outcomes of the fallible one.
+    println("cs".as_cstr().as_string());
+    println(match Bytes.from_string("by").as_string() { Ok(v) => v, Err(e) => e });
+    println(match Bytes.from_array([255]).as_string() { Ok(v) => v, Err(_) => "not-utf8" });
+
     // And the forms that already worked still do.
     println("ab".concat("c"));
     println([1, 2, 3].len().to_string());

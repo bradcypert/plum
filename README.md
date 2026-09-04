@@ -1333,6 +1333,25 @@ program's prelude):
 - **`use Os;` — whole-file I/O.** **`Os.read_file(path): Result[String, String]`** / **`Os.write_file(path,
   contents): Result[Unit, String]`** — whole-file I/O, no streaming/
   stateful file handle. Failure surfaces as `Err`, never a crash.
+- **`Bytes`** — a byte buffer, and the type `String` is a constrained
+  form of. `Bytes.from_string`/`String.as_bytes` (total — every String
+  is bytes), `Bytes.as_string: Result[String, String]` (fallible — not
+  every buffer is UTF-8, and this is the one place that promise is
+  checked), `Bytes.len`/`is_empty`/`at: Option[Int]`/`slice`/`concat`/
+  `from_array`/`to_array`/`to_hex`/`is_utf8`. Indices are **bytes**, so
+  `Bytes.slice` can split a multi-byte character in half — precisely
+  what `String.slice` refuses to do. No `.to_string()`: bytes are not
+  text, so `to_hex` renders and `as_string` decodes, and which you want
+  is your decision rather than the compiler's. `Bytes` and `String`
+  share a runtime cell exactly, so converting between them is one
+  refcount increment and never a copy.
+- **`Bytes` file I/O.** `Os.read_bytes(path): Result[Bytes, String]`,
+  `Os.write_bytes(path, data)`, `Os.append_bytes(path, data)` — for
+  payloads a `String` cannot honestly describe: images, compressed
+  data, anything with an embedded NUL or a byte that is not valid
+  UTF-8. The `String` pair above keeps its exact contract and stays the
+  text convenience. Sockets are **not** covered yet — `Net.read` is
+  still NUL-terminated (below).
 - **`Map[K, V]`** — `Map.new`, `Map.insert`, `Map.get: Option[V]`,
   `Map.contains`, `Map.remove`, `Map.len`, `Map.keys`/`Map.values:
   Array[...]`, `Map.from_arrays`. A real hash table (amortized `O(1)`

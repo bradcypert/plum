@@ -35,6 +35,29 @@ pub enum ITy {
     // `.as_cstr()` one way, `.as_string()` the other. Mirrors
     // `plum_types::Type::CStr` exactly, including that reasoning.
     ITCStr,
+    // A byte buffer, and the type `ITStr` is a constrained form of.
+    //
+    // The two share a cell layout exactly -- `{i64 rc, i64 len, bytes..,
+    // NUL}` -- and always did: `plum_str_new` memcpys raw bytes,
+    // `plum_str_eq` is a length check plus `memcmp`, and nothing in the
+    // cell has ever known about UTF-8. What made a `String` textual was
+    // the FUNCTION SET, not the representation: `chars_of` decodes
+    // codepoints, `String.slice` is defined over it and so can never
+    // split a character, and `.as_cstr()` stops at a NUL.
+    //
+    // So this is deliberately NOT `ITStruct("Bytes", ..)` wrapping an
+    // `ITStr`. That spelling would say bytes are a special case of
+    // text, which is backwards -- text is the special case, being bytes
+    // that additionally promise to decode. Two primitives and a checked
+    // conversion (`.as_bytes()` total one way, `.as_string()` a
+    // `Result` the other) is the same relationship Rust's `String` and
+    // `Vec<u8>` have, and it puts the promise where it can be verified
+    // rather than where it has to be trusted.
+    //
+    // Same reasoning as `ITCStr` above, one step further: `ITCStr` is
+    // also a distinct type precisely so the conversion has to be
+    // written down.
+    ITBytes,
     ITStruct(String, Array[ITy]),
     ITEnum(String, Array[ITy]),
     // A generic declaration's own type parameter, named exactly as
@@ -137,6 +160,11 @@ let unify_non_var (a: ITy) (b: ITy): Result[Subst, String] =
         ITBool => match b { ITBool => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITStr => match b { ITStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITCStr => match b { ITCStr => Ok(subst_empty(())), _ => type_mismatch(a, b) },
+        // Does NOT unify with `ITStr`, despite the identical runtime
+        // cell. That is the entire point of the type: a `Bytes` that
+        // silently passed where a `String` was wanted would put the
+        // UTF-8 promise back to being trusted rather than checked.
+        ITBytes => match b { ITBytes => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITUnit => match b { ITUnit => Ok(subst_empty(())), _ => type_mismatch(a, b) },
         ITStruct(a_name, a_args) => match b {
             ITStruct(b_name, b_args) => if a_name == b_name { unify_arg_lists(a_args, b_args) } else { type_mismatch(a, b) },
@@ -230,6 +258,7 @@ let type_mismatch (a: ITy) (b: ITy): Result[Subst, String] = Err(render_ty(a).co
 pub let render_ty (ty: ITy): String =
     match ty {
         ITInt => "Int", ITFloat => "Float", ITBool => "Bool", ITStr => "String", ITUnit => "Unit", ITCStr => "CStr",
+        ITBytes => "Bytes",
         ITVar(id) => "T".concat(id.to_string()),
         ITFunction(params, ret) => "(".concat(join_comma_ty(params)).concat(") -> ").concat(render_ty(ret)),
         ITStruct(name, args) => if Array.is_empty(args) { name } else { name.concat("[").concat(join_comma_ty(args)).concat("]") },

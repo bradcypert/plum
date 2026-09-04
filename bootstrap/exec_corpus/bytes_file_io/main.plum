@@ -1,0 +1,92 @@
+use Os;
+
+// Whole-file binary I/O: `Os.read_bytes`, `Os.write_bytes`,
+// `Os.append_bytes`.
+//
+// The acceptance test for the whole `Bytes` type is here rather than in
+// `bytes/`: a program must be able to round-trip arbitrary bytes,
+// including an embedded NUL, through a file and get back exactly what
+// it wrote.
+//
+// The runtime half of this already worked before `Bytes` existed --
+// `plum_read_file_raw` reads with `fread` and the file's real size, and
+// `plum_write_file_raw` writes with `fwrite` and the cell's stored
+// length, so neither has ever truncated at a NUL. What was missing was
+// a TYPE that promised it, and byte-indexed operations to do anything
+// with the result. `Os.read_file` returning a `String` is a claim about
+// encoding that a JPEG does not satisfy.
+//
+// Nothing here prints a path: every path is a fresh temp directory with
+// a random name, and a fixture compares exact output.
+
+let main (): Unit =
+    match Os.temp_dir() {
+        Err(e) => println(e),
+        Ok(root) => {
+            let path = root.concat("/blob.bin");
+
+            // Every byte that a text path would mangle: a NUL, a lone
+            // 0xFF that is not valid UTF-8, both newline bytes, a
+            // continuation byte with no leader, and one ordinary ASCII
+            // character to prove nothing shifted.
+            let data = Bytes.from_array([0, 255, 10, 13, 128, 65]);
+            match Os.write_bytes(path, data) {
+                Err(e) => println("write: ".concat(e)),
+                Ok(_) => println("write: ok"),
+            };
+
+            match Os.read_bytes(path) {
+                Err(e) => println("read: ".concat(e)),
+                Ok(back) => {
+                    println("len: ".concat(back.len().to_string()));
+                    println("hex: ".concat(back.to_hex()));
+                    println("round trip: ".concat((back == data).to_string()));
+                    // The file is not text, and says so.
+                    println("is_utf8: ".concat(back.is_utf8().to_string()));
+                },
+            };
+
+            match Os.append_bytes(path, Bytes.from_array([66])) {
+                Err(e) => println("append: ".concat(e)),
+                Ok(_) => println("append: ok"),
+            };
+            match Os.read_bytes(path) {
+                Err(e) => println("read after append: ".concat(e)),
+                Ok(back) => println("after append: ".concat(back.to_hex())),
+            };
+
+            // `append_bytes` creates the file when it does not exist,
+            // the way `>>` does.
+            let fresh = root.concat("/fresh.bin");
+            match Os.append_bytes(fresh, Bytes.from_array([1, 2])) {
+                Err(e) => println("append fresh: ".concat(e)),
+                Ok(_) => println("append fresh: ok"),
+            };
+            match Os.read_bytes(fresh) {
+                Err(e) => println("read fresh: ".concat(e)),
+                Ok(back) => println("fresh hex: ".concat(back.to_hex())),
+            };
+
+            // An empty file round-trips as empty, not as a failure.
+            let nothing = root.concat("/empty.bin");
+            match Os.write_bytes(nothing, Bytes.empty()) {
+                Err(e) => println("write empty: ".concat(e)),
+                Ok(_) => println("write empty: ok"),
+            };
+            match Os.read_bytes(nothing) {
+                Err(e) => println("read empty: ".concat(e)),
+                Ok(back) => println("empty len: ".concat(back.len().to_string())),
+            };
+
+            // A missing file is an `Err`, distinct from an empty one.
+            match Os.read_bytes(root.concat("/missing.bin")) {
+                Err(_) => println("missing: err"),
+                Ok(_) => println("missing: UNEXPECTEDLY OK"),
+            };
+
+            match Os.remove_tree(root) {
+                Err(e) => println("cleanup: ".concat(e)),
+                Ok(_) => println("cleanup: ok"),
+            }
+        },
+    }

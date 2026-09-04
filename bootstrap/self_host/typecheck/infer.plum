@@ -1181,6 +1181,16 @@ let reject_unrenderable (p2: Program2) (t: ITy): Unit =
     match t {
         ITUnit => fail_tc("Unit has no .to_string()"),
         ITCStr => fail_tc(".to_string() on a CStr isn't supported -- use .as_string()"),
+        // Deliberately refused rather than given a default rendering.
+        //
+        // Bytes are not text, so there is no honest `String` for them:
+        // dumping them raw produces a string that lies about its
+        // encoding (the thing this type exists to stop), and quietly
+        // picking hex would make `.to_string()` mean something different
+        // here than it does on every other type. Both alternatives are
+        // named, because which one is wanted is the caller's decision
+        // and not one the compiler can make for them.
+        ITBytes => fail_tc(".to_string() on Bytes isn't supported -- use .to_hex() for a rendering, or .as_string() to decode as UTF-8"),
         ITRef(_) => fail_tc(".to_string() on a Ref isn't supported -- use .get().to_string()"),
         ITFunction(_, _) => fail_tc("a closure has no .to_string()"),
         ITTuple(_) => fail_tc(".to_string() on a tuple isn't supported"),
@@ -1198,6 +1208,7 @@ let is_unrenderable (t: ITy): Bool =
     match t {
         ITUnit => true,
         ITCStr => true,
+        ITBytes => true,
         ITRef(_) => true,
         ITFunction(_, _) => true,
         ITTuple(_) => true,
@@ -1835,6 +1846,7 @@ let infer_closure_call_exact (p2: Program2) (state: FreshState) (env: TyEnv) (ac
 let ity_namespace (t: ITy): Option[String] =
     match t {
         ITStr => Some("String"),
+        ITBytes => Some("Bytes"),
         ITInt => Some("Int"),
         ITFloat => Some("Float"),
         ITBool => Some("Bool"),
@@ -2253,12 +2265,26 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         let r = infer_expr(p2, state, env, acc, base);
         let s1 = match unify(subst_apply(r.subst, r.ty), ITStr) { Ok(x) => subst_compose(x, r.subst), Err(e) => { fail_tc(".as_cstr() requires a String: ".concat(e)); r.subst } };
         ir_leaf(ITCStr, s1, r.state, TAsCStr(r.texpr))
-    } else if method_name == "as_string" {
+    } else if method_name == "as_string" && Array.is_empty(args) {
         // The way back. Without it a `CStr` is a dead end -- exactly the
         // gap the real compiler found while wiring up TCP.
+        //
+        // A non-`CStr` receiver FALLS THROUGH rather than failing, the
+        // same rule `contains`/`remove`/`concat` above are annotated
+        // with: a built-in arm matches on NAME before the receiver is
+        // known, so it has to hand back what it turns out not to own.
+        // `Bytes.as_string` is the second owner of this name -- and the
+        // two are not variations on a theme, they are opposites. A
+        // `CStr` -> `String` is total (the bytes are already whatever
+        // they are, and the NUL was checked going the other way); a
+        // `Bytes` -> `String` is a `Result`, because that is the one
+        // place the UTF-8 promise gets verified rather than assumed.
         let r = infer_expr(p2, state, env, acc, base);
-        let s1 = match unify(subst_apply(r.subst, r.ty), ITCStr) { Ok(x) => subst_compose(x, r.subst), Err(e) => { fail_tc(".as_string() requires a CStr: ".concat(e)); r.subst } };
-        ir_leaf(ITStr, s1, r.state, TAsString(r.texpr))
+        let bt = subst_apply(r.subst, r.ty);
+        match unify(bt, ITCStr) {
+            Err(_) => infer_namespaced_method(p2, r.state, env, r.subst, bt, base, "as_string", args),
+            Ok(x) => ir_leaf(ITStr, subst_compose(x, r.subst), r.state, TAsString(r.texpr)),
+        }
     } else if method_name == "remove" && args.len() == 1 {
         // `xs.remove(i)` -- a new array without element `i`.
         //
