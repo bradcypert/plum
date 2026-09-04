@@ -1,0 +1,34 @@
+http://example.com:8080/x?q=1 -> http | example.com | 8080 | /x | q=1 | -
+http://example.com -> http | example.com | 80 | / | - | -
+https://example.com/a/b -> https | example.com | 443 | /a/b | - | -
+http://example.com/p?a=1&a=2&b=&flag#frag -> http | example.com | 80 | /p | a=1&a=2&b=&flag | frag
+HTTP://Example.COM/X -> http | Example.COM | 80 | /X | - | -
+ftp://h/x -> ftp | h | 0 | /x | - | -
+http://h/p#frag?notquery -> http | h | 80 | /p | - | frag?notquery
+http://[::1]:9000/x -> http | ::1 | 9000 | /x | - | -
+http://[::1]/x -> http | ::1 | 80 | /x | - | -
+/nope -> Url.parse: missing scheme (expected something like http://host/path)
+nonsense -> Url.parse: missing scheme (expected something like http://host/path)
+1http://h/x -> Url.parse: invalid scheme: 1http
+http://user@host/x -> Url.parse: userinfo (user@host) is not supported
+http:///x -> Url.parse: missing host
+http://h:99999/x -> Url.parse: port out of range: 99999
+http://h:0x/x -> Url.parse: invalid port: 0x
+http://h:/x -> Url.parse: empty port
+http://h/p?a=%zz -> Url.parse: query value: Encoding.percent_decode: invalid escape at byte 0
+http://h/p?a=%2 -> Url.parse: query value: Encoding.percent_decode: truncated escape at byte 0
+http://h/%C3%A9 -> http | h | 80 | /%C3%A9 | - | -
+http://example.com => http://example.com/ (stable)
+http://example.com:80/x => http://example.com/x (stable)
+https://example.com:443/x => https://example.com/x (stable)
+https://example.com:8443/x => https://example.com:8443/x (stable)
+http://[::1]:80/x => http://[::1]/x (stable)
+http://h/p?a=1#f => http://h/p?a=1#f (stable)
+q: hello world
+empty: []
+missing: <none>
+all tag: a,b
+first tag: a
+target: /p?tag=a&tag=b&q=hello%20world&empty=
+built: http://h/p?a%20b=c%26d&plain=1
+read back: c&d

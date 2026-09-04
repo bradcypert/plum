@@ -1,5 +1,6 @@
 use Os;
 use Encoding;
+use Url;
 
 // Property tests: invariants that must hold for MANY inputs, checked
 // against values generated here rather than against answers recorded
@@ -508,4 +509,108 @@ pub let test_encoding_roundtrip (): Unit = {
         match Encoding.base64_decode("a") { Ok(_) => "accepted", Err(_) => "rejected" }, "rejected");
     check_eq("pct truncated rejected", "%2",
         match Encoding.percent_decode("%2") { Ok(_) => "accepted", Err(_) => "rejected" }, "rejected")
+}
+
+// --- Url round trips ---
+//
+// `parse(stringify(u))` yields the same `Url` as `u`. Note the shape:
+// NOT `stringify(parse(s)) == s`, which is false on purpose --
+// `stringify` is canonical, so it drops a default port and adds the `/`
+// a bare authority implies. Idempotence after one normalisation pass is
+// the honest invariant, and it is the one that says a URL survives
+// being taken apart and put back together.
+//
+// The parts are generated rather than whole URLs: assembling from
+// pieces is what reaches combinations nobody would think to type, and
+// the port/query/fragment presence flags are exactly the axes where a
+// stringify bug hides.
+
+let url_of (seed: Int): String = {
+    let scheme = if rand_between(seed, 0, 1) == 0 { "http" } else { "https" };
+    let host = ["a.example", "b.test", "127.0.0.1", "h"][rand_between(next_seed(seed), 0, 3)];
+    // Includes each scheme's own default, which stringify must omit,
+    // and the other's, which it must keep.
+    let port = [0, 80, 443, 8080, 65535][rand_between(next_seed(next_seed(seed)), 0, 4)];
+    let path = ["/", "/x", "/a/b/c", "/p%C3%A9"][rand_between(next_seed(seed) + 7, 0, 3)];
+    let query = ["", "q=1", "a=1&b=2", "tag=a&tag=b", "e="][rand_between(next_seed(seed) + 3, 0, 4)];
+    let frag = ["", "top", "a-b"][rand_between(next_seed(seed) + 11, 0, 2)];
+    scheme.concat("://").concat(host)
+        .concat(if port == 0 { "" } else { ":".concat(port.to_string()) })
+        .concat(path)
+        .concat(if String.is_empty(query) { "" } else { "?".concat(query) })
+        .concat(if String.is_empty(frag) { "" } else { "#".concat(frag) })
+}
+
+let url_fields (u: Url.Url): String =
+    u.scheme.concat("|").concat(u.host).concat("|").concat(u.port.to_string())
+        .concat("|").concat(u.path).concat("|").concat(u.raw_query).concat("|").concat(u.fragment)
+
+let url_roundtrip (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let text = url_of(seed);
+        match Url.parse(text) {
+            Err(e) => check_eq("url parses", text, e, "parsed"),
+            Ok(u) => {
+                let again = Url.stringify(u);
+                check_eq("url stringify round trip", text,
+                    match Url.parse(again) { Ok(v) => url_fields(v), Err(e) => e },
+                    url_fields(u));
+                // Canonical means canonical: a second pass changes nothing.
+                check_eq("url stringify idempotent", text,
+                    match Url.parse(again) { Ok(v) => Url.stringify(v), Err(e) => e },
+                    again)
+            },
+        };
+        url_roundtrip(next_seed(seed), left - 1)
+    }
+
+// A query survives being built and read back, for values full of the
+// characters that mean something in a query string.
+let query_roundtrip (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let value = ["a b", "c&d", "e=f", "100%", "", "a+b", "é", "?#/"][rand_between(seed, 0, 7)];
+        let name = ["k", "a b", "n&m"][rand_between(next_seed(seed), 0, 2)];
+        match Url.parse("http://h/p") {
+            Err(e) => check_eq("query base parses", "http://h/p", e, "parsed"),
+            Ok(base) => {
+                let u = Url.with_query(base, [Url.Param { name: name, value: value }]);
+                check_eq("query round trip", name.concat(" = ").concat(value),
+                    match Url.query_get(u, name) { Some(v) => v, None => "<none>" }, value);
+                // And it survives the text form, which is the part that
+                // has to escape `&` and `=` correctly.
+                check_eq("query survives stringify", name.concat(" = ").concat(value),
+                    match Url.parse(Url.stringify(u)) {
+                        Ok(v) => match Url.query_get(v, name) { Some(x) => x, None => "<none>" },
+                        Err(e) => e,
+                    }, value)
+            },
+        };
+        query_roundtrip(next_seed(seed), left - 1)
+    }
+
+pub let test_url_roundtrip (): Unit = {
+    url_roundtrip(31337, 150);
+    query_roundtrip(8675309, 120);
+
+    // The compatibility claim #26 was accepted on: for every URL the
+    // HTTP client accepts today, `Url` agrees about what to connect to
+    // and what to put in the request line. `Http` builds its request
+    // target by leaving the query IN the path; `Url` splits them and
+    // `request_target` puts them back, so these must match.
+    check_eq("http compat target", "http://h/x?q=1",
+        match Url.parse("http://h/x?q=1") { Ok(u) => Url.request_target(u), Err(e) => e }, "/x?q=1");
+    check_eq("http compat target", "http://h",
+        match Url.parse("http://h") { Ok(u) => Url.request_target(u), Err(e) => e }, "/");
+    check_eq("http compat port", "http://h/x",
+        match Url.parse("http://h/x") { Ok(u) => u.port.to_string(), Err(e) => e }, "80");
+    check_eq("http compat port", "http://h:8080/x",
+        match Url.parse("http://h:8080/x") { Ok(u) => u.port.to_string(), Err(e) => e }, "8080");
+    check_eq("http compat host", "http://h:8080/x",
+        match Url.parse("http://h:8080/x") { Ok(u) => u.host, Err(e) => e }, "h");
+
+    // Parsing is not connecting: https parses even though the client
+    // cannot yet speak it. This is the line that made the split worth
+    // making.
+    check_eq("https parses", "https://example.com/x",
+        match Url.parse("https://example.com/x") { Ok(u) => u.port.to_string(), Err(e) => e }, "443")
 }

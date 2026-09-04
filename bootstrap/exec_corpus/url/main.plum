@@ -1,0 +1,124 @@
+use Url;
+
+// URL parsing, building and query access.
+//
+// Every structural result here was checked against Python's
+// `urllib.parse.urlsplit` before being recorded, rather than against
+// whatever this compiler first printed.
+//
+// Two deliberate differences from that reference, both documented in
+// the module: `port` is always RESOLVED to the scheme's default (Python
+// reports `None` and makes you supply the default yourself), and
+// `stringify` is CANONICAL rather than byte-preserving -- it omits a
+// default port and adds the `/` a bare authority implies.
+
+let describe (u: Url.Url): String =
+    u.scheme.concat(" | ").concat(u.host).concat(" | ").concat(u.port.to_string())
+        .concat(" | ").concat(u.path)
+        .concat(" | ").concat(if String.is_empty(u.raw_query) { "-" } else { u.raw_query })
+        .concat(" | ").concat(if String.is_empty(u.fragment) { "-" } else { u.fragment })
+
+let show (s: String): Unit =
+    println(match Url.parse(s) {
+        Err(e) => s.concat(" -> ").concat(e),
+        Ok(u) => s.concat(" -> ").concat(describe(u)),
+    })
+
+// Canonical output, and that re-parsing it gives the same thing back.
+let show_canonical (s: String): Unit =
+    println(match Url.parse(s) {
+        Err(e) => s.concat(" => ").concat(e),
+        Ok(u) => {
+            let text = Url.stringify(u);
+            let stable = match Url.parse(text) {
+                Ok(again) => describe(again) == describe(u),
+                Err(_) => false,
+            };
+            s.concat(" => ").concat(text).concat(if stable { " (stable)" } else { " (NOT STABLE)" })
+        },
+    })
+
+let main (): Unit = {
+    // --- Structure ---
+    show("http://example.com:8080/x?q=1");
+    show("http://example.com");
+    show("https://example.com/a/b");
+    show("http://example.com/p?a=1&a=2&b=&flag#frag");
+    // Scheme is lowercased; schemes are case-insensitive. The host is
+    // left exactly as written, matching Go's `net/url`.
+    show("HTTP://Example.COM/X");
+    // Parsing is not connecting: an unknown scheme is still a URL, and
+    // gets port 0 because this module knows no default for it.
+    show("ftp://h/x");
+    // A fragment ends the query, and a `?` inside a fragment belongs to
+    // the fragment.
+    show("http://h/p#frag?notquery");
+
+    // --- IPv6 ---
+    //
+    // Brackets are syntax, not part of the host: they keep the colons
+    // from being read as a port separator. `Net.connect_to` hands the
+    // host to `getaddrinfo`, which wants `::1` and not `[::1]`.
+    show("http://[::1]:9000/x");
+    show("http://[::1]/x");
+
+    // --- Rejections, all with a message and never a panic ---
+    show("/nope");
+    show("nonsense");
+    show("1http://h/x");
+    show("http://user@host/x");
+    show("http:///x");
+    show("http://h:99999/x");
+    show("http://h:0x/x");
+    show("http://h:/x");
+    // The query is validated at parse time, so a lookup afterwards
+    // cannot be "present but malformed".
+    show("http://h/p?a=%zz");
+    show("http://h/p?a=%2");
+
+    // A percent-encoded path is kept ENCODED: it goes straight into an
+    // HTTP request line, and decoding it would mean re-encoding it.
+    show("http://h/%C3%A9");
+
+    // --- Canonical form ---
+    show_canonical("http://example.com");
+    show_canonical("http://example.com:80/x");
+    show_canonical("https://example.com:443/x");
+    show_canonical("https://example.com:8443/x");
+    show_canonical("http://[::1]:80/x");
+    show_canonical("http://h/p?a=1#f");
+
+    // --- Query access ---
+    match Url.parse("http://h/p?tag=a&tag=b&q=hello%20world&empty=") {
+        Err(e) => println(e),
+        Ok(u) => {
+            // Values come back decoded; `parse` already proved they can be.
+            println("q: ".concat(match Url.query_get(u, "q") { Some(v) => v, None => "<none>" }));
+            // Absent is `None`; present-but-empty is `Some("")`.
+            println("empty: ".concat(match Url.query_get(u, "empty") { Some(v) => "[".concat(v).concat("]"), None => "<none>" }));
+            println("missing: ".concat(match Url.query_get(u, "nope") { Some(v) => v, None => "<none>" }));
+            // A key may legitimately repeat, and a single-value lookup
+            // cannot say so.
+            println("all tag: ".concat(Array.join(Url.query_all(u, "tag"), ",")));
+            println("first tag: ".concat(match Url.query_get(u, "tag") { Some(v) => v, None => "<none>" }));
+
+            // What goes after the method in a request line -- path plus
+            // the query exactly as it arrived, and never the fragment.
+            println("target: ".concat(Url.request_target(u)))
+        },
+    };
+
+    // --- Building ---
+    match Url.parse("http://h/p") {
+        Err(e) => println(e),
+        Ok(u) => {
+            let with_q = Url.with_query(u, [
+                Url.Param { name: "a b", value: "c&d" },
+                Url.Param { name: "plain", value: "1" },
+            ]);
+            println("built: ".concat(Url.stringify(with_q)));
+            // Round trips through the encoder it just used.
+            println("read back: ".concat(match Url.query_get(with_q, "a b") { Some(v) => v, None => "<none>" }))
+        },
+    }
+}

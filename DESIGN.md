@@ -18206,3 +18206,68 @@ Both now derive from `std_module_names()`. This is the same failure the
 safe when something checks it -- and it is worth noting that the fix
 there (move the list next to the code and check it) did not generalise
 on its own to the next hand-kept list twenty lines away.
+
+## `Url`: parsing is not connecting (2026-09-04)
+
+Split out of the HTTPS issue, which paired URL parsing with TLS. They
+are a small pure-Plum change and a large one involving a C library and
+per-platform link flags, and pairing them meant the small one waited on
+the large one for no reason. The line that makes the split obvious is
+one the original issue wrote itself:
+
+    Url.parse("https://example.com/x")   // succeeds as a Url
+
+Parsing a URL and being able to connect to it are different problems.
+
+### What is stored, and what is left alone
+
+`path` stays percent-ENCODED and `raw_query` is kept verbatim. That is
+not laziness. The path goes straight into an HTTP request line, so
+decoding it would mean re-encoding it, and a general re-encode turns `/`
+into `%2F` and breaks the target. Query VALUES are decoded on lookup,
+because a lookup's whole purpose is to hand back something usable.
+
+The single source of truth for the query is `raw_query`. Storing parsed
+pairs alongside it would let the two disagree the moment anyone built a
+`Url` by hand. `parse` VALIDATES instead -- every escape must decode and
+every decoded value must be UTF-8 -- so `query_get` is total afterwards:
+`None` means absent, never "present but malformed". That is the whole
+reason validation happens at parse time rather than at lookup.
+
+`Http` today leaves the query inside the path, so its request target is
+whatever followed the authority. `Url` splits them and `request_target`
+puts them back, which is both the compatibility claim and the migration
+path: `Url.request_target(u)` is exactly the old `parsed.path`.
+
+Three smaller decisions worth recording. IPv6 brackets are STRIPPED into
+the host, because they are syntax -- they keep the colons from being
+read as a port separator -- and `Net.connect_to` hands the host to
+`getaddrinfo`, which wants `::1` and not `[::1]`. The port is always
+RESOLVED to the scheme default, with 0 for a scheme this module knows no
+default for; an unknown scheme is still a URL, so that is not an error.
+Userinfo is REJECTED rather than parsed, because `http://user@host/`
+otherwise parses to a host of `user@host` -- silently wrong in a
+security-relevant position -- and a v1 that says so is better than one
+that guesses.
+
+### The round trip that is false on purpose
+
+The obvious property is `stringify(parse(s)) == s`, and it does not
+hold, deliberately: `stringify` is canonical, so it omits a default port
+and adds the `/` a bare authority implies. Writing that property would
+have meant either making `stringify` preserve input byte-for-byte --
+which costs a "was the port written?" flag on the struct, purely to
+reproduce noise -- or deleting the property.
+
+The invariant that IS true is idempotence after one normalisation:
+`parse(stringify(u))` yields the same `Url`, and stringifying that again
+changes nothing. That says a URL survives being taken apart and put back
+together, which is what anyone actually depends on, and it holds over
+generated URLs assembled from parts -- which is how the port and
+query/fragment presence axes get combined in ways nobody would type by
+hand.
+
+`Encoding.percent_encode` does the escaping; this module only decides
+where the `&` and `=` go. That was the reason for the dependency
+recorded when the issue was split, and it is the difference between one
+encoder and two.

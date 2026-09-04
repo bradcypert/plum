@@ -1395,6 +1395,23 @@ program's prelude):
   empty one is a clean peer close, and `Err` is a real socket error. UDP isn't
   in yet — deferred pending its own design for `recvfrom`'s sender-
   address problem.
+- **`use Url;` — URL parsing and building.** `Url.parse(s):
+  Result[Url, String]` gives `scheme`, `host`, `port`, `path`,
+  `raw_query` and `fragment`; `Url.stringify(u)` puts one back together,
+  `Url.request_target(u)` gives the path-plus-query an HTTP request line
+  needs, and `Url.query_get`/`query_all`/`query_params`/`with_query`
+  read and build the query. **Parsing is not connecting** — `https://`
+  parses fine whether or not the client can speak it yet (see #22). The
+  port is always resolved to the scheme's default (80/443, or 0 for a
+  scheme with no known default); the path stays percent-**encoded**,
+  because it goes straight into a request line and decoding it would
+  mean re-encoding it; query values come back decoded, and `parse`
+  validates every escape so a later lookup cannot be
+  "present but malformed". IPv6 brackets are stripped (`[::1]` parses to
+  host `::1`, which is what `getaddrinfo` wants) and re-added by
+  `stringify`. `stringify` is canonical, not byte-preserving: it omits a
+  default port and adds the `/` a bare authority implies. Userinfo
+  (`user@host`) is rejected rather than silently mis-parsed.
 - **`use Encoding;` — hex, base64, and percent-encoding.**
   `Encoding.hex_encode(b: Bytes): String` / `Encoding.hex_decode(s):
   Result[Bytes, String]`, `Encoding.base64_encode`/`base64_decode`,
