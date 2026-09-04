@@ -63,6 +63,56 @@ let main (): Unit = match Net.listen_on(18733) {
 }
 PLUM
 
+# --- Binary TCP --------------------------------------------------
+# Same race-free shape as the TCP case above, with a payload chosen so
+# that the STRING path would demonstrably mangle it: it opens with a NUL
+# and carries a second one, so `Net.read`'s NUL-terminated result would
+# be empty. `Net.read_bytes` carries a length and does not care.
+#
+# The last line is the distinction `Net.read` cannot express: a clean
+# peer close arrives as `Ok` with an empty buffer, NOT as an `Err`.
+mkdir -p "$work/netbin"
+cat > "$work/netbin/main.plum" <<'PLUM'
+use Net;
+let payload (): Bytes = Bytes.from_array([0, 255, 10, 13, 128, 65, 0, 66])
+
+let main (): Unit = match Net.listen_on(18735) {
+    Err(e) => println("listen: ".concat(e)),
+    Ok(srv) => {
+        let acceptor = spawn {
+            match Net.accept(srv) {
+                Err(e) => "accept: ".concat(e),
+                Ok(conn) => {
+                    let got = match Net.read_bytes(conn, 1024) {
+                        Ok(b) => b.to_hex(),
+                        Err(e) => e,
+                    };
+                    match Net.write_bytes(conn, payload()) { Ok(_) => (), Err(_) => () };
+                    Net.close(conn);
+                    got
+                },
+            }
+        };
+        match Net.connect_to("127.0.0.1", 18735) {
+            Err(e) => println("connect: ".concat(e)),
+            Ok(fd) => {
+                match Net.write_bytes(fd, payload()) { Ok(_) => (), Err(_) => () };
+                let reply = match Net.read_bytes(fd, 1024) { Ok(b) => b, Err(_) => Bytes.empty() };
+                println(acceptor.join());
+                println(reply.to_hex());
+                println((reply == payload()).to_string());
+                println(match Net.read_bytes(fd, 1024) {
+                    Ok(b) => b.is_empty().to_string(),
+                    Err(e) => "eof was an error: ".concat(e),
+                });
+                Net.close(fd)
+            },
+        };
+        Net.close(srv)
+    },
+}
+PLUM
+
 # --- HTTP --------------------------------------------------------
 # `Http.serve_once` listens AND accepts internally, so the race cannot
 # be removed the way it can for raw TCP. The client retries instead: a
@@ -121,6 +171,10 @@ check() {
 }
 
 check tcp "ping/pong"
+check netbin "00ff0a0d80410042
+00ff0a0d80410042
+true
+true"
 check http "200 hello /world
 Net.connect_to: could not connect to 127.0.0.1:1
 http client: https:// is not supported yet

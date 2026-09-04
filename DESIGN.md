@@ -18053,3 +18053,90 @@ compiler binary still calls, and belongs in its own change alongside
 what a handle IS (opaque native handles) and how one gets closed
 (scope-based cleanup) -- committing to `File = Int` now is a decision
 that would be unwound.
+
+## Binary sockets, and a leak fix that was a race (2026-09-04)
+
+`Net.read_bytes`/`Net.write_bytes`, beside the existing `Net.read`/
+`Net.write` rather than replacing them. `Net.read` returns a `String`,
+which is a promise the bytes decode as UTF-8; arbitrary socket traffic
+does not keep it. The fix for that is a function with a different RETURN
+TYPE, not a quieter version of the same one.
+
+### Why the receive side needed two C functions
+
+`tcp_recv` returns a `CStr`, and a `CStr` structurally cannot carry a
+length -- so the caller has to `strlen`, which truncates any payload
+containing a zero byte. Plum's extern surface has no out-parameter, no
+multi-value return, and no raw pointer with a separate length, so the
+answer is split across two calls: `tcp_recv_n(fd, max)` returns the
+COUNT, `tcp_recv_data()` hands back the buffer those bytes are in.
+
+That split also recovers a distinction `tcp_recv` throws away. It
+returns `""` for both a clean peer close and a hard error, documented as
+a v1 trade -- fine for a text protocol, where either answer means "stop
+reading". A length-framed binary protocol cannot live with it: an empty
+read mid-stream is an ordinary event, and telling it from a dropped
+connection is the difference between waiting and failing. `tcp_recv_n`
+returns `> 0`, `0` and `< 0` and the Plum wrapper maps them to
+`Ok(data)`, `Ok(empty)` and `Err`.
+
+The send side needed nothing new: `tcp_send` already takes an explicit
+length and never calls `strlen`, so a NUL in the buffer was always just
+another byte. What it needed was a way to NAME the buffer, which is
+`.as_cstr()` on a `Bytes` -- the same `getelementptr` past the header
+that `String.as_cstr()` already was.
+
+**A comment corrected while doing it**: `infer.plum` claimed `.as_cstr()`
+validated its receiver against embedded NULs, "so a string with an
+embedded NUL is caught where it is converted rather than silently
+truncating inside the callee". It does not, and never did in this
+compiler -- `cg_as_cstr` emits one `getelementptr` and no check. The
+comment was corrected rather than the check implemented, because the
+check would be actively wrong for the new receiver: a `Bytes` with a NUL
+in it is ordinary data headed for a call that takes a length.
+
+### The leak fix that introduced a race
+
+`tcp_recv` `malloc`ed a fresh buffer per call and returned it as a
+`CStr`. Nothing ever freed one -- the extern boundary gives Plum no way
+to -- so a server looping on reads leaked its entire traffic volume.
+This is precisely the failure mode `io_shim.c`'s header documents
+avoiding, by owning its buffers and reusing them. Nothing caught it
+because `net-smoke` is the only harness that runs socket code and it does
+not run under ASan.
+
+So both receive functions were given a shared static buffer, which
+removed the leak, and **`net-smoke`'s HTTP round trip started failing 1
+run in 10.**
+
+The old code was leaky AND thread-safe: a fresh `malloc` per call cannot
+be raced. `Http.serve_once` runs inside a `spawn` while the client reads
+on another thread, so one shared buffer is two threads writing one
+array. The leak fix had traded one property for the other.
+
+Measured before fixing, which mattered here -- "intermittent" invites a
+guess, and the numbers made it a diagnosis instead:
+
+    committed compiler (malloc per call)   10/10 pass
+    shared static buffer                    9/10 pass
+    thread-local buffer                    20/20 pass
+
+Thread-local keeps both properties. The buffer is still never freed, but
+it is now bounded by the number of threads that read from a socket
+rather than by the number of reads, which is the actual improvement over
+what was there. There is no portable thread-exit hook to free it from --
+`pthread_key_t` with a destructor is POSIX-only and this file also
+compiles for Winsock -- and process exit reclaims it.
+
+`cross-check` is what says `_Thread_local` is safe here: it compiles
+every shim for macOS arm64/x86_64 and Windows in about two seconds, so
+the one genuinely portability-sensitive line in this change was verified
+against three targets it will never run on locally.
+
+### Scope
+
+`Http` still speaks `String` bodies and is unchanged. Moving it to
+`Bytes` is a separate question -- an HTTP body genuinely is bytes, but
+every existing user of `Http.Response.body` reads it as text, so that is
+an API break to schedule rather than slip in. File handles remain
+deferred behind the questions of what a handle is and how one closes.

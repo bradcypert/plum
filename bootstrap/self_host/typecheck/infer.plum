@@ -2123,6 +2123,7 @@ pub let builtin_methods (): Array[BuiltinMethod] = [
     BuiltinMethod { recv: "String", name: "to_lower", detail: "to_lower(): String" },
     BuiltinMethod { recv: "String", name: "to_upper", detail: "to_upper(): String" },
     BuiltinMethod { recv: "String", name: "as_cstr", detail: "as_cstr(): CStr" },
+    BuiltinMethod { recv: "Bytes", name: "as_cstr", detail: "as_cstr(): CStr" },
     BuiltinMethod { recv: "Int", name: "to_float", detail: "to_float(): Float" },
     BuiltinMethod { recv: "Float", name: "to_int", detail: "to_int(): Int" },
     BuiltinMethod { recv: "Float", name: "round_to_int", detail: "round_to_int(): Int" },
@@ -2258,13 +2259,33 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         };
         ir_leaf(subst_apply(s1, ef.ty), s1, ef.state, TTaskJoin(r.texpr))
     } else if method_name == "as_cstr" {
-        // `s.as_cstr()` -- hand a Plum string's bytes to C. Validated at
-        // this boundary rather than at the extern call, so a string with
-        // an embedded NUL is caught where it is converted rather than
-        // silently truncating inside the callee.
+        // `s.as_cstr()` -- hand a Plum cell's bytes to C as a `char*`.
+        // A BORROWED interior pointer (`getelementptr` past the header),
+        // not a copy, so it is valid exactly as long as the cell is.
+        //
+        // This comment used to claim the conversion was validated here,
+        // so that a string with an embedded NUL was caught where it was
+        // converted rather than truncating inside the callee. It is not,
+        // and never was in this compiler: `cg_as_cstr` emits one
+        // `getelementptr` and no check. Corrected rather than
+        // implemented, because the check would be wrong for the receiver
+        // added below -- a `Bytes` with a NUL in it is ordinary data, and
+        // the extern it is headed for (`tcp_send`) takes an explicit
+        // length and never calls `strlen`.
+        //
+        // Accepting `Bytes` is what makes binary FFI expressible at all:
+        // it is the only way to hand a buffer that may contain a zero
+        // byte to C. The caller still owes the callee a length, exactly
+        // as in C.
         let r = infer_expr(p2, state, env, acc, base);
-        let s1 = match unify(subst_apply(r.subst, r.ty), ITStr) { Ok(x) => subst_compose(x, r.subst), Err(e) => { fail_tc(".as_cstr() requires a String: ".concat(e)); r.subst } };
-        ir_leaf(ITCStr, s1, r.state, TAsCStr(r.texpr))
+        let bt = subst_apply(r.subst, r.ty);
+        match unify(bt, ITBytes) {
+            Ok(x) => ir_leaf(ITCStr, subst_compose(x, r.subst), r.state, TAsCStr(r.texpr)),
+            Err(_) => {
+                let s1 = match unify(bt, ITStr) { Ok(x) => subst_compose(x, r.subst), Err(e) => { fail_tc(".as_cstr() requires a String or Bytes: ".concat(e)); r.subst } };
+                ir_leaf(ITCStr, s1, r.state, TAsCStr(r.texpr))
+            },
+        }
     } else if method_name == "as_string" && Array.is_empty(args) {
         // The way back. Without it a `CStr` is a dead end -- exactly the
         // gap the real compiler found while wiring up TCP.

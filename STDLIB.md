@@ -69,8 +69,10 @@ See README.md for the prose introduction.
 - `let Bytes.concat (a: Bytes) (b: Bytes): Bytes`
 - `let Bytes.at (b: Bytes) (i: Int): Option[Int]`
 - `let Bytes.from_array (xs: Array[Int]): Bytes`
+- `let Bytes.from_cstr (c: CStr) (len: Int): Bytes`
 - `let Bytes.to_array (b: Bytes): Array[Int]`
 - `let Bytes.to_hex (b: Bytes): String`
+- `Bytes.as_cstr(): CStr`  (built in)
 
 ## CStr
 
@@ -129,6 +131,8 @@ See README.md for the prose introduction.
 - `let accept (fd: Int): Result[Int, String]`
 - `let write (fd: Int) (data: String): Result[Int, String]`
 - `let read (fd: Int) (max_len: Int): String`
+- `let read_bytes (fd: Int) (max_len: Int): Result[Bytes, String]`
+- `let write_bytes (fd: Int) (data: Bytes): Result[Int, String]`
 - `let close (fd: Int): Unit`
 
 ## Option

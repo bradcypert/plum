@@ -2700,6 +2700,7 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "bytes_at_raw" { Some("@plum_bytes_at") }
     else if name == "bytes_slice_raw" { Some("@plum_bytes_slice") }
     else if name == "bytes_from_array_raw" { Some("@plum_bytes_from_array") }
+    else if name == "bytes_from_cstr_raw" { Some("@plum_bytes_from_cstr") }
     // `read`/`write` reuse the whole-file symbols unchanged. Those
     // already read with `fread` and the file's real size, and write with
     // `fwrite` and the cell's stored length -- neither has ever

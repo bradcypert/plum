@@ -1384,7 +1384,15 @@ program's prelude):
   safe — fine for line-oriented protocols like HTTP, not arbitrary
   binary payloads) and returns `""` on both a clean peer-close and a
   hard socket error — a real, deliberate v1 scope trade, not a bug (see
-  DESIGN.md's "TCP sockets" section for the full reasoning). UDP isn't
+  DESIGN.md's "TCP sockets" section for the full reasoning).
+  **`Net.read_bytes(fd, max_len): Result[Bytes, String]`** and
+  **`Net.write_bytes(fd, data: Bytes): Result[Int, String]`** are the
+  binary-safe pair, added alongside rather than by changing `Net.read`,
+  whose `String` return is a promise about encoding that arbitrary
+  socket traffic does not keep. They are length-framed, so an embedded
+  NUL is just another byte, and they keep the three outcomes `Net.read`
+  collapses apart: `Ok` with a non-empty buffer is data, `Ok` with an
+  empty one is a clean peer close, and `Err` is a real socket error. UDP isn't
   in yet — deferred pending its own design for `recvfrom`'s sender-
   address problem.
 - **`use Http;` — HTTP client.** `Http.get(url): Result[Http.Response, String]`,
