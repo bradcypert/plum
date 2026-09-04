@@ -177,6 +177,11 @@ else
         if [ -d "$work/p.bin.dSYM" ]; then
             echo "      bundle contents: $(find "$work/p.bin.dSYM" -type f -exec ls -l {} \; 2>/dev/null | awk '{print $NF" ("$5" bytes)"}' | tr '\n' ' ')" >&2
             echo "      bundle line table, first lines: $(dwarf_lines "$work/p.bin.dSYM/Contents/Resources/DWARF/p.bin" | head -n 4 | tr '\n' ' | ')" >&2
+            # The decisive one: WHICH source files the table names. If
+            # ours is in here under any spelling, the toolchain is fine
+            # and this script's matching is what is wrong.
+            echo "      .plum files the bundle names: $(dwarf_lines "$work/p.bin.dSYM/Contents/Resources/DWARF/p.bin" | grep -oE "[^ \"]*\.plum" | sort -u | tr '\n' ' ')" >&2
+            echo "      bundle table size: $(dwarf_lines "$work/p.bin.dSYM/Contents/Resources/DWARF/p.bin" | wc -c) bytes" >&2
         fi
         if command -v nm > /dev/null 2>&1; then
             echo "      debug map (OSO) entries: $(nm -pa "$work/p.bin" 2>/dev/null | grep -c OSO)" >&2
