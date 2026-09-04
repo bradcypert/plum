@@ -159,6 +159,21 @@ else
         echo "FAIL: the built binary has no Plum line information, in itself or a .dSYM." >&2
         echo "      On Mach-O this means the debug map was never resolved -- 'plum build'" >&2
         echo "      keeps no .o files, so it needs to run dsymutil." >&2
+        # Say WHAT is missing rather than leaving the next person to
+        # guess across CI rounds, which is how this one was diagnosed
+        # twice wrongly. Each line distinguishes a different cause:
+        # no tool, tool ran but produced nothing, or a debug map that
+        # points at object files the compiler had already deleted.
+        echo "      --- diagnosis ---" >&2
+        echo "      dsymutil: $(command -v dsymutil 2>/dev/null || echo 'NOT ON PATH')" >&2
+        echo "      .dSYM beside the binary: $(ls -d "$work"/*.dSYM 2>/dev/null || echo 'none')" >&2
+        if command -v nm > /dev/null 2>&1; then
+            echo "      debug map (OSO) entries: $(nm -pa "$work/p.bin" 2>/dev/null | grep -c OSO)" >&2
+        fi
+        if command -v dsymutil > /dev/null 2>&1; then
+            echo "      dsymutil says: $(dsymutil "$work/p.bin" 2>&1 | head -n 2 | tr '\n' ' ')" >&2
+            echo "      .dSYM after running it by hand: $(ls -d "$work"/*.dSYM 2>/dev/null || echo 'still none')" >&2
+        fi
         fail=1 ;;
         esac
     fi
