@@ -17863,11 +17863,46 @@ outlives them long enough for the map to resolve. The scratch is removed
 after, by which point the bundle has copied the DWARF it needs. Every
 other platform keeps the single, faster invocation.
 
-Three CI rounds went into this, and the one that cost nothing was the
-round that printed four facts instead of testing a hypothesis. The two
-before it each tested a guess and came back with the same unhelpful
-message. The lesson is not "macOS is hard" -- it is that a failing check
-which cannot say WHY is worth less than one round of making it able to.
+### The actual cause: an empty `DW_AT_comp_dir`
+
+Two-phase compilation was necessary and not sufficient. The bundle it
+produced held 96,843 bytes of line table naming seven C shims and not
+one `.plum` file, and the debug map carried 7 `N_OSO` entries for the
+EIGHT objects linked. Exactly one object contributed nothing, and it
+was ours.
+
+The cause was in the metadata all along:
+
+    !5 = !DIFile(filename: "/long/path/to/main.plum", directory: "")
+
+No real compiler emits that -- they split the two. A Mach-O linker
+builds its debug map from a unit's name AND directory, so a unit it
+cannot place gets no `N_OSO` entry, `dsymutil` skips that object, and
+none of its line information reaches the bundle. ELF does not care,
+which is why Linux had been passing throughout. The compile unit's own
+file had the same empty directory and is the likelier culprit of the
+two, the map being per-unit.
+
+Splitting them, and giving the compile unit a `comp_dir` of `.`, closed
+it: macOS now reports "line information reaches its .dSYM bundle" and
+the whole run is green on all four platforms.
+
+### What the rounds actually cost
+
+Five CI rounds, and they divide cleanly. Three tested a HYPOTHESIS --
+"clang probably handles it", "run dsymutil after", "run it two-phase" --
+and two of the three came back with the identical unhelpful message,
+advancing nothing. Two printed FACTS instead, and each produced a
+decisive answer: the first showed the debug map naming deleted objects,
+the second showed a populated bundle with no `.plum` in it and 7 OSO
+entries where 8 were due.
+
+The lesson is not that macOS is hard. It is that a failing check which
+cannot say WHY is worth less than one round spent making it able to, and
+that counting is not the same as naming -- "7 entries" sat in the output
+for two rounds before anyone compared it to the eight objects being
+linked. The diagnostic now lists which objects are mapped, not how
+many.
 
 ### The property this quietly changed
 
