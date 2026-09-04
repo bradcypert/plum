@@ -1740,7 +1740,16 @@ let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String])
 }
 
 let run_dsymutil (out: String): Unit =
-    match Os.run_process("dsymutil", [out]) { Ok(r) => (), Err(e) => () }
+    match Os.run_process("dsymutil", [out]) {
+        // Not fatal, but not silent either. A build that produced a
+        // binary and no usable line information should say which, or
+        // the next person diagnosing it is reduced to guessing across
+        // CI rounds -- which is exactly how this took three.
+        Ok(r) => if r.exit_code != 0 || r.stderr != "" {
+            println("warning: dsymutil (exit ".concat(r.exit_code.to_string()).concat("): ").concat(r.stderr))
+        } else { () },
+        Err(e) => println("warning: could not run dsymutil: ".concat(e)),
+    }
 
 let platform_libs (target: String): Array[String] =
     if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32"] } else { ["-lm"] }

@@ -165,8 +165,19 @@ else
         # no tool, tool ran but produced nothing, or a debug map that
         # points at object files the compiler had already deleted.
         echo "      --- diagnosis ---" >&2
+        # What `plum build` itself said. `run_dsymutil` warns there when
+        # dsymutil fails or complains, which is the one voice that can
+        # report the IN-BUILD run rather than a by-hand one after the
+        # scratch objects are gone.
+        echo "      plum build said: $(head -c 400 "$work/build.err" 2>/dev/null | tr '\n' ' ')" >&2
         echo "      dsymutil: $(command -v dsymutil 2>/dev/null || echo 'NOT ON PATH')" >&2
         echo "      .dSYM beside the binary: $(ls -d "$work"/*.dSYM 2>/dev/null || echo 'none')" >&2
+        # Distinguishes an EMPTY bundle -- our in-build dsymutil failed --
+        # from one with content that simply does not mention our source.
+        if [ -d "$work/p.bin.dSYM" ]; then
+            echo "      bundle contents: $(find "$work/p.bin.dSYM" -type f -exec ls -l {} \; 2>/dev/null | awk '{print $NF" ("$5" bytes)"}' | tr '\n' ' ')" >&2
+            echo "      bundle line table, first lines: $(dwarf_lines "$work/p.bin.dSYM/Contents/Resources/DWARF/p.bin" | head -n 4 | tr '\n' ' | ')" >&2
+        fi
         if command -v nm > /dev/null 2>&1; then
             echo "      debug map (OSO) entries: $(nm -pa "$work/p.bin" 2>/dev/null | grep -c OSO)" >&2
         fi
