@@ -18271,3 +18271,61 @@ hand.
 where the `&` and `=` go. That was the reason for the dependency
 recorded when the issue was split, and it is the difference between one
 encoder and two.
+
+## `Http` onto `Url`, and characterising before changing (2026-09-04)
+
+`http_parse_url` is gone. `Http` now parses with `Url` and keeps only
+the question that ever belonged to it -- which URLs an HTTP CLIENT is
+willing to act on, which is not the same question as which strings are
+URLs.
+
+That distinction is the visible improvement. `nope://h/x` parses fine
+and is refused for its SCHEME; `h/x` is refused for having none. Those
+used to be the same message, because the old parser tested for the
+literal prefix `http://` and had nothing else to say.
+
+    example.com/x     was: http client: url must start with http://
+                      now: http client: Url.parse: missing scheme ...
+    http://h:99999/x  was: (accepted, then a failed connect)
+                      now: http client: Url.parse: port out of range: 99999
+    http://user@h/x   was: (connected to a host named "user@h")
+                      now: http client: Url.parse: userinfo ... not supported
+
+The two messages `net-smoke` asserts are unchanged, deliberately, and
+`https` is still checked BEFORE the general scheme test so it keeps its
+specific answer: it is a URL this client will support later, not one it
+will never accept.
+
+### The test was written before the change
+
+The risk in this migration is narrow and easy to state: `Url` splits the
+query out of the path, and the old parser never did. `Url.request_target`
+puts them back, and the claim that it does so byte-for-byte is exactly
+the kind of thing that is true the day it is written and quietly false
+later.
+
+So the request bytes were captured FIRST, from the unmigrated compiler,
+using a raw TCP listener rather than `Http.serve_once` -- a parsed
+`Request` cannot tell you what was actually sent. The recording became
+`net-smoke`'s `httpwire` case, and the migration then had to reproduce
+it exactly. It did, on the first run.
+
+This is the same discipline as the corpus fixtures written before the
+`Bytes` implementation, and it is worth naming as a habit rather than a
+coincidence: when a change is supposed to preserve behaviour, record the
+behaviour with the OLD code, or the test you write afterwards is a
+recording of the new bug.
+
+### One thing pinned as current, not as correct
+
+`Host:` carries no port, even for a request to port 18797. RFC 7230
+wants the port whenever it is not the scheme default, so this is a real
+deviation, and it predates the migration -- the old code sent
+`parsed.host` too.
+
+It is now pinned in `net-smoke` as CURRENT behaviour with a comment
+saying so, rather than quietly fixed in a change whose whole claim is
+that nothing on the wire moved. Fixing it becomes a deliberate edit to
+that expectation. The alternative -- correcting it here -- would have
+meant a migration that could no longer be verified by comparison, which
+is the one property that made this change safe.

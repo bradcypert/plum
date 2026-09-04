@@ -113,6 +113,54 @@ let main (): Unit = match Net.listen_on(18735) {
 }
 PLUM
 
+# --- HTTP wire format --------------------------------------------
+# The exact bytes `Http.get` puts on the wire, captured by a RAW TCP
+# listener rather than by `Http.serve_once` -- a parsed `Request` cannot
+# tell you what was actually sent.
+#
+# This exists because `Http` was migrated onto the `Url` module, which
+# splits the query out of the path where the old hand-rolled parser left
+# them together. `Url.request_target` puts them back, and the claim that
+# it does so byte-for-byte is exactly the kind of thing that is true on
+# the day it is written and quietly false later. The request line below
+# is the one the previous parser produced, recorded before the migration
+# and unchanged by it.
+#
+# `Host` carries no port even though this request goes to 18797. That is
+# a real deviation from RFC 7230, which wants the port whenever it is
+# not the scheme default -- pinned here as CURRENT behaviour, not as
+# correct behaviour, so that fixing it is a deliberate change to this
+# expectation rather than a surprise.
+mkdir -p "$work/httpwire"
+cat > "$work/httpwire/main.plum" <<'PLUM'
+use Net;
+use Http;
+
+let main (): Unit = match Net.listen_on(18797) {
+    Err(e) => println("listen: ".concat(e)),
+    Ok(srv) => {
+        let server = spawn {
+            match Net.accept(srv) {
+                Err(e) => "accept: ".concat(e),
+                Ok(conn) => {
+                    let got = Net.read(conn, 4096);
+                    match Net.write(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi") { Ok(_) => (), Err(_) => () };
+                    Net.close(conn);
+                    got
+                },
+            }
+        };
+        match Http.get("http://127.0.0.1:18797/a/b?q=1&r=2") {
+            Err(e) => println("client: ".concat(e)),
+            Ok(r) => println("client got ".concat(r.status.to_string()).concat(" ").concat(r.body)),
+        };
+        println("--- request bytes ---");
+        println(String.replace(server.join(), "\r\n", "\\r\\n\n"));
+        Net.close(srv)
+    },
+}
+PLUM
+
 # --- HTTP --------------------------------------------------------
 # `Http.serve_once` listens AND accepts internally, so the race cannot
 # be removed the way it can for raw TCP. The client retries instead: a
@@ -171,6 +219,12 @@ check() {
 }
 
 check tcp "ping/pong"
+check httpwire "client got 200 hi
+--- request bytes ---
+GET /a/b?q=1&r=2 HTTP/1.1\\r\\n
+Host: 127.0.0.1\\r\\n
+Connection: close\\r\\n
+\\r\\n"
 check netbin "00ff0a0d80410042
 00ff0a0d80410042
 true
