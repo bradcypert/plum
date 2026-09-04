@@ -730,6 +730,26 @@ let cg_line_search (starts: Array[Int]) (offset: Int) (lo: Int) (hi: Int): Int =
         else { cg_line_search(starts, offset, lo, mid - 1) }
     }
 
+// The directory and last component of a path. A path with no `/` is
+// taken as being in `.` -- a relative name with nowhere to anchor it is
+// still better than an empty directory, which is what this replaced.
+let cg_path_cut (path: String): Int = cg_path_cut_at(path, path.len() - 1)
+
+let cg_path_cut_at (path: String) (i: Int): Int =
+    if i < 0 { 0 - 1 }
+    else if String.slice(path, i, i + 1) == "/" { i }
+    else { cg_path_cut_at(path, i - 1) }
+
+let cg_path_dir (path: String): String = {
+    let c = cg_path_cut(path);
+    if c <= 0 { "." } else { String.slice(path, 0, c) }
+}
+
+let cg_path_base (path: String): String = {
+    let c = cg_path_cut(path);
+    if c < 0 { path } else { String.slice(path, c + 1, path.len()) }
+}
+
 let cg_dbg_find (fs: Array[DbgFile]) (path: String) (i: Int): Option[DbgFile] =
     if i >= fs.len() { None }
     else if fs[i].path == path { Some(fs[i]) }
@@ -746,8 +766,19 @@ let cg_dbg_file (path: String): DbgFile =
             let starts = match Os.read_file(path) { Ok(src) => cg_line_starts(src), Err(e) => [0] };
             let id = cg_dbg_next(());
             let f = DbgFile { path: path, id: id, starts: starts };
+            // filename and directory SPLIT, rather than a whole path
+            // with an empty directory. `DW_AT_comp_dir` is not
+            // decoration on Mach-O: the linker builds its debug map
+            // from the compilation unit's name and directory, and a
+            // unit it cannot place contributes no `N_OSO` entry -- so
+            // its object is skipped by `dsymutil` and none of its line
+            // information reaches the bundle. Measured: with an empty
+            // directory the macOS bundle held 96,843 bytes of line
+            // table naming seven C shims and not one `.plum` file, one
+            // OSO short of the eight objects linked.
             cg_dbg_emit("!".concat(id.to_string()).concat(" = !DIFile(filename: \"")
-                .concat(cg_escape_llvm(path)).concat("\", directory: \"\")\n"));
+                .concat(cg_escape_llvm(cg_path_base(path))).concat("\", directory: \"")
+                .concat(cg_escape_llvm(cg_path_dir(path))).concat("\")\n"));
             DBG_FILES.set(DBG_FILES.get().push(f));
             f
         },
@@ -873,7 +904,12 @@ pub let cg_dbg_module (unit: Unit): String =
             // `LineTablesOnly`: where code came from, and nothing about
             // its types. See this section's own comment.
             .concat("!1 = distinct !DICompileUnit(language: DW_LANG_C99, file: !2, producer: \"plum\", isOptimized: false, runtimeVersion: 0, emissionKind: LineTablesOnly)\n")
-            .concat("!2 = !DIFile(filename: \"<plum>\", directory: \"\")\n")
+            // `directory: "."` rather than empty here too. This is the
+            // COMPILE UNIT's own file, and its `DW_AT_comp_dir` is what
+            // a Mach-O linker uses to place the whole unit in its debug
+            // map -- an empty one is the likelier reason a unit is
+            // dropped than any per-subprogram file being wrong.
+            .concat("!2 = !DIFile(filename: \"<plum>\", directory: \".\")\n")
             // Every subprogram shares one empty signature type: with
             // line tables only, nothing reads it.
             .concat("!3 = !DISubroutineType(types: !4)\n")

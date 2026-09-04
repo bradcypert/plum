@@ -185,6 +185,12 @@ else
         fi
         if command -v nm > /dev/null 2>&1; then
             echo "      debug map (OSO) entries: $(nm -pa "$work/p.bin" 2>/dev/null | grep -c OSO)" >&2
+            # WHICH objects are mapped. One short of the number linked
+            # means an object contributed no debug map entry, and the
+            # missing one is the answer -- counting alone took a round
+            # to notice that 7 entries for 8 objects meant ours was the
+            # one absent.
+            echo "      objects in the map: $(nm -pa "$work/p.bin" 2>/dev/null | grep OSO | awk '{print $NF}' | xargs -n1 basename 2>/dev/null | tr '\n' ' ')" >&2
         fi
         if command -v dsymutil > /dev/null 2>&1; then
             echo "      dsymutil says: $(dsymutil "$work/p.bin" 2>&1 | head -n 2 | tr '\n' ' ')" >&2
