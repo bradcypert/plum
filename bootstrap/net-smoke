@@ -126,11 +126,15 @@ PLUM
 # is the one the previous parser produced, recorded before the migration
 # and unchanged by it.
 #
-# `Host` carries no port even though this request goes to 18797. That is
-# a real deviation from RFC 7230, which wants the port whenever it is
-# not the scheme default -- pinned here as CURRENT behaviour, not as
-# correct behaviour, so that fixing it is a deliberate change to this
-# expectation rather than a surprise.
+# `Host` carries the port, because 18797 is not the scheme default --
+# RFC 7230 section 5.4. It did NOT until 2026-09-04: the client sent a
+# bare host, which a name-based virtual host on a non-default port reads
+# as a different origin than the one that was asked for.
+#
+# That deviation was pinned here first, as current-not-correct
+# behaviour, so the migration onto `Url` could be verified by comparison
+# against it; correcting it was then a deliberate edit to this
+# expectation, which is what the earlier comment asked for.
 mkdir -p "$work/httpwire"
 cat > "$work/httpwire/main.plum" <<'PLUM'
 use Net;
@@ -222,7 +226,7 @@ check tcp "ping/pong"
 check httpwire "client got 200 hi
 --- request bytes ---
 GET /a/b?q=1&r=2 HTTP/1.1\\r\\n
-Host: 127.0.0.1\\r\\n
+Host: 127.0.0.1:18797\\r\\n
 Connection: close\\r\\n
 \\r\\n"
 check netbin "00ff0a0d80410042

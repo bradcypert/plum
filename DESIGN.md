@@ -18329,3 +18329,135 @@ that nothing on the wire moved. Fixing it becomes a deliberate edit to
 that expectation. The alternative -- correcting it here -- would have
 meant a migration that could no longer be verified by comparison, which
 is the one property that made this change safe.
+
+## The `Host` header carried no port (2026-09-04)
+
+`Http` sent `Host: example.com` for a request to `example.com:8080`.
+RFC 7230 section 5.4 wants the port whenever it is not the scheme's
+default, and a name-based virtual host on a non-default port reads a
+bare host as a different origin than the one that was asked for.
+
+Old, and not introduced by the `Url` migration -- that code sent
+`parsed.host` too. It was found BY the migration, pinned in `net-smoke`
+as current-not-correct behaviour so the migration could still be
+verified by byte comparison, and fixed immediately afterwards as a
+deliberate edit to that expectation. Two changes, in that order, because
+a migration that also changes the wire format cannot be checked against
+the format it replaced.
+
+The fix is one call, and where it lives is the interesting part.
+`Url.stringify` already had to re-bracket an IPv6 host and omit a
+default port; the `Host:` header wants exactly the same string, because
+a URL's authority component and a `Host:` header ARE the same thing. So
+that logic became `Url.authority` and both callers use it, rather than
+`Http` growing a second copy that could drift -- the same reasoning that
+made `Http` stop parsing URLs in the first place.
+
+The brackets matter here specifically: `parse` strips them because
+`getaddrinfo` wants `::1` and not `[::1]`, so anything putting the host
+back next to a `:port` has to restore them or the colons are ambiguous.
+`Host: [::1]:9000` is right and `Host: ::1:9000` is not parseable.
+
+## `handle`: the cell is the death a resource hooks onto (2026-09-04)
+
+Issue #9. `Task`/`Sender`/`Receiver` became refcounted cells on
+2026-08-28 for a reason recorded then: "an `Int` has no lifetime, so
+nothing runs when one dies." This makes that declarable, so a file
+descriptor or a terminal mode can hook onto a death too.
+
+```plum
+extern "C" { fn fake_close(h: Int); }
+handle Res { on_drop: fake_close }
+```
+
+The feature is one line of backend change in substance.
+`cg_handle_release_call` chose between `@task_release` and
+`@channel_release` with an `if`; the declared symbol now comes from the
+context instead. Everything else -- the cell, the refcount, the release
+being emitted at the right points -- already existed.
+
+### Why this rather than `defer`
+
+`defer f(); rest` means `{ let r = rest; f(); r }`. If `rest` ends in a
+recursive call, something must run after that call returns, so it is no
+longer a tail call -- and that is semantics, not an implementation
+limit. `ensure` already pays exactly this cost. TCO was not negotiable
+here, so the construct that requires giving it up was the wrong shape.
+
+Cleanup that rides the RELEASE path is free, because the backend already
+emits releases *before* a `musttail`:
+
+    <this function's own slot releases>
+    %r = musttail call @self(...)
+    ret %r
+
+`exec_corpus/handles` pins that empirically: a tail-recursive loop
+acquiring a handle per iteration runs 50,000 deep in constant stack and
+closes all 50,000. A `defer` in that loop could not have.
+
+The full reasoning, including what guards do NOT answer, is on issue #1.
+
+### What a handle is
+
+Three properties: the payload is one number Plum must not interpret; it
+has no fields; something outside Plum's memory model is alive because of
+it. The test is whether Plum needs to look INSIDE it -- if yes it is a
+struct, if it only ever stores the number and hands it back to C it is a
+handle.
+
+The state does not have to fit in the number. `dir_shim` and
+`process_shim` already keep the real thing (a `DIR*`, captured stdout)
+on the C side behind an opaque token; what was missing was only that
+nothing ran when the token died.
+
+### Four refusals, each with only wrong answers available
+
+- **A struct literal.** A handle is registered as a zero-field STRUCT so
+  that every existing name-resolution and visibility path works on it
+  unchanged. That makes `Res {}` parse as an empty struct literal, which
+  would allocate a cell with no handle in it. `from_raw` is the only
+  constructor, so the other door is closed explicitly.
+- **`==`.** With no fields, generated structural equality compares
+  nothing and answers `true` for two different open resources. Comparing
+  payloads instead is a different lie: two cells over one resource
+  (exactly what `Sender`/`Receiver` are) are not the same handle, and a
+  reused fd number is not the same file. Neither answer is right.
+- **`.to_string()`.** The only thing available to print is a raw shim
+  value, which is what `Task` did by accident before it became a cell.
+- **A non-extern `on_drop`.** Validated in the checker rather than
+  discovered at link time, where a typo surfaces as "undefined symbol"
+  naming a function the author never wrote a call to -- and a wrong but
+  EXISTING signature is worse, since it links and then corrupts the
+  stack at the moment a resource is freed.
+
+### Two things the fixture pins as current, not correct
+
+Both were predicted from reading the release machinery and then
+confirmed by running it, which is the useful order.
+
+**Cleanup is FUNCTION-scoped, not block-scoped.** Releases bubble upward
+through `cg_block_ty`, so two handles acquired inside a `{ }` block
+close when the enclosing function returns, not at the closing brace. The
+fixture shows the counts saying so.
+
+**Release order is DECLARATION order.** `a.releases.concat(b.releases)`
+means first acquired, first released. Guards compose correctly only in
+reverse -- acquire a lock then a file, release the file then the lock --
+so this wants flipping. Safe to do (releases touch disjoint slots) but
+it shifts emitted IR everywhere, so it is its own change with
+`bootstrap-check` as the check. Pinned in the fixture as it stands, with
+a comment saying it is current behaviour, so reversing it is a
+deliberate edit rather than a surprise -- the same treatment the `Host:`
+header got a few hours earlier.
+
+### The bug that cost the most time
+
+`from_raw` was intercepted in `cg_fn_call` and kept being emitted as
+`call @Res.from_raw` anyway -- a call to a function that does not exist,
+caught by `clang` rather than by anything here.
+
+The synthesized signatures are marked `is_extern`, which was deliberate:
+that flag is what puts them behind `unsafe`, and they genuinely are FFI
+boundaries. But `is_extern` ALSO routes a call down the extern path,
+which emits `@<name>` verbatim and never reaches `cg_fn_call`. One flag,
+two consumers, and only one of them was in mind when it was set.

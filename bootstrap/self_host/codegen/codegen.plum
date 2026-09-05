@@ -1249,7 +1249,15 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
         TArrayNs(name, args) => cg_array_ns_call(p, env, n, name, args),
         TArrayNsReuse(name, args, cand) => cg_array_ns_reuse(p, env, n, name, args, cand),
-        TExternCall(name, args) => cg_extern_call(p, env, n, name, args, cg_ty(p, e)),
+        // A handle's `from_raw`/`raw` arrive HERE, not through
+        // `cg_fn_call`: their synthesized signatures are marked
+        // `is_extern` so the `unsafe` gate applies to them, and that
+        // flag also routes them down the extern path. They are not real
+        // C functions, so they are intercepted before one is called.
+        TExternCall(name, args) => match cg_handle_conv(p, env, n, name, args, cg_ty(p, e)) {
+            Some(h) => h,
+            None => cg_extern_call(p, env, n, name, args, cg_ty(p, e)),
+        },
         TAsCStr(inner) => cg_as_cstr(p, env, n, inner),
         TAsString(inner) => cg_as_string(p, env, n, inner),
         TChannelNew => cg_channel_new(p, env, n, cg_ty(p, e)),
@@ -2601,7 +2609,49 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExp
 // trace it produces (one frame, not three million) is what the machine
 // actually did. Any OTHER call pops after, so a callee that dies still
 // shows this frame as its caller.
-let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy) (tail: Bool) (pending: String): Emit = {
+// `File.from_raw(n)` and `File.raw(f)`, the two conversions a `handle`
+// declaration synthesizes.
+//
+// Emitted INLINE rather than as generated functions, the same way
+// `cg_channel_new` builds a handle cell inline: each is two or three
+// instructions, and a call would cost more than it saves. The cell
+// layout is `{ i64 rc, i64 handle }` -- identical to the one the three
+// built-in handles use, which is why `cg_handle_cell`/`cg_handle_load`
+// serve both without change.
+let cg_handle_conv (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (args: Array[typecheck.TExpr]) (ret: CgTy): Option[Emit] =
+    if !typecheck.ctx_is_handle(p.ctx, cg_handle_owner(name)) { None }
+    else if cg_ends_with(name, ".from_raw") && args.len() == 1 {
+        let a = cg_expr(p, env, n, args[0]);
+        let cell = cg_reg(a.n);
+        Some(Emit { code: a.code.concat(cg_handle_cell(cell, a.val)), allocas: a.allocas, releases: a.releases,
+                    globals: a.globals, val: cell, ty: ret, n: a.n + 1 })
+    } else if cg_ends_with(name, ".raw") && args.len() == 1 {
+        // A BORROW: the number is read out and the cell keeps its
+        // reference. Nothing is released here, because the caller still
+        // owns the handle -- reading the number does not consume it.
+        let a = cg_borrow(p, env, n, args[0]);
+        let reg = cg_reg(a.n);
+        Some(Emit { code: a.code.concat(cg_handle_load(reg, a.val)).concat(a.drop), allocas: a.allocas, releases: a.releases,
+                    globals: a.globals, val: reg, ty: ret, n: a.n + 1 })
+    } else { None }
+
+// The type name in front of `.from_raw` / `.raw`, or "" for a call that
+// is neither.
+let cg_handle_owner (name: String): String =
+    match String.index_of(name, ".") {
+        None => "",
+        Some(i) => String.slice(name, 0, i),
+    }
+
+let cg_ends_with (s: String) (suffix: String): Bool = s.ends_with(suffix)
+
+let cg_fn_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy) (tail: Bool) (pending: String): Emit =
+    match cg_handle_conv(p, env, n, name, args, ret) {
+        Some(e) => e,
+        None => cg_fn_call_real(p, env, n, module_name, name, args, targs, ret, tail, pending),
+    }
+
+let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: String) (name: String) (args: Array[typecheck.TExpr]) (targs: Array[typecheck.ITy]) (ret: CgTy) (tail: Bool) (pending: String): Emit = {
     let sym = match cg_array_concat_sym(p, name, targs) {
         Some(rt) => rt,
         None => match cg_runtime_fn(name) {
@@ -4293,7 +4343,7 @@ let cg_reuse_of_ity (p: CgProgram) (slot: CgSlot) (ity: typecheck.ITy) (want: In
             // A handle cell is never recycled INTO. Its one word is a
             // shim handle, not a field, and dropping it means telling
             // the shim -- which the generic child-drop cannot do.
-            else if cg_is_handle_name(sname) { None }
+            else if cg_is_handle(p, sname) { None }
             else {
                 let bytes = 8 + 8 * typecheck.ctx_field_names(p.ctx, sname).len();
                 if bytes >= want {
@@ -5347,7 +5397,7 @@ let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): A
                 // walk into. Reached when one is a FIELD of something
                 // being compared, which is why this is a stop rather
                 // than an error.
-                else if cg_is_handle_name(name) { acc2 }
+                else if cg_is_handle(p, name) { acc2 }
                 else { cg_eq_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2) },
             ITEnum(name, args) => cg_eq_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2),
             ITTuple(elems) => cg_eq_close_list(p, elems, 0, acc2),
@@ -5500,7 +5550,7 @@ let cg_emit_str_fn (p: CgProgram) (t: typecheck.ITy): String =
     match t {
         ITStruct(name, args) =>
             if name == "Array" { cg_emit_array_str(t, args[0]) }
-            else if cg_is_handle_name(name) { "" }
+            else if cg_is_handle(p, name) { "" }
             else { cg_emit_struct_str(p, t, name, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
         ITEnum(name, args) => cg_emit_enum_str(p, t, name, args),
         _ => "",
@@ -5637,7 +5687,7 @@ let cg_emit_eq_fn (p: CgProgram) (t: typecheck.ITy): String =
     match t {
         ITStruct(name, args) =>
             if name == "Array" { cg_emit_array_eq(t, args[0]) }
-            else if cg_is_handle_name(name) { "" }
+            else if cg_is_handle(p, name) { "" }
             else { cg_emit_struct_eq(t, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
         ITEnum(name, args) => cg_emit_enum_eq(p, t, cg_find_enum(p, name).variants, args),
         ITTuple(elems) => cg_emit_struct_eq(t, elems),
@@ -5996,6 +6046,11 @@ let cg_rel_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): 
                         // clean up values still in flight, so that one
                         // has to exist.
                         if cg_is_handle_name(name) { cg_rel_close(p, args[0], acc2) }
+                        // A DECLARED handle carries no element type and
+                        // owns nothing but its own number, so the walk
+                        // stops here rather than reaching for `args[0]`
+                        // that does not exist.
+                        else if typecheck.ctx_is_handle(p.ctx, name) { acc2 }
                         else if name == "Array" { cg_rel_close(p, args[0], acc2) }
                         else { cg_rel_close_list(p, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft)), 0, acc2) },
                     ITEnum(name, args) => cg_rel_close_variants(p, cg_find_enum(p, name).variants, args, 0, acc2),
@@ -6092,7 +6147,16 @@ let cg_rel_head (t: typecheck.ITy): String =
 
 let cg_rel_tail (unit: Unit): String = "  call void @free(ptr %p)\n  ret void\n}\n\n"
 
+// The three the compiler builds itself. Each carries an ELEMENT type,
+// which is why the paths below index `args[0]` -- a user handle has no
+// type arguments and would be out of bounds there.
 pub let cg_is_handle_name (name: String): Bool = name == "Sender" || name == "Receiver" || name == "Task"
+
+// Either kind: the three above, or a `handle` a program declared.
+// Asked by the five places a structural walk would otherwise ask a
+// handle for fields it does not have.
+pub let cg_is_handle (p: CgProgram) (name: String): Bool =
+    cg_is_handle_name(name) || typecheck.ctx_is_handle(p.ctx, name)
 
 // Releasing a handle cell is the ordinary dec-and-free, plus the one
 // thing that made this whole change worth doing: at zero, the resource
@@ -6110,6 +6174,40 @@ pub let cg_is_handle_name (name: String): Bool = name == "Sender" || name == "Re
 let cg_handle_release_call (name: String) (rel: String): String =
     if name == "Task" { "  call void @task_release(i64 %h, ptr ".concat(rel).concat(")\n") }
     else { "  call void @channel_release(i64 %h, ptr ".concat(rel).concat(")\n") }
+
+// The whole point of issue #9, in one function: at zero, the number
+// this cell holds is handed to the cleanup the declaration named.
+//
+// Simpler than `cg_emit_handle_rel` below because a declared handle has
+// no element type -- nothing is ever in flight inside it, so there is no
+// child release function to thread through.
+//
+// The cleanup is called with the raw handle and nothing else, and its
+// return value (if any) is discarded: a release runs while a value is
+// dying and has nowhere to report to. That is the same limitation
+// Rust's `Drop` has, and it is why a fallible close should ALSO be
+// offered explicitly -- see the notes on issue #1.
+let cg_emit_user_handle_rel (p: CgProgram) (t: typecheck.ITy) (name: String): String =
+    "define void ".concat(cg_rel_sym(t)).concat("(ptr %p) {\nentry:\n")
+        .concat("  %isnull = icmp eq ptr %p, null\n")
+        .concat("  br i1 %isnull, label %skip, label %live\n")
+        .concat("skip:\n  ret void\n")
+        .concat("live:\n")
+        .concat("  %rc = load i64, ptr %p\n")
+        .concat("  %static = icmp slt i64 %rc, 0\n")
+        .concat("  br i1 %static, label %skip, label %dec\n")
+        .concat("dec:\n")
+        .concat("  %rc1 = sub i64 %rc, 1\n")
+        .concat("  store i64 %rc1, ptr %p\n")
+        .concat("  %dead = icmp sle i64 %rc1, 0\n")
+        .concat("  br i1 %dead, label %gone, label %alive\n")
+        .concat("alive:\n  ret void\n")
+        .concat("gone:\n")
+        .concat("  %hp = getelementptr i8, ptr %p, i64 8\n")
+        .concat("  %h = load i64, ptr %hp\n")
+        .concat("  call void @").concat(typecheck.ctx_handle_on_drop(p.ctx, name)).concat("(i64 %h)\n")
+        .concat("  call void @free(ptr %p)\n")
+        .concat("  ret void\n}\n\n")
 
 let cg_emit_handle_rel (p: CgProgram) (t: typecheck.ITy) (name: String) (elem: typecheck.ITy): String = {
     let rel = if cg_is_heap(cg_of_ity(cg_concrete(p, elem))) { cg_rel_sym(cg_concrete(p, elem)) } else { "null" };
@@ -6139,6 +6237,7 @@ let cg_emit_rel_fn (p: CgProgram) (t: typecheck.ITy): String =
     match t {
         ITStruct(name, args) =>
             if cg_is_handle_name(name) { cg_emit_handle_rel(p, t, name, args[0]) }
+            else if typecheck.ctx_is_handle(p.ctx, name) { cg_emit_user_handle_rel(p, t, name) }
             else if name == "Array" { cg_emit_array_rel(t, args[0]) }
             else { cg_emit_struct_rel(t, Array.map(typecheck.ctx_field_types(p.ctx, name), |ft| typecheck.instantiate_template(typecheck.ctx_struct_generics(p.ctx, name), args, ft))) },
         ITEnum(name, args) => cg_emit_enum_rel(p, t, cg_find_enum(p, name).variants, args),

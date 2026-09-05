@@ -270,6 +270,7 @@ See README.md for the prose introduction.
 - `let default_port (scheme: String): Int`
 - `let parse (input: String): Result[Url, String]`
 - `let request_target (u: Url): String`
+- `let authority (u: Url): String`
 - `let stringify (u: Url): String`
 - `let query_all (u: Url) (name: String): Array[String]`
 - `let query_get (u: Url) (name: String): Option[String]`

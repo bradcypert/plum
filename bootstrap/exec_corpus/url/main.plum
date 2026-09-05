@@ -88,6 +88,19 @@ let main (): Unit = {
     show_canonical("http://[::1]:80/x");
     show_canonical("http://h/p?a=1#f");
 
+    // --- Authority ---
+    //
+    // Host plus the port when it is not the scheme's default, with IPv6
+    // brackets put back. This is what an HTTP `Host:` header wants (RFC
+    // 7230 section 5.4) and what a URL's authority component is -- the
+    // same string for the same reason, so `Http` uses this rather than
+    // carrying its own copy.
+    println(Array.join(Array.map([
+        "http://h/x", "http://h:80/x", "http://h:8080/x",
+        "https://h:443/x", "https://h:8443/x",
+        "http://[::1]/x", "http://[::1]:9000/x",
+    ], |s| match Url.parse(s) { Ok(u) => Url.authority(u), Err(e) => e }), " "));
+
     // --- Query access ---
     match Url.parse("http://h/p?tag=a&tag=b&q=hello%20world&empty=") {
         Err(e) => println(e),

@@ -1,0 +1,1 @@
+((handle File on_drop:file_close))

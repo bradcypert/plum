@@ -211,6 +211,19 @@ pub let build_sigs (ctx: TyContext) (program: parser.ProgramNode): Program2 = co
 // types a `void` extern (`plum_types::TypeContext::extern_fns`).
 let is_unit_ty (t: ITy): Bool = match t { ITUnit => true, _ => false }
 
+// `File.from_raw(n: Int): File` and `File.raw(f: File): Int`.
+//
+// Named after the type, so they arrive through the ordinary namespaced
+// path (`find_sig` on "File.from_raw") with no special case in call
+// resolution.
+let handle_sigs (module_name: String) (decl: parser.HandleDeclNode) (is_pub: Bool): Array[FnSig] = {
+    let ty = ITStruct(parser.qualify_type(module_name, decl.name), []);
+    [
+        FnSig { name: decl.name.concat(".from_raw"), module: module_name, generics: [], params: [ITInt], ret: ty, is_extern: true, is_pub: is_pub },
+        FnSig { name: decl.name.concat(".raw"), module: module_name, generics: [], params: [ty], ret: ITInt, is_extern: true, is_pub: is_pub },
+    ]
+}
+
 let extern_sigs (ctx: TyContext) (fns: Array[parser.ExternFnNode]) (i: Int) (acc: Array[FnSig]): Array[FnSig] =
     if i >= fns.len() { acc }
     else {
@@ -240,6 +253,20 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
             // inference resolves it; `is_extern` is what the unsafe gate
             // and the backend key off.
             IKExtern(block) => collect_sigs_acc(ctx, items, i + 1, Array.concat(sigs, extern_sigs(ctx, block.fns, 0, [])), globals),
+            // A handle declaration synthesizes its own two conversions.
+            // Nothing else can build or read one: the payload is a
+            // native number, so there is no literal syntax for it and no
+            // field to reach.
+            //
+            // Both are marked `is_extern`, which is what puts them
+            // behind `unsafe` -- and that is not a trick to reuse a
+            // gate, it is what they are. `from_raw` asserts that a
+            // number really is a live resource of this kind, and `raw`
+            // hands that number to C while Plum still owns the cell.
+            // Getting either wrong is a double close or a
+            // use-after-free, which is exactly the class of thing
+            // `unsafe` marks everywhere else in this language.
+            IKHandle(decl) => collect_sigs_acc(ctx, items, i + 1, Array.concat(sigs, handle_sigs(items[i].module, decl, items[i].is_pub)), globals),
             _ => collect_sigs_acc(ctx, items, i + 1, sigs, globals),
         }
     }
@@ -366,8 +393,45 @@ let bind_param (env: TyEnv) (p: parser.ParamNode) (ty: ITy): TyEnv =
 pub let check_program (program: parser.ProgramNode): Unit = {
     let ctx = build_context(program);
     let p2 = build_sigs(ctx, program);
+    check_handle_drops(p2, program.items, 0);
     check_ordered_bounds(ctx, program.items, check_all_fns(p2, program.items, 0, []))
 }
+
+// A handle's `on_drop` must name an `extern "C"` function taking one
+// `Int` and returning nothing.
+//
+// Checked here rather than discovered at link time. Without it, a typo
+// in a handle declaration produces "undefined symbol" from `clang`,
+// naming a function the author never wrote a call to -- and a WRONG but
+// existing signature is worse still, since it links and then corrupts
+// the stack at the exact moment a resource is being freed.
+//
+// Requiring `extern` also settles where the `declare` comes from: the
+// extern block emits exactly one, so the handle declaration adds none
+// and cannot produce a duplicate.
+let check_handle_drops (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): Unit =
+    if i >= items.len() { () }
+    else {
+        match items[i].kind {
+            IKHandle(decl) => match find_sig(p2, decl.on_drop) {
+                None => fail_tc("handle ".concat(decl.name).concat(": on_drop names '").concat(decl.on_drop)
+                    .concat("', which is not declared. It must be an `extern \"C\"` function taking one Int.")),
+                Some(sig) =>
+                    if !sig.is_extern {
+                        fail_tc("handle ".concat(decl.name).concat(": on_drop '").concat(decl.on_drop)
+                            .concat("' must be an `extern \"C\"` function, not a Plum one -- it runs while a value is being freed"))
+                    } else if sig.params.len() != 1 {
+                        fail_tc("handle ".concat(decl.name).concat(": on_drop '").concat(decl.on_drop)
+                            .concat("' must take exactly one Int, but takes ").concat(sig.params.len().to_string()))
+                    } else { match sig.params[0] {
+                        ITInt => match sig.ret { ITUnit => (), _ => fail_tc("handle ".concat(decl.name).concat(": on_drop '").concat(decl.on_drop).concat("' must return nothing")) },
+                        _ => fail_tc("handle ".concat(decl.name).concat(": on_drop '").concat(decl.on_drop).concat("' must take an Int")),
+                    } },
+            },
+            _ => (),
+        };
+        check_handle_drops(p2, items, i + 1)
+    }
 
 // --- Ordered comparisons through a generic ---
 //
@@ -567,7 +631,7 @@ let ord_req_for (f: TFn) (kind: String) (t: ITy) (acc: Array[OrdReq]): Array[Ord
 let violates_bound (ctx: TyContext) (kind: String) (t: ITy): Bool =
     if kind == "Ord" { is_known_unordered(t) }
     else if kind == "Eq" { Option.is_some(first_function_within(ctx, t, [])) }
-    else if kind == "Show" { is_unrenderable(t) }
+    else if kind == "Show" { is_unrenderable(ctx, t) }
     else { false }
 
 let bound_needs (kind: String): String =
@@ -696,6 +760,7 @@ let typed_params (params: Array[parser.ParamNode]) (tys: Array[ITy]) (subst: Sub
 pub let typed_program (program: parser.ProgramNode): Array[TFn] = {
     let ctx = build_context(program);
     let p2 = build_sigs(ctx, program);
+    check_handle_drops(p2, program.items, 0);
     let fns = typed_fns_acc(p2, program.items, 0, []);
     // Run on the BUILD path too, not only in `check`. A rule the
     // compiler enforces and the checker does not is the gap that let
@@ -1112,6 +1177,7 @@ let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (o
     };
     let operand_ty = subst_apply(combined, lr.ty);
     reject_function_equality(p2, op, operand_ty);
+    reject_handle_equality(p2, op, operand_ty);
     reject_unordered_comparison(op, operand_ty);
     ir_leaf(binary_result_ty(op, operand_ty), combined, rr.state, TBinary(op, lr.texpr, rr.texpr))
 }
@@ -1197,6 +1263,12 @@ let reject_unrenderable (p2: Program2) (t: ITy): Unit =
         ITStruct(name, _) =>
             if name == "Task" || name == "Sender" || name == "Receiver" {
                 fail_tc(".to_string() on a ".concat(name).concat(" isn't supported"))
+            } else if ctx_is_handle(p2.ctx, name) {
+                // A handle's payload is a number the compiler is not
+                // allowed to interpret, so the only thing it COULD print
+                // is a raw shim value. That is what `Task` used to do by
+                // accident before it became a real cell.
+                fail_tc(".to_string() on a handle (".concat(parser.bare_type_name(name)).concat(") isn't supported: its payload is opaque"))
             } else { () },
         _ => (),
     }
@@ -1204,7 +1276,7 @@ let reject_unrenderable (p2: Program2) (t: ITy): Unit =
 // The same rule as a predicate, for the CALL-SITE check on a generic.
 // One rule, asked in two places -- the direct one keeps its specific
 // wording, which names the thing to write instead.
-let is_unrenderable (t: ITy): Bool =
+let is_unrenderable (ctx: TyContext) (t: ITy): Bool =
     match t {
         ITUnit => true,
         ITCStr => true,
@@ -1212,7 +1284,7 @@ let is_unrenderable (t: ITy): Bool =
         ITRef(_) => true,
         ITFunction(_, _) => true,
         ITTuple(_) => true,
-        ITStruct(name, _) => name == "Task" || name == "Sender" || name == "Receiver",
+        ITStruct(name, _) => name == "Task" || name == "Sender" || name == "Receiver" || ctx_is_handle(ctx, name),
         _ => false,
     }
 
@@ -1224,6 +1296,31 @@ let is_known_unordered (t: ITy): Bool =
         ITVar(_) => false,
         ITParam(_) => false,
         _ => true,
+    }
+
+// `==` on a handle is refused rather than answered.
+//
+// A handle has no fields, so the structural equality this checker would
+// generate compares nothing and is therefore always TRUE -- two
+// different open files would compare equal. Comparing the payloads
+// instead would be a different lie: two cells over one underlying
+// resource (which is exactly what `Sender`/`Receiver` are) are not the
+// same handle, and a reused file descriptor number is not the same file.
+// Neither answer is right, so there is no answer.
+let reject_handle_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
+    match op {
+        BEq => reject_if_handle(p2, "==", t),
+        BNe => reject_if_handle(p2, "!=", t),
+        _ => (),
+    }
+
+let reject_if_handle (p2: Program2) (sym: String) (t: ITy): Unit =
+    match t {
+        ITStruct(name, _) => if ctx_is_handle(p2.ctx, name) {
+            fail_tc("'".concat(sym).concat("' is not supported for handle ").concat(parser.bare_type_name(name))
+                .concat(": a handle has no fields to compare, and its payload is opaque"))
+        } else { () },
+        _ => (),
     }
 
 let reject_function_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
@@ -2633,6 +2730,16 @@ let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     // module the author had not written.
     let name = parser.join_dot(path);
     check_struct_named(p2.ctx, p2.current, name);
+    // A handle is registered as a zero-field struct so that every
+    // existing name-resolution path works on it. That makes `File {}`
+    // parse and check as an empty struct literal -- and it would
+    // allocate a cell with no native handle in it, which every later
+    // use would read as garbage. `from_raw` is the only way to build
+    // one, so this is where the other way is closed off.
+    if ctx_is_handle(p2.ctx, name) {
+        fail_tc("handle ".concat(parser.bare_type_name(name)).concat(" cannot be built with a struct literal -- use ")
+            .concat(parser.bare_type_name(name)).concat(".from_raw(n) inside an `unsafe` block"))
+    } else { () };
     match best_struct(p2.ctx, p2.current, name) {
         Some(info) => {
             let fields = expand_nested_updates(p2, info, fields0, spread);

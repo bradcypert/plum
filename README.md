@@ -1412,6 +1412,17 @@ program's prelude):
   `stringify`. `stringify` is canonical, not byte-preserving: it omits a
   default port and adds the `/` a bare authority implies. Userinfo
   (`user@host`) is rejected rather than silently mis-parsed.
+- **`handle` — native resources that clean themselves up.** `handle File
+  { on_drop: file_close }` declares a type whose value holds one opaque
+  native number and whose death calls `file_close` with it. Because
+  cleanup rides the refcount release path, it is hoisted **before** a
+  tail call and so costs no tail-call optimization — which a `defer`
+  statement could not manage, since it would have to run after the call
+  returns. `Task`, `Sender` and `Receiver` have worked this way since
+  0.0.x; this is the declarable form. `T.from_raw(n)` and `T.raw(t)` are
+  the only ways in and out and both require `unsafe`, since both are FFI
+  boundaries. A handle has no fields, no `==` and no `.to_string()`: its
+  payload is opaque, so there is no honest answer for any of them.
 - **`use Encoding;` — hex, base64, and percent-encoding.**
   `Encoding.hex_encode(b: Bytes): String` / `Encoding.hex_decode(s):
   Result[Bytes, String]`, `Encoding.base64_encode`/`base64_decode`,

@@ -141,6 +141,30 @@ VariantList ::= Variant { "," Variant } [ "," ]
 Variant     ::= Identifier [ "(" Type { "," Type } ")" ]
 ```
 
+### Handle declarations
+
+```
+HandleDecl  ::= "handle" Identifier "{" "on_drop" ":" Identifier [ "," ] "}"
+```
+
+An opaque native handle: a type whose value holds one number the
+compiler never interprets, and whose death calls `on_drop` with that
+number. `on_drop` must name an `extern "C"` function taking one `Int`
+and returning nothing.
+
+`handle` is a **contextual keyword** — it introduces an item only at the
+start of one, and remains an ordinary identifier everywhere else. It has
+to be: this compiler's own source uses `handle` as a variable and
+parameter name (`dir_open_handle`, `process_free_raw`), so a real
+keyword would stop it compiling itself. Same treatment as
+`require`/`ensure`.
+
+A handle has no fields on purpose. If Plum needs to look inside it, it
+is a struct. The declaration synthesizes two conversions, both `unsafe`
+because both are FFI boundaries: `T.from_raw(n: Int): T` asserts that a
+number really is a live resource of this kind, and `T.raw(t: T): Int`
+hands that number to C while Plum still owns the cell.
+
 ### Extern blocks
 
 ```

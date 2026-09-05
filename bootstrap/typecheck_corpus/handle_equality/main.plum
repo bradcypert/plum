@@ -1,0 +1,13 @@
+// Rejected: a handle has no fields, so generated structural equality
+// would compare nothing and answer `true` for two different open
+// resources. Comparing payloads instead would be a different lie -- two
+// cells over one resource (what `Sender`/`Receiver` are) are not the
+// same handle, and a reused file descriptor number is not the same
+// file. Neither answer is right, so there is no answer.
+extern "C" { fn fake_open() -> Int; fn fake_close(h: Int); }
+handle Res { on_drop: fake_close }
+let main (): Unit = {
+    let a = unsafe { Res.from_raw(fake_open()) };
+    let b = unsafe { Res.from_raw(fake_open()) };
+    println(if a == b { "same" } else { "different" })
+}

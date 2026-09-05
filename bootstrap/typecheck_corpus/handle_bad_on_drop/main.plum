@@ -1,0 +1,6 @@
+// Rejected: `on_drop` names a function that does not exist. Caught here
+// rather than at link time, where it would surface as "undefined symbol"
+// naming a function the author never wrote a call to.
+extern "C" { fn fake_close(h: Int); }
+handle Res { on_drop: fake_clsoe }
+let main (): Unit = println("unreachable")

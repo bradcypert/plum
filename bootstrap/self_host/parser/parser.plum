@@ -155,6 +155,16 @@ pub struct EnumDeclNode { pub name: String, pub generics: Array[GenericParamNode
 pub struct ExternParamNode { pub name: String, pub ty: Ty }
 pub struct ExternFnNode { pub name: String, pub params: Array[ExternParamNode], pub ret_ty: Option[Ty] }
 pub struct ExternBlockNode { pub abi: String, pub fns: Array[ExternFnNode] }
+// An opaque native handle: a type whose value holds ONE number the
+// compiler never interprets, and whose death calls `on_drop` with that
+// number.
+//
+// `Task`/`Sender`/`Receiver` are the same shape, hardcoded, and this is
+// the declarable form of what they already are -- see DESIGN.md's
+// "Handles that own something" and issue #9. A handle has NO fields on
+// purpose: if Plum needs to look inside it, it is a struct.
+pub struct HandleDeclNode { pub name: String, pub on_drop: String }
+
 pub struct UseDeclNode { pub path: Array[String] }
 
 pub enum ItemKindNode {
@@ -162,6 +172,7 @@ pub enum ItemKindNode {
     IKStruct(StructDeclNode),
     IKEnum(EnumDeclNode),
     IKExtern(ExternBlockNode),
+    IKHandle(HandleDeclNode),
     IKUse(UseDeclNode),
 }
 
@@ -369,7 +380,21 @@ let parse_item (tokens: Array[lexer.Token]) (pos: Int): ItemResult = {
         TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKEnum(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
         TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKExtern(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
         TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKUse(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
-        _ => { fail_at(start, "expected an item (let/struct/enum/extern/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start } },
+        // `handle` is a CONTEXTUAL keyword: it is only an item
+        // introducer here, at the start of an item, and stays an
+        // ordinary identifier everywhere else. It has to be -- this
+        // compiler's own source uses `handle` as a variable name in
+        // several places (`dir_open_handle`, `process_free_raw`'s
+        // parameter), and a real keyword would stop it compiling
+        // itself. Same treatment as `require`/`ensure`.
+        TokIdent(word) => if word == "handle" {
+            let r = parse_handle_decl(tokens, start);
+            ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKHandle(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos }
+        } else {
+            fail_at(start, "expected an item (let/struct/enum/extern/handle/use)");
+            ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start }
+        },
+        _ => { fail_at(start, "expected an item (let/struct/enum/extern/handle/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start } },
     }
 }
 
@@ -547,6 +572,29 @@ let parse_tuple_param_elems_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Ar
 // --- Struct / enum / extern / use declarations ---
 
 struct StructDeclResult { value: StructDeclNode, next_pos: Int }
+
+struct HandleDeclResult { value: HandleDeclNode, next_pos: Int }
+
+// `handle File { on_drop: file_close }`
+//
+// A record rather than `handle File = file_close`, so a second hook is
+// a new key rather than new syntax. Exactly one key is understood
+// today, and an unknown one is an error rather than being ignored --
+// a silently-dropped `on_drpo` is a resource that never gets cleaned
+// up, which is the one failure this whole feature exists to prevent.
+let parse_handle_decl (tokens: Array[lexer.Token]) (pos: Int): HandleDeclResult = {
+    let name_tok = expect_ident(tokens, pos + 1);
+    let p1 = expect(tokens, name_tok.next_pos, TokLBrace, "'{'");
+    let key_tok = expect_ident(tokens, p1);
+    let p2 = if key_tok.name == "on_drop" { expect(tokens, key_tok.next_pos, TokColon, "':'") }
+             else { { fail_at(p1, "a handle understands one key, 'on_drop', but found '".concat(key_tok.name).concat("'")); expect(tokens, key_tok.next_pos, TokColon, "':'") } };
+    let fn_tok = expect_ident(tokens, p2);
+    let p3 = bump_if(tokens, fn_tok.next_pos, TokComma);
+    HandleDeclResult {
+        value: HandleDeclNode { name: name_tok.name, on_drop: fn_tok.name },
+        next_pos: expect(tokens, p3.next_pos, TokRBrace, "'}'"),
+    }
+}
 
 let parse_struct_decl (tokens: Array[lexer.Token]) (pos: Int): StructDeclResult = {
     let p1 = expect(tokens, pos, TokStruct, "'struct'");
@@ -1791,6 +1839,7 @@ let render_item (item: ItemNode): String = {
                 "fn ".concat(f.name).concat("(").concat(params_str).concat(")").concat(ret_str)
             })))
         },
+        IKHandle(decl) => sexpr(["handle", pub_marker.concat(decl.name), "on_drop:".concat(decl.on_drop)]),
         IKUse(decl) => "(".concat(pub_marker).concat("use ").concat(join_dot(decl.path)).concat(")"),
     }
 }

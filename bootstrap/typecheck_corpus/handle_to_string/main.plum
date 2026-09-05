@@ -1,0 +1,9 @@
+// Rejected: a handle's payload is a number the compiler is not allowed
+// to interpret, so the only thing it could print is a raw shim value --
+// which is what `Task` did by accident before it became a real cell.
+extern "C" { fn fake_open() -> Int; fn fake_close(h: Int); }
+handle Res { on_drop: fake_close }
+let main (): Unit = {
+    let r = unsafe { Res.from_raw(fake_open()) };
+    println(r.to_string())
+}

@@ -1,0 +1,12 @@
+start
+  in scoped, a = 1
+  closed 1
+after scoped: live=0 closes=1
+  two alive: 2 and 3
+after block: live=2 closes=1
+kept = 4
+after 50000: live=3 closes=50001
+done
+  closed 2
+  closed 3
+  closed 4

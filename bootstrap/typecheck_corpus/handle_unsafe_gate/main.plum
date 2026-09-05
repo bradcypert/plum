@@ -1,0 +1,9 @@
+// Rejected: `from_raw` ASSERTS that a number is a live resource of this
+// kind, and getting that wrong is a double close. It carries the same
+// `unsafe` requirement every other FFI boundary does, because it is one.
+extern "C" { fn fake_open() -> Int; fn fake_close(h: Int); }
+handle Res { on_drop: fake_close }
+let main (): Unit = {
+    let r = Res.from_raw(unsafe { fake_open() });
+    println("unreachable")
+}

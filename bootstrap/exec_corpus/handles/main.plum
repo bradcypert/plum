@@ -1,0 +1,95 @@
+// `handle` -- an opaque native handle whose death runs a cleanup
+// (issue #9).
+//
+// `Task`/`Sender`/`Receiver` have worked this way since 2026-08-28
+// ("the cell is the death the resource can hook onto"); this is the
+// declarable form of the same thing, so a file descriptor or a terminal
+// mode can hook onto a death too.
+//
+// `native/shim.c` counts and narrates, so cleanup here is OBSERVED
+// rather than assumed -- a real resource is reclaimed invisibly, and a
+// fixture could only claim it happened.
+
+extern "C" {
+    fn fake_open() -> Int;
+    fn fake_close(h: Int);
+    fn fake_verbose(on: Int);
+    fn fake_live() -> Int;
+    fn fake_closes() -> Int;
+}
+
+// The declaration. `on_drop` names an ordinary C function, declared
+// above like any other extern.
+handle Res { on_drop: fake_close }
+
+// Acquiring wraps the raw number. `from_raw` is `unsafe` because it
+// ASSERTS that this number really is a live resource; getting that
+// wrong is a double close. `raw` is unsafe for the mirror reason -- it
+// hands the number to C while Plum still owns the cell.
+let acquire (): Res = unsafe { Res.from_raw(fake_open()) }
+let use_it (r: Res): Int = unsafe { Res.raw(r) }
+
+let live (): String = unsafe { fake_live() }.to_string()
+let closed (): String = unsafe { fake_closes() }.to_string()
+
+let scoped (): Unit = {
+    let a = acquire();
+    println("  in scoped, a = ".concat(use_it(a).to_string()))
+}
+
+// Tail recursion with a handle acquired per iteration. Releases are
+// hoisted BEFORE the tail call (`cg_tail_releases`), so this runs in
+// constant stack AND still closes every resource. That property is the
+// whole reason handles were chosen over a `defer` statement, which
+// would have had to run cleanup after the call and so could not be a
+// tail call at all -- see issue #1.
+let loop (n: Int): Int =
+    if n <= 0 { 0 }
+    else {
+        let r = acquire();
+        let ignored = use_it(r);
+        loop(n - 1)
+    }
+
+let main (): Unit = {
+    unsafe { fake_verbose(1) };
+    println("start");
+
+    // One handle, one function. It closes when `scoped` returns.
+    scoped();
+    println("after scoped: live=".concat(live()).concat(" closes=").concat(closed()));
+
+    // Two handles alive at once. Note what does NOT happen here: they
+    // are acquired inside a block, and they do not close at the end of
+    // it. Releases bubble to the enclosing FUNCTION (`cg_block_ty`
+    // concatenates them upward), so these two live until `main`
+    // returns, and the counts below say so.
+    {
+        let x = acquire();
+        let y = acquire();
+        println("  two alive: ".concat(use_it(x).to_string()).concat(" and ").concat(use_it(y).to_string()))
+    };
+    println("after block: live=".concat(live()).concat(" closes=").concat(closed()));
+
+    // A handle returned from a function outlives the call that made it:
+    // it is an ordinary value, and the refcount is what decides.
+    let kept = acquire();
+    println("kept = ".concat(use_it(kept).to_string()));
+
+    // Deep enough that a lost tail call would overflow the stack.
+    // Narration off: fifty thousand closes are counted, not printed.
+    unsafe { fake_verbose(0) };
+    let total = loop(50000);
+    unsafe { fake_verbose(1) };
+    println("after 50000: live=".concat(live()).concat(" closes=").concat(closed()));
+
+    // Everything still alive closes below this line, as `main` returns:
+    // `x`, `y` and `kept`, in DECLARATION order.
+    //
+    // Declaration order is current behaviour, not intended behaviour --
+    // guards compose correctly only in reverse (acquire a lock then a
+    // file, release the file then the lock). Pinned here as it stands so
+    // that reversing it is a deliberate edit to this file rather than a
+    // surprise. See issue #1.
+    println("done")
+}

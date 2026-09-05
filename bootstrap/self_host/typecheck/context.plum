@@ -33,7 +33,19 @@ struct StructInfo { name: String, generics: Array[String], fields: Array[StructF
 struct VariantInfo { tag: String, enum_name: String, payload: Array[ITy] }
 struct EnumInfo { name: String, generics: Array[String], variants: Array[VariantInfo], module: String, is_pub: Bool }
 
-pub struct TyContext { pub structs: Array[StructInfo], pub enums: Array[EnumInfo] }
+// An opaque native handle (issue #9). Registered as a zero-field
+// STRUCT as well, so that every existing path -- name resolution,
+// visibility, `render_ty` -- works on it unchanged; this table is the
+// extra fact that a struct does not have, namely what to call when one
+// dies.
+//
+// A handle is deliberately not its own `ITy` case. Doing that would
+// mean threading the context through `cg_of_ity`, which has 44 call
+// sites and no access to one, to answer a question only five places
+// actually ask.
+struct HandleInfo { name: String, module: String, is_pub: Bool, on_drop: String }
+
+pub struct TyContext { pub structs: Array[StructInfo], pub enums: Array[EnumInfo], handles: Array[HandleInfo] }
 
 let fail_ctx (msg: String): Unit = panic_raw("self-hosted type checker: ".concat(msg))
 
@@ -96,6 +108,7 @@ pub let build_context (program: parser.ProgramNode): TyContext = {
 let builtin_context (unit: Unit): TyContext = TyContext {
     structs: [],
     enums: [],
+    handles: [],
 }
 
 let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext): TyContext =
@@ -105,10 +118,20 @@ let collect_names_acc (items: Array[parser.ItemNode]) (i: Int) (ctx: TyContext):
             IKStruct(decl) => collect_names_acc(items, i + 1, TyContext {
                 structs: ctx.structs.push(StructInfo { name: parser.qualify_type(items[i].module, decl.name), generics: Array.map(decl.generics, |g| g.name), fields: [], module: items[i].module, is_pub: items[i].is_pub }),
                 enums: ctx.enums,
+                handles: ctx.handles,
+            }),
+            // A handle is a struct with no fields, plus the drop hook.
+            // Registering the struct half here is what makes the NAME
+            // resolve everywhere a type name can appear.
+            IKHandle(decl) => collect_names_acc(items, i + 1, TyContext {
+                structs: ctx.structs.push(StructInfo { name: parser.qualify_type(items[i].module, decl.name), generics: [], fields: [], module: items[i].module, is_pub: items[i].is_pub }),
+                enums: ctx.enums,
+                handles: ctx.handles.push(HandleInfo { name: parser.qualify_type(items[i].module, decl.name), module: items[i].module, is_pub: items[i].is_pub, on_drop: decl.on_drop }),
             }),
             IKEnum(decl) => collect_names_acc(items, i + 1, TyContext {
                 structs: ctx.structs,
                 enums: ctx.enums.push(EnumInfo { name: parser.qualify_type(items[i].module, decl.name), generics: Array.map(decl.generics, |g| g.name), variants: [], module: items[i].module, is_pub: items[i].is_pub }),
+                handles: ctx.handles,
             }),
             _ => collect_names_acc(items, i + 1, ctx),
         }
@@ -120,6 +143,7 @@ let resolve_decls_acc (items: Array[parser.ItemNode]) (i: Int) (names: TyContext
         match items[i].kind {
             IKStruct(decl) => resolve_decls_acc(items, i + 1, names, add_struct(names, out, decl, items[i].module, items[i].is_pub)),
             IKEnum(decl) => resolve_decls_acc(items, i + 1, names, add_enum(names, out, decl, items[i].module, items[i].is_pub)),
+            IKHandle(decl) => resolve_decls_acc(items, i + 1, names, add_handle(out, decl, items[i].module, items[i].is_pub)),
             _ => resolve_decls_acc(items, i + 1, names, out),
         }
     }
@@ -136,7 +160,7 @@ let add_struct (names: TyContext) (out: TyContext) (decl: parser.StructDeclNode)
     // that same reasoning, applied to functions instead of structs).
     let generic_names = Array.map(decl.generics, |g| g.name);
     let fields = Array.map(decl.fields, |f| StructFieldTemplate { name: f.name, ty: resolve_ann_seen(names, module_name, generic_names, f.ty), is_pub: f.is_pub });
-    TyContext { structs: out.structs.push(StructInfo { name: parser.qualify_type(module_name, decl.name), generics: generic_names, fields: fields, module: module_name, is_pub: is_pub }), enums: out.enums }
+    TyContext { structs: out.structs.push(StructInfo { name: parser.qualify_type(module_name, decl.name), generics: generic_names, fields: fields, module: module_name, is_pub: is_pub }), enums: out.enums, handles: out.handles }
 }
 
 let add_enum (names: TyContext) (out: TyContext) (decl: parser.EnumDeclNode) (module_name: String) (is_pub: Bool): TyContext = {
@@ -146,8 +170,17 @@ let add_enum (names: TyContext) (out: TyContext) (decl: parser.EnumDeclNode) (mo
         enum_name: parser.qualify_type(module_name, decl.name),
         payload: Array.map(v.payload, |t| resolve_ann_seen(names, module_name, generic_names, t)),
     });
-    TyContext { structs: out.structs, enums: out.enums.push(EnumInfo { name: parser.qualify_type(module_name, decl.name), generics: generic_names, variants: variants, module: module_name, is_pub: is_pub }) }
+    TyContext { structs: out.structs, enums: out.enums.push(EnumInfo { name: parser.qualify_type(module_name, decl.name), generics: generic_names, variants: variants, module: module_name, is_pub: is_pub }), handles: out.handles }
 }
+
+// No annotations to resolve -- a handle has no fields -- so pass 2 adds
+// exactly what pass 1 did.
+let add_handle (out: TyContext) (decl: parser.HandleDeclNode) (module_name: String) (is_pub: Bool): TyContext =
+    TyContext {
+        structs: out.structs.push(StructInfo { name: parser.qualify_type(module_name, decl.name), generics: [], fields: [], module: module_name, is_pub: is_pub }),
+        enums: out.enums,
+        handles: out.handles.push(HandleInfo { name: parser.qualify_type(module_name, decl.name), module: module_name, is_pub: is_pub, on_drop: decl.on_drop }),
+    }
 
 // --- Lookups ---
 
@@ -489,6 +522,30 @@ let lookup_generic_arg (generics: Array[String]) (args: Array[ITy]) (name: Strin
 // same reason it reads expression types off the typed tree instead of
 // synthesizing them. Exposed as functions rather than by making the
 // info structs public, so the representation stays private.
+// Is this type name a declared handle? Asked by the five places a
+// structural walk would otherwise ask a handle for its fields.
+pub let ctx_is_handle (ctx: TyContext) (name: String): Bool =
+    ctx_handle_at(ctx.handles, name, 0)
+
+let ctx_handle_at (hs: Array[HandleInfo]) (name: String) (i: Int): Bool =
+    if i >= hs.len() { false }
+    else if hs[i].name == name || parser.bare_type_name(hs[i].name) == name { true }
+    else { ctx_handle_at(hs, name, i + 1) }
+
+// The C function to call when one dies. "" when `name` is not a handle.
+pub let ctx_handle_on_drop (ctx: TyContext) (name: String): String =
+    ctx_on_drop_at(ctx.handles, name, 0)
+
+let ctx_on_drop_at (hs: Array[HandleInfo]) (name: String) (i: Int): String =
+    if i >= hs.len() { "" }
+    else if hs[i].name == name || parser.bare_type_name(hs[i].name) == name { hs[i].on_drop }
+    else { ctx_on_drop_at(hs, name, i + 1) }
+
+// Every declared handle's qualified name, for the backend's emission
+// worklist.
+pub let ctx_handle_names (ctx: TyContext): Array[String] =
+    Array.map(ctx.handles, |h| h.name)
+
 pub let ctx_field_names (ctx: TyContext) (name: String): Array[String] =
     match find_struct(ctx, name) {
         Some(info) => Array.map(info.fields, |f| f.name),

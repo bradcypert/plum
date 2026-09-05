@@ -24,6 +24,7 @@ https://example.com:443/x => https://example.com/x (stable)
 https://example.com:8443/x => https://example.com:8443/x (stable)
 http://[::1]:80/x => http://[::1]/x (stable)
 http://h/p?a=1#f => http://h/p?a=1#f (stable)
+h h h:8080 h h:8443 [::1] [::1]:9000
 q: hello world
 empty: []
 missing: <none>

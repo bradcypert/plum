@@ -1,0 +1,2 @@
+let handle (n: Int): Int = n
+let use_it (handle: Int): Int = handle

@@ -1,0 +1,8 @@
+// Rejected: a handle is registered as a zero-field struct so that every
+// existing name-resolution path works on it, which would otherwise make
+// `Res {}` a legal empty struct literal. It would allocate a cell with
+// no native handle in it, and every later use would read garbage.
+// `from_raw` is the only way to build one.
+extern "C" { fn fake_close(h: Int); }
+handle Res { on_drop: fake_close }
+let main (): Unit = { let r = Res {}; println("unreachable") }
