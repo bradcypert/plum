@@ -84,12 +84,16 @@ let main (): Unit = {
     println("after 50000: live=".concat(live()).concat(" closes=").concat(closed()));
 
     // Everything still alive closes below this line, as `main` returns:
-    // `x`, `y` and `kept`, in DECLARATION order.
+    // `kept`, then `y`, then `x` -- REVERSE declaration order.
     //
-    // Declaration order is current behaviour, not intended behaviour --
-    // guards compose correctly only in reverse (acquire a lock then a
-    // file, release the file then the lock). Pinned here as it stands so
-    // that reversing it is a deliberate edit to this file rather than a
-    // surprise. See issue #1.
+    // LIFO is the order every language with guards uses, and the only
+    // one that composes: acquire a lock and then a file, and the file
+    // must be released while the lock still protects it. Order is not a
+    // memory-safety question -- the slots are disjoint, so any order
+    // frees the same cells -- and it became observable only when
+    // `handle` gave a release a SIDE EFFECT. It was declaration order
+    // until then, pinned here as current-not-correct, and this fixture
+    // is what made reversing it a checkable change rather than a
+    // hopeful one.
     println("done")
 }

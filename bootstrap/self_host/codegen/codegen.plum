@@ -1831,7 +1831,9 @@ let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.T
     match block.tail {
         Some(t) => {
             let r = cg_expr_t(p, s.env, s.n, t, tail, pending);
-            Emit { code: s.code.concat(r.code), allocas: s.allocas.concat(r.allocas), releases: s.releases.concat(r.releases), globals: s.globals.concat(r.globals), val: r.val, ty: ty, n: r.n }
+            // The tail expression's temporaries are the last things
+            // created, so under LIFO they are the first released.
+            Emit { code: s.code.concat(r.code), allocas: s.allocas.concat(r.allocas), releases: r.releases.concat(s.releases), globals: s.globals.concat(r.globals), val: r.val, ty: ty, n: r.n }
         },
         None => Emit { code: s.code.concat(cg_tail_pop(p, tail)), allocas: s.allocas, releases: s.releases, globals: s.globals, val: "0", ty: CgUnit, n: s.n },
     }
@@ -1886,7 +1888,10 @@ let cg_stmts_at (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typec
                 BlockEmit {
                     code: head.concat(rest.code),
                     allocas: r.allocas.concat(pat.allocas).concat(rest.allocas),
-                    releases: r.releases.concat(pat.releases).concat(rest.releases),
+                    // LIFO, as above: later statements first, then the
+                    // names this pattern bound, then the scrutinee's own
+                    // temporaries.
+                    releases: rest.releases.concat(pat.releases).concat(r.releases),
                     globals: r.globals.concat(pat.globals).concat(rest.globals),
                     env: rest.env, n: rest.n,
                 }
@@ -1916,7 +1921,19 @@ let cg_stmts_at (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typec
                     // null-init goes missing releases uninitialised
                     // stack the first time it is overwritten.
                     allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(cg_null_init(vty, slot)).concat(r.allocas).concat(rest.allocas),
-                    releases: cg_release_slot(vty, slot, "_end").concat(r.releases).concat(rest.releases),
+                    // LIFO: everything declared LATER in this block is
+                    // released before this slot is. Acquire a lock and
+                    // then a file, and the file is released first --
+                    // which is the order every language with guards
+                    // uses, and the only one that composes when one
+                    // resource is held inside another's lifetime.
+                    //
+                    // Order is not a memory-safety question: the slots
+                    // are disjoint, so any order frees the same cells.
+                    // It became observable when `handle` gave a release
+                    // a SIDE EFFECT (issue #9), and until then there was
+                    // nothing to get wrong.
+                    releases: rest.releases.concat(r.releases).concat(cg_release_slot(vty, slot, "_end")),
                     globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
             },
             // Assignment needs no new slot — that is the whole payoff of
@@ -1951,7 +1968,13 @@ let cg_stmts_at (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typec
                 let r = cg_expr(p, env, n, e);
                 let rest = cg_stmts(p, env, r.n, stmts, i + 1, starts);
                 // Rule 1: the value is owned, and nothing takes it.
-                BlockEmit { code: r.code.concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, e)), r.val)).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: r.releases.concat(rest.releases), globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
+                // LIFO, same as the `let` arms: anything this statement
+                // created is released AFTER everything the later ones
+                // did. A bare block statement -- `{ let x = ..; .. };` --
+                // carries its slots' releases here, so without this the
+                // block's contents would outlive a `let` written below
+                // it, which is the wrong nesting.
+                BlockEmit { code: r.code.concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, e)), r.val)).concat(rest.code), allocas: r.allocas.concat(rest.allocas), releases: rest.releases.concat(r.releases), globals: r.globals.concat(rest.globals), env: rest.env, n: rest.n }
             },
         }
     }

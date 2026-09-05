@@ -18531,3 +18531,34 @@ same function must observe the effect.**
 
 That is the strongest argument yet for making cleanup block-scoped, and
 it is still its own change -- see the notes on issue #1.
+
+## Releases run LIFO (2026-09-05)
+
+Slot releases were emitted in DECLARATION order: acquire a lock and then
+a file, and the lock was released first. Now they run in reverse, so the
+file is released while the lock still protects it -- the order every
+language with guards uses, and the only one that composes when one
+resource is held inside another's lifetime.
+
+**This was never a memory-safety question.** The slots are disjoint, so
+any order frees exactly the same cells, and nothing in five years of
+this compiler could tell the difference. It became observable the moment
+`handle` gave a release a SIDE EFFECT, and it was pinned in
+`exec_corpus/handles` as current-not-correct on the day handles landed,
+precisely so that reversing it would be a checkable change rather than a
+hopeful one. The fixture went from `closed 2 / 3 / 4` to `4 / 3 / 2`,
+which is the whole proof.
+
+Four concatenation sites, all in `cg_stmts_at` and `cg_block_ty`: a
+statement's own releases now follow everything the statements after it
+produced. The `TSExpr` arm mattered as much as the `let` arms and was
+easy to miss -- a bare block statement (`{ let x = ..; .. };`) carries
+its slots' releases there, so leaving it alone kept a block's contents
+alive past a `let` written below it. The fixture caught exactly that: an
+intermediate run printed `3 / 2 / 4`, LIFO within the block and FIFO
+around it.
+
+Emitted IR shifts for every program that frees anything, which is every
+program. `bootstrap-check` is what makes that safe to do at all, and
+`alloc-check` confirms the counts are unchanged -- reordering frees does
+not change how many there are.
