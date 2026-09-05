@@ -1,0 +1,107 @@
+use Os;
+
+// Streaming file I/O: `Os.open`, `File.read`/`write`/`seek`/`close`
+// (issue #16, increment 4).
+//
+// `File` is a `handle` (issue #9), so an open file closes itself when
+// the value dies. `File.close` is still offered and still returns a
+// `Result`, because closing can fail -- `fclose` is where a buffered
+// write reaches the disk, and so where a full one is discovered. Call
+// it when that error matters; rely on the handle when it does not.
+// Neither path leaks.
+//
+// Nothing here prints a path: every path is a fresh temp directory with
+// a random name, and a fixture compares exact output.
+
+let show (label: String) (r: Result[Bytes, String]): Unit =
+    println(label.concat(": ").concat(match r { Ok(b) => b.to_hex(), Err(e) => e }))
+
+let main (): Unit = match Os.temp_dir() {
+    Err(e) => println(e),
+    Ok(root) => {
+        let path = root.concat("/stream.bin");
+
+        // --- Writing ---
+        match Os.open(path, Mode.Write) {
+            Err(e) => println("open write: ".concat(e)),
+            Ok(f) => {
+                // A NUL, a byte that is not valid UTF-8, and a newline:
+                // everything a text-shaped API would mangle.
+                match f.write(Bytes.from_array([0, 255, 65, 66, 10, 67])) {
+                    Ok(n) => println("wrote ".concat(n.to_string())),
+                    Err(e) => println(e),
+                };
+                // Explicit close, because a failed final flush is worth
+                // knowing about.
+                match f.close() { Ok(_) => println("close: ok"), Err(e) => println("close: ".concat(e)) };
+                // Closing again is harmless -- and it is the NORMAL
+                // path, since the handle's own cleanup runs after this.
+                // The shim owns a slot table precisely so the second
+                // close cannot reach a stale FILE*.
+                match f.close() { Ok(_) => println("close again: ok"), Err(e) => println("close again: ".concat(e)) }
+            },
+        };
+
+        // --- Reading, in pieces ---
+        match Os.open(path, Mode.Read) {
+            Err(e) => println("open read: ".concat(e)),
+            Ok(f) => {
+                show("first 3", f.read(3));
+                show("rest", f.read(100));
+                // An empty read is END OF FILE, not a failure. The same
+                // three-way split `Net.read_bytes` makes.
+                match f.read(100) {
+                    Ok(b) => println("at eof: ".concat(b.is_empty().to_string())),
+                    Err(e) => println("at eof: ".concat(e)),
+                };
+                match f.seek(1, Seek.Start) {
+                    Ok(pos) => println("seek to ".concat(pos.to_string())),
+                    Err(e) => println(e),
+                };
+                show("after seek", f.read(2))
+                // NO close here, deliberately: the handle closes the
+                // file when `f` dies. If it did not, the `remove_tree`
+                // below would be deleting a file still held open.
+            },
+        };
+
+        // --- Append does not truncate ---
+        //
+        // The explicit `close` here is NOT optional, and the reason is
+        // worth knowing. Cleanup runs when the handle's value dies, and
+        // values die at the end of the enclosing FUNCTION, not at the
+        // end of the `match` arm that introduced them. So without this
+        // close, `f` would still be open -- with its write sitting in a
+        // buffer -- when `read_bytes` below reads the file back, and the
+        // appended byte would be missing from the result.
+        //
+        // Written the wrong way first, and this fixture printed
+        // `00ff41420a43` where the last byte should have been `44`.
+        //
+        // The rule: rely on the handle to guarantee nothing LEAKS, and
+        // close explicitly when something else in the same function has
+        // to observe the effect.
+        match Os.open(path, Mode.Append) {
+            Err(e) => println("open append: ".concat(e)),
+            Ok(f) => {
+                match f.write(Bytes.from_array([68])) {
+                    Ok(_) => println("appended"),
+                    Err(e) => println(e),
+                };
+                match f.close() { Ok(_) => (), Err(e) => println(e) }
+            },
+        };
+        match Os.read_bytes(path) {
+            Ok(b) => println("whole file: ".concat(b.to_hex())),
+            Err(e) => println(e),
+        };
+
+        // Opening something that is not there is an ordinary `Err`.
+        match Os.open(root.concat("/missing.bin"), Mode.Read) {
+            Ok(_) => println("missing: UNEXPECTEDLY OK"),
+            Err(_) => println("missing: err"),
+        };
+
+        match Os.remove_tree(root) { Ok(_) => println("cleanup ok"), Err(e) => println(e) }
+    },
+}

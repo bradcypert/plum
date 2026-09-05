@@ -1,0 +1,12 @@
+wrote 6
+close: ok
+close again: ok
+first 3: 00ff41
+rest: 420a43
+at eof: true
+seek to 1
+after seek: ff41
+appended
+whole file: 00ff41420a4344
+missing: err
+cleanup ok

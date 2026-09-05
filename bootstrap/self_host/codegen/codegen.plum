@@ -5386,7 +5386,17 @@ let cg_eq_code (t: typecheck.ITy) (av: String) (bv: String) (n: Int): EqEmit = {
 // a `PExpr`) terminate — it needs exactly one function, which calls
 // itself.
 let cg_eq_close (p: CgProgram) (t: typecheck.ITy) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
-    if cg_eq_is_primitive(t) { acc }
+    // A type with a handle ANYWHERE inside it gets no equality function,
+    // not even a container's. The checker refuses `==` on exactly these
+    // (`first_handle_within`), so nothing can call one -- and generating
+    // the container's anyway would emit a call to the handle's, which is
+    // deliberately never generated.
+    //
+    // Reached without any `==` in the program at all: every `match`
+    // seeds an equality type for its scrutinee, so `match Os.open(..)`
+    // asked for `Result[Os.File, String]`'s.
+    if Option.is_some(typecheck.first_handle_within(p.ctx, t, [])) { acc }
+    else if cg_eq_is_primitive(t) { acc }
     else if cg_ty_in(acc, t, 0) { acc }
     else {
         let acc2 = acc.push(t);
@@ -5547,6 +5557,15 @@ let cg_emit_str_fns_acc (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (acc:
     if i >= ts.len() { acc } else { cg_emit_str_fns_acc(p, ts, i + 1, acc.push(cg_emit_str_fn(p, ts[i]))) }
 
 let cg_emit_str_fn (p: CgProgram) (t: typecheck.ITy): String =
+    // Renderers are emitted for the same list as RELEASE functions, so a
+    // type reaches here because it needs releasing, not because anything
+    // renders it. One containing a handle gets none: the checker refuses
+    // `.to_string()` on exactly these, and a container's renderer would
+    // call the handle's, which is deliberately never generated.
+    if Option.is_some(typecheck.first_handle_within(p.ctx, t, [])) { "" }
+    else { cg_emit_str_fn_real(p, t) }
+
+let cg_emit_str_fn_real (p: CgProgram) (t: typecheck.ITy): String =
     match t {
         ITStruct(name, args) =>
             if name == "Array" { cg_emit_array_str(t, args[0]) }

@@ -173,6 +173,12 @@ See README.md for the prose introduction.
 - `let read_bytes (path: String): Result[Bytes, String]`
 - `let write_bytes (path: String) (data: Bytes): Result[Unit, String]`
 - `let append_bytes (path: String) (data: Bytes): Result[Unit, String]`
+- `let open (path: String) (mode: Mode): Result[File, String]`
+- `let File.read (f: File) (max_len: Int): Result[Bytes, String]`
+- `let File.write (f: File) (data: Bytes): Result[Int, String]`
+- `let File.seek (f: File) (offset: Int) (from: Seek): Result[Int, String]`
+- `let File.flush (f: File): Result[Unit, String]`
+- `let File.close (f: File): Result[Unit, String]`
 - `let run_process (program: String) (args: Array[String]): Result[ProcessResult, String]`
 - `let list_dir (path: String): Result[Array[String], String]`
 - `let is_directory (path: String): Result[Bool, String]`

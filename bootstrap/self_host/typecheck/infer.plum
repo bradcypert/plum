@@ -1263,14 +1263,27 @@ let reject_unrenderable (p2: Program2) (t: ITy): Unit =
         ITStruct(name, _) =>
             if name == "Task" || name == "Sender" || name == "Receiver" {
                 fail_tc(".to_string() on a ".concat(name).concat(" isn't supported"))
-            } else if ctx_is_handle(p2.ctx, name) {
-                // A handle's payload is a number the compiler is not
-                // allowed to interpret, so the only thing it COULD print
-                // is a raw shim value. That is what `Task` used to do by
-                // accident before it became a real cell.
-                fail_tc(".to_string() on a handle (".concat(parser.bare_type_name(name)).concat(") isn't supported: its payload is opaque"))
-            } else { () },
-        _ => (),
+            } else { reject_if_handle_render(p2, t) },
+        // Any type with a handle inside it, at any depth -- a
+        // `Result[File, String]` has no rendering either, for the same
+        // reason and by the same walk equality uses.
+        _ => reject_if_handle_render(p2, t),
+    }
+
+let reject_if_handle_render (p2: Program2) (t: ITy): Unit =
+    match first_handle_within(p2.ctx, t, []) {
+        None => (),
+        Some(inner) =>
+            // A handle's payload is a number the compiler is not allowed
+            // to interpret, so the only thing it COULD print is a raw
+            // shim value -- which is what `Task` did by accident before
+            // it became a real cell.
+            if render_ty(inner) == render_ty(t) {
+                fail_tc(".to_string() on a handle (".concat(render_ty(t)).concat(") isn't supported: its payload is opaque"))
+            } else {
+                fail_tc(".to_string() on ".concat(render_ty(t)).concat(" isn't supported: it would have to render ")
+                    .concat(render_ty(inner)).concat(", whose payload is opaque"))
+            },
     }
 
 // The same rule as a predicate, for the CALL-SITE check on a generic.
@@ -1284,8 +1297,8 @@ let is_unrenderable (ctx: TyContext) (t: ITy): Bool =
         ITRef(_) => true,
         ITFunction(_, _) => true,
         ITTuple(_) => true,
-        ITStruct(name, _) => name == "Task" || name == "Sender" || name == "Receiver" || ctx_is_handle(ctx, name),
-        _ => false,
+        ITStruct(name, _) => name == "Task" || name == "Sender" || name == "Receiver" || Option.is_some(first_handle_within(ctx, t, [])),
+        _ => Option.is_some(first_handle_within(ctx, t, [])),
     }
 
 let is_known_unordered (t: ITy): Bool =
@@ -1315,12 +1328,65 @@ let reject_handle_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
     }
 
 let reject_if_handle (p2: Program2) (sym: String) (t: ITy): Unit =
+    match first_handle_within(p2.ctx, t, []) {
+        None => (),
+        Some(inner) => fail_tc("'".concat(sym).concat("' is not supported for ").concat(render_ty(t))
+            .concat(if render_ty(inner) == render_ty(t) { ": a handle has no fields to compare, and its payload is opaque" }
+                    else { ": it would have to compare ".concat(render_ty(inner)).concat(", and a handle has no meaningful equality") })),
+    }
+
+// A handle ANYWHERE inside `t`, by the same walk `first_function_within`
+// does -- and for the same reason. `Result[File, String]` cannot be
+// compared either: its equality would have to compare the `File`, and
+// there is no honest answer for that.
+//
+// The backend needs this agreement, not just the diagnostic. Every
+// `match` seeds an equality type for its scrutinee, so `match
+// Os.open(..)` asked for `Result[Os.File, String]`'s eq function, which
+// asked for the handle's, which is deliberately never generated. The
+// two sides now decline in the same places.
+pub let first_handle_within (ctx: TyContext) (t: ITy) (seen: Array[String]): Option[ITy] =
     match t {
-        ITStruct(name, _) => if ctx_is_handle(p2.ctx, name) {
-            fail_tc("'".concat(sym).concat("' is not supported for handle ").concat(parser.bare_type_name(name))
-                .concat(": a handle has no fields to compare, and its payload is opaque"))
-        } else { () },
-        _ => (),
+        ITStruct(name, args) =>
+            if Array.contains(seen, name) { None }
+            else if ctx_is_handle(ctx, name) || name == "Task" || name == "Sender" || name == "Receiver" { Some(t) }
+            else {
+                let inner = first_handle_in_list(ctx, args, seen.push(name), 0);
+                if Option.is_some(inner) { inner }
+                else { match find_struct(ctx, name) {
+                    None => None,
+                    Some(_) => first_handle_in_list(ctx,
+                        Array.map(ctx_field_types(ctx, name), |ft| instantiate_template(ctx_struct_generics(ctx, name), args, ft)),
+                        seen.push(name), 0),
+                } }
+            },
+        ITEnum(name, args) =>
+            if Array.contains(seen, name) { None }
+            else {
+                let inner = first_handle_in_list(ctx, args, seen.push(name), 0);
+                if Option.is_some(inner) { inner }
+                else { match ctx_enum_tags(ctx, name) {
+                    Some(tags) => first_handle_in_variants(ctx, name, tags, args, seen.push(name), 0),
+                    None => None,
+                } }
+            },
+        ITTuple(elems) => first_handle_in_list(ctx, elems, seen, 0),
+        ITRef(inner) => first_handle_within(ctx, inner, seen),
+        _ => None,
+    }
+
+let first_handle_in_list (ctx: TyContext) (ts: Array[ITy]) (seen: Array[String]) (i: Int): Option[ITy] =
+    if i >= ts.len() { None }
+    else { match first_handle_within(ctx, ts[i], seen) { Some(x) => Some(x), None => first_handle_in_list(ctx, ts, seen, i + 1) } }
+
+let first_handle_in_variants (ctx: TyContext) (enum_name: String) (tags: Array[String]) (args: Array[ITy]) (seen: Array[String]) (i: Int): Option[ITy] =
+    if i >= tags.len() { None }
+    else {
+        let payload = Array.map(ctx_variant_payload(ctx, enum_name, tags[i]), |pt| instantiate_template(ctx_variant_generics(ctx, enum_name, tags[i]), args, pt));
+        match first_handle_in_list(ctx, payload, seen, 0) {
+            Some(f) => Some(f),
+            None => first_handle_in_variants(ctx, enum_name, tags, args, seen, i + 1),
+        }
     }
 
 let reject_function_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
@@ -1976,12 +2042,51 @@ let no_method_message (base_ty: ITy) (method_name: String): String =
 // call takes. That is the point: this is sugar, not a second calling
 // convention, so arity errors, generic instantiation and argument
 // unification are all whatever they already were.
+// A method's function, looked up where a method can be DECLARED.
+//
+// `find_sig` searches the calling module, the root, and the prelude --
+// which is right for a free function and wrong for a method. A method
+// belongs to its RECEIVER's type, so it is declared wherever that type
+// is, and for a type declared inside a stdlib module that is neither
+// the caller's module nor the root nor the prelude.
+//
+// `Os.File` was the first type to notice. `f.read(4096)` reported "no
+// function named `File.read` is in scope" while `Os.File.read` was
+// sitting right there, declared next to the type it belongs to. Nothing
+// before it had tried: the prelude's own types are found by the prelude
+// fallback, and no stdlib module had declared a type WITH methods.
+//
+// The receiver's type carries its module in its qualified name
+// (`ITStruct("Os.File", [])`), so the module to search is derivable and
+// needs no new bookkeeping.
+let find_sig_for_method (p2: Program2) (base_ty: ITy) (qualified: String): Option[FnSig] =
+    match find_sig(p2, qualified) {
+        Some(sig) => Some(sig),
+        None => match base_ty {
+            ITStruct(name, _) => find_sig_in(p2.sigs, module_of_qualified(name), qualified, 0),
+            ITEnum(name, _) => find_sig_in(p2.sigs, module_of_qualified(name), qualified, 0),
+            _ => None,
+        },
+    }
+
+// `"Os.File"` -> `"Os"`; a bare name -> `""` (the root), which is what
+// an unqualified type is already in.
+let module_of_qualified (name: String): String = {
+    let i = last_dot_index(name, 0, 0 - 1);
+    if i < 0 { "" } else { String.slice(name, 0, i) }
+}
+
+let last_dot_index (s: String) (i: Int) (best: Int): Int =
+    if i >= String.char_len(s) { best }
+    else if String.slice(s, i, i + 1) == "." { last_dot_index(s, i + 1, i) }
+    else { last_dot_index(s, i + 1, best) }
+
 let infer_namespaced_method (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base_ty: ITy) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): InferResult =
     match ity_namespace(base_ty) {
         None => { fail_tc(no_method_message(base_ty, method_name)); ir_unsupported(acc, state, "unsupported method call") },
         Some(ns) => {
             let qualified = ns.concat(".").concat(method_name);
-            match find_sig(p2, qualified) {
+            match find_sig_for_method(p2, base_ty, qualified) {
                 Some(sig) => infer_fn_call(p2, state, env, acc, sig, Array.concat([base], args)),
                 // A declaration wins over a builtin of the same name,
                 // the shadowing order used everywhere else here.

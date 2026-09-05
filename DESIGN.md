@@ -18461,3 +18461,73 @@ that flag is what puts them behind `unsafe`, and they genuinely are FFI
 boundaries. But `is_extern` ALSO routes a call down the extern path,
 which emits `@<name>` verbatim and never reaches `cg_fn_call`. One flag,
 two consumers, and only one of them was in mind when it was set.
+
+## Streaming files, on top of `handle` (2026-09-05)
+
+Issue #16's increment 4, and the reason it waited: it needed #9, not #1.
+`Os.open` returns a `File`, which is a `handle`, so an open file closes
+itself when the value dies. No `defer`, no scope construct, no TCO cost.
+
+`File.close` exists anyway and returns a `Result`. `fclose` is where a
+buffered write actually reaches the disk, so it is where a full disk is
+discovered -- a cleanup that cannot report is not enough on its own.
+This is Rust's `File` exactly: `Drop` so nothing leaks, an explicit
+fallible operation for when the error matters.
+
+### The second close is the normal path, so it must be harmless
+
+Rust makes it impossible: `close` CONSUMES the value, so the destructor
+cannot also run. Plum has no move semantics, so both really do run on
+every well-written program, and "closed twice" is the common case rather
+than a bug.
+
+`dir_shim.c` casts its `DIR *` straight to a handle, which is fine there
+because a directory is closed exactly once. A file cannot: `fclose` on
+an already-closed `FILE *` is undefined, and the fd underneath may by
+then belong to something else entirely. So `file_shim.c` owns a SLOT
+TABLE and the number Plum holds is an index; closing marks the slot
+empty and every later close on it does nothing. Closing an
+already-closed handle returns success, not an error -- reporting it
+would make the safe pattern the noisy one.
+
+That is also what #9 meant by "the state does not have to fit in the
+number".
+
+### Three bugs, and the first was the interesting one
+
+**Associated functions on a module's type were unreachable.** `f.read(4096)`
+reported "no function named `File.read` is in scope" while `Os.File.read`
+sat right there, declared next to the type it belongs to. `find_sig`
+searches the calling module, the root and the prelude -- right for a
+free function, wrong for a method, because a method lives wherever its
+RECEIVER'S TYPE lives. Nothing had noticed before: the prelude's own
+types are found by the prelude fallback, and no stdlib module had ever
+declared a type WITH methods. The receiver's type already carries its
+module in its qualified name (`ITStruct("Os.File", [])`), so the fix
+needed no new bookkeeping.
+
+**Equality and rendering had to be poisoned by CONTAINMENT.** A handle
+has no `==` and no `.to_string()`, which was already true -- but a
+`Result[File, String]` inherits both problems, and the backend went
+looking for functions that are deliberately never generated. Neither
+needed a program that compares or prints anything: every `match` seeds
+an equality type for its scrutinee, so `match Os.open(..)` asked for
+`Result[Os.File, String]`'s; and renderers are emitted for the same list
+as RELEASE functions, so the type got one for needing to be freed.
+`first_handle_within` now mirrors `first_function_within` exactly -- a
+closure already poisoned equality for its containers, for the same
+reason and by the same walk -- and the checker and the backend decline
+in the same places.
+
+**A write was silently lost, and the fixture caught it.** The append
+section wrote a byte, then read the whole file back, and the byte was
+not there: the handle was still open with its write in a buffer, because
+cleanup runs at the end of the enclosing FUNCTION and not at the end of
+the `match` arm. Fixed in the fixture by closing explicitly, and kept
+there with the wrong output written down, because the rule it teaches is
+the one thing about handles a user has to hold in their head: **rely on
+the handle so nothing leaks; close explicitly when something else in the
+same function must observe the effect.**
+
+That is the strongest argument yet for making cleanup block-scoped, and
+it is still its own change -- see the notes on issue #1.

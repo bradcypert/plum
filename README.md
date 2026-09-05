@@ -1345,6 +1345,21 @@ program's prelude):
   is your decision rather than the compiler's. `Bytes` and `String`
   share a runtime cell exactly, so converting between them is one
   refcount increment and never a copy.
+- **Streaming files.** `Os.open(path, Mode.Read | Mode.Write |
+  Mode.Append): Result[File, String]`, then `f.read(n): Result[Bytes,
+  String]` (an empty result is **end of file**, not a failure),
+  `f.write(bytes)`, `f.seek(offset, Seek.Start | Seek.Current |
+  Seek.End)`, `f.flush()` and `f.close()`. For the cases a whole-file
+  read cannot serve: a file too big to hold, a stream consumed as it
+  arrives, an append-only log kept open. **`File` is a `handle`, so an
+  open file closes itself when the value dies** — `close` is offered
+  anyway, and returns a `Result`, because `fclose` is where a buffered
+  write reaches the disk and so where a full one is discovered. Closing
+  twice is harmless and is the normal path. One thing to know: cleanup
+  runs when the value dies, and values die at the end of the enclosing
+  **function**, not the enclosing block — so if something later in the
+  same function has to observe your writes, close explicitly rather than
+  waiting for the handle.
 - **`Bytes` file I/O.** `Os.read_bytes(path): Result[Bytes, String]`,
   `Os.write_bytes(path, data)`, `Os.append_bytes(path, data)` — for
   payloads a `String` cannot honestly describe: images, compressed
