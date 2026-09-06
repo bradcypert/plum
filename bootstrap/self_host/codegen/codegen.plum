@@ -1826,16 +1826,75 @@ struct BlockEmit { code: String, allocas: String, releases: String, globals: Str
 // its statements each have something after them by definition. A block
 // that ENDS in a statement still owes the pop, appended after the last
 // one.
+// Does this block bind anything whose release is OBSERVABLE?
+//
+// Block-scoped cleanup exists for side effects -- a file that must be
+// closed before the same function reads it back. For ordinary data,
+// WHEN a cell is freed is invisible, and releasing early is not free:
+// it costs in-place REUSE. `alloc_corpus/literal_in_loop` builds a
+// struct per iteration and reuses the slot's dying cell every time;
+// nulling that slot at the end of each iteration took it from 3
+// allocations to 1003.
+//
+// So the rule is: scope what can be observed, and leave everything else
+// exactly as it was. A program with no handles emits byte-identical IR
+// to before this change, which is why the corpus goldens, `alloc-check`
+// and the bootstrap fixed point are all untouched by it.
+let cg_block_binds_handle (p: CgProgram) (block: typecheck.TBlock): Bool =
+    cg_stmts_bind_handle(p, block.stmts, 0)
+
+let cg_stmts_bind_handle (p: CgProgram) (stmts: Array[typecheck.TStmt]) (i: Int): Bool =
+    if i >= stmts.len() { false }
+    else {
+        match stmts[i] {
+            TSLet(_, value) =>
+                if Option.is_some(typecheck.first_handle_within(p.ctx, cg_concrete(p, typecheck.texpr_ty(p.subst, value)), [])) { true }
+                else { cg_stmts_bind_handle(p, stmts, i + 1) },
+            _ => cg_stmts_bind_handle(p, stmts, i + 1),
+        }
+    }
+
+// A block releases what it created, AT ITS END -- unless it is in tail
+// position, where its end is the function's end and the existing
+// machinery already handles it.
+//
+// **Why the escaping value survives, with no escape analysis.** A block
+// is an expression, and its tail can be a value bound inside it
+// (`{ let a = acquire(); a }`). Reading a slot INCREMENTS (see the RC
+// discipline above), so by the time the releases below run, the block's
+// result already holds its own reference. Emitting them here rather
+// than at the function's end changes when the slot lets go, never
+// whether the result is still alive.
+//
+// **Why tail position is excluded, and it is not an optimisation.**
+// Nothing can run after a `musttail` call, so a block whose tail IS that
+// call must not emit releases after it -- they would be unreachable, and
+// the values would leak. Those releases are instead handed upward and
+// emitted BEFORE the call by `cg_tail_releases`, which is what
+// `tail_rel` is for. So: propagate in tail position, emit inline
+// everywhere else. A block never does both, which is what keeps a
+// release from being emitted twice.
 let cg_block_ty (p: CgProgram) (env: Array[CgSlot]) (n: Int) (block: typecheck.TBlock) (ty: CgTy) (tail: Bool) (pending: String): Emit = {
     let s = cg_stmts(p, env, n, block.stmts, 0, block.starts);
     match block.tail {
         Some(t) => {
             let r = cg_expr_t(p, s.env, s.n, t, tail, pending);
-            // The tail expression's temporaries are the last things
-            // created, so under LIFO they are the first released.
-            Emit { code: s.code.concat(r.code), allocas: s.allocas.concat(r.allocas), releases: r.releases.concat(s.releases), globals: s.globals.concat(r.globals), val: r.val, ty: ty, n: r.n }
+            // LIFO: the tail expression's temporaries are the last
+            // things created, so they are the first released.
+            let mine = r.releases.concat(s.releases);
+            let here = !tail && cg_block_binds_handle(p, block);
+            Emit { code: s.code.concat(r.code).concat(if here { mine } else { "" }),
+                   allocas: s.allocas.concat(r.allocas),
+                   releases: if here { "" } else { mine },
+                   globals: s.globals.concat(r.globals), val: r.val, ty: ty, n: r.n }
         },
-        None => Emit { code: s.code.concat(cg_tail_pop(p, tail)), allocas: s.allocas, releases: s.releases, globals: s.globals, val: "0", ty: CgUnit, n: s.n },
+        None => {
+            let here = !tail && cg_block_binds_handle(p, block);
+            Emit { code: s.code.concat(cg_tail_pop(p, tail)).concat(if here { s.releases } else { "" }),
+                   allocas: s.allocas,
+                   releases: if here { "" } else { s.releases },
+                   globals: s.globals, val: "0", ty: CgUnit, n: s.n }
+        },
     }
 }
 
@@ -4843,6 +4902,18 @@ let cg_zero_of (t: CgTy): String =
         CgHandle(_) => "null",
     }
 
+// An arm releases its own bindings only when the scrutinee could carry
+// something whose release is observable -- the same rule, and the same
+// reason, as `cg_block_binds_handle`. `Ok(f) => ..` on a
+// `Result[File, String]` is the case that matters, since a resource
+// almost always arrives through a pattern rather than a `let`.
+let cg_arm_scoped (p: CgProgram) (sity: typecheck.ITy) (tail: Bool): Bool =
+    !tail && Option.is_some(typecheck.first_handle_within(p.ctx, cg_concrete(p, sity), []))
+
+// The block a guarded arm branches to when its guard says no: it
+// releases what the pattern bound, then falls through to the next arm.
+let cg_guard_fail_label (n: Int): String = "Lgf".concat(n.to_string())
+
 struct ArmsEmit { code: String, allocas: String, releases: String, globals: String, n: Int }
 
 let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TArm]) (i: Int) (sval: String) (sity: typecheck.ITy) (slot: String) (lty: String) (end_label: String) (fail_label: String) (code: String) (allocas: String) (releases: String) (globals: String) (tail: Bool) (pending: String): ArmsEmit =
@@ -4871,10 +4942,28 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                     .concat(b.code)
                     .concat("  store ").concat(lty).concat(" ").concat(b.val).concat(", ptr ").concat(slot).concat("
 ")
+                    // An arm's BINDINGS are scoped to the arm, the same
+                    // way a block's `let`s are scoped to the block --
+                    // and this is the case that matters most in
+                    // practice, because a resource almost always arrives
+                    // through a pattern (`Ok(f) => ..`) rather than
+                    // through a `let`.
+                    //
+                    // Released after the result is stored, so an arm
+                    // that yields one of its own bindings is safe: the
+                    // read that produced `b.val` already incremented it.
+                    //
+                    // Excluded in tail position for the same reason
+                    // `cg_block_ty` excludes it -- nothing may run after
+                    // a `musttail`, so those releases are handed upward
+                    // instead.
+                    .concat(if cg_arm_scoped(p, sity, tail) { pat.releases.concat(b.releases) } else { "" })
                     .concat("  br label %").concat(end_label).concat("
 ");
                 cg_match_arms(p, env, b.n, arms, i + 1, sval, sity, slot, lty, end_label, fail_label,
-                    code.concat(this_code), allocas.concat(pat.allocas).concat(b.allocas), releases.concat(pat.releases).concat(b.releases), globals.concat(pat.globals).concat(b.globals), tail, pending)
+                    code.concat(this_code), allocas.concat(pat.allocas).concat(b.allocas),
+                    if cg_arm_scoped(p, sity, tail) { releases } else { releases.concat(pat.releases).concat(b.releases) },
+                    globals.concat(pat.globals).concat(b.globals), tail, pending)
             },
             // `Rect(a, b) if a.x == b.x => ..` — the tag matched, but the
             // arm still has to earn the body. This emitter used to drop
@@ -4912,18 +5001,38 @@ let cg_match_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[type
                     // already covers -- delayed, not leaked.
                     .concat(pat.binds)
                     .concat(g.code)
-                    .concat("  br i1 ").concat(g.val).concat(", label %").concat(body_label).concat(", label %").concat(next_label).concat("
+                    // A guarded arm has TWO ways out, and the bindings
+                    // are already stored and incremented on both: the
+                    // guard runs AFTER `pat.binds`, because it is
+                    // allowed to read them. So the failing path needs a
+                    // cleanup edge of its own, or an arm whose guard
+                    // says no leaks everything it bound.
+                    //
+                    // The second copy of the release text is RENAMED,
+                    // for the reason `cg_tail_releases` renames its own:
+                    // every release line names a temporary after its
+                    // slot (`%s1_end`), and SSA names are unique across
+                    // a whole function, not per block. `pat.n` is unique
+                    // per arm, so it makes a safe suffix.
+                    .concat("  br i1 ").concat(g.val).concat(", label %").concat(body_label).concat(", label %")
+                    .concat(if cg_arm_scoped(p, sity, tail) { cg_guard_fail_label(pat.n) } else { next_label }).concat("
 ")
+                    .concat(if cg_arm_scoped(p, sity, tail) {
+                        cg_guard_fail_label(pat.n).concat(":\n")
+                            .concat(String.replace(pat.releases, "_end", "_end.g".concat(pat.n.to_string())))
+                            .concat("  br label %").concat(next_label).concat("\n")
+                    } else { "" })
                     .concat(body_label).concat(":\n")
                     .concat(b.code)
                     .concat("  store ").concat(lty).concat(" ").concat(b.val).concat(", ptr ").concat(slot).concat("
 ")
+                    .concat(if cg_arm_scoped(p, sity, tail) { pat.releases.concat(g.releases).concat(b.releases) } else { "" })
                     .concat("  br label %").concat(end_label).concat("
 ");
                 cg_match_arms(p, env, b.n, arms, i + 1, sval, sity, slot, lty, end_label, fail_label,
                     code.concat(this_code),
                     allocas.concat(pat.allocas).concat(g.allocas).concat(b.allocas),
-                    releases.concat(pat.releases).concat(g.releases).concat(b.releases),
+                    if cg_arm_scoped(p, sity, tail) { releases } else { releases.concat(pat.releases).concat(g.releases).concat(b.releases) },
                     globals.concat(pat.globals).concat(g.globals).concat(b.globals), tail, pending)
             },
         }
@@ -5896,10 +6005,30 @@ let cg_null_init (t: typecheck.ITy) (slot: String): String =
 // at different places — before an overwrite, and at function exit — so
 // the scratch register is derived from the slot's own (already unique)
 // name plus a distinguishing suffix.
+// Releasing a slot NULLS it afterwards, and that store is not
+// housekeeping -- it is what makes releasing a slot more than once safe.
+//
+// It became load-bearing when blocks started releasing their own slots
+// (block-scoped cleanup). A slot's `alloca` is hoisted to the entry
+// block and REUSED every time round a loop, so a body block that
+// releases at its end leaves the slot pointing at a freed cell; the next
+// iteration's release-on-overwrite (`_pre`) then frees the same pointer
+// again. That is a double free, and it showed up as
+// `malloc(): unaligned tcache chunk detected` while the compiler was
+// compiling itself.
+//
+// Nulling closes it for good: `_pre` and every later release are
+// null-tolerant no-ops, which is the same reason slots are null-INITED
+// at their `alloca`. Dead at a function's last release, where LLVM drops
+// it.
+//
+// The store deliberately contains no `_end`, so `cg_tail_releases`'s
+// rename still touches only the load/release pair.
 let cg_release_slot (t: typecheck.ITy) (slot: String) (suffix: String): String =
     if cg_rc_enabled(()) && cg_is_heap(cg_of_ity(t)) {
         "  ".concat(slot).concat(suffix).concat(" = load ptr, ptr ").concat(slot).concat("\n")
             .concat("  call void ").concat(cg_rel_sym(t)).concat("(ptr ").concat(slot).concat(suffix).concat(")\n")
+            .concat("  store ptr null, ptr ").concat(slot).concat("\n")
     } else { "" }
 
 // **Reference counting is ON.** `sh2` frees what it allocates: peak RSS

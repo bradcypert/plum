@@ -59,11 +59,16 @@ let main (): Unit = {
     scoped();
     println("after scoped: live=".concat(live()).concat(" closes=").concat(closed()));
 
-    // Two handles alive at once. Note what does NOT happen here: they
-    // are acquired inside a block, and they do not close at the end of
-    // it. Releases bubble to the enclosing FUNCTION (`cg_block_ty`
-    // concatenates them upward), so these two live until `main`
-    // returns, and the counts below say so.
+    // Two handles alive at once, acquired inside a block -- and they
+    // close at the end of THAT BLOCK, in reverse order, before the line
+    // below runs. The counts say so: `live=0` here, not 2.
+    //
+    // They used to live until `main` returned, because releases bubbled
+    // up to the enclosing function. That cost a real bug -- a file
+    // opened for append in a `match` arm still held its write in a
+    // buffer when the same function read the file back, and the write
+    // was missing (see `exec_corpus/file_io`). Blocks release their own
+    // now.
     {
         let x = acquire();
         let y = acquire();
@@ -83,17 +88,16 @@ let main (): Unit = {
     unsafe { fake_verbose(1) };
     println("after 50000: live=".concat(live()).concat(" closes=").concat(closed()));
 
-    // Everything still alive closes below this line, as `main` returns:
-    // `kept`, then `y`, then `x` -- REVERSE declaration order.
+    // `kept` closes below this line, as `main` returns -- it is a `let`
+    // in the function's own body, so the function IS its block.
     //
-    // LIFO is the order every language with guards uses, and the only
-    // one that composes: acquire a lock and then a file, and the file
-    // must be released while the lock still protects it. Order is not a
-    // memory-safety question -- the slots are disjoint, so any order
-    // frees the same cells -- and it became observable only when
-    // `handle` gave a release a SIDE EFFECT. It was declaration order
-    // until then, pinned here as current-not-correct, and this fixture
-    // is what made reversing it a checkable change rather than a
-    // hopeful one.
+    // Ordering is LIFO wherever more than one is live: the pair above
+    // closed 3 before 2. That is the order every language with guards
+    // uses, and the only one that composes -- acquire a lock and then a
+    // file, and the file must be released while the lock still protects
+    // it. It is not a memory-safety question (the slots are disjoint,
+    // so any order frees the same cells); it became observable only when
+    // `handle` gave a release a SIDE EFFECT.
+    //
     println("done")
 }

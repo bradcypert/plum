@@ -67,28 +67,22 @@ let main (): Unit = match Os.temp_dir() {
 
         // --- Append does not truncate ---
         //
-        // The explicit `close` here is NOT optional, and the reason is
-        // worth knowing. Cleanup runs when the handle's value dies, and
-        // values die at the end of the enclosing FUNCTION, not at the
-        // end of the `match` arm that introduced them. So without this
-        // close, `f` would still be open -- with its write sitting in a
-        // buffer -- when `read_bytes` below reads the file back, and the
-        // appended byte would be missing from the result.
+        // NO explicit close here, deliberately: `f` closes at the end of
+        // the `match` arm that bound it, so its buffered write has
+        // reached the file before `read_bytes` below reads it back.
         //
-        // Written the wrong way first, and this fixture printed
-        // `00ff41420a43` where the last byte should have been `44`.
-        //
-        // The rule: rely on the handle to guarantee nothing LEAKS, and
-        // close explicitly when something else in the same function has
-        // to observe the effect.
+        // This is a regression test as much as a demonstration. Cleanup
+        // used to run at the end of the enclosing FUNCTION, and written
+        // exactly like this the fixture printed `00ff41420a43` -- the
+        // appended `44` missing, because the handle was still open with
+        // the write in a buffer. That silently-lost write is what
+        // motivated block-scoped cleanup; if it ever comes back, the
+        // last two bytes below are what will say so.
         match Os.open(path, Mode.Append) {
             Err(e) => println("open append: ".concat(e)),
-            Ok(f) => {
-                match f.write(Bytes.from_array([68])) {
-                    Ok(_) => println("appended"),
-                    Err(e) => println(e),
-                };
-                match f.close() { Ok(_) => (), Err(e) => println(e) }
+            Ok(f) => match f.write(Bytes.from_array([68])) {
+                Ok(_) => println("appended"),
+                Err(e) => println(e),
             },
         };
         match Os.read_bytes(path) {

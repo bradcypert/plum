@@ -1355,11 +1355,11 @@ program's prelude):
   open file closes itself when the value dies** — `close` is offered
   anyway, and returns a `Result`, because `fclose` is where a buffered
   write reaches the disk and so where a full one is discovered. Closing
-  twice is harmless and is the normal path. One thing to know: cleanup
-  runs when the value dies, and values die at the end of the enclosing
-  **function**, not the enclosing block — so if something later in the
-  same function has to observe your writes, close explicitly rather than
-  waiting for the handle.
+  twice is harmless and is the normal path. Cleanup runs at the end of
+  the block that introduced the handle — a `match` arm, a loop body, a
+  `{ }` — so a file opened in one arm is closed before the next
+  statement runs, and `close` is for when you want to *see* the error
+  rather than to make the close happen.
 - **`Bytes` file I/O.** `Os.read_bytes(path): Result[Bytes, String]`,
   `Os.write_bytes(path, data)`, `Os.append_bytes(path, data)` — for
   payloads a `String` cannot honestly describe: images, compressed

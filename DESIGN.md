@@ -18562,3 +18562,91 @@ Emitted IR shifts for every program that frees anything, which is every
 program. `bootstrap-check` is what makes that safe to do at all, and
 `alloc-check` confirms the counts are unchanged -- reordering frees does
 not change how many there are.
+
+## Block-scoped cleanup, and the two things it cost (2026-09-05)
+
+A block now releases what it created at ITS end, not the enclosing
+function's. What motivated it was a real bug rather than a principle: a
+file opened for append inside a `match` arm still held its write in a
+buffer when the same function read the file back, and the appended byte
+was missing. `exec_corpus/file_io` keeps that case, now as a regression
+test.
+
+### The objection that turned out not to bite
+
+The reason this was deferred was escape analysis. A block is an
+EXPRESSION, and its tail can be a value bound inside it
+(`{ let a = acquire(); a }`) -- releasing the slot at the block's end
+looked like it would free the value being returned.
+
+It does not, and the emitted IR says why:
+
+    %t9 = load ptr, ptr %t5
+    call void @plum_rc_inc(ptr %t9)      ; the tail READ increments
+    %t5_end = load ptr, ptr %t5
+    call void @plum_rel_Res(ptr %t5_end) ; then the slot releases
+
+Reading a slot takes an owned +1, so the block's result already holds
+its own reference before any release runs. **No escape analysis was
+needed at all** -- the ownership discipline had already answered the
+question, years before it was asked.
+
+### Tail position is the sharp edge
+
+Nothing may run after a `musttail` call, so a block whose tail IS that
+call cannot emit releases after it -- they would be unreachable and the
+values would leak. Those are handed upward instead and emitted BEFORE
+the call by `cg_tail_releases`, which is what `tail_rel` has always been
+for. So a block propagates in tail position and emits inline everywhere
+else, and never both, which is what keeps a release from being emitted
+twice.
+
+Guarded match arms needed a second exit for the same reason. A guard
+runs AFTER the bindings are stored, because it is allowed to read them,
+so an arm whose guard says no has to release what it bound before
+falling through to the next arm. That is a cleanup edge of its own, with
+the release text renamed the way `cg_tail_releases` renames its own --
+every release names a temporary after its slot, and SSA names are unique
+across a whole function rather than per block.
+
+### Cost one: a double free, found by the compiler compiling itself
+
+A slot's `alloca` is hoisted to the entry block and REUSED every time
+round a loop. A body block that releases at its end left the slot
+pointing at a freed cell, and the next iteration's release-on-overwrite
+freed the same pointer again. It surfaced as
+`malloc(): unaligned tcache chunk detected` in `bootstrap-check`, which
+is exactly the harness for it: the corpus fixtures all passed.
+
+Releasing a slot now NULLS it, which makes every later release on it a
+null-tolerant no-op -- the same reason slots are null-INITED at their
+`alloca`. Worth noting the recovery: the broken compiler had already
+been used to build itself, so the working tree held a binary with double
+frees compiled in. `git checkout sh.real` to the last committed compiler
+and rebuilding from that is the way out, and is why that binary is
+tracked.
+
+### Cost two: it defeated in-place reuse, and the fix is the interesting part
+
+`alloc_corpus/literal_in_loop` went from 3 allocations to 1003.
+
+That fixture builds a struct per iteration and RECYCLES the slot's dying
+cell instead of allocating -- reuse depends on the slot still holding
+the previous value when the next one is built. Nulling it at the end of
+each iteration left nothing to reuse. This is the machinery that took
+this compiler from 6.78GB to 94.7MB, so losing it is not a trade worth
+making for tidier frees.
+
+The fix is to scope only what can be OBSERVED. Block cleanup exists for
+side effects; for ordinary data, when a cell is freed is invisible, and
+freeing it early costs reuse and buys nothing. So a block releases at
+its end only when it binds something whose release is observable -- a
+handle, directly or nested -- and a match arm only when its scrutinee
+could carry one.
+
+The consequence worth stating: **a program with no handles emits
+byte-identical IR to before this change.** Not "close enough" -- the
+same bytes, which is why the corpus goldens, `alloc-check` and the
+bootstrap fixed point were all restored by the gate rather than
+re-recorded against it. A semantic change that costs nothing where the
+semantics do not apply is the shape to aim for.
