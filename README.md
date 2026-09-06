@@ -1345,6 +1345,16 @@ program's prelude):
   is your decision rather than the compiler's. `Bytes` and `String`
   share a runtime cell exactly, so converting between them is one
   refcount increment and never a copy.
+- **File metadata.** `Os.exists(path): Result[Bool, String]`,
+  `Os.stat(path): Result[Os.Metadata, String]` (`is_directory`, `size`,
+  `mtime`), and `Os.file_size`/`Os.mtime` for the single fields.
+  `Os.stat` costs one `stat(2)` however many fields you read. `mtime` is
+  epoch **seconds**, the same unit as `Time.now()`, so the two compare
+  without a conversion. Note the deliberate split: **`Os.exists` answers
+  `Ok(false)` for a missing path, and everything else returns `Err`** —
+  "does this exist" and "can I see whether this exists" are different
+  questions, so a permission error is an `Err` rather than a silent no,
+  and a `Metadata` in hand always describes something real.
 - **Streaming files.** `Os.open(path, Mode.Read | Mode.Write |
   Mode.Append): Result[File, String]`, then `f.read(n): Result[Bytes,
   String]` (an empty result is **end of file**, not a failure),

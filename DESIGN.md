@@ -18650,3 +18650,44 @@ same bytes, which is why the corpus goldens, `alloc-check` and the
 bootstrap fixed point were all restored by the gate rather than
 re-recorded against it. A semantic change that costs nothing where the
 semantics do not apply is the shape to aim for.
+
+## File metadata, and one function that disagrees on purpose (2026-09-06)
+
+Issue #24: `Os.exists`, `Os.stat`, `Os.file_size`, `Os.mtime` -- the rest
+of `stat(2)`, next to the `is_directory` that was already using it.
+
+Loaded once and read field by field, so `Os.stat` costs ONE `stat`
+however many fields a caller wants. Plum's extern surface has no
+multi-value return, and this is the third place that constraint has been
+worked around the same way, after `tcp_recv_n`/`tcp_recv_data` and
+`file_read_n`/`file_read_data`.
+
+### The contract split, which is the only interesting decision here
+
+`Os.exists` returns `Ok(false)` for a missing path. Everything else
+returns `Err`.
+
+That looks inconsistent and is not. `is_directory` already established
+that a missing path is a real `Err` rather than a silent `Ok(false)`, and
+`stat`/`file_size`/`mtime` follow it -- so a `Metadata` in hand always
+describes something that exists, and there is no `exists: false` case
+inside it to disagree with the function whose job that is.
+
+`exists` is the exception because answering that question IS its job. And
+underneath it is three-way, not two: 1 present, 0 absent, **-1 cannot
+say**. Only `ENOENT` and `ENOTDIR` count as absent -- the second because
+a path under a non-directory cannot exist either. Anything else is a real
+failure and surfaces as `Err`, so a permission error never arrives as a
+silent no. That distinction is the thing this issue was filed about:
+inferring existence from a failed `read_file` cannot tell missing from
+`EACCES` from `EISDIR`.
+
+`Metadata` deliberately has no `exists` field for the same reason.
+
+### Fixture
+
+`exec_corpus/file_metadata` prints no path and no timestamp -- both vary
+per run. It pins what was OBSERVED instead: sizes before and after an
+append (a growth, not an absolute), and `mtime` compared against
+`Time.now()` rather than printed, which also pins that the two share a
+unit.

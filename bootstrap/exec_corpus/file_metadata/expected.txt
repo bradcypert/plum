@@ -1,0 +1,13 @@
+wrote 5 bytes
+exists file: true
+exists dir: true
+exists missing: false
+stat file: dir=false size=5
+stat dir: dir=true
+stat missing: err
+size: 5
+size after append: 7
+mtime is recent: true
+mtime missing: err
+cleanup ok
+exists after cleanup: false

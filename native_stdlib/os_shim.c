@@ -238,3 +238,70 @@ static int plum_copy_tree(const char *src, const char *dst) {
 long long os_copy_tree(const char *src, const char *dst) {
     return plum_copy_tree(src, dst) == 0 ? 0 : -1;
 }
+
+// --- File metadata (issue #24) ---
+//
+// `stat(2)`, the rest of it. `path_is_dir` in `dir_shim.c` was the first
+// caller and stays where it is; these are its siblings, here because
+// this is the filesystem shim.
+//
+// Loaded into a thread-local record and then read field by field, so
+// `Os.stat` costs ONE `stat` rather than one per field. Plum's extern
+// surface has no multi-value return, which is the same constraint
+// `tcp_recv_n`/`tcp_recv_data` and `file_read_n`/`file_read_data` work
+// around the same way.
+//
+// Thread-local rather than plain static: `net_shim.c` learned what a
+// shared buffer costs when two threads use it at once, and a per-thread
+// record is cheap enough not to repeat that.
+#include <errno.h>
+#include <time.h>
+
+#if defined(_MSC_VER)
+#define PLUM_OS_TLS __declspec(thread)
+#else
+#define PLUM_OS_TLS _Thread_local
+#endif
+
+static PLUM_OS_TLS long long stat_size = 0;
+static PLUM_OS_TLS long long stat_mtime = 0;
+static PLUM_OS_TLS long long stat_is_dir = 0;
+
+// 0 on success, -1 if the path cannot be stat'ed at all (most commonly
+// because it is not there). Follows symlinks, matching `path_is_dir`.
+long long os_stat_load(const char *path) {
+    struct stat st;
+    if (stat(path, &st) != 0) {
+        stat_size = 0;
+        stat_mtime = 0;
+        stat_is_dir = 0;
+        return -1;
+    }
+    stat_size = (long long)st.st_size;
+    stat_mtime = (long long)st.st_mtime;
+    stat_is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
+    return 0;
+}
+
+long long os_stat_size(void) { return stat_size; }
+long long os_stat_mtime(void) { return stat_mtime; }
+long long os_stat_is_dir(void) { return stat_is_dir; }
+
+// Three-way, and the third case is the point: 1 present, 0 absent, -1
+// CANNOT SAY.
+//
+// "Does this exist" and "can I see whether this exists" are different
+// questions, and collapsing them is how a permission error becomes a
+// silent "no". Only `ENOENT` and `ENOTDIR` mean absent -- the latter
+// because a path under a non-directory (`a/b` where `a` is a file)
+// cannot exist either. Anything else is a real failure to report.
+long long os_path_exists(const char *path) {
+    struct stat st;
+    if (stat(path, &st) == 0) {
+        return 1;
+    }
+    if (errno == ENOENT || errno == ENOTDIR) {
+        return 0;
+    }
+    return -1;
+}

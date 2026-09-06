@@ -180,6 +180,10 @@ See README.md for the prose introduction.
 - `let File.flush (f: File): Result[Unit, String]`
 - `let File.close (f: File): Result[Unit, String]`
 - `let run_process (program: String) (args: Array[String]): Result[ProcessResult, String]`
+- `let exists (path: String): Result[Bool, String]`
+- `let stat (path: String): Result[Metadata, String]`
+- `let file_size (path: String): Result[Int, String]`
+- `let mtime (path: String): Result[Int, String]`
 - `let list_dir (path: String): Result[Array[String], String]`
 - `let is_directory (path: String): Result[Bool, String]`
 

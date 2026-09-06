@@ -1,0 +1,93 @@
+use Os;
+use Time;
+
+// File metadata: `Os.exists`, `Os.stat`, `Os.file_size`, `Os.mtime`
+// (issue #24). The rest of `stat(2)`, next to the `is_directory` that
+// was already using it.
+//
+// Nothing here prints a path or a raw timestamp: paths are fresh temp
+// directories with random names, and a timestamp is the wall clock. What
+// is printed is what was OBSERVED about them, which is the part that has
+// to keep being true.
+
+let report (label: String) (r: Result[Bool, String]): Unit =
+    println(label.concat(": ").concat(match r { Ok(b) => b.to_string(), Err(e) => e }))
+
+let main (): Unit = match Os.temp_dir() {
+    Err(e) => println(e),
+    Ok(root) => {
+        let path = root.concat("/data.bin");
+        match Os.write_bytes(path, Bytes.from_array([1, 2, 3, 4, 5])) {
+            Err(e) => println(e),
+            Ok(_) => println("wrote 5 bytes"),
+        };
+
+        // --- exists ---
+        //
+        // The ONE function here where a missing path is `Ok`. That is
+        // its whole job: `Ok(false)` means "not there", and `Err` is
+        // reserved for "cannot tell" -- a permission error must not
+        // arrive as a silent no.
+        report("exists file", Os.exists(path));
+        report("exists dir", Os.exists(root));
+        report("exists missing", Os.exists(root.concat("/nope")));
+
+        // --- stat ---
+        //
+        // A missing path is an `Err` here, matching `is_directory`. So a
+        // `Metadata` in hand always describes something real, and there
+        // is no `exists: false` case to disagree with `Os.exists`.
+        match Os.stat(path) {
+            Err(e) => println("stat file: ".concat(e)),
+            Ok(m) => println("stat file: dir=".concat(m.is_directory.to_string())
+                .concat(" size=").concat(m.size.to_string())),
+        };
+        match Os.stat(root) {
+            Err(e) => println("stat dir: ".concat(e)),
+            Ok(m) => println("stat dir: dir=".concat(m.is_directory.to_string())),
+        };
+        println(match Os.stat(root.concat("/nope")) {
+            Ok(_) => "stat missing: UNEXPECTEDLY OK",
+            Err(_) => "stat missing: err",
+        });
+
+        // --- size ---
+        match Os.file_size(path) {
+            Err(e) => println(e),
+            Ok(n) => println("size: ".concat(n.to_string())),
+        };
+        // Growing the file grows the size, which is the property worth
+        // pinning -- an absolute number would only pin the fixture.
+        match Os.append_bytes(path, Bytes.from_array([6, 7])) {
+            Err(e) => println(e),
+            Ok(_) => (),
+        };
+        match Os.file_size(path) {
+            Err(e) => println(e),
+            Ok(n) => println("size after append: ".concat(n.to_string())),
+        };
+
+        // --- mtime ---
+        //
+        // Epoch SECONDS, the same unit as `Time.now()`, so the two can be
+        // compared without a conversion. Printed as a comparison rather
+        // than a value, since the value is the wall clock.
+        match Os.mtime(path) {
+            Err(e) => println(e),
+            Ok(t) => {
+                let now = Time.now();
+                // Written moments ago, so within a generous window of
+                // now -- and not in the future.
+                println("mtime is recent: ".concat((t <= now && t > now - 300).to_string()))
+            },
+        };
+        println(match Os.mtime(root.concat("/nope")) {
+            Ok(_) => "mtime missing: UNEXPECTEDLY OK",
+            Err(_) => "mtime missing: err",
+        });
+
+        match Os.remove_tree(root) { Ok(_) => println("cleanup ok"), Err(e) => println(e) };
+        // After the tree is gone, `exists` says so rather than failing.
+        report("exists after cleanup", Os.exists(path))
+    },
+}
