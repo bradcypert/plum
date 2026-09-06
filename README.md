@@ -1448,6 +1448,18 @@ program's prelude):
   the only ways in and out and both require `unsafe`, since both are FFI
   boundaries. A handle has no fields, no `==` and no `.to_string()`: its
   payload is opaque, so there is no honest answer for any of them.
+- **`use Path;` — lexical path handling.** `Path.join(a, b)` /
+  `join_all`, `dirname`, `basename`, `stem`, `extension`,
+  `with_extension`, `clean`, `is_absolute`, `separator`. It **never
+  touches the filesystem** — `clean` resolves `.` and `..` lexically and
+  does not follow symlinks; questions about what is really there stay
+  with `Os`. Joins with `\` on Windows and `/` elsewhere, and accepts
+  both as input on Windows, so a path written on one platform reads on
+  the other. `extension` comes back **without** the dot (`"plum"`), a
+  leading dot does not begin an extension (`.hidden` is a name), and a
+  trailing separator is ignored by both `dirname` and `basename` — which
+  is what makes `join(dirname(p), basename(p)) == clean(p)` hold for
+  every path, including the awkward ones.
 - **`use Encoding;` — hex, base64, and percent-encoding.**
   `Encoding.hex_encode(b: Bytes): String` / `Encoding.hex_decode(s):
   Result[Bytes, String]`, `Encoding.base64_encode`/`base64_decode`,

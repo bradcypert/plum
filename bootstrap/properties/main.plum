@@ -1,6 +1,7 @@
 use Os;
 use Encoding;
 use Url;
+use Path;
 
 // Property tests: invariants that must hold for MANY inputs, checked
 // against values generated here rather than against answers recorded
@@ -613,4 +614,73 @@ pub let test_url_roundtrip (): Unit = {
     // making.
     check_eq("https parses", "https://example.com/x",
         match Url.parse("https://example.com/x") { Ok(u) => u.port.to_string(), Err(e) => e }, "443")
+}
+
+// --- Path splits describe the same split ---
+//
+// `join(dirname(p), basename(p)) == clean(p)`, for every path.
+//
+// This is the invariant that decided how a TRAILING SEPARATOR is
+// handled, and it is worth stating why it is not free. Python treats
+// `a/b/` as having no file part (basename `""`, dirname `a/b`); Go
+// strips the slash in `Base` but not in `Dir`, so it answers `b` and
+// `a/b` -- and `join("a/b", "b")` is `a/b/b`, not `a/b`. Go's own pair
+// does not round-trip. Stripping in both halves is what makes these two
+// functions describe one split rather than two.
+//
+// Generated from parts rather than whole strings: the combinations that
+// break this are trailing slashes, doubled slashes, `.`/`..` segments
+// and a bare root, and assembling them reaches pairings nobody types.
+
+let path_piece (seed: Int): String =
+    ["a", "b", "..", ".", "x.plum", ".hidden", ""][rand_between(seed, 0, 6)]
+
+let path_of (seed: Int): String = {
+    let n = rand_between(seed, 1, 4);
+    let lead = if rand_between(next_seed(seed), 0, 1) == 0 { "/" } else { "" };
+    let body = path_body(next_seed(next_seed(seed)), n, "");
+    let trail = if rand_between(seed + 7, 0, 3) == 0 { "/" } else { "" };
+    lead.concat(body).concat(trail)
+}
+
+let path_body (seed: Int) (left: Int) (acc: String): String =
+    if left <= 0 { acc }
+    else {
+        let piece = path_piece(seed);
+        let sep = if String.is_empty(acc) { "" } else { "/" };
+        path_body(next_seed(seed), left - 1, acc.concat(sep).concat(piece))
+    }
+
+let path_split_rt (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let p = path_of(seed);
+        check_eq("dirname+basename == clean", p,
+            Path.join(Path.dirname(p), Path.basename(p)), Path.clean(p));
+        // `clean` is idempotent: cleaning an already-clean path changes
+        // nothing. A normaliser that is not idempotent has no canonical
+        // form, and every comparison built on it is unreliable.
+        check_eq("clean is idempotent", p, Path.clean(Path.clean(p)), Path.clean(p));
+        path_split_rt(next_seed(seed), left - 1)
+    }
+
+pub let test_path_splits (): Unit = {
+    path_split_rt(24601, 300);
+
+    // The documented edges, which a generator will not reliably hit.
+    check_eq("clean empty", "''", Path.clean(""), ".");
+    check_eq("basename empty", "''", Path.basename(""), ".");
+    check_eq("dirname empty", "''", Path.dirname(""), ".");
+    check_eq("basename root", "/", Path.basename("/"), Path.separator());
+    check_eq("dirname root", "/", Path.dirname("/"), Path.separator());
+
+    // Extension and stem describe the same name.
+    check_eq("stem+ext", "x.plum", Path.stem("x.plum").concat(".").concat(Path.extension("x.plum")), "x.plum");
+    check_eq("leading dot is not an extension", ".hidden", Path.extension(".hidden"), "");
+    check_eq("leading dot keeps its stem", ".hidden", Path.stem(".hidden"), ".hidden");
+
+    // Joining must never invent an absolute path out of relative parts.
+    check_eq("join stays relative", "a + b",
+        Path.is_absolute(Path.join("a", "b")).to_string(), "false");
+    check_eq("join keeps the first root", "/a + b",
+        Path.is_absolute(Path.join("/a", "b")).to_string(), "true")
 }

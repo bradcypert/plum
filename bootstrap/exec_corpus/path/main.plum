@@ -1,0 +1,88 @@
+use Path;
+
+// Lexical path handling (issue #18). Nothing here touches the
+// filesystem: `clean` does not resolve symlinks and nothing stats.
+//
+// **Every result is printed with the separator replaced by `|`.** This
+// fixture runs on Windows too, via `bootstrap/platform-smoke`, where
+// the separator is `\` -- so printing raw output would compare
+// byte-for-byte against the wrong thing on one platform or the other.
+// Normalizing pins the STRUCTURE, which is what these functions
+// promise, and leaves the separator itself to `separator()` below.
+//
+// Inputs are written with `/` throughout: Windows accepts both, and
+// `Path` normalizes on the way in, so the same source means the same
+// thing on both.
+
+let bar (s: String): String = String.replace(s, Path.separator(), "|")
+
+let t (label: String) (got: String): Unit =
+    println(label.concat(" -> [").concat(bar(got)).concat("]"))
+
+let main (): Unit = {
+    // --- join ---
+    //
+    // Empty segments are skipped, so joining nothing to something
+    // cannot turn a relative path absolute.
+    t("join a b", Path.join("a", "b"));
+    t("join '' b", Path.join("", "b"));
+    t("join a ''", Path.join("a", ""));
+    // A later absolute segment does NOT discard the earlier ones,
+    // matching Go. Python lets `/b` win, which is convenient until a
+    // caller passes user input as the second argument and silently
+    // escapes the directory they meant to stay inside.
+    t("join a /b", Path.join("a", "/b"));
+    t("join_all a b c", Path.join_all(["a", "b", "c"]));
+
+    // --- clean, lexically ---
+    t("clean a/./b/../c", Path.clean("a/./b/../c"));
+    t("clean a//b/", Path.clean("a//b/"));
+    // The root has no parent, so `..` above it is dropped -- but a
+    // relative `..` is kept, because it really does mean the parent.
+    t("clean /../x", Path.clean("/../x"));
+    t("clean ../x", Path.clean("../x"));
+    // The empty string is not a path; `.` is the one it means.
+    t("clean ''", Path.clean(""));
+    t("clean /", Path.clean("/"));
+
+    // --- dirname / basename, including the documented edges ---
+    t("dirname /tmp/x.plum", Path.dirname("/tmp/x.plum"));
+    t("dirname file", Path.dirname("file"));
+    t("dirname /x", Path.dirname("/x"));
+    t("dirname ''", Path.dirname(""));
+    t("dirname /", Path.dirname("/"));
+    t("dirname a/b/", Path.dirname("a/b/"));
+    t("basename /tmp/x.plum", Path.basename("/tmp/x.plum"));
+    t("basename file", Path.basename("file"));
+    t("basename ''", Path.basename(""));
+    t("basename /", Path.basename("/"));
+    t("basename a/b/", Path.basename("a/b/"));
+
+    // --- extension / stem ---
+    //
+    // Returned WITHOUT the dot, so a check reads `== "plum"`. A leading
+    // dot does not begin an extension (`.hidden` is a name); a trailing
+    // one gives an empty extension and a stem without it.
+    t("ext x.plum", Path.extension("x.plum"));
+    t("ext x", Path.extension("x"));
+    t("ext file.", Path.extension("file."));
+    t("ext .hidden", Path.extension(".hidden"));
+    t("ext a.b.c", Path.extension("a.b.c"));
+    t("stem x.plum", Path.stem("x.plum"));
+    t("stem file.", Path.stem("file."));
+    t("stem .hidden", Path.stem(".hidden"));
+    t("stem a.b.c", Path.stem("a.b.c"));
+    t("with_extension /a/x.plum ll", Path.with_extension("/a/x.plum", "ll"));
+    t("with_extension x.plum ''", Path.with_extension("x.plum", ""));
+
+    // --- is_absolute ---
+    println("abs /tmp: ".concat(Path.is_absolute("/tmp").to_string()));
+    println("abs a/b: ".concat(Path.is_absolute("a/b").to_string()));
+    println("abs '': ".concat(Path.is_absolute("").to_string()));
+
+    // The separator is one character, and it is what `join` emits --
+    // asserted as a relationship rather than printed, since its value
+    // differs by platform and this file must not.
+    println("separator is 1 char: ".concat((String.char_len(Path.separator()) == 1).to_string()));
+    println("join uses it: ".concat((Path.join("a", "b") == "a".concat(Path.separator()).concat("b")).to_string()))
+}

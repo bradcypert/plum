@@ -18691,3 +18691,63 @@ per run. It pins what was OBSERVED instead: sizes before and after an
 append (a growth, not an absolute), and `mtime` compared against
 `Time.now()` rather than printed, which also pins that the two share a
 unit.
+
+## `Path`, and the split that had to agree with itself (2026-09-06)
+
+Issue #18: `join`, `dirname`, `basename`, `stem`, `extension`,
+`with_extension`, `clean`, `is_absolute`, `separator`. Ordinary Plum
+over `Os.platform()`, the same way `Time.utc` is ordinary Plum over
+`Time.now`. No syscalls: `clean` is lexical, and questions about what is
+really on disk stay with `Os`.
+
+Windows input is normalized to `/` on the way in and the platform
+separator is put back only when a path is rebuilt. That is one set of
+rules rather than two, and it means `Path.dirname("C:/a/b")` works on a
+Windows machine whether or not the caller used backslashes -- which they
+often will not, since paths arrive from config files and command lines
+written elsewhere.
+
+### Three choices where the references disagree
+
+**`extension` returns no dot.** Go and Python include it; Rust does not.
+Without it reads better at the point of use (`== "plum"`), and it
+matches this library's own splitters -- `String.split` does not hand
+back its separator either.
+
+**A leading dot does not begin an extension.** `.hidden` is a name, so
+its stem is `.hidden` and its extension is empty. Python and Rust agree;
+Go says the extension of `.hidden` is `.hidden`.
+
+**A trailing separator is ignored by BOTH halves of the split**, and
+this is the one that took an argument to settle. Python treats `a/b/` as
+having no file part: basename `""`, dirname `a/b`. Go strips the slash
+in `Base` but not in `Dir`, answering `b` and `a/b` -- so
+`join(Dir(p), Base(p))` is `a/b/b`, and **Go's own pair does not
+round-trip**.
+
+Stripping in both is what makes the two functions describe ONE split:
+
+    join(dirname(p), basename(p)) == clean(p)
+
+That holds here for every path, including `""`, `/`, `file` and `a/b/`.
+It is checked in `bootstrap/properties` over 300 generated paths
+assembled from parts -- trailing slashes, doubled slashes, `.`/`..`
+segments and a bare root -- because those are the combinations that
+break it and the ones nobody types by hand. The same property checks
+that `clean` is IDEMPOTENT, which is the other thing a normaliser has to
+be: without it there is no canonical form, and every comparison built on
+it is unreliable.
+
+### The fixture has to survive being run on Windows
+
+`bootstrap/platform-smoke` runs every `exec_corpus` fixture on the
+machine it is sitting on, Windows included, and compares output byte for
+byte. A path fixture printing `a/b` would therefore be wrong on one
+platform or the other by construction.
+
+So every result is printed with the separator replaced by `|`. That pins
+the STRUCTURE, which is what these functions promise, and leaves the
+separator itself to two assertions about `separator()` -- that it is one
+character, and that it is what `join` emits. Same discipline as
+`file_metadata` printing no timestamps: pin the relationship, never the
+value that varies.
