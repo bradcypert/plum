@@ -1,81 +1,125 @@
 Plum is a small, statically typed, compiled language.
 
-`plum check` and `plum build` now agree.
+Plum can work with bytes.
 
-## Eight programs your editor approved and the build refused
+## `Bytes`, and which type is the special case
 
-`plum check` is what runs on every keystroke in an editor. When it
-accepts something the compiler then rejects, you find out at the worst
-possible moment — after the code is written and you have moved on.
+Every I/O path was text and whole-value: `Os.read_file` moved a whole
+`String`, HTTP bodies were `String`, and `Net.read` stopped at a NUL.
+That ruled out images, gzip, protobuf, and any C ABI that is not text.
 
-Eight constructs did exactly that:
-
-```plum
-match n { 1 | 2 => .. }     // or-patterns aren't supported yet
-(1, 2).to_string()          // .to_string() on a tuple isn't supported
-().to_string()              // Unit has no .to_string()
-r.to_string()               // on a Ref: use .get().to_string()
-f.to_string()               // a closure has no .to_string()
-c.to_string()               // on a CStr: use .as_string()
-let r = 1..5;               // '..' is only supported as a `for` iterand
-show(ref(1))                // where `let show [T] (x: T) = x.to_string()`
-```
-
-Every one of those messages is a good message. They were arriving from
-the wrong tool, at the wrong time. They come from `plum check` now,
-worded the same, suggestions included.
-
-**This rejects programs 0.0.18 accepted — and every one of them already
-failed to build.** If your project compiles today it will compile on
-0.0.19. What changes is when you hear about the ones that don't.
-
-## `[T: Show]`, the third bound
-
-The last of those eight needed more than a message move. Inside a
-generic, `x.to_string()` cannot know what `x` is:
+`Bytes` is a byte buffer, and `String` is now documented and implemented
+as bytes carrying a UTF-8 invariant — not the other way round:
 
 ```plum
-let show [T] (x: T): String = x.to_string()
+let raw = Bytes.from_string("hi")     // total: every String is bytes
+match raw.as_string() {               // fallible: not every Bytes is a String
+    Ok(text) => println(text),
+    Err(e) => println(e),
+}
 
-show(1)          // fine
-show(ref(1))     // call to show: T is Ref[Int], but show requires T
-                 // to have a text form, and this one has none
+"é".as_bytes().len()                  // 2  -- bytes
+"é".char_len()                        // 1  -- characters
 ```
 
-Checked at the **call**, where the type is concrete, and it follows the
-value: a function that renders nothing itself but passes its `T` to one
-that does inherits the requirement.
+Indices are bytes, so `Bytes.slice` can split a multi-byte character in
+half — precisely what `String.slice` refuses to do. There is no
+`.to_string()` on `Bytes`: bytes are not text, so `to_hex` renders and
+`as_string` decodes, and which you want is your decision.
 
-`Show` joins `Ord` and `Eq` as a bound you can declare — `[T: Show]` —
-and is then required of callers whether or not the body renders
-anything.
+Binary I/O follows it. `Os.read_bytes` / `write_bytes` / `append_bytes`
+round-trip anything, embedded NULs included, and `Net.read_bytes` /
+`write_bytes` are binary-safe sockets that keep three outcomes apart:
+data, a clean peer close, and a real error. The existing `String` calls
+are unchanged and remain the text convenience.
 
-## Type signatures you can read
+## Files that close themselves
 
-Hover and completion were showing the compiler's internal parse-tree
-notation:
+```plum
+match Os.open(path, Mode.Read) {
+    Err(e) => println(e),
+    Ok(f) => match f.read(4096) {     // Result[Bytes, String]; empty is EOF
+        Ok(chunk) => println(chunk.len().to_string()),
+        Err(e) => println(e),
+    },
+}
+```
+
+There is no `close` in that example and nothing leaks. `File` is a
+**handle**: a type whose value owns a native resource, and whose death
+runs the cleanup. `f.close()` still exists and still returns a `Result`,
+because `fclose` is where a buffered write reaches the disk and so where
+a full one is discovered — call it when the error matters, rely on the
+handle when it does not.
+
+Cleanup runs at the end of the **block** that introduced the value, in
+reverse order of acquisition, and costs nothing at a tail call: a
+tail-recursive loop that opens a resource per iteration runs in constant
+stack and still closes all of them.
+
+You can declare your own:
+
+```plum
+extern "C" { fn terminal_restore(h: Int); }
+handle RawMode { on_drop: terminal_restore }
+```
+
+`handle` is a contextual keyword, so existing code using `handle` as an
+identifier is unaffected.
+
+## Three new modules
+
+**`use Encoding;`** — hex, base64 (standard and URL-safe), and RFC 3986
+percent-encoding, all on `Bytes`. Not a crypto suite.
+
+**`use Url;`** — `parse`, `stringify`, `request_target`, and query
+access. Parsing is not connecting: `https://` parses fine whether or not
+the client can speak it yet. `Http` uses it now instead of its own
+hand-rolled parser, which is why `http://user@host/` is refused rather
+than quietly connecting to a host named `user@host`.
+
+**`use Path;`** — `join`, `dirname`, `basename`, `stem`, `extension`,
+`clean`, `is_absolute`. Lexical only; it never touches the filesystem.
+Joins with `\` on Windows and accepts both separators as input. The
+compiler uses it for its own paths, which is how three hand-rolled
+copies of `dirname` came to be deleted.
+
+`Os` also grew `exists`, `stat`, `file_size` and `mtime`. Note the
+deliberate split: `Os.exists` answers `Ok(false)` for a missing path and
+everything else returns `Err`, because "does this exist" and "can I see
+whether this exists" are different questions — a permission error is not
+a silent no.
+
+## Your debugger knows your source
+
+Debug builds carry DWARF line tables for Plum source, so `gdb`, `perf`
+and `addr2line` name the file and line you wrote rather than a mangled
+symbol:
 
 ```
-before:  let Option.map (o: (gt Option T)) (f: (fn (T) -> U)): (gt Option U)
-after:   let Option.map (o: Option[T]) (f: (T) -> U): Option[U]
+plum_codegen_cg_parse_std   ->  codegen/stdlib.plum:112
 ```
 
-## A standard-library reference that cannot go stale
+Line tables only — a debugger can step, break on a line and attribute a
+profile; it cannot print a local. Release builds carry none.
 
-[STDLIB.md](STDLIB.md) lists all 161 entries across 18 sections,
-generated by the compiler (`plum stdlib-reference`) and checked against
-it on every build. It replaces a hand-written prose list that had
-drifted: 32 functions existed and were documented nowhere, including
-`Ref.get`, `Ref.set`, `Sender.send` and `Receiver.recv`.
+## Also
 
-Tuples also work rather better than the README claimed — nested, inside
-arrays, as struct fields, returned from generic functions. Only
-`.to_string()` on one is missing, which is now one of the eight above.
+- `Process.run` takes argv directly, with no shell between you and the
+  program.
+- `plum help`, and `--release` / `--trace` build modes.
+- `Float`-to-`Int` conversions behave as documented.
+- HTTP requests now send `Host: host:port` when the port is not the
+  scheme default, per RFC 7230. Previously they sent a bare host, which
+  a name-based virtual host reads as a different origin.
+- [STDLIB.md](STDLIB.md) is up to 222 entries across 23 sections, still
+  generated by the compiler and checked against it on every build.
 
 ## Upgrading
 
-Nothing that compiled under 0.0.18 fails under 0.0.19.
+Nothing that compiled under 0.0.19 fails under 0.0.20.
 
-The checker rejects more than it did, and every addition is a program
-the compiler was already refusing. If you worked around one of them, the
-workaround is still correct and no longer necessary.
+`Bytes`, `File`, `Mode`, `Seek` and `Metadata` are new names in `Os` and
+the prelude; `handle` is a contextual keyword and does not reserve the
+word. If you were joining paths with `.concat("/")`, that still works —
+`Path.join` is an improvement, not a requirement.
