@@ -18751,3 +18751,53 @@ separator itself to two assertions about `separator()` -- that it is one
 character, and that it is what `join` emits. Same discipline as
 `file_metadata` printing no timestamps: pin the relationship, never the
 value that varies.
+
+## The compiler uses its own Path module (2026-09-06)
+
+Issue #28, and the point of it was to find out whether `Path` (#18) was
+the right shape by making something depend on it. A stdlib module with
+no caller is a guess.
+
+Nine construction sites -- eight in `main.plum`, one in `parser.plum` --
+became `Path.join`. Three hand-rolled helpers were deleted outright:
+
+- `lsp.base_of` and `lsp.dir_of`, written over `chars_of` under a
+  comment saying "one call site does not justify a shared helper". There
+  were nine.
+- `parser.embed_dir_of`, a third `dirname` in a third style.
+
+Two behaviours improved as a side effect rather than by intent, which is
+the useful kind of evidence that the API was right. `embed_resolve`
+tested `rel.starts_with("/")` to decide whether a path was absolute;
+`Path.is_absolute` also knows about a Windows drive letter. And the
+deleted `dir_of` answered `""` for `/x`, an empty project directory,
+where `Path.dirname` answers `/`.
+
+### What the risk turned out to be
+
+The worry recorded on the issue was that `Path.join` emits the PLATFORM
+separator, so paths that currently contain `/` on Windows would start
+containing `\` -- and three things compare paths byte for byte: emitted
+debug info (`DIFile` splits directory from filename and the CU carries a
+`comp_dir`), `clang` argv, and module resolution.
+
+On Linux the answer is that nothing moved at all: `emit-llvm` on an
+unchanged project produces IR byte-identical to the pre-migration
+compiler, checked directly rather than inferred from the harnesses
+passing. `debug-info-check` and `lsp-smoke` agree. Windows is
+compile-checked by `cross-check` and exercised by `platform-smoke` in
+CI; the separator really will differ there, and that is the intended
+correction rather than a regression.
+
+### The seed had to be refreshed, for a reason worth stating
+
+`check-seed` failed with `unbound variant/function: Path`. The seed is
+the compiler as LLVM IR, and it was generated before `Path` existed --
+so the compiler it bootstraps cannot compile a source that says
+`use Path;`.
+
+That is the seed working exactly as documented ("it does not need to be
+current; it needs to be new enough to compile today's source"), and it
+is the first time in this arc that a change to the compiler's own SOURCE
+rather than to a shim has forced a refresh. Adding a stdlib module is
+free; using one from the compiler is not.

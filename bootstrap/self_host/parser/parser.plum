@@ -34,6 +34,7 @@
 //   here that needs to parse malformed input gracefully yet.
 
 use Os;
+use Path;
 use lexer;
 
 // --- AST ---
@@ -1228,16 +1229,10 @@ let embed_read (full: String) (pos: Int): PExpr =
 // would make a build depend on where it was launched from. An absolute
 // path is taken as written.
 let embed_resolve (rel: String): String =
-    if rel.starts_with("/") { rel }
-    else {
-        let dir = embed_dir_of(current_path(()));
-        if dir == "" { rel } else { dir.concat("/").concat(rel) }
-    }
-
-let embed_dir_of (path: String): String = {
-    let parts = path.split("/");
-    if parts.len() <= 1 { "" } else { Array.join(Array.slice(parts, 0, parts.len() - 1), "/") }
-}
+    // `Path.is_absolute` rather than a leading-slash test: it also knows
+    // about a Windows drive letter, which the hand-rolled check did not.
+    if Path.is_absolute(rel) { rel }
+    else { Path.join(Path.dirname(current_path(())), rel) }
 
 let parse_postfix_from (tokens: Array[lexer.Token]) (pos: Int) (expr: PExpr) (ns: Bool): ExprResult =
     match tokens[pos] {
