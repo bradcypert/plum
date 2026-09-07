@@ -18801,3 +18801,53 @@ current; it needs to be new enough to compile today's source"), and it
 is the first time in this arc that a change to the compiler's own SOURCE
 rather than to a shim has forced a refresh. Adding a stdlib module is
 free; using one from the compiler is not.
+
+## A path comparison that only failed where TMPDIR ends in a slash (2026-09-07)
+
+CI went red on macOS and Windows the moment the compiler started using
+its own `Path` module (#28), with a single failing assertion:
+
+    FAIL: a cross-file error was not attributed to the file it is in
+
+Linux passed, locally and in CI, on three architectures.
+
+### The mechanism
+
+The language server checks an unsaved buffer by copying the project to a
+scratch directory and checking that. Diagnostics then carry SCRATCH
+paths, and `lsp_real_path` maps them back by testing whether a
+diagnostic's path starts with the scratch directory:
+
+    if scratch != "" && d.path.starts_with(scratch) { .. }
+
+That is a raw string comparison, and it was fine while both sides were
+built the same way. The migration made one side different: a
+diagnostic's path is now built by `Path.join`, which CLEANS, and
+`scratch` came straight from `Os.temp_dir` and did not.
+
+Cleaning only matters if there is something to clean, which is where the
+platform comes in. `os_temp_dir` builds `"%s/plum-XXXXXX"` from
+`TMPDIR`. **macOS sets `TMPDIR` with a trailing slash**, so the result
+is `/var/.../T//plum-abc`; Linux usually leaves it unset and gets
+`/tmp`, with nothing to collapse. So the prefix test succeeded on Linux
+and silently failed on macOS -- and a silent failure here is not an
+error, it is every cross-file error being attributed to a temporary file
+the user has never heard of.
+
+### The fix, and the more useful part
+
+The fix is one line: clean the scratch path where it is bound, so both
+sides of the comparison are normalized. Both functions now say in a
+comment that they are comparing normalized paths, because that is an
+invariant a reader cannot see from the types.
+
+The more useful part is that `bootstrap/lsp-smoke` now sets `TMPDIR`
+with a trailing slash itself. It reproduced on Linux immediately once
+the shape was known -- `TMPDIR=/tmp/ bootstrap/lsp-smoke` -- which means
+the harness could have caught it and simply never tried. It does now,
+on every platform, rather than only on the ones that happen to supply
+the awkward value.
+
+That is the same lesson as `cross-check`: a difference that exists only
+on a platform CI cannot iterate on quickly is worth reproducing on the
+one it can.

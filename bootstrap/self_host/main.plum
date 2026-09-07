@@ -870,7 +870,23 @@ struct BufferCheck { diagnostic: Option[lsp.Diagnostic], scratch: String }
 let lsp_check_buffer (path: String) (text: String): BufferCheck =
     match Os.temp_dir() {
         Err(_) => BufferCheck { diagnostic: None, scratch: "" },
-        Ok(scratch) => {
+        Ok(raw_scratch) => {
+            // CLEANED, and that is not tidiness -- `lsp_real_path`
+            // recognises a diagnostic from the scratch copy by testing
+            // whether its path STARTS WITH this one, and the paths it
+            // compares against are built by `Path.join`, which cleans.
+            // Both sides have to be normalized or the test silently
+            // fails and every cross-file error is attributed to the
+            // scratch file instead of the real one.
+            //
+            // `Os.temp_dir` really can hand back a path needing it:
+            // macOS sets `TMPDIR` WITH a trailing slash, so the shim's
+            // `"%s/plum-XXXXXX"` produces `/var/.../T//plum-abc`. Linux
+            // usually leaves `TMPDIR` unset and gets `/tmp`, which is
+            // why this passed everywhere it was run by hand and failed
+            // on macOS and Windows in CI. `TMPDIR=/tmp/ bootstrap/lsp-smoke`
+            // reproduces it here.
+            let scratch = Path.clean(raw_scratch);
             let dir = Path.dirname(path);
             // `Os.copy_tree` copies the CONTENTS of `dir`, so the
             // project lands directly in the scratch dir rather than
@@ -929,6 +945,11 @@ let line_width (src: String) (line: Int): Int = {
 // A diagnostic reported inside the scratch copy, mapped back to the
 // file the user is actually editing. Without this every error would
 // point at a temp directory that will not exist a moment later.
+// Both arguments arrive CLEANED -- `scratch` from `lsp_check_buffer`
+// and `dir` from `Path.dirname` -- because this compares them against a
+// diagnostic's path as raw text, and that path was built by `Path.join`
+// and is therefore clean. A prefix test between a normalized string and
+// an un-normalized one is a silent no-match, not an error.
 let lsp_real_path (d: lsp.Diagnostic) (scratch: String) (dir: String): String =
     if scratch != "" && d.path.starts_with(scratch) {
         dir.concat(String.slice(d.path, scratch.len(), d.path.len()))
