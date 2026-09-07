@@ -50,7 +50,15 @@ pub struct TArm { pub pattern: parser.PPattern, pub guard: Option[TExpr], pub bo
 // bound by, and the body. No guard -- an arm that can decline after
 // winning would have to put the value back, and this queue has no
 // un-pop.
-pub struct TSelectArm { pub chan: TExpr, pub pattern: parser.PPattern, pub body: TExpr }
+// Mirrors `parser.SelectArmKindNode`, for the same reason: an `else`
+// arm has no channel, so it must not be possible to ask for one.
+pub enum TSelectArmKind {
+    TSARecv(TExpr, parser.PPattern),
+    TSAAfter(TExpr),
+    TSAElse,
+}
+
+pub struct TSelectArm { pub kind: TSelectArmKind, pub body: TExpr }
 pub struct TFieldInit { pub name: String, pub value: TExpr }
 
 pub enum TNode {
@@ -309,7 +317,14 @@ let t_arm_children (arms: Array[TArm]) (i: Int) (acc: Array[TExpr]): Array[TExpr
 
 let t_select_children (arms: Array[TSelectArm]) (i: Int) (acc: Array[TExpr]): Array[TExpr] =
     if i >= arms.len() { acc }
-    else { t_select_children(arms, i + 1, acc.push(arms[i].chan).push(arms[i].body)) }
+    else {
+        let with_kind = match arms[i].kind {
+            TSARecv(chan, _) => acc.push(chan),
+            TSAAfter(d) => acc.push(d),
+            TSAElse => acc,
+        };
+        t_select_children(arms, i + 1, with_kind.push(arms[i].body))
+    }
 
 let t_field_children (fs: Array[TFieldInit]) (i: Int) (acc: Array[TExpr]): Array[TExpr] =
     if i >= fs.len() { acc } else { t_field_children(fs, i + 1, acc.push(fs[i].value)) }

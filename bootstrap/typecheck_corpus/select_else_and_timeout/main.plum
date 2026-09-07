@@ -1,0 +1,14 @@
+// Rejected: `else` is taken the instant nothing is ready, so a timeout
+// beside it could never fire. Refused rather than silently ignored,
+// because the author plainly meant one or the other and the compiler
+// cannot tell which.
+use Time;
+
+let main (): Unit = {
+    let (tx, rx) = channel[Int]();
+    println(select {
+        n = rx => n.to_string(),
+        else => "nothing ready",
+        Time.millis(50) => "timed out",
+    })
+}

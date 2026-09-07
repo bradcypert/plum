@@ -1,0 +1,5 @@
+// Rejected: a `select` with no channel arm is not waiting for anything.
+// `select { else => x }` is `x` written at length, and a timeout-only
+// one is `Time.sleep` written at length -- neither is a multiplexer,
+// which is what `select` is for.
+let main (): Unit = println(select { else => "nothing to wait on" })

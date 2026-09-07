@@ -1,0 +1,88 @@
+use Time;
+
+// `select`'s non-blocking `else` arm and its timeout arm (issue #21).
+//
+// The multiplexer itself is `exec_corpus/select_channels`. What is here
+// is the two ways of NOT waiting forever, which is the hole this had
+// versus Go: without them, every "take one if ready" or "wait 200ms" is
+// a blocking `recv` or a hand-rolled busy loop.
+//
+// Both compile to the same call. `else` is a timeout of ZERO -- the
+// shim sweeps once and waits on an already-past deadline, which returns
+// at once -- so the difference between "do not wait" and "wait this
+// long" is a number rather than a second code path.
+//
+// Timings are asserted as BOUNDS, never printed: a duration measured on
+// a loaded runner is not reproducible.
+
+let took (label: String) (t0: Time.Instant) (least: Time.Duration): Unit =
+    println(label.concat(Time.since(t0).ge(least).to_string()))
+
+let main (): Unit = {
+    let (tx, rx) = channel[Int]();
+
+    // --- else, with nothing ready ---
+    //
+    // Must not block. If it did, this fixture would hang rather than
+    // fail, which is why the harness runs everything under a timeout.
+    println(select {
+        n = rx => "got ".concat(n.to_string()),
+        else => "nothing ready",
+    });
+
+    // --- else, with a value waiting ---
+    //
+    // The channel arm wins: `else` is only for when nothing is ready.
+    tx.send(7);
+    println(select {
+        n = rx => "got ".concat(n.to_string()),
+        else => "nothing ready",
+    });
+
+    // The value really was consumed, so `else` is taken again.
+    println(select {
+        n = rx => "got ".concat(n.to_string()),
+        else => "nothing ready",
+    });
+
+    // --- a timeout that fires ---
+    let t0 = Time.instant();
+    println(select {
+        n = rx => "got ".concat(n.to_string()),
+        Time.millis(60) => "timed out",
+    });
+    took("waited at least 60ms: ", t0, Time.millis(60));
+
+    // --- a timeout that does not fire ---
+    //
+    // A ready value beats a generous deadline, and returns without
+    // waiting for it -- so a 30-second arm costs nothing here. If the
+    // deadline were consulted before the sweep, this fixture would take
+    // half a minute instead of failing.
+    tx.send(9);
+    let t1 = Time.instant();
+    println(select {
+        n = rx => "got ".concat(n.to_string()),
+        Time.seconds(30) => "timed out",
+    });
+    println("returned promptly: ".concat(Time.since(t1).lt(Time.seconds(5)).to_string()));
+
+    // --- the duration is an ordinary expression ---
+    //
+    // Any `Duration` works, including one held in a variable, which is
+    // what makes a configurable timeout expressible.
+    let budget = Time.millis(20);
+    println(select {
+        n = rx => "got ".concat(n.to_string()),
+        budget => "budget spent",
+    });
+
+    // --- a timeout of zero is not an error ---
+    //
+    // It means the same as `else`, which is exactly how `else` is
+    // implemented.
+    println(select {
+        n = rx => "got ".concat(n.to_string()),
+        Time.zero() => "zero timeout",
+    })
+}

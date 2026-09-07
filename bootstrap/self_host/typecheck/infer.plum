@@ -2953,11 +2953,41 @@ struct ArmsResult { ty: ITy, subst: Subst, state: FreshState, tarms: Array[TArm]
 // `select` with no arms at all blocks forever with nothing that could
 // wake it -- Go allows exactly that as a deliberate idiom, but nothing
 // else in this language is a way to spell "hang", so it is rejected.
+// How many arms of each kind, so the shape rules below can be stated
+// once rather than rediscovered per arm.
+struct SelectShape { recv: Int, after: Int, other: Int }
+
+let select_shape (arms: Array[parser.SelectArmNode]) (i: Int) (acc: SelectShape): SelectShape =
+    if i >= arms.len() { acc }
+    else {
+        let next = match arms[i].kind {
+            SARecv(_, _) => SelectShape { recv: acc.recv + 1, after: acc.after, other: acc.other },
+            SAAfter(_) => SelectShape { recv: acc.recv, after: acc.after + 1, other: acc.other },
+            SAElse => SelectShape { recv: acc.recv, after: acc.after, other: acc.other + 1 },
+        };
+        select_shape(arms, i + 1, next)
+    }
+
 let infer_select (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arms: Array[parser.SelectArmNode]): InferResult =
     if Array.is_empty(arms) {
         fail_tc("`select` needs at least one arm; a select with none can never proceed");
         ir_unsupported(acc, state, "empty select")
     } else {
+        let shape = select_shape(arms, 0, SelectShape { recv: 0, after: 0, other: 0 });
+        // A select with no channel arm is not waiting for anything --
+        // `select { else => x }` is `x` written at length, and
+        // `select { after d => x }` is a `sleep` written at length.
+        if shape.recv == 0 {
+            fail_tc("`select` needs at least one channel arm; one with only `else` or a timeout is not waiting for anything")
+        } else { () };
+        // `else` fires the instant nothing is ready, so a timeout beside
+        // it could never be reached. Rejected rather than silently
+        // ignored, because the author clearly meant one or the other.
+        if shape.other > 0 && shape.after > 0 {
+            fail_tc("`select` cannot have both `else` and a timeout arm: `else` is taken immediately when nothing is ready, so the timeout could never fire")
+        } else { () };
+        if shape.other > 1 { fail_tc("`select` can have only one `else` arm") } else { () };
+        if shape.after > 1 { fail_tc("`select` can have only one timeout arm") } else { () };
         let here = current_err_offset(());
         let r = infer_select_arms(p2, state, env, acc, arms, 0, None, []);
         set_stmt_pos(here);
@@ -2971,23 +3001,51 @@ let infer_select_arms (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
     else {
         // Same as `match`: an arm's errors belong to the arm.
         set_stmt_pos(arms[i].start);
-        let cr = infer_expr(p2, state, env, acc, arms[i].expr);
-        let ef = fresh(cr.state);
-        let s1 = match unify(subst_apply(cr.subst, cr.ty), ITStruct("Receiver", [ef.ty])) {
-            Ok(s) => subst_compose(s, cr.subst),
-            Err(e) => { fail_tc("a `select` arm waits on a Receiver: ".concat(e)); cr.subst },
-        };
-        let br = bind_pattern_ty(p2, ef.state, s1, env, arms[i].pattern, subst_apply(s1, ef.ty));
-        let bodyr = infer_expr(p2, br.state, br.env, br.subst, arms[i].body);
+        let a = infer_select_arm(p2, state, env, acc, arms[i]);
         let new_result = match result_ty {
-            None => subst_apply(bodyr.subst, bodyr.ty),
-            Some(prev) => match unify(subst_apply(bodyr.subst, prev), subst_apply(bodyr.subst, bodyr.ty)) {
-                Ok(s) => subst_apply(subst_compose(s, bodyr.subst), bodyr.ty),
-                Err(e) => { fail_tc("`select` arms: ".concat(e)); bodyr.ty },
+            None => subst_apply(a.subst, a.ty),
+            Some(prev) => match unify(subst_apply(a.subst, prev), subst_apply(a.subst, a.ty)) {
+                Ok(s) => subst_apply(subst_compose(s, a.subst), a.ty),
+                Err(e) => { fail_tc("`select` arms: ".concat(e)); a.ty },
             },
         };
-        infer_select_arms(p2, bodyr.state, env, bodyr.subst, arms, i + 1, Some(new_result),
-            tarms.push(TSelectArm { chan: cr.texpr, pattern: br.pattern, body: bodyr.texpr }))
+        infer_select_arms(p2, a.state, env, a.subst, arms, i + 1, Some(new_result), tarms.push(a.tarm))
+    }
+
+struct SelectOneArm { ty: ITy, subst: Subst, state: FreshState, tarm: TSelectArm }
+
+let infer_select_arm (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (arm: parser.SelectArmNode): SelectOneArm =
+    match arm.kind {
+        SARecv(pattern, chan) => {
+            let cr = infer_expr(p2, state, env, acc, chan);
+            let ef = fresh(cr.state);
+            let s1 = match unify(subst_apply(cr.subst, cr.ty), ITStruct("Receiver", [ef.ty])) {
+                Ok(s) => subst_compose(s, cr.subst),
+                Err(e) => { fail_tc("a `select` arm waits on a Receiver: ".concat(e)); cr.subst },
+            };
+            let br = bind_pattern_ty(p2, ef.state, s1, env, pattern, subst_apply(s1, ef.ty));
+            let bodyr = infer_expr(p2, br.state, br.env, br.subst, arm.body);
+            SelectOneArm { ty: bodyr.ty, subst: bodyr.subst, state: bodyr.state,
+                           tarm: TSelectArm { kind: TSARecv(cr.texpr, br.pattern), body: bodyr.texpr } }
+        },
+        // The wait is a `Time.Duration`, so a bare `Int` of milliseconds
+        // is a type error rather than a unit nobody wrote down. That is
+        // the whole reason `Duration` is a type.
+        SAAfter(d) => {
+            let dr = infer_expr(p2, state, env, acc, d);
+            let s1 = match unify(subst_apply(dr.subst, dr.ty), ITStruct("Time.Duration", [])) {
+                Ok(s) => subst_compose(s, dr.subst),
+                Err(e) => { fail_tc("a `select` timeout arm waits for a Time.Duration: ".concat(e)); dr.subst },
+            };
+            let bodyr = infer_expr(p2, dr.state, env, s1, arm.body);
+            SelectOneArm { ty: bodyr.ty, subst: bodyr.subst, state: bodyr.state,
+                           tarm: TSelectArm { kind: TSAAfter(dr.texpr), body: bodyr.texpr } }
+        },
+        SAElse => {
+            let bodyr = infer_expr(p2, state, env, acc, arm.body);
+            SelectOneArm { ty: bodyr.ty, subst: bodyr.subst, state: bodyr.state,
+                           tarm: TSelectArm { kind: TSAElse, body: bodyr.texpr } }
+        },
     }
 
 // --- Exhaustiveness ---

@@ -3250,40 +3250,70 @@ let cg_reads_max_select (name: String) (arms: Array[typecheck.TSelectArm]) (i: I
 
 let cg_reads_select_chans (name: String) (arms: Array[typecheck.TSelectArm]) (i: Int) (acc: Int): Int =
     if i >= arms.len() { acc }
-    else { cg_reads_select_chans(name, arms, i + 1, cg_cap2(acc + cg_reads_max(name, arms[i].chan))) }
+    else { cg_reads_select_chans(name, arms, i + 1, cg_cap2(acc + match arms[i].kind {
+        TSARecv(chan, _) => cg_reads_max(name, chan),
+        TSAAfter(d) => cg_reads_max(name, d),
+        TSAElse => 0,
+    })) }
 
 let cg_reads_select_bodies (name: String) (arms: Array[typecheck.TSelectArm]) (i: Int) (best: Int): Int =
     if i >= arms.len() { best }
     else {
-        let here = if cg_pattern_binds(arms[i].pattern, name) { 0 } else { cg_reads_max(name, arms[i].body) };
+        let here = match arms[i].kind {
+            TSARecv(_, pattern) => if cg_pattern_binds(pattern, name) { 0 } else { cg_reads_max(name, arms[i].body) },
+            _ => cg_reads_max(name, arms[i].body),
+        };
         cg_reads_select_bodies(name, arms, i + 1, cg_max2(best, here))
     }
 
 let lv_select_arms (ctx: LvCtx) (arms: Array[typecheck.TSelectArm]) (i: Int) (acc: Array[typecheck.TSelectArm]): Array[typecheck.TSelectArm] =
     if i >= arms.len() { acc }
     else {
-        let inner = lv_scoped(lv_with(ctx, lv_select_rest(arms, i + 1, [])), lv_pat_names(arms[i].pattern, []));
+        let inner = lv_scoped(lv_with(ctx, lv_select_rest(arms, i + 1, [])), match arms[i].kind {
+            TSARecv(_, pattern) => lv_pat_names(pattern, []),
+            _ => [],
+        });
         lv_select_arms(ctx, arms, i + 1, acc.push(typecheck.TSelectArm {
-            chan: lv_expr(lv_with(ctx, lv_select_rest(arms, i + 1, [])), arms[i].chan),
-            pattern: arms[i].pattern,
+            kind: match arms[i].kind {
+                TSARecv(chan, pattern) => TSARecv(lv_expr(lv_with(ctx, lv_select_rest(arms, i + 1, [])), chan), pattern),
+                TSAAfter(d) => TSAAfter(lv_expr(lv_with(ctx, lv_select_rest(arms, i + 1, [])), d)),
+                TSAElse => TSAElse,
+            },
             body: lv_expr(inner, arms[i].body),
         }))
     }
 
 let lv_select_rest (arms: Array[typecheck.TSelectArm]) (from: Int) (acc: Array[typecheck.TExpr]): Array[typecheck.TExpr] =
-    if from >= arms.len() { acc } else { lv_select_rest(arms, from + 1, acc.push(arms[from].chan)) }
+    if from >= arms.len() { acc }
+    else { lv_select_rest(arms, from + 1, match arms[from].kind {
+        TSARecv(chan, _) => acc.push(chan),
+        TSAAfter(d) => acc.push(d),
+        TSAElse => acc,
+    }) }
 
 let cg_rel_in_select (p: CgProgram) (arms: Array[typecheck.TSelectArm]) (i: Int) (here: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= arms.len() { here }
-    else { cg_rel_in_select(p, arms, i + 1, cg_rel_in(p, arms[i].body, cg_rel_in(p, arms[i].chan, here))) }
+    else { cg_rel_in_select(p, arms, i + 1, cg_rel_in(p, arms[i].body, match arms[i].kind {
+        TSARecv(chan, _) => cg_rel_in(p, chan, here),
+        TSAAfter(d) => cg_rel_in(p, d, here),
+        TSAElse => here,
+    })) }
 
 let cg_eq_in_select (p: CgProgram) (arms: Array[typecheck.TSelectArm]) (i: Int) (acc: Array[typecheck.ITy]): Array[typecheck.ITy] =
     if i >= arms.len() { acc }
-    else { cg_eq_in_select(p, arms, i + 1, cg_eq_in(p, arms[i].body, cg_eq_in(p, arms[i].chan, acc))) }
+    else { cg_eq_in_select(p, arms, i + 1, cg_eq_in(p, arms[i].body, match arms[i].kind {
+        TSARecv(chan, _) => cg_eq_in(p, chan, acc),
+        TSAAfter(d) => cg_eq_in(p, d, acc),
+        TSAElse => acc,
+    })) }
 
 let cg_calls_in_select (p: CgProgram) (arms: Array[typecheck.TSelectArm]) (i: Int) (acc: Array[CgInst]): Array[CgInst] =
     if i >= arms.len() { acc }
-    else { cg_calls_in_select(p, arms, i + 1, cg_calls_in(p, arms[i].body, cg_calls_in(p, arms[i].chan, acc))) }
+    else { cg_calls_in_select(p, arms, i + 1, cg_calls_in(p, arms[i].body, match arms[i].kind {
+        TSARecv(chan, _) => cg_calls_in(p, chan, acc),
+        TSAAfter(d) => cg_calls_in(p, d, acc),
+        TSAElse => acc,
+    })) }
 
 let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (elems: Array[typecheck.TExpr]) (i: Int) (code: String) (allocas: String) (releases: String) (globals: String): FieldsEmit =
     if i >= elems.len() { FieldsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
@@ -4796,6 +4826,22 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
 //
 // The result is merged through a stack slot rather than a `phi`, the
 // same way `cg_match` merges its arms.
+// `select`, in three shapes that share one emission.
+//
+// The handles array holds only the CHANNEL arms, so an arm's position
+// in it is its index among those -- not its position in the source,
+// which may have an `else` or a timeout in the middle of it.
+//
+// The otherwise-arm reuses the block that was already here as the
+// switch's unreachable default. That is the whole trick: a blocking
+// select can never return an index it was not given, so that block was
+// dead; with a timeout it becomes the arm that runs when `-1` comes
+// back, and nothing else about the shape changes.
+//
+// `else` is a timeout of ZERO rather than a separate call. The shim
+// sweeps once and waits on an already-past deadline, which returns
+// immediately -- so "take one if ready, otherwise continue" and "wait
+// this long" are one code path, and the difference is a number.
 let cg_select (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TSelectArm]) (body_ty: CgTy): Emit = {
     let hs = cg_reg(n);
     let outp = cg_reg(n + 1);
@@ -4805,46 +4851,116 @@ let cg_select (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typechec
     let end_label = cg_label(n + 5);
     let fail_label = cg_label(n + 6);
     let lty = cg_llvm_ty(body_ty);
-    let c = cg_select_chans(p, env, n + 7, arms, 0, hs, "", "", "", "");
-    let a = cg_select_arms(p, env, c.n, arms, 0, c.n, box, slot, lty, end_label, "", "", "", "");
-    let res = cg_reg(a.n);
+    let chans = cg_recv_arms(arms, 0, []);
+    let c = cg_select_chans(p, env, n + 7, chans, 0, hs, "", "", "", "");
+    // The waiting call, and any code the timeout's duration needed.
+    let w = cg_select_wait(p, env, c.n, arms, hs, chans.len(), outp, idx);
+    let a = cg_select_arms(p, env, w.n, chans, 0, w.n, box, slot, lty, end_label, "", "", "", "");
+    let o = cg_select_otherwise(p, env, a.n, arms, slot, lty, body_ty, end_label);
+    let res = cg_reg(o.n);
     Emit {
         code: c.code
-            .concat("  ").concat(idx).concat(" = call i64 @channel_select(ptr ").concat(hs).concat(", i64 ").concat(arms.len().to_string()).concat(", ptr ").concat(outp).concat(")\n")
+            .concat(w.code)
             .concat("  ").concat(box).concat(" = load ptr, ptr ").concat(outp).concat("\n")
             .concat("  switch i64 ").concat(idx).concat(", label %").concat(fail_label).concat(" [\n")
-            .concat(cg_select_cases(arms, 0, c.n, ""))
+            .concat(cg_select_cases(chans, 0, w.n, ""))
             .concat("  ]\n")
             .concat(a.code)
-            // Unreachable in practice: `@channel_select` only returns
-            // an index it was given, and a `select` with no arms is
-            // rejected by the checker. It exists because a `switch`
-            // needs a default and a block needs a terminator.
             .concat(fail_label).concat(":\n")
-            .concat("  store ").concat(lty).concat(" ").concat(cg_zero_of(body_ty)).concat(", ptr ").concat(slot).concat("\n")
+            .concat(o.code)
             .concat("  br label %").concat(end_label).concat("\n")
             .concat(end_label).concat(":\n")
             .concat("  ").concat(res).concat(" = load ").concat(lty).concat(", ptr ").concat(slot).concat("\n"),
-        allocas: "  ".concat(hs).concat(" = alloca i64, i64 ").concat(arms.len().to_string()).concat("\n")
+        allocas: "  ".concat(hs).concat(" = alloca i64, i64 ").concat(cg_alloca_count(chans.len())).concat("\n")
             .concat("  ").concat(outp).concat(" = alloca ptr\n")
             .concat("  ").concat(slot).concat(" = alloca ").concat(lty).concat("\n")
-            .concat(c.allocas).concat(a.allocas),
-        releases: c.releases.concat(a.releases), globals: c.globals.concat(a.globals),
-        val: res, ty: body_ty, n: a.n + 1,
+            .concat(c.allocas).concat(w.allocas).concat(a.allocas).concat(o.allocas),
+        releases: c.releases.concat(w.releases).concat(a.releases).concat(o.releases),
+        globals: c.globals.concat(w.globals).concat(a.globals).concat(o.globals),
+        val: res, ty: body_ty, n: o.n + 1,
     }
 }
+
+// `alloca i64, i64 0` is legal but pointless; the checker guarantees at
+// least one channel arm, so this only guards against a zero reaching
+// here some other way.
+let cg_alloca_count (k: Int): String = if k <= 0 { "1" } else { k.to_string() }
+
+// The channel arms, in source order. Their index here is their index in
+// the handles array and so the value `@channel_select` returns.
+let cg_recv_arms (arms: Array[typecheck.TSelectArm]) (i: Int) (acc: Array[typecheck.TSelectArm]): Array[typecheck.TSelectArm] =
+    if i >= arms.len() { acc }
+    else { cg_recv_arms(arms, i + 1, match arms[i].kind { TSARecv(_, _) => acc.push(arms[i]), _ => acc }) }
+
+// The arm taken when no channel was ready, or `None` when the select
+// simply blocks.
+let cg_otherwise_arm (arms: Array[typecheck.TSelectArm]) (i: Int): Option[typecheck.TSelectArm] =
+    if i >= arms.len() { None }
+    else { match arms[i].kind { TSARecv(_, _) => cg_otherwise_arm(arms, i + 1), _ => Some(arms[i]) } }
+
+// The call that waits. Blocking, or bounded by a duration -- and `else`
+// is a bound of zero.
+//
+// A `Duration`'s nanoseconds are read straight out of its cell rather
+// than through `Duration.as_nanos`: the backend has no way to call a
+// stdlib function it was not handed, and the field is at a known offset
+// because a struct's layout is decided right here.
+let cg_select_wait (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TSelectArm]) (hs: String) (k: Int) (outp: String) (idx: String): Emit =
+    match cg_otherwise_arm(arms, 0) {
+        None => Emit { code: "  ".concat(idx).concat(" = call i64 @channel_select(ptr ").concat(hs)
+                        .concat(", i64 ").concat(k.to_string()).concat(", ptr ").concat(outp).concat(")\n"),
+                       allocas: "", releases: "", globals: "", val: idx, ty: CgInt, n: n },
+        Some(arm) => match arm.kind {
+            TSAAfter(d) => {
+                let dr = cg_expr(p, env, n, d);
+                let np = cg_reg(dr.n);
+                let nanos = cg_reg(dr.n + 1);
+                Emit {
+                    code: dr.code
+                        .concat("  ").concat(np).concat(" = getelementptr i8, ptr ").concat(dr.val)
+                        .concat(", i64 ").concat(cg_field_offset(0).to_string()).concat("\n")
+                        .concat("  ").concat(nanos).concat(" = load i64, ptr ").concat(np).concat("\n")
+                        .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, d)), dr.val))
+                        .concat("  ").concat(idx).concat(" = call i64 @channel_select_timeout(ptr ").concat(hs)
+                        .concat(", i64 ").concat(k.to_string()).concat(", ptr ").concat(outp)
+                        .concat(", i64 ").concat(nanos).concat(")\n"),
+                    allocas: dr.allocas, releases: dr.releases, globals: dr.globals,
+                    val: idx, ty: CgInt, n: dr.n + 2,
+                }
+            },
+            _ => Emit { code: "  ".concat(idx).concat(" = call i64 @channel_select_timeout(ptr ").concat(hs)
+                            .concat(", i64 ").concat(k.to_string()).concat(", ptr ").concat(outp).concat(", i64 0)\n"),
+                        allocas: "", releases: "", globals: "", val: idx, ty: CgInt, n: n },
+        },
+    }
+
+// The body of the `else`/timeout arm, or the zero store that was here
+// before there was one -- which stays because a `switch` needs a
+// default and a block needs a terminator, and a blocking select really
+// can never reach it.
+let cg_select_otherwise (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TSelectArm]) (slot: String) (lty: String) (body_ty: CgTy) (end_label: String): Emit =
+    match cg_otherwise_arm(arms, 0) {
+        None => Emit { code: "  store ".concat(lty).concat(" ").concat(cg_zero_of(body_ty)).concat(", ptr ").concat(slot).concat("\n"),
+                       allocas: "", releases: "", globals: "", val: "0", ty: body_ty, n: n },
+        Some(arm) => {
+            let b = cg_expr(p, env, n, arm.body);
+            Emit { code: b.code.concat("  store ").concat(lty).concat(" ").concat(b.val).concat(", ptr ").concat(slot).concat("\n"),
+                   allocas: b.allocas, releases: b.releases, globals: b.globals, val: b.val, ty: body_ty, n: b.n }
+        },
+    }
 
 // Each arm's receiver, evaluated in order, its handle stored into the
 // array `@channel_select` reads.
 let cg_select_chans (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TSelectArm]) (i: Int) (hs: String) (code: String) (allocas: String) (releases: String) (globals: String): FieldsEmit =
     if i >= arms.len() { FieldsEmit { code: code, allocas: allocas, releases: releases, globals: globals, n: n } }
     else {
-        let r = cg_expr(p, env, n, arms[i].chan);
+        let chan = match arms[i].kind { TSARecv(c, _) => c, _ => arms[i].body };
+        let r = cg_expr(p, env, n, chan);
         let ep = hs.concat("_h").concat(i.to_string());
         let line = cg_handle_load(cg_reg(r.n), r.val)
             .concat("  ").concat(ep).concat(" = getelementptr i8, ptr ").concat(hs).concat(", i64 ").concat((8 * i).to_string()).concat("\n")
             .concat("  store i64 ").concat(cg_reg(r.n)).concat(", ptr ").concat(ep).concat("\n")
-            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arms[i].chan)), r.val));
+            .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, chan)), r.val));
         cg_select_chans(p, env, r.n + 1, arms, i + 1, hs, code.concat(r.code).concat(line),
             allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
     }
@@ -4863,10 +4979,11 @@ let cg_select_arms (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typ
         // The payload's type is the RECEIVER's type argument, and each
         // arm has its own, which is the whole reason the unboxing load
         // lives in the arm's block rather than before the switch.
-        let elem = cg_array_elem_ity(p, typecheck.texpr_ty(p.subst, arms[i].chan));
+        let chan = match arms[i].kind { TSARecv(c, _) => c, _ => arms[i].body };
+        let elem = cg_array_elem_ity(p, typecheck.texpr_ty(p.subst, chan));
         let vty = cg_of_ity(elem);
         let v = cg_reg(n);
-        let pat = cg_pattern(p, env, n + 1, arms[i].pattern, v, elem);
+        let pat = cg_pattern(p, env, n + 1, match arms[i].kind { TSARecv(_, pt) => pt, _ => PWildcard }, v, elem);
         let b = cg_expr(p, pat.env, pat.n, arms[i].body);
         let this_code = cg_select_label(base, i).concat(":\n")
             .concat("  ").concat(v).concat(" = load ").concat(cg_llvm_ty(vty)).concat(", ptr ").concat(box).concat("\n")

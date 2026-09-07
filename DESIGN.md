@@ -19018,3 +19018,94 @@ guarantee the OS makes and is asserted tightly, while the upper bound
 exists only to catch an answer that is absurd rather than merely slow,
 and is generous enough that a busy machine cannot trip it. Same
 discipline as `file_metadata` never printing a timestamp.
+
+## `select` stops waiting forever (2026-09-07)
+
+Issue #21. The multiplexer shipped in 0.0.17; what it could not do was
+decline to wait. Without that, "take one if ready" is a blocking `recv`
+and "wait 200ms" is a hand-rolled busy loop -- which is the hole this
+had versus Go, not the original multi-channel wait.
+
+    select {
+        n = rx => Ok(n),
+        Time.millis(200) => Err("timed out"),
+    }
+
+    select {
+        n = rx => Some(n),
+        else => None,
+    }
+
+### `else` is a timeout of zero
+
+Not a second code path. The shim sweeps the channels once and then waits
+on an already-past deadline, which returns immediately -- so "do not
+wait" and "wait this long" are one call, and the difference between them
+is a number. Two arm kinds in the grammar, one in the backend.
+
+The switch's DEFAULT block did the rest. A blocking select can never
+return an index it was not given, so that block was already there and
+already unreachable, storing a zero to satisfy LLVM; with a timeout it
+becomes the arm that runs when `-1` comes back. Nothing else about the
+emission changed.
+
+### The timeout is a `Duration`, and that is the whole point
+
+`200 => "timed out"` is a type error. A bare number could be
+milliseconds, seconds or nanoseconds and only the author knows which,
+which is exactly why `Duration` was made a type in #19 rather than an
+`Int` of milliseconds. `typecheck_corpus/select_timeout_not_duration`
+pins it.
+
+Any `Duration` expression works, including one in a variable, so a
+configurable deadline needs no special form.
+
+### Spelling, and a keyword not added
+
+`after Time.millis(200) =>` reads best and was rejected: it costs a
+keyword, and the grammar already has enough. The arm is a bare
+expression instead, told apart from a receive by whether a `=` appears
+at the arm's own nesting level before the `=>`.
+
+That scan is depth-tracked rather than speculative, and it has to be: a
+pattern and an expression OVERLAP, since `n` is both. Parsing one and
+backtracking would mean either backtracking support in the parser or
+accepting `Time.millis(200)` as a pattern.
+
+### Three rules, each because only one answer is defensible
+
+**Both `else` and a timeout** is rejected. `else` fires the instant
+nothing is ready, so the timeout could never be reached -- the author
+meant one or the other and the compiler cannot tell which.
+
+**No channel arm** is rejected. `select { else => x }` is `x` written at
+length and a timeout-only one is `Time.sleep` written at length; neither
+is a multiplexer, which is what `select` is.
+
+**More than one of either** is rejected, for the same reason a `match`
+does not take two `_` arms.
+
+### The shim computes its deadline once
+
+`pthread_cond_timedwait` takes an absolute time, and the loop re-waits
+against it on every wakeup. Recomputing "now plus `nanos`" inside the
+loop would restart the clock on every spurious wakeup and on every send
+to an unrelated channel, so a select could wait far longer than asked
+and, in a busy enough process, never return at all.
+
+It also sweeps once more after `ETIMEDOUT`. A send can land between the
+last sweep and the deadline expiring, and reporting a timeout while a
+value sits in the queue would lose that value.
+
+`CLOCK_REALTIME`, because that is what the condition variable is
+specified against -- so a timeout can be lengthened or shortened by the
+system clock being set. That is a real limitation and the reason
+`Time.since` reads the monotonic clock instead: measuring elapsed time
+and bounding a wait are different jobs, and only one of them can use a
+condition variable.
+
+### The README said this was not implemented
+
+It had said so since before the multiplexer shipped, which the issue
+correctly called part of the bug. Both it and GRAMMAR.md now describe
+what is actually there.

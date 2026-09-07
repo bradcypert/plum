@@ -933,11 +933,39 @@ compile error pointing at the call.
 type argument written out — there is nothing else in the expression to
 infer it from.
 
-**`select` is not implemented.** The keyword parses and the checker
-then rejects it, which is the worst of both: the syntax looks
-supported. It needs a runtime primitive that waits on several channels
-at once, which the current one-mutex-and-condvar-per-channel design has
-no way to express. Tracked, not shipped.
+**`select`** waits on several channels at once and takes whichever is
+ready first:
+
+```
+let got = select {
+    n = numbers => n.to_string(),
+    s = words => s,
+};
+```
+
+Arms are swept in written order, so an earlier one wins a tie. Two ways
+of not waiting forever:
+
+```
+// Take one if ready, otherwise carry on. Never blocks.
+select {
+    n = rx => Some(n),
+    else => None,
+}
+
+// Wait up to a Duration, then take the timeout arm.
+select {
+    n = rx => Ok(n),
+    Time.millis(200) => Err("timed out"),
+}
+```
+
+A timeout arm is any expression of type `Time.Duration`, so a
+configurable deadline can be held in a variable. `else` is exactly a
+timeout of zero, and having both in one `select` is rejected — `else`
+would fire first every time, so the timeout could never be reached.
+An empty `select {}` is rejected too, as is one with no channel arm:
+neither is waiting for anything.
 
 See DESIGN.md's "Concurrency" section for the full memory-ownership
 story around sending heap values across task boundaries.

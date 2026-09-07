@@ -121,7 +121,23 @@ pub enum PStmt {
 // and without it a formatter can indent everything around a `match` and
 // not the arms themselves.
 pub struct MatchArmNode { pub pattern: PPattern, pub guard: Option[PExpr], pub body: PExpr, pub start: Int }
-pub struct SelectArmNode { pub pattern: PPattern, pub expr: PExpr, pub body: PExpr, pub start: Int }
+// What a `select` arm waits for.
+//
+// A payload enum rather than a struct with a `kind` tag and unused
+// fields: an `else` arm has no channel and no binding, and giving it
+// dummy ones would let a later pass read them. Every consumer has to
+// branch on the kind anyway to be correct, so making the wrong read
+// impossible costs nothing.
+pub enum SelectArmKindNode {
+    // `n = rx =>` -- a binding and the receiver it comes from.
+    SARecv(PPattern, PExpr),
+    // `Time.millis(200) =>` -- a `Duration`, after which this arm wins.
+    SAAfter(PExpr),
+    // `else =>` -- taken when nothing is ready, without waiting.
+    SAElse,
+}
+
+pub struct SelectArmNode { pub kind: SelectArmKindNode, pub body: PExpr, pub start: Int }
 pub struct FieldPatternNode { pub name: String, pub pattern: PPattern }
 
 pub enum PPattern {
@@ -1518,19 +1534,70 @@ let parse_select_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
 
 struct SelectArmsResult { value: Array[SelectArmNode], next_pos: Int }
 
-let parse_select_arms_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[SelectArmNode]): SelectArmsResult =
+// Three shapes, told apart before anything is parsed:
+//
+//     else => body                  the default arm
+//     pat = receiver => body        a receive
+//     duration => body              a timeout
+//
+// The first is a keyword. The other two are separated by whether a
+// top-level `=` appears before the `=>`, which `select_arm_has_binding`
+// answers by scanning. A speculative parse would not work: a pattern
+// and an expression overlap (`n` is both), so parsing one and
+// backtracking would mean either backtracking support or accepting
+// `Time.millis(200)` as a pattern.
+let parse_select_arms_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[SelectArmNode]): SelectArmsResult = {
     if check(tokens, pos, TokRBrace) { SelectArmsResult { value: acc, next_pos: pos } }
     else {
+        let arm_r = parse_select_arm(tokens, pos);
+        note_offsets(offset_at(pos), end_offset_at(arm_r.next_pos - 1));
+        let new_acc = acc.push(arm_r.value);
+        let comma_b = bump_if(tokens, arm_r.next_pos, TokComma);
+        if !comma_b.matched { SelectArmsResult { value: new_acc, next_pos: comma_b.next_pos } }
+        else { parse_select_arms_acc(tokens, comma_b.next_pos, new_acc) }
+    }
+}
+
+struct SelectArmResult { value: SelectArmNode, next_pos: Int }
+
+let parse_select_arm (tokens: Array[lexer.Token]) (pos: Int): SelectArmResult =
+    if check(tokens, pos, TokElse) {
+        let arrow_pos = expect(tokens, pos + 1, TokFatArrow, "'=>'");
+        let body_r = parse_expr(tokens, arrow_pos);
+        SelectArmResult { value: SelectArmNode { kind: SAElse, body: body_r.value, start: offset_at(pos) }, next_pos: body_r.next_pos }
+    } else if select_arm_has_binding(tokens, pos, 0) {
         let pat_r = parse_pattern(tokens, pos);
         let eq_pos = expect(tokens, pat_r.next_pos, TokEq, "'='");
         let expr_r = parse_expr(tokens, eq_pos);
         let arrow_pos = expect(tokens, expr_r.next_pos, TokFatArrow, "'=>'");
         let body_r = parse_expr(tokens, arrow_pos);
-        note_offsets(offset_at(pos), end_offset_at(body_r.next_pos - 1));
-        let new_acc = acc.push(SelectArmNode { pattern: pat_r.value, expr: expr_r.value, body: body_r.value, start: offset_at(pos) });
-        let comma_b = bump_if(tokens, body_r.next_pos, TokComma);
-        if !comma_b.matched { SelectArmsResult { value: new_acc, next_pos: comma_b.next_pos } }
-        else { parse_select_arms_acc(tokens, comma_b.next_pos, new_acc) }
+        SelectArmResult { value: SelectArmNode { kind: SARecv(pat_r.value, expr_r.value), body: body_r.value, start: offset_at(pos) }, next_pos: body_r.next_pos }
+    } else {
+        let expr_r = parse_expr(tokens, pos);
+        let arrow_pos = expect(tokens, expr_r.next_pos, TokFatArrow, "'=>'");
+        let body_r = parse_expr(tokens, arrow_pos);
+        SelectArmResult { value: SelectArmNode { kind: SAAfter(expr_r.value), body: body_r.value, start: offset_at(pos) }, next_pos: body_r.next_pos }
+    }
+
+// Is there a `=` before this arm's `=>`, at the arm's own nesting level?
+//
+// Depth-tracked, so a `=>` inside a nested `match` in the arm's
+// RECEIVER expression cannot end the scan early. `==` is its own token
+// and so is never mistaken for a binding.
+let select_arm_has_binding (tokens: Array[lexer.Token]) (pos: Int) (depth: Int): Bool =
+    match tokens[pos] {
+        TokEq => if depth == 0 { true } else { select_arm_has_binding(tokens, pos + 1, depth) },
+        TokFatArrow => if depth == 0 { false } else { select_arm_has_binding(tokens, pos + 1, depth) },
+        TokLParen => select_arm_has_binding(tokens, pos + 1, depth + 1),
+        TokLBracket => select_arm_has_binding(tokens, pos + 1, depth + 1),
+        TokLBrace => select_arm_has_binding(tokens, pos + 1, depth + 1),
+        TokRParen => select_arm_has_binding(tokens, pos + 1, depth - 1),
+        TokRBracket => select_arm_has_binding(tokens, pos + 1, depth - 1),
+        // A closing brace at depth 0 is the end of the `select` body:
+        // the arm is malformed, and the caller reports it.
+        TokRBrace => if depth <= 0 { false } else { select_arm_has_binding(tokens, pos + 1, depth - 1) },
+        TokEof => false,
+        _ => select_arm_has_binding(tokens, pos + 1, depth),
     }
 
 let parse_for_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = {
@@ -1765,7 +1832,11 @@ let render_arm (a: MatchArmNode): String = match a.guard {
 }
 
 let render_select_arm (a: SelectArmNode): String =
-    "(arm ".concat(render_pattern(a.pattern)).concat(" = ").concat(render_expr(a.expr)).concat(" ").concat(render_expr(a.body)).concat(")")
+    match a.kind {
+        SARecv(pattern, expr) => "(arm ".concat(render_pattern(pattern)).concat(" = ").concat(render_expr(expr)).concat(" ").concat(render_expr(a.body)).concat(")"),
+        SAAfter(d) => "(after ".concat(render_expr(d)).concat(" ").concat(render_expr(a.body)).concat(")"),
+        SAElse => "(else ".concat(render_expr(a.body)).concat(")"),
+    }
 
 let render_field_pattern (fp: FieldPatternNode): String = fp.name.concat("=").concat(render_pattern(fp.pattern))
 

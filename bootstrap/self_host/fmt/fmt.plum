@@ -286,7 +286,11 @@ let arm_edits (chars: Array[String]) (arms: Array[parser.MatchArmNode]) (i: Int)
 let select_edits (chars: Array[String]) (arms: Array[parser.SelectArmNode]) (i: Int) (depth: Int) (acc: Array[Edit]): Array[Edit] =
     if i >= arms.len() { acc }
     else {
-        let a = expr_edits(chars, arms[i].expr, depth, acc);
+        let a = match arms[i].kind {
+            SARecv(_, chan) => expr_edits(chars, chan, depth, acc),
+            SAAfter(d) => expr_edits(chars, d, depth, acc),
+            SAElse => acc,
+        };
         select_edits(chars, arms, i + 1, depth, expr_edits(chars, arms[i].body, depth + 1, a))
     }
 

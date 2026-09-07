@@ -189,6 +189,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "; loop is in C because every payload crosses as a box, so there is",
     "; nothing type-dependent for the backend to contribute.",
     "declare i64 @channel_select(ptr, i64, ptr)",
+    "declare i64 @channel_select_timeout(ptr, i64, ptr, i64)",
     "; The two ends of a channel, and a task handle, are refcounted CELLS",
     "; on the Plum side. These are what the last reference dying calls:",
     "; the queue is freed when its second end goes, and an unjoined task",

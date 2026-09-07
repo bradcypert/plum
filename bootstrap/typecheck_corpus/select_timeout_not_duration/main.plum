@@ -1,0 +1,13 @@
+// Rejected: a timeout arm waits for a `Time.Duration`, not a bare
+// number of unstated units.
+//
+// This is the payoff of `Duration` being a real type rather than an
+// `Int` of milliseconds. `200` here could be milliseconds, seconds or
+// nanoseconds, and only the author knows which -- so the type asks.
+let main (): Unit = {
+    let (tx, rx) = channel[Int]();
+    println(select {
+        n = rx => n.to_string(),
+        200 => "timed out",
+    })
+}
