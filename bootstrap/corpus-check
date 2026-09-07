@@ -51,7 +51,7 @@ asan=1
 shims=(native_stdlib/compat_shim.c native_stdlib/dir_shim.c
        native_stdlib/file_shim.c native_stdlib/io_shim.c
        native_stdlib/os_shim.c native_stdlib/process_shim.c
-       native_stdlib/thread_shim.c)
+       native_stdlib/thread_shim.c native_stdlib/time_shim.c)
 
 # Fixtures that leak BY DESIGN, with the reason. Annotated here rather
 # than silently excluded, and rather than dropping ASan for everyone:

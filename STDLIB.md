@@ -291,6 +291,34 @@ See README.md for the prose introduction.
 ## Time
 
 - `let now (): Int`
+- `let nanos (n: Int): Duration`
+- `let micros (n: Int): Duration`
+- `let millis (n: Int): Duration`
+- `let seconds (n: Int): Duration`
+- `let minutes (n: Int): Duration`
+- `let hours (n: Int): Duration`
+- `let zero (): Duration`
+- `let Duration.as_nanos (d: Duration): Int`
+- `let Duration.as_micros (d: Duration): Int`
+- `let Duration.as_millis (d: Duration): Int`
+- `let Duration.as_seconds (d: Duration): Int`
+- `let Duration.is_zero (d: Duration): Bool`
+- `let Duration.add (a: Duration) (b: Duration): Duration`
+- `let Duration.sub (a: Duration) (b: Duration): Duration`
+- `let Duration.scale (d: Duration) (n: Int): Duration`
+- `let Duration.negate (d: Duration): Duration`
+- `let Duration.compare (a: Duration) (b: Duration): Int`
+- `let Duration.lt (a: Duration) (b: Duration): Bool`
+- `let Duration.le (a: Duration) (b: Duration): Bool`
+- `let Duration.gt (a: Duration) (b: Duration): Bool`
+- `let Duration.ge (a: Duration) (b: Duration): Bool`
+- `let Duration.min (a: Duration) (b: Duration): Duration`
+- `let Duration.max (a: Duration) (b: Duration): Duration`
+- `let now_millis (): Int`
+- `let instant (): Instant`
+- `let since (t0: Instant): Duration`
+- `let between (earlier: Instant) (later: Instant): Duration`
+- `let sleep (d: Duration): Unit`
 - `let utc (epoch: Int): DateTime`
 - `let weekday_name (weekday: Int): String`
 - `let month_name (month: Int): String`

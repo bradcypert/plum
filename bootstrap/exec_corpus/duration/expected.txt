@@ -1,0 +1,23 @@
+1500ms as ms: 1500
+1500ms as us: 1500000
+1500ms as s: 1
+2s == 2000ms: true
+1min == 60s: true
+1h == 60min: true
+200ms + 300ms: 500
+3x 50ms: 150
+1ms - 5ms: -4
+zero is zero: true
+1ms < 1s: true
+1s > 999ms: true
+1s >= 1000ms: true
+compare 1s to 999ms: 1
+compare equal: 0
+min: 5
+max: 9
+slept >= 50ms: true
+slept < 5s: true
+non-positive sleeps returned: yes
+monotonic is non-decreasing: true
+reversed is <= 0: true
+now_millis agrees with now(): true

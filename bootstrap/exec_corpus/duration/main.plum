@@ -1,0 +1,81 @@
+use Time;
+
+// `Duration`, the monotonic clock, and `sleep` (issue #19).
+//
+// Nothing here prints a time. A duration measured on a loaded CI runner
+// is not reproducible, so what is printed is what was OBSERVED about
+// it -- the same discipline `file_metadata` uses for `mtime`.
+//
+// The bounds are deliberately lopsided. "At least" is a real guarantee
+// the OS makes and can be asserted tightly; the upper bound is only
+// there to catch an answer that is absurd rather than merely slow, so
+// it is generous enough that a busy machine cannot trip it.
+
+let main (): Unit = {
+    // --- Construction names the unit ---
+    //
+    // Which is the entire reason this is a type and not an `Int`. A
+    // bare number cannot say whether it means seconds or milliseconds,
+    // and every module that took one would have to agree by convention.
+    println("1500ms as ms: ".concat(Time.millis(1500).as_millis().to_string()));
+    println("1500ms as us: ".concat(Time.millis(1500).as_micros().to_string()));
+    // Truncating, the way `/` is: 1.5 seconds is 1 second, not 2.
+    println("1500ms as s: ".concat(Time.millis(1500).as_seconds().to_string()));
+
+    // Units agree, so a duration built two ways is one value.
+    println("2s == 2000ms: ".concat((Time.seconds(2) == Time.millis(2000)).to_string()));
+    println("1min == 60s: ".concat((Time.minutes(1) == Time.seconds(60)).to_string()));
+    println("1h == 60min: ".concat((Time.hours(1) == Time.minutes(60)).to_string()));
+
+    // --- Arithmetic ---
+    println("200ms + 300ms: ".concat(Time.millis(200).add(Time.millis(300)).as_millis().to_string()));
+    println("3x 50ms: ".concat(Time.millis(50).scale(3).as_millis().to_string()));
+    // A negative duration is representable. `sub` can produce one, and
+    // refusing to hold it would only move the problem to every caller.
+    println("1ms - 5ms: ".concat(Time.millis(1).sub(Time.millis(5)).as_millis().to_string()));
+    println("zero is zero: ".concat(Time.zero().is_zero().to_string()));
+
+    // --- Comparison ---
+    //
+    // Functions, not `<`: this checker offers ordered comparison on
+    // `Int`, `Float` and `String` and on nothing else. `==` works,
+    // because that is structural. See `typecheck_corpus/duration_ordering`.
+    println("1ms < 1s: ".concat(Time.millis(1).lt(Time.seconds(1)).to_string()));
+    println("1s > 999ms: ".concat(Time.seconds(1).gt(Time.millis(999)).to_string()));
+    println("1s >= 1000ms: ".concat(Time.seconds(1).ge(Time.millis(1000)).to_string()));
+    println("compare 1s to 999ms: ".concat(Time.seconds(1).compare(Time.millis(999)).to_string()));
+    println("compare equal: ".concat(Time.seconds(1).compare(Time.millis(1000)).to_string()));
+    println("min: ".concat(Time.millis(5).min(Time.millis(9)).as_millis().to_string()));
+    println("max: ".concat(Time.millis(5).max(Time.millis(9)).as_millis().to_string()));
+
+    // --- Sleeping, measured on the monotonic clock ---
+    //
+    // "At least" is the contract; a sleep overshoots by whatever the
+    // scheduler decides and no caller can be promised otherwise.
+    let t0 = Time.instant();
+    Time.sleep(Time.millis(50));
+    let slept = Time.since(t0);
+    println("slept >= 50ms: ".concat(slept.ge(Time.millis(50)).to_string()));
+    println("slept < 5s: ".concat(slept.lt(Time.seconds(5)).to_string()));
+
+    // A non-positive sleep is not a wait, so this cannot hang.
+    Time.sleep(Time.zero());
+    Time.sleep(Time.millis(0).sub(Time.millis(10)));
+    println("non-positive sleeps returned: yes");
+
+    // --- The monotonic clock never goes backwards ---
+    let a = Time.instant();
+    let b = Time.instant();
+    println("monotonic is non-decreasing: ".concat(Time.between(a, b).ge(Time.zero()).to_string()));
+    // Read the wrong way round it is negative, which is information
+    // rather than an error.
+    println("reversed is <= 0: ".concat(Time.between(b, a).le(Time.zero()).to_string()));
+
+    // --- The wall clock still agrees with `Time.now()` ---
+    //
+    // `now()` stays SECONDS. Changing it would have broken every caller
+    // and every documented `iso8601` answer, which is why `now_millis`
+    // is a second function rather than a wider first one.
+    println("now_millis agrees with now(): "
+        .concat((Time.now_millis() / 1000 - Time.now() <= 1).to_string()))
+}

@@ -1448,6 +1448,22 @@ program's prelude):
   the only ways in and out and both require `unsafe`, since both are FFI
   boundaries. A handle has no fields, no `==` and no `.to_string()`: its
   payload is opaque, so there is no honest answer for any of them.
+- **`Duration`, clocks, and `sleep`.** `Time.millis(200)`,
+  `Time.seconds(1)`, `Time.micros`/`nanos`/`minutes`/`hours`/`zero`
+  build one; `d.as_millis()` and friends read it back, truncating.
+  `Time.sleep(d)` waits **at least** that long. `Time.instant()` reads a
+  monotonic clock and `Time.since(t0)` gives the elapsed `Duration` —
+  use those to measure how long something took, and `Time.now_millis()`
+  (wall clock, can jump) to say when it happened. `Time.now()` is
+  unchanged and still epoch **seconds**, so every calendar helper keeps
+  its contract.
+
+  A `Duration` is a real type, not an `Int` of milliseconds, so a
+  timeout cannot be passed in the wrong unit and every module that takes
+  one takes the same one. Its field is private: you build it through a
+  constructor that names the unit. Note the one wart — a struct has no
+  `<` in Plum, so ordering is `a.lt(b)`, `le`, `gt`, `ge` and
+  `compare`; `==` works normally.
 - **`use Path;` — lexical path handling.** `Path.join(a, b)` /
   `join_all`, `dirname`, `basename`, `stem`, `extension`,
   `with_extension`, `clean`, `is_absolute`, `separator`. It **never

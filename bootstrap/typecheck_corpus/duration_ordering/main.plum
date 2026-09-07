@@ -1,0 +1,13 @@
+// Rejected: `Duration` is a struct, and this checker offers ordered
+// comparison on `Int`, `Float` and `String` and on nothing else.
+//
+// Pinned because it is a documented limitation of a type people will
+// reach for, not an accident. `Duration.lt`/`le`/`gt`/`ge`/`compare` are
+// the spelling, and `==` works because that one is structural.
+//
+// If ordered comparison ever reaches single-field wrapper structs, `<`
+// starts working here for free and this fixture is what will say so.
+use Time;
+
+let main (): Unit =
+    println(if Time.millis(1) < Time.seconds(1) { "sooner" } else { "later" })

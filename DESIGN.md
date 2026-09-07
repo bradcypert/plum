@@ -18959,3 +18959,62 @@ same test name, and asserts both run and that a root-module test still
 reports its bare name. Reverting the qualification fails that harness
 outright -- the dispatcher no longer compiles, so every assertion in it
 goes red at once.
+
+## `Duration`, and the cost of an expressive type (2026-09-07)
+
+Issue #19. `Time.now()` was seconds since the epoch and there was no way
+to sleep at all, which rules out retries, timeouts, polling and frame
+pacing without a busy loop.
+
+`Duration` is a real type rather than an `Int` of milliseconds. That was
+a deliberate choice with a real cost, taken because the alternative is
+worse in a specific way: #7 wants timeouts, `Http` wants them, a
+terminal API wants them, and a bare `Int` means each module grows its
+own `timeout_ms` that cannot be handed to the others, with the unit
+carried only by a name and a convention.
+
+Nanoseconds internally, private field, constructed through
+`Time.millis`/`seconds`/… which name their unit. A signed 64-bit
+nanosecond count spans about 292 years, which is more than a duration
+needs; milliseconds would buy range nobody wants and lose the precision
+timing code exists for. Both Go and Rust made the same trade.
+
+### The wart, stated rather than hidden
+
+**A `Duration` cannot use `<`.** This checker offers ordered comparison
+on `Int`, `Float` and `String` and on nothing else, so `elapsed <
+timeout` does not compile and `elapsed.lt(timeout)` is the spelling.
+`==` works, because that one is structural.
+
+Three ways out were considered and the smallest was taken. Making
+single-field wrapper structs orderable is a compiler change and a new
+rule about which programs typecheck, and it needs a defensible answer
+for why `Point { x, y }` is not ordered. Making `Duration` a compiler
+primitive the way `Bytes` is spends an `ITy` case and a checker/backend
+audit on a stdlib convenience -- `Bytes` earned that by being a layering
+decision, and this would not. So: comparison functions, and
+`typecheck_corpus/duration_ordering` pins the rejection so that if
+ordered wrappers ever land, the fixture is what says `<` started
+working.
+
+### `now()` did not change
+
+It stays epoch seconds, and every calendar function stays arithmetic on
+it. `now_millis` is a second function rather than a wider first one --
+changing `now()` would have broken every caller and every documented
+`iso8601` answer to buy precision that belongs in `Duration` anyway.
+
+`Instant` is a distinct type from a wall-clock reading, and its origin
+is deliberately unspecified: two instants may be subtracted, one alone
+means nothing. Exposing the origin would invite treating it as a date,
+which it is not, and the whole point of a monotonic clock is that it is
+not one.
+
+### The fixture asserts bounds, not times
+
+A duration measured on a loaded CI runner is not reproducible. The
+bounds are deliberately lopsided: "slept at least 50ms" is a real
+guarantee the OS makes and is asserted tightly, while the upper bound
+exists only to catch an answer that is absurd rather than merely slow,
+and is generous enough that a busy machine cannot trip it. Same
+discipline as `file_metadata` never printing a timestamp.
