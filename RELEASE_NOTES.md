@@ -1,89 +1,149 @@
 Plum is a small, statically typed, compiled language.
 
-Process identity — argv, the working directory, stdin and stderr — plus
-two language-server fixes for macOS and Windows.
+`Duration` and a monotonic clock, `select` arms that stop waiting, and
+JSON decoding that says which field disagreed — plus a memory-corruption
+fix in the compiler that has no workaround short of upgrading.
 
-**0.0.21 was never published.** Its release job failed while uploading
-one platform's artifact, and the commit it tagged still had the Windows
-bug below. If you are on 0.0.20, this is the upgrade.
+## A closure inside a match arm could corrupt the heap
 
-## The language server, on macOS and Windows
+Fixed. This is the reason to take this release even if none of the
+features below matter to you.
 
-Both bugs arrived in 0.0.20 and both were invisible on Linux.
+A closure captures its whole enclosing environment, so a closure cell
+can hold values its body never mentions. The compiler's last-use pass
+did not know that: inside a closure body it still had the enclosing
+function's locals in scope, and when one of them was not read again it
+offered that value's cell as somewhere to build a new one. But a
+captured value belongs to the closure, not to the frame running its
+body — so the body released a reference it never held, and the closure's
+own cleanup released the same value again later.
 
-**On macOS**, an error in one file of a project was attributed to a
-temporary file rather than the file it is in — so the editor underlined
-nothing and pointed somewhere you have never opened. The server checks
-an unsaved buffer by copying the project to a scratch directory, and it
-recognises a diagnostic from that copy by matching the directory as a
-prefix. One side of that comparison had been normalized and the other
-had not. It only showed where the temporary directory needed
-normalizing, which is why macOS saw it and Linux did not: macOS sets
-`TMPDIR` with a trailing slash.
-
-**On Windows**, hover, completion, go-to-definition and cross-file
-diagnostics all failed together. A `file:` URI always uses `/`, while
-every path the compiler reports uses the platform separator — and the
-two met without being reconciled, so the server handed a child process a
-project directory spelled one way and a file path spelled the other.
-Nothing matched. Both conventions are now converted at the boundary
-where they meet.
-
-`bootstrap/lsp-smoke` sets `TMPDIR` with a trailing slash itself now, on
-every platform, so the shape that hid the first bug is exercised
-everywhere rather than only where it happens to occur.
-
-## Process identity
+The shape that hits it is ordinary:
 
 ```plum
-use Os;
-
-Os.cwd()                  // Result[String, String]
-Os.chdir(path)
-Os.home_dir()             // Option[String] — $HOME, or %USERPROFILE%
-
-Os.read_stdin_line()      // Result[Option[String], String]
-Os.read_stdin(4096)       // Result[Bytes, String]
-Os.write_stderr("...")
+let found = entries[0].value;
+Result.map(inner_run(found, p), |x| Some(x))
 ```
 
-`None` from `read_stdin_line` is end of stream and `Some("")` is a blank
-line, and keeping those apart is the point. The shims the language
-server has always used answer `""` to both, so a filter reading until
-end of input stopped at the first blank line — wrong in a way that only
-shows up on real data. A final line with no trailing newline is an
-ordinary line rather than something to drop.
+`|x| Some(x)` never names `found`, and that is exactly why the pass
+thought `found` was free. Symptoms were a `malloc(): unaligned tcache
+chunk` abort or a wrong value, on the SECOND call, some distance from
+the code at fault. Values kept alive only by a static string literal
+never showed it, because releasing an immortal value twice is free.
 
-`Os.read_stdin` hands back `Bytes`, because standard input carries
-whatever was piped into it. An empty result is end of stream; a short
-one is data, since a pipe gives you what it has.
+Programs with no closures compile to identical output.
 
-`Os.write_stderr` is not `println`, which is stdout. A diagnostic in the
-same stream as the program's output cannot be separated from it by
-whoever is reading.
+`bootstrap/exec_corpus/closure_capture_reuse` pins it. Worth saying what
+missed it: 149 corpus fixtures under AddressSanitizer with leak
+detection, and the bootstrap fixed point — the compiler simply does not
+write that shape anywhere in its own source. It was found by writing the
+JSON module below.
 
-`Os.home_dir()` reads the environment and returns `None` when it is
-unset, rather than guessing a path from a username — a guess that is
-usually right is the worst kind of wrong for a directory a program is
-about to write to.
+## Decoding JSON
 
-## `args()` is documented
+`json_parse` gives back a faithful `JsonValue`. Getting a real type out
+of one meant matching `JsonObject`, scanning an `Array[JsonEntry]` by
+hand, and matching `JsonString` — once per field, and with the field's
+name gone by the time anything could report a failure.
 
-It has existed since the beginning, is used by this compiler and by the
-test corpus, and appeared in STDLIB.md nowhere — under a heading
-promising that every function is listed by construction.
+```plum
+use Json;
 
-It was not alone: `chars_of` and `panic_raw` were missing for the same
-reason. The reference is generated by reading declarations, and these
-three are implemented by the compiler rather than declared anywhere it
-could see. All three are listed now, and a check fails the build if
-another one is added without being.
+struct Repo { name: String, stars: Int, owner: Owner, license: Option[String] }
 
-## Upgrading
+let repo (): Json.Decoder[Repo] =
+    Json.map4(
+        Json.field("name",    Json.string()),
+        Json.field("stars",   Json.int()),
+        Json.field("owner",   owner()),
+        Json.field("license", Json.nullable(Json.string())),
+        |n, s, o, l| Repo { name: n, stars: s, owner: o, license: l })
 
-Nothing that compiled under 0.0.20 fails under 0.0.22.
+Json.decode_string(repo(), text)    // Result[Repo, String]
+```
 
-`Os.cwd`, `chdir`, `home_dir`, `read_stdin_line`, `read_stdin` and
-`write_stderr` are new names in `Os`. If you were reaching into
-`native_stdlib` with your own `extern "C"` block to read standard input,
-that still works and is no longer necessary.
+Decoders compose, and the composition is what carries the path:
+
+```
+expected String at data.repos[1].name
+no field `admin` at owner
+expected a whole Number at stars
+```
+
+Nobody threaded that string. `at(["data", "repos"], index(1, field("name",
+string())))` is nested `field`s, and each one extends the path the
+decoder inside it reports against.
+
+Present, absent and null are three different states and get three
+different answers. `field` requires the key; `nullable` permits its
+value to be null; `optional_field` accepts either. `int()` refuses
+`41.5` rather than truncating it.
+
+The rest: `string bool int float value null_as`, `list`, `map` through
+`map6`, `succeed`, `fail`, `and_then`, `one_of`, `decode`.
+
+This is a library, not syntax — a generic struct with a closure field,
+compiled by the same compiler as everything else. A decoder that misreads
+a document is a COMPILE error at the line that misreads it, which is the
+thing a path-string API cannot do.
+
+## `Duration`, sleep, and a monotonic clock
+
+Time had one function, `Time.now()`, in whole seconds. Anything wanting
+to wait, or to measure how long something took, had nothing to use.
+
+```plum
+use Time;
+
+Time.sleep(Time.millis(250))
+
+let t0 = Time.instant();
+run_it();
+Time.since(t0).as_millis()
+```
+
+`Duration` is a type rather than a number, so `Time.sleep(500)` does not
+compile and cannot mean milliseconds on one line and seconds on the
+next. Built with `nanos micros millis seconds minutes hours zero`, read
+with `as_nanos as_micros as_millis as_seconds`, combined with `add sub
+scale negate`, compared with `lt le gt ge min max compare`. Durations
+can be negative — `between` a later and an earlier instant is the
+negation of the other order, which is more useful than a saturating zero.
+
+`Time.instant()` reads a MONOTONIC clock, which never moves backwards
+and is unaffected by the system clock being set. It is the one to
+measure with. `Time.now()` and `Time.now_millis()` remain the wall
+clock, which is the one to timestamp with. The origin of an `Instant` is
+deliberately meaningless: two of them are only ever subtracted.
+
+`==` works on both because it is structural; ordered comparison is
+`Duration.lt` and friends, since `<` is defined on `Int`, `Float` and
+`String` and on nothing else.
+
+## `select` stops waiting forever
+
+`select` could multiplex channels but could only block, so "take one if
+something is ready" and "wait 200ms" both needed a hand-rolled loop.
+
+```plum
+select {
+    n = rx => handle(n),
+    else => "nothing ready",
+}
+
+select {
+    n = rx => handle(n),
+    Time.millis(200) => "timed out",
+}
+```
+
+Both compile to the same call: `else` is a timeout of zero. No new
+keyword — a timeout arm is an expression of type `Duration` where a
+channel would be, and `else` was already a keyword.
+
+## Also
+
+`plum test` now runs tests in submodules, not only in a project's root
+module, and reports them by qualified name — `shapes.area_is_positive`
+rather than `area_is_positive`. A project whose tests sat beside the
+code they cover was silently running none of them.
