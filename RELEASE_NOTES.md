@@ -1,125 +1,32 @@
 Plum is a small, statically typed, compiled language.
 
-Plum can work with bytes.
+A one-line fix to the language server on macOS and Windows. If you are
+on Linux, 0.0.20 and 0.0.21 behave identically.
 
-## `Bytes`, and which type is the special case
+## Cross-file diagnostics went to the wrong file
 
-Every I/O path was text and whole-value: `Os.read_file` moved a whole
-`String`, HTTP bodies were `String`, and `Net.read` stopped at a NUL.
-That ruled out images, gzip, protobuf, and any C ABI that is not text.
+On macOS and Windows, an error in one file of a project was attributed
+to a temporary file instead of the file it is in — so your editor
+underlined nothing, and the diagnostic pointed somewhere you have never
+opened. Errors in the file being edited were unaffected.
 
-`Bytes` is a byte buffer, and `String` is now documented and implemented
-as bytes carrying a UTF-8 invariant — not the other way round:
+The language server checks an unsaved buffer by copying the project to a
+scratch directory, so diagnostics come back carrying scratch paths and
+are mapped home by matching that prefix. In 0.0.20 the two sides of that
+comparison stopped being built the same way: one had been normalized and
+the other had not.
 
-```plum
-let raw = Bytes.from_string("hi")     // total: every String is bytes
-match raw.as_string() {               // fallible: not every Bytes is a String
-    Ok(text) => println(text),
-    Err(e) => println(e),
-}
+It only showed up where the temporary directory needed normalizing.
+macOS sets `TMPDIR` with a trailing slash, which produces a doubled
+separator; Linux usually leaves it unset and produces `/tmp`, with
+nothing to collapse. That is why every Linux run passed while both other
+platforms failed.
 
-"é".as_bytes().len()                  // 2  -- bytes
-"é".char_len()                        // 1  -- characters
-```
-
-Indices are bytes, so `Bytes.slice` can split a multi-byte character in
-half — precisely what `String.slice` refuses to do. There is no
-`.to_string()` on `Bytes`: bytes are not text, so `to_hex` renders and
-`as_string` decodes, and which you want is your decision.
-
-Binary I/O follows it. `Os.read_bytes` / `write_bytes` / `append_bytes`
-round-trip anything, embedded NULs included, and `Net.read_bytes` /
-`write_bytes` are binary-safe sockets that keep three outcomes apart:
-data, a clean peer close, and a real error. The existing `String` calls
-are unchanged and remain the text convenience.
-
-## Files that close themselves
-
-```plum
-match Os.open(path, Mode.Read) {
-    Err(e) => println(e),
-    Ok(f) => match f.read(4096) {     // Result[Bytes, String]; empty is EOF
-        Ok(chunk) => println(chunk.len().to_string()),
-        Err(e) => println(e),
-    },
-}
-```
-
-There is no `close` in that example and nothing leaks. `File` is a
-**handle**: a type whose value owns a native resource, and whose death
-runs the cleanup. `f.close()` still exists and still returns a `Result`,
-because `fclose` is where a buffered write reaches the disk and so where
-a full one is discovered — call it when the error matters, rely on the
-handle when it does not.
-
-Cleanup runs at the end of the **block** that introduced the value, in
-reverse order of acquisition, and costs nothing at a tail call: a
-tail-recursive loop that opens a resource per iteration runs in constant
-stack and still closes all of them.
-
-You can declare your own:
-
-```plum
-extern "C" { fn terminal_restore(h: Int); }
-handle RawMode { on_drop: terminal_restore }
-```
-
-`handle` is a contextual keyword, so existing code using `handle` as an
-identifier is unaffected.
-
-## Three new modules
-
-**`use Encoding;`** — hex, base64 (standard and URL-safe), and RFC 3986
-percent-encoding, all on `Bytes`. Not a crypto suite.
-
-**`use Url;`** — `parse`, `stringify`, `request_target`, and query
-access. Parsing is not connecting: `https://` parses fine whether or not
-the client can speak it yet. `Http` uses it now instead of its own
-hand-rolled parser, which is why `http://user@host/` is refused rather
-than quietly connecting to a host named `user@host`.
-
-**`use Path;`** — `join`, `dirname`, `basename`, `stem`, `extension`,
-`clean`, `is_absolute`. Lexical only; it never touches the filesystem.
-Joins with `\` on Windows and accepts both separators as input. The
-compiler uses it for its own paths, which is how three hand-rolled
-copies of `dirname` came to be deleted.
-
-`Os` also grew `exists`, `stat`, `file_size` and `mtime`. Note the
-deliberate split: `Os.exists` answers `Ok(false)` for a missing path and
-everything else returns `Err`, because "does this exist" and "can I see
-whether this exists" are different questions — a permission error is not
-a silent no.
-
-## Your debugger knows your source
-
-Debug builds carry DWARF line tables for Plum source, so `gdb`, `perf`
-and `addr2line` name the file and line you wrote rather than a mangled
-symbol:
-
-```
-plum_codegen_cg_parse_std   ->  codegen/stdlib.plum:112
-```
-
-Line tables only — a debugger can step, break on a line and attribute a
-profile; it cannot print a local. Release builds carry none.
-
-## Also
-
-- `Process.run` takes argv directly, with no shell between you and the
-  program.
-- `plum help`, and `--release` / `--trace` build modes.
-- `Float`-to-`Int` conversions behave as documented.
-- HTTP requests now send `Host: host:port` when the port is not the
-  scheme default, per RFC 7230. Previously they sent a bare host, which
-  a name-based virtual host reads as a different origin.
-- [STDLIB.md](STDLIB.md) is up to 222 entries across 23 sections, still
-  generated by the compiler and checked against it on every build.
+`bootstrap/lsp-smoke` now sets `TMPDIR` that way itself, on every
+platform, so the awkward shape is exercised where it can be iterated on
+rather than only where it happens to occur.
 
 ## Upgrading
 
-Nothing that compiled under 0.0.19 fails under 0.0.20.
-
-`Bytes`, `File`, `Mode`, `Seek` and `Metadata` are new names in `Os` and
-the prelude; `handle` is a contextual keyword and does not reserve the
-word. If you were joining paths with `.concat("/")`, that still works —
-`Path.join` is an improvement, not a requirement.
+Nothing else changed. If you are on 0.0.20 and use the language server
+on macOS or Windows, this is worth taking; otherwise it can wait.
