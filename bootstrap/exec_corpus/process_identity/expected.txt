@@ -1,0 +1,17 @@
+args: [--args|b|c] err=[]
+lines: [[a]
+[]
+[b]
+eof after 3] err=[]
+no trailing nl: [[x]
+[y]
+eof after 2] err=[]
+empty stdin: [eof after 0] err=[]
+bytes: [hex 6869] err=[]
+stderr: [] err=[to stderr]
+cwd is a directory: true
+chdir moved: true
+chdir went to the parent: true
+chdir back: true
+chdir to nowhere: err
+home is absolute: true

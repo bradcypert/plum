@@ -11,10 +11,6 @@ use Process;
 // would run, `*` would glob, and `a;echo pwned` would become two
 // commands.
 
-extern "C" {
-    fn stdin_read_line() -> CStr;
-}
-
 let join_acc (xs: Array[String]) (i: Int) (acc: String): String =
     if i >= xs.len() { acc }
     else if i == 0 { join_acc(xs, i + 1, xs[i]) }
@@ -40,7 +36,14 @@ let run_self (self: String) (args: Array[String]) (env: Array[String]) (stdin: O
 
 let child (argv: Array[String]): Unit =
     if argv[0] == "--echo" { println(join_acc(Array.drop(argv, 1), 0, "")) }
-    else if argv[0] == "--stdin" { unsafe { println(stdin_read_line().as_string()) } }
+    // `Os.read_stdin_line` rather than the private LSP shim this
+    // fixture used to declare itself with an ad-hoc `extern "C"` block.
+    // That was the evidence in issue #17 that stdin needed a public API:
+    // a corpus fixture reaching into `native_stdlib` for something no
+    // user program could name.
+    else if argv[0] == "--stdin" {
+        println(match Os.read_stdin_line() { Ok(Some(l)) => l, Ok(None) => "", Err(e) => e })
+    }
     else if argv[0] == "--env" {
         println(match Os.env_var("PLUM_PROC_TEST") { Some(v) => v, None => "UNSET" })
     }

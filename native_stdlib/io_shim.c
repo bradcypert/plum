@@ -161,3 +161,70 @@ void plum_trace(void) {
         fprintf(stderr, "  ... %lld more frames\n", plum_depth - shown);
     }
 }
+
+// --- A public stdin, and stderr (issue #17) ---
+//
+// Added ALONGSIDE `stdin_read_line`/`stdin_read_n` rather than changing
+// them: those are called by the language server in this same binary, and
+// MAINTENANCE.md's rule is not to change the arity of a shim the
+// compiler still calls.
+//
+// The reason for new ones is a contract the old pair cannot express.
+// `stdin_read_line` returns "" at end of stream AND for an empty line,
+// so a filter reading until EOF cannot tell "the input ended" from "the
+// input contained a blank line" -- and a program that stops at the first
+// blank line is wrong in a way that only shows up on real data.
+// `stdin_read_n` has the mirror problem: it returns "" on a short read,
+// discarding however many bytes it did get.
+//
+// Both new functions return a COUNT and leave the bytes in a buffer the
+// caller reads separately, the same split `tcp_recv_n`/`tcp_recv_data`
+// and `file_read_n`/`file_read_data` use, and for the same reason: a
+// `CStr` return cannot carry a length.
+
+// The line just read, without its newline. Returns the byte count, or
+// -1 at end of stream -- which is the distinction the whole pair exists
+// for. An empty line is 0, and that is not the same answer.
+long long stdin_line_n(void) {
+    size_t len = 0;
+    if (!ensure(&line_buf, &line_cap, 256)) return -1;
+    int any = 0;
+    for (;;) {
+        int c = fgetc(stdin);
+        if (c == EOF) break;
+        any = 1;
+        if (c == '\n') break;
+        if (!ensure(&line_buf, &line_cap, len + 2)) return -1;
+        line_buf[len++] = (char)c;
+    }
+    // EOF with nothing read at all is the end of the stream. EOF after
+    // some bytes is a final line without a trailing newline, which is an
+    // ordinary line and must not be thrown away.
+    if (!any && len == 0) return -1;
+    if (len > 0 && line_buf[len - 1] == '\r') len--;
+    line_buf[len] = '\0';
+    return (long long)len;
+}
+
+const char *stdin_line_data(void) { return line_buf ? line_buf : ""; }
+
+// Up to `max` bytes. Returns how many were actually read: 0 at end of
+// stream, and a SHORT COUNT is data, not a failure -- a pipe hands over
+// what it has.
+long long stdin_bytes_n(long long max) {
+    if (max < 0) max = 0;
+    if (!ensure(&body_buf, &body_cap, (size_t)max + 1)) return -1;
+    size_t got = fread(body_buf, 1, (size_t)max, stdin);
+    if (got == 0 && ferror(stdin)) return -1;
+    body_buf[got] = '\0';
+    return (long long)got;
+}
+
+const char *stdin_bytes_data(void) { return body_buf ? body_buf : ""; }
+
+// Unbuffered by convention: stderr is where a program says something is
+// wrong, and a message lost in a buffer at exit is the one that mattered.
+void stderr_write(const char *s) {
+    fputs(s, stderr);
+    fflush(stderr);
+}

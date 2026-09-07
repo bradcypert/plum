@@ -44,6 +44,32 @@ if [ -n "$missing" ]; then
     exit 1
 fi
 
+# --- the FREE functions the compiler implements ---
+#
+# Same problem as the methods above, one step over: `builtin_sig` is
+# also a chain of name comparisons, so nothing can enumerate it, and
+# `plum stdlib-reference` silently omitted `args`, `chars_of` and
+# `panic_raw` entirely -- three functions that exist, are callable, and
+# are used by this compiler, under a heading promising completeness.
+#
+# `typecheck.builtin_functions()` is the table the reference reads. This
+# is what stops it drifting from the chain beside it.
+sig_chain="$(sed -n '/^let builtin_sig /,/^$/p' "$infer" | grep -oE 'name == "[A-Za-z_.]+"' | sed 's/.*"\(.*\)"/\1/' | sort -u)"
+sig_table="$(sed -n '/pub let builtin_functions /,/^]/p' "$infer" | grep -oE 'name: "[A-Za-z_.]+"' | sed 's/.*"\(.*\)"/\1/' | sort -u)"
+
+if [ -z "$sig_chain" ] || [ -z "$sig_table" ]; then
+    echo "check-builtins: found no builtin_sig names -- has infer.plum's shape changed?" >&2
+    exit 1
+fi
+
+sig_missing="$(comm -23 <(printf '%s\n' "$sig_chain") <(printf '%s\n' "$sig_table"))"
+if [ -n "$sig_missing" ]; then
+    echo "check-builtins: builtin_sig answers for these and the reference does not list them:" >&2
+    printf '  %s\n' $sig_missing >&2
+    echo "add them to \`builtin_functions\` in $infer" >&2
+    exit 1
+fi
+
 # --- and every SHARED name is exercised as a dot call ---
 #
 # A builtin arm matches on NAME before the receiver is known, so a name

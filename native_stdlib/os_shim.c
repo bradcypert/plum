@@ -305,3 +305,30 @@ long long os_path_exists(const char *path) {
     }
     return -1;
 }
+
+// --- Working directory (issue #17) ---
+//
+// Its own buffer rather than `plum_os_buf`: that one holds the result of
+// `os_temp_dir`/`os_self_exe`, and a caller holding one of those across
+// a `cwd()` would silently get the wrong string back.
+static char plum_cwd_buf[PLUM_PATH_MAX];
+
+// "" on failure, never NULL -- a null `CStr` return is a hard runtime
+// abort under Plum's FFI semantics, the same trade every other shim
+// here makes.
+const char *os_cwd(void) {
+#if defined(_WIN32)
+    if (_getcwd(plum_cwd_buf, (int)sizeof(plum_cwd_buf)) == NULL) plum_cwd_buf[0] = '\0';
+#else
+    if (getcwd(plum_cwd_buf, sizeof(plum_cwd_buf)) == NULL) plum_cwd_buf[0] = '\0';
+#endif
+    return plum_cwd_buf;
+}
+
+long long os_chdir(const char *path) {
+#if defined(_WIN32)
+    return _chdir(path) == 0 ? 0 : -1;
+#else
+    return chdir(path) == 0 ? 0 : -1;
+#endif
+}

@@ -461,6 +461,18 @@ let reference_sections (items: Array[parser.ItemNode]): Unit = {
     reference_builtins(ms, "", 0)
 }
 
+// Free functions the compiler implements itself. A dotted name is
+// skipped: it is already printed by `reference_builtins` in method
+// form, and printing it twice would say the same thing in two shapes.
+let reference_builtin_fns (fs: Array[typecheck.BuiltinFn]) (ns: String) (i: Int): Unit =
+    if i >= fs.len() { () }
+    else {
+        if ns == "(prelude)" && Option.is_none(String.index_of(fs[i].name, ".")) {
+            println("- `".concat(fs[i].detail).concat("`  (built in)"))
+        } else { () };
+        reference_builtin_fns(fs, ns, i + 1)
+    }
+
 let with_builtin_ns (ms: Array[typecheck.BuiltinMethod]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= ms.len() { acc }
     else if ms[i].recv != "" && !Array.contains(acc, ms[i].recv) { with_builtin_ns(ms, i + 1, acc.push(ms[i].recv)) }
@@ -474,6 +486,7 @@ let reference_ns_acc (items: Array[parser.ItemNode]) (ms: Array[typecheck.Builti
         println("");
         reference_entries(items, nss[i], 0);
         reference_builtins(ms, nss[i], 0);
+        reference_builtin_fns(typecheck.builtin_functions(), nss[i], 0);
         reference_ns_acc(items, ms, nss, i + 1)
     }
 

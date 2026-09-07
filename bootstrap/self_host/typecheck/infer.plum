@@ -312,6 +312,33 @@ let resolve_param_ty (ctx: TyContext) (viewer: String) (in_scope: Array[String])
 let arr_of (t: ITy): ITy = ITStruct("Array", [t])
 let tp (name: String): ITy = ITParam(name)
 
+// The FREE functions the compiler implements itself, as `builtin_methods`
+// is for methods, and for the same reason: `builtin_sig` below is a
+// chain of name comparisons, and nothing can enumerate a chain of `if`s.
+//
+// Without this, `plum stdlib-reference` silently omitted a whole
+// category. `args()`, `chars_of` and `panic_raw` exist, are callable,
+// are used by this compiler and by the corpus -- and appeared in
+// STDLIB.md nowhere, under a heading promising every function is listed
+// "by construction". A document that is generated is only complete if
+// everything it should contain is reachable by whatever generates it.
+//
+// `bootstrap/check-builtins` fails if the chain matches a name this
+// table does not carry. The chain stays the authority; this stays
+// honest about being a second copy, and is checked against the first.
+pub struct BuiltinFn { pub name: String, pub detail: String }
+
+pub let builtin_functions (): Array[BuiltinFn] = [
+    BuiltinFn { name: "args", detail: "let args (): Array[String]" },
+    BuiltinFn { name: "chars_of", detail: "let chars_of (s: String): Array[String]" },
+    BuiltinFn { name: "panic_raw", detail: "let panic_raw (message: String): Unit" },
+    // Namespaced, and already listed through `builtin_methods` as
+    // `Array.push(x: T): Array[T]`. Carried here so the check against
+    // the chain is total; skipped by the reference so it is not printed
+    // twice.
+    BuiltinFn { name: "Array.push", detail: "Array.push(x: T): Array[T]" },
+]
+
 let builtin_sig (name: String): Option[FnSig] =
     // A built-in ARRAY operation, not a prelude function: there is no
     // `let Array.push` anywhere to read.

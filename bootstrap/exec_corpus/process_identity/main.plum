@@ -1,0 +1,117 @@
+use Os;
+use Process;
+use Path;
+
+// Process identity: argv, working directory, home, stdin and stderr
+// (issue #17).
+//
+// stdin cannot be tested by running a fixture directly -- the harness
+// gives it nothing -- so this re-invokes ITSELF with `Process.run`,
+// which can feed a child's stdin. The parent asserts, the child reads.
+// Same shape as `exec_corpus/process_run`.
+//
+// Nothing prints a path: the working directory and `$HOME` differ per
+// machine. What is printed is what was OBSERVED about them.
+
+let run_self (self: String) (argv: Array[String]) (stdin: Option[String]): Result[Process.ProcessResult, String] =
+    Process.run(Process.Options { program: self, args: argv, env: [], stdin: stdin })
+
+// --- The child ---
+
+// Reads every line, so end of stream and a blank line have to be
+// distinguishable. `None` is EOF; `Some("")` is a blank line. The
+// shims the language server uses answer `""` to both, which is why
+// these are new functions rather than a rename.
+let drain (n: Int): Unit = match Os.read_stdin_line() {
+    Err(e) => println("err ".concat(e)),
+    Ok(None) => println("eof after ".concat(n.to_string())),
+    Ok(Some(line)) => { println("[".concat(line).concat("]")); drain(n + 1) },
+}
+
+let child (argv: Array[String]): Unit =
+    if argv[0] == "--lines" { drain(0) }
+    // Raw bytes, for input that is not text. An empty result is end of
+    // stream; a short one is data.
+    else if argv[0] == "--bytes" {
+        match Os.read_stdin(64) {
+            Err(e) => println(e),
+            Ok(b) => println("hex ".concat(b.to_hex())),
+        }
+    }
+    else if argv[0] == "--args" { println(Array.join(argv, "|")) }
+    else if argv[0] == "--stderr" { Os.write_stderr("to stderr") }
+    else { println("unknown") }
+
+// --- The parent ---
+
+let show (label: String) (r: Result[Process.ProcessResult, String]): Unit =
+    match r {
+        Err(_) => println(label.concat(": err")),
+        Ok(res) => println(label.concat(": [").concat(String.trim_end(res.stdout))
+            .concat("] err=[").concat(String.trim_end(res.stderr)).concat("]")),
+    }
+
+let parent (): Unit = match Os.self_exe() {
+    Err(e) => println(e),
+    Ok(self) => {
+        // argv, which reaches the child exactly as passed.
+        show("args", run_self(self, ["--args", "b", "c"], None));
+
+        // A blank line in the middle must not read as end of stream.
+        show("lines", run_self(self, ["--lines"], Some("a\n\nb\n")));
+        // A final line with no trailing newline is still a line.
+        show("no trailing nl", run_self(self, ["--lines"], Some("x\ny")));
+        // Nothing at all is end of stream immediately.
+        show("empty stdin", run_self(self, ["--lines"], Some("")));
+
+        // Bytes, not text.
+        show("bytes", run_self(self, ["--bytes"], Some("hi")));
+
+        // stderr is a different stream from stdout, which is the whole
+        // point of not using `println` for it.
+        show("stderr", run_self(self, ["--stderr"], None));
+
+        // --- The current process's own identity ---
+        //
+        // `cwd` is a real directory: it exists and is one.
+        match Os.cwd() {
+            Err(e) => println("cwd: ".concat(e)),
+            Ok(d) => println("cwd is a directory: "
+                .concat(Result.unwrap_or(Os.is_directory(d), false).to_string())),
+        };
+
+        // `chdir` moves, and moving back restores what `cwd` reported.
+        match Os.cwd() {
+            Err(e) => println("cwd: ".concat(e)),
+            Ok(before) => match Os.chdir(Path.dirname(before)) {
+                Err(e) => println("chdir: ".concat(e)),
+                Ok(_) => match Os.cwd() {
+                    Err(e) => println("cwd: ".concat(e)),
+                    Ok(up) => {
+                        println("chdir moved: ".concat((up != before).to_string()));
+                        println("chdir went to the parent: ".concat((up == Path.dirname(before)).to_string()));
+                        match Os.chdir(before) {
+                            Err(e) => println("chdir back: ".concat(e)),
+                            Ok(_) => println("chdir back: ".concat(
+                                (Result.unwrap_or(Os.cwd(), "") == before).to_string())),
+                        }
+                    },
+                },
+            },
+        };
+
+        // A directory that is not there is an `Err`, not a silent no-op.
+        println("chdir to nowhere: ".concat(match Os.chdir("/no/such/dir/here") {
+            Ok(_) => "UNEXPECTEDLY OK", Err(_) => "err",
+        }));
+
+        // `$HOME` is set in every environment this runs in; the point is
+        // that it is read rather than guessed from a username.
+        println("home is absolute: ".concat(match Os.home_dir() {
+            Some(h) => Path.is_absolute(h).to_string(),
+            None => "unset",
+        }))
+    },
+}
+
+let main (): Unit = if Array.is_empty(args()) { parent() } else { child(args()) }

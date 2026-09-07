@@ -22,6 +22,9 @@ See README.md for the prose introduction.
 - `let assert_ne (a: T) (b: T): Unit`
 - `let json_parse (s: String): Result[JsonValue, String]`
 - `let json_stringify (v: JsonValue): String`
+- `let args (): Array[String]`  (built in)
+- `let chars_of (s: String): Array[String]`  (built in)
+- `let panic_raw (message: String): Unit`  (built in)
 
 ## Array
 
@@ -180,6 +183,12 @@ See README.md for the prose introduction.
 - `let File.flush (f: File): Result[Unit, String]`
 - `let File.close (f: File): Result[Unit, String]`
 - `let run_process (program: String) (args: Array[String]): Result[ProcessResult, String]`
+- `let cwd (): Result[String, String]`
+- `let chdir (path: String): Result[Unit, String]`
+- `let home_dir (): Option[String]`
+- `let read_stdin_line (): Result[Option[String], String]`
+- `let read_stdin (max_len: Int): Result[Bytes, String]`
+- `let write_stderr (s: String): Unit`
 - `let exists (path: String): Result[Bool, String]`
 - `let stat (path: String): Result[Metadata, String]`
 - `let file_size (path: String): Result[Int, String]`
