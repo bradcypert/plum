@@ -20,6 +20,24 @@
 # and runs real programs on it. Nothing is shipped that is merely
 # expected to work.
 #
+# --- Action versions ---
+#
+# `upload-artifact` and `download-artifact` are a PAIR and their majors
+# have to be compatible: they agree on a backend, not just on a file
+# format, so a v4 upload cannot be read by a v3 download. Bump them
+# together or not at all. v7 and v8 are the matched pair here -- the
+# numbers differ because the two repositories release independently,
+# which makes them look mismatched when they are not.
+#
+# They were bumped from v4 (and `action-gh-release` from v2) because
+# those ran on Node 20, which GitHub now force-runs on Node 24 and
+# annotates every release with. Nothing about the bump is functional:
+# each major in between was a runtime change. The two behaviour changes
+# that did arrive are both wanted -- `download-artifact` v8 now ERRORS
+# on a hash mismatch rather than warning, and v5 changed the output path
+# for single downloads BY ID, which `publish` does not do (it downloads
+# everything into one directory and flattens it with `find`).
+#
 # Windows builds under MSYS2/MinGW. It runs `platform-smoke` only, like
 # macOS, for the same reason: the rest of `bootstrap/` is Linux-only
 # development tooling. Its archive carries `plum.exe`, which
@@ -128,7 +146,7 @@ jobs:
       - name: package
         run: ./bootstrap/package-release sh.real x86_64-linux
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: plum-x86_64-linux
           path: dist/*
@@ -186,7 +204,7 @@ jobs:
       - name: package
         run: ./bootstrap/package-release sh.real ${{ matrix.arch }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: plum-${{ matrix.arch }}
           path: dist/*
@@ -229,7 +247,7 @@ jobs:
       - name: package
         run: ./bootstrap/package-release sh.real arm64-linux
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: plum-arm64-linux
           path: dist/*
@@ -278,7 +296,7 @@ jobs:
       - name: package
         run: ./bootstrap/package-release sh.real x86_64-windows
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: plum-x86_64-windows
           path: dist/*
@@ -296,7 +314,7 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -307,7 +325,7 @@ jobs:
           ls -l dist
 
       - name: publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           name: plum ${{ github.event.inputs.tag || github.ref_name }}
