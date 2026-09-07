@@ -24,6 +24,24 @@ cd "$root" || exit 1
 # where that wrapper does not work.
 plum="${1:-./sh}"
 
+# --- TMPDIR gets a TRAILING SLASH here, on purpose ---
+#
+# macOS sets `TMPDIR` that way, and Linux usually leaves it unset. That
+# one difference hid a real bug for a full CI cycle: `Os.temp_dir`'s
+# shim builds `"%s/plum-XXXXXX"`, so a trailing slash produces
+# `/var/.../T//plum-abc`, and the server recognises a diagnostic from
+# its scratch copy by testing whether the diagnostic's path starts with
+# that string. Once those paths started being built by `Path.join`,
+# which CLEANS, the `//` collapsed on one side of the comparison only --
+# so every cross-file error was attributed to the scratch file instead
+# of the real one, on macOS and Windows, while every local run passed.
+#
+# Setting it here means this harness exercises the awkward shape on
+# every platform rather than only on the ones that happen to supply it.
+# Unset it to run against the ambient value instead.
+export TMPDIR="${TMPDIR:-/tmp}"
+case "$TMPDIR" in */) ;; *) TMPDIR="$TMPDIR/" ;; esac
+
 # `python3` on Linux and macOS; MSYS2 ships it as `python`. Only used to
 # BUILD the LSP session -- a stream of Content-Length-framed JSON, which
 # is miserable to write in shell and trivial here.
