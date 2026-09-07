@@ -25,11 +25,13 @@
 # the generated test dispatcher: only the functions a test actually
 # reaches are compiled, not the whole compiler.
 #
-# A test must live in the ROOT module. The dispatcher `plum test`
-# generates calls each name unqualified, so a `test_` function declared
-# in `lsp/` or `parser/` fails with `unbound function` against an
-# unrelated line -- see issue #29. Tests therefore live in `main.plum`
-# and call into the submodules.
+# Tests live BESIDE the code they cover -- `lsp/lsp.plum` holds the ones
+# about URI conversion -- and are reported by their qualified name
+# (`lsp.test_lsp_uri_roundtrip`), so two modules may each have a
+# `test_parse`. That was issue #29: discovery found a `test_` function
+# anywhere, but the generated dispatcher called it unqualified, so a test
+# outside the root module failed with `unbound function` against a line
+# nobody had written a test on.
 #
 # Usage:  bootstrap/self-test [path-to-plum-binary]   (default: ./sh)
 set -uo pipefail

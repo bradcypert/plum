@@ -23,6 +23,13 @@
 # not stop the ones after it.
 set -uo pipefail
 
+# Since 2026-09-07 it also covers tests in a SUBDIRECTORY module, which
+# `plum test` could not run: discovery found them, and the generated
+# dispatcher then called each by its bare name, which is not in scope
+# from the root. A test outside the root module failed with `unbound
+# function` against a line nobody had written a test on (issue #29).
+# Two modules may now each declare a `test_parse`, and the reported name
+# says which is which.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 work="$(mktemp -d -t plum-testsmoke-XXXXXX)"
@@ -72,6 +79,17 @@ let test_fails_on_purpose (): Unit = assert_eq(2 + 2, 5)
 let test_runs_after_a_failure (): Unit = assert(true)
 PLUM
 
+# Two SUBDIRECTORY modules, each declaring a test of the same name --
+# the case that could not run at all before issue #29, and the case that
+# proves the qualified name is what distinguishes them.
+mkdir -p "$work/alpha" "$work/beta"
+cat > "$work/alpha/alpha.plum" <<'PLUM'
+pub let test_parse (): Unit = assert_eq(2, 2)
+PLUM
+cat > "$work/beta/beta.plum" <<'PLUM'
+pub let test_parse (): Unit = assert_eq(3, 3)
+PLUM
+
 fail=0
 
 check_run() {
@@ -86,8 +104,18 @@ check_run() {
     echo "$out" | grep -q 'test test_partial_application ... ok' || { echo "FAIL [$label]: partial application did not work in a test"; fail=1; }
     echo "$out" | grep -q 'test test_dotted_field_update ... ok' || { echo "FAIL [$label]: a dotted field update did not work in a test"; fail=1; }
     echo "$out" | grep -q 'test_fails_on_purpose' || { echo "FAIL [$label]: the failing test was not reported"; fail=1; }
-    # 7 passed proves the run continued past the failure.
-    echo "$out" | grep -q 'FAILED. 7 passed; 1 failed' || { echo "FAIL [$label]: wrong tally"; echo "$out" | tail -3; fail=1; }
+    # A test in a subdirectory module runs, and is reported by its
+    # QUALIFIED name -- which is what lets two modules each have one
+    # called `test_parse`. Both must appear, or the name is not actually
+    # distinguishing them.
+    echo "$out" | grep -q 'test alpha.test_parse ... ok' || { echo "FAIL [$label]: a test in a submodule did not run"; fail=1; }
+    echo "$out" | grep -q 'test beta.test_parse ... ok' || { echo "FAIL [$label]: a same-named test in a second submodule did not run"; fail=1; }
+    # A ROOT-module test keeps its bare name, so existing projects report
+    # exactly what they reported before.
+    echo "$out" | grep -q 'test test_assertions ... ok' || { echo "FAIL [$label]: a root-module test lost its bare name"; fail=1; }
+    # 9 passed proves the run continued past the failure, and counts the
+    # two submodule tests.
+    echo "$out" | grep -q 'FAILED. 9 passed; 1 failed' || { echo "FAIL [$label]: wrong tally"; echo "$out" | tail -3; fail=1; }
 }
 
 check_run self-hosted ./sh

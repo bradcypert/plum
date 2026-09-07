@@ -18925,3 +18925,37 @@ did not. If `Path` ever does need it, the honest framing is a public
 "manipulate paths for another platform" API -- something a
 cross-compiling build tool genuinely wants -- rather than a testing hook
 in a public interface.
+
+## Tests can live beside the code they cover (2026-09-07)
+
+Issue #29. `plum test` found a `test_` function anywhere in a project and
+then generated a dispatcher calling each one by its BARE name -- which is
+not in scope from the root module. So a test in a subdirectory failed
+with `unbound function`, pointing at a line nobody had written a test on,
+and tests were usable only in a project's root. Nothing documented that.
+
+The fix is that discovery records the module, and one string then serves
+as both the SELECTOR and the CALL, because `lsp.test_x` is exactly how
+the dispatcher has to spell the call and exactly what tells it apart from
+another module's `test_x`. A root-module test keeps its bare name, so
+existing projects report what they always did.
+
+Two modules may now each declare a `test_parse`, and the output says
+which is which.
+
+### It was found by needing it
+
+`bootstrap/self-test` landed the day before, and its tests were about
+`lsp/` while living in `main.plum` and calling inward -- annotated at the
+time as the wrong place for them, with the restriction written down
+because it could not be fixed in passing. They have moved.
+
+That is the useful order: the limitation was recorded where it bit, with
+what would fix it (`ItemNode.module` already carries the module), so the
+fix was half-written before it started.
+
+`test-smoke` now builds two subdirectory modules that each declare the
+same test name, and asserts both run and that a root-module test still
+reports its bare name. Reverting the qualification fails that harness
+outright -- the dispatcher no longer compiles, so every assertion in it
+goes red at once.

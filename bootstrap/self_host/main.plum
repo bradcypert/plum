@@ -1443,10 +1443,20 @@ let usage (): Unit = {
     println("                      e.g. PLUM_CC=\"zig cc\". Plum ships no sysroot.")
 }
 
-// Every top-level `let` whose name's LAST segment starts with `test_`.
-// The last-segment rule is what makes a module-qualified
-// `lexer.test_foo` discoverable — the same rule the real compiler's
-// `discover_tests` uses.
+// Every top-level `let` whose name's LAST segment starts with `test_`,
+// recorded with its MODULE.
+//
+// The qualification is what lets a test live beside the code it covers.
+// Discovery has always found a `test_` function in a subdirectory, but
+// the dispatcher called it by its bare name -- which is not in scope
+// from the root module -- so `plum test` reported `unbound function`
+// against a line the author had not written a test on. Tests were
+// therefore only usable in a project's root, which nothing documented
+// and which pushes them away from what they test.
+//
+// One string serves as both the SELECTOR and the CALL, because
+// `lsp.test_x` is exactly how the dispatcher has to spell the call and
+// exactly what distinguishes it from another module's `test_x`.
 let discover_tests (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= items.len() { acc }
     else {
@@ -1460,12 +1470,19 @@ let discover_tests (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String])
                 // of reporting a failure. Caught immediately -- this
                 // compiler's own `cmd_test`/`cmd_test_one` were named
                 // `test_*` at first and were "discovered".
-                if last.starts_with("test_") && takes_no_args(def.params) { acc.push(def.name) } else { acc }
+                if last.starts_with("test_") && takes_no_args(def.params) {
+                    acc.push(qualify_test(items[i].module, def.name))
+                } else { acc }
             },
             _ => acc,
         };
         discover_tests(items, i + 1, next)
     }
+
+// A root-module test keeps its bare name, so existing projects report
+// exactly what they reported before.
+let qualify_test (module_name: String) (name: String): String =
+    if module_name == "" { name } else { module_name.concat(".").concat(name) }
 
 // `let f ()` parses as ONE parameter holding the empty-tuple pattern,
 // not as zero parameters -- the unit-argument convention. So "callable
@@ -2514,65 +2531,3 @@ let main (): Unit = {
     }
 }
 
-// --- Tests of this compiler's own internals ---
-//
-// Run by `bootstrap/self-test`, which is `plum test bootstrap/self_host`.
-//
-// These exist for logic that is CONDITIONAL ON THE PLATFORM, and so
-// cannot be reached by running the compiler on the machine you are
-// sitting at. Two releases in a row shipped a language-server bug of
-// exactly that kind: the code was wrong only under the Windows
-// convention, every local run took the other branch, and CI reported it
-// fifteen minutes later as "the language server answers a real session"
-// with no detail. Passing the convention in as an argument makes both
-// readings reachable from anywhere.
-//
-// A test must live in the ROOT module: the dispatcher `plum test`
-// generates calls each name unqualified, so one declared in `lsp/` or
-// `parser/` reports `unbound function` against an unrelated line. These
-// therefore call into the submodules rather than living beside them.
-
-let POSIX (): String = "/"
-let WINDOWS_SEP (): String = "\\"
-
-// A URI survives being turned into a path and back, under BOTH
-// conventions. True by definition -- and false on Windows until
-// 2026-09-07, because the conversion in changed separators and the
-// conversion out did not change them back.
-let uri_round_trip (sep: String) (uri: String): Unit =
-    assert_eq(lsp.path_to_uri_in(sep, lsp.uri_to_path_in(sep, uri)), uri)
-
-pub let test_lsp_uri_roundtrip (): Unit = {
-    uri_round_trip(POSIX(), "file:///home/x/a.plum");
-    uri_round_trip(POSIX(), "file:///a/b/c/deep.plum");
-    uri_round_trip(WINDOWS_SEP(), "file:///C:/x/a.plum");
-    uri_round_trip(WINDOWS_SEP(), "file:///c:/Users/Someone/proj/main.plum");
-    // A drive letter is not special under the Posix convention, and a
-    // Unix path is not special under the Windows one; neither should
-    // lose its round trip for being unusual.
-    uri_round_trip(POSIX(), "file:///C:/x/a.plum");
-    uri_round_trip(WINDOWS_SEP(), "file:///home/x/a.plum")
-}
-
-// The conversion itself, spelled out. The round trip above would still
-// pass if BOTH directions were wrong in the same way -- these pin what
-// each direction actually produces.
-pub let test_lsp_uri_separators (): Unit = {
-    // The Windows reading: the URI's slashes become backslashes, and the
-    // slash in front of the drive letter belongs to the URI, not the
-    // path.
-    assert_eq(lsp.uri_to_path_in(WINDOWS_SEP(), "file:///C:/x/a.plum"), "C:\\x\\a.plum");
-    assert_eq(lsp.path_to_uri_in(WINDOWS_SEP(), "C:\\x\\a.plum"), "file:///C:/x/a.plum");
-
-    // The Posix reading leaves the leading slash alone, because there it
-    // IS the root.
-    assert_eq(lsp.uri_to_path_in(POSIX(), "file:///home/x/a.plum"), "/home/x/a.plum");
-    assert_eq(lsp.path_to_uri_in(POSIX(), "/home/x/a.plum"), "file:///home/x/a.plum");
-
-    // A backslash is a legal character in a Unix filename, so the Posix
-    // conversion must not touch one.
-    assert_eq(lsp.path_to_uri_in(POSIX(), "/home/odd\\name.plum"), "file:///home/odd\\name.plum");
-
-    // Not a `file:` URI: handed back untouched rather than guessed at.
-    assert_eq(lsp.uri_to_path_in(WINDOWS_SEP(), "untitled:Untitled-1"), "untitled:Untitled-1")
-}
