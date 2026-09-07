@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Unit tests of the COMPILER'S OWN internals -- `plum test` pointed at
+# `bootstrap/self_host`, which is an ordinary Plum project and so an
+# ordinary test target.
+#
+# Every other harness here drives the compiler from OUTSIDE: give it a
+# program, compare what it prints. That cannot reach a function whose
+# behaviour depends on something the host is not. `Path` and the
+# language server both branch on the platform, and on Linux the Windows
+# branch does not merely go untested -- it is unreachable. No input
+# selects it.
+#
+# Two releases in a row shipped a language-server bug of exactly that
+# shape. Both were correct on Linux, wrong under the Windows convention,
+# and reported by CI fifteen minutes later as one line: "the language
+# server answers a real session". The fix in both cases was a few
+# characters; finding them was the expensive part.
+#
+# So the functions that convert between a URI and a path now take the
+# convention as an ARGUMENT, and `main.plum` holds tests that pass both.
+# The Windows reading is checkable here, in about a second, on any
+# machine.
+#
+# This is fast because the compiler's dead-code elimination starts from
+# the generated test dispatcher: only the functions a test actually
+# reaches are compiled, not the whole compiler.
+#
+# A test must live in the ROOT module. The dispatcher `plum test`
+# generates calls each name unqualified, so a `test_` function declared
+# in `lsp/` or `parser/` fails with `unbound function` against an
+# unrelated line -- see issue #29. Tests therefore live in `main.plum`
+# and call into the submodules.
+#
+# Usage:  bootstrap/self-test [path-to-plum-binary]   (default: ./sh)
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root" || exit 1
+
+plum="${1:-./sh}"
+
+out="$(SH_MEM="${SH_MEM:-1G}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$plum" test bootstrap/self_host 2>&1)"
+rc=$?
+
+if [ $rc -ne 0 ] || ! printf '%s' "$out" | grep -q "0 failed"; then
+    printf '%s\n' "$out" >&2
+    echo "self-test: FAILED" >&2
+    exit 1
+fi
+
+# Echoed rather than asserted, for the same reason `property-check`
+# echoes its count: a suite that silently ran zero tests would otherwise
+# pass. `plum test` reports the number it discovered.
+printf 'self-test: %s\n' "$(printf '%s' "$out" | grep 'test result:')"

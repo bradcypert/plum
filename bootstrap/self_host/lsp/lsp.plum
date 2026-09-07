@@ -325,12 +325,25 @@ pub let publish_message (uri: String) (diagnostics: Array[JsonValue]): String =
 // child process a project directory spelled one way and a file path
 // spelled the other.
 //
-// A no-op on Unix, where the separator already is `/`.
-pub let uri_to_path (uri: String): String =
+// The separator is a PARAMETER rather than read from the host, and that
+// is the whole reason this pair exists in this shape. The Windows branch
+// is unreachable on Linux -- not untested, UNREACHABLE -- so the bug
+// above could only ever be found by CI, fifteen minutes at a time, on a
+// machine nobody can attach a debugger to. Passing the convention in
+// makes both readings checkable from anywhere; `test_lsp_uri_roundtrip`
+// in `main.plum` exercises them.
+pub let uri_to_path_in (sep: String) (uri: String): String =
     if uri.starts_with("file://") {
         let rest = String.slice(uri, 7, uri.len());
-        Path.clean(if starts_with_drive(rest) { String.slice(rest, 1, rest.len()) } else { rest })
+        let p = if starts_with_drive(rest) { String.slice(rest, 1, rest.len()) } else { rest };
+        String.replace(p, "/", sep)
     } else { uri }
+
+// The host form. Additionally CLEANS, which collapses a doubled
+// separator and resolves `.`/`..` -- normalization on top of the
+// conversion, so a path from an editor compares equal to the same path
+// as the compiler reports it.
+pub let uri_to_path (uri: String): String = Path.clean(uri_to_path_in(Path.separator(), uri))
 
 // `/C:/...` -- a slash, then a letter, then a colon.
 let starts_with_drive (s: String): Bool =
@@ -538,15 +551,17 @@ pub let params_col (params: JsonValue): Int =
 // is defined in terms of `/`, so `file:///C:\\x\\a.plum` is not
 // something an editor can open.
 //
-// Written as "replace the platform separator with `/`" rather than
-// "replace backslashes", so it is exactly a no-op on Unix -- where a
-// backslash is a legal character in a filename and must not be touched.
-pub let path_to_uri (path: String): String = {
-    let p = String.replace(path, Path.separator(), "/");
+// Written as "replace the separator with `/`" rather than "replace
+// backslashes", so it is exactly a no-op under the Posix convention,
+// where a backslash is a legal character in a filename.
+pub let path_to_uri_in (sep: String) (path: String): String = {
+    let p = String.replace(path, sep, "/");
     if p.starts_with("file://") { p }
     else if is_drive_path(p) { "file:///".concat(p) }
     else { "file://".concat(p) }
 }
+
+pub let path_to_uri (path: String): String = path_to_uri_in(Path.separator(), path)
 
 // `didChange` under FULL sync (`textDocumentSync: 1`) carries the whole
 // document in the last content change, which is why full sync is what

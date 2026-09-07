@@ -11,6 +11,7 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version help-check check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
+         self-test \
          property-check doc-check alloc-check lossless-check fmt-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
@@ -31,6 +32,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
+| `self-test` | the compiler's OWN internals, via `plum test` on `bootstrap/self_host` -- the only harness that can reach platform-conditional code, since a Windows branch is unreachable on Linux rather than merely untested | 1s |
 | `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |
 | `doc-check` | every snippet in `TUTORIAL.md` compiles, runs, and prints what the tutorial says it prints | 6s |
 | `alloc-check` | allocation counts have not RISEN -- the only harness that measures the memory model rather than correctness | 2s |
@@ -68,6 +70,17 @@ reaches `clang`.
 
 Every harness here runs with `clang` alone. There is no Rust in this
 repository — see "Things that are deliberately true".
+
+`self-test` is the one to reach for after touching anything that
+branches on `Os.platform()`. Every other harness drives the compiler
+from outside -- give it a program, compare what it prints -- which
+cannot reach a function whose behaviour depends on being somewhere you
+are not. Two releases in a row shipped a language-server bug of that
+shape, both correct on Linux and wrong under the Windows convention,
+each reported by CI fifteen minutes later as a single line. The fix is
+to make the convention an ARGUMENT rather than something read from the
+host, and then test both readings here; `lsp.uri_to_path_in` is the
+worked example.
 
 `property-check` is the one to reach for after touching the prelude or
 the runtime. Everything else here compares against a CHECKED-IN answer,

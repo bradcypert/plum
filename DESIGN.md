@@ -18851,3 +18851,77 @@ the awkward value.
 That is the same lesson as `cross-check`: a difference that exists only
 on a platform CI cannot iterate on quickly is worth reproducing on the
 one it can.
+
+## Testing a branch the host cannot take (2026-09-07)
+
+Two releases in a row shipped a language-server bug that Linux cannot
+execute. Not "was not tested" -- cannot execute: the code branches on
+`Os.platform()`, that value is fixed when the program starts, and no
+input selects the other branch. Both bugs were found by CI, fifteen
+minutes at a time, reported as one line ("the language server answers a
+real session") on a machine nobody can attach a debugger to.
+
+Every harness here drives the compiler from OUTSIDE -- give it a
+program, compare what it prints -- which is exactly the shape that
+cannot reach such a branch.
+
+### Make the convention an argument
+
+`lsp.uri_to_path`/`path_to_uri` now take the separator as a parameter,
+with the host forms as one-line wrappers passing `Path.separator()`. The
+public behaviour is identical; what changes is that both readings are
+reachable from anywhere.
+
+That turns the bug into a two-line test. `test_lsp_uri_separators`
+asserts what each direction produces under each convention, and
+`test_lsp_uri_roundtrip` asserts the invariant that failed:
+
+    path_to_uri(uri_to_path(u)) == u
+
+true by definition, and false on Windows in 0.0.20 and 0.0.21 because
+the conversion in changed separators and the conversion out did not
+change them back. Reintroducing that produces
+`file:///C:\x\a.plum` -- a URI no editor can open -- in about a second,
+on Linux.
+
+Both assertions are needed. The round trip alone would pass if BOTH
+directions were wrong in the same way, which is the same blindness the
+`Encoding` properties have to a shared alphabet: a self-consistent pair
+proves consistency, not correctness.
+
+### `plum test` on the compiler itself
+
+`bootstrap/self_host` is an ordinary Plum project, so `plum test` runs
+on it, and `bootstrap/self-test` is exactly that. It takes about a
+second because dead-code elimination starts from the generated test
+dispatcher: only what a test actually reaches is compiled.
+
+This is the first harness that can see the compiler's internals rather
+than its behaviour. Everything else compares output.
+
+One restriction, annotated where it bites: a test has to live in the
+ROOT module. `discover_tests` finds a `test_` function anywhere, but the
+dispatcher calls each name UNQUALIFIED, so one declared in `lsp/` fails
+with `unbound function` against an unrelated line -- issue #29. So these
+tests sit in `main.plum` and call inward, which is the wrong place for
+them and is marked as such.
+
+### What was deliberately NOT done
+
+`Path` was not given the same treatment, and it is the more obvious
+candidate -- it is where the platform logic actually lives.
+
+The reason is that `Path` is a stdlib module, so parameterizing it means
+either exposing the parameterized forms publicly, roughly doubling the
+API surface of a module chosen for being small, or keeping them private
+and testing nothing. And `Path` was not the source of either bug: it was
+correct both times. Its Windows behaviour is already exercised on
+Windows by `platform-smoke`, through the `path` fixture, which prints
+its results with the separator replaced so the same expected output
+holds on every platform.
+
+The LSP had no equivalent, which is why it got the treatment and `Path`
+did not. If `Path` ever does need it, the honest framing is a public
+"manipulate paths for another platform" API -- something a
+cross-compiling build tool genuinely wants -- rather than a testing hook
+in a public interface.
