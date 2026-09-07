@@ -19109,3 +19109,135 @@ condition variable.
 It had said so since before the multiplexer shipped, which the issue
 correctly called part of the bug. Both it and GRAMMAR.md now describe
 what is actually there.
+
+## Decoding JSON, and a capture that was not the frame's to spend (2026-09-07)
+
+`json_parse` has been in the prelude for a long time, and it is
+faithful: a `JsonValue` is exactly what the document said. It is also
+close to unusable. Reading `owner.login` out of one means matching
+`JsonObject`, scanning an `Array[JsonEntry]` by hand, and matching
+`JsonString` -- about fifteen lines that say nothing about the program,
+repeated once per field, and which have thrown away the field's NAME by
+the time they report a failure. Issue #4 asked for accessors.
+
+Three shapes were considered and two were rejected before any code
+existed. A **cursor chain** (`doc.get("owner").get("login").as_string()`)
+threads an `Option` through every step and reports `None` at the end
+without saying which step produced it. A **path string**
+(`Json.path(doc, "dashboards[1].search")`) reads well until a key
+contains a dot, at which point it needs an escape syntax, and it can
+only ever return a `JsonValue` -- a misread document stays a runtime
+`None` in a program that already shipped. **Pattern-matching syntax for
+JSON** would have been new grammar for one data format.
+
+What shipped is **decoder combinators**: a DSL made of values rather
+than syntax.
+
+```plum
+pub struct Decoder[T] { run: (JsonValue, String) -> Result[T, String] }
+```
+
+A decoder knows how to turn a `JsonValue` into a `T` or explain why it
+cannot, and it carries the path it is currently looking at. Decoders
+compose, and the composition is what carries the path: `field("owner",
+d)` extends the path `d` reports against, so
+
+```
+expected String at data.repos[1].name
+```
+
+comes out of `at(["data", "repos"], index(1, field("name", string())))`
+without anyone threading a string. `at` is not a path parser at all --
+it is nested `field`s, which is why it gets this right for free.
+
+Nothing in the compiler knows the module exists. It is ordinary Plum
+over a generic struct with a closure field, which is the one fact that
+had to be checked before the design was chosen.
+
+### Three decisions the fixture pins
+
+`int()` REFUSES `41.5` rather than truncating. JSON has one number type,
+so an `Int` decoder has to decide, and silently producing `41` hides a
+disagreement about the document until something downstream is wrong for
+a reason nobody can trace back here.
+
+`field` requires the key; `nullable` permits the VALUE to be null;
+`optional_field` accepts either absence or null. Present, absent and
+null are three states, and both spellings exist because both situations
+do -- `field(k, nullable(d))` says the key must be there, and
+`optional_field(k, d)` says it need not be.
+
+`at` takes `["data", "repos"]` rather than `"data.repos"`. A key
+containing a dot is ordinary JSON, and a string path would have to
+invent an escape for it.
+
+`bootstrap/typecheck_corpus/json_decoder_mismatch` is the other half of
+the argument: `field("name", int())` feeding a `String` field is a
+COMPILE error, at the line that misreads the document.
+
+### The bug this found
+
+The first build of the fixture died with `malloc(): unaligned tcache
+chunk detected` -- after eleven correct lines, which is what a heap
+corruption detected at the next allocation looks like. Under ASan it
+passed cleanly, which was the first useful fact: the fault was in a path
+ASan's allocator does not take the same way.
+
+Reduction took it from the JSON module to twenty lines with no JSON in
+them, and every ingredient turned out to be load-bearing:
+
+```plum
+let step (entries: Array[Entry]) (p: String): Result[Option[String], String] = {
+    let found = entries[0].value;
+    Result.map(inner_run(found, p), |x| Some(x))
+}
+```
+
+Replacing `|x| Some(x)` with a NAMED function fixed it. Replacing the
+heap string with a literal hid it -- a literal is a static cell with a
+negative refcount, and releasing an immortal cell twice is free.
+Patching `@plum_reuse_ok` to return false did NOT fix it, which ruled
+out cell reuse as the mechanism; redirecting `free` to a no-op DID,
+which established over-release.
+
+The emitted closure body says the rest:
+
+```llvm
+%t78 = load ptr, ptr %c2      ; the CAPTURED `found`
+store ptr null, ptr %c2       ; "moved out of its slot"
+%t79 = call i1 @plum_reuse_ok(ptr %t78, i64 24)
+```
+
+Closures capture the WHOLE enclosing environment, deliberately -- a
+shadowing-aware free-variable scan is the analysis that crashed
+`fbip.rs` in the Rust backend. So a closure cell holds names its body
+never mentions, and `|x| Some(x)` was carrying `found`. The last-use
+pass gave the closure body the enclosing function's scope
+(`lv_scoped(ctx, ps)` APPENDS), saw that nothing read `found` again, and
+offered `found`'s cell as somewhere to build `Some(x)`.
+
+Both branches of that are wrong, and the reuse branch is not the worse
+one. `%c2` is a local COPY of a pointer that lives in the closure CELL,
+so nulling it changes nothing, and `@plum_lambda76_rel` drops the same
+cell again when the cell dies. The giveup branch simply releases it
+outright. Either way the body spends a reference the frame never held.
+
+The fix is two edits and no new machinery:
+
+- `lv_dead` now requires the name to be in `scope`. "Nothing reads it
+  after here" is a statement about a slot THIS FRAME OWNS; for anything
+  else the same evidence proves nothing.
+- a closure body gets a fresh `LvCtx` whose scope is its own parameters.
+  The continuation still carries `body`, and that is load-bearing for a
+  different reason: a lambda's parameters are not in
+  `cg_movable_params` (which is computed for the enclosing function), so
+  keeping them live is the only thing stopping `Some(x)` from recycling
+  `x`'s own cell into itself.
+
+`bootstrap/exec_corpus/closure_capture_reuse` pins it, and was checked
+against the pre-fix compiler: it aborts there. The 149-fixture
+`corpus-check` had noticed nothing, and neither had the bootstrap fixed
+point -- the self-hosted compiler does not happen to write this shape.
+That is the fourth time a feature written in Plum has found a bug in the
+backend that compiles it, and the reason for writing library code in the
+language at all.

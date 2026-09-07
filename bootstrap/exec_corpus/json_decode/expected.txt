@@ -1,0 +1,26 @@
+ok          plum *412 by bradcypert (admin) [lang, compiler] license=-
+wrong type  ERR expected Number at stars
+fractional  ERR expected a whole Number at stars
+nested      ERR no field `admin` at owner
+not object  ERR expected Object at owner
+in array    ERR expected String at topics[1]
+root        ERR expected Object at the root
+unparseable ERR expected opening quote
+strict/have b
+strict/null <none>
+strict/miss ERR no field `nick` at the root
+loose/have  b
+loose/null  <none>
+loose/miss  <none>
+at          plum
+at/deep err ERR expected String at data.repos[1].name
+at/no key   ERR no field `users` at data
+index/range ERR index 9 out of range (length 2) at data.repos
+one_of/str  abc
+one_of/int  7
+one_of/no   ERR no alternative matched at id
+and_then    v2 id=7
+and_then/no ERR unsupported version 1 at the root
+value       {"id":7}
+succeed     ignored the input
+decode      plum *412 by bradcypert (admin) [lang, compiler] license=-

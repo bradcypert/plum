@@ -1,0 +1,23 @@
+// Rejected: `Json.int()` decodes an `Int`, and `Repo.name` is a
+// `String`, so the closure `map2` is handed cannot be applied.
+//
+// This is the whole reason decoders are typed values rather than a
+// path-string lookup that hands back `Option[JsonValue]`. A wrong
+// reading of a document is a compile error here, at the line that
+// misreads it -- with a string API it would be a `None` at runtime, in
+// a program that had already shipped.
+use Json;
+
+struct Repo { name: String, stars: Int }
+
+let repo (): Json.Decoder[Repo] =
+    Json.map2(
+        Json.field("name", Json.int()),
+        Json.field("stars", Json.int()),
+        |n, s| Repo { name: n, stars: s })
+
+let main (): Unit =
+    println(match Json.decode_string(repo(), "{\"name\":\"plum\",\"stars\":1}") {
+        Ok(r) => r.name,
+        Err(e) => e,
+    })

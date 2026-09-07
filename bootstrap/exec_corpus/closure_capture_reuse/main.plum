@@ -1,0 +1,69 @@
+// A closure's CAPTURES are borrowed, and the last-use pass must not
+// treat them as this frame's to spend.
+//
+// The bug: closures capture the whole enclosing environment, so a
+// closure cell holds names its body never mentions. The liveness pass
+// gave the body the enclosing function's scope, saw that `found` was
+// not read again, and offered `found`'s cell as somewhere to build
+// `Some(x)`. Reuse MOVES a candidate out of its slot and releases it --
+// but the slot inside a closure body is a local COPY of a pointer that
+// lives in the closure cell, so nulling it changes nothing, and the
+// closure's own release function drops the same cell again when the
+// cell dies. Second call reads freed memory.
+//
+// Every ingredient below is load-bearing, which is why the fixture is
+// this shape and not shorter:
+//
+//   * `found` must be HEAP and must not be a string literal -- a
+//     literal is a static cell with a negative refcount, and releasing
+//     an immortal cell twice is free. This one is built by `concat`.
+//   * the closure literal must exist. Passing a NAMED function to
+//     `Result.map` captures nothing and never reproduced it.
+//   * something must consume `found` before the closure is built, so
+//     the closure is not the value's only reader.
+//   * it must run more than once. The first call corrupts; the second
+//     is where it shows.
+//
+// Found while writing `Json.optional_field`, whose body is exactly this
+// shape. `bootstrap/exec_corpus/json_decode` covers it in situ; this
+// covers it with nothing else in the way.
+
+enum Val { VNull, VStr(String) }
+struct Entry { key: String, value: Val }
+
+let inner_run (v: Val) (p: String): Result[String, String] =
+    match v { VStr(s) => Ok(s.concat(p)), VNull => Err("null") }
+
+let step (entries: Array[Entry]) (p: String): Result[Option[String], String] = {
+    let found = entries[0].value;
+    Result.map(inner_run(found, p), |x| Some(x))
+}
+
+let go (n: Int): Unit = {
+    let es = [Entry { key: "k".concat(n.to_string()), value: VStr("b".concat(n.to_string())) }];
+    println(match step(es, "!") {
+        Err(e) => "ERR ".concat(e),
+        Ok(o) => Option.unwrap_or(o, "<none>"),
+    });
+}
+
+// The same thing where the binding comes from a match arm rather than a
+// `let`, which is how `optional_field` actually reads.
+let step_arm (entries: Array[Entry]) (p: String): Result[Option[String], String] =
+    match Some(entries[0].value) {
+        None => Ok(None),
+        Some(found) => Result.map(inner_run(found, p), |x| Some(x)),
+    }
+
+let go_arm (n: Int): Unit = {
+    let es = [Entry { key: "k".concat(n.to_string()), value: VStr("a".concat(n.to_string())) }];
+    println(match step_arm(es, "?") {
+        Err(e) => "ERR ".concat(e),
+        Ok(o) => Option.unwrap_or(o, "<none>"),
+    });
+}
+
+let main (): Unit = {
+    go(1); go(2); go(3);
+    go_arm(1); go_arm(2); go_arm(3);
+}

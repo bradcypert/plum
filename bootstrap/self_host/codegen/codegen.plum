@@ -2214,8 +2214,18 @@ struct LvCtx { exprs: Array[typecheck.TExpr], names: Array[String], scope: Array
 // Names bound and still in scope, innermost LAST -- `lv_pick` searches
 // backwards so a shadowed outer name is never chosen over the inner one
 // the backend would resolve.
+// A name this pass has not seen BOUND is never dead, whatever the
+// continuation says. "Nothing reads it after here" is only a statement
+// about ownership for a slot this frame owns; for anything else --
+// above all a closure's CAPTURE, which lives in the closure cell and is
+// released by the closure's own release function -- the same evidence
+// proves nothing, and acting on it releases a reference the frame never
+// held. `scope` is exactly the set of frame-owned names, so requiring
+// membership is what makes the two questions stop being confused.
 let lv_dead (ctx: LvCtx) (v: String): Bool =
-    if cg_name_in(ctx.names, v, 0) { false } else { lv_none_read(ctx.exprs, v, 0) }
+    if !cg_name_in(ctx.scope, v, 0) { false }
+    else if cg_name_in(ctx.names, v, 0) { false }
+    else { lv_none_read(ctx.exprs, v, 0) }
 
 let lv_none_read (xs: Array[typecheck.TExpr]) (v: String) (i: Int): Bool =
     if i >= xs.len() { true }
@@ -2324,7 +2334,22 @@ let lv_node (ctx: LvCtx) (node: typecheck.TNode): typecheck.TNode =
         TForArray(pat, arr, body) => TForArray(pat,
             lv_expr(lv_with(ctx, [body]), arr),
             lv_expr(lv_scoped(lv_with(ctx, [body]), lv_pat_names(pat, [])), body)),
-        TClosure(ps, body) => TClosure(ps, lv_expr(lv_scoped(lv_with(ctx, [body]), ps), body)),
+        // A closure body is a FRAME OF ITS OWN, so its scope starts from
+        // its parameters and does NOT inherit the enclosing function's
+        // locals. Those become CAPTURES, and a capture is borrowed: the
+        // closure cell owns it and the generated release function drops
+        // it when the cell dies. Reuse moves a candidate out of its slot
+        // and releases it, which for a capture is a reference the body
+        // never held -- and nulling the body's local copy does not null
+        // the cell's own slot, so the closure's release drops it a
+        // second time. A closure called twice then reads freed memory.
+        //
+        // The continuation still carries `body`, which is what keeps the
+        // closure's own parameters live: a lambda's parameters are not
+        // in `cg_movable_params` (that is computed for the enclosing
+        // function), so the interlock that stops `Some(x)` recycling
+        // `x`'s own cell into itself is this, and only this.
+        TClosure(ps, body) => TClosure(ps, lv_expr(LvCtx { exprs: [body], names: [], scope: lv_cat_names([], ps, 0) }, body)),
         // `spawn` runs its block on another thread, at a time nothing
         // here orders. Everything it touches stays live.
         TSpawn(a) => TSpawn(lv_expr(lv_with(ctx, [a]), a)),

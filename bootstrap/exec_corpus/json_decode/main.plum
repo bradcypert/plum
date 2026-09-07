@@ -1,0 +1,177 @@
+use Json;
+
+// Decoding JSON into real types, with errors that say WHERE (issue #4).
+//
+// `json_parse` in the prelude gives back a `JsonValue`, which is
+// faithful and unusable: reading `owner.login` out of one means
+// matching `JsonObject`, scanning an `Array[JsonEntry]` by hand, and
+// matching `JsonString` -- about fifteen lines that say nothing about
+// the program, repeated per field, and which lose the field's NAME by
+// the time they report a failure.
+//
+// A `Json.Decoder[T]` is a value that knows how to turn a `JsonValue`
+// into a `T` or explain why it cannot. Decoders compose, and the
+// composition is what carries the path: `field("owner", ...)` extends
+// the path its inner decoder reports against, so a failure five levels
+// down names all five levels without anyone threading a string.
+//
+// This is a library, not syntax -- no keyword, no grammar change, and
+// nothing in the compiler knows it exists. It is ordinary Plum built
+// on a struct with a closure field.
+
+struct Owner { login: String, admin: Bool }
+
+struct Repo {
+    name: String,
+    stars: Int,
+    owner: Owner,
+    topics: Array[String],
+    license: Option[String],
+}
+
+// --- Decoders -----------------------------------------------------
+//
+// A decoder for a struct is one `mapN` over one decoder per field, and
+// reads in the same order the struct declares them.
+
+let owner (): Json.Decoder[Owner] =
+    Json.map2(
+        Json.field("login", Json.string()),
+        Json.field("admin", Json.bool()),
+        |l, a| Owner { login: l, admin: a })
+
+let repo (): Json.Decoder[Repo] =
+    Json.map5(
+        Json.field("name", Json.string()),
+        Json.field("stars", Json.int()),
+        Json.field("owner", owner()),
+        Json.field("topics", Json.list(Json.string())),
+        Json.field("license", Json.nullable(Json.string())),
+        |n, s, o, t, l| Repo { name: n, stars: s, owner: o, topics: t, license: l })
+
+let show_owner (o: Owner): String =
+    o.login.concat(if o.admin { " (admin)" } else { "" })
+
+let show_repo (r: Repo): String =
+    r.name.concat(" *").concat(r.stars.to_string())
+        .concat(" by ").concat(show_owner(r.owner))
+        .concat(" [").concat(Array.join(r.topics, ", ")).concat("]")
+        .concat(" license=").concat(Option.unwrap_or(r.license, "-"))
+
+// --- Documents ----------------------------------------------------
+
+let good_owner: String = "{\"login\":\"bradcypert\",\"admin\":true}"
+
+let doc (stars: String) (owner_text: String) (topics: String) (license: String): String =
+    "{\"name\":\"plum\",\"stars\":".concat(stars)
+        .concat(",\"owner\":").concat(owner_text)
+        .concat(",\"topics\":").concat(topics)
+        .concat(",\"license\":").concat(license)
+        .concat("}")
+
+let good: String = doc("412", good_owner, "[\"lang\",\"compiler\"]", "null")
+
+// --- Reporting ----------------------------------------------------
+//
+// `decode_string` parses and decodes in one step. Both halves fail into
+// the same `Result[T, String]`, so a caller has one error path rather
+// than two.
+
+let report [T] (label: String) (r: Result[T, String]) (render: (T) -> String): Unit =
+    println(String.pad_right(label, 12, " ").concat(match r {
+        Ok(v) => render(v),
+        Err(e) => "ERR ".concat(e),
+    }))
+
+let show_repo_doc (label: String) (text: String): Unit =
+    report(label, Json.decode_string(repo(), text), show_repo)
+
+let show_str (label: String) (r: Result[String, String]): Unit =
+    report(label, r, |s| s)
+
+let main (): Unit = {
+    // A whole struct, five fields deep, out of one call.
+    show_repo_doc("ok", good);
+
+    // --- Errors name the path -------------------------------------
+    //
+    // Which field, spelled the way the document spells it. A `mapN`
+    // reports its FIRST failure, left to right, so these each show one.
+    show_repo_doc("wrong type", doc("\"many\"", good_owner, "[]", "null"));
+    show_repo_doc("fractional", doc("41.5", good_owner, "[]", "null"));
+    show_repo_doc("nested", doc("412", "{\"login\":\"b\"}", "[]", "null"));
+    show_repo_doc("not object", doc("412", "\"bradcypert\"", "[]", "null"));
+    show_repo_doc("in array", doc("412", good_owner, "[\"lang\",7]", "null"));
+    show_repo_doc("root", "[1, 2]");
+
+    // A parse error arrives on the same path, phrased by `json_parse`.
+    show_repo_doc("unparseable", "{bad");
+
+    // --- Present, absent, and null --------------------------------
+    //
+    // Three different states, and three different answers. `field`
+    // requires the key; `nullable` allows the VALUE to be null;
+    // `optional_field` accepts the key being absent OR null.
+    let strict = Json.field("nick", Json.nullable(Json.string()));
+    let loose = Json.optional_field("nick", Json.string());
+    let render_opt = |o: Option[String]| Option.unwrap_or(o, "<none>");
+
+    report("strict/have", Json.decode_string(strict, "{\"nick\":\"b\"}"), render_opt);
+    report("strict/null", Json.decode_string(strict, "{\"nick\":null}"), render_opt);
+    report("strict/miss", Json.decode_string(strict, "{}"), render_opt);
+    report("loose/have", Json.decode_string(loose, "{\"nick\":\"b\"}"), render_opt);
+    report("loose/null", Json.decode_string(loose, "{\"nick\":null}"), render_opt);
+    report("loose/miss", Json.decode_string(loose, "{}"), render_opt);
+
+    // --- Reaching into a document ---------------------------------
+    //
+    // `at` takes a LIST of keys rather than a dotted string: a key
+    // containing a dot is ordinary JSON, and a path DSL would have to
+    // invent an escape for it.
+    let nested = "{\"data\":{\"repos\":[{\"name\":\"plum\"},{\"name\":42}]}}";
+    show_str("at", Json.decode_string(Json.at(["data", "repos"], Json.index(0, Json.field("name", Json.string()))), nested));
+    show_str("at/deep err", Json.decode_string(Json.at(["data", "repos"], Json.index(1, Json.field("name", Json.string()))), nested));
+    show_str("at/no key", Json.decode_string(Json.at(["data", "users"], Json.string()), nested));
+    show_str("index/range", Json.decode_string(Json.at(["data", "repos"], Json.index(9, Json.string())), nested));
+
+    // --- Choosing between shapes ----------------------------------
+    //
+    // An id that some servers send as a number and others as a string.
+    let id = Json.field("id", Json.one_of([
+        Json.string(),
+        Json.map(Json.int(), |i| i.to_string()),
+    ]));
+    show_str("one_of/str", Json.decode_string(id, "{\"id\":\"abc\"}"));
+    show_str("one_of/int", Json.decode_string(id, "{\"id\":7}"));
+    show_str("one_of/no", Json.decode_string(id, "{\"id\":true}"));
+
+    // --- Deciding what to read from what was read -----------------
+    //
+    // `and_then` runs a second decoder chosen by the first one's
+    // result, which is how a versioned payload is read. `fail` is a
+    // decoder that always fails, and its message gets the same path
+    // treatment as a built-in one.
+    let versioned = Json.and_then(Json.field("version", Json.int()), |v|
+        if v == 2 {
+            Json.map(Json.at(["payload", "id"], Json.int()), |i| "v2 id=".concat(i.to_string()))
+        } else {
+            Json.fail("unsupported version ".concat(v.to_string()))
+        });
+    show_str("and_then", Json.decode_string(versioned, "{\"version\":2,\"payload\":{\"id\":7}}"));
+    show_str("and_then/no", Json.decode_string(versioned, "{\"version\":1,\"payload\":{\"id\":7}}"));
+
+    // --- Escape hatches -------------------------------------------
+    //
+    // `value` hands back the `JsonValue` untouched, for a field whose
+    // shape is not known ahead of time; `succeed` ignores the input.
+    show_str("value", Json.decode_string(Json.map(Json.field("payload", Json.value()), json_stringify), "{\"payload\":{\"id\":7}}"));
+    show_str("succeed", Json.decode_string(Json.succeed("ignored the input"), "[1,2,3]"));
+
+    // `decode` is the same thing against an already-parsed value, for
+    // when the document was read once and is decoded several ways.
+    println(match json_parse(good) {
+        Err(e) => "ERR ".concat(e),
+        Ok(v) => String.pad_right("decode", 12, " ")
+            .concat(Result.unwrap_or(Result.map(Json.decode(repo(), v), show_repo), "?")),
+    });
+}

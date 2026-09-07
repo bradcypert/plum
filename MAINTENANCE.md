@@ -299,6 +299,21 @@ If you add a third thing that moves, it belongs in that same
 arrangement — do not reason about why the shapes cannot overlap, they
 overlapped once already.
 
+**A closure's CAPTURES are borrowed, and no analysis may spend them.**
+Captures are whole-environment, so a closure cell holds names its body
+never mentions — and the cell owns them, released by the closure's own
+generated release function. A body that moves a capture out of its slot
+nulls a local COPY of the pointer and the release then drops the same
+cell twice. `lv_dead` therefore answers `false` for any name not in
+`scope`, and a closure body gets a FRESH `LvCtx` whose scope is its own
+parameters. Its continuation still carries `body`, which is what keeps
+the closure's own parameters live — they are not in `cg_movable_params`
+(computed for the enclosing function), so that is the only thing
+stopping `Some(x)` from recycling `x`'s cell into itself.
+`exec_corpus/closure_capture_reuse` pins it; the 149-fixture corpus and
+the bootstrap fixed point both missed this, because the compiler does
+not write that shape.
+
 **`cg_movable_params` is not filtered by type, on purpose.** It looks
 like it should be -- its consumer `cg_move_or_own` seems to serve only
 `cg_concat` -- but it has two callers, and the other is `cg_array_push`,
@@ -538,6 +553,13 @@ Worth knowing before you "fix" them:
   modules it is still documentation the compiler does not check; module
   membership comes from the directory. Do not assume removing a `use`
   will break a directory-module call, because it will not.
+- **`Json` is decoders, not the JSON type.** `JsonValue`, `json_parse`
+  and `json_stringify` stay in the prelude; `use Json;` brings in
+  `Decoder` and its combinators. `field` requires the key, `nullable`
+  permits a null value, `optional_field` accepts either — three states,
+  three answers, and `exec_corpus/json_decode` shows all of them next to
+  each other. Its `expected.txt` is the contract for every error
+  message; changing one is changing a documented string.
 - **`Os`, `Time`, `Net`, `Http` and `Process` are modules; the type namespaces
   are not, and cannot be.** `T.f(x)` is the method-call mechanism, so
   `Array.map` being in scope is what makes `xs.map(f)` work. Adding a

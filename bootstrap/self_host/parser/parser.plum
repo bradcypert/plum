@@ -220,7 +220,7 @@ pub struct ProgramNode { pub items: Array[ItemNode] }
 // variant/function: Time" into a message that says what to do about
 // it. Kept here because both of those import `parser` and neither
 // imports the other.
-pub let std_module_names (): Array[String] = ["Net", "Http", "Os", "Time", "Process", "Encoding", "Url", "Path"]
+pub let std_module_names (): Array[String] = ["Net", "Http", "Os", "Time", "Process", "Encoding", "Url", "Path", "Json"]
 
 // The module the PRELUDE's own items live in.
 //
