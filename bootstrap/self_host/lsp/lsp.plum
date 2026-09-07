@@ -55,6 +55,8 @@
 // `json_parse`/`json_stringify` come from the prelude; these are the
 // small accessors that make an object usable as a record.
 
+use Path;
+
 pub let json_field (v: JsonValue) (key: String): Option[JsonValue] =
     match v {
         JsonObject(entries) => json_field_acc(entries, key, 0),
@@ -310,10 +312,24 @@ pub let publish_message (uri: String) (diagnostics: Array[JsonValue]): String =
 // in front of it belongs to the URI, not to the path -- `/C:/x` opens
 // nothing. Stripping a fixed seven characters was right on one
 // platform and silently wrong on the other.
+// The result is CLEANED, which on Windows also converts the URI's
+// forward slashes to the platform separator.
+//
+// That conversion is the point. A `file:` URI always uses `/`, while
+// every path the compiler itself reports is built by `Path.join` and so
+// uses the platform separator -- the two conventions meet here, and have
+// to be reconciled at the boundary rather than compared later and
+// silently found unequal. When they were not, hover, completion,
+// go-to-definition and cross-file diagnostics all failed at once on
+// Windows while every Unix platform passed: the server was handing a
+// child process a project directory spelled one way and a file path
+// spelled the other.
+//
+// A no-op on Unix, where the separator already is `/`.
 pub let uri_to_path (uri: String): String =
     if uri.starts_with("file://") {
         let rest = String.slice(uri, 7, uri.len());
-        if starts_with_drive(rest) { String.slice(rest, 1, rest.len()) } else { rest }
+        Path.clean(if starts_with_drive(rest) { String.slice(rest, 1, rest.len()) } else { rest })
     } else { uri }
 
 // `/C:/...` -- a slash, then a letter, then a colon.
@@ -518,10 +534,19 @@ pub let params_col (params: JsonValue): Int =
 // needs putting back: `C:/x` is `file:///C:/x`, and `file://C:/x` would
 // make `C:` the AUTHORITY -- a host name -- rather than part of the
 // path.
-pub let path_to_uri (path: String): String =
-    if path.starts_with("file://") { path }
-    else if is_drive_path(path) { "file:///".concat(path) }
-    else { "file://".concat(path) }
+// The inverse, and it undoes that separator conversion: a `file:` URI
+// is defined in terms of `/`, so `file:///C:\\x\\a.plum` is not
+// something an editor can open.
+//
+// Written as "replace the platform separator with `/`" rather than
+// "replace backslashes", so it is exactly a no-op on Unix -- where a
+// backslash is a legal character in a filename and must not be touched.
+pub let path_to_uri (path: String): String = {
+    let p = String.replace(path, Path.separator(), "/");
+    if p.starts_with("file://") { p }
+    else if is_drive_path(p) { "file:///".concat(p) }
+    else { "file://".concat(p) }
+}
 
 // `didChange` under FULL sync (`textDocumentSync: 1`) carries the whole
 // document in the last content change, which is why full sync is what
