@@ -19850,3 +19850,46 @@ for any mechanical rewrite of code that generates text.
 The seven files touched came to 275 insertions and 275 deletions: every
 converted line is one line either way, which is itself a small sign that
 nothing structural moved.
+
+### Testing a pipe on a platform that only gets files (2026-09-08)
+
+Issue #32. The Windows leg of CI ran `exec_corpus/stdin_timeout` and
+proved almost nothing about the code it was exercising.
+
+A corpus fixture feeds its child's stdin through `Process.run`, which
+uses a temp FILE. A file is always ready to read, so no deadline can
+expire against one -- which means `TimedOut` is structurally unreachable
+from inside the corpus, and on Windows only `GetFileType`'s
+FILE_TYPE_DISK branch ever ran. `PeekNamedPipe` and the console path
+were compiled by `cross-check` and never executed anywhere.
+
+`bootstrap/stdin-smoke` covers the pipe cases properly, and is bash with
+fractional sleeps, so it is Linux-only. The fix was to carry a PORTABLE
+SUBSET of the same three cases into `platform-smoke`, which is the one
+harness written in POSIX `sh` and run on all three platforms.
+
+Two constraints shaped it, both from `platform-smoke`'s own rules:
+
+**No `timeout` command** -- it is GNU. So nothing may block forever, and
+every writer in these cases closes the pipe, which ends the reader
+through EOF rather than through a kill.
+
+**The program prints a VERDICT, not a transcript.** How many timeouts
+occur before data arrives depends on how loaded the machine is, so
+comparing the sequence would flake -- exactly the failure
+`select_else_timeout` established the convention against. What is
+deterministic is whether a timeout happened at all, what line was
+eventually assembled, and whether the stream ended:
+
+```
+lines=partial timeouts=yes eof=true
+```
+
+`lines=partial` is self-checking in the same way the Linux harness's
+output is: the string can only exist if `par` survived the deadlines
+that passed before `tial` arrived.
+
+Writing the program also ran into a documented limit worth seeing in
+practice: an interpolation cannot contain braces of its own, so
+`"${if n > 0 { "yes" } else { "no" }}"` does not parse and the `if` has
+to be bound to a `let` first. GRAMMAR.md says so; this is what it costs.

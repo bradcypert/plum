@@ -94,6 +94,92 @@ for dir in bootstrap/exec_corpus/*/; do
     fi
 done
 
+# --- Timed stdin reads, over a real PIPE (issue #32) ---
+#
+# The corpus above cannot reach this. A fixture feeds its child's stdin
+# through `Process.run`, which uses a temp FILE -- and a file is always
+# ready to read, so no deadline can ever expire against one. On Windows
+# that means the corpus exercises `GetFileType`'s FILE_TYPE_DISK branch
+# and leaves `PeekNamedPipe` only proven to compile.
+#
+# `bootstrap/stdin-smoke` covers this properly on Linux, and is bash
+# with fractional sleeps. This is the portable subset, so that the path
+# a real program on Windows most often takes -- a shell pipeline --
+# actually runs somewhere.
+#
+# **The program prints a VERDICT, not a transcript.** How many timeouts
+# occur before data arrives depends on the machine, so comparing the
+# sequence would flake. Whether a timeout happened at all, what line was
+# eventually read, and whether the stream ended are all deterministic.
+#
+# No `timeout` command here (it is GNU), so nothing may block forever:
+# every writer closes the pipe, which ends the reader through EOF.
+mkdir -p "$work/stdinpipe"
+cat > "$work/stdinpipe/main.plum" <<'PLUM_EOF'
+use Os;
+use Time;
+
+struct Acc { lines: Array[String], timeouts: Int, eof: Bool }
+
+let step (a: Acc) (n: Int): Acc =
+    if n <= 0 || a.eof { a }
+    else {
+        match Os.read_stdin_line_timeout(Time.millis(200)) {
+            Ok(Got(l)) => step(Acc { lines: a.lines.push(l), timeouts: a.timeouts, eof: false }, n - 1),
+            Ok(TimedOut) => step(Acc { lines: a.lines, timeouts: a.timeouts + 1, eof: false }, n - 1),
+            Ok(Eof) => Acc { lines: a.lines, timeouts: a.timeouts, eof: true },
+            Err(_) => Acc { lines: a.lines, timeouts: a.timeouts, eof: true },
+        }
+    }
+
+// Each part is bound first: an interpolation cannot contain braces of
+// its own, so an `if` has to be pulled out into a `let`. GRAMMAR.md
+// says so; this is what it looks like in practice.
+let main (): Unit = {
+    let a = step(Acc { lines: [], timeouts: 0, eof: false }, 60);
+    let joined = Array.join(a.lines, "|");
+    let timed_out = if a.timeouts > 0 { "yes" } else { "no" };
+    println("lines=${joined} timeouts=${timed_out} eof=${a.eof}")
+}
+PLUM_EOF
+
+if ! "$plum" build "$work/stdinpipe" -o "$work/stdinpipe.bin" > "$work/stdinpipe.log" 2>&1; then
+    printf 'FAIL  %-24s did not build: %s\n' "stdin_pipe" "$(head -n 1 "$work/stdinpipe.log")"
+    fail=$((fail + 1))
+else
+    check_pipe() {
+        label="$1"
+        want="$2"
+        got="$3"
+        if [ "$got" = "$want" ]; then
+            printf 'OK    %-24s\n' "$label"
+            ok=$((ok + 1))
+        else
+            printf 'FAIL  %-24s\n        expected | %s\n        actual   | %s\n' "$label" "$want" "$got"
+            fail=$((fail + 1))
+        fi
+    }
+
+    # A pipe nobody writes to. Every read must time out rather than
+    # block, and the reader must still finish when the writer goes away.
+    check_pipe "stdin_pipe_idle" \
+        "lines= timeouts=yes eof=true" \
+        "$(sleep 1 | "$work/stdinpipe.bin")"
+
+    # THE ONE THAT MATTERS: `par` arrives, deadlines pass, then `tial`
+    # completes the line. A reader that dropped its partial line on
+    # timeout would report `tial` here.
+    check_pipe "stdin_pipe_partial" \
+        "lines=partial timeouts=yes eof=true" \
+        "$( { printf 'par'; sleep 1; printf 'tial\n'; } | "$work/stdinpipe.bin" )"
+
+    # Everything available at once: no timeout, and a BLANK line is data
+    # rather than the end of the stream.
+    check_pipe "stdin_pipe_ready" \
+        "lines=a| timeouts=no eof=true" \
+        "$(printf 'a\n\n' | "$work/stdinpipe.bin")"
+fi
+
 echo
 if [ $fail -eq 0 ]; then
     echo "platform smoke: $ok programs built and ran correctly on $(uname -s) $(uname -m)"

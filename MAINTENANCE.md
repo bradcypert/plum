@@ -41,7 +41,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `mem-check` | peak RSS of `emit-llvm` and `check` is under a ceiling -- the `SH_MEM` cgroup guard is inert on CI, so this is the only memory assertion that runs there | 3s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |
-| `platform-smoke` | a compiler *binary* builds and runs every execution fixture on the machine it is sitting on | 21s |
+| `platform-smoke` | a compiler *binary* builds and runs every execution fixture on the machine it is sitting on, plus timed stdin reads over a real PIPE — the one path a corpus fixture cannot reach, since `Process.run` feeds a child from a file | 25s |
 | `example-sweep` | every `examples/` project matches its recorded output | 5s |
 | `fmt-check` | every repo file is already formatted, `fmt` touches only leading whitespace, and `fmt_corpus` reformats as recorded | 40s |
 | `lossless-check` | every `.plum` file survives a round trip through the token stream, and nothing but trivia sits between tokens -- the floor a formatter stands on | 30s |
@@ -624,6 +624,13 @@ Worth knowing before you "fix" them:
   stdio — they are a different consumer that never does timed reads.
   Mixing the two families in one program loses bytes; do not build a
   third reader.
+- **A stdin test that needs a PIPE goes in `platform-smoke`, not the
+  corpus.** `Process.run` feeds a child's stdin from a temp FILE, and a
+  file is always ready — so `TimedOut` is unreachable from a corpus
+  fixture and Windows would only ever exercise `GetFileType`'s
+  FILE_TYPE_DISK branch. The pipe cases there print a VERDICT rather
+  than a transcript, because the number of timeouts before data arrives
+  depends on the machine.
 - **A timeout bounds the WHOLE call and keeps what it read.** Bytes
   already buffered survive, so calling again resumes mid-line. Bounding
   only the wait for the first byte would pass every terminal test and

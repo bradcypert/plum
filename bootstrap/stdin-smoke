@@ -13,9 +13,15 @@
 # stay buffered for the next call. That is the property this checks, and
 # it needs a writer that stops mid-line — a shell pipeline, not a file.
 #
-# Linux/macOS development tooling, like `net-smoke` and `lsp-smoke`. The
-# Windows path for these reads is compiled by `cross-check` and
-# exercised by `platform-smoke` only as far as the corpus fixture goes.
+# Linux/macOS development tooling, like `net-smoke` and `lsp-smoke`:
+# bash, and fractional sleeps.
+#
+# `bootstrap/platform-smoke` carries a PORTABLE SUBSET of these same
+# three cases (issue #32), so the pipe path runs on macOS and Windows
+# too. That one prints a verdict rather than a transcript, because how
+# many timeouts occur before data arrives depends on the machine. This
+# harness can be exact because it controls the timing; keep the fine
+# cases here and the portable ones there.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
