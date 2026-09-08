@@ -1,149 +1,131 @@
 Plum is a small, statically typed, compiled language.
 
-`Duration` and a monotonic clock, `select` arms that stop waiting, and
-JSON decoding that says which field disagreed — plus a memory-corruption
-fix in the compiler that has no workaround short of upgrading.
+Child processes that do not block, stdin reads with a deadline, and the
+rest of the numeric surface — trigonometry, logs, constants, and a
+seeded generator you can replay.
 
-## A closure inside a match arm could corrupt the heap
+## Child processes, without blocking
 
-Fixed. This is the reason to take this release even if none of the
-features below matter to you.
-
-A closure captures its whole enclosing environment, so a closure cell
-can hold values its body never mentions. The compiler's last-use pass
-did not know that: inside a closure body it still had the enclosing
-function's locals in scope, and when one of them was not read again it
-offered that value's cell as somewhere to build a new one. But a
-captured value belongs to the closure, not to the frame running its
-body — so the body released a reference it never held, and the closure's
-own cleanup released the same value again later.
-
-The shape that hits it is ordinary:
+`Process.run` waits for the child to finish, which is right for a build
+step and wrong for anything that has to stay responsive meanwhile.
 
 ```plum
-let found = entries[0].value;
-Result.map(inner_run(found, p), |x| Some(x))
-```
-
-`|x| Some(x)` never names `found`, and that is exactly why the pass
-thought `found` was free. Symptoms were a `malloc(): unaligned tcache
-chunk` abort or a wrong value, on the SECOND call, some distance from
-the code at fault. Values kept alive only by a static string literal
-never showed it, because releasing an immortal value twice is free.
-
-Programs with no closures compile to identical output.
-
-`bootstrap/exec_corpus/closure_capture_reuse` pins it. Worth saying what
-missed it: 149 corpus fixtures under AddressSanitizer with leak
-detection, and the bootstrap fixed point — the compiler simply does not
-write that shape anywhere in its own source. It was found by writing the
-JSON module below.
-
-## Decoding JSON
-
-`json_parse` gives back a faithful `JsonValue`. Getting a real type out
-of one meant matching `JsonObject`, scanning an `Array[JsonEntry]` by
-hand, and matching `JsonString` — once per field, and with the field's
-name gone by the time anything could report a failure.
-
-```plum
-use Json;
-
-struct Repo { name: String, stars: Int, owner: Owner, license: Option[String] }
-
-let repo (): Json.Decoder[Repo] =
-    Json.map4(
-        Json.field("name",    Json.string()),
-        Json.field("stars",   Json.int()),
-        Json.field("owner",   owner()),
-        Json.field("license", Json.nullable(Json.string())),
-        |n, s, o, l| Repo { name: n, stars: s, owner: o, license: l })
-
-Json.decode_string(repo(), text)    // Result[Repo, String]
-```
-
-Decoders compose, and the composition is what carries the path:
-
-```
-expected String at data.repos[1].name
-no field `admin` at owner
-expected a whole Number at stars
-```
-
-Nobody threaded that string. `at(["data", "repos"], index(1, field("name",
-string())))` is nested `field`s, and each one extends the path the
-decoder inside it reports against.
-
-Present, absent and null are three different states and get three
-different answers. `field` requires the key; `nullable` permits its
-value to be null; `optional_field` accepts either. `int()` refuses
-`41.5` rather than truncating it.
-
-The rest: `string bool int float value null_as`, `list`, `map` through
-`map6`, `succeed`, `fail`, `and_then`, `one_of`, `decode`.
-
-This is a library, not syntax — a generic struct with a closure field,
-compiled by the same compiler as everything else. A decoder that misreads
-a document is a COMPILE error at the line that misreads it, which is the
-thing a path-string API cannot do.
-
-## `Duration`, sleep, and a monotonic clock
-
-Time had one function, `Time.now()`, in whole seconds. Anything wanting
-to wait, or to measure how long something took, had nothing to use.
-
-```plum
+use Process;
 use Time;
 
-Time.sleep(Time.millis(250))
+let child = Process.start(opts)?;
 
-let t0 = Time.instant();
-run_it();
-Time.since(t0).as_millis()
+match child.poll() {                       // never blocks
+    Ok(None) => draw_spinner(),
+    Ok(Some(res)) => finish(res),
+    Err(e) => report(e),
+}
+
+child.wait_timeout(Time.seconds(5))        // None = still going, untouched
+child.terminate()                          // SIGTERM
+child.kill()                               // SIGKILL
+child.pid()
 ```
 
-`Duration` is a type rather than a number, so `Time.sleep(500)` does not
-compile and cannot mean milliseconds on one line and seconds on the
-next. Built with `nanos micros millis seconds minutes hours zero`, read
-with `as_nanos as_micros as_millis as_seconds`, combined with `add sub
-scale negate`, compared with `lt le gt ge min max compare`. Durations
-can be negative — `between` a later and an earlier instant is the
-negation of the other order, which is more useful than a saturating zero.
+`Child` is a handle, so **a child whose handle dies is killed and
+reaped**. That is deliberate and worth knowing before you rely on the
+other behaviour: once the value is gone nothing can poll the process,
+wait for it, signal it, or read its output, so leaving it running would
+leak something the program can no longer name — along with the temp
+files it is still writing to.
 
-`Time.instant()` reads a MONOTONIC clock, which never moves backwards
-and is unaffected by the system clock being set. It is the one to
-measure with. `Time.now()` and `Time.now_millis()` remain the wall
-clock, which is the one to timestamp with. The origin of an `Instant` is
-deliberately meaningless: two of them are only ever subtracted.
+Output is readable only once the child has exited, and then any number
+of times. `wait` on a finished child returns the same result rather than
+failing, so it is safe after a `poll` that already said `Some`.
 
-`==` works on both because it is structural; ordered comparison is
-`Duration.lt` and friends, since `<` is defined on `Int`, `Float` and
-`String` and on nothing else.
+It is `start`, not `spawn`, because `spawn` is a keyword.
 
-## `select` stops waiting forever
+**On Windows, `terminate` is `kill`** — there is no SIGTERM, so a child
+that would have cleaned up on a polite request does not get the chance.
 
-`select` could multiplex channels but could only block, so "take one if
-something is ready" and "wait 200ms" both needed a hand-rolled loop.
+## Reading stdin with a deadline
 
 ```plum
-select {
-    n = rx => handle(n),
-    else => "nothing ready",
-}
+use Os;
+use Time;
 
-select {
-    n = rx => handle(n),
-    Time.millis(200) => "timed out",
+match Os.read_stdin_line_timeout(Time.millis(200)) {
+    Ok(Got(line)) => handle(line),
+    Ok(Eof) => stop(),
+    Ok(TimedOut) => redraw(),
+    Err(e) => report(e),
 }
 ```
 
-Both compile to the same call: `else` is a timeout of zero. No new
-keyword — a timeout arm is an expression of type `Duration` where a
-channel would be, and `else` was already a keyword.
+Also `Os.read_stdin_timeout(max, duration)` for bytes.
 
-## Also
+Three outcomes, in a type with three names. `Option` was already spent:
+`read_stdin_line` uses `None` for end of stream, and telling that from a
+blank line is the distinction it exists for.
 
-`plum test` now runs tests in submodules, not only in a project's root
-module, and reports them by qualified name — `shapes.area_is_positive`
-rather than `area_is_positive`. A project whose tests sat beside the
-code they cover was silently running none of them.
+**The timeout bounds the whole call**, not just the wait for the first
+byte — and a partial line survives it. Bytes already read stay buffered,
+so a call that times out mid-line loses nothing and the next one
+continues where it stopped. Bounding only the first byte is what most
+such APIs do; it passes every test written against a terminal, where a
+line arrives at once, and hangs past its deadline on a pipe.
+
+## Trigonometry, logs, and constants
+
+```plum
+Float.sin(x)   Float.cos(x)   Float.tan(x)
+Float.asin(x)  Float.acos(x)  Float.atan(x)
+Float.atan2(y, x)
+Float.log(x)   Float.log2(x)  Float.log10(x)  Float.exp(x)
+Float.pi()     Float.tau()    Float.e()
+Float.radians(deg)            Float.degrees(rad)
+```
+
+Angles are radians. `atan2` takes `(y, x)`, the order libm, Go, Python
+and Java all use, and knows which quadrant the point is in — which
+`atan(y / x)` cannot.
+
+`examples/asteroids` now uses these instead of declaring `sin` and `cos`
+in its own `extern "C"` block beside a hand-typed `3.14159265358979`.
+
+## Seeded random numbers
+
+`Float.random` reads a process-global generator seeded from the clock,
+which is right for "different each run" and useless for a test or a
+replay.
+
+```plum
+let r = Rng.from_seed(42);
+let (r1, roll) = Rng.int_range(r, 1, 7);      // 1..6 — upper bound EXCLUDED
+let (r2, f) = Rng.float(r1);                  // [0.0, 1.0)
+let (r3, deck) = Rng.shuffle(r2, cards);
+let (r4, pick) = Rng.choice(r3, options);     // Option[T]
+```
+
+Every call returns the next generator alongside the value rather than
+mutating in place, so a generator is as ordinary a value as an `Int` —
+and the same seed replays exactly, on every platform and every run. A
+`Ref[Rng]` is the opt-in for in-place update.
+
+`int_range` uses rejection sampling rather than a modulo, so small
+ranges are not biased toward their low end. Any `Int` is a legal seed,
+including 0 and negatives.
+
+**Not for cryptography.** It is a statistical generator — good for
+games, replays and tests — and its entire state is recoverable from two
+outputs.
+
+## A runtime declaration no longer breaks your `extern "C"`
+
+If your program declared a C function the compiler's runtime also uses,
+it did not link:
+
+```
+error: invalid redefinition of function 'sin'
+```
+
+This was always possible — `sqrt` and `pow` have been declared by the
+runtime for a long time — but the trigonometry above would have made it
+common, since `sin` and `cos` are exactly what a program declares for
+itself. A duplicate declaration is now dropped rather than emitted, so
+your `extern "C"` block can name whatever it needs to.
