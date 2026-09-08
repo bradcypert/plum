@@ -554,6 +554,25 @@ Worth knowing before you "fix" them:
   modules it is still documentation the compiler does not check; module
   membership comes from the directory. Do not assume removing a `use`
   will break a directory-module call, because it will not.
+- **A runtime `declare` shadows a user's `extern "C"` of the same name.**
+  `cg_emit_extern_decls` skips any name the runtime already declares —
+  read out of the runtime IR text at emit time, never a second list.
+  Without it, adding `declare double @sin` to the runtime stops every
+  program that declares `sin` itself from linking, which is how
+  `examples/asteroids` broke. Adding a runtime declare is therefore a
+  QUIET claim on that C name for every program; prefer a `plum_`-prefixed
+  wrapper for anything not already a standard libc symbol.
+- **The RNG cannot use bitwise ops or wrapping multiply, because Plum
+  has neither.** `&`/`|`/`^`/`<<` do not lex, and `*` traps on overflow.
+  That rules out PCG, xoshiro and splitmix64 entirely. `Rng` is
+  L'Ecuyer's combined generator, whose largest intermediate is ~8.6e13.
+  Any change here must keep every intermediate inside i64 by
+  construction, not by hoping.
+- **`exec_corpus/math_and_rng` must not print raw trig results.** libm
+  differs in the last ulp across platforms and `platform-smoke` runs
+  this fixture on three of them. Print a rounded value or a boolean from
+  an identity. The RNG's own numbers are exact and printed in full — if
+  they change, the algorithm changed.
 - **There is ONE stdin reader, and it does not use stdio.** `poll` asks
   the kernel what is available and knows nothing about bytes `fgetc`
   has already buffered, so a timed read layered over stdio reports

@@ -105,6 +105,22 @@ See README.md for the prose introduction.
 - `let Float.round (x: Float): Float`
 - `let Float.random (): Float`
 - `let Float.random_range (lo: Float) (hi: Float): Float`
+- `let Float.sin (x: Float): Float`
+- `let Float.cos (x: Float): Float`
+- `let Float.tan (x: Float): Float`
+- `let Float.asin (x: Float): Float`
+- `let Float.acos (x: Float): Float`
+- `let Float.atan (x: Float): Float`
+- `let Float.atan2 (y: Float) (x: Float): Float`
+- `let Float.log (x: Float): Float`
+- `let Float.log2 (x: Float): Float`
+- `let Float.log10 (x: Float): Float`
+- `let Float.exp (x: Float): Float`
+- `let Float.pi (): Float`
+- `let Float.tau (): Float`
+- `let Float.e (): Float`
+- `let Float.radians (degrees: Float): Float`
+- `let Float.degrees (radians: Float): Float`
 - `Float.to_int(): Int`  (built in)
 - `Float.round_to_int(): Int`  (built in)
 
@@ -267,6 +283,16 @@ See README.md for the prose introduction.
 - `let Result.map (r: Result[T, E]) (f: (T) -> U): Result[U, E]`
 - `let Result.map_err (r: Result[T, E]) (f: (E) -> F): Result[T, F]`
 - `let Result.and_then (r: Result[T, E]) (f: (T) -> Result[U, E]): Result[U, E]`
+
+## Rng
+
+- `let Rng.from_seed (seed: Int): Rng`
+- `let Rng.float (r: Rng): (Rng, Float)`
+- `let Rng.float_range (r: Rng) (lo: Float) (hi: Float): (Rng, Float)`
+- `let Rng.int_range (r: Rng) (lo: Int) (hi: Int): (Rng, Int)`
+- `let Rng.bool (r: Rng): (Rng, Bool)`
+- `let Rng.shuffle (r: Rng) (xs: Array[T]): (Rng, Array[T])`
+- `let Rng.choice (r: Rng) (xs: Array[T]): (Rng, Option[T])`
 
 ## Sender
 

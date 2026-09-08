@@ -2870,6 +2870,17 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "string_hash_raw" { Some("@plum_str_hash_raw") }
     else if name == "sqrt_raw" { Some("@plum_sqrt_raw") }
     else if name == "pow_raw" { Some("@plum_pow_raw") }
+    else if name == "sin_raw" { Some("@plum_sin_raw") }
+    else if name == "cos_raw" { Some("@plum_cos_raw") }
+    else if name == "tan_raw" { Some("@plum_tan_raw") }
+    else if name == "asin_raw" { Some("@plum_asin_raw") }
+    else if name == "acos_raw" { Some("@plum_acos_raw") }
+    else if name == "atan_raw" { Some("@plum_atan_raw") }
+    else if name == "atan2_raw" { Some("@plum_atan2_raw") }
+    else if name == "log_raw" { Some("@plum_log_raw") }
+    else if name == "log2_raw" { Some("@plum_log2_raw") }
+    else if name == "log10_raw" { Some("@plum_log10_raw") }
+    else if name == "exp_raw" { Some("@plum_exp_raw") }
     else if name == "floor_raw" { Some("@plum_floor_raw") }
     else if name == "ceil_raw" { Some("@plum_ceil_raw") }
     else if name == "round_raw" { Some("@plum_round_raw") }
@@ -6671,21 +6682,75 @@ let cg_emit_array_rel (t: typecheck.ITy) (elem: typecheck.ITy): String =
 // output, and filtering by reachability would mean threading extern
 // names through the same worklist that exists to decide which BODIES to
 // emit -- externs have no bodies.
+//
+// A name the RUNTIME already declares is skipped, and so is a name a
+// second `extern` block repeats. LLVM rejects a redefinition, so
+// without this a program that declares a C function the runtime also
+// uses does not compile at all -- and the names that collide are
+// exactly the ones a program reaches for: `examples/asteroids`
+// declared `sin` and `cos` itself, and stopped linking the day the
+// prelude grew `Float.sin`. The user's spelling is DROPPED rather than
+// preferred, because the runtime's declaration of a libc function is
+// the same function; two declarations that disagreed about types would
+// be a type error in C too.
 let cg_emit_extern_decls (items: Array[parser.ItemNode]) (i: Int) (acc: String): String =
+    cg_emit_extern_decls_acc(items, i, acc, cg_runtime_declared(()))
+
+let cg_emit_extern_decls_acc (items: Array[parser.ItemNode]) (i: Int) (acc: String) (seen: Array[String]): String =
     if i >= items.len() { acc }
     else {
         match items[i].kind {
-            IKExtern(block) => cg_emit_extern_decls(items, i + 1, acc.concat(cg_extern_decl_list(block.fns, 0, ""))),
-            _ => cg_emit_extern_decls(items, i + 1, acc),
+            IKExtern(block) => {
+                let out = cg_extern_decl_list(block.fns, 0, "", seen);
+                cg_emit_extern_decls_acc(items, i + 1, acc.concat(out.text), out.seen)
+            },
+            _ => cg_emit_extern_decls_acc(items, i + 1, acc, seen),
         }
     }
 
-let cg_extern_decl_list (fns: Array[parser.ExternFnNode]) (i: Int) (acc: String): String =
-    if i >= fns.len() { acc }
+struct ExternDecls { text: String, seen: Array[String] }
+
+let cg_extern_decl_list (fns: Array[parser.ExternFnNode]) (i: Int) (acc: String) (seen: Array[String]): ExternDecls =
+    if i >= fns.len() { ExternDecls { text: acc, seen: seen } }
+    else if cg_name_in(seen, fns[i].name, 0) { cg_extern_decl_list(fns, i + 1, acc, seen) }
     else {
         let ret = match fns[i].ret_ty { Some(t) => cg_c_ty(cg_of_ann(t)), None => "void" };
         let params = cg_extern_param_tys(fns[i].params, 0, "");
-        cg_extern_decl_list(fns, i + 1, acc.concat("declare ").concat(ret).concat(" @").concat(fns[i].name).concat("(").concat(params).concat(")\n"))
+        cg_extern_decl_list(fns, i + 1,
+            acc.concat("declare ").concat(ret).concat(" @").concat(fns[i].name).concat("(").concat(params).concat(")\n"),
+            seen.push(fns[i].name))
+    }
+
+// Read out of the runtime's own IR text rather than kept as a second
+// list. A hand-maintained copy would fall out of step the first time
+// somebody added a `declare` -- which is the failure this whole file
+// keeps running into, and the reason `cg_std_modules` derives from
+// `std_module_names` instead of repeating it.
+let cg_runtime_declared (): Array[String] =
+    cg_declared_names(String.lines(cg_runtime(())), 0, [])
+
+let cg_declared_names (lines: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= lines.len() { acc }
+    else if !String.starts_with(String.trim(lines[i]), "declare ") { cg_declared_names(lines, i + 1, acc) }
+    else {
+        match cg_declared_name_of(String.trim(lines[i])) {
+            Some(nm) => cg_declared_names(lines, i + 1, acc.push(nm)),
+            None => cg_declared_names(lines, i + 1, acc),
+        }
+    }
+
+// `declare i64 @process_run(ptr, ptr, i64)` -> `process_run`. The name
+// runs from the `@` to the `(`.
+let cg_declared_name_of (line: String): Option[String] =
+    match String.index_of(line, "@") {
+        None => None,
+        Some(at) => {
+            let rest = String.slice(line, at + 1, String.char_len(line));
+            match String.index_of(rest, "(") {
+                None => None,
+                Some(open) => Some(String.slice(rest, 0, open)),
+            }
+        },
     }
 
 let cg_extern_param_tys (ps: Array[parser.ExternParamNode]) (i: Int) (acc: String): String =

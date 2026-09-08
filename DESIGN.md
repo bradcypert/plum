@@ -19470,3 +19470,120 @@ byte is readable and the loop re-checks rather than trusting it.
 
 The console path is the one nothing in CI runs. `platform-smoke` runs
 the corpus fixture on Windows, and a corpus fixture's stdin is a file.
+
+## Trigonometry, and a generator the language could not have (2026-09-08)
+
+Issue #20: the rest of the numeric surface. `Float.sqrt`, `pow`, `floor`,
+`ceil` and `round` already wrapped libm; this adds `sin`, `cos`, `tan`,
+`asin`, `acos`, `atan`, `atan2`, `log`, `log2`, `log10`, `exp`, the
+constants `pi`, `tau` and `e`, `radians`/`degrees`, and a seeded
+generator.
+
+The trigonometry is the boring half and was written the way `sqrt`
+already was: a `declare` in `runtime.plum`, a wrapper, a name in
+`cg_runtime_fn`, and a prelude function. Checked against Python's libm
+for eleven functions at the same input, matching bit for bit -- which is
+what catches the mistake actually worth catching here, a `log2_raw`
+wired to `@plum_log_raw`.
+
+Constants are FUNCTIONS -- `Float.pi()` -- because `Float.` is a type
+namespace and `T.f(x)` is how a name gets into one. They are written out
+to the last digit a double holds rather than computed, so they are exact
+literals and not a rounding of something else.
+
+### The generator the language ruled out
+
+The issue suggested "PCG/xorshift, pure Plum, no shim". Neither is
+possible, and finding out why took two one-line experiments before any
+design:
+
+```
+$ echo 'let main (): Unit = println((5 & 3).to_string())' | plum check
+unexpected character '&' (Plum has no bitwise-and token)
+
+$ plum run  # 9223372036854775807 * 2
+integer overflow
+```
+
+**Plum has no bitwise operators at all**, and `*` traps on overflow.
+Every modern generator -- PCG, xoshiro, splitmix64 -- is built out of
+wrapping 64-bit multiplication and xor/shift, and the language offers
+neither. This is not a gap to route around inside the RNG; it is the
+whole design space gone.
+
+What is left is arithmetic that stays inside an `Int` BY CONSTRUCTION,
+and among those the best understood is L'Ecuyer's combined
+multiplicative generator (1988): two Lehmer streams with different
+moduli, subtracted. Period about 2^61, largest intermediate about
+8.6e13 against `Int`'s 9.2e18. No bitwise operations, no overflow, no
+shim.
+
+It is a statistical generator, not a cryptographic one, and its entire
+state is recoverable from two outputs. That is written where somebody
+about to generate a token will read it.
+
+Measured before shipping rather than assumed: 200,000 draws from
+`int_range(0, 100)` gave a mean of 49.54 against an expected 49.5, the
+full range 0..99, and 92 collisions between two seeds' first 10,000
+draws where ~100 is expected.
+
+Two details that are decisions rather than defaults. `int_range` uses
+REJECTION SAMPLING, not `z % span`: the modulo is biased whenever the
+span does not divide the range evenly, invisible in a game and fatal in
+a shuffle. And `Rng.from_seed` folds any `Int` into both streams' legal
+ranges, including 0 and negatives -- a naive mapping turns seed 0 into a
+generator that returns one number forever.
+
+The state fields are private, which the checker enforced the first time
+a test reached for them. That is the right answer: the algorithm is
+this module's business.
+
+### The prelude broke the flagship example
+
+`example-sweep` failed the moment the trigonometry landed:
+
+```
+FAIL  asteroids   invalid redefinition of function 'sin'
+```
+
+`examples/asteroids` declared `sin` and `cos` in its own `extern "C"`
+block -- because Plum had no trigonometry, which is precisely the
+motivation issue #20 cited. The runtime now declares them too, and LLVM
+rejects the second declaration.
+
+The hazard is general and pre-existed this change: `check-declares`'s
+own header says an unused runtime declare "silently blocks a user
+`extern "C"` block". Anyone declaring `sqrt` had the same problem
+already. Widening the runtime to `sin`, `cos`, `log` and `exp` just
+moved it onto the names a game reaches for first.
+
+So the fix is not to the example. `cg_emit_extern_decls` now skips any
+name the runtime already declares, and any name a second `extern` block
+repeats. The user's spelling is DROPPED rather than preferred: the
+runtime's declaration of a libc function is the same function, and two
+declarations that disagreed about types would be an error in C too.
+
+The set of runtime-declared names is read out of the runtime's own IR
+text at emit time, not kept as a second list. A hand-maintained copy
+falls out of step the first time somebody adds a `declare` -- the same
+failure `cg_std_modules` avoids by deriving from `std_module_names`
+rather than repeating it.
+
+`asteroids` then moved onto `Float.sin`, `Float.cos` and `Float.pi()`,
+losing two extern declarations and a hand-typed constant. That it can is
+the acceptance criterion the issue actually wrote down.
+
+### What the fixture may print
+
+`exec_corpus/math_and_rng` never prints a raw trig result. libm is
+correctly rounded but not identical across platforms, and
+`platform-smoke` runs this fixture on Linux, macOS and Windows -- so
+`Float.sin(0.7).to_string()` is exactly the kind of value that passes
+here and fails on somebody else's machine. What it prints is either
+rounded to three decimals, well inside that noise, or a BOOLEAN from an
+identity.
+
+The generator is the opposite: integer arithmetic with no libm anywhere,
+identical everywhere, so its output is printed in full. If those numbers
+ever change, the algorithm changed, and that should be a deliberate edit
+to the fixture.

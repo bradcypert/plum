@@ -684,3 +684,148 @@ pub let test_path_splits (): Unit = {
     check_eq("join keeps the first root", "/a + b",
         Path.is_absolute(Path.join("/a", "b")).to_string(), "true")
 }
+
+// --- Trigonometry and logs (issue #20) ---
+//
+// Identities, not recorded values. `sin(0.7)` matching whatever this
+// compiler printed last time proves nothing about `sin`; the Pythagorean
+// identity holding for every angle proves quite a lot, and would catch
+// the two mistakes worth catching here -- a wrong libm symbol, and
+// arguments swapped.
+//
+// The tolerance is 1e-9 rather than exact. These are the only functions
+// in the prelude whose results are not exactly determined: libm is
+// correctly rounded but not identical across platforms, so an equality
+// test would pass on this machine and fail on somebody's.
+
+let TRIG_EPS (): Float = 0.000000001
+
+let close (a: Float) (b: Float): Bool = Float.abs(a - b) < TRIG_EPS()
+
+let trig_laws (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        // Radians in roughly [-6.28, 6.28], so a full turn either way.
+        let x = rand_between(seed, 0 - 6283, 6283).to_float() / 1000.0;
+        let case = x.to_string();
+        check_eq("sin^2 + cos^2 = 1", case,
+            close(Float.sin(x) * Float.sin(x) + Float.cos(x) * Float.cos(x), 1.0).to_string(), "true");
+        check_eq("sin is odd", case, close(Float.sin(0.0 - x), 0.0 - Float.sin(x)).to_string(), "true");
+        check_eq("cos is even", case, close(Float.cos(0.0 - x), Float.cos(x)).to_string(), "true");
+        check_eq("sin and cos are bounded", case,
+            (Float.abs(Float.sin(x)) <= 1.0 && Float.abs(Float.cos(x)) <= 1.0).to_string(), "true");
+        // `atan2(sin t, cos t)` is `t` folded into (-pi, pi]. Checked
+        // through `cos`, which is even and periodic, so the fold does
+        // not have to be spelled out -- and the ARGUMENT ORDER is what
+        // this catches, since swapping them gives the co-angle.
+        check_eq("atan2 recovers the angle", case,
+            close(Float.cos(Float.atan2(Float.sin(x), Float.cos(x))), Float.cos(x)).to_string(), "true");
+        // exp and log undo each other, on the range where log is defined.
+        let p = Float.abs(x) + 0.001;
+        check_eq("log undoes exp", case, close(Float.log(Float.exp(p)) - p, 0.0).to_string(), "true");
+        check_eq("exp undoes log", case, (Float.abs(Float.exp(Float.log(p)) - p) < 0.000001).to_string(), "true");
+        check_eq("log2 agrees with log", case,
+            (Float.abs(Float.log2(p) - Float.log(p) / Float.log(2.0)) < 0.000001).to_string(), "true");
+        // Degrees and radians are inverse, which is what stops a factor
+        // of 180 or a stray pi from hiding in one of them.
+        check_eq("degrees undoes radians", case,
+            (Float.abs(Float.degrees(Float.radians(x)) - x) < 0.000001).to_string(), "true");
+        trig_laws(next_seed(seed), left - 1)
+    }
+
+pub let test_trig_laws (): Unit = {
+    trig_laws(31415, 200);
+
+    // The values everyone knows, which a generator will not land on.
+    check_eq("sin 0", "0", close(Float.sin(0.0), 0.0).to_string(), "true");
+    check_eq("cos 0", "0", close(Float.cos(0.0), 1.0).to_string(), "true");
+    check_eq("sin pi/2", "pi/2", close(Float.sin(Float.pi() / 2.0), 1.0).to_string(), "true");
+    check_eq("cos pi", "pi", close(Float.cos(Float.pi()), 0.0 - 1.0).to_string(), "true");
+    check_eq("tau is two pi", "tau", close(Float.tau(), 2.0 * Float.pi()).to_string(), "true");
+    check_eq("log e", "e", close(Float.log(Float.e()), 1.0).to_string(), "true");
+    check_eq("log10 1000", "1000", close(Float.log10(1000.0), 3.0).to_string(), "true");
+    check_eq("radians 180", "180", close(Float.radians(180.0), Float.pi()).to_string(), "true");
+
+    // `atan2` in all four quadrants. `atan(y/x)` cannot tell these
+    // apart, and the whole point of `atan2` is that it can.
+    check_eq("atan2 Q1", "1,1", close(Float.atan2(1.0, 1.0), Float.pi() / 4.0).to_string(), "true");
+    check_eq("atan2 Q2", "1,-1", close(Float.atan2(1.0, 0.0 - 1.0), 3.0 * Float.pi() / 4.0).to_string(), "true");
+    check_eq("atan2 Q3", "-1,-1", close(Float.atan2(0.0 - 1.0, 0.0 - 1.0), 0.0 - 3.0 * Float.pi() / 4.0).to_string(), "true");
+    check_eq("atan2 Q4", "-1,1", close(Float.atan2(0.0 - 1.0, 1.0), 0.0 - Float.pi() / 4.0).to_string(), "true")
+}
+
+// --- Seeded random numbers (issue #20) ---
+//
+// The properties an `Rng` promises: the same seed replays exactly, a
+// range is respected including its excluded upper bound, and a shuffle
+// is a PERMUTATION rather than merely a rearrangement that lost or
+// duplicated something.
+
+let rng_take (r: Rng) (n: Int) (acc: Array[Int]): Array[Int] =
+    if n <= 0 { acc } else {
+        let (next, v) = Rng.int_range(r, 0, 1000);
+        rng_take(next, n - 1, acc.push(v))
+    }
+
+let rng_in_range (r: Rng) (lo: Int) (hi: Int) (n: Int): Bool =
+    if n <= 0 { true } else {
+        let (next, v) = Rng.int_range(r, lo, hi);
+        if v < lo || v >= hi { false } else { rng_in_range(next, lo, hi, n - 1) }
+    }
+
+let rng_floats_in_unit (r: Rng) (n: Int): Bool =
+    if n <= 0 { true } else {
+        let (next, f) = Rng.float(r);
+        if f < 0.0 || f >= 1.0 { false } else { rng_floats_in_unit(next, n - 1) }
+    }
+
+let rng_laws (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let case = seed.to_string();
+        // Same seed, same sequence -- the entire reason this type exists.
+        check_eq("a seed replays", case,
+            Array.join(Array.map(rng_take(Rng.from_seed(seed), 20, []), |v: Int| v.to_string()), ","),
+            Array.join(Array.map(rng_take(Rng.from_seed(seed), 20, []), |v: Int| v.to_string()), ","));
+        // The upper bound is EXCLUDED, which is what makes
+        // `int_range(r, 0, xs.len())` an index.
+        check_eq("int_range respects its bounds", case,
+            rng_in_range(Rng.from_seed(seed), 0 - 5, 7, 200).to_string(), "true");
+        check_eq("float is in [0,1)", case,
+            rng_floats_in_unit(Rng.from_seed(seed), 200).to_string(), "true");
+        // An empty range has no number to return and must not draw one.
+        let (_, empty) = Rng.int_range(Rng.from_seed(seed), 4, 4);
+        check_eq("an empty range gives its low end", case, empty.to_string(), "4");
+        // A shuffle keeps exactly the elements it was given. Sorting
+        // both sides is what makes this about membership rather than
+        // order -- a shuffle that dropped or duplicated one would show here.
+        let xs = rng_take(Rng.from_seed(seed), 12, []);
+        let (_, shuffled) = Rng.shuffle(Rng.from_seed(seed + 1), xs);
+        check_eq("shuffle is a permutation", case,
+            Array.join(Array.map(Array.sort_int(shuffled), |v: Int| v.to_string()), ","),
+            Array.join(Array.map(Array.sort_int(xs), |v: Int| v.to_string()), ","));
+        check_eq("shuffle keeps the length", case,
+            shuffled.len().to_string(), xs.len().to_string());
+        rng_laws(next_seed(seed), left - 1)
+    }
+
+pub let test_rng_laws (): Unit = {
+    rng_laws(1729, 40);
+
+    // Seeds a generator must survive: zero, negative, and one that
+    // would land on a modulus boundary if it were used unfolded.
+    check_eq("seed 0 is usable", "0",
+        rng_in_range(Rng.from_seed(0), 0, 10, 100).to_string(), "true");
+    check_eq("a negative seed is usable", "-99",
+        rng_in_range(Rng.from_seed(0 - 99), 0, 10, 100).to_string(), "true");
+    check_eq("seed 0 is not stuck", "0",
+        (rng_take(Rng.from_seed(0), 5, [])[0] == rng_take(Rng.from_seed(0), 5, [])[4]).to_string(), "false");
+
+    // Different seeds are different streams.
+    check_eq("seeds differ", "1 vs 2",
+        (Array.join(Array.map(rng_take(Rng.from_seed(1), 10, []), |v: Int| v.to_string()), ",")
+         == Array.join(Array.map(rng_take(Rng.from_seed(2), 10, []), |v: Int| v.to_string()), ",")).to_string(),
+        "false");
+
+    // `choice` on an empty array has nothing to return.
+    let (_, none) = Rng.choice(Rng.from_seed(5), []);
+    check_eq("choice of nothing", "[]", Option.is_none(none).to_string(), "true")
+}

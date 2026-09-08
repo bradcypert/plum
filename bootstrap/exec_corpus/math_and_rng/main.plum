@@ -1,0 +1,96 @@
+// Trigonometry, constants, and a seeded generator (issue #20).
+//
+// **Trig results are never printed raw.** libm is correctly rounded but
+// not identical across platforms, so `Float.sin(0.7).to_string()` can
+// differ in the last digit between Linux, macOS and Windows -- and
+// `platform-smoke` runs this fixture on all three. What is printed is
+// either a value rounded well inside that noise, or a BOOLEAN from an
+// identity, which is exactly what the property tests do and for the
+// same reason.
+//
+// The generator is the opposite case: it is integer arithmetic with no
+// libm anywhere, so its output is identical everywhere and is printed
+// in full. That is the whole promise of a seeded `Rng` -- if these
+// numbers ever change, either the algorithm changed or something is
+// wrong, and both should be a deliberate edit to this file.
+
+let r3 (x: Float): String = (Float.round(x * 1000.0) / 1000.0).to_string()
+
+let yes (b: Bool): String = if b { "yes" } else { "no" }
+
+let close (a: Float) (b: Float): Bool = Float.abs(a - b) < 0.000000001
+
+let ints (xs: Array[Int]): String = Array.join(Array.map(xs, |v: Int| v.to_string()), ",")
+
+let draw (r: Rng) (n: Int) (acc: Array[Int]): Array[Int] =
+    if n <= 0 { acc } else {
+        let (next, v) = Rng.int_range(r, 0, 100);
+        draw(next, n - 1, acc.push(v))
+    }
+
+let main (): Unit = {
+    // --- Constants ---
+    println("pi      ".concat(Float.pi().to_string()));
+    println("tau     ".concat(Float.tau().to_string()));
+    println("e       ".concat(Float.e().to_string()));
+
+    // --- Trig, to three decimals ---
+    println("sin 0   ".concat(r3(Float.sin(0.0))));
+    println("cos 0   ".concat(r3(Float.cos(0.0))));
+    println("sin pi/2".concat(" ").concat(r3(Float.sin(Float.pi() / 2.0))));
+    println("cos pi  ".concat(r3(Float.cos(Float.pi()))));
+    println("tan pi/4".concat(" ").concat(r3(Float.tan(Float.pi() / 4.0))));
+    println("asin 1  ".concat(r3(Float.asin(1.0))));
+    println("acos 1  ".concat(r3(Float.acos(1.0))));
+    println("atan 1  ".concat(r3(Float.atan(1.0))));
+
+    // `atan2` in four quadrants -- the thing `atan(y/x)` cannot do,
+    // and the check that catches its arguments being swapped.
+    println("atan2 Q1".concat(" ").concat(r3(Float.atan2(1.0, 1.0))));
+    println("atan2 Q2".concat(" ").concat(r3(Float.atan2(1.0, 0.0 - 1.0))));
+    println("atan2 Q3".concat(" ").concat(r3(Float.atan2(0.0 - 1.0, 0.0 - 1.0))));
+    println("atan2 Q4".concat(" ").concat(r3(Float.atan2(0.0 - 1.0, 1.0))));
+
+    // --- Logs and exponentials ---
+    println("log e   ".concat(r3(Float.log(Float.e()))));
+    println("log2 8  ".concat(r3(Float.log2(8.0))));
+    println("log10 1k".concat(" ").concat(r3(Float.log10(1000.0))));
+    println("exp 0   ".concat(r3(Float.exp(0.0))));
+
+    // --- Angles ---
+    println("rad 180 ".concat(yes(close(Float.radians(180.0), Float.pi()))));
+    println("deg pi  ".concat(r3(Float.degrees(Float.pi()))));
+
+    // --- Identities, which hold to full precision everywhere ---
+    println("sin2+cos2".concat(" ").concat(yes(close(
+        Float.sin(0.7) * Float.sin(0.7) + Float.cos(0.7) * Float.cos(0.7), 1.0))));
+    println("log undoes exp ".concat(yes(close(Float.log(Float.exp(2.5)), 2.5))));
+
+    // --- A seeded generator ---
+    //
+    // Exact numbers, on purpose: same seed, same sequence, everywhere.
+    println("seed 42 ".concat(ints(draw(Rng.from_seed(42), 8, []))));
+    println("seed 43 ".concat(ints(draw(Rng.from_seed(43), 8, []))));
+    println("replays ".concat(yes(ints(draw(Rng.from_seed(42), 8, [])) == ints(draw(Rng.from_seed(42), 8, [])))));
+
+    // Seeds that could break a naive folding: zero and negative.
+    println("seed 0  ".concat(ints(draw(Rng.from_seed(0), 4, []))));
+    println("seed -7 ".concat(ints(draw(Rng.from_seed(0 - 7), 4, []))));
+
+    // A shuffle is a permutation, and an empty range draws nothing.
+    let (_, shuffled) = Rng.shuffle(Rng.from_seed(7), [1, 2, 3, 4, 5, 6]);
+    println("shuffle ".concat(ints(shuffled)));
+    println("sorted  ".concat(ints(Array.sort_int(shuffled))));
+    let (_, empty) = Rng.int_range(Rng.from_seed(1), 4, 4);
+    println("empty   ".concat(empty.to_string()));
+
+    // `choice`, including from nothing.
+    let (_, picked) = Rng.choice(Rng.from_seed(9), ["a", "b", "c"]);
+    println("choice  ".concat(Option.unwrap_or(picked, "-")));
+    let (_, none) = Rng.choice(Rng.from_seed(9), []);
+    println("choice0 ".concat(yes(Option.is_none(none))));
+
+    // A float stays inside [0, 1).
+    let (_, f) = Rng.float(Rng.from_seed(11));
+    println("float   ".concat(yes(f >= 0.0 && f < 1.0)));
+}

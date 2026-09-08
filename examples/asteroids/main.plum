@@ -37,8 +37,6 @@ extern "C" {
     fn raylib_is_key_down(key: Int) -> Bool;
     fn raylib_is_key_pressed(key: Int) -> Bool;
 
-    fn sin(x: Float) -> Float;
-    fn cos(x: Float) -> Float;
 }
 
 // --- Constants ---
@@ -48,7 +46,11 @@ let SCREEN_HEIGHT = 600
 let SCREEN_WIDTH_F = 800.0
 let SCREEN_HEIGHT_F = 600.0
 
-let PI = 3.14159265358979
+// `Float.pi()` since issue #20. This used to be a hand-typed constant
+// beside hand-declared `sin`/`cos` externs, which is what a program had
+// to do before the prelude had trigonometry -- and is exactly the
+// motivation that issue cited.
+let PI = Float.pi()
 
 let SHIP_SIZE = 20.0
 let SHIP_ROTATION_SPEED = 3.5
@@ -139,7 +141,7 @@ let vec2_scale (a: Vec2) (s: Float): Vec2 = Vec2 { x: a.x * s, y: a.y * s }
 let vec2_length (a: Vec2): Float = Float.sqrt(a.x * a.x + a.y * a.y)
 let zero_vec2 (): Vec2 = Vec2 { x: 0.0, y: 0.0 }
 
-let ship_facing (rotation: Float): Vec2 = unsafe { Vec2 { x: sin(rotation), y: 0.0 - cos(rotation) } }
+let ship_facing (rotation: Float): Vec2 = Vec2 { x: Float.sin(rotation), y: 0.0 - Float.cos(rotation) }
 
 let wrap_position (pos: Vec2): Vec2 = {
     let x =
@@ -206,7 +208,7 @@ let spawn_asteroid (asteroids: Array[Asteroid]) (position: Vec2) (size: Asteroid
         Some(i) => {
             let angle = Float.random_range(0.0, 2.0 * PI);
             let speed = Float.random_range(ASTEROID_SPEED_MIN, ASTEROID_SPEED_MAX);
-            let velocity = unsafe { Vec2 { x: cos(angle) * speed, y: sin(angle) * speed } };
+            let velocity = Vec2 { x: Float.cos(angle) * speed, y: Float.sin(angle) * speed };
             let a = Asteroid {
                 position: position,
                 velocity: velocity,
