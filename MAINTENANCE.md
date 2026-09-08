@@ -554,6 +554,22 @@ Worth knowing before you "fix" them:
   modules it is still documentation the compiler does not check; module
   membership comes from the directory. Do not assume removing a `use`
   will break a directory-module call, because it will not.
+- **A prelude GLOBAL costs every program, always.** Globals are
+  initialised eagerly by `@plum_init_globals` and are not dead-code
+  eliminated, so `chars_of(..)` hoisted to a prelude global charges its
+  allocations to programs that never call the function. `alloc-check`
+  reports this as the SAME constant rise across every unrelated fixture
+  — a uniform offset is one startup problem, not many. Hoisting a table
+  out of a per-character loop is still right; hoisting one that most
+  programs never reach is not.
+- **`Float.to_fixed` rounds half to EVEN; `Float.round` rounds half away
+  from zero.** Not a bug and not ours — `to_fixed` is `snprintf`, and C,
+  Python, Rust and Java all pair them this way. Pinned by
+  `exec_corpus/formatting` and `test_format_laws`; do not "fix" it.
+- **`Int.to_radix` is signed and reversible; `Int.to_bits` is the bit
+  pattern.** `to_binary(-1)` is `"-1"`, `to_bits(-1)` is sixty-four
+  ones. Keep them distinct — collapsing them loses one of the two
+  questions.
 - **`|` is both the closure delimiter and bitwise-or, and that is safe
   only because Plum has no juxtaposition application.** A closure can
   start only where an expression is expected; `|` is an operator only

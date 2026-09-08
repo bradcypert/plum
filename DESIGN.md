@@ -19699,3 +19699,113 @@ they need; the other half is **wrapping** 64-bit multiplication, and `*`
 still traps on overflow. Adding a separate wrapping-multiply operation
 is a real design question — a second arithmetic surface with different
 overflow semantics — and nothing needs it yet.
+
+## Formatting numbers, and an issue whose premise had expired (2026-09-08)
+
+Issue #23 asked for a formatting API, and its motivating example was
+
+```plum
+println(user.concat(" ").concat(n.to_string()).concat(" items"))
+```
+
+with a proposed `Fmt.format("hello, {}", [name])` to replace it. That
+proposal would have been strictly WORSE than what the language already
+had, because **string interpolation already exists**:
+
+```plum
+println("${user} ${n} items")
+```
+
+The issue's own "Alternatives considered" rejects grammar-level
+interpolation as a language change to avoid; it had already landed. A
+positional `{}` API would have been untyped, order-dependent, and would
+have thrown away the expression. Checking the premise before
+implementing is the whole reason this took ten minutes rather than a
+day.
+
+### What was actually missing
+
+Measured from this repository's own code rather than guessed:
+
+1. **Width**, which turned out to be already served by `String.pad_*`.
+   What is clumsy is the ERGONOMICS -- padding has to sit outside the
+   string -- and only a specifier syntax fixes that.
+2. **Float precision**. `${1.0 / 3.0}` gives sixteen digits, and
+   `exec_corpus/math_and_rng` had been working around it with
+   `Float.round(x * 1000.0) / 1000.0` -- arithmetic standing in for
+   formatting.
+3. **Integer radix**. No hex, binary or octal, which got worse the day
+   bitwise operators landed: `${flags}` printing `20` is the wrong view
+   of a bit field.
+
+So: `Float.to_fixed`, `Int.to_radix`/`to_hex`/`to_binary`/`to_octal`,
+`Int.to_bits`/`to_hex_bits`, and `String.pad_center`.
+
+**Functions before syntax**, deliberately. These are what a `${x:.2}`
+specifier would lower to, so they are needed either way; shipping them
+first means the syntax can be designed against real use instead of
+guessed, and it stays purely additive. A specifier language is frozen
+the day it ships.
+
+### `to_fixed` delegates, and that is the point
+
+The obvious implementation -- scale by a power of ten, round, split --
+is what I wrote first, and it is wrong in the last place:
+
+```
+2.675 * 100.0  ==  267.50000000000006
+```
+
+so it rounds to 2.68 where C, Rust and Python all give 2.67. The
+difference is that the C library converts from the EXACT binary value
+(2.675 is really 2.674999...), while scaling introduces its own error
+first. `snprintf("%.*f")` was already linked for `to_string`; using it
+is two lines shorter AND correct.
+
+Two consequences are surprising enough to be pinned by both a fixture
+and a property:
+
+- **It rounds half to EVEN while `Float.round` rounds half away from
+  zero.** `Float.to_fixed(2.5, 0)` is `"2"` and `Float.round(2.5)` is
+  `3.0`. That looks like an inconsistency invented here and is not: C,
+  Python, Rust and Java all pair those two the same way. Matching every
+  other language beat agreeing with the neighbouring function.
+- **A negative value that rounds to zero keeps its sign**, so
+  `to_fixed(-0.001, 2)` is `"-0.00"`. Also what C does, and it is
+  information: the value was below zero.
+
+### Signed radix, and a separate bit view
+
+`Int.to_radix` is SIGNED and reversible -- `to_radix(-255, 16)` is
+`"-ff"`, which reads back. That is the opposite of C's and Rust's `%x`
+on a negative, and it is what keeps it a number conversion rather than
+a bit dump. The bit pattern gets its own name: `Int.to_bits(-1)` is
+sixty-four ones while `Int.to_binary(-1)` is `"-1"`, and both are right
+about different questions.
+
+The most negative `Int` has no positive counterpart, so it cannot be
+negated before conversion. Its last digit is peeled off in the negative
+and the rest divides safely -- and it cannot even be written as a
+literal (`-9223372036854775808` is a lex error, because the magnitude
+overflows before the minus applies), so the fixture spells it `1 << 63`.
+
+### A global table cost every program 37 allocations
+
+The first version looked up digits in
+`chars_of("0123456789abcdefghijklmnopqrstuvwxyz")`, hoisted to a global
+because character tables have twice been the hot spot in this project.
+
+`alloc-check` failed with fifteen regressions, every one of them
+**exactly +37**. A uniform offset across unrelated fixtures is not
+fifteen problems; it is one, at startup. Globals are initialised eagerly
+by `@plum_init_globals` and are NOT dead-code eliminated, so 36 strings
+and an array were allocated by every program that had never formatted a
+number.
+
+Building the digit from its value instead -- 48 is `'0'`, 87 is
+`'a' - 10` -- costs about two allocations per digit and none at
+startup. The earlier lesson was that hoisting a table out of a
+per-character loop is a large win; the mirror of it is that a table
+nothing reaches is pure cost, and which one applies depends on whether
+the caller is in a loop. `alloc-check` is what tells them apart, and a
+constant offset is its signature for this class.

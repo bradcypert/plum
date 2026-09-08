@@ -945,3 +945,122 @@ pub let test_bitwise_laws (): Unit = {
     check_eq("count_ones of -1", "-1", Int.count_ones(0 - 1).to_string(), "64");
     check_eq("ushr of the sign bit", "-1 >> 63", Int.shr_logical(0 - 1, 63).to_string(), "1")
 }
+
+// --- Formatting laws (issue #23) ---
+//
+// The interesting ones are round trips. A recorded string proves the
+// function did what it did last time; `to_radix` then reading the
+// digits back proves it is a base conversion.
+
+let digit_value_at (c: String): Int =
+    match String.index_of("0123456789abcdefghijklmnopqrstuvwxyz", c) { Some(i) => i, None => 0 - 1 }
+
+// Reads a radix string back to an Int, which is the inverse `parse_int`
+// only offers for base 10.
+let from_radix (s: String) (radix: Int): Int = {
+    let neg = String.starts_with(s, "-");
+    let body = if neg { String.slice(s, 1, String.char_len(s)) } else { s };
+    let v = from_radix_acc(chars_of(body), radix, 0, 0);
+    if neg { 0 - v } else { v }
+}
+
+let from_radix_acc (cs: Array[String]) (radix: Int) (i: Int) (acc: Int): Int =
+    if i >= cs.len() { acc } else { from_radix_acc(cs, radix, i + 1, acc * radix + digit_value_at(cs[i])) }
+
+let count_char (s: String) (c: String): Int =
+    Array.fold(chars_of(s), 0, |acc, ch| if ch == c { acc + 1 } else { acc })
+
+let format_laws (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let n = rand_between(seed, 0 - 100000000, 100000000);
+        let radix = rand_between(next_seed(seed), 2, 36);
+        let case = n.to_string().concat(" base ").concat(radix.to_string());
+
+        // A base conversion is reversible. This is the property; the
+        // digits themselves are an implementation detail.
+        check_eq("to_radix round trips", case,
+            from_radix(Int.to_radix(n, radix), radix).to_string(), n.to_string());
+        // Base 10 must agree with the one everybody already uses.
+        check_eq("base 10 is to_string", case, Int.to_radix(n, 10), n.to_string());
+        check_eq("hex is radix 16", case, Int.to_hex(n), Int.to_radix(n, 16));
+        check_eq("binary is radix 2", case, Int.to_binary(n), Int.to_radix(n, 2));
+        // The sign lives in the string, not in the digits.
+        check_eq("sign is a prefix", case,
+            String.starts_with(Int.to_radix(n, radix), "-").to_string(), (n < 0).to_string());
+
+        // Bit patterns are fixed width, and their ones agree with
+        // `count_ones` -- two independent implementations of the same
+        // question, which is what makes this worth checking.
+        check_eq("to_bits is 64 wide", case, String.char_len(Int.to_bits(n)).to_string(), "64");
+        check_eq("to_hex_bits is 16 wide", case, String.char_len(Int.to_hex_bits(n)).to_string(), "16");
+        check_eq("bits agree with count_ones", case,
+            count_char(Int.to_bits(n), "1").to_string(), Int.count_ones(n).to_string());
+        // A non-negative number's bit pattern is its unsigned hex,
+        // zero-extended -- so the two renderings cannot drift apart.
+        let p = Int.abs(n);
+        check_eq("hex_bits ends with hex", case,
+            String.ends_with(Int.to_hex_bits(p), Int.to_hex(p)).to_string(), "true");
+
+        // --- Fixed decimals ---
+        let d = rand_between(next_seed(next_seed(seed)), 0, 9);
+        let x = rand_between(seed, 0 - 1000000, 1000000).to_float() / 1000.0;
+        let fcase = x.to_string().concat(" to ").concat(d.to_string()).concat("dp");
+        let text = Float.to_fixed(x, d);
+
+        // Exactly `d` digits after the point, and a point only when
+        // there are digits to follow it.
+        check_eq("decimal places", fcase, count_char(text, ".").to_string(), (if d == 0 { 0 } else { 1 }).to_string());
+        if d > 0 {
+            check_eq("digits after the point", fcase,
+                (String.char_len(text) - Option.unwrap_or(String.index_of(text, "."), 0) - 1).to_string(),
+                d.to_string())
+        } else { () };
+        // The rendering is within half a unit in the last place of the
+        // value -- which is what "correctly rounded" means, and is a
+        // statement no recorded string can make.
+        check_eq("stays within half a ulp", fcase,
+            (Float.abs(Result.unwrap_or(String.parse_float(text), 0.0 - 999999.0) - x)
+                <= 0.5 / Float.pow(10.0, d.to_float()) + 0.0000001).to_string(), "true");
+
+        // --- Padding ---
+        let w = rand_between(next_seed(seed), 0, 20);
+        let s = String.slice("abcdefghij", 0, rand_between(seed, 0, 10));
+        let pcase = "'".concat(s).concat("' to ").concat(w.to_string());
+        check_eq("pad_center reaches the width", pcase,
+            String.char_len(String.pad_center(s, w, ".")).to_string(),
+            Int.max(w, String.char_len(s)).to_string());
+        check_eq("pad_center keeps the text", pcase,
+            String.contains(String.pad_center(s, w, "."), s).to_string(), "true");
+        // The three pads agree on length, differing only in placement.
+        check_eq("pads agree on width", pcase,
+            String.char_len(String.pad_left(s, w, ".")).to_string(),
+            String.char_len(String.pad_center(s, w, ".")).to_string());
+
+        format_laws(next_seed(seed), left - 1)
+    }
+
+pub let test_format_laws (): Unit = {
+    format_laws(90210, 200);
+
+    // Edges a generator will not reliably reach.
+    check_eq("radix of zero", "0", Int.to_hex(0), "0");
+    check_eq("bits of zero", "0", count_char(Int.to_bits(0), "1").to_string(), "0");
+    check_eq("bits of -1", "-1", count_char(Int.to_bits(0 - 1), "1").to_string(), "64");
+    // The most negative Int cannot be negated, so its conversion has to
+    // peel the last digit off first.
+    check_eq("radix of the most negative Int", "min",
+        Int.to_radix(1 << 63, 16), "-8000000000000000");
+    check_eq("radix is clamped", "base 99", Int.to_radix(255, 99), Int.to_radix(255, 36));
+
+    // Half to EVEN, unlike `Float.round`. Pinned because it is
+    // surprising, standard, and would otherwise look like a bug.
+    check_eq("half to even at .5", "0.5", Float.to_fixed(0.5, 0), "0");
+    check_eq("half to even at 1.5", "1.5", Float.to_fixed(1.5, 0), "2");
+    check_eq("half to even at 2.5", "2.5", Float.to_fixed(2.5, 0), "2");
+    check_eq("round is half away from zero", "2.5", Float.round(2.5).to_string(), "3");
+    // Correctly rounded from the exact binary value: 2.675 is really
+    // 2.674999..., which a scale-and-round implementation gets wrong.
+    check_eq("rounds from the exact value", "2.675", Float.to_fixed(2.675, 2), "2.67");
+    check_eq("a negative that rounds to zero keeps its sign", "-0.001",
+        Float.to_fixed(0.0 - 0.001, 2), "-0.00")
+}

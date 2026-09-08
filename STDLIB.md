@@ -98,6 +98,7 @@ See README.md for the prose introduction.
 - `let Float.min (a: Float) (b: Float): Float`
 - `let Float.max (a: Float) (b: Float): Float`
 - `let Float.clamp (x: Float) (lo: Float) (hi: Float): Float`
+- `let Float.to_fixed (x: Float) (decimals: Int): String`
 - `let Float.sqrt (x: Float): Float`
 - `let Float.pow (base: Float) (exp: Float): Float`
 - `let Float.floor (x: Float): Float`
@@ -140,6 +141,12 @@ See README.md for the prose introduction.
 - `let Int.clamp (x: Int) (lo: Int) (hi: Int): Int`
 - `let Int.shr_logical (x: Int) (n: Int): Int`
 - `let Int.count_ones (x: Int): Int`
+- `let Int.to_radix (n: Int) (radix: Int): String`
+- `let Int.to_hex (n: Int): String`
+- `let Int.to_binary (n: Int): String`
+- `let Int.to_octal (n: Int): String`
+- `let Int.to_bits (n: Int): String`
+- `let Int.to_hex_bits (n: Int): String`
 - `Int.to_float(): Float`  (built in)
 
 ## Json
@@ -322,6 +329,7 @@ See README.md for the prose introduction.
 - `let String.char_len (s: String): Int`
 - `let String.pad_left (s: String) (width: Int) (fill: String): String`
 - `let String.pad_right (s: String) (width: Int) (fill: String): String`
+- `let String.pad_center (s: String) (width: Int) (fill: String): String`
 - `let String.hash (s: String): Int`
 - `let String.is_ascii_ws (c: String): Bool`
 - `let String.index_of (s: String) (needle: String): Option[Int]`

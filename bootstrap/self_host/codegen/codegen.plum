@@ -2936,6 +2936,7 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "string_hash_raw" { Some("@plum_str_hash_raw") }
     else if name == "sqrt_raw" { Some("@plum_sqrt_raw") }
     else if name == "pow_raw" { Some("@plum_pow_raw") }
+    else if name == "float_fixed_raw" { Some("@plum_float_fixed_raw") }
     else if name == "sin_raw" { Some("@plum_sin_raw") }
     else if name == "cos_raw" { Some("@plum_cos_raw") }
     else if name == "tan_raw" { Some("@plum_tan_raw") }

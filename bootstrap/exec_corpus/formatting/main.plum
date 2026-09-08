@@ -1,0 +1,71 @@
+// Formatting numbers inside interpolation (issue #23).
+//
+// String interpolation already existed -- `"${a} + ${b} = ${a + b}"` --
+// so building output was never the gap. What was missing was CONTROL
+// over how a number renders inside one: `${1.0 / 3.0}` gives sixteen
+// digits, and `${flags}` shows a bit field as a decimal.
+//
+// These are the functions a `${x:.2}` specifier syntax would lower to.
+// Shipping them first means that syntax, if it arrives, is designed
+// against real use rather than guessed -- and it stays purely additive.
+
+let flag_read: Int = 1
+let flag_write: Int = 2
+let flag_exec: Int = 4
+
+let main (): Unit = {
+    // --- Fixed decimals ---
+    println("third    ${Float.to_fixed(1.0 / 3.0, 2)}");
+    println("pi       ${Float.to_fixed(3.14159265358979, 5)}");
+    println("zero dp  ${Float.to_fixed(1.5, 0)}");
+    println("money    ${Float.to_fixed(19.999, 2)}");
+
+    // Correctly rounded from the EXACT binary value. 2.675 is really
+    // 2.674999..., so 2.67 is right and 2.68 is what a scale-and-round
+    // implementation in Plum would wrongly produce.
+    println("2.675    ${Float.to_fixed(2.675, 2)}");
+
+    // Half to EVEN, which `Float.round` is not -- see the prelude's own
+    // note. Every other language pairs them this way too.
+    println("halves   ${Float.to_fixed(0.5, 0)} ${Float.to_fixed(1.5, 0)} ${Float.to_fixed(2.5, 0)} ${Float.to_fixed(3.5, 0)}");
+    println("round    ${Float.round(0.5)} ${Float.round(1.5)} ${Float.round(2.5)}");
+
+    // A negative that rounds to zero keeps its sign: it is information.
+    println("neg zero ${Float.to_fixed(0.0 - 0.001, 2)}");
+
+    // No fallback for large values -- the C library renders them in
+    // full rather than switching to exponent form.
+    println("large    ${Float.to_fixed(1.0e20, 2)}");
+
+    // --- Radix ---
+    //
+    // SIGNED and reversible: `-ff` is what `String.parse_int` would
+    // read back. `Int.to_bits` is the bit-pattern view instead.
+    println("hex      ${Int.to_hex(255)} ${Int.to_hex(0 - 255)}");
+    println("binary   ${Int.to_binary(10)} ${Int.to_binary(0 - 1)}");
+    println("octal    ${Int.to_octal(64)}");
+    println("radix 36 ${Int.to_radix(1295, 36)}");
+    println("radix 7  ${Int.to_radix(100, 7)}");
+
+    // The most negative Int has no positive counterpart, so it cannot
+    // be negated before conversion -- its last digit comes off first.
+    println("min      ${Int.to_radix(1 << 63, 16)}");
+    println("zero     ${Int.to_hex(0)} ${Int.to_binary(0)}");
+
+    // --- Bit patterns ---
+    //
+    // Two's complement, fixed width. `to_binary(-1)` is "-1" and
+    // `to_bits(-1)` is sixty-four ones; both answer different questions.
+    println("bits 5   ${Int.to_bits(5)}");
+    println("bits -1  ${Int.to_bits(0 - 1)}");
+    println("hexbits  ${Int.to_hex_bits(255)} ${Int.to_hex_bits(0 - 1)}");
+
+    // What it is for: reading a bit field.
+    let mode = flag_read | flag_exec;
+    println("mode     ${Int.to_hex_bits(mode)} = ${Int.to_binary(mode)}");
+
+    // --- Padding, and a table ---
+    println("[${String.pad_center("hi", 8, ".")}] [${String.pad_center("odd", 8, ".")}]");
+    println("${String.pad_right("name", 8, " ")}${String.pad_left("size", 6, " ")}");
+    println("${String.pad_right("main.plum", 8, " ")}${String.pad_left((1284).to_string(), 6, " ")}");
+}
