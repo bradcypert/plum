@@ -239,6 +239,13 @@ See README.md for the prose introduction.
 ## Process
 
 - `let run (opts: Options): Result[ProcessResult, String]`
+- `let start (opts: Options): Result[Child, String]`
+- `let Child.pid (c: Child): Int`
+- `let Child.poll (c: Child): Result[Option[ProcessResult], String]`
+- `let Child.wait (c: Child): Result[ProcessResult, String]`
+- `let Child.wait_timeout (c: Child) (d: Time.Duration): Result[Option[ProcessResult], String]`
+- `let Child.terminate (c: Child): Result[Unit, String]`
+- `let Child.kill (c: Child): Result[Unit, String]`
 
 ## Receiver
 

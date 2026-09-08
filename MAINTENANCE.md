@@ -553,6 +553,20 @@ Worth knowing before you "fix" them:
   modules it is still documentation the compiler does not check; module
   membership comes from the directory. Do not assume removing a `use`
   will break a directory-module call, because it will not.
+- **A `Child` handle KILLS its process when it dies.** The policy lives
+  in one `drop_policy` field in `process_shim.c`, set in one place and
+  read in one place, so offering a choice later is an addition rather
+  than a redesign. `exec_corpus/process_async` pins the behaviour with a
+  marker file a surviving child would leave behind; if you change the
+  default, that fixture is what will tell you, and it should be a
+  deliberate edit.
+- **`Process.start`, not `spawn` — `spawn` is a keyword.** A member name
+  after `.` must be an identifier, so `Process.spawn(..)` does not
+  parse. Do not rename it back without doing the grammar work first.
+- **A spawned child's output is readable only after it exits.** The
+  status is collected once, on the running-to-finished transition, and
+  fills the same buffers the blocking path fills — which is why
+  `process_exit_code` and its neighbours work unchanged, and repeatedly.
 - **`Json` is decoders, not the JSON type.** `JsonValue`, `json_parse`
   and `json_stringify` stay in the prelude; `use Json;` brings in
   `Decoder` and its combinators. `field` requires the key, `nullable`

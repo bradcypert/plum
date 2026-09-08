@@ -1,0 +1,141 @@
+use Os;
+use Path;
+use Process;
+use Time;
+
+// Asynchronous children: start one, look in on it, stop it (issue #7).
+//
+// Re-invokes ITSELF for every child, the same trick
+// `exec_corpus/process_run` uses and for the same reason: `/bin/sleep`
+// is not on Windows and a shell would need one command line per
+// platform. The binary under test is the only program guaranteed to
+// exist everywhere.
+//
+// **Timings are asserted as BOUNDS or as booleans, never printed.** A
+// duration measured on a loaded CI runner is not reproducible, and a
+// fixture that prints one is a fixture that fails for no reason. The
+// `select_else_timeout` fixture settled this convention.
+//
+// Exit codes of a SIGNALLED child are deliberately not printed either:
+// POSIX reports "did not exit normally" where Windows reports the code
+// `TerminateProcess` was given, and no single expected output covers
+// both. What is checked is that `wait` returns and the child is gone.
+
+let ms (n: Int): Time.Duration = Time.millis(n)
+
+let self_or_fail (): String = match Os.self_exe() { Ok(s) => s, Err(_) => "" }
+
+let start_self (self: String) (args: Array[String]): Result[Process.Child, String] =
+    Process.start(Process.Options { program: self, args: args, env: [], stdin: None })
+
+// --- The child side ---
+
+let child (argv: Array[String]): Unit =
+    if argv[0] == "--sleep" {
+        match String.parse_int(argv[1]) {
+            Ok(n) => { Time.sleep(ms(n)); println("child done") },
+            Err(_) => println("bad ms"),
+        }
+    }
+    // Sleeps, then leaves a file behind. If the parent's handle dying
+    // did NOT kill this child, the file appears and the parent sees it.
+    else if argv[0] == "--marker" {
+        Time.sleep(ms(300));
+        match Os.write_file(argv[1], "reached") { Ok(_) => (), Err(_) => () }
+    }
+    else { println("unknown child mode") }
+
+// --- The parent side ---
+
+let poll_says (c: Process.Child): String =
+    match c.poll() { Ok(None) => "running", Ok(Some(_)) => "done", Err(e) => "ERR ".concat(e) }
+
+let show_result (label: String) (r: Result[Process.ProcessResult, String]): Unit =
+    println(label.concat(match r {
+        Err(e) => "ERR ".concat(e),
+        Ok(res) => "exit=".concat(res.exit_code.to_string())
+            .concat(" out=[").concat(String.trim_end(res.stdout)).concat("]"),
+    }))
+
+// A child that outlives one poll, then is waited for.
+let case_poll_then_wait (self: String): Unit =
+    match start_self(self, ["--sleep", "400"]) {
+        Err(e) => println("start: ".concat(e)),
+        Ok(c) => {
+            println("pid is real:  ".concat((c.pid() > 0).to_string()));
+            println("first poll:   ".concat(poll_says(c)));
+            show_result("after wait:   ", c.wait());
+            // The result is captured, so asking again is not a second
+            // wait on a process that is already gone.
+            println("poll after:   ".concat(poll_says(c)));
+            show_result("wait again:   ", c.wait());
+        },
+    }
+
+// A timeout that expires, and then one that does not.
+let case_wait_timeout (self: String): Unit =
+    match start_self(self, ["--sleep", "400"]) {
+        Err(e) => println("start: ".concat(e)),
+        Ok(c) => {
+            println("short timeout:".concat(match c.wait_timeout(ms(20)) {
+                Ok(None) => " timed out",
+                Ok(Some(_)) => " finished (too fast to be a real test)",
+                Err(e) => " ERR ".concat(e),
+            }));
+            // Still running, and NOT signalled by the timeout above.
+            println("still there:  ".concat(poll_says(c)));
+            println("long timeout: ".concat(match c.wait_timeout(Time.seconds(20)) {
+                Ok(Some(res)) => "exit=".concat(res.exit_code.to_string()),
+                Ok(None) => "timed out (should not happen)",
+                Err(e) => "ERR ".concat(e),
+            }));
+        },
+    }
+
+// Stopping one that would otherwise run far longer than this fixture.
+let case_terminate (self: String): Unit =
+    match start_self(self, ["--sleep", "20000"]) {
+        Err(e) => println("start: ".concat(e)),
+        Ok(c) => {
+            println("terminate:    ".concat(match c.terminate() { Ok(_) => "ok", Err(e) => e }));
+            println("gone:         ".concat(match c.wait() { Ok(_) => "true", Err(e) => "ERR ".concat(e) }));
+            // Signalling something already dead is success.
+            println("again:        ".concat(match c.kill() { Ok(_) => "ok", Err(e) => e }));
+        },
+    }
+
+// The handle dying kills the child. The marker file is what a survivor
+// would leave behind.
+let case_drop_kills (self: String) (marker: String): Unit = {
+    {
+        match start_self(self, ["--marker", marker]) {
+            Err(e) => println("start: ".concat(e)),
+            Ok(c) => println("started:      ".concat((c.pid() > 0).to_string())),
+        }
+    };
+    // Longer than the child's own 300ms sleep, so a survivor has had
+    // every chance to write the file.
+    Time.sleep(ms(1200));
+    println("marker left:  ".concat(match Os.exists(marker) {
+        Ok(b) => b.to_string(),
+        Err(e) => "ERR ".concat(e),
+    }));
+}
+
+let parent (): Unit = {
+    let self = self_or_fail();
+    if String.is_empty(self) { println("self_exe failed") } else {
+        let marker = Path.join(match Os.temp_dir() { Ok(d) => d, Err(_) => "." },
+                               "plum_async_marker_".concat(Time.now_millis().to_string()));
+        match Os.remove_file(marker) { Ok(_) => (), Err(_) => () };
+        case_poll_then_wait(self);
+        case_wait_timeout(self);
+        case_terminate(self);
+        case_drop_kills(self, marker);
+        show_result("no such prog: ", Result.and_then(
+            Process.start(Process.Options { program: "plum_definitely_not_a_program_9f3a", args: [], env: [], stdin: None }),
+            |c| c.wait()));
+    }
+}
+
+let main (): Unit = if Array.is_empty(args()) { parent() } else { child(args()) }

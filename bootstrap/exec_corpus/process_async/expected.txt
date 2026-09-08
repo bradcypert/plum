@@ -1,0 +1,14 @@
+pid is real:  true
+first poll:   running
+after wait:   exit=0 out=[child done]
+poll after:   done
+wait again:   exit=0 out=[child done]
+short timeout: timed out
+still there:  running
+long timeout: exit=0
+terminate:    ok
+gone:         true
+again:        ok
+started:      true
+marker left:  false
+no such prog: ERR Process.start: could not start process: plum_definitely_not_a_program_9f3a

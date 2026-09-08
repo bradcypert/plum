@@ -19241,3 +19241,135 @@ point -- the self-hosted compiler does not happen to write this shape.
 That is the fourth time a feature written in Plum has found a bug in the
 backend that compiles it, and the reason for writing library code in the
 language at all.
+
+## Children that do not block, and a default that had to be chosen (2026-09-08)
+
+Issue #7 asked for two things that sound related and are not: timeout
+based terminal reads, and asynchronous child processes. The first has no
+receiver -- there is no `Terminal` module, and building one inside #7
+would have meant designing #3 by accident -- so it was split into #30.
+This is the second.
+
+`Process.run` blocks until the child exits, which is exactly right for a
+compiler shelling out to `clang` and exactly wrong for an application
+that wants to stay responsive while something runs.
+
+```plum
+use Process;
+use Time;
+
+let child = Process.start(opts)?;
+match child.poll() {
+    Ok(None) => redraw_spinner(),
+    Ok(Some(res)) => finish(res),
+    Err(e) => report(e),
+}
+```
+
+Plus `wait`, `wait_timeout`, `terminate`, `kill` and `pid`.
+
+### The temp files paid for themselves
+
+The shim captures a child's stdout and stderr into TEMP FILES rather
+than pipes, and its header explains why: a pipe with nobody draining it
+deadlocks once the child writes more than the kernel buffer, so a
+pipe-based design needs a reader running the whole time the child does.
+
+That decision, made for the blocking path, is what made the
+asynchronous one cheap. Nothing has to be read while the child runs, so
+`poll` really is `waitpid(WNOHANG)` and nothing else. A pipe-based shim
+could not have offered `poll` as a question you ask occasionally; it
+would have needed a draining thread first.
+
+The status is collected exactly ONCE, on the transition from running to
+finished, and fills the same `out_data`/`err_data` the blocking path
+fills -- so `process_exit_code` and its neighbours work unchanged
+afterwards, and work repeatedly. `wait` on an already-finished child
+returns the same result rather than failing, which is what makes it safe
+to call after a `poll` that already said `Some`.
+
+There is deliberately no way to read a child's output before it exits.
+That would mean defining what a partial read of a file somebody is still
+writing means, and nothing has asked for it.
+
+### `spawn` is a keyword
+
+`Process.spawn` does not parse. `spawn` is the concurrency construct, so
+the parser wants an identifier after `Process.` and finds a keyword.
+Making it work would mean teaching the parser that a keyword following
+`.` is a member name -- real grammar work for a naming preference. It is
+`start`, which pairs with `wait` and is what Go calls it.
+
+Worth noting as a general shape: the reserved words in a small language
+are the names a library most wants. This is the second time (`handle`
+was the first) that a keyword and a good API name have collided.
+
+### What happens when a `Child` value dies
+
+The decision this issue actually turned on, and the one that is hard to
+take back.
+
+A `Child` is a `handle` (issue #9), so something must happen when the
+value dies. Two candidates:
+
+- **Kill and reap it.** Consistent with every other handle in the
+  stdlib: the handle owning the resource died, so the resource is gone.
+- **Detach -- leave it running.** What Rust's `Child` does. Never kills
+  anything by surprise.
+
+Kill and reap, and the argument is not taste. A `Child` going out of
+scope means nothing can reach that process again: the value that could
+have polled it, waited for it, signalled it, or read its output has just
+been destroyed. Leaving it alive leaks something no part of the program
+can name -- along with the temp files it is still writing to, whose
+paths died with the slot, and on POSIX a zombie until this program
+exits, because the only process that could reap it has stopped tracking
+it. Detach is not the gentler option; it is the lossier one, and finding
+that out is what settled the question.
+
+The policy still lives in a `drop_policy` field on the child's slot,
+initialised in one place and read in one place. It is not settable from
+Plum. That is deliberate: it exists so that offering the choice later is
+an ADDITION rather than a redesign. The honest limitation is that
+without a public override, changing the default later is a silent
+behaviour change for programs that never said what they wanted -- which
+is the argument for shipping the override alongside any such change,
+not before it.
+
+### What the fixture can and cannot assert
+
+`exec_corpus/process_async` re-invokes ITSELF for every child, the trick
+`process_run` established: `/bin/sleep` is not on Windows, and a shell
+would need a different command line per platform.
+
+Timings are asserted as BOUNDS and booleans, never printed -- the
+convention `select_else_timeout` settled, because a duration measured on
+a loaded runner is not reproducible.
+
+Exit codes of a SIGNALLED child are not printed either, and that is a
+real platform difference rather than caution: POSIX reports "did not
+exit normally" where Windows reports whatever code `TerminateProcess`
+was given. What the fixture checks is that `wait` returns and the child
+is gone.
+
+The kill-on-drop case needed something observable OUTSIDE the process
+tree. The child sleeps 300ms and then writes a marker file; the parent
+drops the handle immediately and looks for that file 1.2 seconds later.
+A surviving child has had four times its own sleep to leave evidence.
+Checked for non-vacuousness by running the same child directly and
+confirming it does write the file when allowed to finish -- without
+that, "no marker" is also what a broken child mode looks like.
+
+`Process` now needs `Time`, because `wait_timeout` takes a `Duration`.
+
+### The bounded wait polls, and says so
+
+POSIX has no portable timed `waitpid`. The alternatives -- `sigtimedwait`
+on SIGCHLD, `pidfd_open` -- are per-platform and interact with whatever
+else in the program handles signals. So a bounded wait polls, with a
+backoff that starts at 1ms and caps at 20ms: a short wait stays
+responsive, a long one costs about fifty wakeups a second.
+
+An UNBOUNDED wait does not poll at all. It blocks in `waitpid`, which is
+the case that would otherwise spin for hours. Windows needs none of
+this: `WaitForSingleObject` takes a timeout, so both paths are one call.
