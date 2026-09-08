@@ -1053,8 +1053,17 @@ pub let test_format_laws (): Unit = {
     check_eq("radix is clamped", "base 99", Int.to_radix(255, 99), Int.to_radix(255, 36));
 
     // Half to EVEN, unlike `Float.round`. Pinned because it is
-    // surprising, standard, and would otherwise look like a bug.
+    // surprising, standard, and would otherwise look like a bug -- and
+    // because the C library does NOT agree across platforms on these
+    // four, which is what CI on Windows found. The prelude rounds the
+    // digits itself so that every platform answers the same.
     check_eq("half to even at .5", "0.5", Float.to_fixed(0.5, 0), "0");
+    check_eq("half to even at 3.5", "3.5", Float.to_fixed(3.5, 0), "4");
+    check_eq("tie to even down", "0.125", Float.to_fixed(0.125, 2), "0.12");
+    check_eq("tie to even up", "0.375", Float.to_fixed(0.375, 2), "0.38");
+    // A carry that runs off the end of the kept digits.
+    check_eq("carry into the units", "9.99", Float.to_fixed(9.99, 1), "10.0");
+    check_eq("carry through two digits", "99.995", Float.to_fixed(99.995, 2), "100.00");
     check_eq("half to even at 1.5", "1.5", Float.to_fixed(1.5, 0), "2");
     check_eq("half to even at 2.5", "2.5", Float.to_fixed(2.5, 0), "2");
     check_eq("round is half away from zero", "2.5", Float.round(2.5).to_string(), "3");

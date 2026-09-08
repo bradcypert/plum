@@ -25,10 +25,27 @@ let main (): Unit = {
     // implementation in Plum would wrongly produce.
     println("2.675    ${Float.to_fixed(2.675, 2)}");
 
-    // Half to EVEN, which `Float.round` is not -- see the prelude's own
-    // note. Every other language pairs them this way too.
+    // Half to EVEN -- IEEE 754's default, and unbiased: rounding every
+    // tie away from zero accumulates, which is the whole reason it is
+    // called banker's rounding.
+    //
+    // **These four values are why the rounding is not left to the C
+    // library.** `snprintf` is correctly rounded on every platform and
+    // does not agree across them: glibc gives 0 2 2 4 here and the
+    // Microsoft CRT gives 1 2 3 4. CI on Windows is what found that,
+    // after this function had been written to delegate. The rounding is
+    // now applied to the digits by the prelude, so every platform
+    // answers the same.
     println("halves   ${Float.to_fixed(0.5, 0)} ${Float.to_fixed(1.5, 0)} ${Float.to_fixed(2.5, 0)} ${Float.to_fixed(3.5, 0)}");
+    println("more     ${Float.to_fixed(0.125, 2)} ${Float.to_fixed(0.375, 2)} ${Float.to_fixed(2.5, 2)}");
+    // `Float.round` rounds half AWAY from zero, and that is not an
+    // inconsistency: C specifies it that way regardless of the rounding
+    // mode, because it is arithmetic rather than rendering. Every
+    // language with both has this pair.
     println("round    ${Float.round(0.5)} ${Float.round(1.5)} ${Float.round(2.5)}");
+    // A carry that runs off the end, which the digit-string rounding
+    // has to handle rather than inherit.
+    println("carry    ${Float.to_fixed(9.99, 1)} ${Float.to_fixed(9.99, 0)} ${Float.to_fixed(99.995, 2)}");
 
     // A negative that rounds to zero keeps its sign: it is information.
     println("neg zero ${Float.to_fixed(0.0 - 0.001, 2)}");

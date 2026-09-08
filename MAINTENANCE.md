@@ -570,10 +570,17 @@ Worth knowing before you "fix" them:
   — a uniform offset is one startup problem, not many. Hoisting a table
   out of a per-character loop is still right; hoisting one that most
   programs never reach is not.
-- **`Float.to_fixed` rounds half to EVEN; `Float.round` rounds half away
-  from zero.** Not a bug and not ours — `to_fixed` is `snprintf`, and C,
-  Python, Rust and Java all pair them this way. Pinned by
-  `exec_corpus/formatting` and `test_format_laws`; do not "fix" it.
+- **`Float.to_fixed` rounds the DIGITS itself; do not hand the rounding
+  back to `snprintf`.** The C library is correctly rounded on every
+  platform and does not agree across them: glibc rounds ties to even,
+  Microsoft's CRT rounds them away from zero, so `to_fixed(2.5, 0)` was
+  "2" on Linux and "3" on Windows. The library is asked for 18 decimals
+  and the rule is applied here. Half-to-even is IEEE 754's default and
+  is unbiased; `Float.round` is half-away because C specifies `round()`
+  that way, and that pair is not an inconsistency.
+- **A number-formatting fixture must print exact HALVES.** This bug was
+  invisible to every Linux harness and only reachable through
+  `platform-smoke` on Windows, because nothing else printed a tie.
 - **`Int.to_radix` is signed and reversible; `Int.to_bits` is the bit
   pattern.** `to_binary(-1)` is `"-1"`, `to_bits(-1)` is sixty-four
   ones. Keep them distinct — collapsing them loses one of the two

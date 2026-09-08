@@ -19767,9 +19767,11 @@ and a property:
 
 - **It rounds half to EVEN while `Float.round` rounds half away from
   zero.** `Float.to_fixed(2.5, 0)` is `"2"` and `Float.round(2.5)` is
-  `3.0`. That looks like an inconsistency invented here and is not: C,
-  Python, Rust and Java all pair those two the same way. Matching every
-  other language beat agreeing with the neighbouring function.
+  `3.0`. That looks like an inconsistency invented here and is not: C
+  specifies `round()` as half-away regardless of the FP mode, because it
+  is arithmetic -- "the nearest integer, ties away" -- while formatting
+  renders under the ambient mode. Every language with both has this
+  pair.
 - **A negative value that rounds to zero keeps its sign**, so
   `to_fixed(-0.001, 2)` is `"-0.00"`. Also what C does, and it is
   information: the value was below zero.
@@ -19893,3 +19895,54 @@ Writing the program also ran into a documented limit worth seeing in
 practice: an interpolation cannot contain braces of its own, so
 `"${if n > 0 { "yes" } else { "no" }}"` does not parse and the `if` has
 to be bound to a `let` first. GRAMMAR.md says so; this is what it costs.
+
+### `snprintf` is correctly rounded and not portable (2026-09-08)
+
+The section above says `to_fixed` delegates to the C library because
+scaling in Plum is wrong in the last place. That was right about the
+scaling and wrong about the conclusion, and Windows CI is what said so.
+
+```
+Linux, macOS:  halves   0 2 2 4
+Windows:       halves   1 2 3 4
+```
+
+Those are `to_fixed` of 0.5, 1.5, 2.5 and 3.5. glibc rounds ties to
+EVEN; Microsoft's CRT rounds them AWAY FROM ZERO. Both libraries are
+correctly rounded and both agree on everything that is not an exact tie
+-- 2.675 is really 2.674999..., and both render it 2.67 -- so the
+disagreement is narrow and total: exactly the halfway cases, on every
+platform, forever.
+
+**A language whose programs print different numbers depending on the
+machine has a worse problem than one whose rounding is a line longer.**
+So the rounding moved into the prelude: ask the library for eighteen
+decimal places, which is a faithful expansion of the exact binary value
+on any platform, and apply the rounding rule to the digits.
+
+Eighteen is enough to tell a tie from a near-miss because a tie has to
+be EXACT, and the gap between neighbouring doubles is enormously larger
+than 1e-18 wherever fractional digits matter: next to 2.5 it is about
+4.4e-16, so the double after 2.5 renders as 2.500000000000000444 and is
+visibly not a tie.
+
+**Half to even was kept**, and the reasoning is worth recording because
+the first instinct was to switch to half-away for internal consistency
+with `Float.round`:
+
+- It is IEEE 754's default, `roundTiesToEven`. glibc does not choose it
+  for formatting; it inherits the ambient rounding mode. The Microsoft
+  CRT is the one departing from the standard.
+- It is unbiased. Rounding every tie away from zero accumulates:
+  summing the thousand ties 0.5 .. 999.5 gives 500,500 rounded away and
+  500,000 rounded to even, against an exact 500,000.
+
+Verified against Python on eighteen values including both tie
+directions (0.125 down to 0.12, 0.375 up to 0.38), values that only
+look like ties (0.135 is 0.13500000000000000888, so it rounds up), and
+carries that run off the end (9.99 to one place is 10.0, 99.995 to two
+is 100.00). All eighteen match.
+
+The Linux output did not change, which is the trap: every local harness
+passed before and after. Only the platform legs could see this, and
+only because the fixture happened to print exact halves.
