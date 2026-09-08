@@ -19373,3 +19373,100 @@ responsive, a long one costs about fifty wakeups a second.
 An UNBOUNDED wait does not poll at all. It blocks in `waitpid`, which is
 the case that would otherwise spin for hours. Windows needs none of
 this: `WaitForSingleObject` takes a timeout, so both paths are one call.
+
+## Reading with a deadline, and the reader that had to be replaced (2026-09-08)
+
+The other half of #7. `Os.read_stdin_line` blocks, so a program that
+wants to stay responsive while waiting for input cannot.
+
+```plum
+use Os;
+use Time;
+
+match Os.read_stdin_line_timeout(Time.millis(200)) {
+    Ok(Got(line)) => handle(line),
+    Ok(Eof) => stop(),
+    Ok(TimedOut) => redraw(),
+    Err(e) => report(e),
+}
+```
+
+### Three outcomes, and `Option` was already spent
+
+`read_stdin_line` is `Result[Option[String], String]` where `None` is
+END OF STREAM -- the distinction issue #17 built a whole shim pair to
+preserve, because a filter that stops at the first blank line is wrong
+in a way only real data shows. A timed read needs a third answer, and
+there was no room left.
+
+So `Input[T]` -- `Got`, `Eof`, `TimedOut` -- three names, and a `match`
+the compiler makes you finish. Nesting a second `Option` would have
+been free and unreadable.
+
+### The reader had to change before the timeout could exist
+
+This is the part that was not obvious from the issue.
+
+`poll` asks the KERNEL whether a descriptor has bytes. The existing
+readers used `fgetc` and `fread`, which buffer in USER SPACE. A timed
+read layered over stdio therefore reports "nothing there, timed out"
+while a complete line sits in stdio's buffer -- not a Windows quirk, a
+silent wrong answer on Linux.
+
+Two readers over one descriptor cannot both be right, so there is now
+one: a single buffer filled by raw `read`/`ReadFile`, shared by the
+timed and untimed entry points alike. The language server's own
+`stdin_read_line`/`stdin_read_n` still use stdio and were left alone --
+MAINTENANCE.md's rule about not changing shims the compiler calls -- and
+they are safe only because the language server never does a timed read.
+Mixing the two families would lose bytes, which is a hazard recorded
+rather than removed.
+
+### What the timeout bounds
+
+The whole call. The alternative -- bound only the wait for the first
+byte -- is what most such APIs do, and it is wrong in a way that hides:
+`poll` returning readable means A byte is available, not a line, so a
+slow writer leaves the reader blocked mid-line long past its deadline.
+Against a terminal, where a line arrives all at once, every test passes.
+Against a pipe it hangs.
+
+Bounding the whole call is only safe because a partial line SURVIVES.
+Bytes already read stay buffered and the next call resumes mid-line, so
+a timeout is never data loss. A version that discarded them would be
+worse than the blocking reader it replaced.
+
+### The fixture cannot test the interesting half
+
+`Process.run` feeds a child's stdin from a FILE, and a file is always
+ready -- so no deadline can expire against one. `TimedOut` is
+structurally unreachable from inside a corpus fixture, and so is the
+partial-line case that matters most.
+
+`exec_corpus/stdin_timeout` covers what a file can show: a line, a blank
+line, a final line with no trailing newline, and end of stream, all
+through the timed entry point. `bootstrap/stdin-smoke` covers the rest
+from the shell, where a writer can stop mid-line:
+
+```
+timeout
+timeout
+got[partial]
+eof
+```
+
+`par`, then two expired deadlines, then `tial\n`. That output is
+self-checking -- the string `partial` can only exist if the fragment
+survived both timeouts, and a discarding reader prints `got[tial]`.
+
+### Windows has three cases, not one
+
+`GetFileType` decides: a redirected FILE is always ready and cannot
+block; a PIPE is peeked with `PeekNamedPipe`, where a peek failure is
+end of stream rather than an error; a CONSOLE is waited on with
+`WaitForSingleObject`, which signals for any input record at all -- a
+key release, a mouse move, a focus change -- so a wake is not proof a
+byte is readable and the loop re-checks rather than trusting it.
+
+The console path is the one nothing in CI runs. `platform-smoke` runs
+the corpus fixture on Windows, and a corpus fixture's stdin is a file.

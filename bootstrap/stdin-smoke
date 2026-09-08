@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Proves the two things `exec_corpus/stdin_timeout` structurally cannot.
+#
+# A corpus fixture feeds its child's stdin through `Process.run`, which
+# uses a FILE — and a file is always ready to read, so no deadline can
+# ever expire against one. `TimedOut` is unreachable from in there, and
+# so is the case that matters most:
+#
+#   **a timeout must not lose a partial line.**
+#
+# `read_stdin_line_timeout` bounds the WHOLE call rather than just the
+# wait for the first byte, which is only safe because bytes already read
+# stay buffered for the next call. That is the property this checks, and
+# it needs a writer that stops mid-line — a shell pipeline, not a file.
+#
+# Linux/macOS development tooling, like `net-smoke` and `lsp-smoke`. The
+# Windows path for these reads is compiled by `cross-check` and
+# exercised by `platform-smoke` only as far as the corpus fixture goes.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+mkdir -p "$work/prog"
+cat > "$work/prog/main.plum" <<'EOF'
+use Os;
+use Time;
+
+let show (r: Result[Os.Input[String], String]): String = match r {
+    Ok(Got(l)) => "got[".concat(l).concat("]"),
+    Ok(Eof) => "eof",
+    Ok(TimedOut) => "timeout",
+    Err(e) => "ERR ".concat(e),
+}
+
+let loop_n (n: Int): Unit =
+    if n <= 0 { () } else {
+        println(show(Os.read_stdin_line_timeout(Time.millis(200))));
+        loop_n(n - 1)
+    }
+
+let main (): Unit = loop_n(4)
+EOF
+
+fail=0
+check() {
+    local name="$1" expected="$2" actual="$3"
+    if [ "$actual" = "$expected" ]; then
+        printf 'OK    %s\n' "$name"
+    else
+        printf 'FAIL  %s\n      expected: %s\n      actual:   %s\n' "$name" "$(echo "$expected" | tr '\n' '|')" "$(echo "$actual" | tr '\n' '|')"
+        fail=1
+    fi
+}
+
+SH_TIMEOUT="${SH_TIMEOUT:-120}" SH_MEM="${SH_MEM:-256M}" ./sh build "$work/prog" -o "$work/prog.bin" > "$work/build.log" 2>&1 || {
+    echo "stdin-smoke: build failed"; cat "$work/build.log"; exit 1
+}
+
+# Nothing ever arrives: every read must time out rather than block, and
+# the program must still finish.
+got="$(sleep 2 | timeout 30 "$work/prog.bin")"
+check "an idle pipe times out" "$(printf 'timeout\ntimeout\ntimeout\ntimeout')" "$got"
+
+# THE ONE THAT MATTERS. `par` arrives, the deadline passes twice, then
+# `tial\n` completes the line. A reader that discarded its partial line
+# on timeout would print `got[tial]` here.
+got="$( { printf 'par'; sleep 0.5; printf 'tial\n'; } | timeout 30 "$work/prog.bin" )"
+check "a timeout keeps the partial line" "$(printf 'timeout\ntimeout\ngot[partial]\neof')" "$got"
+
+# A blank line is data and the end of the stream is not, which is the
+# distinction the whole three-way result exists for.
+got="$(printf 'a\n\n' | timeout 30 "$work/prog.bin")"
+check "blank line is not end of stream" "$(printf 'got[a]\ngot[]\neof\neof')" "$got"
+
+if [ $fail -eq 0 ]; then
+    echo "stdin smoke: ok, timed reads bound the whole call and keep what they read"
+else
+    echo "stdin smoke: FAILED"
+fi
+exit $fail

@@ -216,6 +216,8 @@ See README.md for the prose introduction.
 - `let read_stdin_line (): Result[Option[String], String]`
 - `let read_stdin (max_len: Int): Result[Bytes, String]`
 - `let write_stderr (s: String): Unit`
+- `let read_stdin_line_timeout (d: Time.Duration): Result[Input[String], String]`
+- `let read_stdin_timeout (max_len: Int) (d: Time.Duration): Result[Input[Bytes], String]`
 - `let exists (path: String): Result[Bool, String]`
 - `let stat (path: String): Result[Metadata, String]`
 - `let file_size (path: String): Result[Int, String]`

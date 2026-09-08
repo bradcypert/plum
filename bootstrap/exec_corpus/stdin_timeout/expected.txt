@@ -1,0 +1,11 @@
+-- lines
+got[alpha]
+got[]
+got[beta]
+eof
+eof
+-- bytes
+got:4[0123]
+got:3[456]
+eof
+eof

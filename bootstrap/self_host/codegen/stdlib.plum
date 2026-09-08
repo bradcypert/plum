@@ -47,6 +47,8 @@ let cg_std_needs (name: String): Array[String] =
     // the thing #26 was split out to avoid.
     else if name == "Url" { ["Encoding"] }
     // `Path` asks `Os.platform()` which separator to use.
+    // `Os.read_stdin_line_timeout` takes a `Duration`.
+    else if name == "Os" { ["Time"] }
     else if name == "Path" { ["Os"] }
     // `Process.start` waits with a `Duration`, which is `Time`'s.
     else if name == "Process" { ["Time"] }
@@ -882,6 +884,8 @@ let cg_os_src (): String = Array.join([
     "    fn stdin_line_data() -> CStr;",
     "    fn stdin_bytes_n(max: Int) -> Int;",
     "    fn stdin_bytes_data() -> CStr;",
+    "    fn stdin_line_timed(timeout_nanos: Int) -> Int;",
+    "    fn stdin_bytes_timed(max: Int, timeout_nanos: Int) -> Int;",
     "    fn stderr_write(s: CStr) -> Unit;",
     "}",
     "",
@@ -938,6 +942,40 @@ let cg_os_src (): String = Array.join([
     "// program's output cannot be separated from it by whoever is reading.",
     "// No trailing newline is added; say so if you want one.",
     "pub let write_stderr (s: String): Unit = unsafe { stderr_write(s.as_cstr()); () }",
+    "",
+    "// --- Reading with a deadline (issue #7) ---",
+    "//",
+    "// Three outcomes, and `Option` has already spent itself on two of",
+    "// them: `read_stdin_line` uses `None` for end of stream, which is the",
+    "// distinction the whole function exists for. A timed read has to say",
+    "// \"a line\", \"the input ended\" or \"nothing arrived in time\", so it says",
+    "// so in a type with three names rather than nesting two `Option`s and",
+    "// asking the reader to remember which is which.",
+    "pub enum Input[T] { Got(T), Eof, TimedOut }",
+    "",
+    "// The timeout bounds the WHOLE CALL, not just the wait for the first",
+    "// byte -- a slow writer cannot leave a caller blocked mid-line past",
+    "// its deadline. Bytes already read are kept, so `TimedOut` is never",
+    "// data loss: calling again resumes where this stopped.",
+    "pub let read_stdin_line_timeout (d: Time.Duration): Result[Input[String], String] = unsafe {",
+    "    let n = stdin_line_timed(d.as_nanos());",
+    "    if n == 0 - 2 { Ok(TimedOut) }",
+    "    else if n < 0 { Ok(Eof) }",
+    "    else { match Bytes.from_cstr(stdin_line_data(), n).as_string() {",
+    "        Ok(text) => Ok(Got(text)),",
+    "        Err(e) => Err(\"Os.read_stdin_line_timeout: \".concat(e)),",
+    "    } }",
+    "}",
+    "",
+    "// Up to `max_len` bytes, with the same three outcomes. A SHORT read is",
+    "// `Got`, not `TimedOut`: a pipe handing over what it has is data",
+    "// arriving, not a deadline passing.",
+    "pub let read_stdin_timeout (max_len: Int) (d: Time.Duration): Result[Input[Bytes], String] = unsafe {",
+    "    let n = stdin_bytes_timed(max_len, d.as_nanos());",
+    "    if n == 0 - 2 { Ok(TimedOut) }",
+    "    else if n < 0 { Ok(Eof) }",
+    "    else { Ok(Got(Bytes.from_cstr(stdin_bytes_data(), n))) }",
+    "}",
     "",
     "// --- File metadata ---",
     "//",

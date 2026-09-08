@@ -1,0 +1,84 @@
+use Os;
+use Process;
+use Time;
+
+// Reading stdin with a deadline (issue #7).
+//
+// Re-invokes ITSELF and feeds the child a known stdin, the same trick
+// `process_run` and `process_async` use -- here it is what makes the
+// input deterministic rather than whatever the harness happened to
+// leave attached to the process.
+//
+// **What this fixture cannot cover: `TimedOut`.** `Process.run` feeds a
+// child's stdin from a FILE, and a file is always ready to read -- so
+// no deadline can ever expire against one, which is correct behaviour
+// and useless as a test. A timeout needs a pipe nobody is writing to,
+// and there is no portable way to arrange one from inside a fixture.
+// `bootstrap/stdin-smoke` does it from the shell instead, and covers
+// both the timeout and the partial-line case that goes with it.
+//
+// What IS covered here is everything a file can show: a line, a BLANK
+// line, a final line with no trailing newline, and the end of the
+// stream -- the four outcomes the pre-timeout API already had to keep
+// apart, now through the timed entry point.
+
+let show_line (r: Result[Os.Input[String], String]): String = match r {
+    Ok(Got(l)) => "got[".concat(l).concat("]"),
+    Ok(Eof) => "eof",
+    Ok(TimedOut) => "timeout",
+    Err(e) => "ERR ".concat(e),
+}
+
+let show_bytes (r: Result[Os.Input[Bytes], String]): String = match r {
+    Ok(Got(b)) => "got:".concat(b.len().to_string()).concat("[")
+        .concat(match b.as_string() { Ok(s) => s, Err(_) => "?" }).concat("]"),
+    Ok(Eof) => "eof",
+    Ok(TimedOut) => "timeout",
+    Err(e) => "ERR ".concat(e),
+}
+
+// A second is far longer than reading an already-complete file needs,
+// and short enough that a hang is a failure rather than a stuck run.
+let budget (): Time.Duration = Time.seconds(1)
+
+let read_lines (n: Int): Unit =
+    if n <= 0 { () } else {
+        println(show_line(Os.read_stdin_line_timeout(budget())));
+        read_lines(n - 1)
+    }
+
+let read_chunks (n: Int): Unit =
+    if n <= 0 { () } else {
+        println(show_bytes(Os.read_stdin_timeout(4, budget())));
+        read_chunks(n - 1)
+    }
+
+let child (argv: Array[String]): Unit =
+    if argv[0] == "--lines" { read_lines(5) }
+    else if argv[0] == "--bytes" { read_chunks(4) }
+    else { println("unknown child mode") }
+
+let run_self (self: String) (mode: String) (input: String): Unit =
+    match Process.run(Process.Options {
+        program: self, args: [mode], env: [], stdin: Some(input),
+    }) {
+        Err(e) => println("ERR ".concat(e)),
+        Ok(res) => print(res.stdout),
+    }
+
+let parent (): Unit = match Os.self_exe() {
+    Err(e) => println("self_exe: ".concat(e)),
+    Ok(self) => {
+        // A line, a BLANK line, and a final line with no newline after
+        // it. The blank one is the case that distinguishes this API
+        // from one that reports "" for both empty and ended.
+        println("-- lines");
+        run_self(self, "--lines", "alpha\n\nbeta");
+        // Bytes come back in whatever sizes the stream offers; a short
+        // read is data, and running out is `Eof`.
+        println("-- bytes");
+        run_self(self, "--bytes", "0123456");
+    },
+}
+
+let main (): Unit = if Array.is_empty(args()) { parent() } else { child(args()) }

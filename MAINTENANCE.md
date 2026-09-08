@@ -11,7 +11,7 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version help-check check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
-         self-test \
+         self-test stdin-smoke \
          property-check doc-check alloc-check lossless-check fmt-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
@@ -32,6 +32,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
+| `stdin-smoke` | timed stdin reads bound the whole call and keep a partial line across a timeout — the cases a corpus fixture cannot reach, because `Process.run` feeds a child from a FILE and a file never times out | 3s |
 | `self-test` | the compiler's OWN internals, via `plum test` on `bootstrap/self_host` -- the only harness that can reach platform-conditional code, since a Windows branch is unreachable on Linux rather than merely untested | 1s |
 | `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |
 | `doc-check` | every snippet in `TUTORIAL.md` compiles, runs, and prints what the tutorial says it prints | 6s |
@@ -553,6 +554,19 @@ Worth knowing before you "fix" them:
   modules it is still documentation the compiler does not check; module
   membership comes from the directory. Do not assume removing a `use`
   will break a directory-module call, because it will not.
+- **There is ONE stdin reader, and it does not use stdio.** `poll` asks
+  the kernel what is available and knows nothing about bytes `fgetc`
+  has already buffered, so a timed read layered over stdio reports
+  "timed out" with a whole line sitting in the stdio buffer. The
+  language server's private `stdin_read_line`/`stdin_read_n` still use
+  stdio — they are a different consumer that never does timed reads.
+  Mixing the two families in one program loses bytes; do not build a
+  third reader.
+- **A timeout bounds the WHOLE call and keeps what it read.** Bytes
+  already buffered survive, so calling again resumes mid-line. Bounding
+  only the wait for the first byte would pass every terminal test and
+  hang past its deadline on a pipe. `bootstrap/stdin-smoke` is what
+  proves it; the corpus cannot.
 - **A `Child` handle KILLS its process when it dies.** The policy lives
   in one `drop_policy` field in `process_shim.c`, set in one place and
   read in one place, so offering a choice later is an addition rather
