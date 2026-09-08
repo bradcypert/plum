@@ -342,7 +342,7 @@ let bump_if (tokens: Array[lexer.Token]) (pos: Int) (expected: lexer.Token): Bum
 
 let expect (tokens: Array[lexer.Token]) (pos: Int) (expected: lexer.Token) (what: String): Int =
     if check(tokens, pos, expected) { pos + 1 }
-    else { { fail_at(pos, "expected ".concat(what).concat(", found ").concat(lexer.render_token(tokens[pos]))); pos } }
+    else { { fail_at(pos, "expected ${what}, found ${lexer.render_token(tokens[pos])}"); pos } }
 
 struct IdentTok { name: String, next_pos: Int }
 let expect_ident (tokens: Array[lexer.Token]) (pos: Int): IdentTok =
@@ -605,7 +605,7 @@ let parse_handle_decl (tokens: Array[lexer.Token]) (pos: Int): HandleDeclResult 
     let p1 = expect(tokens, name_tok.next_pos, TokLBrace, "'{'");
     let key_tok = expect_ident(tokens, p1);
     let p2 = if key_tok.name == "on_drop" { expect(tokens, key_tok.next_pos, TokColon, "':'") }
-             else { { fail_at(p1, "a handle understands one key, 'on_drop', but found '".concat(key_tok.name).concat("'")); expect(tokens, key_tok.next_pos, TokColon, "':'") } };
+             else { { fail_at(p1, "a handle understands one key, 'on_drop', but found '${key_tok.name}'"); expect(tokens, key_tok.next_pos, TokColon, "':'") } };
     let fn_tok = expect_ident(tokens, p2);
     let p3 = bump_if(tokens, fn_tok.next_pos, TokComma);
     HandleDeclResult {
@@ -1252,7 +1252,7 @@ let parse_postfix (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult
 // the source text, so it deserves the caret diagnostic `fail_at`
 // already produces -- pointing at the call, quoting the line.
 let parse_builtin (tokens: Array[lexer.Token]) (pos: Int) (name: String): ExprResult = {
-    let open = expect(tokens, pos + 1, TokLParen, "'(' after `@".concat(name).concat("`"));
+    let open = expect(tokens, pos + 1, TokLParen, "'(' after `@${name}`");
     let args_r = parse_arguments(tokens, pos + 1);
     ExprResult { value: builtin_expr(name, args_r.value, pos), next_pos: args_r.next_pos }
 }
@@ -1260,7 +1260,7 @@ let parse_builtin (tokens: Array[lexer.Token]) (pos: Int) (name: String): ExprRe
 let builtin_expr (name: String) (args: Array[PExpr]) (pos: Int): PExpr =
     if name == "embed_file" { embed_file_expr(args, pos) }
     else {
-        fail_at(pos, "unknown builtin `@".concat(name).concat("`. Plum has one: `@embed_file(\"path\")`"));
+        fail_at(pos, "unknown builtin `@${name}`. Plum has one: `@embed_file(\"path\")`");
         EStr("")
     }
 
@@ -1415,7 +1415,7 @@ let parse_primary (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult
         _ => { fail_at(pos, "expected an expression"); ExprResult { value: EInt(0), next_pos: pos } },
     }
 
-// Desugars `"a${x}b"` into `"a".concat(x.to_string()).concat("b")` —
+// Desugars `"a${x}b"` into `"a${x}b"` —
 // mirrors `crates/plum-syntax/src/parser.rs::desugar_interp_str`
 // exactly, re-lexing/re-parsing each `${...}` piece's raw source text
 // via THIS SAME lexer/parser (recursive, not a separate code path).
@@ -1778,7 +1778,7 @@ let escape_str_chars (chars: Array[String]) (i: Int) (acc: String): String =
 
 let join_space (strs: Array[String]): String = Array.fold(strs, "", |acc, s| if acc == "" { s } else { acc.concat(" ").concat(s) })
 let join_comma (strs: Array[String]): String = Array.fold(strs, "", |acc, s| if acc == "" { s } else { acc.concat(",").concat(s) })
-let paren (s: String): String = "(".concat(s).concat(")")
+let paren (s: String): String = "(${s})"
 let sexpr (parts: Array[String]): String = paren(join_space(parts))
 
 let op_symbol (op: BOp): String = match op {
@@ -1791,8 +1791,8 @@ let op_symbol (op: BOp): String = match op {
 pub let render_type (ty: Ty): String = match ty {
     TyPath(segments) => join_dot(segments),
     TyGeneric(base, args) => sexpr(Array.concat(["gt", join_dot(base)], Array.map(args, |t| render_type(t)))),
-    TyFunction(params, ret) => "(fn (".concat(join_space(Array.map(params, |t| render_type(t)))).concat(") -> ").concat(render_type(ret)).concat(")"),
-    TyTuple(elems) => "(tup ".concat(join_space(Array.map(elems, |t| render_type(t)))).concat(")"),
+    TyFunction(params, ret) => "(fn (${join_space(Array.map(params, |t| render_type(t)))}) -> ${render_type(ret)})",
+    TyTuple(elems) => "(tup ${join_space(Array.map(elems, |t| render_type(t)))})",
 }
 
 // The way a person WRITES a type. `render_type` above prints the parse
@@ -1812,10 +1812,10 @@ pub let render_type (ty: Ty): String = match ty {
 pub let render_type_source (ty: Ty): String = match ty {
     TyPath(segments) => join_dot(segments),
     TyGeneric(base, args) => join_dot(base).concat("[").concat(join_list(Array.map(args, |t| render_type_source(t)))).concat("]"),
-    TyFunction(params, ret) => "(".concat(join_list(Array.map(params, |t| render_type_source(t)))).concat(") -> ").concat(render_type_source(ret)),
+    TyFunction(params, ret) => "(${join_list(Array.map(params, |t| render_type_source(t)))}) -> ${render_type_source(ret)}",
     // A tuple of one is not a tuple; `(Int)` is how a parenthesised
     // type is written, and the parser produces `TyTuple` for both.
-    TyTuple(elems) => "(".concat(join_list(Array.map(elems, |t| render_type_source(t)))).concat(")"),
+    TyTuple(elems) => "(${join_list(Array.map(elems, |t| render_type_source(t)))})",
 }
 
 let join_list (strs: Array[String]): String =
@@ -1833,13 +1833,13 @@ let render_expr (e: PExpr): String = match e {
     EArray(elems) => sexpr(Array.concat(["array"], Array.map(elems, |x| render_expr(x)))),
     EUnary(op, inner) => {
         let sym = match op { UNeg => "-", UNot => "!", UBitNot => "~" };
-        "(".concat(sym).concat(" ").concat(render_expr(inner)).concat(")")
+        "(${sym} ${render_expr(inner)})"
     },
     EBinary(op, lhs, rhs) => sexpr([op_symbol(op), render_expr(lhs), render_expr(rhs)]),
-    EField(base, name) => "(field ".concat(render_expr(base)).concat(" ").concat(name).concat(")"),
+    EField(base, name) => "(field ${render_expr(base)} ${name})",
     ECall(callee, args) => sexpr(Array.concat(["call", render_expr(callee)], Array.map(args, |x| render_expr(x)))),
     EGenericInst(callee, args) => sexpr(Array.concat(["generic", render_expr(callee)], Array.map(args, |t| render_type(t)))),
-    EIndex(base, index) => "(index ".concat(render_expr(base)).concat(" ").concat(render_expr(index)).concat(")"),
+    EIndex(base, index) => "(index ${render_expr(base)} ${render_expr(index)})",
     EBlock(block) => render_block(block),
     EIf(cond, then_branch, else_branch) => {
         let base = ["if", render_expr(cond), render_block(then_branch)];
@@ -1847,10 +1847,10 @@ let render_expr (e: PExpr): String = match e {
         sexpr(parts)
     },
     EMatch(scrutinee, arms, _) => sexpr(Array.concat(["match", render_expr(scrutinee)], Array.map(arms, |a| render_arm(a)))),
-    EFor(pattern, iter, body) => "(for ".concat(render_pattern(pattern)).concat(" ").concat(render_expr(iter)).concat(" ").concat(render_block(body)).concat(")"),
+    EFor(pattern, iter, body) => "(for ${render_pattern(pattern)} ${render_expr(iter)} ${render_block(body)})",
     EClosure(params, body) => sexpr(["closure", paren(join_space(params)), render_expr(body)]),
-    EUnsafe(block) => "(unsafe ".concat(render_block(block)).concat(")"),
-    ESpawn(block) => "(spawn ".concat(render_block(block)).concat(")"),
+    EUnsafe(block) => "(unsafe ${render_block(block)})",
+    ESpawn(block) => "(spawn ${render_block(block)})",
     EStructLit(path, fields, spread) => {
         let field_strs = Array.map(fields, |f| render_field_init(f));
         let base = Array.concat(["struct-lit", join_dot(path)], field_strs);
@@ -1877,22 +1877,22 @@ let render_block (b: PBlock): String = {
 let render_stmt (s: PStmt): String = match s {
     SLet(is_mut, pattern, _, value) => {
         let mut_marker = if is_mut { "mut " } else { "" };
-        "(let ".concat(mut_marker).concat(render_pattern(pattern)).concat(" ").concat(render_expr(value)).concat(")")
+        "(let ${mut_marker}${render_pattern(pattern)} ${render_expr(value)})"
     },
-    SAssign(name, value) => "(= ".concat(name).concat(" ").concat(render_expr(value)).concat(")"),
-    SExpr(e) => "(stmt ".concat(render_expr(e)).concat(")"),
+    SAssign(name, value) => "(= ${name} ${render_expr(value)})",
+    SExpr(e) => "(stmt ${render_expr(e)})",
 }
 
 let render_arm (a: MatchArmNode): String = match a.guard {
-    Some(g) => "(arm ".concat(render_pattern(a.pattern)).concat(" if=").concat(render_expr(g)).concat(" ").concat(render_expr(a.body)).concat(")"),
-    None => "(arm ".concat(render_pattern(a.pattern)).concat(" ").concat(render_expr(a.body)).concat(")"),
+    Some(g) => "(arm ${render_pattern(a.pattern)} if=${render_expr(g)} ${render_expr(a.body)})",
+    None => "(arm ${render_pattern(a.pattern)} ${render_expr(a.body)})",
 }
 
 let render_select_arm (a: SelectArmNode): String =
     match a.kind {
-        SARecv(pattern, expr) => "(arm ".concat(render_pattern(pattern)).concat(" = ").concat(render_expr(expr)).concat(" ").concat(render_expr(a.body)).concat(")"),
-        SAAfter(d) => "(after ".concat(render_expr(d)).concat(" ").concat(render_expr(a.body)).concat(")"),
-        SAElse => "(else ".concat(render_expr(a.body)).concat(")"),
+        SARecv(pattern, expr) => "(arm ${render_pattern(pattern)} = ${render_expr(expr)} ${render_expr(a.body)})",
+        SAAfter(d) => "(after ${render_expr(d)} ${render_expr(a.body)})",
+        SAElse => "(else ${render_expr(a.body)})",
     }
 
 let render_field_pattern (fp: FieldPatternNode): String = fp.name.concat("=").concat(render_pattern(fp.pattern))
@@ -1922,8 +1922,8 @@ let join_plus (strs: Array[String]): String = Array.fold(strs, "", |acc, s| if a
 
 let render_param (p: ParamNode): String = match p {
     ParamIdent(name) => name,
-    ParamPatternTy(pattern, Some(ty)) => "(".concat(render_pattern(pattern)).concat(":").concat(render_type(ty)).concat(")"),
-    ParamPatternTy(pattern, None) => "(".concat(render_pattern(pattern)).concat(")"),
+    ParamPatternTy(pattern, Some(ty)) => "(${render_pattern(pattern)}:${render_type(ty)})",
+    ParamPatternTy(pattern, None) => "(${render_pattern(pattern)})",
 }
 
 let render_item (item: ItemNode): String = {
@@ -1959,11 +1959,11 @@ let render_item (item: ItemNode): String = {
             sexpr(Array.concat(base, Array.map(block.fns, |f| {
                 let params_str = join_comma(Array.map(f.params, |p| p.name.concat(":").concat(render_type(p.ty))));
                 let ret_str = match f.ret_ty { Some(t) => "->".concat(render_type(t)), None => "" };
-                "fn ".concat(f.name).concat("(").concat(params_str).concat(")").concat(ret_str)
+                "fn ${f.name}(${params_str})${ret_str}"
             })))
         },
         IKHandle(decl) => sexpr(["handle", pub_marker.concat(decl.name), "on_drop:".concat(decl.on_drop)]),
-        IKUse(decl) => "(".concat(pub_marker).concat("use ").concat(join_dot(decl.path)).concat(")"),
+        IKUse(decl) => "(${pub_marker}use ${join_dot(decl.path)})",
     }
 }
 

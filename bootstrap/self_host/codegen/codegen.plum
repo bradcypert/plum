@@ -170,8 +170,8 @@ let cg_ty_name (t: CgTy): String =
         CgBytes => "Bytes",
         CgStruct(name) => name,
         CgEnum(name) => name,
-        CgArray(elem) => "Array[".concat(cg_ty_name(elem)).concat("]"),
-        CgRef(inner) => "Ref[".concat(cg_ty_name(inner)).concat("]"),
+        CgArray(elem) => "Array[${cg_ty_name(elem)}]",
+        CgRef(inner) => "Ref[${cg_ty_name(inner)}]",
         CgClosure(_, ret) => "(..) -> ".concat(cg_ty_name(ret)),
         CgTuple(elems) => "(".concat(cg_ty_name_list(elems, 0, "")).concat(")"),
         CgHandle(name) => name,
@@ -389,7 +389,7 @@ let cg_ity_mangle (t: typecheck.ITy): String =
         // `cg_of_ity` — and it must default to the same thing here, or
         // a call site and its callee would disagree about the symbol.
         ITVar(_) => "Unit",
-        ITParam(name) => { cg_fail("internal: generic parameter ".concat(name).concat(" was not substituted before mangling")); "T" },
+        ITParam(name) => { cg_fail("internal: generic parameter ${name} was not substituted before mangling"); "T" },
     }
 
 let cg_inst_eq (a: CgInst) (b: CgInst): Bool =
@@ -592,7 +592,7 @@ let cg_frame_name (module_name: String) (name: String): String =
 // One private constant per emitted function, keyed by its SYMBOL, which
 // is already unique per monomorphization.
 let cg_frame_global (sym: String) (shown: String): String =
-    "@.fname_".concat(sym).concat(" = private constant [").concat((shown.len() + 1).to_string())
+    "@.fname_${sym} = private constant [${(shown.len() + 1)}"
         .concat(" x i8] c\"").concat(cg_escape_llvm(shown)).concat("\\00\"\n")
 
 // A COMPILER-GENERATED function is not a frame a reader wants. Contract
@@ -610,7 +610,7 @@ let cg_frame_visible (name: String): Bool = !parser.bare_type_name(name).starts_
 // AND tail calls" entry records the measurements behind this shape.
 let cg_frame_push (sym: String) (shown: String): String =
     if DEBUG_FRAMES.get() && cg_frame_visible(shown) {
-        "  call void @plum_frame_push(ptr @.fname_".concat(sym).concat(")\n")
+        "  call void @plum_frame_push(ptr @.fname_${sym})\n"
     } else { "" }
 
 // The pop a TAIL-POSITION expression owes, or nothing if this function
@@ -788,7 +788,7 @@ let cg_dbg_file (path: String): DbgFile =
             // directory the macOS bundle held 96,843 bytes of line
             // table naming seven C shims and not one `.plum` file, one
             // OSO short of the eight objects linked.
-            cg_dbg_emit("!".concat(id.to_string()).concat(" = !DIFile(filename: \"")
+            cg_dbg_emit("!${id} = !DIFile(filename: \""
                 .concat(cg_escape_llvm(cg_path_base(path))).concat("\", directory: \"")
                 .concat(cg_escape_llvm(cg_path_dir(path))).concat("\")\n"));
             DBG_FILES.set(DBG_FILES.get().push(f));
@@ -822,7 +822,7 @@ let cg_dbg_loc (sp: Int) (f: DbgFile) (off: Int): Int = {
     if seen >= 0 { seen }
     else {
         let id = cg_dbg_next(());
-        cg_dbg_emit("!".concat(id.to_string()).concat(" = !DILocation(line: ").concat(line.to_string())
+        cg_dbg_emit("!${id} = !DILocation(line: ${line}"
             .concat(", column: 1, scope: !").concat(sp.to_string()).concat(")\n"));
         DBG_LOCS.set(DBG_LOCS.get().push(DbgLoc { line: line, id: id }));
         id
@@ -1023,7 +1023,7 @@ let cg_tail_releases (p: CgProgram) (k: Int): String =
 let cg_str_constant (n: Int) (s: String): String = {
     let bytes = s.len();
     let arr = bytes + 1;
-    "@.str".concat(n.to_string()).concat(" = private global { i64, i64, [").concat(arr.to_string()).concat(" x i8] } { i64 -1, i64 ")
+    "@.str${n} = private global { i64, i64, [${arr} x i8] } { i64 -1, i64 "
         .concat(bytes.to_string()).concat(", [").concat(arr.to_string()).concat(" x i8] c\"").concat(cg_escape_llvm(s)).concat("\\00\" }\n")
 }
 
@@ -1091,7 +1091,7 @@ let cg_const_empty (n: Int): ConstList = ConstList { tys: [], vals: [], globals:
 let cg_const_slot_ty (t: String): String = if t == "i1" { "i1, [7 x i8]" } else { t }
 
 let cg_const_slot_val (t: String) (v: String): String =
-    if t == "i1" { "i1 ".concat(v).concat(", [7 x i8] zeroinitializer") } else { t.concat(" ").concat(v) }
+    if t == "i1" { "i1 ${v}, [7 x i8] zeroinitializer" } else { t.concat(" ").concat(v) }
 
 let cg_const_tys (tys: Array[String]) (i: Int) (acc: String): String =
     if i >= tys.len() { acc } else { cg_const_tys(tys, i + 1, acc.concat(", ").concat(cg_const_slot_ty(tys[i]))) }
@@ -1101,8 +1101,8 @@ let cg_const_vals (tys: Array[String]) (vals: Array[String]) (i: Int) (acc: Stri
 
 let cg_const_cell (c: ConstList) (head_ty: String) (head_val: String) (pad: Int): ConstVal = {
     let g = "@.const".concat(c.n.to_string());
-    let padding = if pad > 0 { ", [".concat(pad.to_string()).concat(" x i8]") } else { "" };
-    let pad_val = if pad > 0 { ", [".concat(pad.to_string()).concat(" x i8] zeroinitializer") } else { "" };
+    let padding = if pad > 0 { ", [${pad} x i8]" } else { "" };
+    let pad_val = if pad > 0 { ", [${pad} x i8] zeroinitializer" } else { "" };
     ConstVal { ty: "ptr", val: g, n: c.n + 1,
         globals: c.globals.concat(g).concat(" = private global <{ ").concat(head_ty).concat(cg_const_tys(c.tys, 0, "")).concat(padding).concat(" }> <{ ")
             .concat(head_val).concat(cg_const_vals(c.tys, c.vals, 0, "")).concat(pad_val).concat(" }>\n") }
@@ -1223,7 +1223,7 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
             let ty = cg_ty(p, e);
             let reg = cg_reg(n);
             Emit {
-                code: "  ".concat(reg).concat(" = load ").concat(cg_llvm_ty(ty)).concat(", ptr ").concat(cg_global_slot(gm, name)).concat("\n").concat(cg_inc(ty, reg)),
+                code: "  ${reg} = load ${cg_llvm_ty(ty)}, ptr ${cg_global_slot(gm, name)}\n${cg_inc(ty, reg)}",
                 allocas: "", releases: "", globals: "", val: reg, ty: ty, n: n + 1,
             }
         },
@@ -1330,7 +1330,7 @@ let cg_of_ity (t: typecheck.ITy): CgTy =
         // type, and it is why this backend compiles `let empty = []`
         // while the REAL compiler rejects it as uninferable.
         ITVar(_) => CgUnit,
-        ITParam(name) => { cg_fail("internal: generic parameter ".concat(name).concat(" reached codegen — generics aren't supported")); CgUnit },
+        ITParam(name) => { cg_fail("internal: generic parameter ${name} reached codegen — generics aren't supported"); CgUnit },
     }
 
 let cg_unit_emit (n: Int): Emit = Emit { code: "", allocas: "", releases: "", globals: "", val: "0", ty: CgUnit, n: n }
@@ -1374,7 +1374,7 @@ let cg_ident (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (ty: Cg
                 // Rule 3: a read yields a NEW owned reference. The slot
                 // keeps its own, so the two are independent and the
                 // slot's eventual release stays balanced.
-                code: "  ".concat(reg).concat(" = load ").concat(cg_llvm_ty(slot.ty)).concat(", ptr ").concat(slot.ptr).concat("\n").concat(cg_inc(slot.ty, reg)),
+                code: "  ${reg} = load ${cg_llvm_ty(slot.ty)}, ptr ${slot.ptr}\n${cg_inc(slot.ty, reg)}",
                 allocas: "", releases: "", globals: "", val: reg, ty: slot.ty, n: n + 1,
             }
         },
@@ -1390,13 +1390,13 @@ let cg_unary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.UOp) (inne
     let reg = cg_reg(r.n);
     let line = match op {
         UNeg => match r.ty {
-            CgFloat => "  ".concat(reg).concat(" = fneg double ").concat(r.val).concat("\n"),
-            _ => "  ".concat(reg).concat(" = sub i64 0, ").concat(r.val).concat("\n"),
+            CgFloat => "  ${reg} = fneg double ${r.val}\n",
+            _ => "  ${reg} = sub i64 0, ${r.val}\n",
         },
-        UNot => "  ".concat(reg).concat(" = xor i1 ").concat(r.val).concat(", true\n"),
+        UNot => "  ${reg} = xor i1 ${r.val}, true\n",
         // `~x` is `x xor -1`: LLVM has no bitwise-not instruction, and
         // this is the canonical spelling of one.
-        UBitNot => "  ".concat(reg).concat(" = xor i64 ").concat(r.val).concat(", -1\n"),
+        UBitNot => "  ${reg} = xor i64 ${r.val}, -1\n",
     };
     Emit { code: r.code.concat(line), allocas: r.allocas, releases: r.releases, globals: r.globals, val: reg, ty: r.ty, n: r.n + 1 }
 }
@@ -1459,7 +1459,7 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
         // so the operator and the helper can no longer disagree.
         let cmp = cg_reg(b.n);
         let res = cg_reg(b.n + 1);
-        let line = "  ".concat(cmp).concat(" = call i64 @plum_str_cmp_raw(ptr ").concat(a.val).concat(", ptr ").concat(b.val).concat(")\n")
+        let line = "  ${cmp} = call i64 @plum_str_cmp_raw(ptr ${a.val}, ptr ${b.val})\n"
             .concat("  ").concat(res).concat(" = ").concat(cg_str_rel_pred(op)).concat(" i64 ").concat(cmp).concat(", 0\n");
         Emit { code: code.concat(line).concat(a.drop).concat(b.drop), allocas: allocas, releases: releases, globals: globals, val: res, ty: CgBool, n: b.n + 2 }
     } else if cg_is_checked_arith(op, a.ty) {
@@ -1481,10 +1481,10 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
         // program did not merely crash, it printed a wrong number and
         // kept going.
         let g = cg_div_guard(a.val, b.val, b.n);
-        let line = "  ".concat(g.reg).concat(" = ").concat(cg_binary_op_text(op, a.ty)).concat(" ").concat(cg_llvm_ty(a.ty)).concat(" ").concat(a.val).concat(", ").concat(b.val).concat("\n");
+        let line = "  ${g.reg} = ${cg_binary_op_text(op, a.ty)} ${cg_llvm_ty(a.ty)} ${a.val}, ${b.val}\n";
         Emit { code: code.concat(g.code).concat(line), allocas: allocas, releases: releases, globals: globals, val: g.reg, ty: ty, n: g.next }
     } else {
-        let line = "  ".concat(reg).concat(" = ").concat(cg_binary_op_text(op, a.ty)).concat(" ").concat(cg_llvm_ty(a.ty)).concat(" ").concat(a.val).concat(", ").concat(b.val).concat("\n");
+        let line = "  ${reg} = ${cg_binary_op_text(op, a.ty)} ${cg_llvm_ty(a.ty)} ${a.val}, ${b.val}\n";
         Emit { code: code.concat(line), allocas: allocas, releases: releases, globals: globals, val: reg, ty: ty, n: b.n + 1 }
     }
 }
@@ -1536,7 +1536,7 @@ let cg_overflow_guard (intrinsic: String) (lhs: String) (rhs: String) (n: Int): 
     let ok = cg_reg(n + 3);
     let cont = cg_label(n + 4);
     let bad = cg_label(n + 5);
-    let code = "  ".concat(pair).concat(" = call { i64, i1 } @").concat(intrinsic).concat("(i64 ").concat(lhs).concat(", i64 ").concat(rhs).concat(")\n")
+    let code = "  ${pair} = call { i64, i1 } @${intrinsic}(i64 ${lhs}, i64 ${rhs})\n"
         .concat("  ").concat(value).concat(" = extractvalue { i64, i1 } ").concat(pair).concat(", 0\n")
         .concat("  ").concat(ovf).concat(" = extractvalue { i64, i1 } ").concat(pair).concat(", 1\n")
         .concat("  ").concat(ok).concat(" = xor i1 ").concat(ovf).concat(", true\n")
@@ -1580,7 +1580,7 @@ let cg_div_guard (lhs: String) (rhs: String) (n: Int): DivGuard = {
     let ovf_ok_reg = cg_reg(n + 6);
     let ovf_ok = cg_label(n + 7);
     let ovf_bad = cg_label(n + 8);
-    let code = "  ".concat(nz).concat(" = icmp ne i64 ").concat(rhs).concat(", 0\n")
+    let code = "  ${nz} = icmp ne i64 ${rhs}, 0\n"
         .concat("  br i1 ").concat(nz).concat(", label %").concat(zero_ok).concat(", label %").concat(zero_bad).concat("\n")
         .concat(zero_bad).concat(":\n")
         .concat("  call void @plum_div_zero_fail()\n")
@@ -1626,7 +1626,7 @@ let cg_shift_guard (op: parser.BOp) (lhs: String) (rhs: String) (n: Int): DivGua
     let clamped = cg_reg(n + 4);
     let raw = cg_reg(n + 5);
     let res = cg_reg(n + 6);
-    let head = "  ".concat(neg).concat(" = icmp slt i64 ").concat(rhs).concat(", 0\n")
+    let head = "  ${neg} = icmp slt i64 ${rhs}, 0\n"
         .concat("  br i1 ").concat(neg).concat(", label %").concat(bad).concat(", label %").concat(ok).concat("\n")
         .concat(bad).concat(":\n")
         .concat("  call void @plum_shift_fail()\n")
@@ -1693,9 +1693,9 @@ let cg_shortcircuit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (lhs: typecheck
     let res = cg_reg(b.n);
     let shortcut = if is_and { "0" } else { "1" };
     let br = if is_and {
-        "  br i1 ".concat(a.val).concat(", label %").concat(rhs_label).concat(", label %").concat(end_label).concat("\n")
+        "  br i1 ${a.val}, label %${rhs_label}, label %${end_label}\n"
     } else {
-        "  br i1 ".concat(a.val).concat(", label %").concat(end_label).concat(", label %").concat(rhs_label).concat("\n")
+        "  br i1 ${a.val}, label %${end_label}, label %${rhs_label}\n"
     };
     let code = a.code
         .concat("  store i1 ").concat(shortcut).concat(", ptr ").concat(slot).concat("\n")
@@ -1706,7 +1706,7 @@ let cg_shortcircuit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (lhs: typecheck
         .concat("  br label %").concat(end_label).concat("\n")
         .concat(end_label).concat(":\n")
         .concat("  ").concat(res).concat(" = load i1, ptr ").concat(slot).concat("\n");
-    Emit { code: code, allocas: "  ".concat(slot).concat(" = alloca i1\n").concat(a.allocas).concat(b.allocas), releases: a.releases.concat(b.releases), globals: a.globals.concat(b.globals), val: res, ty: CgBool, n: b.n + 1 }
+    Emit { code: code, allocas: "  ${slot} = alloca i1\n${a.allocas}${b.allocas}", releases: a.releases.concat(b.releases), globals: a.globals.concat(b.globals), val: res, ty: CgBool, n: b.n + 1 }
 }
 
 // --- if/else ---
@@ -1745,7 +1745,7 @@ let cg_if (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cond: typecheck.TExpr) (
         .concat("  br label %").concat(end_label).concat("\n")
         .concat(end_label).concat(":\n")
         .concat("  ").concat(res).concat(" = load ").concat(lty).concat(", ptr ").concat(slot).concat("\n");
-    Emit { code: code, allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(c.allocas).concat(t.allocas).concat(e.allocas), releases: c.releases.concat(t.releases).concat(e.releases), globals: c.globals.concat(t.globals).concat(e.globals), val: res, ty: ty, n: e.n + 1 }
+    Emit { code: code, allocas: "  ${slot} = alloca ${lty}\n${c.allocas}${t.allocas}${e.allocas}", releases: c.releases.concat(t.releases).concat(e.releases), globals: c.globals.concat(t.globals).concat(e.globals), val: res, ty: ty, n: e.n + 1 }
 }
 
 // --- for loops ---
@@ -1797,7 +1797,7 @@ let cg_for (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPatter
         .concat("  store i64 ").concat(step_next).concat(", ptr ").concat(iv).concat("\n")
         .concat("  br label %").concat(cond_label).concat("\n")
         .concat(end_label).concat(":\n");
-    let allocas = "  ".concat(iv).concat(" = alloca i64\n")
+    let allocas = "  ${iv} = alloca i64\n"
         .concat("  ").concat(hi_slot).concat(" = alloca i64\n")
         .concat(lo.allocas).concat(hi.allocas).concat(b.allocas);
     Emit { code: code, allocas: allocas, releases: lo.releases.concat(hi.releases).concat(b.releases), globals: lo.globals.concat(hi.globals).concat(b.globals), val: "0", ty: CgUnit, n: b.n + 2 }
@@ -1858,7 +1858,7 @@ let cg_for_array (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.P
         .concat("  br label %").concat(cond_label).concat("\n")
         .concat(end_label).concat(":\n")
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), a.val));
-    let allocas = "  ".concat(iv).concat(" = alloca i64\n")
+    let allocas = "  ${iv} = alloca i64\n"
         .concat("  ").concat(len_slot).concat(" = alloca i64\n")
         .concat("  ").concat(slot).concat(" = alloca ").concat(lty).concat("\n")
         .concat(a.allocas).concat(b.allocas);
@@ -1868,7 +1868,7 @@ let cg_for_array (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.P
 // The element pointer for a RUNTIME index, as opposed to
 // `cg_elem_ptr_lines`'s numbered-register form.
 let cg_elem_ptr_lines_at (arr: String) (idx: String) (out: String): String =
-    "  ".concat(out).concat("_off = mul i64 ").concat(idx).concat(", 8\n")
+    "  ${out}_off = mul i64 ${idx}, 8\n"
         .concat("  ").concat(out).concat("_b = getelementptr i8, ptr ").concat(arr).concat(", i64 ").concat(out).concat("_off\n")
         .concat("  ").concat(out).concat(" = getelementptr i8, ptr ").concat(out).concat("_b, i64 ").concat(cg_array_elem_offset(0).to_string()).concat("\n")
 
@@ -1987,7 +1987,7 @@ let cg_stmts (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typechec
 // carry no trace of debug information.
 let cg_dbg_marker (starts: Array[Int]) (i: Int): String =
     if !DEBUG_INFO.get() || i >= starts.len() || starts[i] < 0 { "" }
-    else { "  ; plum.off ".concat(starts[i].to_string()).concat("\n") }
+    else { "  ; plum.off ${starts[i]}\n" }
 
 let cg_stmts_at (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typecheck.TStmt]) (i: Int) (starts: Array[Int]): BlockEmit =
     if i >= stmts.len() { BlockEmit { code: "", allocas: "", releases: "", globals: "", env: env, n: n } }
@@ -2045,7 +2045,7 @@ let cg_stmts_at (p: CgProgram) (env: Array[CgSlot]) (n: Int) (stmts: Array[typec
                     // whose release goes missing leaks, and one whose
                     // null-init goes missing releases uninitialised
                     // stack the first time it is overwritten.
-                    allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(cg_null_init(vty, slot)).concat(r.allocas).concat(rest.allocas),
+                    allocas: "  ${slot} = alloca ${lty}\n${cg_null_init(vty, slot)}${r.allocas}${rest.allocas}",
                     // LIFO: everything declared LATER in this block is
                     // released before this slot is. Acquire a lock and
                     // then a file, and the file is released first --
@@ -2675,7 +2675,7 @@ let cg_self_concat (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
                 let recv = cg_reg(n);
                 let arg = cg_borrow(p, env, n + 1, args[0]);
                 let out = cg_reg(arg.n);
-                let code = "  ".concat(recv).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
+                let code = "  ${recv} = load ptr, ptr ${slot.ptr}\n"
                     .concat(arg.code)
                     .concat("  ").concat(out).concat(" = call ptr @plum_str_concat_reuse(ptr ").concat(recv).concat(", ptr ").concat(arg.val).concat(")\n")
                     .concat(arg.drop)
@@ -2703,7 +2703,7 @@ let cg_self_push (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (va
                 let cell = cg_reg(v.n);
                 let len = cg_reg(v.n + 1);
                 let idx = cg_reg(v.n + 2);
-                let code = "  ".concat(recv).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
+                let code = "  ${recv} = load ptr, ptr ${slot.ptr}\n"
                     .concat(v.code)
                     .concat("  ").concat(cell).concat(" = call ptr @plum_array_push_grow(ptr ").concat(recv).concat(", i1 ").concat(if cg_is_heap(elem) { "1" } else { "0" }).concat(", ptr ").concat(cg_rel_sym(slot.ity)).concat(")\n")
                     .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(cell).concat(")\n")
@@ -2762,7 +2762,7 @@ let cg_println (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arg: typecheck.TExp
         let reg = cg_reg(s.n);
         Emit {
             code: s.code.concat("  ").concat(reg).concat(" = call i1 @plum_println(ptr ").concat(s.val).concat(")\n")
-                .concat(if cg_rc_enabled(()) { "  call void @plum_rel_str(ptr ".concat(s.val).concat(")\n") } else { "" }),
+                .concat(if cg_rc_enabled(()) { "  call void @plum_rel_str(ptr ${s.val})\n" } else { "" }),
             allocas: s.allocas, releases: s.releases, globals: s.globals, val: reg, ty: CgUnit, n: s.n + 1,
         }
     }
@@ -2832,7 +2832,7 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
             None =>
                 if false { "" }
                 else if cg_has_fn_in(p, module_name, name, 0) { "@".concat(cg_sym(module_name, name, cg_concrete_list(p, targs, 0, []))) }
-                else { { cg_fail("prelude function ".concat(name).concat(" has no implementation in this backend's runtime yet")); "@plum_missing" } },
+                else { { cg_fail("prelude function ${name} has no implementation in this backend's runtime yet"); "@plum_missing" } },
         } };
     let a = cg_args(p, env, n, args, 0, "", "", "", "", []);
     let reg = cg_reg(a.n);
@@ -2853,7 +2853,7 @@ let cg_fn_call_real (p: CgProgram) (env: Array[CgSlot]) (n: Int) (module_name: S
     let kw = if is_self || Option.unwrap_or(Option.map(cg_callee_proto(p, module_name, name, cg_concrete_list(p, targs, 0, [])), |q| q == p.cur_proto), false) {
         "musttail call "
     } else { "call " };
-    let call = "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(sym).concat("(").concat(cg_join_commas(a.vals)).concat(")\n")
+    let call = "  ${reg} = call ${cg_llvm_ty(ret)} ${sym}(${cg_join_commas(a.vals)})\n"
         .concat(if Option.is_some(cg_runtime_fn(name)) || name == "Array.concat" { cg_dec_args(p, args, a.vals, 0, "") } else { "" });
     let code = if cyclic {
         // Releases first, then return the call's own result -- see
@@ -3033,7 +3033,7 @@ let cg_method_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (method_name: St
     else if method_name == "to_upper" { cg_str_unop(p, env, n, base, "@plum_str_to_upper") }
     else if method_name == "to_lower" { cg_str_unop(p, env, n, base, "@plum_str_to_lower") }
     else if method_name == "trim" { cg_str_unop(p, env, n, base, "@plum_str_trim") }
-    else { { cg_fail("method .".concat(method_name).concat("() isn't supported by this backend yet")); cg_unit_emit(n) } }
+    else { { cg_fail("method .${method_name}() isn't supported by this backend yet"); cg_unit_emit(n) } }
 
 // The aggregate arm of `.to_string()`. The base arrived OWNED, so it
 // is released once the rendering has read it.
@@ -3083,7 +3083,7 @@ let cg_to_string (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         // same reason a `Ref` refuses. Printing one used to "work"
         // because these were plain `Int`s -- printing the raw shim
         // pointer, which was never useful and is now not even stable.
-        CgHandle(name) => { cg_fail(".to_string() on a ".concat(name).concat(" isn't supported")); cg_unit_emit(b.n) },
+        CgHandle(name) => { cg_fail(".to_string() on a ${name} isn't supported"); cg_unit_emit(b.n) },
     }
 }
 
@@ -3212,7 +3212,7 @@ let cg_move_or_own (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TE
                     Some(slot) => {
                         let reg = cg_reg(n);
                         BorrowEmit {
-                            code: "  ".concat(reg).concat(" = load ").concat(cg_llvm_ty(slot.ty)).concat(", ptr ").concat(slot.ptr).concat("\n")
+                            code: "  ${reg} = load ${cg_llvm_ty(slot.ty)}, ptr ${slot.ptr}\n"
                                 .concat(cg_null_out(slot)),
                             allocas: "", releases: "", globals: "", val: reg, ty: slot.ty, drop: "", n: n + 1,
                         }
@@ -3226,7 +3226,7 @@ let cg_move_or_own (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TE
 // Null the slot a reference was moved out of, so its exit release is a
 // no-op rather than a second decrement.
 let cg_null_out (slot: CgSlot): String =
-    if cg_rc_enabled(()) && cg_is_heap(slot.ty) { "  store ptr null, ptr ".concat(slot.ptr).concat("\n") } else { "" }
+    if cg_rc_enabled(()) && cg_is_heap(slot.ty) { "  store ptr null, ptr ${slot.ptr}\n" } else { "" }
 
 // --- Strings and arrays ---
 
@@ -3263,7 +3263,7 @@ let cg_len (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.TExpr):
 // synthesizing types here instead of reading them.
 let cg_array_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[typecheck.TExpr]) (ty: CgTy): Emit = {
     let cell = cg_reg(n);
-    let head = "  ".concat(cell).concat(" = call ptr @plum_array_new(i64 ").concat(elems.len().to_string()).concat(")\n");
+    let head = "  ${cell} = call ptr @plum_array_new(i64 ${elems.len()})\n";
     let st = cg_array_store_elems(p, env, n + 1, cell, elems, 0, "", "", "", "");
     Emit { code: head.concat(st.code), allocas: st.allocas, releases: st.releases, globals: st.globals, val: cell, ty: ty, n: st.n }
 }
@@ -3321,7 +3321,7 @@ let cg_array_lit_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Arra
 // common case and emits no call at all.
 let cg_array_clear_call (p: CgProgram) (slot: CgSlot) (old: String): String =
     if cg_is_heap(cg_elem_ty(slot.ty)) {
-        "  call void @plum_array_clear(ptr ".concat(old).concat(", ptr ").concat(cg_rel_sym(cg_array_elem_ity(p, slot.ity))).concat(")\n")
+        "  call void @plum_array_clear(ptr ${old}, ptr ${cg_rel_sym(cg_array_elem_ity(p, slot.ity))})\n"
     } else { "" }
 
 let cg_store_elem_vals (cell: String) (vals: Array[String]) (i: Int) (acc: String): String =
@@ -3423,7 +3423,7 @@ let cg_array_store_elems (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: Str
     else {
         let r = cg_expr(p, env, n, elems[i]);
         let ep = cg_reg(r.n);
-        let line = "  ".concat(ep).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_array_elem_offset(i).to_string()).concat("\n")
+        let line = "  ${ep} = getelementptr i8, ptr ${cell}, i64 ${cg_array_elem_offset(i)}\n"
             .concat("  store ").concat(cg_llvm_ty(r.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(ep).concat("\n");
         cg_array_store_elems(p, env, r.n + 1, cell, elems, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
     }
@@ -3507,7 +3507,7 @@ let cg_array_set (p: CgProgram) (env: Array[CgSlot]) (n: Int) (base: typecheck.T
         // The slot being overwritten already had a reference from the
         // copy; releasing it keeps the new cell's count exact.
         .concat(cg_elem_ptr_lines(cell, i.val, v.n + 3))
-        .concat("  ".concat(cell).concat("_old = load ").concat(cg_llvm_ty(v.ty)).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 3)).concat("\n"))
+        .concat("  ${cell}_old = load ${cg_llvm_ty(v.ty)}, ptr ${cg_elem_ptr_reg(v.n + 3)}\n")
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, value)), cell.concat("_old")))
         .concat("  store ").concat(cg_llvm_ty(v.ty)).concat(" ").concat(v.val).concat(", ptr ").concat(cg_elem_ptr_reg(v.n + 3)).concat("\n")
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, base)), b.val));
@@ -3550,14 +3550,14 @@ let cg_extern_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (
     let is_void = cg_ty_eq(ret, CgUnit);
     let is_bool = cg_ty_eq(ret, CgBool);
     let call = if is_void {
-        "  call void @".concat(name).concat("(").concat(cg_join_commas(m.vals)).concat(")\n")
+        "  call void @${name}(${cg_join_commas(m.vals)})\n"
     } else if is_bool {
         // C returns an `int`; anything non-zero is true. Truncating
         // instead would read 2 as FALSE.
-        "  ".concat(raw).concat(" = call i32 @").concat(name).concat("(").concat(cg_join_commas(m.vals)).concat(")\n")
+        "  ${raw} = call i32 @${name}(${cg_join_commas(m.vals)})\n"
             .concat("  ").concat(reg).concat(" = icmp ne i32 ").concat(raw).concat(", 0\n")
     } else {
-        "  ".concat(reg).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" @").concat(name).concat("(").concat(cg_join_commas(m.vals)).concat(")\n")
+        "  ${reg} = call ${cg_llvm_ty(ret)} @${name}(${cg_join_commas(m.vals)})\n"
     };
     Emit { code: a.code.concat(m.code).concat(call).concat(cg_dec_args(p, args, a.vals, 0, "")), allocas: a.allocas, releases: a.releases, globals: a.globals,
         val: if is_void { "0" } else { reg }, ty: ret, n: m.n + 2 }
@@ -3645,7 +3645,7 @@ let cg_spawn (p: CgProgram) (env: Array[CgSlot]) (n: Int) (clo: typecheck.TExpr)
     // A capture-FREE closure is a module-level constant with an
     // immortal refcount, and `@plum_rel_closure` skips those, so the
     // common `spawn { f(3) }` is unchanged.
-    let fn_text = "define ptr ".concat(entry).concat("(ptr %clo) {\nentry:\n")
+    let fn_text = "define ptr ${entry}(ptr %clo) {\nentry:\n"
         .concat(cg_invoke("%clo", ret, "", 0))
         .concat("  call void @plum_rel_closure(ptr %clo)\n")
         .concat("  %box = call ptr @malloc(i64 8)\n")
@@ -3687,14 +3687,14 @@ let cg_task_join (p: CgProgram) (env: Array[CgSlot]) (n: Int) (task: typecheck.T
 // A handle CELL is `{ rc, i64 handle }`: the refcount that gives the
 // thing behind the handle a lifetime, and the opaque shim value itself.
 let cg_handle_cell (cell: String) (handle: String): String =
-    "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 16)\n")
+    "  ${cell} = call ptr @plum_alloc(i64 16)\n"
         .concat("  ").concat(cell).concat("_h = getelementptr i8, ptr ").concat(cell).concat(", i64 8\n")
         .concat("  store i64 ").concat(handle).concat(", ptr ").concat(cell).concat("_h\n")
 
 // The shim handle back out of a cell. Every call into the thread shim
 // goes through this, because the shim knows nothing about cells.
 let cg_handle_load (reg: String) (cell: String): String =
-    "  ".concat(reg).concat("_p = getelementptr i8, ptr ").concat(cell).concat(", i64 8\n")
+    "  ${reg}_p = getelementptr i8, ptr ${cell}, i64 8\n"
         .concat("  ").concat(reg).concat(" = load i64, ptr ").concat(reg).concat("_p\n")
 
 let cg_channel_new (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ty: CgTy): Emit = {
@@ -3705,7 +3705,7 @@ let cg_channel_new (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ty: CgTy): Emit
     // The queue is created with TWO references, one for each end's
     // cell, so it outlives whichever end is dropped first and is freed
     // when the second goes.
-    let code = "  ".concat(h).concat(" = call i64 @channel_new()\n")
+    let code = "  ${h} = call i64 @channel_new()\n"
         .concat(cg_handle_cell(tx, h))
         .concat(cg_handle_cell(rx, h))
         .concat("  ").concat(cell).concat(" = call ptr @plum_alloc(i64 24)\n")
@@ -3791,7 +3791,7 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
     let fn_ty = cg_of_ity(fn_ity);
     let param_tys = cg_closure_params(fn_ty);
     let param_itys = cg_closure_param_itys(fn_ity);
-    if params.len() != param_tys.len() { cg_fail("closure takes ".concat(params.len().to_string()).concat(" parameter(s) but its type says ").concat(param_tys.len().to_string())) };
+    if params.len() != param_tys.len() { cg_fail("closure takes ${params.len()} parameter(s) but its type says ${param_tys.len()}") };
     let fn_name = "@plum_lambda".concat(n.to_string());
     // The lifted function's body is emitted against a FRESH environment
     // built from the captures and parameters, never the creation site's
@@ -3799,7 +3799,7 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
     let used = cg_used_captures(env, params, body, 0, []);
     let inner_env = cg_closure_inner_env(used, params, param_tys, param_itys, 0, []);
     let inner = cg_expr(p, inner_env, n + 1, body);
-    let lifted = "define ".concat(cg_llvm_ty(inner.ty)).concat(" ").concat(fn_name).concat("(ptr %env").concat(cg_closure_param_decls(param_tys, 0, "")).concat(") {\nentry:\n")
+    let lifted = "define ${cg_llvm_ty(inner.ty)} ${fn_name}(ptr %env".concat(cg_closure_param_decls(param_tys, 0, "")).concat(") {\nentry:\n")
         .concat(cg_capture_loads(used, 0, ""))
         .concat(cg_closure_param_slots(param_tys, 0, ""))
         .concat(inner.allocas)
@@ -3825,7 +3825,7 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
         .concat(cg_closure_param_releases(param_itys, 0, ""))
         .concat("  ret ").concat(cg_llvm_ty(inner.ty)).concat(" ").concat(inner.val).concat("\n}\n\n");
     let cell = cg_reg(inner.n);
-    let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((24 + 8 * used.len()).to_string()).concat(")\n")
+    let head = "  ${cell} = call ptr @plum_alloc(i64 ${(24 + 8 * used.len())})\n"
         .concat("  ").concat(cell).concat("_c = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_closure_code_offset(()).to_string()).concat("\n")
         .concat("  store ptr ").concat(fn_name).concat(", ptr ").concat(cell).concat("_c\n")
         .concat("  ").concat(cell).concat("_r = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_closure_rel_offset(()).to_string()).concat("\n")
@@ -3835,7 +3835,7 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
     // literal took, by name and type, and is emitted alongside the
     // lifted function itself — the two are generated together because
     // only here is it known what was captured.
-    let rel_fn = "define void ".concat(fn_name).concat("_rel(ptr %p) {\nentry:\n")
+    let rel_fn = "define void ${fn_name}_rel(ptr %p) {\nentry:\n"
         .concat(cg_capture_releases(used, 0, ""))
         .concat("  ret void\n}\n\n");
     // A closure that captured NOTHING is the same three words every
@@ -3913,7 +3913,7 @@ let cg_capture_loads (env: Array[CgSlot]) (i: Int) (acc: String): String =
     if i >= env.len() { acc }
     else {
         let lty = cg_llvm_ty(env[i].ty);
-        let line = "  %cp".concat(i.to_string()).concat(" = getelementptr i8, ptr %env, i64 ").concat(cg_capture_offset(i).to_string()).concat("\n")
+        let line = "  %cp${i} = getelementptr i8, ptr %env, i64 ${cg_capture_offset(i)}\n"
             .concat("  %cv").concat(i.to_string()).concat(" = load ").concat(lty).concat(", ptr %cp").concat(i.to_string()).concat("\n")
             .concat("  %c").concat(i.to_string()).concat(" = alloca ").concat(lty).concat("\n")
             .concat("  store ").concat(lty).concat(" %cv").concat(i.to_string()).concat(", ptr %c").concat(i.to_string()).concat("\n");
@@ -3933,7 +3933,7 @@ let cg_closure_param_slots (param_tys: Array[CgTy]) (i: Int) (acc: String): Stri
     if i >= param_tys.len() { acc }
     else {
         let lty = cg_llvm_ty(param_tys[i]);
-        let line = "  %a".concat(i.to_string()).concat(" = alloca ").concat(lty).concat("\n")
+        let line = "  %a${i} = alloca ${lty}\n"
             .concat("  store ").concat(lty).concat(" %p").concat(i.to_string()).concat(", ptr %a").concat(i.to_string()).concat("\n");
         cg_closure_param_slots(param_tys, i + 1, acc.concat(line))
     }
@@ -3947,7 +3947,7 @@ let cg_capture_releases (env: Array[CgSlot]) (i: Int) (acc: String): String =
     if i >= env.len() { acc }
     else if !cg_is_heap(env[i].ty) { cg_capture_releases(env, i + 1, acc) }
     else {
-        let line = "  %kp".concat(i.to_string()).concat(" = getelementptr i8, ptr %p, i64 ").concat(cg_capture_offset(i).to_string()).concat("\n")
+        let line = "  %kp${i} = getelementptr i8, ptr %p, i64 ${cg_capture_offset(i)}\n"
             .concat("  %kv").concat(i.to_string()).concat(" = load ptr, ptr %kp").concat(i.to_string()).concat("\n")
             .concat("  call void ").concat(cg_rel_sym(env[i].ity)).concat("(ptr %kv").concat(i.to_string()).concat(")\n");
         cg_capture_releases(env, i + 1, acc.concat(line))
@@ -3959,7 +3959,7 @@ let cg_capture_stores (env: Array[CgSlot]) (i: Int) (cell: String) (n: Int) (acc
         let lty = cg_llvm_ty(env[i].ty);
         let v = cg_reg(n);
         let slot = cg_reg(n + 1);
-        let line = "  ".concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(env[i].ptr).concat("\n")
+        let line = "  ${v} = load ${lty}, ptr ${env[i].ptr}\n"
             .concat(cg_inc(env[i].ty, v))
             .concat("  ").concat(slot).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_capture_offset(i).to_string()).concat("\n")
             .concat("  store ").concat(lty).concat(" ").concat(v).concat(", ptr ").concat(slot).concat("\n");
@@ -4010,7 +4010,7 @@ let cg_elem_ty (t: CgTy): CgTy =
 // `base + 8 + 8*index`, as three real instructions. The resulting
 // pointer is `cg_reg(n + 2)`; three registers are consumed.
 let cg_elem_ptr_lines (arr: String) (idx: String) (n: Int): String =
-    "  ".concat(cg_reg(n)).concat(" = mul i64 ").concat(idx).concat(", 8\n")
+    "  ${cg_reg(n)} = mul i64 ${idx}, 8\n"
         .concat("  ").concat(cg_reg(n + 1)).concat(" = getelementptr i8, ptr ").concat(arr).concat(", i64 ").concat(cg_reg(n)).concat("\n")
         .concat("  ").concat(cg_reg(n + 2)).concat(" = getelementptr i8, ptr ").concat(cg_reg(n + 1)).concat(", i64 ").concat(cg_array_elem_offset(0).to_string()).concat("\n")
 
@@ -4028,14 +4028,14 @@ let cg_array_loop (iv: String) (len: String) (n: Int): LoopParts = {
     let cur = cg_reg(n + 3);
     let test = cg_reg(n + 4);
     let step = cg_reg(n + 5);
-    let pre = "  store i64 0, ptr ".concat(iv).concat("\n")
+    let pre = "  store i64 0, ptr ${iv}\n"
         .concat("  br label %").concat(cond_label).concat("\n")
         .concat(cond_label).concat(":\n")
         .concat("  ").concat(cur).concat(" = load i64, ptr ").concat(iv).concat("\n")
         .concat("  ").concat(test).concat(" = icmp slt i64 ").concat(cur).concat(", ").concat(len).concat("\n")
         .concat("  br i1 ").concat(test).concat(", label %").concat(body_label).concat(", label %").concat(end_label).concat("\n")
         .concat(body_label).concat(":\n");
-    let post = "  ".concat(step).concat(" = add i64 ").concat(cur).concat(", 1\n")
+    let post = "  ${step} = add i64 ${cur}, 1\n"
         .concat("  store i64 ").concat(step).concat(", ptr ").concat(iv).concat("\n")
         .concat("  br label %").concat(cond_label).concat("\n")
         .concat(end_label).concat(":\n");
@@ -4043,7 +4043,7 @@ let cg_array_loop (iv: String) (len: String) (n: Int): LoopParts = {
 }
 
 let cg_invoke (clo_val: String) (ret: CgTy) (arg_ops: String) (n: Int): String =
-    "  ".concat(cg_reg(n)).concat("p = getelementptr i8, ptr ").concat(clo_val).concat(", i64 ").concat(cg_closure_code_offset(()).to_string()).concat("\n")
+    "  ${cg_reg(n)}p = getelementptr i8, ptr ${clo_val}, i64 ${cg_closure_code_offset(())}\n"
         .concat("  ").concat(cg_reg(n)).concat(" = load ptr, ptr ").concat(cg_reg(n)).concat("p\n")
         .concat("  ").concat(cg_reg(n + 1)).concat(" = call ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(n)).concat("(ptr ").concat(clo_val).concat(arg_ops).concat(")\n")
 
@@ -4051,7 +4051,7 @@ let cg_array_ns_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (fn_name: Stri
     if fn_name == "map" { cg_array_map(p, env, n, args[0], args[1]) }
     else if fn_name == "filter" { cg_array_filter(p, env, n, args[0], args[1]) }
     else if fn_name == "fold" { cg_array_fold(p, env, n, args[0], args[1], args[2]) }
-    else { { cg_fail("Array.".concat(fn_name).concat("(..) isn't supported yet")); cg_unit_emit(n) } }
+    else { { cg_fail("Array.${fn_name}(..) isn't supported yet"); cg_unit_emit(n) } }
 
 // `Array.map(xs, f)` building its result into `xs`'s own cell.
 //
@@ -4085,7 +4085,7 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
             let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
                 .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
                 .concat(cg_inc(elem, ev))
-                .concat(cg_invoke(f.val, ret, ", ".concat(cg_llvm_ty(elem)).concat(" ").concat(ev), b + 4))
+                .concat(cg_invoke(f.val, ret, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
                 // Before the store, so the slot is not left holding a
                 // reference nobody owns. Safe when the closure returned
                 // the element it was given: that value carries the
@@ -4097,7 +4097,7 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
             let ldrop = cg_label(b + 11);
             let lskip = cg_label(b + 12);
             Emit {
-                code: "  ".concat(old).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
+                code: "  ${old} = load ptr, ptr ${slot.ptr}\n"
                     .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
                     .concat(f.code)
                     .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
@@ -4117,7 +4117,7 @@ let cg_array_map_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: String)
                     .concat("  br label %").concat(lskip).concat("\n")
                     .concat(lskip).concat(":\n")
                     .concat(cg_dec_cg(f.ty, f.val)),
-                allocas: "  ".concat(iv).concat(" = alloca i64\n").concat(f.allocas),
+                allocas: "  ${iv} = alloca i64\n${f.allocas}",
                 releases: f.releases, globals: f.globals, val: out, ty: CgArray(ret), n: b + 13,
             }
         },
@@ -4157,7 +4157,7 @@ let cg_reuse_elem_drop (elem_ity: typecheck.ITy) (same: String) (ev: String) (n:
     else {
         let ldo = cg_label(n);
         let lend = cg_label(n + 1);
-        "  br i1 ".concat(same).concat(", label %").concat(ldo).concat(", label %").concat(lend).concat("\n")
+        "  br i1 ${same}, label %${ldo}, label %${lend}\n"
             .concat(ldo).concat(":\n").concat(drop)
             .concat("  br label %").concat(lend).concat("\n")
             .concat(lend).concat(":\n")
@@ -4212,7 +4212,7 @@ let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: Stri
             let body = cg_elem_ptr_lines(old, lp.idx_reg, b)
                 .concat("  ").concat(ev).concat(" = load ").concat(cg_llvm_ty(elem)).concat(", ptr ").concat(cg_elem_ptr_reg(b)).concat("\n")
                 .concat(cg_inc(elem, ev))
-                .concat(cg_invoke(f.val, CgBool, ", ".concat(cg_llvm_ty(elem)).concat(" ").concat(ev), b + 4))
+                .concat(cg_invoke(f.val, CgBool, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
                 .concat("  br i1 ").concat(cg_reg(b + 5)).concat(", label %").concat(keep_label).concat(", label %").concat(skip_label).concat("\n")
                 .concat(keep_label).concat(":\n")
                 .concat("  ").concat(cur_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
@@ -4231,7 +4231,7 @@ let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: Stri
             let ldrop = cg_label(b + 16);
             let lskip = cg_label(b + 17);
             Emit {
-                code: "  ".concat(old).concat(" = load ptr, ptr ").concat(slot.ptr).concat("\n")
+                code: "  ${old} = load ptr, ptr ${slot.ptr}\n"
                     .concat("  store ptr null, ptr ").concat(slot.ptr).concat("\n")
                     .concat(f.code)
                     .concat("  ").concat(len).concat(" = call i64 @plum_array_len(ptr ").concat(old).concat(")\n")
@@ -4250,7 +4250,7 @@ let cg_array_filter_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (nm: Stri
                     .concat("  br label %").concat(lskip).concat("\n")
                     .concat(lskip).concat(":\n")
                     .concat(cg_dec_cg(f.ty, f.val)),
-                allocas: "  ".concat(iv).concat(" = alloca i64\n").concat("  ").concat(cnt).concat(" = alloca i64\n").concat(f.allocas),
+                allocas: "  ${iv} = alloca i64\n  ${cnt} = alloca i64\n${f.allocas}",
                 releases: f.releases, globals: f.globals, val: out, ty: CgArray(elem), n: b + 18,
             }
         },
@@ -4292,7 +4292,7 @@ let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.
         // borrowed element has to become owned first. The source array
         // keeps its own reference.
         .concat(cg_inc(elem, ev))
-        .concat(cg_invoke(f.val, ret, ", ".concat(cg_llvm_ty(elem)).concat(" ").concat(ev), b + 4))
+        .concat(cg_invoke(f.val, ret, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
         .concat(cg_elem_ptr_lines(out, lp.idx_reg, b + 6))
         .concat("  store ").concat(cg_llvm_ty(ret)).concat(" ").concat(cg_reg(b + 5)).concat(", ptr ").concat(cg_elem_ptr_reg(b + 6)).concat("\n");
     let code = a.code.concat(f.code)
@@ -4306,7 +4306,7 @@ let cg_array_map (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck.
         // used once, real the moment one is folded over twice.
         .concat(cg_dec(cg_concrete(p, typecheck.texpr_ty(p.subst, arr_e)), a.val))
         .concat(cg_dec_cg(f.ty, f.val));
-    Emit { code: code, allocas: "  ".concat(iv).concat(" = alloca i64\n").concat(a.allocas).concat(f.allocas), releases: a.releases.concat(f.releases), globals: a.globals.concat(f.globals), val: out, ty: CgArray(ret), n: b + 9 }
+    Emit { code: code, allocas: "  ${iv} = alloca i64\n${a.allocas}${f.allocas}", releases: a.releases.concat(f.releases), globals: a.globals.concat(f.globals), val: out, ty: CgArray(ret), n: b + 9 }
 }
 
 // The output array is allocated at the INPUT's length and its length
@@ -4333,7 +4333,7 @@ let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typeche
         // One reference for the predicate to consume, and -- if the
         // element is kept -- one more for the output array below.
         .concat(cg_inc(elem, ev))
-        .concat(cg_invoke(f.val, CgBool, ", ".concat(cg_llvm_ty(elem)).concat(" ").concat(ev), b + 4))
+        .concat(cg_invoke(f.val, CgBool, ", ${cg_llvm_ty(elem)} ${ev}", b + 4))
         .concat("  br i1 ").concat(cg_reg(b + 5)).concat(", label %").concat(keep_label).concat(", label %").concat(skip_label).concat("\n")
         .concat(keep_label).concat(":\n")
         .concat("  ").concat(cur_cnt).concat(" = load i64, ptr ").concat(cnt).concat("\n")
@@ -4362,7 +4362,7 @@ let cg_array_filter (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typeche
         .concat(cg_dec_cg(f.ty, f.val));
     Emit {
         code: code,
-        allocas: "  ".concat(iv).concat(" = alloca i64\n").concat("  ").concat(cnt).concat(" = alloca i64\n").concat(a.allocas).concat(f.allocas), releases: a.releases.concat(f.releases),
+        allocas: "  ${iv} = alloca i64\n  ${cnt} = alloca i64\n${a.allocas}${f.allocas}", releases: a.releases.concat(f.releases),
         globals: a.globals.concat(f.globals), val: out, ty: CgArray(elem), n: b + 14,
     }
 }
@@ -4387,7 +4387,7 @@ let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck
         // slot's own reference is replaced by the result immediately
         // below, so it is released rather than incremented.
         .concat(cg_inc(elem, ev))
-        .concat(cg_invoke(f.val, init.ty, ", ".concat(acc_ty).concat(" ").concat(cur_acc).concat(", ").concat(cg_llvm_ty(elem)).concat(" ").concat(ev), b + 5))
+        .concat(cg_invoke(f.val, init.ty, ", ${acc_ty} ${cur_acc}, ${cg_llvm_ty(elem)} ${ev}", b + 5))
         .concat("  store ").concat(acc_ty).concat(" ").concat(cg_reg(b + 6)).concat(", ptr ").concat(acc).concat("\n");
     let out = cg_reg(b + 7);
     let code = a.code.concat(init.code).concat(f.code)
@@ -4404,7 +4404,7 @@ let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck
         .concat(cg_dec_cg(f.ty, f.val));
     Emit {
         code: code,
-        allocas: "  ".concat(iv).concat(" = alloca i64\n").concat("  ").concat(acc).concat(" = alloca ").concat(acc_ty).concat("\n").concat(a.allocas).concat(init.allocas).concat(f.allocas), releases: a.releases.concat(init.releases).concat(f.releases),
+        allocas: "  ${iv} = alloca i64\n  ${acc} = alloca ${acc_ty}\n${a.allocas}${init.allocas}${f.allocas}", releases: a.releases.concat(init.releases).concat(f.releases),
         globals: a.globals.concat(init.globals).concat(f.globals), val: out, ty: init.ty, n: b + 8,
     }
 }
@@ -4415,7 +4415,7 @@ let cg_array_fold (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arr_e: typecheck
 // lookup: elements are already in order, so their index IS their slot.
 let cg_tuple_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (elems: Array[typecheck.TExpr]) (ty: CgTy): Emit = {
     let cell = cg_reg(n);
-    let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((8 + 8 * elems.len()).to_string()).concat(")\n");
+    let head = "  ${cell} = call ptr @plum_alloc(i64 ${(8 + 8 * elems.len())})\n";
     let f = cg_store_tuple(p, env, n + 1, cell, elems, 0, "", "", "", "");
     Emit { code: head.concat(f.code), allocas: f.allocas, releases: f.releases, globals: f.globals, val: cell, ty: ty, n: f.n }
 }
@@ -4425,7 +4425,7 @@ let cg_store_tuple (p: CgProgram) (env: Array[CgSlot]) (n: Int) (cell: String) (
     else {
         let r = cg_expr(p, env, n, elems[i]);
         let fp = cg_reg(r.n);
-        let line = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(i).to_string()).concat("\n")
+        let line = "  ${fp} = getelementptr i8, ptr ${cell}, i64 ${cg_field_offset(i)}\n"
             .concat("  store ").concat(cg_llvm_ty(r.ty)).concat(" ").concat(r.val).concat(", ptr ").concat(fp).concat("\n");
         cg_store_tuple(p, env, r.n + 1, cell, elems, i + 1, code.concat(r.code).concat(line), allocas.concat(r.allocas), releases.concat(r.releases), globals.concat(r.globals))
     }
@@ -4475,7 +4475,7 @@ let cg_struct_lit (p: CgProgram) (env: Array[CgSlot]) (n: Int) (name: String) (f
 }
 
 let cg_cell_alloc (cell: String) (nfields: Int): String =
-    "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat((8 + 8 * nfields).to_string()).concat(")\n")
+    "  ${cell} = call ptr @plum_alloc(i64 ${(8 + 8 * nfields)})\n"
 
 // A struct literal that may RECYCLE a dead local's cell instead of
 // allocating one.
@@ -4618,7 +4618,7 @@ let cg_reuse_cell (p: CgProgram) (c: ReuseCand) (want: Int) (n: Int): ReuseEmit 
     let cell = cg_reg(n + 6);
     let drops = cg_reuse_drops(c.children, old, 0, n + 7, "");
     ReuseEmit {
-        code: "  ".concat(old).concat(" = load ptr, ptr ").concat(c.slot.ptr).concat("\n")
+        code: "  ${old} = load ptr, ptr ${c.slot.ptr}\n"
             .concat("  store ptr null, ptr ").concat(c.slot.ptr).concat("\n")
             .concat("  ").concat(ok).concat(" = call i1 @plum_reuse_ok(ptr ").concat(old).concat(", i64 ").concat(want.to_string()).concat(")\n")
             .concat("  br i1 ").concat(ok).concat(", label %").concat(lr).concat(", label %").concat(lf).concat("\n")
@@ -4641,7 +4641,7 @@ let cg_reuse_cell (p: CgProgram) (c: ReuseCand) (want: Int) (n: Int): ReuseEmit 
 // One of the two drop shapes, never both.
 let cg_reuse_drop_code (c: ReuseCand) (old: String) (inline: String): String =
     if c.drop_sym == "" { inline }
-    else { "  call void ".concat(c.drop_sym).concat("(ptr ").concat(old).concat(")\n") }
+    else { "  call void ${c.drop_sym}(ptr ${old})\n" }
 
 let cg_reuse_drops (tys: Array[typecheck.ITy]) (old: String) (i: Int) (n: Int) (acc: String): CopyEmit =
     if i >= tys.len() { CopyEmit { code: acc, n: n } }
@@ -4680,7 +4680,7 @@ let cg_variant_reuse (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ename: String
 let cg_variant_build_reuse (p: CgProgram) (v: CgVariant) (a: ArgVals) (c: ReuseCand) (want: Int): Emit = {
     let enum_name = v.enum_name;
     let r = cg_reuse_cell(p, c, want, a.n);
-    let tagged = "  ".concat(r.cell).concat("_t = getelementptr i8, ptr ").concat(r.cell).concat(", i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
+    let tagged = "  ${r.cell}_t = getelementptr i8, ptr ${r.cell}, i64 ${cg_tag_offset(())}\n"
         .concat("  store i64 ").concat(v.tag.to_string()).concat(", ptr ").concat(r.cell).concat("_t\n");
     let stores = cg_store_payload(r.cell, a.vals, 0, r.n, "");
     Emit { code: a.code.concat(r.code).concat(tagged).concat(stores.code),
@@ -4702,7 +4702,7 @@ let cg_copy_missing_fields (p: CgProgram) (field_names: Array[String]) (field_it
         let sp = cg_reg(n);
         let v = cg_reg(n + 1);
         let dp = cg_reg(n + 2);
-        let line = "  ".concat(sp).concat(" = getelementptr i8, ptr ").concat(base).concat(", i64 ").concat(cg_field_offset(i).to_string()).concat("\n")
+        let line = "  ${sp} = getelementptr i8, ptr ${base}, i64 ${cg_field_offset(i)}\n"
             .concat("  ").concat(v).concat(" = load ").concat(lty).concat(", ptr ").concat(sp).concat("\n")
             .concat(cg_inc(cg_of_ity(fty), v))
             .concat("  ").concat(dp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(i).to_string()).concat("\n")
@@ -4741,7 +4741,7 @@ let cg_store_evald (cell: String) (vals: Array[EvaldField]) (i: Int) (n: Int) (a
     if i >= vals.len() { CopyEmit { code: acc, n: n } }
     else {
         let fp = cg_reg(n);
-        let line = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_field_offset(vals[i].idx).to_string()).concat("\n")
+        let line = "  ${fp} = getelementptr i8, ptr ${cell}, i64 ${cg_field_offset(vals[i].idx)}\n"
             .concat("  store ").concat(vals[i].lty).concat(" ").concat(vals[i].val).concat(", ptr ").concat(fp).concat("\n");
         cg_store_evald(cell, vals, i + 1, n + 1, acc.concat(line))
     }
@@ -4837,7 +4837,7 @@ let cg_variant_call (p: CgProgram) (env: Array[CgSlot]) (n: Int) (ename: String)
 let cg_variant_build (p: CgProgram) (v: CgVariant) (a: ArgVals): Emit = {
     let enum_name = v.enum_name;
     let cell = cg_reg(a.n);
-    let head = "  ".concat(cell).concat(" = call ptr @plum_alloc(i64 ").concat(cg_enum_cell_size(p, enum_name).to_string()).concat(")\n")
+    let head = "  ${cell} = call ptr @plum_alloc(i64 ${cg_enum_cell_size(p, enum_name)})\n"
         .concat("  ").concat(cell).concat("_t = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
         .concat("  store i64 ").concat(v.tag.to_string()).concat(", ptr ").concat(cell).concat("_t\n");
     let stores = cg_store_payload(cell, a.vals, 0, a.n + 1, "");
@@ -4852,7 +4852,7 @@ let cg_store_payload (cell: String) (vals: Array[String]) (i: Int) (n: Int) (acc
     if i >= vals.len() { StoreEmit { code: acc, n: n } }
     else {
         let pp = cg_reg(n);
-        let line = "  ".concat(pp).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_payload_offset(i).to_string()).concat("
+        let line = "  ${pp} = getelementptr i8, ptr ${cell}, i64 ${cg_payload_offset(i)}".concat("
 ")
             .concat("  store ").concat(vals[i]).concat(", ptr ").concat(pp).concat("
 ");
@@ -4913,7 +4913,7 @@ let cg_match (p: CgProgram) (env: Array[CgSlot]) (n: Int) (scrutinee: typecheck.
         .concat(sc.drop);
     Emit {
         code: code,
-        allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(sc.allocas).concat(a.allocas), releases: sc.releases.concat(a.releases),
+        allocas: "  ${slot} = alloca ${lty}\n${sc.allocas}${a.allocas}", releases: sc.releases.concat(a.releases),
         globals: sc.globals.concat(a.globals), val: res, ty: body_ty, n: a.n + 1,
     }
 }
@@ -4974,7 +4974,7 @@ let cg_select (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typechec
             .concat("  br label %").concat(end_label).concat("\n")
             .concat(end_label).concat(":\n")
             .concat("  ").concat(res).concat(" = load ").concat(lty).concat(", ptr ").concat(slot).concat("\n"),
-        allocas: "  ".concat(hs).concat(" = alloca i64, i64 ").concat(cg_alloca_count(chans.len())).concat("\n")
+        allocas: "  ${hs} = alloca i64, i64 ${cg_alloca_count(chans.len())}\n"
             .concat("  ").concat(outp).concat(" = alloca ptr\n")
             .concat("  ").concat(slot).concat(" = alloca ").concat(lty).concat("\n")
             .concat(c.allocas).concat(w.allocas).concat(a.allocas).concat(o.allocas),
@@ -5010,7 +5010,7 @@ let cg_otherwise_arm (arms: Array[typecheck.TSelectArm]) (i: Int): Option[typech
 // because a struct's layout is decided right here.
 let cg_select_wait (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TSelectArm]) (hs: String) (k: Int) (outp: String) (idx: String): Emit =
     match cg_otherwise_arm(arms, 0) {
-        None => Emit { code: "  ".concat(idx).concat(" = call i64 @channel_select(ptr ").concat(hs)
+        None => Emit { code: "  ${idx} = call i64 @channel_select(ptr ${hs}"
                         .concat(", i64 ").concat(k.to_string()).concat(", ptr ").concat(outp).concat(")\n"),
                        allocas: "", releases: "", globals: "", val: idx, ty: CgInt, n: n },
         Some(arm) => match arm.kind {
@@ -5031,7 +5031,7 @@ let cg_select_wait (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typ
                     val: idx, ty: CgInt, n: dr.n + 2,
                 }
             },
-            _ => Emit { code: "  ".concat(idx).concat(" = call i64 @channel_select_timeout(ptr ").concat(hs)
+            _ => Emit { code: "  ${idx} = call i64 @channel_select_timeout(ptr ${hs}"
                             .concat(", i64 ").concat(k.to_string()).concat(", ptr ").concat(outp).concat(", i64 0)\n"),
                         allocas: "", releases: "", globals: "", val: idx, ty: CgInt, n: n },
         },
@@ -5043,7 +5043,7 @@ let cg_select_wait (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typ
 // can never reach it.
 let cg_select_otherwise (p: CgProgram) (env: Array[CgSlot]) (n: Int) (arms: Array[typecheck.TSelectArm]) (slot: String) (lty: String) (body_ty: CgTy) (end_label: String): Emit =
     match cg_otherwise_arm(arms, 0) {
-        None => Emit { code: "  store ".concat(lty).concat(" ").concat(cg_zero_of(body_ty)).concat(", ptr ").concat(slot).concat("\n"),
+        None => Emit { code: "  store ${lty} ${cg_zero_of(body_ty)}, ptr ${slot}\n",
                        allocas: "", releases: "", globals: "", val: "0", ty: body_ty, n: n },
         Some(arm) => {
             let b = cg_expr(p, env, n, arm.body);
@@ -5308,7 +5308,7 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
             PatEmit {
                 code: "",
                 binds: cg_inc(sty, sval).concat("  store ").concat(lty).concat(" ").concat(sval).concat(", ptr ").concat(slot).concat("\n"),
-                allocas: "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n").concat(cg_null_init(sity, slot)),
+                allocas: "  ${slot} = alloca ${lty}\n${cg_null_init(sity, slot)}",
                 releases: cg_release_slot(sity, slot, "_end"),
                 globals: "", test: "1", env: env.push(CgSlot { name: name, ptr: slot, ty: sty, ity: sity }), n: n + 1,
             }
@@ -5328,7 +5328,7 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
 
 let cg_pat_cmp (env: Array[CgSlot]) (n: Int) (op: String) (sval: String) (lit: String): PatEmit = {
     let reg = cg_reg(n);
-    PatEmit { code: "  ".concat(reg).concat(" = ").concat(op).concat(sval).concat(", ").concat(lit).concat("
+    PatEmit { code: "  ${reg} = ${op}${sval}, ${lit}".concat("
 "), binds: "", allocas: "", releases: "", globals: "", test: reg, env: env, n: n + 1 }
 }
 
@@ -5339,7 +5339,7 @@ let cg_pat_str (env: Array[CgSlot]) (n: Int) (sval: String) (lit: String): PatEm
     // cell's refcount word as if it were the first byte of text.
     let gname = "@.str".concat(n.to_string());
     let test = cg_reg(n + 2);
-    let code = "  ".concat(test).concat(" = call i1 @plum_str_eq(ptr ").concat(sval).concat(", ptr ").concat(gname).concat(")\n");
+    let code = "  ${test} = call i1 @plum_str_eq(ptr ${sval}, ptr ${gname})\n";
     PatEmit { code: code, binds: "", allocas: "", releases: "", globals: cg_str_constant(n, lit), test: test, env: env, n: n + 3 }
 }
 
@@ -5369,7 +5369,7 @@ let cg_pat_variant (p: CgProgram) (env: Array[CgSlot]) (n: Int) (path: Array[Str
         Some(v) => {
             let tag = cg_reg(n);
             let tag_ok = cg_reg(n + 1);
-            let load = "  ".concat(tag).concat("p = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
+            let load = "  ${tag}p = getelementptr i8, ptr ${sval}, i64 ${cg_tag_offset(())}\n"
                 .concat("  ").concat(tag).concat(" = load i64, ptr ").concat(tag).concat("p\n")
                 .concat("  ").concat(tag_ok).concat(" = icmp eq i64 ").concat(tag).concat(", ").concat(v.tag.to_string()).concat("\n");
             // Payload templates instantiated against the SCRUTINEE's
@@ -5424,16 +5424,16 @@ let cg_pat_payloads (p: CgProgram) (env: Array[CgSlot]) (n: Int) (payload: Array
         let pv = cg_reg(n + 1);
         let pty = cg_concrete(p, payload[i]);
         let pllty = cg_llvm_ty(cg_of_ity(pty));
-        let load = "  ".concat(pp).concat(" = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_payload_offset(i).to_string()).concat("\n")
+        let load = "  ${pp} = getelementptr i8, ptr ${sval}, i64 ${cg_payload_offset(i)}\n"
             .concat("  ").concat(pv).concat(" = load ").concat(pllty).concat(", ptr ").concat(pp).concat("\n");
         let needs_safe = pllty == "ptr" && cg_pat_derefs(pats[i]);
         let pval = if needs_safe { cg_reg(n + 2) } else { pv };
         let guard = if needs_safe {
-            "  ".concat(pval).concat(" = select i1 ").concat(test).concat(", ptr ").concat(pv).concat(", ptr @plum_pat_safe\n")
+            "  ${pval} = select i1 ${test}, ptr ${pv}, ptr @plum_pat_safe\n"
         } else { "" };
         let sub = cg_pattern(p, env, n + 3, pats[i], pval, pty);
         let combined = cg_reg(sub.n);
-        let join = "  ".concat(combined).concat(" = and i1 ").concat(test).concat(", ").concat(sub.test).concat("
+        let join = "  ${combined} = and i1 ${test}, ${sub.test}".concat("
 ");
         cg_pat_payloads(p, sub.env, sub.n + 1, payload, pats, i + 1, sval, combined,
             code.concat(load).concat(guard).concat(sub.code).concat(join), binds.concat(sub.binds), allocas.concat(sub.allocas), releases.concat(sub.releases), globals.concat(sub.globals))
@@ -5499,11 +5499,11 @@ let cg_pat_fields (p: CgProgram) (env: Array[CgSlot]) (n: Int) (field_names: Arr
         let fty = cg_concrete(p, field_tys[idx]);
         let fp = cg_reg(n);
         let fv = cg_reg(n + 1);
-        let load = "  ".concat(fp).concat(" = getelementptr i8, ptr ").concat(sval).concat(", i64 ").concat(cg_field_offset(idx).to_string()).concat("\n")
+        let load = "  ${fp} = getelementptr i8, ptr ${sval}, i64 ${cg_field_offset(idx)}\n"
             .concat("  ").concat(fv).concat(" = load ").concat(cg_llvm_ty(cg_of_ity(fty))).concat(", ptr ").concat(fp).concat("\n");
         let sub = cg_pattern(p, env, n + 2, pats[i].pattern, fv, fty);
         let combined = cg_reg(sub.n);
-        let join = "  ".concat(combined).concat(" = and i1 ").concat(test).concat(", ").concat(sub.test).concat("
+        let join = "  ${combined} = and i1 ${test}, ${sub.test}".concat("
 ");
         cg_pat_fields(p, sub.env, sub.n + 1, field_names, field_tys, pats, i + 1, sval, combined,
             code.concat(load).concat(sub.code).concat(join), binds.concat(sub.binds), allocas.concat(sub.allocas), releases.concat(sub.releases), globals.concat(sub.globals))
@@ -5584,8 +5584,8 @@ let cg_fn (p0: CgProgram) (def: typecheck.TFn) (targs: Array[typecheck.ITy]) (n0
     // since `cg_dbg_attach` returns the body untouched without a
     // location.
     let dfile = if dbg.sp >= 0 { cg_dbg_file(def.path) } else { DbgFile { path: "", id: 0, starts: [0] } };
-    let header = "define ".concat(cg_llvm_ty(ret)).concat(" @").concat(sym).concat("(").concat(cg_param_decls(params))
-        .concat(if dbg.sp >= 0 { ") !dbg !".concat(dbg.sp.to_string()).concat(" {\nentry:\n") } else { ") {\nentry:\n" });
+    let header = "define ${cg_llvm_ty(ret)} @${sym}(${cg_param_decls(params)}"
+        .concat(if dbg.sp >= 0 { ") !dbg !${dbg.sp} {\nentry:\n" } else { ") {\nentry:\n" });
     // Every `alloca` is hoisted here, at the top of the entry block,
     // ahead of any instruction that could branch — see `Emit`'s own
     // comment for why that is a correctness requirement inside loops
@@ -5643,7 +5643,7 @@ let cg_param_slots (params: Array[CgParam]) (ptys: Array[typecheck.ITy]) (i: Int
     else {
         let lty = cg_llvm_ty(params[i].ty);
         let slot = "%s".concat(i.to_string());
-        let line = "  ".concat(slot).concat(" = alloca ").concat(lty).concat("\n")
+        let line = "  ${slot} = alloca ${lty}\n"
             .concat("  store ").concat(lty).concat(" %p").concat(i.to_string()).concat(", ptr ").concat(slot).concat("\n");
         cg_param_slots(params, ptys, i + 1, env.push(CgSlot { name: params[i].name, ptr: slot, ty: params[i].ty, ity: ptys[i] }), code.concat(line), releases.concat(cg_release_slot(ptys[i], slot, "_end")))
     }
@@ -5676,7 +5676,7 @@ let cg_entry_named (entry_sym: String): String = cg_lines([
     "  %seed32 = trunc i64 %seed to i32",
     "  call void @srand(i32 %seed32)",
     "  call void @plum_init_globals()",
-    "  %r = call i1 ".concat(entry_sym).concat("()"),
+    "  %r = call i1 ${entry_sym}()",
     "  ret i32 0",
     "}",
 ])
@@ -5717,18 +5717,18 @@ let cg_eq_code (t: typecheck.ITy) (av: String) (bv: String) (n: Int): EqEmit = {
     let reg = cg_reg(n);
     let lty = cg_llvm_ty(cg_of_ity(t));
     let line = match t {
-        ITStr => "  ".concat(reg).concat(" = call i1 @plum_str_eq(ptr ").concat(av).concat(", ptr ").concat(bv).concat(")\n"),
+        ITStr => "  ${reg} = call i1 @plum_str_eq(ptr ${av}, ptr ${bv})\n",
         // Byte-for-byte, which is what `@plum_str_eq` already is: a
         // length check and a `memcmp`, with no encoding anywhere in it.
-        ITBytes => "  ".concat(reg).concat(" = call i1 @plum_str_eq(ptr ").concat(av).concat(", ptr ").concat(bv).concat(")\n"),
-        ITFloat => "  ".concat(reg).concat(" = fcmp oeq double ").concat(av).concat(", ").concat(bv).concat("\n"),
-        ITInt => "  ".concat(reg).concat(" = icmp eq i64 ").concat(av).concat(", ").concat(bv).concat("\n"),
-        ITBool => "  ".concat(reg).concat(" = icmp eq i1 ").concat(av).concat(", ").concat(bv).concat("\n"),
-        ITUnit => "  ".concat(reg).concat(" = icmp eq i1 ").concat(av).concat(", ").concat(bv).concat("\n"),
+        ITBytes => "  ${reg} = call i1 @plum_str_eq(ptr ${av}, ptr ${bv})\n",
+        ITFloat => "  ${reg} = fcmp oeq double ${av}, ${bv}\n",
+        ITInt => "  ${reg} = icmp eq i64 ${av}, ${bv}\n",
+        ITBool => "  ${reg} = icmp eq i1 ${av}, ${bv}\n",
+        ITUnit => "  ${reg} = icmp eq i1 ${av}, ${bv}\n",
         // A defaulted (unconstrained) type is compared as its defaulted
         // representation, which is `Unit` — see `cg_of_ity`.
-        ITVar(_) => "  ".concat(reg).concat(" = icmp eq i1 ").concat(av).concat(", ").concat(bv).concat("\n"),
-        _ => "  ".concat(reg).concat(" = call i1 ").concat(cg_eq_sym(t)).concat("(").concat(lty).concat(" ").concat(av).concat(", ").concat(lty).concat(" ").concat(bv).concat(")\n"),
+        ITVar(_) => "  ${reg} = icmp eq i1 ${av}, ${bv}\n",
+        _ => "  ${reg} = call i1 ${cg_eq_sym(t)}(${lty} ${av}, ${lty} ${bv})\n",
     };
     EqEmit { code: line, val: reg, n: n + 1 }
 }
@@ -5796,7 +5796,7 @@ let cg_eq_close_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[type
 let cg_str_sym (t: typecheck.ITy): String = "@plum_str_".concat(cg_ity_mangle(t))
 
 let cg_sfmt_sym (owner: typecheck.ITy) (i: Int): String =
-    "@.sfmt_".concat(cg_ity_mangle(owner)).concat("_").concat(i.to_string())
+    "@.sfmt_${cg_ity_mangle(owner)}_${i}"
 
 // A STATIC string cell (refcount -1), the same shape `cg_str_constant`
 // produces -- so `plum_rel_str` skips it and these never need freeing.
@@ -5814,9 +5814,9 @@ struct StrEmit { code: String, consts: String, val: String, n: Int }
 // string cell. `owner` only supplies a unique prefix for any constants.
 let cg_render_val (owner: typecheck.ITy) (t: typecheck.ITy) (val: String) (n: Int): StrEmit =
     match t {
-        ITInt => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr @plum_int_to_string(i64 ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
-        ITFloat => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr @plum_float_to_string(double ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
-        ITBool => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr @plum_bool_to_string(i1 ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
+        ITInt => StrEmit { code: "  ${cg_reg(n)} = call ptr @plum_int_to_string(i64 ${val})\n", consts: "", val: cg_reg(n), n: n + 1 },
+        ITFloat => StrEmit { code: "  ${cg_reg(n)} = call ptr @plum_float_to_string(double ${val})\n", consts: "", val: cg_reg(n), n: n + 1 },
+        ITBool => StrEmit { code: "  ${cg_reg(n)} = call ptr @plum_bool_to_string(i1 ${val})\n", consts: "", val: cg_reg(n), n: n + 1 },
         // Unreachable in practice: `.to_string()` on a `CStr` is
         // rejected in `cg_to_string`, so nothing gets this far with one.
         ITCStr => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "<cstr>"), val: cg_sfmt_sym(owner, n), n: n + 1 },
@@ -5834,7 +5834,7 @@ let cg_render_val (owner: typecheck.ITy) (t: typecheck.ITy) (val: String) (n: In
             let r2 = cg_reg(n + 2);
             StrEmit {
                 consts: cg_sfmt_const(owner, n, "\""),
-                code: "  ".concat(r1).concat(" = call ptr @plum_str_concat(ptr ").concat(q).concat(", ptr ").concat(val).concat(")\n")
+                code: "  ${r1} = call ptr @plum_str_concat(ptr ${q}, ptr ${val})\n"
                     .concat("  ").concat(r2).concat(" = call ptr @plum_str_concat(ptr ").concat(r1).concat(", ptr ").concat(q).concat(")\n")
                     .concat("  call void @plum_rel_str(ptr ").concat(r1).concat(")\n"),
                 val: r2, n: n + 3,
@@ -5843,8 +5843,8 @@ let cg_render_val (owner: typecheck.ITy) (t: typecheck.ITy) (val: String) (n: In
         ITUnit => StrEmit { code: "", consts: cg_sfmt_const(owner, n, "Unit"), val: cg_sfmt_sym(owner, n), n: n + 1 },
         // The renderable aggregates -- `Array` is an `ITStruct` too, so
         // both reach their own emitted renderer the same way.
-        ITStruct(_, _) => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr ").concat(cg_str_sym(t)).concat("(ptr ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
-        ITEnum(_, _) => StrEmit { code: "  ".concat(cg_reg(n)).concat(" = call ptr ").concat(cg_str_sym(t)).concat("(ptr ").concat(val).concat(")\n"), consts: "", val: cg_reg(n), n: n + 1 },
+        ITStruct(_, _) => StrEmit { code: "  ${cg_reg(n)} = call ptr ${cg_str_sym(t)}(ptr ${val})\n", consts: "", val: cg_reg(n), n: n + 1 },
+        ITEnum(_, _) => StrEmit { code: "  ${cg_reg(n)} = call ptr ${cg_str_sym(t)}(ptr ${val})\n", consts: "", val: cg_reg(n), n: n + 1 },
         // Everything with no sensible text form gets a PLACEHOLDER
         // rather than a call to a renderer that was never emitted.
         // This is a deliberate, documented divergence: the real
@@ -5869,7 +5869,7 @@ let cg_render_val (owner: typecheck.ITy) (t: typecheck.ITy) (val: String) (n: In
 let cg_str_append (acc: String) (piece: String) (n: Int): StrEmit = {
     let out = cg_reg(n);
     StrEmit {
-        code: "  ".concat(out).concat(" = call ptr @plum_str_concat(ptr ").concat(acc).concat(", ptr ").concat(piece).concat(")\n")
+        code: "  ${out} = call ptr @plum_str_concat(ptr ${acc}, ptr ${piece})\n"
             .concat("  call void @plum_rel_str(ptr ").concat(acc).concat(")\n")
             .concat("  call void @plum_rel_str(ptr ").concat(piece).concat(")\n"),
         consts: "", val: out, n: n + 1,
@@ -5889,7 +5889,7 @@ let cg_str_append_lit (owner: typecheck.ITy) (acc: String) (text: String) (n: In
     let out = cg_reg(n + 1);
     StrEmit {
         consts: cg_sfmt_const(owner, n, text),
-        code: "  ".concat(out).concat(" = call ptr @plum_str_concat(ptr ").concat(acc).concat(", ptr ").concat(lit).concat(")\n")
+        code: "  ${out} = call ptr @plum_str_concat(ptr ${acc}, ptr ${lit})\n"
             .concat("  call void @plum_rel_str(ptr ").concat(acc).concat(")\n"),
         val: out, n: n + 2,
     }
@@ -5933,7 +5933,7 @@ let cg_emit_struct_str (p: CgProgram) (t: typecheck.ITy) (name: String) (ftys: A
     let start = cg_str_seed_lit(t, name.concat(" { "), 0);
     let body = cg_struct_str_fields(t, names, ftys, 0, start.val, start.code, start.consts, start.n);
     let fin = cg_str_append_lit(t, body.val, " }", body.n);
-    "define ptr ".concat(cg_str_sym(t)).concat("(ptr %p) {\nentry:\n")
+    "define ptr ${cg_str_sym(t)}(ptr %p) {\nentry:\n"
         .concat(body.code).concat(fin.code)
         .concat("  ret ptr ").concat(fin.val).concat("\n}\n\n")
         .concat(body.consts).concat(fin.consts)
@@ -5946,7 +5946,7 @@ let cg_struct_str_fields (t: typecheck.ITy) (names: Array[String]) (ftys: Array[
         let lbl = cg_str_append_lit(t, acc, sep.concat(names[i]).concat(": "), n);
         let fp = cg_reg(lbl.n);
         let fv = cg_reg(lbl.n + 1);
-        let load = "  ".concat(fp).concat(" = getelementptr i8, ptr %p, i64 ").concat(cg_field_offset(i).to_string()).concat("\n")
+        let load = "  ${fp} = getelementptr i8, ptr %p, i64 ${cg_field_offset(i)}\n"
             .concat("  ").concat(fv).concat(" = load ").concat(cg_llvm_ty(cg_of_ity(ftys[i]))).concat(", ptr ").concat(fp).concat("\n");
         let r = cg_render_val(t, ftys[i], fv, lbl.n + 2);
         let app = cg_str_append(lbl.val, r.val, r.n);
@@ -5960,7 +5960,7 @@ let cg_emit_array_str (t: typecheck.ITy) (elem: typecheck.ITy): String = {
     let ety = cg_llvm_ty(cg_of_ity(elem));
     let r = cg_render_val(t, elem, "%ev", 20);
     let sep = cg_sfmt_sym(t, 1);
-    "define ptr ".concat(cg_str_sym(t)).concat("(ptr %p) {\nentry:\n")
+    "define ptr ${cg_str_sym(t)}(ptr %p) {\nentry:\n"
         .concat("  %accp = alloca ptr\n  store ptr ").concat(cg_sfmt_sym(t, 0)).concat(", ptr %accp\n")
         .concat("  %lp = getelementptr i8, ptr %p, i64 8\n  %len = load i64, ptr %lp\n")
         .concat("  %ip = alloca i64\n  store i64 0, ptr %ip\n  br label %loop\n")
@@ -5998,7 +5998,7 @@ let cg_emit_array_str (t: typecheck.ITy) (elem: typecheck.ITy): String = {
 let cg_emit_enum_str (p: CgProgram) (t: typecheck.ITy) (name: String) (args: Array[typecheck.ITy]): String = {
     let vs = cg_find_enum(p, name).variants;
     let blocks = cg_enum_str_blocks(p, t, vs, args, 0, 100, "", "");
-    "define ptr ".concat(cg_str_sym(t)).concat("(ptr %p) {\nentry:\n")
+    "define ptr ${cg_str_sym(t)}(ptr %p) {\nentry:\n"
         .concat("  %tp = getelementptr i8, ptr %p, i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
         .concat("  %tag = load i64, ptr %tp\n")
         .concat("  switch i64 %tag, label %unknown [\n").concat(cg_enum_str_cases(vs, 0, "")).concat("  ]\n")
@@ -6015,7 +6015,7 @@ let cg_enum_str_blocks (p: CgProgram) (t: typecheck.ITy) (vs: Array[CgVariant]) 
     if i >= vs.len() { StrEmit { code: code, consts: consts, val: "", n: n } }
     else {
         let ptys = cg_variant_payload_tys(p, vs[i], args);
-        let head = "S".concat(vs[i].tag.to_string()).concat(":\n");
+        let head = "S${vs[i].tag}:\n";
         // A payload-free variant is just its own name.
         if Array.is_empty(ptys) {
             cg_enum_str_blocks(p, t, vs, args, i + 1, n + 1,
@@ -6037,7 +6037,7 @@ let cg_enum_str_payloads (t: typecheck.ITy) (ptys: Array[typecheck.ITy]) (i: Int
         let pre = if i == 0 { StrEmit { code: "", consts: "", val: acc, n: n } } else { cg_str_append_lit(t, acc, ", ", n) };
         let pp = cg_reg(pre.n);
         let pv = cg_reg(pre.n + 1);
-        let load = "  ".concat(pp).concat(" = getelementptr i8, ptr %p, i64 ").concat(cg_payload_offset(i).to_string()).concat("\n")
+        let load = "  ${pp} = getelementptr i8, ptr %p, i64 ${cg_payload_offset(i)}\n"
             .concat("  ").concat(pv).concat(" = load ").concat(cg_llvm_ty(cg_of_ity(ptys[i]))).concat(", ptr ").concat(pp).concat("\n");
         let r = cg_render_val(t, ptys[i], pv, pre.n + 2);
         let app = cg_str_append(pre.val, r.val, r.n);
@@ -6068,7 +6068,7 @@ let cg_emit_eq_fn (p: CgProgram) (t: typecheck.ITy): String =
         // `exec_corpus/refs` pins down — `a == b` is true only when
         // both name the same cell.
         ITRef(_) =>
-            "define i1 ".concat(cg_eq_sym(t)).concat("(ptr %a, ptr %b) {\nentry:\n")
+            "define i1 ${cg_eq_sym(t)}(ptr %a, ptr %b) {\nentry:\n"
                 .concat("  %r = icmp eq ptr %a, %b\n  ret i1 %r\n}\n\n"),
         _ => "",
     }
@@ -6078,7 +6078,7 @@ let cg_emit_eq_fn (p: CgProgram) (t: typecheck.ITy): String =
 // field would be more code for no saved work.
 let cg_emit_struct_eq (t: typecheck.ITy) (field_tys: Array[typecheck.ITy]): String = {
     let body = cg_eq_fields(field_tys, 0, "%a", "%b", 0, "1", "");
-    "define i1 ".concat(cg_eq_sym(t)).concat("(ptr %a, ptr %b) {\nentry:\n").concat(body.code)
+    "define i1 ${cg_eq_sym(t)}(ptr %a, ptr %b) {\nentry:\n${body.code}"
         .concat("  ret i1 ").concat(body.val).concat("\n}\n\n")
 }
 
@@ -6091,13 +6091,13 @@ let cg_eq_fields (field_tys: Array[typecheck.ITy]) (i: Int) (av: String) (bv: St
         let bp = cg_reg(n + 1);
         let axv = cg_reg(n + 2);
         let bxv = cg_reg(n + 3);
-        let loads = "  ".concat(ap).concat(" = getelementptr i8, ptr ").concat(av).concat(", i64 ").concat(off).concat("\n")
+        let loads = "  ${ap} = getelementptr i8, ptr ${av}, i64 ${off}\n"
             .concat("  ").concat(bp).concat(" = getelementptr i8, ptr ").concat(bv).concat(", i64 ").concat(off).concat("\n")
             .concat("  ").concat(axv).concat(" = load ").concat(lty).concat(", ptr ").concat(ap).concat("\n")
             .concat("  ").concat(bxv).concat(" = load ").concat(lty).concat(", ptr ").concat(bp).concat("\n");
         let cmp = cg_eq_code(field_tys[i], axv, bxv, n + 4);
         let joined = cg_reg(cmp.n);
-        let join = "  ".concat(joined).concat(" = and i1 ").concat(running).concat(", ").concat(cmp.val).concat("\n");
+        let join = "  ${joined} = and i1 ${running}, ${cmp.val}\n";
         cg_eq_fields(field_tys, i + 1, av, bv, cmp.n + 1, joined, acc.concat(loads).concat(cmp.code).concat(join))
     }
 
@@ -6106,7 +6106,7 @@ let cg_eq_fields (field_tys: Array[typecheck.ITy]) (i: Int) (av: String) (bv: St
 // through to `yes`, which is also the `switch` default, so the common
 // case (`tok == TokEof`) is one integer compare and a jump.
 let cg_emit_enum_eq (p: CgProgram) (t: typecheck.ITy) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]): String = {
-    let head = "define i1 ".concat(cg_eq_sym(t)).concat("(ptr %a, ptr %b) {\nentry:\n")
+    let head = "define i1 ${cg_eq_sym(t)}(ptr %a, ptr %b) {\nentry:\n"
         .concat("  %tap = getelementptr i8, ptr %a, i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
         .concat("  %ta = load i64, ptr %tap\n")
         .concat("  %tbp = getelementptr i8, ptr %b, i64 ").concat(cg_tag_offset(()).to_string()).concat("\n")
@@ -6130,7 +6130,7 @@ let cg_enum_eq_blocks (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typeche
     else {
         let payload = Array.map(typecheck.ctx_variant_payload(p.ctx, vs[i].enum_name, vs[i].name), |q| typecheck.instantiate_template(typecheck.ctx_variant_generics(p.ctx, vs[i].enum_name, vs[i].name), args, q));
         let body = cg_eq_payloads(payload, 0, n, "1", "");
-        let block = "V".concat(vs[i].tag.to_string()).concat(":\n").concat(body.code).concat("  ret i1 ").concat(body.val).concat("\n");
+        let block = "V${vs[i].tag}:\n${body.code}  ret i1 ${body.val}\n";
         cg_enum_eq_blocks(p, vs, args, i + 1, body.n, acc.concat(block))
     }
 
@@ -6143,13 +6143,13 @@ let cg_eq_payloads (payload: Array[typecheck.ITy]) (i: Int) (n: Int) (running: S
         let bp = cg_reg(n + 1);
         let axv = cg_reg(n + 2);
         let bxv = cg_reg(n + 3);
-        let loads = "  ".concat(ap).concat(" = getelementptr i8, ptr %a, i64 ").concat(off).concat("\n")
+        let loads = "  ${ap} = getelementptr i8, ptr %a, i64 ${off}\n"
             .concat("  ").concat(bp).concat(" = getelementptr i8, ptr %b, i64 ").concat(off).concat("\n")
             .concat("  ").concat(axv).concat(" = load ").concat(lty).concat(", ptr ").concat(ap).concat("\n")
             .concat("  ").concat(bxv).concat(" = load ").concat(lty).concat(", ptr ").concat(bp).concat("\n");
         let cmp = cg_eq_code(payload[i], axv, bxv, n + 4);
         let joined = cg_reg(cmp.n);
-        let join = "  ".concat(joined).concat(" = and i1 ").concat(running).concat(", ").concat(cmp.val).concat("\n");
+        let join = "  ${joined} = and i1 ${running}, ${cmp.val}\n";
         cg_eq_payloads(payload, i + 1, cmp.n + 1, joined, acc.concat(loads).concat(cmp.code).concat(join))
     }
 
@@ -6157,7 +6157,7 @@ let cg_eq_payloads (payload: Array[typecheck.ITy]) (i: Int) (n: Int) (running: S
 let cg_emit_array_eq (t: typecheck.ITy) (elem: typecheck.ITy): String = {
     let lty = cg_llvm_ty(cg_of_ity(elem));
     let cmp = cg_eq_code(elem, "%av", "%bv", 0);
-    "define i1 ".concat(cg_eq_sym(t)).concat("(ptr %a, ptr %b) {\nentry:\n")
+    "define i1 ${cg_eq_sym(t)}(ptr %a, ptr %b) {\nentry:\n"
         .concat("  %lap = getelementptr i8, ptr %a, i64 8\n")
         .concat("  %la = load i64, ptr %lap\n")
         .concat("  %lbp = getelementptr i8, ptr %b, i64 8\n")
@@ -6219,7 +6219,7 @@ let cg_emit_array_eq (t: typecheck.ITy) (elem: typecheck.ITy): String = {
 // an overwrite is safe on the very FIRST write — where "before" is
 // uninitialised stack.
 let cg_null_init (t: typecheck.ITy) (slot: String): String =
-    if cg_rc_enabled(()) && cg_is_heap(cg_of_ity(t)) { "  store ptr null, ptr ".concat(slot).concat("\n") } else { "" }
+    if cg_rc_enabled(()) && cg_is_heap(cg_of_ity(t)) { "  store ptr null, ptr ${slot}\n" } else { "" }
 
 // Release whatever a slot currently holds. Emitted twice for each slot,
 // at different places — before an overwrite, and at function exit — so
@@ -6246,7 +6246,7 @@ let cg_null_init (t: typecheck.ITy) (slot: String): String =
 // rename still touches only the load/release pair.
 let cg_release_slot (t: typecheck.ITy) (slot: String) (suffix: String): String =
     if cg_rc_enabled(()) && cg_is_heap(cg_of_ity(t)) {
-        "  ".concat(slot).concat(suffix).concat(" = load ptr, ptr ").concat(slot).concat("\n")
+        "  ${slot}${suffix} = load ptr, ptr ${slot}\n"
             .concat("  call void ").concat(cg_rel_sym(t)).concat("(ptr ").concat(slot).concat(suffix).concat(")\n")
             .concat("  store ptr null, ptr ").concat(slot).concat("\n")
     } else { "" }
@@ -6320,7 +6320,7 @@ let cg_is_heap (t: CgTy): Bool =
 // its own reference to each, or both cells release the same children.
 let cg_inc_elems (elem: CgTy) (cell: String) (len: String) (reg: String): String =
     if cg_rc_enabled(()) && cg_is_heap(elem) {
-        "  ".concat(reg).concat(" = call i1 @plum_array_inc_elems(ptr ").concat(cell).concat(", i64 ").concat(len).concat(")\n")
+        "  ${reg} = call i1 @plum_array_inc_elems(ptr ${cell}, i64 ${len})\n"
     } else { "" }
 
 // Releasing something whose type is only known as a representation.
@@ -6329,7 +6329,7 @@ let cg_inc_elems (elem: CgTy) (cell: String) (len: String) (reg: String): String
 // function.
 let cg_dec_cg (t: CgTy) (val: String): String =
     match t {
-        CgClosure(ptys, ret) => if cg_rc_enabled(()) { "  call void @plum_rel_closure(ptr ".concat(val).concat(")\n") } else { "" },
+        CgClosure(ptys, ret) => if cg_rc_enabled(()) { "  call void @plum_rel_closure(ptr ${val})\n" } else { "" },
         _ => "",
     }
 
@@ -6352,7 +6352,7 @@ let cg_dec_args (p: CgProgram) (args: Array[typecheck.TExpr]) (vals: Array[Strin
     else { cg_dec_args(p, args, vals, i + 1, acc.concat(cg_dec_op(cg_concrete(p, typecheck.texpr_ty(p.subst, args[i])), vals[i]))) }
 
 let cg_dec_op (t: typecheck.ITy) (operand: String): String =
-    if cg_rc_enabled(()) && cg_is_heap(cg_of_ity(t)) { "  call void ".concat(cg_rel_sym(t)).concat("(").concat(operand).concat(")\n") } else { "" }
+    if cg_rc_enabled(()) && cg_is_heap(cg_of_ity(t)) { "  call void ${cg_rel_sym(t)}(${operand})\n" } else { "" }
 
 // --- Borrowing ---
 //
@@ -6380,7 +6380,7 @@ let cg_borrow (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr):
             Some(slot) => {
                 let reg = cg_reg(n);
                 BorrowEmit {
-                    code: "  ".concat(reg).concat(" = load ").concat(cg_llvm_ty(slot.ty)).concat(", ptr ").concat(slot.ptr).concat("\n"),
+                    code: "  ${reg} = load ${cg_llvm_ty(slot.ty)}, ptr ${slot.ptr}\n",
                     allocas: "", releases: "", globals: "", val: reg, ty: slot.ty, drop: "", n: n + 1,
                 }
             },
@@ -6398,10 +6398,10 @@ let cg_borrow_owned (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.T
 }
 
 let cg_inc (t: CgTy) (val: String): String =
-    if cg_rc_enabled(()) && cg_is_heap(t) { "  call void @plum_rc_inc(ptr ".concat(val).concat(")\n") } else { "" }
+    if cg_rc_enabled(()) && cg_is_heap(t) { "  call void @plum_rc_inc(ptr ${val})\n" } else { "" }
 
 let cg_dec (t: typecheck.ITy) (val: String): String =
-    if cg_rc_enabled(()) && cg_is_heap(cg_of_ity(t)) { "  call void ".concat(cg_rel_sym(t)).concat("(ptr ").concat(val).concat(")\n") } else { "" }
+    if cg_rc_enabled(()) && cg_is_heap(cg_of_ity(t)) { "  call void ${cg_rel_sym(t)}(ptr ${val})\n" } else { "" }
 
 // A release function per TYPE, not per value, so a cell's children can
 // be released without any runtime type information — the same shape as
@@ -6498,7 +6498,7 @@ let cg_emit_relc_fn (p: CgProgram) (t: typecheck.ITy): String =
         ITEnum(name, args) => {
             let vs = cg_find_enum(p, name).variants;
             if cg_enum_owns(p, vs, args, 0) {
-                "define void ".concat(cg_relc_sym(t)).concat("(ptr %p) {\nentry:\n")
+                "define void ${cg_relc_sym(t)}(ptr %p) {\nentry:\n"
                     .concat("  %isnull = icmp eq ptr %p, null\n")
                     .concat("  br i1 %isnull, label %done, label %live\n")
                     .concat("live:\n")
@@ -6522,7 +6522,7 @@ let cg_relc_sym (t: typecheck.ITy): String = "@plum_relc_".concat(cg_ity_mangle(
 // Every release function has the same shape: decrement, and on reaching
 // zero release the children and free the cell.
 let cg_rel_head (t: typecheck.ITy): String =
-    "define void ".concat(cg_rel_sym(t)).concat("(ptr %p) {\nentry:\n")
+    "define void ${cg_rel_sym(t)}(ptr %p) {\nentry:\n"
         .concat("  %isnull = icmp eq ptr %p, null\n")
         .concat("  br i1 %isnull, label %skip, label %live\n")
         .concat("skip:\n  ret void\nlive:\n")
@@ -6563,8 +6563,8 @@ pub let cg_is_handle (p: CgProgram) (name: String): Bool =
 // joined -- and freeing the queue has to release them too. `null` for
 // an element type that owns nothing, which the shim checks for.
 let cg_handle_release_call (name: String) (rel: String): String =
-    if name == "Task" { "  call void @task_release(i64 %h, ptr ".concat(rel).concat(")\n") }
-    else { "  call void @channel_release(i64 %h, ptr ".concat(rel).concat(")\n") }
+    if name == "Task" { "  call void @task_release(i64 %h, ptr ${rel})\n" }
+    else { "  call void @channel_release(i64 %h, ptr ${rel})\n" }
 
 // The whole point of issue #9, in one function: at zero, the number
 // this cell holds is handed to the cleanup the declaration named.
@@ -6579,7 +6579,7 @@ let cg_handle_release_call (name: String) (rel: String): String =
 // Rust's `Drop` has, and it is why a fallible close should ALSO be
 // offered explicitly -- see the notes on issue #1.
 let cg_emit_user_handle_rel (p: CgProgram) (t: typecheck.ITy) (name: String): String =
-    "define void ".concat(cg_rel_sym(t)).concat("(ptr %p) {\nentry:\n")
+    "define void ${cg_rel_sym(t)}(ptr %p) {\nentry:\n"
         .concat("  %isnull = icmp eq ptr %p, null\n")
         .concat("  br i1 %isnull, label %skip, label %live\n")
         .concat("skip:\n  ret void\n")
@@ -6602,7 +6602,7 @@ let cg_emit_user_handle_rel (p: CgProgram) (t: typecheck.ITy) (name: String): St
 
 let cg_emit_handle_rel (p: CgProgram) (t: typecheck.ITy) (name: String) (elem: typecheck.ITy): String = {
     let rel = if cg_is_heap(cg_of_ity(cg_concrete(p, elem))) { cg_rel_sym(cg_concrete(p, elem)) } else { "null" };
-    "define void ".concat(cg_rel_sym(t)).concat("(ptr %p) {\nentry:\n")
+    "define void ${cg_rel_sym(t)}(ptr %p) {\nentry:\n"
         .concat("  %isnull = icmp eq ptr %p, null\n")
         .concat("  br i1 %isnull, label %skip, label %live\n")
         .concat("skip:\n  ret void\n")
@@ -6651,7 +6651,7 @@ let cg_emit_rel_fn (p: CgProgram) (t: typecheck.ITy): String =
         // impossible to release was wrong: the machinery was already
         // there, and one release path simply wasn't using it.
         ITFunction(_, _) =>
-            "define void ".concat(cg_rel_sym(t)).concat("(ptr %p) {\nentry:\n")
+            "define void ${cg_rel_sym(t)}(ptr %p) {\nentry:\n"
                 .concat("  call void @plum_rel_closure(ptr %p)\n  ret void\n}\n\n"),
         _ => "",
     }
@@ -6669,7 +6669,7 @@ let cg_rel_children (tys: Array[typecheck.ITy]) (i: Int) (n: Int) (acc: String) 
         let off = if is_payload { cg_payload_offset(i) } else { cg_field_offset(i) };
         let fp = "%rp".concat(n.to_string());
         let fv = "%rv".concat(n.to_string());
-        let line = "  ".concat(fp).concat(" = getelementptr i8, ptr %p, i64 ").concat(off.to_string()).concat("\n")
+        let line = "  ${fp} = getelementptr i8, ptr %p, i64 ${off}\n"
             .concat("  ").concat(fv).concat(" = load ptr, ptr ").concat(fp).concat("\n")
             .concat("  call void ").concat(cg_rel_sym(tys[i])).concat("(ptr ").concat(fv).concat(")\n");
         cg_rel_children(tys, i + 1, n + 1, acc.concat(line), is_payload)
@@ -6700,7 +6700,7 @@ let cg_rel_blocks (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.I
     if i >= vs.len() { acc }
     else if !cg_variant_owns(p, vs[i], args) { cg_rel_blocks(p, vs, args, i + 1, n, acc) }
     else {
-        let block = "R".concat(vs[i].tag.to_string()).concat(":\n")
+        let block = "R${vs[i].tag}:\n"
             .concat(cg_rel_children(cg_variant_payload_tys(p, vs[i], args), 0, n, "", true))
             .concat("  br label %done\n");
         cg_rel_blocks(p, vs, args, i + 1, n + 100, acc.concat(block))
@@ -6895,7 +6895,7 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     cg_dbg_reset(());
     let program = cg_with_prelude(program0);
     let p = cg_build_program(program);
-    if !cg_has_fn(p, entry) { cg_fail("no top-level '".concat(entry).concat("' function to compile")) };
+    if !cg_has_fn(p, entry) { cg_fail("no top-level '${entry}' function to compile") };
     // Globals are roots too: their bodies can call functions that
     // nothing else reaches.
     let insts = cg_reachable(p, cg_global_roots(p, 0, [CgInst { module: "", name: entry, targs: [] }]), [], 0);
@@ -6941,7 +6941,7 @@ let cg_global_dup (gs: Array[typecheck.TFn]) (module_name: String) (name: String
 
 let cg_emit_globals (p: CgProgram) (i: Int) (n: Int) (slots: String) (body: String): GlobalsEmit =
     if i >= p.globals.len() {
-        GlobalsEmit { slots: slots, init: "define void @plum_init_globals() {\nentry:\n".concat(body).concat("  ret void\n}\n\n") }
+        GlobalsEmit { slots: slots, init: "define void @plum_init_globals() {\nentry:\n${body}  ret void\n}\n\n" }
     } else if cg_global_dup(p.globals, p.globals[i].module, p.globals[i].name, 0, i) {
         // The flat module namespace lets two modules declare the same
         // global — `UPPERCASE_CHARS` exists in both `interp.plum` and
@@ -6986,7 +6986,7 @@ let cg_reachable (p: CgProgram) (pending: Array[CgInst]) (done: Array[CgInst]) (
                 // A runtime-implemented prelude function has no Plum
                 // body to walk or specialize — it is already a symbol.
                 None => if Option.is_some(cg_runtime_fn(head.name)) { cg_reachable(p, rest, done, fuel + 1) } else {
-                    cg_fail("prelude function ".concat(head.name).concat(" has no implementation in this backend's runtime yet"));
+                    cg_fail("prelude function ${head.name} has no implementation in this backend's runtime yet");
                     done
                 },
                 Some(def) => {

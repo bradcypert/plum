@@ -135,7 +135,7 @@ let fail_tc (msg: String): Unit = {
     let e = ERR.get();
     if e.path == "" || e.offset < 0 {
         panic_raw("self-hosted type checker: ".concat(msg)
-            .concat(if e.fn_name == "" { "" } else { " (checking '".concat(e.fn_name).concat("')") }))
+            .concat(if e.fn_name == "" { "" } else { " (checking '${e.fn_name}')" }))
     }
     else {
         match Os.read_file(e.path) {
@@ -243,7 +243,7 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
                     let params = Array.map(def.params, |p| resolve_param_ty(ctx, items[i].module, generic_names, p));
                     let ret = match def.ret_ty {
                         Some(t) => resolve_ann_seen(ctx, items[i].module, generic_names, t),
-                        None => { fail_tc("top-level function ".concat(def.name).concat(" needs an explicit return type annotation")); ITUnit },
+                        None => { fail_tc("top-level function ${def.name} needs an explicit return type annotation"); ITUnit },
                     };
                     collect_sigs_acc(ctx, items, i + 1, sigs.push(FnSig { name: def.name, module: items[i].module, generics: generic_names, params: params, ret: ret, is_extern: false, is_pub: items[i].is_pub }), globals)
                 }
@@ -279,7 +279,7 @@ let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (
 // parameter").
 let resolve_param_ty (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (p: parser.ParamNode): ITy =
     match p {
-        ParamIdent(name) => { fail_tc("parameter ".concat(name).concat(" needs an explicit type annotation")); ITUnit },
+        ParamIdent(name) => { fail_tc("parameter ${name} needs an explicit type annotation"); ITUnit },
         ParamPatternTy(pattern, ann) => match ann {
             Some(t) => resolve_ann_seen(ctx, viewer, in_scope, t),
             None => match pattern {
@@ -441,18 +441,18 @@ let check_handle_drops (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): 
     else {
         match items[i].kind {
             IKHandle(decl) => match find_sig(p2, decl.on_drop) {
-                None => fail_tc("handle ".concat(decl.name).concat(": on_drop names '").concat(decl.on_drop)
+                None => fail_tc("handle ${decl.name}: on_drop names '${decl.on_drop}"
                     .concat("', which is not declared. It must be an `extern \"C\"` function taking one Int.")),
                 Some(sig) =>
                     if !sig.is_extern {
-                        fail_tc("handle ".concat(decl.name).concat(": on_drop '").concat(decl.on_drop)
+                        fail_tc("handle ${decl.name}: on_drop '${decl.on_drop}"
                             .concat("' must be an `extern \"C\"` function, not a Plum one -- it runs while a value is being freed"))
                     } else if sig.params.len() != 1 {
-                        fail_tc("handle ".concat(decl.name).concat(": on_drop '").concat(decl.on_drop)
+                        fail_tc("handle ${decl.name}: on_drop '${decl.on_drop}"
                             .concat("' must take exactly one Int, but takes ").concat(sig.params.len().to_string()))
                     } else { match sig.params[0] {
-                        ITInt => match sig.ret { ITUnit => (), _ => fail_tc("handle ".concat(decl.name).concat(": on_drop '").concat(decl.on_drop).concat("' must return nothing")) },
-                        _ => fail_tc("handle ".concat(decl.name).concat(": on_drop '").concat(decl.on_drop).concat("' must take an Int")),
+                        ITInt => match sig.ret { ITUnit => (), _ => fail_tc("handle ${decl.name}: on_drop '${decl.on_drop}' must return nothing") },
+                        _ => fail_tc("handle ${decl.name}: on_drop '${decl.on_drop}' must take an Int"),
                     } },
             },
             _ => (),
@@ -544,7 +544,7 @@ let bound_names (module_name: String) (fn_name: String) (param: String) (bs: Arr
         // this does not know is rejected rather than ignored, for the
         // same reason an unknown type is: quietly meaning nothing is
         // the worst of the three options.
-        fail_tc("unknown bound `".concat(bs[i]).concat("` on ").concat(param)
+        fail_tc("unknown bound `${bs[i]}` on ${param}"
             .concat(". Plum has three: `Ord`, `Eq` and `Show`"));
         bound_names(module_name, fn_name, param, bs, i + 1, acc)
     }
@@ -701,7 +701,7 @@ let check_call_targs (ctx: TyContext) (fns: Array[TFn]) (reqs: Array[OrdReq]) (s
             let idx = generic_index(fns, m, n, reqs[i].param);
             let got = if idx >= 0 && idx < targs.len() { subst_apply(sub, targs[idx]) } else { ITUnit };
             if idx >= 0 && idx < targs.len() && violates_bound(ctx, reqs[i].kind, got) {
-                fail_tc("call to ".concat(n).concat(": ").concat(reqs[i].param).concat(" is ")
+                fail_tc("call to ${n}: ${reqs[i].param} is "
                     .concat(render_ty(got)).concat(", but ").concat(n).concat(" requires ")
                     .concat(reqs[i].param).concat(bound_needs(reqs[i].kind)))
             } else { () }
@@ -759,7 +759,7 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
     let ret_ty = subst_apply(r.subst, sig.ret);
     match unify(body_ty, ret_ty) {
         Ok(_) => (),
-        Err(e) => fail_tc("function ".concat(def.name).concat(": declared return type ").concat(render_ty(ret_ty)).concat(" doesn't match body type ").concat(render_ty(body_ty)).concat(" (").concat(e).concat(")")),
+        Err(e) => fail_tc("function ${def.name}: declared return type ${render_ty(ret_ty)} doesn't match body type ${render_ty(body_ty)} (${e})"),
     };
     TFn { name: def.name, module: module_name, path: ERR.get().path, offset: ERR.get().offset, generics: sig.generics, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
 }
@@ -841,7 +841,7 @@ let typed_globals_acc (p20: Program2) (globals: Array[GlobalDef]) (i: Int) (acc:
                 match unify(subst_apply(r.subst, r.ty), declared) {
                     Ok(s) => subst_compose(s, r.subst),
                     Err(e) => {
-                        fail_tc("global ".concat(globals[i].def.name).concat(": declared type ").concat(render_ty(declared))
+                        fail_tc("global ${globals[i].def.name}: declared type ${render_ty(declared)}"
                             .concat(" doesn't match its value's type ").concat(render_ty(subst_apply(r.subst, r.ty))).concat(" (").concat(e).concat(")"));
                         r.subst
                     },
@@ -1098,7 +1098,7 @@ let check_global (p20: Program2) (def: parser.LetDefNode) (module_name: String):
             let declared = resolve_ann_seen(p2.ctx, module_name, [], t);
             match unify(subst_apply(r.subst, r.ty), declared) {
                 Ok(_) => (),
-                Err(e) => fail_tc("global ".concat(def.name).concat(": declared type ").concat(render_ty(declared))
+                Err(e) => fail_tc("global ${def.name}: declared type ${render_ty(declared)}"
                     .concat(" doesn't match its value's type ").concat(render_ty(subst_apply(r.subst, r.ty))).concat(" (").concat(e).concat(")")),
             }
         },
@@ -1204,7 +1204,7 @@ let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (o
     let rr = infer_expr(p2, lr.state, env, lr.subst, rhs);
     let combined = match unify(subst_apply(rr.subst, lr.ty), subst_apply(rr.subst, rr.ty)) {
         Ok(s) => subst_compose(s, rr.subst),
-        Err(e) => { fail_tc("'".concat(op_name(op)).concat("': ").concat(e)); rr.subst },
+        Err(e) => { fail_tc("'${op_name(op)}': ${e}"); rr.subst },
     };
     let operand_ty = subst_apply(combined, lr.ty);
     reject_function_equality(p2, op, operand_ty);
@@ -1232,7 +1232,7 @@ let reject_non_int_bitwise (op: parser.BOp) (operand_ty: ITy): Unit =
         match operand_ty {
             ITInt => (),
             ITVar(_) => (),
-            _ => fail_tc("'".concat(op_name(op)).concat("' needs Int operands, found ").concat(render_ty(operand_ty))),
+            _ => fail_tc("'${op_name(op)}' needs Int operands, found ${render_ty(operand_ty)}"),
         }
     }
 
@@ -1273,7 +1273,7 @@ let is_bitwise (op: parser.BOp): Bool =
 // the bugs were.
 let reject_unordered_comparison (op: parser.BOp) (t: ITy): Unit =
     if is_ordered_op(op) && is_known_unordered(t) {
-        fail_tc("'".concat(op_name(op)).concat("' needs an ordered type -- Int, Float or String -- but got ").concat(render_ty(t)))
+        fail_tc("'${op_name(op)}' needs an ordered type -- Int, Float or String -- but got ${render_ty(t)}")
     } else { () }
 
 let is_ordered_op (op: parser.BOp): Bool =
@@ -1322,7 +1322,7 @@ let reject_unrenderable (p2: Program2) (t: ITy): Unit =
         ITTuple(_) => fail_tc(".to_string() on a tuple isn't supported"),
         ITStruct(name, _) =>
             if name == "Task" || name == "Sender" || name == "Receiver" {
-                fail_tc(".to_string() on a ".concat(name).concat(" isn't supported"))
+                fail_tc(".to_string() on a ${name} isn't supported")
             } else { reject_if_handle_render(p2, t) },
         // Any type with a handle inside it, at any depth -- a
         // `Result[File, String]` has no rendering either, for the same
@@ -1339,9 +1339,9 @@ let reject_if_handle_render (p2: Program2) (t: ITy): Unit =
             // shim value -- which is what `Task` did by accident before
             // it became a real cell.
             if render_ty(inner) == render_ty(t) {
-                fail_tc(".to_string() on a handle (".concat(render_ty(t)).concat(") isn't supported: its payload is opaque"))
+                fail_tc(".to_string() on a handle (${render_ty(t)}) isn't supported: its payload is opaque")
             } else {
-                fail_tc(".to_string() on ".concat(render_ty(t)).concat(" isn't supported: it would have to render ")
+                fail_tc(".to_string() on ${render_ty(t)} isn't supported: it would have to render "
                     .concat(render_ty(inner)).concat(", whose payload is opaque"))
             },
     }
@@ -1390,9 +1390,9 @@ let reject_handle_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
 let reject_if_handle (p2: Program2) (sym: String) (t: ITy): Unit =
     match first_handle_within(p2.ctx, t, []) {
         None => (),
-        Some(inner) => fail_tc("'".concat(sym).concat("' is not supported for ").concat(render_ty(t))
+        Some(inner) => fail_tc("'${sym}' is not supported for ${render_ty(t)}"
             .concat(if render_ty(inner) == render_ty(t) { ": a handle has no fields to compare, and its payload is opaque" }
-                    else { ": it would have to compare ".concat(render_ty(inner)).concat(", and a handle has no meaningful equality") })),
+                    else { ": it would have to compare ${render_ty(inner)}, and a handle has no meaningful equality" })),
     }
 
 // A handle ANYWHERE inside `t`, by the same walk `first_function_within`
@@ -1458,9 +1458,9 @@ let reject_function_equality (p2: Program2) (op: parser.BOp) (t: ITy): Unit =
 
 let reject_if_functional (p2: Program2) (sym: String) (t: ITy): Unit =
     match first_function_within(p2.ctx, t, []) {
-        Some(inner) => fail_tc("'".concat(sym).concat("' is not supported for ").concat(render_ty(t))
+        Some(inner) => fail_tc("'${sym}' is not supported for ${render_ty(t)}"
             .concat(if render_ty(inner) == render_ty(t) { ": a function has no meaningful equality" }
-                    else { ": it would have to compare ".concat(render_ty(inner)).concat(", and a function has no meaningful equality") })),
+                    else { ": it would have to compare ${render_ty(inner)}, and a function has no meaningful equality" })),
         None => (),
     }
 
@@ -1639,7 +1639,7 @@ let qualified_global (p2: Program2) (env: TyEnv) (base: parser.PExpr) (name: Str
                 None => None,
                 Some(g) => {
                     if !g.is_pub && ns != p2.current {
-                        fail_tc("global ".concat(ns).concat(".").concat(name).concat(" is private to module ").concat(ns))
+                        fail_tc("global ${ns}.${name} is private to module ${ns}")
                     } else { () };
                     Some(g)
                 },
@@ -1676,12 +1676,12 @@ let infer_field_read (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
                     check_field_visible(p2.ctx, p2.current, struct_name, name);
                     ir_leaf(instantiate_template(info.generics, args, field_ty), r.subst, r.state, TFieldGet(r.texpr, name))
                 },
-                None => { fail_tc("struct ".concat(struct_name).concat(" has no field named ").concat(name)); ir_unsupported(r.subst, r.state, "bad field access") },
+                None => { fail_tc("struct ${struct_name} has no field named ${name}"); ir_unsupported(r.subst, r.state, "bad field access") },
             },
             // Naming the FIELD matters: reaching here with `Array`
             // means something is reading `.field` off an array, and
             // which field says which expression is at fault.
-            None => { fail_tc("no such type '".concat(struct_name).concat("' to read field '").concat(name).concat("' from")); ir_unsupported(r.subst, r.state, "unknown struct") },
+            None => { fail_tc("no such type '${struct_name}' to read field '${name}' from"); ir_unsupported(r.subst, r.state, "unknown struct") },
         },
         _ => { fail_tc("field access requires a struct value with a statically known type, found ".concat(render_ty(base_ty))); ir_unsupported(r.subst, r.state, "field access on a non-struct") },
     }
@@ -1712,7 +1712,7 @@ let find_field_template_acc (fields: Array[StructFieldTemplate]) (name: String) 
 // Saying so is the whole cost of having gated the module behind `use`.
 let unbound_message (tag: String): String =
     if Array.contains(parser.std_module_names(), tag) {
-        "unbound variant/function: ".concat(tag).concat(" -- `").concat(tag)
+        "unbound variant/function: ${tag} -- `${tag}"
             .concat("` is a standard library module; add `use ").concat(tag).concat(";` to this file")
     } else { "unbound variant/function: ".concat(tag) }
 
@@ -1736,7 +1736,7 @@ let resolve_variant (p2: Program2) (tag: String): Option[VariantLookup] = {
 }
 
 let ambiguous_tag_message (tag: String) (cands: Array[VariantLookup]): String =
-    "`".concat(tag).concat("` is a variant of ").concat(join_enum_names(cands, 0, ""))
+    "`${tag}` is a variant of ".concat(join_enum_names(cands, 0, ""))
         .concat(" -- write ").concat(parser.display_type_name(cands[0].enum_name)).concat(".").concat(tag)
         .concat(" to say which one you mean")
 
@@ -1951,7 +1951,7 @@ let infer_array_ns_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
     if fn_name == "map" { infer_array_map(p2, state, env, acc, args[0], args[1]) }
     else if fn_name == "filter" { infer_array_filter(p2, state, env, acc, args[0], args[1]) }
     else if fn_name == "fold" { infer_array_fold(p2, state, env, acc, args[0], args[1], args[2]) }
-    else { { fail_tc("unsupported Array.".concat(fn_name).concat("(...) call")); ir_unsupported(acc, state, "Array.".concat(fn_name)) } }
+    else { { fail_tc("unsupported Array.${fn_name}(...) call"); ir_unsupported(acc, state, "Array.".concat(fn_name)) } }
 
 // Infers a closure argument with its parameter types ALREADY KNOWN,
 // instead of letting them start as fresh variables the body is checked
@@ -2094,7 +2094,7 @@ let ity_namespace (t: ITy): Option[String] =
 // `String.trim_end`" hides that built-in methods are a separate thing.
 let no_method_message (base_ty: ITy) (method_name: String): String =
     match ity_namespace(base_ty) {
-        Some(ns) => "no method `".concat(method_name).concat("` on ").concat(ns)
+        Some(ns) => "no method `${method_name}` on ${ns}"
             .concat(": it is not a built-in method, and no function named `")
             .concat(ns).concat(".").concat(method_name).concat("` is in scope"),
         None => "no method `".concat(method_name)
@@ -2274,10 +2274,10 @@ let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
         // its remaining parameters, and a partial application would have
         // nothing to compile to.
         if sig.params.len() != args.len() {
-            fail_tc("call to extern ".concat(sig.name).concat(": expected ").concat(sig.params.len().to_string()).concat(" argument(s), found ").concat(args.len().to_string()))
+            fail_tc("call to extern ${sig.name}: expected ${sig.params.len()} argument(s), found ${args.len()}")
         };
         if !UNSAFE.get() {
-            fail_tc("calling extern function '".concat(sig.name).concat("' requires an 'unsafe' block"))
+            fail_tc("calling extern function '${sig.name}' requires an 'unsafe' block")
         };
         let ar = infer_call_args(p2, state, env, acc, args, sig.params, 0, []);
         ir_leaf(sig.ret, ar.subst, ar.state, TExternCall(sig.name, ar.texprs))
@@ -2299,7 +2299,7 @@ let infer_fn_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (
         if !Array.is_empty(args) && args.len() < sig.params.len() {
             infer_partial_call(p2, state, env, acc, sig, args)
         } else {
-            if sig.params.len() != args.len() { fail_tc("call to ".concat(sig.name).concat(": expected ").concat(sig.params.len().to_string()).concat(" argument(s), found ").concat(args.len().to_string())) };
+            if sig.params.len() != args.len() { fail_tc("call to ${sig.name}: expected ${sig.params.len()} argument(s), found ${args.len()}") };
             let fr = fresh_list(state, sig.generics.len());
             let inst_params = Array.map(sig.params, |t| instantiate_template(sig.generics, fr.tys, t));
             let inst_ret = instantiate_template(sig.generics, fr.tys, sig.ret);
@@ -2336,7 +2336,7 @@ let infer_call_args (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst)
         let r = seeded;
         let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, param_tys[i])) {
             Ok(s) => subst_compose(s, r.subst),
-            Err(e) => { fail_tc("argument ".concat(i.to_string()).concat(": ").concat(e)); r.subst },
+            Err(e) => { fail_tc("argument ${i}: ${e}"); r.subst },
         };
         infer_call_args(p2, r.state, env, s2, args, param_tys, i + 1, texprs.push(r.texpr))
     }
@@ -2451,7 +2451,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
             Ok(s0) => {
                 let s1 = subst_compose(s0, br.subst);
                 let ar = infer_expr(p2, br.state, env, s1, args[0]);
-                let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() argument: ").concat(e)); ar.subst } };
+                let s2 = match unify(subst_apply(ar.subst, ar.ty), ITStr) { Ok(s) => subst_compose(s, ar.subst), Err(e) => { fail_tc(".${method_name}() argument: ${e}"); ar.subst } };
                 ir_leaf(ITBool, s2, ar.state, TMethodCall(method_name, br.texpr, [ar.texpr]))
             },
         }
@@ -2466,7 +2466,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         // Str -> Str, no arguments. Compiler primitives like
         // `ends_with`/`split` above, recognised by name and arity.
         let br = infer_expr(p2, state, env, acc, base);
-        let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() receiver: ").concat(e)); br.subst } };
+        let s1 = match unify(subst_apply(br.subst, br.ty), ITStr) { Ok(s) => subst_compose(s, br.subst), Err(e) => { fail_tc(".${method_name}() receiver: ${e}"); br.subst } };
         ir_leaf(ITStr, s1, br.state, TMethodCall(method_name, br.texpr, []))
     } else if method_name == "replace" && args.len() == 2 {
         // Str -> Str -> Str -> Str: haystack, needle, replacement.
@@ -2490,7 +2490,7 @@ let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
         // `Float.round`. NaN becomes 0; overflow saturates. Recognised
         // here by name and arity, like `to_float` above.
         let r = infer_expr(p2, state, env, acc, base);
-        let s1 = match unify(subst_apply(r.subst, r.ty), ITFloat) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc(".".concat(method_name).concat("() receiver: ").concat(e)); r.subst } };
+        let s1 = match unify(subst_apply(r.subst, r.ty), ITFloat) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc(".${method_name}() receiver: ${e}"); r.subst } };
         ir_leaf(ITInt, s1, r.state, TMethodCall(method_name, r.texpr, []))
     } else if method_name == "len" && Array.is_empty(args) {
         infer_len(p2, state, env, acc, base)
@@ -2779,7 +2779,7 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
                         match unify(vty, want) {
                             Ok(sub) => LetTy { ty: subst_apply(sub, want), subst: subst_compose(r.subst, sub) },
                             Err(e) => {
-                                fail_tc("let ".concat(render_pattern_name(pattern)).concat(": declared type ").concat(render_ty(want)).concat(" doesn't match value type ").concat(render_ty(vty)).concat(" (").concat(e).concat(")"));
+                                fail_tc("let ${render_pattern_name(pattern)}: declared type ${render_ty(want)} doesn't match value type ${render_ty(vty)} (${e})");
                                 LetTy { ty: want, subst: r.subst }
                             },
                         }
@@ -2804,7 +2804,7 @@ let infer_stmts (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (st
                     Some(b) => b.ty,
                     None => { fail_tc("assignment to an unbound name: ".concat(name)); ITUnit },
                 };
-                let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, target_ty)) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc("assignment to ".concat(name).concat(": ").concat(e)); r.subst } };
+                let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, target_ty)) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc("assignment to ${name}: ${e}"); r.subst } };
                 infer_stmts(p2, r.state, env, s2, stmts, i + 1, tstmts.push(TSAssign(name, r.texpr)), starts)
             },
             SExpr(e) => { let r = infer_expr(p2, state, env, acc, e); infer_stmts(p2, r.state, env, r.subst, stmts, i + 1, tstmts.push(TSExpr(r.texpr)), starts) },
@@ -2882,7 +2882,7 @@ let expand_nested_acc (p2: Program2) (info: StructInfo) (fields: Array[parser.Fi
         check_field_visible(p2.ctx, p2.current, info.name, outer);
         let inner_name = match find_field_template(info.fields, outer) {
             Some(ITStruct(sn, _)) => sn,
-            _ => { fail_tc("'".concat(outer).concat(".") .concat(fields[i].extra_path[0]).concat("' needs '").concat(outer).concat("' to be a struct")); "" },
+            _ => { fail_tc("'${outer}." .concat(fields[i].extra_path[0]).concat("' needs '").concat(outer).concat("' to be a struct")); "" },
         };
         // The inner literal updates ONE field of `base.outer`, spreading
         // the rest -- and recurses, so `a.b.c: v` nests twice.
@@ -2909,7 +2909,7 @@ let infer_struct_lit (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst
     // use would read as garbage. `from_raw` is the only way to build
     // one, so this is where the other way is closed off.
     if ctx_is_handle(p2.ctx, name) {
-        fail_tc("handle ".concat(parser.bare_type_name(name)).concat(" cannot be built with a struct literal -- use ")
+        fail_tc("handle ${parser.bare_type_name(name)} cannot be built with a struct literal -- use "
             .concat(parser.bare_type_name(name)).concat(".from_raw(n) inside an `unsafe` block"))
     } else { () };
     match best_struct(p2.ctx, p2.current, name) {
@@ -2960,9 +2960,9 @@ let infer_struct_fields (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Su
         check_field_visible(p2.ctx, p2.current, info.name, fields[i].name);
         let field_ty = match find_field_template(info.fields, fields[i].name) {
             Some(t) => instantiate_template(info.generics, gen_args, t),
-            None => { fail_tc("struct ".concat(info.name).concat(" has no field named ").concat(fields[i].name)); ITUnit },
+            None => { fail_tc("struct ${info.name} has no field named ${fields[i].name}"); ITUnit },
         };
-        let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, field_ty)) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc("field ".concat(fields[i].name).concat(": ").concat(e)); r.subst } };
+        let s2 = match unify(subst_apply(r.subst, r.ty), subst_apply(r.subst, field_ty)) { Ok(s) => subst_compose(s, r.subst), Err(e) => { fail_tc("field ${fields[i].name}: ${e}"); r.subst } };
         infer_struct_fields(p2, r.state, env, s2, info, gen_args, fields, i + 1, texprs.push(r.texpr))
     }
 
@@ -3331,7 +3331,7 @@ let bind_variant_pattern (p2: Program2) (state: FreshState) (acc: Subst) (env: T
                 let fr = fresh_list(state, info.generics.len());
                 let s1 = match unify(subst_apply(acc, scrutinee_ty), ITStruct(info.name, fr.tys)) { Ok(s) => subst_compose(s, acc), Err(e) => { fail_tc(e); acc } };
                 if arg_pats.len() != info.fields.len() {
-                    fail_tc("struct ".concat(tag).concat(" has ").concat(info.fields.len().to_string()).concat(" field(s), pattern binds ").concat(arg_pats.len().to_string()));
+                    fail_tc("struct ${tag} has ${info.fields.len()} field(s), pattern binds ${arg_pats.len()}");
                     BindResult { env: env, subst: s1, state: fr.state, pattern: PVariant([info.name, tag], arg_pats) }
                 } else {
                     // `Point(x, y)` names no field and binds all of
@@ -3398,7 +3398,7 @@ let bind_struct_field_pats (p2: Program2) (state: FreshState) (acc: Subst) (env:
         check_field_visible(p2.ctx, p2.current, info.name, field_pats[i].name);
         let field_ty = match find_field_template(info.fields, field_pats[i].name) {
             Some(t) => instantiate_template(info.generics, gen_args, t),
-            None => { fail_tc("struct ".concat(info.name).concat(" has no field named ").concat(field_pats[i].name)); ITUnit },
+            None => { fail_tc("struct ${info.name} has no field named ${field_pats[i].name}"); ITUnit },
         };
         let r = bind_pattern_ty(p2, state, acc, env, field_pats[i].pattern, subst_apply(acc, field_ty));
         bind_struct_field_pats(p2, r.state, r.subst, r.env, info, gen_args, field_pats, i + 1,

@@ -226,7 +226,7 @@ let lex_number (chars: Array[String]) (pos: Int): NumResult = {
         let text = Array.concat_all(Array.filter(Array.slice(chars, pos, int_end), |c| c != "_"));
         match String.parse_int(text) {
             Ok(n) => NumResult { token: TokInt(n), next_pos: int_end },
-            Err(_) => { panic_raw("integer literal out of range: ".concat(text).concat(" (Int is a 64-bit signed integer)")); NumResult { token: TokInt(0), next_pos: int_end } },
+            Err(_) => { panic_raw("integer literal out of range: ${text} (Int is a 64-bit signed integer)"); NumResult { token: TokInt(0), next_pos: int_end } },
         }
     }
 }
@@ -597,7 +597,7 @@ let relex_acc (chars: Array[String]) (lexed: LexedSource) (i: Int) (acc: String)
     else {
         let from = if i == 0 { 0 } else { lexed.ends[i - 1] };
         if !gap_is_trivia(chars, from, lexed.starts[i]) {
-            panic_raw("token ".concat(i.to_string()).concat(" has non-trivia before it: a token boundary is wrong"))
+            panic_raw("token ${i} has non-trivia before it: a token boundary is wrong")
         } else { () };
         let gap = slice_chars(chars, from, lexed.starts[i]);
         relex_acc(chars, lexed, i + 1, acc.concat(gap).concat(slice_chars(chars, lexed.starts[i], lexed.ends[i])))
@@ -682,7 +682,7 @@ pub let render_at (source: String) (path: String) (offset: Int) (msg: String): S
     // it -- byte-identical to `plum_syntax::error::CompileError`'s own
     // layout, so output from the two compilers can be diffed directly.
     let pad = spaces(gutter.len());
-    "error: ".concat(msg).concat("\n")
+    "error: ${msg}\n"
         .concat("  --> ").concat(path).concat(":").concat(gutter).concat(":").concat(lc.col.to_string()).concat("\n")
         .concat(pad).concat(" |\n")
         .concat(gutter).concat(" | ").concat(text).concat("\n")
@@ -743,17 +743,17 @@ let string_join_with_space (strs: Array[String]): String = {
 }
 
 let render_interp_piece (p: InterpPiece): String = match p {
-    PieceLiteral(s) => "Literal(".concat(quote(s)).concat(")"),
-    PieceExpr(s) => "Expr(".concat(quote(s)).concat(")"),
+    PieceLiteral(s) => "Literal(${quote(s)})",
+    PieceExpr(s) => "Expr(${quote(s)})",
 }
 
 pub let render_token (t: Token): String = match t {
-    TokIdent(s) => "Ident(".concat(quote(s)).concat(")"),
-    TokBuiltin(s) => "Builtin(".concat(quote(s)).concat(")"),
-    TokInt(n) => "Int(".concat(n.to_string()).concat(")"),
-    TokFloat(f) => "Float(".concat(f.to_string()).concat(")"),
-    TokStr(s) => "Str(".concat(quote(s)).concat(")"),
-    TokInterpStr(pieces) => "InterpStr(".concat(string_join_with_space(Array.map(pieces, |p| render_interp_piece(p)))).concat(")"),
+    TokIdent(s) => "Ident(${quote(s)})",
+    TokBuiltin(s) => "Builtin(${quote(s)})",
+    TokInt(n) => "Int(${n})",
+    TokFloat(f) => "Float(${f})",
+    TokStr(s) => "Str(${quote(s)})",
+    TokInterpStr(pieces) => "InterpStr(${string_join_with_space(Array.map(pieces, |p| render_interp_piece(p)))})",
     TokTrue => "True", TokFalse => "False", TokUnderscore => "Underscore",
     TokLet => "Let", TokMut => "Mut", TokFn => "Fn", TokStruct => "Struct", TokEnum => "Enum",
     TokMatch => "Match", TokIf => "If", TokElse => "Else", TokFor => "For", TokIn => "In",

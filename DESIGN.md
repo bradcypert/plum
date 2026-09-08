@@ -19809,3 +19809,44 @@ per-character loop is a large win; the mirror of it is that a table
 nothing reaches is pure cost, and which one applies depends on whether
 the caller is in a loop. `alloc-check` is what tells them apart, and a
 constant offset is its signature for this class.
+
+### Interpolating the compiler's own IR emission (2026-09-08)
+
+`#33` was filed rather than built because the usage survey did not
+support a specifier syntax. The same survey found something else:
+`concat(` appears 1,075 times in `codegen.plum` alone and about 1,400
+across the compiler, most of it assembling LLVM IR text one fragment at
+a time.
+
+```plum
+"  ".concat(reg).concat(" = call i1 ").concat(cg_eq_sym(t)).concat("(")
+    .concat(lty).concat(" ").concat(av).concat(", ").concat(lty)
+    .concat(" ").concat(bv).concat(")\n")
+```
+
+against
+
+```plum
+"  ${reg} = call i1 ${cg_eq_sym(t)}(${lty} ${av}, ${lty} ${bv})\n"
+```
+
+Measured first, because IR emission is the compiler's hottest path and
+a readability change that cost allocations would not be worth it. Two
+programs building the same 4,800-character string, one each way:
+**identical** -- 800 allocations, 504,980 bytes, same breakdown.
+Interpolation lowers to the same chain, so this is free.
+
+275 chains converted by script, plus 58 redundant `.to_string()` calls
+dropped from inside interpolations.
+
+**The verification is the interesting part.** A corpus run proves the
+compiler still works; it does not prove the rewrite changed nothing. So
+the emitted IR for all 93 execution fixtures was captured BEFORE the
+change and compared after: 93 of 93 byte-identical. That is a stronger
+statement than any test suite can make -- not "the output is still
+correct" but "the output is the same bytes" -- and it is the right check
+for any mechanical rewrite of code that generates text.
+
+The seven files touched came to 275 insertions and 275 deletions: every
+converted line is one line either way, which is itself a small sign that
+nothing structural moved.

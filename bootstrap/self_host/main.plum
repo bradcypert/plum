@@ -395,7 +395,7 @@ pub let cmd_stdlib_reference (unit: Unit): Unit = {
     println("`bootstrap/check-stdlib-reference` fails when it is out of date.");
     println("");
     println("Everything here is available with no `use` unless its section says");
-    println("otherwise -- ".concat(module_list_prose(())).concat(" are modules and need one."));
+    println("otherwise -- ${module_list_prose(())} are modules and need one.");
     println("");
     println("A declared function is shown as it is written, receiver first:");
     println("`let Array.reverse (xs: Array[T]): Array[T]`. A function the compiler");
@@ -421,7 +421,7 @@ let module_list_prose (unit: Unit): String = {
 let module_list_acc (names: Array[String]) (i: Int) (acc: String): String =
     if i >= names.len() { acc }
     else {
-        let quoted = "`".concat(names[i]).concat("`");
+        let quoted = "`${names[i]}`";
         let sep = if i == 0 { "" } else if i == names.len() - 1 { " and " } else { ", " };
         module_list_acc(names, i + 1, acc.concat(sep).concat(quoted))
     }
@@ -468,7 +468,7 @@ let reference_builtin_fns (fs: Array[typecheck.BuiltinFn]) (ns: String) (i: Int)
     if i >= fs.len() { () }
     else {
         if ns == "(prelude)" && Option.is_none(String.index_of(fs[i].name, ".")) {
-            println("- `".concat(fs[i].detail).concat("`  (built in)"))
+            println("- `${fs[i].detail}`  (built in)")
         } else { () };
         reference_builtin_fns(fs, ns, i + 1)
     }
@@ -499,7 +499,7 @@ let reference_builtins (ms: Array[typecheck.BuiltinMethod]) (ns: String) (i: Int
     else {
         if ms[i].recv == ns {
             let call = if ns == "" { ms[i].detail } else { ns.concat(".").concat(ms[i].detail) };
-            println("- `".concat(call).concat("`  (built in)"))
+            println("- `${call}`  (built in)")
         } else { () };
         reference_builtins(ms, ns, i + 1)
     }
@@ -510,7 +510,7 @@ let reference_entries (items: Array[parser.ItemNode]) (ns: String) (i: Int): Uni
         match items[i].kind {
             IKLet(def) =>
                 if reference_ns_of(items[i], def.name) == ns && reference_visible(items[i], def.name) {
-                    println("- `".concat(def_signature(def)).concat("`"))
+                    println("- `${def_signature(def)}`")
                 } else { () },
             _ => (),
         };
@@ -676,7 +676,7 @@ let variants_of (decl: parser.EnumDeclNode) (i: Int) (acc: Array[JsonValue]): Ar
 let variant_detail (ename: String) (v: parser.EnumVariantNode): String = {
     let ps = payload_list(v, 0, "");
     ename.concat(".").concat(v.name)
-        .concat(if String.is_empty(ps) { "" } else { "(".concat(ps).concat(")") })
+        .concat(if String.is_empty(ps) { "" } else { "(${ps})" })
 }
 
 // Indexed over the VARIANT rather than over its payload array, so this
@@ -746,7 +746,7 @@ let name_offset (src: String) (from: Int) (to: Int) (name: String): Int =
 // What hover shows: the declaration as written, near enough to be
 // recognisable without re-rendering the whole AST.
 let def_signature (def: parser.LetDefNode): String =
-    "let ".concat(def.name).concat(" ").concat(param_list(def.params, 0, ""))
+    "let ${def.name} ".concat(param_list(def.params, 0, ""))
         .concat(match def.ret_ty { Some(t) => ": ".concat(parser.render_type_source(t)), None => "" })
 
 // `parser.render_pattern` produces S-EXPRESSIONS. That is correct for
@@ -770,16 +770,16 @@ let param_list (ps: Array[parser.ParamNode]) (i: Int) (acc: String): String =
     if i >= ps.len() { acc }
     else {
         let one = match ps[i] {
-            ParamIdent(n) => "(".concat(n).concat(")"),
+            ParamIdent(n) => "(${n})",
             ParamPatternTy(pat, t) => match t {
-                Some(ty) => "(".concat(render_sig_pattern(pat)).concat(": ").concat(parser.render_type_source(ty)).concat(")"),
+                Some(ty) => "(${render_sig_pattern(pat)}: ${parser.render_type_source(ty)})",
                 // A zero-argument function's parameter IS the unit
                 // pattern, written `()` in source. Wrapping an
                 // already-parenthesised pattern in parentheses gives
                 // `(())`, which is not something anyone writes.
                 None => {
                     let inner = render_sig_pattern(pat);
-                    if inner == "()" { inner } else { "(".concat(inner).concat(")") }
+                    if inner == "()" { inner } else { "(${inner})" }
                 },
             },
         };
@@ -1524,10 +1524,10 @@ let run_tests (bin: String) (names: Array[String]) (i: Int) (acc: TestRun): Test
                       else { TestRun { failed: 1, detail: if pr.stderr == "" { pr.stdout } else { pr.stderr } } },
         };
         if outcome.failed == 0 {
-            println("test ".concat(names[i]).concat(" ... ok"));
+            println("test ${names[i]} ... ok");
             run_tests(bin, names, i + 1, acc)
         } else {
-            println("test ".concat(names[i]).concat(" ... FAILED"));
+            println("test ${names[i]} ... FAILED");
             // The child's own output IS the failure report -- the panic
             // message it died with. Captured rather than let through so
             // it lands under the test's name instead of interleaved
@@ -1594,11 +1594,11 @@ let cmd_test (dir: String) (release: Bool) (trace: Bool): Unit = {
     // the user's items alone would check the WRONG program and reject
     // every call to a prelude function, `assert_eq` first among them.
     // The same note `emit-llvm` already carries, for the same reason.
-    println("running ".concat(names.len().to_string()).concat(" tests"));
+    println("running ${names.len()} tests");
     let run = compile_and_run_tests(dir, program, names, release, trace);
     println("");
     if run.failed == 0 {
-        println("test result: ok. ".concat(names.len().to_string()).concat(" passed; 0 failed"));
+        println("test result: ok. ${names.len()} passed; 0 failed");
     } else {
         println("failures:");
         println("");
@@ -1609,7 +1609,7 @@ let cmd_test (dir: String) (release: Bool) (trace: Bool): Unit = {
         // divergence from the real compiler's report, which
         // `bootstrap/test-smoke` compares.
         print(run.detail);
-        println("test result: FAILED. ".concat((names.len() - run.failed).to_string()).concat(" passed; ").concat(run.failed.to_string()).concat(" failed"));
+        println("test result: FAILED. ${(names.len() - run.failed)} passed; ${run.failed} failed");
         // Non-zero exit, printing nothing: the report is already
         // written. This used to be `panic_raw("")`, the only mechanism
         // the language had -- and it printed its (empty) message,
@@ -1829,7 +1829,7 @@ let run_dsymutil (out: String): Unit =
         // the next person diagnosing it is reduced to guessing across
         // CI rounds -- which is exactly how this took three.
         Ok(r) => if r.exit_code != 0 || r.stderr != "" {
-            println("warning: dsymutil (exit ".concat(r.exit_code.to_string()).concat("): ").concat(r.stderr))
+            println("warning: dsymutil (exit ${r.exit_code}): ${r.stderr}")
         } else { () },
         Err(e) => println("warning: could not run dsymutil: ".concat(e)),
     }
@@ -1861,7 +1861,7 @@ let target_error (triple: String): String =
     if triple == native_target() { "" }
     else if Array.contains(known_64_bit_arches(), target_arch(triple)) { "" }
     else {
-        "unsupported target `".concat(triple).concat("`: Plum emits 64-bit code only, and `")
+        "unsupported target `${triple}`: Plum emits 64-bit code only, and `"
             .concat(target_arch(triple))
             .concat("` is not a 64-bit architecture this compiler knows.\n")
             .concat("Known: ").concat(Array.join(known_64_bit_arches(), ", "))
@@ -2148,7 +2148,7 @@ let parse_file_items (path: String) (module_name: String): Array[parser.ItemNode
             parser.set_source_context(path, src, lexed.starts, lexed.ends);
             parser.with_module(parser.parse_program(lexed.tokens).items, module_name)
         },
-        Err(e) => { panic_raw("failed to read ".concat(path).concat(": ").concat(e)); [] },
+        Err(e) => { panic_raw("failed to read ${path}: ${e}"); [] },
     }
 
 // The same reconstruction as `lexer.relex`, one level up: the file
@@ -2174,9 +2174,9 @@ let relex_items_acc (chars: Array[String]) (items: Array[parser.ItemNode]) (i: I
     if i >= items.len() { acc.concat(Array.concat_all(Array.slice(chars, at, chars.len()))) }
     else {
         let it = items[i];
-        if it.start < at { panic_raw("item ".concat(i.to_string()).concat(" overlaps the one before it")) } else { () };
+        if it.start < at { panic_raw("item ${i} overlaps the one before it") } else { () };
         if !lexer.gap_is_trivia(chars, at, it.start) {
-            panic_raw("item ".concat(i.to_string()).concat(" has non-trivia before it: an item boundary is wrong"))
+            panic_raw("item ${i} has non-trivia before it: an item boundary is wrong")
         } else { () };
         relex_items_acc(chars, items, i + 1, it.end,
             acc.concat(Array.concat_all(Array.slice(chars, at, it.end))))
@@ -2258,7 +2258,7 @@ let fmt_one (path: String) (write: Bool) (check: Bool): Int =
             // piping the output reads as an empty file.
             if out == src { { if !write && !check { print(out) } else { () }; 0 } }
             else if lexer.token_texts(out) != lexer.token_texts(src) {
-                println("fmt: refusing to write ".concat(path).concat(": formatting changed the token stream, which is a bug in a rule"));
+                println("fmt: refusing to write ${path}: formatting changed the token stream, which is a bug in a rule");
                 Os.exit_with(1);
                 0
             }
@@ -2365,9 +2365,9 @@ let cmd_new (name: String): Unit =
             Ok(_) => {
                 println("created ".concat(name));
                 println("");
-                println("  plum run ".concat(name).concat("      compile and run it"));
-                println("  plum test ".concat(name).concat("     run its tests"));
-                println("  plum build ".concat(name).concat("    compile to a binary"))
+                println("  plum run ${name}      compile and run it");
+                println("  plum test ${name}     run its tests");
+                println("  plum build ${name}    compile to a binary")
             },
         }
     }

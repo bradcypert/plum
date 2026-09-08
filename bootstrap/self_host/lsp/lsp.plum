@@ -95,7 +95,7 @@ pub let content_length (line: String): Int =
 // rather than papered over: the fix is a byte-length primitive, and no
 // diagnostic this server emits today is non-ASCII.
 pub let frame (body: String): String =
-    "Content-Length: ".concat(body.len().to_string()).concat("\r\n\r\n").concat(body)
+    "Content-Length: ${body.len()}\r\n\r\n${body}"
 
 // --- Requests ---
 

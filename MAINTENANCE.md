@@ -554,6 +554,14 @@ Worth knowing before you "fix" them:
   modules it is still documentation the compiler does not check; module
   membership comes from the directory. Do not assume removing a `use`
   will break a directory-module call, because it will not.
+- **Prefer `"${a} ${b}"` to `a.concat(" ").concat(b)`.** Interpolation
+  lowers to exactly the same chain — measured identical, 800
+  allocations and 504,980 bytes either way — so it is free, and a
+  ten-`concat` line building LLVM IR is unreadable. `${x.to_string()}`
+  is redundant; interpolation already calls it.
+  **Verify a bulk rewrite by diffing EMITTED IR before and after**, not
+  by running the corpus: if every fixture's `.ll` is byte-identical, the
+  rewrite provably changed nothing. That is stronger than any test.
 - **A prelude GLOBAL costs every program, always.** Globals are
   initialised eagerly by `@plum_init_globals` and are not dead-code
   eliminated, so `chars_of(..)` hoisted to a prelude global charges its

@@ -55,7 +55,7 @@ let fail_ctx (msg: String): Unit = panic_raw("self-hosted type checker: ".concat
 pub let module_label (m: String): String =
     if m == "" { "the root module" }
     else if m == parser.PRELUDE_MODULE(()) { "the prelude" }
-    else { "module `".concat(m).concat("`") }
+    else { "module `${m}`" }
 
 // --- Building the context from a whole program's declarations ---
 
@@ -213,7 +213,7 @@ pub let check_field_visible (ctx: TyContext) (viewer: String) (struct_name: Stri
             else { match find_field_pub(info.fields, field, 0) {
                 None => (),
                 Some(is_pub) => if is_pub { () } else {
-                    fail_ctx("field ".concat(struct_name).concat(".").concat(field)
+                    fail_ctx("field ${struct_name}.${field}"
                         .concat(" is private to ").concat(module_label(info.module))
                         .concat(". Add `pub` to it to use it from ").concat(module_label(viewer)))
                 },
@@ -549,19 +549,19 @@ pub let ctx_handle_names (ctx: TyContext): Array[String] =
 pub let ctx_field_names (ctx: TyContext) (name: String): Array[String] =
     match find_struct(ctx, name) {
         Some(info) => Array.map(info.fields, |f| f.name),
-        None => { fail_ctx("unknown struct: ".concat(name).concat(" (asked for its field names)")); [] },
+        None => { fail_ctx("unknown struct: ${name} (asked for its field names)"); [] },
     }
 
 pub let ctx_field_types (ctx: TyContext) (name: String): Array[ITy] =
     match find_struct(ctx, name) {
         Some(info) => Array.map(info.fields, |f| f.ty),
-        None => { fail_ctx("unknown struct: ".concat(name).concat(" (asked for its field types)")); [] },
+        None => { fail_ctx("unknown struct: ${name} (asked for its field types)"); [] },
     }
 
 pub let ctx_variant_payload (ctx: TyContext) (enum_name: String) (tag: String): Array[ITy] =
     match find_variant_in(ctx, enum_name, tag) {
         Some(v) => v.payload,
-        None => { fail_ctx("unknown variant: ".concat(enum_name).concat(".").concat(tag)); [] },
+        None => { fail_ctx("unknown variant: ${enum_name}.${tag}"); [] },
     }
 
 // The declared type-parameter names of a struct, and of the enum a
@@ -572,13 +572,13 @@ pub let ctx_variant_payload (ctx: TyContext) (enum_name: String) (tag: String): 
 pub let ctx_struct_generics (ctx: TyContext) (name: String): Array[String] =
     match find_struct(ctx, name) {
         Some(info) => info.generics,
-        None => { fail_ctx("unknown struct: ".concat(name).concat(" (asked for its generics)")); [] },
+        None => { fail_ctx("unknown struct: ${name} (asked for its generics)"); [] },
     }
 
 pub let ctx_variant_generics (ctx: TyContext) (enum_name: String) (tag: String): Array[String] =
     match find_variant_in(ctx, enum_name, tag) {
         Some(v) => v.enum_generics,
-        None => { fail_ctx("unknown variant: ".concat(enum_name).concat(".").concat(tag)); [] },
+        None => { fail_ctx("unknown variant: ${enum_name}.${tag}"); [] },
     }
 
 // Every variant tag of an enum, in declaration order — what
