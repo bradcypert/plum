@@ -1,0 +1,79 @@
+// Bitwise operators: `&`, `|`, `^`, `<<`, `>>` and `~`.
+//
+// Plum had none of these until now, which is not a small gap: it ruled
+// out hashing, bit flags, binary formats, and every modern random
+// number generator (all of which are built from wrapping multiply and
+// xor/shift). `Rng` uses L'Ecuyer's combined generator precisely
+// because PCG and xoshiro were unreachable.
+//
+// Three decisions this fixture pins, all of them places where C and
+// Plum now differ:
+//
+//   1. Bitwise binds TIGHTER than comparison. `a & b == 0` is
+//      `(a & b) == 0`. In C it is `a & (b == 0)`, which Ritchie called
+//      a mistake he could not fix once code depended on it.
+//   2. Shifts bind like multiplication, as in Go, so `1 << n + 1` is
+//      `(1 << n) + 1` rather than `1 << (n + 1)`.
+//   3. A shift of 64 or more is DEFINED, not undefined: `<<` gives 0
+//      and `>>` fills with the sign bit. A negative count stops the
+//      program -- see `abort_corpus/negative_shift`.
+
+let show (label: String) (v: Int): Unit =
+    println(String.pad_right(label, 16, " ").concat(v.to_string()))
+
+let flag_a: Int = 1
+let flag_b: Int = 2
+let flag_c: Int = 4
+
+let has (flags: Int) (f: Int): Bool = flags & f != 0
+
+let main (): Unit = {
+    // --- The operators themselves ---
+    show("12 & 10", 12 & 10);
+    show("12 | 10", 12 | 10);
+    show("12 ^ 10", 12 ^ 10);
+    show("1 << 10", 1 << 10);
+    show("1024 >> 3", 1024 >> 3);
+    show("~0", ~0);
+    show("~5", ~5);
+
+    // `>>` is ARITHMETIC: the sign bit is what gets shifted in, so
+    // halving a negative number stays negative.
+    show("-8 >> 1", (0 - 8) >> 1);
+    show("-1 >> 40", (0 - 1) >> 40);
+
+    // --- Precedence, spelled out ---
+    //
+    // Each of these would parse differently in C.
+    println("(a & b) == 0:  ".concat((12 & 10 == 8).to_string()));
+    show("1 << 3 + 1", 1 << 3 + 1);
+    show("& before ^", 12 ^ 10 & 6);
+    show("^ before |", 1 | 6 ^ 3);
+
+    // --- Shift counts at and past the word width ---
+    show("1 << 63", 1 << 63);
+    show("1 << 64", 1 << 64);
+    show("1 << 99", 1 << 99);
+    show("-1 >> 99", (0 - 1) >> 99);
+    show("1 >> 99", 1 >> 99);
+
+    // --- What they are actually for ---
+    let flags = flag_a | flag_c;
+    println("has a: ".concat(has(flags, flag_a).to_string()));
+    println("has b: ".concat(has(flags, flag_b).to_string()));
+    println("has c: ".concat(has(flags, flag_c).to_string()));
+    show("cleared c", flags & ~flag_c);
+
+    // An unsigned shift, which `>>` deliberately is not.
+    show("ushr -1 by 1", Int.shr_logical(0 - 1, 1));
+    show("ushr -1 by 0", Int.shr_logical(0 - 1, 0));
+    show("ushr -1 by 64", Int.shr_logical(0 - 1, 64));
+    show("ushr 1024 by 3", Int.shr_logical(1024, 3));
+    show("ones in 255", Int.count_ones(255));
+    show("ones in -1", Int.count_ones(0 - 1));
+    show("ones in 0", Int.count_ones(0));
+
+    // A closure body may be a bitwise-or, and the parser tells the
+    // three `|` characters apart without any lookahead.
+    println(Array.join(Array.map([1, 2, 3], |x: Int| (x | 8).to_string()), ","))
+}

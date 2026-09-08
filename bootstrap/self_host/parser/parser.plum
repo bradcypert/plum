@@ -50,8 +50,9 @@ pub enum Ty {
     TyTuple(Array[Ty]),
 }
 
-pub enum UOp { UNeg, UNot }
-pub enum BOp { BAdd, BSub, BMul, BDiv, BRem, BEq, BNe, BLt, BGt, BLe, BGe, BAnd, BOr, BRange, BPipe }
+pub enum UOp { UNeg, UNot, UBitNot }
+pub enum BOp { BAdd, BSub, BMul, BDiv, BRem, BEq, BNe, BLt, BGt, BLe, BGe, BAnd, BOr, BRange, BPipe,
+               BBitAnd, BBitOr, BBitXor, BShl, BShr }
 
 pub struct FieldInitNode { pub name: String, pub extra_path: Array[String], pub value: PExpr }
 
@@ -1118,16 +1119,64 @@ let compare_op_at (tokens: Array[lexer.Token]) (pos: Int): Option[CompareOp] =
     }
 
 let parse_compare (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = spanned(pos, {
-    let lhs = parse_range(tokens, pos, ns);
+    let lhs = parse_bitor(tokens, pos, ns);
     match compare_op_at(tokens, lhs.next_pos) {
         None => lhs,
         Some(op_r) => {
-            let rhs = parse_range(tokens, op_r.next_pos, ns);
+            let rhs = parse_bitor(tokens, op_r.next_pos, ns);
             if Option.is_some(compare_op_at(tokens, rhs.next_pos)) { fail_at(rhs.next_pos, "comparison operators do not chain") };
             ExprResult { value: EBinary(op_r.op, lhs.value, rhs.value), next_pos: rhs.next_pos }
         },
     }
 })
+
+// --- Bitwise, and where it sits ---
+//
+// TIGHTER than comparison, which is where C famously put it wrong:
+// there `a & b == c` means `a & (b == c)`, because `&` binds looser
+// than `==`. Dennis Ritchie called it a mistake he could not fix once
+// code depended on it. Nothing depends on it here, so `a & b == c`
+// means `(a & b) == c` -- the reading everybody expects.
+//
+// `&` tighter than `^` tighter than `|` is the one part of C's
+// arrangement that is not disputed, and is kept.
+//
+// **`|` is unambiguous with closures**, which is the reason this could
+// be added at all. A closure literal is `|x| body`, and Plum has no
+// juxtaposition application -- `f x` is not a call -- so a `|` can
+// only start a closure where an expression is EXPECTED, and can only
+// be bitwise-or where one has just ENDED. The parser is in exactly one
+// of those states at every point, so no lookahead or backtracking is
+// needed to tell them apart.
+let parse_bitor (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let lhs = parse_bitxor(tokens, pos, ns);
+    spanned(pos, parse_bitor_rest(tokens, lhs.next_pos, lhs.value, ns))
+}
+let parse_bitor_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr) (ns: Bool): ExprResult =
+    match tokens[pos] {
+        TokPipe => { let rhs = parse_bitxor(tokens, pos + 1, ns); parse_bitor_rest(tokens, rhs.next_pos, EBinary(BBitOr, lhs, rhs.value), ns) },
+        _ => ExprResult { value: lhs, next_pos: pos },
+    }
+
+let parse_bitxor (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let lhs = parse_bitand(tokens, pos, ns);
+    spanned(pos, parse_bitxor_rest(tokens, lhs.next_pos, lhs.value, ns))
+}
+let parse_bitxor_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr) (ns: Bool): ExprResult =
+    match tokens[pos] {
+        TokCaret => { let rhs = parse_bitand(tokens, pos + 1, ns); parse_bitxor_rest(tokens, rhs.next_pos, EBinary(BBitXor, lhs, rhs.value), ns) },
+        _ => ExprResult { value: lhs, next_pos: pos },
+    }
+
+let parse_bitand (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = {
+    let lhs = parse_range(tokens, pos, ns);
+    spanned(pos, parse_bitand_rest(tokens, lhs.next_pos, lhs.value, ns))
+}
+let parse_bitand_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr) (ns: Bool): ExprResult =
+    match tokens[pos] {
+        TokAmp => { let rhs = parse_range(tokens, pos + 1, ns); parse_bitand_rest(tokens, rhs.next_pos, EBinary(BBitAnd, lhs, rhs.value), ns) },
+        _ => ExprResult { value: lhs, next_pos: pos },
+    }
 
 let parse_range (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult = spanned(pos, {
     let lhs = parse_add(tokens, pos, ns);
@@ -1160,6 +1209,12 @@ let parse_mul_rest (tokens: Array[lexer.Token]) (pos: Int) (lhs: PExpr) (ns: Boo
         TokStar => { let rhs = parse_unary(tokens, pos + 1, ns); parse_mul_rest(tokens, rhs.next_pos, EBinary(BMul, lhs, rhs.value), ns) },
         TokSlash => { let rhs = parse_unary(tokens, pos + 1, ns); parse_mul_rest(tokens, rhs.next_pos, EBinary(BDiv, lhs, rhs.value), ns) },
         TokPercent => { let rhs = parse_unary(tokens, pos + 1, ns); parse_mul_rest(tokens, rhs.next_pos, EBinary(BRem, lhs, rhs.value), ns) },
+        // Shifts bind like multiplication, as in Go, so `1 << n + 1` is
+        // `(1 << n) + 1`. C binds them looser than `+`, which makes the
+        // same line mean `1 << (n + 1)` and is a routine source of
+        // off-by-one-bit.
+        TokShl => { let rhs = parse_unary(tokens, pos + 1, ns); parse_mul_rest(tokens, rhs.next_pos, EBinary(BShl, lhs, rhs.value), ns) },
+        TokShr => { let rhs = parse_unary(tokens, pos + 1, ns); parse_mul_rest(tokens, rhs.next_pos, EBinary(BShr, lhs, rhs.value), ns) },
         _ => ExprResult { value: lhs, next_pos: pos },
     }
 
@@ -1167,6 +1222,7 @@ let parse_unary (tokens: Array[lexer.Token]) (pos: Int) (ns: Bool): ExprResult =
     match tokens[pos] {
         TokMinus => { let r = parse_unary(tokens, pos + 1, ns); ExprResult { value: EUnary(UNeg, r.value), next_pos: r.next_pos } },
         TokBang => { let r = parse_unary(tokens, pos + 1, ns); ExprResult { value: EUnary(UNot, r.value), next_pos: r.next_pos } },
+        TokTilde => { let r = parse_unary(tokens, pos + 1, ns); ExprResult { value: EUnary(UBitNot, r.value), next_pos: r.next_pos } },
         _ => parse_postfix(tokens, pos, ns),
     })
 
@@ -1729,6 +1785,7 @@ let op_symbol (op: BOp): String = match op {
     BAdd => "+", BSub => "-", BMul => "*", BDiv => "/", BRem => "%",
     BEq => "==", BNe => "!=", BLt => "<", BGt => ">", BLe => "<=", BGe => ">=",
     BAnd => "&&", BOr => "||", BRange => "..", BPipe => "|>",
+    BBitAnd => "&", BBitOr => "|", BBitXor => "^", BShl => "<<", BShr => ">>",
 }
 
 pub let render_type (ty: Ty): String = match ty {
@@ -1775,7 +1832,7 @@ let render_expr (e: PExpr): String = match e {
     ETuple(elems) => sexpr(Array.concat(["tuple"], Array.map(elems, |x| render_expr(x)))),
     EArray(elems) => sexpr(Array.concat(["array"], Array.map(elems, |x| render_expr(x)))),
     EUnary(op, inner) => {
-        let sym = match op { UNeg => "-", UNot => "!" };
+        let sym = match op { UNeg => "-", UNot => "!", UBitNot => "~" };
         "(".concat(sym).concat(" ").concat(render_expr(inner)).concat(")")
     },
     EBinary(op, lhs, rhs) => sexpr([op_symbol(op), render_expr(lhs), render_expr(rhs)]),

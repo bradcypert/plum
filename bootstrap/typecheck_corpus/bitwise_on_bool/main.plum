@@ -1,0 +1,7 @@
+// Rejected: `&&` and `||` are the boolean operators.
+//
+// A `&` that quietly worked on `Bool` would make the difference between
+// them look like a style choice rather than what it is —
+// short-circuiting. `a && expensive()` does not call `expensive` when
+// `a` is false; a bitwise `&` would have to.
+let main (): Unit = println((true & false).to_string())

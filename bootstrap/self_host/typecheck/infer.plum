@@ -1190,6 +1190,10 @@ let infer_unary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (op
     match op {
         UNot => ir_leaf(unify_or_fail(r.ty, ITBool), r.subst, r.state, TUnary(op, r.texpr)),
         UNeg => ir_leaf(r.ty, r.subst, r.state, TUnary(op, r.texpr)),
+        // `~` flips bits, so it is `Int` and nothing else. `!` is the
+        // `Bool` one; keeping them separate is what stops `~flag` and
+        // `!count` from silently meaning something.
+        UBitNot => ir_leaf(unify_or_fail(r.ty, ITInt), r.subst, r.state, TUnary(op, r.texpr)),
     }
 }
 
@@ -1206,8 +1210,37 @@ let infer_binary (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (o
     reject_function_equality(p2, op, operand_ty);
     reject_handle_equality(p2, op, operand_ty);
     reject_unordered_comparison(op, operand_ty);
+    reject_non_int_bitwise(op, operand_ty);
     ir_leaf(binary_result_ty(op, operand_ty), combined, rr.state, TBinary(op, lr.texpr, rr.texpr))
 }
+
+// Bitwise operators are `Int` and nothing else.
+//
+// `Float` is the one worth rejecting loudly rather than defining: C
+// programmers reach for `&` on a float expecting the bit pattern, and
+// the answer they want is a REINTERPRET, not an operation. Bool is
+// rejected too -- `&&` and `||` are the boolean operators, and a `&`
+// that quietly worked on Bool would make the difference between them
+// look like a style choice rather than short-circuiting.
+//
+// An unresolved type variable is allowed through, the same allowance
+// `reject_unordered_comparison` makes: this checker has no deferred
+// constraints, so rejecting here would reject a generic body that is
+// only ever instantiated at `Int`.
+let reject_non_int_bitwise (op: parser.BOp) (operand_ty: ITy): Unit =
+    if !is_bitwise(op) { () } else {
+        match operand_ty {
+            ITInt => (),
+            ITVar(_) => (),
+            _ => fail_tc("'".concat(op_name(op)).concat("' needs Int operands, found ").concat(render_ty(operand_ty))),
+        }
+    }
+
+let is_bitwise (op: parser.BOp): Bool =
+    match op {
+        BBitAnd => true, BBitOr => true, BBitXor => true, BShl => true, BShr => true,
+        _ => false,
+    }
 
 // `==`/`!=` on anything CONTAINING a function is a type error, not a
 // backend failure. Mirrors the real compiler's own check (see
@@ -1495,6 +1528,7 @@ let op_name (op: parser.BOp): String = match op {
     BAdd => "+", BSub => "-", BMul => "*", BDiv => "/", BRem => "%",
     BEq => "==", BNe => "!=", BLt => "<", BGt => ">", BLe => "<=", BGe => ">=",
     BAnd => "&&", BOr => "||", BRange => "..", BPipe => "|>",
+    BBitAnd => "&", BBitOr => "|", BBitXor => "^", BShl => "<<", BShr => ">>",
 }
 
 let binary_result_ty (op: parser.BOp) (operand_ty: ITy): ITy =
@@ -1502,6 +1536,12 @@ let binary_result_ty (op: parser.BOp) (operand_ty: ITy): ITy =
         BAdd => operand_ty, BSub => operand_ty, BMul => operand_ty, BDiv => operand_ty, BRem => operand_ty,
         BEq => ITBool, BNe => ITBool, BLt => ITBool, BGt => ITBool, BLe => ITBool, BGe => ITBool,
         BAnd => ITBool, BOr => ITBool,
+        // Bitwise operators are `Int` only, and the operand type has
+        // already been unified across both sides by the caller -- so
+        // returning it is what makes `1 & true` a type error and
+        // `a & b` on two Ints an Int.
+        BBitAnd => operand_ty, BBitOr => operand_ty, BBitXor => operand_ty,
+        BShl => operand_ty, BShr => operand_ty,
         // A range is only a thing in a `for` iterand, where `infer_for`
         // matches `EBinary(BRange, ..)` before this is reached. Anywhere
         // else the backend refuses it -- and used to refuse it after

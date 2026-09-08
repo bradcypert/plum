@@ -1,0 +1,2 @@
+before
+negative shift count

@@ -1,0 +1,1 @@
+let case (xs: Array[Int]) (m: Int): Array[Int] = Array.map(xs, |x: Int| x | m)

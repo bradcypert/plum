@@ -1,0 +1,13 @@
+// A negative shift count stops the program, the way division by zero
+// and integer overflow do. It has no meaning, and quietly treating it
+// as a shift the other way is how `x >> -1` becomes a bug nobody can
+// find.
+//
+// `n` comes from a function so no constant folding can see it: the
+// check has to be in the emitted code, not in the compiler.
+let n (): Int = 0 - 1
+let main (): Unit = {
+    println("before");
+    println((1 << n()).to_string());
+    println("unreachable")
+}

@@ -1,0 +1,1 @@
+Let Ident("case") LParen Ident("a") Colon Ident("Int") RParen Colon Ident("Int") Eq Tilde Ident("a") Plus Int(1)

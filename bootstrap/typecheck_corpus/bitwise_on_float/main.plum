@@ -1,0 +1,7 @@
+// Rejected: bitwise operators are `Int` and nothing else.
+//
+// `Float` is the one worth rejecting loudly. A C programmer reaches for
+// `&` on a float expecting to get at the bit pattern, and the operation
+// they want is a REINTERPRET — a different thing, which this language
+// does not offer yet and should not silently approximate.
+let main (): Unit = println((1.5 & 2.0).to_string())

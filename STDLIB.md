@@ -138,6 +138,8 @@ See README.md for the prose introduction.
 - `let Int.min (a: Int) (b: Int): Int`
 - `let Int.max (a: Int) (b: Int): Int`
 - `let Int.clamp (x: Int) (lo: Int) (hi: Int): Int`
+- `let Int.shr_logical (x: Int) (n: Int): Int`
+- `let Int.count_ones (x: Int): Int`
 - `Int.to_float(): Float`  (built in)
 
 ## Json

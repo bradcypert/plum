@@ -19587,3 +19587,115 @@ The generator is the opposite: integer arithmetic with no libm anywhere,
 identical everywhere, so its output is printed in full. If those numbers
 ever change, the algorithm changed, and that should be a deliberate edit
 to the fixture.
+
+## Bitwise operators, and the ambiguity that was not there (2026-09-08)
+
+Closing #20 surfaced this: Plum had no bitwise operators at all. Not a
+weak set — `&` did not lex. That ruled out hashing, bit flags, binary
+formats and every modern random number generator, and it is why `Rng`
+had to be a 1988 combined LCG rather than PCG.
+
+Added: `&`, `|`, `^`, `<<`, `>>` and unary `~`, plus `Int.shr_logical`
+and `Int.count_ones` in the prelude.
+
+### `|` and closures never collide, and the reason is structural
+
+The obvious objection is that `|` is already the closure delimiter:
+`|x| x + 1`. Adding infix `|` looks like it needs lookahead or
+backtracking to tell `f(|x| x)` from `f(a | b)`.
+
+It needs neither, because **Plum has no juxtaposition application**.
+`f x` is not a call — every call is `f(x)`. So a closure literal can
+only appear where an expression is EXPECTED, and a bitwise-or can only
+appear where an expression has just ENDED. The parser is in exactly one
+of those two states at every point, and they never overlap. The
+disambiguation is free.
+
+`bootstrap/corpus/expressions/bitwise_or_vs_closure` pins it at the
+token level: `Array.map(xs, |x: Int| x | m)` lexes to three `Pipe`
+tokens, and the goldens record the parse that reads the first two as
+delimiters and the third as an operator.
+
+A language with juxtaposition application — Haskell, ML, F# — cannot do
+this, which is why they spell bitwise operations as named functions or
+with a different symbol. That Plum can is a consequence of a syntax
+decision made long before anybody wanted `|`.
+
+### Precedence: fixing C where C is agreed to be wrong
+
+Bitwise binds **tighter than comparison**. In C, `a & b == c` means
+`a & (b == c)`, because `&` binds looser than `==`. Ritchie described
+this as a mistake he could not fix once code depended on it; nothing
+depends on it here, so it is fixed. `&` tighter than `^` tighter than
+`|` is the part of C's arrangement nobody disputes, and is kept.
+
+Shifts sit at **multiplicative** precedence, following Go, so
+`1 << n + 1` is `(1 << n) + 1`. C binds shifts looser than `+`, making
+the same line `1 << (n + 1)` — a routine source of off-by-one-bit.
+
+Both choices are pinned by AST goldens and by property tests, because
+precedence is exactly the kind of thing that no law can catch: every
+law holds under either reading if the expression is parenthesised.
+
+### Shift counts are defined, not undefined
+
+LLVM's `shl` and `ashr` are POISON when the count is negative or at
+least the word width — and poison does not crash. It licenses the
+optimiser to assume the case never happens, which is how a wrong answer
+gets baked in silently.
+
+So shifts are guarded, the way division already was:
+
+- a **negative** count stops the program, alongside division by zero and
+  integer overflow. It has no meaning, and treating it as a shift the
+  other way is how `x >> -1` becomes a bug nobody can find.
+- a count of **64 or more** is defined: `<<` gives 0, and `>>` fills
+  with the sign bit, so `-1 >> 99` is `-1` and `1 >> 99` is `0`. Go's
+  rule, the mathematically right answer, and it means a shift derived
+  from a loop counter needs no hand-written bounds check.
+
+The clamp is what makes the second case branch-free: `ashr` by 63
+already IS the sign fill, so the right shift needs only the clamp, and
+the left shift needs one `select` to turn its clamped result into zero.
+
+### `Int` only
+
+`Float` is rejected rather than reinterpreted: a C programmer reaching
+for `&` on a float wants the bit pattern, and that is a REINTERPRET —
+a different operation this language does not offer and should not
+silently approximate. `Bool` is rejected because `&&` and `||` are the
+boolean operators, and a `&` that quietly worked on `Bool` would make
+short-circuiting look like a style choice.
+
+### The mask that traps
+
+`Int.shr_logical` is an unsigned right shift, which `>>` deliberately is
+not. The obvious implementation is wrong here:
+
+```plum
+(x >> n) & ((1 << (64 - n)) - 1)     // traps
+```
+
+At `n = 1` that is `(1 << 63) - 1`, and `1 << 63` is `Int`'s most
+negative value — so subtracting one from it is an integer overflow, and
+Plum checks those. Found by running it, not by reading it.
+
+The complement builds the same mask out of a shift and a NOT, neither of
+which can overflow:
+
+```plum
+(x >> n) & ~((0 - 1) << (64 - n))
+```
+
+The `n <= 0` and `n >= 64` ends are handled before the mask because the
+mask cannot express them: at `n = 0` it would need a shift of 64, which
+this language defines as zero.
+
+### What this does NOT unlock
+
+PCG, xoshiro and splitmix64 are still unavailable, and `Rng` still uses
+L'Ecuyer's combined generator. Bitwise operators were only half of what
+they need; the other half is **wrapping** 64-bit multiplication, and `*`
+still traps on overflow. Adding a separate wrapping-multiply operation
+is a real design question — a second arithmetic surface with different
+overflow semantics — and nothing needs it yet.

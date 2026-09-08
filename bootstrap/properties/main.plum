@@ -829,3 +829,119 @@ pub let test_rng_laws (): Unit = {
     let (_, none) = Rng.choice(Rng.from_seed(5), []);
     check_eq("choice of nothing", "[]", Option.is_none(none).to_string(), "true")
 }
+
+// --- Bitwise laws ---
+//
+// Boolean algebra, which these operators either satisfy or are wrong.
+// Recorded values would prove nothing here: `12 & 10 == 8` is one
+// point, and De Morgan holding for thousands of pairs is a statement
+// about the operator.
+//
+// The shift laws are the ones with edges worth generating against. A
+// shift count is drawn from -0..70 deliberately, so counts AT and PAST
+// the word width are exercised rather than assumed — those are defined
+// behaviour here, not undefined, and the definition is what is checked.
+
+let bitwise_laws (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let a = rand_between(seed, 0 - 1000000, 1000000);
+        let b = rand_between(next_seed(seed), 0 - 1000000, 1000000);
+        let case = a.to_string().concat(" , ").concat(b.to_string());
+
+        // Commutative, associative, and idempotent where they should be.
+        check_eq("& commutes", case, (a & b).to_string(), (b & a).to_string());
+        check_eq("| commutes", case, (a | b).to_string(), (b | a).to_string());
+        check_eq("^ commutes", case, (a ^ b).to_string(), (b ^ a).to_string());
+        check_eq("& is idempotent", case, (a & a).to_string(), a.to_string());
+        check_eq("| is idempotent", case, (a | a).to_string(), a.to_string());
+
+        // `^` is its own inverse, which is the property every use of it
+        // for swapping or masking depends on.
+        check_eq("^ cancels", case, (a ^ a).to_string(), "0");
+        check_eq("^ round trip", case, ((a ^ b) ^ b).to_string(), a.to_string());
+
+        // Complement.
+        check_eq("~~ is identity", case, (~(~a)).to_string(), a.to_string());
+        check_eq("a & ~a is empty", case, (a & ~a).to_string(), "0");
+        check_eq("a | ~a is full", case, (a | ~a).to_string(), "-1");
+        check_eq("~a is -a - 1", case, (~a).to_string(), (0 - a - 1).to_string());
+
+        // De Morgan, both directions.
+        check_eq("de morgan and", case, (~(a & b)).to_string(), (~a | ~b).to_string());
+        check_eq("de morgan or", case, (~(a | b)).to_string(), (~a & ~b).to_string());
+
+        // Absorption, which catches a precedence mistake as well as an
+        // operator one.
+        check_eq("absorption", case, (a & (a | b)).to_string(), a.to_string());
+
+        // Identity and annihilator elements.
+        check_eq("& all ones", case, (a & (0 - 1)).to_string(), a.to_string());
+        check_eq("| zero", case, (a | 0).to_string(), a.to_string());
+        check_eq("& zero", case, (a & 0).to_string(), "0");
+        check_eq("^ zero", case, (a ^ 0).to_string(), a.to_string());
+
+        // --- Shifts ---
+        //
+        // Counts run past 63 on purpose: those are DEFINED, and the
+        // definition is what is being checked.
+        let n = rand_between(next_seed(next_seed(seed)), 0, 70);
+        let scase = case.concat(" << ").concat(n.to_string());
+
+        // A left shift doubles, until it runs out of room. Checked
+        // against repeated addition rather than multiplication, because
+        // `*` traps on overflow and `<<` does not.
+        check_eq("<< by 0", scase, (a << 0).to_string(), a.to_string());
+        check_eq(">> by 0", scase, (a >> 0).to_string(), a.to_string());
+        check_eq("<< by 1 doubles", case, (a << 1).to_string(), (a + a).to_string());
+
+        // Past the word width both are total, and their answers are the
+        // limit of the sequence rather than garbage.
+        if n >= 64 {
+            check_eq("<< past the width is 0", scase, (a << n).to_string(), "0");
+            check_eq(">> past the width is the sign", scase,
+                (a >> n).to_string(), (if a < 0 { 0 - 1 } else { 0 }).to_string())
+        } else { () };
+
+        // An arithmetic shift right is a floor division by a power of
+        // two, which is where it differs from truncating `/` for
+        // negatives -- and is the reason `Rng` needs `plum__mod_floor`.
+        check_eq(">> by 1 halves toward -inf", case,
+            (a >> 1).to_string(), (if a < 0 { (a - 1) / 2 } else { a / 2 }).to_string());
+
+        // The unsigned shift agrees with the signed one on
+        // non-negatives, and differs on exactly the sign bit.
+        let p = Int.abs(a);
+        check_eq("ushr agrees on non-negatives", case,
+            Int.shr_logical(p, 3).to_string(), (p >> 3).to_string());
+        check_eq("ushr never goes negative", scase,
+            (Int.shr_logical(a, 1) >= 0).to_string(), "true");
+        check_eq("ushr by 0 is identity", case, Int.shr_logical(a, 0).to_string(), a.to_string());
+        check_eq("ushr past the width is 0", scase,
+            (if n >= 64 { Int.shr_logical(a, n) } else { 0 }).to_string(), "0");
+
+        // Population count, and its complement.
+        check_eq("ones of a and ~a fill the word", case,
+            (Int.count_ones(a) + Int.count_ones(~a)).to_string(), "64");
+        check_eq("ones is in range", case,
+            (Int.count_ones(a) >= 0 && Int.count_ones(a) <= 64).to_string(), "true");
+
+        bitwise_laws(next_seed(seed), left - 1)
+    }
+
+pub let test_bitwise_laws (): Unit = {
+    bitwise_laws(20250908, 200);
+
+    // The values that pin PRECEDENCE, which no law above can see:
+    // every one of these parses differently in C.
+    check_eq("bitwise binds tighter than ==", "12 & 10 == 8", (12 & 10 == 8).to_string(), "true");
+    check_eq("shifts bind like multiplication", "1 << 3 + 1", (1 << 3 + 1).to_string(), "9");
+    check_eq("& binds tighter than ^", "12 ^ 10 & 6", (12 ^ 10 & 6).to_string(), (12 ^ (10 & 6)).to_string());
+    check_eq("^ binds tighter than |", "1 | 6 ^ 3", (1 | 6 ^ 3).to_string(), (1 | (6 ^ 3)).to_string());
+    check_eq("~ binds tightest", "~5 + 1", (~5 + 1).to_string(), ((~5) + 1).to_string());
+
+    // The word's edges.
+    check_eq("the sign bit", "1 << 63", (1 << 63).to_string(), "-9223372036854775808");
+    check_eq("count_ones of the sign bit", "1 << 63", Int.count_ones(1 << 63).to_string(), "1");
+    check_eq("count_ones of -1", "-1", Int.count_ones(0 - 1).to_string(), "64");
+    check_eq("ushr of the sign bit", "-1 >> 63", Int.shr_logical(0 - 1, 63).to_string(), "1")
+}

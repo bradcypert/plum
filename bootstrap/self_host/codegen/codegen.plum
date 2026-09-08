@@ -1394,6 +1394,9 @@ let cg_unary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.UOp) (inne
             _ => "  ".concat(reg).concat(" = sub i64 0, ").concat(r.val).concat("\n"),
         },
         UNot => "  ".concat(reg).concat(" = xor i1 ").concat(r.val).concat(", true\n"),
+        // `~x` is `x xor -1`: LLVM has no bitwise-not instruction, and
+        // this is the canonical spelling of one.
+        UBitNot => "  ".concat(reg).concat(" = xor i64 ").concat(r.val).concat(", -1\n"),
     };
     Emit { code: r.code.concat(line), allocas: r.allocas, releases: r.releases, globals: r.globals, val: reg, ty: r.ty, n: r.n + 1 }
 }
@@ -1463,6 +1466,14 @@ let cg_strict_binary (p: CgProgram) (env: Array[CgSlot]) (n: Int) (op: parser.BO
         // CHECKED. `+`, `-` and `*` on Int stop the program on overflow
         // rather than wrapping -- see `cg_overflow_guard`.
         let g = cg_overflow_guard(cg_overflow_intrinsic(op), a.val, b.val, b.n);
+        Emit { code: code.concat(g.code), allocas: allocas, releases: releases, globals: globals, val: g.reg, ty: ty, n: g.next }
+    } else if cg_is_shift(op) {
+        // GUARDED, for the same reason division is: LLVM's `shl` and
+        // `ashr` are POISON when the shift count is negative or at
+        // least the word width, and poison does not crash -- it makes
+        // the optimiser free to assume the branch never happens, which
+        // is how a wrong answer gets baked in silently.
+        let g = cg_shift_guard(op, a.val, b.val, b.n);
         Emit { code: code.concat(g.code), allocas: allocas, releases: releases, globals: globals, val: g.reg, ty: ty, n: g.next }
     } else if cg_is_int_division(op, a.ty) {
         // GUARDED. See `cg_div_guard` -- `sdiv`/`srem` are undefined
@@ -1587,6 +1598,53 @@ let cg_div_guard (lhs: String) (rhs: String) (n: Int): DivGuard = {
     DivGuard { code: code, reg: cg_reg(n + 9), next: n + 10 }
 }
 
+let cg_is_shift (op: parser.BOp): Bool = match op { BShl => true, BShr => true, _ => false }
+
+// A shift with a well-defined answer for every shift count.
+//
+// Three cases, and only the first is an error:
+//
+//   * a NEGATIVE count stops the program, the same way division by zero
+//     and integer overflow do. It has no meaning, and silently treating
+//     it as a shift the other way is how `x >> -1` becomes a bug nobody
+//     can find.
+//   * a count of 64 OR MORE is defined rather than rejected: `<<` gives
+//     0, and `>>` fills with the sign bit, so `-1 >> 99` is -1 and
+//     `1 >> 99` is 0. That is Go's rule, it is what the mathematics
+//     says, and it means a shift derived from a loop counter does not
+//     have to be bounds-checked by hand.
+//   * anything else is the instruction itself.
+//
+// The clamp is what makes the second case work without a branch: `ashr`
+// by 63 already IS the sign fill, and `shl` needs one `select` to turn
+// its clamped result into 0.
+let cg_shift_guard (op: parser.BOp) (lhs: String) (rhs: String) (n: Int): DivGuard = {
+    let neg = cg_reg(n);
+    let ok = cg_label(n + 1);
+    let bad = cg_label(n + 2);
+    let wide = cg_reg(n + 3);
+    let clamped = cg_reg(n + 4);
+    let raw = cg_reg(n + 5);
+    let res = cg_reg(n + 6);
+    let head = "  ".concat(neg).concat(" = icmp slt i64 ").concat(rhs).concat(", 0\n")
+        .concat("  br i1 ").concat(neg).concat(", label %").concat(bad).concat(", label %").concat(ok).concat("\n")
+        .concat(bad).concat(":\n")
+        .concat("  call void @plum_shift_fail()\n")
+        .concat("  unreachable\n")
+        .concat(ok).concat(":\n")
+        .concat("  ").concat(wide).concat(" = icmp sgt i64 ").concat(rhs).concat(", 63\n")
+        .concat("  ").concat(clamped).concat(" = select i1 ").concat(wide).concat(", i64 63, i64 ").concat(rhs).concat("\n")
+        .concat("  ").concat(raw).concat(" = ").concat(cg_binary_op_text(op, CgInt)).concat(" i64 ").concat(lhs).concat(", ").concat(clamped).concat("\n");
+    match op {
+        // `ashr` by 63 is already the sign fill a wider shift should
+        // give, so the clamp alone is the whole answer.
+        BShr => DivGuard { code: head, reg: raw, next: n + 6 },
+        _ => DivGuard {
+            code: head.concat("  ").concat(res).concat(" = select i1 ").concat(wide).concat(", i64 0, i64 ").concat(raw).concat("\n"),
+            reg: res, next: n + 7 },
+    }
+}
+
 let cg_is_equality (op: parser.BOp): Bool = match op { BEq => true, BNe => true, _ => false }
 
 // LLVM spells the same Plum operator differently for integers and
@@ -1607,6 +1665,14 @@ let cg_binary_op_text (op: parser.BOp) (t: CgTy): String = {
         BGt => if f { "fcmp ogt" } else { "icmp sgt" },
         BLe => if f { "fcmp ole" } else { "icmp sle" },
         BGe => if f { "fcmp oge" } else { "icmp sge" },
+        BBitAnd => "and",
+        BBitOr => "or",
+        BBitXor => "xor",
+        // Reached only through `cg_shift_guard`, which emits the
+        // clamping around it -- a bare `shl`/`ashr` past the word width
+        // is POISON in LLVM, not zero.
+        BShl => "shl",
+        BShr => "ashr",
         BAnd => { cg_fail("'&&' should have been short-circuited"); "and" },
         BOr => { cg_fail("'||' should have been short-circuited"); "or" },
         BRange => { cg_fail("'..' isn't an operator here"); "add" },

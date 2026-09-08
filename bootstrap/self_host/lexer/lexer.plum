@@ -101,6 +101,11 @@ pub enum Token {
     TokBang,
     TokPipe,
     TokPipeGt,
+    TokAmp,
+    TokCaret,
+    TokShl,
+    TokShr,
+    TokTilde,
     TokArrow,
     TokFatArrow,
     TokEof,
@@ -396,10 +401,16 @@ let lex_operator (chars: Array[String]) (pos: Int): OpResult =
     }
     else if chars[pos] == "<" {
         if pos + 1 < chars.len() && chars[pos + 1] == "=" { OpResult { token: TokLtEq, next_pos: pos + 2 } }
+        // Longest match first, the same rule `&&` and `||` follow. No
+        // generic syntax uses angle brackets here -- Plum spells them
+        // `[T]` -- so `>>` never has to be split back apart the way it
+        // does in C++ and Rust.
+        else if pos + 1 < chars.len() && chars[pos + 1] == "<" { OpResult { token: TokShl, next_pos: pos + 2 } }
         else { OpResult { token: TokLt, next_pos: pos + 1 } }
     }
     else if chars[pos] == ">" {
         if pos + 1 < chars.len() && chars[pos + 1] == "=" { OpResult { token: TokGtEq, next_pos: pos + 2 } }
+        else if pos + 1 < chars.len() && chars[pos + 1] == ">" { OpResult { token: TokShr, next_pos: pos + 2 } }
         else { OpResult { token: TokGt, next_pos: pos + 1 } }
     }
     else if chars[pos] == "+" { OpResult { token: TokPlus, next_pos: pos + 1 } }
@@ -410,9 +421,11 @@ let lex_operator (chars: Array[String]) (pos: Int): OpResult =
     else if chars[pos] == "*" { OpResult { token: TokStar, next_pos: pos + 1 } }
     else if chars[pos] == "/" { OpResult { token: TokSlash, next_pos: pos + 1 } }
     else if chars[pos] == "%" { OpResult { token: TokPercent, next_pos: pos + 1 } }
+    else if chars[pos] == "^" { OpResult { token: TokCaret, next_pos: pos + 1 } }
+    else if chars[pos] == "~" { OpResult { token: TokTilde, next_pos: pos + 1 } }
     else if chars[pos] == "&" {
         if pos + 1 < chars.len() && chars[pos + 1] == "&" { OpResult { token: TokAndAnd, next_pos: pos + 2 } }
-        else { unexpected_char("'&' (Plum has no bitwise-and token)") }
+        else { OpResult { token: TokAmp, next_pos: pos + 1 } }
     }
     else if chars[pos] == "|" {
         if pos + 1 < chars.len() && chars[pos + 1] == ">" { OpResult { token: TokPipeGt, next_pos: pos + 2 } }
@@ -752,6 +765,7 @@ pub let render_token (t: Token): String = match t {
     TokEq => "Eq", TokEqEq => "EqEq", TokNotEq => "NotEq", TokLt => "Lt", TokGt => "Gt", TokLtEq => "LtEq", TokGtEq => "GtEq",
     TokPlus => "Plus", TokMinus => "Minus", TokStar => "Star", TokSlash => "Slash", TokPercent => "Percent",
     TokAndAnd => "AndAnd", TokOrOr => "OrOr", TokBang => "Bang", TokPipe => "Pipe", TokPipeGt => "PipeGt",
+    TokAmp => "Amp", TokCaret => "Caret", TokShl => "Shl", TokShr => "Shr", TokTilde => "Tilde",
     TokArrow => "Arrow", TokFatArrow => "FatArrow",
     TokEof => "Eof",
 }

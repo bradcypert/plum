@@ -554,6 +554,25 @@ Worth knowing before you "fix" them:
   modules it is still documentation the compiler does not check; module
   membership comes from the directory. Do not assume removing a `use`
   will break a directory-module call, because it will not.
+- **`|` is both the closure delimiter and bitwise-or, and that is safe
+  only because Plum has no juxtaposition application.** A closure can
+  start only where an expression is expected; `|` is an operator only
+  where one has ended. If a `f x` call form is ever added, this breaks
+  and needs real disambiguation.
+  `corpus/expressions/bitwise_or_vs_closure` is the golden that would
+  catch it.
+- **Shifts are GUARDED, like division.** LLVM's `shl`/`ashr` are poison
+  past the word width — poison, not a crash, so the optimiser is free to
+  bake in a wrong answer. `cg_shift_guard` clamps, and aborts on a
+  negative count. Never emit a bare `shl`/`ashr`.
+- **Bitwise binds tighter than comparison, and shifts bind like
+  multiplication.** Both differ from C deliberately. Precedence is
+  pinned by AST goldens in `corpus/expressions/` and by
+  `test_bitwise_laws` — no algebraic law can catch a precedence change,
+  because every law holds under either reading once parenthesised.
+- **A mask of the form `(1 << k) - 1` TRAPS at k = 63.** `1 << 63` is
+  the most negative `Int`, and subtracting one overflows. Use
+  `~((0 - 1) << k)`, which is the same mask from a shift and a NOT.
 - **A runtime `declare` shadows a user's `extern "C"` of the same name.**
   `cg_emit_extern_decls` skips any name the runtime already declares —
   read out of the runtime IR text at emit time, never a second list.

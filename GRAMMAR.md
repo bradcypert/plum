@@ -239,12 +239,15 @@ Expr        ::= PipeExpr
 PipeExpr    ::= OrExpr { "|>" OrExpr }
 OrExpr      ::= AndExpr { "||" AndExpr }
 AndExpr     ::= CompareExpr { "&&" CompareExpr }
-CompareExpr ::= RangeExpr [ CompareOp RangeExpr ]
+CompareExpr ::= BitOrExpr [ CompareOp BitOrExpr ]
 CompareOp   ::= "==" | "!=" | "<" | ">" | "<=" | ">="
+BitOrExpr   ::= BitXorExpr { "|" BitXorExpr }
+BitXorExpr  ::= BitAndExpr { "^" BitAndExpr }
+BitAndExpr  ::= RangeExpr { "&" RangeExpr }
 RangeExpr   ::= AddExpr [ ".." AddExpr ]
 AddExpr     ::= MulExpr { ( "+" | "-" ) MulExpr }
-MulExpr     ::= UnaryExpr { ( "*" | "/" | "%" ) UnaryExpr }
-UnaryExpr   ::= [ "-" | "!" ] PostfixExpr
+MulExpr     ::= UnaryExpr { ( "*" | "/" | "%" | "<<" | ">>" ) UnaryExpr }
+UnaryExpr   ::= [ "-" | "!" | "~" ] PostfixExpr
 PostfixExpr ::= PrimaryExpr { Postfix }
 Postfix     ::= "." Identifier
               | GenericArgs
@@ -261,6 +264,34 @@ application (non-associative) — `a < b < c` and `a..b..c` are both
 grammar errors, not parsed with some implied associativity. See
 DESIGN.md for why (chained comparisons silently meaning something other
 than the mathematical reading is a documented footgun).
+
+**Bitwise operators** bind **tighter than comparison**, which is where
+C put them wrong: there `a & b == c` means `a & (b == c)`, because `&`
+binds looser than `==`. Here it means `(a & b) == c`. `&` tighter than
+`^` tighter than `|` is the part of C's arrangement that is not
+disputed, and is kept.
+
+Shifts sit at **multiplicative** precedence, as in Go, so `1 << n + 1`
+is `(1 << n) + 1`. C binds them looser than `+`, making the same line
+mean `1 << (n + 1)`.
+
+`|` is both the closure delimiter and bitwise-or, and the two never
+collide. A closure literal is `|x| body`, and Plum has **no
+juxtaposition application** — `f x` is not a call — so a `|` can only
+begin a closure where an expression is *expected*, and can only be
+bitwise-or where one has just *ended*. The parser is in exactly one of
+those states at any point, so no lookahead or backtracking is needed.
+`Array.map(xs, |x| x | m)` parses with three `|` tokens and no
+ambiguity.
+
+All five binary bitwise operators and `~` are **`Int` only**. `Bool`
+uses `&&` and `||`, which short-circuit; `Float` is rejected rather than
+reinterpreted.
+
+**Shift counts** are defined for every value. A count of 64 or more
+gives `0` for `<<` and a sign fill for `>>` (so `-1 >> 99` is `-1`), as
+in Go. A **negative** count aborts the program, alongside division by
+zero and integer overflow — see `bootstrap/abort_corpus/negative_shift`.
 
 **Currying (partial application)** — DESIGN.md's "Currying" section.
 No grammar change: `PostfixExpr`'s repeated `Arguments` already allowed
