@@ -52,8 +52,7 @@ fi
 # build` has linked its own output since the self-sufficiency check
 # started passing. The shims are the ones the compiler embeds
 # (see `bootstrap/gen-shims`).
+# See the note in `bootstrap/corpus-check`: derived, not listed.
 clang -O2 -Wno-override-module "$ll" \
-    "$root/native_stdlib/compat_shim.c" "$root/native_stdlib/dir_shim.c" \
-    "$root/native_stdlib/io_shim.c" "$root/native_stdlib/os_shim.c" \
-    "$root/native_stdlib/process_shim.c" "$root/native_stdlib/thread_shim.c" \
+    "$root"/native_stdlib/*.c \
     -lm -o "$out"

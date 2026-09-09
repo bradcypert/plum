@@ -37,10 +37,13 @@ fi
 # for a step that is a call to clang, in a script whose entire purpose
 # is proving the compiler reproduces ITSELF -- the one place a Rust
 # dependency was most misleading. Removed 2026-08-21.
+# DERIVED from the directory rather than listed. Five harnesses each
+# kept their own copy of this list, and adding `handle_shim.c` broke
+# all five at once with `undefined reference` — a link error several
+# steps from the cause. An unused shim costs nothing, so there is no
+# reason for any of them to be selective.
 clang -O2 -Wno-override-module "$work/stage2.ll" \
-    native_stdlib/compat_shim.c native_stdlib/dir_shim.c \
-    native_stdlib/io_shim.c native_stdlib/os_shim.c \
-    native_stdlib/process_shim.c native_stdlib/thread_shim.c \
+    native_stdlib/*.c \
     -lm -o "$work/sh2"
 
 echo "stage 2 -> IR ..."

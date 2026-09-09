@@ -2,4 +2,10 @@
 # Fails if bootstrap/self_host/codegen/shims.plum has drifted from
 # native_stdlib/*.c. Run in validation, so a forgotten regeneration is
 # caught here rather than as a mysterious link error later.
+#
+# The generator DERIVES its file list from the directory, so a new shim
+# that nobody added to a list is caught here too. That was not true
+# until `handle_shim.c` was added and this passed while the file was not
+# embedded at all — the miss then showed up as `undefined reference` at
+# link time, which is a long way from the cause.
 exec "$(dirname "$0")/gen-shims" --check

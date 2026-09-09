@@ -27,9 +27,19 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SHIMS = ["compat_shim.c", "dir_shim.c", "file_shim.c", "io_shim.c",
-         "net_shim.c", "os_shim.c", "process_shim.c", "thread_shim.c",
-         "time_shim.c"]
+# DERIVED from the directory, not listed by hand.
+#
+# It used to be a literal list, and the failure that produces is the one
+# this project keeps meeting: `handle_shim.c` was added, `check-shims`
+# said everything matched -- because it only compares the files it knows
+# about -- and the miss surfaced as `undefined reference to
+# plum_handle_track` at link time, several steps from the cause.
+#
+# Sorted so the generated file has a stable order regardless of how the
+# filesystem enumerates.
+SHIMS = sorted(p.name for p in (ROOT / "native_stdlib").glob("*.c"))
+if not SHIMS:
+    sys.exit("no shims found in native_stdlib/")
 OUT = ROOT / "bootstrap" / "self_host" / "shims" / "shims.plum"
 
 HEADER = '''// The C shims this compiler links into every binary it produces --

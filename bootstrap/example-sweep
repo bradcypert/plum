@@ -155,10 +155,9 @@ for dir in examples/*/; do
     fi
 
     link_self() {
+        # See the note in `bootstrap/corpus-check`: derived, not listed.
         clang -O2 -Wno-override-module "$work/$name.ll" \
-            native_stdlib/compat_shim.c native_stdlib/dir_shim.c \
-            native_stdlib/io_shim.c native_stdlib/os_shim.c \
-            native_stdlib/process_shim.c native_stdlib/thread_shim.c \
+            native_stdlib/*.c \
             $clang_flags -lm -o "$work/$name.bin"
     }
 

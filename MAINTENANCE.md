@@ -562,6 +562,19 @@ Worth knowing before you "fix" them:
   **Verify a bulk rewrite by diffing EMITTED IR before and after**, not
   by running the corpus: if every fixture's `.ll` is byte-identical, the
   rewrite provably changed nothing. That is stronger than any test.
+- **A `handle` is released on panic and on `Os.exit_with`, not only on
+  scope exit.** Live handles are registered at creation and released by
+  an `atexit` handler, LIFO. Unregistration happens BEFORE the cleanup
+  runs, so a cleanup that exits is not run twice. Only DECLARED handles
+  are tracked — `Task`/`Sender`/`Receiver` own memory and threads, which
+  the OS reclaims.
+- **Shim lists are DERIVED from `native_stdlib/*.c` everywhere except
+  `cross-check`.** `gen-shims` used to hold a hand-written list, so
+  `check-shims` passed while a new shim was not embedded at all. The
+  exception is real: `net_shim.c` needs `-lws2_32` on Windows, so an
+  unused shim costs nothing to run and can still cost a library to
+  link. A new shim the COMPILER calls must be added to `cross-check` by
+  hand; its `seed -> binary` leg fails loudly if you forget.
 - **`mem-check`'s ceilings are per platform, and macOS is ~1.5x Linux
   and ~20 MB noisier.** Do not compare a macOS number to a Linux one;
   RSS on 16 KB pages is not the same quantity as on 4 KB. When it fails,

@@ -1,0 +1,33 @@
+use Os;
+
+// `Os.exit_with` runs handle cleanups too (issue #1).
+//
+// The companion to `abort_corpus/handle_cleanup_on_panic`: same
+// machinery, the other way out. Both end in `exit()`, so one `atexit`
+// handler covers them, and a clean exit leaving a child process alive
+// would be worse than a panic doing it.
+//
+// The ordinary paths are checked here as well, because the registry
+// must not disturb them: a handle released at the end of its block is
+// cleaned up ONCE, there, and is gone from the live list by the time
+// the program exits.
+extern "C" { fn cleanup_probe(h: Int); }
+handle Probe { on_drop: cleanup_probe }
+
+let use_and_release (): Unit = {
+    let scoped = unsafe { Probe.from_raw(10) };
+    println("inside the function")
+}
+
+let main (): Unit = {
+    // Released at the end of its block.
+    { let inner = unsafe { Probe.from_raw(1) }; println("in block") };
+    // Released when the function returns.
+    use_and_release();
+    // Still live when the program exits, and released LIFO.
+    let a = unsafe { Probe.from_raw(2) };
+    let b = unsafe { Probe.from_raw(3) };
+    println("exiting");
+    Os.exit_with(0);
+    println("unreachable")
+}

@@ -1,0 +1,33 @@
+// A panic still runs a handle's cleanup (issue #1).
+//
+// A `handle` releases on every ordinary exit -- a normal return, a
+// block ending, an `Err` being returned -- and Plum has no early
+// `return`, so those are all the paths a function has. Except a panic,
+// which does not unwind: `panic_raw` prints and calls `exit`.
+//
+// That was not untidiness for the operating system to sweep up. A
+// `Process.Child` outlived its parent's panic and went on working, and
+// the OS does not kill your grandchildren, remove your lock file, or
+// take the terminal out of raw mode.
+//
+// Live handles are now registered, and released on the way out through
+// an `atexit` handler -- which covers `panic_raw`, `Os.exit_with` and
+// returning from `main` alike, because all three end in `exit()`.
+//
+// Order is LIFO, matching an ordinary scope exit: a handle opened later
+// may depend on one opened earlier.
+extern "C" { fn cleanup_probe(h: Int); }
+handle Probe { on_drop: cleanup_probe }
+
+let main (): Unit = {
+    // Released the ordinary way, well before the panic. It must NOT be
+    // cleaned up a second time on the way out -- which is why a handle
+    // is unregistered before its cleanup runs, not after.
+    { let done = unsafe { Probe.from_raw(1) }; println("opened and closed 1") };
+
+    let a = unsafe { Probe.from_raw(2) };
+    let b = unsafe { Probe.from_raw(3) };
+    println("2 and 3 are live");
+    panic_raw("something went wrong");
+    println("unreachable")
+}

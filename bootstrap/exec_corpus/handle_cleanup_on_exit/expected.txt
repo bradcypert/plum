@@ -1,0 +1,7 @@
+in block
+cleanup 1
+inside the function
+cleanup 10
+exiting
+cleanup 3
+cleanup 2

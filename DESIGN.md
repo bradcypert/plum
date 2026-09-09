@@ -20002,3 +20002,84 @@ comment recording a measurement is not evidence about today** -- the
 header confidently said 66 MB with 1.9x headroom while the runner had
 been at 120 for weeks, and reading it as current is what produced a
 confident, wrong diagnosis of regression.
+
+## Cleanup a panic cannot skip (2026-09-09)
+
+Issue #1 asked for `defer`. Most of it had already arrived under a
+different name.
+
+`handle` (#9) runs an `on_drop` when a value dies, and measuring the
+issue's own acceptance criteria against it found four of five already
+met:
+
+```
+-- normal        cleanup 1                 on an ordinary return
+-- ordering      cleanup 12, 11, 10        LIFO, deterministic
+-- early return  cleanup 20, then err      before the Err is returned
+-- block         cleanup 30 inside         at the end of the BLOCK
+```
+
+The third one is free rather than implemented: **Plum has no early
+`return`**, so "cleanup on a propagated error" is not a separate path.
+An `Err` is a returned value, and the ordinary return covers it. The
+issue's `defer terminal.restore()` is already spelled `let terminal =
+Terminal.enter_raw()`, which is the case DESIGN.md's `handle` section
+names.
+
+### The one that was missing was not cosmetic
+
+A panic does not unwind. `panic_raw` prints and calls `exit`, so
+nothing runs on the way out -- and this is what that costs:
+
+```
+started true
+parent dies here
+parent exit=1
+child survived the parent's panic: YES
+```
+
+The child kept running and wrote its marker two and a half seconds
+after its parent died, directly contradicting `Child`'s documented
+contract. The operating system reclaims descriptors and memory; it does
+not kill your grandchildren, remove your lock file, or take the
+terminal out of raw mode.
+
+### `atexit`, not a hook in the panic path
+
+Every exit worth covering ends in `exit()`: `panic_raw` does,
+`Os.exit_with` does, returning from `main` does. One `atexit` handler
+therefore covers all three, and covers anything added later, without
+the panic code knowing this exists.
+
+Live handles are registered at creation and unregistered at release --
+BEFORE the cleanup runs, so a cleanup that itself exits does not find
+itself still listed and run twice. The walk is LIFO and non-reentrant.
+
+This is not the refcounting problem again. Tracking every value would
+be ruinous; a program holds a few files, a socket, maybe a child. A
+flat array with a linear-scan removal is the right shape at that size,
+and `alloc-check` confirms no change. **It costs nothing in TCO**,
+which is what a `defer` would have cost and why `defer` was rejected.
+
+Only DECLARED handles are tracked. `Task`, `Sender` and `Receiver` own
+memory and threads, which the OS does reclaim.
+
+### Three shim lists, and the one that had to stay
+
+Adding `handle_shim.c` failed in a way worth recording. `check-shims`
+passed while the file was not embedded at all, because `gen-shims` held
+a hand-written list of shim names, and a list cannot notice a file it
+does not mention. The miss surfaced as `undefined reference to
+plum_handle_track` at link time, several steps from the cause. That
+list is now derived from the directory.
+
+Then the same shape appeared four more times: `corpus-check`,
+`bootstrap-check`, `example-sweep` and `shbuild` each kept their own
+copy, and all four broke at once. Those are now `native_stdlib/*.c`, on
+`corpus-check`'s own stated reasoning that an unused shim costs nothing.
+
+`cross-check` is the exception, and finding out why was the useful
+part: globbing it produced six undefined Winsock symbols, because
+`net_shim.c` needs `-lws2_32` on Windows. **An unused shim costs
+nothing to RUN and can still cost a library to LINK.** That list stays
+selective, and now says so.

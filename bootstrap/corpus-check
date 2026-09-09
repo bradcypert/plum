@@ -48,10 +48,16 @@ asan=1
 # unconditionally: which one a fixture reaches is not worth deriving,
 # and an unused shim costs nothing. `compat_shim.c` is a no-op on
 # Linux and supplies the missing libc names elsewhere.
-shims=(native_stdlib/compat_shim.c native_stdlib/dir_shim.c
-       native_stdlib/file_shim.c native_stdlib/io_shim.c
-       native_stdlib/os_shim.c native_stdlib/process_shim.c
-       native_stdlib/thread_shim.c native_stdlib/time_shim.c)
+#
+# DERIVED from the directory rather than listed. Four harnesses each
+# kept their own copy of this list, and adding `handle_shim.c` broke
+# all four at once with `undefined reference` — a link error several
+# steps from the cause.
+#
+# `bootstrap/cross-check` is the one that stayed selective, and its
+# header says why: an unused shim costs nothing to RUN and can still
+# cost a LIBRARY to link, which `net_shim.c` does on Windows.
+shims=(native_stdlib/*.c)
 
 # Fixtures that leak BY DESIGN, with the reason. Annotated here rather
 # than silently excluded, and rather than dropping ASan for everyone:
@@ -147,10 +153,21 @@ for dir in bootstrap/abort_corpus/*/; do
     if ! SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh emit-llvm "$dir" --release > "$work/ab-$name.ll" 2>"$work/ab-$name.err"; then
         fail_with "$name" "emit failed: $(head -n 1 "$work/ab-$name.err")"; continue
     fi
+    # A fixture may carry its own C, the same way an execution fixture
+    # may. `emit-llvm` does not link, so unlike `plum build` this loop
+    # has to pass the files itself. Added for `handle_cleanup_on_panic`,
+    # which needs an observable `on_drop` and cannot get one from the
+    # shims: every candidate there either takes no argument or reports
+    # nothing.
+    abnative=()
+    if [ -d "$dir/native" ]; then
+        for c in "$dir"/native/*.c; do [ -e "$c" ] && abnative+=("$c"); done
+    fi
+
     # These fixtures ABORT, so ASan's leak check would report whatever
     # was live at the abort -- which is not a leak, it is a program that
     # stopped. Built plain.
-    if ! clang -O2 -Wno-override-module "$work/ab-$name.ll" "${shims[@]}" -lm -o "$work/ab-$name.bin" > "$work/ab-$name.link" 2>&1; then
+    if ! clang -O2 -Wno-override-module "$work/ab-$name.ll" "${shims[@]}" "${abnative[@]}" -lm -o "$work/ab-$name.bin" > "$work/ab-$name.link" 2>&1; then
         fail_with "$name" "emitted IR did not link: $(head -n 1 "$work/ab-$name.link")"; continue
     fi
 

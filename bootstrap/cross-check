@@ -43,9 +43,22 @@ trap 'rm -rf "$work"' EXIT
 # `net_shim.c` is not among them -- nothing in the compiler calls it --
 # but it IS compile-checked below, because `plum build` writes every
 # embedded shim into every user build.
+# The one shim list that is still SELECTIVE, and must stay that way.
+#
+# Everywhere else this is `native_stdlib/*.c`, on the reasoning that an
+# unused shim costs nothing. That is true on Linux and FALSE here:
+# `net_shim.c` needs `-lws2_32` on Windows, so globbing it into this
+# link fails with six undefined Winsock symbols. An unused shim costs
+# nothing to RUN and can still cost a library to LINK.
+#
+# So this is what the compiler itself needs, and nothing else. A new
+# shim the compiler calls has to be added here by hand — which the
+# `seed -> binary` leg below will tell you about immediately, in the
+# form of an undefined reference.
 seed_shims=(native_stdlib/compat_shim.c native_stdlib/dir_shim.c
-            native_stdlib/io_shim.c native_stdlib/os_shim.c
-            native_stdlib/process_shim.c native_stdlib/thread_shim.c)
+            native_stdlib/handle_shim.c native_stdlib/io_shim.c
+            native_stdlib/os_shim.c native_stdlib/process_shim.c
+            native_stdlib/thread_shim.c)
 
 # `aarch64-linux-gnu` is here even though nothing publishes a binary
 # for it: a compile check is cheap, and it is the target most likely to
