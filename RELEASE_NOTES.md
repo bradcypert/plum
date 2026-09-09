@@ -1,93 +1,91 @@
 Plum is a small, statically typed, compiled language.
 
-Bitwise operators — the language had none — and control over how numbers
-render inside string interpolation.
+A `Terminal` module, and cleanup that a crash can no longer skip.
 
-## Bitwise operators
+## Cleanup now runs on panic
 
-```plum
-a & b     a | b     a ^ b     a << n     a >> n     ~a
+A `handle` releases when its value dies — on a normal return, at the end
+of a block, when an `Err` is returned. Plum has no early `return`, so
+those are every path a function has except one: a **panic**, which does
+not unwind.
+
+That was not untidiness for the operating system to sweep up:
+
+```
+started true
+parent dies here
+parent exit=1
+child survived the parent's panic: YES
 ```
 
-Until now `&` did not even lex. That ruled out bit flags, binary
-formats, hashing, and every modern random number generator — `Rng` uses
-a 1988 combined generator because PCG and xoshiro were unreachable.
+A `Process.Child` outlived its parent and kept working, contradicting
+its own documented contract. The OS reclaims file descriptors and
+memory. It does not kill your grandchildren, remove your lock file, or
+take your terminal out of raw mode.
 
-Also `Int.shr_logical` (an unsigned right shift, since `>>` is
-arithmetic), `Int.count_ones`, and the formatting below for reading the
-results.
+Live handles are now released on the way out — on a panic, on
+`Os.exit_with`, and on returning from `main` — in LIFO order, the same
+order a scope releases in. Nothing to opt into: if you have a `handle`,
+this already applies to it.
 
-**Two places this deliberately differs from C.**
-
-Bitwise binds **tighter than comparison**, so `a & b == 0` means
-`(a & b) == 0`. In C it means `a & (b == 0)` — a mistake Ritchie
-described as unfixable once code depended on it. Nothing depended on it
-here.
-
-Shifts bind like multiplication, as in Go, so `1 << n + 1` is
-`(1 << n) + 1` rather than `1 << (n + 1)`.
-
-**Shift counts are defined for every value.** A count of 64 or more
-gives `0` for `<<` and a sign fill for `>>`, so `-1 >> 99` is `-1`. A
-negative count stops the program, alongside division by zero and
-integer overflow.
-
-`|` is both the closure delimiter and bitwise-or, and they never
-collide: a closure can only start where an expression is expected, and
-`|` can only be an operator where one has ended. `Array.map(xs, |x| x | m)`
-parses with no ambiguity.
-
-## Formatting numbers
-
-String interpolation already existed, so building output was never the
-problem:
+## `Terminal`
 
 ```plum
-println("${user} ${n} items")
+use Terminal;
+
+Terminal.is_tty(Stdout)          // per stream: Stdin, Stdout, Stderr
+Terminal.size()                  // Result[Size, String] — { cols, rows }
+Terminal.write(text)             // no newline, no flush
+Terminal.flush()
+
+let raw    = Terminal.enter_raw()?;
+let screen = Terminal.enter_alt_screen()?;
+let cursor = Terminal.hide_cursor()?;
 ```
 
-What was missing was control over how a number renders inside one.
+The three modes are handles, so **the terminal is restored on every exit
+path, including a crash**. That is the machinery a terminal program
+otherwise writes in C, and it is the first thing in the language to
+depend on the panic cleanup above.
 
-```plum
-Float.to_fixed(1.0 / 3.0, 2)     // "0.33"
-Float.to_fixed(19.999, 2)        // "20.00"
+They release LIFO, so the cursor returns before the screen is given up
+and the screen before the mode is restored — the right order, arranged
+by nobody. Each works without the others.
 
-Int.to_hex(255)                  // "ff"      — signed: to_hex(-255) is "-ff"
-Int.to_binary(10)                // "1010"
-Int.to_octal(64)                 // "100"
-Int.to_radix(1295, 36)           // "zz"
+Entering the same mode twice is **counted, not refused**: the first
+entry saves the state, the last release restores it, so a library and
+its caller can both ask without knowing about each other.
 
-Int.to_bits(5)                   // 64 binary digits, two's complement
-Int.to_hex_bits(255)             // "00000000000000ff"
+Three things worth knowing before writing a terminal program:
 
-String.pad_center("hi", 8, ".")  // "...hi..."
-```
+- **`is_tty` is asked per stream**, because the answer differs. A
+  program in a pipeline routinely has a terminal on stderr and a pipe on
+  stdout, and asking about the wrong one is how progress bars end up in
+  log files.
+- **Raw mode turns Ctrl+C into a byte** (0x03) rather than a signal.
+  That is what raw mode means everywhere, and here it is also what keeps
+  cleanup working — a default SIGINT ends a process *without* running
+  any cleanup, so signals left enabled would hand back a broken
+  terminal. Your program is responsible for noticing 0x03 and quitting.
+- **Every mode change refuses when there is no terminal.** Escape
+  sequences written into a pipe are not invisible, they are corruption.
+- **`size` polls.** POSIX signals a resize with `SIGWINCH`, Plum has no
+  signal handling, and comparing the size between iterations of an event
+  loop costs one syscall against a redraw. It works the same way on
+  Windows, which has no such signal at all.
 
-`to_radix` is **signed and reversible** — `to_radix(-255, 16)` is
-`"-ff"`, which reads back. `to_bits` is the bit-pattern view instead:
-`to_binary(-1)` is `"-1"` while `to_bits(-1)` is sixty-four ones. Both
-answer different questions.
+Semantic key events — `Key.Up`, `Ctrl+C` — are deliberately **not** here.
+That part is pure Plum with no C in it, which makes it the piece most
+easily copied into a program and the one where a frozen API would hurt
+most; it is tracked separately.
 
-**`Float.to_fixed` gives the same answer on every platform**, which
-took more work than expected. `snprintf` is correctly rounded
-everywhere and does not agree across platforms: glibc rounds exact ties
-to even, Microsoft's CRT rounds them away from zero, so `to_fixed(2.5, 0)`
-was `"2"` on Linux and `"3"` on Windows. The rounding is now applied to
-the digits rather than left to the C library.
-
-Ties round **half to even** — IEEE 754's default, and unbiased, since
-rounding every tie away from zero accumulates. Note that `Float.round`
-rounds half *away* from zero: that pair is not an inconsistency, it is
-what C, Python, Rust and Java all do, because `round` is arithmetic and
-formatting is rendering.
+Windows needs Windows 10 or later, so the console can deliver the same
+escape sequences a POSIX terminal does.
 
 ## Also
 
-`examples/asteroids` no longer declares `sin` and `cos` in its own
-`extern "C"` block beside a hand-typed `3.14159265358979`; it uses the
-`Float` trigonometry added in 0.0.24.
-
-Internally, about 275 chains of `.concat(...)` in the compiler became
-interpolation. Verified by diffing the emitted LLVM IR for every
-execution fixture before and after — 93 of 93 byte-identical — so the
-change is provably invisible.
+`bootstrap/mem-check`'s ceilings are per platform now. macOS costs about
+1.5x Linux for the same work — likely 16 KB pages against 4 KB, so RSS
+is not a comparable quantity — and it varies by 20 MB between runs where
+Linux does not vary at all. A single shared ceiling was measuring which
+runner a job landed on.
