@@ -38,7 +38,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `doc-check` | every snippet in `TUTORIAL.md` compiles, runs, and prints what the tutorial says it prints | 6s |
 | `alloc-check` | allocation counts have not RISEN -- the only harness that measures the memory model rather than correctness | 2s |
 | `debug-info-check` | a debug build carries Plum line information at the right LINES, and a release build carries none | 2s |
-| `mem-check` | peak RSS of `emit-llvm` and `check` is under a ceiling -- the `SH_MEM` cgroup guard is inert on CI, so this is the only memory assertion that runs there | 3s |
+| `mem-check` | peak RSS of `emit-llvm` and `check` is under a PER-PLATFORM ceiling — the `SH_MEM` cgroup guard is inert on CI, so this is the only memory assertion that runs there | 3s |
 | `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
 | `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |
 | `platform-smoke` | a compiler *binary* builds and runs every execution fixture on the machine it is sitting on, plus timed stdin reads over a real PIPE — the one path a corpus fixture cannot reach, since `Process.run` feeds a child from a file | 25s |
@@ -562,6 +562,13 @@ Worth knowing before you "fix" them:
   **Verify a bulk rewrite by diffing EMITTED IR before and after**, not
   by running the corpus: if every fixture's `.ll` is byte-identical, the
   rewrite provably changed nothing. That is stronger than any test.
+- **`mem-check`'s ceilings are per platform, and macOS is ~1.5x Linux
+  and ~20 MB noisier.** Do not compare a macOS number to a Linux one;
+  RSS on 16 KB pages is not the same quantity as on 4 KB. When it fails,
+  check the printed value against the table in its header BEFORE
+  assuming a regression — a value inside the recorded range is the guard
+  being too tight. That happened once already: twelve macOS runs climbed
+  108 → 128 MB against a 128 MB ceiling while Linux never moved off 75.
 - **A prelude GLOBAL costs every program, always.** Globals are
   initialised eagerly by `@plum_init_globals` and are not dead-code
   eliminated, so `chars_of(..)` hoisted to a prelude global charges its

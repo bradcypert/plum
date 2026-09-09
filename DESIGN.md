@@ -19946,3 +19946,59 @@ is 100.00). All eighteen match.
 The Linux output did not change, which is the trap: every local harness
 passed before and after. Only the platform legs could see this, and
 only because the fixture happened to print exact halves.
+
+### A guard that measured the runner's mood (2026-09-09)
+
+`mem-check` failed on the macOS leg of the 0.0.25 release commit:
+
+```
+FAIL: emit-llvm, whole compiler peaked at 128 MB, over its 128 MB ceiling
+```
+
+Exactly at the ceiling, on a commit whose release job passed on all five
+platforms. The first reading was a regression, and that reading was
+wrong -- reached by comparing a local measurement against a COMMENT in
+the harness rather than against history.
+
+What the history says. Each release's compiler, emitting its own source,
+on one machine:
+
+```
+v0.0.20  25,828 lines   73 MB
+v0.0.23  27,070 lines   75 MB
+HEAD     28,569 lines   77 MB
+```
+
+Five releases, +10% source, +5% memory. The current compiler also uses
+76 MB on v0.0.23's source, so it is not hungrier -- the input grew a
+little. Bisecting every commit since 0.0.24 is flat at 76 MB.
+
+What the CI logs say, over twelve consecutive runs on macOS:
+
+```
+108, 108, 109, 110, 122, 123, 124, 125, 126, 127, 128   (ceiling 128)
+```
+
+That is not drift. It is a ceiling sitting 0-16% above what the runner
+uses, on a platform that varies by 20 MB between runs, so it was
+measuring which runner the job landed on. Linux, across the same runs,
+never moved off 75 MB.
+
+**The ceilings are now per platform**, because the platforms are not
+measuring the same quantity. macOS costs about 1.5x Linux for both
+operations -- not the ~20% the old note claimed -- and the likely reason
+is page size: Apple Silicon uses 16 KB pages against Linux's 4 KB, and
+RSS rounds up per region. A shared ceiling was comparing different
+things and calling the difference headroom.
+
+The new macOS ceilings are 192 MB and 80 MB, which is 1.5x and 1.7x over
+the worst run actually observed, and still catch the regression the
+harness exists for: the pre-fix compiler used 744 MB to emit and 83 MB
+to check on Linux, about 1,100 and 124 scaled to macOS.
+
+Two lessons, and the second is the one that cost time. A threshold set
+from a measurement taken once is a threshold that expires. And **a
+comment recording a measurement is not evidence about today** -- the
+header confidently said 66 MB with 1.9x headroom while the runner had
+been at 120 for weeks, and reading it as current is what produced a
+confident, wrong diagnosis of regression.

@@ -30,19 +30,40 @@
 # over the 83 MB the old compiler really used -- a threshold that misses
 # the regression it was written for is decoration.
 #
-# Measured on every platform that runs this, 2026-09-03:
+# **The ceilings are PER PLATFORM**, because the platforms do not
+# measure the same thing. Re-measured 2026-09-09 from six consecutive
+# CI runs, after the macOS leg failed at exactly its ceiling:
 #
-#             emit-llvm   check      ceiling headroom
-#   linux x86_64   55 MB   26 MB      2.3x / 2.5x
-#   linux arm64    55 MB   24 MB      2.3x / 2.7x
-#   macOS arm64    66 MB   39 MB      1.9x / 1.6x
+#                emit-llvm       check        ceiling      headroom
+#   linux x86_64   75 MB        29 MB        128 / 64      1.7x / 2.2x
+#   linux arm64    74-75 MB     27 MB        128 / 64      1.7x / 2.4x
+#   macOS arm64    108-128 MB   40-46 MB     192 / 80      1.5x / 1.7x
 #
-# macOS costs ~20% more to emit and ~50% more to check than Linux, so
-# its `check` has the least room of anything here. That is still the
-# right ceiling rather than a too-tight one: 39 MB would have to grow by
-# 64% to trip it, which is a regression and not noise, and raising it
-# past 83 MB would stop it catching the thing it exists for. Worth
-# knowing before anyone reads the slack as spare.
+# Two things that a single shared ceiling was hiding.
+#
+# **macOS costs about 1.5x Linux**, not the ~20% the previous note
+# claimed. The likely reason -- not verified from here -- is the page
+# size: Apple Silicon uses 16 KB pages against Linux's 4 KB, and RSS
+# rounds up per region, so the two numbers are not comparable
+# quantities. A shared ceiling was therefore comparing different things
+# and calling the difference headroom.
+#
+# **macOS also VARIES by about 20 MB run to run**, where Linux does
+# not vary at all. Its previous 128 MB ceiling sat 0-16% above what the
+# runner actually used, so it was measuring the runner's mood: twelve
+# consecutive runs came in at 108, 108, 109, 110, 122, 123, 124, 125,
+# 126, 127 and finally 128, which failed. Nothing had regressed -- the
+# same compiler builds at 75 MB on Linux, and every release since
+# v0.0.20 measures within 4 MB of that.
+#
+# The new ceilings still catch what this exists for. The pre-fix
+# compiler used 744 MB to emit and 83 MB to check on Linux, so about
+# 1,100 MB and 124 MB scaled to macOS -- both far above 192 and 80.
+#
+# If a ceiling here fails, check the printed number against this table
+# BEFORE assuming a regression. A value inside these ranges on a
+# platform that varies is the guard being too tight, and the fix is to
+# re-measure rather than to raise it by a round number.
 #
 # The Windows job does not run this at all -- it is a separate job with
 # its own steps. The `resource` guard below is defensive rather than
@@ -116,12 +137,21 @@ check() {   # <threshold-KB> <label> <args...>
 
 echo "mem-check: peak RSS of the compiler alone (no clang in these)"
 
-# 56 MB today; 744 MB measured on the pre-fix compiler, before tail
-# calls in a cycle returned early. This is the number with a job.
-check 131072 "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
+# See the table at the top for what each platform actually measures and
+# why they differ. `uname` rather than a build-time constant, because
+# the same checkout is run on all three.
+case "$(uname -s)" in
+    Darwin) emit_ceiling=196608; check_ceiling=81920 ;;
+    *)      emit_ceiling=131072; check_ceiling=65536 ;;
+esac
 
-# 26 MB today, 83 MB on that same pre-fix compiler.
-check 65536 "check, whole compiler" check bootstrap/self_host
+# 75 MB on Linux and up to 128 MB on macOS today; 744 MB measured on the
+# pre-fix compiler, before tail calls in a cycle returned early.
+check "$emit_ceiling" "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
+
+# 29 MB on Linux and up to 46 MB on macOS; 83 MB on that same pre-fix
+# compiler.
+check "$check_ceiling" "check, whole compiler" check bootstrap/self_host
 
 [ $fail -ne 0 ] && exit 1
 echo "mem-check: the compiler stays within its memory ceilings"
