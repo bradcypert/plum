@@ -1,0 +1,42 @@
+use Terminal;
+
+// The terminal platform layer, exercised where a fixture can reach it
+// (issue #3).
+//
+// **A corpus fixture is never attached to a terminal.** Its output is
+// captured for comparison, so stdout is a pipe by construction, and
+// `platform-smoke` runs the same program the same way. That makes the
+// NEGATIVE answers the testable ones -- which is not a small thing to
+// check: a program that says "yes, a terminal" when piped is how
+// progress bars and escape sequences end up in log files.
+//
+// The positive answers need a pseudo-terminal, which is what
+// `bootstrap/tty-smoke` is for. Between them: this proves the answer is
+// not always true, and that proves it is not always false.
+
+let show (label: String) (b: Bool): Unit = println("${label} ${b}")
+
+let main (): Unit = {
+    // Piped, so all three are false. Asked per stream because they
+    // genuinely differ: a program in a pipeline routinely has a
+    // terminal on stderr and a pipe on stdout.
+    show("stdin ", Terminal.is_tty(Stdin));
+    show("stdout", Terminal.is_tty(Stdout));
+    show("stderr", Terminal.is_tty(Stderr));
+
+    // No terminal means no size, and that is an `Err` rather than a
+    // guess. 80x24 is a guess, and a library that guesses on a caller's
+    // behalf is worse than one that says it does not know.
+    println(match Terminal.size() {
+        Ok(s) => "size ${s.cols}x${s.rows}",
+        Err(_) => "size unknown, as it should be when piped",
+    });
+
+    // `write` adds no newline and does not flush; `flush` is what makes
+    // a frame visible. Both matter to a program drawing with escape
+    // sequences, and both are ordinary here.
+    match Terminal.write("no newline ->") { Ok(_) => (), Err(e) => println(e) };
+    match Terminal.write(" still the same line") { Ok(_) => (), Err(e) => println(e) };
+    match Terminal.flush() { Ok(_) => println(""), Err(e) => println(e) };
+    println("done")
+}

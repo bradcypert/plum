@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# The terminal answers that only a REAL terminal can prove (issue #3).
+#
+# `exec_corpus/terminal` checks what a fixture can reach, which is every
+# NEGATIVE answer: a corpus fixture's output is captured for comparison,
+# so its stdout is a pipe by construction and `is_tty` must say no. That
+# is worth checking — a program claiming a terminal when piped is how
+# escape sequences end up in log files — but it cannot tell a correct
+# implementation from one that always says no.
+#
+# This allocates a pseudo-terminal and asks again. It is the only thing
+# in the repository that exercises `isatty` returning TRUE, or the
+# `TIOCGWINSZ` path at all.
+#
+# **The window size is set to something nobody would pick by accident.**
+# 137x42 rather than 80x24, so a hardcoded default cannot pass, and the
+# two numbers differ so transposing them fails.
+#
+# Linux/macOS development tooling, like `net-smoke` and `stdin-smoke`.
+# Windows has no `pty`, and its console cannot be allocated by a CI job
+# at all — see issue #32, which found the same limit for stdin. What
+# runs there is the corpus fixture, and the Windows console path stays
+# compile-checked only, which `Terminal`'s own header says.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+command -v python3 >/dev/null || { echo "tty-smoke: needs python3 for a pty"; exit 0; }
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+mkdir -p "$work/prog"
+cat > "$work/prog/main.plum" <<'EOF'
+use Terminal;
+
+let main (): Unit = {
+    println("stdin=${Terminal.is_tty(Stdin)} stdout=${Terminal.is_tty(Stdout)} stderr=${Terminal.is_tty(Stderr)}");
+    println(match Terminal.size() { Ok(s) => "size=${s.cols}x${s.rows}", Err(_) => "size=unknown" })
+}
+EOF
+
+SH_TIMEOUT="${SH_TIMEOUT:-120}" SH_MEM="${SH_MEM:-256M}" ./sh build "$work/prog" -o "$work/prog.bin" > "$work/build.log" 2>&1 || {
+    echo "tty-smoke: build failed"; cat "$work/build.log"; exit 1
+}
+
+got="$(python3 - "$work/prog.bin" <<'PY'
+import os, pty, struct, fcntl, termios, sys
+prog = sys.argv[1]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(prog, [prog])
+# Set AFTER the fork so the child is looking at a sized terminal, and to
+# a size nobody would choose as a fallback.
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 42, 137, 0, 0))
+out = b""
+try:
+    while True:
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            break
+        out += chunk
+except OSError:
+    pass
+os.waitpid(pid, 0)
+sys.stdout.write(out.decode(errors="replace").replace("\r", ""))
+PY
+)"
+
+want="$(printf 'stdin=true stdout=true stderr=true\nsize=137x42')"
+
+if [ "$(printf '%s' "$got" | sed '/^$/d')" = "$want" ]; then
+    echo "tty smoke: ok, a real terminal is detected and reports its size"
+    exit 0
+fi
+
+echo "tty smoke: FAILED" >&2
+printf '  expected | %s\n' "$want" >&2
+printf '  actual   | %s\n' "$got" >&2
+exit 1

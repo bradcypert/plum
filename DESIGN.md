@@ -20083,3 +20083,76 @@ part: globbing it produced six undefined Winsock symbols, because
 `net_shim.c` needs `-lws2_32` on Windows. **An unused shim costs
 nothing to RUN and can still cost a library to LINK.** That list stays
 selective, and now says so.
+
+## A terminal platform layer, and the half that was left out (2026-09-09)
+
+Issue #3 asked for TTY detection, size, raw mode, screen lifecycle,
+output and semantic keyboard events. It shipped as the first four, and
+the interesting decision was leaving the last one out.
+
+### Why the split
+
+The platform layer needs a C shim -- `isatty`, `TIOCGWINSZ`,
+`tcsetattr`, `SetConsoleMode` -- which is the part that is genuinely
+painful for a user to vendor. It also has no design space to get wrong:
+`isatty` is `isatty`.
+
+Decoding escape sequences into `Key.Up` is the opposite. It is a pure
+function from bytes to events with no C in it at all, so a user can
+copy one file and have it. And it is where every bit of taste and churn
+lives: how to model modifiers, the kitty keyboard protocol, mouse
+encodings, bracketed paste, and the fact that a lone `ESC` is either the
+Escape key or an unfinished sequence and only a timeout can say which.
+
+The evidence for building any of it was ONE program. Designing a frozen
+API from a single consumer is what re-scoped #23 and parked #33, and the
+same discipline applies here: the platform layer survives it because
+there is nothing to guess, and the decoder does not. It is #35.
+
+That is also roughly where everyone else has landed. Go, Rust and Java
+keep terminals out of their standard libraries entirely; Python, Ruby
+and Node keep a platform layer and no more; only .NET ships semantic key
+events, and it has one vendor controlling the terminal.
+
+### The size is one observation, not two
+
+`term_size_query` reads the size and stores it; `term_size_cols` and
+`term_size_rows` read it back. The query-then-read split is the same one
+`tcp_recv_n`/`tcp_recv_data` uses, because Plum's extern surface has no
+multi-value return -- but here it also buys correctness. Two separate
+syscalls would let a resize land between them and report a size the
+terminal never had.
+
+Zero is treated as failure. A terminal reporting no size does not know,
+and a caller dividing by it is worse off than one told no. `Err` rather
+than 80x24 for the same reason: a library that guesses on a caller's
+behalf is worse than one that says it does not know.
+
+### Resize is polled, and that is not a compromise
+
+POSIX reports a resize with `SIGWINCH`. Plum has no signal handling, and
+a terminal module is not the place to introduce it -- a signal handler
+mutating state the runtime knows nothing about is a large thing to add
+for one feature. Comparing `Terminal.size()` between iterations of an
+event loop costs one syscall against a redraw, and works identically on
+Windows, which has no such signal at all.
+
+### What a fixture can prove, and what needed a pty
+
+A corpus fixture's output is captured for comparison, so its stdout is a
+PIPE by construction and `is_tty` must answer no. That is worth
+checking -- a program claiming a terminal when piped is how escape
+sequences end up in log files -- but it cannot distinguish a correct
+implementation from one that always says no.
+
+So `bootstrap/tty-smoke` allocates a pseudo-terminal and asks again. It
+is the only thing in the repository that exercises `isatty` returning
+true, or `TIOCGWINSZ` at all. The window size is set to **137x42**
+rather than 80x24, so a hardcoded fallback cannot pass and transposing
+the two numbers fails -- checked by setting it to 80x24 and watching the
+harness fail.
+
+Windows keeps the gap #32 already documented for stdin: a CI job cannot
+allocate a console, so the Windows console path stays compile-checked
+only. `Terminal`'s own header says so rather than leaving it to be
+assumed.

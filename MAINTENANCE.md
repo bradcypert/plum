@@ -11,7 +11,7 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version help-check check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
-         self-test stdin-smoke \
+         self-test stdin-smoke tty-smoke \
          property-check doc-check alloc-check lossless-check fmt-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
@@ -32,6 +32,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
 | `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
+| `tty-smoke` | `is_tty` says YES and `Terminal.size` reports the real size, under a pseudo-terminal — the only thing here that exercises `isatty` returning true or `TIOCGWINSZ` at all | 3s |
 | `stdin-smoke` | timed stdin reads bound the whole call and keep a partial line across a timeout — the cases a corpus fixture cannot reach, because `Process.run` feeds a child from a FILE and a file never times out | 3s |
 | `self-test` | the compiler's OWN internals, via `plum test` on `bootstrap/self_host` -- the only harness that can reach platform-conditional code, since a Windows branch is unreachable on Linux rather than merely untested | 1s |
 | `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |
@@ -562,6 +563,15 @@ Worth knowing before you "fix" them:
   **Verify a bulk rewrite by diffing EMITTED IR before and after**, not
   by running the corpus: if every fixture's `.ll` is byte-identical, the
   rewrite provably changed nothing. That is stronger than any test.
+- **`Terminal` is the platform layer only.** `is_tty`, `size`, `write`,
+  `flush` — the part that needs a C shim and has no design space to get
+  wrong. Semantic key events are #35 and deliberately NOT here: that is
+  pure Plum with no C, so it is the most vendorable piece and the one
+  where a frozen API would hurt most.
+- **A corpus fixture is never a terminal**, so it can only prove the
+  negative answers. `bootstrap/tty-smoke` allocates a pty for the
+  positive ones, and sets the size to 137x42 so a hardcoded 80x24
+  cannot pass and a transposition fails.
 - **A `handle` is released on panic and on `Os.exit_with`, not only on
   scope exit.** Live handles are registered at creation and released by
   an `atexit` handler, LIFO. Unregistration happens BEFORE the cleanup
