@@ -35,6 +35,14 @@ let main (): Unit = {
     // `write` adds no newline and does not flush; `flush` is what makes
     // a frame visible. Both matter to a program drawing with escape
     // sequences, and both are ordinary here.
+    // Every mode change REFUSES when there is no terminal. Escape
+    // sequences written into a pipe are not invisible, they are
+    // corruption, and raw mode on a pipe would leave a program waiting
+    // for keys that cannot come.
+    println(match Terminal.enter_raw() { Ok(_) => "raw entered (wrong)", Err(_) => "raw refused, as it should be" });
+    println(match Terminal.enter_alt_screen() { Ok(_) => "alt entered (wrong)", Err(_) => "alt refused, as it should be" });
+    println(match Terminal.hide_cursor() { Ok(_) => "cursor hidden (wrong)", Err(_) => "cursor refused, as it should be" });
+
     match Terminal.write("no newline ->") { Ok(_) => (), Err(e) => println(e) };
     match Terminal.write(" still the same line") { Ok(_) => (), Err(e) => println(e) };
     match Terminal.flush() { Ok(_) => println(""), Err(e) => println(e) };

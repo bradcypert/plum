@@ -20156,3 +20156,73 @@ Windows keeps the gap #32 already documented for stdin: a CI job cannot
 allocate a console, so the Windows console path stays compile-checked
 only. `Terminal`'s own header says so rather than leaving it to be
 assumed.
+
+### Raw mode, and the panic that proves it (2026-09-09)
+
+Increment two of #3: raw mode, the alternate screen and cursor
+visibility, each a `handle`.
+
+```plum
+let raw = Terminal.enter_raw()?;
+let screen = Terminal.enter_alt_screen()?;
+let cursor = Terminal.hide_cursor()?;
+```
+
+They release LIFO, so the cursor comes back before the screen is given
+up and the screen before the mode is restored -- the right order,
+arranged by nobody. Each works without the others; a filter wants raw
+mode and no alternate screen.
+
+**Entering is COUNTED, not refused.** Entering twice must not save the
+already-changed state as the thing to restore, or leaving puts the
+terminal back to raw. The first entry saves and applies, later ones only
+count, the last to die restores. Counting also does not care what order
+the handles die in, which matters because handles in different scopes
+need not die in the order they were born.
+
+### `ISIG` is cleared, and that is what makes cleanup work
+
+Raw mode turns Ctrl+C from a signal into a byte, which is what raw mode
+means everywhere. Here it is also load-bearing: **the default action for
+SIGINT ends a process without running `atexit` handlers**, so a Ctrl+C
+in raw mode with signals still enabled would leave the terminal raw and
+the cursor hidden -- the exact failure the handles exist to prevent.
+Delivered as 0x03, the program can exit normally and everything is put
+back. The cost is that a raw-mode program is responsible for noticing
+0x03 and quitting.
+
+`VMIN=1, VTIME=0`, so a read blocks until a byte arrives and the timeout
+belongs entirely to `poll` -- which is what `Os.read_stdin_timeout`
+already uses. Asking termios for a timeout as well would be two
+mechanisms racing over one deadline.
+
+### Every mode change refuses when there is no terminal
+
+Escape sequences written into a pipe are not invisible; they are
+corruption. `enter_alt_screen` and `hide_cursor` check `isatty` on
+stdout, `enter_raw` checks stdin, and all three return `Err` otherwise --
+which is also what makes the behaviour assertable from a corpus fixture,
+whose stdout is a pipe by construction.
+
+### The assertion that needed a pseudo-terminal
+
+The claim worth proving is not that entering works. It is that a program
+which CRASHES gives the terminal back. `bootstrap/tty-smoke` runs one
+that panics while raw, on the alternate screen, with the cursor hidden,
+and checks two things about the pty afterwards:
+
+```
+\033[?1049h  \033[?25l  ...  crash while raw  \033[?25h  \033[?1049l
+```
+
+that the escape sequences appear in LIFO order, and that `tcgetattr`
+before and after are equal. Both hold.
+
+Checked for non-vacuousness by pointing `AltScreen`'s `on_drop` at a
+no-op and rerunning: `TERMIOS SEQUENCES-WRONG` -- the termios half still
+restored, the escape-sequence half not, which is exactly the right
+diagnosis.
+
+This is the first thing in the repository to depend on cleanup-on-panic
+from issue #1, and the clearest argument for it: without that, every one
+of these handles is a promise kept only when nothing goes wrong.

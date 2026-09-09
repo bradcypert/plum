@@ -366,6 +366,9 @@ See README.md for the prose introduction.
 - `let size (): Result[Size, String]`
 - `let write (text: String): Result[Unit, String]`
 - `let flush (): Result[Unit, String]`
+- `let enter_raw (): Result[RawMode, String]`
+- `let enter_alt_screen (): Result[AltScreen, String]`
+- `let hide_cursor (): Result[HiddenCursor, String]`
 
 ## Time
 

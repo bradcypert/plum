@@ -2,5 +2,8 @@ stdin  false
 stdout false
 stderr false
 size unknown, as it should be when piped
+raw refused, as it should be
+alt refused, as it should be
+cursor refused, as it should be
 no newline -> still the same line
 done

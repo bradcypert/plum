@@ -568,6 +568,14 @@ Worth knowing before you "fix" them:
   wrong. Semantic key events are #35 and deliberately NOT here: that is
   pure Plum with no C, so it is the most vendorable piece and the one
   where a frozen API would hurt most.
+- **Raw mode clears `ISIG` on purpose.** A default SIGINT ends a process
+  WITHOUT running `atexit`, so Ctrl+C with signals still enabled would
+  leave the terminal raw — defeating the handles. As a byte, the program
+  exits normally and everything is restored. Do not "fix" this by
+  keeping signals.
+- **Entering a terminal mode twice is counted, not refused.** The first
+  entry saves the state; the last release restores it. Saving on every
+  entry would restore the terminal to raw.
 - **A corpus fixture is never a terminal**, so it can only prove the
   negative answers. `bootstrap/tty-smoke` allocates a pty for the
   positive ones, and sets the size to 137x42 so a hardcoded 80x24

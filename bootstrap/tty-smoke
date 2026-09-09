@@ -41,6 +41,25 @@ let main (): Unit = {
 }
 EOF
 
+
+# The one that matters: a program that PANICS while raw, on the
+# alternate screen, with the cursor hidden. Everything must be put back.
+mkdir -p "$work/crash"
+cat > "$work/crash/main.plum" <<'PLUM_CRASH'
+use Terminal;
+
+let main (): Unit = match Terminal.enter_raw() {
+    Err(e) => println(e),
+    Ok(raw) => match Terminal.enter_alt_screen() {
+        Err(e) => println(e),
+        Ok(alt) => match Terminal.hide_cursor() {
+            Err(e) => println(e),
+            Ok(cur) => panic_raw("crash while raw"),
+        },
+    },
+}
+PLUM_CRASH
+
 SH_TIMEOUT="${SH_TIMEOUT:-120}" SH_MEM="${SH_MEM:-256M}" ./sh build "$work/prog" -o "$work/prog.bin" > "$work/build.log" 2>&1 || {
     echo "tty-smoke: build failed"; cat "$work/build.log"; exit 1
 }
@@ -70,12 +89,28 @@ PY
 
 want="$(printf 'stdin=true stdout=true stderr=true\nsize=137x42')"
 
-if [ "$(printf '%s' "$got" | sed '/^$/d')" = "$want" ]; then
-    echo "tty smoke: ok, a real terminal is detected and reports its size"
-    exit 0
+if [ "$(printf '%s' "$got" | sed '/^$/d')" != "$want" ]; then
+    echo "tty smoke: FAILED (detection)" >&2
+    printf '  expected | %s\n' "$want" >&2
+    printf '  actual   | %s\n' "$got" >&2
+    exit 1
 fi
 
-echo "tty smoke: FAILED" >&2
-printf '  expected | %s\n' "$want" >&2
-printf '  actual   | %s\n' "$got" >&2
-exit 1
+SH_TIMEOUT="${SH_TIMEOUT:-120}" SH_MEM="${SH_MEM:-256M}" ./sh build "$work/crash" -o "$work/crash.bin" > "$work/crash.log" 2>&1 || {
+    echo "tty-smoke: crash-case build failed"; cat "$work/crash.log"; exit 1
+}
+
+# Compares the pty's termios BEFORE and AFTER a program that panics
+# while raw. Nothing else in the repository can assert this: cleanup on
+# panic (issue #1) is what makes it true, and only a real terminal can
+# show that it is.
+restored="$(python3 "$root/bootstrap/tty_restore_probe.py" "$work/crash.bin")"
+
+if [ "$restored" != "termios sequences" ]; then
+    echo "tty smoke: FAILED (a panic did not restore the terminal)" >&2
+    printf '  %s\n' "$restored" >&2
+    exit 1
+fi
+
+echo "tty smoke: ok, a terminal is detected, sized, and restored after a panic"
+exit 0
