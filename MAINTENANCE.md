@@ -574,6 +574,16 @@ Worth knowing before you "fix" them:
   declaration without one keeps the plain-text answer it always had.
   `lsp-smoke` asserts both, because the second is the one a change here
   would quietly break.
+- **`plum doc` splits a module by NAMESPACE, uniformly.** A `T.f`
+  declaration goes to `<module>.T.md`, and a type named `T` joins that
+  page when the namespace exists — so `enum Option` leads the page about
+  `Option`. Split by namespace rather than by size, because a threshold
+  would make a page's URL depend on how many functions were written that
+  week. A type with no methods stays with its module.
+- **In generated docs `##` means "a declaration" and nothing else.** The
+  namespace index is bold text, not a heading, because anything parsing
+  the output — a search index, an HTML renderer — would otherwise count
+  it as one.
 - **`docs/stdlib/` and `STDLIB.md` are both GENERATED; the README links
   to them and lists nothing itself.** The README's hand-written list was
   accurate and unchecked, which is a promise that holds only while

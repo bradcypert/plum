@@ -20405,3 +20405,31 @@ JSON by two functions whose `kind`/`detail` lines are identical, so a
 patch aimed at one landed in the other and the checker caught it as
 `struct lsp.Completion has no field named doc`. Worth knowing that the
 two are that similar, since the next person adding a field will meet it.
+
+### Splitting the reference by namespace (2026-09-10)
+
+`prelude.md` was 160 declarations and 724 lines: a list to scroll rather
+than a reference to consult. `plum doc` now gives every `T.f` namespace
+its own page.
+
+**Uniformly, not by size.** `Os.File` has five declarations and
+`prelude.Array` twenty-three, and both get a page, because a namespace
+is a type's API surface and that is what deserves a URL. A size
+threshold would make a page's address depend on how many functions
+happened to be written that week, which is the sort of thing that
+breaks links later.
+
+A TYPE named `T` joins namespace `T` when that namespace exists, so
+`enum Option` leads the page about `Option` rather than sitting on the
+module page away from its own methods. A type with no methods --
+`Terminal.Size`, `Json.Decoder` -- has no namespace to join and stays
+with its module, which is where a reader would look for it.
+
+24 pages now, the largest 267 lines against the old 724.
+
+The namespace index on a module page is **bold text rather than a
+heading**, and that is not cosmetic: at `##` it was indistinguishable
+from a declaration to anything parsing the file. A count of
+declarations read 339 instead of 335 for exactly that reason, and an
+HTML renderer and a search index are both such parsers. `##` means one
+thing in this output.
