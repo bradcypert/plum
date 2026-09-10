@@ -568,6 +568,13 @@ Worth knowing before you "fix" them:
   wrong. Semantic key events are #35 and deliberately NOT here: that is
   pure Plum with no C, so it is the most vendorable piece and the one
   where a frozen API would hurt most.
+- **The standard library documents itself through `plum doc --stdlib`,
+  the same generator a user project uses.** It is not a bespoke path —
+  `cg_parse_std` already sets a source context per module, which is what
+  carries the doc trivia. A module's own description is the `///` block
+  at the top of its source, which reaches the generator attached to
+  whatever the module declares first (usually its `extern` block) and
+  would otherwise be silently dropped.
 - **Doc comments are `///`; `//` is a note to maintainers.** They reach
   the AST as `ItemNode.doc`, read from the gap the lexer already records
   between tokens. **A comment never becomes a token** — that is the

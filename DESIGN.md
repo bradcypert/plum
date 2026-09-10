@@ -20299,3 +20299,48 @@ Both were written into `exec_corpus/doc_comments` before the
 implementation, as cases that ought to differ. Neither would have been
 noticed by generating documentation and reading it, because both produce
 plausible output.
+
+### The standard library documents itself (2026-09-09)
+
+Increment four of #37. `plum doc --stdlib` runs the SAME generator a
+user's project runs -- the stdlib is a set of modules like any other, so
+it feeds itself rather than getting a path of its own. `cg_parse_std`
+already sets a source context per module, which is the whole reason the
+doc trivia reaches these items with no extra work.
+
+Generating it immediately found a gap: **a module's own description was
+being dropped.** It is written at the top of the source, above the
+module's `extern "C"` block -- and an extern block is not a declaration
+`plum doc` renders, since it is how a module reaches the system rather
+than something a caller may call. So the description attached to an item
+that was thrown away, and every module was documented function by
+function with nothing saying what it was FOR.
+
+Then the conversion: 986 comment lines became `///`, and the standard
+library went from 425 lines of bare signatures to **1,740 lines of
+documentation** across eleven modules.
+
+### Eleven lines to check, not 986
+
+The risk in a mechanical sweep is publishing maintainer notes. Scanning
+the source for references to `DESIGN.md`, CI harnesses and issue numbers
+found eleven such lines among the 986.
+
+**Two of them reached the output.** The other nine sat in blocks that
+did not attach to a declaration -- section separators and file-level
+notes -- so they were never at risk. That is worth knowing before the
+next sweep: what matters is not how many internal references the source
+contains, but how many are in a block directly above a `pub` item.
+
+Both were the same shape, an explanation carrying one sentence of
+provenance:
+
+> `snprintf` ... glibc and Microsoft's CRT ... disagree on ties.
+> ~~That was found by CI, on Windows, after this function had been
+> written to delegate.~~ A language whose programs print different
+> numbers depending on the machine has a worse problem ...
+
+The fact that the platforms disagree is the caller's business. Where we
+happened to find that out is not. Reviewing eleven lines beat reviewing
+986, which is the argument for sweeping first and checking the output
+rather than curating the input.
