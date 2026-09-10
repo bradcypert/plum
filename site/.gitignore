@@ -5,8 +5,12 @@ resources/
 # Prose pages are GENERATED from the repository root Markdown by
 # `bootstrap/build-site`, so the repo has one copy of each document and
 # the site cannot drift from it.
+content/install.md
 content/tutorial.md
+content/language.md
+content/modules.md
+content/running.md
+content/tooling.md
 content/grammar.md
 content/vision.md
 content/porting.md
-content/design.md

@@ -65,14 +65,22 @@ cleanDestinationDir = true
   url = "/tutorial/"
   weight = 2
 [[menu.main]]
-  name = "Grammar"
-  url = "/grammar/"
+  name = "Language"
+  url = "/language/"
   weight = 3
+[[menu.main]]
+  name = "Modules"
+  url = "/modules/"
+  weight = 4
+[[menu.main]]
+  name = "Tooling"
+  url = "/tooling/"
+  weight = 5
 [[menu.main]]
   name = "API"
   url = "/api/index.html"
-  weight = 4
+  weight = 6
 [[menu.main]]
-  name = "Vision"
-  url = "/vision/"
-  weight = 5
+  name = "Grammar"
+  url = "/grammar/"
+  weight = 7

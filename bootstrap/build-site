@@ -35,41 +35,31 @@ fi
 
 # --- Prose --------------------------------------------------------
 #
-# Each root document becomes a page. The leading `# Heading` is dropped
-# because the layout emits the title itself; leaving it would show the
-# title twice, once as a page heading and once as prose.
-#
-# Links between root documents (`TUTORIAL.md`) are rewritten to site
-# paths (`/tutorial/`), so the same file reads correctly on GitHub and
-# here without a second copy. Every OTHER root document -- README,
-# DESIGN, MAINTENANCE -- becomes a link to the file on GitHub rather
-# than a dead relative link, because those are not published here.
+# Each root document becomes a page. `bootstrap/site_page.py` does the
+# actual conversion, including rewriting links: a root document that IS
+# published becomes a site path, and anything else (an example, a shim,
+# DESIGN.md) becomes a link to the file on GitHub rather than a relative
+# path with no page behind it.
 page() {
     local src="$1" slug="$2" title="$3" blurb="$4" toc="$5"
-    local dst="site/content/${slug}.md"
-    {
-        echo "---"
-        echo "title: \"${title}\""
-        echo "blurb: \"${blurb}\""
-        echo "toc: ${toc}"
-        echo "sourcefile: \"${src}\""
-        echo "---"
-        echo
-        awk 'NR == 1 && /^# / { next } { print }' "$src" \
-            | sed -E 's@\]\(TUTORIAL\.md@](/tutorial/@g;
-                      s@\]\(GRAMMAR\.md@](/grammar/@g;
-                      s@\]\(VISION\.md@](/vision/@g;
-                      s@\]\(PORTING\.md@](/porting/@g;
-                      s@\]\(DESIGN\.md@](/design/@g;
-                      s@\]\(STDLIB\.md@](/api/index.html@g' \
-            | sed -E "s@\]\(([A-Z_]+\.md)@](${repo}/blob/main/\1@g"
-    } > "$dst"
-    echo "  ${dst}"
+    python3 bootstrap/site_page.py "$src" "$slug" "$title" "$blurb" "$toc" \
+        > "site/content/${slug}.md" || exit 1
+    echo "  site/content/${slug}.md"
 }
 
 echo "prose:"
+page INSTALL.md  install  "Install" \
+     "One binary, and clang." true
 page TUTORIAL.md tutorial "Tutorial" \
      "From \`plum new\` to a program with tests, in twenty minutes." true
+page LANGUAGE.md language "Language tour" \
+     "The whole language, one feature at a time." true
+page MODULES.md  modules  "Modules" \
+     "How code is organised, and what the standard library gives you." true
+page RUNNING.md  running  "Running programs" \
+     "Building, running, cross-compiling, and the worked examples." true
+page TOOLING.md  tooling  "Tooling" \
+     "Tests, formatting, the language server, and debug builds." true
 page GRAMMAR.md  grammar  "Grammar" \
      "The whole language, as a grammar." true
 page VISION.md   vision   "Vision" \

@@ -35,7 +35,13 @@ if ! "$plum" complete "$work" > "$work/names.json" 2>"$work/err"; then
     exit 1
 fi
 
-"$PY_BIN" - "$work/names.json" README.md TUTORIAL.md <<'PY'
+# Derived from `bootstrap/build-site` for the same reason `doc-check`
+# derives it: a page published to plumlang.org that nothing checks is
+# how a document starts naming functions that no longer exist.
+docs="README.md $(awk '/^page /{print $2}' bootstrap/build-site)"
+
+# shellcheck disable=SC2086
+"$PY_BIN" - "$work/names.json" $docs <<'PY'
 import re, json, sys
 names = set(x["name"] for x in json.load(open(sys.argv[1])))
 spaces = set(n.split(".")[0] for n in names if "." in n)

@@ -1,10 +1,15 @@
 # Plum
 
-Plum is an ML-style language (OCaml/F# family: type inference, algebraic
-data types, pattern matching, `Result`-based errors) for the places a
-garbage collector isn't an option: constrained and embedded hardware, and
-code that has to sit directly on a C ABI boundary without translation
-friction.
+Plum is a general-purpose ML-style language (OCaml/F# family: type
+inference, algebraic data types, pattern matching, `Result`-based
+errors) that does not need a garbage collector to get there.
+
+That makes it usable in the places a collector rules out, which is where
+the design pressure came from: code that has to sit directly on a C ABI
+boundary without translation friction, work with hard latency
+requirements, and eventually constrained hardware. But the target is
+ordinary software first. See "Design decisions" below for what that
+ordering does and does not commit to.
 
 ## The gap
 
@@ -75,56 +80,68 @@ exists, it doesn't belong in Plum.
 
 ## Design decisions
 
-Plum is a general-purpose ML-style language first (web APIs, WASM,
+Plum is a general-purpose ML-style language first (web APIs, CLI tools,
 games), not a systems/embedded language first. The memory model is
 justified by frame-time predictability and clean C FFI, not by fitting
 on a microcontroller; embedded reach is a welcome side effect, not the
 goal.
 
-The full reasoning behind every decision below, including the ones that
-changed along the way, lives in `DESIGN.md`. This section is a summary
-only; if it ever looks inconsistent with `DESIGN.md`, `DESIGN.md` is the
-one to trust.
+Most of what follows has since been built. This section records the
+decisions and says where each one stands; the full reasoning behind
+every one of them, including the ones that changed along the way, lives
+in `DESIGN.md`. If this section ever looks inconsistent with
+`DESIGN.md`, `DESIGN.md` is the one to trust, and `README.md` is the
+place to look for what is actually checked rather than claimed.
 
 - **Memory management**: reference counting + FBIP (Perceus algorithm),
   no tracing GC, no borrow checker. Uniqueness tracking is
   compiler-internal, invisible in the surface type system. Immutable by
-  default; an explicit opt-in mutable/shared reference type exists for
-  genuinely graph-shaped shared state (game entity graphs, etc.). Cycles
-  handled via `Weak`-by-convention initially (Swift's approach). A
-  scoped, budget-bounded cycle collector for just that shared type is a
-  possible later addition, not a v1 commitment.
+  default, with `Ref[T]` as the explicit opt-in for genuinely
+  graph-shaped shared state (game entity graphs, and the like).
+  **Built.** Reference cycles are only possible through `Ref`; a
+  `Weak`-by-convention story and a scoped, budget-bounded cycle
+  collector for that one type remain possible later additions rather
+  than commitments.
 - **Concurrency**: Go-inspired tasks + channels + `select`, with channel
   send implemented as an ownership move (reusing the same static
   last-use analysis FBIP needs) so the default non-atomic refcounts stay
-  race-free without a runtime cost. An explicit atomic-refcounted type is
-  the escape hatch for genuine cross-task sharing. Scheduler starts on
-  OS threads; a real green-thread scheduler is a later upgrade.
+  race-free without a runtime cost. **Built**, on OS threads. A real
+  green-thread scheduler is still a later upgrade, and an explicit
+  atomic-refcounted type remains the intended escape hatch for genuine
+  cross-task sharing.
 - **Backend**: LLVM, targeting the C ABI directly (not compiling through
   C source, which gives no reliable tail-call guarantee; that matters
-  for an ML-style language built around recursion).
-- **Implementation sequencing**: validate the memory model and FBIP pass
-  on a simplified typed IR with a tree-walking interpreter first, before
-  investing in the LLVM backend. The risky, unproven part of the design is
-  the memory model, not codegen.
-- **Bootstrap language**: Rust, edition 2024.
+  for an ML-style language built around recursion). **Built.**
 - **Error handling**: `Result`-based, explicit. No exceptions as the
   primary mechanism: a simpler runtime, no unwinding machinery to
   reconcile with refcount cleanup, and a better fit for constrained
-  targets.
+  targets. **Built**, and there is no early `return` either.
 - **Syntax**: Rust-shaped surface syntax (braces, `fn`, expression-
   oriented `match`), not OCaml/F#'s literal look, while keeping ML
   semantics (inference, ADTs, pattern matching, `Result`) underneath.
-  The pitch: "Rust with the lifetimes deleted."
-- **Ad-hoc polymorphism (v1)**: a small built-in set of compiler-known
-  traits (`Num`, `Eq`, `Show`). No user-definable typeclasses yet.
+  **Built.** The pitch: "Rust with the lifetimes deleted."
+- **Ad-hoc polymorphism**: a small built-in set of compiler-known
+  bounds rather than user-definable typeclasses. **Built** as `[T: Ord]`,
+  `[T: Eq]` and `[T: Show]`. User-definable typeclasses are still not
+  offered, and are not a v1 commitment.
 - **FFI priority**: calling into existing C libraries matters more early
-  on than being called from C/other languages, though both are goals.
-  `extern` blocks with explicit C-ABI types, no implicit string/allocation
-  coercion at the boundary, a `#[repr(C)]`-equivalent for structs crossing
-  the boundary.
-- **Target platforms**: hosted (Linux/macOS/Windows) and WASM are
-  primary. Raspberry Pi is close to free once an LLVM backend exists.
-  RISC-V microcontrollers (ESP32-C3/C6/H2) are aspirational; the
-  Xtensa-based original ESP32 is deprioritized (needs a non-mainline
-  LLVM fork).
+  on than being called from C, though both are goals. `extern "C"`
+  blocks with explicit C-ABI types, no implicit string or allocation
+  coercion at the boundary. **Built**, and exercised by
+  `examples/asteroids` against real raylib.
+- **How it was bootstrapped**: the memory model and FBIP pass were
+  validated on a simplified typed IR with a tree-walking interpreter
+  before any of the LLVM backend was written, because the risky,
+  unproven part of the design was the memory model rather than codegen.
+  That worked, and the sequencing is now history.
+- **Implementation language**: Plum. The first compiler was written in
+  Rust; the self-hosted one replaced its code generator on 2026-08-21
+  and the Rust implementation was retired on 2026-08-25. Building from
+  source needs `clang` and nothing else.
+- **Target platforms**: hosted Linux, macOS and Windows are primary and
+  published, with cross-compilation through `plum build --target`.
+  Raspberry Pi is close to free. WASM is deliberately deprioritized:
+  its concurrency, FFI and standard-library stories are all undesigned,
+  and nothing is pushing on it. RISC-V microcontrollers (ESP32-C3/C6/H2)
+  are aspirational; the Xtensa-based original ESP32 is deprioritized, as
+  it needs a non-mainline LLVM fork.

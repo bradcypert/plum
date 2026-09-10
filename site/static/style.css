@@ -42,6 +42,29 @@ pre .d { color: var(--hl-d); font-style: italic; }
 pre .o { color: var(--hl-o); }
 pre .f { color: inherit; font-weight: 600; }
 
+/* Chroma, for the languages that are NOT Plum -- the `sh` blocks.
+ *
+ * Hugo highlights those itself, and emits its own class names, so
+ * without this they render flat while the Plum blocks beside them are
+ * coloured. The mapping is deliberately coarse: Chroma has ~60 token
+ * classes and shell uses a handful, so these group them onto the same
+ * four variables the Plum highlighter uses. Shell and Plum then agree
+ * about what a comment or a string looks like, which is the point. */
+.chroma { background: none; }
+.chroma .c, .chroma .ch, .chroma .cm, .chroma .c1, .chroma .cs,
+.chroma .cp, .chroma .cpf { color: var(--hl-c); font-style: italic; }
+.chroma .k, .chroma .kc, .chroma .kd, .chroma .kn, .chroma .kp,
+.chroma .kr, .chroma .kt { color: var(--hl-k); }
+.chroma .s, .chroma .sa, .chroma .sb, .chroma .sc, .chroma .dl,
+.chroma .sd, .chroma .s2, .chroma .se, .chroma .sh, .chroma .si,
+.chroma .sx, .chroma .sr, .chroma .s1, .chroma .ss { color: var(--hl-s); }
+.chroma .m, .chroma .mb, .chroma .mf, .chroma .mh, .chroma .mi,
+.chroma .il, .chroma .mo { color: var(--hl-n); }
+.chroma .nb, .chroma .nf, .chroma .nt, .chroma .nc { color: var(--hl-t); }
+.chroma .nv, .chroma .vc, .chroma .vg, .chroma .vi { color: inherit; font-weight: 600; }
+.chroma .o, .chroma .ow, .chroma .p { color: var(--hl-o); }
+.chroma .err { color: inherit; }
+
 * { box-sizing: border-box; }
 
 body {

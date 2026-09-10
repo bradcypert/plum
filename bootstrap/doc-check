@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Compiles and runs every code snippet in TUTORIAL.md and README.md,
-# and checks each against the output the document claims.
+# Compiles and runs every code snippet in the published prose, and
+# checks each against the output the document claims.
 #
 # Documentation rots silently, and this project has proved it more than
 # once: the README described an interpreter for a day after the
@@ -39,11 +39,20 @@ PY_BIN="$(command -v python3 || command -v python)"
 [ -n "$PY_BIN" ] || { echo "doc-check: needs python3 to extract the snippets" >&2; exit 1; }
 
 fail=0
-"$PY_BIN" bootstrap/doc_check.py TUTORIAL.md "$plum" || fail=1
-# The README too, since 2026-08-31. It had ONE checked snippet against
-# the tutorial's twelve, and in the same week two of its claims turned
-# out to be false -- bounded type parameters "are supported" (they
-# parsed and were discarded) and two same-named types "do not silently
-# unify" (they did). A document nothing runs is a document that drifts.
-"$PY_BIN" bootstrap/doc_check.py README.md "$plum" || fail=1
+
+# The file list is DERIVED from `bootstrap/build-site`, not written out
+# here. Every document published to plumlang.org gets its snippets
+# compiled, and a new page cannot be added to the site without also
+# being checked -- which is exactly the failure this harness exists to
+# prevent, applied to itself.
+#
+# README.md is added on top because it is the front door and is not a
+# site page.
+docs="README.md $(awk '/^page /{print $2}' bootstrap/build-site)"
+
+for doc in $docs; do
+    [ -f "$doc" ] || { echo "doc-check: $doc does not exist"; fail=1; continue; }
+    "$PY_BIN" bootstrap/doc_check.py "$doc" "$plum" || fail=1
+done
+
 exit $fail

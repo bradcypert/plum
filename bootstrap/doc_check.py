@@ -17,7 +17,42 @@ import re, subprocess, sys, os, tempfile, shutil
 doc = open(sys.argv[1]).read()
 plum = sys.argv[2]
 label = os.path.basename(sys.argv[1])
-blocks = re.findall(r'```(\w*)\n(.*?)```', doc, re.S)
+# The whole info string, not just the language, because a `plum` block
+# may carry an attribute after it.
+#
+# Capturing only `\w*` would not merely ignore the attribute -- the
+# fence would fail to match at all, and the scan would pair its CLOSING
+# fence with the next opening one, silently misreading every block after
+# it. An info string this does not understand is an error below rather
+# than something to skip.
+raw = re.findall(r'```([^\n]*)\n(.*?)```', doc, re.S)
+
+blocks = []
+for info, body in raw:
+    parts = info.split()
+    lang = parts[0] if parts else ''
+    attrs = parts[1:]
+    if lang == 'plum':
+        # `fragment` marks Plum source that is illustrative rather than a
+        # complete program: a few lines showing one construct, with no
+        # `main` and nothing to run. It is still highlighted on the site,
+        # because Hugo keys off the language and ignores the attribute --
+        # so authors write one tag for all Plum and say here, explicitly,
+        # which blocks are not programs.
+        #
+        # An unrecognised attribute is a HARD ERROR. The whole point of
+        # the marker is to be deliberate, and a typo that silently
+        # switched checking off for a block would defeat it.
+        unknown = [a for a in attrs if a != 'fragment']
+        if unknown:
+            print(f"{os.path.basename(sys.argv[1])}: unknown attribute(s) "
+                  f"{' '.join(unknown)} on a ```plum block", file=sys.stderr)
+            sys.exit(1)
+        if 'fragment' in attrs:
+            # Not a project, and it BREAKS a run of blocks that are.
+            blocks.append(('', body))
+            continue
+    blocks.append((lang, body))
 
 FILE_HEADER = re.compile(r'^//\s*([\w][\w./-]*\.plum)\s*$')
 
