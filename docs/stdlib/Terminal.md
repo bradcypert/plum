@@ -34,6 +34,7 @@ Asking about the wrong one is how progress bars end up in log files.
 
 ## `struct Size`
 
+The size of the terminal, in character cells.
 
 ## `let size (): Result[Size, String]`
 
@@ -72,12 +73,22 @@ draws is on screen until this returns.
 
 ## `handle RawMode`
 
+Raw mode, held. The terminal is restored when this value dies,
+including on a panic.
+
+While it lives, Ctrl+C arrives as a BYTE (0x03) rather than a
+signal — see `Terminal.enter_raw`.
 
 ## `handle AltScreen`
 
+The alternate screen, held. The previous screen and the user's
+scrollback come back when this value dies.
 
 ## `handle HiddenCursor`
 
+A hidden cursor, held. The cursor is shown again when this value
+dies, including on a panic — which is what stops a crash leaving a
+terminal with no cursor.
 
 ## `let enter_raw (): Result[RawMode, String]`
 

@@ -10,15 +10,24 @@ failure names the field rather than the document.
 
 ## `let value (): Decoder[JsonValue]`
 
+The `JsonValue` itself, undecoded. For a field whose shape is not
+known ahead of time, or one to be handled separately.
 
 ## `let string (): Decoder[String]`
 
+Decodes a JSON string. `Err` on any other kind of value, naming the
+path where it was found.
 
 ## `let bool (): Decoder[Bool]`
 
+Decodes `true` or `false`. A JSON string reading `\"true\"` is not a
+boolean and is rejected.
 
 ## `let float (): Decoder[Float]`
 
+Decodes any JSON number as a `Float`. JSON has one number type, so
+this accepts integers too — `Json.int` is the one that refuses a
+fractional value.
 
 ## `let int (): Decoder[Int]`
 
@@ -30,6 +39,9 @@ for a reason nobody can trace back to here.
 
 ## `let null_as (fallback: T): Decoder[T]`
 
+Decodes JSON `null` as a value of your choosing. For a field whose
+absence has a meaning the type does not carry — `null_as(0)` on a
+count, say.
 
 ## `let field (key: String) (inner: Decoder[T]): Decoder[T]`
 
@@ -45,6 +57,9 @@ spellings exist because both situations do.
 
 ## `let nullable (inner: Decoder[T]): Decoder[Option[T]]`
 
+Allows the VALUE to be null, giving `None`. The key must still be
+present: `field(k, nullable(d))` says "present, may be null", and
+`optional_field(k, d)` says "may be absent".
 
 ## `let at (keys: Array[String]) (inner: Decoder[T]): Decoder[T]`
 
@@ -56,30 +71,63 @@ anything about paths.
 
 ## `let index (i: Int) (inner: Decoder[T]): Decoder[T]`
 
+Decodes one element of an array by position, extending the reported
+path with `[i]`.
+
+`Err` when the value is not an array, and when the index is past its
+end — which names the length, since that is the thing the caller got
+wrong.
 
 ## `let list (inner: Decoder[T]): Decoder[Array[T]]`
 
+Decodes every element of an array with the same decoder.
+
+Stops at the FIRST element that fails and reports that element's
+index. Collecting every failure would need a second error type and
+would still leave the caller without a value.
 
 ## `let map (a: Decoder[A]) (f: (A) -> T): Decoder[T]`
 
+Transforms what a decoder produced. The usual way to turn a decoded
+field into something else without writing a new decoder.
 
 ## `let map2 (a: Decoder[A]) (b: Decoder[B]) (f: (A, B) -> T): Decoder[T]`
 
+Combines two decoders. The usual way to build a struct: one decoder
+per field, and a function that assembles them.
+
+Reports the FIRST failure, left to right, so an error names one
+field rather than every field that could not be read.
 
 ## `let map3 (a: Decoder[A]) (b: Decoder[B]) (c: Decoder[C]) (f: (A, B, C) -> T): Decoder[T]`
 
+Combines 3 decoders — see `Json.map2`. There is one of these per
+arity because Plum has no variadics; past six, `and_then` composes
+without limit.
 
 ## `let map4 (a: Decoder[A]) (b: Decoder[B]) (c: Decoder[C]) (d: Decoder[D]) (f: (A, B, C, D) -> T): Decoder[T]`
 
+Combines 4 decoders — see `Json.map2`. There is one of these per
+arity because Plum has no variadics; past six, `and_then` composes
+without limit.
 
 ## `let map5 (a: Decoder[A]) (b: Decoder[B]) (c: Decoder[C]) (d: Decoder[D]) (e: Decoder[E]) (f: (A, B, C, D, E) -> T): Decoder[T]`
 
+Combines 5 decoders — see `Json.map2`. There is one of these per
+arity because Plum has no variadics; past six, `and_then` composes
+without limit.
 
 ## `let map6 (a: Decoder[A]) (b: Decoder[B]) (c: Decoder[C]) (d: Decoder[D]) (e: Decoder[E]) (g: Decoder[F]) (f: (A, B, C, D, E, F) -> T): Decoder[T]`
 
+Combines 6 decoders — see `Json.map2`. There is one of these per
+arity because Plum has no variadics; past six, `and_then` composes
+without limit.
 
 ## `let succeed (x: T): Decoder[T]`
 
+A decoder that ignores the input and always produces the same
+value. Useful as a branch of `and_then`, or as a default in
+`one_of`.
 
 ## `let fail (msg: String): Decoder[T]`
 
@@ -102,6 +150,10 @@ back at them.
 
 ## `let decode (d: Decoder[T]) (v: JsonValue): Result[T, String]`
 
+Runs a decoder against an already-parsed `JsonValue`.
+
+`Json.decode_string` is the one that parses first. Use this when the
+same document is decoded more than once.
 
 ## `let decode_string (d: Decoder[T]) (text: String): Result[T, String]`
 

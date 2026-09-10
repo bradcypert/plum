@@ -9,12 +9,32 @@ fixed message saying WHAT failed rather than why.
 
 ## `let connect_to (host: String) (port: Int): Result[Int, String]`
 
+Opens a TCP connection. The `Int` is a socket, for `Net.read`,
+`Net.write` and `Net.close`.
+
+`host` may be a name or an address; resolution happens here, so a
+DNS failure and a refused connection are both `Err` with a message
+saying which.
+
+**Blocking, and never closed for you.** There is no timeout, and no
+handle type — a socket outlives every scope until `Net.close` is
+called, so a connection opened in a loop and dropped is a leak the
+language will not catch.
 
 ## `let listen_on (port: Int): Result[Int, String]`
 
+Binds and listens on a port, returning a socket to `accept` on.
+
+Binds all interfaces. `Err` when the port is already in use or is
+one this process may not have — under 1024 usually needs privilege.
 
 ## `let accept (fd: Int): Result[Int, String]`
 
+Waits for a connection and returns a socket for it.
+
+Blocks until a client arrives. The listening socket stays open for
+the next `accept`; the returned one is a separate connection and
+needs its own `Net.close`.
 
 ## `let write (fd: Int) (data: String): Result[Int, String]`
 
@@ -62,3 +82,5 @@ calls `strlen` -- a NUL in the buffer is just another byte.
 
 ## `let close (fd: Int): Unit`
 
+Closes a socket. Closing one twice, or closing a number that was
+never a socket, does nothing rather than failing.

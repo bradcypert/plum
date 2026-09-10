@@ -279,7 +279,7 @@ pub let cg_prelude_src (unit: Unit): String = cg_lines([
     "        else if first < 5 { false }",
     "        else if plum__any_nonzero(rest, 1) { true }",
     "        else {",
-    "            /// An exact tie. Round to even.",
+    "            // An exact tie. Round to even.",
     "            let last = if String.is_empty(kept) { 0 } else { plum__digit_at(kept, String.char_len(kept) - 1) };",
     "            last - (last / 2) * 2 == 1",
     "        }",

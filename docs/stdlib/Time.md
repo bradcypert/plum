@@ -46,21 +46,32 @@ duration.
 
 ## `let micros (n: Int): Duration`
 
+A duration of `n` microseconds. Negative durations are allowed and mean
+what they say.
 
 ## `let millis (n: Int): Duration`
 
+A duration of `n` milliseconds. Negative durations are allowed and mean
+what they say.
 
 ## `let seconds (n: Int): Duration`
 
+A duration of `n` seconds. Negative durations are allowed and mean
+what they say.
 
 ## `let minutes (n: Int): Duration`
 
+A duration of `n` minutes. Negative durations are allowed and mean
+what they say.
 
 ## `let hours (n: Int): Duration`
 
+A duration of `n` hours. Negative durations are allowed and mean
+what they say.
 
 ## `let zero (): Duration`
 
+A duration of no time at all.
 
 ## `let Duration.as_nanos (d: Duration): Int`
 
@@ -70,24 +81,36 @@ care about rather than rounding one answer into another.
 
 ## `let Duration.as_micros (d: Duration): Int`
 
+The duration in microseconds, TRUNCATED toward zero. Use
+`Duration.as_nanos` when the remainder matters.
 
 ## `let Duration.as_millis (d: Duration): Int`
 
+The duration in milliseconds, TRUNCATED toward zero. Use
+`Duration.as_nanos` when the remainder matters.
 
 ## `let Duration.as_seconds (d: Duration): Int`
 
+The duration in whole seconds, TRUNCATED toward zero. Use
+`Duration.as_nanos` when the remainder matters.
 
 ## `let Duration.is_zero (d: Duration): Bool`
 
+Whether this is exactly no time. A negative duration is not zero.
 
 ## `let Duration.add (a: Duration) (b: Duration): Duration`
 
+Adds two durations.
 
 ## `let Duration.sub (a: Duration) (b: Duration): Duration`
 
+Subtracts `b` from `a`. The result may be negative, which is a
+legal duration and is what `Time.between` returns for two instants
+given the other way round.
 
 ## `let Duration.scale (d: Duration) (n: Int): Duration`
 
+Multiplies a duration by a whole number.
 
 ## `let Duration.negate (d: Duration): Duration`
 
@@ -109,21 +132,43 @@ spelling that always worked.
 
 ## `let Duration.lt (a: Duration) (b: Duration): Bool`
 
+Whether `a` is shorter than `b`.
+
+Spelled out rather than `<`, because ordered comparison in this
+language works on `Int`, `Float` and `String` and not on structs.
+`==` does work, since that one is structural.
 
 ## `let Duration.le (a: Duration) (b: Duration): Bool`
 
+Whether `a` is no longer than `b`.
+
+Spelled out rather than `<`, because ordered comparison in this
+language works on `Int`, `Float` and `String` and not on structs.
+`==` does work, since that one is structural.
 
 ## `let Duration.gt (a: Duration) (b: Duration): Bool`
 
+Whether `a` is longer than `b`.
+
+Spelled out rather than `<`, because ordered comparison in this
+language works on `Int`, `Float` and `String` and not on structs.
+`==` does work, since that one is structural.
 
 ## `let Duration.ge (a: Duration) (b: Duration): Bool`
 
+Whether `a` is at least as long as `b`.
+
+Spelled out rather than `<`, because ordered comparison in this
+language works on `Int`, `Float` and `String` and not on structs.
+`==` does work, since that one is structural.
 
 ## `let Duration.min (a: Duration) (b: Duration): Duration`
 
+The shorter of two durations.
 
 ## `let Duration.max (a: Duration) (b: Duration): Duration`
 
+The longer of two durations.
 
 ## `let now_millis (): Int`
 
@@ -177,9 +222,13 @@ is right there; only `era` can go negative and it uses the floor.
 
 ## `let weekday_name (weekday: Int): String`
 
+The English name of a weekday, 0 being Sunday, as `Time.utc`
+reports it. Out-of-range numbers give an empty string.
 
 ## `let month_name (month: Int): String`
 
+The English name of a month, 1 being January, as `Time.utc` reports
+it. Out-of-range numbers give an empty string.
 
 ## `let iso8601 (epoch: Int): String`
 

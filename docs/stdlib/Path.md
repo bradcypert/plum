@@ -36,6 +36,13 @@ silently escapes the directory they meant to stay inside.
 
 ## `let join (a: String) (b: String): String`
 
+Joins two path segments with the platform separator, cleaning the
+result.
+
+A trailing separator on `a` or a leading one on `b` does not produce
+a doubled separator. **An absolute `b` wins**: joining `/etc` onto
+`/home/x` gives `/etc`, matching every other language's `join` and
+the shell's own reading of an absolute path.
 
 ## `let basename (p: String): String`
 
@@ -49,6 +56,14 @@ separator is `.` -- the directory it is in.
 
 ## `let extension (p: String): String`
 
+The extension of the last segment, without its dot, or empty when
+there is none.
+
+A leading dot does not start an extension: `.gitignore` is a name,
+not an extension, and returns nothing. `archive.tar.gz` gives
+`gz` --
+the LAST dot wins, so `stem` and `extension` always recombine into
+the original name.
 
 ## `let stem (p: String): String`
 

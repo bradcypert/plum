@@ -20,6 +20,13 @@ re-invoke itself.
 
 ## `let make_dir (path: String): Result[Unit, String]`
 
+Creates one directory. The PARENT must already exist; this makes a
+single level, not a path.
+
+`Err` when the parent is missing, when the name is taken by a file,
+or when permission is refused. A directory that already exists is
+also an `Err`, so a caller who does not care should check
+`Os.exists` first.
 
 ## `let rename_file (from: String) (to: String): Result[Unit, String]`
 
@@ -29,6 +36,9 @@ half-written file.
 
 ## `let remove_file (path: String): Result[Unit, String]`
 
+Deletes a file. `Err` when it is not there, when it is a directory,
+or when permission is refused — `Os.remove_tree` is the one for
+directories.
 
 ## `let remove_tree (path: String): Result[Unit, String]`
 
@@ -57,9 +67,17 @@ ordinary variants.
 
 ## `let read_file (path: String): Result[String, String]`
 
+Reads a whole file as text.
+
+`Err` when the file is missing, unreadable, or not valid UTF-8. Use
+`Os.read_bytes` for a file that is not text, or that might not be.
 
 ## `let write_file (path: String) (contents: String): Result[Unit, String]`
 
+Writes text to a file, creating it or REPLACING what was there.
+
+The parent directory must exist. Nothing is written on failure, so
+a full disk leaves the old contents rather than a truncated file.
 
 ## `let read_bytes (path: String): Result[Bytes, String]`
 
@@ -69,6 +87,10 @@ array is empty only when the file could not be opened at all, so
 
 ## `let write_bytes (path: String) (data: Bytes): Result[Unit, String]`
 
+Writes bytes to a file, creating it or REPLACING what was there.
+
+The `Bytes` counterpart to `Os.write_file`: use this for anything
+that is not text, and for text you have already encoded.
 
 ## `let append_bytes (path: String) (data: Bytes): Result[Unit, String]`
 
@@ -76,6 +98,14 @@ Creates the file when it does not exist, the way `>>` does.
 
 ## `handle File`
 
+An open file. **Closed when this value dies**, including on a
+panic, so a file opened in a scope needs no cleanup.
+
+`File.close` is still offered and still returns a `Result`, because
+closing can fail: a buffered write is flushed by the close, and that
+is exactly when a full disk is discovered. Call it when that error
+matters; rely on the handle when it does not. Closing twice is
+harmless.
 
 ## `enum Mode`
 
@@ -123,6 +153,14 @@ run afterwards, is harmless.
 
 ## `struct ProcessResult`
 
+What a finished process left behind.
+
+`exit_code` is the child's own status: a non-zero one is an ordinary
+result, not an error. Failing to START the process is the `Err`.
+What a finished process left behind.
+
+`exit_code` is the child's own status: a non-zero one is an ordinary
+result, not an error. Failing to START the process is the `Err`.
 
 ## `let run_process (program: String) (args: Array[String]): Result[ProcessResult, String]`
 
@@ -131,9 +169,16 @@ could not be started at all.
 
 ## `let cwd (): Result[String, String]`
 
+The process's current working directory, as an absolute path.
 
 ## `let chdir (path: String): Result[Unit, String]`
 
+Changes the process's working directory.
+
+Affects the WHOLE process, including every relative path used
+afterwards and every child it spawns — so a library that changes it
+and does not change it back has altered something its caller never
+agreed to.
 
 ## `let home_dir (): Option[String]`
 
@@ -233,6 +278,14 @@ the two can be compared without a conversion.
 
 ## `let list_dir (path: String): Result[Array[String], String]`
 
+Lists a directory's entries by NAME, without `.` or `..`, in
+whatever order the filesystem gives.
+
+Names, not paths: join them onto the directory with `Path.join` to
+get something you can open.
 
 ## `let is_directory (path: String): Result[Bool, String]`
 
+Whether the path is a directory. `Ok(false)` for a file, and for
+something that is not there at all — use `Os.exists` to tell those
+apart.
