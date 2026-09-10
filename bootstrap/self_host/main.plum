@@ -407,13 +407,41 @@ let doc_has_flag (argv: Array[String]) (flag: String) (i: Int): Bool =
     else if argv[i] == flag { true }
     else { doc_has_flag(argv, flag, i + 1) }
 
+// `--home "Label=url"` puts a link out of the reference and back to
+// whatever contains it.
+//
+// A generated reference is almost never the whole site -- it sits under
+// a project's own pages, and a reader who arrives at one declaration
+// from a search result is otherwise stuck inside it with no way up.
+//
+// It takes a LABEL as well as a URL because the tool cannot know what
+// the surrounding site is called, and "Home" is the wrong answer for
+// most of them. Split on the FIRST `=`, since a URL may contain more.
+let doc_home_link (spec: String): String =
+    if String.is_empty(spec) { "" }
+    else {
+        match String.index_of(spec, "=") {
+            None => "",
+            Some(i) => {
+                let label = doc_html_escape(String.slice(spec, 0, i));
+                let url = doc_html_escape(String.slice(spec, i + 1, spec.len()));
+                "<p class=\"home\"><a href=\"${url}\">&larr; ${label}</a></p>\n"
+            },
+        }
+    }
+
+let doc_flag_value (argv: Array[String]) (flag: String) (i: Int) (fallback: String): String =
+    if i + 1 >= argv.len() { fallback }
+    else if argv[i] == flag { argv[i + 1] }
+    else { doc_flag_value(argv, flag, i + 1, fallback) }
+
 let doc_out_dir (argv: Array[String]) (i: Int) (fallback: String): String =
     if i + 1 >= argv.len() { fallback }
     else if argv[i] == "-o" { argv[i + 1] }
     else { doc_out_dir(argv, i + 1, fallback) }
 
-let cmd_doc (dir: String) (out: String) (html: Bool): Unit =
-    cmd_doc_render(collect_project(dir), out, html)
+let cmd_doc (dir: String) (out: String) (html: Bool) (home: String): Unit =
+    cmd_doc_render(collect_project(dir), out, html, home)
 
 // The standard library documents itself through the SAME generator.
 //
@@ -426,19 +454,19 @@ let cmd_doc (dir: String) (out: String) (html: Bool): Unit =
 // The prelude is included under its own name. It is what a program gets
 // without asking, so leaving it out would document everything except
 // the part nobody has to opt into.
-let cmd_doc_stdlib (out: String) (html: Bool): Unit = {
+let cmd_doc_stdlib (out: String) (html: Bool) (home: String): Unit = {
     let prelude = parser.with_module(codegen.cg_with_prelude(parser.ProgramNode { items: [] }).items, "prelude");
     let std = codegen.cg_std_items(all_std_uses(()));
-    cmd_doc_render(Array.concat(prelude, std), out, html)
+    cmd_doc_render(Array.concat(prelude, std), out, html, home)
 }
 
 let cmd_doc_items (items: Array[parser.ItemNode]) (out: String): Unit =
-    cmd_doc_render(items, out, false)
+    cmd_doc_render(items, out, false, "")
 
-let cmd_doc_render (items: Array[parser.ItemNode]) (out: String) (html: Bool): Unit = {
+let cmd_doc_render (items: Array[parser.ItemNode]) (out: String) (html: Bool) (home: String): Unit = {
     doc_make_dirs(out);
     let mods = sorted_namespaces(doc_modules(items, 0, []), 0);
-    if html { doc_write_html(items, mods, out) }
+    if html { doc_write_html(items, mods, out, home) }
     else {
         doc_write_modules(items, mods, out, 0);
         println("wrote ${mods.len().to_string()} module(s) to ${out}")
@@ -716,14 +744,19 @@ let doc_html_page (title: String) (nav: String) (body: String): String =
         .concat("<title>${doc_html_escape(title)}</title>\n")
         .concat("<link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n")
         .concat("<nav>\n${nav}</nav>\n<main>\n${body}</main>\n")
+        .concat("<script src=\"search-index.js\"></script>\n<script src=\"search.js\"></script>\n")
         .concat("</body>\n</html>\n")
 
-let doc_html_nav (mods: Array[String]) (items: Array[parser.ItemNode]) (i: Int) (acc: String): String =
-    if i >= mods.len() { "<p class=\"brand\"><a href=\"index.html\">API reference</a></p>\n<ul>\n".concat(acc).concat("</ul>\n") }
+let doc_html_nav (home: String) (mods: Array[String]) (items: Array[parser.ItemNode]) (i: Int) (acc: String): String =
+    if i >= mods.len() {
+        home.concat("<p class=\"brand\"><a href=\"index.html\">API reference</a></p>\n")
+            .concat(doc_search_box(()))
+            .concat("<ul>\n").concat(acc).concat("</ul>\n")
+    }
     else {
         let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
         let subs = doc_html_nav_ns(mods[i], nss, 0, "");
-        doc_html_nav(mods, items, i + 1,
+        doc_html_nav(home, mods, items, i + 1,
             acc.concat("<li><a href=\"${mods[i]}.html\">${doc_html_escape(mods[i])}</a>${subs}</li>\n"))
     }
 
@@ -827,6 +860,25 @@ let doc_css (): String = Array.join([
     "}",
     "p code { background: var(--surface); padding: 0.08em 0.3em; border-radius: 2px; }",
     "a { color: var(--accent); }",
+    "nav .home { margin: 0 0 0.75rem; font-size: 0.85rem; }",
+    "nav .home a { color: var(--muted); text-decoration: none; }",
+    "nav .home a:hover { color: var(--accent); }",
+    ".search { position: relative; margin: 0 0 1.25rem; }",
+    "#q {",
+    "  width: 100%; padding: 0.4rem 0.55rem; border-radius: 3px;",
+    "  border: 1px solid var(--rule); background: var(--bg); color: var(--fg);",
+    "  font: inherit;",
+    "}",
+    "#q:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }",
+    "#results {",
+    "  list-style: none; margin: 0.3rem 0 0; padding: 0.25rem;",
+    "  position: absolute; z-index: 5; left: 0; right: 0; max-height: 60vh; overflow-y: auto;",
+    "  background: var(--bg); border: 1px solid var(--rule); border-radius: 3px;",
+    "}",
+    "#results li { margin: 0; }",
+    "#results a { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; }",
+    "#results a span { color: var(--muted); font-size: 0.85em; }",
+    "#results .none { color: var(--muted); padding: 0.2rem 0.4rem; }",
     "@media (max-width: 800px) {",
     "  body { grid-template-columns: 1fr; gap: 0; }",
     "  nav { position: static; max-height: none; border-bottom: 1px solid var(--rule); }",
@@ -834,9 +886,11 @@ let doc_css (): String = Array.join([
 ], "\n")
 
 // Every page of the reference, plus the stylesheet and a front door.
-let doc_write_html (items: Array[parser.ItemNode]) (mods: Array[String]) (out: String): Unit = {
-    let nav = doc_html_nav(mods, items, 0, "");
+let doc_write_html (items: Array[parser.ItemNode]) (mods: Array[String]) (out: String) (home: String): Unit = {
+    let nav = doc_html_nav(doc_home_link(home), mods, items, 0, "");
     doc_write("${out}/style.css", doc_css(()));
+    doc_write("${out}/search-index.js", doc_search_index(items, mods));
+    doc_write("${out}/search.js", doc_search_js(()));
     doc_write("${out}/index.html", doc_html_page("API reference", nav,
         "  <h1>API reference</h1>\n  <p class=\"sub\">Generated by <code>plum doc</code> from the source.</p>\n"
             .concat(doc_html_index(mods, 0, ""))));
@@ -904,6 +958,102 @@ let doc_signature_of (item: parser.ItemNode): Option[String] =
         IKExtern(_) => None,
         IKUse(_) => None,
     }
+
+
+// --- Search ---
+//
+// 335 declarations is past the point where scrolling is the way in, so
+// the pages carry a filter.
+//
+// The index is a JS file assigning a global, NOT a `.json` fetched at
+// load. `fetch` is blocked under `file://` by every browser's origin
+// rules, and these pages are meant to work from a folder on disk — so
+// an index that needed fetching would leave search broken in exactly
+// the case the no-network rule exists to protect.
+//
+// Encoded with the prelude's own `json_stringify`, rather than by
+// pasting strings together: a signature contains quotes and
+// backslashes, and hand-rolled escaping is how a search index becomes a
+// syntax error.
+let doc_search_index (items: Array[parser.ItemNode]) (mods: Array[String]): String =
+    "window.PLUM_DOCS = ".concat(json_stringify(JsonArray(doc_index_mods(items, mods, 0, [])))).concat(";\n")
+
+let doc_index_mods (items: Array[parser.ItemNode]) (mods: Array[String]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+    if i >= mods.len() { acc }
+    else {
+        let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
+        doc_index_mods(items, mods, i + 1, doc_index_items(items, mods[i], nss, 0, acc))
+    }
+
+let doc_index_items (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (i: Int) (acc: Array[JsonValue]): Array[JsonValue] =
+    if i >= items.len() { acc }
+    else {
+        let mine = if String.is_empty(items[i].module) { "root" } else { items[i].module };
+        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) { doc_index_items(items, m, nss, i + 1, acc) }
+        else {
+            match doc_signature_of(items[i]) {
+                None => doc_index_items(items, m, nss, i + 1, acc),
+                Some(sig) => {
+                    let ns = doc_ns_of_in(nss, items[i]);
+                    let page = if String.is_empty(ns) { "${m}.html" } else { "${m}.${ns}.html" };
+                    doc_index_items(items, m, nss, i + 1, acc.push(JsonObject([
+                        JsonEntry { key: "n", value: JsonString(doc_anchor(sig)) },
+                        JsonEntry { key: "s", value: JsonString(sig) },
+                        JsonEntry { key: "u", value: JsonString("${page}#${doc_anchor(sig)}") },
+                        JsonEntry { key: "m", value: JsonString(if String.is_empty(ns) { m } else { "${m}.${ns}" }) },
+                    ])))
+                },
+            }
+        }
+    }
+
+// Filtering, in as little script as does the job.
+//
+// Substring rather than fuzzy: a reader searching a reference knows
+// roughly what the thing is called, and fuzzy matching in a list this
+// size mostly produces confident wrong answers above the right one.
+// Ranked so a name that STARTS with the query comes first.
+let doc_search_js (): String = Array.join([
+    "(function () {",
+    "  var box = document.getElementById('q');",
+    "  var out = document.getElementById('results');",
+    "  if (!box || !out || !window.PLUM_DOCS) { return; }",
+    "  function render(rows) {",
+    "    if (!rows.length) { out.innerHTML = '<li class=\"none\">No match</li>'; return; }",
+    "    out.innerHTML = rows.slice(0, 40).map(function (r) {",
+    "      return '<li><a href=\"' + r.u + '\"><code>' + r.n + '</code>' +",
+    "             '<span>' + r.m + '</span></a></li>';",
+    "    }).join('');",
+    "  }",
+    "  box.addEventListener('input', function () {",
+    "    var q = box.value.trim().toLowerCase();",
+    "    if (!q) { out.innerHTML = ''; out.hidden = true; return; }",
+    "    out.hidden = false;",
+    "    var starts = [], contains = [];",
+    "    for (var i = 0; i < window.PLUM_DOCS.length; i++) {",
+    "      var r = window.PLUM_DOCS[i], n = r.n.toLowerCase();",
+    "      if (n.indexOf(q) === 0) { starts.push(r); }",
+    "      else if (n.indexOf(q) > 0 || r.s.toLowerCase().indexOf(q) >= 0) { contains.push(r); }",
+    "    }",
+    "    render(starts.concat(contains));",
+    "  });",
+    "  box.addEventListener('keydown', function (e) {",
+    "    if (e.key === 'Escape') { box.value = ''; out.innerHTML = ''; out.hidden = true; box.blur(); }",
+    "  });",
+    "  document.addEventListener('keydown', function (e) {",
+    "    if (e.key === '/' && document.activeElement !== box) { e.preventDefault(); box.focus(); }",
+    "  });",
+    "})();",
+], "\n")
+
+// The box itself, on every page — a reference is entered from a link
+// far more often than from its front door, so search has to be wherever
+// the reader lands.
+let doc_search_box (): String =
+    "<form class=\"search\" onsubmit=\"return false;\">\n"
+        .concat("<input id=\"q\" type=\"search\" placeholder=\"Search (/)\" autocomplete=\"off\" spellcheck=\"false\">\n")
+        .concat("<ul id=\"results\" hidden></ul>\n</form>\n"
+)
 
 pub let cmd_stdlib_reference (unit: Unit): Unit = {
     let prelude = codegen.cg_with_prelude(parser.ProgramNode { items: [] }).items;
@@ -1969,7 +2119,7 @@ pub let plum_version (): String = "0.0.26"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
-    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | new <name> | version | help | lsp | complete <project-dir>");
+    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
     println("");
     println("  --trace             a stack trace on stderr when the program dies.");
     println("                      Tail recursion still runs in constant stack space.");
@@ -2945,7 +3095,8 @@ let main (): Unit = {
         // place whichever order they are written in.
         let html = doc_has_flag(argv, "--html", 0);
         let out = doc_out_dir(argv, 0, "docs");
-        if argv[1] == "--stdlib" { cmd_doc_stdlib(out, html) } else { cmd_doc(argv[1], out, html) }
+        let home = doc_flag_value(argv, "--home", 0, "");
+        if argv[1] == "--stdlib" { cmd_doc_stdlib(out, html, home) } else { cmd_doc(argv[1], out, html, home) }
     } else if argv.len() >= 1 && argv[0] == "stdlib-reference" {
         // Before the `argv.len() < 2` guard for the same reason
         // `version` is, and the comment above is why this was checked

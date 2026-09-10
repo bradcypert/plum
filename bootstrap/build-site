@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# Builds plumlang.org into `site/public`.
+#
+# Two generators, one tree:
+#
+#   Hugo         prose, from `site/content` -- most of which is copied
+#                out of the repository root Markdown by this script, so
+#                each document has exactly one source of truth.
+#   `plum doc`   the API reference, verbatim into `public/api`.
+#
+# The reference is deliberately not run through Hugo. It is the
+# compiler's own output, and it has to look here exactly as it looks
+# for someone who ran `plum doc` on their own package -- otherwise the
+# site quietly stops being a demonstration of the tool it documents.
+#
+#   bootstrap/build-site           # build into site/public
+#   bootstrap/build-site --serve   # build, then `hugo server` for local work
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+plum="${PLUM:-./sh}"
+repo="https://github.com/bradcypert/plum"
+
+if ! command -v hugo >/dev/null 2>&1; then
+    echo "build-site: hugo is not on PATH" >&2
+    echo "  https://gohugo.io/installation/" >&2
+    exit 1
+fi
+
+# --- Prose --------------------------------------------------------
+#
+# Each root document becomes a page. The leading `# Heading` is dropped
+# because the layout emits the title itself; leaving it would show the
+# title twice, once as a page heading and once as prose.
+#
+# Links between root documents (`TUTORIAL.md`) are rewritten to site
+# paths (`/tutorial/`), so the same file reads correctly on GitHub and
+# here without a second copy. Every OTHER root document -- README,
+# DESIGN, MAINTENANCE -- becomes a link to the file on GitHub rather
+# than a dead relative link, because those are not published here.
+page() {
+    local src="$1" slug="$2" title="$3" blurb="$4" toc="$5"
+    local dst="site/content/${slug}.md"
+    {
+        echo "---"
+        echo "title: \"${title}\""
+        echo "blurb: \"${blurb}\""
+        echo "toc: ${toc}"
+        echo "sourcefile: \"${src}\""
+        echo "---"
+        echo
+        awk 'NR == 1 && /^# / { next } { print }' "$src" \
+            | sed -E 's@\]\(TUTORIAL\.md@](/tutorial/@g;
+                      s@\]\(GRAMMAR\.md@](/grammar/@g;
+                      s@\]\(VISION\.md@](/vision/@g;
+                      s@\]\(PORTING\.md@](/porting/@g;
+                      s@\]\(DESIGN\.md@](/design/@g;
+                      s@\]\(STDLIB\.md@](/api/index.html@g' \
+            | sed -E "s@\]\(([A-Z_]+\.md)@](${repo}/blob/main/\1@g"
+    } > "$dst"
+    echo "  ${dst}"
+}
+
+echo "prose:"
+page TUTORIAL.md tutorial "Tutorial" \
+     "From \`plum new\` to a program with tests, in twenty minutes." true
+page GRAMMAR.md  grammar  "Grammar" \
+     "The whole language, as a grammar." true
+page VISION.md   vision   "Vision" \
+     "What Plum is for, and what it is deliberately not." false
+page PORTING.md  porting  "Porting" \
+     "What a new platform costs, and what is already paid." true
+
+# --- Prose site ---------------------------------------------------
+
+echo "hugo:"
+hugo --source site --minify --quiet || exit 1
+
+# --- API reference ------------------------------------------------
+#
+# After Hugo, because `cleanDestinationDir` empties `public` first.
+echo "reference:"
+"$plum" doc --stdlib --html -o site/public/api --home "Plum=/" || exit 1
+
+pages=$(find site/public -name '*.html' | wc -l | tr -d ' ')
+echo "built ${pages} page(s) into site/public"
+
+if [ "${1:-}" = "--serve" ]; then
+    echo "serving http://localhost:1313/ (the reference is at /api/index.html)"
+    hugo server --source site --disableFastRender
+fi

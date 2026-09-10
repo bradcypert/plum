@@ -1,0 +1,13 @@
+{{ define "main" }}
+<article>
+  <h1>{{ .Title }}</h1>
+  {{ with .Params.blurb }}<p class="blurb">{{ . }}</p>{{ end }}
+  {{ if .Params.toc }}
+    <nav class="toc" aria-label="On this page">{{ .TableOfContents }}</nav>
+  {{ end }}
+  {{ .Content }}
+  {{ with .Params.sourcefile }}
+    <p class="provenance">Generated from <code>{{ . }}</code> in the repository.</p>
+  {{ end }}
+</article>
+{{ end }}

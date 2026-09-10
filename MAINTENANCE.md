@@ -29,6 +29,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-version` | the version string, the tag and the built binary agree | <1s |
 | `help-check` | `plum help`/`--help`/`-h` print usage, extra args ignored | <1s |
 | `check-docs` | `docs/stdlib/` matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 3s |
+| `check-site-links` | a built site links only to pages it contains. Not in the loop above — it needs `build-site` to have run first, and CI runs the pair | <1s |
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
@@ -818,3 +819,43 @@ Worth knowing before you "fix" them:
   passes. Check both forms when a lookup is on a checking path.
 - **`ity_namespace` must return the BARE name.** An associated function
   is declared `let Circle.area (..)` whatever module it lives in.
+
+## The website
+
+[plumlang.org](https://plumlang.org) is built on deploy and never
+committed. `.github/workflows/site.yml` builds the compiler from the
+seed, runs `bootstrap/build-site`, and publishes `site/public`.
+
+```sh
+bootstrap/build-site           # into site/public
+bootstrap/build-site --serve   # and then hugo server on :1313
+```
+
+Two generators feed one tree, and the split matters:
+
+- **Hugo** renders the prose from `site/content`. Most of that content
+  is *copied out of the repository root Markdown by `build-site`*, so
+  each document has exactly one source of truth and the site cannot
+  drift from the repo. Editing `site/content/tutorial.md` edits a file
+  that is regenerated and gitignored; edit `TUTORIAL.md`.
+  `site/content/_index.md` and `site/content/install.md` are the two
+  hand-written pages, and they are tracked.
+- **`plum doc --stdlib --html`** renders `/api`, verbatim, after Hugo
+  has run — Hugo's `cleanDestinationDir` empties `public` first, so the
+  order is not arbitrary. It is deliberately *not* run through Hugo:
+  the reference has to look here exactly as it looks for someone who
+  ran `plum doc` on their own package, or the site stops being a
+  demonstration of the tool it documents.
+
+The two generators know nothing about each other, so the links
+*between* them are the ones nothing else checks — that is what
+`check-site-links` is for, and it is why it looks at unquoted
+attributes as well as quoted ones (Hugo's `--minify` drops the quotes,
+and a quoted-only pattern reports a clean bill of health for a site it
+never looked at).
+
+**The palette is duplicated on purpose.** `site/static/style.css` and
+`doc_css()` in `bootstrap/self_host/main.plum` define the same
+variables. The reference must stand alone in a folder on someone's disk
+with no build step and no network, so it cannot import a stylesheet
+from the site. Change one, change the other.

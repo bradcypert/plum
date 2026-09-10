@@ -1,0 +1,9 @@
+<header class="site">
+  <a class="brand" href="{{ "/" | relURL }}">Plum</a>
+  <nav>
+    {{ range .Site.Menus.main }}
+      <a href="{{ .URL | relURL }}"{{ if $.IsMenuCurrent "main" . }} aria-current="page"{{ end }}>{{ .Name }}</a>
+    {{ end }}
+    <a href="{{ .Site.Params.repo }}">Source</a>
+  </nav>
+</header>
