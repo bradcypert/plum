@@ -568,6 +568,18 @@ Worth knowing before you "fix" them:
   wrong. Semantic key events are #35 and deliberately NOT here: that is
   pure Plum with no C, so it is the most vendorable piece and the one
   where a frozen API would hurt most.
+- **Doc comments are `///`; `//` is a note to maintainers.** They reach
+  the AST as `ItemNode.doc`, read from the gap the lexer already records
+  between tokens. **A comment never becomes a token** — that is the
+  constraint that keeps the `.tokens` goldens and `lossless-check`
+  untouched, and a `TokComment` in the stream would be a far more
+  invasive change than this.
+- **A blank line severs a doc run.** Only the gap's FINAL line is
+  skipped (the token's own indentation); every other empty line ends the
+  block. Skipping empties generally is the obvious rule and is wrong —
+  it attaches a block that was deliberately separated.
+  `exec_corpus/doc_comments` covers this and the first-item-in-a-file
+  case, which token index 0 makes easy to get wrong.
 - **Raw mode clears `ISIG` on purpose.** A default SIGINT ends a process
   WITHOUT running `atexit`, so Ctrl+C with signals still enabled would
   leave the terminal raw — defeating the handles. As a byte, the program

@@ -208,11 +208,25 @@ pub enum ItemKindNode {
 // concatenated into one flat list -- so by the time a type error is
 // reported there is no ambient "current file" left to attribute it to.
 // See `typecheck/infer.plum`'s `fail_tc`.
-pub struct ItemNode { pub is_pub: Bool, pub module: String, pub kind: ItemKindNode, pub path: String, pub start: Int, pub end: Int }
+// `doc` is the `///` block written immediately above this item, with
+// the slashes and one leading space stripped, or "" when there is none.
+//
+// TRIVIA, kept on the item rather than recovered later by walking
+// source offsets. The token stream is untouched -- a comment never
+// becomes a token -- so the `.tokens` goldens and `lossless-check` mean
+// exactly what they meant before. What changed is that the gap between
+// two tokens, which the lexer already records losslessly, is now
+// INTERPRETED at the one point that knows what it belongs to.
+//
+// `///` and not `//`, because a comment above a declaration is not
+// automatically documentation: this compiler's own standard library has
+// 882 comment lines and a dozen of them cite CI harnesses and issue
+// numbers. The author says which is which.
+pub struct ItemNode { pub is_pub: Bool, pub module: String, pub kind: ItemKindNode, pub path: String, pub doc: String, pub start: Int, pub end: Int }
 
 // Stamps a module name onto every item parsed from one file.
 pub let with_module (items: Array[ItemNode]) (m: String): Array[ItemNode] =
-    Array.map(items, |it| ItemNode { is_pub: it.is_pub, module: m, kind: it.kind, path: it.path, start: it.start, end: it.end })
+    Array.map(items, |it| ItemNode { is_pub: it.is_pub, module: m, kind: it.kind, path: it.path, doc: it.doc, start: it.start, end: it.end })
 pub struct ProgramNode { pub items: Array[ItemNode] }
 
 // The stdlib modules a program can `use`. THE list -- `codegen`'s
@@ -301,6 +315,59 @@ let CTX: Ref[SourceContext] = ref(SourceContext { path: "", source: "", starts: 
 
 pub let set_source_context (path: String) (source: String) (starts: Array[Int]) (ends: Array[Int]): Unit =
     CTX.set(SourceContext { path: path, source: source, starts: starts, ends: ends })
+
+// The `///` block immediately above the token at `pos`.
+//
+// Reads the GAP the lexer already records -- everything between the end
+// of the previous token and the start of this one -- and keeps the run
+// of `///` lines that ends at this token. A blank line or an ordinary
+// `//` line ENDS the run, so a doc block separated from what it
+// documents does not attach to it, and a maintenance note written just
+// above a declaration does not become its documentation.
+pub let doc_before (pos: Int): String = {
+    let ctx = CTX.get();
+    if pos < 0 || pos >= ctx.starts.len() || ctx.source == "" { "" }
+    else {
+        // The FIRST token's gap runs from the start of the file, which
+        // is the same rule `lexer.trivia_before` uses. Treating it as
+        // "no gap" silently dropped the documentation on whatever item
+        // a file happened to declare first -- and a module's first
+        // declaration is exactly the one most likely to carry it.
+        let from = if pos == 0 { 0 } else { ctx.ends[pos - 1] };
+        doc_lines_of(String.lines(String.slice(ctx.source, from, ctx.starts[pos])))
+    }
+}
+
+// Walks the gap's lines BACKWARDS from the token, so only the run
+// touching the declaration is taken.
+let doc_lines_of (lines: Array[String]): String =
+    Array.join(Array.reverse(doc_run(lines, lines.len() - 1, [])), "\n")
+
+let doc_run (lines: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
+    if i < 0 { acc }
+    else {
+        let t = String.trim(lines[i]);
+        // ONLY the final element is skipped: it is the partial line
+        // holding the token's own indentation, and has no newline after
+        // it. Every other empty line is a real blank line and SEVERS
+        // the run -- a block separated from a declaration by a blank
+        // line is not documenting it.
+        //
+        // Skipping empties generally is the obvious rule and is wrong;
+        // it ate the separating line and attached the block anyway,
+        // which `exec_corpus/doc_comments` caught.
+        if i == lines.len() - 1 && String.is_empty(t) { doc_run(lines, i - 1, acc) }
+        else if !String.starts_with(t, "///") { acc }
+        else { doc_run(lines, i - 1, acc.push(strip_doc_marker(t))) }
+    }
+
+// `/// text` -> `text`, and a bare `///` -> "". One space after the
+// marker is the convention and is removed; further indentation is the
+// author's and is kept, so an indented example survives.
+let strip_doc_marker (line: String): String = {
+    let body = String.slice(line, 3, String.char_len(line));
+    if String.starts_with(body, " ") { String.slice(body, 1, String.char_len(body)) } else { body }
+}
 
 // Where the token at `pos` starts, as a character offset -- or -1 when
 // no source context is set, which is what every AST position degrades
@@ -393,11 +460,11 @@ let parse_item (tokens: Array[lexer.Token]) (pos: Int): ItemResult = {
     let pub_bump = bump_if(tokens, pos, TokPub);
     let start = pub_bump.next_pos;
     match tokens[start] {
-        TokLet => { let r = parse_let_def(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKLet(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
-        TokStruct => { let r = parse_struct_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKStruct(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
-        TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKEnum(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
-        TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKExtern(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
-        TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKUse(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
+        TokLet => { let r = parse_let_def(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKLet(r.value), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
+        TokStruct => { let r = parse_struct_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKStruct(r.value), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
+        TokEnum => { let r = parse_enum_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKEnum(r.value), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
+        TokExtern => { let r = parse_extern_block(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKExtern(r.value), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
+        TokUse => { let r = parse_use_decl(tokens, start); ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKUse(r.value), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos } },
         // `handle` is a CONTEXTUAL keyword: it is only an item
         // introducer here, at the start of an item, and stays an
         // ordinary identifier everywhere else. It has to be -- this
@@ -407,12 +474,12 @@ let parse_item (tokens: Array[lexer.Token]) (pos: Int): ItemResult = {
         // itself. Same treatment as `require`/`ensure`.
         TokIdent(word) => if word == "handle" {
             let r = parse_handle_decl(tokens, start);
-            ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKHandle(r.value), path: current_path(()), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos }
+            ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKHandle(r.value), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos }
         } else {
             fail_at(start, "expected an item (let/struct/enum/extern/handle/use)");
-            ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start }
+            ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start }
         },
-        _ => { fail_at(start, "expected an item (let/struct/enum/extern/handle/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start } },
+        _ => { fail_at(start, "expected an item (let/struct/enum/extern/handle/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start } },
     }
 }
 

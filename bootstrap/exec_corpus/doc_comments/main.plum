@@ -1,0 +1,38 @@
+/// Doc comments are `///`, and reach the AST as trivia (issue #37).
+///
+/// This fixture is checked by the compiler PARSING ITSELF: `plum spans`
+/// reports each item with the documentation attached to it, so what is
+/// asserted is the mechanism rather than a rendering of it.
+///
+/// The distinctions that matter are all here — a `///` block reaches
+/// the item, an ordinary `//` does not, a blank line severs the run,
+/// and the FIRST item in a file is not a special case.
+pub struct Documented { pub value: Int }
+
+// An ordinary comment. It documents nothing: `///` is what says "this
+// is for a reader of the API", and this compiler's own standard library
+// has a dozen comments citing CI harnesses and issue numbers that have
+// no business in published documentation.
+pub let undocumented (x: Int): Int = x + 1
+
+/// The first line.
+/// The second line, which joins it.
+pub let two_lines (x: Int): Int = x
+
+/// This block is separated from the declaration by a blank line, so it
+/// documents nothing.
+
+pub let severed (x: Int): Int = x
+
+/// A bare `///` line inside a block becomes an empty line, so
+///
+/// paragraphs survive.
+pub let paragraphs (x: Int): Int = x
+
+let main (): Unit = {
+    println("${undocumented(1)} ${two_lines(2)} ${severed(3)} ${paragraphs(4)}");
+    // Bound first: an interpolation cannot contain braces of its own,
+    // so a struct literal has to be a `let`. GRAMMAR.md says so.
+    let d = Documented { value: 5 };
+    println("value ${d.value}")
+}

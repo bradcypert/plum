@@ -20243,3 +20243,59 @@ diagnosis.
 This is the first thing in the repository to depend on cleanup-on-panic
 from issue #1, and the clearest argument for it: without that, every one
 of these handles is a promise kept only when nothing goes wrong.
+
+## `plum doc`, and comments that reach the tree (2026-09-09)
+
+The README is 1,704 lines, and 1,275 lines of documentation are written
+and unreadable: the standard library carries doc comments on 813
+declarations, and `STDLIB.md` is 425 lines of bare signatures with none
+of that prose. Both are the same problem, and generating from source
+fixes both. Issue #37.
+
+### `///`, because not every comment is documentation
+
+There was no such convention -- zero occurrences -- so "the comment
+above a declaration" meant ALL of it. Publishing verbatim would have
+shipped a dozen lines citing CI harnesses and issue numbers alongside
+genuinely good user documentation. `///` lets the author say which is
+which, and the fixture pins the difference: an ordinary `//` above a
+declaration produces no documentation at all.
+
+### Trivia, without touching the token stream
+
+The alternative was to recover comments by walking source offsets, the
+way `fmt` does. Trivia is the better end state -- one representation,
+usable by `plum doc` and by LSP hover, which today shows a signature and
+could show prose.
+
+The cost turned out to be far smaller than it looks, and the reason is
+the design constraint worth keeping: **a comment never becomes a
+token.** The lexer already records every gap between two tokens
+losslessly -- that is what makes `lossless-check` possible -- and the
+parser already carries a `SourceContext` with the source and every
+offset. So the gap is now INTERPRETED at the one point that knows what
+it belongs to, and `ItemNode` gained a `doc` field. The 98 `.tokens`
+goldens and `lossless-check` pass untouched, because nothing about the
+token stream changed.
+
+A `TokComment` in the stream would have been the invasive version, and
+is not what "trivia" has to mean.
+
+### Two bugs, both found by the fixture asserting the distinctions
+
+**The first item in a file got nothing.** Token index 0 has no previous
+token, and the guard against reading `ends[-1]` rejected it outright
+rather than starting the gap at the beginning of the file. A module's
+first declaration is the one most likely to carry documentation, so this
+was a quiet, systematic hole: one file, one missing block, no error.
+
+**A blank line did not sever a run.** The rule skipped trailing empty
+lines while the run was still empty -- which ate the very blank line
+that was supposed to separate a block from the declaration below it, and
+attached it anyway. Only the gap's FINAL line may be skipped, because
+that one is the token's own indentation and has no newline after it.
+
+Both were written into `exec_corpus/doc_comments` before the
+implementation, as cases that ought to differ. Neither would have been
+noticed by generating documentation and reading it, because both produce
+plausible output.
