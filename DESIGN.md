@@ -20371,3 +20371,37 @@ directory that cannot be created is indistinguishable from one that is
 already there. `plum doc` now creates each prefix in turn -- a
 user-facing command should not fail because a parent directory is
 missing.
+
+### Hover shows the documentation (2026-09-09)
+
+The last increment of #37, and the one that justified carrying comments
+as trivia rather than recovering them by walking source offsets: hover
+and `plum doc` now read the SAME `ItemNode.doc`.
+
+There are two hover paths and only one of them wanted this. The
+checker's path answers for LOCALS -- it knows a local's inferred type,
+which the name index does not -- and a local has no documentation to
+show. The name-index path answers for top-level declarations, which is
+where a `///` block lives.
+
+`Def` gained a `doc` field carried through the definitions JSON, kept
+separate from `detail` rather than folded into it: a signature and its
+prose are rendered differently, and joining them would leave the
+renderer unable to tell them apart again.
+
+**Markdown only when there is something to show.** A documented
+declaration fences its signature as `plum` and puts the prose beneath
+it; an undocumented one keeps the plain-text answer it always had.
+Wrapping a bare signature in Markdown gains nothing and costs anything
+that renders fences badly.
+
+That second case is the one worth asserting, and `lsp-smoke` does:
+breaking the markdown branch fails the three new assertions and leaves
+the two "unchanged behaviour" ones green, which is what says the fixture
+is measuring the difference rather than the feature.
+
+One detail found while wiring it: `Completion` and `Def` are parsed from
+JSON by two functions whose `kind`/`detail` lines are identical, so a
+patch aimed at one landed in the other and the checker caught it as
+`struct lsp.Completion has no field named doc`. Worth knowing that the
+two are that similar, since the next person adding a field will meet it.

@@ -78,7 +78,7 @@ printf 'struct P { x: Int }\n\nlet f (p: P): Int = {\n    let n = p.x;\n    n + 
 # part of `$work`'s own project and poisons the diagnostics the earlier
 # assertions look for. That is exactly what happened on the first
 # attempt.
-live=$(native_path "$(mktemp -d)"); trap 'rm -rf "$work" "$live" "$multi" "$compl" "$sel"' EXIT
+live=$(native_path "$(mktemp -d)"); trap 'rm -rf "$work" "$live" "$multi" "$compl" "$sel" "$docp"' EXIT
 printf 'let main (): Unit = println("clean on disk")\n' > "$live/main.plum"
 # A multi-file project: the error lives in `other.plum` while the edit
 # happens in `main.plum`. The diagnostic must be attributed to the file
@@ -97,8 +97,14 @@ printf 'enum Shape { Circle(Int), Square(Int) }\nlet area (s: Shape): Int = matc
 # root for the same reason `live` has one.
 sel=$(native_path "$(mktemp -d)")
 printf 'let total (xs: Array[Int]): Int = Array.fold(xs, 0, |a, v| a + v * 2)\n' > "$sel/main.plum"
+# A SIXTH project, for hover over a DOCUMENTED declaration. Its own root
+# for the same reason every other one has one: adding a `///` block to
+# any project above would shift the line numbers its assertions depend
+# on, which is how the fixtures here have always been kept independent.
+docp=$(native_path "$(mktemp -d)")
+printf '/// Scales a value.\n///\n/// Named `scale` rather than `mul` because it reads as an operation on\n/// the thing.\npub let scale (n: Int): Int = n * 2\n\n// An ordinary comment, which is NOT documentation.\npub let plain (n: Int): Int = n\n' > "$docp/main.plum"
 
-"$PY_BIN" - "$work" "$live" "$multi" "$compl" "$work/fmt" "$sel" > "$work/session.bin" <<'PY'
+"$PY_BIN" - "$work" "$live" "$multi" "$compl" "$work/fmt" "$sel" "$docp" > "$work/session.bin" <<'PY'
 import json, sys
 d = sys.argv[1]
 live = sys.argv[2]
@@ -106,6 +112,7 @@ multi = sys.argv[3]
 compl = sys.argv[4]
 fmtd = sys.argv[5]
 sel = sys.argv[6]
+docp = sys.argv[7]
 msgs = [
   {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}},
   # --- completion. The position is ignored: this server offers NAMES,
@@ -121,6 +128,13 @@ msgs = [
   # FIELDS, not the project-wide name list -- which is the whole
   # difference between the two kinds of completion.
   {"jsonrpc":"2.0","id":8,"method":"textDocument/completion","params":{"textDocument":{"uri":"file://%s/main.plum" % compl},"position":{"line":3,"character":26}}},
+  # --- hover over a DOCUMENTED declaration. `///` above `scale` must
+  # reach the hover as MARKDOWN, with the signature fenced and the prose
+  # below it; `plain` carries an ordinary `//` and must still answer in
+  # plain text, unchanged.
+  {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % docp}}},
+  {"jsonrpc":"2.0","id":20,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://%s/main.plum" % docp},"position":{"line":4,"character":8}}},
+  {"jsonrpc":"2.0","id":21,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://%s/main.plum" % docp},"position":{"line":7,"character":8}}},
   {"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file://%s/main.plum" % d}}},
   # hover and go-to-definition on `P` in `let f (p: P)` -- line 2, char 11
   {"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file://%s/main.plum" % d},"position":{"line":2,"character":10}}},
@@ -244,6 +258,14 @@ echo "$out" | grep -q '"id":6,"result":{"uri":[^}]*"line":3' || { echo "FAIL: go
 # now carry a range, and go-to-definition must return one that is WIDER
 # than a point -- `n` is one character, so `character:8` to `character:9`.
 echo "$out" | grep -q '"id":3,"result":{"contents":[^}]*}[^}]*"range"' || { echo "FAIL: hover carries no range"; fail=1; }
+
+# Documentation reaches hover, as markdown, with the signature fenced.
+echo "$out" | grep -q '"id":20,.*"kind":"markdown"' || { echo "FAIL: a documented hover is not markdown"; fail=1; }
+echo "$out" | grep -q '"id":20,.*plum\\nlet scale (n: Int): Int\\n' || { echo "FAIL: hover did not fence the signature"; fail=1; }
+echo "$out" | grep -q '"id":20,.*Named `scale` rather than `mul`' || { echo "FAIL: hover did not carry the doc prose"; fail=1; }
+# An ORDINARY comment is not documentation: that hover is unchanged.
+echo "$out" | grep -q '"id":21,.*"kind":"plaintext"' || { echo "FAIL: an undocumented hover stopped being plain text"; fail=1; }
+echo "$out" | grep -q '"id":21,.*"value":"let plain (n: Int): Int"' || { echo "FAIL: an undocumented hover lost its signature"; fail=1; }
 echo "$out" | grep -q '"id":6,"result":{"uri":[^}]*"character":8}[^}]*"character":9}' || { echo "FAIL: definition range is not the width of the name"; fail=1; }
 # --- expand-selection ---
 #

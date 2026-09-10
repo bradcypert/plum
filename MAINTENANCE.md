@@ -569,6 +569,11 @@ Worth knowing before you "fix" them:
   wrong. Semantic key events are #35 and deliberately NOT here: that is
   pure Plum with no C, so it is the most vendorable piece and the one
   where a frozen API would hurt most.
+- **Hover is markdown only when there IS documentation.** A `///` block
+  makes hover fence the signature and show the prose below it; a
+  declaration without one keeps the plain-text answer it always had.
+  `lsp-smoke` asserts both, because the second is the one a change here
+  would quietly break.
 - **`docs/stdlib/` and `STDLIB.md` are both GENERATED; the README links
   to them and lists nothing itself.** The README's hand-written list was
   accurate and unchecked, which is a promise that holds only while

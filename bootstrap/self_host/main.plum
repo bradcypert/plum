@@ -861,6 +861,10 @@ let def_entry (item: parser.ItemNode): Option[JsonValue] =
 // line and column, and resolving one needs the file the item came
 // from. Read per item: an index is built once per request, and a
 // project is a handful of files.
+// `doc` rides along with every definition, so hover can show what was
+// written above the declaration. It is the same `ItemNode.doc` that
+// `plum doc` publishes -- one representation, which is what carrying
+// comments as trivia bought.
 let def_json (item: parser.ItemNode) (name: String) (kind: String) (detail: String): JsonValue = {
     let lc = match Os.read_file(item.path) {
         Ok(src) => lexer.line_col(src, name_offset(src, item.start, item.end, name)),
@@ -873,6 +877,7 @@ let def_json (item: parser.ItemNode) (name: String) (kind: String) (detail: Stri
         JsonEntry { key: "col", value: JsonNumber(lc.col.to_float()) },
         JsonEntry { key: "kind", value: JsonString(kind) },
         JsonEntry { key: "detail", value: JsonString(detail) },
+        JsonEntry { key: "doc", value: JsonString(item.doc) },
     ])
 }
 
