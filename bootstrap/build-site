@@ -7,6 +7,10 @@
 #                out of the repository root Markdown by this script, so
 #                each document has exactly one source of truth.
 #   `plum doc`   the API reference, verbatim into `public/api`.
+#   `plum highlight`
+#                the Plum code blocks in the prose, after Hugo has
+#                rendered them -- Chroma has no Plum lexer, and the
+#                compiler's own is the only one that cannot be wrong.
 #
 # The reference is deliberately not run through Hugo. It is the
 # compiler's own output, and it has to look here exactly as it looks
@@ -83,6 +87,11 @@ hugo --source site --minify --quiet || exit 1
 # After Hugo, because `cleanDestinationDir` empties `public` first.
 echo "reference:"
 "$plum" doc --stdlib --html -o site/public/api --home "Plum=/" || exit 1
+
+# Chroma has no Plum lexer, so Hugo left the ```plum fences plain.
+# The compiler highlights them, after the fact, with its own lexer.
+echo "highlighting:"
+PLUM="$plum" python3 bootstrap/highlight-site site/public || exit 1
 
 pages=$(find site/public -name '*.html' | wc -l | tr -d ' ')
 echo "built ${pages} page(s) into site/public"

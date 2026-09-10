@@ -113,6 +113,14 @@ jobs:
         run: ./bootstrap/check-doc-names
       - name: the stdlib reference matches the compiler
         run: ./bootstrap/check-stdlib-reference
+      - name: the generated docs match the compiler
+        run: ./bootstrap/check-docs
+      # The same lossless token stream `lossless-check` and the
+      # formatter stand on, used for a third thing: strip the tags out
+      # of `plum highlight` and the source comes back byte for byte.
+      # Documentation is code people copy.
+      - name: highlighting does not corrupt code
+        run: ./bootstrap/highlight-check
       - name: debug and release builds differ
         run: ./bootstrap/check-build-modes
 

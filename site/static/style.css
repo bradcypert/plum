@@ -20,6 +20,28 @@
   }
 }
 
+/* Syntax highlighting. These classes are emitted by `plum highlight`
+ * -- the compiler's own lexer -- and the same names and values are in
+ * `doc_css()`, for the reason given at the top of this file. */
+:root {
+  --hl-k: #8a3a67; --hl-t: #1f6f6b; --hl-s: #3f6b2b; --hl-n: #8a5a1a;
+  --hl-c: #8a8290; --hl-d: #6d6270; --hl-o: #7a7280;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hl-k: #dd91bb; --hl-t: #6fc7c0; --hl-s: #9ccf7a; --hl-n: #e0b170;
+    --hl-c: #7d7386; --hl-d: #9c90a2; --hl-o: #9b93a4;
+  }
+}
+pre .k { color: var(--hl-k); }
+pre .t { color: var(--hl-t); }
+pre .s { color: var(--hl-s); }
+pre .n { color: var(--hl-n); }
+pre .c { color: var(--hl-c); font-style: italic; }
+pre .d { color: var(--hl-d); font-style: italic; }
+pre .o { color: var(--hl-o); }
+pre .f { color: inherit; font-weight: 600; }
+
 * { box-sizing: border-box; }
 
 body {

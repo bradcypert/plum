@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+"""Proves `plum highlight` cannot corrupt the code it highlights.
+
+The claim is exact: strip the tags out of the output, undo the HTML
+escaping, and you have the input back BYTE FOR BYTE. Not "close", not
+"close enough to read" -- identical.
+
+That is the property that matters, because the output is documentation
+people copy and paste, and a highlighter that drops a character
+produces a snippet that looks right and does not compile.
+
+It holds because `plum highlight` is the REAL lexer rather than a regex
+approximation, and `lexer.tokenize_spanned` is lossless: token spans
+plus the gaps between them are the whole file. This harness is what
+keeps that true, and it is the reason a highlighter for Plum could be
+written at all without maintaining a second, worse lexer.
+
+Run over every corpus fixture and every file of the compiler's own
+source -- the largest and strangest Plum in the repository, including
+the 69KB parser.
+
+    bootstrap/highlight-check
+    PLUM=./plum bootstrap/highlight-check
+"""
+import glob
+import html
+import os
+import re
+import subprocess
+import sys
+
+PATTERNS = (
+    "bootstrap/corpus/*/*.plum",
+    "bootstrap/exec_corpus/*/*.plum",
+    "bootstrap/abort_corpus/*/*.plum",
+    "bootstrap/typecheck_corpus/*/*.plum",
+    "bootstrap/self_host/*.plum",
+    "bootstrap/self_host/*/*.plum",
+    "examples/*/*.plum",
+)
+
+TAGS = re.compile(r"</?span[^>]*>")
+
+
+def main() -> int:
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.chdir(root)
+    plum = os.environ.get("PLUM", "./sh")
+
+    files = sorted({f for pattern in PATTERNS for f in glob.glob(pattern)})
+    if not files:
+        print("highlight-check: found no source files to check", file=sys.stderr)
+        return 1
+
+    failed = 0
+    for src in files:
+        done = subprocess.run([plum, "highlight", src], capture_output=True, text=True)
+        if done.returncode != 0:
+            failed += 1
+            print(f"FAIL {src}: highlight exited {done.returncode}")
+            print("    " + done.stderr.strip().replace("\n", "\n    "))
+            continue
+
+        with open(src, encoding="utf8") as handle:
+            original = handle.read()
+        plain = html.unescape(TAGS.sub("", done.stdout))
+
+        if plain == original:
+            continue
+
+        failed += 1
+        print(f"FAIL {src}: round trip differs")
+        for i, (before, after) in enumerate(zip(original.splitlines(), plain.splitlines())):
+            if before != after:
+                print(f"    line {i + 1}")
+                print(f"    in:  {before!r}")
+                print(f"    out: {after!r}")
+                break
+        else:
+            print(f"    length {len(original)} in, {len(plain)} out")
+
+    if failed:
+        print(f"highlight-check: FAILED ({failed} of {len(files)})")
+        return 1
+
+    print(f"highlight-check: {len(files)} file(s) round-trip identical")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

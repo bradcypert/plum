@@ -1344,8 +1344,19 @@ Documentation comes from `///` comments in the source, so the same
 mechanism works on your own code:
 
 ```
-plum doc my-project -o docs
+plum doc my-project -o docs           # Markdown, one page per module
+plum doc my-project -o docs --html    # a browsable site, with search
 ```
+
+`plum highlight <file>` prints Plum source as marked-up HTML, using the
+compiler's own lexer rather than a regex approximation of it. It is what
+colours the code on [plumlang.org](https://plumlang.org) — every static
+site generator ships a highlighter, and none of them ships one for a
+language this young. Because it is the real lexer over a lossless token
+stream, stripping the tags back out gives the source byte for byte, and
+`bootstrap/highlight-check` asserts exactly that over every fixture and
+every file of the compiler's own source. A snippet that does not lex
+renders plain rather than not at all.
 
 ## Examples
 

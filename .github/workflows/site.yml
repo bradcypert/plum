@@ -63,6 +63,11 @@ jobs:
       - name: build the site
         run: PLUM=./plum ./bootstrap/build-site
 
+      # The site build calls `plum highlight` on every code block; this
+      # is what says the highlighter did not eat any of them.
+      - name: check the highlighter round-trips
+        run: PLUM=./plum ./bootstrap/highlight-check
+
       # A published site with a dead link is worse than one page late.
       - name: check internal links
         run: python3 bootstrap/check-site-links site/public

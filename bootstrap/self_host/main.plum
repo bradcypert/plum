@@ -59,6 +59,7 @@ use lsp;
 use typecheck;
 use codegen;
 use shims;
+use highlight;
 use Path;
 
 // `query <project> <path> <line> <col>` -- what is the type of the
@@ -769,7 +770,7 @@ let doc_html_nav_ns (m: String) (nss: Array[String]) (i: Int) (acc: String): Str
 // the signature's own name, so a link can point at one entry.
 let doc_html_entry (sig: String) (doc: String): String =
     "    <section class=\"decl\" id=\"${doc_anchor(sig)}\">\n"
-        .concat("      <h2><code>${doc_html_escape(sig)}</code></h2>\n")
+        .concat("      <h2><code>${highlight.hl_html(sig)}</code></h2>\n")
         .concat(doc_html_prose(doc))
         .concat("    </section>\n")
 
@@ -810,6 +811,29 @@ let doc_css (): String = Array.join([
     "    --rule: #2e2636; --accent: #dd91bb; --surface: #1f1927;",
     "  }",
     "}",
+    // Syntax highlighting. The classes are emitted by `plum highlight`,
+    // which is the compiler's OWN lexer -- see highlight/highlight.plum.
+    // These same names and values are in site/static/style.css; the
+    // reference has to stand alone with no network, so it cannot import
+    // them from anywhere.
+    ":root {",
+    "  --hl-k: #8a3a67; --hl-t: #1f6f6b; --hl-s: #3f6b2b; --hl-n: #8a5a1a;",
+    "  --hl-c: #8a8290; --hl-d: #6d6270; --hl-o: #7a7280;",
+    "}",
+    "@media (prefers-color-scheme: dark) {",
+    "  :root {",
+    "    --hl-k: #dd91bb; --hl-t: #6fc7c0; --hl-s: #9ccf7a; --hl-n: #e0b170;",
+    "    --hl-c: #7d7386; --hl-d: #9c90a2; --hl-o: #9b93a4;",
+    "  }",
+    "}",
+    ".k { color: var(--hl-k); }",
+    ".t { color: var(--hl-t); }",
+    ".s { color: var(--hl-s); }",
+    ".n { color: var(--hl-n); }",
+    ".c { color: var(--hl-c); font-style: italic; }",
+    ".d { color: var(--hl-d); font-style: italic; }",
+    ".o { color: var(--hl-o); }",
+    ".f { color: inherit; font-weight: 600; }",
     "* { box-sizing: border-box; }",
     "body {",
     "  margin: 0; background: var(--bg); color: var(--fg);",
@@ -958,7 +982,6 @@ let doc_signature_of (item: parser.ItemNode): Option[String] =
         IKExtern(_) => None,
         IKUse(_) => None,
     }
-
 
 // --- Search ---
 //
@@ -2119,7 +2142,7 @@ pub let plum_version (): String = "0.0.26"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
-    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
+    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
     println("");
     println("  --trace             a stack trace on stderr when the program dies.");
     println("                      Tail recursion still runs in constant stack space.");
@@ -3085,6 +3108,16 @@ let main (): Unit = {
         // to print usage because argv.len() is 1, but `plum help
         // build` tries to open `build` as a file.
         usage(());
+    } else if argv.len() >= 2 && argv[0] == "highlight" {
+        // Plum source in, marked-up HTML in. No `<pre>`, no page, no
+        // stylesheet -- just the inside of a code block, so a caller
+        // can put it wherever it is going. `bootstrap/highlight-site`
+        // is one such caller; `plum doc --html` calls the same code
+        // directly.
+        match Os.read_file(argv[1]) {
+            Err(e) => { println("highlight: ${argv[1]}: ${e}"); Os.exit_with(1) },
+            Ok(src) => print(highlight.hl_html(src)),
+        }
     } else if argv.len() >= 1 && argv[0] == "lsp" {
         // No file argument: the server talks over stdin/stdout.
         lsp_serve(())

@@ -11,7 +11,7 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version help-check check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
-         self-test stdin-smoke tty-smoke check-docs \
+         self-test stdin-smoke tty-smoke check-docs highlight-check \
          property-check doc-check alloc-check lossless-check fmt-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
@@ -29,6 +29,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-version` | the version string, the tag and the built binary agree | <1s |
 | `help-check` | `plum help`/`--help`/`-h` print usage, extra args ignored | <1s |
 | `check-docs` | `docs/stdlib/` matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 3s |
+| `highlight-check` | `plum highlight` gives the source back byte for byte with the tags stripped, over 294 files — highlighting cannot corrupt code a reader is about to copy | 13s |
 | `check-site-links` | a built site links only to pages it contains. Not in the loop above — it needs `build-site` to have run first, and CI runs the pair | <1s |
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
@@ -840,6 +841,13 @@ Two generators feed one tree, and the split matters:
   that is regenerated and gitignored; edit `TUTORIAL.md`.
   `site/content/_index.md` and `site/content/install.md` are the two
   hand-written pages, and they are tracked.
+- **`plum highlight`** colours the Plum code blocks in the prose,
+  after Hugo has rendered them. Chroma has no Plum lexer, and teaching
+  it about Plum would mean maintaining a second lexer, in Go, in
+  someone else's repository. `bootstrap/highlight-site` runs the real
+  one over the built pages instead. A block the compiler will not lex
+  is left plain rather than dropped — documentation is full of
+  illustrative fragments, and they still have to render.
 - **`plum doc --stdlib --html`** renders `/api`, verbatim, after Hugo
   has run — Hugo's `cleanDestinationDir` empties `public` first, so the
   order is not arbitrary. It is deliberately *not* run through Hugo:

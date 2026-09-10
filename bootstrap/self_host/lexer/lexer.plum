@@ -534,10 +534,33 @@ pub let tokenize_spanned (source: String): LexedSource = {
 // these are the whole of what "lossless" means here: walk the tokens in
 // order, emit the gap then the token, and you have the file back.
 pub let token_text (source: String) (lexed: LexedSource) (i: Int): String =
-    slice_chars(chars_of(source), lexed.starts[i], lexed.ends[i])
+    token_text_at(source_chars(source), lexed, i)
 
 pub let trivia_before (source: String) (lexed: LexedSource) (i: Int): String =
-    slice_chars(chars_of(source), if i == 0 { 0 } else { lexed.ends[i - 1] }, lexed.starts[i])
+    trivia_before_at(source_chars(source), lexed, i)
+
+// The same two, taking the split source instead of the source.
+//
+// `starts` and `ends` are offsets into `chars_of(source)`, so the two
+// functions above have to split the whole file to answer a question
+// about one token -- 69,000 heap-allocated one-character strings, per
+// call, on `parser.plum`. That is fine for the one-shot use they were
+// written for (the parser asking about the gap before a single token)
+// and quadratic for anything that walks the stream, which is what
+// every LOSSLESS consumer does by definition.
+//
+// Every such consumer inside this file already hoisted the split by
+// hand -- `token_texts`, `render_tokens`, `line_col` -- so these just
+// give the same fast path a name that callers outside it can use.
+// `source_chars` exists because `slice_chars` is private and callers
+// should not have to know that the offsets are into `chars_of`.
+pub let source_chars (source: String): Array[String] = chars_of(source)
+
+pub let token_text_at (chars: Array[String]) (lexed: LexedSource) (i: Int): String =
+    slice_chars(chars, lexed.starts[i], lexed.ends[i])
+
+pub let trivia_before_at (chars: Array[String]) (lexed: LexedSource) (i: Int): String =
+    slice_chars(chars, if i == 0 { 0 } else { lexed.ends[i - 1] }, lexed.starts[i])
 
 let slice_chars (chars: Array[String]) (from: Int) (to: Int): String =
     Array.concat_all(Array.slice(chars, from, to))

@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Runs the Plum code blocks in a built site through `plum highlight`.
+
+Hugo highlights code with Chroma, and Chroma has no Plum lexer -- so a
+```plum fence renders as plain text. Teaching Chroma about Plum would
+mean writing a lexer for it, in Go, in someone else's repository, kept
+in step with the real one by hand. Bitwise operators went in this
+month; that lexer would already be wrong.
+
+So the blocks are highlighted here instead, by the compiler, after Hugo
+has run. `plum highlight` is the REAL lexer, so it is right about the
+language by construction, and `bootstrap/highlight-check` proves it
+gives the source back byte for byte with the tags stripped.
+
+The cost is one subprocess per block, which is why this runs over the
+BUILT site rather than the Markdown: by then the blocks are found, and
+there are a few dozen of them.
+
+    bootstrap/highlight-site site/public
+"""
+import html
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+# Hugo's `--minify` drops attribute quotes, so match all three forms.
+# The same lesson as `check-site-links`: a quoted-only pattern silently
+# matches nothing on a minified page and reports success having done
+# nothing at all.
+BLOCK = re.compile(
+    r'(<code(?=[^>]*\bclass\s*=\s*(?:"[^"]*\blanguage-plum\b[^"]*"'
+    r"|'[^']*\blanguage-plum\b[^']*'"
+    r'|language-plum\b))[^>]*>)(.*?)(</code>)',
+    re.DOTALL,
+)
+
+
+def highlight(plum: str, source: str) -> str:
+    """Marked-up HTML for one snippet, or None if the compiler refused."""
+    with tempfile.NamedTemporaryFile("w", suffix=".plum", delete=False, encoding="utf8") as handle:
+        handle.write(source)
+        path = handle.name
+    try:
+        done = subprocess.run([plum, "highlight", path], capture_output=True, text=True)
+    finally:
+        os.unlink(path)
+    return done.stdout if done.returncode == 0 else None
+
+
+def main() -> int:
+    root = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else "site/public")
+    plum = os.environ.get("PLUM", "./sh")
+
+    blocks = 0
+    pages = 0
+    for dirpath, _, filenames in os.walk(root):
+        for name in filenames:
+            if not name.endswith(".html"):
+                continue
+            path = os.path.join(dirpath, name)
+            with open(path, encoding="utf8") as handle:
+                page = handle.read()
+
+            count = 0
+
+            def replace(match: re.Match) -> str:
+                nonlocal count
+                open_tag, body, close_tag = match.groups()
+                # Hugo already escaped the source into HTML; the
+                # highlighter wants the source, and escapes it again
+                # itself.
+                marked = highlight(plum, html.unescape(body))
+                if marked is None:
+                    return match.group(0)
+                count += 1
+                # Trailing newline goes, or every block renders with a
+                # blank last line inside the box.
+                return open_tag + marked.rstrip("\n") + close_tag
+
+            updated = BLOCK.sub(replace, page)
+            if count:
+                with open(path, "w", encoding="utf8") as handle:
+                    handle.write(updated)
+                blocks += count
+                pages += 1
+
+    if blocks == 0:
+        # Not an error -- a site may legitimately have no Plum in it --
+        # but say so, because "0 blocks" and a broken pattern look
+        # identical from the outside otherwise.
+        print("highlight-site: no Plum code blocks found")
+        return 0
+
+    print(f"highlight-site: highlighted {blocks} block(s) across {pages} page(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

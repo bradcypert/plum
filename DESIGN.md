@@ -20468,3 +20468,91 @@ closed is prose and its mark goes back as text.
 And the page count reported modules rather than pages, so a run that
 wrote 25 pages said 12. A module with namespaces writes several, and
 the tool was understating its own work.
+
+## Highlighting, and the lexer that was already lossless (2026-09-10)
+
+The docs site needed syntax highlighting, and the obvious way to get it
+was the wrong one.
+
+Hugo highlights with Chroma, and Chroma has no Plum lexer. The normal
+answer is to write one: a list of keyword strings, a few regexes for
+numbers and strings, published as a Go package and kept in step with the
+real language by hand. Bitwise operators landed two days before this
+work; that lexer would already have been wrong about `^`, and nothing
+would have said so.
+
+The real lexer was available the whole time, and had been made usable
+for this a while ago without anyone noticing. `tokenize_spanned` records
+where every token starts and ends, and `bootstrap/lossless-check`
+already asserted that every gap between two tokens contains nothing but
+trivia. That is precisely the statement "walk the tokens in order, emit
+the gap then the token, and you have the file back". Emit the gap and
+then the token *wrapped in a span*, and you have the file back with
+markup.
+
+So `plum highlight` is 200 lines and cannot be wrong about the language,
+because it does not know anything about the language — it asks. The
+property that falls out is worth more than the correctness:
+
+**Strip the tags out of the output, undo the HTML escaping, and the
+input comes back byte for byte.** `bootstrap/highlight-check` asserts it
+over 294 files: every corpus fixture, every example, and every file of
+the compiler's own source including the 69KB parser. That matters
+because the output is documentation people copy and paste, and a
+highlighter that drops one character produces a snippet that looks right
+and does not compile. No regex highlighter can make that claim about
+anything.
+
+Two smaller decisions:
+
+- **A snippet that does not lex renders plain, not not-at-all.**
+  Documentation is full of illustrative fragments — an elided body, a
+  deliberately wrong program next to the error it produces. Refusing to
+  render those would make the tool useless for the documents it was
+  written for.
+- **Adjacent same-class pieces merge into one span.** Almost every
+  character of punctuation is its own token, so a span-per-token
+  renderer emits two spans for `()` and roughly half of every page
+  becomes repeated tags that say nothing. The walk produces a flat list
+  of pieces and a second pass merges runs.
+
+### The 95x, and where it actually was
+
+The first version took **65 seconds** on `parser.plum`. Two guesses were
+available and the first one was mine and wrong.
+
+The wrong-but-real one: the accumulators were tail-recursive,
+`f(acc.push(x))`, which is how most of this compiler is written. That
+shape is genuinely quadratic here — only a SELF-REBINDING assignment
+(`acc = acc.push(x)`) lets the backend prove the old value is dead and
+grow in place. Fixing it was correct, and bought nothing measurable.
+
+The actual cost was in the lexer's own public API:
+
+```plum
+pub let token_text (source: String) (lexed: LexedSource) (i: Int): String =
+    slice_chars(chars_of(source), lexed.starts[i], lexed.ends[i])
+```
+
+`starts` and `ends` are offsets into `chars_of(source)`, so answering a
+question about *one token* split the whole file into 69,000
+heap-allocated one-character strings — twice per token, since
+`trivia_before` does it too.
+
+This was invisible for as long as it existed because it was never called
+in a loop. The parser asks about the gap before a single token; that is
+one split, and fine. Every *lossless* consumer walks the stream by
+definition, and every such consumer already inside `lexer.plum` —
+`token_texts`, `render_tokens`, `line_col` — had hoisted the split by
+hand. The public functions were the only ones that hadn't, so the first
+caller from outside the file inherited the quadratic.
+
+`source_chars` / `token_text_at` / `trivia_before_at` give that hoisted
+path a name callers outside the file can use. **65s to 0.69s.** The
+fifth accidental O(n²) in this project, and the second found by a new
+consumer walking a structure whose existing consumers had all quietly
+worked around the same thing.
+
+The lesson repeats one this project keeps learning: the interesting
+guess was worth nothing, and the boring convention mismatch at a
+boundary was worth all of it.
