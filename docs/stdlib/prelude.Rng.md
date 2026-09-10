@@ -26,7 +26,7 @@ Lehmer streams with different moduli, subtracted. Period is about
 2^61, which is ample for games and tests.
 
 It is NOT the generator anyone would reach for first. The modern
-answers -- PCG, xoshiro, splitmix64 -- all need wrapping 64-bit
+answers (PCG, xoshiro, splitmix64) all need wrapping 64-bit
 multiplication and bitwise xor/shift, and Plum has NEITHER: `*`
 traps on overflow, and there is no `^`, `&` or `<<` token in the
 language at all. What is left is arithmetic that stays inside an
@@ -42,7 +42,7 @@ outputs.
 
 Any `Int` is a legal seed. It is folded into the two streams'
 legal ranges (each must be non-zero and below its own modulus),
-so no caller has to know what those ranges are -- including
+so no caller has to know what those ranges are, including
 `Rng.from_seed(0)`, which a naive mapping would turn into a
 generator that only ever returns one number.
 
@@ -57,7 +57,7 @@ A float in `[lo, hi)`, and the next generator.
 
 ## `let Rng.int_range (r: Rng) (lo: Int) (hi: Int): (Rng, Int)`
 
-`[lo, hi)` -- the upper bound EXCLUDED, so `int_range(r, 0, xs.len())`
+`[lo, hi)`, the upper bound EXCLUDED, so `int_range(r, 0, xs.len())`
 is an index into `xs` and needs no `- 1` anywhere.
 
 Rejection sampling, not `z % span`. The modulo is biased whenever the
@@ -78,7 +78,7 @@ A boolean, evenly, and the next generator.
 ## `let Rng.shuffle (r: Rng) (xs: Array[T]): (Rng, Array[T])`
 
 Fisher-Yates, walking from the end so every permutation is equally
-likely. The naive version -- swap each element with any other -- is
+likely. The naive version, swapping each element with any other, is
 not uniform, and looks fine until somebody counts.
 
 ## `let Rng.choice (r: Rng) (xs: Array[T]): (Rng, Option[T])`

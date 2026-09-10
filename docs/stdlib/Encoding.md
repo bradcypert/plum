@@ -15,7 +15,7 @@ needs no `use`. Offered here so that a program already reaching for
 Decodes a hex string to bytes, accepting upper and lower case.
 
 Requires an even number of digits. An odd-length string has no
-reading, and guessing one -- a leading zero? a trailing one? --
+reading, and guessing one (a leading zero? a trailing one?)
 would silently produce different bytes than whatever wrote it
 intended.
 
@@ -34,7 +34,7 @@ frame it without being told the length.
 ## `let base64_url_encode (b: Bytes): String`
 
 The URL-safe alphabet (`-` and `_` for `+` and `/`), with padding
-OMITTED -- which is what JWTs and `data:` URLs expect, since `=`
+OMITTED, which is what JWTs and `data:` URLs expect, since `=`
 needs escaping in a query string.
 
 ## `let base64_decode (s: String): Result[Bytes, String]`
@@ -45,7 +45,7 @@ padding as optional.
 Deliberately lenient, and worth knowing rather than discovering: a
 strict pair would reject a URL-safe token handed to the standard
 decoder, which is the most common way this call is written wrong,
-and rejecting it buys nothing -- the two alphabets do not overlap,
+and rejecting it buys nothing; the two alphabets do not overlap,
 so no input has two readings.
 
 What is NOT lenient is an unrecognised character, or a length that

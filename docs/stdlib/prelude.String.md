@@ -10,7 +10,7 @@ Part of [`prelude`](prelude.md).
 
 All of these are built on `chars_of`, which is the one primitive
 in `runtime.plum`. That is what makes them codepoint-safe rather
-than byte-indexed -- `String.slice` can never split a multi-byte
+than byte-indexed, so `String.slice` can never split a multi-byte
 character in half, because it never sees bytes at all.
 The string with its CHARACTERS reversed, not its bytes — so text
 outside ASCII survives.
@@ -35,7 +35,7 @@ The number of CHARACTERS in `s`, which is not `s.len()`.
 
 `.len()` is bytes; everything else in this section is codepoints.
 The two agree on ASCII and part company on anything else, so a
-program that lines text up in columns wants this one -- padding
+program that lines text up in columns wants this one; padding
 computed from a byte count puts an accented name in the wrong place.
 The number of CHARACTERS (codepoints). `String.len` is the number
 of BYTES, and the two differ for anything outside ASCII.
@@ -165,11 +165,11 @@ It used to have a hand-written parser here, on the reasoning that
 dragging a JSON parser in to read a float would be absurd. That
 reasoning cost twice. The hand-written version accumulated the
 fraction digit by digit against a repeatedly-divided 0.1, so
-`0.000001` parsed as 1.0000000000000002e-06 -- invisible until
+`0.000001` parsed as 1.0000000000000002e-06, invisible until
 floats started printing every digit that matters. And its own
 comment admitted the second cost: "no exponent, which is a real
 narrowing, stated rather than discovered". Stated, but it made
-the two compilers DISAGREE -- `String.parse_float("1e3")` gave
+the two compilers DISAGREE. `String.parse_float("1e3")` gave
 1000 under the real compiler and an error here.
 
 The JSON parser was already in this same prelude, already

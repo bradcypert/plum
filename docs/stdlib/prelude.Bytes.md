@@ -36,7 +36,7 @@ sockets, and not all of them are text.
 ## `let Bytes.slice (b: Bytes) (start: Int) (end: Int): Bytes`
 
 BYTE indices, throughout. `Bytes.slice` can and will split a
-multi-byte character in half -- that is the operation `String`
+multi-byte character in half, which is the operation `String`
 deliberately does not offer, and the reason a program reaching for
 bytes reached for them.
 
@@ -60,7 +60,7 @@ The byte at `i` as a number 0-255, or `None` when out of range.
 ## `let Bytes.from_array (xs: Array[Int]): Bytes`
 
 Each element is one byte, 0-255. Values outside that range are
-masked to their low 8 bits rather than rejected -- `from_array` is
+masked to their low 8 bits rather than rejected. `from_array` is
 a construction helper, and a `Result` here would put error handling
 in front of every literal buffer.
 Bytes from numbers. Values outside 0-255 are truncated to their

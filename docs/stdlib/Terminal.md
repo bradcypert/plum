@@ -6,7 +6,7 @@ The terminal PLATFORM LAYER (issue #3): is this a terminal, how big
 is it, and writing to it.
 
 Deliberately the small half. Turning input bytes into semantic key
-events -- `Key.Up`, `Ctrl+C` -- is #35, and it is pure Plum with no
+events (`Key.Up`, `Ctrl+C`) is #35, and it is pure Plum with no
 C in it, which is why it is not here. What belongs in a standard
 library is the part that needs a shim and has no design space to get
 wrong: `isatty` is `isatty`. How to model a modifier key is taste,
@@ -19,7 +19,7 @@ which is the machinery a TUI otherwise writes in C.
 ## `enum Stream`
 
 Which stream to ask about. A closed set of small integers across the
-extern boundary, the same shape `Os.Mode` and `Os.Seek` use -- an
+extern boundary, the same shape `Os.Mode` and `Os.Seek` use: an
 extern taking a file descriptor NUMBER would let a caller pass
 anything at all.
 
@@ -38,7 +38,7 @@ The size of the terminal, in character cells.
 
 ## `let size (): Result[Size, String]`
 
-The terminal's size, in character cells, measured on STDOUT -- the
+The terminal's size, in character cells, measured on STDOUT. The
 size of the thing being drawn to. A program whose stdin is a pipe and
 whose stdout is a terminal still has a size worth knowing.
 
@@ -103,7 +103,7 @@ still enabled would leave the terminal raw. Delivered as a byte, a
 program can exit normally and everything is restored. A raw-mode
 program is responsible for noticing 0x03 and quitting.
 
-`Err` when stdin is not a terminal -- there is nothing to put into
+`Err` when stdin is not a terminal; there is nothing to put into
 raw mode, and pretending otherwise would leave a program reading a
 pipe and waiting for keys that cannot come.
 

@@ -59,7 +59,7 @@ and Rust print for `%x` on a negative, and it is the choice that
 keeps `to_radix` a number conversion rather than a bit dump. For the
 bit pattern, `Int.to_bits` says so in its name.
 
-Radix is clamped to 2..36 -- one digit per character, `0-9a-z`.
+Radix is clamped to 2..36: one digit per character, `0-9a-z`.
 
 ## `let Int.to_hex (n: Int): String`
 
@@ -78,7 +78,7 @@ Octal, signed. See `Int.to_radix` for other bases.
 
 The BIT PATTERN: all 64 bits, two's complement, most significant
 first. This is the one to reach for with a bit field, where a signed
-reading is not what is wanted -- `Int.to_bits(-1)` is sixty-four
+reading is not what is wanted. `Int.to_bits(-1)` is sixty-four
 ones, while `Int.to_binary(-1)` is "-1". Both are right about
 different questions.
 

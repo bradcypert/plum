@@ -1,7 +1,7 @@
 # Porting Plum to other platforms
 
 Plum began as Linux x86_64 only. This is the record of what that
-actually meant, what has been fixed, and what is left — written from
+actually meant, what has been fixed, and what is left, written from
 measurements of this tree rather than from expectations, because the
 first attempt at guessing (see `MAINTENANCE.md`, "hand-kept gap lists
 were wrong three times") was wrong three times.
@@ -57,7 +57,7 @@ The lesson generalises: a libc *constant* baked into generated IR is as
 much a portability hazard as a libc *symbol*, and a quieter one. A
 sweep of every literal the runtime passes to libc found `fseek`'s
 `0`/`2` (universal in practice) and `fopen`'s modes (already `"rb"`/
-`"wb"`, so Windows will not rewrite newlines) — `setlocale` was the
+`"wb"`, so Windows will not rewrite newlines). `setlocale` was the
 only real one. Both the category and the locale name now live in
 `compat_shim.c`, where the C header supplies them.
 
@@ -93,10 +93,10 @@ remains available later as ordinary cleanup.
 
 Every ✅ above is exercised by a CI leg that builds and runs every
 execution fixture on that platform. `dir_shim.c` and `thread_shim.c` needed no
-Windows code at all — MinGW-w64 supplies `dirent.h` and pthreads, which
+Windows code at all, because MinGW-w64 supplies `dirent.h` and pthreads, which
 is why neither is on the list of things that had to be written.
 
-### Unix commands the compiler shelled out to — fixed
+### Unix commands the compiler shelled out to: fixed
 
 These were never in the shims. They were in the compiler's own Plum
 source, so no amount of shim rewriting would have covered them.
@@ -121,7 +121,7 @@ Mac. `native_stdlib/os_shim.c` now answers that question with
 Verified by shadowing `mktemp`, `rm`, `cp` and `mkdir` on `PATH` with
 scripts that log and exit 1, then building a project: the old compiler
 hit them, the new one builds cleanly with zero hits. The only processes
-`plum build` now starts are `clang` — down from four.
+`plum build` now starts are `clang`, down from four.
 
 `plum test` and the language server still re-invoke the compiler
 itself, deliberately: `panic_raw` aborts rather than returning, so a
@@ -140,11 +140,11 @@ in-process type error would take the language server down.
   that cannot link on a Mac.
 - `bootstrap/check-seed` now asserts the seed *carries* every shim in
   `native_stdlib/`. It previously compared only what the seed
-  *produces*, which is invisible to this class of bug on Linux — every
+  *produces*, which is invisible to this class of bug on Linux, since every
   harness passed while the seed was, in fact, unusable on macOS.
 - `bootstrap/platform-smoke`: POSIX `sh`, no ASan, no GNU `timeout`, no
   `./sh` wrapper. Builds and runs every execution fixture through
-  `plum build` — the path a user takes.
+  `plum build`, the path a user takes.
 - `bootstrap/package-release`: packaging plus unpack-and-use
   verification, extracted from inline YAML because `sha256sum` is
   GNU-only.
@@ -153,8 +153,8 @@ in-process type error would take the language server down.
 - `native_stdlib/os_shim.c` and the `Os` standard-library module
   (`temp_dir`, `self_exe`, `make_dir`, `remove_file`, `remove_tree`,
   `copy_tree`), replacing all 16 shell-out sites. This needed a
-  **two-generation** bootstrap — generation 1 carries the new prelude,
-  generation 2 is the first that may call it — and a second seed
+  **two-generation** bootstrap (generation 1 carries the new prelude,
+  generation 2 is the first that may call it) and a second seed
   refresh. `Os.remove_tree` uses `lstat`, so a symlink is removed
   rather than followed into; tested against a symlink pointing outside
   the tree.
@@ -162,7 +162,7 @@ in-process type error would take the language server down.
 **macOS arm64 is verified.** The `macos-15` CI leg is green: the seed
 bootstraps a compiler, that compiler builds a compiler, and every
 execution fixture builds and prints the right answer on Apple Silicon. It took two
-runs — the first found the locale bug described above.
+runs, and the first found the locale bug described above.
 
 The guess about what would break was wrong, which is worth recording.
 Float formatting was expected to differ between glibc and Apple's libc
@@ -173,12 +173,12 @@ good at.
 
 ## Left to do
 
-### Windows — done
+### Windows: done
 
 Windows x86_64 went green on **2026-08-25**: 44 of 44 programs build
 and run under MSYS2/MinGW, and the `continue-on-error` marker came off
 the CI leg in the same commit. The language server followed the same
-day, once `lsp-smoke` could run there — and turned up a bug on its
+day, once `lsp-smoke` could run there, and turned up a bug on its
 first attempt.
 
 **`uri_to_path` stripped a fixed seven characters from `file://`.**
@@ -193,19 +193,20 @@ it.
 The harness had its own version of the same confusion: it handed the
 compiler MSYS paths. Under MSYS2 an `/tmp/...` path is translated when
 passed as an ARGUMENT and not when it is buried inside a JSON string,
-which is where an LSP session puts it — so `platform-smoke` was never
+which is where an LSP session puts it, so `platform-smoke` was never
 affected while `lsp-smoke` could not open a single file. Every path in
 that harness is now converted with `cygpath -m` up front.
 
 The toolchain reasoning, kept because it is the decision everything
 else followed from:
 
-- **MinGW-w64 via MSYS2** — recommended. `dirent`, pthreads and bash all
-  keep working, so the work shrinks to `process_shim.c`, `net_shim.c`,
-  the self-path, and the `mktemp`/`rm`/`cp`/`mkdir` shell-outs.
-- **clang-cl / MSVC** — properly native, considerably more work: all
+- **MinGW-w64 via MSYS2** is the recommended route. `dirent`, pthreads
+  and bash all keep working, so the work shrinks to `process_shim.c`,
+  `net_shim.c`, the self-path, and the `mktemp`/`rm`/`cp`/`mkdir`
+  shell-outs.
+- **clang-cl / MSVC** is properly native and considerably more work: all
   four shims rewritten against Win32 plus a harness story.
-- **WSL only** — document Windows as supported through WSL and stop.
+- **WSL only**: document Windows as supported through WSL and stop.
   Zero work, and defensible for a 0.0.x language.
 
 Under the MinGW route, in order:
@@ -222,7 +223,7 @@ Under the MinGW route, in order:
    an extra layer over it.
 3. ~~Add a `windows-latest` CI leg running `platform-smoke` under
    MSYS2.~~ **Done.**
-4. ~~Get that leg green.~~ **Done, 2026-08-25 — 43 of 43.** It took
+4. ~~Get that leg green.~~ **Done, 2026-08-25, 43 of 43.** It took
    three rounds, and every one was worth more than the analysis that
    would have replaced it: a second `fork` site nobody had read, a
    `sys/socket.h` left outside a guard, and CRLF output hidden behind
@@ -234,7 +235,7 @@ Under the MinGW route, in order:
    each build and hands them all to `clang`, so `net_shim.c` is
    compiled into every `plum build` whether the program opens a socket
    or not. Nothing would have built on Windows until it compiled.
-6. ~~Add the release matrix entry.~~ **Done** — `release.yml` builds
+6. ~~Add the release matrix entry.~~ **Done.** `release.yml` builds
    and publishes `plum-<version>-x86_64-windows.tar.gz`.
 
 ### What was verified before Windows CI could run it
@@ -244,7 +245,7 @@ red. It is recorded because it is the part that made three CI rounds
 enough instead of ten:
 
 - The **command-line quoting** in `process_shim.c` is the highest-risk
-  logic in the port — a Windows path routinely contains a space, and
+  logic in the port, because a Windows path routinely contains a space, and
   getting it wrong silently splits one argument into two. The algorithm
   was extracted and tested on Linux against nine cases, including the
   two that are usually wrong: a trailing backslash before the closing
@@ -253,14 +254,14 @@ enough instead of ten:
   removes a symlink rather than following it into someone else's files.
 - The POSIX path of `process_shim.c` was refactored behind the same
   `plum_spawn_capture` boundary the Windows path implements, and all
-  twelve harnesses still pass — so the port did not change Linux
+  twelve harnesses still pass, so the port did not change Linux
   behaviour, rather than being believed not to.
 - `net_shim.c` was restructured so both platforms share one copy of
   every function, differing only in a handle type, a close call, an
   error sentinel and a one-time init. `bootstrap/net-smoke` still opens
   real TCP and HTTP connections on Linux afterwards.
 
-### Linux arm64 — tier 1 as of 2026-08-26
+### Linux arm64: tier 1 as of 2026-08-26
 
 A `linux-arm64` job runs on `ubuntu-24.04-arm`. It is deliberately the
 HEAVIEST of the non-reference legs: bootstrap-check, the full corpus
@@ -268,7 +269,7 @@ under AddressSanitizer with `detect_leaks=1`, platform-smoke,
 lsp-smoke and the properties.
 
 That is the opposite of how macOS and Windows are treated, and for a
-reason. Those platforms cannot run leak checking at all — LeakSanitizer
+reason. Those platforms cannot run leak checking at all, because LeakSanitizer
 does not exist on Darwin. This one is Linux, so it can. A new
 ARCHITECTURE is exactly where a refcounting or alignment miscompile
 would appear, and a leak in a refcounted language is a miscompile
@@ -279,14 +280,14 @@ bytes would miss the class of bug most worth looking for here.
 Linux x86_64 box, which is free and catches the shim-portability class
 without waiting for CI.
 
-It went green on the first run — bootstrap-check, 64 corpus fixtures
+It went green on the first run: bootstrap-check, 64 corpus fixtures
 under ASan, 102 goldens, platform-smoke, lsp-smoke and the properties,
-in 2m30s — so it earned its release job by the documented rule and has
+in 2m30s, so it earned its release job by the documented rule and has
 one. `install.sh` accepts `arm64-linux` too; it had been refusing it
 with a build-from-source message, which would have been wrong the
 moment the first binary was published.
 
-### Linux arm64 — the original note
+### Linux arm64: the original note
 
 Nearly free once macOS arm64 is green, since that proves the compiler
 produces correct code for the architecture. Mostly a runner change.
@@ -294,7 +295,7 @@ produces correct code for the architecture. Mostly a runner change.
 ## Cross-compiling from Linux
 
 `zig cc` cross-compiles every shim, and links the whole compiler, for
-macOS arm64, macOS x86_64 and Windows x86_64 — from a Linux box, with
+macOS arm64, macOS x86_64 and Windows x86_64, from a Linux box, with
 no Xcode SDK and no Windows toolchain, in **about two seconds**. Zig
 vendors the libc headers and link stubs for all three.
 `bootstrap/cross-check` does exactly this and skips cleanly where `zig`
@@ -302,7 +303,7 @@ is absent.
 
 **It does not replace a platform CI leg, and must not be treated as
 one.** It proves that code compiles and links. Nothing it produces is
-ever executed, so it says nothing about behaviour — not the locale bug,
+ever executed, so it says nothing about behaviour: not the locale bug,
 not the exponent padding, not whether `CreateProcess` actually starts
 `clang`. Every bug this port has hit, except the compile errors, would
 have sailed straight through it. The tier rule stands: a platform is
@@ -317,7 +318,7 @@ the harness passed there, which is the property worth keeping.
 Since 2026-08-27 the harness also drives `plum build --target` on a
 real program, and one leg of that DOES run: the aarch64 binary executes
 under qemu. That is a stronger check than the compile-only ones above,
-but it does not move the tier rule either — one architecture under
+but it does not move the tier rule either. One architecture under
 emulation is not macOS, and it is not Windows.
 
 The rule against cross-building release artifacts matters *more* now
@@ -328,7 +329,7 @@ property worth keeping.
 
 What it *is* worth: closing the compile-error feedback loop from a CI
 round trip down to a second. Three of this port's failures were compile
-errors of one shape — a POSIX header or call left outside a platform
+errors of one shape: a POSIX header or call left outside a platform
 guard, invisible on Linux where the guard is inert.
 
 ### Cost, and what the real cost was
@@ -340,18 +341,18 @@ The real cost was **latency, and only on Intel macOS**: `macos-15`
 (arm64) finishes in under a minute, while `macos-13` sat queued for
 hours. Worse than being slow, a straggling job keeps the whole run
 marked in-progress, and GitHub will not serve *any* job's logs until
-the run completes — so one runner blocked the diagnosis of every other
+the run completes, so one runner blocked the diagnosis of every other
 leg.
 
 **And it was never going to arrive.** The job eventually ended at
-`24h0m1s` — GitHub's job timeout, not a runner. `macos-13` had been
+`24h0m1s`, which is GitHub's job timeout, not a runner. `macos-13` had been
 **retired**: `actions/runner-images` publishes only `macos-15` and
 `macos-26`, each with an x86_64 and an arm64 variant. A `runs-on`
 naming an image that no longer exists does not fail fast; it waits a
 full day and then dies.
 
-Two changes came out of that. Intel macOS is now `macos-15-intel` — the
-x86_64 image of a current OS, which does exist — and **every job in
+Two changes came out of that. Intel macOS is now `macos-15-intel`, the
+x86_64 image of a current OS, which does exist. And **every job in
 both workflows sets `timeout-minutes`**, so a runner that never arrives
 costs minutes rather than a day. Intel macOS remains release-only:
 publishing an Intel binary requires it to pass, and a tag is a place
@@ -364,7 +365,7 @@ text mode, so every `\n` a Plum program wrote became `\r\n`.
 
 It went unnoticed because a second problem cancelled it out. Git for
 Windows defaults to `core.autocrlf=true`, so the checked-in
-`expected.txt` recordings were *also* checked out as CRLF — and two
+`expected.txt` recordings were *also* checked out as CRLF, and two
 wrong things compared equal. 40 of 43 fixtures passed for the wrong
 reason.
 
@@ -405,7 +406,7 @@ net_shim.c:48:10: fatal error: 'sys/socket.h' file not found
 ```
 
 Self-inflicted, and instructive. The Winsock port moved the socket
-headers into a platform guard — but only from `netinet/in.h` down.
+headers into a platform guard, but only from `netinet/in.h` down.
 `sys/types.h` and `sys/socket.h` sat two lines above the edited region
 and stayed outside it. The port looked complete and compiled fine on
 Linux, where the guard is inert.
@@ -425,10 +426,10 @@ The Windows leg earned its place immediately, and so did the macOS one.
   as ten compile errors with line numbers, which is exactly the trade
   the leg exists to make.
 - **A sweep for the same bug class** then found `rmdir` unguarded in
-  `os_shim.c` — MinGW spells it `_rmdir`, like `mkdir`.
+  `os_shim.c`. MinGW spells it `_rmdir`, like `mkdir`.
 - **macOS failed 2 of 43 fixtures**, both non-ASCII case mapping:
   `"Äöü".to_upper()` returned `Äöü` unchanged. The cause had already
-  been found by reading the source — see the locale note above — and
+  been found by reading the source (see the locale note above), and
   the failure confirmed it precisely. ASCII was unaffected, which is
   why only two fixtures noticed and why this would have shipped
   silently.
@@ -438,5 +439,5 @@ The Windows leg earned its place immediately, and so did the macOS one.
   so it compared `main` against `0.0.1`. Only `GITHUB_REF` carries the
   ref type.
 
-The macOS bootstrap itself — seed to compiler to compiler — passed on
+The macOS bootstrap itself, seed to compiler to compiler, passed on
 arm64 on the first attempt.

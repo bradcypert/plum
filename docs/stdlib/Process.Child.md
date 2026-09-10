@@ -36,12 +36,12 @@ exited returns the same result again rather than failing.
 ## `let Child.wait_timeout (c: Child) (d: Time.Duration): Result[Option[ProcessResult], String]`
 
 Waits, but not forever. `None` means the time ran out and the child
-is still going -- it has NOT been signalled, so the caller can wait
+is still going. It has NOT been signalled, so the caller can wait
 again, give up, or `terminate` it.
 
 ## `let Child.terminate (c: Child): Result[Unit, String]`
 
-Asks the child to stop, and returns at once -- the child may still be
+Asks the child to stop, and returns at once; the child may still be
 running when this returns, so a caller that needs it gone should
 `wait` afterwards.
 

@@ -9,13 +9,13 @@ curl -fsSL https://raw.githubusercontent.com/bradcypert/plum/main/install.sh | s
 
 That picks the right archive for your platform, checks it against the
 published checksum, installs `plum` into `~/.local/bin`, and runs it to
-prove it works. It **does not edit your shell configuration** — if that
+prove it works. It **does not edit your shell configuration**. If that
 directory is not on your `PATH` it prints the line to add and stops.
 `PLUM_PREFIX` and `PLUM_VERSION` override where and which.
 
 You need **`clang`** on your `PATH`; the compiler shells out to it to
-assemble and link what it emits. Nothing else is required — the C shims
-Plum programs use are embedded in the compiler itself.
+assemble and link what it emits. Nothing else is required, because the C
+shims Plum programs use are embedded in the compiler itself.
 
 Or take an archive from
 [Releases](https://github.com/bradcypert/plum/releases) directly. It is a
@@ -54,10 +54,10 @@ programs on it. Nothing here is merely expected to work.
 macOS and Windows are a step down from Linux, and it is worth knowing
 why: Plum is reference counted, so a leak is a *miscompile* rather than
 untidiness, and LeakSanitizer does not exist on Darwin. Both Linux
-targets run it — which is why arm64, a different architecture and so the
-likeliest place for a refcounting or alignment miscompile, is held to the
-same bar as x86_64 rather than a lower one. [Porting](/porting/) covers
-what that costs and what is left.
+targets run it, which is why arm64 is held to the same bar as x86_64
+rather than a lower one: it is a different architecture, and so the
+likeliest place for a refcounting or alignment miscompile.
+[Porting](/porting/) covers what that costs and what is left.
 
 ## Building the compiler from source
 
@@ -68,9 +68,9 @@ Same requirement: `clang`, and nothing else.
 ./plum build bootstrap/self_host -o plum
 ```
 
-The first line builds a compiler from `bootstrap/seed/plum.ll` — the
-self-hosted compiler shipped as LLVM IR, because building a compiler
-written in Plum requires a Plum compiler to start from. The second line
+The first line builds a compiler from `bootstrap/seed/plum.ll`, which is
+the self-hosted compiler shipped as LLVM IR. Building a compiler written
+in Plum requires a Plum compiler to start from. The second line
 rebuilds it with itself, and that is the one you keep.
 
 ## Editor support

@@ -29,8 +29,8 @@ Exactly `decimals` places after the point, rounded HALF TO EVEN.
 
 `snprintf("%.*f")` is correctly rounded on every platform and does
 not give the same answer on all of them. glibc and Microsoft's CRT
-agree on every value whose expansion is not an exact tie -- 2.675 is
-really 2.674999..., and both render it 2.67 -- and disagree on ties:
+agree on every value whose expansion is not an exact tie (2.675 is
+really 2.674999..., and both render it 2.67) and disagree on ties:
 glibc rounds 0.5, 1.5, 2.5, 3.5 to 0, 2, 2, 4 and the Microsoft CRT
 to 1, 2, 3, 4.
 
@@ -50,7 +50,7 @@ the thousand ties 0.5 .. 999.5 gives 500,500 rounded away and
 
 **`Float.round` rounds half AWAY from zero and that is not an
 inconsistency.** C specifies `round()` that way regardless of the FP
-mode, because it is arithmetic -- "the nearest integer, ties away" --
+mode, because it is arithmetic: "the nearest integer, ties away",
 while this is rendering. Every language with both has this pair.
 
 --- Why 18 digits is enough to tell a tie from a near-miss ---
@@ -137,7 +137,7 @@ one that knows which quadrant.
 
 ## `let Float.atan2 (y: Float) (x: Float): Float`
 
-`atan2(y, x)`, in that order -- the argument order libm, Go, Python
+`atan2(y, x)`, in that order, matching libm, Go, Python
 and Java all use, and the reason it exists: it knows which QUADRANT
 the point is in, which `atan(y / x)` cannot, and it does not divide
 by zero when `x` is 0.

@@ -2,7 +2,7 @@
 
 Plum is an ML-style language (OCaml/F# family: type inference, algebraic
 data types, pattern matching, `Result`-based errors) for the places a
-garbage collector isn't an option — constrained and embedded hardware, and
+garbage collector isn't an option: constrained and embedded hardware, and
 code that has to sit directly on a C ABI boundary without translation
 friction.
 
@@ -14,7 +14,7 @@ Memory-management philosophy today is a triangle with an empty middle:
   collector rules out constrained hardware and rules out hard latency
   guarantees. You trade control for ease.
 - **Manually-proven languages** (Rust, and C/C++ if "manually careful"
-  counts) give full control and zero overhead anywhere — but the
+  counts) give full control and zero overhead anywhere, but the
   programmer is the proof engine. The borrow checker doesn't manage memory
   for you; it forces you to demonstrate, by hand, in the type system, that
   your code is correct. Every program pays that tax, whether or not it
@@ -26,7 +26,7 @@ Memory-management philosophy today is a triangle with an empty middle:
   compiler-driven in-place mutation, no borrow checker) but targets
   application and scripting use, not hardware. Austral targets the
   hardware/systems space with an ML-ish flavor, but goes the opposite
-  direction on ergonomics — it exposes linear types to the programmer, so
+  direction on ergonomics. It exposes linear types to the programmer, so
   you're back to manually proving things by hand, just with different
   syntax than Rust.
 
@@ -36,15 +36,15 @@ it's genuinely hard, not because it's unwanted.
 
 ## The pitch
 
-Plum is for people who want Rust's reach — real hardware, real C interop,
-no GC — without Rust's proof burden. You write code that looks like it
+Plum is for people who want Rust's reach (real hardware, real C interop,
+no GC) without Rust's proof burden. You write code that looks like it
 assumes a garbage collector exists. The compiler makes it behave like it
 doesn't.
 
 Concretely, that means: reference counting plus compiler-driven
 functional-but-in-place optimization (mutate in place when uniquely
 owned, copy otherwise) as the memory model, invisible in the surface
-language — no linear types, no lifetime annotations, no borrow checker.
+language: no linear types, no lifetime annotations, no borrow checker.
 You get predictable, GC-free memory behavior as a consequence of how the
 compiler treats ordinary-looking immutable code, not because you proved
 anything to it.
@@ -55,15 +55,15 @@ anything to it.
   real, nonzero cost. Plum's bet is that most systems-adjacent code would
   rather pay a small, predictable runtime cost than a large, upfront
   cognitive one. If a workload genuinely needs proven-zero overhead
-  (kernels, the hottest of hot loops), Plum is the wrong tool — reach for
+  (kernels, the hottest of hot loops), Plum is the wrong tool. Reach for
   Rust or Zig.
 - **Not an OCaml replacement.** OCaml's ecosystem, tooling, and GC are
   mature and excellent. If a project can afford a GC, OCaml is a safer
   choice than Plum today and will be for a long time. Plum only wins in
   the specific situations where a GC is disqualifying.
 - **Not chasing every feature a "real" ML language has on day one.** No
-  user-definable typeclasses in v1 (a small built-in set — `Num`, `Eq`,
-  `Show` — covers the common ergonomic wins). No full effect system —
+  user-definable typeclasses in v1 (a small built-in set of `Num`, `Eq`
+  and `Show` covers the common ergonomic wins). No full effect system,
   just a lightweight unsafe/extern marker that propagates from FFI call
   sites. Power features get added once the memory model and interop story
   are proven, not before.
@@ -76,13 +76,13 @@ exists, it doesn't belong in Plum.
 ## Design decisions
 
 Plum is a general-purpose ML-style language first (web APIs, WASM,
-games) — not a systems/embedded language first. The memory model is
+games), not a systems/embedded language first. The memory model is
 justified by frame-time predictability and clean C FFI, not by fitting
 on a microcontroller; embedded reach is a welcome side effect, not the
 goal.
 
-The full reasoning behind every decision below — including the ones that
-changed along the way — lives in `DESIGN.md`. This section is a summary
+The full reasoning behind every decision below, including the ones that
+changed along the way, lives in `DESIGN.md`. This section is a summary
 only; if it ever looks inconsistent with `DESIGN.md`, `DESIGN.md` is the
 one to trust.
 
@@ -91,7 +91,7 @@ one to trust.
   compiler-internal, invisible in the surface type system. Immutable by
   default; an explicit opt-in mutable/shared reference type exists for
   genuinely graph-shaped shared state (game entity graphs, etc.). Cycles
-  handled via `Weak`-by-convention initially (Swift's approach) — a
+  handled via `Weak`-by-convention initially (Swift's approach). A
   scoped, budget-bounded cycle collector for just that shared type is a
   possible later addition, not a v1 commitment.
 - **Concurrency**: Go-inspired tasks + channels + `select`, with channel
@@ -101,18 +101,19 @@ one to trust.
   the escape hatch for genuine cross-task sharing. Scheduler starts on
   OS threads; a real green-thread scheduler is a later upgrade.
 - **Backend**: LLVM, targeting the C ABI directly (not compiling through
-  C source — C gives no reliable tail-call guarantee, which matters for
-  an ML-style language built around recursion).
+  C source, which gives no reliable tail-call guarantee; that matters
+  for an ML-style language built around recursion).
 - **Implementation sequencing**: validate the memory model and FBIP pass
   on a simplified typed IR with a tree-walking interpreter first, before
   investing in the LLVM backend. The risky, unproven part of the design is
   the memory model, not codegen.
 - **Bootstrap language**: Rust, edition 2024.
 - **Error handling**: `Result`-based, explicit. No exceptions as the
-  primary mechanism — simpler runtime, no unwinding machinery to reconcile
-  with refcount cleanup, better fit for constrained targets.
+  primary mechanism: a simpler runtime, no unwinding machinery to
+  reconcile with refcount cleanup, and a better fit for constrained
+  targets.
 - **Syntax**: Rust-shaped surface syntax (braces, `fn`, expression-
-  oriented `match`), not OCaml/F#'s literal look — while keeping ML
+  oriented `match`), not OCaml/F#'s literal look, while keeping ML
   semantics (inference, ADTs, pattern matching, `Result`) underneath.
   The pitch: "Rust with the lifetimes deleted."
 - **Ad-hoc polymorphism (v1)**: a small built-in set of compiler-known

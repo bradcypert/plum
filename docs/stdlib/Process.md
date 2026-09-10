@@ -26,7 +26,7 @@ result, not an error. Failing to START the process is the `Err`.
 ## `let run (opts: Options): Result[ProcessResult, String]`
 
 A non-zero exit code is an ordinary `Ok`. `Err` means the process
-could not be started at all -- including a program that was not found.
+could not be started at all, including a program that was not found.
 
 ## `let start (opts: Options): Result[Child, String]`
 
@@ -34,8 +34,8 @@ Every length is bound BEFORE any `as_cstr`, which is the ordering
 `Net.write` and `File.write` both spell out: the pointer is an
 interior one into the string's cell, and reading a length afterwards
 in the same argument list is how that bug was found on the wire.
-Named `start`, not `spawn`: `spawn` is a KEYWORD -- the
-concurrency construct -- so `Process.spawn(..)` does not parse at
+Named `start`, not `spawn`: `spawn` is a KEYWORD, the
+concurrency construct, so `Process.spawn(..)` does not parse at
 all. Making it parse would mean teaching the parser that a
 keyword after `.` is a member name, which is real grammar work
 for a naming preference. `start` also pairs with `wait`.

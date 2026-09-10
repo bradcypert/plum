@@ -40,7 +40,7 @@ needs its own `Net.close`.
 
 `len` MUST be bound BEFORE `.as_cstr()` runs. `.as_cstr()`
 decrements the string's refcount to produce its copy and FREES
-the original outright if that was the last reference -- exactly
+the original outright if that was the last reference, exactly
 what a direct `tcp_write(fd, "hello")` passes. Reading
 `data.len()` afterwards in the same argument list is a real
 use-after-free, and the real compiler found it the hard way:
@@ -51,7 +51,7 @@ on the wire rather than theorized.
 
 "" on BOTH a clean peer close and a hard socket error. The
 distinction is not preserved in v1, and either way "stop
-reading" is the right response -- which an empty String already
+reading" is the right response, and an empty String already
 signals to a caller looping until end of stream.
 
 ## `let read_bytes (fd: Int) (max_len: Int): Result[Bytes, String]`
@@ -59,8 +59,8 @@ signals to a caller looping until end of stream.
 Three outcomes, and the middle one is why this exists as a
 `Result[Bytes, _]` rather than just `Bytes`:
 
-  Ok(bytes)  with a non-empty buffer -- data
-  Ok(empty)  the peer closed cleanly -- end of stream
+  Ok(bytes)  with a non-empty buffer: data
+  Ok(empty)  the peer closed cleanly: end of stream
   Err(..)    a real socket error
 
 `Net.read` collapses the last two into `""`, a documented v1
@@ -78,7 +78,7 @@ the cell, and reading `.len()` afterwards in the same argument
 list is how that bug was found on the wire the first time.
 
 Binary-safe because `tcp_send` takes an explicit length and never
-calls `strlen` -- a NUL in the buffer is just another byte.
+calls `strlen`, so a NUL in the buffer is just another byte.
 
 ## `let close (fd: Int): Unit`
 

@@ -3,10 +3,11 @@
 This is the formal grammar the compiler's own lexer and parser
 (`bootstrap/self_host/lexer/` and `bootstrap/self_host/parser/`) are
 implemented against, and it is checked by
-`bootstrap/bootstrap-check` — 102 fixtures in `bootstrap/corpus/`, each
-with a recorded token stream and AST. It's derived directly from the decisions recorded in
-`DESIGN.md` and exercised by `TUTORIAL.md`, every snippet of which is
-compiled and run by `bootstrap/doc-check` — if this document and
+`bootstrap/bootstrap-check`: 102 fixtures in `bootstrap/corpus/`, each
+with a recorded token stream and AST. It's derived directly from the
+decisions recorded in `DESIGN.md` and exercised by `TUTORIAL.md`, every
+snippet of which is
+compiled and run by `bootstrap/doc-check`. If this document and
 `DESIGN.md` ever disagree, that's a bug in one of them, not a license to
 pick either.
 
@@ -14,7 +15,7 @@ Notation: `::=` defines a rule, `|` is alternation, `[ x ]` is optional,
 `{ x }` is zero-or-more, `( x )` is grouping, `"x"` is a literal token.
 
 A short "Known ambiguities and implementation notes" section closes this
-document — a few spots are deliberately left slightly loose because
+document. A few spots are deliberately left slightly loose because
 they're genuinely parser-implementation decisions, not open language
 design questions.
 
@@ -28,7 +29,7 @@ ident_continue::= letter | digit | "_"
 Identifier    ::= ident_start { ident_continue }
 ```
 
-`Identifier` is a single lexical category — the lexer does not split
+`Identifier` is a single lexical category; the lexer does not split
 identifiers into separate "type" and "value" token kinds. Capitalization
 is consulted by the parser/resolver, not the lexer, to disambiguate:
 `Shape.Circle` (path/variant access) from `p.x` (field access), and
@@ -48,31 +49,31 @@ Comment       ::= "//" { any character except newline }
 ```
 
 **String interpolation** (`"hello, ${name}!"`) is pure syntax sugar,
-fully resolved by the lexer+parser — `plum-types`/`plum-ir`/both
+fully resolved by the lexer+parser. `plum-types`/`plum-ir`/both
 backends never see it, only the ordinary `.concat()`/`.to_string()`
 calls it desugars into (`"hello, ".concat(name.to_string()).concat("!"
 )`), which already exist and already work generically over every type.
-No `f"..."` prefix — every double-quoted string supports `${...}`. A
+No `f"..."` prefix; every double-quoted string supports `${...}`. A
 bare `$` not immediately followed by `{` is always a literal `$`; `\$`
 escapes a literal `$` immediately before a `{` that would otherwise
 start an interpolation.
 
 `InterpExprSource` is an ordinary `Expr`, parsed by re-lexing the raw
-text between `${` and its matching `}` — but finding that matching `}`
+text between `${` and its matching `}`, but finding that matching `}`
 is DELIBERATELY RESTRICTED (see DESIGN.md's "String interpolation"
 entry for the fuller "why"): only `(`/`[` nesting depth is tracked (so
 `${f(a, g(b))}` works), and a nested double-quoted string's content is
 skipped wholesale so an embedded `}` inside it (`${f("a}b")}`) doesn't
-end the interpolation early — but `{`/`}` themselves are NOT
+end the interpolation early, but `{`/`}` themselves are NOT
 depth-tracked. A block expression, closure with a block body, struct
 literal, `if`/`match`, or a nested string containing ITS OWN `${...}`
-therefore isn't supported directly inside `${...}` — pull it into a
+therefore isn't supported directly inside `${...}`; pull it into a
 variable first. Getting this wrong produces a real, visible parse error
 (the truncated text fails to parse as a valid expression), never
 silently wrong behavior.
 
 Comments and whitespace are insignificant except as token separators (no
-significant indentation — see DESIGN.md, braces were chosen deliberately
+significant indentation. See DESIGN.md: braces were chosen deliberately
 over an offside rule).
 
 Keywords (reserved, cannot be used as `Identifier`): `let`, `mut`, `fn`,
@@ -87,7 +88,7 @@ Item      ::= [ "pub" ] ItemKind
 ItemKind  ::= LetDef | StructDecl | EnumDecl | ExternBlock | UseDecl
 ```
 
-There is no `mod` declaration in this grammar — module boundaries are
+There is no `mod` declaration in this grammar; module boundaries are
 directory-shaped, not syntactic (see DESIGN.md's "Module system"). Every
 `.plum` file in a directory parses as `Program` and contributes to the
 same module.
@@ -108,7 +109,7 @@ EnsureClause  ::= "ensure" Expr [ ":" StringLiteral ]
 
 Zero `Param`s makes this a plain value binding (`let x = 5`); one or
 more makes it a function definition (`let sum n acc = ...`). This is
-deliberate, not a simplification for the grammar's sake — see DESIGN.md,
+deliberate, not a simplification for the grammar's sake. See DESIGN.md,
 "functions are just values" is a load-bearing ML idea, not a decoration.
 
 **Contracts** (`require`/`ensure`, DESIGN.md's "Contracts" section) —
@@ -117,13 +118,13 @@ postcondition, checked just before returning, with `result` bound to
 the function's own return value inside `ensure` clauses only. Every
 `require` must come before any `ensure`; interleaving them is a parse
 error. `require`/`ensure` are **contextual** keywords, not reserved
-words — recognized only in this one grammar slot (the only other legal
+words, recognized only in this one grammar slot (the only other legal
 token there is `=`), so `let require = 5` elsewhere is still ordinary,
 valid Plum. A function with an `ensure` clause can't declare a
-parameter literally named `result` (rejected at parse time — the
+parameter literally named `result` (rejected at parse time; the
 postcondition needs that name for the return value). Both clause kinds
 desugar entirely at parse time into ordinary `assert`-shaped calls
-(`plum-types`/`plum-ir` never see a contract as such) — see DESIGN.md
+(`plum-types`/`plum-ir` never see a contract as such). See DESIGN.md
 for the exact rewrite and its one real trade-off: `ensure` clauses cost
 that function's own tail-call-optimization, since a postcondition has
 to intercept the return value before returning it; `require` alone does
@@ -152,7 +153,7 @@ compiler never interprets, and whose death calls `on_drop` with that
 number. `on_drop` must name an `extern "C"` function taking one `Int`
 and returning nothing.
 
-`handle` is a **contextual keyword** — it introduces an item only at the
+`handle` is a **contextual keyword**; it introduces an item only at the
 start of one, and remains an ordinary identifier everywhere else. It has
 to be: this compiler's own source uses `handle` as a variable and
 parameter name (`dir_open_handle`, `process_free_raw`), so a real
@@ -175,7 +176,7 @@ ExternParamList ::= ExternParam { "," ExternParam }
 ExternParam     ::= Identifier ":" Type
 ```
 
-`fn` and mandatory type annotations survive here on purpose — see
+`fn` and mandatory type annotations survive here on purpose. See
 DESIGN.md, this is a foreign declaration with no body, so there's
 nothing for inference to work from.
 
@@ -187,7 +188,7 @@ Path    ::= Identifier { "." Identifier }
 ```
 
 One rule covers both `use shapes;` (qualify-by-default, the common
-case) and `use shapes.Circle;` (the bare-import escape hatch) — the
+case) and `use shapes.Circle;` (the bare-import escape hatch). The
 grammar doesn't distinguish them, that's a semantic question of what the
 final path segment resolves to, not a syntactic one.
 
@@ -206,19 +207,19 @@ TupleOrFunctionType ::= "(" [ Type { "," Type } [ "," ] ] ")" [ "->" Type ]
 `TupleOrFunctionType` covers all three of its possibilities, decided by
 the arrow and the element count:
 
-- **Function type** — any parenthesized list followed by `"-> Type"`
+- **Function type**: any parenthesized list followed by `"-> Type"`
   (e.g. `(Int, Int) -> Int`, `() -> Int`). Used to annotate a parameter
   that takes a closure, and to declare `extern "C"` callback parameters
   (see DESIGN.md's "FFI and C interop" section).
-- **Grouping** — `(Int)` with no arrow is just `Int`, matching the
+- **Grouping**: `(Int)` with no arrow is just `Int`, matching the
   value-level rule exactly.
-- **Unit** — `()` with no arrow is `Unit`, the unit VALUE's type. Not an
+- **Unit**: `()` with no arrow is `Unit`, the unit VALUE's type. Not an
   empty tuple, which would be a distinct and useless type.
-- **Tuple type** — two or more types with no arrow: `(Int, Float)`.
+- **Tuple type**: two or more types with no arrow: `(Int, Float)`.
 
 The tuple case was added in 2026-08. Plum had tuple VALUES from the
 start but no way to write their type, which meant a tuple could only
-ever be INFERRED — fine for the real type checker, which infers
+ever be INFERRED. That is fine for the real type checker, which infers
 everything, and fatal for the self-hosted one, which requires every
 top-level signature to be annotated. `bootstrap/exec_corpus/tuples/`
 was unrepresentable there for exactly that reason.
@@ -260,7 +261,7 @@ PlaceholderChain ::= "_" { Postfix }
 ```
 
 `CompareExpr` and `RangeExpr` each allow **at most one** operator
-application (non-associative) — `a < b < c` and `a..b..c` are both
+application (non-associative); `a < b < c` and `a..b..c` are both
 grammar errors, not parsed with some implied associativity. See
 DESIGN.md for why (chained comparisons silently meaning something other
 than the mathematical reading is a documented footgun).
@@ -277,7 +278,7 @@ mean `1 << (n + 1)`.
 
 `|` is both the closure delimiter and bitwise-or, and the two never
 collide. A closure literal is `|x| body`, and Plum has **no
-juxtaposition application** — `f x` is not a call — so a `|` can only
+juxtaposition application** (`f x` is not a call), so a `|` can only
 begin a closure where an expression is *expected*, and can only be
 bitwise-or where one has just *ended*. The parser is in exactly one of
 those states at any point, so no lookahead or backtracking is needed.
@@ -291,20 +292,20 @@ reinterpreted.
 **Shift counts** are defined for every value. A count of 64 or more
 gives `0` for `<<` and a sign fill for `>>` (so `-1 >> 99` is `-1`), as
 in Go. A **negative** count aborts the program, alongside division by
-zero and integer overflow — see `bootstrap/abort_corpus/negative_shift`.
+zero and integer overflow. See `bootstrap/abort_corpus/negative_shift`.
 
-**Currying (partial application)** — DESIGN.md's "Currying" section.
+**Currying (partial application)**: DESIGN.md's "Currying" section.
 No grammar change: `PostfixExpr`'s repeated `Arguments` already allowed
-`f(a)(b)` syntactically. What's new is purely semantic — a `Call`
+`f(a)(b)` syntactically. What's new is purely semantic: a `Call`
 supplying FEWER arguments than its callee's own declared arity is now a
 valid PARTIAL APPLICATION (producing a function value over the
 remaining parameters) rather than an arity-mismatch type error, PROVIDED
 at least one argument is supplied (`f()` on a multi-param `f` is
-unaffected — still either the ordinary zero-arg-Unit sugar or a hard
+unaffected, and still either the ordinary zero-arg-Unit sugar or a hard
 error, never a vacuous "give me `f` back") and the callee's type is
 already resolved at that call site (a still-fully-generic, unconstrained
-callee doesn't get this — falls back to the ordinary arity error).
-`f(a)(b)` and `f(a, b)` are provably equivalent under this rule — the
+callee doesn't get this and falls back to the ordinary arity error).
+`f(a)(b)` and `f(a, b)` are provably equivalent under this rule; the
 well-known ML property that also means Plum's own documented `sum (n -
 1) (acc + n)` footgun (missing comma between two single-arg calls) is
 no longer silently different from `sum(n - 1, acc + n)`, just a
@@ -318,27 +319,27 @@ followed by zero or more `Postfix` steps desugars to an implicit
 single-param closure over that chain, e.g. `Array.find(xs, _.toString())`
 means `Array.find(xs, |n| n.toString())`, and `Array.map(xs, _)` (the
 zero-`Postfix` case) means `Array.map(xs, |x| x)`. This is deliberately
-narrow — see DESIGN.md — `_` is recognized only as the receiver of a
+narrow (see DESIGN.md): `_` is recognized only as the receiver of a
 postfix chain that is the *entire* argument, not a general
 Scala-style placeholder usable anywhere in an expression (`_ + 1` is
 a plain parse error, not sugar for `|x| x + 1`).
 
 **Pipe desugaring** (`x |> rhs`, see DESIGN.md's "Operator precedence
 and pipe semantics" for the full rationale): `x |> f(a, b)` normally
-means `f(a, b, x)` — `x` inserted as the LAST argument. If one of
+means `f(a, b, x)`, with `x` inserted as the LAST argument. If one of
 `rhs`'s arguments is a bare `_` (the zero-`Postfix` case of
-`PlaceholderChain` above — the same shape `Array.map(xs, _)` already
+`PlaceholderChain` above; the same shape `Array.map(xs, _)` already
 uses for the identity closure), `x` is spliced in AT that position
 instead: `x |> f(a, _, b)` means `f(a, x, b)`. This matters because most
 stdlib associated functions take their "subject" value FIRST, not
-last — `xs |> Array.map(_, f)` is how to pipe into `Array.map(arr, f)`,
+last; `xs |> Array.map(_, f)` is how to pipe into `Array.map(arr, f)`,
 since plain `xs |> Array.map(f)` would (wrongly) mean `Array.map(f, xs)`.
 More than one `_` in the same call is a compile error, not a silent
 pick of one.
 
 `Postfix` repeats to handle chains like `Ref.new(start)` (`.new` then
 `(start)`, two postfix steps) and `channel[Int]()` (`[Int]` then `()`,
-two postfix steps) uniformly — one rule, no special-casing based on
+two postfix steps) uniformly: one rule, no special-casing based on
 what's being chased.
 
 ```
@@ -363,8 +364,8 @@ BuiltinCall  ::= BuiltinName Arguments
 `BuiltinName` is a single TOKEN, not `"@"` followed by an identifier:
 `@` and the name are lexed together, so there is no bare `@` in the
 language and `@ foo` is a lex error rather than something the grammar
-has to reject. The name is matched against a closed set — one entry,
-`@embed_file` — and anything else is an error naming what exists.
+has to reject. The name is matched against a closed set of one entry,
+`@embed_file`, and anything else is an error naming what exists.
 
 A builtin runs at COMPILE time and its call never reaches the type
 checker: `@embed_file("x")` is replaced during parsing by a string
@@ -373,11 +374,11 @@ parser contains no trace of it. Its argument must therefore be a
 literal, which the grammar cannot express and the parser checks —
 an interpolated string is a `concat` chain by then, not a literal.
 
-`[e1, e2, ...]` is an `Array[T]` literal — every element must unify to
+`[e1, e2, ...]` is an `Array[T]` literal; every element must unify to
 the same type `T` (checked downstream, not by the parser); `[]` is
 valid, its element type resolved from context (a still-unresolved fresh
 var if nothing ever constrains it). This was previously, incorrectly,
-documented below as "intentionally absent, not yet decided" — stale by
+documented below as "intentionally absent, not yet decided", stale by
 the time that note was written; the real parser has supported this
 since early on (`ast::Expr::ArrayLiteral`). Fixed here rather than left
 to keep drifting further from the real implementation.
@@ -406,7 +407,7 @@ SelectArm     ::= Pattern "=" Expr "=>" Expr
 ```
 
 A receive arm's middle `Expr` is the `Receiver[T]` to wait on, and the
-`Pattern` binds the value received from it — so the `=` reads as the
+`Pattern` binds the value received from it, so the `=` reads as the
 binding it is, not as an equality test. Unlike `MatchArm` there is no
 guard: an arm that could decline after winning would have to put the
 value back, and the queue has no un-pop.
@@ -414,17 +415,17 @@ value back, and the queue has no un-pop.
 The three forms are told apart before anything is parsed: `else` is a
 keyword, and the other two differ by whether a `=` appears at the arm's
 own nesting level before the `=>`. A speculative parse would not do,
-because a pattern and an expression overlap — `n` is both.
+because a pattern and an expression overlap: `n` is both.
 
 `else` is taken when no channel is ready, without waiting. The bare-`Expr`
 form is a timeout: the expression must be a `Time.Duration`, and the arm
 is taken if nothing arrives within it. At most one of each, and never
-both in the same `select` — `else` fires the instant nothing is ready,
+both in the same `select`; `else` fires the instant nothing is ready,
 so a timeout beside it could never be reached.
 
 `select` otherwise blocks until one arm's receiver has a value. Arms are
 swept in written order, so an earlier arm wins a tie. An empty
-`select {}` is rejected, as is one with no channel arm — neither is
+`select {}` is rejected, as is one with no channel arm; neither is
 waiting for anything. See DESIGN.md, "`select`, and the primitive it was
 missing".
 
@@ -435,12 +436,12 @@ FieldInit     ::= Identifier { "." Identifier } [ ":" Expr ]
 ```
 
 `FieldInit`'s shorthand form (`Identifier` with no `: Expr`, and no `.`
-segments) means `field: field` — binds a field from a same-named
+segments) means `field: field`, binding a field from a same-named
 variable in scope, the same shorthand Rust's struct literals allow.
 
 **Nested field-update path sugar**: further `.segment` steps after the
 first identifier are a DIFFERENT sugar (`plumc::nested_struct_update`,
-a pre-inference AST-rewrite pass — no grammar ambiguity with anything
+a pre-inference AST-rewrite pass; there is no grammar ambiguity with anything
 else, since a plain field name never contains a `.`) for deep struct
 updates without hand-reconstructing every intermediate level:
 
@@ -457,13 +458,13 @@ Game {
 }
 ```
 
-before type inference ever runs — paths sharing a prefix merge into ONE
+before type inference ever runs; paths sharing a prefix merge into ONE
 nested literal per level, not independent reconstructions. Requires the
 literal to also carry a `..` spread (there's nothing else to read the
 intermediate values from); no shorthand form (`ship.position` alone,
-no `: expr`, is a parse error — there's no local named `ship.position`
+no `: expr`, is a parse error; there's no local named `ship.position`
 for it to mean). Every intermediate segment's declared field type must
-be a concrete struct (not a still-generic type parameter) — see
+be a concrete struct (not a still-generic type parameter). See
 `nested_struct_update`'s own doc comment for the full "why" and this
 v1 scope limit.
 
@@ -476,7 +477,7 @@ LetStmt    ::= "let" [ "mut" ] Pattern [ ":" Type ] "=" Expr
 AssignStmt ::= Identifier "=" Expr
 ```
 
-Every `BlockItem` requires its trailing `;` — **no exemption** for
+Every `BlockItem` requires its trailing `;`, with **no exemption** for
 `if`/`match`/`for`/block-shaped expressions used as statements, unlike
 Rust. The final, unterminated `Expr` (if present) is the block's value;
 its absence (or a trailing `;` on the last item) makes the block's
@@ -486,9 +487,9 @@ reasoning.
 `AssignStmt` was missing from an earlier draft of this document even
 though DESIGN.md always discussed assignment (`total = total + i`) as a
 statement, not a general expression (see "Operator precedence and pipe
-semantics" — assignment is deliberately excluded from the expression
+semantics"; assignment is deliberately excluded from the expression
 grammar). Its target is restricted to a plain `Identifier`, not a
-general `Pattern` or arbitrary lvalue path — this matches `let mut`
+general `Pattern` or arbitrary lvalue path. This matches `let mut`
 only ever binding a plain identifier (see "Local mutability"), and it
 means `Ref[T]` mutation stays exclusively through `.get()`/`.set()`/
 `.update()`, never through assignment syntax. `p.x = 5` is not valid
@@ -496,7 +497,7 @@ Plum; there is no field-assignment form.
 
 `let mut` is only meaningful with a plain `Identifier` pattern in
 practice (a "mutable slot" doesn't make sense for a destructured
-pattern) — the grammar doesn't forbid `let mut (a, b) = ...` outright,
+pattern); the grammar doesn't forbid `let mut (a, b) = ...` outright,
 but it should be rejected during type-checking/lowering, not parsing;
 noted here so it isn't forgotten as an implementation detail.
 
@@ -519,15 +520,15 @@ FieldPattern     ::= Identifier [ ":" Pattern ]
 ```
 
 `FieldPattern`'s shorthand form (`Identifier` with no `: Pattern`) binds
-a variable of the same name — `Point { x, y }` binds `x` and `y`
+a variable of the same name: `Point { x, y }` binds `x` and `y`
 directly. The trailing `..` in a struct pattern means "ignore remaining
 fields," the third distinct job `..` does in this grammar (struct
-update, ranges, pattern-rest) — see DESIGN.md, each is unambiguous by
+update, ranges, pattern-rest). See DESIGN.md: each is unambiguous by
 grammatical position.
 
 `Option[T]`/`Result[T, E]` patterns (`Some(x)`, `None`, `Ok(v)`,
 `Err(e)`) fall directly out of the enum-variant pattern production
-(`PathType "(" ... ")"`) — nothing type-specific is needed for them.
+(`PathType "(" ... ")"`); nothing type-specific is needed for them.
 
 A bare `PathType` is a nullary variant only when it has more than one
 segment (`Shade.Light`); a single capitalized `Identifier` is
@@ -540,7 +541,7 @@ tag means is a resolution question, not a grammatical one: see
 DESIGN.md, "A variant tag stops being a global name".
 
 In a PATTERN the path must begin with a capitalized segment, since that
-is what tells a path-shaped pattern from an identifier binding — so the
+is what tells a path-shaped pattern from an identifier binding, so the
 enum may be named (`Shade.Light`) but the module may not
 (`inner.Shade.Light` does not parse, though it does in an expression).
 The enum name alone resolves through the declaring module, the root and
@@ -558,7 +559,7 @@ implementation decisions, not open language-design questions:
   "a struct literal used as the condition" and "the condition is `Point`,
   followed by the `if`'s body block." Rust has this exact problem and
   solves it by disallowing bare struct literals in condition position
-  (requiring parens: `if (Point { ... }) { ... }`) — Plum should adopt
+  (requiring parens: `if (Point { ... }) { ... }`). Plum should adopt
   the same restriction, but it isn't spelled out as a separate
   restricted-expression grammar above for readability. Flagged here so
   it isn't lost.
@@ -576,19 +577,19 @@ implementation decisions, not open language-design questions:
   itself, since it's a semantic (name-resolution-time) rule, not a
   syntactic one.
 - **`f (a) (b)` parses as two chained single-argument calls, not one
-  two-argument call — and, as of currying (see "Expressions" above),
+  two-argument call and, as of currying (see "Expressions" above),
   that's no longer a trap.** Because `Postfix` repeats, a call
   immediately followed by another parenthesized group is `f(a)` first,
   then the parenthesized `(b)` applied again to *that result*. Before
   currying existed, `f`'s own multi-param arity made `f(a)` alone an
-  arity-mismatch type error — a loud failure, at least, even though the
+  arity-mismatch type error: a loud failure, at least, even though the
   syntax LOOKED like a valid two-argument call (found by parsing
   an early overview sketch's `sum (n - 1) (acc + n)`, which
   looked like an OCaml-style two-argument call but actually meant
-  something else entirely — the example was corrected to
+  something else entirely, and the example was corrected to
   `sum(n - 1, acc + n)`, and the "always use one comma-separated
   argument list" discipline note that used to live here is now
   historical, not live advice). Now `f(a)` alone is a valid partial
-  application, and `f(a)(b)` is PROVABLY equivalent to `f(a, b)` — see
+  application, and `f(a)(b)` is PROVABLY equivalent to `f(a, b)`. See
   DESIGN.md's "Currying" section for the exact reasoning. The two forms
   are genuinely interchangeable today, not a footgun to route around.

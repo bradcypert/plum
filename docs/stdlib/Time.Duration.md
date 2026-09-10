@@ -11,7 +11,7 @@ A length of time, held as NANOSECONDS.
 A real type rather than an `Int` of milliseconds, because a
 bare number does not say which unit it is and every caller has
 to agree by convention. `#7` will want timeouts, `Http` will
-want them, `Terminal` will want them -- and the alternative is
+want them, `Terminal` will want them, and the alternative is
 each module growing its own `timeout_ms: Int` that cannot be
 passed to the others.
 
@@ -63,7 +63,7 @@ Multiplies a duration by a whole number.
 
 ## `let Duration.negate (d: Duration): Duration`
 
-A duration can be NEGATIVE -- `sub` may produce one, and refusing
+A duration can be NEGATIVE. `sub` may produce one, and refusing
 to represent it would only move the problem to every caller of
 `sub`. `sleep` treats a non-positive duration as no wait at all.
 

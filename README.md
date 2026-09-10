@@ -4,7 +4,7 @@ Plum is a small ML-family language: expression-oriented, statically and
 mostly-inferred typed, no null anywhere, algebraic data types with
 exhaustive pattern matching, and refcounted (not garbage-collected)
 memory management with a Perceus-style functional-but-in-place
-optimizer. It compiles through LLVM to a native binary — there is no
+optimizer. It compiles through LLVM to a native binary. There is no
 interpreter and no VM, so `plum run` and `plum build` are the same path
 and cannot disagree.
 
@@ -12,12 +12,12 @@ and cannot disagree.
 (`bootstrap/self_host/`), compiles itself to a fixed point, and needs no
 Rust toolchain to build, or to be present at all. A Rust
 implementation came first and bootstrapped it; its backend was deleted
-on 2026-08-21 and the rest followed on 2026-08-25 — see "There is no
+on 2026-08-21 and the rest followed on 2026-08-25; see "There is no
 Rust in this repository" below.
 
 See [DESIGN.md](DESIGN.md) for the full design history and rationale
 behind every decision below, and [MAINTENANCE.md](MAINTENANCE.md) for
-how to change the compiler without breaking it — the test harnesses,
+how to change the compiler without breaking it: the test harnesses,
 when to refresh the bootstrap seed, and the traps that have caught
 people before. This README is the practical, "how do I actually use
 it" companion.
@@ -30,7 +30,7 @@ curl -fsSL https://raw.githubusercontent.com/bradcypert/plum/main/install.sh | s
 
 That picks the right archive for your platform, checks it against the
 published checksum, installs `plum` into `~/.local/bin`, and runs it to
-prove it works. It **does not edit your shell configuration** — if that
+prove it works. It **does not edit your shell configuration**. If that
 directory is not on your `PATH` it prints the line to add and stops.
 `PLUM_PREFIX` and `PLUM_VERSION` override where and which.
 
@@ -39,7 +39,7 @@ assemble and link what it emits. Nothing else is required: the C shims
 Plum programs use are embedded in the compiler itself.
 
 Or take an archive from
-[Releases](https://github.com/bradcypert/plum/releases) directly — it
+[Releases](https://github.com/bradcypert/plum/releases) directly. It
 is a single binary.
 
 Documentation lives at **[plumlang.org](https://plumlang.org)**,
@@ -78,21 +78,21 @@ programs on it. Nothing here is merely expected to work.
 macOS and Windows are a step down from Linux and it is worth knowing
 why: Plum is refcounted, so a leak is a miscompile rather than
 untidiness, and LeakSanitizer does not exist on Darwin. Both Linux
-targets run it, which is why arm64 — a different architecture, and so
-the likeliest place for a refcounting or alignment miscompile — is
-held to the same bar as x86_64 rather than a lower one. See [PORTING.md](PORTING.md) for what that costs and what is
-left.
+targets run it, which is why arm64 is held to the same bar as x86_64
+rather than a lower one: it is a different architecture, and so the
+likeliest place for a refcounting or alignment miscompile. See
+[PORTING.md](PORTING.md) for what that costs and what is left.
 
 ## Building the toolchain
 
-Same requirement — `clang`, and nothing else.
+Same requirement: `clang`, and nothing else.
 
 ```sh
 ./bootstrap/from-seed -o plum          # clang only, no Rust
 ./plum build bootstrap/self_host -o plum
 ```
 
-The first line builds a compiler from `bootstrap/seed/plum.ll` — the
+The first line builds a compiler from `bootstrap/seed/plum.ll`, which is the
 self-hosted compiler shipped as LLVM IR, because building a compiler
 written in Plum requires a Plum compiler to start from. The second line
 then rebuilds it with itself, which is the compiler you keep.
@@ -106,20 +106,20 @@ There used to be. Plum began as a Rust compiler, and after the
 self-hosted one replaced its code generator on 2026-08-21 a Rust front
 end and interpreter stayed on as a test oracle: `interp-check` ran every
 execution fixture through it and compared answers. It earned that place
-twice — integer division by zero was undefined in both code generators
+twice. Integer division by zero was undefined in both code generators
 and printed a different wrong number in each, and `0.1 + 0.2` printed
 `0.3` in both, where the interpreter was right on both counts.
 
-It was retired on 2026-08-25 — 44,698 lines, a CI job, and the Rust
+It was retired on 2026-08-25: 44,698 lines, a CI job, and the Rust
 toolchain dependency. Two things had gone wrong with it:
 
 - **It could not see shared bugs.** An oracle finds *disagreements*. On
   the day it was retired, property tests found two bugs the interpreter
-  had *identically* — `parse_int` rejecting `Int`'s own minimum, and
+  had *identically*: `parse_int` rejecting `Int`'s own minimum, and
   `parse_float` landing one ulp out. It had agreed with the compiler on
   both for as long as they existed.
-- **It lagged the language**, so the newest features — the ones most
-  likely to be wrong — were exactly the ones it could not check.
+- **It lagged the language**, so the newest features (the ones most
+  likely to be wrong) were exactly the ones it could not check.
 
 `bootstrap/property-check` replaced it. Properties are written in Plum
 and run by `plum test`, so they track the language instead of trailing
@@ -129,7 +129,7 @@ bugs an oracle could never find".
 
 ## Running a program
 
-Plum programs live in a project directory — a directory *is* a module
+Plum programs live in a project directory. A directory *is* a module
 (see "Modules" below). `plum new` scaffolds a minimal starter project:
 
 ```sh
@@ -152,7 +152,7 @@ Compile and run it in one step:
 plum run myapp
 ```
 
-(The bare `plum myapp` form — no `run` — still works too, for backward
+(The bare `plum myapp` form, with no `run`, still works too, for backward
 compatibility; `plum run` is the recommended, explicit spelling,
 symmetric with `plum build`.)
 
@@ -178,12 +178,12 @@ PLUM_CC="zig cc" plum build myapp --target aarch64-linux-musl
 Plum does not implement cross-compilation so much as get out of its
 way. The IR it emits carries no target triple and no datalayout, so
 `clang --target=` retargets it directly, and `Os.platform()` is
-compiled in by the C compiler's own `#ifdef` — so it reports the
+compiled in by the C compiler's own `#ifdef`, so it reports the
 target's platform, not the build machine's, with no work on our part.
 
 What Plum does **not** ship is a sysroot. `clang` can emit code for any
 target but cannot link one without that target's libc, so `--target`
-needs a C driver that has one. `PLUM_CC` is where you name it — `zig cc`
+needs a C driver that has one. `PLUM_CC` is where you name it; `zig cc`
 above, or a corporate cross toolchain. This is the same arrangement
 Rust's ecosystem settled on with `cargo-zigbuild`, and it is why a
 native build still needs nothing but `clang`: nobody pays for a feature
@@ -193,7 +193,7 @@ be a ~240x increase on a 712 KB archive).
 
 Two conveniences: a Windows target gets a `.exe` suffix when you do not
 pass `-o`, and a non-64-bit target is refused outright rather than
-built. The second is not politeness — cell layout assumes 8-byte slots,
+built. The second is not politeness: cell layout assumes 8-byte slots,
 so a 32-bit target would not fail to link, it would silently
 miscompile.
 
@@ -205,7 +205,7 @@ and differ only in whether it is kept. Nothing can behave one way under
 `run` and another under `build`, because there is no second engine for
 it to behave differently in.
 
-Both use the same `main` entry point — a single `Unit`-typed parameter
+Both use the same `main` entry point: a single `Unit`-typed parameter
 (`let main (): ... = ...`, invoked by the CLI itself, not called from
 your own source) returning `Unit` or any printable value (the CLI
 prints whatever `main` returns).
@@ -226,7 +226,7 @@ error: type error: operator: type mismatch: expected Str, found Int
 
 ## Testing
 
-Any top-level function whose name starts with `test_` is a test — no
+Any top-level function whose name starts with `test_` is a test. No
 attribute, no registration, no `pub` required:
 
 ```
@@ -268,7 +268,7 @@ assertion failed: left != right
 test result: FAILED. 0 passed; 1 failed
 ```
 
-A failing test is just an ordinary runtime error under the hood — any
+A failing test is just an ordinary runtime error under the hood, and any
 other error (an array-index-out-of-bounds, a division by zero, ...)
 inside a test function fails it the same way, not only a failed
 `assert`. Tests in a non-root module are reported under their
@@ -276,13 +276,13 @@ qualified name (`shapes.test_area`, ...), same as anywhere else a
 qualified name is used.
 
 `plum test` COMPILES the project once and runs each test in its own
-process — a runtime failure is a hard abort with no way to keep going
+process, since a runtime failure is a hard abort with no way to keep going
 in the same process, so isolation is not optional.
 
 `bootstrap/test-smoke` exercises it against a fixture that
-deliberately uses the things a smoke test is tempted to skip — the
+deliberately uses the things a smoke test is tempted to skip: the
 prelude's assertions, a `Ref`, a zero-argument call, a partial
-application — and asserts that a failing test both fails and does not
+application, and asserts that a failing test both fails and does not
 stop the ones after it. `plum test` was silently broken for months
 before that fixture existed.
 
@@ -309,7 +309,7 @@ plum fmt one.plum         # to stdout
 * a line that CONTINUES a construct begun on an earlier line is indented
   four past the line that construct started on.
 
-That last one covers the shapes the formatter used to leave alone -- a
+That last one covers the shapes the formatter used to leave alone: a
 `let` body written on the next line, a `|>` chain broken across lines, a
 multi-line call's arguments:
 
@@ -336,14 +336,14 @@ The rules were measured against this repository rather than chosen, and
 the test of that is `bootstrap/fmt-check`: every `.plum` file here is
 already formatted, so `plum fmt` changes none of them.
 
-It also declines to place lines it cannot name -- a line inside a
+It also declines to place lines it cannot name. A line inside a
 multi-line string literal, a hand-aligned line sitting deeper than the
 grid answer, an item's `require`/`ensure`/`=` header lines. Those are
 places where this repository either says nothing or disagrees with
 itself, and a formatter with no evidence should leave your code alone.
 
 **It cannot corrupt a file.** Before writing, `--write` re-lexes its own
-output and compares the token sequence to the original's -- whitespace
+output and compares the token sequence to the original's; whitespace
 and comments are exactly what lies between tokens, so files whose tokens
 agree in order differ only in formatting. A rule that changed the tokens
 would be refused rather than written. Writes go to a temporary file
@@ -354,7 +354,7 @@ cannot leave a half-written source file.
 
 Formatting is served over LSP as well as on the command line, so an
 editor can format on save. It formats the buffer being edited, not the
-file on disk -- see the Formatting section above for what the formatter
+file on disk; see the Formatting section above for what the formatter
 will and will not do.
 
 Expand-selection is served too (`textDocument/selectionRange`): put the
@@ -375,7 +375,7 @@ published binary, on Linux, macOS and Windows.
 | completion | project names, the stdlib, enum variants; fields and methods after `.` |
 
 It asks the TYPE CHECKER, so hovering a local or a parameter shows the
-type it was actually inferred to have — `doubled: Point` — and
+type it was actually inferred to have (`doubled: Point`), and
 go-to-definition on a local jumps to its binding, not to whatever
 top-level name it happens to share. Top-level names fall back to a
 by-name index, which is what supplies a function's full signature on
@@ -388,7 +388,7 @@ filters it, which is what LSP clients do anyway.
 
 **After a `.`** it offers the members of whatever precedes the dot
 instead: a struct's fields with their declared types, and every
-function namespaced under that type — so `p.` on a `Point` offers `x`,
+function namespaced under that type, so `p.` on a `Point` offers `x`,
 `y` and your own `Point.shift`, while `s.` on a `String` offers the
 nineteen `String.` functions. The type comes from the checker, so this
 works on a local whose type was never written down. The base must be a
@@ -398,8 +398,8 @@ and the editor falls back to the whole-project list.
 Known limits: hover and go-to-definition need the project to type-check
 cleanly, and the server re-checks per request (26ms on a small project,
 ~0.9s on the compiler's own 14k lines). Hover resolves fields and
-methods as well as identifiers — `x` in `p.x` reports `Int`, and
-`trim_end` in `s.trim_end()` reports its whole signature — but only
+methods as well as identifiers. `x` in `p.x` reports `Int`, and
+`trim_end` in `s.trim_end()` reports its whole signature, but only
 when the base is a plain identifier, the same limit dot completion has.
 Hovering `to_string` in `p.x.to_string()` answers nothing rather than
 guessing. The language server is exercised by a real LSP
@@ -407,11 +407,11 @@ session in CI on Linux, macOS and Windows.
 
 Two pieces, independent of each other:
 
-- **`plum lsp`** — an LSP server served straight out of the `plum`
+- **`plum lsp`** is an LSP server served straight out of the `plum`
   binary itself, speaking LSP over stdio.
 
   **Diagnostics** are live, against the unsaved buffer rather than the
-  file on disk, and are attributed to the file the error is IN — which
+  file on disk, and are attributed to the file the error is IN, which
   is not always the file being edited. Fixing an error publishes an
   empty list for that file, so it clears rather than lingering. One
   error at a time: the checker stops at the first, because a later
@@ -421,7 +421,7 @@ Two pieces, independent of each other:
 
   **Hover** gives the inferred type of an identifier, a field or a
   method. **Go-to-definition** covers locals, parameters and top-level
-  names — a local jumps to its binding, not to whatever top-level name
+  names. A local jumps to its binding, not to whatever top-level name
   it shadows.
 
   **Completion** offers project names, the standard library, enum
@@ -432,18 +432,18 @@ Two pieces, independent of each other:
   check to succeed.
 
   Hover and go-to-definition need the project to type-check cleanly.
-  Fix-and-recheck is fast in practice — 26ms on a small project.
-- **[`tools/tree-sitter-plum`](tools/tree-sitter-plum)** — a
+  Fix-and-recheck is fast in practice: 26ms on a small project.
+- **[`tools/tree-sitter-plum`](tools/tree-sitter-plum)** is a
   [tree-sitter](https://tree-sitter.github.io/) grammar for syntax
   highlighting/indentation, transcribed from `GRAMMAR.md`. A genuinely
   separate implementation from the compiler's own parser (see that
   directory's own README for the scope note and its two documented,
-  deliberate simplifications) — exists purely to drive editor
+  deliberate simplifications). It exists purely to drive editor
   highlighting, not a second source of truth for the language's actual
   syntax rules.
 
 **Neovim** is the only editor this is packaged and verified for so
-far — see [`editors/nvim`](editors/nvim) for a ready-to-use runtime
+far; see [`editors/nvim`](editors/nvim) for a ready-to-use runtime
 bundle (LSP config + tree-sitter highlighting) and setup instructions.
 Other editors aren't packaged yet; both pieces above are general enough
 (stdio LSP, a standard tree-sitter grammar) that another editor's own
@@ -455,7 +455,7 @@ directly, but that hasn't been tried.
 ### Functions, inference, recursion
 
 ```plum
-// No `return` — a function's body IS its value.
+// No `return`. A function's body IS its value.
 //
 // A top-level signature is written out in full: parameter types and a
 // return type. Inference works INSIDE a function, not across its
@@ -464,7 +464,7 @@ directly, but that hasn't been tried.
 let sum (n: Int) (acc: Int): Int = if n == 0 { acc } else { sum(n - 1, acc + n) }
 
 let main (): Unit = {
-    // Local bindings and closure parameters ARE inferred -- neither
+    // Local bindings and closure parameters ARE inferred; neither
     // `total` nor `v` says what it is.
     let total = Array.fold([1, 2, 3], 0, |a, v| a + v);
     println(sum(3, total).to_string())
@@ -484,7 +484,7 @@ recursion in the default, `--release` and `--trace` builds, so this
 cannot regress quietly.
 
 **Mutual recursion counts too.** `ping` tail-calling `pong` tail-calling
-`ping` runs in constant stack space as well — any tail call that is part
+`ping` runs in constant stack space as well. Any tail call that is part
 of a recursion cycle returns directly. Where the two prototypes happen
 to match it is also a `musttail`; where they do not, the frame is still
 reused from `-Og` up.
@@ -499,7 +499,7 @@ overflowed. Those releases now happen before the call.
 One visible consequence, in `--trace` builds: a recursive chain shows
 **one** frame rather than one per call, because a tail call really does
 replace its caller's frame. A tail call that is *not* part of a cycle —
-an ordinary one-line delegation — keeps its frame and still appears in
+an ordinary one-line delegation, keeps its frame and still appears in
 traces.
 
 ### Tuples
@@ -515,7 +515,7 @@ let main (): Unit = println(match swap(pair()) { (s, n) => s.concat(n.to_string(
 a1
 ```
 
-Tuples work anywhere a type does — nested, inside arrays, as struct
+Tuples work anywhere a type does: nested, inside arrays, as struct
 fields, returned from generic functions. The one thing they lack is
 `.to_string()`; render the elements instead, as above.
 
@@ -524,13 +524,13 @@ fields, returned from generic functions. The one thing they lack is
 `String` is the surface-syntax keyword for text (its type is
 occasionally referred to as `Str` in compiler-internal contexts, but
 `String` is what you write in source). `Int`/`Float` conversions are
-explicit, never implicit: `n.to_float()` (widening — always succeeds,
+explicit, never implicit: `n.to_float()` (widening, always succeeds,
 though not always *exact* for very large `Int` values, since `Float`'s
 53-bit mantissa can't represent every `i64` value precisely),
 `x.to_int()` (truncates toward zero), `x.round_to_int()` (rounds to the
 nearest integer first, same convention `Float.round()` itself uses).
 Both `Float`-to-`Int` conversions are saturating, never undefined
-behavior — `NaN` becomes `0`, and a value outside `Int`'s range becomes
+behavior: `NaN` becomes `0`, and a value outside `Int`'s range becomes
 whichever bound it overshot. `Float.to_int(x)` and `x.to_int()` are
 the same call.
 
@@ -555,7 +555,7 @@ let main (): Unit = {
 ```
 
 **`==` works on anything; `<`, `<=`, `>` and `>=` need an ordered
-type.** Equality is structural — arrays, structs, enums and their
+type.** Equality is structural: arrays, structs, enums and their
 payloads, all the way down. Ordering is defined for `Int`, `Float` and
 `String` only, and comparing anything else is a compile error naming
 the type. Arrays and structs could be given a lexicographic order and
@@ -578,21 +578,21 @@ let area (s: Shape): Float = match s {
 }
 ```
 
-`match` is exhaustive — the compiler rejects a `match` missing a
+`match` is exhaustive; the compiler rejects a `match` missing a
 variant, unless a trailing wildcard (`_ => ...`) catches the rest.
 Struct/enum equality (`==`) and `.to_string()` are structural and work
 recursively through nested structs/enums/arrays, generated for every
-type automatically — no `derive` needed or available.
+type automatically, with no `derive` needed or available.
 
 Field access (`.radius`, `.x`, ...) needs its receiver's type to
-already be known at that point in inference — an unannotated
+already be known at that point in inference. An unannotated
 function/closure parameter that's only ever used for field access
 won't infer a struct type from that alone, so give it an explicit type
 annotation (as `area` does above).
 
 ### Struct updates
 
-There's no field mutation (`p.x = 5` isn't valid) — structs are updated
+There's no field mutation (`p.x = 5` isn't valid); structs are updated
 functionally, by spreading the rest of an old value's fields into a new
 one, with the spread always last:
 
@@ -614,7 +614,7 @@ let move_ship (g: Game) (nx: Float) (ny: Float): Game =
 
 This desugars, before type inference runs, into the fully-nested
 version you'd otherwise write by hand (`Game { ship: Ship { position:
-Vec2 { x: nx, y: ny, ..g.ship.position }, ..g.ship }, ..g }`) — paths
+Vec2 { x: nx, y: ny, ..g.ship.position }, ..g.ship }, ..g }`); paths
 sharing a prefix merge into one nested literal per level. Requires the
 literal to also have a `..` spread (nothing else to read the
 intermediate values from), and every intermediate segment (`ship`,
@@ -650,14 +650,14 @@ error: call to biggest: T is Point, but biggest requires T to be ordered
 ```
 
 The error lands on the **call**, because that is where the type is
-chosen. The definition is correct code and stays legal — it is only the
+chosen. The definition is correct code and stays legal. It is only the
 attempt to use it on something unorderable that is not.
 
 The same applies to `.to_string()`: rendering a type parameter requires
 the type argument to have a text form, so `show(ref(1))` is rejected at
 the call rather than accepted and then refused by the build.
 
-Bounds may also be written down — `[T: Ord]`, `[T: Eq]` and `[T: Show]`
+Bounds may also be written down. `[T: Ord]`, `[T: Eq]` and `[T: Show]`
 — and are then required of callers whether or not the body compares or
 renders anything. Writing one is optional: it pins the requirement into
 the signature so a body that stops needing it does not silently widen
@@ -688,26 +688,26 @@ let main (): Unit = {
 `let Type.func (...) = ...` declares a real, per-type associated
 function. It can be called either way: `Type.func(receiver, args)` with
 the receiver as an ordinary first argument, or `receiver.func(args)`.
-The two are the same call — the second is defined as the first, which is
+The two are the same call; the second is defined as the first, which is
 why `xs.map(f)` works at all (see [Standard
 library](#standard-library)).
 
 This works for any struct/enum you declare, not just the standard
-library's own types — which is exactly how `Option.map`,
+library's own types, which is exactly how `Option.map`,
 `Array.reverse`, `Map.get`, and the rest of the standard library below
 are themselves built.
 
 Two types can each declare a function with the same name (`Point.add`
-and `Circle.add` coexist fine) — there's no collision, since each
+and `Circle.add` coexist fine); there's no collision, since each
 lives in its own type's namespace. This is unrelated to (and doesn't
-change) qualified enum-variant construction — `Type.Variant(args)`
+change) qualified enum-variant construction, `Type.Variant(args)`,
 (e.g. `Shape.Circle(radius)`, always legal even without a `use`, the
 same as a bare `Circle(radius)`) still constructs a variant, not an
 associated-function call. The two are disambiguated by capitalization:
 an associated function name is always lowercase, a variant tag is
 always UpperCamelCase.
 
-### Option and Result — no null, anywhere
+### Option and Result: no null, anywhere
 
 ```
 enum Option[T] { Some(T), None }
@@ -715,7 +715,7 @@ enum Result[T, E] { Ok(T), Err(E) }
 ```
 
 These are ordinary generic enums, available in every program with no
-`use`/declaration of your own — the same as if you'd written them
+`use`/declaration of your own, the same as if you'd written them
 yourself at the top of the file. There's no `?`-operator/early-return
 sugar yet; propagate a `Result` with an explicit `match`:
 
@@ -734,12 +734,12 @@ let main (): Unit = println(read_two(()))
 ```
 
 Note the call site: `read_two(())`, not `read_two()`. Every function
-takes exactly one (possibly curried) argument — a `()` parameter list
+takes exactly one (possibly curried) argument; a `()` parameter list
 in a declaration is shorthand for one `Unit`-typed parameter, not zero
 parameters, so calling it explicitly passes the unit value `()`.
 
 For the common cases, combinators avoid writing the `match` out by
-hand — see the [Standard library](#standard-library) section below for
+hand; see the [Standard library](#standard-library) section below for
 the full list:
 
 ```
@@ -754,7 +754,7 @@ let xs = [1, 2, 3];
 let doubled = Array.map(xs, |x| x * 2);          // [2, 4, 6]
 let evens = Array.filter(xs, |x| x % 2 == 0);    // [2]
 let total = Array.fold(xs, 0, |acc, x| acc + x); // 6
-let ys = xs.push(4);                             // [1, 2, 3, 4] — xs itself is untouched
+let ys = xs.push(4);                             // [1, 2, 3, 4]; xs itself is untouched
 ```
 
 `map`/`filter`/`fold` are the one part of the standard library that's
@@ -763,14 +763,14 @@ called as `Array.map(xs, f)`, never `xs.map(f)`. Dot-call syntax
 (`value.name(...)`) is reserved exclusively for the small, fixed set of
 zero-argument core value conversions (`.to_string()`, `.to_int()`,
 `.round_to_int()`, `.to_float()`, `.as_cstr()`, plus true mutation-shaped
-array/string operations like `.push()`/`.len()`) — every stdlib function
+array/string operations like `.push()`/`.len()`); every stdlib function
 that takes real arguments, `map`/`filter`/`fold` included, is always
 `Type.func(value, ...args)`. This keeps the rule simple to remember
 ("does it take extra arguments? then it's `Type.func(...)`") and avoids
 ambiguity between field access and method dispatch.
 
 Array mutation-shaped methods (`.push()`, `.pop()`, `.set()`,
-`.remove()`) are all *functional* — they return a new array rather than
+`.remove()`) are all *functional*: they return a new array rather than
 mutating in place, but the compiler applies a reuse-in-place
 optimization (FBIP) under the hood when it can prove the original array
 is no longer needed, so this is often as cheap as a real mutation
@@ -778,7 +778,7 @@ without giving up value semantics.
 
 ### Pipe
 
-`x |> f(a, b)` inserts `x` as `f`'s *last* argument — `f(a, b, x)` — and
+`x |> f(a, b)` inserts `x` as `f`'s *last* argument, `f(a, b, x)`, and
 `x |> f` (no parens) means `f(x)`. Chains read top to bottom instead of
 inside out:
 
@@ -791,13 +791,13 @@ inside out:
 
 Since most stdlib functions take their array/subject *first*, not last,
 a bare `_` in one of `f`'s arguments marks where `x` actually goes
-instead of appending it — that's what `_` is doing in every call above:
+instead of appending it. That's what `_` is doing in every call above:
 without it, `[1,2,3] |> Array.map(f)` would (wrongly) mean
 `Array.map(f, [1,2,3])`. At most one `_` per call; a plain single-
 argument call like `xs |> Array.reverse` doesn't need one.
 
 **Pipe + `Result.and_then`/`Result.map` is the house style for
-chaining fallible calls** — Plum has no `?`/early-return (deliberately
+chaining fallible calls**. Plum has no `?`/early-return (deliberately
 not built, see DESIGN.md's own section: it would need a `return`
 statement the language doesn't have at all, plus a `From`-style error-
 conversion mechanism the closed trait set has no room for):
@@ -811,7 +811,7 @@ Net.write(fd, request)
 reads top-to-bottom instead of the nested-`match` alternative
 (`match x { Err(e) => Err(e), Ok(v) => match ... }`). It has one real
 limit worth knowing: a later step needing a value from TWO steps back
-can't stay flat — wrap that one step in a closure so the earlier
+can't stay flat; wrap that one step in a closure so the earlier
 binding stays in scope via capture (`Result.and_then(_, |head| Result
 .map(read_body(head), |body| Response { head, body }))`).
 
@@ -826,7 +826,7 @@ s.trim()
 s.to_upper() / s.to_lower()
 s.starts_with("he") / s.ends_with("lo") / s.contains("ell")
 s.replace("l", "L")
-s.runes()                  // Array[Int] — Unicode codepoints
+s.runes()                  // Array[Int]: Unicode codepoints
 s[0]                       // indexing returns a raw byte, not a character
 ```
 
@@ -837,12 +837,12 @@ sees bytes at all. When you need a count that matches, use
 `String.char_len`:
 
 ```
-"café".len()               // 5 — bytes
-String.char_len("café")    // 4 — characters
+"café".len()               // 5 (bytes)
+String.char_len("café")    // 4 (characters)
 String.slice("café", 0, 3) // "caf"
 ```
 
-Padding counts characters too, which is the point of it — text lined
+Padding counts characters too, which is the point of it: text lined
 up in columns by byte count puts an accented name in the wrong place:
 
 ```
@@ -864,14 +864,14 @@ println("hello, ${name}! n=${n + 1}")   // hello, world! n=42
 ```
 
 is exactly `"hello, ".concat(name.to_string()).concat("! n=").concat((n
-+ 1).to_string())` — pure syntax sugar over `.concat()`/`.to_string()`
++ 1).to_string())`, pure syntax sugar over `.concat()`/`.to_string()`
 (both already generic over every type), resolved entirely by the
 lexer/parser, so it works everywhere a string literal does. A bare `$`
 not followed by `{` is always literal; `\$` escapes one that would
 otherwise start an interpolation. `${...}`'s contents can be any
 ordinary expression (arithmetic, field access, calls, ...) but can't
 itself contain a block expression, a closure with a block body, or a
-nested string with its own `${...}` — pull those into a variable first.
+nested string with its own `${...}`; pull those into a variable first.
 
 ### Local mutability, `if`/blocks as expressions
 
@@ -886,7 +886,7 @@ let go (): Int = {
 }
 ```
 
-`if`/`match`/blocks are all expressions — the last expression in a
+`if`/`match`/blocks are all expressions; the last expression in a
 block (no trailing `;`) is its value. `else` always requires either
 `else if` or a `{ }` block; a bare `else <expr>` isn't valid syntax.
 
@@ -909,7 +909,7 @@ depend on where you started it. A module in a subdirectory embeds
 relative to itself.
 
 The argument must be a literal string. The file is read at compile
-time, so it cannot depend on a value — and an interpolated string
+time, so it cannot depend on a value, and an interpolated string
 counts as a value, not a literal:
 
 ```
@@ -920,7 +920,7 @@ Embedded text is data. It is never re-lexed as Plum, so `${...}` inside
 an embedded file stays exactly as written.
 
 The sigil also keeps builtins out of the identifier namespace, so
-nothing is reserved — `embed_file` remains an ordinary name you are
+nothing is reserved; `embed_file` remains an ordinary name you are
 free to define:
 
 ```
@@ -935,7 +935,7 @@ compile error pointing at the call.
 
 `spawn`/`.join()` for tasks, and channels (`Sender`/`Receiver`) with
 `send`/`recv` for communication between them. `channel[T]()` needs its
-type argument written out — there is nothing else in the expression to
+type argument written out, because there is nothing else in the expression to
 infer it from.
 
 **`select`** waits on several channels at once and takes whichever is
@@ -967,7 +967,7 @@ select {
 
 A timeout arm is any expression of type `Time.Duration`, so a
 configurable deadline can be held in a variable. `else` is exactly a
-timeout of zero, and having both in one `select` is rejected — `else`
+timeout of zero, and having both in one `select` is rejected; `else`
 would fire first every time, so the timeout could never be reached.
 An empty `select {}` is rejected too, as is one with no channel arm:
 neither is waiting for anything.
@@ -987,12 +987,12 @@ let go (): Int = unsafe { strlen("hello".as_cstr()) }
 
 Extern calls are only allowed inside an `unsafe { }` block. The extern
 type surface is intentionally closed: `Int`/`Float`/`Bool`/`CStr`/a
-callback/a struct made of those — no raw pointers, no C-variadic
+callback/a struct made of those: no raw pointers, no C-variadic
 functions, no extern global variables.
 
 `.as_cstr()` goes `String -> CStr` (for passing Plum strings out to C);
 `.as_string()` goes the other way, `CStr -> String` (for turning a C
-function's returned string data — e.g. a socket's `tcp_recv` — into a
+function's returned string data (a socket's `tcp_recv`, say) into a
 real, usable Plum value). `CStr` otherwise has no operations of its
 own.
 
@@ -1018,7 +1018,7 @@ addr2line -e ./myapp 0x5320      # myapp/main.plum:14
 perf report ./myapp              # samples land on Plum lines
 ```
 
-Line tables only — where code came from, not what its types are. `gdb`
+Line tables only: where code came from, not what its types are. `gdb`
 can step, break on a line and profile; it cannot print a local, because
 describing every Plum type in DWARF is a much larger project than this
 and nobody has needed it yet. Functions the compiler generates rather
@@ -1035,7 +1035,7 @@ plum build myapp --trace
 ```
 
 A program built with `--trace` prints a stack trace to **stderr** when
-it dies — for a failed bounds check, a division by zero, an overflow, a
+it dies: for a failed bounds check, a division by zero, an overflow, a
 broken contract, or an explicit `panic_raw`:
 
 ```
@@ -1052,8 +1052,8 @@ are hidden, so a failed precondition starts at the function you wrote.
 Deep recursion is capped at 256 frames with a count of the rest.
 
 **Tail recursion still runs in constant stack space under `--trace`.**
-The trace is a shadow call stack — a frame pushed on entry, popped on
-the way out — and where that pop goes decides whether the optimiser can
+The trace is a shadow call stack, a frame pushed on entry and popped on
+the way out, and where that pop goes decides whether the optimiser can
 still turn a tail-recursive call into a loop. Each path through a
 function pops its own frame, and a call to the function *itself* in tail
 position pops *before* calling, so nothing sits between that call and
@@ -1080,7 +1080,7 @@ because a shadow stack still costs a push and a pop per call.
 
 ## Modules
 
-A directory *is* a module — no `mod foo;` declaration anywhere. Every
+A directory *is* a module, with no `mod foo;` declaration anywhere. Every
 `.plum` file in a directory shares one namespace; subdirectories become
 nested child modules, discovered from the file tree itself.
 
@@ -1109,8 +1109,8 @@ let main (): Unit = println(shapes.area(shapes.Circle { radius: 2.0 }).to_string
 12.56636
 ```
 
-`use` is qualify-by-default (Go-style) — `shapes.area`, not a bare
-`area` — so call sites stay self-explanatory without cross-referencing
+`use` is qualify-by-default (Go-style): `shapes.area`, not a bare
+`area`, so call sites stay self-explanatory without cross-referencing
 imports.
 
 **Functions are private by default.** `pub let` opts one into being
@@ -1133,7 +1133,7 @@ error: shapes.secret_helper is private to module `shapes`. Add `pub` to its decl
 ```
 
 **Types are private by default too.** `pub struct` and `pub enum` opt
-one into being named from outside its module — in an annotation, in a
+one into being named from outside its module: in an annotation, in a
 literal, and in a pattern:
 
 ```plum
@@ -1147,10 +1147,10 @@ pub let read (s: Secret): Int = s.n
 // main.plum
 use secrets;
 
-// Fine -- the VALUE may cross. `hold` never names the type.
+// Fine: the VALUE may cross. `hold` never names the type.
 let hold (): Int = secrets.read(secrets.make())
 
-// Rejected -- the NAME may not.
+// Rejected: the NAME may not.
 let named (): secrets.Secret = secrets.make()
 
 let main (): Unit = println(hold().to_string())
@@ -1191,14 +1191,14 @@ error: field counter.Counter.n is private to module `counter`
 A struct with any private field **cannot be constructed from outside
 its module**, because a literal has to name every field. That is the
 point rather than a side effect: it makes a constructor function the
-only way in. The same applies to destructuring — `Counter { label, n }`
+only way in. The same applies to destructuring. `Counter { label, n }`
 and the positional `Counter(label, n)` both name `n`, so both are
 refused.
 
 **Two modules may declare the same type name.** A type is identified by
 the module that declared it, so `shapes.Circle` and `render.Circle` are
 different types, and a bare `Circle` means the one declared where you
-wrote it — your own module first, then the root, then the prelude. A
+wrote it: your own module first, then the root, then the prelude. A
 root declaration shadows a prelude one of the same name rather than
 colliding with it.
 
@@ -1228,7 +1228,7 @@ error: declared return type P doesn't match body type inner.P
 
 **Anywhere a type or variant can be named, the module can be part of
 the name.** When two modules declare the same enum, that is the only
-way to say which one you mean -- in an annotation, an expression, and a
+way to say which one you mean: in an annotation, an expression, and a
 pattern alike:
 
 ```plum
@@ -1267,7 +1267,7 @@ The prelude is a module of its own, so `pub` applies to the standard
 library too: `Map.get` is part of the interface, `Map`'s buckets are
 not, and reaching for the latter is an error wherever you are.
 
-Its module cannot be named — there is no `use prelude;` and no
+Its module cannot be named; there is no `use prelude;` and no
 `prelude.println(..)`. Prelude names are reached the way they always
 were, unqualified; the module exists so that what the prelude does not
 export is genuinely unavailable rather than merely undocumented.
@@ -1301,7 +1301,7 @@ let conf (): Result[String, String] = Os.read_file("app.conf")
 ```
 
 A module can depend on another. `Http` is ordinary Plum over `Net`'s
-sockets, so `use Http;` brings `Net` in with it — you do not have to
+sockets, so `use Http;` brings `Net` in with it, and you do not have to
 know what a module is built on to use it.
 
 Without the `use`, the error says what to do:
@@ -1323,11 +1323,11 @@ the `assert` family, `Json`, and every type namespace.
 
 Two generated references, neither written by hand:
 
-- **[`docs/stdlib/`](docs/stdlib/)** — one page per module, with the
+- **[`docs/stdlib/`](docs/stdlib/)** is one page per module, with the
   documentation written on each declaration. Start with
   [`prelude`](docs/stdlib/prelude.md), which is what every program gets
   without asking for it.
-- **[STDLIB.md](STDLIB.md)** — every signature in one file, for when you
+- **[STDLIB.md](STDLIB.md)** is every signature in one file, for when you
   want to search rather than read.
 
 Both come out of `plum doc` and `plum stdlib-reference`, and
@@ -1350,7 +1350,7 @@ plum doc my-project -o docs --html    # a browsable site, with search
 
 `plum highlight <file>` prints Plum source as marked-up HTML, using the
 compiler's own lexer rather than a regex approximation of it. It is what
-colours the code on [plumlang.org](https://plumlang.org) — every static
+colours the code on [plumlang.org](https://plumlang.org). Every static
 site generator ships a highlighter, and none of them ships one for a
 language this young. Because it is the real lexer over a lossless token
 stream, stripping the tags back out gives the source byte for byte, and
@@ -1363,38 +1363,38 @@ renders plain rather than not at all.
 Real, runnable projects under [`examples/`](examples/), one per theme —
 each with its output recorded in `expected.txt` and checked by
 `bootstrap/example-sweep` (except `asteroids`, which opens a window and
-is only built, not run — see its own entry below):
+is only built, not run; see its own entry below):
 
 - [`adts_and_matching`](examples/adts_and_matching/main.plum) —
   structs, enums, exhaustive `match`, guard clauses.
-- [`option_result`](examples/option_result/main.plum) — `Option`/
+- [`option_result`](examples/option_result/main.plum) covers `Option`/
   `Result` combinators for error handling with no null anywhere.
-- [`json_and_files`](examples/json_and_files/main.plum) — build a
+- [`json_and_files`](examples/json_and_files/main.plum) builds a
   `JsonValue`, stringify it, round-trip it through a real file.
-- [`concurrency`](examples/concurrency/main.plum) — `spawn`/`.join()`,
+- [`concurrency`](examples/concurrency/main.plum) covers `spawn`/`.join()`,
   channels, `send`/`recv`.
 - [`generics_and_assoc_fns`](examples/generics_and_assoc_fns/main.plum)
-  — generic structs and `Type.func(args)` associated functions on your
+  covers generic structs and `Type.func(args)` associated functions on your
   own types.
 - [`shared_mutability`](examples/shared_mutability/main.plum) —
   `Ref[T]`, the opt-in escape hatch for state that's genuinely shared
   or mutated in place.
-- [`contracts`](examples/contracts/main.plum) — `require`/`ensure`
+- [`contracts`](examples/contracts/main.plum) covers `require`/`ensure`
   function contracts: preconditions and postconditions checked at the
   call boundary, contrasted with `option_result`'s `Result`-based
   handling for genuinely expected failure.
-- [`currying`](examples/currying/main.plum) — partial application at
+- [`currying`](examples/currying/main.plum) covers partial application at
   call sites: an under-applied call becomes a real function value over
   the remaining parameters, composing with ordinary closures and
   higher-order functions for free.
-- [`asteroids`](examples/asteroids/main.plum) — a full playable
+- [`asteroids`](examples/asteroids/main.plum) is a full playable
   Asteroids clone against real [raylib](https://www.raylib.com/), the
   one example that links native C (`native/raylib_shim.c` bridges
-  raylib's real ABI — 32-bit `float`/`unsigned char` fields — across
+  raylib's real ABI (32-bit `float`/`unsigned char` fields) across
   `extern "C"`'s closed, ABI-safe type surface; see that file's own
   doc comment). Build/run with `make`/`make run` inside the example's
   own directory (needs raylib installed and on your linker path, not
-  `plum run`/`plum build` directly — see [its own
+  `plum run`/`plum build` directly; see [its own
   README](examples/asteroids/README.md) for install/build steps and
   controls). The most complete demonstration of functional
   game-state-as-value-not-mutation in the whole repo.
@@ -1406,14 +1406,14 @@ Plum, compiles itself to a byte-identical fixed point, and builds
 without a Rust toolchain. The core language and LLVM backend are
 substantially complete (scalars, control flow, closures, generics,
 arrays, strings, concurrency, FFI), and there is one implementation of
-all of it — the Rust one was retired on 2026-08-25.
+all of it. The Rust one was retired on 2026-08-25.
 
-Rebuilding a value — `Entity { x: e.x + 1, ..}` in a loop, or
-`Array.map` over an array nothing else is holding — recycles the old
+Rebuilding a value, whether `Entity { x: e.x + 1, ..}` in a loop or
+`Array.map` over an array nothing else is holding, recycles the old
 cell instead of allocating a new one, so an update loop that reads as
 pure allocates a constant number of times rather than once per
 iteration. It applies to structs and enums whatever they
-hold — including `String` and `Array` fields and payloads — to arrays
+hold, including `String` and `Array` fields and payloads, to arrays
 under `.push()` and `Array.map`, and to strings under `.concat()`. It
 does not apply to `Array.filter`, or to mapping an array whose elements
 are themselves references.
@@ -1433,6 +1433,6 @@ What is actually checked, rather than claimed: 74 corpus fixtures under
 AddressSanitizer with leak detection, 102 lexer/parser goldens, 11
 property tests, recorded allocation counts for ten memory-model
 fixtures, every project in `examples/` against its recorded output, and
-a real language-server session — on Linux x86_64 and arm64, macOS, and
+a real language-server session, on Linux x86_64 and arm64, macOS, and
 Windows. Running `./bootstrap/` is the honest answer to "what works";
 no list kept by hand is. See DESIGN.md for the full history.

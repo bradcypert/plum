@@ -50,13 +50,13 @@ has to be exact in one way that is easy to miss: bucket index is
 `String.hash(..) % bucket_count`, which means `Map.keys` and
 `Map.values` enumerate in HASH order. A hash that disagreed with
 the real compiler's would print the same map in a different order
--- see `@plum_str_hash_raw` in runtime.plum, and the sign-bit mask
+See `@plum_str_hash_raw` in runtime.plum, and the sign-bit mask
 that a first attempt got wrong.
 
 ## `struct JsonEntry`
 
 Mirrored from `crates/plumc/src/lib.rs`'s STDLIB_JSON_SRC, minus its
-own `chars_of` (the runtime already provides that one -- it is the
+own `chars_of` (the runtime already provides that one, since it is the
 single thing this prelude cannot write in Plum). Everything else is
 character-for-character the real compiler's, so the two agree on
 number formatting, escape handling and parse errors by construction

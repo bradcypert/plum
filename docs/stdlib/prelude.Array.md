@@ -84,8 +84,8 @@ associative, so a different order can give a different last digit.
 
 Namespaced under `Array`, not `String`, since 2026-08-25: both
 take an `Array[String]`. `String.` used to mean two different
-things -- "first parameter is a String" for most of it and
-"produces a String" for these two -- and `x.f(a)` = `T.f(x, a)`
+things, "first parameter is a String" for most of it and
+"produces a String" for these two, and `x.f(a)` = `T.f(x, a)`
 needs it to mean exactly one. `parts.join(", ")` now works and
 reads the right way round.
 

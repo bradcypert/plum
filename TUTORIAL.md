@@ -1,7 +1,7 @@
 # A tour of Plum in twenty minutes
 
 This walks from nothing to a program you would recognise as real. Every
-snippet is a complete program — copy it into `main.plum` and run it.
+snippet is a complete program. Copy it into `main.plum` and run it.
 
 If you have not installed Plum yet:
 
@@ -20,7 +20,7 @@ plum run hello
 ```
 
 A project is a **directory**, not a manifest file. There is nothing to
-configure — `plum new` writes one `main.plum` and that is the project.
+configure. `plum new` writes one `main.plum`, and that is the project.
 
 ## 2. Functions, and types you mostly do not write
 
@@ -37,7 +37,7 @@ let main (): Unit = println(double(21).to_string())
 Parameter and return types are annotations you write on purpose;
 everything inside is inferred. `let total = double(21)` needs no type.
 
-A function body is an **expression**, not a block of statements — which
+A function body is an **expression**, not a block of statements, which
 is why there is no `return`. `{ ... }` is itself an expression whose
 value is its last line:
 
@@ -75,7 +75,7 @@ let main (): Unit = {
 Values are immutable. `shifted` builds a new `Point` rather than
 changing one, and `p` is still `{1, 2}` afterwards.
 
-To change one field of a big struct, use functional update — `..base`
+To change one field of a big struct, use functional update. `..base`
 fills in the rest:
 
 ```plum
@@ -185,7 +185,7 @@ let main (): Unit = {
 ```
 
 `xs.map(f)` and `Array.map(xs, f)` are the same call. **A method is a
-namespaced function whose first parameter is the receiver** — so
+namespaced function whose first parameter is the receiver**, so
 anything named `Array.<name>` is a method on arrays, `String.<name>`
 is a method on strings, and a function you write yourself is no
 different:
@@ -214,7 +214,7 @@ let main (): Unit = println(1 + "one")
 error: '+': Int != String
 ```
 
-Integer overflow is checked, not wrapped — a program that overflows
+Integer overflow is checked, not wrapped. A program that overflows
 stops rather than quietly continuing with a wrong number. Division by
 zero stops too.
 
@@ -260,9 +260,9 @@ under one and differently under the other.
 
 ## Where to go next
 
-- **[README.md](README.md)** — the reference: modules, the standard
+- **[README.md](README.md)** is the reference: modules, the standard
   library, concurrency, the C FFI, and the editor integration.
-- **`examples/`** — nine real projects, from a JSON round-trip to an
+- **`examples/`** holds nine real projects, from a JSON round-trip to an
   HTTP server to an asteroids game.
-- **`plum lsp`** — a language server with live diagnostics, hover and
+- **`plum lsp`** is a language server with live diagnostics, hover and
   completion. See the README's "Editor support".

@@ -18,7 +18,7 @@ harmless.
 ## `let File.read (f: File) (max_len: Int): Result[Bytes, String]`
 
 Up to `max_len` bytes. An empty result is END OF FILE, not a
-failure -- the same three-way split `Net.read_bytes` makes, and
+failure: the same three-way split `Net.read_bytes` makes, and
 for the same reason: a reader looping until the end needs to tell
 "nothing left" from "something broke".
 

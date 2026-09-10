@@ -13,12 +13,12 @@ Both halves are the real text: `a b` is a space, not `a%20b`.
 
 `port` is always RESOLVED: the scheme's default when the URL did
 not say. 0 means the scheme has no default this module knows,
-which is not an error -- parsing is not connecting, and a URL
+which is not an error. Parsing is not connecting, and a URL
 with a scheme we have never heard of is still a URL.
 
 `path` is percent-encoded and never empty (`/` when the URL had
 none). `raw_query` and `fragment` are stored without their `?`
-and `#`, and are `""` when absent -- which does not distinguish
+and `#`, and are `""` when absent, which does not distinguish
 `http://h/p` from `http://h/p?`, a difference nothing observable
 depends on.
 
@@ -38,7 +38,7 @@ Absolute URLs only. A scheme-relative (`//host/x`) or relative
 (`/x`) reference has no meaning without a base to resolve against,
 and resolution is a different function than parsing.
 
-The scheme is lowercased -- schemes are case-insensitive, and
+The scheme is lowercased, because schemes are case-insensitive, and
 normalising here is what lets `u.scheme == "http"` be written
 everywhere else without thinking about it. The host is left
 exactly as written, matching Go's `net/url`.
@@ -46,7 +46,7 @@ exactly as written, matching Go's `net/url`.
 ## `let request_target (u: Url): String`
 
 What goes after the method in an HTTP request line: the path, plus
-the query exactly as it arrived. Not the fragment -- a fragment is
+the query exactly as it arrived. Not the fragment; a fragment is
 never sent to a server.
 
 ## `let authority (u: Url): String`
@@ -56,7 +56,7 @@ it is not the scheme's default.
 
 This is what an HTTP `Host:` header wants (RFC 7230 section 5.4)
 and what a URL's authority component is, which is the same string
-for the same reasons -- so it is written once here rather than
+for the same reasons, so it is written once here rather than
 twice, once in `stringify` and once in the HTTP client.
 
 The brackets have to come back: they were stripped on the way in
@@ -66,7 +66,7 @@ host next to a `:port` needs them or the colons are ambiguous.
 ## `let stringify (u: Url): String`
 
 The port is omitted when it is the scheme's default, and an IPv6
-host is re-bracketed -- so this is CANONICAL output rather than a
+host is re-bracketed, so this is CANONICAL output rather than a
 byte-for-byte reproduction of whatever was parsed. `parse` after
 `stringify` yields the same `Url`, which is the invariant that
 matters and the one the properties check.
