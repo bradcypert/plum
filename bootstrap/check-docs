@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Fails if `docs/stdlib/` has drifted from the compiler that generates it.
+#
+# The same shape as `check-stdlib-reference`, and for the same reason:
+# a generated file checked into the repository is only trustworthy if
+# something asserts it was regenerated. Without this, `docs/stdlib/`
+# would be a snapshot of whatever the standard library looked like the
+# last time somebody remembered — which is the exact failure the
+# README's hand-written list had, and why it is gone.
+#
+#   bootstrap/check-docs            # verify
+#   bootstrap/check-docs --record   # regenerate
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+plum="${PLUM:-./sh}"
+out="docs/stdlib"
+
+if [ "${1:-}" = "--record" ]; then
+    rm -rf "$out"
+    SH_TIMEOUT="${SH_TIMEOUT:-300}" SH_MEM="${SH_MEM:-512M}" "$plum" doc --stdlib -o "$out" > /dev/null || {
+        echo "check-docs: generation failed" >&2; exit 1
+    }
+    echo "check-docs: recorded $(ls "$out" | wc -l | tr -d ' ') module pages"
+    exit 0
+fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+SH_TIMEOUT="${SH_TIMEOUT:-300}" SH_MEM="${SH_MEM:-512M}" "$plum" doc --stdlib -o "$work/stdlib" > /dev/null || {
+    echo "check-docs: generation failed" >&2; exit 1
+}
+
+if diff -ru "$out" "$work/stdlib" > "$work/diff" 2>&1; then
+    echo "check-docs: $(ls "$out" | wc -l | tr -d ' ') module pages match the compiler"
+    exit 0
+fi
+
+echo "check-docs: docs/stdlib is out of date. Regenerate with:" >&2
+echo "    bootstrap/check-docs --record" >&2
+head -n 30 "$work/diff" >&2
+exit 1

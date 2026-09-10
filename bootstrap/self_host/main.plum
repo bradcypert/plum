@@ -422,11 +422,31 @@ let cmd_doc_stdlib (out: String): Unit = {
 }
 
 let cmd_doc_items (items: Array[parser.ItemNode]) (out: String): Unit = {
-    match Os.make_dir(out) { Ok(_) => (), Err(_) => () };
+    doc_make_dirs(out);
     let mods = sorted_namespaces(doc_modules(items, 0, []), 0);
     doc_write_modules(items, mods, out, 0);
     println("wrote ${mods.len().to_string()} module(s) to ${out}")
 }
+
+// `Os.make_dir` creates ONE level, so `-o docs/stdlib` failed when
+// `docs` did not exist -- and failed quietly, because a directory that
+// cannot be made is indistinguishable here from one that already
+// exists. Every prefix is created in turn instead.
+let doc_make_dirs (path: String): Unit =
+    doc_make_acc(String.split(Path.clean(path), Path.separator()), 0, "")
+
+let doc_make_acc (parts: Array[String]) (i: Int) (acc: String): Unit =
+    if i >= parts.len() { () }
+    else {
+        // An absolute path's first segment is empty; joining it back on
+        // keeps the leading separator instead of turning `/a/b` into
+        // `a/b`.
+        let here = if String.is_empty(acc) && String.is_empty(parts[i]) { Path.separator() }
+            else if String.is_empty(acc) { parts[i] }
+            else { Path.join(acc, parts[i]) };
+        match Os.make_dir(here) { Ok(_) => (), Err(_) => () };
+        doc_make_acc(parts, i + 1, here)
+    }
 
 let doc_modules (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= items.len() { acc }

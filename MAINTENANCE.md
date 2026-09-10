@@ -11,7 +11,7 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version help-check check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
-         self-test stdin-smoke tty-smoke \
+         self-test stdin-smoke tty-smoke check-docs \
          property-check doc-check alloc-check lossless-check fmt-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
@@ -28,6 +28,7 @@ About two minutes. If you only run two, run `corpus-check` and
 |---|---|---|
 | `check-version` | the version string, the tag and the built binary agree | <1s |
 | `help-check` | `plum help`/`--help`/`-h` print usage, extra args ignored | <1s |
+| `check-docs` | `docs/stdlib/` matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 3s |
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
@@ -568,6 +569,11 @@ Worth knowing before you "fix" them:
   wrong. Semantic key events are #35 and deliberately NOT here: that is
   pure Plum with no C, so it is the most vendorable piece and the one
   where a frozen API would hurt most.
+- **`docs/stdlib/` and `STDLIB.md` are both GENERATED; the README links
+  to them and lists nothing itself.** The README's hand-written list was
+  accurate and unchecked, which is a promise that holds only while
+  somebody keeps remembering. Do not reintroduce one — add to the source
+  comments instead, which is where both files come from.
 - **The standard library documents itself through `plum doc --stdlib`,
   the same generator a user project uses.** It is not a bespoke path —
   `cg_parse_std` already sets a source context per module, which is what

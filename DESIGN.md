@@ -20344,3 +20344,30 @@ The fact that the platforms disagree is the caller's business. Where we
 happened to find that out is not. Reviewing eleven lines beat reviewing
 986, which is the argument for sweeping first and checking the output
 rather than curating the input.
+
+### The README stops listing the library (2026-09-09)
+
+`docs/stdlib/` is checked in, one page per module, verified by
+`bootstrap/check-docs` the same way `STDLIB.md` is verified by
+`check-stdlib-reference`. A generated file in a repository is only worth
+trusting if something asserts it was regenerated; otherwise it is a
+snapshot of whenever somebody last remembered.
+
+Two generated references rather than one, because they answer different
+questions: `docs/stdlib/` is per-module prose to read, `STDLIB.md` is
+every signature in one file to search. Neither is hand-maintained, so
+neither can drift from the other or from the compiler.
+
+The README's own standard-library section was 310 lines and is now 28.
+It was accurate when measured -- that was checked, and no drift was
+found -- and nothing verified it, which is a promise that holds exactly
+as long as somebody keeps remembering. The file went from 1,704 lines to
+1,422.
+
+Generating the docs into the repository also found a plain bug:
+`plum doc -o docs/stdlib` created nothing, because `Os.make_dir` makes
+ONE level and `docs/` did not exist. It failed quietly, since a
+directory that cannot be created is indistinguishable from one that is
+already there. `plum doc` now creates each prefix in turn -- a
+user-facing command should not fail because a parent directory is
+missing.
