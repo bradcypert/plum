@@ -20433,3 +20433,38 @@ from a declaration to anything parsing the file. A count of
 declarations read 339 instead of 335 for exactly that reason, and an
 HTML renderer and a search index are both such parsers. `##` means one
 thing in this output.
+
+### `plum doc --html` (2026-09-10)
+
+The same walk, a second renderer. `--html` writes a browsable folder:
+one page per module and namespace, a stylesheet, and an index.
+
+It is a language feature rather than a website: any Plum project gets a
+reference from one command, which is the `cargo doc` bet. With no
+package manager yet, a self-contained folder somebody can drop on
+GitHub Pages is worth more here than it would be in a language with a
+registry.
+
+**No network requests, and that is a rule rather than an omission.**
+System font stacks, one local stylesheet, no CDN and no web font.
+Documentation is read from `file://`, behind corporate proxies and
+without a connection, and a generator that needs the internet to render
+fails precisely where it is most needed. Checked, not assumed: the
+generated folder contains no `http` anywhere.
+
+**Anchors are the declared NAME**, so `id="Array.map"` outlives a
+parameter rename. An anchor built from the whole signature would break
+every inbound link the first time one changed, which is the sort of
+thing nobody notices until the links are already out there.
+
+Two bugs worth recording, both caught before producing anything:
+
+`doc_pairs` took `open_tag` and `close_tag` and then hardcoded
+`<code>`, so `**bold**` would have rendered as code. The inline
+renderer splits on the mark and treats every ODD piece as the inside of
+a pair -- with the LAST piece excepted, since an opening mark that never
+closed is prose and its mark goes back as text.
+
+And the page count reported modules rather than pages, so a run that
+wrote 25 pages said 12. A module with namespaces writes several, and
+the tool was understating its own work.

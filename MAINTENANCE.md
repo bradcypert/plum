@@ -574,6 +574,14 @@ Worth knowing before you "fix" them:
   declaration without one keeps the plain-text answer it always had.
   `lsp-smoke` asserts both, because the second is the one a change here
   would quietly break.
+- **`plum doc --html` makes NO network requests.** System fonts, one
+  local stylesheet, no CDN. A docs folder is read from `file://`, behind
+  proxies and on planes; a generator that needs the internet to render
+  fails exactly where documentation is most needed. Do not add a web
+  font.
+- **Anchors are the declared NAME, not the signature.** `id="Array.map"`
+  survives a parameter being renamed; an anchor built from the signature
+  would break every inbound link the first time one changed.
 - **`plum doc` splits a module by NAMESPACE, uniformly.** A `T.f`
   declaration goes to `<module>.T.md`, and a type named `T` joins that
   page when the namespace exists — so `enum Option` leads the page about

@@ -402,7 +402,18 @@ let locals_acc (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (spa
 // Only `pub` items appear. Documentation is the public surface, and a
 // private helper carrying a `///` block is documenting itself to the
 // next maintainer, which is a different audience.
-let cmd_doc (dir: String) (out: String): Unit = cmd_doc_items(collect_project(dir), out)
+let doc_has_flag (argv: Array[String]) (flag: String) (i: Int): Bool =
+    if i >= argv.len() { false }
+    else if argv[i] == flag { true }
+    else { doc_has_flag(argv, flag, i + 1) }
+
+let doc_out_dir (argv: Array[String]) (i: Int) (fallback: String): String =
+    if i + 1 >= argv.len() { fallback }
+    else if argv[i] == "-o" { argv[i + 1] }
+    else { doc_out_dir(argv, i + 1, fallback) }
+
+let cmd_doc (dir: String) (out: String) (html: Bool): Unit =
+    cmd_doc_render(collect_project(dir), out, html)
 
 // The standard library documents itself through the SAME generator.
 //
@@ -415,17 +426,23 @@ let cmd_doc (dir: String) (out: String): Unit = cmd_doc_items(collect_project(di
 // The prelude is included under its own name. It is what a program gets
 // without asking, so leaving it out would document everything except
 // the part nobody has to opt into.
-let cmd_doc_stdlib (out: String): Unit = {
+let cmd_doc_stdlib (out: String) (html: Bool): Unit = {
     let prelude = parser.with_module(codegen.cg_with_prelude(parser.ProgramNode { items: [] }).items, "prelude");
     let std = codegen.cg_std_items(all_std_uses(()));
-    cmd_doc_items(Array.concat(prelude, std), out)
+    cmd_doc_render(Array.concat(prelude, std), out, html)
 }
 
-let cmd_doc_items (items: Array[parser.ItemNode]) (out: String): Unit = {
+let cmd_doc_items (items: Array[parser.ItemNode]) (out: String): Unit =
+    cmd_doc_render(items, out, false)
+
+let cmd_doc_render (items: Array[parser.ItemNode]) (out: String) (html: Bool): Unit = {
     doc_make_dirs(out);
     let mods = sorted_namespaces(doc_modules(items, 0, []), 0);
-    doc_write_modules(items, mods, out, 0);
-    println("wrote ${mods.len().to_string()} module(s) to ${out}")
+    if html { doc_write_html(items, mods, out) }
+    else {
+        doc_write_modules(items, mods, out, 0);
+        println("wrote ${mods.len().to_string()} module(s) to ${out}")
+    }
 }
 
 // `Os.make_dir` creates ONE level, so `-o docs/stdlib` failed when
@@ -565,15 +582,23 @@ let doc_ns_index (m: String) (nss: Array[String]) (i: Int): String =
 // Only taken from an item that is not itself rendered. A documented
 // `pub` declaration coming first is its own documentation, not the
 // module's.
-let doc_module_blurb (items: Array[parser.ItemNode]) (m: String) (i: Int): String =
+let doc_module_blurb (items: Array[parser.ItemNode]) (m: String) (i: Int): String = {
+    let t = doc_module_blurb_text(items, m, i);
+    if String.is_empty(t) { "" } else { "\n".concat(t).concat("\n") }
+}
+
+// The module's description as WRITTEN, with no wrapper. The Markdown
+// and HTML renderers want the same text shaped differently, so the
+// shaping belongs to each of them rather than to this.
+let doc_module_blurb_text (items: Array[parser.ItemNode]) (m: String) (i: Int): String =
     if i >= items.len() { "" }
     else {
         let mine = if String.is_empty(items[i].module) { "root" } else { items[i].module };
-        if mine != m { doc_module_blurb(items, m, i + 1) }
+        if mine != m { doc_module_blurb_text(items, m, i + 1) }
         else if String.is_empty(items[i].doc) { "" }
         else {
             match doc_entry(items[i]) {
-                None => "\n".concat(items[i].doc).concat("\n"),
+                None => items[i].doc,
                 Some(_) => "",
             }
         }
@@ -628,6 +653,257 @@ let doc_entry (item: parser.ItemNode): Option[String] =
 // more than silence.
 let doc_render (signature: String) (doc: String): String =
     "\n## `${signature}`\n\n".concat(if String.is_empty(doc) { "" } else { doc.concat("\n") })
+
+// --- HTML output ---
+//
+// The same walk, a second renderer. `plum doc --html` writes a
+// browsable folder: one page per module and namespace, a stylesheet,
+// and an index.
+//
+// **No network requests.** System fonts, one local stylesheet, no CDN
+// and no web font — a generated docs folder works from a file:// URL,
+// on a plane, and inside a private network. A documentation generator
+// that needs the internet to render is one that fails where it is most
+// often read.
+
+let doc_html_escape (s: String): String =
+    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+// Backticks become `<code>`, `**` becomes `<strong>`. Escaping happens
+// FIRST, so a `<` inside a doc comment is text rather than markup.
+let doc_inline (s: String): String =
+    doc_pairs(doc_pairs(doc_html_escape(s), "`", "<code>", "</code>"), "**", "<strong>", "</strong>")
+
+// Replaces matched pairs of `mark`, leaving an unmatched one alone --
+// an odd number of backticks in a sentence is prose, not broken markup.
+//
+// Splitting on the mark makes every ODD piece the inside of a pair. The
+// last piece is the exception: if it is odd, its opening mark never
+// closed, so the mark goes back as text.
+let doc_pairs (s: String) (mark: String) (open_tag: String) (close_tag: String): String =
+    doc_pairs_acc(String.split(s, mark), mark, open_tag, close_tag, 0, "")
+
+let doc_pairs_acc (parts: Array[String]) (mark: String) (open_tag: String) (close_tag: String) (i: Int) (acc: String): String =
+    if i >= parts.len() { acc }
+    else if i == parts.len() - 1 {
+        if i - (i / 2) * 2 == 1 { acc.concat(mark).concat(parts[i]) } else { acc.concat(parts[i]) }
+    }
+    else if i - (i / 2) * 2 == 1 {
+        doc_pairs_acc(parts, mark, open_tag, close_tag, i + 1, acc.concat(open_tag).concat(parts[i]).concat(close_tag))
+    }
+    else { doc_pairs_acc(parts, mark, open_tag, close_tag, i + 1, acc.concat(parts[i])) }
+
+// Prose to paragraphs. A doc block is hard-wrapped, so lines within a
+// paragraph are joined; a blank line starts a new one.
+let doc_html_prose (text: String): String =
+    if String.is_empty(text) { "" } else { doc_para_acc(String.lines(text), 0, "", "") }
+
+let doc_para_acc (lines: Array[String]) (i: Int) (cur: String) (acc: String): String =
+    if i >= lines.len() { acc.concat(doc_para_flush(cur)) }
+    else if String.is_empty(String.trim(lines[i])) { doc_para_acc(lines, i + 1, "", acc.concat(doc_para_flush(cur))) }
+    else if String.is_empty(cur) { doc_para_acc(lines, i + 1, String.trim(lines[i]), acc) }
+    else { doc_para_acc(lines, i + 1, cur.concat(" ").concat(String.trim(lines[i])), acc) }
+
+let doc_para_flush (cur: String): String =
+    if String.is_empty(cur) { "" } else { "      <p>".concat(doc_inline(cur)).concat("</p>\n") }
+
+// One page. `nav` is shared by every page so any of them is a way into
+// the rest -- a reference is entered from a search result far more
+// often than from its front door.
+let doc_html_page (title: String) (nav: String) (body: String): String =
+    "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+        .concat("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n")
+        .concat("<title>${doc_html_escape(title)}</title>\n")
+        .concat("<link rel=\"stylesheet\" href=\"style.css\">\n</head>\n<body>\n")
+        .concat("<nav>\n${nav}</nav>\n<main>\n${body}</main>\n")
+        .concat("</body>\n</html>\n")
+
+let doc_html_nav (mods: Array[String]) (items: Array[parser.ItemNode]) (i: Int) (acc: String): String =
+    if i >= mods.len() { "<p class=\"brand\"><a href=\"index.html\">API reference</a></p>\n<ul>\n".concat(acc).concat("</ul>\n") }
+    else {
+        let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
+        let subs = doc_html_nav_ns(mods[i], nss, 0, "");
+        doc_html_nav(mods, items, i + 1,
+            acc.concat("<li><a href=\"${mods[i]}.html\">${doc_html_escape(mods[i])}</a>${subs}</li>\n"))
+    }
+
+let doc_html_nav_ns (m: String) (nss: Array[String]) (i: Int) (acc: String): String =
+    if Array.is_empty(nss) { "" }
+    else if i >= nss.len() { "<ul class=\"ns\">\n".concat(acc).concat("</ul>\n") }
+    else { doc_html_nav_ns(m, nss, i + 1, acc.concat("<li><a href=\"${m}.${nss[i]}.html\">${doc_html_escape(nss[i])}</a></li>\n")) }
+
+// A declaration: its signature as code, its prose beneath. The `id` is
+// the signature's own name, so a link can point at one entry.
+let doc_html_entry (sig: String) (doc: String): String =
+    "    <section class=\"decl\" id=\"${doc_anchor(sig)}\">\n"
+        .concat("      <h2><code>${doc_html_escape(sig)}</code></h2>\n")
+        .concat(doc_html_prose(doc))
+        .concat("    </section>\n")
+
+// A stable anchor from a signature: the declared NAME, which is what a
+// reader would type and what a link should survive a signature change
+// for. `let Array.map (xs: ...)` becomes `Array.map`.
+let doc_anchor (sig: String): String = {
+    let after = doc_after_keyword(sig);
+    match String.index_of(after, " ") {
+        None => after,
+        Some(sp) => String.slice(after, 0, sp),
+    }
+}
+
+let doc_after_keyword (sig: String): String =
+    match String.index_of(sig, " ") {
+        None => sig,
+        Some(sp) => String.slice(sig, sp + 1, String.char_len(sig)),
+    }
+
+// The stylesheet, written once beside the pages.
+//
+// **System fonts.** A web font would make every page a network request,
+// and documentation is read on planes, behind proxies and from
+// `file://`. The stack below is what each platform already has.
+//
+// Light and dark both defined, switched by the reader's own setting
+// rather than a control this generator would have to carry JavaScript
+// for.
+let doc_css (): String = Array.join([
+    ":root {",
+    "  --bg: #fcfafb; --fg: #1c1620; --muted: #6d6270;",
+    "  --rule: #e6dce3; --accent: #8a3a67; --surface: #f4eef2;",
+    "}",
+    "@media (prefers-color-scheme: dark) {",
+    "  :root {",
+    "    --bg: #15111a; --fg: #ece5ee; --muted: #9c90a2;",
+    "    --rule: #2e2636; --accent: #dd91bb; --surface: #1f1927;",
+    "  }",
+    "}",
+    "* { box-sizing: border-box; }",
+    "body {",
+    "  margin: 0; background: var(--bg); color: var(--fg);",
+    "  font-family: ui-serif, Georgia, 'Times New Roman', serif;",
+    "  line-height: 1.6;",
+    "  display: grid; grid-template-columns: 16rem minmax(0, 1fr);",
+    "  gap: 3rem; max-width: 72rem; margin: 0 auto; padding: 0 1.5rem;",
+    "}",
+    "nav {",
+    "  position: sticky; top: 0; align-self: start; max-height: 100vh;",
+    "  overflow-y: auto; padding: 2.5rem 0 3rem;",
+    "  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;",
+    "  font-size: 0.88rem;",
+    "}",
+    ".brand { font-weight: 600; margin: 0 0 1.25rem; }",
+    ".brand a { color: var(--accent); text-decoration: none; }",
+    "nav ul { list-style: none; margin: 0; padding: 0; }",
+    "nav ul.ns { margin: 0.15rem 0 0.5rem 0.85rem; font-size: 0.94em; }",
+    "nav li { margin: 0.1rem 0; }",
+    "nav a {",
+    "  color: var(--fg); text-decoration: none; display: block;",
+    "  padding: 0.15rem 0.4rem; border-left: 2px solid transparent; border-radius: 2px;",
+    "}",
+    "nav a:hover { background: var(--surface); border-left-color: var(--accent); }",
+    "nav a:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }",
+    "main { padding: 2.5rem 0 6rem; min-width: 0; }",
+    "h1 {",
+    "  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;",
+    "  font-size: 1.7rem; letter-spacing: -0.02em; margin: 0 0 0.75rem;",
+    "  color: var(--accent);",
+    "}",
+    ".sub { color: var(--muted); font-size: 0.9rem; margin: 0 0 2rem; }",
+    ".blurb { max-width: 66ch; }",
+    ".decl {",
+    "  border-top: 1px solid var(--rule); padding: 1.3rem 0 0.4rem;",
+    "  max-width: 66ch;",
+    "}",
+    ".decl h2 { margin: 0 0 0.65rem; font-weight: 400; font-size: 1rem; }",
+    ".decl h2 code {",
+    "  background: var(--surface); padding: 0.35rem 0.55rem; border-radius: 3px;",
+    "  border-left: 2px solid var(--accent); display: inline-block;",
+    "  overflow-wrap: anywhere;",
+    "}",
+    "p { margin: 0 0 0.8rem; }",
+    "code {",
+    "  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;",
+    "  font-size: 0.87em;",
+    "}",
+    "p code { background: var(--surface); padding: 0.08em 0.3em; border-radius: 2px; }",
+    "a { color: var(--accent); }",
+    "@media (max-width: 800px) {",
+    "  body { grid-template-columns: 1fr; gap: 0; }",
+    "  nav { position: static; max-height: none; border-bottom: 1px solid var(--rule); }",
+    "}",
+], "\n")
+
+// Every page of the reference, plus the stylesheet and a front door.
+let doc_write_html (items: Array[parser.ItemNode]) (mods: Array[String]) (out: String): Unit = {
+    let nav = doc_html_nav(mods, items, 0, "");
+    doc_write("${out}/style.css", doc_css(()));
+    doc_write("${out}/index.html", doc_html_page("API reference", nav,
+        "  <h1>API reference</h1>\n  <p class=\"sub\">Generated by <code>plum doc</code> from the source.</p>\n"
+            .concat(doc_html_index(mods, 0, ""))));
+    doc_write_html_mods(items, mods, nav, out, 0);
+    // Pages, not modules: a module with namespaces writes several, and
+    // reporting the module count made the tool understate its own work.
+    println("wrote ${(doc_page_count(items, mods, 0) + 1).to_string()} HTML page(s) and a stylesheet to ${out}")
+}
+
+let doc_page_count (items: Array[parser.ItemNode]) (mods: Array[String]) (i: Int): Int =
+    if i >= mods.len() { 0 }
+    else { 1 + doc_namespaces(items, mods[i], 0, []).len() + doc_page_count(items, mods, i + 1) }
+
+let doc_html_index (mods: Array[String]) (i: Int) (acc: String): String =
+    if i >= mods.len() { "  <ul>\n".concat(acc).concat("  </ul>\n") }
+    else { doc_html_index(mods, i + 1, acc.concat("    <li><a href=\"${mods[i]}.html\">${doc_html_escape(mods[i])}</a></li>\n")) }
+
+let doc_write_html_mods (items: Array[parser.ItemNode]) (mods: Array[String]) (nav: String) (out: String) (i: Int): Unit =
+    if i >= mods.len() { () }
+    else {
+        let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
+        let body = "  <h1>${doc_html_escape(mods[i])}</h1>\n"
+            .concat("  <div class=\"blurb\">\n").concat(doc_html_prose(doc_module_blurb_text(items, mods[i], 0))).concat("  </div>\n")
+            .concat(doc_html_entries(items, mods[i], "", 0, ""));
+        doc_write("${out}/${mods[i]}.html", doc_html_page(mods[i], nav, body));
+        doc_write_html_ns(items, mods[i], nss, nav, out, 0);
+        doc_write_html_mods(items, mods, nav, out, i + 1)
+    }
+
+let doc_write_html_ns (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (nav: String) (out: String) (i: Int): Unit =
+    if i >= nss.len() { () }
+    else {
+        let body = "  <h1>${doc_html_escape(m)}.${doc_html_escape(nss[i])}</h1>\n"
+            .concat("  <p class=\"sub\">Part of <a href=\"${m}.html\">${doc_html_escape(m)}</a>.</p>\n")
+            .concat(doc_html_entries(items, m, nss[i], 0, ""));
+        doc_write("${out}/${m}.${nss[i]}.html", doc_html_page("${m}.${nss[i]}", nav, body));
+        doc_write_html_ns(items, m, nss, nav, out, i + 1)
+    }
+
+let doc_html_entries (items: Array[parser.ItemNode]) (m: String) (ns: String) (i: Int) (acc: String): String =
+    doc_html_entries_in(items, m, sorted_namespaces(doc_namespaces(items, m, 0, []), 0), ns, i, acc)
+
+let doc_html_entries_in (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (ns: String) (i: Int) (acc: String): String =
+    if i >= items.len() { acc }
+    else {
+        let mine = if String.is_empty(items[i].module) { "root" } else { items[i].module };
+        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) || doc_ns_of_in(nss, items[i]) != ns {
+            doc_html_entries_in(items, m, nss, ns, i + 1, acc)
+        } else {
+            match doc_signature_of(items[i]) {
+                None => doc_html_entries_in(items, m, nss, ns, i + 1, acc),
+                Some(sig) => doc_html_entries_in(items, m, nss, ns, i + 1, acc.concat(doc_html_entry(sig, items[i].doc))),
+            }
+        }
+    }
+
+// The signature alone, without the Markdown wrapper `doc_entry` adds --
+// the two renderers need the same text shaped differently.
+let doc_signature_of (item: parser.ItemNode): Option[String] =
+    match item.kind {
+        IKLet(def) => Some(def_signature(def)),
+        IKStruct(d) => Some("struct ${d.name}"),
+        IKEnum(d) => Some("enum ${d.name}"),
+        IKHandle(d) => Some("handle ${d.name}"),
+        IKExtern(_) => None,
+        IKUse(_) => None,
+    }
 
 pub let cmd_stdlib_reference (unit: Unit): Unit = {
     let prelude = codegen.cg_with_prelude(parser.ProgramNode { items: [] }).items;
@@ -2665,8 +2941,11 @@ let main (): Unit = {
     } else if argv.len() >= 2 && argv[0] == "doc" {
         // `-o` is optional; `docs/` is the conventional place and saves
         // every caller from spelling it.
-        let out = if argv.len() >= 4 && argv[2] == "-o" { argv[3] } else { "docs" };
-        if argv[1] == "--stdlib" { cmd_doc_stdlib(out) } else { cmd_doc(argv[1], out) }
+        // `--html` may sit anywhere after the target, so `-o` keeps its
+        // place whichever order they are written in.
+        let html = doc_has_flag(argv, "--html", 0);
+        let out = doc_out_dir(argv, 0, "docs");
+        if argv[1] == "--stdlib" { cmd_doc_stdlib(out, html) } else { cmd_doc(argv[1], out, html) }
     } else if argv.len() >= 1 && argv[0] == "stdlib-reference" {
         // Before the `argv.len() < 2` guard for the same reason
         // `version` is, and the comment above is why this was checked
