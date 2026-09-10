@@ -504,13 +504,26 @@ let doc_entries (items: Array[parser.ItemNode]) (m: String) (i: Int) (acc: Strin
     if i >= items.len() { acc }
     else {
         let mine = if String.is_empty(items[i].module) { "root" } else { items[i].module };
-        if !items[i].is_pub || mine != m { doc_entries(items, m, i + 1, acc) }
+        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) { doc_entries(items, m, i + 1, acc) }
         else {
             match doc_entry(items[i]) {
                 None => doc_entries(items, m, i + 1, acc),
                 Some(text) => doc_entries(items, m, i + 1, acc.concat(text)),
             }
         }
+    }
+
+// A name the COMPILER generates, not one anybody may write.
+//
+// Contract desugaring declares `__contract_require`/`__contract_ensure`
+// and marks them `pub` because the generated code calls them across
+// modules. `STDLIB.md` has always filtered these; this is the same
+// rule, and without it every project's documentation began with a
+// function its author had never heard of.
+let doc_is_internal (item: parser.ItemNode): Bool =
+    match item.kind {
+        IKLet(def) => String.starts_with(def.name, "__"),
+        _ => false,
     }
 
 // A declaration and whatever `///` was written above it. `None` for the
