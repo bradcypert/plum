@@ -89,9 +89,38 @@ if [ -n "$loose" ]; then
     done
 fi
 
+libs=0
+
 for dir in examples/*/; do
     name="$(basename "$dir")"
-    [ -f "$dir/main.plum" ] || continue
+
+    # A directory with no `main.plum` is a LIBRARY: a project that
+    # exists to be depended on, like `examples/semver/`. It has no entry
+    # point, so it is TYPE-CHECKED rather than emitted and run.
+    #
+    # It must also be named by some example's `plum.pkg`. A library that
+    # nothing depends on is source under `examples/` that nobody builds,
+    # which is exactly the silence this harness was written to break --
+    # the same reason a loose `.plum` file is reported above.
+    if [ ! -f "$dir/main.plum" ]; then
+        if ! grep -qs -- "\"\.\./$name\"" examples/*/plum.pkg; then
+            printf 'FAIL  %-24s a library under examples/ that no example depends on\n' "$name"
+            fail=$((fail + 1))
+            continue
+        fi
+        # `sh check` reports errors on stdout and still exits 0, so the
+        # OUTPUT is what says whether it worked. Same reason the emit
+        # step below looks at the first line rather than at `$?`.
+        check_out="$(SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-240}" ./sh check "$dir" 2>&1)"
+        if [ "$check_out" = "ok" ]; then
+            printf 'LIB   %-24s type-checks on its own\n' "$name"
+            libs=$((libs + 1))
+        else
+            printf 'FAIL  %-24s %s\n' "$name" "$(printf '%s' "$check_out" | head -n 1)"
+            fail=$((fail + 1))
+        fi
+        continue
+    fi
 
     # `--link-c` only when the example actually HAS a native shim: most
     # do not, and clang is happy to fail on a path that is not there.
@@ -205,9 +234,11 @@ for dir in examples/*/; do
 done
 
 echo
+libs_note=""
+[ "$libs" -gt 0 ] && libs_note=", $libs library"
 if [ "$skipped_link" -gt 0 ]; then
-    echo "examples: $ok matching, $emit_only emit-only, $skipped_link emitted-but-not-linked, $fail failing"
+    echo "examples: $ok matching, $emit_only emit-only, $skipped_link emitted-but-not-linked$libs_note, $fail failing"
 else
-    echo "examples: $ok matching, $emit_only emit-only, $fail failing"
+    echo "examples: $ok matching, $emit_only emit-only$libs_note, $fail failing"
 fi
 [ "$fail" -eq 0 ]

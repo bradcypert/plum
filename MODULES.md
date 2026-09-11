@@ -263,11 +263,8 @@ nothing is fetched. `plum check`, `run`, `build`, `test` and `doc` all
 read the dependency's source alongside your own, and the language
 server sees it too.
 
-A dependency's modules arrive under the names its own layout gives
-them, with one exception: files at the dependency's root belong to a
-module named after the **dependency** rather than to the root module.
-So `../parsec/parsec.plum` is reached as `parsec.parse`, while
-`../parsec/json/` is module `json` either way.
+A dependency's modules arrive under the names its own directories give
+them, which are the same names it uses when built alone:
 
 ```plum fragment
 use parsec;
@@ -283,6 +280,44 @@ merely undocumented.
 Dependencies of dependencies come along, with their paths resolved
 relative to the manifest that names them. Two packages that depend on
 each other terminate rather than recursing.
+
+A package's name belongs to the package. If a dependency has its own
+`plum.pkg` declaring a `name`, the `Dep` naming it has to agree, so a
+`path` edited to point somewhere else cannot go on claiming to be the
+old dependency.
+
+### A library's code goes in module subdirectories
+
+The root module is where `main` lives and its names are unqualified, so
+a package may not put anything there. A dependency contributes only its
+module **subdirectories**, and source at a dependency's root is an
+error:
+
+```
+dependency `parsec` has Plum source at its root: ../parsec/parsec.plum
+  A dependency's code lives in module subdirectories, so its module
+  names are the same whether it is built on its own or used from
+  another project.
+```
+
+So a library is laid out one level deeper than you might first write
+it, the same shape as Rust's `src/lib.rs`:
+
+```
+parsec/
+  plum.pkg          declares that it is called `parsec`
+  parsec/           module `parsec`
+  json/             module `json`
+```
+
+The second half of that error message is the half that matters. A
+module is named by its directory, chosen by the library's author, in
+every context. That is what lets `json/json.plum` say `use parsec;` and
+keep working when the library is checked on its own, which is most of
+what "a dependency is an ordinary project" means.
+
+[`examples/packages/`](examples/packages/) is the whole thing, two
+projects and about a hundred lines.
 
 ### Two module names that collide
 

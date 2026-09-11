@@ -180,11 +180,13 @@ let dep_of (path: String) (e: parser.PExpr): Dep = match e {
         reject_unknown(path, fields, 0, ["name", "path"], "Dep");
         let name = required_string(path, fields, "name", "Dep");
         let dep_path = required_string(path, fields, "path", "Dep");
-        // A dependency's NAME is a module name, so it has to be one.
-        // Catching this here names the manifest line; catching it later
-        // would name nothing at all.
-        if !is_module_name(name) {
-            fail(path, "`${name}` cannot be a module name: a dependency's name is the module its code lands in, so it must start with a letter and hold only letters, digits and `_`")
+        // A package name is an identifier. It names no module -- a
+        // dependency's modules are named by its own subdirectories --
+        // but it is what a registry would resolve one day, and a name
+        // that cannot be written in source is a name that will have to
+        // be changed later. Catching it here names the manifest line.
+        if !is_identifier(name) {
+            fail(path, "`${name}` cannot be a package name: it must start with a letter and hold only letters, digits and `_`")
         };
         Dep { name: name, path: dep_path }
     },
@@ -232,12 +234,11 @@ let string_value (path: String) (name: String) (e: parser.PExpr): String = match
 let last_segment (path: Array[String]): String = Option.unwrap_or(Array.last(path), "")
 
 // Asked of the LEXER rather than of a character-class predicate written
-// here. A dependency's name becomes a module name, and the authority on
-// what may be a module name is the thing that reads module names: a
-// string is one exactly when it lexes to a single identifier. That also
-// rejects `match` and `struct` for free, which a hand-written
-// letters-and-digits test would have let through.
-let is_module_name (s: String): Bool = {
+// here. The authority on what an identifier is, is the thing that reads
+// identifiers: a string is one exactly when it lexes to a single
+// `TokIdent`. That also rejects `match` and `struct` for free, which a
+// hand-written letters-and-digits test would have let through.
+let is_identifier (s: String): Bool = {
     let tokens = lexer.tokenize(s);
     tokens.len() == 2 && match tokens[0] { TokIdent(n) => n == s, _ => false }
 }

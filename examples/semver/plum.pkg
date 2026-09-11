@@ -1,0 +1,11 @@
+// A library declares its own name. The project that depends on it
+// repeats the name beside the path, and the two have to agree: a name
+// belongs to the package, not to whoever is using it.
+//
+// `deps` is absent because this library has none. A project with no
+// dependencies needs no `plum.pkg` at all; this one has a manifest only
+// to say what it is called.
+Package {
+    name: "semver",
+    version: "0.1.0",
+}

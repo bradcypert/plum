@@ -1,0 +1,10 @@
+installed: 1.4.2
+
+  a patch (1.4.7): upgrade
+  a minor bump (1.6.0): upgrade
+  a downgrade (1.3.9): hold
+  a new major (2.0.0): hold
+  a typo (1.4): a version is three numbers separated by dots, not `1.4`
+  a bad part (1.x.0): the minor version is not a number: `x`
+
+sorted: 1.4.2, 1.4.7, 1.6.0, 2.0.0

@@ -1,0 +1,20 @@
+// A second module inside the same library.
+//
+// It qualifies its neighbour as `semver.` and that keeps working when
+// the whole thing is consumed as a dependency, because a package's
+// modules arrive under the names its own layout gives them.
+
+use semver;
+
+// `^1.4.0`, roughly: an upgrade is allowed when it stays on the same
+// major version and does not go backwards.
+//
+// Real caret ranges treat `0.x` specially, since nothing below 1.0
+// promises anything. Left out on purpose; see the note in `semver.plum`
+// about what this example is for.
+pub let caret_allows (have: semver.Version) (candidate: semver.Version): Bool =
+    candidate.major == have.major && match semver.compare(candidate, have) {
+        semver.Order.After => true,
+        semver.Order.Same => false,
+        semver.Order.Before => false,
+    }

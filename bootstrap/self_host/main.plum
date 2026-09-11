@@ -3028,7 +3028,13 @@ let collect_path_items (path: String) (module_name: String): Array[parser.ItemNo
 let collect_project (root: String): Array[parser.ItemNode] =
     if Result.unwrap_or(Os.is_directory(root), false) {
         let own = collect_root_entries(root, Result.unwrap_or(Os.list_dir(root), []), 0, []);
-        collect_deps(dep_closure(root, []), 0, own)
+        // The ROOT's own path seeds the visited set, and it has to:
+        // its modules are already loaded above, so a dependency that
+        // leads back here must be skipped like any other package
+        // already seen. Without it, `a -> b -> a` loaded `a` a second
+        // time as a dependency and reported it as a module clash with
+        // itself.
+        collect_deps(dep_closure(root, DepScan { visited: [Path.clean(root)], found: [] }).found, 0, own)
     } else {
         collect_path_items(root, "")
     }
@@ -3040,7 +3046,7 @@ let collect_project (root: String): Array[parser.ItemNode] =
 // than the root's -- `Path.join` handles that, including letting an
 // absolute path win.
 //
-// `seen` is keyed on the cleaned path and is what makes a cycle
+// `visited` is keyed on the cleaned path and is what makes a cycle
 // terminate: two packages that depend on each other are a perfectly
 // ordinary thing to write by accident with path dependencies, and
 // without this the compiler would recurse until it died with nothing
@@ -3048,39 +3054,73 @@ let collect_project (root: String): Array[parser.ItemNode] =
 // reach the same directory through a symlink are still two entries --
 // they then collide on module names and are reported as that, which is
 // a worse message than it could be but not a wrong one.
-let dep_closure (dir: String) (seen: Array[pkg.Dep]): Array[pkg.Dep] =
-    add_deps(dir, pkg.read(dir).deps, 0, seen)
+//
+// `visited` is kept SEPARATE from `found` rather than derived from it,
+// because the root project belongs in one and not the other: its
+// modules are loaded directly, so it must stop a cycle without being
+// loaded a second time as a dependency of itself.
+struct DepScan { visited: Array[String], found: Array[pkg.Dep] }
 
-let add_deps (dir: String) (deps: Array[pkg.Dep]) (i: Int) (seen: Array[pkg.Dep]): Array[pkg.Dep] =
-    if i >= deps.len() { seen }
+let dep_closure (dir: String) (scan: DepScan): DepScan =
+    add_deps(dir, pkg.read(dir).deps, 0, scan)
+
+let add_deps (dir: String) (deps: Array[pkg.Dep]) (i: Int) (scan: DepScan): DepScan =
+    if i >= deps.len() { scan }
     else {
         let resolved = pkg.Dep { name: deps[i].name, path: Path.clean(Path.join(dir, deps[i].path)) };
-        if Array.any(seen, |d| d.path == resolved.path) { add_deps(dir, deps, i + 1, seen) }
-        else { add_deps(dir, deps, i + 1, dep_closure(resolved.path, seen.push(resolved))) }
+        if Array.contains(scan.visited, resolved.path) { add_deps(dir, deps, i + 1, scan) }
+        else {
+            if !Result.unwrap_or(Os.is_directory(resolved.path), false) {
+                panic_raw("dependency `${resolved.name}` is not a directory: ${resolved.path}")
+            };
+            let manifest = pkg.read(resolved.path);
+            // A package's name belongs to the PACKAGE. The consuming
+            // manifest repeats it so you can read what a project depends
+            // on without walking to the directory, and repeating it is
+            // only useful if a disagreement is an error: otherwise a
+            // path edited to point somewhere else keeps the old name and
+            // the manifest describes a dependency that is not there.
+            if manifest.name != "" && manifest.name != resolved.name {
+                panic_raw("dependency `${resolved.name}` at ${resolved.path} calls itself `${manifest.name}`.\n  A package's name belongs to the package, so the two have to agree.")
+            };
+            let next = DepScan { visited: scan.visited.push(resolved.path), found: scan.found.push(resolved) };
+            add_deps(dir, deps, i + 1, add_deps(resolved.path, manifest.deps, 0, next))
+        }
     }
 
 let collect_deps (deps: Array[pkg.Dep]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
     if i >= deps.len() { acc }
     else {
-        if !Result.unwrap_or(Os.is_directory(deps[i].path), false) {
-            panic_raw("dependency `${deps[i].name}` is not a directory: ${deps[i].path}")
-        };
         let items = collect_dependency(deps[i].path, deps[i].name);
         reject_module_clash(module_names(acc, 0, []), module_names(items, 0, []), deps[i].name, 0);
         collect_deps(deps, i + 1, Array.concat(acc, items))
     }
 
-// A dependency is laid out exactly like a project, with ONE difference:
-// its root-level files belong to a module named after the dependency
-// rather than to the root module `""`. They have to go somewhere, and
-// the root module already belongs to whoever is doing the building --
-// letting a dependency's root files land there would put its functions
-// in the consuming project's own unqualified namespace, which is the
-// one thing a package must not be able to do.
+// A dependency contributes only its module SUBDIRECTORIES. Source at a
+// dependency's root is an error.
 //
-// So a single-file library `../parsec/parsec.plum` is reachable as
-// `parsec.parse`, and a `../parsec/json/` subdirectory is module
-// `json`, the same name it has when the library is built on its own.
+// The root module `""` belongs to whoever is being built: it is where
+// `main` lives, and its names are unqualified. A dependency's files
+// cannot go there, because putting a package's functions into the
+// consuming project's own unqualified namespace is the one thing a
+// package must not be able to do.
+//
+// The first design instead renamed a dependency's root files to the
+// dependency's name. That was wrong twice over, and the example in
+// `examples/semver/` found both within a day. The name came from the
+// CONSUMER's `Dep { name: .. }`, so a consumer could rename a library's
+// own root module out from under it and break the library's internal
+// `use` of itself. And the name differed between contexts -- `""` when
+// the library was built alone, the dependency's name when it was
+// consumed -- so a library with two modules could not be type-checked
+// on its own at all, which is most of what makes it an ordinary project.
+//
+// Requiring a subdirectory removes both: a module is named by its
+// directory, always, in every context, by the library's own author.
+// The cost is that a one-file library is `parsec/parsec/parsec.plum`
+// rather than `parsec/parsec.plum`, which is the same shape as Rust's
+// `src/lib.rs` and one a later release can relax without breaking
+// anything written against this rule.
 let collect_dependency (dir: String) (dep_name: String): Array[parser.ItemNode] =
     collect_dep_entries(dir, dep_name, Result.unwrap_or(Os.list_dir(dir), []), 0, [])
 
@@ -3089,8 +3129,14 @@ let collect_dep_entries (dir: String) (dep_name: String) (entries: Array[String]
     else if entries[i] == "." || entries[i] == ".." { collect_dep_entries(dir, dep_name, entries, i + 1, acc) }
     else {
         let full = Path.join(dir, entries[i]);
-        let m = if Result.unwrap_or(Os.is_directory(full), false) { entries[i] } else { dep_name };
-        collect_dep_entries(dir, dep_name, entries, i + 1, Array.concat(acc, collect_path_items(full, m)))
+        if Result.unwrap_or(Os.is_directory(full), false) {
+            collect_dep_entries(dir, dep_name, entries, i + 1, Array.concat(acc, collect_path_items(full, entries[i])))
+        } else {
+            if entries[i].ends_with(".plum") {
+                panic_raw("dependency `${dep_name}` has Plum source at its root: ${full}\n  A dependency's code lives in module subdirectories, so its module names are the same whether it is built on its own or used from another project.\n  Move it into a directory named for the module it should be.")
+            };
+            collect_dep_entries(dir, dep_name, entries, i + 1, acc)
+        }
     }
 
 // Function and type names are namespaced by module. MODULE names are

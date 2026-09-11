@@ -1,0 +1,69 @@
+// A LIBRARY, not a program. There is no `main` here.
+//
+// `examples/packages/` depends on this directory by path, and that is
+// the only reason it is interesting: it shows what a package looks like
+// from the inside. It is an ordinary Plum project. Nothing about it
+// says "library", and nothing had to be published.
+//
+// A library's code lives in module subdirectories, never at the project
+// root. This directory is named `semver/`, so this is module `semver`
+// and these names are `semver.parse` and `semver.Version` -- when the
+// project is built on its own, and identically when another project
+// depends on it. The root module `""` is where `main` lives and its
+// names are unqualified, which is why a package may not put anything
+// there.
+//
+// Check it on its own: `plum check examples/semver`
+
+pub struct Version {
+    pub major: Int,
+    pub minor: Int,
+    pub patch: Int,
+}
+
+pub enum Order {
+    Before,
+    Same,
+    After,
+}
+
+// `1.4.2` and nothing cleverer. Real semantic versions carry
+// pre-release and build metadata; leaving them out keeps this an
+// example about packaging.
+pub let parse (s: String): Result[Version, String] = {
+    let parts = String.split(s, ".");
+    if parts.len() != 3 {
+        Err("a version is three numbers separated by dots, not `${s}`")
+    } else {
+        match part(parts[0], "major") {
+            Err(e) => Err(e),
+            Ok(major) => match part(parts[1], "minor") {
+                Err(e) => Err(e),
+                Ok(minor) => match part(parts[2], "patch") {
+                    Err(e) => Err(e),
+                    Ok(patch) => Ok(Version { major: major, minor: minor, patch: patch }),
+                },
+            },
+        }
+    }
+}
+
+// No `pub`, so this is unreachable from outside the module -- and a
+// package boundary does not change that. `plum check` on the project
+// next door rejects `semver.part(..)` the same way it rejects reaching
+// into any other module's internals.
+let part (text: String) (which: String): Result[Int, String] =
+    match String.parse_int(text) {
+        Err(_) => Err("the ${which} version is not a number: `${text}`"),
+        Ok(n) => if n < 0 { Err("the ${which} version cannot be negative") } else { Ok(n) },
+    }
+
+pub let compare (a: Version) (b: Version): Order =
+    if a.major != b.major { rank(a.major, b.major) }
+    else if a.minor != b.minor { rank(a.minor, b.minor) }
+    else { rank(a.patch, b.patch) }
+
+let rank (a: Int) (b: Int): Order =
+    if a < b { Before } else if a > b { After } else { Same }
+
+pub let render (v: Version): String = "${v.major}.${v.minor}.${v.patch}"

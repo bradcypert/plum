@@ -41,9 +41,9 @@ pass=0; fail=0
 #   parsec also ships a `json/` subdirectory, so a dependency with more
 #   than one module is covered rather than assumed.
 
-mkdir -p "$work/app" "$work/parsec/json" "$work/core"
+mkdir -p "$work/app" "$work/parsec/parsec" "$work/parsec/json" "$work/core/core"
 
-cat > "$work/parsec/parsec.plum" <<'EOF'
+cat > "$work/parsec/parsec/parsec.plum" <<'EOF'
 pub let greet (who: String): String = "hello, ".concat(who)
 let secret (): String = "not yours"
 EOF
@@ -53,7 +53,7 @@ EOF
 cat > "$work/parsec/plum.pkg" <<'EOF'
 Package { name: "parsec", deps: [ Dep { name: "core", path: "../core" } ] }
 EOF
-cat > "$work/core/core.plum" <<'EOF'
+cat > "$work/core/core/core.plum" <<'EOF'
 pub let ping (): String = "ping"
 EOF
 cat > "$work/app/main.plum" <<'EOF'
@@ -101,6 +101,20 @@ cat > "$work/core/plum.pkg" <<'EOF'
 Package { name: "core", deps: [ Dep { name: "parsec", path: "../parsec" } ] }
 EOF
 expect_ok "a dependency cycle terminates" "hello, ping json" "$plum" run "$work/app"
+
+# A library is an ORDINARY project: the same module names whether it is
+# built alone or consumed. That is the whole reason a dependency's code
+# has to sit in subdirectories, and it is checked from the side that
+# would have caught the first design -- `parsec/json/` says `use
+# parsec;` and must resolve in both contexts.
+cat > "$work/parsec/json/json.plum" <<'EOF'
+use parsec;
+pub let tag (): String = parsec.greet("json")
+EOF
+expect_ok "a library checks on its own"  "ok"  "$plum" check "$work/parsec"
+cat > "$work/parsec/json/json.plum" <<'EOF'
+pub let tag (): String = "json"
+EOF
 rm "$work/core/plum.pkg"
 
 # Every command goes through `collect_project`, so this is really
@@ -177,10 +191,24 @@ expect_err "a non-string name"         'is a string' \
     'Package { name: 3 }'
 expect_err "deps must be an array"     'array of `Dep' \
     'Package { name: "app", deps: 3 }'
-expect_err "a keyword is not a module" 'cannot be a module name' \
+expect_err "a keyword is not a package name" 'cannot be a package name' \
     'Package { name: "app", deps: [ Dep { name: "match", path: "../parsec" } ] }'
 expect_err "a missing directory"       'is not a directory' \
     'Package { name: "app", deps: [ Dep { name: "nope", path: "../nope" } ] }'
+
+# A package's name belongs to the package. Without this, a `path` edited
+# to point somewhere else keeps the old name and the manifest describes
+# a dependency that is not there.
+expect_err "a name that disagrees"     'calls itself' \
+    'Package { name: "app", deps: [ Dep { name: "notparsec", path: "../parsec" } ] }'
+
+# Source at a dependency's ROOT. The root module is where `main` lives
+# and its names are unqualified, so a package may not put anything
+# there; requiring a subdirectory is also what makes a library's module
+# names the same alone and consumed.
+echo 'pub let stray (): Int = 1' > "$work/parsec/stray.plum"
+expect_err "root source in a dependency" 'has Plum source at its root' "$good"
+rm "$work/parsec/stray.plum"
 
 # Text after the value is REJECTED rather than ignored, which is the
 # difference between a manifest that says what it appears to say and one

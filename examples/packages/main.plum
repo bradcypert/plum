@@ -1,0 +1,78 @@
+// Using another project as a dependency.
+//
+// `plum.pkg` beside this file names `../semver` as a path dependency.
+// Both of its modules are then reachable here exactly as if they were
+// subdirectories of this project:
+//
+//   semver   the library's root files, under the DEPENDENCY's name
+//   compat   its `compat/` subdirectory, under its own name
+//
+// Nothing else changes. `plum run`, `build`, `test`, `check` and `doc`
+// all read the dependency's source, and the language server sees it too.
+//
+// Run: `plum run examples/packages`
+// Build: `plum build examples/packages -o out && ./out`
+
+use semver;
+use compat;
+
+struct Release {
+    name: String,
+    version: String,
+}
+
+let main (): Unit = {
+    let installed = "1.4.2";
+    println("installed: ${installed}");
+    println("");
+
+    let candidates = [
+        Release { name: "a patch", version: "1.4.7" },
+        Release { name: "a minor bump", version: "1.6.0" },
+        Release { name: "a downgrade", version: "1.3.9" },
+        Release { name: "a new major", version: "2.0.0" },
+        Release { name: "a typo", version: "1.4" },
+        Release { name: "a bad part", version: "1.x.0" },
+    ];
+
+    for r in candidates {
+        println(verdict(installed, r))
+    };
+
+    println("");
+    println("sorted: ${Array.join(sorted_versions(), ", ")}")
+}
+
+// Every failure here is a VALUE, so the two parses and the comparison
+// compose into one `match` with no exceptions and no early return.
+let verdict (installed: String) (r: Release): String =
+    match semver.parse(installed) {
+        Err(e) => "  ${r.name}: cannot read the installed version: ${e}",
+        Ok(have) => match semver.parse(r.version) {
+            Err(e) => "  ${r.name} (${r.version}): ${e}",
+            Ok(want) =>
+                if compat.caret_allows(have, want) {
+                    "  ${r.name} (${semver.render(want)}): upgrade"
+                } else {
+                    "  ${r.name} (${semver.render(want)}): hold"
+                },
+        },
+    }
+
+// `semver.compare` returns the library's own `Order`, and sorting by it
+// is the ordinary `Array.sort_by`. A dependency's types are types.
+let sorted_versions (): Array[String] = {
+    let parsed = Array.fold(["1.6.0", "1.4.2", "2.0.0", "1.4.7"], [], |acc, s|
+        match semver.parse(s) {
+            Err(_) => acc,
+            Ok(v) => acc.push(v),
+        });
+    Array.map(Array.sort_by(parsed, |a, b| not_after(a, b)), |v| semver.render(v))
+}
+
+let not_after (a: semver.Version) (b: semver.Version): Bool =
+    match semver.compare(a, b) {
+        semver.Order.After => false,
+        semver.Order.Same => true,
+        semver.Order.Before => true,
+    }

@@ -1,0 +1,18 @@
+// A project declares its dependencies here, and only here. A project
+// with none needs no `plum.pkg` at all.
+//
+// This file is DATA. It is read by Plum's own parser, which is why
+// there is no second configuration format to learn, but it is not a
+// `.plum` file and nothing in it runs. Anything that is not a string, a
+// number, `true`/`false`, an array or a struct literal is rejected:
+// try changing `path` to `"../sem".concat("ver")` and see what the
+// compiler says.
+Package {
+    name: "packages",
+    version: "0.1.0",
+    deps: [
+        // A path is relative to THIS file. Nothing is fetched, and
+        // `../semver` is an ordinary project that builds on its own.
+        Dep { name: "semver", path: "../semver" },
+    ],
+}
