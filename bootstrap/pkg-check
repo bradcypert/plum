@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# Do path dependencies work, and does the manifest stay DATA?
+#
+# Two halves, and the second is the reason this file exists.
+#
+# The first half is ordinary: a project with a `plum.pkg` can call into
+# a dependency, a dependency's own dependencies come along, a cycle
+# between two packages terminates instead of recursing forever, and
+# `check`/`run`/`build`/`test` all see the same sources.
+#
+# The second half asserts what a manifest is NOT. `plum.pkg` is read by
+# the real lexer and parser, which is what makes a second configuration
+# format unnecessary -- and it is exactly what invites `setup.py`. The
+# defence is `pkg.check_value`, which rejects every node that is not a
+# literal, an array or a struct literal, and the honest risk there is
+# not a user (who hits the wall once and stops) but a maintainer
+# relaxing it a little, twice, over two years. So the rejections are
+# asserted here. Loosening the line now means deleting a test that says
+# in words why the line is where it is, which is a deliberate act rather
+# than a careless one.
+#
+# Fixtures are generated into a temp directory rather than checked in:
+# half of them are deliberately broken, and a broken manifest sitting in
+# the repository is a thing every other harness has to learn to ignore.
+#
+# Usage:  bootstrap/pkg-check [path-to-plum-binary]   (default: ./sh.real)
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+plum="$(cd "$(dirname "${1:-./sh.real}")" && pwd)/$(basename "${1:-./sh.real}")"
+
+work="$(mktemp -d 2>/dev/null || mktemp -d -t plum-pkg)"
+trap 'rm -rf "$work"' EXIT
+
+pass=0; fail=0
+
+# --- the fixture tree ---------------------------------------------------
+#
+#   app  -> parsec -> core
+#   parsec also ships a `json/` subdirectory, so a dependency with more
+#   than one module is covered rather than assumed.
+
+mkdir -p "$work/app" "$work/parsec/json" "$work/core"
+
+cat > "$work/parsec/parsec.plum" <<'EOF'
+pub let greet (who: String): String = "hello, ".concat(who)
+let secret (): String = "not yours"
+EOF
+cat > "$work/parsec/json/json.plum" <<'EOF'
+pub let tag (): String = "json"
+EOF
+cat > "$work/parsec/plum.pkg" <<'EOF'
+Package { name: "parsec", deps: [ Dep { name: "core", path: "../core" } ] }
+EOF
+cat > "$work/core/core.plum" <<'EOF'
+pub let ping (): String = "ping"
+EOF
+cat > "$work/app/main.plum" <<'EOF'
+use parsec;
+use core;
+use json;
+
+let main (): Unit = println("${parsec.greet(core.ping())} ${json.tag()}")
+
+let test_greet (): Unit = assert_eq(parsec.greet("x"), "hello, x")
+EOF
+
+manifest() { printf '%s\n' "$1" > "$work/app/plum.pkg"; }
+
+good="Package {
+    name: \"app\",
+    version: \"0.1.0\",
+    deps: [
+        // a comment, because a manifest is hand-edited
+        Dep { name: \"parsec\", path: \"../parsec\" },
+    ],
+}"
+
+# --- half one: it works -------------------------------------------------
+
+# `expect_ok <label> <expected-stdout> <command...>`
+expect_ok() {
+    local label="$1" want="$2"; shift 2
+    local got
+    got="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$@" 2>&1)"
+    if [ $? -ne 0 ] || [ "$got" != "$want" ]; then
+        printf 'FAIL  %-44s\n        want: %s\n        got:  %s\n' "$label" "$want" "$(printf '%s' "$got" | head -n 3)"
+        fail=$((fail + 1)); return
+    fi
+    pass=$((pass + 1))
+}
+
+manifest "$good"
+expect_ok "a dependency resolves"        "hello, ping json" "$plum" run "$work/app"
+expect_ok "so does a transitive one"     "ok"               "$plum" check "$work/app"
+
+# A cycle is an ordinary accident with path dependencies, and without a
+# visited set the compiler recurses until it dies saying nothing.
+cat > "$work/core/plum.pkg" <<'EOF'
+Package { name: "core", deps: [ Dep { name: "parsec", path: "../parsec" } ] }
+EOF
+expect_ok "a dependency cycle terminates" "hello, ping json" "$plum" run "$work/app"
+rm "$work/core/plum.pkg"
+
+# Every command goes through `collect_project`, so this is really
+# checking that none of them found their own way to load sources.
+if SH_TIMEOUT="${SH_TIMEOUT:-120}" SH_MEM="${SH_MEM:-512M}" "$plum" build "$work/app" -o "$work/appbin" >/dev/null 2>&1 \
+   && [ "$("$work/appbin")" = "hello, ping json" ]; then
+    pass=$((pass + 1))
+else
+    printf 'FAIL  %-44s a built binary did not run a dependency\n' "build sees dependencies"
+    fail=$((fail + 1))
+fi
+if SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" test "$work/app" 2>&1 | grep -q '1 passed; 0 failed'; then
+    pass=$((pass + 1))
+else
+    printf 'FAIL  %-44s\n' "test sees dependencies"
+    fail=$((fail + 1))
+fi
+
+# A project with no manifest is exactly what it was before packages
+# existed. This is the property that keeps `plum new` writing one file.
+mkdir -p "$work/plain"
+echo 'let main (): Unit = println("plain")' > "$work/plain/main.plum"
+expect_ok "no manifest is not an error" "plain" "$plum" run "$work/plain"
+
+# --- half two: it is data, not a program --------------------------------
+
+# `expect_err <label> <substring-of-message> <manifest>`
+expect_err() {
+    local label="$1" want="$2" text="$3"
+    manifest "$text"
+    local got
+    got="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" check "$work/app" 2>&1)"
+    if [ $? -eq 0 ]; then
+        printf 'FAIL  %-44s accepted, and must not be\n' "$label"
+        fail=$((fail + 1)); return
+    fi
+    case "$got" in
+        *"$want"*) pass=$((pass + 1)) ;;
+        *) printf 'FAIL  %-44s\n        want to see: %s\n        got:         %s\n' \
+               "$label" "$want" "$(printf '%s' "$got" | head -n 2)"
+           fail=$((fail + 1)) ;;
+    esac
+}
+
+not_data="a manifest is data, not a program"
+
+expect_err "a call is rejected"      "$not_data" \
+    'Package { name: "app", deps: [ Dep { name: "p", path: "../par".concat("sec") } ] }'
+expect_err "a name is rejected"      "$not_data" \
+    'Package { name: "app", deps: some_deps }'
+expect_err "interpolation is rejected" "$not_data" \
+    'Package { name: "app", version: "0.${1}.0" }'
+expect_err "a field access is rejected" "$not_data" \
+    'Package { name: "app", version: config.version }'
+expect_err "an if is rejected"       "$not_data" \
+    'Package { name: "app", version: if true { "a" } else { "b" } }'
+expect_err "a block is rejected"     "$not_data" \
+    'Package { name: "app", version: { "a" } }'
+expect_err "a closure is rejected"   "$not_data" \
+    'Package { name: "app", version: |x| x }'
+expect_err "a spread is rejected"    "$not_data" \
+    'Package { name: "app", deps: [ Dep { ..base } ] }'
+
+# Shape errors. Ignoring an unknown field is the failure mode worth
+# naming: `dependencies:` for `deps:` would otherwise build a project
+# with no dependencies and no complaint.
+expect_err "an unknown field is named" "has no field \`dependencies\`" \
+    'Package { name: "app", dependencies: [] }'
+expect_err "a missing name is named"   'needs a `name`' \
+    'Package { version: "0.1.0" }'
+expect_err "the wrong wrapper is named" 'a manifest is one `Package' \
+    'Project { name: "app" }'
+expect_err "a non-string name"         'is a string' \
+    'Package { name: 3 }'
+expect_err "deps must be an array"     'array of `Dep' \
+    'Package { name: "app", deps: 3 }'
+expect_err "a keyword is not a module" 'cannot be a module name' \
+    'Package { name: "app", deps: [ Dep { name: "match", path: "../parsec" } ] }'
+expect_err "a missing directory"       'is not a directory' \
+    'Package { name: "app", deps: [ Dep { name: "nope", path: "../nope" } ] }'
+
+# Text after the value is REJECTED rather than ignored, which is the
+# difference between a manifest that says what it appears to say and one
+# that quietly does not.
+expect_err "trailing text is rejected" 'expected the end of the file' \
+    'Package { name: "app" }
+Package { name: "other" }'
+
+# Two dependencies providing the same module name. One of them winning
+# silently is how this goes wrong everywhere it goes wrong.
+mkdir -p "$work/core/json"
+echo 'pub let tag (): String = "other"' > "$work/core/json/json.plum"
+expect_err "a module clash is rejected" 'Module names are not namespaced by package' \
+    'Package { name: "app", deps: [ Dep { name: "parsec", path: "../parsec" }, Dep { name: "core", path: "../core" } ] }'
+rm -rf "$work/core/json"
+
+# A dependency's private names stay private. Visibility already worked
+# across modules; what is checked here is that a package boundary does
+# not accidentally become a hole in it.
+manifest "$good"
+cat > "$work/app/main.plum" <<'EOF'
+use parsec;
+let main (): Unit = println(parsec.secret())
+EOF
+got="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" check "$work/app" 2>&1)"
+case "$got" in
+    *"is private to module"*) pass=$((pass + 1)) ;;
+    *) printf 'FAIL  %-44s a private name in a dependency was reachable\n' "privacy holds across a package"
+       fail=$((fail + 1)) ;;
+esac
+
+if [ "$fail" -ne 0 ]; then
+    printf '\npkg-check: %d check(s) failed, %d passed\n' "$fail" "$pass"
+    exit 1
+fi
+printf 'pkg-check: %d checks pass -- path dependencies resolve, and a manifest is data\n' "$pass"

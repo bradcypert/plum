@@ -241,6 +241,101 @@ being slipped in beside the feature that revealed it.
 What stayed in the prelude, with no `use` needed: `println`/`print`,
 the `assert` family, `Json`, and every type namespace.
 
+## Packages
+
+A project can use code from another directory on disk. It says so in a
+`plum.pkg` file at its root:
+
+```plum fragment
+// plum.pkg
+Package {
+    name: "myapp",
+    version: "0.1.0",
+    deps: [
+        Dep { name: "parsec", path: "../parsec" },
+    ],
+}
+```
+
+A dependency is an ordinary project: a directory with `.plum` files in
+it, which builds and tests on its own. Nothing has to be published, and
+nothing is fetched. `plum check`, `run`, `build`, `test` and `doc` all
+read the dependency's source alongside your own, and the language
+server sees it too.
+
+A dependency's modules arrive under the names its own layout gives
+them, with one exception: files at the dependency's root belong to a
+module named after the **dependency** rather than to the root module.
+So `../parsec/parsec.plum` is reached as `parsec.parse`, while
+`../parsec/json/` is module `json` either way.
+
+```plum fragment
+use parsec;
+use json;
+
+let main (): Unit = println(parsec.greet(json.tag()))
+```
+
+`pub` means the same thing across a package boundary as it does across
+a module boundary: a dependency's unexported names are unavailable, not
+merely undocumented.
+
+Dependencies of dependencies come along, with their paths resolved
+relative to the manifest that names them. Two packages that depend on
+each other terminate rather than recursing.
+
+### Two module names that collide
+
+Function and type names are namespaced by module. Module names are not
+namespaced by package, so two dependencies that both ship a `util`
+module are a genuine ambiguity. That is an error naming both sides,
+rather than one of them silently winning:
+
+```
+dependency `core` provides a module `json`, and so does something
+already loaded.
+```
+
+Rename-on-import is the usual answer and can be added later. Until it
+exists, one of the two has to be renamed.
+
+### A manifest is data
+
+`plum.pkg` is read by Plum's own lexer and parser, which is why there
+is no second configuration format to learn. It is deliberately **not** a
+`.plum` file, and it holds a bare value rather than a declaration.
+
+That distinction is the whole design. `setup.py`, `build.rs` and
+`build.zig` all began as configuration and became programs, because a
+config file written in a general-purpose language invites computing in
+it, and then the tool has to *run* the file in order to read it. Reusing
+a parser to read data carries none of that risk: text goes in, a tree
+comes out, and nothing executes. Making the file look like a program
+carries all of it.
+
+So the shape is enforced rather than trusted. Anything that is not a
+string, a number, `true`/`false`, an array or a struct literal is
+rejected, including string interpolation:
+
+```
+plum.pkg: a manifest is data, not a program, and a function call is
+not data.
+```
+
+An unknown field is an error too, so `dependencies:` written for
+`deps:` says so instead of quietly building a project with no
+dependencies.
+
+### What is not here yet
+
+Version numbers are recorded and not used. There is no registry, no
+fetching, no lockfile and no way to depend on a package you have not
+already got a copy of. Those are separable, and the ordering is
+discussed in [issue #36](https://github.com/bradcypert/plum/issues/36).
+
+Whatever arrives, the compiler's own bootstrap stays what it is today:
+a seed, and no network.
+
 ## Standard library
 
 Two generated references, neither written by hand:

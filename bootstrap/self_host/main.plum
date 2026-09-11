@@ -60,6 +60,7 @@ use typecheck;
 use codegen;
 use shims;
 use highlight;
+use pkg;
 use Path;
 
 // `query <project> <path> <line> <col>` -- what is the type of the
@@ -3015,13 +3016,109 @@ let collect_path_items (path: String) (module_name: String): Array[parser.ItemNo
     }
 
 // The project ROOT: each subdirectory names a module, each root-level
-// file belongs to `""`.
+// file belongs to `""`, and anything the project's `plum.pkg` declares
+// as a dependency is loaded alongside it.
+//
+// Dependencies go through THIS function rather than through the
+// individual commands, which is why `check`, `build`, `run`, `test`,
+// `doc`, `emit-llvm` and the language server all see them without any
+// of them being told about packages. A dependency is source, and the
+// compiler already knew how to read source from a directory; the only
+// new question was which directories to read.
 let collect_project (root: String): Array[parser.ItemNode] =
     if Result.unwrap_or(Os.is_directory(root), false) {
-        collect_root_entries(root, Result.unwrap_or(Os.list_dir(root), []), 0, [])
+        let own = collect_root_entries(root, Result.unwrap_or(Os.list_dir(root), []), 0, []);
+        collect_deps(dep_closure(root, []), 0, own)
     } else {
         collect_path_items(root, "")
     }
+
+// The dependency graph, flattened.
+//
+// Paths are relative to the MANIFEST THAT NAMES THEM, so a dependency's
+// own dependencies resolve against the dependency's directory rather
+// than the root's -- `Path.join` handles that, including letting an
+// absolute path win.
+//
+// `seen` is keyed on the cleaned path and is what makes a cycle
+// terminate: two packages that depend on each other are a perfectly
+// ordinary thing to write by accident with path dependencies, and
+// without this the compiler would recurse until it died with nothing
+// useful to say. Cleaning is textual, not `realpath`, so two paths that
+// reach the same directory through a symlink are still two entries --
+// they then collide on module names and are reported as that, which is
+// a worse message than it could be but not a wrong one.
+let dep_closure (dir: String) (seen: Array[pkg.Dep]): Array[pkg.Dep] =
+    add_deps(dir, pkg.read(dir).deps, 0, seen)
+
+let add_deps (dir: String) (deps: Array[pkg.Dep]) (i: Int) (seen: Array[pkg.Dep]): Array[pkg.Dep] =
+    if i >= deps.len() { seen }
+    else {
+        let resolved = pkg.Dep { name: deps[i].name, path: Path.clean(Path.join(dir, deps[i].path)) };
+        if Array.any(seen, |d| d.path == resolved.path) { add_deps(dir, deps, i + 1, seen) }
+        else { add_deps(dir, deps, i + 1, dep_closure(resolved.path, seen.push(resolved))) }
+    }
+
+let collect_deps (deps: Array[pkg.Dep]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
+    if i >= deps.len() { acc }
+    else {
+        if !Result.unwrap_or(Os.is_directory(deps[i].path), false) {
+            panic_raw("dependency `${deps[i].name}` is not a directory: ${deps[i].path}")
+        };
+        let items = collect_dependency(deps[i].path, deps[i].name);
+        reject_module_clash(module_names(acc, 0, []), module_names(items, 0, []), deps[i].name, 0);
+        collect_deps(deps, i + 1, Array.concat(acc, items))
+    }
+
+// A dependency is laid out exactly like a project, with ONE difference:
+// its root-level files belong to a module named after the dependency
+// rather than to the root module `""`. They have to go somewhere, and
+// the root module already belongs to whoever is doing the building --
+// letting a dependency's root files land there would put its functions
+// in the consuming project's own unqualified namespace, which is the
+// one thing a package must not be able to do.
+//
+// So a single-file library `../parsec/parsec.plum` is reachable as
+// `parsec.parse`, and a `../parsec/json/` subdirectory is module
+// `json`, the same name it has when the library is built on its own.
+let collect_dependency (dir: String) (dep_name: String): Array[parser.ItemNode] =
+    collect_dep_entries(dir, dep_name, Result.unwrap_or(Os.list_dir(dir), []), 0, [])
+
+let collect_dep_entries (dir: String) (dep_name: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
+    if i >= entries.len() { acc }
+    else if entries[i] == "." || entries[i] == ".." { collect_dep_entries(dir, dep_name, entries, i + 1, acc) }
+    else {
+        let full = Path.join(dir, entries[i]);
+        let m = if Result.unwrap_or(Os.is_directory(full), false) { entries[i] } else { dep_name };
+        collect_dep_entries(dir, dep_name, entries, i + 1, Array.concat(acc, collect_path_items(full, m)))
+    }
+
+// Function and type names are namespaced by module. MODULE names are
+// not namespaced by package, so two dependencies that both ship a
+// `util` module are a real collision with no way to say which one you
+// meant.
+//
+// v1 REJECTS it and names both sides. Rename-on-import is the usual
+// answer and it can be added later without changing anything decided
+// here; what must not happen in the meantime is one module silently
+// winning, which is how this goes wrong everywhere it goes wrong.
+// Compared as SETS of module names rather than item against item: a
+// dependency is thousands of items and a handful of modules, and the
+// obvious nested scan over both item lists is quadratic in the size of
+// the source for an answer that depends only on the names.
+let reject_module_clash (existing: Array[String]) (incoming: Array[String]) (dep_name: String) (i: Int): Unit =
+    if i >= incoming.len() { () }
+    else {
+        if Array.contains(existing, incoming[i]) {
+            panic_raw("dependency `${dep_name}` provides a module `${incoming[i]}`, and so does something already loaded.\n  Module names are not namespaced by package, so one of them has to be renamed.")
+        };
+        reject_module_clash(existing, incoming, dep_name, i + 1)
+    }
+
+let module_names (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= items.len() { acc }
+    else if items[i].module == "" || Array.contains(acc, items[i].module) { module_names(items, i + 1, acc) }
+    else { module_names(items, i + 1, acc.push(items[i].module)) }
 
 let collect_root_entries (root: String) (entries: Array[String]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
     if i >= entries.len() { acc }

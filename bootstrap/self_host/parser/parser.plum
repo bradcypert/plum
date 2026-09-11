@@ -1099,6 +1099,21 @@ let spanned (pos: Int) (r: ExprResult): ExprResult = { note_span(pos, r.next_pos
 // argument shape: most of its callers have nothing to do with this.
 pub let parse_expr (tokens: Array[lexer.Token]) (pos: Int): ExprResult = parse_pipe(tokens, pos, false)
 
+// A whole file that is ONE expression, rather than a program. The
+// package manifest is the only such file: it holds a value, not
+// declarations, and `pkg.plum` reads it with the real lexer and parser
+// rather than a second format's.
+//
+// The trailing-token check is the point. Without it a manifest could
+// carry anything at all after its closing brace and be read as though
+// it did not -- which is exactly the kind of silently-ignored text a
+// configuration file must not have.
+pub let parse_whole_expr (tokens: Array[lexer.Token]): PExpr = {
+    let r = parse_expr(tokens, 0);
+    if is_at_eof(tokens, r.next_pos) { r.value }
+    else { { fail_at(r.next_pos, "expected the end of the file, found ${lexer.render_token(tokens[r.next_pos])}"); r.value } }
+}
+
 // The head of an `if`/`match`/`while`/`for`, where a `{` belongs to the
 // body rather than to a value. Suppression stops at any BRACKET: inside
 // `(..)`, `[..]` or an argument list the ambiguity cannot arise, so

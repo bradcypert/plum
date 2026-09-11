@@ -1,0 +1,245 @@
+use lexer;
+use parser;
+
+// `plum.pkg` -- the package manifest.
+//
+// A project does not need one. Everything the compiler did before this
+// module existed, it still does with no manifest present, and `plum
+// new` does not write one. The file appears when a project acquires a
+// DEPENDENCY, which is the first moment there is anything to say that
+// the directory layout does not already say.
+//
+// == Why it is read by the real parser ==
+//
+// The alternative was a second format with a second parser -- TOML or a
+// subset of it -- written and then maintained forever alongside the
+// language's own. Plum already has a lexer and a parser, and a manifest
+// is a value; `parser.parse_whole_expr` turns the text into a tree and
+// nothing here executes anything.
+//
+// == Why it is NOT a `.plum` file ==
+//
+// This is the part with the bad history. `setup.py`, `build.rs` and
+// `build.zig` all began as configuration and became programs, because a
+// configuration file written in a general-purpose language invites
+// computing in it, and then the tool has to RUN it in order to read it.
+//
+// Two separable things were being conflated there, and only one is
+// risky. Reusing a parser to read data carries none: text goes in, a
+// tree comes out. Making the file LOOK like a program is the whole
+// risk. So this file has no `let`, no declaration, no `main`, and not a
+// `.plum` extension. It is a bare value, and it is a value in a file
+// nothing will ever try to compile. Zig makes the same split and did
+// not blur it: `.zon` is data, `build.zig` is a program.
+//
+// And the shape is ENFORCED rather than trusted. `check_value` walks
+// the parsed tree and rejects every node that is not a literal, an
+// array, or a struct literal, so
+//
+//     Dep { name: "x", path: home_dir().concat("/x") }
+//
+// fails immediately, saying a manifest is data and not a program.
+// Anyone who tries to script one finds out in five seconds and the
+// error teaches the rule. String interpolation is rejected by the same
+// walk without needing its own case, because an interpolated string
+// parses to a concatenation rather than to `EStr`.
+//
+// The honest residual risk is not users but us: a maintainer relaxing
+// the validator a little, twice, over two years. `bootstrap/pkg-check`
+// asserts the rejections so that relaxation has to be deliberate.
+
+pub struct Dep { pub name: String, pub path: String }
+
+pub struct Manifest {
+    pub name: String,
+    pub version: String,
+    pub deps: Array[Dep],
+}
+
+pub let manifest_name (unit: Unit): String = "plum.pkg"
+
+// What a project with no `plum.pkg` has. Not an error: the file is
+// optional, and its absence means "no dependencies", not "malformed".
+pub let no_manifest (unit: Unit): Manifest = Manifest { name: "", version: "", deps: [] }
+
+pub let manifest_path (root: String): String = Path.join(root, manifest_name(()))
+
+// Read `<root>/plum.pkg`, or the empty manifest if there is none.
+//
+// A read that fails for any reason OTHER than absence is a hard error:
+// a manifest that exists and cannot be read must never be silently
+// treated as a project without dependencies, because that would fail
+// much later as a pile of unbound variables.
+pub let read (root: String): Manifest = {
+    let path = manifest_path(root);
+    if !Result.unwrap_or(Os.exists(path), false) { no_manifest(()) }
+    else {
+        match Os.read_file(path) {
+            Err(e) => { panic_raw("failed to read ${path}: ${e}"); no_manifest(()) },
+            Ok(src) => parse(path, src),
+        }
+    }
+}
+
+pub let parse (path: String) (src: String): Manifest = {
+    let lexed = lexer.tokenize_spanned(src);
+    // The same per-file source context every other parse sets, so a
+    // malformed manifest gets `plum.pkg:3:9` with a caret rather than a
+    // bare message.
+    parser.set_source_context(path, src, lexed.starts, lexed.ends);
+    let value = parser.parse_whole_expr(lexed.tokens);
+    check_value(path, value);
+    to_manifest(path, value)
+}
+
+// ---------------------------------------------------------------- data
+
+// The line between data and program, in one function. Everything
+// allowed here is inert; everything else names or calls something.
+let check_value (path: String) (e: parser.PExpr): Unit = match e {
+    EInt(_) => (),
+    EFloat(_) => (),
+    EStr(_) => (),
+    EBool(_) => (),
+    EArray(elems) => check_all(path, elems, 0),
+    EStructLit(_, fields, spread) => match spread {
+        // `Dep { ..base }` reads a value out of scope, and there is no
+        // scope here.
+        Some(_) => not_data(path, "a spread (`..`)"),
+        None => check_fields(path, fields, 0),
+    },
+    _ => not_data(path, kind_of(e)),
+}
+
+let check_all (path: String) (elems: Array[parser.PExpr]) (i: Int): Unit =
+    if i >= elems.len() { () }
+    else { check_value(path, elems[i]); check_all(path, elems, i + 1) }
+
+let check_fields (path: String) (fields: Array[parser.FieldInitNode]) (i: Int): Unit =
+    if i >= fields.len() { () }
+    else { check_value(path, fields[i].value); check_fields(path, fields, i + 1) }
+
+// Named so the message can say WHAT was found. A bare "not allowed"
+// leaves the reader hunting; "a function call" points at the line.
+let kind_of (e: parser.PExpr): String = match e {
+    EIdent(n, _) => "the name `${n}`",
+    ECall(_, _) => "a function call",
+    EField(_, _) => "a field access",
+    EIndex(_, _) => "an index",
+    EBinary(_, _, _) => "an operator (string interpolation is one)",
+    EUnary(_, _) => "an operator",
+    EClosure(_, _) => "a closure",
+    EIf(_, _, _) => "an `if`",
+    EMatch(_, _, _) => "a `match`",
+    EBlock(_) => "a block",
+    EFor(_, _, _) => "a `for`",
+    ETuple(_) => "a tuple",
+    ESpawn(_) => "a `spawn`",
+    EUnsafe(_) => "an `unsafe` block",
+    _ => "that",
+}
+
+let not_data (path: String) (what: String): Unit =
+    panic_raw("${path}: a manifest is data, not a program, and ${what} is not data.\n  Only strings, numbers, `true`/`false`, arrays and struct literals are allowed.")
+
+// ------------------------------------------------------------ the shape
+
+let to_manifest (path: String) (e: parser.PExpr): Manifest = match e {
+    EStructLit(lit_path, fields, _) => {
+        if last_segment(lit_path) != "Package" {
+            fail(path, "a manifest is one `Package { .. }`, but this one is `${last_segment(lit_path)}`")
+        };
+        reject_unknown(path, fields, 0, ["name", "version", "deps"], "Package");
+        Manifest {
+            name: required_string(path, fields, "name", "Package"),
+            version: optional_string(path, fields, "version"),
+            deps: deps_of(path, fields),
+        }
+    },
+    _ => { fail(path, "a manifest is one `Package { .. }`"); no_manifest(()) },
+}
+
+let deps_of (path: String) (fields: Array[parser.FieldInitNode]): Array[Dep] =
+    match field_named(fields, "deps", 0) {
+        None => [],
+        Some(v) => match v {
+            EArray(elems) => dep_list(path, elems, 0, []),
+            _ => { fail(path, "`deps` is an array of `Dep { .. }`"); [] },
+        },
+    }
+
+let dep_list (path: String) (elems: Array[parser.PExpr]) (i: Int) (acc: Array[Dep]): Array[Dep] =
+    if i >= elems.len() { acc }
+    else { dep_list(path, elems, i + 1, acc.push(dep_of(path, elems[i]))) }
+
+let dep_of (path: String) (e: parser.PExpr): Dep = match e {
+    EStructLit(lit_path, fields, _) => {
+        if last_segment(lit_path) != "Dep" {
+            fail(path, "every entry in `deps` is a `Dep { .. }`, but this one is `${last_segment(lit_path)}`")
+        };
+        reject_unknown(path, fields, 0, ["name", "path"], "Dep");
+        let name = required_string(path, fields, "name", "Dep");
+        let dep_path = required_string(path, fields, "path", "Dep");
+        // A dependency's NAME is a module name, so it has to be one.
+        // Catching this here names the manifest line; catching it later
+        // would name nothing at all.
+        if !is_module_name(name) {
+            fail(path, "`${name}` cannot be a module name: a dependency's name is the module its code lands in, so it must start with a letter and hold only letters, digits and `_`")
+        };
+        Dep { name: name, path: dep_path }
+    },
+    _ => { fail(path, "every entry in `deps` is a `Dep { .. }`"); Dep { name: "", path: "" } },
+}
+
+// ----------------------------------------------------------- accessors
+
+let field_named (fields: Array[parser.FieldInitNode]) (name: String) (i: Int): Option[parser.PExpr] =
+    if i >= fields.len() { None }
+    else if fields[i].name == name { Some(fields[i].value) }
+    else { field_named(fields, name, i + 1) }
+
+// An unknown field is an ERROR rather than something ignored. A
+// manifest is small and hand-written, and the failure mode of ignoring
+// what it did not understand is a typo that does nothing and says
+// nothing -- `dependencies:` instead of `deps:`, and a build that
+// cannot find a module for reasons the manifest appears to contradict.
+let reject_unknown (path: String) (fields: Array[parser.FieldInitNode]) (i: Int) (known: Array[String]) (what: String): Unit =
+    if i >= fields.len() { () }
+    else {
+        if !Array.contains(known, fields[i].name) {
+            fail(path, "`${what}` has no field `${fields[i].name}`. It understands ${Array.join(known, ", ")}")
+        };
+        reject_unknown(path, fields, i + 1, known, what)
+    }
+
+let required_string (path: String) (fields: Array[parser.FieldInitNode]) (name: String) (what: String): String =
+    match field_named(fields, name, 0) {
+        None => { fail(path, "`${what}` needs a `${name}`"); "" },
+        Some(v) => string_value(path, name, v),
+    }
+
+let optional_string (path: String) (fields: Array[parser.FieldInitNode]) (name: String): String =
+    match field_named(fields, name, 0) {
+        None => "",
+        Some(v) => string_value(path, name, v),
+    }
+
+let string_value (path: String) (name: String) (e: parser.PExpr): String = match e {
+    EStr(s) => s,
+    _ => { fail(path, "`${name}` is a string"); "" },
+}
+
+let last_segment (path: Array[String]): String = Option.unwrap_or(Array.last(path), "")
+
+// Asked of the LEXER rather than of a character-class predicate written
+// here. A dependency's name becomes a module name, and the authority on
+// what may be a module name is the thing that reads module names: a
+// string is one exactly when it lexes to a single identifier. That also
+// rejects `match` and `struct` for free, which a hand-written
+// letters-and-digits test would have let through.
+let is_module_name (s: String): Bool = {
+    let tokens = lexer.tokenize(s);
+    tokens.len() == 2 && match tokens[0] { TokIdent(n) => n == s, _ => false }
+}
+
+let fail (path: String) (msg: String): Unit = panic_raw("${path}: ${msg}")

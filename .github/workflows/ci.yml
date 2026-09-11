@@ -124,6 +124,14 @@ jobs:
       - name: debug and release builds differ
         run: ./bootstrap/check-build-modes
 
+      # Path dependencies resolve, and -- the half that will matter in
+      # two years -- a manifest is still data. `plum.pkg` is read by the
+      # real parser, which is what makes a second config format
+      # unnecessary and is exactly what invites `setup.py`. The
+      # rejections are asserted so that relaxing them is deliberate.
+      - name: packages resolve and manifests stay data
+        run: ./bootstrap/pkg-check
+
       # Allocation counts. Refcount churn creeps back in silently, and
       # the language's central claim is a number nobody was looking at
       # until this existed. Fails on a rise, reports a fall.

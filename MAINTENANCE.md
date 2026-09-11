@@ -11,7 +11,7 @@ are. This is the operating manual.
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
 for h in check-version help-check check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
-         self-test stdin-smoke tty-smoke check-docs highlight-check \
+         self-test stdin-smoke tty-smoke check-docs highlight-check pkg-check \
          property-check doc-check alloc-check lossless-check fmt-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
@@ -30,6 +30,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `help-check` | `plum help`/`--help`/`-h` print usage, extra args ignored | <1s |
 | `check-docs` | `docs/stdlib/` matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 3s |
 | `highlight-check` | `plum highlight` gives the source back byte for byte with the tags stripped, over 294 files — highlighting cannot corrupt code a reader is about to copy | 13s |
+| `pkg-check` | path dependencies resolve (including transitively, and through a cycle) and every command sees them — and `plum.pkg` stays DATA: a call, a name, an interpolation or an `if` in a manifest is rejected | 9s |
 | `check-site-links` | a built site links only to pages it contains. Not in the loop above — it needs `build-site` to have run first, and CI runs the pair | <1s |
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
