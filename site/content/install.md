@@ -41,9 +41,14 @@ Silicon and Intel, and Windows x86_64. The Windows one contains
 `plum.exe` and is built for MSYS2/MinGW.
 
 ```sh
-tar -xzf plum-0.0.7-arm64-macos.tar.gz
-./plum-0.0.7-arm64-macos/plum version
+tar -xzf plum-*-arm64-macos.tar.gz
+./plum-*-arm64-macos/plum version
 ```
+
+The archive unpacks into a directory named for the version it contains,
+so the glob saves pasting a version number that this page would then
+have to be kept in step with. It was written out once, and said `0.0.7`
+for nineteen releases.
 
 ### Platforms
 
