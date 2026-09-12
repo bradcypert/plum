@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Fails if `docs/stdlib/` has drifted from the compiler that generates it.
 #
-# The same shape as `check-stdlib-reference`, and for the same reason:
-# a generated file checked into the repository is only trustworthy if
-# something asserts it was regenerated. Without this, `docs/stdlib/`
+# A generated file checked into the repository is only trustworthy if
+# something asserts it was regenerated.
+#
+# It covers `index.md` as well as the pages. There used to be a second
+# generated reference, `STDLIB.md`, with a harness of its own, and the
+# two drifted in opposite directions while both harnesses passed: one
+# listed `Map.get` twice, the other was missing `Array.map` entirely.
+# Neither could ask whether the two described the same library. One
+# generator now writes both, so there is nothing left to disagree. Without this, `docs/stdlib/`
 # would be a snapshot of whatever the standard library looked like the
 # last time somebody remembered — which is the exact failure the
 # README's hand-written list had, and why it is gone.

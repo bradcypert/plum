@@ -48,7 +48,7 @@ fi
 #
 # Same problem as the methods above, one step over: `builtin_sig` is
 # also a chain of name comparisons, so nothing can enumerate it, and
-# `plum stdlib-reference` silently omitted `args`, `chars_of` and
+# the generated reference silently omitted `args`, `chars_of` and
 # `panic_raw` entirely -- three functions that exist, are callable, and
 # are used by this compiler, under a heading promising completeness.
 #

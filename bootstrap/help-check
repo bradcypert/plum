@@ -2,7 +2,7 @@
 # Proves `plum help` is a real command.
 #
 # Until this existed, `plum help` printed usage only because a single
-# argument that is not `version`/`lsp`/`stdlib-reference` falls through
+# argument that is not `version` or `lsp` falls through
 # to `argv.len() < 2`. That is an accident: `plum help build` tried to
 # open `build` as a source file, and `help` was not a command the usage
 # text itself named.
