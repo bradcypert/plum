@@ -316,27 +316,30 @@ let tp (name: String): ITy = ITParam(name)
 // is for methods, and for the same reason: `builtin_sig` below is a
 // chain of name comparisons, and nothing can enumerate a chain of `if`s.
 //
-// Without this, `plum stdlib-reference` silently omitted a whole
+// Without this, the generated reference silently omitted a whole
 // category. `args()`, `chars_of` and `panic_raw` exist, are callable,
-// are used by this compiler and by the corpus -- and appeared in
-// STDLIB.md nowhere, under a heading promising every function is listed
+// are used by this compiler and by the corpus -- and appeared nowhere,
+// under a heading promising every function is listed
 // "by construction". A document that is generated is only complete if
 // everything it should contain is reachable by whatever generates it.
 //
 // `bootstrap/check-builtins` fails if the chain matches a name this
 // table does not carry. The chain stays the authority; this stays
 // honest about being a second copy, and is checked against the first.
-pub struct BuiltinFn { pub name: String, pub detail: String }
+// `doc` as on `BuiltinMethod`. `Array.push` carries none: it is listed
+// here only so the check against the call chain is total, and it is
+// documented as a METHOD, where it belongs.
+pub struct BuiltinFn { pub name: String, pub detail: String, pub doc: String }
 
 pub let builtin_functions (): Array[BuiltinFn] = [
-    BuiltinFn { name: "args", detail: "let args (): Array[String]" },
-    BuiltinFn { name: "chars_of", detail: "let chars_of (s: String): Array[String]" },
-    BuiltinFn { name: "panic_raw", detail: "let panic_raw (message: String): Unit" },
+    BuiltinFn { name: "args", detail: "let args (): Array[String]", doc: "The process's command-line arguments, program name first, exactly as the OS gave them." },
+    BuiltinFn { name: "chars_of", detail: "let chars_of (s: String): Array[String]", doc: "The string split into one entry per CHARACTER, not per byte. This is the boundary-correct way to walk text." },
+    BuiltinFn { name: "panic_raw", detail: "let panic_raw (message: String): Unit", doc: "Prints `message` and exits non-zero. This is the only non-zero exit Plum exposes; `assert` and friends are built on it." },
     // Namespaced, and already listed through `builtin_methods` as
     // `Array.push(x: T): Array[T]`. Carried here so the check against
     // the chain is total; skipped by the reference so it is not printed
     // twice.
-    BuiltinFn { name: "Array.push", detail: "Array.push(x: T): Array[T]" },
+    BuiltinFn { name: "Array.push", detail: "Array.push(x: T): Array[T]", doc: "" },
 ]
 
 let builtin_sig (name: String): Option[FnSig] =
@@ -2362,7 +2365,28 @@ let infer_call_args (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst)
 // about being a second copy, and is checked against the first.
 //
 // `recv` is the type the method is called ON -- "" means any receiver.
-pub struct BuiltinMethod { pub recv: String, pub name: String, pub detail: String }
+// `doc` is what a `///` comment would say if these had a declaration to
+// write one above. They do not: the compiler implements them, so there
+// is no source item anywhere for `plum doc` to walk, which is why
+// `Array.map` was absent from the generated reference and from
+// plumlang.org until 2026-09-11 while 335 declared functions were
+// documented around it.
+//
+// The text lives here rather than in a table in `main.plum` so that it
+// sits beside the signature it describes: a builtin whose `detail`
+// changes and whose `doc` does not is then one line to notice rather
+// than two files to keep in step.
+// `recv` is a NAMESPACE name and `recv_ty` is the receiver's TYPE, and
+// they are genuinely different: `Ref.get`'s namespace is `Ref` and its
+// receiver is `Ref[T]`. Both are needed because `detail` is written in
+// METHOD form for an editor's completion popup, where the receiver is
+// the thing you already typed, while a reference documents the
+// DECLARATION -- `let Array.map (xs: Array[T]) (f: (T) -> U)`, receiver
+// first, which is also a spelling you can actually call.
+//
+// `to_string` has none. It works on every value, so there is no type to
+// write, and it is the one entry whose signature stays in method form.
+pub struct BuiltinMethod { pub recv: String, pub name: String, pub detail: String, pub doc: String, pub recv_ty: String }
 
 // Whether `Ns.name` names one of the methods below -- which is what
 // makes `Ns.name(x, ..)` mean `x.name(..)`.
@@ -2375,37 +2399,37 @@ let has_builtin_method (ms: Array[BuiltinMethod]) (ns: String) (name: String) (i
     else { has_builtin_method(ms, ns, name, i + 1) }
 
 pub let builtin_methods (): Array[BuiltinMethod] = [
-    BuiltinMethod { recv: "", name: "to_string", detail: "to_string(): String" },
-    BuiltinMethod { recv: "Array", name: "map", detail: "map(f: (T) -> U): Array[U]" },
-    BuiltinMethod { recv: "Array", name: "filter", detail: "filter(f: (T) -> Bool): Array[T]" },
-    BuiltinMethod { recv: "Array", name: "fold", detail: "fold(init: U) (f: (U, T) -> U): U" },
-    BuiltinMethod { recv: "Array", name: "len", detail: "len(): Int" },
-    BuiltinMethod { recv: "Array", name: "push", detail: "push(x: T): Array[T]" },
-    BuiltinMethod { recv: "String", name: "concat", detail: "concat(other: String): String" },
-    BuiltinMethod { recv: "String", name: "len", detail: "len(): Int" },
-    BuiltinMethod { recv: "String", name: "split", detail: "split(sep: String): Array[String]" },
-    BuiltinMethod { recv: "String", name: "trim", detail: "trim(): String" },
-    BuiltinMethod { recv: "String", name: "contains", detail: "contains(needle: String): Bool" },
-    BuiltinMethod { recv: "String", name: "starts_with", detail: "starts_with(prefix: String): Bool" },
-    BuiltinMethod { recv: "String", name: "ends_with", detail: "ends_with(suffix: String): Bool" },
-    BuiltinMethod { recv: "String", name: "replace", detail: "replace(from: String) (to: String): String" },
-    BuiltinMethod { recv: "String", name: "to_lower", detail: "to_lower(): String" },
-    BuiltinMethod { recv: "String", name: "to_upper", detail: "to_upper(): String" },
-    BuiltinMethod { recv: "String", name: "as_cstr", detail: "as_cstr(): CStr" },
-    BuiltinMethod { recv: "Bytes", name: "as_cstr", detail: "as_cstr(): CStr" },
-    BuiltinMethod { recv: "Int", name: "to_float", detail: "to_float(): Float" },
-    BuiltinMethod { recv: "Float", name: "to_int", detail: "to_int(): Int" },
-    BuiltinMethod { recv: "Float", name: "round_to_int", detail: "round_to_int(): Int" },
-    BuiltinMethod { recv: "CStr", name: "as_string", detail: "as_string(): String" },
-    BuiltinMethod { recv: "Ref", name: "get", detail: "get(): T" },
-    BuiltinMethod { recv: "Ref", name: "set", detail: "set(value: T): Unit" },
-    BuiltinMethod { recv: "Sender", name: "send", detail: "send(value: T): Unit" },
-    BuiltinMethod { recv: "Receiver", name: "recv", detail: "recv(): T" },
-    BuiltinMethod { recv: "Map", name: "get", detail: "get(key: K): Option[V]" },
-    BuiltinMethod { recv: "Map", name: "remove", detail: "remove(key: K): Map[K, V]" },
-    BuiltinMethod { recv: "Array", name: "join", detail: "join(sep: String): String" },
-    BuiltinMethod { recv: "Array", name: "remove", detail: "remove(i: Int): Array[T]" },
-    BuiltinMethod { recv: "Array", name: "set", detail: "set(i: Int) (v: T): Array[T]" },
+    BuiltinMethod { recv: "", name: "to_string", detail: "to_string(): String", doc: "Renders any value as text. Every type has one, including structs, enums and arrays, so it is the fallback whenever a value has to be shown. `\${x}` in an interpolated string calls it.", recv_ty: "" },
+    BuiltinMethod { recv: "Array", name: "map", detail: "map(f: (T) -> U): Array[U]", doc: "A new array holding `f` applied to each element, in order. The result's element type is whatever `f` returns, so mapping can change it.", recv_ty: "Array[T]" },
+    BuiltinMethod { recv: "Array", name: "filter", detail: "filter(f: (T) -> Bool): Array[T]", doc: "A new array holding the elements `f` says `true` about, in their original order.", recv_ty: "Array[T]" },
+    BuiltinMethod { recv: "Array", name: "fold", detail: "fold(init: U) (f: (U, T) -> U): U", doc: "Reduces the array to one value: starts at `init` and calls `f(acc, element)` for each element, left to right.", recv_ty: "Array[T]" },
+    BuiltinMethod { recv: "Array", name: "len", detail: "len(): Int", doc: "How many elements the array holds.", recv_ty: "Array[T]" },
+    BuiltinMethod { recv: "Array", name: "push", detail: "push(x: T): Array[T]", doc: "A new array with `x` added at the end. The receiver is unchanged, but when it is dying the compiler reuses its cell rather than copying, so `acc = acc.push(x)` in a loop does not go quadratic.", recv_ty: "Array[T]" },
+    BuiltinMethod { recv: "String", name: "concat", detail: "concat(other: String): String", doc: "The two strings run together. Plum has no `+` for strings; this is the operation.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "len", detail: "len(): Int", doc: "The length in BYTES, not characters. `String.char_len` counts characters.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "split", detail: "split(sep: String): Array[String]", doc: "The string cut at each occurrence of `sep`. Splitting on the empty string gives one entry per character.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "trim", detail: "trim(): String", doc: "The string without leading or trailing ASCII whitespace.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "contains", detail: "contains(needle: String): Bool", doc: "Whether `needle` appears anywhere in the string. Byte-wise.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "starts_with", detail: "starts_with(prefix: String): Bool", doc: "Whether the string begins with `prefix`. Byte-wise.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "ends_with", detail: "ends_with(suffix: String): Bool", doc: "Whether the string ends with `suffix`. Byte-wise.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "replace", detail: "replace(from: String) (to: String): String", doc: "The string with every occurrence of `from` replaced by `to`.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "to_lower", detail: "to_lower(): String", doc: "The string with ASCII letters lowercased. Non-ASCII is left alone.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "to_upper", detail: "to_upper(): String", doc: "The string with ASCII letters uppercased. Non-ASCII is left alone.", recv_ty: "String" },
+    BuiltinMethod { recv: "String", name: "as_cstr", detail: "as_cstr(): CStr", doc: "The string as a NUL-terminated pointer, for passing to an `extern` block's C functions. Only valid inside `unsafe`.", recv_ty: "String" },
+    BuiltinMethod { recv: "Bytes", name: "as_cstr", detail: "as_cstr(): CStr", doc: "The bytes as a NUL-terminated pointer, for passing to an `extern` block's C functions. Only valid inside `unsafe`.", recv_ty: "Bytes" },
+    BuiltinMethod { recv: "Int", name: "to_float", detail: "to_float(): Float", doc: "The integer as a `Float`. Plum never converts between numeric types on its own, so this is how it is said.", recv_ty: "Int" },
+    BuiltinMethod { recv: "Float", name: "to_int", detail: "to_int(): Int", doc: "The float truncated toward zero.", recv_ty: "Float" },
+    BuiltinMethod { recv: "Float", name: "round_to_int", detail: "round_to_int(): Int", doc: "The float rounded to the nearest integer, halves away from zero.", recv_ty: "Float" },
+    BuiltinMethod { recv: "CStr", name: "as_string", detail: "as_string(): String", doc: "A NUL-terminated C pointer copied into a Plum string. Only valid inside `unsafe`, and the pointer must really be NUL-terminated.", recv_ty: "CStr" },
+    BuiltinMethod { recv: "Ref", name: "get", detail: "get(): T", doc: "The value currently in the cell.", recv_ty: "Ref[T]" },
+    BuiltinMethod { recv: "Ref", name: "set", detail: "set(value: T): Unit", doc: "Replaces the value in the cell. This is the one way to mutate shared state, and a `Ref` is what a `spawn`ed task can share.", recv_ty: "Ref[T]" },
+    BuiltinMethod { recv: "Sender", name: "send", detail: "send(value: T): Unit", doc: "Puts a value on the channel, blocking while it is full.", recv_ty: "Sender[T]" },
+    BuiltinMethod { recv: "Receiver", name: "recv", detail: "recv(): T", doc: "Takes the next value off the channel, blocking until one arrives.", recv_ty: "Receiver[T]" },
+    BuiltinMethod { recv: "Map", name: "get", detail: "get(key: K): Option[V]", doc: "The value stored under `key`, or `None`.", recv_ty: "Map[K, V]" },
+    BuiltinMethod { recv: "Map", name: "remove", detail: "remove(key: K): Map[K, V]", doc: "A new map without `key`. Removing a key that is not there is not an error.", recv_ty: "Map[K, V]" },
+    BuiltinMethod { recv: "Array", name: "join", detail: "join(sep: String): String", doc: "The elements, which must be `String`, run together with `sep` between them.", recv_ty: "Array[T]" },
+    BuiltinMethod { recv: "Array", name: "remove", detail: "remove(i: Int): Array[T]", doc: "A new array with the element at index `i` left out. Out of range is a runtime error.", recv_ty: "Array[T]" },
+    BuiltinMethod { recv: "Array", name: "set", detail: "set(i: Int) (v: T): Array[T]", doc: "A new array with index `i` holding `v`. Out of range is a runtime error.", recv_ty: "Array[T]" },
 ]
 
 let infer_method_call (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subst) (base: parser.PExpr) (method_name: String) (args: Array[parser.PExpr]): InferResult =

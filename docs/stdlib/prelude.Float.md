@@ -188,3 +188,15 @@ radians, so this is the conversion at the edge.
 ## `let Float.degrees (radians: Float): Float`
 
 Radians to degrees.
+
+## `let Float.to_int (self: Float): Int`
+
+The float truncated toward zero.
+
+Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let Float.round_to_int (self: Float): Int`
+
+The float rounded to the nearest integer, halves away from zero.
+
+Implemented by the compiler itself, so it has no Plum source to read.

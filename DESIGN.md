@@ -20556,3 +20556,77 @@ worked around the same thing.
 The lesson repeats one this project keeps learning: the interesting
 guess was worth nothing, and the boring convention mismatch at a
 boundary was worth all of it.
+
+### `Array.map` was not in the reference (2026-09-11)
+
+Two generated references existed, and keeping both was a deliberate
+decision recorded above: `docs/stdlib/` is per-module prose to read,
+`STDLIB.md` is every signature in one file to search. Neither was
+hand-maintained, so the argument went, neither could drift.
+
+Both had drifted, in opposite directions, and nothing could have said
+so because nothing compared them.
+
+`plum doc` walks DECLARATIONS. Thirty-one of the standard library's
+methods are implemented by the compiler and have no declaration
+anywhere, so nineteen of them -- the ones with no Plum wrapper --
+reached no page: `Array.map`, `Array.filter`, `Array.fold`,
+`Array.push`, `Array.len`, `String.concat`, `to_string` and twelve
+more. `Ref`, `CStr`, `Sender` and `Receiver` are entirely builtin and
+had no page at all. The published reference on plumlang.org did not
+list the most-used function in the language, with 335 declared
+functions documented around it.
+
+`STDLIB.md` had them, because `stdlib-reference` read the builtin table
+directly. It listed fifteen of them TWICE instead, once as a
+declaration and once marked `(built in)`, because a builtin with a Plum
+wrapper appears in both halves of that generator and nothing checked
+the output against itself.
+
+The symmetry is the useful part. `check-stdlib-reference`'s own header
+named `Ref.get`, `Ref.set`, `Sender.send` and `Receiver.recv` as the
+functions the hand-written README had missed, and used them to argue
+for a generated document. Those four are exactly the ones the OTHER
+generated document then missed for two days.
+
+**The fix is one function, and the reason it is one function is worth
+recording.** `builtin_items` turns each builtin into a real `ItemNode`
+by WRITING PLUM AND PARSING IT:
+
+```
+/// A new array holding `f` applied to each element, in order.
+///
+/// Implemented by the compiler itself, so it has no Plum source to read.
+pub let Array.map (self: Array[T]) (f: (T) -> U): Array[U] = ()
+```
+
+Bodies are `()` and are never compiled; these items exist only between
+that function and the Markdown writer. Constructing AST nodes by hand
+would have worked too, and would have been the beginning of a second
+copy of the doc generator. As items, they get module grouping,
+namespace pages, anchors, the HTML emitter, the search index and
+`def_signature` for free -- every feature, including the ones added
+next year.
+
+Two things had to be added to the builtin table for this, and both are
+real information that was missing rather than plumbing. A `doc`, since
+a builtin has no declaration to write a `///` above. And a `recv_ty`,
+because `recv` is a NAMESPACE name and a receiver is a TYPE: `Ref.get`
+lives in `Ref` and takes a `Ref[T]`. Without it the reference rendered
+`let Array.map (f: (T) -> U)`, which reads as a one-argument function
+and is untrue of the `Array.map(xs, f)` spelling that also works.
+
+`STDLIB.md` and `plum stdlib-reference` are retired. The flat list is
+`docs/stdlib/index.md`, written by the same pass as the pages, from the
+same items, with the same anchors -- so the index, the pages and the
+search index agree by construction rather than by three functions being
+kept in step. That is 159 lines of compiler and one harness removed,
+but the line count is not the point: two generators for one library is
+two chances to disagree, and this is what that cost.
+
+The thing that actually failed here is subtler than "nobody checked".
+Both documents were generated, both were verified against the compiler,
+and both harnesses passed every day while the reference was missing
+`Array.map`. A generated file can only be as complete as what its
+generator can REACH, and neither harness could ask the question that
+mattered: whether the two of them described the same library.

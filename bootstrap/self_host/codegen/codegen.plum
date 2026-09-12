@@ -600,7 +600,7 @@ let cg_frame_global (sym: String) (shown: String): String =
 // showed it at the top of the trace -- above `divide`, which is the
 // frame the person is actually looking for. The double-underscore
 // prefix is the same one every synthesized name carries and the same
-// rule `stdlib-reference` uses to hide them.
+// rule the generated reference uses to hide them.
 let cg_frame_visible (name: String): Bool = !parser.bare_type_name(name).starts_with("__")
 
 // Pushed on entry. The matching pop is NOT in the epilogue: every path

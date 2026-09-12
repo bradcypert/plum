@@ -81,3 +81,9 @@ The bytes as numbers 0-255.
 
 Lowercase hex, two characters per byte. `Encoding.hex_decode`
 reads it back.
+
+## `let Bytes.as_cstr (self: Bytes): CStr`
+
+The bytes as a NUL-terminated pointer, for passing to an `extern` block's C functions. Only valid inside `unsafe`.
+
+Implemented by the compiler itself, so it has no Plum source to read.

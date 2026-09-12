@@ -379,14 +379,19 @@ Two generated references, neither written by hand:
   documentation written on each declaration. Start with
   [`prelude`](docs/stdlib/prelude.md), which is what every program gets
   without asking for it.
-- **[STDLIB.md](STDLIB.md)** is every signature in one file, for when you
-  want to search rather than read.
+- **[`docs/stdlib/index.md`](docs/stdlib/index.md)** is every
+  declaration in one file, each linked to the page that documents it,
+  for when you want to search rather than read.
 
-Both come out of `plum doc` and `plum stdlib-reference`, and
-`bootstrap/check-docs` and `bootstrap/check-stdlib-reference` fail if
-either has fallen behind the compiler. This section used to list the
-library by hand; it was accurate, and nothing checked it, which is a
-promise that keeps for exactly as long as somebody keeps remembering.
+Both come out of `plum doc`, in one pass, and `bootstrap/check-docs`
+fails if either has fallen behind the compiler. This section used to
+list the library by hand; it was accurate, and nothing checked it, which
+is a promise that keeps for exactly as long as somebody keeps
+remembering.
+
+The functions the compiler implements itself, `Array.map` and
+`String.concat` among them, are in there too, even though they have no
+Plum source to read.
 
 `Net`, `Http`, `Os`, `Time`, `Process`, `Encoding`, `Url`, `Path`,
 `Json` and `Terminal` need a `use`. Everything else is in the prelude

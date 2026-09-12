@@ -373,22 +373,33 @@ let locals_acc (nodes: Array[typecheck.NodeType]) (path: String) (off: Int) (spa
     }
     else { locals_acc(nodes, path, off, span, i + 1, seen, acc) }
 
-// --- `plum stdlib-reference` ---
+// --- `plum doc` ---
 //
 // The standard library, listed by the compiler that implements it.
 //
-// The README documents the library as hand-written prose, which means
-// it can be incomplete without looking incomplete: 32 of 142 functions
-// were never mentioned, including `Ref.get`, `Ref.set`, `Sender.send`
-// and `Receiver.recv` -- both halves of two headline features.
-// `check-doc-names` proves every name the docs MENTION is real; nothing
-// could prove the reverse, because "everything that exists" was not
-// written down anywhere a check could read.
+// The README once documented the library as hand-written prose, which
+// means it can be incomplete without looking incomplete: 32 of 142
+// functions were never mentioned, including `Ref.get`, `Ref.set`,
+// `Sender.send` and `Receiver.recv` -- both halves of two headline
+// features. `check-doc-names` proves every name the docs MENTION is
+// real; nothing could prove the reverse, because "everything that
+// exists" was not written down anywhere a check could read.
 //
 // It is now, and it is generated rather than maintained. Every entry
 // comes from the same place completion reads, so a function that exists
 // is in this document by construction, with the signature it actually
 // has.
+//
+// That used to be two commands. `plum stdlib-reference` wrote
+// `STDLIB.md`, one flat list of signatures, and `plum doc` wrote
+// `docs/stdlib/`, one page per module with the prose. Two generators
+// for one library is two chances to disagree, and they did, in both
+// directions: `STDLIB.md` listed `Map.get` and `String.trim` twice
+// each, while `docs/stdlib/` was missing `Array.map` entirely, along
+// with eighteen other builtins and four whole namespaces. The flat list
+// is now `index.md`, written by the same pass as the pages, and those
+// four functions the old header named are documented at last.
+//
 // `plum doc <dir> [-o <out>]` -- reference documentation, generated
 // from the source it documents (issue #37).
 //
@@ -459,8 +470,176 @@ let cmd_doc (dir: String) (out: String) (html: Bool) (home: String): Unit =
 let cmd_doc_stdlib (out: String) (html: Bool) (home: String): Unit = {
     let prelude = parser.with_module(codegen.cg_with_prelude(parser.ProgramNode { items: [] }).items, "prelude");
     let std = codegen.cg_std_items(all_std_uses(()));
-    cmd_doc_render(Array.concat(prelude, std), out, html, home)
+    let declared = Array.concat(prelude, std);
+    cmd_doc_render(Array.concat(declared, builtin_items(declared)), out, html, home)
 }
+
+// A program that `use`s every stdlib module, so `cg_std_items` yields
+// all of them rather than the none an empty program asks for.
+//
+// Built FROM `parser.std_module_names()` rather than spelled out. It
+// used to be the literal string `"use Os;\nuse Time;\nuse Net;\nuse
+// Http;\nuse Process;"` -- a hand-maintained second copy of that list,
+// sitting directly under a comment promising that a function which
+// exists appears here "by construction". It did not: a module added to
+// `std_module_names` and not to this string was invisible to the
+// generated reference AND to the check that compared the output against
+// the checked-in file, which would therefore have agreed that nothing
+// was missing. Found when `Encoding` landed and silently did not appear.
+let all_std_uses (unit: Unit): Array[parser.ItemNode] = {
+    let src = Array.fold(parser.std_module_names(()), "", |acc, m| acc.concat("use ").concat(m).concat(";\n"))
+        .concat("let main (): Unit = ()");
+    let lexed = lexer.tokenize_spanned(src);
+    parser.set_source_context("<stdlib-modules>", src, lexed.starts, lexed.ends);
+    let items = parser.parse_program(lexed.tokens).items;
+    parser.set_source_context("", "", [], []);
+    items
+}
+
+// The methods and functions the COMPILER implements, as items.
+//
+// `plum doc` walks declarations, and these have none -- so `Array.map`,
+// `Array.fold`, `String.concat`, `Ref.get` and fifteen others were
+// simply absent from the generated reference, and `Ref`, `CStr`,
+// `Sender` and `Receiver` had no page at all. Whichever of the two
+// generated references you read, the most-used function in the language
+// was missing from one of them.
+//
+// They are turned into real `ItemNode`s by WRITING PLUM AND PARSING IT,
+// rather than by constructing AST nodes here. That is the difference
+// between one function and a second copy of the doc generator: once a
+// builtin is an item, every existing feature works on it with no change
+// at all -- module grouping, namespace pages, anchors, the HTML
+// emitter, the search index, and `def_signature` rendering the
+// signature the same way it renders every other one.
+//
+// The bodies are `()` and are never compiled. These items exist only
+// between here and `cmd_doc_render`, which reads declarations and
+// writes Markdown; nothing type-checks them and nothing emits them.
+// That is also why the generic parameters are undeclared: `T` and `U`
+// parse as ordinary type names, and no pass that cares ever sees them.
+// Fifteen of these are ALSO declared in Plum, `Map.get` and
+// `String.trim` among them, so a builtin entry is dropped when a
+// declaration of the same name exists. The declaration is the one to
+// keep: it is real source with its own `///` documentation, and the
+// builtin entry carries different parameter names for the same
+// function.
+//
+// `STDLIB.md` listed both, and had done since it was written:
+// `Map.get` appears there twice, once as a declaration and once marked
+// `(built in)`. Nobody noticed, because nothing compared the two halves
+// of a file that was only ever appended to.
+let builtin_items (declared: Array[parser.ItemNode]): Array[parser.ItemNode] = {
+    let names = declared_names(declared, 0, []);
+    let src = builtin_src(Array.filter(typecheck.builtin_methods(), |m|
+            !Array.contains(names, builtin_qualified(m.recv, m.name))), 0, "")
+        .concat(builtin_fn_src(Array.filter(typecheck.builtin_functions(), |f|
+            !Array.contains(names, f.name)), 0, ""));
+    let lexed = lexer.tokenize_spanned(src);
+    parser.set_source_context("<builtins>", src, lexed.starts, lexed.ends);
+    let items = parser.parse_program(lexed.tokens).items;
+    parser.set_source_context("", "", [], []);
+    // The prelude's module, because that is what these are: available
+    // with no `use`, in every program.
+    parser.with_module(items, "prelude")
+}
+
+let builtin_qualified (recv: String) (name: String): String =
+    if String.is_empty(recv) { name } else { recv.concat(".").concat(name) }
+
+let declared_names (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= items.len() { acc }
+    else {
+        let next = match items[i].kind {
+            IKLet(def) => if Array.contains(acc, def.name) { acc } else { acc.push(def.name) },
+            _ => acc,
+        };
+        declared_names(items, i + 1, next)
+    }
+
+let builtin_src (ms: Array[typecheck.BuiltinMethod]) (i: Int) (acc: String): String =
+    if i >= ms.len() { acc }
+    else {
+        let head = if String.is_empty(ms[i].recv) { "" } else { ms[i].recv.concat(".") };
+        // The receiver, written back in as the first parameter, so a
+        // builtin reads the way every declared associated function on
+        // the same page reads. Without it `Array.map` showed as taking
+        // one argument, which is both inconsistent and untrue of the
+        // `Array.map(xs, f)` spelling.
+        let params = builtin_params(ms[i].detail);
+        // A receiver IS a parameter list, so a method that takes
+        // nothing else must not also emit `()`. `Ref.get` rendered as
+        // `let Ref.get (self: Ref[T]) (): T`, which parses but reads as
+        // a function of two argument lists, one of them empty.
+        let rest = if String.is_empty(ms[i].recv_ty) { params }
+            else if params == "()" { "" }
+            else { " ".concat(params) };
+        let recv = if String.is_empty(ms[i].recv_ty) { "" }
+            else { "(self: ".concat(ms[i].recv_ty).concat(")") };
+        builtin_src(ms, i + 1,
+            acc.concat("/// ").concat(ms[i].doc).concat("\n")
+                .concat(BUILTIN_NOTE(())).concat("\n")
+                .concat("pub let ").concat(head).concat(builtin_name(ms[i].detail)).concat(" ")
+                .concat(recv).concat(rest).concat(builtin_ret(ms[i].detail)).concat(" = ()\n\n"))
+    }
+
+// A dotted `BuiltinFn` is skipped: it is the same thing as a method of
+// that name, and documenting it twice would say one thing in two
+// shapes. The reference has always filtered these; this is that rule,
+// in the generator that replaced it.
+let builtin_fn_src (fs: Array[typecheck.BuiltinFn]) (i: Int) (acc: String): String =
+    if i >= fs.len() { acc }
+    else if Option.is_some(String.index_of(fs[i].name, ".")) { builtin_fn_src(fs, i + 1, acc) }
+    else {
+        builtin_fn_src(fs, i + 1,
+            acc.concat("/// ").concat(fs[i].doc).concat("\n")
+                .concat(BUILTIN_NOTE(())).concat("\n")
+                // `BuiltinFn.detail` is already a whole declaration.
+                .concat("pub ").concat(fs[i].detail).concat(" = ()\n\n"))
+    }
+
+// Said on every one of them, in the reader's own words rather than as a
+// bracketed marker, because "(built in)" beside a signature invites the
+// question this sentence answers.
+let BUILTIN_NOTE (unit: Unit): String =
+    "///\n/// Implemented by the compiler itself, so it has no Plum source to read."
+
+// `BuiltinMethod.detail` is written in METHOD form -- `map(f: (T) -> U):
+// Array[U]` -- because that is how an editor's completion popup shows
+// it, where the receiver is the thing you already typed. A declaration
+// names the receiver, so the two halves are taken apart here and the
+// receiver written back in between them.
+let builtin_name (detail: String): String =
+    match String.index_of(detail, "(") {
+        None => detail,
+        Some(i) => String.slice(detail, 0, i),
+    }
+
+// Everything between the first `(` and the LAST `)`, which is one or
+// more parameter lists: `fold(init: U) (f: (U, T) -> U): U` has two,
+// and `map(f: (T) -> U)` has parentheses nested inside one.
+//
+// The last `)` is what separates parameters from the return type, and
+// that is exact for every builtin there is. It would stop being exact
+// for one that RETURNED a function type, since the return would then
+// carry the final `)` itself. None does; if one ever did, this is where
+// it would go wrong, and `check-docs` would show it immediately.
+let builtin_params (detail: String): String =
+    match String.index_of(detail, "(") {
+        None => "()",
+        Some(i) => String.slice(detail, i, last_paren(detail, 0, i) + 1),
+    }
+
+let builtin_ret (detail: String): String =
+    match String.index_of(detail, "(") {
+        None => "",
+        Some(i) => String.slice(detail, last_paren(detail, 0, i) + 1, detail.len()),
+    }
+
+let last_paren (s: String) (i: Int) (best: Int): Int =
+    if i >= s.len() { best }
+    else if String.slice(s, i, i + 1) == ")" { last_paren(s, i + 1, i) }
+    else { last_paren(s, i + 1, best) }
 
 let cmd_doc_items (items: Array[parser.ItemNode]) (out: String): Unit =
     cmd_doc_render(items, out, false, "")
@@ -471,6 +650,7 @@ let cmd_doc_render (items: Array[parser.ItemNode]) (out: String) (html: Bool) (h
     if html { doc_write_html(items, mods, out, home) }
     else {
         doc_write_modules(items, mods, out, 0);
+        doc_write("${out}/index.md", doc_index_page(items, mods));
         println("wrote ${mods.len().to_string()} module(s) to ${out}")
     }
 }
@@ -587,6 +767,75 @@ let doc_module_page (items: Array[parser.ItemNode]) (m: String) (nss: Array[Stri
         .concat(doc_ns_index(m, nss, 0))
         .concat(doc_entries_ns(items, m, "", 0, ""))
 
+// EVERY signature in one file, each linked to the page that documents
+// it. The Markdown counterpart of `index.html`, and the thing you read
+// when you want to search rather than browse.
+//
+// This replaced `STDLIB.md`, which said the same thing and was built by
+// a second generator, `plum stdlib-reference`. Two generators for one
+// library is two chances to disagree, and they did: `STDLIB.md` listed
+// `Map.get` and `String.trim` twice each, once as a declaration and
+// once as a builtin, because nothing ever compared its two halves. It
+// also could not be produced for a USER's project, which is the whole
+// premise of `plum doc` being a general tool rather than a bespoke one.
+let doc_index_page (items: Array[parser.ItemNode]) (mods: Array[String]): String =
+    "# API reference\n\nGenerated by `plum doc` from the source. Do not edit by hand.\n\nEvery declaration, linked to the page that documents it.\n"
+        .concat(doc_index_mod_sections(items, mods, 0, ""))
+
+let doc_index_mod_sections (items: Array[parser.ItemNode]) (mods: Array[String]) (i: Int) (acc: String): String =
+    if i >= mods.len() { acc }
+    else {
+        let nss = sorted_namespaces(doc_namespaces(items, mods[i], 0, []), 0);
+        doc_index_mod_sections(items, mods, i + 1,
+            acc.concat("\n## [${mods[i]}](${mods[i]}.md)\n\n")
+                .concat(doc_index_links(items, mods[i], "", "${mods[i]}.md", 0, ""))
+                .concat(doc_index_ns_sections(items, mods[i], nss, 0, "")))
+    }
+
+let doc_index_ns_sections (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (i: Int) (acc: String): String =
+    if i >= nss.len() { acc }
+    else {
+        doc_index_ns_sections(items, m, nss, i + 1,
+            acc.concat("\n### [${m}.${nss[i]}](${m}.${nss[i]}.md)\n\n")
+                .concat(doc_index_links(items, m, nss[i], "${m}.${nss[i]}.md", 0, "")))
+    }
+
+// One line per declaration: the signature, linked to its anchor on the
+// page it lives on. The anchor is `doc_anchor`'s, the same one the HTML
+// pages and the search index use, so all three agree by construction
+// rather than by three functions being kept in step.
+let doc_index_links (items: Array[parser.ItemNode]) (m: String) (ns: String) (page: String) (i: Int) (acc: String): String =
+    doc_index_links_in(items, m, sorted_namespaces(doc_namespaces(items, m, 0, []), 0), ns, page, i, acc)
+
+let doc_index_links_in (items: Array[parser.ItemNode]) (m: String) (nss: Array[String]) (ns: String) (page: String) (i: Int) (acc: String): String =
+    if i >= items.len() { acc }
+    else {
+        let mine = if String.is_empty(items[i].module) { "root" } else { items[i].module };
+        if !items[i].is_pub || mine != m || doc_is_internal(items[i]) || doc_ns_of_in(nss, items[i]) != ns {
+            doc_index_links_in(items, m, nss, ns, page, i + 1, acc)
+        } else {
+            match doc_entry_signature(items[i]) {
+                None => doc_index_links_in(items, m, nss, ns, page, i + 1, acc),
+                Some(sig) => doc_index_links_in(items, m, nss, ns, page, i + 1,
+                    acc.concat("- [`${sig}`](${page}#${doc_anchor(sig)})\n")),
+            }
+        }
+    }
+
+// The signature alone, without the documentation `doc_entry` renders
+// beneath it. Split out rather than duplicated: an index that wrote its
+// own version of a signature would be a third spelling to keep in step
+// with the page and the search index.
+let doc_entry_signature (item: parser.ItemNode): Option[String] =
+    match item.kind {
+        IKLet(def) => Some(def_signature(def)),
+        IKStruct(d) => Some("struct ${d.name}"),
+        IKEnum(d) => Some("enum ${d.name}"),
+        IKHandle(d) => Some("handle ${d.name}"),
+        IKExtern(_) => None,
+        IKUse(_) => None,
+    }
+
 // Links to the namespace pages, so a module page is a way in rather
 // than a dead end when most of its API lives one level down.
 let doc_ns_index (m: String) (nss: Array[String]) (i: Int): String =
@@ -669,13 +918,9 @@ let doc_is_internal (item: parser.ItemNode): Bool =
 // and an `extern` block is how a module reaches C rather than something
 // a caller may call.
 let doc_entry (item: parser.ItemNode): Option[String] =
-    match item.kind {
-        IKLet(def) => Some(doc_render(def_signature(def), item.doc)),
-        IKStruct(d) => Some(doc_render("struct ${d.name}", item.doc)),
-        IKEnum(d) => Some(doc_render("enum ${d.name}", item.doc)),
-        IKHandle(d) => Some(doc_render("handle ${d.name}", item.doc)),
-        IKExtern(_) => None,
-        IKUse(_) => None,
+    match doc_entry_signature(item) {
+        None => None,
+        Some(sig) => Some(doc_render(sig, item.doc)),
     }
 
 // An undocumented declaration still appears. Leaving it out would make
@@ -1078,165 +1323,6 @@ let doc_search_box (): String =
         .concat("<input id=\"q\" type=\"search\" placeholder=\"Search (/)\" autocomplete=\"off\" spellcheck=\"false\">\n")
         .concat("<ul id=\"results\" hidden></ul>\n</form>\n"
 )
-
-pub let cmd_stdlib_reference (unit: Unit): Unit = {
-    let prelude = codegen.cg_with_prelude(parser.ProgramNode { items: [] }).items;
-    let std = codegen.cg_std_items(all_std_uses(()));
-    println("# Plum standard library");
-    println("");
-    println("Generated by `plum stdlib-reference`; do not edit by hand.");
-    println("`bootstrap/check-stdlib-reference` fails when it is out of date.");
-    println("");
-    println("Everything here is available with no `use` unless its section says");
-    println("otherwise -- ${module_list_prose(())} are modules and need one.");
-    println("");
-    println("A declared function is shown as it is written, receiver first:");
-    println("`let Array.reverse (xs: Array[T]): Array[T]`. A function the compiler");
-    println("implements itself is marked `(built in)` and shown in method form:");
-    println("`Array.map(f: (T) -> U): Array[U]`. Both are callable either way --");
-    println("`Array.reverse(xs)` and `xs.reverse()` are the same call.");
-    println("");
-    println("See README.md for the prose introduction.");
-    reference_sections(Array.concat(prelude, std))
-}
-
-// The module names, prose-joined and backticked, for the header.
-//
-// Derived rather than typed out, for the same reason `all_std_uses`
-// below is: this document's whole claim is that it is generated, and a
-// hand-written list of the modules is a second copy that can fall
-// behind the first.
-let module_list_prose (unit: Unit): String = {
-    let names = parser.std_module_names(());
-    module_list_acc(names, 0, "")
-}
-
-let module_list_acc (names: Array[String]) (i: Int) (acc: String): String =
-    if i >= names.len() { acc }
-    else {
-        let quoted = "`${names[i]}`";
-        let sep = if i == 0 { "" } else if i == names.len() - 1 { " and " } else { ", " };
-        module_list_acc(names, i + 1, acc.concat(sep).concat(quoted))
-    }
-
-// A program that `use`s every stdlib module, so `cg_std_items` yields
-// all of them rather than the none an empty program asks for.
-//
-// Built FROM `parser.std_module_names()` rather than spelled out. It
-// used to be the literal string `"use Os;\nuse Time;\nuse Net;\nuse
-// Http;\nuse Process;"` -- a hand-maintained second copy of that list,
-// sitting directly under a comment promising that a function which
-// exists appears here "by construction". It did not: a module added to
-// `std_module_names` and not to this string was invisible to the
-// generated reference AND to `check-stdlib-reference`, which compares
-// this output against the checked-in file and so would have agreed that
-// nothing was missing. Found when `Encoding` landed and silently did
-// not appear.
-let all_std_uses (unit: Unit): Array[parser.ItemNode] = {
-    let src = Array.fold(parser.std_module_names(()), "", |acc, m| acc.concat("use ").concat(m).concat(";\n"))
-        .concat("let main (): Unit = ()");
-    let lexed = lexer.tokenize_spanned(src);
-    parser.set_source_context("<stdlib-reference>", src, lexed.starts, lexed.ends);
-    let items = parser.parse_program(lexed.tokens).items;
-    parser.set_source_context("", "", [], []);
-    items
-}
-
-let reference_sections (items: Array[parser.ItemNode]): Unit = {
-    let ms = typecheck.builtin_methods();
-    reference_ns_acc(items, ms, sorted_namespaces(with_builtin_ns(ms, 0, namespaces_of(items, 0, [])), 0), 0);
-    // `to_string` is the one method with no receiver TYPE -- it works on
-    // every value, so it belongs to no namespace and would otherwise be
-    // the one entry this document silently dropped.
-    println("");
-    println("## Any type");
-    println("");
-    reference_builtins(ms, "", 0)
-}
-
-// Free functions the compiler implements itself. A dotted name is
-// skipped: it is already printed by `reference_builtins` in method
-// form, and printing it twice would say the same thing in two shapes.
-let reference_builtin_fns (fs: Array[typecheck.BuiltinFn]) (ns: String) (i: Int): Unit =
-    if i >= fs.len() { () }
-    else {
-        if ns == "(prelude)" && Option.is_none(String.index_of(fs[i].name, ".")) {
-            println("- `${fs[i].detail}`  (built in)")
-        } else { () };
-        reference_builtin_fns(fs, ns, i + 1)
-    }
-
-let with_builtin_ns (ms: Array[typecheck.BuiltinMethod]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= ms.len() { acc }
-    else if ms[i].recv != "" && !Array.contains(acc, ms[i].recv) { with_builtin_ns(ms, i + 1, acc.push(ms[i].recv)) }
-    else { with_builtin_ns(ms, i + 1, acc) }
-
-let reference_ns_acc (items: Array[parser.ItemNode]) (ms: Array[typecheck.BuiltinMethod]) (nss: Array[String]) (i: Int): Unit =
-    if i >= nss.len() { () }
-    else {
-        println("");
-        println("## ".concat(nss[i]));
-        println("");
-        reference_entries(items, nss[i], 0);
-        reference_builtins(ms, nss[i], 0);
-        reference_builtin_fns(typecheck.builtin_functions(), nss[i], 0);
-        reference_ns_acc(items, ms, nss, i + 1)
-    }
-
-// The methods the compiler implements itself. They are not source
-// items, so nothing that reads declarations can find them -- which is
-// how `Array.map` came to be missing from the editor's completion list
-// as well.
-let reference_builtins (ms: Array[typecheck.BuiltinMethod]) (ns: String) (i: Int): Unit =
-    if i >= ms.len() { () }
-    else {
-        if ms[i].recv == ns {
-            let call = if ns == "" { ms[i].detail } else { ns.concat(".").concat(ms[i].detail) };
-            println("- `${call}`  (built in)")
-        } else { () };
-        reference_builtins(ms, ns, i + 1)
-    }
-
-let reference_entries (items: Array[parser.ItemNode]) (ns: String) (i: Int): Unit =
-    if i >= items.len() { () }
-    else {
-        match items[i].kind {
-            IKLet(def) =>
-                if reference_ns_of(items[i], def.name) == ns && reference_visible(items[i], def.name) {
-                    println("- `${def_signature(def)}`")
-                } else { () },
-            _ => (),
-        };
-        reference_entries(items, ns, i + 1)
-    }
-
-// A prelude item is public API only when it says `pub`; a stdlib
-// module's items are reached through their module, so they carry one.
-// `pub`, and not a name the compiler generates for itself. Contract
-// desugaring declares `__contract_require`/`__contract_ensure`, which
-// are `pub` because the generated code calls them across modules and
-// are not API anybody may write.
-let reference_visible (item: parser.ItemNode) (name: String): Bool =
-    item.is_pub && !name.starts_with("__")
-
-// `Array.reverse` is grouped under `Array`; `Os.read_file` -- declared
-// as a bare `read_file` inside module `Os` -- under `Os`.
-let reference_ns_of (item: parser.ItemNode) (name: String): String =
-    if item.module != "" && item.module != parser.PRELUDE_MODULE(()) { item.module }
-    else { match String.index_of(name, ".") { Some(i) => String.slice(name, 0, i), None => "(prelude)" } }
-
-let namespaces_of (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): Array[String] =
-    if i >= items.len() { acc }
-    else {
-        let next = match items[i].kind {
-            IKLet(def) => {
-                let ns = reference_ns_of(items[i], def.name);
-                if reference_visible(items[i], def.name) && !Array.contains(acc, ns) { acc.push(ns) } else { acc }
-            },
-            _ => acc,
-        };
-        namespaces_of(items, i + 1, next)
-    }
 
 let sorted_namespaces (nss: Array[String]) (i: Int): Array[String] =
     if i >= nss.len() { nss } else { sorted_namespaces(bubble_ns(nss, 0), i + 1) }
@@ -3273,11 +3359,6 @@ let main (): Unit = {
         let out = doc_out_dir(argv, 0, "docs");
         let home = doc_flag_value(argv, "--home", 0, "");
         if argv[1] == "--stdlib" { cmd_doc_stdlib(out, html, home) } else { cmd_doc(argv[1], out, html, home) }
-    } else if argv.len() >= 1 && argv[0] == "stdlib-reference" {
-        // Before the `argv.len() < 2` guard for the same reason
-        // `version` is, and the comment above is why this was checked
-        // rather than assumed: it takes no argument either.
-        cmd_stdlib_reference(())
     } else if argv.len() < 2 {
         usage(());
     } else if argv[0] == "query" && argv.len() >= 5 {

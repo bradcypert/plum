@@ -120,3 +120,45 @@ uses for anything that accumulates.
 
 Sorted by BYTE order, not by any locale's alphabet — so uppercase
 sorts before lowercase, and accented letters sort after `z`.
+
+## `let Array.map (self: Array[T]) (f: (T) -> U): Array[U]`
+
+A new array holding `f` applied to each element, in order. The result's element type is whatever `f` returns, so mapping can change it.
+
+Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let Array.filter (self: Array[T]) (f: (T) -> Bool): Array[T]`
+
+A new array holding the elements `f` says `true` about, in their original order.
+
+Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let Array.fold (self: Array[T]) (init: U) (f: (U, T) -> U): U`
+
+Reduces the array to one value: starts at `init` and calls `f(acc, element)` for each element, left to right.
+
+Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let Array.len (self: Array[T]): Int`
+
+How many elements the array holds.
+
+Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let Array.push (self: Array[T]) (x: T): Array[T]`
+
+A new array with `x` added at the end. The receiver is unchanged, but when it is dying the compiler reuses its cell rather than copying, so `acc = acc.push(x)` in a loop does not go quadratic.
+
+Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let Array.remove (self: Array[T]) (i: Int): Array[T]`
+
+A new array with the element at index `i` left out. Out of range is a runtime error.
+
+Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let Array.set (self: Array[T]) (i: Int) (v: T): Array[T]`
+
+A new array with index `i` holding `v`. Out of range is a runtime error.
+
+Implemented by the compiler itself, so it has no Plum source to read.

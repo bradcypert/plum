@@ -111,8 +111,6 @@ jobs:
         run: ./bootstrap/check-builtins
       - name: every stdlib name the docs mention exists
         run: ./bootstrap/check-doc-names
-      - name: the stdlib reference matches the compiler
-        run: ./bootstrap/check-stdlib-reference
       - name: the generated docs match the compiler
         run: ./bootstrap/check-docs
       # The same lossless token stream `lossless-check` and the

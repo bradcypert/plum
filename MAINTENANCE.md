@@ -28,7 +28,7 @@ About two minutes. If you only run two, run `corpus-check` and
 |---|---|---|
 | `check-version` | the version string, the tag and the built binary agree | <1s |
 | `help-check` | `plum help`/`--help`/`-h` print usage, extra args ignored | <1s |
-| `check-docs` | `docs/stdlib/` matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 3s |
+| `check-docs` | `docs/stdlib/`, pages and index, matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 3s |
 | `highlight-check` | `plum highlight` gives the source back byte for byte with the tags stripped, over 294 files — highlighting cannot corrupt code a reader is about to copy | 13s |
 | `pkg-check` | path dependencies resolve (including transitively, and through a cycle) and every command sees them — and `plum.pkg` stays DATA: a call, a name, an interpolation or an `if` in a manifest is rejected | 9s |
 | `check-site-links` | a built site links only to pages it contains. Not in the loop above — it needs `build-site` to have run first, and CI runs the pair | <1s |
@@ -595,11 +595,23 @@ Worth knowing before you "fix" them:
   namespace index is bold text, not a heading, because anything parsing
   the output — a search index, an HTML renderer — would otherwise count
   it as one.
-- **`docs/stdlib/` and `STDLIB.md` are both GENERATED; the README links
-  to them and lists nothing itself.** The README's hand-written list was
+- **`docs/stdlib/` is GENERATED, index and all; the README links to it
+  and lists nothing itself.** The README's hand-written list was
   accurate and unchecked, which is a promise that holds only while
   somebody keeps remembering. Do not reintroduce one — add to the source
-  comments instead, which is where both files come from.
+  comments instead, which is where the pages come from.
+- **One generator, not two.** `STDLIB.md` and `plum stdlib-reference`
+  were retired in 0.0.29: a second generator for the same library is a
+  second chance to disagree, and both had drifted in opposite
+  directions, one listing `Map.get` twice and the other missing
+  `Array.map` altogether. A flat list of everything is
+  `docs/stdlib/index.md`, written by the same pass as the pages.
+- **A compiler BUILTIN has no declaration, so nothing that walks
+  declarations can see it.** `typecheck.builtin_methods` carries a `doc`
+  for each, and `main.plum`'s `builtin_items` turns them into items by
+  writing Plum and parsing it. Add a builtin, and give it a `doc`; the
+  reference then documents it like anything else. A builtin that is
+  ALSO declared in Plum is dropped in favour of the declaration.
 - **The standard library documents itself through `plum doc --stdlib`,
   the same generator a user project uses.** It is not a bespoke path —
   `cg_parse_std` already sets a source context per module, which is what

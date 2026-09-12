@@ -191,3 +191,15 @@ Split on newlines.
 A trailing newline produces a final empty piece, since the text
 after it is empty — which is what makes joining the result back
 with newlines give the original.
+
+## `let String.concat (self: String) (other: String): String`
+
+The two strings run together. Plum has no `+` for strings; this is the operation.
+
+Implemented by the compiler itself, so it has no Plum source to read.
+
+## `let String.as_cstr (self: String): CStr`
+
+The string as a NUL-terminated pointer, for passing to an `extern` block's C functions. Only valid inside `unsafe`.
+
+Implemented by the compiler itself, so it has no Plum source to read.

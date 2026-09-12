@@ -85,3 +85,9 @@ different questions.
 ## `let Int.to_hex_bits (n: Int): String`
 
 The same, in hex: sixteen digits, two's complement, zero padded.
+
+## `let Int.to_float (self: Int): Float`
+
+The integer as a `Float`. Plum never converts between numeric types on its own, so this is how it is said.
+
+Implemented by the compiler itself, so it has no Plum source to read.
