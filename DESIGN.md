@@ -20630,3 +20630,63 @@ and both harnesses passed every day while the reference was missing
 `Array.map`. A generated file can only be as complete as what its
 generator can REACH, and neither harness could ask the question that
 mattered: whether the two of them described the same library.
+
+### Wrapping arithmetic (2026-09-12)
+
+`+`, `-` and `*` on `Int` abort on overflow, deliberately: an integer
+that silently went negative is a wrong answer that keeps running. That
+default is load-bearing and is not weakened here.
+
+Some algorithms are DEFINED over a fixed-width word, though, and until
+now they could not be written in Plum at all. The cost was not
+hypothetical, and it shows up in three places in this repository:
+
+- **`Rng` is L'Ecuyer's combined multiplicative generator (1988)**,
+  chosen because every intermediate stays inside `i64` by construction.
+  PCG and splitmix64 both need a wrapping 64-bit multiply. The generator
+  was picked by elimination rather than on merit.
+- **`String.hash` is a runtime primitive**, and the irony is visible in
+  `runtime.plum`: `plum_str_hash_raw` is FNV-1a, and its `mul i64` is
+  exactly the wrapping multiply Plum could not express. Hashing does not
+  want to be a primitive; it became one because of this.
+- **`bootstrap/properties`' own generator** is a 31-bit LCG, with a
+  comment explaining that the usual 64-bit constants "would kill the
+  test process rather than wrap".
+
+**Named functions, not operators.** `Int.wrapping_add`,
+`Int.wrapping_sub`, `Int.wrapping_mul`. Zig's `+%`/`-%`/`*%` reads
+better inside a hash function where every operation wraps, and costs new
+tokens and precedence entries; the verbosity is the point everywhere
+else. Wrapping is rare and should look deliberate at the call site. It
+is also the additive choice: an operator can be layered on later without
+breaking anything written against the functions, and the reverse is not
+true.
+
+The implementation is three lines of IR each, because that is all
+wrapping is at this level. LLVM's `add`/`sub`/`mul` wrap unless marked
+`nsw`/`nuw`, so it is the CHECKED path that does extra work, calling
+`llvm.*.with.overflow` and branching. They go through the same
+`name -> @symbol` mapping as every other primitive rather than being
+special-cased into `cg_binary`, and `-O2` inlines them away.
+
+**The property is that they agree with the checked operators wherever
+the checked ones do not overflow.** That is the invariant a reader
+assumes: `wrapping_mul` is not a different multiply, it is the same
+multiply with an answer in the one place `*` refuses to give one. If
+those ever disagreed on an ordinary product, wrapping would be silently
+wrong everywhere rather than only at the edges, and nothing else here
+would catch it. Checked once against generated inputs bounded well
+inside the range, and once against pinned values at the edges, where
+two's complement has a defined right answer to write down.
+
+Verified by fault injection rather than by argument: mapping
+`wrapping_add_raw` to `@plum_wrapping_sub` fails both properties and
+names the inputs.
+
+Three follow-ups this unblocks, none of them done here, and each wants
+care of its own: `Rng` could become a real PCG or splitmix64;
+`String.hash` could move from IR into Plum, which must stay byte-for-byte
+identical or `Map.keys` enumerates in a different order and
+`example-sweep` compares output exactly; and the property generator
+could become a proper 64-bit LCG, which would change every property's
+inputs at once.

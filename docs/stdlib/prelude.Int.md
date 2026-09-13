@@ -86,6 +86,33 @@ different questions.
 
 The same, in hex: sixteen digits, two's complement, zero padded.
 
+## `let Int.wrapping_add (a: Int) (b: Int): Int`
+
+Addition that WRAPS on overflow, two's complement, instead of
+stopping the program.
+
+`+` is the one to reach for. It aborts on overflow, deliberately,
+because an integer that silently became negative is a wrong
+answer that keeps running. This is for the cases where wrapping is
+the SPECIFICATION rather than an accident: hashes, checksums,
+fixed-width binary protocols, and generators like PCG or
+splitmix64 that are defined mod 2^64.
+
+It is a named function and not an operator so that it is visible
+at the call site. Wrapping should be asked for, not defaulted to.
+
+## `let Int.wrapping_sub (a: Int) (b: Int): Int`
+
+Subtraction that WRAPS on overflow. See `Int.wrapping_add`.
+
+## `let Int.wrapping_mul (a: Int) (b: Int): Int`
+
+Multiplication that WRAPS on overflow. See `Int.wrapping_add`.
+
+This is the one most algorithms actually need: FNV-1a, xxHash and
+splitmix64 are all a wrapping multiply by a large constant
+followed by a mix.
+
 ## `let Int.to_float (self: Int): Float`
 
 The integer as a `Float`. Plum never converts between numeric types on its own, so this is how it is said.

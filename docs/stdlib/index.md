@@ -339,6 +339,9 @@ Every declaration, linked to the page that documents it.
 - [`let Int.to_octal (n: Int): String`](prelude.Int.md#Int.to_octal)
 - [`let Int.to_bits (n: Int): String`](prelude.Int.md#Int.to_bits)
 - [`let Int.to_hex_bits (n: Int): String`](prelude.Int.md#Int.to_hex_bits)
+- [`let Int.wrapping_add (a: Int) (b: Int): Int`](prelude.Int.md#Int.wrapping_add)
+- [`let Int.wrapping_sub (a: Int) (b: Int): Int`](prelude.Int.md#Int.wrapping_sub)
+- [`let Int.wrapping_mul (a: Int) (b: Int): Int`](prelude.Int.md#Int.wrapping_mul)
 - [`let Int.to_float (self: Int): Float`](prelude.Int.md#Int.to_float)
 
 ### [prelude.Map](prelude.Map.md)

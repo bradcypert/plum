@@ -1073,3 +1073,69 @@ pub let test_format_laws (): Unit = {
     check_eq("a negative that rounds to zero keeps its sign", "-0.001",
         Float.to_fixed(0.0 - 0.001, 2), "-0.00")
 }
+
+// --- Wrapping arithmetic ---
+
+// The acceptance criterion from issue #31: wrapping and checked agree
+// wherever the checked one does not overflow.
+//
+// That is the property worth having, because it is the one a reader
+// assumes. `wrapping_mul` is not a different multiply; it is the same
+// multiply with a different answer in the one place `*` refuses to give
+// one. If the two ever disagreed on an ordinary product, wrapping would
+// be silently wrong everywhere rather than only at the edges, and
+// nothing else here would notice.
+//
+// The inputs are deliberately small enough that no product can
+// overflow: `rand_between` is bounded at 2^15, so `a * b` peaks near
+// 2^30 and `+`/`-` cannot overflow either. A generated case that DID
+// overflow would abort the test process on the checked side, which is
+// correct behaviour and a useless test.
+let wrapping_agrees (seed: Int) (left: Int): Unit =
+    if left <= 0 { () } else {
+        let a = rand_between(seed, 0 - 32768, 32768);
+        let b = rand_between(next_seed(seed), 0 - 32768, 32768);
+        let input = "${a}, ${b}";
+        check_eq("wrapping_add agrees with +", input,
+            Int.wrapping_add(a, b).to_string(), (a + b).to_string());
+        check_eq("wrapping_sub agrees with -", input,
+            Int.wrapping_sub(a, b).to_string(), (a - b).to_string());
+        check_eq("wrapping_mul agrees with *", input,
+            Int.wrapping_mul(a, b).to_string(), (a * b).to_string());
+        wrapping_agrees(next_seed(next_seed(seed)), left - 1)
+    }
+
+pub let test_wrapping_agrees_with_checked (): Unit = {
+    wrapping_agrees(20260911, 300);
+
+    // The method spelling is the same function. `T.f(x, a)` and
+    // `x.f(a)` are one call, and a primitive is exactly where that
+    // could quietly stop being true.
+    check_eq("the method spelling agrees", "7, 6",
+        7.wrapping_mul(6).to_string(), Int.wrapping_mul(7, 6).to_string())
+}
+
+// And the edges, which are the whole reason these exist. Pinned as
+// exact values rather than generated: two's complement wrap-around is
+// defined, so there is a right answer to write down.
+pub let test_wrapping_at_the_edges (): Unit = {
+    let max = 9223372036854775807;
+    let min = 0 - max - 1;
+
+    check_eq("max + 1 wraps to min", "max", Int.wrapping_add(max, 1).to_string(), min.to_string());
+    check_eq("min - 1 wraps to max", "min", Int.wrapping_sub(min, 1).to_string(), max.to_string());
+    check_eq("max * 2 wraps to -2", "max", Int.wrapping_mul(max, 2).to_string(), "-2");
+    check_eq("min * -1 wraps to itself", "min", Int.wrapping_mul(min, 0 - 1).to_string(), min.to_string());
+
+    // Wrapping twice is identity, which is what "mod 2^64" means and is
+    // the property a checksum actually relies on.
+    check_eq("add then sub returns the input", "max",
+        Int.wrapping_sub(Int.wrapping_add(max, 12345), 12345).to_string(), max.to_string());
+
+    // splitmix64's first mix step, which `*` cannot express at all: the
+    // multiply overflows by construction, so before this existed the
+    // only way to write it was a C shim.
+    let z = Int.wrapping_add(0, 0 - 7046029254386353131);
+    check_eq("splitmix64 first step", "0",
+        Int.wrapping_mul(z, 0 - 4658895280553007687).to_string(), "-2993748316962524115")
+}

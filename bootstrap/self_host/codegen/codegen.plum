@@ -2942,6 +2942,12 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "write_file_bytes_raw" { Some("@plum_write_file_raw") }
     else if name == "append_file_bytes_raw" { Some("@plum_os_append_file") }
     else if name == "string_hash_raw" { Some("@plum_str_hash_raw") }
+    // Wrapping arithmetic. Runtime symbols rather than an inline
+    // instruction so that they follow the same path as every other
+    // primitive, and because `-O2` inlines a three-line function anyway.
+    else if name == "wrapping_add_raw" { Some("@plum_wrapping_add") }
+    else if name == "wrapping_sub_raw" { Some("@plum_wrapping_sub") }
+    else if name == "wrapping_mul_raw" { Some("@plum_wrapping_mul") }
     else if name == "sqrt_raw" { Some("@plum_sqrt_raw") }
     else if name == "pow_raw" { Some("@plum_pow_raw") }
     else if name == "float_fixed_raw" { Some("@plum_float_fixed_raw") }
