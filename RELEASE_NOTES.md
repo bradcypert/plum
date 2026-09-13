@@ -1,127 +1,96 @@
 Plum is a small, statically typed, compiled language.
 
-A Plum project can now depend on another one.
+The API reference did not list `Array.map`. It does now.
 
-## Path dependencies
+## The reference was missing the builtins
 
-A project says what it depends on in a `plum.pkg` file at its root:
-
-```
-Package {
-    name: "myapp",
-    version: "0.1.0",
-    deps: [
-        Dep { name: "semver", path: "../semver" },
-    ],
-}
-```
-
-A dependency is an ordinary project: a directory of `.plum` files that
-builds, tests and type-checks on its own. Nothing is published and
-nothing is fetched.
-
-There is no new build step and no new command. `plum check`, `run`,
-`build`, `test` and `doc` all read the dependency's source, and the
-language server sees it too, because the change is one function: a
-dependency is source, and the compiler already knew how to read source
-from a directory. The only new question was which directories.
-
-`pub` means the same thing across a package boundary as it does across
-a module boundary. A dependency's unexported names are unavailable, not
-merely undocumented.
-
-Dependencies of dependencies come along, resolved relative to the
-manifest that names them. Two packages that depend on each other
-terminate rather than recursing.
-
-**A project with no dependencies needs no manifest at all.** `plum new`
-still writes exactly one file.
-
-## A manifest is data, not a program
-
-`plum.pkg` is read by Plum's own lexer and parser. That is why there is
-no second configuration format to learn, and it is also the whole risk:
-`setup.py`, `build.rs` and `build.zig` each began as configuration and
-became programs, because a config file written in a general-purpose
-language invites computing in it, and then the tool has to *run* the
-file in order to read it.
-
-Two things were being conflated there, and only one is dangerous.
-Reusing a parser to read data carries no risk: text goes in, a tree
-comes out, nothing executes. Making the file look like a program carries
-all of it. So `plum.pkg` has no `let`, no declaration, no `main`, and is
-deliberately not a `.plum` file. It holds a bare value, in a file
-nothing will ever compile.
-
-And the shape is enforced rather than trusted. Anything that is not a
-string, a number, `true`/`false`, an array or a struct literal is
-rejected:
+`plum doc` reads declarations, and 31 of the standard library's methods
+are implemented by the compiler and have no declaration anywhere. So
+nineteen of them appeared on no page at all:
 
 ```
-plum.pkg: a manifest is data, not a program, and a function call is not data.
-  Only strings, numbers, `true`/`false`, arrays and struct literals are allowed.
+Array.map     Array.filter   Array.fold    Array.len     Array.push
+Array.remove  Array.set      String.concat String.as_cstr to_string
+Bytes.as_cstr CStr.as_string Float.to_int  Float.round_to_int Int.to_float
+Ref.get       Ref.set        Sender.send   Receiver.recv
 ```
 
-String interpolation is caught by the same rule without needing its own
-case, because an interpolated string parses to a concatenation. Text
-after the value is rejected rather than ignored. An unknown field is an
-error, so `dependencies:` written for `deps:` says so instead of quietly
-building a project with no dependencies.
+`Ref`, `CStr`, `Sender` and `Receiver` are entirely builtin and had no
+page whatsoever. The reference on
+[plumlang.org](https://plumlang.org/api/index.html) documented 335
+declared functions and not the most-used one in the language.
 
-**There is no build file**, and that split is the point. `plum build`
-knows how to build a Plum project because there is only one way to build
-one, and nothing in a manifest can change that.
+They are documented now, with prose written for each rather than a bare
+signature, and they are in the search index. The mechanism is worth a
+sentence because it is the reason this was one function rather than a
+second copy of the generator: each builtin is turned into a real item by
+writing Plum and parsing it, so module grouping, namespace pages,
+anchors, the HTML emitter and search all work on it unchanged.
 
-## Where a library's code goes
+## One reference, not two
 
-A dependency contributes its module **subdirectories**. Source at a
-dependency's root is an error, so a library is laid out one level deeper
-than you might first write it:
+`STDLIB.md` and the `plum stdlib-reference` command are **removed**.
+The flat list of every declaration is now
+[`docs/stdlib/index.md`](docs/stdlib/index.md), written by the same pass
+as the pages, from the same items, with the same anchors.
 
+If you linked to `STDLIB.md`, that is the replacement. On the site it is
+`/api/index.html`.
+
+Two generators for one library is two chances to disagree, and they had,
+in both directions: `STDLIB.md` listed `Map.get` and `String.trim` twice
+each, once as a declaration and once as a builtin, while `docs/stdlib/`
+was missing the nineteen above.
+
+Both documents were generated. Both were verified against the compiler
+by a harness. Both harnesses passed every day while the reference was
+incomplete, because a generated file is only as complete as what its
+generator can reach, and neither could ask whether the two described the
+same library.
+
+`plum doc` also writes `index.md` for **your** project now, which a
+command that only knew about this compiler's standard library could
+never do.
+
+## Wrapping arithmetic
+
+```plum fragment
+Int.wrapping_add(a, b)
+Int.wrapping_sub(a, b)
+Int.wrapping_mul(a, b)    // or a.wrapping_mul(b)
 ```
-semver/
-  plum.pkg          declares that it is called `semver`
-  semver/           module `semver`
-  compat/           module `compat`
-```
 
-The root module is where `main` lives and its names are unqualified, so
-a package may not put anything there. More usefully: a module is named
-by its directory, chosen by the library's author, and it is the same
-name whether the library is built alone or used from somewhere else.
-That is what lets `compat/compat.plum` say `use semver;` and keep
-working in both.
+`+`, `-` and `*` on `Int` still abort on overflow. That is deliberate
+and is not weakened: an integer that silently went negative is a wrong
+answer that keeps running.
 
-This rule replaced a worse one within a day of shipping it, and the
-first real example is what found the problem. The details are in
-[issue #36](https://github.com/bradcypert/plum/issues/36); the short
-version is that the previous rule let a *consumer* rename a library's
-own module, and gave a library two different module layouts depending on
-who was building it.
+Some algorithms are defined over a fixed-width word, though, and could
+not be written in Plum at all. PCG and splitmix64 need a wrapping 64-bit
+multiply; so do FNV-1a, xxHash and MurmurHash; so do checksums and
+binary protocols specified mod 2^64.
 
-[`examples/packages/`](examples/packages/) is the whole thing: two
-projects, a library and something that depends on it, about a hundred
-lines with a README.
+The cost was already visible in three places in this repository. `Rng`
+is L'Ecuyer's 1988 generator, chosen because every intermediate stays
+inside `i64` by construction rather than on merit. `String.hash` is a
+runtime primitive, and the irony sits in the runtime itself: that
+primitive is FNV-1a, and its `mul` is exactly the wrapping multiply Plum
+could not express. And the property tests' own generator is a 31-bit
+LCG, with a comment explaining that the usual 64-bit constants would
+kill the test process rather than wrap.
 
-## What is not here
+Named functions rather than operators, so wrapping is asked for and
+visible at the call site. It is also the additive choice: an operator
+can be layered on later without breaking anything written against these.
 
-Versions are recorded and not used. There is no registry, no fetching,
-no lockfile and no resolver, so a dependency is a directory you already
-have. Those are separable and tracked on
-[#36](https://github.com/bradcypert/plum/issues/36).
-
-The compiler's own bootstrap is unchanged and stays that way: a seed,
-and no network.
+The property asserted is that they agree with the checked operators
+wherever the checked ones do not overflow, because `wrapping_mul` is not
+a different multiply. It is the same one with an answer in the one place
+`*` refuses to give one.
 
 ## Also in this release
 
-- `bootstrap/pkg-check`, 27 checks. Half assert that dependencies
-  resolve; half assert the rejections above, because the risk to a rule
-  like "a manifest is data" is not a user hitting it once but a
-  maintainer relaxing it twice over two years.
-- `bootstrap/example-sweep` now understands a library. A directory under
-  `examples/` with no `main.plum` is type-checked and must be named by
-  some example's `plum.pkg`. It used to be skipped in silence, which is
-  the exact failure that harness was written to stop.
-- `INSTALL.md`'s macOS example uses a glob rather than a version number.
-  The number had said `0.0.7` for nineteen releases.
+- Three harness comments described `plum stdlib-reference` after it
+  stopped existing, one of them wrongly describing how arguments
+  dispatch.
+- `site/content/install.md` was generated, gitignored, and committed
+  anyway. It is no longer tracked.
