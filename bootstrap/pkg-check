@@ -133,6 +133,18 @@ else
     fail=$((fail + 1))
 fi
 
+# An ABSOLUTE dependency path is taken as written. This did not work
+# until 0.0.30 and failed in the worst way: `Path.join` does NOT let an
+# absolute second segment win (its rule is Go's), but its own
+# documentation said it did, so the loader resolved `/opt/parsec`
+# relative to the manifest and then reported that the user's dependency
+# was missing while naming a path the user had never written.
+manifest "Package {
+    name: \"app\",
+    deps: [ Dep { name: \"parsec\", path: \"$work/parsec\" } ],
+}"
+expect_ok "an absolute dependency path" "hello, ping json" "$plum" run "$work/app"
+
 # A project with no manifest is exactly what it was before packages
 # existed. This is the property that keeps `plum new` writing one file.
 mkdir -p "$work/plain"
@@ -195,6 +207,16 @@ expect_err "a keyword is not a package name" 'cannot be a package name' \
     'Package { name: "app", deps: [ Dep { name: "match", path: "../parsec" } ] }'
 expect_err "a missing directory"       'is not a directory' \
     'Package { name: "app", deps: [ Dep { name: "nope", path: "../nope" } ] }'
+
+# An EMPTY path is caught in the manifest rather than in the loader,
+# because by the time the loader sees it, it is indistinguishable from a
+# cycle: `Path.join` drops empty segments, so it cleans to the project's
+# own directory, which is already in the visited set. The dependency was
+# silently skipped and the BUILD SUCCEEDED, leaving `unbound variable`
+# at the `use` as the only symptom -- an error pointing at the user's
+# source rather than at the manifest line that was wrong.
+expect_err "an empty dependency path"  'has an empty path' \
+    'Package { name: "app", deps: [ Dep { name: "lib", path: "" } ] }'
 
 # A package's name belongs to the package. Without this, a `path` edited
 # to point somewhere else keeps the old name and the manifest describes

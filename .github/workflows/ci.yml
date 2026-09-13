@@ -122,6 +122,13 @@ jobs:
       - name: debug and release builds differ
         run: ./bootstrap/check-build-modes
 
+      # The commands a USER types that nothing else here runs. `plum new`
+      # is the first one a person ever types, and its scaffold embeds a
+      # test; `plum doc DIR` is the user-facing half of a command only
+      # ever exercised as `--stdlib`.
+      - name: the user-facing commands work
+        run: ./bootstrap/cli-smoke
+
       # Path dependencies resolve, and -- the half that will matter in
       # two years -- a manifest is still data. `plum.pkg` is read by the
       # real parser, which is what makes a second config format

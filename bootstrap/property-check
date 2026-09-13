@@ -39,7 +39,19 @@ if [ $rc -ne 0 ] || ! printf '%s' "$out" | grep -q "0 failed"; then
     exit 1
 fi
 
-# The count is echoed rather than asserted: a property suite that
-# silently ran zero tests would otherwise pass. `plum test` reports the
-# number it discovered.
+# ASSERTED, not echoed, for the reason the previous version of this
+# comment named and then did not act on: a property suite that silently
+# ran zero tests satisfies both conditions above. `plum test` on a
+# project with no `test_` functions prints `0 passed; 0 failed`, exit 0.
+#
+# A FLOOR, so adding properties does not fail the harness. Raise it when
+# you add some.
+floor=21
+passed="$(printf '%s' "$out" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+')"
+if [ -z "$passed" ] || [ "$passed" -lt "$floor" ]; then
+    printf '%s\n' "$out" >&2
+    echo "property-check: ran ${passed:-no} propert(ies), expected at least $floor" >&2
+    exit 1
+fi
+
 printf 'property-check: %s\n' "$(printf '%s' "$out" | grep 'test result:')"

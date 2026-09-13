@@ -40,9 +40,19 @@ Joins two path segments with the platform separator, cleaning the
 result.
 
 A trailing separator on `a` or a leading one on `b` does not produce
-a doubled separator. **An absolute `b` wins**: joining `/etc` onto
-`/home/x` gives `/etc`, matching every other language's `join` and
-the shell's own reading of an absolute path.
+a doubled separator.
+
+**An absolute `b` does NOT win**: `join("a", "/b")` is `a/b`, not
+`/b`. This is `join_all([a, b])` and inherits its rule, which is
+Go's; see the reasoning there. If `b` may be absolute and should
+be taken as-is, test it with `Path.is_absolute` and use it
+directly.
+
+This documentation said the opposite until 0.0.30, and the
+package loader was written against the sentence rather than the
+code: an absolute dependency path was resolved relative to the
+manifest, producing `/home/x/opt/parsec` and blaming the user's
+manifest for a path the compiler had invented.
 
 ## `let basename (p: String): String`
 

@@ -10,7 +10,7 @@ The absolute value.
 
 `Int.abs` of the most negative `Int` cannot be represented and
 overflows, which stops the program rather than returning a negative
-\"absolute\" value.
+"absolute" value.
 
 ## `let Int.min (a: Int) (b: Int): Int`
 

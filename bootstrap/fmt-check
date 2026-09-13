@@ -53,9 +53,20 @@ while IFS= read -r f; do
     # `@embed_file` resolves relative to the file being compiled.
     side="$(dirname "$f")/.fmt-check-tok-$$.plum"
     cp "$work/out" "$side"
-    "$plum" relex "$f" --tokens > "$work/tok-before" 2>/dev/null
-    "$plum" relex "$side" --tokens > "$work/tok-after" 2>/dev/null
+    tok_rc=0
+    "$plum" relex "$f" --tokens > "$work/tok-before" 2>"$work/tokerr" || tok_rc=1
+    "$plum" relex "$side" --tokens > "$work/tok-after" 2>>"$work/tokerr" || tok_rc=1
     rm -f "$side"
+    # A FAILING `relex --tokens` used to read as a pass. Its output went
+    # to `> file` with stderr to `/dev/null` and its exit status
+    # discarded, so both files came back empty and `cmp -s` happily
+    # agreed. Verified by injection: a wrapper where `--tokens` exits 1
+    # produced a byte-identical verdict with this property removed
+    # entirely.
+    if [ $tok_rc -ne 0 ]; then
+        printf 'FAIL  %-58s relex --tokens failed: %s\n' "$f" "$(head -n 1 "$work/tokerr")"
+        fail=$((fail + 1)); continue
+    fi
     if ! cmp -s "$work/tok-before" "$work/tok-after"; then
         printf 'FAIL  %-58s fmt changed the token stream\n' "$f"
         fail=$((fail + 1)); continue
@@ -97,6 +108,36 @@ for dir in bootstrap/fmt_corpus/*/; do
     if ! cmp -s "$dir/expected.plum" "$work/fixed"; then
         printf 'FAIL  %-58s does not match expected.plum\n' "$name"
         diff "$dir/expected.plum" "$work/fixed" | head -n 6 | sed 's/^/        /'
+        fail=$((fail + 1)); continue
+    fi
+
+    # SAME PROGRAM, asserted here rather than only in the sweep above.
+    #
+    # The sweep checks this too, but it cannot fail there: the token
+    # comparison runs before the byte comparison, so any file reaching
+    # the pass counter is already byte-identical to its formatted form
+    # and its token streams agree trivially. Property 2 could only ever
+    # fire on a file property 1 was already failing.
+    #
+    # These fixtures are the only inputs in the repository where `fmt`
+    # genuinely REWRITES text, and until now they were checked against
+    # `expected.plum` alone. So the property that makes a formatter safe
+    # to run on somebody's code was checked on exactly zero inputs where
+    # the formatter acts. A rule that ate a trailing comma or a comment
+    # would have been caught only by someone noticing `expected.plum`
+    # change in review.
+    ctok_rc=0
+    "$plum" relex "$dir/in.plum" --tokens > "$work/ctok-before" 2>"$work/tokerr" || ctok_rc=1
+    cp "$work/fixed" "$dir/.fmt-check-tok-$$.plum"
+    "$plum" relex "$dir/.fmt-check-tok-$$.plum" --tokens > "$work/ctok-after" 2>>"$work/tokerr" || ctok_rc=1
+    rm -f "$dir/.fmt-check-tok-$$.plum"
+    if [ $ctok_rc -ne 0 ]; then
+        printf 'FAIL  %-58s relex --tokens failed: %s\n' "$name" "$(head -n 1 "$work/tokerr")"
+        fail=$((fail + 1)); continue
+    fi
+    if ! cmp -s "$work/ctok-before" "$work/ctok-after"; then
+        printf 'FAIL  %-58s fmt changed the token stream\n' "$name"
+        diff "$work/ctok-before" "$work/ctok-after" | head -n 6 | sed 's/^/        /'
         fail=$((fail + 1)); continue
     fi
     ok=$((ok + 1))

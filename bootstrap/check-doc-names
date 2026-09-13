@@ -28,7 +28,28 @@ PY_BIN="$(command -v python3 || command -v python)"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-printf 'use Os;\nuse Time;\nuse Net;\nuse Http;\nuse Process;\nlet main (): Unit = println("x")\n' > "$work/main.plum"
+# The `use` list is DERIVED from the compiler, not typed out here.
+#
+# It used to be a hand-written `use Os; use Time; use Net; use Http;
+# use Process;` -- five of the ten modules `parser.std_module_names()`
+# actually has. A name is only checkable when its namespace appears in
+# completion's answer, so every `Json.*` and `Terminal.*` name in the
+# documentation was silently unverifiable, and fabricated ones passed
+# under "all real".
+#
+# That is verbatim the bug `main.plum`'s own `all_std_uses` comment
+# records fixing IN THE COMPILER: "a hand-maintained second copy of that
+# list... Found when `Encoding` landed and silently did not appear."
+# The harness kept its copy.
+mods="$(grep -oE 'pub let std_module_names \(\): Array\[String\] = \[[^]]*\]' \
+    bootstrap/self_host/parser/parser.plum | grep -oE '"[A-Za-z_]+"' | tr -d '"')"
+if [ -z "$mods" ]; then
+    echo "check-doc-names: could not read std_module_names from parser.plum" >&2
+    exit 1
+fi
+: > "$work/main.plum"
+for m in $mods; do printf 'use %s;\n' "$m" >> "$work/main.plum"; done
+printf 'let main (): Unit = println("x")\n' >> "$work/main.plum"
 
 if ! "$plum" complete "$work" > "$work/names.json" 2>"$work/err"; then
     echo "check-doc-names: \`plum complete\` failed: $(head -n 1 "$work/err")" >&2
@@ -41,20 +62,46 @@ fi
 docs="README.md $(awk '/^page /{print $2}' bootstrap/build-site)"
 
 # shellcheck disable=SC2086
-"$PY_BIN" - "$work/names.json" $docs <<'PY'
+"$PY_BIN" - "$work/names.json" "$mods" $docs <<'PY'
 import re, json, sys
 names = set(x["name"] for x in json.load(open(sys.argv[1])))
 spaces = set(n.split(".")[0] for n in names if "." in n)
 fails = 0
-for doc in sys.argv[2:]:
+
+# Every standard-library module must have reached completion, or this
+# harness is checking a subset of the documentation while reporting on
+# all of it. A module missing here means the fixture did not `use` it,
+# or completion stopped offering it -- either way names in that
+# namespace become unverifiable AND are reported as "all real".
+absent = [m for m in sys.argv[2].split() if m not in spaces]
+if absent:
+    print("FAIL completion offered nothing for: %s" % " ".join(absent))
+    fails += len(absent)
+
+# A nested namespace (`Os.File.read`) needs the middle segment to be
+# allowed a capital. The old pattern required the second segment to
+# start lowercase, so an entire page of `docs/stdlib/` was unmatchable.
+NAME = re.compile(r"`([A-Z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)`")
+total = 0
+for doc in sys.argv[3:]:
     prose = re.sub(r"```.*?```", "", open(doc).read(), flags=re.S)
-    claimed = sorted(set(re.findall(r"`([A-Z][A-Za-z0-9_]*\.[a-z_][A-Za-z0-9_]*)`", prose)))
+    claimed = sorted(set(NAME.findall(prose)))
     checkable = [c for c in claimed if c.split(".")[0] in spaces]
     missing = [c for c in checkable if c not in names]
+    total += len(checkable)
     for m in missing:
         print("FAIL %s names `%s`, which does not exist" % (doc, m))
     fails += len(missing)
     if not missing:
         print("ok   %-12s %d standard-library names in prose, all real" % (doc + ":", len(checkable)))
+
+# Zero names across EVERY document is not a pass. A per-document zero is
+# fine and expected -- the README is an 88-line front door that names
+# none -- but the whole set yielding nothing means the pattern or the
+# document list has stopped matching, which is the failure this harness
+# already had once.
+if total == 0:
+    print("FAIL no standard-library names matched in any document -- nothing was checked")
+    fails += 1
 sys.exit(1 if fails else 0)
 PY

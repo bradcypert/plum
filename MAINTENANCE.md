@@ -10,8 +10,10 @@ are. This is the operating manual.
 
 ```sh
 ./sh build bootstrap/self_host -o sh.real   # your change, compiled in
-for h in check-version help-check check-shims check-declares cross-check lsp-smoke test-smoke net-smoke \
-         self-test stdin-smoke tty-smoke check-docs highlight-check pkg-check \
+for h in check-version help-check check-shims check-declares check-builtins cross-check \
+         lsp-smoke test-smoke net-smoke cli-smoke \
+         self-test stdin-smoke tty-smoke check-docs check-doc-names check-build-modes \
+         highlight-check pkg-check \
          property-check doc-check alloc-check lossless-check fmt-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
@@ -31,11 +33,15 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-docs` | `docs/stdlib/`, pages and index, matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 3s |
 | `highlight-check` | `plum highlight` gives the source back byte for byte with the tags stripped, over 294 files — highlighting cannot corrupt code a reader is about to copy | 13s |
 | `pkg-check` | path dependencies resolve (including transitively, and through a cycle) and every command sees them — and `plum.pkg` stays DATA: a call, a name, an interpolation or an `if` in a manifest is rejected | 9s |
+| `check-builtins` | every compiler builtin is offered by completion and listed in the reference -- a builtin is a chain of `if`s that nothing can enumerate, so this compares the chain against the table beside it | <1s |
+| `check-doc-names` | every standard-library name the documentation mentions in prose exists, with the `use` list DERIVED from `parser.std_module_names()` rather than typed out | 2s |
+| `check-build-modes` | a debug build and a release build differ in the ways they are supposed to | 2s |
+| `cli-smoke` | the user-facing commands nothing else runs: `plum new` scaffolds a project that runs AND whose embedded test passes, `plum doc` on an ordinary project directory, `dump-tokens`, `dump-ast` | 6s |
 | `check-site-links` | a built site links only to pages it contains. Not in the loop above — it needs `build-site` to have run first, and CI runs the pair | <1s |
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
 | `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
-| `test-smoke` | `plum test` really runs tests, and both engines agree | 1s |
+| `test-smoke` | `plum test` really runs tests. It said "and both engines agree" until 2026-09-13; there has been one engine since the Rust interpreter was retired on 2026-08-25 | 1s |
 | `tty-smoke` | `is_tty` says YES and `Terminal.size` reports the real size, under a pseudo-terminal — the only thing here that exercises `isatty` returning true or `TIOCGWINSZ` at all | 3s |
 | `stdin-smoke` | timed stdin reads bound the whole call and keep a partial line across a timeout — the cases a corpus fixture cannot reach, because `Process.run` feeds a child from a FILE and a file never times out | 3s |
 | `self-test` | the compiler's OWN internals, via `plum test` on `bootstrap/self_host` -- the only harness that can reach platform-conditional code, since a Windows branch is unreachable on Linux rather than merely untested | 1s |

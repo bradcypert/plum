@@ -15,21 +15,22 @@
 #
 # For each example:
 #   1. the SELF-HOSTED compiler emits IR, which is linked and run
-#   2. its output must match `expected.txt` exactly
-#   3. IF the real compiler is present, it is built and run too, and ITS
-#      output must match `expected.txt` as well
+#   2. its output must match `expected.txt` EXACTLY, byte for byte
+#   3. its exit status must be zero
 #
-# Step 3 is what preserves the differential test. Two implementations
-# both required to match one fixed recording are two implementations
-# required to agree with each other -- and unlike a live comparison,
-# this also catches the case where BOTH drift together, because the
-# recording does not move with them.
+# There used to be a step comparing against the Rust compiler, and this
+# header described it for weeks after it stopped existing -- along with
+# a `plum=./target/release/plum` line that nothing referenced. The Rust
+# implementation was retired on 2026-08-25; there is one compiler now,
+# and the differential test went with it. `bootstrap-check` is what
+# stands in its place: a compiler that miscompiles its own source
+# produces a different compiler at the next stage.
 #
 # A self-hosted failure is reported with its first error line, which is
 # the whole point — the output is a to-do list, not a pass/fail gate.
 #
 # Run from the repo root after `plum build bootstrap/self_host -o
-# sh.real`. `cargo build --release` is optional and only adds step 3.
+# sh.real`.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -37,7 +38,6 @@ cd "$root"
 work="$(mktemp -d -t plum-sweep-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
-plum=./target/release/plum
 
 # Examples that cannot be run non-interactively, with the reason. They
 # are still EMITTED and reported on — only the output comparison is
@@ -214,21 +214,37 @@ for dir in examples/*/; do
         fail=$((fail + 1))
         continue
     fi
-    ref_out="$(cat "$dir/expected.txt")"
-
     if ! link_self > "$work/$name.link_err" 2>&1; then
         printf 'FAIL  %-24s emitted IR did not link: %s\n' "$name" "$(head -n 1 "$work/$name.link_err")"
         fail=$((fail + 1))
         continue
     fi
-    act_out="$(cd "$work" && "./$name.bin" 2>&1)"
 
-    if [ "$ref_out" == "$act_out" ]; then
+    # Into a FILE and compared with `cmp`, not captured into a variable
+    # and compared as a string. Command substitution strips trailing
+    # newlines from both sides, so an example that gained or lost a
+    # trailing blank line -- or its final newline -- matched anyway. A
+    # codegen change of exactly that shape would have passed every
+    # example here.
+    ( cd "$work" && "./$name.bin" > "$name.out" 2>&1 )
+    run_rc=$?
+
+    # The EXIT STATUS, which was never looked at. An example that
+    # printed its recorded output and then died reported `OK`: verified
+    # with a scratch example ending in `Os.exit_with(3)`.
+    if [ $run_rc -ne 0 ]; then
+        printf 'FAIL  %-24s exited %d\n' "$name" "$run_rc"
+        sed 's/^/        /' "$work/$name.out" | head -n 5
+        fail=$((fail + 1))
+        continue
+    fi
+
+    if cmp -s "$dir/expected.txt" "$work/$name.out"; then
         printf 'OK    %-24s\n' "$name"
         ok=$((ok + 1))
     else
         printf 'DIFF  %-24s output differs from expected.txt\n' "$name"
-        diff <(printf '%s\n' "$ref_out") <(printf '%s\n' "$act_out") | head -n 10 | sed 's/^/        /'
+        diff "$dir/expected.txt" "$work/$name.out" | head -n 10 | sed 's/^/        /'
         fail=$((fail + 1))
     fi
 done

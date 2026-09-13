@@ -118,7 +118,12 @@ for dir in bootstrap/exec_corpus/*/; do
 
     leakcheck=$asan
     [ -n "${leaks[$name]:-}" ] && leakcheck=0
-    act="$(cd "$work" && ASAN_OPTIONS=detect_leaks=$leakcheck timeout 60 "./$name.bin" 2>"$work/$name.rt")"
+    # Into a FILE, not a variable. Command substitution strips trailing
+    # newlines from BOTH sides of the comparison below, so a program that
+    # gained or lost a trailing blank line -- or dropped its final
+    # newline entirely -- matched its recording anyway. That is a codegen
+    # change no fixture here could see.
+    ( cd "$work" && ASAN_OPTIONS=detect_leaks=$leakcheck timeout 60 "./$name.bin" > "$name.out" 2>"$name.rt" )
     rc=$?
     if [ $rc -ne 0 ]; then
         # ASan writes its report to stderr and exits nonzero; that
@@ -127,7 +132,7 @@ for dir in bootstrap/exec_corpus/*/; do
         continue
     fi
 
-    if [ "$act" == "$(cat "$dir/expected.txt")" ]; then
+    if cmp -s "$dir/expected.txt" "$work/$name.out"; then
         if [ $leakcheck -eq 0 ] && [ $asan -eq 1 ]; then
             printf 'OK    %-24s [leaks by design: %s]\n' "$name" "${leaks[$name]}"
         else
@@ -136,7 +141,7 @@ for dir in bootstrap/exec_corpus/*/; do
         ok=$((ok + 1))
     else
         fail_with "$name" "output differs from expected.txt"
-        diff <(cat "$dir/expected.txt") <(printf '%s\n' "$act") | head -n 8 | sed 's/^/        /'
+        diff "$dir/expected.txt" "$work/$name.out" | head -n 8 | sed 's/^/        /'
     fi
 done
 
@@ -171,18 +176,18 @@ for dir in bootstrap/abort_corpus/*/; do
         fail_with "$name" "emitted IR did not link: $(head -n 1 "$work/ab-$name.link")"; continue
     fi
 
-    act="$(cd "$work" && timeout 60 "./ab-$name.bin" 2>&1)"
+    ( cd "$work" && timeout 60 "./ab-$name.bin" > "ab-$name.out" 2>&1 )
     rc=$?
     if [ $rc -eq 0 ]; then
-        fail_with "$name" "did NOT abort -- it exited 0 and printed: $(printf '%s' "$act" | tr '\n' ' ')"
+        fail_with "$name" "did NOT abort -- it exited 0 and printed: $(tr '\n' ' ' < "$work/ab-$name.out")"
         continue
     fi
-    if [ "$act" == "$(cat "$dir/expected.txt")" ]; then
-        printf 'OK    %-24s exit %s: %s\n' "$name" "$rc" "$(printf '%s' "$act" | tail -1)"
+    if cmp -s "$dir/expected.txt" "$work/ab-$name.out"; then
+        printf 'OK    %-24s exit %s: %s\n' "$name" "$rc" "$(tail -n 1 "$work/ab-$name.out")"
         ok=$((ok + 1))
     else
         fail_with "$name" "aborted, but not as expected"
-        diff <(cat "$dir/expected.txt") <(printf '%s\n' "$act") | head -n 8 | sed 's/^/        /'
+        diff "$dir/expected.txt" "$work/ab-$name.out" | head -n 8 | sed 's/^/        /'
     fi
 done
 

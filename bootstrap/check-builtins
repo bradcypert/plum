@@ -54,7 +54,20 @@ fi
 #
 # `typecheck.builtin_functions()` is the table the reference reads. This
 # is what stops it drifting from the chain beside it.
-sig_chain="$(sed -n '/^let builtin_sig /,/^$/p' "$infer" | grep -oE 'name == "[A-Za-z_.]+"' | sed 's/.*"\(.*\)"/\1/' | sort -u)"
+# The range ends at the next TOP-LEVEL declaration, not at the first
+# blank line.
+#
+# It used to be `/^$/`, which worked only because `builtin_sig`'s arms
+# happened to be contiguous. Insert a blank line and a comment mid-chain
+# -- the natural way to add an arm with a note about it -- and the range
+# stopped there, so every name below became invisible while the harness
+# reported success. Verified by injection: a new arm after a blank line
+# was not seen, and neither was `args`, and this still exited 0.
+#
+# That is exactly the regression this half exists to prevent: `args`,
+# `chars_of` and `panic_raw` were once missing from the generated
+# reference under a heading promising completeness.
+sig_chain="$(sed -n '/^let builtin_sig /,/^\(pub \)\?let [a-z_]* /p' "$infer" | grep -oE 'name == "[A-Za-z_.]+"' | sed 's/.*"\(.*\)"/\1/' | sort -u)"
 sig_table="$(sed -n '/pub let builtin_functions /,/^]/p' "$infer" | grep -oE 'name: "[A-Za-z_.]+"' | sed 's/.*"\(.*\)"/\1/' | sort -u)"
 
 if [ -z "$sig_chain" ] || [ -z "$sig_table" ]; then

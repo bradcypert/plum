@@ -103,6 +103,23 @@ for n, (files, order, nlang, nbody) in enumerate(projects, 1):
         print("FAIL %d: did not build  [%s]\n   %s" % (n, where, (r.stdout + r.stderr).strip().splitlines()[0] if (r.stdout+r.stderr).strip() else "")); fails += 1
         continue
     run = subprocess.run([d + "/out"], capture_output=True, text=True)
+    # The snippet's EXIT STATUS, which was never looked at. A tutorial
+    # program that printed exactly what the tutorial claims and then died
+    # was reported `ok`: verified with a block ending in
+    # `Os.exit_with(3)`. Documentation is the one thing here a reader
+    # copies verbatim, so "it runs" has to mean it ran.
+    if run.returncode != 0:
+        print("FAIL %d: ran and exited %d  [%s]\n   %s"
+              % (n, run.returncode, where,
+                 (run.stdout + run.stderr).strip().splitlines()[-1] if (run.stdout + run.stderr).strip() else ""))
+        fails += 1
+        continue
+    # stderr was discarded too. A snippet that writes a warning or a
+    # diagnostic alongside its output is not doing what the page says.
+    if run.stderr.strip():
+        print("FAIL %d: wrote to stderr  [%s]\n   %s" % (n, where, run.stderr.strip().splitlines()[0]))
+        fails += 1
+        continue
     got = run.stdout.strip()
     if nlang == '' and nbody.strip() and not nbody.startswith('error:'):
         want = nbody.strip()

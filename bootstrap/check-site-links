@@ -61,6 +61,21 @@ def main(root: str) -> int:
             print(f"  {page} -> {link}")
         return 1
 
+    # A tree with no pages in it is a FAILURE, not a clean bill of
+    # health. This harness has already been green-while-blind once: its
+    # link regex matched only quoted attributes, and the site is built
+    # with `--minify`, which strips the quotes -- so it walked every
+    # prose page, matched nothing, and reported success for weeks.
+    #
+    # Fixing the regex did not fix that shape. Point this at a directory
+    # Hugo never wrote (a changed `publishDir`, a `build-site` that fails
+    # while still exiting 0) and it says "0 page(s), no broken internal
+    # links" and exits 0. `highlight-check` is the model: a harness with
+    # nothing to check has not passed, it has not run.
+    if pages == 0:
+        print(f"check-site-links: no HTML pages under {root} -- nothing was checked")
+        return 1
+
     print(f"check-site-links: {pages} page(s), no broken internal links")
     return 0
 

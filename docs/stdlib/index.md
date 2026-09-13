@@ -233,7 +233,7 @@ Every declaration, linked to the page that documents it.
 - [`struct ParseResult`](prelude.md#ParseResult)
 - [`let json_parse (s: String): Result[JsonValue, String]`](prelude.md#json_parse)
 - [`let json_stringify (v: JsonValue): String`](prelude.md#json_stringify)
-- [`let to_string (): String`](prelude.md#to_string)
+- [`let to_string (self: T): String`](prelude.md#to_string)
 - [`let args (): Array[String]`](prelude.md#args)
 - [`let chars_of (s: String): Array[String]`](prelude.md#chars_of)
 - [`let panic_raw (message: String): Unit`](prelude.md#panic_raw)

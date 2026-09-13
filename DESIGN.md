@@ -20690,3 +20690,84 @@ identical or `Map.keys` enumerates in a different order and
 `example-sweep` compares output exactly; and the property generator
 could become a proper 64-bit LCG, which would change every property's
 inputs at once.
+
+### Auditing the harnesses (2026-09-13)
+
+Two reviews ran over the codebase. The first found five real defects in
+a week's work, recorded above. The second asked a different question:
+**which harnesses cannot fail?**
+
+That question had a precedent. `check-site-links` passed for weeks while
+checking nothing, because its regex required quoted HTML attributes and
+the site is built with `--minify`, which strips the quotes. Fixing the
+regex fixed that instance and not the shape, and the shape is what this
+audit went looking for.
+
+**A harness with nothing to check has not passed; it has not run.** That
+is the rule the whole list comes down to, and the repository already had
+it in two places (`highlight-check` and `gen-shims` both refuse an empty
+input set) without applying it anywhere else.
+
+What was actually broken, each proven by fault injection rather than
+argued:
+
+- **`check-doc-names` checked zero names in eight of ten documents.** It
+  built its fixture from a hand-written `use Os; use Time; use Net; use
+  Http; use Process;` -- five of the ten modules `std_module_names()`
+  has. A name is only checkable when its namespace appears in
+  completion's answer, so every `Json.*` and `Terminal.*` name in the
+  documentation was unverifiable, and `Terminal.dimensions` passed under
+  "all real". This is verbatim the bug `main.plum`'s own `all_std_uses`
+  comment records fixing IN THE COMPILER, complete with the sentence
+  "a hand-maintained second copy of that list". The harness kept its
+  copy. Its name pattern also required the second segment to start
+  lowercase, so every `Os.File.*` name was unmatchable.
+- **`fmt-check`'s safety property was dead twice over.** `relex
+  --tokens` had its exit status discarded and its stderr sent to
+  `/dev/null`, so a failure produced two empty files that compared
+  equal. And the token comparison ran BEFORE the byte comparison, so any
+  file reaching the pass counter was already byte-identical to its
+  formatted form and its tokens agreed trivially. The property that
+  makes a formatter safe to run on somebody's code was checked on
+  exactly zero inputs where the formatter acts. It now runs in the
+  `fmt_corpus` loop, which is the only place `fmt` rewrites text.
+- **`self-test` and `property-check` treated a zero-test run as a pass.**
+  Both comments named the hazard -- "a suite that silently ran zero tests
+  would otherwise pass" -- and then echoed the count instead of
+  asserting it. `self-test` discovers TWO tests for a 250KB compiler,
+  both URI conversion, and MAINTENANCE calls it "the only harness that
+  can reach platform-conditional code".
+- **`example-sweep` and `doc_check.py` never looked at exit status.** A
+  program that printed its recorded output and then died reported `OK`,
+  proven with a scratch example ending in `Os.exit_with(3)`.
+- **`check-builtins` read only as far as the first blank line.** The
+  `sed` range ended at `/^$/`, so adding an arm after a blank line --
+  the natural way to add one with a comment -- hid every name below it.
+  Injection: the visible set went from five names to two, and the
+  harness still passed.
+- **Four harnesses compared output through command substitution**, which
+  strips trailing newlines from both sides. A codegen change that gained
+  or lost a trailing blank line passed 161 corpus fixtures and the
+  stage-2 goldens. `platform-smoke` prints an `od -c` dump on failure
+  because a diff twice showed two identical-looking lines; that is
+  almost certainly this, seen from the other side.
+- **One `lsp-smoke` assertion was `&& { echo note; :; }`**, which does
+  nothing when the grep fails. Making it assert revealed it had never
+  matched at all: it looked for `let main (): Unit` in a completion list
+  from a project with no `main`.
+
+`bootstrap/cli-smoke` is new, and covers what the audit found nothing
+running at all: `plum new` (whose scaffold embeds a test, and which is
+the first command a person ever types), `plum doc` on an ordinary
+project directory as opposed to `--stdlib`, `dump-tokens` and
+`dump-ast`.
+
+The generalisation worth keeping: **a harness written alongside a
+feature shares that feature's blind spot.** `check-doc-names` and
+`check-builtins` each kept their own copy of a list the compiler
+derives, because they were written by someone thinking about the
+documents rather than about the list. The two generated stdlib
+references each had a harness, and neither could ask whether the two
+described the same library. The fix is not more harnesses; it is
+deriving inputs from the thing under test, and refusing to pass on an
+empty input set.

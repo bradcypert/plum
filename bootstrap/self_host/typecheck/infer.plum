@@ -2399,7 +2399,7 @@ let has_builtin_method (ms: Array[BuiltinMethod]) (ns: String) (name: String) (i
     else { has_builtin_method(ms, ns, name, i + 1) }
 
 pub let builtin_methods (): Array[BuiltinMethod] = [
-    BuiltinMethod { recv: "", name: "to_string", detail: "to_string(): String", doc: "Renders any value as text. Every type has one, including structs, enums and arrays, so it is the fallback whenever a value has to be shown. `\${x}` in an interpolated string calls it.", recv_ty: "" },
+    BuiltinMethod { recv: "", name: "to_string", detail: "to_string(): String", doc: "Renders any value as text. Every type has one, including structs, enums and arrays, so it is the fallback whenever a value has to be shown. `\${x}` in an interpolated string calls it.\n///\n/// Written `x.to_string()`. It is a METHOD on every value rather than a free function, so there is no `to_string(x)` spelling and no one type it belongs to.", recv_ty: "T" },
     BuiltinMethod { recv: "Array", name: "map", detail: "map(f: (T) -> U): Array[U]", doc: "A new array holding `f` applied to each element, in order. The result's element type is whatever `f` returns, so mapping can change it.", recv_ty: "Array[T]" },
     BuiltinMethod { recv: "Array", name: "filter", detail: "filter(f: (T) -> Bool): Array[T]", doc: "A new array holding the elements `f` says `true` about, in their original order.", recv_ty: "Array[T]" },
     BuiltinMethod { recv: "Array", name: "fold", detail: "fold(init: U) (f: (U, T) -> U): U", doc: "Reduces the array to one value: starts at `init` and calls `f(acc, element)` for each element, left to right.", recv_ty: "Array[T]" },

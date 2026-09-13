@@ -92,7 +92,12 @@ printf 'let helper (): String = "ok"\nlet oops (): Int = "wrong"\n' > "$multi/ot
 # any project above would shift the line numbers the hover and
 # definition assertions depend on.
 compl=$(native_path "$(mktemp -d)")
-printf 'enum Shape { Circle(Int), Square(Int) }\nlet area (s: Shape): Int = match s { Circle(r) => r, Square(w) => w }\nstruct Vec { x: Int, y: Int }\nlet sum (v: Vec): Int = v.x + v.y\n' > "$compl/main.plum"
+# `nullary` is appended LAST so it cannot shift the line numbers the
+# completion positions below depend on. It exists because the
+# zero-argument signature assertion had nothing to match: this project
+# has no zero-argument function, so the check looked for
+# `let main (): Unit` in a completion list that could never contain it.
+printf 'enum Shape { Circle(Int), Square(Int) }\nlet area (s: Shape): Int = match s { Circle(r) => r, Square(w) => w }\nstruct Vec { x: Int, y: Int }\nlet sum (v: Vec): Int = v.x + v.y\nlet nullary (): Int = 7\n' > "$compl/main.plum"
 # A FIFTH project, for expand-selection and for the crash below. Its own
 # root for the same reason `live` has one.
 sel=$(native_path "$(mktemp -d)")
@@ -227,7 +232,11 @@ echo "$out" | grep -q '"label":"let","kind":14' || { echo "FAIL: completion miss
 echo "$out" | grep -q '"label":"s","kind":6' || { echo "FAIL: completion missing locals in scope"; fail=1; }
 # The detail is the SIGNATURE, and a zero-argument function's parameter
 # renders as `()`. It read `((tuple))` until 2026-08-25, in hover too.
-echo "$out" | grep -q '"detail":"let main (): Unit"' && { echo "note: unit-param rendering checked"; :; }
+# ASSERTED. This was `&& { echo "note: ..."; :; }`, which prints a note
+# when the grep matches and does nothing at all when it does not -- so
+# the regression it names could come straight back with the harness
+# green and a line missing from the log.
+echo "$out" | grep -q '"detail":"let nullary (): Int"' || { echo "FAIL: a zero-argument signature is not rendered as ()"; fail=1; }
 echo "$out" | grep -q '"detail":"Shape.Circle(Int)"' || { echo "FAIL: variant detail lost its payload"; fail=1; }
 # --- dot completion ---
 echo "$out" | grep -q '"triggerCharacters":\["\."\]' || { echo 'FAIL: the dot is not a completion trigger'; fail=1; }

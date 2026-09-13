@@ -94,9 +94,11 @@ Renders a `JsonValue` as compact JSON — no spaces, no newlines.
 Object keys come out in the order they are held, which for a parsed
 document is the order they were read.
 
-## `let to_string (): String`
+## `let to_string (self: T): String`
 
 Renders any value as text. Every type has one, including structs, enums and arrays, so it is the fallback whenever a value has to be shown. `${x}` in an interpolated string calls it.
+
+Written `x.to_string()`. It is a METHOD on every value rather than a free function, so there is no `to_string(x)` spelling and no one type it belongs to.
 
 Implemented by the compiler itself, so it has no Plum source to read.
 

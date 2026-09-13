@@ -175,7 +175,7 @@ pub let cg_prelude_src (unit: Unit): String = cg_lines([
     "///",
     "/// `Int.abs` of the most negative `Int` cannot be represented and",
     "/// overflows, which stops the program rather than returning a negative",
-    "/// \\\"absolute\\\" value.",
+    "/// \"absolute\" value.",
     "pub let Int.abs (a: Int): Int = if a < 0 { 0 - a } else { a }",
     "/// The smaller of two.",
     "pub let Int.min (a: Int) (b: Int): Int = if a < b { a } else { b }",

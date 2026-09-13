@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# The user-facing commands nothing else runs.
+#
+# Every other harness here drives `check`, `build`, `run`, `test`,
+# `emit-llvm` or `fmt`, because those are what the compiler's own
+# development needs. Four documented commands were left over, and the
+# most exposed one is the one a person types FIRST:
+#
+#   plum new        scaffolds a project, and its template embeds a
+#                   `test_greet` function. If the template stopped
+#                   compiling, the first person to find out would be
+#                   somebody trying the language for the first time.
+#   plum doc DIR    the USER-facing half of `plum doc`. `check-docs` and
+#                   `build-site` both exercise `--stdlib`, which takes a
+#                   different path through `cmd_doc_stdlib`; nothing ran
+#                   it on an ordinary project directory, which is the
+#                   mode the documentation tells people to use.
+#   dump-tokens     documented in `bootstrap/README.md`, invoked by
+#   dump-ast        nothing. `tokens` and `ast` are covered by the
+#                   corpus goldens; these two are their debug siblings
+#                   and share none of that coverage.
+#
+# Deliberately shallow. This is a smoke test: it asserts each command
+# runs, produces the shape it promises, and exits 0. What the output
+# MEANS is `corpus-check`'s job and `check-docs`'s job.
+#
+# Usage:  bootstrap/cli-smoke [path-to-plum-binary]   (default: ./sh)
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+plum="${1:-./sh}"
+
+work="$(mktemp -d 2>/dev/null || mktemp -d -t plum-cli)"
+trap 'rm -rf "$work"' EXIT
+
+fail=0
+ok=0
+
+check() {
+    if [ "$1" -eq 0 ]; then ok=$((ok + 1)); else printf 'FAIL  %s\n' "$2"; fail=$((fail + 1)); fi
+}
+
+# --- plum new ---------------------------------------------------------
+
+# Run from INSIDE the temp directory: `new` takes a name, not a path,
+# and creates the directory relative to the working directory.
+( cd "$work" && SH_TIMEOUT="${SH_TIMEOUT:-60}" "$root/$plum" new hello ) > "$work/new.log" 2>&1
+check $? "plum new exited nonzero: $(head -n 1 "$work/new.log")"
+
+[ -f "$work/hello/main.plum" ]; check $? "plum new did not write main.plum"
+
+# Exactly one file, which is a property the documentation states in
+# several places and which packages deliberately did not change: a
+# project with no dependencies needs no manifest.
+[ "$(find "$work/hello" -type f | wc -l)" -eq 1 ]; check $? "plum new wrote more than one file"
+
+# The scaffold must RUN, not merely exist.
+out="$(SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" run "$work/hello" 2>&1)"
+[ "$out" = "hello, plum" ]; check $? "plum new's scaffold did not run: $out"
+
+# And its embedded test must pass. The template advertises `plum test`
+# in the message `new` prints, so a template whose test fails teaches a
+# new user that the test runner is broken.
+out="$(SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" test "$work/hello" 2>&1)"
+printf '%s' "$out" | grep -q '1 passed; 0 failed'; check $? "plum new's scaffold test did not pass: $(printf '%s' "$out" | tail -n 1)"
+
+# Refusing to overwrite is the one destructive-adjacent behaviour here.
+( cd "$work" && "$root/$plum" new hello ) > "$work/new2.log" 2>&1
+[ $? -ne 0 ]; check $? "plum new overwrote an existing directory"
+
+# --- plum doc on a PROJECT --------------------------------------------
+
+mkdir -p "$work/proj/greet"
+cat > "$work/proj/greet/greet.plum" <<'EOF'
+/// Greets somebody.
+pub let hello (who: String): String = "hello, ".concat(who)
+let private_helper (): Int = 1
+EOF
+printf 'use greet;\nlet main (): Unit = println(greet.hello("x"))\n' > "$work/proj/main.plum"
+
+SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" doc "$work/proj" -o "$work/docs" > "$work/doc.log" 2>&1
+check $? "plum doc on a project exited nonzero: $(head -n 1 "$work/doc.log")"
+
+[ -f "$work/docs/greet.md" ]; check $? "plum doc wrote no page for module greet"
+[ -f "$work/docs/index.md" ]; check $? "plum doc wrote no index.md"
+grep -q 'Greets somebody' "$work/docs/greet.md"; check $? "the /// text did not reach the page"
+# `pub` is the public surface. A private helper carrying no `///` would
+# be invisible anyway; this one has a name that would show if the filter
+# broke.
+! grep -q 'private_helper' "$work/docs/greet.md"; check $? "a private declaration was published"
+
+SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" doc "$work/proj" -o "$work/dochtml" --html > "$work/doch.log" 2>&1
+check $? "plum doc --html on a project exited nonzero: $(head -n 1 "$work/doch.log")"
+[ -f "$work/dochtml/index.html" ] && [ -f "$work/dochtml/style.css" ]
+check $? "plum doc --html did not write index.html and style.css"
+
+# --- dump-tokens / dump-ast -------------------------------------------
+#
+# Their non-dump siblings are pinned byte-for-byte by 98 corpus goldens.
+# These two share none of that, so all this asserts is that they run and
+# say something about the file they were given.
+
+SH_TIMEOUT="${SH_TIMEOUT:-60}" "$plum" dump-tokens "$work/proj/main.plum" > "$work/tok.txt" 2>&1
+check $? "dump-tokens exited nonzero: $(head -n 1 "$work/tok.txt")"
+[ -s "$work/tok.txt" ] && grep -q 'println' "$work/tok.txt"
+check $? "dump-tokens produced nothing recognisable"
+
+SH_TIMEOUT="${SH_TIMEOUT:-60}" "$plum" dump-ast "$work/proj/main.plum" > "$work/ast.txt" 2>&1
+check $? "dump-ast exited nonzero: $(head -n 1 "$work/ast.txt")"
+[ -s "$work/ast.txt" ] && grep -q 'main' "$work/ast.txt"
+check $? "dump-ast produced nothing recognisable"
+
+if [ "$fail" -ne 0 ]; then
+    printf '\ncli-smoke: %d check(s) failed, %d passed\n' "$fail" "$ok"
+    exit 1
+fi
+printf 'cli-smoke: %d checks pass -- new, doc on a project, dump-tokens, dump-ast\n' "$ok"

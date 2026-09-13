@@ -62,8 +62,15 @@ echo "stage 2 -> corpus ..."
 pass=0
 fail=0
 for f in bootstrap/corpus/*/*.plum; do
-    if [ "$("$work/sh2" ast "$f")" = "$(cat "${f%.plum}.expected")" ] &&
-       [ "$("$work/sh2" tokens "$f")" = "$(cat "${f%.plum}.tokens")" ]; then
+    # Written to FILES and compared with `cmp`. Command substitution
+    # strips trailing newlines from both sides, so a golden that gained
+    # or lost one matched anyway -- and these goldens are the evidence
+    # that stage 2 is a working compiler, which is the non-obvious half
+    # of what this harness proves.
+    "$work/sh2" ast "$f" > "$work/g.ast" 2>/dev/null
+    "$work/sh2" tokens "$f" > "$work/g.tok" 2>/dev/null
+    if cmp -s "$work/g.ast" "${f%.plum}.expected" &&
+       cmp -s "$work/g.tok" "${f%.plum}.tokens"; then
         pass=$((pass + 1))
     else
         fail=$((fail + 1))

@@ -180,6 +180,17 @@ let dep_of (path: String) (e: parser.PExpr): Dep = match e {
         reject_unknown(path, fields, 0, ["name", "path"], "Dep");
         let name = required_string(path, fields, "name", "Dep");
         let dep_path = required_string(path, fields, "path", "Dep");
+        // An empty path is rejected HERE because by the time the loader
+        // sees it, it is indistinguishable from a cycle. `Path.join`
+        // drops empty segments, so `path: ""` cleans to the depending
+        // project's own directory, which is already in the visited set,
+        // and the dependency was silently skipped: the build SUCCEEDED
+        // and the only symptom was `unbound variable` at the `use`,
+        // pointing at the user's source rather than at the manifest
+        // line that was actually wrong.
+        if String.is_empty(dep_path) {
+            fail(path, "dependency `${name}` has an empty path")
+        };
         // A package name is an identifier. It names no module -- a
         // dependency's modules are named by its own subdirectories --
         // but it is what a registry would resolve one day, and a name

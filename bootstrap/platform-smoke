@@ -54,7 +54,15 @@ fail=0
 for dir in bootstrap/exec_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
-    [ -f "$dir/expected.txt" ] || continue
+    # A fixture with no recording is REPORTED, not skipped. `corpus-check`
+    # fails one; this one walked silently past it, so a fixture that lost
+    # its `expected.txt` was checked by neither on the platforms where
+    # only this harness runs.
+    if [ ! -f "$dir/expected.txt" ]; then
+        printf 'FAIL  %-24s no expected.txt\n' "$name"
+        fail=$((fail + 1))
+        continue
+    fi
 
     # `build`, not `emit-llvm` plus a hand-written clang line. The point
     # is to test what a user actually runs, including the parts of the
@@ -65,7 +73,11 @@ for dir in bootstrap/exec_corpus/*/; do
         continue
     fi
 
-    act="$(cd "$work" && "./$name.bin" 2>"$work/$name.rt")"
+    # Into a FILE. Command substitution strips trailing newlines from
+    # both sides, which is almost certainly what the two mystery diffs
+    # below were: a difference no character-level view could display,
+    # because the comparison had already discarded it.
+    ( cd "$work" && "./$name.bin" > "$name.out" 2>"$name.rt" )
     rc=$?
     if [ $rc -ne 0 ]; then
         printf 'FAIL  %-24s exited %s: %s\n' "$name" "$rc" "$(head -n 1 "$work/$name.rt")"
@@ -73,12 +85,12 @@ for dir in bootstrap/exec_corpus/*/; do
         continue
     fi
 
-    if [ "$act" = "$(cat "$dir/expected.txt")" ]; then
+    if cmp -s "$dir/expected.txt" "$work/$name.out"; then
         printf 'OK    %-24s\n' "$name"
         ok=$((ok + 1))
     else
         printf 'FAIL  %-24s output differs from expected.txt\n' "$name"
-        printf '%s\n' "$act" > "$work/$name.act"
+        cp "$work/$name.out" "$work/$name.act"
         # BYTES, not a diff. Twice now a diff has shown two lines that
         # looked identical, and a rendered-CR pass over it showed
         # nothing either -- so whatever the difference was, no

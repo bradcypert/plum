@@ -50,7 +50,24 @@ if [ $rc -ne 0 ] || ! printf '%s' "$out" | grep -q "0 failed"; then
     exit 1
 fi
 
-# Echoed rather than asserted, for the same reason `property-check`
-# echoes its count: a suite that silently ran zero tests would otherwise
-# pass. `plum test` reports the number it discovered.
+# ASSERTED, not echoed. This comment used to say the count was echoed
+# "for the same reason `property-check` echoes its count: a suite that
+# silently ran zero tests would otherwise pass" -- naming the hazard
+# exactly and then leaving it to a human reading a log line. `plum test`
+# on a project it discovers nothing in prints `0 passed; 0 failed` and
+# exits 0, which satisfies both conditions above.
+#
+# A FLOOR rather than an exact count, so adding a test does not fail the
+# harness; raise it when you add one. The floor is what catches a
+# DISCOVERY regression, which is the failure that matters here: drop a
+# module from the walk and this harness reports 0/0 and passes, taking
+# the compiler's only platform-conditional coverage with it.
+floor=2
+passed="$(printf '%s' "$out" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+')"
+if [ -z "$passed" ] || [ "$passed" -lt "$floor" ]; then
+    printf '%s\n' "$out" >&2
+    echo "self-test: discovered ${passed:-no} test(s), expected at least $floor -- test discovery has regressed" >&2
+    exit 1
+fi
+
 printf 'self-test: %s\n' "$(printf '%s' "$out" | grep 'test result:')"

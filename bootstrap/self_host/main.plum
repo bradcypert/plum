@@ -544,6 +544,13 @@ let builtin_items (declared: Array[parser.ItemNode]): Array[parser.ItemNode] = {
     parser.with_module(items, "prelude")
 }
 
+// A `doc` MAY contain newlines, and every line after one must begin
+// with `///`. `builtin_src` emits the text straight after a `/// `, so
+// a bare newline would put the rest of the sentence in item position
+// and `plum doc` would die parsing `<builtins>`. That is a loud failure
+// rather than a silent one, and `check-docs` catches it immediately,
+// but it is the kind of rule that is invisible until somebody writes a
+// paragraph. `to_string`'s doc uses it deliberately.
 let builtin_qualified (recv: String) (name: String): String =
     if String.is_empty(recv) { name } else { recv.concat(".").concat(name) }
 
@@ -3129,8 +3136,18 @@ let collect_project (root: String): Array[parser.ItemNode] =
 //
 // Paths are relative to the MANIFEST THAT NAMES THEM, so a dependency's
 // own dependencies resolve against the dependency's directory rather
-// than the root's -- `Path.join` handles that, including letting an
-// absolute path win.
+// than the root's.
+//
+// An ABSOLUTE path is taken as written, and that is `dep_path`'s only
+// job. It used to say `Path.join(dir, ..)` with a comment claiming
+// `join` lets an absolute second segment win -- which is what
+// `Path.join`'s own documentation said, and is not what `Path.join`
+// does. It is `join_all([a, b])`, whose rule is Go's: a later absolute
+// segment does NOT discard the earlier ones. So `path: "/opt/parsec"`
+// resolved to `<manifest dir>/opt/parsec`, and the compiler reported
+// that the user's dependency was missing while naming a path the user
+// had never written. Found by review, 0.0.30; the stdlib doc is fixed
+// too, since the sentence is what the bug was written against.
 //
 // `visited` is keyed on the cleaned path and is what makes a cycle
 // terminate: two packages that depend on each other are a perfectly
@@ -3153,7 +3170,7 @@ let dep_closure (dir: String) (scan: DepScan): DepScan =
 let add_deps (dir: String) (deps: Array[pkg.Dep]) (i: Int) (scan: DepScan): DepScan =
     if i >= deps.len() { scan }
     else {
-        let resolved = pkg.Dep { name: deps[i].name, path: Path.clean(Path.join(dir, deps[i].path)) };
+        let resolved = pkg.Dep { name: deps[i].name, path: dep_path(dir, deps[i].path) };
         if Array.contains(scan.visited, resolved.path) { add_deps(dir, deps, i + 1, scan) }
         else {
             if !Result.unwrap_or(Os.is_directory(resolved.path), false) {
@@ -3173,6 +3190,10 @@ let add_deps (dir: String) (deps: Array[pkg.Dep]) (i: Int) (scan: DepScan): DepS
             add_deps(dir, deps, i + 1, add_deps(resolved.path, manifest.deps, 0, next))
         }
     }
+
+let dep_path (dir: String) (declared: String): String =
+    if Path.is_absolute(declared) { Path.clean(declared) }
+    else { Path.clean(Path.join(dir, declared)) }
 
 let collect_deps (deps: Array[pkg.Dep]) (i: Int) (acc: Array[parser.ItemNode]): Array[parser.ItemNode] =
     if i >= deps.len() { acc }
