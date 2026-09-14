@@ -1,0 +1,2 @@
+error: call to biggest: T is P, but biggest requires T to be ordered -- Int, Float or String
+main.plum:18:1

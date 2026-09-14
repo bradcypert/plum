@@ -1,0 +1,2 @@
+error: global M: declared type Int doesn't match its value's type String (String != Int)
+main.plum:6:1

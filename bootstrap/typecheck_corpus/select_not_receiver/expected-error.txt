@@ -1,0 +1,2 @@
+error: a `select` arm waits on a Receiver: Sender[Int] != Receiver[T2]
+main.plum:6:22

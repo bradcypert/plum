@@ -1,0 +1,2 @@
+error: `select` cannot have both `else` and a timeout arm: `else` is taken immediately when nothing is ready, so the timeout could never fire
+main.plum:9:5

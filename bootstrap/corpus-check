@@ -209,6 +209,18 @@ for dir in bootstrap/typecheck_corpus/*/; do
     # tell a good diagnostic from a bad one. Match-arm errors were
     # reported at the enclosing function's first line for months and
     # every fixture still passed, because they were still rejections.
+    # REQUIRED, not optional. It was optional, and 53 of 55 fixtures
+    # did not have one, so they asserted nothing but the exit code --
+    # passing whether the compiler said the right thing, said something
+    # misleading, or said the right thing in the wrong place. A fixture
+    # that pins no message is a fixture that cannot tell a good
+    # diagnostic from a bad one, which is the only thing it is for.
+    #
+    # Regenerate with `bootstrap/record-typecheck-errors`.
+    if [ ! -f "$dir/expected-error.txt" ]; then
+        fail_with "$name" "no expected-error.txt (record it with bootstrap/record-typecheck-errors)"
+        continue
+    fi
     if [ -f "$dir/expected-error.txt" ]; then
         missing=""
         while IFS= read -r want; do

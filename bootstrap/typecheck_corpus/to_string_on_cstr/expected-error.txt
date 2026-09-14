@@ -1,0 +1,2 @@
+error: .to_string() on a CStr isn't supported -- use .as_string()
+main.plum:7:5

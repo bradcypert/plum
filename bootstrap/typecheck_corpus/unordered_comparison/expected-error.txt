@@ -1,0 +1,2 @@
+error: '<' needs an ordered type -- Int, Float or String -- but got Array[Int]
+main.plum:24:5

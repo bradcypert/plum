@@ -1,0 +1,2 @@
+error: argument 0: Bool != Int
+main.plum:2:1

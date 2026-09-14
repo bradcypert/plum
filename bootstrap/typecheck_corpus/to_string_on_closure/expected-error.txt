@@ -1,0 +1,2 @@
+error: a closure has no .to_string()
+main.plum:4:5

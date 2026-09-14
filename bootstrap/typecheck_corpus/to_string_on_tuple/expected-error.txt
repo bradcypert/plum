@@ -1,0 +1,2 @@
+error: .to_string() on a tuple isn't supported
+main.plum:6:1

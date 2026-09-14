@@ -1,0 +1,2 @@
+error: a `select` timeout arm waits for a Time.Duration: Int != Time.Duration
+main.plum:11:9

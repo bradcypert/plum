@@ -1,0 +1,7 @@
+// The other half of the pair next door: the module is NOT imported, so
+// the advice to add `use Os;` is right. Both cases used to produce this
+// message and only this one deserved it.
+let main (): Unit = {
+    Os.exit_with(0);
+    ()
+}

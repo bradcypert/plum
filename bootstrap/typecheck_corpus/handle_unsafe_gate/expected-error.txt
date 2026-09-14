@@ -1,0 +1,2 @@
+error: calling extern function 'Res.from_raw' requires an 'unsafe' block
+main.plum:7:5

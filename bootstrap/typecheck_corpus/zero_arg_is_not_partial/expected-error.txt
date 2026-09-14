@@ -1,0 +1,2 @@
+error: call to scale: expected 2 argument(s), found 0
+main.plum:11:1

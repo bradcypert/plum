@@ -1,0 +1,2 @@
+error: global inner.SECRET is private to module inner
+main.plum:6:1

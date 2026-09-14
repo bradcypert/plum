@@ -1,0 +1,2 @@
+error: match is not exhaustive — missing variant(s): Triangle
+main.plum:5:1

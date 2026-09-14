@@ -1,0 +1,2 @@
+error: call to same: T is (Int) -> Int, but same requires T to have equality, and a function has none
+main.plum:9:85

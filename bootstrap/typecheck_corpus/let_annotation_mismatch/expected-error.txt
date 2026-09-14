@@ -1,0 +1,2 @@
+error: let a: declared type Int doesn't match value type Bool (Bool != Int)
+main.plum:15:5

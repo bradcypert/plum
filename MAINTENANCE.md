@@ -59,7 +59,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `bootstrap-check` | the compiler compiled by itself is the same compiler | 14s |
 | `check-seed` | the checked-in seed still bootstraps to today's compiler | 26s |
 | `self-sufficiency` | it builds itself with no Rust, from any directory | 27s |
-| `corpus-check` | every corpus fixture compiles, runs, prints the right thing, aborts when it should, and leaks nothing | 29s |
+| `corpus-check` | every corpus fixture compiles, runs, prints the right thing, aborts when it should, and leaks nothing — and every `typecheck_corpus` fixture is rejected WITH the recorded message and position, which 53 of 55 did not assert until 2026-09-14 | 30s |
 
 `cross-check` needs `zig` and skips cleanly without it. Run it after
 touching anything in `native_stdlib/`: it compiles every shim for macOS
@@ -107,8 +107,8 @@ Add properties when you add stdlib functions. Two of the first six
 found real bugs, and both were bugs the retired Rust interpreter had
 too -- which is why they had survived.
 
-Three generators, run deliberately rather than routinely:
-`gen-seed`, `gen-shims`, `record-examples`. And one packager,
+Four generators, run deliberately rather than routinely: `gen-seed`,
+`gen-shims`, `record-examples`, `record-typecheck-errors`. And one packager,
 `package-release`, which the release workflow calls once per platform;
 it can be run by hand to reproduce exactly what a release job produced.
 

@@ -1,0 +1,2 @@
+error: handle Res cannot be built with a struct literal -- use Res.from_raw(n) inside an `unsafe` block
+main.plum:8:23

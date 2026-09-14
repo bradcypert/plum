@@ -1,0 +1,2 @@
+error: field x: Bool != Int
+main.plum:3:5

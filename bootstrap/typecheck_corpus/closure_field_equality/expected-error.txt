@@ -1,0 +1,2 @@
+error: '==' is not supported for Holder: it would have to compare (Int) -> Int, and a function has no meaningful equality
+main.plum:12:5

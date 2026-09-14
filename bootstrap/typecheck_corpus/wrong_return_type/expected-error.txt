@@ -1,0 +1,2 @@
+error: function f: declared return type Int doesn't match body type Bool (Bool != Int)
+main.plum:1:1

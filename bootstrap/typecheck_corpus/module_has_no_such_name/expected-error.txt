@@ -1,0 +1,2 @@
+error: `Os` has no `exit`. Did you mean `exit_with`?
+main.plum:11:5

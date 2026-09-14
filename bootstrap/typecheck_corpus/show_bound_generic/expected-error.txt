@@ -1,0 +1,2 @@
+error: call to show: T is Ref[Int], but show requires T to have a text form, and this one has none
+main.plum:12:1

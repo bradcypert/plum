@@ -1,0 +1,2 @@
+error: unknown bound `Nonsense` on T. Plum has three: `Ord`, `Eq` and `Show`
+main.plum:6:1

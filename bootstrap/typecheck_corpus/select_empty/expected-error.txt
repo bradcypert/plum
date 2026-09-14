@@ -1,0 +1,2 @@
+error: `select` needs at least one arm; a select with none can never proceed
+main.plum:5:5

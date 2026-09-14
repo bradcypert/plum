@@ -1,0 +1,2 @@
+error: function mix: declared return type light.Shade doesn't match body type dark.Shade (dark.Shade != light.Shade)
+main.plum:15:1

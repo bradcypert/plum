@@ -1,0 +1,2 @@
+error: calling extern function 'shim_add' requires an 'unsafe' block
+main.plum:14:1

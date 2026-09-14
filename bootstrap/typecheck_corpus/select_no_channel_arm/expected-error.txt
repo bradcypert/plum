@@ -1,0 +1,2 @@
+error: `select` needs at least one channel arm; one with only `else` or a timeout is not waiting for anything
+main.plum:5:1

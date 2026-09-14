@@ -1,0 +1,13 @@
+// The module IS imported, and has no `exit`. The function is
+// `exit_with`.
+//
+// This was reported as "unbound variant/function: Os -- `Os` is a
+// standard library module; add `use Os;` to this file", to a file whose
+// first line is `use Os;`. Adding the duplicate `use` produced the same
+// error again. See issue #38.
+use Os;
+
+let main (): Unit = {
+    Os.exit(0);
+    ()
+}

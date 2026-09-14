@@ -1,0 +1,2 @@
+error: '..' is only supported as a `for` iterand
+main.plum:6:5

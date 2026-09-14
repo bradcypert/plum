@@ -1,0 +1,2 @@
+error: function bad: declared return type light.P doesn't match body type dark.P (dark.P != light.P)
+main.plum:11:1

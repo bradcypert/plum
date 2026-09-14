@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# Writes `expected-error.txt` for every `typecheck_corpus` fixture.
+#
+# A generator, run deliberately, like `record-examples` and `gen-seed`.
+# Running it accepts whatever the compiler says TODAY as correct, so run
+# it when you have changed a diagnostic ON PURPOSE, read the diff, and
+# commit the recordings with the change that caused them.
+#
+# Why the recordings exist at all: `corpus-check` asserted only that
+# each fixture was REJECTED, and rejection alone cannot tell a good
+# diagnostic from a bad one. Two of these 55 fixtures pinned a message;
+# the other 53 passed whether the compiler said the right thing, said
+# something misleading, or said the right thing in the wrong place.
+# `corpus-check`'s own comment records what that cost: match-arm errors
+# were reported at the enclosing function's first line for months and
+# every fixture still passed.
+#
+# WHAT IS RECORDED, and why it is two lines rather than the whole output:
+#
+#   error: match arms: Int != String      the message
+#   main.plum:13:5                        where it points
+#
+# `corpus-check` matches each line as a SUBSTRING, so this pins the
+# wording and the position while leaving the source quote and the caret
+# free to change with the renderer. Pinning the full output would make
+# every fixture fail the next time the caret gains a colour.
+#
+# An EXISTING recording is left alone unless you pass `--force`.
+# A hand-written one may deliberately assert less than the compiler
+# prints: `exhaustive_error_position` pins `error: match is not
+# exhaustive` and not the variant list after it, so the fixture keeps
+# testing the POSITION when that list changes. A recorder that
+# overwrites narrower assertions with broader ones silently converts a
+# deliberate choice into a brittle one, which it did on its first run.
+#
+# Usage:  bootstrap/record-typecheck-errors [--force] [fixture-name ...]
+#         (no arguments records every fixture that has no recording)
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+work="$(mktemp -d 2>/dev/null || mktemp -d -t plum-rec)"
+trap 'rm -rf "$work"' EXIT
+
+force=0
+if [ "${1:-}" = "--force" ]; then force=1; shift; fi
+
+if [ $# -gt 0 ]; then
+    dirs=""
+    for n in "$@"; do dirs="$dirs bootstrap/typecheck_corpus/$n/"; done
+else
+    dirs="$(echo bootstrap/typecheck_corpus/*/)"
+fi
+
+written=0
+skipped=0
+for dir in $dirs; do
+    name="$(basename "$dir")"
+    [ -f "$dir/main.plum" ] || { printf 'skip  %-28s no main.plum\n' "$name"; skipped=$((skipped + 1)); continue; }
+    if [ $force -eq 0 ] && [ -f "$dir/expected-error.txt" ]; then
+        printf 'keep  %-28s already recorded (--force to replace)\n' "$name"
+        continue
+    fi
+
+    if SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh check "$dir" > "$work/out" 2>&1; then
+        # A fixture the checker ACCEPTS has no error to record, and is
+        # itself the bug. Recording nothing and saying so is right;
+        # writing an empty file would make `corpus-check` pass it.
+        printf 'SKIP  %-28s ACCEPTED -- this fixture is broken, not the recording\n' "$name"
+        skipped=$((skipped + 1))
+        continue
+    fi
+
+    # TWO error paths, and the second is worth knowing about. `fail_tc`
+    # renders `error: <msg>` with a source position and a caret. When no
+    # position was ever set -- a visibility or declaration check that
+    # runs outside body inference -- it falls back to `self-hosted type
+    # checker: <msg>` with no position at all. Five fixtures land there.
+    # Both are recorded; a message with no position is still a message,
+    # and pinning it is what will show if one gains a position later.
+    msg="$(grep -m1 -E '^(error: |self-hosted type checker: )' "$work/out")"
+    if [ -z "$msg" ]; then
+        printf 'SKIP  %-28s rejected with no recognisable message line\n' "$name"
+        skipped=$((skipped + 1))
+        continue
+    fi
+
+    # `main.plum:LINE:COL` out of the `--> path:line:col` arrow. The
+    # path is trimmed to the basename so a recording does not depend on
+    # where the repository sits on disk.
+    loc="$(grep -m1 -oE 'main\.plum:[0-9]+:[0-9]+' "$work/out" | grep -oE 'main\.plum:[0-9]+:[0-9]+')"
+
+    {
+        printf '%s\n' "$msg"
+        [ -n "$loc" ] && printf '%s\n' "$loc"
+    } > "$dir/expected-error.txt"
+    written=$((written + 1))
+    printf 'ok    %-28s %s\n' "$name" "$(printf '%s' "$msg" | cut -c1-52)"
+done
+
+printf '\nrecorded %d fixture(s), skipped %d\n' "$written" "$skipped"
+[ "$skipped" -eq 0 ]

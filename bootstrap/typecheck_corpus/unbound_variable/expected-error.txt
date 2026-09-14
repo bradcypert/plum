@@ -1,0 +1,2 @@
+error: unbound variable: nonexistent_thing
+main.plum:1:1

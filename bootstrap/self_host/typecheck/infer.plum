@@ -1713,6 +1713,57 @@ let find_field_template_acc (fields: Array[StructFieldTemplate]) (name: String) 
 // missing `use`, not a typo -- most often in code written before the
 // module existed, or copied from documentation that predates it.
 // Saying so is the whole cost of having gated the module behind `use`.
+// Whether `ns` names a module that is PRESENT in this program.
+//
+// That is the question that separates the two ways a module-qualified
+// name fails, and the reason it is the right question is how `use`
+// works: a stdlib module's source is only included when something
+// imports it. So a module with no items here was not imported, and a
+// module with items was -- no import list needs to be threaded anywhere
+// to know which.
+let module_in_program (p2: Program2) (ns: String): Bool =
+    Array.any(p2.sigs, |sig| sig.module == ns) || Array.any(p2.globals, |g| g.module == ns)
+
+// The module is here and has no such name. Saying "add `use Os;`" to a
+// file that already says it sends the reader to fix something that is
+// already correct, and adding the duplicate `use` produces the same
+// error again.
+let no_member_message (p2: Program2) (ns: String) (name: String): String = {
+    let near = near_member_names(p2, ns, name);
+    if Array.is_empty(near) { "`${ns}` has no `${name}`" }
+    else { "`${ns}` has no `${name}`. Did you mean ".concat(join_alternatives(near, 0, "")).concat("?") }
+}
+
+// A cheap suggestion rather than an edit distance: one name being a
+// PREFIX of the other catches the shape this actually takes, which is a
+// remembered-but-shortened name. `Os.exit` for `Os.exit_with` is the
+// case that prompted it, and `Time.now` for `Time.now_utc` is the next
+// one. A name unrelated to anything in the module gets no suggestion,
+// which is better than a confidently wrong one.
+// `is_pub` matters here and not only for correctness of the suggestion:
+// a private name is not reachable, so offering it sends the reader to
+// write something that fails differently. `Os.exit` suggested
+// `exit_raw` before this, which is the runtime primitive `exit_with`
+// wraps and is not API.
+let near_member_names (p2: Program2) (ns: String) (name: String): Array[String] = {
+    let from_sigs = Array.fold(p2.sigs, [], |acc, sig|
+        if sig.module == ns && sig.is_pub && is_near_name(sig.name, name) && !Array.contains(acc, sig.name) { acc.push(sig.name) } else { acc });
+    let both = Array.fold(p2.globals, from_sigs, |acc, g|
+        if g.module == ns && g.is_pub && is_near_name(g.def.name, name) && !Array.contains(acc, g.def.name) { acc.push(g.def.name) } else { acc });
+    Array.slice(Array.sort_string(both), 0, if both.len() > 3 { 3 } else { both.len() })
+}
+
+let is_near_name (candidate: String) (written: String): Bool =
+    candidate != written && (candidate.starts_with(written) || written.starts_with(candidate))
+
+let join_alternatives (names: Array[String]) (i: Int) (acc: String): String =
+    if i >= names.len() { acc }
+    else {
+        let quoted = "`${names[i]}`";
+        let sep = if i == 0 { "" } else if i == names.len() - 1 { " or " } else { ", " };
+        join_alternatives(names, i + 1, acc.concat(sep).concat(quoted))
+    }
+
 let unbound_message (tag: String): String =
     if Array.contains(parser.std_module_names(), tag) {
         "unbound variant/function: ${tag} -- `${tag}"
@@ -1936,7 +1987,17 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                                         let ar = infer_list(p2, state, env, acc, args, 0, [], []);
                                         infer_variant_v(p2, ar.state, ar.subst, method_name, ar.tys, ar.texprs, v)
                                     },
-                                    None => infer_method_call(p2, state, env, acc, base, method_name, args),
+                                    // `Os.exit(3)` where the file DOES
+                                    // `use Os;`. The module is here and
+                                    // has no `exit`, so falling through
+                                    // to the method call would infer
+                                    // `Os` as a value, fail as an
+                                    // unbound name, and report "add
+                                    // `use Os;`" to a file whose first
+                                    // line is `use Os;`. See issue #38.
+                                    None => if module_in_program(p2, ns) {
+                                        { fail_tc(no_member_message(p2, ns, method_name)); ir_unsupported(acc, state, "no ${method_name} in ${ns}") }
+                                    } else { infer_method_call(p2, state, env, acc, base, method_name, args) },
                                 },
                             },
                         } } }

@@ -1,0 +1,1 @@
+self-hosted type checker: field counter.Counter.n is private to module `counter`. Add `pub` to it to use it from the root module

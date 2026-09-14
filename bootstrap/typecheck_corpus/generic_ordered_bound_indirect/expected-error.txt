@@ -1,0 +1,2 @@
+error: call to pick: T is P, but pick requires T to be ordered -- Int, Float or String
+main.plum:12:1

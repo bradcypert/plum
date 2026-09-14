@@ -1,0 +1,2 @@
+error: `Light` is a variant of Weight and Shade -- write Weight.Light to say which one you mean
+main.plum:11:5

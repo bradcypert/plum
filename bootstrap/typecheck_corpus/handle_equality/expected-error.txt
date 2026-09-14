@@ -1,0 +1,2 @@
+error: '==' is not supported for Res: a handle has no fields to compare, and its payload is opaque
+main.plum:12:5

@@ -1,0 +1,2 @@
+error: '&' needs Int operands, found Float
+main.plum:7:1

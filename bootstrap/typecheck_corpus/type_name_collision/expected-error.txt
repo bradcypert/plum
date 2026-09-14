@@ -1,0 +1,2 @@
+error: let a: declared type P doesn't match value type inner.P (inner.P != P)
+main.plum:11:5
