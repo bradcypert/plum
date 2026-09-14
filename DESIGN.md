@@ -20830,3 +20830,59 @@ other direction: there, harnesses could not fail because they checked
 nothing; here, a harness checked exactly what it claimed and the claim
 did not cover the defect. Both are cases of a test suite being read as
 proof of more than it asserts.
+
+### Path, under both conventions (2026-09-14)
+
+`Path` branched on `Os.platform()`, and on a Unix machine the Windows
+side was not merely untested, it was **unreachable**. `self-test` exists
+for exactly that class, MAINTENANCE names `lsp.uri_to_path_in` as the
+worked example, and that pattern had been used exactly once: those two
+URI tests were still the only tests `self-test` discovered in a 250KB
+compiler.
+
+Every path function now has an `_in` form taking the convention as its
+first argument, and a host form that reads it:
+
+```
+pub let clean_in (windows: Bool) (p: String): String = ...
+pub let clean (p: String): String = clean_in(IS_WINDOWS, p)
+```
+
+Ten of them, which is real growth in a core module's public API, and it
+was a deliberate choice rather than a side effect. The alternatives were
+a two-function seam that would have left `join`, `basename` and
+`dirname` covered only indirectly, or leaving it alone. What settled it
+is that the `_in` forms are not only a test hook: building a path FOR
+another platform is a thing a cross-compiler or a build tool does, and
+this compiler already cross-compiles to Windows.
+
+**The tests found three real bugs on their first run**, all of them
+pre-existing, all invisible from Linux, and all in code the package
+loader now depends on:
+
+- **`dirname("C:\a\")` was `C:.`** The drive was included in the search
+  for the last separator, so the root at index 2 was not recognised as
+  one. `C:.` is the current directory on drive C, not its top.
+- **`basename("C:\")` was `C:`.** Same cause: after trimming the
+  trailing separator there was none left, so the drive read as a name.
+- **`clean("//srv/sh")` was `\srv\sh`.** A UNC root is TWO separators,
+  and collapsing it turned a network path into a local one naming
+  something else entirely. This is the one to be uncomfortable about:
+  silently rewriting a path to point somewhere else is worse than
+  failing.
+
+Then the fix for the third broke the first, which is worth recording
+because it is the shape these bugs take. `join("C:\", "a")` builds
+`C://a` before cleaning, and a leading `//` after a drive is not UNC. A
+path with a drive is never UNC, and saying so is the whole fix.
+
+The property that caught all of it is one the module was already written
+to satisfy and nothing had checked under this convention:
+
+```
+join(dirname(p), basename(p)) == clean(p)
+```
+
+`bootstrap/properties` checks it over generated Unix paths. Asserting it
+for `C:\a\`, `\\server\share\f`, `\` and `""` is what turned three
+unreachable branches into three failing tests, and it took one run.

@@ -3505,3 +3505,107 @@ let main (): Unit = {
     }
 }
 
+// --- Path, under both conventions -----------------------------------
+//
+// `plum test` discovers these, so `bootstrap/self-test` runs them. They
+// live here rather than beside `Path` because the stdlib is prepended
+// SOURCE and test discovery reads a project's own items only, so a
+// `test_` function in the prelude would never be found.
+//
+// Every one of them calls an `_in` form. The point is not that `Path`
+// works on Linux, which every other harness already establishes a
+// thousand times over; it is that the WINDOWS branch works, and that
+// branch is unreachable on this machine through the host functions. It
+// is the same argument, and the same shape, as `test_lsp_uri_*` next
+// door: two releases shipped Windows-only path bugs that were correct
+// on Linux, each found by CI fifteen minutes at a time.
+//
+// `Path.is_absolute` earned the attention: the package loader depends
+// on it now, and a Windows absolute path is three different shapes.
+let eq (label: String) (got: String) (want: String): Unit =
+    if got == want { () } else { panic_raw("${label}: got `${got}`, want `${want}`") }
+
+let eq_bool (label: String) (got: Bool) (want: Bool): Unit =
+    eq(label, got.to_string(), want.to_string())
+
+pub let test_path_separator (): Unit = {
+    eq("windows separator", Path.separator_in(true), "\\");
+    eq("unix separator", Path.separator_in(false), "/")
+}
+
+pub let test_path_is_absolute_windows (): Unit = {
+    // A leading separator, either spelling.
+    eq_bool("/x", Path.is_absolute_in(true, "/x"), true);
+    eq_bool("\\x", Path.is_absolute_in(true, "\\x"), true);
+    // A drive WITH a root.
+    eq_bool("C:/x", Path.is_absolute_in(true, "C:/x"), true);
+    eq_bool("C:\\x", Path.is_absolute_in(true, "C:\\x"), true);
+    eq_bool("c:/x lower", Path.is_absolute_in(true, "c:/x"), true);
+    // A drive WITHOUT one. `C:x` means "the current directory on drive
+    // C", which is relative with a drive attached, and reading it as
+    // absolute is how a path escapes the tree it was meant to stay in.
+    eq_bool("C:x", Path.is_absolute_in(true, "C:x"), false);
+    // A UNC share.
+    eq_bool("//server/share", Path.is_absolute_in(true, "//server/share"), true);
+    eq_bool("relative", Path.is_absolute_in(true, "a/b"), false);
+    // Not a drive: the first character has to be a letter.
+    eq_bool("1:/x", Path.is_absolute_in(true, "1:/x"), false)
+}
+
+pub let test_path_is_absolute_unix (): Unit = {
+    eq_bool("/x", Path.is_absolute_in(false, "/x"), true);
+    eq_bool("a/b", Path.is_absolute_in(false, "a/b"), false);
+    // A drive letter means nothing here, and a backslash is a legal
+    // character in a Unix filename rather than a separator.
+    eq_bool("C:/x", Path.is_absolute_in(false, "C:/x"), false);
+    eq_bool("\\x", Path.is_absolute_in(false, "\\x"), false)
+}
+
+pub let test_path_clean_windows (): Unit = {
+    eq("backslashes", Path.clean_in(true, "a\\b\\c"), "a\\b\\c");
+    eq("dotdot", Path.clean_in(true, "a\\b\\..\\c"), "a\\c");
+    eq("drive kept", Path.clean_in(true, "C:\\a\\..\\b"), "C:\\b");
+    eq("mixed separators", Path.clean_in(true, "a/b\\c"), "a\\b\\c");
+    eq("rooted", Path.clean_in(true, "\\a\\.\\b"), "\\a\\b");
+    eq("empty is dot", Path.clean_in(true, ""), ".");
+    // The root has no parent, so `..` off it is dropped rather than kept.
+    eq("dotdot off the root", Path.clean_in(true, "\\..\\x"), "\\x")
+}
+
+pub let test_path_clean_unix (): Unit = {
+    eq("dotdot", Path.clean_in(false, "a/b/../c"), "a/c");
+    eq("backslash is a NAME", Path.clean_in(false, "a\\b"), "a\\b");
+    eq("empty is dot", Path.clean_in(false, ""), ".")
+}
+
+pub let test_path_split_windows (): Unit = {
+    eq("basename", Path.basename_in(true, "C:\\a\\b.txt"), "b.txt");
+    eq("dirname", Path.dirname_in(true, "C:\\a\\b.txt"), "C:\\a");
+    eq("trailing separator", Path.basename_in(true, "a\\b\\"), "b");
+    eq("dirname of a bare name", Path.dirname_in(true, "b.txt"), ".");
+    eq("join", Path.join_in(true, "C:\\x", "y"), "C:\\x\\y");
+    // The rule `join` inherits from `join_all`, under this convention
+    // too: a later absolute segment does NOT discard the earlier ones.
+    eq("absolute b does not win", Path.join_in(true, "a", "\\b"), "a\\b");
+    eq("extension", Path.extension_in(true, "C:\\a\\b.tar.gz"), "gz");
+    eq("stem", Path.stem_in(true, "C:\\a\\b.tar.gz"), "b.tar");
+    eq("with_extension", Path.with_extension_in(true, "C:\\a\\b.txt", "md"), "C:\\a\\b.md")
+}
+
+// `join(dirname(p), basename(p)) == clean(p)`, the identity the two
+// splitters were written to satisfy, asserted under the WINDOWS
+// convention. `bootstrap/properties` checks it over generated Unix
+// paths; these are the shapes only Windows has.
+pub let test_path_split_recombines_windows (): Unit = {
+    recombines("C:\\a\\b.txt");
+    recombines("C:\\a\\");
+    recombines("\\\\server\\share\\f");
+    recombines("b.txt");
+    recombines("\\");
+    recombines("")
+}
+
+let recombines (p: String): Unit =
+    eq("recombine ${p}",
+        Path.join_in(true, Path.dirname_in(true, p), Path.basename_in(true, p)),
+        Path.clean_in(true, p))
