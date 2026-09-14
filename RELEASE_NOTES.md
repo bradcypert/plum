@@ -1,82 +1,93 @@
 Plum is a small, statically typed, compiled language.
 
-`plum highlight` was quadratic. It is not any more.
+Three Windows path bugs, and a diagnostic that sent you to fix something
+already correct.
 
-## 32x on a large file
+## Paths on Windows
 
-| input | 0.0.30 | 0.0.31 |
+Three bugs, all pre-existing, and one of them is the kind worth being
+uncomfortable about.
+
+| | was | is |
 |---|---|---|
-| 51 KB | 130 ms | 61 ms |
-| 107 KB | 437 ms | 95 ms |
-| 225 KB | 2,175 ms | 148 ms |
-| 415 KB | 7,693 ms | 239 ms |
+| `Path.dirname("C:\a\")` | `C:.` | `C:\` |
+| `Path.basename("C:\")` | `C:` | `\` |
+| `Path.clean("//srv/sh")` | `\srv\sh` | `\\srv\sh` |
 
-Doubling the input used to roughly quadruple the time. The output is
-byte-identical over all 296 files it is checked against, so this is
-purely cost.
+The first two share a cause: the drive letter was included in the search
+for the last separator, so the root at index 2 was not recognised as
+one. `C:.` is the current directory on drive C, not its top.
 
-It matters beyond the command itself: every code block on
-[plumlang.org](https://plumlang.org) goes through `plum highlight`, and
-so does the API reference. A large file was minutes of a site build
-rather than seconds.
+**The third silently rewrote a network path into a local one.** A UNC
+root is two separators; collapsing it to one produces a path that names
+something else entirely. Rewriting a path to point somewhere else is
+worse than refusing to handle it.
 
-## What it was
+Nothing on Linux or macOS is affected. These are Windows-only, which is
+exactly why they lasted: on a Unix machine that code was not merely
+untested, it was **unreachable**.
+
+## Path takes the convention as an argument
+
+Every `Path` function now has an `_in` form:
 
 ```plum fragment
-acc = hl_gap_pieces(lexer.trivia_before_at(chars, lexed, i), acc);
+Path.clean_in(windows, p)          Path.basename_in(windows, p)
+Path.join_in(windows, a, b)        Path.dirname_in(windows, p)
+Path.is_absolute_in(windows, p)    Path.separator_in(windows)
 ```
 
-Plum's backend can grow an array in place when it can prove the old
-value is dead, and a **self-rebinding assignment** is the shape where
-that is provable: the slot is overwritten with the result, so nothing
-can observe the mutation. `highlight.plum` carries a twenty-line comment
-about this, ending "the fourth accidental O(n^2) in this project and the
-second caused by this exact distinction".
+plus `join_all_in`, `extension_in`, `stem_in` and `with_extension_in`.
+The plain forms are unchanged and read the convention from the host, so
+nothing you have written needs to change.
 
-The line above looks like that shape and is not one. The `push` happens
-inside the callee, on a **parameter**, which is exactly where the
-compiler cannot prove the old value is dead. So it copied the whole
-accumulator once per token while the comment above it explained why it
-did not.
+Two reasons this is worth ten new functions. The first is that it makes
+the Windows behaviour reachable from any machine, which is how the bugs
+above were found: they turned up on the first run of the first test.
+The second is that it is genuinely useful. If you are emitting paths for
+a platform other than the one you are running on, which this compiler
+does when it cross-compiles, the `_in` forms are what to call.
 
-The rule is narrower than "rebind the accumulator": the push itself has
-to be the self-rebinding assignment, in the scope that owns the slot.
-Moving it into a helper defeats it however the call site is written.
+The property that caught all three is one the module was already written
+to satisfy, and which nothing had checked under the Windows convention:
 
-## The measurement that changed the fix
+```
+join(dirname(p), basename(p)) == clean(p)
+```
 
-Three shapes, at 415 KB:
+## A diagnostic that blamed the wrong thing
 
-| shape | time |
-|---|---|
-| `acc = hl_gap_pieces(gap, acc)` | 7.7s |
-| `acc = acc.concat(hl_gap_pieces(gap, []))` | 11.0s |
-| `for .. { acc = acc.push(ps[i]) }` | 0.24s |
+```plum fragment
+use Os;
+let main (): Unit = Os.exit(0)
+```
 
-The middle one was the first fix, and it was worse. `acc =
-acc.concat(x)` is written down as one of the two self-rebinding shapes
-the backend can reuse, and here it did not: it allocated a fresh array
-of the combined length every token and paid for the small array
-besides. The reuse that actually fires is `acc = acc.push(x)`.
+```
+error: `Os` has no `exit`. Did you mean `exit_with`?
+```
 
-Worth knowing before reaching for `concat` to fix a copy. It is in
-DESIGN.md so the next person does not have to measure it again.
+It used to say `` `Os` is a standard library module; add `use Os;` to
+this file ``, to a file whose first line is `use Os;`. Following that
+advice added a duplicate import and produced the same error again.
 
-## How it was found, and what that says
+A module-qualified name fails two ways and they now read differently:
+the module is not imported, or the module is imported and has no such
+name. Suggestions are restricted to public names, because the first
+version offered a private runtime primitive.
 
-Not by a harness. `bootstrap/highlight-check` timed out in CI on the
-compiler's own 415 KB `codegen.plum` once a slower runner crossed a
-25-second limit.
+## Every rejection is now pinned
 
-That harness asserts that highlighting does not **corrupt** code: strip
-the tags, undo the escaping, and the source comes back byte for byte. A
-quadratic corrupts nothing. Every file passed the whole time, because
-passing only required finishing, and on a developer's machine it always
-finished.
+`bootstrap/typecheck_corpus` has 57 fixtures. Two of them asserted what
+the compiler actually said; the rest asserted only that it exited
+non-zero, so they passed whether the message was right, misleading, or
+attached to the wrong line.
 
-The harness was not weak. It answered exactly the question it claimed to
-answer, and nothing in the suite was asking about cost. That is worth
-saying plainly in release notes, because the previous release fixed
-seven harnesses that could not fail, and this is the same lesson
-approached from the other side: a test suite proves what it asserts, and
-not one thing more.
+All of them pin the message and its position now. That is not a
+user-facing feature, and it is in these notes because it is the reason
+the next bad diagnostic gets caught by a test rather than by somebody
+hitting it.
+
+## Also in this release
+
+- The seed was refreshed. It bootstraps to a compiler identical to this
+  one, as `bootstrap/check-seed` asserts.
