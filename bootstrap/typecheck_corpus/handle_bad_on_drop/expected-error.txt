@@ -1,1 +1,2 @@
-self-hosted type checker: handle Res: on_drop names 'fake_clsoe', which is not declared. It must be an `extern "C"` function taking one Int.
+error: handle Res: on_drop names 'fake_clsoe', which is not declared. It must be an `extern "C"` function taking one Int.
+main.plum:5:1

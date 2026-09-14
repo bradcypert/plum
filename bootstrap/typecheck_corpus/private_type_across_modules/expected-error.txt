@@ -1,1 +1,2 @@
-self-hosted type checker: struct Secret is private to module `shapes`. Add `pub` to its declaration to use it from the root module
+error: struct Secret is private to module `shapes`. Add `pub` to its declaration to use it from the root module
+main.plum:9:5

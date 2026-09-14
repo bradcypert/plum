@@ -21,6 +21,8 @@
 // zero new code.
 
 use parser;
+use lexer;
+use Os;
 
 // `is_pub` was parsed into `StructFieldNode` and dropped here until
 // 2026-08-27, which is why `pub` on a field did nothing.
@@ -47,7 +49,60 @@ struct HandleInfo { name: String, module: String, is_pub: Bool, on_drop: String 
 
 pub struct TyContext { pub structs: Array[StructInfo], pub enums: Array[EnumInfo], handles: Array[HandleInfo] }
 
-let fail_ctx (msg: String): Unit = panic_raw("self-hosted type checker: ".concat(msg))
+// --- Where an error points -------------------------------------------
+//
+// This state lived in `infer.plum`, which meant the checks in THIS file
+// could not reach it and reported with no position at all: "self-hosted
+// type checker: field shapes.Circle.radius is private to module
+// `shapes`" told you what was wrong and not where you did it. Five
+// diagnostics read that way. See issue #40.
+//
+// It sits here rather than there because `infer.plum` imports this file
+// and not the other way round, so this is the only end of the pair both
+// can reach.
+pub struct ErrPos { pub path: String, pub offset: Int, pub fn_name: String }
+let ERR: Ref[ErrPos] = ref(ErrPos { path: "", offset: 0 - 1, fn_name: "" })
+
+// The FUNCTION being checked, recorded alongside the position. It is
+// what a PRELUDE error has instead of a position: prelude source is a
+// string inside the compiler, so it has no file to point into, and
+// "unknown struct: Array" with no further context is nearly useless
+// when the prelude is a thousand lines.
+pub let set_err_pos (path: String) (offset: Int) (fn_name: String): Unit =
+    ERR.set(ErrPos { path: path, offset: offset, fn_name: fn_name })
+
+// A statement offset of -1 means "synthesized, or parsed without a
+// source context" -- keep whatever the enclosing item set instead of
+// overwriting it with a position that points nowhere.
+pub let current_err_offset (unit: Unit): Int = ERR.get().offset
+pub let err_path (unit: Unit): String = ERR.get().path
+
+pub let set_stmt_pos (offset: Int): Unit =
+    if offset >= 0 { ERR.set(ErrPos { path: ERR.get().path, offset: offset, fn_name: ERR.get().fn_name }) } else { () }
+
+// Every checker error goes through here. With a position it renders
+// `error: <msg>` with the source line and a caret; without one it says
+// so plainly rather than pretending.
+//
+// The bare form still exists and is still reached, by the
+// internal-invariant checks below ("unknown struct: X (asked for its
+// field names)"). Those are compiler bugs rather than user errors, and
+// a compiler bug has no user source to point at.
+pub let fail_at_err (msg: String): Unit = {
+    let e = ERR.get();
+    if e.path == "" || e.offset < 0 {
+        panic_raw("self-hosted type checker: ".concat(msg)
+            .concat(if e.fn_name == "" { "" } else { " (checking '${e.fn_name}')" }))
+    }
+    else {
+        match Os.read_file(e.path) {
+            Ok(src) => panic_raw(lexer.render_at(src, e.path, e.offset, msg)),
+            Err(_) => panic_raw("self-hosted type checker: ".concat(msg)),
+        }
+    }
+}
+
+let fail_ctx (msg: String): Unit = fail_at_err(msg)
 
 // The root module is spelled `""` internally -- it holds the prelude
 // and every file not in a subdirectory. Printing "module ``" in a

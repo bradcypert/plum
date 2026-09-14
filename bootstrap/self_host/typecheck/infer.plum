@@ -103,7 +103,7 @@ pub let recorded_types (): Array[NodeType] = NODES.get()
 
 let note_at (name: String) (offset: Int) (ty: ITy) (def_offset: Int): Unit =
     if RECORD.get() && offset >= 0 {
-        NODES.set(NODES.get().push(NodeType { path: ERR.get().path, offset: offset, name: name, ty: render_ty(ty), def_offset: def_offset }))
+        NODES.set(NODES.get().push(NodeType { path: err_path(()), offset: offset, name: name, ty: render_ty(ty), def_offset: def_offset }))
     } else { () }
 
 let note_ident (name: String) (offset: Int) (ty: ITy) (def_offset: Int): Unit = note_at(name, offset, ty, def_offset)
@@ -112,38 +112,13 @@ let note_ident (name: String) (offset: Int) (ty: ITy) (def_offset: Int): Unit = 
 // only the uses of `n`. Its own definition is itself.
 let note_binding (name: String) (offset: Int) (ty: ITy): Unit = note_at(name, offset, ty, offset)
 
-struct ErrPos { path: String, offset: Int, fn_name: String }
-let ERR: Ref[ErrPos] = ref(ErrPos { path: "", offset: 0 - 1, fn_name: "" })
-
-// The FUNCTION being checked, recorded alongside the position. It is
-// what a PRELUDE error has instead of a position: prelude source is a
-// string inside the compiler, so it has no file to point into, and
-// "unknown struct: Array" with no further context is nearly useless
-// when the prelude is a thousand lines.
-pub let set_err_pos (path: String) (offset: Int) (fn_name: String): Unit =
-    ERR.set(ErrPos { path: path, offset: offset, fn_name: fn_name })
-
-// A statement offset of -1 means "synthesized, or parsed without a
-// source context" — keep whatever the enclosing item set instead of
-// overwriting it with a position that points nowhere.
-pub let current_err_offset (unit: Unit): Int = ERR.get().offset
-
-pub let set_stmt_pos (offset: Int): Unit =
-    if offset >= 0 { ERR.set(ErrPos { path: ERR.get().path, offset: offset, fn_name: ERR.get().fn_name }) } else { () }
-
-let fail_tc (msg: String): Unit = {
-    let e = ERR.get();
-    if e.path == "" || e.offset < 0 {
-        panic_raw("self-hosted type checker: ".concat(msg)
-            .concat(if e.fn_name == "" { "" } else { " (checking '${e.fn_name}')" }))
-    }
-    else {
-        match Os.read_file(e.path) {
-            Ok(src) => panic_raw(lexer.render_at(src, e.path, e.offset, msg)),
-            Err(_) => panic_raw("self-hosted type checker: ".concat(msg)),
-        }
-    }
-}
+// `ErrPos`, `ERR`, `set_err_pos`, `set_stmt_pos` and `current_err_offset`
+// moved to `context.plum`. Both files are module `typecheck`, so every
+// caller here still reaches them unqualified; what changed is that the
+// checks in `context.plum` can now reach them too. Five diagnostics
+// reported with no position at all because the state was on this side
+// and they were on that one. See issue #40.
+let fail_tc (msg: String): Unit = fail_at_err(msg)
 
 // --- Fresh type variables ---
 
@@ -442,6 +417,13 @@ pub let check_program (program: parser.ProgramNode): Unit = {
 let check_handle_drops (p2: Program2) (items: Array[parser.ItemNode]) (i: Int): Unit =
     if i >= items.len() { () }
     else {
+        // The DECLARATION's own position. This check runs before any
+        // function body, so nothing else has set one, and both of its
+        // errors used to arrive with no position at all -- naming the
+        // handle but not the line that declared it. An `ItemNode`
+        // already carries the file and the offset; they were simply
+        // never used here. See issue #40.
+        set_err_pos(items[i].path, items[i].start, "");
         match items[i].kind {
             IKHandle(decl) => match find_sig(p2, decl.on_drop) {
                 None => fail_tc("handle ${decl.name}: on_drop names '${decl.on_drop}"
@@ -764,7 +746,7 @@ let check_fn_typed (p20: Program2) (def: parser.LetDefNode) (module_name: String
         Ok(_) => (),
         Err(e) => fail_tc("function ${def.name}: declared return type ${render_ty(ret_ty)} doesn't match body type ${render_ty(body_ty)} (${e})"),
     };
-    TFn { name: def.name, module: module_name, path: ERR.get().path, offset: ERR.get().offset, generics: sig.generics, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
+    TFn { name: def.name, module: module_name, path: err_path(()), offset: current_err_offset(()), generics: sig.generics, params: typed_params(def.params, sig.params, r.subst, 0, []), ret: ret_ty, body: r.texpr, subst: r.subst }
 }
 
 // Parameter names paired with their (now resolved) declared types.
@@ -852,7 +834,7 @@ let typed_globals_acc (p20: Program2) (globals: Array[GlobalDef]) (i: Int) (acc:
             },
         };
         typed_globals_acc(p20, globals, i + 1,
-            acc.push(TFn { name: globals[i].def.name, module: globals[i].module, path: ERR.get().path, offset: ERR.get().offset, generics: [], params: [], ret: subst_apply(s2, r.ty), body: r.texpr, subst: s2 }))
+            acc.push(TFn { name: globals[i].def.name, module: globals[i].module, path: err_path(()), offset: current_err_offset(()), generics: [], params: [], ret: subst_apply(s2, r.ty), body: r.texpr, subst: s2 }))
     }
 
 let typed_fns_acc (p2: Program2) (items: Array[parser.ItemNode]) (i: Int) (acc: Array[TFn]): Array[TFn] =

@@ -1,1 +1,2 @@
-self-hosted type checker: field shapes.Circle.radius is private to module `shapes`. Add `pub` to it to use it from the root module
+error: field shapes.Circle.radius is private to module `shapes`. Add `pub` to it to use it from the root module
+main.plum:9:5

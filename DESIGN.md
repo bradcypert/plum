@@ -20886,3 +20886,53 @@ join(dirname(p), basename(p)) == clean(p)
 `bootstrap/properties` checks it over generated Unix paths. Asserting it
 for `C:\a\`, `\\server\share\f`, `\` and `""` is what turned three
 unreachable branches into three failing tests, and it took one run.
+
+### Where an error points (2026-09-14)
+
+Five diagnostics reached the user with no source position and an
+internal prefix in place of one:
+
+```
+self-hosted type checker: field shapes.Circle.radius is private to module `shapes`. ...
+```
+
+The messages were good. They did not say WHERE, and "self-hosted type
+checker" is a detail the reader has no use for: there is one type
+checker.
+
+The cause was structural rather than an oversight in any of the five.
+`fail_tc` reads a position out of `ERR` and renders message, arrow and
+caret; `ERR` lived in `infer.plum`. `context.plum`, which `infer.plum`
+imports and not the other way round, could not reach it, so its own
+`fail_ctx` was the no-position fallback unconditionally. Three of the
+five are privacy checks reached from `infer_field_read` DURING body
+inference, with a perfectly good position sitting in `ERR` that the call
+into `context.plum` threw away.
+
+**The state moved to the end of the pair both halves can reach.**
+`ErrPos`, `ERR` and the position API now live in `context.plum`, and
+`fail_ctx` is `fail_at_err`. Both files are module `typecheck`, so every
+existing caller reaches them unqualified and nothing else changed: the
+first attempt wrote `context.set_err_pos(..)` from `infer.plum`, which
+in the same module is a function calling itself.
+
+The other two are handle-declaration checks that run before any body, so
+there was genuinely no position to have. But `check_handle_drops` walks
+`ItemNode`s, and an `ItemNode` has carried `path` and `start` since
+spans were added. It sets the position from the declaration it is about
+to check, which is one line.
+
+All five now point at the right place: the privacy errors at the USE,
+which is where the reader has to change something, and the handle errors
+at the `handle` block.
+
+The `self-hosted type checker:` prefix stays, and is now honest. It
+marks the errors that could not say where, and what still reaches it is
+the internal-invariant checks: `unknown struct: X (asked for its field
+names)` is a compiler bug, and a compiler bug has no user source to
+point at.
+
+`corpus-check` is what makes this stick. All 57 typecheck fixtures pin
+message AND position, so the five recordings gained a `main.plum:L:C`
+line in this change, and an error that loses its position again will
+fail a test rather than being noticed by somebody hitting it.

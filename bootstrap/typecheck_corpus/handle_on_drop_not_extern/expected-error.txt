@@ -1,1 +1,2 @@
-self-hosted type checker: handle Res: on_drop 'my_close' must be an `extern "C"` function, not a Plum one -- it runs while a value is being freed
+error: handle Res: on_drop 'my_close' must be an `extern "C"` function, not a Plum one -- it runs while a value is being freed
+main.plum:5:1
