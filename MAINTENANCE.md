@@ -31,7 +31,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-version` | the version string, the tag and the built binary agree | <1s |
 | `help-check` | `plum help`/`--help`/`-h` print usage, extra args ignored | <1s |
 | `check-docs` | `docs/stdlib/`, pages and index, matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 3s |
-| `highlight-check` | `plum highlight` gives the source back byte for byte with the tags stripped, over 294 files — highlighting cannot corrupt code a reader is about to copy | 13s |
+| `highlight-check` | `plum highlight` gives the source back byte for byte with the tags stripped, over 296 files — highlighting cannot corrupt code a reader is about to copy. Note what it does NOT assert: `plum highlight` was quadratic for weeks and every file passed, because passing only requires finishing | 6s |
 | `pkg-check` | path dependencies resolve (including transitively, and through a cycle) and every command sees them — and `plum.pkg` stays DATA: a call, a name, an interpolation or an `if` in a manifest is rejected | 9s |
 | `check-builtins` | every compiler builtin is offered by completion and listed in the reference -- a builtin is a chain of `if`s that nothing can enumerate, so this compares the chain against the table beside it | <1s |
 | `check-doc-names` | every standard-library name the documentation mentions in prose exists, with the `use` list DERIVED from `parser.std_module_names()` rather than typed out | 2s |

@@ -156,6 +156,39 @@ pub let hl_html (source: String): String =
 //
 // This is the fourth accidental O(n^2) in this project and the second
 // caused by this exact distinction. See DESIGN.md.
+//
+// AND IT CAME BACK, 2026-09-13, with that paragraph sitting directly
+// above the loop it describes. `acc = hl_gap_pieces(gap, acc)` LOOKS
+// self-rebinding, and is not: the `push` happens inside the callee, on
+// a PARAMETER, which is exactly where the backend cannot prove the old
+// value is dead. So it copied the whole accumulator once per token
+// while the comment explained why it did not.
+//
+// The rule is narrower than "rebind the accumulator". THE PUSH ITSELF
+// has to be the self-rebinding assignment, in the scope that owns the
+// slot. Moving it into a helper defeats it however the call site is
+// written.
+//
+// Two shapes were measured before this one, because the first guess was
+// wrong and the second was worse:
+//
+//   acc = hl_gap_pieces(gap, acc)          7.7s   (the original)
+//   acc = acc.concat(hl_gap_pieces(gap,[])) 11.0s
+//   for .. { acc = acc.push(ps[i]) }        0.24s
+//
+// The middle one is the interesting result. `acc = acc.concat(x)` is
+// written down as one of the two self-rebinding shapes the backend can
+// reuse, and here it did not: it allocated a fresh array of the
+// combined length every token, and paid for the small array besides. So
+// the reuse that actually fires is `acc = acc.push(x)`. Worth knowing
+// before reaching for `concat` to fix a copy.
+//
+// Found by CI, not by a harness. `highlight-check` timed out on
+// `codegen.plum` (415KB) once a slower runner crossed 25 seconds. Every
+// file in the repository passed the whole time, because passing only
+// required finishing: the harness asserts that highlighting does not
+// CORRUPT code, and a quadratic does not corrupt anything. 7.7s to
+// 0.24s, output byte-identical over all 296 files.
 let hl_pieces (source: String): Array[HlPiece] = {
     let lexed = lexer.tokenize_spanned(source);
     // Split ONCE. `lexer.token_text` would re-split the whole file per
@@ -171,7 +204,8 @@ let hl_pieces (source: String): Array[HlPiece] = {
     // has that shape, so it is worth getting right.
     let mut in_def = false;
     for i in 0..lexed.tokens.len() {
-        acc = hl_gap_pieces(lexer.trivia_before_at(chars, lexed, i), acc);
+        let gap_ps = hl_gap_pieces(lexer.trivia_before_at(chars, lexed, i), []);
+        for g in 0..gap_ps.len() { acc = acc.push(gap_ps[g]); };
         match lexed.tokens[i] {
             // The end-of-file token has no text. Emitting the trivia
             // before it still matters -- that is the file's trailing
@@ -180,7 +214,8 @@ let hl_pieces (source: String): Array[HlPiece] = {
             TokEof => {},
             tok => {
                 let text = lexer.token_text_at(chars, lexed, i);
-                acc = hl_token_pieces(hl_class_in(in_def, tok, text), tok, text, acc);
+                let tok_ps = hl_token_pieces(hl_class_in(in_def, tok, text), tok, text, []);
+                for t in 0..tok_ps.len() { acc = acc.push(tok_ps[t]); };
                 in_def = hl_still_in_def(in_def, tok);
             },
         };

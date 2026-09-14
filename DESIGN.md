@@ -20771,3 +20771,62 @@ references each had a harness, and neither could ask whether the two
 described the same library. The fix is not more harnesses; it is
 deriving inputs from the thing under test, and refusing to pass on an
 empty input set.
+
+### The comment was right and the code still did it (2026-09-13)
+
+`plum highlight` was quadratic in file size. 51KB took 130ms and 415KB
+took 7.7 seconds. CI found it, not a harness: `highlight-check` timed
+out on `codegen.plum` once a slower runner crossed `./sh`'s 25-second
+default.
+
+`highlight.plum` carries a twenty-line note above the loop explaining
+precisely this hazard, ending "this is the fourth accidental O(n^2) in
+this project and the second caused by this exact distinction". The
+principle in it is correct. The code under it was quadratic anyway.
+
+```
+acc = hl_gap_pieces(lexer.trivia_before_at(chars, lexed, i), acc);
+```
+
+That LOOKS like the self-rebinding assignment the note prescribes, and
+is not one. The `push` happens inside the callee, on a PARAMETER, which
+is exactly where the backend cannot prove the old value is dead. So it
+copied the whole accumulator once per token while the comment above it
+explained why it did not.
+
+**The rule is narrower than "rebind the accumulator": the push itself
+has to be the self-rebinding assignment, in the scope that owns the
+slot.** Moving it into a helper defeats it however the call site is
+written.
+
+Three shapes, measured rather than reasoned about, because the first fix
+was wrong and the second was worse:
+
+| shape | 415KB |
+|---|---|
+| `acc = hl_gap_pieces(gap, acc)` | 7.7s |
+| `acc = acc.concat(hl_gap_pieces(gap, []))` | 11.0s |
+| `for .. { acc = acc.push(ps[i]) }` | 0.24s |
+
+The middle row is the finding worth keeping. `acc = acc.concat(x)` is
+recorded as one of the two self-rebinding shapes the backend can reuse,
+and here it did not: it allocated a fresh array of the combined length
+every token and paid for the small array besides. The reuse that
+actually fires is `acc = acc.push(x)`. Reaching for `concat` to fix a
+copy made it 40% slower.
+
+Output is byte-identical over all 296 files, and `highlight-check` went
+from 43 seconds to 5.5.
+
+**What the harness could not see.** `highlight-check` asserts that
+highlighting does not CORRUPT code: strip the tags, undo the escaping,
+get the source back. A quadratic corrupts nothing. Every file passed the
+whole time, because passing only required finishing, and locally it
+always finished. The harness was not weak; it was answering a different
+question, and nothing was asking about cost.
+
+That is the same shape as the audit's findings one day earlier, from the
+other direction: there, harnesses could not fail because they checked
+nothing; here, a harness checked exactly what it claimed and the claim
+did not cover the defect. Both are cases of a test suite being read as
+proof of more than it asserts.

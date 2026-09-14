@@ -1,85 +1,82 @@
 Plum is a small, statically typed, compiled language.
 
-Two reviews ran over the codebase. This is what they found.
+`plum highlight` was quadratic. It is not any more.
 
-## An absolute dependency path never worked
+## 32x on a large file
 
+| input | 0.0.30 | 0.0.31 |
+|---|---|---|
+| 51 KB | 130 ms | 61 ms |
+| 107 KB | 437 ms | 95 ms |
+| 225 KB | 2,175 ms | 148 ms |
+| 415 KB | 7,693 ms | 239 ms |
+
+Doubling the input used to roughly quadruple the time. The output is
+byte-identical over all 296 files it is checked against, so this is
+purely cost.
+
+It matters beyond the command itself: every code block on
+[plumlang.org](https://plumlang.org) goes through `plum highlight`, and
+so does the API reference. A large file was minutes of a site build
+rather than seconds.
+
+## What it was
+
+```plum fragment
+acc = hl_gap_pieces(lexer.trivia_before_at(chars, lexed, i), acc);
 ```
-Package {
-    name: "myapp",
-    deps: [ Dep { name: "parsec", path: "/opt/plum/parsec" } ],
-}
-```
 
-That reported a dependency missing at `<your project>/opt/plum/parsec`,
-a path you never wrote. It works now, and the way it broke is worth
-recording.
+Plum's backend can grow an array in place when it can prove the old
+value is dead, and a **self-rebinding assignment** is the shape where
+that is provable: the slot is overwritten with the result, so nothing
+can observe the mutation. `highlight.plum` carries a twenty-line comment
+about this, ending "the fourth accidental O(n^2) in this project and the
+second caused by this exact distinction".
 
-`Path.join` does not let an absolute second segment win. Its rule is
-Go's: `join("a", "/b")` is `a/b`. That is deliberate, and `join_all`'s
-documentation says so clearly, because the alternative silently lets
-user input escape the directory a caller meant to stay inside.
+The line above looks like that shape and is not one. The `push` happens
+inside the callee, on a **parameter**, which is exactly where the
+compiler cannot prove the old value is dead. So it copied the whole
+accumulator once per token while the comment above it explained why it
+did not.
 
-`Path.join`'s **own** documentation, twenty lines below, said the
-opposite: "**An absolute `b` wins**: joining `/etc` onto `/home/x` gives
-`/etc`". The package loader was written against that sentence, comment
-and all.
+The rule is narrower than "rebind the accumulator": the push itself has
+to be the self-rebinding assignment, in the scope that owns the slot.
+Moving it into a helper defeats it however the call site is written.
 
-So the fix is in both places. Fixing only the code would have left the
-sentence that caused it sitting there for the next caller.
+## The measurement that changed the fix
 
-## Also fixed
+Three shapes, at 415 KB:
 
-- **An empty dependency path was silently skipped, and the build
-  succeeded.** `path: ""` cleans to the project's own directory, which is
-  already in the cycle-visited set. The only symptom was `unbound
-  variable` at the `use`, an error pointing at your source rather than at
-  the manifest line that was wrong. It is now rejected in the manifest.
-- **`to_string` was documented as `let to_string (): String`**, a
-  nullary free function that does not exist. It is a method on every
-  value, written `x.to_string()`, and the reference now says so. This
-  shipped in 0.0.29 alongside the change that documented the builtins in
-  the first place.
-- **Escaped quotes reached the site as backslashes.** `\"absolute\"`
-  was visible in the `Int.abs` documentation on plumlang.org and in
-  language-server hover.
+| shape | time |
+|---|---|
+| `acc = hl_gap_pieces(gap, acc)` | 7.7s |
+| `acc = acc.concat(hl_gap_pieces(gap, []))` | 11.0s |
+| `for .. { acc = acc.push(ps[i]) }` | 0.24s |
 
-## Seven harnesses that could not fail
+The middle one was the first fix, and it was worse. `acc =
+acc.concat(x)` is written down as one of the two self-rebinding shapes
+the backend can reuse, and here it did not: it allocated a fresh array
+of the combined length every token and paid for the small array
+besides. The reuse that actually fires is `acc = acc.push(x)`.
 
-Not user-visible, and the reason it is in these notes anyway is that
-everything above was found by review rather than by a test.
+Worth knowing before reaching for `concat` to fix a copy. It is in
+DESIGN.md so the next person does not have to measure it again.
 
-The correctness of this compiler rests on 28 harnesses. Seven of them
-could not fail:
+## How it was found, and what that says
 
-- `check-doc-names` checked **zero** names in eight of ten documents. Its
-  fixture named five of the ten standard-library modules, so every
-  `Json.*` and `Terminal.*` name in the documentation was unverifiable,
-  and fabricated ones passed under "all real".
-- `fmt-check`'s safety property, that formatting never changes a
-  program's tokens, ran only on files the formatter had not touched. It
-  was checked on no input where the formatter acts.
-- `self-test` and `property-check` passed on a run that discovered zero
-  tests. Both had comments naming that exact hazard.
-- `example-sweep` and the tutorial checker never read a program's exit
-  status, so one that printed the right answer and then died was
-  reported as working.
-- `check-builtins` stopped reading at the first blank line.
+Not by a harness. `bootstrap/highlight-check` timed out in CI on the
+compiler's own 415 KB `codegen.plum` once a slower runner crossed a
+25-second limit.
 
-Plus four harnesses that compared output through shell command
-substitution, which strips trailing newlines from both sides, so a
-change in trailing whitespace passed 161 corpus fixtures unnoticed.
+That harness asserts that highlighting does not **corrupt** code: strip
+the tags, undo the escaping, and the source comes back byte for byte. A
+quadratic corrupts nothing. Every file passed the whole time, because
+passing only required finishing, and on a developer's machine it always
+finished.
 
-Every fix is proven by fault injection rather than by argument: each one
-was demonstrated to fail on a deliberately broken input before being
-trusted.
-
-**`bootstrap/cli-smoke`** is new, and covers what nothing ran at all:
-`plum new` (whose scaffold embeds a test, and which is the first command
-anyone types), `plum doc` on an ordinary project directory rather than
-the standard library, `dump-tokens` and `dump-ast`.
-
-The pattern behind all of it: a harness written alongside a feature
-tends to share that feature's blind spot. Two harnesses each kept a
-private copy of a list the compiler derives, which is the same mistake
-the compiler's own source has a comment about having fixed.
+The harness was not weak. It answered exactly the question it claimed to
+answer, and nothing in the suite was asking about cost. That is worth
+saying plainly in release notes, because the previous release fixed
+seven harnesses that could not fail, and this is the same lesson
+approached from the other side: a test suite proves what it asserts, and
+not one thing more.
