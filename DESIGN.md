@@ -20936,3 +20936,57 @@ point at.
 message AND position, so the five recordings gained a `main.plum:L:C`
 line in this change, and an error that loses its position again will
 fail a test rather than being noticed by somebody hitting it.
+
+### `native/` selects by target (2026-09-14)
+
+A project's C sources are discovered rather than listed, which is how
+`examples/asteroids` reaches its raylib shim without being told to. That
+worked while every shim was portable and stopped working the moment one
+was not: a POSIX-only terminal shim and its Windows counterpart cannot
+both be compiled for either target.
+
+```
+native/helpers.c          every target
+native/posix/term.c       Linux and macOS
+native/linux/epoll.c      Linux only
+native/macos/kqueue.c     macOS only
+native/windows/term.c     Windows only
+```
+
+**Directories rather than `term.linux.c` suffixes.** Issue #8 offered
+both. A directory already means something in this language, since a
+module is one, and the motivating case is a shim with its own headers
+and helpers, which wants somewhere to put them rather than a naming
+convention applied file by file. Go uses both spellings; this only needs
+the one that scales past a single file.
+
+The compatibility story falls out rather than being arranged: a `.c`
+file directly under `native/` is compiled for every target, which is
+every project written before this.
+
+The four names are `linux`, `macos`, `windows` and `posix`. They are the
+strings `Os.platform()` and `target_os` already return, so the compiler
+has one spelling of "windows" rather than a second invented here.
+`posix` earns its place because the case that prompted the issue is a
+POSIX-only shim, and writing it twice under `linux/` and `macos/` would
+be two copies of one file.
+
+**An unrecognized subdirectory is an error.** `native/win32/` would
+otherwise compile on no target at all, and the symptom would be a linker
+error naming a symbol whose source is sitting right there in the tree.
+
+Selection follows the TARGET, not the host, which is the part worth a
+test rather than an assertion.
+
+**How it is tested, with no cross toolchain.** The proof in both
+directions is an `#error` in the directory that must not be reached: a
+file that is compiled says so, and a file that is skipped is silent.
+
+On the host, `native/windows/` holds an `#error` and a successful run IS
+the assertion. Targeting Windows, the roles swap, and both halves are
+checked: the Windows `#error` must FIRE and the POSIX one must not.
+Asserting only the absence would pass vacuously if clang gave up before
+reaching any platform source; requiring the other to fire proves it got
+there. The link fails on this machine for want of Windows headers, which
+does not matter, because the assertion is about which sources clang was
+handed rather than about the outcome.

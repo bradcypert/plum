@@ -543,3 +543,44 @@ functions, no extern global variables.
 function's returned string data (a socket's `tcp_recv`, say) into a
 real, usable Plum value). `CStr` otherwise has no operations of its
 own.
+
+### Where the C goes
+
+A project's own C sources live in `native/`, and are compiled and
+linked automatically. Nothing has to name them.
+
+```
+myproject/
+  main.plum
+  native/
+    helpers.c          every target
+    posix/term.c       Linux and macOS
+    linux/epoll.c      Linux only
+    macos/kqueue.c     macOS only
+    windows/term.c     Windows only
+```
+
+A `.c` file directly under `native/` is compiled for every target. A
+subdirectory named for a target is compiled only when building for it,
+which is what lets a POSIX-only shim coexist with its Windows
+counterpart instead of failing to compile on one of them.
+
+The four names are `linux`, `macos`, `windows` and `posix`, the last
+meaning Linux and macOS. They are the same strings `Os.platform()`
+returns, so there is one spelling of "windows" to remember rather than
+two.
+
+Anything else is an error rather than something skipped:
+
+```
+native/win32: not a target directory.
+  Plum understands linux, macos, windows and posix. A `.c` file
+  directly under `native/` is compiled for every target.
+```
+
+Files that are not `.c` are left alone wherever they sit, so headers
+live beside the sources that include them.
+
+Cross-compiling selects by the **target**, not by the machine you are
+on: `plum build . --target x86_64-pc-windows-gnu` compiles `windows/`
+and ignores `posix/`.

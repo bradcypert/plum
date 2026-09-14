@@ -36,7 +36,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `check-builtins` | every compiler builtin is offered by completion and listed in the reference -- a builtin is a chain of `if`s that nothing can enumerate, so this compares the chain against the table beside it | <1s |
 | `check-doc-names` | every standard-library name the documentation mentions in prose exists, with the `use` list DERIVED from `parser.std_module_names()` rather than typed out | 2s |
 | `check-build-modes` | a debug build and a release build differ in the ways they are supposed to | 2s |
-| `cli-smoke` | the user-facing commands nothing else runs: `plum new` scaffolds a project that runs AND whose embedded test passes, `plum doc` on an ordinary project directory, `dump-tokens`, `dump-ast` | 6s |
+| `cli-smoke` | the user-facing commands nothing else runs: `plum new` scaffolds a project that runs AND whose embedded test passes, `plum doc` on an ordinary project directory, `dump-tokens`, `dump-ast` — and which `native/*.c` sources a target selects, proved with an `#error` in the directory that must not be reached | 12s |
 | `check-site-links` | a built site links only to pages it contains. Not in the loop above — it needs `build-site` to have run first, and CI runs the pair | <1s |
 | `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |

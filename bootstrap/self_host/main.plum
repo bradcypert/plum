@@ -2374,7 +2374,7 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
                     // Native, for the same reason `run` is: each test
                     // runs as a child of this binary.
                     let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll])), cfiles),
-                        Array.concat(link_args([], dir), Array.concat(platform_libs(native_target()), ["-o", bin])));
+                        Array.concat(link_args([], dir, native_target()), Array.concat(platform_libs(native_target()), ["-o", bin])));
                     match run_process(cc_program(), argv) {
                         Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
                         Ok(r) => if r.exit_code == 0 { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
@@ -2441,17 +2441,68 @@ let test_dispatch_arms (names: Array[String]) (i: Int) (acc: String): String =
             acc.concat("    if which == \"").concat(names[i]).concat("\" { ").concat(names[i]).concat("(()) } else { () };\n"))
     }
 
-// The C shims every self-hosted binary links against: `process_run`
-// and friends are declared by the runtime preamble but IMPLEMENTED in
-// `native_stdlib/*.c`, so a produced binary does not link without
-// them. Discovered rather than hard-coded as a list, since the set has
-// grown before and the directory is the authority.
-let native_c_files (dir: String): Array[String] =
+// A project's own C sources, selected for the target being built.
+//
+// Discovered rather than hard-coded as a list, since the directory is
+// the authority -- and now the SUBDIRECTORY is too:
+//
+//     native/common.c            always compiled
+//     native/linux/terminal.c    only when targeting Linux
+//     native/macos/terminal.c    only when targeting macOS
+//     native/windows/terminal.c  only when targeting Windows
+//     native/posix/terminal.c    Linux and macOS, not Windows
+//
+// Directories rather than `terminal.linux.c` suffixes because a
+// directory already means something in this language -- a module is one
+// -- and because the motivating case is a shim with its own headers and
+// helpers, which wants somewhere to put them rather than a naming
+// convention applied file by file. See issue #8.
+//
+// A `.c` file at the root is compiled for every target, so every
+// project written before this keeps working unchanged: that is the
+// whole of the compatibility story, and it falls out rather than being
+// arranged.
+//
+// `posix` earns its place: the case that prompted this is a terminal
+// shim that is POSIX-only, and writing it twice under `linux/` and
+// `macos/` would be two copies of one file.
+let native_c_files (dir: String) (os: String): Array[String] =
     match Os.list_dir(dir) {
         Err(_) => [],
-        Ok(entries) => Array.fold(entries, [], |acc, e|
-            if e.ends_with(".c") { acc.push(Path.join(dir, e)) } else { acc }),
+        Ok(entries) => native_c_acc(dir, os, entries, 0, []),
     }
+
+let native_c_acc (dir: String) (os: String) (entries: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= entries.len() { acc }
+    else if entries[i] == "." || entries[i] == ".." { native_c_acc(dir, os, entries, i + 1, acc) }
+    else {
+        let full = Path.join(dir, entries[i]);
+        if Result.unwrap_or(Os.is_directory(full), false) {
+            // An unrecognized subdirectory is an ERROR, not something
+            // skipped. `native/win32/` or `native/darwin/` would
+            // otherwise compile on no target at all, and the symptom
+            // would be a linker error naming a symbol whose source is
+            // sitting right there.
+            if !native_known_dir(entries[i]) {
+                panic_raw("native/${entries[i]}: not a target directory.\n  Plum understands linux, macos, windows and posix. A `.c` file directly under `native/` is compiled for every target.")
+            };
+            let picked = if native_applies(entries[i], os) { native_c_files(full, os) } else { [] };
+            native_c_acc(dir, os, entries, i + 1, Array.concat(acc, picked))
+        }
+        // Headers and anything else are left alone: they are included
+        // BY the sources rather than compiled alongside them.
+        else if entries[i].ends_with(".c") { native_c_acc(dir, os, entries, i + 1, acc.push(full)) }
+        else { native_c_acc(dir, os, entries, i + 1, acc) }
+    }
+
+let native_known_dir (name: String): Bool =
+    name == "linux" || name == "macos" || name == "windows" || name == "posix"
+
+// The target names are the ones `Os.platform()` and `target_os` already
+// use, so there is one spelling of "windows" in this compiler rather
+// than a second one invented here.
+let native_applies (name: String) (os: String): Bool =
+    if name == os { true } else if name == "posix" { os != "windows" } else { false }
 
 // `-o` if given, else the project directory's own basename -- the same
 // convention `plum build` uses.
@@ -2711,9 +2762,9 @@ let cc_prefix_args (): Array[String] = {
 let target_args (target: String): Array[String] =
     if target == native_target() { [] } else { ["--target=".concat(target)] }
 
-let link_args (argv: Array[String]) (dir: String): Array[String] = {
+let link_args (argv: Array[String]) (dir: String) (target: String): Array[String] = {
     let libs = Array.map(collect_flag(argv, "--link-lib", 0, []), |l| "-l".concat(l));
-    let cs = Array.concat(collect_flag(argv, "--link-c", 0, []), native_c_files(dir.concat("/native")));
+    let cs = Array.concat(collect_flag(argv, "--link-c", 0, []), native_c_files(dir.concat("/native"), target_os(target)));
     Array.concat(cs, libs)
 }
 
@@ -2857,7 +2908,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
 let build_project (argv: Array[String]): Unit = {
     let target = match find_flag_value(argv, "--target", 0) { Some(t) => t, None => native_target() };
     let out = output_path(argv, target);
-    let err = compile_project(argv[1], out, link_args(argv, argv[1]), target, wants_release(argv), wants_trace(argv));
+    let err = compile_project(argv[1], out, link_args(argv, argv[1], target), target, wants_release(argv), wants_trace(argv));
     if err == "" { println("wrote ".concat(out)) } else { println(err) }
 }
 
@@ -2895,7 +2946,7 @@ let run_project (argv: Array[String]): Unit = {
             // machine cannot execute a foreign binary. Anything that
             // looks like `--target` after the project directory is one
             // of the PROGRAM's own arguments, not ours.
-            let err = compile_project(argv[1], out, link_args(argv, argv[1]), native_target(), wants_release(argv), wants_trace(argv));
+            let err = compile_project(argv[1], out, link_args(argv, argv[1], native_target()), native_target(), wants_release(argv), wants_trace(argv));
             if err != "" { println(err) }
             else {
                 let args = Array.slice(argv, 2, argv.len());

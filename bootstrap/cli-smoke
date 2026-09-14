@@ -20,6 +20,10 @@
 #                   corpus goldens; these two are their debug siblings
 #                   and share none of that coverage.
 #
+# And one BEHAVIOUR rather than a command: which of a project's
+# `native/*.c` sources get compiled for which target. That is checked
+# here because it is only observable through `plum build` and `plum run`.
+#
 # Deliberately shallow. This is a smoke test: it asserts each command
 # runs, produces the shape it promises, and exits 0. What the output
 # MEANS is `corpus-check`'s job and `check-docs`'s job.
@@ -94,6 +98,57 @@ SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" doc "$work/proj" -o "$work/dochtml" --ht
 check $? "plum doc --html on a project exited nonzero: $(head -n 1 "$work/doch.log")"
 [ -f "$work/dochtml/index.html" ] && [ -f "$work/dochtml/style.css" ]
 check $? "plum doc --html did not write index.html and style.css"
+
+# --- native/ source selection -----------------------------------------
+#
+# `native/*.c` is compiled for every target; `native/<os>/*.c` only when
+# that target is being built. The proof in both directions is an
+# `#error` in the directory that must NOT be reached: a file that is
+# compiled says so, and a file that is skipped is silent.
+
+mkdir -p "$work/nat/native/posix" "$work/nat/native/windows"
+printf 'int plum_common_marker(void) { return 1; }\n' > "$work/nat/native/common.c"
+printf '#include <unistd.h>\nint plum_posix_marker(void) { return 2; }\n' > "$work/nat/native/posix/p.c"
+printf '#error "a windows source was compiled for a non-windows target"\n' > "$work/nat/native/windows/w.c"
+cat > "$work/nat/main.plum" <<'EOF'
+extern "C" {
+    fn plum_common_marker() -> Int;
+    fn plum_posix_marker() -> Int;
+}
+let main (): Unit = unsafe { println("${(plum_common_marker() + plum_posix_marker()).to_string()}") }
+EOF
+
+# On this machine (Linux or macOS) `common` and `posix` are compiled and
+# `windows` is not. If `windows/` were reached the `#error` would fail
+# the build, so a successful run IS the assertion.
+out="$(SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$plum" run "$work/nat" 2>&1)"
+[ "$out" = "3" ]; check $? "native/ selection on the host: expected 3, got: $(printf '%s' "$out" | tail -n 1)"
+
+# The other direction, and it needs NO cross toolchain. Target Windows
+# and the roles swap: `windows/` must now be reached and `posix/` must
+# not. The link will fail here for want of Windows headers, which is
+# fine -- this asserts on WHICH sources clang was handed, not on the
+# outcome.
+#
+# Both halves are needed. Asserting only that the posix `#error` is
+# absent would pass vacuously if clang gave up before reaching any
+# platform source; requiring the windows one to FIRE proves it got there.
+printf '#error "a posix source was compiled for a windows target"\n' > "$work/nat/native/posix/p.c"
+printf '#error "the windows source was reached"\n' > "$work/nat/native/windows/w.c"
+xout="$(SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$plum" build "$work/nat" --target x86_64-pc-windows-gnu -o "$work/nat/out.exe" 2>&1)"
+printf '%s' "$xout" | grep -q 'the windows source was reached'
+check $? "targeting windows did not compile native/windows/"
+! printf '%s' "$xout" | grep -q 'a posix source was compiled'
+check $? "targeting windows compiled native/posix/"
+
+# An unrecognized subdirectory is an error rather than something
+# skipped, so `native/win32/` cannot compile on no target at all.
+mkdir -p "$work/nat/native/win32"
+printf 'int stray(void) { return 0; }\n' > "$work/nat/native/win32/x.c"
+uout="$(SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$plum" run "$work/nat" 2>&1)"
+printf '%s' "$uout" | grep -q 'not a target directory'
+check $? "an unknown native/ subdirectory was not reported: $(printf '%s' "$uout" | tail -n 1)"
+rm -rf "$work/nat/native/win32"
 
 # --- dump-tokens / dump-ast -------------------------------------------
 #
