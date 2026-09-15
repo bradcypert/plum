@@ -1,89 +1,108 @@
 Plum is a small, statically typed, compiled language.
 
-C sources can be platform-specific, and every checker error now says
-where.
+Packages went from existing to being usable.
 
-## `native/` selects by target
+## Breaking: a dependency's modules are named by its package
 
-A project's C sources are discovered rather than listed, which is how an
-example reaches its raylib shim without being told to. That worked while
-every shim was portable and stopped working the moment one was not: a
-POSIX-only terminal shim and its Windows counterpart cannot both be
-compiled for either target.
+```plum
+// before
+use parsec;
+use json;
+let x = json.parse(src)
 
-```
-myproject/
-  main.plum
-  native/
-    helpers.c          every target
-    posix/term.c       Linux and macOS
-    linux/epoll.c      Linux only
-    macos/kqueue.c     macOS only
-    windows/term.c     Windows only
+// now
+let x = parsec.json.parse(src)
 ```
 
-A `.c` file directly under `native/` is compiled for every target, so
-every project written before this keeps working unchanged. A
-subdirectory named for a target is compiled only when building for it.
+Two packages could not both ship a `json` module. It was a hard error,
+and its advice, "one of them has to be renamed", was something the
+consumer could not act on: they own neither package.
 
-The four names are `linux`, `macos`, `windows` and `posix`, the last
-meaning Linux and macOS. They are the same strings `Os.platform()`
-returns, so there is one spelling of "windows" to remember rather than
-two. Files that are not `.c` are left alone wherever they sit, so
-headers live beside the sources that include them.
+Now a dependency's modules live under its package name, so the collision
+cannot occur rather than being reported.
 
-Selection follows the **target**, not the machine you are on:
-`plum build . --target x86_64-pc-windows-gnu` compiles `windows/` and
-ignores `posix/`.
+**A module named after its own package collapses to the package name.**
+A library called `semver` whose main module is `semver/` is reached as
+`semver.parse(..)`, not `semver.semver.parse(..)`.
 
-Anything else is an error rather than something skipped:
+**Inside a package, its own modules stay bare.** A library reads the
+same whether it is built by itself or used from somewhere else, which is
+most of what makes it a library.
 
-```
-native/win32: not a target directory.
-  Plum understands linux, macos, windows and posix. A `.c` file
-  directly under `native/` is compiled for every target.
-```
+**Your own project is untouched.** `use lexer;` and `lexer.tokenize(..)`
+mean exactly what they did.
 
-`native/win32/` would otherwise compile on no target at all, and the
-symptom would be a linker error naming a symbol whose source is sitting
-right there in the tree.
-
-## Every checker error says where
-
-Five diagnostics used to arrive with no source position and an internal
-prefix in place of one:
+The one collision left is the only one a package prefix cannot remove:
+your own module sharing a name with a package you depend on, since your
+modules are bare by design. That is still an error, and unlike the old
+message you can act on it, because you own one of the two:
 
 ```
-self-hosted type checker: field shapes.Circle.radius is private to module `shapes`. ...
+`parsec` is both one of your modules and something dependency `parsec` provides.
+  Your own modules are named bare, so rename yours: a directory called something else.
 ```
 
-They now point at the line you have to change:
+Short names are coming back: `use parsec.json;` then `json.parse(..)`,
+with `use parsec.json as pj;` when one file needs two. That is
+[#44](https://github.com/bradcypert/plum/issues/44), and it is
+ergonomics rather than correctness now, so it gets its own release.
+
+## A package can ship C
+
+A dependency's `native/*.c` is compiled and linked. It was not before:
+the Plum half of a package with a shim resolved perfectly and the link
+failed with `undefined reference` naming a symbol whose source was
+sitting in the dependency.
+
+That ruled out every package touching C, which is the difference between
+having packages and having an ecosystem.
+
+Target selection applies per dependency, so a package carries
+`native/posix/` and `native/windows/` the same way a project does.
+
+## A package declares what it links against
+
+```plum fragment
+Package {
+    name: "sqlite",
+    link: [ "sqlite3" ],
+}
+```
+
+Collected transitively, so a consumer names nothing. Before this, every
+user of a package had to know an implementation detail of it and repeat
+it on their own build.
+
+Libraries differ by platform, so there are four more optional fields
+using the same names as `native/`'s subdirectories, `posix` meaning
+Linux and macOS in both:
+
+```plum fragment
+Package {
+    name: "term",
+    link: [ "m" ],
+    link_posix: [ "pthread" ],
+    link_windows: [ "ws2_32" ],
+}
+```
+
+`link` takes library **names**, what `-l` takes. A linker flag is not a
+library name and is rejected:
 
 ```
-error: field shapes.Circle.radius is private to module `shapes`. Add `pub` to it to use it from the root module
-  --> main.plum:9:5
-  |
-9 |     println(shapes.area(shapes.Circle { radius: 2.0 }).to_string());
+plum.pkg: `-Wl,--wrap=malloc` is not a library name.
+  `link` takes what `-l` takes: `sqlite3`, `ws2_32`, `stdc++`. A linker
+  FLAG is not a library name, and a manifest may not pass one into
+  someone else's build.
 ```
 
-The privacy errors point at the **use**, which is where you fix
-something. The handle errors point at the **declaration**, which is the
-thing that is wrong.
+A manifest that could carry linker arguments would be a manifest that
+injects arbitrary behaviour into someone else's build, which is the same
+line `plum.pkg` holds everywhere else: it is data.
 
-The cause was structural rather than five oversights. The error position
-lived in one half of the type checker and these checks were in the
-other, which could not reach it. Three of them ran during body
-inference, with a perfectly good position sitting there that the call
-across threw away.
+## Upgrading
 
-The `self-hosted type checker:` prefix still exists and is now honest:
-it marks the errors that could not say where, and what still reaches it
-are internal-invariant checks, which are compiler bugs rather than
-anything you wrote.
-
-## Also in this release
-
-- `bootstrap/cli-smoke` covers which `native/*.c` sources a target
-  selects. The proof in both directions is an `#error` in the directory
-  that must not be reached, which needs no cross toolchain: a file that
-  is compiled says so, and a file that is skipped is silent.
+If you depend on a package, qualify its modules with the package name
+and drop the `use` for them. Nothing else changes: your own modules,
+the standard library, and every project without dependencies behave
+exactly as before.
