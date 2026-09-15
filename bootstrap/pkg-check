@@ -145,6 +145,44 @@ manifest "Package {
 }"
 expect_ok "an absolute dependency path" "hello, ping json" "$plum" run "$work/app"
 
+# A dependency can ship C, and its `native/` is selected by target the
+# same way a project's is.
+#
+# Until 0.0.34 it could not: the Plum half resolved perfectly and the
+# link failed with `undefined reference` naming a symbol whose source
+# was sitting in the dependency. That made every package touching C
+# impossible, which is the difference between having packages and having
+# an ecosystem.
+#
+# The marker is CALLED, not merely linked, so a build that quietly
+# dropped the object file would fail here rather than pass.
+mkdir -p "$work/parsec/native/windows"
+printf 'int parsec_native_marker(void) { return 11; }\n' > "$work/parsec/native/m.c"
+# Inside a DEPENDENCY, so this also proves target selection is applied
+# per package rather than only to the root project.
+printf '#error "a dependency windows source was compiled for a non-windows target"\n' > "$work/parsec/native/windows/w.c"
+cat > "$work/app/main.plum" <<'EOF'
+use parsec;
+extern "C" {
+    fn parsec_native_marker() -> Int;
+}
+let main (): Unit = unsafe { println("${parsec_native_marker().to_string()} ${parsec.greet("c")}") }
+EOF
+manifest "$good"
+expect_ok "a dependency ships C" "11 hello, c" "$plum" run "$work/app"
+rm -rf "$work/parsec/native"
+
+# Restore the project the rest of the checks below expect.
+cat > "$work/app/main.plum" <<'EOF'
+use parsec;
+use core;
+use json;
+
+let main (): Unit = println("${parsec.greet(core.ping())} ${json.tag()}")
+
+let test_greet (): Unit = assert_eq(parsec.greet("x"), "hello, x")
+EOF
+
 # A project with no manifest is exactly what it was before packages
 # existed. This is the property that keeps `plum new` writing one file.
 mkdir -p "$work/plain"

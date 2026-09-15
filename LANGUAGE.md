@@ -584,3 +584,12 @@ live beside the sources that include them.
 Cross-compiling selects by the **target**, not by the machine you are
 on: `plum build . --target x86_64-pc-windows-gnu` compiles `windows/`
 and ignores `posix/`.
+
+A **dependency** can carry `native/` too, with the same rules, so a
+package is free to be a binding over a C library rather than pure Plum.
+
+One limit worth knowing before you rely on it: link flags do not
+travel. A package shipping a shim over SQLite also needs `-lsqlite3`,
+and there is nowhere in a manifest to say so, so the consuming build has
+to pass `--link-lib sqlite3` itself. A shim over libc, or over anything
+already linked, needs nothing extra.

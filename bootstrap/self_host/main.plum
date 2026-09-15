@@ -2762,11 +2762,46 @@ let cc_prefix_args (): Array[String] = {
 let target_args (target: String): Array[String] =
     if target == native_target() { [] } else { ["--target=".concat(target)] }
 
+// A DEPENDENCY's `native/` counts too, and did not until 0.0.34.
+//
+// The Plum half of a package with a C shim resolved perfectly: modules
+// loaded, the checker was happy, the IR came out. Only the C was
+// missing, because this looked at `<project>/native` and nowhere else,
+// so every build ended in `undefined reference` naming a symbol whose
+// source was sitting in the dependency. That made a whole class of
+// package impossible -- a terminal library, a SQLite binding, anything
+// touching C -- which is the difference between having packages and
+// having an ecosystem. See issue #41.
+//
+// Target selection applies per dependency, so a package can carry
+// `native/windows/` and `native/posix/` the same way a project can.
+//
+// KNOWN LIMIT, worth stating rather than discovering: link FLAGS do not
+// travel. A package shipping a SQLite shim also needs `-lsqlite3`, and
+// there is nowhere in a manifest to say so, so the consumer has to know
+// and repeat it. A shim over libc, or over anything already linked,
+// needs nothing extra.
 let link_args (argv: Array[String]) (dir: String) (target: String): Array[String] = {
     let libs = Array.map(collect_flag(argv, "--link-lib", 0, []), |l| "-l".concat(l));
-    let cs = Array.concat(collect_flag(argv, "--link-c", 0, []), native_c_files(dir.concat("/native"), target_os(target)));
+    let os = target_os(target);
+    let own = native_c_files(dir.concat("/native"), os);
+    let cs = Array.concat(collect_flag(argv, "--link-c", 0, []),
+        Array.concat(own, dep_native_files(project_deps(dir), os, 0, [])));
     Array.concat(cs, libs)
 }
+
+// The resolved dependency paths, transitively, with cycles already
+// handled -- the same scan `collect_project` uses to decide which
+// SOURCE to load, so the C and the Plum can never disagree about which
+// packages are in the build.
+let project_deps (dir: String): Array[pkg.Dep] =
+    if Result.unwrap_or(Os.is_directory(dir), false) {
+        dep_closure(dir, DepScan { visited: [Path.clean(dir)], found: [] }).found
+    } else { [] }
+
+let dep_native_files (deps: Array[pkg.Dep]) (os: String) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= deps.len() { acc }
+    else { dep_native_files(deps, os, i + 1, Array.concat(acc, native_c_files(Path.join(deps[i].path, "native"), os))) }
 
 // Compiles a project to `out`. Returns an error message, or "" on
 // success -- shared by `build` and `run`, which differ only in what

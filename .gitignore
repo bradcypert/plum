@@ -2,3 +2,6 @@
 /dist
 /sh.seed
 /sh.gen*
+/sh.next
+/sh.broken
+/sh.test
