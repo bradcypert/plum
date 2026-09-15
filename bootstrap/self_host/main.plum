@@ -2782,13 +2782,25 @@ let target_args (target: String): Array[String] =
 // and repeat it. A shim over libc, or over anything already linked,
 // needs nothing extra.
 let link_args (argv: Array[String]) (dir: String) (target: String): Array[String] = {
-    let libs = Array.map(collect_flag(argv, "--link-lib", 0, []), |l| "-l".concat(l));
     let os = target_os(target);
+    let deps = project_deps(dir);
+    // Libraries come from three places, and only the first was ever
+    // available: the command line, this project's own manifest, and
+    // every DEPENDENCY's manifest. The third is the point -- a package
+    // shipping a shim over SQLite knows it needs `-lsqlite3`, and until
+    // 0.0.34 there was nowhere to say so, which meant every consumer had
+    // to know an implementation detail of every dependency. See #42.
+    let declared = Array.concat(pkg.manifest_link_for(pkg.read(dir), os), dep_link_libs(deps, os, 0, []));
+    let libs = Array.map(Array.concat(collect_flag(argv, "--link-lib", 0, []), declared), |l| "-l".concat(l));
     let own = native_c_files(dir.concat("/native"), os);
     let cs = Array.concat(collect_flag(argv, "--link-c", 0, []),
-        Array.concat(own, dep_native_files(project_deps(dir), os, 0, [])));
+        Array.concat(own, dep_native_files(deps, os, 0, [])));
     Array.concat(cs, libs)
 }
+
+let dep_link_libs (deps: Array[pkg.Dep]) (os: String) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= deps.len() { acc }
+    else { dep_link_libs(deps, os, i + 1, Array.concat(acc, pkg.manifest_link_for(pkg.read(deps[i].path), os))) }
 
 // The resolved dependency paths, transitively, with cycles already
 // handled -- the same scan `collect_project` uses to decide which

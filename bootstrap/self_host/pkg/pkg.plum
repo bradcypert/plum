@@ -50,17 +50,40 @@ use parser;
 
 pub struct Dep { pub name: String, pub path: String }
 
+// `link` is library NAMES, not linker flags: `["sqlite3"]` becomes
+// `-lsqlite3` and nothing else can be said. A manifest that could carry
+// `-Wl,--wrap=malloc` would be a manifest that injects arbitrary linker
+// behaviour into someone else's build, which is the same slide this file
+// is shaped to prevent everywhere else. See issue #42.
+//
+// The per-target lists use the SAME four names as `native/`'s
+// subdirectories, and `posix` means the same thing in both: Linux and
+// macOS. One vocabulary to learn rather than two.
 pub struct Manifest {
     pub name: String,
     pub version: String,
     pub deps: Array[Dep],
+    pub link: Array[String],
+    pub link_linux: Array[String],
+    pub link_macos: Array[String],
+    pub link_windows: Array[String],
+    pub link_posix: Array[String],
+}
+
+// The libraries this manifest asks for when building for `os`.
+pub let manifest_link_for (m: Manifest) (os: String): Array[String] = {
+    let per_os = if os == "windows" { m.link_windows }
+        else if os == "macos" { m.link_macos }
+        else { m.link_linux };
+    let posix = if os == "windows" { [] } else { m.link_posix };
+    Array.concat(m.link, Array.concat(posix, per_os))
 }
 
 pub let manifest_name (unit: Unit): String = "plum.pkg"
 
 // What a project with no `plum.pkg` has. Not an error: the file is
 // optional, and its absence means "no dependencies", not "malformed".
-pub let no_manifest (unit: Unit): Manifest = Manifest { name: "", version: "", deps: [] }
+pub let no_manifest (unit: Unit): Manifest = Manifest { name: "", version: "", deps: [], link: [], link_linux: [], link_macos: [], link_windows: [], link_posix: [] }
 
 pub let manifest_path (root: String): String = Path.join(root, manifest_name(()))
 
@@ -149,15 +172,60 @@ let to_manifest (path: String) (e: parser.PExpr): Manifest = match e {
         if last_segment(lit_path) != "Package" {
             fail(path, "a manifest is one `Package { .. }`, but this one is `${last_segment(lit_path)}`")
         };
-        reject_unknown(path, fields, 0, ["name", "version", "deps"], "Package");
+        reject_unknown(path, fields, 0,
+            ["name", "version", "deps", "link", "link_linux", "link_macos", "link_windows", "link_posix"], "Package");
         Manifest {
             name: required_string(path, fields, "name", "Package"),
             version: optional_string(path, fields, "version"),
             deps: deps_of(path, fields),
+            link: link_field(path, fields, "link"),
+            link_linux: link_field(path, fields, "link_linux"),
+            link_macos: link_field(path, fields, "link_macos"),
+            link_windows: link_field(path, fields, "link_windows"),
+            link_posix: link_field(path, fields, "link_posix"),
         }
     },
     _ => { fail(path, "a manifest is one `Package { .. }`"); no_manifest(()) },
 }
+
+// A list of library NAMES. The validator is the whole point: a name is
+// what `-l` takes, so anything that could be a flag, a path or a shell
+// fragment is refused here rather than handed to the linker.
+//
+// `stdc++`, `ws2_32` and `c++` are all real library names, which is why
+// `+`, `_` and digits are allowed; a leading `-` never is.
+let link_field (path: String) (fields: Array[parser.FieldInitNode]) (name: String): Array[String] =
+    match field_named(fields, name, 0) {
+        None => [],
+        Some(v) => match v {
+            EArray(elems) => link_names(path, name, elems, 0, []),
+            _ => { fail(path, "`${name}` is an array of library names"); [] },
+        },
+    }
+
+let link_names (path: String) (field: String) (elems: Array[parser.PExpr]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= elems.len() { acc }
+    else {
+        let lib = match elems[i] {
+            EStr(s) => s,
+            _ => { fail(path, "`${field}` holds library names, which are strings"); "" },
+        };
+        if !is_library_name(lib) {
+            fail(path, "`${lib}` is not a library name.\n  `${field}` takes what `-l` takes: `sqlite3`, `ws2_32`, `stdc++`. A linker FLAG is not a library name, and a manifest may not pass one into someone else's build.")
+        };
+        link_names(path, field, elems, i + 1, acc.push(lib))
+    }
+
+let is_library_name (s: String): Bool =
+    !String.is_empty(s) && !s.starts_with("-") && all_library_chars(chars_of(s), 0)
+
+let all_library_chars (cs: Array[String]) (i: Int): Bool =
+    if i >= cs.len() { true }
+    else if is_library_char(cs[i]) { all_library_chars(cs, i + 1) }
+    else { false }
+
+let is_library_char (c: String): Bool =
+    Array.contains(chars_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.+"), c)
 
 let deps_of (path: String) (fields: Array[parser.FieldInitNode]): Array[Dep] =
     match field_named(fields, "deps", 0) {

@@ -588,8 +588,36 @@ and ignores `posix/`.
 A **dependency** can carry `native/` too, with the same rules, so a
 package is free to be a binding over a C library rather than pure Plum.
 
-One limit worth knowing before you rely on it: link flags do not
-travel. A package shipping a shim over SQLite also needs `-lsqlite3`,
-and there is nowhere in a manifest to say so, so the consuming build has
-to pass `--link-lib sqlite3` itself. A shim over libc, or over anything
-already linked, needs nothing extra.
+A package says what its shim links against, so the consumer does not
+have to know:
+
+```plum fragment
+Package {
+    name: "sqlite",
+    link: [ "sqlite3" ],
+}
+```
+
+Collected from every dependency, transitively, and added to the link
+alongside anything the build passes with `--link-lib`.
+
+`link` takes library **names**, what `-l` takes: `sqlite3`, `ws2_32`,
+`stdc++`. A linker flag is not a library name and is rejected, because a
+manifest that could carry `-Wl,--wrap=malloc` would be a manifest that
+injects arbitrary linker behaviour into someone else's build.
+
+Libraries differ by platform, so there are four more optional fields
+using the same names as `native/`'s subdirectories, `posix` meaning
+Linux and macOS in both:
+
+```plum fragment
+Package {
+    name: "term",
+    link: [ "m" ],
+    link_posix: [ "pthread" ],
+    link_windows: [ "ws2_32" ],
+}
+```
+
+Selection follows the target, so cross-compiling asks for the right
+ones.

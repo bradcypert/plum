@@ -172,6 +172,50 @@ manifest "$good"
 expect_ok "a dependency ships C" "11 hello, c" "$plum" run "$work/app"
 rm -rf "$work/parsec/native"
 
+# A package declares what it LINKS against, and the consumer names
+# nothing. Until 0.0.34 there was nowhere to say so, so every user of a
+# package had to know an implementation detail of it.
+#
+# `-lm` is the library to test with: present everywhere, and the shim
+# genuinely needs it.
+mkdir -p "$work/parsec/native"
+printf '#include <math.h>\ndouble parsec_root2(void) { return sqrt(2.0); }\n' > "$work/parsec/native/s.c"
+cat > "$work/app/main.plum" <<'EOF'
+extern "C" {
+    fn parsec_root2() -> Float;
+}
+let main (): Unit = unsafe { println(parsec_root2().to_string()) }
+EOF
+cat > "$work/parsec/plum.pkg" <<'EOF'
+Package { name: "parsec", link: [ "m" ], deps: [ Dep { name: "core", path: "../core" } ] }
+EOF
+manifest "$good"
+expect_ok "a dependency declares its libraries" "1.4142135623730951" "$plum" run "$work/app"
+
+# Per-target lists, proved in BOTH directions with a library that does
+# not exist. Named for this platform it must break the link; named for
+# another it must be ignored entirely.
+cat > "$work/parsec/plum.pkg" <<'EOF'
+Package { name: "parsec", link: [ "m" ], link_windows: [ "plum_no_such_library" ], deps: [ Dep { name: "core", path: "../core" } ] }
+EOF
+expect_ok "another target's libraries are ignored" "1.4142135623730951" "$plum" run "$work/app"
+
+cat > "$work/parsec/plum.pkg" <<'EOF'
+Package { name: "parsec", link: [ "m" ], link_posix: [ "plum_no_such_library" ], deps: [ Dep { name: "core", path: "../core" } ] }
+EOF
+if SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" run "$work/app" 2>&1 | grep -q 'plum_no_such_library'; then
+    pass=$((pass + 1))
+else
+    printf 'FAIL  %-44s this platform ignored link_posix
+' "this target's libraries are used"
+    fail=$((fail + 1))
+fi
+
+rm -rf "$work/parsec/native"
+cat > "$work/parsec/plum.pkg" <<'EOF'
+Package { name: "parsec", deps: [ Dep { name: "core", path: "../core" } ] }
+EOF
+
 # Restore the project the rest of the checks below expect.
 cat > "$work/app/main.plum" <<'EOF'
 use parsec;
@@ -255,6 +299,19 @@ expect_err "a missing directory"       'is not a directory' \
 # source rather than at the manifest line that was wrong.
 expect_err "an empty dependency path"  'has an empty path' \
     'Package { name: "app", deps: [ Dep { name: "lib", path: "" } ] }'
+
+# `link` is library NAMES. A manifest that could carry a linker flag
+# would be a manifest that injects arbitrary linker behaviour into
+# someone else's build, which is the same slide the whole file is shaped
+# to prevent.
+expect_err "a linker flag is not a library" 'is not a library name' \
+    'Package { name: "app", link: [ "-Wl,--wrap=malloc" ] }'
+expect_err "nor is a path"                  'is not a library name' \
+    'Package { name: "app", link: [ "../../etc/libc.so" ] }'
+expect_err "nor is a shell fragment"        'is not a library name' \
+    'Package { name: "app", link: [ "m; rm -rf /" ] }'
+expect_err "link holds strings"             'library names, which are strings' \
+    'Package { name: "app", link: [ 3 ] }'
 
 # A package's name belongs to the package. Without this, a `path` edited
 # to point somewhere else keeps the old name and the manifest describes
