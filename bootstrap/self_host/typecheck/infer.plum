@@ -1746,6 +1746,60 @@ let join_alternatives (names: Array[String]) (i: Int) (acc: String): String =
         join_alternatives(names, i + 1, acc.concat(sep).concat(quoted))
     }
 
+// --- Package-qualified module names ----------------------------------
+//
+// A dependency's modules are `pkg.module` (see `dep_module_name`), so
+// two packages shipping a `json` cannot collide. That leaves one thing
+// to arrange: INSIDE a package, its own modules must still be reachable
+// by their bare names, or a library would read one way built alone and
+// another way consumed. That is the same standalone-versus-consumed
+// trap the library layout rule was written for.
+//
+// It needs no per-file bookkeeping. The module being checked is
+// `p2.current`, and its package is whatever sits before the first dot,
+// so resolving `compat` from inside `semver.compat` can simply also try
+// `semver.compat`.
+pub let package_of (module_name: String): String =
+    match String.index_of(module_name, ".") {
+        None => "",
+        Some(i) => String.slice(module_name, 0, i),
+    }
+
+// `ns` as written, then `ns` read as a module of the CURRENT package.
+// In that order, so a module named outright always wins over one
+// reached implicitly.
+let module_candidates (p2: Program2) (ns: String): Array[String] = {
+    let pkg = package_of(p2.current);
+    if String.is_empty(pkg) { [ns] } else { [ns, pkg.concat(".").concat(ns)] }
+}
+
+let find_module_sig (p2: Program2) (ns: String) (name: String): Option[FnSig] =
+    find_module_sig_at(p2, module_candidates(p2, ns), name, 0)
+
+let find_module_sig_at (p2: Program2) (cands: Array[String]) (name: String) (i: Int): Option[FnSig] =
+    if i >= cands.len() { None }
+    else { match find_sig_in(p2.sigs, cands[i], name, 0) {
+        Some(sig) => Some(sig),
+        None => find_module_sig_at(p2, cands, name, i + 1),
+    } }
+
+// The module a dotted base names, or `None` when the expression is a
+// value rather than a path. `parsec.json.parse(x)` has to reach module
+// `parsec.json`; `p.field.method(x)` must stay a method call, and the
+// difference is whether the HEAD of the chain is bound to something.
+let module_path_of (p2: Program2) (env: TyEnv) (base: parser.PExpr): Option[String] =
+    match enum_path_name(base) {
+        None => None,
+        Some(dotted) => match String.index_of(dotted, ".") {
+            None => None,
+            Some(i) => {
+                let head = String.slice(dotted, 0, i);
+                if Option.is_some(tyenv_lookup(env, head)) || Option.is_some(find_global_def(p2, head)) { None }
+                else { Some(dotted) }
+            },
+        },
+    }
+
 let unbound_message (tag: String): String =
     if Array.contains(parser.std_module_names(), tag) {
         "unbound variant/function: ${tag} -- `${tag}"
@@ -1957,7 +2011,7 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                             // the bare name up in one flat table, so
                             // `lexer.tokenize` and `parser.tokenize` were
                             // the same function.
-                            None => match find_sig_in(p2.sigs, ns, method_name, 0) {
+                            None => match find_module_sig(p2, ns, method_name) {
                                 Some(sig) => { check_visible(p2, sig, ns, method_name); infer_fn_call(p2, state, env, acc, sig, args) },
                                 // `Shade.Light(x)` -- a payload variant
                                 // said with its enum. After the function
@@ -1985,7 +2039,19 @@ let infer_call_shapes (p2: Program2) (state: FreshState) (env: TyEnv) (acc: Subs
                         } } }
                 }
             },
-            _ => infer_method_call(p2, state, env, acc, base, method_name, args),
+            // A DOTTED base: `parsec.json.parse(x)` names module
+            // `parsec.json`. Only when the head of the chain is not
+            // bound to anything, so `p.field.method(x)` on a local stays
+            // a method call, which is what `module_path_of` decides.
+            _ => match module_path_of(p2, env, base) {
+                Some(ns) => match find_module_sig(p2, ns, method_name) {
+                    Some(sig) => { check_visible(p2, sig, ns, method_name); infer_fn_call(p2, state, env, acc, sig, args) },
+                    None => if module_in_program(p2, ns) {
+                        { fail_tc(no_member_message(p2, ns, method_name)); ir_unsupported(acc, state, "no ${method_name} in ${ns}") }
+                    } else { infer_method_call(p2, state, env, acc, base, method_name, args) },
+                },
+                None => infer_method_call(p2, state, env, acc, base, method_name, args),
+            },
         },
         _ => {
             let r = infer_expr(p2, state, env, acc, callee);

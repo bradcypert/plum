@@ -57,11 +57,7 @@ cat > "$work/core/core/core.plum" <<'EOF'
 pub let ping (): String = "ping"
 EOF
 cat > "$work/app/main.plum" <<'EOF'
-use parsec;
-use core;
-use json;
-
-let main (): Unit = println("${parsec.greet(core.ping())} ${json.tag()}")
+let main (): Unit = println("${parsec.greet(core.ping())} ${parsec.json.tag()}")
 
 let test_greet (): Unit = assert_eq(parsec.greet("x"), "hello, x")
 EOF
@@ -162,7 +158,6 @@ printf 'int parsec_native_marker(void) { return 11; }\n' > "$work/parsec/native/
 # per package rather than only to the root project.
 printf '#error "a dependency windows source was compiled for a non-windows target"\n' > "$work/parsec/native/windows/w.c"
 cat > "$work/app/main.plum" <<'EOF'
-use parsec;
 extern "C" {
     fn parsec_native_marker() -> Int;
 }
@@ -218,11 +213,7 @@ EOF
 
 # Restore the project the rest of the checks below expect.
 cat > "$work/app/main.plum" <<'EOF'
-use parsec;
-use core;
-use json;
-
-let main (): Unit = println("${parsec.greet(core.ping())} ${json.tag()}")
+let main (): Unit = println("${parsec.greet(core.ping())} ${parsec.json.tag()}")
 
 let test_greet (): Unit = assert_eq(parsec.greet("x"), "hello, x")
 EOF
@@ -336,10 +327,25 @@ Package { name: "other" }'
 
 # Two dependencies providing the same module name. One of them winning
 # silently is how this goes wrong everywhere it goes wrong.
+# Two dependencies both shipping a `json` module NO LONGER collide: they
+# are `parsec.json` and `core.json`. That is the structural fix, and it
+# is checked as a success rather than as an error.
 mkdir -p "$work/core/json"
-echo 'pub let tag (): String = "other"' > "$work/core/json/json.plum"
-expect_err "a module clash is rejected" 'Module names are not namespaced by package' \
-    'Package { name: "app", deps: [ Dep { name: "parsec", path: "../parsec" }, Dep { name: "core", path: "../core" } ] }'
+echo 'pub let tag (): String = "core-json"' > "$work/core/json/json.plum"
+cat > "$work/app/main.plum" <<'EOF'
+let main (): Unit = println("${parsec.json.tag()} ${core.json.tag()}")
+EOF
+manifest 'Package { name: "app", deps: [ Dep { name: "parsec", path: "../parsec" }, Dep { name: "core", path: "../core" } ] }'
+expect_ok "two packages may both ship json" "json core-json" "$plum" run "$work/app"
+
+# What IS still a collision, and the only one a package prefix cannot
+# remove: your OWN module sharing a name with a package you depend on,
+# since your modules are bare by design. Unlike the old message, its
+# advice can be acted on -- you own one of the two.
+mkdir -p "$work/app/parsec"
+echo 'pub let mine (): Int = 1' > "$work/app/parsec/p.plum"
+expect_err "your module vs a package name" 'is both one of your modules' "$good"
+rm -rf "$work/app/parsec"
 rm -rf "$work/core/json"
 
 # A dependency's private names stay private. Visibility already worked
@@ -347,7 +353,6 @@ rm -rf "$work/core/json"
 # not accidentally become a hole in it.
 manifest "$good"
 cat > "$work/app/main.plum" <<'EOF'
-use parsec;
 let main (): Unit = println(parsec.secret())
 EOF
 got="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" check "$work/app" 2>&1)"

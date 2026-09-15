@@ -263,15 +263,20 @@ nothing is fetched. `plum check`, `run`, `build`, `test` and `doc` all
 read the dependency's source alongside your own, and the language
 server sees it too.
 
-A dependency's modules arrive under the names its own directories give
-them, which are the same names it uses when built alone:
+A dependency's modules arrive **under its package name**, so two
+packages can both ship a `json` without ever meeting:
 
 ```plum fragment
-use parsec;
-use json;
-
-let main (): Unit = println(parsec.greet(json.tag()))
+let main (): Unit = println(parsec.greet(parsec.json.tag()))
 ```
+
+A module named after its own package collapses to just the package, so
+a library called `semver` whose main module is `semver/` is reached as
+`semver.parse(..)` rather than `semver.semver.parse(..)`.
+
+Inside a package, its own modules stay bare: `parsec/json/json.plum`
+says `use parsec;` and calls `parsec.greet(..)`, and that reads the same
+whether the library is built alone or used from somewhere else.
 
 `pub` means the same thing across a package boundary as it does across
 a module boundary: a dependency's unexported names are unavailable, not
@@ -319,20 +324,19 @@ what "a dependency is an ordinary project" means.
 [`examples/packages/`](examples/packages/) is the whole thing, two
 projects and about a hundred lines.
 
-### Two module names that collide
+### The one collision that is left
 
-Function and type names are namespaced by module. Module names are not
-namespaced by package, so two dependencies that both ship a `util`
-module are a genuine ambiguity. That is an error naming both sides,
-rather than one of them silently winning:
+Your own modules are bare, so a package you depend on can still share a
+name with one of them. That is an error, and unlike a collision between
+two dependencies it is one you can act on, because you own one of the
+two:
 
 ```
-dependency `core` provides a module `json`, and so does something
-already loaded.
+`parsec` is both one of your modules and something dependency `parsec`
+provides.
+  Your own modules are named bare, so rename yours: a directory called
+  something else.
 ```
-
-Rename-on-import is the usual answer and can be added later. Until it
-exists, one of the two has to be renamed.
 
 ### A manifest is data
 

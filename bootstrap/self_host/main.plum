@@ -2495,6 +2495,22 @@ let native_c_acc (dir: String) (os: String) (entries: Array[String]) (i: Int) (a
         else { native_c_acc(dir, os, entries, i + 1, acc) }
     }
 
+// A dependency's module, as the rest of the program sees it.
+//
+// `parsec/json/` is module `parsec.json`, so two packages shipping a
+// `json` module no longer collide: they are different modules with
+// different names, rather than the same name arriving twice. That is
+// the structural fix for issue #43, as against making the collision
+// merely reportable.
+//
+// ONE special case, and it is the common one. A package usually has a
+// module named after itself, and `semver.semver.parse(..)` is a poor
+// thing to ask anybody to write. A module whose name equals its
+// package's collapses to the package name, so it is `semver.parse(..)`,
+// which is what a Rust crate root gives you.
+let dep_module_name (pkg_name: String) (dir_name: String): String =
+    if dir_name == pkg_name { pkg_name } else { pkg_name.concat(".").concat(dir_name) }
+
 let native_known_dir (name: String): Bool =
     name == "linux" || name == "macos" || name == "windows" || name == "posix"
 
@@ -3335,7 +3351,7 @@ let collect_dep_entries (dir: String) (dep_name: String) (entries: Array[String]
     else {
         let full = Path.join(dir, entries[i]);
         if Result.unwrap_or(Os.is_directory(full), false) {
-            collect_dep_entries(dir, dep_name, entries, i + 1, Array.concat(acc, collect_path_items(full, entries[i])))
+            collect_dep_entries(dir, dep_name, entries, i + 1, Array.concat(acc, collect_path_items(full, dep_module_name(dep_name, entries[i]))))
         } else {
             if entries[i].ends_with(".plum") {
                 panic_raw("dependency `${dep_name}` has Plum source at its root: ${full}\n  A dependency's code lives in module subdirectories, so its module names are the same whether it is built on its own or used from another project.\n  Move it into a directory named for the module it should be.")
@@ -3344,15 +3360,14 @@ let collect_dep_entries (dir: String) (dep_name: String) (entries: Array[String]
         }
     }
 
-// Function and type names are namespaced by module. MODULE names are
-// not namespaced by package, so two dependencies that both ship a
-// `util` module are a real collision with no way to say which one you
-// meant.
+// Module names ARE namespaced by package now, so two dependencies that
+// both ship a `util` are `a.util` and `b.util` and never meet. What is
+// left is narrower and is the one collision a package prefix cannot
+// remove: YOUR OWN module having the same name as a package you depend
+// on, since your modules are bare by design.
 //
-// v1 REJECTS it and names both sides. Rename-on-import is the usual
-// answer and it can be added later without changing anything decided
-// here; what must not happen in the meantime is one module silently
-// winning, which is how this goes wrong everywhere it goes wrong.
+// That one is worth keeping as an error, and unlike the old message its
+// advice can be acted on: you own one of the two names.
 // Compared as SETS of module names rather than item against item: a
 // dependency is thousands of items and a handful of modules, and the
 // obvious nested scan over both item lists is quadratic in the size of
@@ -3361,7 +3376,7 @@ let reject_module_clash (existing: Array[String]) (incoming: Array[String]) (dep
     if i >= incoming.len() { () }
     else {
         if Array.contains(existing, incoming[i]) {
-            panic_raw("dependency `${dep_name}` provides a module `${incoming[i]}`, and so does something already loaded.\n  Module names are not namespaced by package, so one of them has to be renamed.")
+            panic_raw("`${incoming[i]}` is both one of your modules and something dependency `${dep_name}` provides.\n  Your own modules are named bare, so rename yours: a directory called something else.")
         };
         reject_module_clash(existing, incoming, dep_name, i + 1)
     }
