@@ -1,74 +1,68 @@
 Plum is a small, statically typed, compiled language.
 
-`use` binds a module's short name, and manifest examples in the
-documentation are checked.
+Plum can hash now, and a quadratic went with it.
 
-## Short names are back
-
-0.0.34 made a dependency's modules package-qualified, which fixed
-collisions and left `parsec.json.parse(..)` as the only spelling. A file
-can now say what it is using:
+## `Crypto.sha256`
 
 ```plum fragment
-use parsec.json;
+use Crypto;
+use Encoding;
 
-let main (): Unit = println(json.tag())
+let digest (s: String): String =
+    Encoding.hex_encode(Crypto.sha256(Bytes.from_string(s)))
 ```
 
-and rename it, which is how one file reaches two packages that both ship
-the same module name:
+Pure Plum. No C shim, no platform branch.
+
+It is a new module rather than a function in `Encoding`, because hex,
+base64 and percent-encoding are all reversible transformations and a
+digest is one-way. They compose without being neighbours, as above.
+
+**Cryptographic**, unlike `String.hash`, which is FNV-1a for bucketing
+and says so in its own documentation. Use `Crypto.sha256` when the
+answer has to mean something to somebody else.
+
+It is writable in Plum at all because of two earlier releases:
+`Int.wrapping_add` from 0.0.29, added because hashing needs it, and the
+bitwise operators from 0.0.26. `Int` is 64 bits, so the 32-bit lanes are
+masked explicitly.
+
+Checked against all four of NIST's published vectors, which is firmer
+ground than most things here get: the expected answer is what the
+standard says rather than what this compiler produced last time.
+
+## `String.repeat` was quadratic
 
 ```plum fragment
-use parsec.json as pj;
-use core.json as cj;
+String.repeat("-", 40)
 ```
 
-`use parsec;` still works and still gives `parsec.json.parse(..)`.
+That was fine. This was not:
 
-Three rules worth knowing:
+| characters | allocated, before | after |
+|---|---|---|
+| 25,000 | 313 MB | 19.6 MB |
+| 100,000 | 5.0 GB | 313 MB |
+| 1,000,000 | never finished | 657 MB, 44ms |
 
-- **An alias replaces the short name rather than adding one.** After
-  `use parsec.json as pj;`, `pj` works and `json` does not.
-- **Binding one name twice in a file is an error** naming both and
-  telling you to use `as`. Letting the second win silently would
-  reintroduce, one level down, exactly what package qualification
-  removed.
-- **A binding wins over a module of the same name, including one of
-  yours.** If your project has a `json/` module and a file says
-  `use parsec.json;`, then in that file `json` is the dependency's. The
-  `use` is at the top of the file and says so, which is the rule Python
-  follows for `from parsec import json`.
+It was written as `s.concat(String.repeat(s, n - 1))`, which
+concatenates onto a string one character shorter each time, so the bytes
+allocated are 1+2+3+...+n.
 
-## What changed underneath
+`String.pad_left`, `pad_right` and `pad_center` are all built on it, so
+padding to a large width was quadratic too.
 
-`use` was decorative for anything but a standard-library module. Every
-module was loaded and addressable by its own name, so `use lexer;` was a
-comment: delete it and nothing changed.
+It is a loop with a self-rebinding accumulator now, which the compiler
+can grow in place. The allocation counter shows the difference: 100,000
+concatenations used to cause 100,000 allocations and now cause 6,251.
 
-It binds into a file's scope now, because per-file scope is the whole
-mechanism. One file saying `use parsec.json;` while another says
-`use core.json;` is what makes two packages usable in one program, and
-that only works if a binding belongs to a file rather than to a program.
+Found by SHA-256's million-character test vector, which would not run.
+It is the seventh accidental quadratic in this project, and the first
+found by a test vector rather than by a harness.
 
-**Nothing you have written needs to change.** Your own modules still
-resolve with no `use` at all, and `use Os;` still means what it meant.
+## Also in this release
 
-## Manifest examples are checked
-
-Three `plum.pkg` examples in the documentation were tagged as Plum
-fragments, which was a small lie: a manifest is not Plum and will never
-compile as one, and that is exactly why nothing checked them. Meanwhile
-the manifest format is the newest and fastest-moving thing documented,
-having gained four fields in 0.0.34 alone.
-
-They are tagged as manifests now and parsed and validated on every
-documentation run, via a new command:
-
-```sh
-plum check-manifest plum.pkg
-```
-
-It deliberately does not resolve dependencies, which is why it exists
-rather than reusing `plum check`. The manifests in the documentation
-name packages that do not exist and never will; what they claim is that
-the form is right, and that is what is checked.
+- A name declared inside a standard-library module could delete a
+  compiler builtin of the same name from the generated reference. They
+  are different functions that merely spell alike. Not reachable today,
+  which is why it was worth fixing before it became so.
