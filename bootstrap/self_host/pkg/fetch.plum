@@ -1,0 +1,332 @@
+use Crypto;
+use Process;
+
+// Fetching a git dependency into the global cache.
+//
+// This file is the same module as `pkg.plum` -- one directory is one
+// module -- so everything here is `pkg.something` from outside and bare
+// from inside.
+//
+// == Why shelling out to `git` ==
+//
+// Settled in issue #36 and worth restating where the code is, because
+// the obvious argument for the other side is a false one. "Nobody
+// writes their own TLS" is not true: Go wrote `crypto/tls` in Go and
+// `go get` uses it, Zig wrote `std.crypto.tls` in Zig so its toolchain
+// would not need OpenSSL, and Java has done TLS in Java since the 90s.
+// Languages whose identity is "no C dependencies" wrote their own.
+//
+// The argument that actually applies here is scale and starting point.
+// Go and Zig built their TLS on crypto their languages already had.
+// Plum has SHA-256 and three encodings. No AES, no ChaCha20, no
+// elliptic curve, no bignum, no constant-time comparison. TLS from
+// there is a research programme, and `bootstrap/properties` can prove
+// sorting correct while being unable to tell you whether your AES is
+// constant-time.
+//
+// So `git` is a CONDITIONAL dependency: needed by a project that fetches
+// and by nothing else. The bootstrap path stays `seed -> compiler` with
+// no network, forever, and nothing in this file is on it.
+//
+// == Why fetching is explicit ==
+//
+// `plum build` does not fetch. A missing dependency is an error naming
+// `plum fetch`, not a silent download in the middle of a build.
+//
+// Cargo and Go both fetch implicitly and it is a real convenience. It
+// is also a build that reaches the network without being asked, and
+// this compiler currently cannot: every harness in `bootstrap/` runs
+// offline, and that is a property worth keeping deliberately rather
+// than discovering it has been lost. Implicit fetching can be added
+// later; it cannot be taken back once builds depend on it.
+
+// ------------------------------------------------------------ the cache
+//
+// A global cache, not a `deps/` directory inside the project.
+//
+// The decision rests on the content hash. Packages are addressed by URL
+// and commit and verified by `sha256`, so two projects that name the
+// same commit are naming the same bytes, which is exactly what makes a
+// shared cache safe rather than a correctness hazard. Without the hash,
+// vendoring would be the only honest option.
+//
+// The rest follows: other people's code stays out of your tree and out
+// of your grep results, and a `plum vendor` that copies the cache into
+// a project is an addition later rather than something to walk back.
+
+// `PLUM_CACHE`, then `XDG_CACHE_HOME/plum`, then `~/.cache/plum`.
+//
+// `PLUM_CACHE` exists for the harnesses before it exists for users: a
+// test that fetches must not write into the developer's real cache, and
+// `bootstrap/pkg-check` sets it to a temp directory. An override that
+// only the tests need is still the first thing to add, because without
+// it the tests cannot run at all without side effects.
+//
+// An empty variable counts as unset. `PLUM_CACHE=` in a shell script is
+// how a variable gets cleared, and treating it as a request to use the
+// empty string as a path produces a cache at the filesystem root.
+pub let cache_root (unit: Unit): String =
+    match non_empty_env("PLUM_CACHE") {
+        Some(p) => p,
+        None => match non_empty_env("XDG_CACHE_HOME") {
+            Some(p) => Path.join(p, "plum"),
+            None => match Os.home_dir(()) {
+                Some(h) => Path.join(Path.join(h, ".cache"), "plum"),
+                None => {
+                    panic_raw("cannot find a cache directory: neither PLUM_CACHE, XDG_CACHE_HOME nor HOME is set.\n  Set PLUM_CACHE to a directory Plum may write fetched packages into.");
+                    ""
+                },
+            },
+        },
+    }
+
+let non_empty_env (name: String): Option[String] =
+    match Os.env_var(name) {
+        None => None,
+        Some(v) => if String.is_empty(v) { None } else { Some(v) },
+    }
+
+pub let package_cache (unit: Unit): String = Path.join(cache_root(()), "pkg")
+
+// Where one commit of one repository lives.
+//
+// `<cache>/pkg/github.com/someone/parsec/<rev>/`. Readable on purpose:
+// a cache you cannot navigate by hand is a cache you cannot debug, and
+// the first question anyone asks is "what did it actually download".
+//
+// The commit is a directory level of its own, so two projects wanting
+// two commits of the same package is not a conflict -- it is two
+// directories, both valid, neither invalidating the other. That is the
+// property `node_modules` has and a single-checkout-per-repo cache does
+// not.
+pub let cache_dir (git: String) (rev: String): String =
+    Path.join(join_segments(package_cache(()), url_segments(git), 0),
+        sanitize_segment(rev))
+
+// The URL, as directory names.
+//
+// Every segment is sanitized and `.`/`..`/empty can never survive, so a
+// URL cannot address anything outside the cache no matter what it says.
+// That matters more than it looks: the URL comes from a manifest, and a
+// manifest can come from a dependency of a dependency.
+let url_segments (git: String): Array[String] =
+    Array.map(non_empty(String.split(strip_dot_git(strip_scheme(git)), "/"), 0, []),
+        |s| sanitize_segment(s))
+
+let strip_scheme (url: String): String =
+    match String.index_of(url, "://") {
+        Some(i) => String.slice(url, i + 3, url.len()),
+        None => url,
+    }
+
+// `foo.git` and `foo` are the same repository, and a cache that stored
+// them twice would fetch twice and hash twice for one package.
+let strip_dot_git (url: String): String =
+    if url.ends_with(".git") { String.slice(url, 0, url.len() - 4) } else { url }
+
+let non_empty (xs: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= xs.len() { acc }
+    else if String.is_empty(xs[i]) { non_empty(xs, i + 1, acc) }
+    else { non_empty(xs, i + 1, acc.push(xs[i])) }
+
+// Anything that is not a plain name becomes `_`.
+//
+// `:` and `@` in an scp-style URL, a space, a backslash, and above all
+// `.` and `..`, which are the only two that could escape the cache.
+let sanitize_segment (s: String): String = {
+    let mapped = Array.fold(chars_of(s), "", |acc, c| acc.concat(if is_safe_char(c) { c } else { "_" }));
+    if mapped == "." || mapped == ".." || String.is_empty(mapped) { "_" } else { mapped }
+}
+
+let is_safe_char (c: String): Bool =
+    Array.contains(chars_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"), c)
+
+let join_segments (base: String) (segs: Array[String]) (i: Int): String =
+    if i >= segs.len() { base }
+    else { join_segments(Path.join(base, segs[i]), segs, i + 1) }
+
+// -------------------------------------------------------- the tree hash
+//
+// A deterministic SHA-256 over a directory's contents.
+//
+// Built as a hash OF HASHES rather than a hash of one big buffer, for
+// two reasons. The buffer would be the whole package in memory at once,
+// and building it by `acc = acc.concat(bytes)` is the shape that has
+// produced seven accidental quadratics in this project. Each file is
+// hashed alone, and only the 32-byte digests are concatenated.
+//
+// Every part is LENGTH-PREFIXED. Without that, a file named `a` holding
+// `b/c` and a file named `a/b` holding `c` serialize identically, and
+// two different trees get one hash. That is the classic mistake in this
+// exact construction and it is invisible in testing.
+//
+// What it does NOT cover, stated rather than discovered: file modes
+// (so the executable bit does not travel), empty directories, and
+// symlinks, which are followed and hashed as their targets' contents.
+// None matters for Plum source and C shims. A package whose behaviour
+// depends on any of them is not something this should silently accept,
+// and when that day comes the version of the scheme has to change.
+pub let tree_hash (dir: String): String =
+    Bytes.to_hex(Crypto.sha256(Bytes.from_array(
+        all_digests(dir, Array.sort_string(tree_files(dir, "", [])), 0, []))))
+
+// Relative paths use `/` UNCONDITIONALLY, never `Path.separator()`.
+//
+// The hash has to be the same on Windows as on Linux, or a `sha256` in
+// a manifest is a claim that holds on one platform and fails the build
+// on another. The separator is a property of the local filesystem; the
+// hash is a property of the package.
+let tree_files (dir: String) (rel: String) (acc: Array[String]): Array[String] =
+    tree_entries(dir, rel, Result.unwrap_or(Os.list_dir(dir), []), 0, acc)
+
+let tree_entries (dir: String) (rel: String) (entries: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= entries.len() { acc }
+    // `.git` is excluded because it is not the package: it is a
+    // different byte sequence on every clone of the same commit, so
+    // including it would make the tree hash unreproducible by
+    // construction. `plum fetch` deletes it anyway; this is the belt to
+    // that brace, and it is what lets the hash be checked against a
+    // directory that still has one.
+    else if entries[i] == "." || entries[i] == ".." || entries[i] == ".git" {
+        tree_entries(dir, rel, entries, i + 1, acc)
+    }
+    else {
+        let full = Path.join(dir, entries[i]);
+        let child = if String.is_empty(rel) { entries[i] } else { "${rel}/${entries[i]}" };
+        let next = if Result.unwrap_or(Os.is_directory(full), false) { tree_files(full, child, acc) }
+            else { acc.push(child) };
+        tree_entries(dir, rel, entries, i + 1, next)
+    }
+
+let all_digests (dir: String) (files: Array[String]) (i: Int) (acc: Array[Int]): Array[Int] =
+    if i >= files.len() { acc }
+    else { all_digests(dir, files, i + 1, append_bytes(acc, file_digest(dir, files[i]))) }
+
+let file_digest (dir: String) (rel: String): Bytes = {
+    let content = match Os.read_bytes(path_of(dir, rel)) {
+        Ok(b) => b,
+        Err(e) => { panic_raw("cannot hash ${rel}: ${e}"); Bytes.empty(()) },
+    };
+    Crypto.sha256(Bytes.concat(
+        Bytes.from_string("${rel.len().to_string()}\n${rel}\n${content.len().to_string()}\n"),
+        content))
+}
+
+// `acc.push` in a self-rebinding loop, which the compiler grows in
+// place. `acc.concat` here would be the quadratic this file's header
+// warns about, on a 32-byte-per-file accumulator.
+let append_bytes (acc: Array[Int]) (b: Bytes): Array[Int] = {
+    let mut out = acc;
+    for i in 0..b.len() { out = out.push(Option.unwrap_or(Bytes.at(b, i), 0)); };
+    out
+}
+
+let path_of (dir: String) (rel: String): String =
+    Array.fold(String.split(rel, "/"), dir, |acc, seg| Path.join(acc, seg))
+
+// ------------------------------------------------------------- fetching
+
+pub let is_fetched (d: Dep): Bool =
+    Result.unwrap_or(Os.is_directory(cache_dir(d.git, d.rev)), false)
+
+// Fetch `d` unless it is already in the cache. Returns its directory.
+//
+// The verification runs on every call, not only after a download. A
+// cache entry is a directory on a disk that other programs can reach,
+// and the whole point of declaring a `sha256` is that the bytes are
+// checked before they are compiled -- checking only what was just
+// downloaded would verify the one case that was never in doubt.
+pub let fetch_dep (d: Dep): String = {
+    let dir = cache_dir(d.git, d.rev);
+    if !Result.unwrap_or(Os.is_directory(dir), false) { clone_into(d, dir) } else { () };
+    verify(d, dir);
+    dir
+}
+
+// The same check `fetch_dep` runs, for a cache entry that is already
+// there. `plum build` calls this on every git dependency.
+pub let verify_cached (d: Dep) (dir: String): Unit = verify(d, dir)
+
+let verify (d: Dep) (dir: String): Unit =
+    if String.is_empty(d.sha256) { () }
+    else {
+        let got = tree_hash(dir);
+        if got != d.sha256 {
+            panic_raw("dependency `${d.name}` does not match its `sha256`.\n  manifest: ${d.sha256}\n  fetched:  ${got}\n  at ${dir}\n  Either the commit's contents changed underneath the hash, or the cache entry was modified. Delete the directory above and fetch again.")
+        } else { () }
+    }
+
+let clone_into (d: Dep) (dir: String): Unit = {
+    require_git(d);
+    // Cloned into a scratch directory beside the destination and MOVED
+    // into place, so an interrupted fetch cannot leave a half-populated
+    // directory that later runs would accept as a complete package.
+    // Beside it rather than in `/tmp` so the move stays on one
+    // filesystem and is therefore atomic.
+    let scratch = "${dir}.partial";
+    match Os.remove_tree(scratch) { Ok(_) => (), Err(_) => () };
+    ensure_parent(dir);
+
+    // A full clone, then a checkout. `--depth 1` cannot fetch an
+    // arbitrary commit on every server -- some allow it, some do not --
+    // and a fetch that works on GitHub and fails on a self-hosted remote
+    // is a worse deal than a slower clone that always works.
+    git(d, ["clone", "--quiet", d.git, scratch],
+        "could not clone ${d.git}");
+    git(d, ["-C", scratch, "checkout", "--quiet", d.rev],
+        "could not check out ${d.rev} from ${d.git}\n  The repository was cloned, so the URL is right and the commit is not in it.");
+
+    // The package is source, not a repository. Removing `.git` keeps the
+    // cache to what is actually needed, and stops anything downstream
+    // from treating a cache entry as a working tree it may update.
+    match Os.remove_tree(Path.join(scratch, ".git")) { Ok(_) => (), Err(_) => () };
+
+    match Os.rename_file(scratch, dir) {
+        Ok(_) => (),
+        Err(e) => panic_raw("could not move the fetched package into ${dir}: ${e}"),
+    }
+}
+
+// The error a person actually gets when `git` is not installed.
+//
+// Named, and named BEFORE anything is attempted, because the failure
+// otherwise arrives as `Err` from `Process.run` somewhere inside a
+// clone and reads as a network problem. Windows is the case that
+// matters: git is frequently absent there and the compiler itself has
+// never needed it.
+let require_git (d: Dep): Unit =
+    if git_available(()) { () }
+    else {
+        panic_raw("dependency `${d.name}` needs `git`, which is not on PATH.\n  Plum shells out to git to fetch packages; it is needed only by projects that fetch, not to build the compiler or a project with path dependencies.\n  Install git, or vendor the package and use `path` instead of `git`.")
+    }
+
+pub let git_available (unit: Unit): Bool =
+    match Process.run(Process.Options { program: "git", args: ["--version"], env: [], stdin: None }) {
+        Err(_) => false,
+        Ok(r) => r.exit_code == 0,
+    }
+
+let git (d: Dep) (args: Array[String]) (what: String): Unit =
+    match Process.run(Process.Options { program: "git", args: args, env: [], stdin: None }) {
+        Err(e) => panic_raw("dependency `${d.name}`: ${what}\n  git could not be started: ${e}"),
+        Ok(r) => if r.exit_code != 0 {
+            panic_raw("dependency `${d.name}`: ${what}\n  git exited ${r.exit_code.to_string()}: ${String.trim(r.stderr)}")
+        } else { () },
+    }
+
+let ensure_parent (dir: String): Unit = ensure_dir(Path.dirname(dir))
+
+// Every prefix in turn: `Os.make_dir` makes one level, and a cache path
+// is six deep on a first fetch.
+let ensure_dir (path: String): Unit =
+    ensure_acc(String.split(Path.clean(path), Path.separator()), 0, "")
+
+let ensure_acc (parts: Array[String]) (i: Int) (acc: String): Unit =
+    if i >= parts.len() { () }
+    else {
+        let here = if String.is_empty(acc) && String.is_empty(parts[i]) { Path.separator() }
+            else if String.is_empty(acc) { parts[i] }
+            else { Path.join(acc, parts[i]) };
+        match Os.make_dir(here) { Ok(_) => (), Err(_) => () };
+        ensure_acc(parts, i + 1, here)
+    }

@@ -47,7 +47,7 @@ advice used to describe.
 | `help-check` | `plum help`/`--help`/`-h` print usage, extra args ignored | <1s |
 | `check-docs` | `docs/stdlib/`, pages and index, matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 1s |
 | `highlight-check` | `plum highlight` gives the source back byte for byte with the tags stripped, over 296 files — highlighting cannot corrupt code a reader is about to copy. Note what it does NOT assert: `plum highlight` was quadratic for weeks and every file passed, because passing only requires finishing | 9s |
-| `pkg-check` | path dependencies resolve (including transitively, and through a cycle) and every command sees them — and `plum.pkg` stays DATA: a call, a name, an interpolation or an `if` in a manifest is rejected | 17s |
+| `pkg-check` | path dependencies resolve (including transitively, and through a cycle) and every command sees them; git dependencies fetch, verify against their `sha256` on every build, and two commits of one package coexist — against a git repo made in a temp directory, so it stays offline; and `plum.pkg` stays DATA: a call, a name, an interpolation or an `if` in a manifest is rejected | 17s |
 | `check-builtins` | every compiler builtin is offered by completion and listed in the reference -- a builtin is a chain of `if`s that nothing can enumerate, so this compares the chain against the table beside it | <1s |
 | `check-doc-names` | every standard-library name the documentation mentions in prose exists, with the `use` list DERIVED from `parser.std_module_names()` rather than typed out | <1s |
 | `check-build-modes` | a debug build and a release build differ in the ways they are supposed to | 17s |
@@ -634,6 +634,37 @@ Worth knowing before you "fix" them:
   `Option`. Split by namespace rather than by size, because a threshold
   would make a page's URL depend on how many functions were written that
   week. A type with no methods stays with its module.
+- **`plum build` does not fetch, and that is the decision the package
+  system rests on.** A git dependency missing from the cache is an error
+  naming `plum fetch`, never a download. Cargo and Go both fetch
+  implicitly and it is a real convenience; it is also a build that
+  reaches the network without being asked, and every harness in
+  `bootstrap/` currently runs offline. Implicit fetching can be added
+  later. It cannot be taken back once builds depend on it.
+  `pkg-check` asserts both halves: the refusal, and that a refused build
+  wrote nothing to the cache.
+- **A `rev` is a full 40-character commit hash, enforced in the
+  manifest.** A branch or a tag moves, and "the manifest is the
+  lockfile" is false the moment a dependency can change underneath a
+  build. An abbreviated hash is refused for the same reason one level
+  down: it is a pin that can become ambiguous as a repository grows.
+- **The tree hash is a hash OF HASHES, and every part is
+  length-prefixed.** Hashing one concatenated buffer would hold the
+  whole package in memory and would be built by `acc = acc.concat(..)`,
+  which is the shape behind seven accidental quadratics here. Without
+  length prefixes, a file `a` holding `b/c` and a file `a/b` holding `c`
+  serialize identically and two different trees get one hash — the
+  classic mistake in this construction, and invisible in testing.
+  Relative paths in the hash use `/` unconditionally, never
+  `Path.separator()`, or a `sha256` would hold on one platform and fail
+  the build on another. It does NOT cover file modes, empty directories
+  or symlinks; changing that changes every existing hash, so it is a
+  version bump of the scheme rather than a fix.
+- **`PLUM_CACHE` exists for the harnesses before it exists for users.**
+  A test that fetches must not write into the developer's real
+  `~/.cache/plum`. An override only the tests need is still the first
+  thing to add, because without it the tests cannot run at all without
+  side effects.
 - **A manifest example is tagged ```plum manifest, not ```plum
   fragment.** `fragment` means "real Plum that cannot stand alone", and
   a `plum.pkg` is not Plum at all, so the tag was a lie that also left

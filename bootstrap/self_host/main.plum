@@ -481,7 +481,7 @@ let cmd_doc (dir: String) (out: String) (html: Bool) (home: String) (with_deps: 
 
 let dep_count (dir: String): Int =
     if Result.unwrap_or(Os.is_directory(dir), false) {
-        dep_closure(dir, DepScan { visited: [Path.clean(dir)], found: [] }).found.len()
+        dep_closure(dir, DepScan { visited: [Path.clean(dir)], found: [], fetch: false }).found.len()
     } else { 0 }
 
 // The standard library documents itself through the SAME generator.
@@ -2282,7 +2282,7 @@ pub let plum_version (): String = "0.0.36"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
-    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | check-manifest <file> | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--with-deps] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
+    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | check-manifest <file> | fetch [<project-dir>] | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--with-deps] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
     println("");
     println("  --trace             a stack trace on stderr when the program dies.");
     println("                      Tail recursion still runs in constant stack space.");
@@ -2870,7 +2870,7 @@ let dep_link_libs (deps: Array[pkg.Dep]) (os: String) (i: Int) (acc: Array[Strin
 // packages are in the build.
 let project_deps (dir: String): Array[pkg.Dep] =
     if Result.unwrap_or(Os.is_directory(dir), false) {
-        dep_closure(dir, DepScan { visited: [Path.clean(dir)], found: [] }).found
+        dep_closure(dir, DepScan { visited: [Path.clean(dir)], found: [], fetch: false }).found
     } else { [] }
 
 let dep_native_files (deps: Array[pkg.Dep]) (os: String) (i: Int) (acc: Array[String]): Array[String] =
@@ -3286,7 +3286,7 @@ let collect_project (root: String): Array[parser.ItemNode] =
         // already seen. Without it, `a -> b -> a` loaded `a` a second
         // time as a dependency and reported it as a module clash with
         // itself.
-        collect_deps(dep_closure(root, DepScan { visited: [Path.clean(root)], found: [] }).found, 0,
+        collect_deps(dep_closure(root, DepScan { visited: [Path.clean(root)], found: [], fetch: false }).found, 0,
             collect_own(root))
     } else {
         collect_path_items(root, "")
@@ -3312,6 +3312,45 @@ let collect_own (root: String): Array[parser.ItemNode] =
         collect_root_entries(root, Result.unwrap_or(Os.list_dir(root), []), 0, [])
     } else {
         collect_path_items(root, "")
+    }
+
+// `plum fetch [<project-dir>]` -- download every git dependency into
+// the global cache (issue #36).
+//
+// The same walk `build` does, with `fetch: true`, so a package that
+// resolves here resolves identically there. What it prints is the
+// cache directory of each one, because "where did it actually go" is
+// the first question a global cache raises and the answer is otherwise
+// a path nobody can guess.
+let cmd_fetch (dir: String): Unit = {
+    if !Result.unwrap_or(Os.is_directory(dir), false) {
+        panic_raw("`plum fetch` takes a project directory; ${dir} is not one")
+    };
+    let found = dep_closure(dir, DepScan { visited: [Path.clean(dir)], found: [], fetch: true }).found;
+    report_fetched(found, 0);
+    // A count, not a list, when there is nothing to say: a project with
+    // only path dependencies is a perfectly ordinary thing to run this
+    // on, and it should say so rather than printing nothing and looking
+    // like it failed.
+    println("fetch: ${found.len().to_string()} dependency(s) resolved for ${dir}")
+}
+
+let report_fetched (deps: Array[pkg.Dep]) (i: Int): Unit =
+    if i >= deps.len() { () }
+    else {
+        if String.is_empty(deps[i].git) {
+            println("  ${deps[i].name}  (path) ${deps[i].path}")
+        } else {
+            // The hash is printed whether or not the manifest declared
+            // one, because that is how a `sha256` gets INTO a manifest:
+            // fetch once, read the line, paste it. Zig's `zig fetch`
+            // does the same and it is the only workable answer when the
+            // alternative is computing a tree hash by hand.
+            println("  ${deps[i].name}  ${deps[i].git} @ ${String.slice(deps[i].rev, 0, 12)}");
+            println("    ${deps[i].path}");
+            println("    sha256: ${pkg.tree_hash(deps[i].path)}")
+        };
+        report_fetched(deps, i + 1)
     }
 
 // The dependency graph, flattened.
@@ -3344,7 +3383,14 @@ let collect_own (root: String): Array[parser.ItemNode] =
 // because the root project belongs in one and not the other: its
 // modules are loaded directly, so it must stop a cycle without being
 // loaded a second time as a dependency of itself.
-struct DepScan { visited: Array[String], found: Array[pkg.Dep] }
+//
+// `fetch` rides along in the scan rather than being a second walk.
+// `plum fetch` and `plum build` ask the same question of the same
+// graph and differ in one thing: whether a git dependency that is not
+// in the cache is downloaded or reported. Two walks would be two
+// chances to resolve a package differently, and the one that fetched
+// would be the one nothing else exercised.
+struct DepScan { visited: Array[String], found: Array[pkg.Dep], fetch: Bool }
 
 let dep_closure (dir: String) (scan: DepScan): DepScan =
     add_deps(dir, pkg.read(dir).deps, 0, scan)
@@ -3352,7 +3398,7 @@ let dep_closure (dir: String) (scan: DepScan): DepScan =
 let add_deps (dir: String) (deps: Array[pkg.Dep]) (i: Int) (scan: DepScan): DepScan =
     if i >= deps.len() { scan }
     else {
-        let resolved = pkg.Dep { name: deps[i].name, path: dep_path(dir, deps[i].path) };
+        let resolved = resolve_dep(dir, deps[i], scan.fetch);
         if Array.contains(scan.visited, resolved.path) { add_deps(dir, deps, i + 1, scan) }
         else {
             if !Result.unwrap_or(Os.is_directory(resolved.path), false) {
@@ -3368,9 +3414,38 @@ let add_deps (dir: String) (deps: Array[pkg.Dep]) (i: Int) (scan: DepScan): DepS
             if manifest.name != "" && manifest.name != resolved.name {
                 panic_raw("dependency `${resolved.name}` at ${resolved.path} calls itself `${manifest.name}`.\n  A package's name belongs to the package, so the two have to agree.")
             };
-            let next = DepScan { visited: scan.visited.push(resolved.path), found: scan.found.push(resolved) };
+            let next = DepScan { visited: scan.visited.push(resolved.path), found: scan.found.push(resolved), fetch: scan.fetch };
             add_deps(dir, deps, i + 1, add_deps(resolved.path, manifest.deps, 0, next))
         }
+    }
+
+// A declared dependency, with its `path` filled in to where the code
+// actually is.
+//
+// Everything downstream -- `collect_deps`, `link_args`,
+// `dep_native_files` -- reads `Dep.path` and nothing else, so a git
+// dependency becomes an ordinary directory here and the rest of the
+// compiler never learns that fetching exists. That seam is why this
+// change is small.
+let resolve_dep (dir: String) (d: pkg.Dep) (fetch: Bool): pkg.Dep =
+    if String.is_empty(d.git) {
+        pkg.Dep { name: d.name, path: dep_path(dir, d.path), git: "", rev: "", sha256: "" }
+    } else {
+        let cached = pkg.cache_dir(d.git, d.rev);
+        if fetch { pkg.fetch_dep(d); () }
+        else if !Result.unwrap_or(Os.is_directory(cached), false) {
+            // The whole reason `plum build` does not fetch: this is an
+            // error a person can act on, rather than a download starting
+            // in the middle of a build they did not expect to touch the
+            // network.
+            panic_raw("dependency `${d.name}` has not been fetched.\n  ${d.git} at ${String.slice(d.rev, 0, 12)}\n  Run `plum fetch` to download it.")
+        } else {
+            // Verified on every build, not only on the fetch that
+            // downloaded it. A cache entry is a directory other programs
+            // can reach.
+            pkg.verify_cached(d, cached)
+        };
+        pkg.Dep { name: d.name, path: cached, git: d.git, rev: d.rev, sha256: d.sha256 }
     }
 
 let dep_path (dir: String) (declared: String): String =
@@ -3564,6 +3639,11 @@ let main (): Unit = {
             Err(e) => { println("check-manifest: ${argv[1]}: ${e}"); Os.exit_with(1) },
             Ok(src) => { pkg.parse(argv[1], src); println("ok") },
         }
+    } else if argv.len() >= 1 && argv[0] == "fetch" {
+        // The directory is optional and defaults to `.`, because
+        // `plum fetch` is run from inside the project far more often
+        // than it is pointed at one.
+        cmd_fetch(if argv.len() >= 2 { argv[1] } else { "." })
     } else if argv.len() >= 1 && argv[0] == "lsp" {
         // No file argument: the server talks over stdin/stdout.
         lsp_serve(())

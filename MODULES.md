@@ -259,10 +259,64 @@ Package {
 ```
 
 A dependency is an ordinary project: a directory with `.plum` files in
-it, which builds and tests on its own. Nothing has to be published, and
-nothing is fetched. `plum check`, `run`, `build`, `test` and `doc` all
-read the dependency's source alongside your own, and the language
-server sees it too.
+it, which builds and tests on its own. Nothing has to be published.
+`plum check`, `run`, `build`, `test` and `doc` all read the
+dependency's source alongside your own, and the language server sees it
+too.
+
+### Depending on a git repository
+
+A dependency can also name a repository and a commit:
+
+```plum manifest
+// plum.pkg
+Package {
+    name: "myapp",
+    version: "0.1.0",
+    deps: [
+        Dep {
+            name: "parsec",
+            git: "https://github.com/someone/parsec",
+            rev: "9f2a1c4e8b7d3f6a0c5e2b9d4a8f1c3e7b6d0a52",
+            sha256: "3b8f1d0c6a24e7593f8c1b0d4a6e29f7c53b8d1a0f462e97c8b3d5a1f0e6c294",
+        },
+    ],
+}
+```
+
+**`rev` is a full commit hash, never a branch or a tag.** Both move, and
+a dependency that can change underneath a build is not pinned — which
+would make "the manifest is the lockfile" false, and that is the promise
+the whole design rests on. A short hash is rejected too: it is a pin
+that can become ambiguous as a repository grows.
+
+**`sha256` is optional, and is how the manifest becomes a lockfile.**
+It is the hash of the package's contents. Declare one and every later
+fetch has to produce exactly those bytes, on any machine. `plum fetch`
+prints the hash of what it got, so adding one is a copy and a paste. It
+is checked on every build, not only when something is downloaded.
+
+**Fetching is a separate step.** `plum build` never touches the network;
+a dependency that is not in the cache is an error telling you to run
+`plum fetch`, not a download starting in the middle of a build.
+
+```sh
+plum fetch            # download what plum.pkg names, into the cache
+plum fetch my-project # or point it at a project
+```
+
+Fetched packages live in a **global cache**, shared between your
+projects, not in a directory inside this one — `$PLUM_CACHE`, else
+`$XDG_CACHE_HOME/plum`, else `~/.cache/plum`. Each commit gets its own
+directory, so two projects wanting two versions of one package is two
+directories rather than a conflict. The path is readable on purpose:
+`<cache>/pkg/github.com/someone/parsec/<commit>/`.
+
+**`git` is only needed if you fetch.** Plum shells out to it rather than
+implementing TLS; a project with only `path` dependencies never needs
+it, and neither does building the compiler. If it is missing, the error
+says so by name.
+
 
 A dependency's modules arrive **under its package name**, so two
 packages can both ship a `json` without ever meeting:

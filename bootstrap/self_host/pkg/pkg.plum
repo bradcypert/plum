@@ -48,7 +48,30 @@ use parser;
 // the validator a little, twice, over two years. `bootstrap/pkg-check`
 // asserts the rejections so that relaxation has to be deliberate.
 
-pub struct Dep { pub name: String, pub path: String }
+// A dependency is EITHER a path or a git repository, never both and
+// never neither.
+//
+// `path` is a directory on this machine, relative to the manifest that
+// names it. `git` is a URL plus a `rev`, fetched into the global cache
+// by `plum fetch` — see `fetch.plum`, which is the same module.
+//
+// `sha256` is optional and is the tree hash of what was fetched. It is
+// how a manifest becomes a lockfile without there being a second file:
+// declare it and every later fetch has to produce exactly those bytes.
+// `plum fetch` prints the hash of what it got, so adding one is a
+// copy and a paste.
+//
+// Unused fields are the empty string rather than `Option`, matching
+// `Manifest` beside it, and every consumer asks `git != ""` — a
+// dependency with a `git` is a git dependency, which is the only
+// question anything downstream needs answered.
+pub struct Dep {
+    pub name: String,
+    pub path: String,
+    pub git: String,
+    pub rev: String,
+    pub sha256: String,
+}
 
 // `link` is library NAMES, not linker flags: `["sqlite3"]` becomes
 // `-lsqlite3` and nothing else can be said. A manifest that could carry
@@ -245,20 +268,12 @@ let dep_of (path: String) (e: parser.PExpr): Dep = match e {
         if last_segment(lit_path) != "Dep" {
             fail(path, "every entry in `deps` is a `Dep { .. }`, but this one is `${last_segment(lit_path)}`")
         };
-        reject_unknown(path, fields, 0, ["name", "path"], "Dep");
+        reject_unknown(path, fields, 0, ["name", "path", "git", "rev", "sha256"], "Dep");
         let name = required_string(path, fields, "name", "Dep");
-        let dep_path = required_string(path, fields, "path", "Dep");
-        // An empty path is rejected HERE because by the time the loader
-        // sees it, it is indistinguishable from a cycle. `Path.join`
-        // drops empty segments, so `path: ""` cleans to the depending
-        // project's own directory, which is already in the visited set,
-        // and the dependency was silently skipped: the build SUCCEEDED
-        // and the only symptom was `unbound variable` at the `use`,
-        // pointing at the user's source rather than at the manifest
-        // line that was actually wrong.
-        if String.is_empty(dep_path) {
-            fail(path, "dependency `${name}` has an empty path")
-        };
+        let dep_path = optional_string(path, fields, "path");
+        let git = optional_string(path, fields, "git");
+        let rev = optional_string(path, fields, "rev");
+        let sha256 = optional_string(path, fields, "sha256");
         // A package name is an identifier. It names no module -- a
         // dependency's modules are named by its own subdirectories --
         // but it is what a registry would resolve one day, and a name
@@ -267,10 +282,82 @@ let dep_of (path: String) (e: parser.PExpr): Dep = match e {
         if !is_identifier(name) {
             fail(path, "`${name}` cannot be a package name: it must start with a letter and hold only letters, digits and `_`")
         };
-        Dep { name: name, path: dep_path }
+        // An explicitly EMPTY path gets its own message, because it is a
+        // different mistake from omitting the field and the generic
+        // "give it a path" would be telling someone to do what they
+        // just did. See the note in `check_source` for why an empty
+        // path is caught here at all rather than by the loader.
+        match field_named(fields, "path", 0) {
+            Some(_) => if String.is_empty(dep_path) {
+                fail(path, "dependency `${name}` has an empty path")
+            } else { () },
+            None => (),
+        };
+        check_source(path, name, dep_path, git, rev, sha256);
+        Dep { name: name, path: dep_path, git: git, rev: rev, sha256: sha256 }
     },
-    _ => { fail(path, "every entry in `deps` is a `Dep { .. }`"); Dep { name: "", path: "" } },
+    _ => { fail(path, "every entry in `deps` is a `Dep { .. }`"); Dep { name: "", path: "", git: "", rev: "", sha256: "" } },
 }
+
+// Where a dependency comes from, checked once, here.
+//
+// Every one of these is a manifest that PARSES and that the loader
+// would otherwise discover much later, somewhere that cannot name the
+// line that was wrong.
+let check_source (path: String) (name: String) (dep_path: String) (git: String) (rev: String) (sha256: String): Unit = {
+    let has_path = !String.is_empty(dep_path);
+    let has_git = !String.is_empty(git);
+
+    if has_path && has_git {
+        fail(path, "dependency `${name}` has both a `path` and a `git`.\n  A dependency comes from one place. Delete whichever is not the one you meant.")
+    };
+    // An empty path is rejected HERE because by the time the loader
+    // sees it, it is indistinguishable from a cycle. `Path.join`
+    // drops empty segments, so `path: ""` cleans to the depending
+    // project's own directory, which is already in the visited set,
+    // and the dependency was silently skipped: the build SUCCEEDED
+    // and the only symptom was `unbound variable` at the `use`,
+    // pointing at the user's source rather than at the manifest
+    // line that was actually wrong.
+    if !has_path && !has_git {
+        fail(path, "dependency `${name}` says where it is called but not where it comes from.\n  Give it a `path` (a directory on this machine) or a `git` and a `rev`.")
+    };
+
+    if has_git {
+        if String.is_empty(rev) {
+            fail(path, "dependency `${name}` has a `git` but no `rev`.\n  A manifest is the lockfile here, so a git dependency names an exact commit.")
+        };
+        // A branch or a tag is NOT a pin. Both move, and a dependency
+        // that can change underneath a build makes "the manifest is the
+        // lockfile" false -- which is the one promise this design is
+        // built on, so it is enforced rather than recommended. The
+        // length check is what rejects `main` and `v1.2.0`, and it also
+        // rejects an abbreviated SHA, which is a pin that can become
+        // ambiguous as a repository grows.
+        if !String.is_empty(rev) && !is_hex_of_length(rev, 40) {
+            fail(path, "dependency `${name}` has `rev: \"${rev}\"`, which is not a commit.\n  A `rev` is a full 40-character commit hash. A branch or a tag moves, and a dependency that moves is not pinned.")
+        }
+    } else {
+        if !String.is_empty(rev) {
+            fail(path, "dependency `${name}` has a `rev` but no `git`. A path dependency is whatever is in the directory.")
+        };
+        if !String.is_empty(sha256) {
+            fail(path, "dependency `${name}` has a `sha256` but no `git`.\n  A path dependency is a directory you control and is not verified; the hash would be checking your own working tree against itself.")
+        }
+    };
+
+    if !String.is_empty(sha256) && !is_hex_of_length(sha256, 64) {
+        fail(path, "dependency `${name}` has a `sha256` that is not a 64-character hex hash.\n  `plum fetch` prints the hash of what it fetched; paste that.")
+    }
+}
+
+let is_hex_of_length (s: String) (n: Int): Bool =
+    s.len() == n && all_hex(chars_of(s), 0)
+
+let all_hex (cs: Array[String]) (i: Int): Bool =
+    if i >= cs.len() { true }
+    else if Array.contains(chars_of("0123456789abcdef"), cs[i]) { all_hex(cs, i + 1) }
+    else { false }
 
 // ----------------------------------------------------------- accessors
 

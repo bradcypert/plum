@@ -427,8 +427,155 @@ case "$got" in
        fail=$((fail + 1)) ;;
 esac
 
+# --- half three: fetching a git dependency ------------------------------
+#
+# Offline, always. The "remote" is a git repository created in the temp
+# directory a moment ago, which `git clone` treats exactly like any
+# other: a harness that reached the network would be one that fails on a
+# train, and it would be testing GitHub rather than this compiler.
+#
+# `PLUM_CACHE` points into the temp directory too. Without it these
+# tests would write into the developer's real `~/.cache/plum`, which is
+# a side effect no harness may have.
+#
+# Skips cleanly without `git`, the way `cross-check` skips without
+# `zig` -- git is a CONDITIONAL dependency here, needed only to fetch,
+# and a machine without it must still be able to run everything else.
+
+if ! command -v git > /dev/null 2>&1; then
+    printf 'pkg-check: skipping the fetch half, no `git` on PATH\n'
+else
+    export PLUM_CACHE="$work/cache"
+
+    mkdir -p "$work/remote/greet"
+    cat > "$work/remote/plum.pkg" <<'EOF'
+Package { name: "greeter", version: "0.1.0" }
+EOF
+    cat > "$work/remote/greet/greet.plum" <<'EOF'
+pub let hello (who: String): String = "hello, ".concat(who)
+EOF
+    git -C "$work/remote" init -q
+    git -C "$work/remote" add -A
+    git -C "$work/remote" -c user.email=t@t -c user.name=t commit -qm one > /dev/null 2>&1
+    rev="$(git -C "$work/remote" rev-parse HEAD)"
+
+    mkdir -p "$work/consumer"
+    printf 'use greeter.greet as g;\nlet main (): Unit = println(g.hello("world"))\n' > "$work/consumer/main.plum"
+
+    git_manifest() { # <extra-fields>
+        printf 'Package { name: "consumer", deps: [ Dep { name: "greeter", git: "%s", rev: "%s"%s } ] }\n' \
+            "$work/remote" "$rev" "$1" > "$work/consumer/plum.pkg"
+    }
+
+    expect_c() { # <label> <expected-stdout> <command...>
+        local label="$1" want="$2"; shift 2
+        local got
+        got="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$@" 2>&1)"
+        if [ "$got" != "$want" ]; then
+            printf 'FAIL  %-44s\n        want: %s\n        got:  %s\n' "$label" "$want" "$(printf '%s' "$got" | head -n 3)"
+            fail=$((fail + 1)); return
+        fi
+        pass=$((pass + 1))
+    }
+
+    expect_c_err() { # <label> <substring> <command...>
+        local label="$1" want="$2"; shift 2
+        local got
+        got="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$@" 2>&1)"
+        case "$got" in
+            *"$want"*) pass=$((pass + 1)) ;;
+            *) printf 'FAIL  %-44s\n        want to see: %s\n        got:         %s\n' \
+                   "$label" "$want" "$(printf '%s' "$got" | head -n 2)"
+               fail=$((fail + 1)) ;;
+        esac
+    }
+
+    # BUILDING MUST NOT FETCH. This is the decision the whole design
+    # rests on, so it is asserted before anything has been fetched: the
+    # error names the command to run, and no download happens.
+    git_manifest ""
+    expect_c_err "build refuses to fetch" "Run \`plum fetch\`" "$plum" check "$work/consumer"
+    [ ! -d "$work/cache/pkg" ]
+    pass_or_fail=$?
+    if [ "$pass_or_fail" -eq 0 ]; then pass=$((pass + 1)); else
+        printf 'FAIL  %-44s a refused build wrote to the cache\n' "a refused build fetches nothing"
+        fail=$((fail + 1))
+    fi
+
+    # And then it does.
+    SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" fetch "$work/consumer" > "$work/fetch.log" 2>&1
+    if [ $? -eq 0 ]; then pass=$((pass + 1)); else
+        printf 'FAIL  %-44s %s\n' "plum fetch succeeds" "$(head -n 2 "$work/fetch.log")"
+        fail=$((fail + 1))
+    fi
+    expect_c "a fetched dependency runs" "hello, world" "$plum" run "$work/consumer"
+
+    # The hash `plum fetch` printed must be one the manifest accepts --
+    # that round trip is the entire workflow for pinning a dependency,
+    # and a printed hash that is rejected when pasted back would make
+    # `sha256` unusable while every individual piece still passed.
+    got_hash="$(grep 'sha256:' "$work/fetch.log" | head -n 1 | awk '{print $2}')"
+    git_manifest ", sha256: \"$got_hash\""
+    expect_c "the printed hash is accepted" "hello, world" "$plum" run "$work/consumer"
+
+    # A wrong one is refused, and refused on a build rather than only on
+    # a fetch: the cache is already populated here, so this is the path
+    # that verifies bytes nobody just downloaded.
+    git_manifest ', sha256: "0000000000000000000000000000000000000000000000000000000000000000"'
+    expect_c_err "a wrong hash stops the build" "does not match its \`sha256\`" "$plum" check "$work/consumer"
+
+    # Two commits of one repository are two cache entries, not a
+    # conflict. This is the property a global cache has to have and a
+    # single-checkout-per-repo cache does not.
+    echo 'pub let extra (): Int = 1' >> "$work/remote/greet/greet.plum"
+    git -C "$work/remote" add -A
+    git -C "$work/remote" -c user.email=t@t -c user.name=t commit -qm two > /dev/null 2>&1
+    rev2="$(git -C "$work/remote" rev-parse HEAD)"
+    rev_keep="$rev"; rev="$rev2"
+    git_manifest ""
+    SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" fetch "$work/consumer" > "$work/fetch2.log" 2>&1
+    rev="$rev_keep"
+    n="$(find "$work/cache" -maxdepth 8 -type d -name '????????????????????????????????????????' | wc -l)"
+    if [ "$n" -eq 2 ]; then pass=$((pass + 1)); else
+        printf 'FAIL  %-44s expected 2 commit directories in the cache, found %s\n' "two commits coexist" "$n"
+        fail=$((fail + 1))
+    fi
+
+    # The second commit changed a file, so its tree hash must differ. If
+    # these matched, `sha256` would be verifying nothing at all while
+    # every other check here still passed.
+    h1="$(grep 'sha256:' "$work/fetch.log"  | head -n 1 | awk '{print $2}')"
+    h2="$(grep 'sha256:' "$work/fetch2.log" | head -n 1 | awk '{print $2}')"
+    if [ -n "$h1" ] && [ -n "$h2" ] && [ "$h1" != "$h2" ]; then pass=$((pass + 1)); else
+        printf 'FAIL  %-44s two different trees hashed the same: %s\n' "the tree hash follows content" "$h1"
+        fail=$((fail + 1))
+    fi
+
+    # A `rev` that is not a full commit hash is refused by the MANIFEST,
+    # before anything is cloned. A branch moves, and a dependency that
+    # moves is not pinned.
+    rev_keep="$rev"; rev="main"; git_manifest ""; rev="$rev_keep"
+    expect_c_err "a branch is not a rev" "is not a commit" "$plum" fetch "$work/consumer"
+
+    # A commit that does not exist fails at the checkout, and says which
+    # half of the URL-and-commit pair was wrong.
+    rev_keep="$rev"; rev="0123456789012345678901234567890123456789"; git_manifest ""; rev="$rev_keep"
+    expect_c_err "an absent commit is named" "the commit is not in it" "$plum" fetch "$work/consumer"
+
+    # A partial fetch must not be mistaken for a complete one. The
+    # failed checkout above left `<dir>.partial`; the cache entry itself
+    # must not exist, or the next build would compile half a package.
+    [ -z "$(find "$work/cache" -maxdepth 8 -type d -name '0123456789*' -not -name '*.partial')" ]
+    if [ $? -eq 0 ]; then pass=$((pass + 1)); else
+        printf 'FAIL  %-44s a failed fetch left a usable cache entry\n' "a failed fetch is not usable"
+        fail=$((fail + 1))
+    fi
+
+    unset PLUM_CACHE
+fi
+
 if [ "$fail" -ne 0 ]; then
     printf '\npkg-check: %d check(s) failed, %d passed\n' "$fail" "$pass"
     exit 1
 fi
-printf 'pkg-check: %d checks pass -- path dependencies resolve, and a manifest is data\n' "$pass"
+printf 'pkg-check: %d checks pass -- path and git dependencies resolve, and a manifest is data\n' "$pass"

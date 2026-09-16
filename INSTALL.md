@@ -13,8 +13,16 @@ directory is not on your `PATH` it prints the line to add and stops.
 `PLUM_PREFIX` and `PLUM_VERSION` override where and which.
 
 You need **`clang`** on your `PATH`; the compiler shells out to it to
-assemble and link what it emits. Nothing else is required: the C shims
-Plum programs use are embedded in the compiler itself.
+assemble and link what it emits. Nothing else is required to build
+anything: the C shims Plum programs use are embedded in the compiler
+itself.
+
+**`git` is needed only to fetch packages.** `plum fetch` shells out to
+it rather than Plum implementing TLS, so a project whose dependencies
+are all local `path` entries never needs it, and neither does building
+the compiler from source. If it is missing, `plum fetch` says so by
+name rather than failing as something that looks like a network
+problem. See [MODULES.md](MODULES.md#depending-on-a-git-repository).
 
 Or take an archive from
 [Releases](https://github.com/bradcypert/plum/releases) directly. It
