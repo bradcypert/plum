@@ -2236,7 +2236,7 @@ pub let plum_version (): String = "0.0.34"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
-    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
+    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | check-manifest <file> | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
     println("");
     println("  --trace             a stack trace on stderr when the program dies.");
     println("                      Tail recursion still runs in constant stack space.");
@@ -3480,6 +3480,21 @@ let main (): Unit = {
         match Os.read_file(argv[1]) {
             Err(e) => { println("highlight: ${argv[1]}: ${e}"); Os.exit_with(1) },
             Ok(src) => print(highlight.hl_html(src)),
+        }
+    } else if argv.len() >= 2 && argv[0] == "check-manifest" {
+        // A `plum.pkg` on its own: does it PARSE and does the validator
+        // accept it? Deliberately not "does this project build" --
+        // `plum check` on a directory reads the manifest too, but it
+        // then resolves every dependency, so a perfectly valid manifest
+        // naming `../parsec` fails when `../parsec` is not there.
+        //
+        // That is exactly the documentation's situation: the manifests
+        // in LANGUAGE.md and MODULES.md name packages that do not exist
+        // and never will, and what they claim is that the FORM is right.
+        // This checks that claim and nothing else. See issue #45.
+        match Os.read_file(argv[1]) {
+            Err(e) => { println("check-manifest: ${argv[1]}: ${e}"); Os.exit_with(1) },
+            Ok(src) => { pkg.parse(argv[1], src); println("ok") },
         }
     } else if argv.len() >= 1 && argv[0] == "lsp" {
         // No file argument: the server talks over stdin/stdout.

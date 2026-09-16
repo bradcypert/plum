@@ -28,6 +28,7 @@ label = os.path.basename(sys.argv[1])
 raw = re.findall(r'```([^\n]*)\n(.*?)```', doc, re.S)
 
 blocks = []
+manifests = []
 for info, body in raw:
     parts = info.split()
     lang = parts[0] if parts else ''
@@ -43,11 +44,24 @@ for info, body in raw:
         # An unrecognised attribute is a HARD ERROR. The whole point of
         # the marker is to be deliberate, and a typo that silently
         # switched checking off for a block would defeat it.
-        unknown = [a for a in attrs if a != 'fragment']
+        unknown = [a for a in attrs if a not in ('fragment', 'manifest')]
         if unknown:
             print(f"{os.path.basename(sys.argv[1])}: unknown attribute(s) "
                   f"{' '.join(unknown)} on a ```plum block", file=sys.stderr)
             sys.exit(1)
+        # A MANIFEST is not Plum source and will never compile as one, so
+        # tagging it `fragment` was a small lie that also left it checked
+        # by nothing. It is parsed and validated instead, which is what
+        # the block actually claims.
+        #
+        # Not `plum check` on a scratch project: that resolves every
+        # dependency, and the manifests in the documentation name
+        # packages that do not exist and never will. What they claim is
+        # that the FORM is right. See issue #45.
+        if 'manifest' in attrs:
+            manifests.append(body)
+            blocks.append(('', body))
+            continue
         if 'fragment' in attrs:
             # Not a project, and it BREAKS a run of blocks that are.
             blocks.append(('', body))
@@ -129,6 +143,25 @@ for n, (files, order, nlang, nbody) in enumerate(projects, 1):
             print("ok   %d  -> %s" % (n, got.replace("\n", " | ")))
     else:
         print("ok   %d  (built; no output claimed)" % n)
+# --- manifests --------------------------------------------------------
+#
+# Parsed and validated rather than compiled. `check-manifest` exists for
+# this: it answers "is this a well-formed manifest" without resolving
+# dependencies, which the documentation's examples deliberately cannot
+# satisfy because they name packages that do not exist.
+for mn, mbody in enumerate(manifests, 1):
+    mpath = os.path.join(work, "doc-%d.pkg" % mn)
+    with open(mpath, "w", encoding="utf8") as handle:
+        handle.write(mbody)
+    mr = subprocess.run([plum, "check-manifest", mpath], capture_output=True, text=True)
+    out = (mr.stdout + mr.stderr).strip()
+    if mr.returncode != 0 or out != "ok":
+        first = out.splitlines()[0] if out else "no output"
+        print("FAIL manifest %d: %s" % (mn, first.replace(mpath, "<block>")))
+        fails += 1
+    else:
+        print("ok   manifest %d" % mn)
+
 shutil.rmtree(work)
-print("%s: %d snippets, %d failures\n" % (label, len(projects), fails))
+print("%s: %d snippets, %d manifest(s), %d failures\n" % (label, len(projects), len(manifests), fails))
 sys.exit(1 if fails else 0)

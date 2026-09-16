@@ -4,22 +4,29 @@ Packages went from existing to being usable.
 
 ## Breaking: a dependency's modules are named by its package
 
+A dependency contributed all of its modules as bare names, with nothing
+saying which package they came from. `examples/packages` depends on one
+package, `semver`, which has two modules, `semver/` and `compat/`:
+
 ```plum
-// before
-use parsec;
-use json;
-let x = json.parse(src)
+// before: `compat` is semver's, and nothing here says so
+compat.caret_allows(have, want)
 
 // now
-let x = parsec.json.parse(src)
+semver.compat.caret_allows(have, want)
 ```
 
-Two packages could not both ship a `json` module. It was a hard error,
-and its advice, "one of them has to be renamed", was something the
-consumer could not act on: they own neither package.
+`compat` is a name any package might ship, and two that did could not be
+used together. It was a hard error, and its advice, "one of them has to
+be renamed", was something the consumer could not act on: they own
+neither package.
 
 Now a dependency's modules live under its package name, so the collision
 cannot occur rather than being reported.
+
+(The `use` lines that named those modules were doing nothing, and still
+are: `use` is decorative for anything that is not a standard-library
+module. Giving it meaning is [#44](https://github.com/bradcypert/plum/issues/44).)
 
 **A module named after its own package collapses to the package name.**
 A library called `semver` whose main module is `semver/` is reached as

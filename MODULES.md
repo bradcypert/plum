@@ -246,7 +246,7 @@ the `assert` family, `Json`, and every type namespace.
 A project can use code from another directory on disk. It says so in a
 `plum.pkg` file at its root:
 
-```plum fragment
+```plum manifest
 // plum.pkg
 Package {
     name: "myapp",

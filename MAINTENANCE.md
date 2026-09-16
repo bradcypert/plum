@@ -46,7 +46,7 @@ About two minutes. If you only run two, run `corpus-check` and
 | `stdin-smoke` | timed stdin reads bound the whole call and keep a partial line across a timeout — the cases a corpus fixture cannot reach, because `Process.run` feeds a child from a FILE and a file never times out | 3s |
 | `self-test` | the compiler's OWN internals, via `plum test` on `bootstrap/self_host` -- the only harness that can reach platform-conditional code, since a Windows branch is unreachable on Linux rather than merely untested | 1s |
 | `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |
-| `doc-check` | every snippet in `TUTORIAL.md` compiles, runs, and prints what the tutorial says it prints | 6s |
+| `doc-check` | every snippet in the published docs compiles, runs, and prints what the page says it prints — and every ```plum manifest block parses and passes the manifest validator, which is what a `fragment` tag left checked by nothing | 7s |
 | `alloc-check` | allocation counts have not RISEN -- the only harness that measures the memory model rather than correctness | 2s |
 | `debug-info-check` | a debug build carries Plum line information at the right LINES, and a release build carries none | 2s |
 | `mem-check` | peak RSS of `emit-llvm` and `check` is under a PER-PLATFORM ceiling — the `SH_MEM` cgroup guard is inert on CI, so this is the only memory assertion that runs there | 3s |
@@ -597,6 +597,13 @@ Worth knowing before you "fix" them:
   `Option`. Split by namespace rather than by size, because a threshold
   would make a page's URL depend on how many functions were written that
   week. A type with no methods stays with its module.
+- **A manifest example is tagged ```plum manifest, not ```plum
+  fragment.** `fragment` means "real Plum that cannot stand alone", and
+  a `plum.pkg` is not Plum at all, so the tag was a lie that also left
+  it unchecked. `manifest` routes it to `plum check-manifest`, which
+  parses and validates without resolving dependencies — the
+  documentation's manifests name packages that do not exist, and what
+  they claim is that the FORM is right.
 - **In generated docs `##` means "a declaration" and nothing else.** The
   namespace index is bold text, not a heading, because anything parsing
   the output — a search index, an HTML renderer — would otherwise count

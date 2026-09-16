@@ -591,7 +591,7 @@ package is free to be a binding over a C library rather than pure Plum.
 A package says what its shim links against, so the consumer does not
 have to know:
 
-```plum fragment
+```plum manifest
 Package {
     name: "sqlite",
     link: [ "sqlite3" ],
@@ -610,7 +610,7 @@ Libraries differ by platform, so there are four more optional fields
 using the same names as `native/`'s subdirectories, `posix` meaning
 Linux and macOS in both:
 
-```plum fragment
+```plum manifest
 Package {
     name: "term",
     link: [ "m" ],
