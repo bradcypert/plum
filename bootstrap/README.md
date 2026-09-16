@@ -88,13 +88,15 @@ refresh rule (`check-seed` fails when the seed has fallen behind;
 `gen-seed` refreshes it, deliberately, because each refresh is ~6MB of
 generated text).
 
-**What the Rust compiler is still for.** Since the seed landed it is no
-longer required to build anything. It stays for two jobs it is uniquely
-good at: it is the ORACLE the example sweep compares self-hosted output
-against byte for byte (which is what caught the `Bool`-width FFI bug,
-the dropped match guards and both nested-pattern miscompilations), and
-it is a from-source path for anyone unwilling to trust a checked-in
-artifact. It is no longer where new language work happens.
+**There is no Rust compiler.** It was retired on 2026-08-25 and the
+crates are gone. This paragraph used to describe it as still present
+and still serving "two jobs it is uniquely good at" — being the oracle
+`example-sweep` compared against, and a from-source path for anyone
+unwilling to trust a checked-in artifact. Neither is true: the sweep
+compares against a checked-in recording, and the from-source path is
+`bootstrap/from-seed` with clang alone. The bugs it did catch while it
+existed (the `Bool`-width FFI bug, the dropped match guards, both
+nested-pattern miscompilations) are real history and are in DESIGN.md.
 
 ## Scripts
 
@@ -105,16 +107,22 @@ artifact. It is no longer where new language work happens.
 | `check-seed` | the checked-in seed still bootstraps to today's compiler |
 | `example-sweep` | every `examples/` project matches its checked-in recording |
 | `corpus-check` | every corpus fixture compiles, runs, prints the right thing, aborts when it should, and leaks nothing |
-
-No counts in this table on purpose: a number here is a number to keep
-current by remembering to, and this project has been wrong about
-exactly that kind of number more than once. The scripts print their
-own.
 | `test-smoke` | `plum test` really runs tests |
 | `net-smoke` | TCP and HTTP work in a compiled binary |
 | `lsp-smoke` | the language server answers a real session |
 | `check-shims` | the embedded C shims match `native_stdlib/` |
 | `record-examples` | regenerates the `examples/*/expected.txt` the sweep checks against |
+
+This is a selection; MAINTENANCE.md's table is the full one, and is
+where the pre-commit loop and the per-harness timings live.
+
+No counts in this table on purpose: a number here is a number to keep
+current by remembering to, and this project has been wrong about
+exactly that kind of number more than once. The scripts print their
+own. That paragraph used to sit in the MIDDLE of this table, between
+`corpus-check` and `test-smoke`, which ended the table early and left
+the last five rows rendering as loose text — the table was making the
+argument and losing it at the same time.
 
 These divide differently than the names suggest, and the difference is
 what each can SEE:
@@ -224,8 +232,8 @@ Plum has no interpreter now. The Rust one was retired on 2026-08-25;
 **Self-hosting is done.** The compiler compiles itself to a
 byte-identical fixed point, builds itself with no Rust compiler involved
 from any directory (`self-sufficiency`), and a fresh clone bootstraps
-from `seed/` with clang alone. Every project in `examples/` builds and
-runs identically under both implementations.
+from `seed/` with clang alone. Every project in `examples/` matches its
+recorded output.
 
 The paragraph that stood here described four stages and said "still not
 self-hosting" — accurate when written, wrong for a long time after, and
@@ -233,7 +241,12 @@ nobody noticed because nothing checks prose. That is the argument for
 `example-sweep`: **run it, and believe it over anything written here**,
 including this sentence.
 
-Known remaining differences are all in editor support — the Rust
-implementation still has completion, live-as-you-type diagnostics, and
-resolution for field names and enum variants. See the README's "Editor
-support" table.
+A paragraph under it listed completion, live-as-you-type diagnostics and
+field/variant resolution as things "the Rust implementation still has"
+and this one did not, and pointed at an "Editor support" table in the
+root README. The Rust implementation has not existed since 2026-08-25,
+the self-hosted language server does all three — `lsp-smoke` asserts
+hover, go-to-definition, live diagnostics on unsaved text and completion
+from all three sources, and `check-builtins` asserts every builtin is
+among them — and the table it named is not in the README either. Three
+false claims in one sentence, each independently true when written.

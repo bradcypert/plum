@@ -13,7 +13,7 @@ are. This is the operating manual.
 for h in check-version help-check check-shims check-declares check-builtins cross-check \
          lsp-smoke test-smoke net-smoke cli-smoke \
          self-test stdin-smoke tty-smoke check-docs check-doc-names check-build-modes \
-         highlight-check pkg-check \
+         highlight-check pkg-check time-harnesses \
          property-check doc-check alloc-check lossless-check fmt-check \
          corpus-check example-sweep \
          bootstrap-check self-sufficiency check-seed; do
@@ -21,8 +21,23 @@ for h in check-version help-check check-shims check-declares check-builtins cros
 done
 ```
 
-About two minutes. If you only run two, run `corpus-check` and
-`bootstrap-check`.
+**About thirteen minutes**, and four harnesses are 78% of it:
+`corpus-check`, `self-sufficiency`, `check-seed` and `bootstrap-check`
+spend 10 of the 13 between them. Everything else in the loop together is
+under three.
+
+This document said "about two minutes" until 2026-09-16, which was six
+times wrong and wrong in the direction that matters: a developer who
+budgets two minutes and spends thirteen stops running the loop. The
+individual numbers had drifted as far — `bootstrap-check` was written
+down as 14s and takes 93 — so `bootstrap/time-harnesses` now measures
+them, and the loop entry above is that script checking, in under a
+second, that the table below still names every harness in the loop and
+no script that has been deleted.
+
+If you only run two, run `corpus-check` and `bootstrap-check` — but know
+that this is now five minutes rather than the cheap sanity check the
+advice used to describe.
 
 ## The harnesses
 
@@ -30,40 +45,41 @@ About two minutes. If you only run two, run `corpus-check` and
 |---|---|---|
 | `check-version` | the version string, the tag and the built binary agree | <1s |
 | `help-check` | `plum help`/`--help`/`-h` print usage, extra args ignored | <1s |
-| `check-docs` | `docs/stdlib/`, pages and index, matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 3s |
-| `highlight-check` | `plum highlight` gives the source back byte for byte with the tags stripped, over 296 files — highlighting cannot corrupt code a reader is about to copy. Note what it does NOT assert: `plum highlight` was quadratic for weeks and every file passed, because passing only requires finishing | 6s |
-| `pkg-check` | path dependencies resolve (including transitively, and through a cycle) and every command sees them — and `plum.pkg` stays DATA: a call, a name, an interpolation or an `if` in a manifest is rejected | 9s |
+| `check-docs` | `docs/stdlib/`, pages and index, matches what `plum doc --stdlib` produces — a generated file in the repo is only trustworthy if something asserts it was regenerated | 1s |
+| `highlight-check` | `plum highlight` gives the source back byte for byte with the tags stripped, over 296 files — highlighting cannot corrupt code a reader is about to copy. Note what it does NOT assert: `plum highlight` was quadratic for weeks and every file passed, because passing only requires finishing | 9s |
+| `pkg-check` | path dependencies resolve (including transitively, and through a cycle) and every command sees them — and `plum.pkg` stays DATA: a call, a name, an interpolation or an `if` in a manifest is rejected | 17s |
 | `check-builtins` | every compiler builtin is offered by completion and listed in the reference -- a builtin is a chain of `if`s that nothing can enumerate, so this compares the chain against the table beside it | <1s |
-| `check-doc-names` | every standard-library name the documentation mentions in prose exists, with the `use` list DERIVED from `parser.std_module_names()` rather than typed out | 2s |
-| `check-build-modes` | a debug build and a release build differ in the ways they are supposed to | 2s |
-| `cli-smoke` | the user-facing commands nothing else runs: `plum new` scaffolds a project that runs AND whose embedded test passes, `plum doc` on an ordinary project directory, `dump-tokens`, `dump-ast` — and which `native/*.c` sources a target selects, proved with an `#error` in the directory that must not be reached | 12s |
+| `check-doc-names` | every standard-library name the documentation mentions in prose exists, with the `use` list DERIVED from `parser.std_module_names()` rather than typed out | <1s |
+| `check-build-modes` | a debug build and a release build differ in the ways they are supposed to | 17s |
+| `cli-smoke` | the user-facing commands nothing else runs: `plum new` scaffolds a project that runs AND whose embedded test passes, `plum doc` on an ordinary project directory, `dump-tokens`, `dump-ast` — and which `native/*.c` sources a target selects, proved with an `#error` in the directory that must not be reached | 5s |
+| `time-harnesses` | this table names every harness in the loop, and every row names a script that exists. `--measure` re-measures the `time` column instead, which takes as long as the loop does | <1s |
 | `check-site-links` | a built site links only to pages it contains. Not in the loop above — it needs `build-site` to have run first, and CI runs the pair | <1s |
-| `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | <1s |
+| `check-shims` | the embedded C shims match `native_stdlib/`, and include no non-portable header outside a platform guard | 1s |
 | `check-declares` | every symbol the runtime declares is actually called -- an unused one silently blocks a user `extern "C"` block | <1s |
-| `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 1s |
+| `lsp-smoke` | the language server answers a real session: live diagnostics on unsaved text, hover, go-to-definition, and completion from all three sources | 7s |
 | `test-smoke` | `plum test` really runs tests. It said "and both engines agree" until 2026-09-13; there has been one engine since the Rust interpreter was retired on 2026-08-25 | 1s |
-| `tty-smoke` | `is_tty` says YES and `Terminal.size` reports the real size, under a pseudo-terminal — the only thing here that exercises `isatty` returning true or `TIOCGWINSZ` at all | 3s |
-| `stdin-smoke` | timed stdin reads bound the whole call and keep a partial line across a timeout — the cases a corpus fixture cannot reach, because `Process.run` feeds a child from a FILE and a file never times out | 3s |
-| `self-test` | the compiler's OWN internals, via `plum test` on `bootstrap/self_host` -- the only harness that can reach platform-conditional code, since a Windows branch is unreachable on Linux rather than merely untested | 1s |
-| `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 1s |
-| `doc-check` | every snippet in the published docs compiles, runs, and prints what the page says it prints — and every ```plum manifest block parses and passes the manifest validator, which is what a `fragment` tag left checked by nothing | 7s |
-| `alloc-check` | allocation counts have not RISEN -- the only harness that measures the memory model rather than correctness | 2s |
+| `tty-smoke` | `is_tty` says YES and `Terminal.size` reports the real size, under a pseudo-terminal — the only thing here that exercises `isatty` returning true or `TIOCGWINSZ` at all | 2s |
+| `stdin-smoke` | timed stdin reads bound the whole call and keep a partial line across a timeout — the cases a corpus fixture cannot reach, because `Process.run` feeds a child from a FILE and a file never times out | 4s |
+| `self-test` | the compiler's OWN internals, via `plum test` on `bootstrap/self_host` -- the only harness that can reach platform-conditional code, since a Windows branch is unreachable on Linux rather than merely untested | 7s |
+| `property-check` | invariants hold over generated inputs -- the only harness that can catch the compiler being confidently wrong | 3s |
+| `doc-check` | every snippet in the published docs compiles, runs, and prints what the page says it prints — and every ```plum manifest block parses and passes the manifest validator, which is what a `fragment` tag left checked by nothing | 24s |
+| `alloc-check` | allocation counts have not RISEN -- the only harness that measures the memory model rather than correctness | 17s |
 | `debug-info-check` | a debug build carries Plum line information at the right LINES, and a release build carries none | 2s |
-| `mem-check` | peak RSS of `emit-llvm` and `check` is under a PER-PLATFORM ceiling — the `SH_MEM` cgroup guard is inert on CI, so this is the only memory assertion that runs there | 3s |
-| `net-smoke` | TCP and HTTP work in a compiled binary | 1s |
-| `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 2s |
-| `platform-smoke` | a compiler *binary* builds and runs every execution fixture on the machine it is sitting on, plus timed stdin reads over a real PIPE — the one path a corpus fixture cannot reach, since `Process.run` feeds a child from a file | 25s |
-| `example-sweep` | every `examples/` project matches its recorded output | 5s |
-| `fmt-check` | every repo file is already formatted, `fmt` touches only leading whitespace, and `fmt_corpus` reformats as recorded | 40s |
-| `lossless-check` | every `.plum` file survives a round trip through the token stream, and nothing but trivia sits between tokens -- the floor a formatter stands on | 30s |
-| `bootstrap-check` | the compiler compiled by itself is the same compiler | 14s |
-| `check-seed` | the checked-in seed still bootstraps to today's compiler | 26s |
-| `self-sufficiency` | it builds itself with no Rust, from any directory | 27s |
-| `corpus-check` | every corpus fixture compiles, runs, prints the right thing, aborts when it should, and leaks nothing — and every `typecheck_corpus` fixture is rejected WITH the recorded message and position, which 53 of 55 did not assert until 2026-09-14 | 30s |
+| `mem-check` | peak RSS of `emit-llvm` and `check` is under a PER-PLATFORM ceiling — the `SH_MEM` cgroup guard is inert on CI, so this is the only memory assertion that runs there | 40s |
+| `net-smoke` | TCP and HTTP work in a compiled binary | 6s |
+| `cross-check` | every C shim compiles, and the compiler links, for macOS arm64/x86_64 and Windows | 4s |
+| `platform-smoke` | a compiler *binary* builds and runs every execution fixture on the machine it is sitting on, plus timed stdin reads over a real PIPE — the one path a corpus fixture cannot reach, since `Process.run` feeds a child from a file | 119s |
+| `example-sweep` | every `examples/` project matches its recorded output | 13s |
+| `fmt-check` | every repo file is already formatted, `fmt` touches only leading whitespace, and `fmt_corpus` reformats as recorded | 27s |
+| `lossless-check` | every `.plum` file survives a round trip through the token stream, and nothing but trivia sits between tokens -- the floor a formatter stands on | 7s |
+| `bootstrap-check` | the compiler compiled by itself is the same compiler | 93s |
+| `check-seed` | the checked-in seed still bootstraps to today's compiler | 136s |
+| `self-sufficiency` | it builds itself with no Rust, from any directory | 168s |
+| `corpus-check` | every corpus fixture compiles, runs, prints the right thing, aborts when it should, and leaks nothing — and every `typecheck_corpus` fixture is rejected WITH the recorded message and position, which 53 of 55 did not assert until 2026-09-14 | 199s |
 
 `cross-check` needs `zig` and skips cleanly without it. Run it after
 touching anything in `native_stdlib/`: it compiles every shim for macOS
-and Windows from this Linux box in about two seconds, using Zig's
+and Windows from this Linux box in a few seconds, using Zig's
 vendored libc headers, so no Xcode SDK or Windows toolchain is needed.
 It proves compilation and linking only -- **nothing it produces is ever
 run**. It exists because two consecutive Windows CI failures were the
@@ -451,8 +467,29 @@ Two habits help:
 
 Numbers in prose are the worst offenders. Neither this document's
 script table nor `bootstrap/README.md`'s carries fixture counts, for
-that reason — the scripts print their own. The timings above are
-approximate on purpose.
+that reason — the scripts print their own.
+
+The timings above are the exception, and they are the case worth
+studying, because they show how the habit fails when neither habit
+applies. A time is not a property of the repository, so no script can
+assert one; and "approximate on purpose" — what this paragraph said
+until 2026-09-16 — reads as a licence to leave them alone, which is
+what happened. They were measured once, in a much smaller repository,
+and then drifted by up to 7x while every one of them still looked
+plausible. Nothing was wrong enough to notice, and the total was wrong
+enough to change behaviour.
+
+So they carry a DATE and a machine instead, and
+`bootstrap/time-harnesses --measure` reproduces them. Re-measure when
+the total has visibly moved, or when you have added something slow, and
+say when you did it:
+
+    2026-09-16, 24 cores, idle. Loop total 12m48s.
+
+Measure on an idle machine. The first attempt at this recorded 1953s
+for a harness that takes 189, because a build was running in another
+terminal — a wrong number arrived at carefully is still a wrong number,
+and it is more convincing than the one it replaced.
 
 ## Cutting a release
 

@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Times the pre-commit loop, and checks MAINTENANCE.md's harness table
+# against reality.
+#
+# Two jobs, because the table has two kinds of claim in it and they rot
+# differently.
+#
+# The NAMES rot silently and can be checked here, cheaply, forever:
+# every harness in the documented loop must have a row in the table, and
+# every row must name a script that exists. That is the DEFAULT, it
+# takes under a second, and it is why this script can sit in the loop
+# beside everything else.
+#
+# The TIMES cannot be asserted -- they are a property of the machine,
+# not of the repository, so a harness that failed when a number moved
+# would fail on every machine that is not this one. They can only be
+# re-measured, which is `--measure`. It runs the whole loop and prints
+# the table's `time` column, ready to paste, and it takes as long as the
+# loop takes. Measure on an IDLE machine: a concurrent build put one
+# harness at 1953s that really takes 189, which is how this script came
+# to be written rather than the numbers simply being corrected by hand.
+#
+# Written on 2026-09-16 because those numbers had drifted far enough to
+# be actively misleading: `corpus-check` was documented at 30s and took
+# 185, and the loop was documented as "about two minutes" and took ten.
+# A developer budgeting two minutes and spending ten learns to skip the
+# loop, which is the opposite of what the table is for.
+#
+# Both lists are DERIVED from MAINTENANCE.md rather than typed out here.
+# A second copy of the list is a second thing to keep in step, and this
+# file exists because things fall out of step.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root"
+
+doc="MAINTENANCE.md"
+
+# The loop: everything between `for h in` and `; do`, minus continuations.
+loop_harnesses() {
+    sed -n '/^for h in /,/; do$/p' "$doc" \
+        | sed 's/^for h in //; s/; do$//; s/\\$//' \
+        | tr ' ' '\n' | sed '/^$/d'
+}
+
+# The table: the first cell of every row whose first cell is `code`.
+table_harnesses() {
+    sed -n 's/^| `\([a-z0-9-]*\)` |.*/\1/p' "$doc"
+}
+
+check() {
+    local fail=0 h
+    local table; table="$(table_harnesses)"
+
+    [ -n "$(loop_harnesses)" ] || { echo "FAIL: no loop found in $doc" >&2; return 1; }
+    [ -n "$table" ] || { echo "FAIL: no harness table found in $doc" >&2; return 1; }
+
+    for h in $(loop_harnesses); do
+        if ! grep -qx "$h" <<< "$table"; then
+            echo "FAIL: $h is in the loop but has no row in $doc's table" >&2
+            fail=1
+        fi
+    done
+
+    for h in $table; do
+        if [ ! -x "bootstrap/$h" ]; then
+            echo "FAIL: $doc's table names $h, which is not an executable in bootstrap/" >&2
+            fail=1
+        fi
+    done
+
+    [ "$fail" -eq 0 ] && echo "time-harnesses: $(loop_harnesses | wc -l) in the loop, $(wc -l <<< "$table") in the table, all accounted for"
+    return "$fail"
+}
+
+# Prints a duration the way the table writes one: <1s, then whole
+# seconds. Tenths would be false precision -- these move by whole
+# seconds between runs on an idle machine and by more on a busy one.
+human() { # <seconds>
+    if [ "$1" -lt 1 ]; then echo "<1s"; else echo "${1}s"; fi
+}
+
+measure() {
+    local h start elapsed total=0 status
+    echo "# $(date -u +%Y-%m-%d), $(nproc) cores, load $(cut -d' ' -f1 /proc/loadavg)"
+    echo
+    echo "| script | time |"
+    echo "|---|---|"
+    for h in $(loop_harnesses); do
+        start=$SECONDS
+        "bootstrap/$h" > /dev/null 2>&1
+        status=$?
+        elapsed=$((SECONDS - start))
+        total=$((total + elapsed))
+        if [ "$status" -ne 0 ]; then
+            echo "| \`$h\` | $(human "$elapsed") FAILED |"
+        else
+            echo "| \`$h\` | $(human "$elapsed") |"
+        fi
+    done
+    echo
+    echo "total: $((total / 60))m$((total % 60))s"
+}
+
+case "${1:-}" in
+    "")        check ;;
+    --measure) check && measure ;;
+    *)         echo "usage: $0 [--measure]" >&2; exit 2 ;;
+esac
