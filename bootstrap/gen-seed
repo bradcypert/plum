@@ -12,7 +12,34 @@
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
-SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > bootstrap/seed/plum.ll
+
+# Written to a scratch file and MOVED into place.
+#
+# `> bootstrap/seed/plum.ll` truncates the seed before the compiler has
+# emitted a byte, so anything that stopped this script part way -- a
+# Ctrl+C, a killed job, a full disk -- left the seed at zero bytes. That
+# is the one file a clean clone cannot build without, and the failure is
+# silent until somebody tries.
+#
+# Happened on 2026-09-16: an interrupted refresh emptied it, and the
+# only reason it was noticed immediately is that the refresh was being
+# watched. `git checkout bootstrap/seed/plum.ll` is the recovery if you
+# ever see a zero-byte seed.
+#
+# Beside the destination rather than in /tmp, so the move is a rename on
+# one filesystem and therefore atomic.
+scratch="bootstrap/seed/plum.ll.partial"
+trap 'rm -f "$scratch"' EXIT
+SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh emit-llvm bootstrap/self_host > "$scratch"
+
+# An empty or truncated emission must never reach the seed. `set -e`
+# catches a non-zero exit; this catches a compiler that exited 0 having
+# written nothing, which is the shape that would be hardest to notice.
+if [ ! -s "$scratch" ]; then
+    echo "gen-seed: the compiler produced an empty seed; the existing one is untouched" >&2
+    exit 1
+fi
+mv "$scratch" bootstrap/seed/plum.ll
 echo "wrote bootstrap/seed/plum.ll ($(wc -l < bootstrap/seed/plum.ll) lines, $(du -h bootstrap/seed/plum.ll | cut -f1))"
 
 # A fingerprint of the shim sources baked into the seed just now.
