@@ -1,115 +1,74 @@
 Plum is a small, statically typed, compiled language.
 
-Packages went from existing to being usable.
+`use` binds a module's short name, and manifest examples in the
+documentation are checked.
 
-## Breaking: a dependency's modules are named by its package
+## Short names are back
 
-A dependency contributed all of its modules as bare names, with nothing
-saying which package they came from. `examples/packages` depends on one
-package, `semver`, which has two modules, `semver/` and `compat/`:
-
-```plum
-// before: `compat` is semver's, and nothing here says so
-compat.caret_allows(have, want)
-
-// now
-semver.compat.caret_allows(have, want)
-```
-
-`compat` is a name any package might ship, and two that did could not be
-used together. It was a hard error, and its advice, "one of them has to
-be renamed", was something the consumer could not act on: they own
-neither package.
-
-Now a dependency's modules live under its package name, so the collision
-cannot occur rather than being reported.
-
-(The `use` lines that named those modules were doing nothing, and still
-are: `use` is decorative for anything that is not a standard-library
-module. Giving it meaning is [#44](https://github.com/bradcypert/plum/issues/44).)
-
-**A module named after its own package collapses to the package name.**
-A library called `semver` whose main module is `semver/` is reached as
-`semver.parse(..)`, not `semver.semver.parse(..)`.
-
-**Inside a package, its own modules stay bare.** A library reads the
-same whether it is built by itself or used from somewhere else, which is
-most of what makes it a library.
-
-**Your own project is untouched.** `use lexer;` and `lexer.tokenize(..)`
-mean exactly what they did.
-
-The one collision left is the only one a package prefix cannot remove:
-your own module sharing a name with a package you depend on, since your
-modules are bare by design. That is still an error, and unlike the old
-message you can act on it, because you own one of the two:
-
-```
-`parsec` is both one of your modules and something dependency `parsec` provides.
-  Your own modules are named bare, so rename yours: a directory called something else.
-```
-
-Short names are coming back: `use parsec.json;` then `json.parse(..)`,
-with `use parsec.json as pj;` when one file needs two. That is
-[#44](https://github.com/bradcypert/plum/issues/44), and it is
-ergonomics rather than correctness now, so it gets its own release.
-
-## A package can ship C
-
-A dependency's `native/*.c` is compiled and linked. It was not before:
-the Plum half of a package with a shim resolved perfectly and the link
-failed with `undefined reference` naming a symbol whose source was
-sitting in the dependency.
-
-That ruled out every package touching C, which is the difference between
-having packages and having an ecosystem.
-
-Target selection applies per dependency, so a package carries
-`native/posix/` and `native/windows/` the same way a project does.
-
-## A package declares what it links against
+0.0.34 made a dependency's modules package-qualified, which fixed
+collisions and left `parsec.json.parse(..)` as the only spelling. A file
+can now say what it is using:
 
 ```plum fragment
-Package {
-    name: "sqlite",
-    link: [ "sqlite3" ],
-}
+use parsec.json;
+
+let main (): Unit = println(json.tag())
 ```
 
-Collected transitively, so a consumer names nothing. Before this, every
-user of a package had to know an implementation detail of it and repeat
-it on their own build.
-
-Libraries differ by platform, so there are four more optional fields
-using the same names as `native/`'s subdirectories, `posix` meaning
-Linux and macOS in both:
+and rename it, which is how one file reaches two packages that both ship
+the same module name:
 
 ```plum fragment
-Package {
-    name: "term",
-    link: [ "m" ],
-    link_posix: [ "pthread" ],
-    link_windows: [ "ws2_32" ],
-}
+use parsec.json as pj;
+use core.json as cj;
 ```
 
-`link` takes library **names**, what `-l` takes. A linker flag is not a
-library name and is rejected:
+`use parsec;` still works and still gives `parsec.json.parse(..)`.
 
+Three rules worth knowing:
+
+- **An alias replaces the short name rather than adding one.** After
+  `use parsec.json as pj;`, `pj` works and `json` does not.
+- **Binding one name twice in a file is an error** naming both and
+  telling you to use `as`. Letting the second win silently would
+  reintroduce, one level down, exactly what package qualification
+  removed.
+- **A binding wins over a module of the same name, including one of
+  yours.** If your project has a `json/` module and a file says
+  `use parsec.json;`, then in that file `json` is the dependency's. The
+  `use` is at the top of the file and says so, which is the rule Python
+  follows for `from parsec import json`.
+
+## What changed underneath
+
+`use` was decorative for anything but a standard-library module. Every
+module was loaded and addressable by its own name, so `use lexer;` was a
+comment: delete it and nothing changed.
+
+It binds into a file's scope now, because per-file scope is the whole
+mechanism. One file saying `use parsec.json;` while another says
+`use core.json;` is what makes two packages usable in one program, and
+that only works if a binding belongs to a file rather than to a program.
+
+**Nothing you have written needs to change.** Your own modules still
+resolve with no `use` at all, and `use Os;` still means what it meant.
+
+## Manifest examples are checked
+
+Three `plum.pkg` examples in the documentation were tagged as Plum
+fragments, which was a small lie: a manifest is not Plum and will never
+compile as one, and that is exactly why nothing checked them. Meanwhile
+the manifest format is the newest and fastest-moving thing documented,
+having gained four fields in 0.0.34 alone.
+
+They are tagged as manifests now and parsed and validated on every
+documentation run, via a new command:
+
+```sh
+plum check-manifest plum.pkg
 ```
-plum.pkg: `-Wl,--wrap=malloc` is not a library name.
-  `link` takes what `-l` takes: `sqlite3`, `ws2_32`, `stdc++`. A linker
-  FLAG is not a library name, and a manifest may not pass one into
-  someone else's build.
-```
 
-A manifest that could carry linker arguments would be a manifest that
-injects arbitrary behaviour into someone else's build, which is the same
-line `plum.pkg` holds everywhere else: it is data.
-
-## Upgrading
-
-If you depend on a package, qualify its modules with the package name
-and drop the `use` for them. Nothing else changes: your own modules,
-the standard library, and every project without dependencies behave
-exactly as before.
+It deliberately does not resolve dependencies, which is why it exists
+rather than reusing `plum check`. The manifests in the documentation
+name packages that do not exist and never will; what they claim is that
+the form is right, and that is what is checked.
