@@ -104,6 +104,48 @@ pub let fail_at_err (msg: String): Unit = {
 
 let fail_ctx (msg: String): Unit = fail_at_err(msg)
 
+// --- What each file's `use` declarations bind -------------------------
+//
+// Beside `ERR` for the same reason `ERR` is here: `infer.plum` imports
+// this file and not the other way round, and BOTH halves need it. Type
+// paths resolve here, so `use parsec.json;` then `json.Doc` would
+// otherwise work for functions and fail for types.
+//
+// Keyed by FILE, which is the point of the feature, and the file is
+// already known: `err_path` is set per function for diagnostics.
+pub struct UseBinding { pub path: String, pub local: String, pub module: String }
+
+let USES: Ref[Array[UseBinding]] = ref([])
+
+pub let set_uses (us: Array[UseBinding]): Unit = USES.set(us)
+
+// What `ns` is bound to in the file being checked, if anything.
+pub let use_target (ns: String): Option[String] = use_target_at(USES.get(), err_path(()), ns, 0)
+
+let use_target_at (uses: Array[UseBinding]) (file: String) (ns: String) (i: Int): Option[String] =
+    if i >= uses.len() { None }
+    else if uses[i].path == file && uses[i].local == ns { Some(uses[i].module) }
+    else { use_target_at(uses, file, ns, i + 1) }
+
+// A dotted TYPE path read through this file's bindings: `json.Doc`
+// becomes `parsec.json.Doc` when `json` is bound. Only the module part
+// is rewritten; the type's own name is the last segment and is never
+// touched.
+// `last_dot_index` is `infer.plum`'s, reused rather than written again:
+// both files are module `typecheck`, so a second copy is a
+// redefinition, which is how this was found.
+pub let rewrite_type_path (name: String): String = {
+    let i = last_dot_index(name, 0, 0 - 1);
+    if i < 0 { name }
+    else {
+        let ns = String.slice(name, 0, i);
+        match use_target(ns) {
+            None => name,
+            Some(target) => target.concat(String.slice(name, i, String.char_len(name))),
+        }
+    }
+}
+
 // The root module is spelled `""` internally -- it holds the prelude
 // and every file not in a subdirectory. Printing "module ``" in a
 // diagnostic is not something a reader can act on.
@@ -538,7 +580,7 @@ let resolve_named (ctx: TyContext) (viewer: String) (in_scope: Array[String]) (n
     else if Array.contains(in_scope, name) { ITParam(name) }
     // Resolved through the VIEWER's own module first, so a name means
     // what it means where it was written.
-    else { match best_struct(ctx, viewer, name) {
+    else { match best_struct(ctx, viewer, rewrite_type_path(name)) {
         Some(info) => { check_struct_named(ctx, viewer, name); ITStruct(info.name, args) },
         None => match best_enum(ctx, viewer, name) {
             Some(info) => { check_enum_named(ctx, viewer, name); ITEnum(info.name, args) },

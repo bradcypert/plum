@@ -64,6 +64,20 @@ EOF
 
 manifest() { printf '%s\n' "$1" > "$work/app/plum.pkg"; }
 
+# `expect_err` edits the manifest; this one leaves it alone and checks
+# what the compiler says about the SOURCE already in place.
+expect_err_src() {
+    local label="$1" want="$2"
+    local got
+    got="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" check "$work/app" 2>&1)"
+    case "$got" in
+        *"$want"*) pass=$((pass + 1)) ;;
+        *) printf 'FAIL  %-44s\n        want to see: %s\n        got:         %s\n' \
+               "$label" "$want" "$(printf '%s' "$got" | head -n 2)"
+           fail=$((fail + 1)) ;;
+    esac
+}
+
 good="Package {
     name: \"app\",
     version: \"0.1.0\",
@@ -217,6 +231,57 @@ let main (): Unit = println("${parsec.greet(core.ping())} ${parsec.json.tag()}")
 
 let test_greet (): Unit = assert_eq(parsec.greet("x"), "hello, x")
 EOF
+
+# `use` BINDS a short name, per file. Until 0.0.35 it was decorative for
+# anything but a standard-library module: every module was addressable by
+# its own name and `use lexer;` was a comment.
+mkdir -p "$work/core/json"
+echo 'pub let tag (): String = "core-json"' > "$work/core/json/json.plum"
+manifest 'Package { name: "app", deps: [ Dep { name: "parsec", path: "../parsec" }, Dep { name: "core", path: "../core" } ] }'
+
+cat > "$work/app/main.plum" <<'EOF'
+use parsec.json;
+let main (): Unit = println(json.tag())
+EOF
+expect_ok "use binds the short name" "json" "$plum" run "$work/app"
+
+# Two packages, one file, which is the case the whole feature exists for.
+cat > "$work/app/main.plum" <<'EOF'
+use parsec.json as pj;
+use core.json as cj;
+let main (): Unit = println("${pj.tag()} ${cj.tag()}")
+EOF
+expect_ok "two aliases in one file" "json core-json" "$plum" run "$work/app"
+
+# An alias REPLACES the name rather than adding one.
+cat > "$work/app/main.plum" <<'EOF'
+use parsec.json as pj;
+let main (): Unit = println(json.tag())
+EOF
+expect_err_src "an alias replaces the name" 'unbound variable: json'
+
+# A file that did not ask for it cannot reach it.
+cat > "$work/app/main.plum" <<'EOF'
+let main (): Unit = println(json.tag())
+EOF
+expect_err_src "no use, no short name" 'unbound variable: json'
+
+# Binding one name twice silently let the second win, which is the
+# failure the package prefix removed, reintroduced one level down.
+cat > "$work/app/main.plum" <<'EOF'
+use parsec.json;
+use core.json;
+let main (): Unit = println(json.tag())
+EOF
+expect_err_src "one name bound twice" 'is bound twice in this file'
+
+rm -rf "$work/core/json"
+cat > "$work/app/main.plum" <<'EOF'
+let main (): Unit = println("${parsec.greet(core.ping())} ${parsec.json.tag()}")
+
+let test_greet (): Unit = assert_eq(parsec.greet("x"), "hello, x")
+EOF
+manifest "$good"
 
 # A project with no manifest is exactly what it was before packages
 # existed. This is the property that keeps `plum new` writing one file.

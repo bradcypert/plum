@@ -183,7 +183,16 @@ pub struct ExternBlockNode { pub abi: String, pub fns: Array[ExternFnNode] }
 // purpose: if Plum needs to look inside it, it is a struct.
 pub struct HandleDeclNode { pub name: String, pub on_drop: String }
 
-pub struct UseDeclNode { pub path: Array[String] }
+// `alias` is what the file calls this module, and is empty for a plain
+// `use`. `use parsec.json as pj;` binds `pj`; `use parsec.json;` binds
+// `json`, the last segment. See issue #44.
+pub struct UseDeclNode { pub path: Array[String], pub alias: String }
+
+// What a `use` binds in the file that wrote it: its alias, or the last
+// segment of the path when there is none.
+pub let use_local_name (u: UseDeclNode): String =
+    if !String.is_empty(u.alias) { u.alias }
+    else { Option.unwrap_or(Array.last(u.path), "") }
 
 pub enum ItemKindNode {
     IKLet(LetDefNode),
@@ -477,9 +486,9 @@ let parse_item (tokens: Array[lexer.Token]) (pos: Int): ItemResult = {
             ItemResult { value: ItemNode { is_pub: pub_bump.matched, module: "", kind: IKHandle(r.value), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(r.next_pos - 1) }, next_pos: r.next_pos }
         } else {
             fail_at(start, "expected an item (let/struct/enum/extern/handle/use)");
-            ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start }
+            ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [], alias: "" }), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start }
         },
-        _ => { fail_at(start, "expected an item (let/struct/enum/extern/handle/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [] }), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start } },
+        _ => { fail_at(start, "expected an item (let/struct/enum/extern/handle/use)"); ItemResult { value: ItemNode { is_pub: false, module: "", kind: IKUse(UseDeclNode { path: [], alias: "" }), path: current_path(()), doc: doc_before(pos), start: offset_at(pos), end: end_offset_at(start) }, next_pos: start } },
     }
 }
 
@@ -815,8 +824,28 @@ struct UseDeclResult { value: UseDeclNode, next_pos: Int }
 let parse_use_decl (tokens: Array[lexer.Token]) (pos: Int): UseDeclResult = {
     let p1 = expect(tokens, pos, TokUse, "'use'");
     let path_r = parse_dotted_path_acc(tokens, p1, []);
-    UseDeclResult { value: UseDeclNode { path: path_r.value }, next_pos: expect(tokens, path_r.next_pos, TokSemicolon, "';'") }
+    // `as` is a CONTEXTUAL keyword, like `handle` and `require`: it
+    // introduces an alias only here, and stays an ordinary identifier
+    // everywhere else. A new reserved word would break every program
+    // with a variable called `as`, to buy nothing.
+    let alias_r = parse_use_alias(tokens, path_r.next_pos);
+    UseDeclResult {
+        value: UseDeclNode { path: path_r.value, alias: alias_r.value },
+        next_pos: expect(tokens, alias_r.next_pos, TokSemicolon, "';'"),
+    }
 }
+
+struct AliasResult { value: String, next_pos: Int }
+
+let parse_use_alias (tokens: Array[lexer.Token]) (pos: Int): AliasResult =
+    match tokens[pos] {
+        TokIdent(name) => if name != "as" { AliasResult { value: "", next_pos: pos } }
+            else {
+                let alias_tok = expect_ident(tokens, pos + 1);
+                AliasResult { value: alias_tok.name, next_pos: alias_tok.next_pos }
+            },
+        _ => AliasResult { value: "", next_pos: pos },
+    }
 
 struct PathResult { value: Array[String], next_pos: Int }
 
@@ -2045,7 +2074,10 @@ let render_item (item: ItemNode): String = {
             })))
         },
         IKHandle(decl) => sexpr(["handle", pub_marker.concat(decl.name), "on_drop:".concat(decl.on_drop)]),
-        IKUse(decl) => "(${pub_marker}use ${join_dot(decl.path)})",
+        // The alias only appears when there IS one, so every existing
+        // `.expected` golden stays byte-identical.
+        IKUse(decl) => if String.is_empty(decl.alias) { "(${pub_marker}use ${join_dot(decl.path)})" }
+            else { "(${pub_marker}use ${join_dot(decl.path)} as ${decl.alias})" },
     }
 }
 

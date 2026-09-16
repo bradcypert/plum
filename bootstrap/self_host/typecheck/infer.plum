@@ -171,6 +171,8 @@ pub struct FnSig { pub name: String, pub module: String, pub generics: Array[Str
 // `let x: T = ..` inside a generic function resolves `T` to `ITParam`
 // rather than failing as an unknown type. Everything else here was
 // already threaded through every inference call; this rides along.
+// `UseBinding` and the lookup live in `context.plum`, beside `ERR`,
+// because type paths resolve there and need them too.
 pub struct Program2 { pub sigs: Array[FnSig], pub globals: Array[GlobalDef], pub ctx: TyContext, pub current: String, pub generics: Array[String] }
 
 // `is_pub` is carried because a global can be reached from another
@@ -179,7 +181,10 @@ pub struct Program2 { pub sigs: Array[FnSig], pub globals: Array[GlobalDef], pub
 // was a keyword with no effect.
 pub struct GlobalDef { pub module: String, pub def: parser.LetDefNode, pub is_pub: Bool }
 
-pub let build_sigs (ctx: TyContext) (program: parser.ProgramNode): Program2 = collect_sigs_acc(ctx, program.items, 0, [], [])
+pub let build_sigs (ctx: TyContext) (program: parser.ProgramNode): Program2 = {
+    set_uses(collect_uses(program.items, 0, []));
+    collect_sigs_acc(ctx, program.items, 0, [], [])
+}
 
 // An extern function has no generics and no body; `Unit` stands in for
 // a declaration with no return type, matching how the real compiler
@@ -206,6 +211,48 @@ let extern_sigs (ctx: TyContext) (fns: Array[parser.ExternFnNode]) (i: Int) (acc
         let ret = match fns[i].ret_ty { Some(t) => resolve_ann(ctx, [], t), None => ITUnit };
         extern_sigs(ctx, fns, i + 1, acc.push(FnSig { name: fns[i].name, module: "", generics: [], params: params, ret: ret, is_extern: true, is_pub: true }))
     }
+
+// Every `use` in the program, tagged with the file that wrote it.
+//
+// A `use` of a STANDARD-LIBRARY module is skipped: those already work
+// by their own name and gating their source is what `use` means there.
+// Binding `Os` to a module called `Os` would be a no-op that could only
+// collide with something.
+let collect_uses (items: Array[parser.ItemNode]) (i: Int) (acc: Array[UseBinding]): Array[UseBinding] =
+    if i >= items.len() { acc }
+    else {
+        let next = match items[i].kind {
+            IKUse(decl) => {
+                let local = parser.use_local_name(decl);
+                let target = parser.join_dot(decl.path);
+                // A single-segment `use lexer;` names a module outright
+                // and binds nothing new; only a dotted path or an alias
+                // introduces a name the file did not already have.
+                if String.is_empty(local) || (decl.path.len() < 2 && String.is_empty(decl.alias)) { acc }
+                else {
+                    // Two `use`s binding one name in one file. Without
+                    // this the second silently wins, which is the exact
+                    // failure the package prefix was added to remove,
+                    // reintroduced one level down.
+                    match existing_binding(acc, items[i].path, local, 0) {
+                        Some(other) => if other != target {
+                            { set_err_pos(items[i].path, items[i].start, "");
+                                fail_tc("`${local}` is bound twice in this file: to `${other}` and to `${target}`.\n  Give one of them another name with `as`.");
+                                acc }
+                        } else { acc },
+                        None => acc.push(UseBinding { path: items[i].path, local: local, module: target }),
+                    }
+                }
+            },
+            _ => acc,
+        };
+        collect_uses(items, i + 1, next)
+    }
+
+let existing_binding (acc: Array[UseBinding]) (file: String) (local: String) (i: Int): Option[String] =
+    if i >= acc.len() { None }
+    else if acc[i].path == file && acc[i].local == local { Some(acc[i].module) }
+    else { existing_binding(acc, file, local, i + 1) }
 
 let collect_sigs_acc (ctx: TyContext) (items: Array[parser.ItemNode]) (i: Int) (sigs: Array[FnSig]) (globals: Array[GlobalDef]): Program2 =
     if i >= items.len() { Program2 { sigs: sigs, globals: globals, ctx: ctx, current: "", generics: [] } }
@@ -1770,7 +1817,14 @@ pub let package_of (module_name: String): String =
 // reached implicitly.
 let module_candidates (p2: Program2) (ns: String): Array[String] = {
     let pkg = package_of(p2.current);
-    if String.is_empty(pkg) { [ns] } else { [ns, pkg.concat(".").concat(ns)] }
+    let base = if String.is_empty(pkg) { [ns] } else { [ns, pkg.concat(".").concat(ns)] };
+    // A `use` binding in THIS FILE comes first. It is the only one the
+    // author asked for by name, so it wins over a module that merely
+    // happens to be called `ns`.
+    match use_target(ns) {
+        None => base,
+        Some(target) => Array.concat([target], base),
+    }
 }
 
 let find_module_sig (p2: Program2) (ns: String) (name: String): Option[FnSig] =

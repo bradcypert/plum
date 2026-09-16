@@ -20990,3 +20990,59 @@ reaching any platform source; requiring the other to fire proves it got
 there. The link fails on this machine for want of Windows headers, which
 does not matter, because the assertion is about which sources clang was
 handed rather than about the outcome.
+
+### `use` finally means something (2026-09-15)
+
+Until now `use` was decorative for anything but a standard-library
+module. Every module was loaded and addressable by its own name, so
+`use lexer;` was a comment: delete it and nothing changed. It was only
+load-bearing for the standard library, where it gates whether a module's
+source is included at all.
+
+Package-qualified module names made that untenable. `parsec.json.parse(..)`
+at every call site is noise, and the fix is the one every language
+reaches for: let a file say what it is using and then use the short name.
+
+```plum
+use parsec.json;            // json.parse(..)
+use parsec.json as pj;      // pj.parse(..), and `json` is not bound
+use parsec;                 // parsec.json.parse(..), as before
+```
+
+**Per-file scope is the whole mechanism.** One file saying
+`use parsec.json;` while another says `use core.json;` is what makes two
+packages usable in one program, and it only works if a binding belongs
+to a file rather than to a program.
+
+The file was already available and needed no new plumbing:
+`set_err_pos` records it per function so diagnostics can quote source,
+so `err_path(())` is the file being checked.
+
+**The bindings live in `context.plum`, beside `ERR`, for the reason
+`ERR` moved there.** Type paths resolve in that file, so bindings kept
+in `infer.plum` would have worked for `json.parse(..)` and failed for
+`json.Doc` — functions bound, types not, which is worse than neither.
+`Program2` carries nothing: both halves ask `use_target(ns)`.
+
+Two things worth recording about the implementation:
+
+**A duplicate helper, caught by the type checker.** The first version
+added `last_dot_index` to `context.plum`, returning `Option[Int]`.
+`infer.plum` already had one returning `Int`, and both files are module
+`typecheck`, so it was a redefinition. The error was
+`'<': Option[Int] != Int` at the OTHER function, which is the flat
+same-module namespace showing its edges. The fix is to reuse rather than
+re-add.
+
+**A binding shadows a module of the same name, including your own.** If
+a project has a `json/` module and a file says `use parsec.json;`, then
+in that file `json` is the dependency's. That is deliberate: the `use`
+is explicit and sits at the top of the file, and it is what Python does
+with `from parsec import json`. Documented rather than made an error,
+because forbidding it would stop a project with its own `json` from
+ever reaching a package's.
+
+What did NOT change, and was the thing to protect: your own modules
+still resolve bare with no `use` at all, and standard-library `use`
+still means what it meant. The compiler's own seven modules are the
+proof, since they exercise module resolution harder than any fixture.

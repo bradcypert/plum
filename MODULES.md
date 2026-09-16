@@ -270,6 +270,33 @@ packages can both ship a `json` without ever meeting:
 let main (): Unit = println(parsec.greet(parsec.json.tag()))
 ```
 
+`use` brings one in under its short name, for the file that says so:
+
+```plum fragment
+use parsec.json;
+
+let main (): Unit = println(json.tag())
+```
+
+and `as` renames it, which is how one file reaches two packages that
+both ship the same module name:
+
+```plum fragment
+use parsec.json as pj;
+use core.json as cj;
+```
+
+An alias REPLACES the short name rather than adding one: after
+`use parsec.json as pj;`, `pj` works and `json` does not. Binding one
+name twice in a file is an error naming both and telling you to use
+`as`.
+
+A binding wins over a module of the same name, including one of your
+own. If your project has a `json/` module and a file says
+`use parsec.json;`, then in THAT FILE `json` is the dependency's. The
+`use` is at the top of the file and says so, which is the same rule
+Python follows for `from parsec import json`.
+
 A module named after its own package collapses to just the package, so
 a library called `semver` whose main module is `semver/` is reached as
 `semver.parse(..)` rather than `semver.semver.parse(..)`.
