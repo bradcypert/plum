@@ -554,15 +554,33 @@ let builtin_items (declared: Array[parser.ItemNode]): Array[parser.ItemNode] = {
 let builtin_qualified (recv: String) (name: String): String =
     if String.is_empty(recv) { name } else { recv.concat(".").concat(name) }
 
+// Only PRELUDE-level declarations count, because that is the namespace
+// a builtin lives in.
+//
+// Collecting every declaration meant a name declared inside a stdlib
+// module suppressed the builtin of the same name: `Os` declaring a bare
+// `args` would have deleted `args` from the reference entirely, since
+// the two are different functions that merely spell alike. Not
+// reachable today -- no stdlib module declares a bare name matching a
+// builtin -- which is exactly why it was worth fixing before one does.
 let declared_names (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String]): Array[String] =
     if i >= items.len() { acc }
     else {
         let next = match items[i].kind {
-            IKLet(def) => if Array.contains(acc, def.name) { acc } else { acc.push(def.name) },
+            IKLet(def) => if !prelude_level(items[i]) || Array.contains(acc, def.name) { acc }
+                else { acc.push(def.name) },
             _ => acc,
         };
         declared_names(items, i + 1, next)
     }
+
+// An ASSOCIATED function (`Array.reverse`) is prelude-level wherever it
+// is declared: its namespace is the type, not the module, which is the
+// same rule that lets a builtin `Array.map` and a declared
+// `Array.reverse` sit on one page.
+let prelude_level (item: parser.ItemNode): Bool =
+    item.module == parser.PRELUDE_MODULE(()) || String.is_empty(item.module)
+        || match item.kind { IKLet(def) => Option.is_some(String.index_of(def.name, ".")), _ => false }
 
 let builtin_src (ms: Array[typecheck.BuiltinMethod]) (i: Int) (acc: String): String =
     if i >= ms.len() { acc }
