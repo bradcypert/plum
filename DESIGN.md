@@ -21046,3 +21046,73 @@ What did NOT change, and was the thing to protect: your own modules
 still resolve bare with no `use` at all, and standard-library `use`
 still means what it meant. The compiler's own seven modules are the
 proof, since they exercise module resolution harder than any fixture.
+
+### SHA-256, and the seventh quadratic (2026-09-16)
+
+`Crypto.sha256` exists, in pure Plum. No shim, no C, no platform branch.
+
+**A new module rather than a function in `Encoding`.** Hex, base64 and
+percent-encoding are reversible transformations; a digest is one-way,
+and putting it among them is a category error that would only get worse
+if the primitives in #47 ever arrive. They compose without being
+neighbours: `Encoding.hex_encode(Crypto.sha256(b))`.
+
+It is writable at all because of two earlier releases. `Int.wrapping_add`
+landed in 0.0.29, and the issue that introduced it
+([#31](https://github.com/bradcypert/plum/issues/31)) named FNV-1a and
+xxHash as the motivation, noting `String.hash` was a runtime primitive
+only because `*` trapped. The bitwise operators landed in 0.0.26. `Int`
+is 64 bits, so the 32-bit lanes are masked explicitly.
+
+**The constants are generated, not transcribed.** K is the first 32 bits
+of the fractional parts of the cube roots of the first 64 primes, and H
+of the square roots of the first 8. Typing 72 magic numbers from memory
+is exactly the kind of thing that looks right and is not, so they were
+computed and then spot-checked against the two values everyone knows
+(`K[0] = 1116352408`, `H[0] = 1779033703`).
+
+**Testing is firmer ground than usual here.** NIST publishes four
+vectors, so the expected answer is what the standard says rather than
+what this compiler produced last time. Three live in `exec_corpus`,
+where they also get AddressSanitizer and leak detection. The fourth, a
+million characters, is in `bootstrap/properties`: ASan instruments every
+allocation and a million bytes of it exceeds the corpus timeout.
+
+### The quadratic it found
+
+That million-character vector would not run, and the cause was not
+SHA-256.
+
+```
+pub let String.repeat (s: String) (n: Int): String =
+    if n <= 0 { "" } else { s.concat(String.repeat(s, n - 1)) }
+```
+
+Each step concatenates onto a string one character shorter, so the bytes
+allocated are 1+2+3+...+n.
+
+| n | allocated, before | after |
+|---|---|---|
+| 25,000 | 313 MB | 19.6 MB |
+| 100,000 | 5.0 GB | 313 MB |
+| 1,000,000 | never finished | 657 MB, 44ms |
+
+`String.pad_left`, `pad_right` and `pad_center` are all built on it.
+
+The fix is the shape this project keeps relearning: a loop with a
+self-rebinding accumulator, `out = out.concat(s)`, which the backend can
+grow in place because the slot is overwritten with the result and
+nothing can observe a mutation. The `concat` counter shows it working:
+100,000 concatenations now cause 6,251 allocations rather than 100,000.
+
+**Seventh accidental O(n^2) in this project**, and worth noting how it
+was found: not by a harness, but by a test vector that needed a large
+input. The counters (`PLUM_RT_STATS=1`) then named it in one run,
+because allocations grew linearly while BYTES grew quadratically, which
+is that bug's signature.
+
+A measurement mistake is worth recording too. The first benchmark
+substituted the input size into a template with `sed`, and the first
+substitution consumed the pattern, so all four sizes ran the same input
+and the timings looked flat. A benchmark that shows no variation is more
+often broken than interesting.

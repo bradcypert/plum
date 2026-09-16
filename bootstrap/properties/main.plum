@@ -1,3 +1,4 @@
+use Crypto;
 use Os;
 use Encoding;
 use Url;
@@ -1139,3 +1140,18 @@ pub let test_wrapping_at_the_edges (): Unit = {
     check_eq("splitmix64 first step", "0",
         Int.wrapping_mul(z, 0 - 4658895280553007687).to_string(), "-2993748316962524115")
 }
+
+// --- SHA-256 ---------------------------------------------------------
+
+// NIST's fourth published vector: a million `a`s. It lives here rather
+// than in `exec_corpus` because that corpus runs under
+// AddressSanitizer, which instruments every allocation, and a million
+// bytes of it takes longer than the harness allows.
+//
+// It is the case that found `String.repeat` to be quadratic. Building
+// the input allocated 1+2+3+...+n bytes and never finished, which is
+// why the fix and this vector arrived together.
+pub let test_sha256_long_vector (): Unit =
+    check_eq("sha256 of a million a's", "1000000 x a",
+        Encoding.hex_encode(Crypto.sha256(Bytes.from_string(String.repeat("a", 1000000)))),
+        "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0")

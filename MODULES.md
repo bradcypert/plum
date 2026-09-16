@@ -212,6 +212,7 @@ modules, and a file that wants one says so:
 | `Time` | the clock, and the calendar on top of it |
 | `Net` | TCP sockets |
 | `Http` | HTTP client and server, built on `Net` |
+| `Crypto` | SHA-256. Cryptographic, unlike `String.hash` |
 
 ```plum fragment
 use Os;
