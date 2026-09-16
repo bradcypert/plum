@@ -453,8 +453,36 @@ let doc_out_dir (argv: Array[String]) (i: Int) (fallback: String): String =
     else if argv[i] == "-o" { argv[i + 1] }
     else { doc_out_dir(argv, i + 1, fallback) }
 
-let cmd_doc (dir: String) (out: String) (html: Bool) (home: String): Unit =
-    cmd_doc_render(collect_project(dir), out, html, home)
+// A project's OWN modules, unless `--with-deps` asks for the tree.
+//
+// `plum doc myapp` used to document every dependency alongside them,
+// which was a consequence rather than a decision: dependencies reach
+// every command through `collect_project`, and that is exactly the
+// design that let `check`, `run`, `build`, `test`, `doc` and the
+// language server all see them without one of them learning what a
+// package is. `doc` is the one command where it is wrong, because its
+// output is something you publish under your own name.
+//
+// `--with-deps` keeps the old behaviour, and it is not a courtesy: with
+// no registry and no hosted documentation, generating a dependency's
+// pages locally is the only way to read its API at all.
+let cmd_doc (dir: String) (out: String) (html: Bool) (home: String) (with_deps: Bool): Unit = {
+    let items = if with_deps { collect_project(dir) } else { collect_own(dir) };
+    cmd_doc_render(items, out, html, home);
+    // A consumer application is usually `main.plum` and nothing `pub`,
+    // so the honest answer for it is zero modules and an empty index --
+    // which looks like the tool failed. Say why, once, and only in the
+    // case where there is something the flag would have shown. Printing
+    // it whenever a project has dependencies would nag every run.
+    if !with_deps && doc_modules(items, 0, []).len() == 0 && dep_count(dir) > 0 {
+        println("note: no `pub` items outside dependencies; `--with-deps` documents the ${dep_count(dir).to_string()} package(s) this one depends on")
+    } else { () }
+}
+
+let dep_count (dir: String): Int =
+    if Result.unwrap_or(Os.is_directory(dir), false) {
+        dep_closure(dir, DepScan { visited: [Path.clean(dir)], found: [] }).found.len()
+    } else { 0 }
 
 // The standard library documents itself through the SAME generator.
 //
@@ -2254,7 +2282,7 @@ pub let plum_version (): String = "0.0.36"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
-    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | check-manifest <file> | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
+    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | check-manifest <file> | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--with-deps] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
     println("");
     println("  --trace             a stack trace on stderr when the program dies.");
     println("                      Tail recursion still runs in constant stack space.");
@@ -3252,14 +3280,36 @@ let collect_path_items (path: String) (module_name: String): Array[parser.ItemNo
 // new question was which directories to read.
 let collect_project (root: String): Array[parser.ItemNode] =
     if Result.unwrap_or(Os.is_directory(root), false) {
-        let own = collect_root_entries(root, Result.unwrap_or(Os.list_dir(root), []), 0, []);
         // The ROOT's own path seeds the visited set, and it has to:
         // its modules are already loaded above, so a dependency that
         // leads back here must be skipped like any other package
         // already seen. Without it, `a -> b -> a` loaded `a` a second
         // time as a dependency and reported it as a module clash with
         // itself.
-        collect_deps(dep_closure(root, DepScan { visited: [Path.clean(root)], found: [] }).found, 0, own)
+        collect_deps(dep_closure(root, DepScan { visited: [Path.clean(root)], found: [] }).found, 0,
+            collect_own(root))
+    } else {
+        collect_path_items(root, "")
+    }
+
+// The project's OWN items -- what `collect_project` loads before it
+// loads anything a manifest names.
+//
+// Split out for `plum doc`, which documents a project rather than
+// compiling it and so wants the modules the author wrote and not the
+// modules the author depends on (issue #49).
+//
+// This is a SPLIT of `collect_project` rather than a filter applied
+// afterwards, and that distinction is the whole correctness argument.
+// A dependency's modules are package-qualified (`parsec.json`) and the
+// project's own are bare (`json`), so filtering on the name is
+// available and is wrong: it says a module is foreign because of how it
+// is spelled. `collect_own` says so because of where it was READ FROM,
+// which is the actual question, and it cannot be fooled by a project
+// that happens to contain a dot in a directory name.
+let collect_own (root: String): Array[parser.ItemNode] =
+    if Result.unwrap_or(Os.is_directory(root), false) {
+        collect_root_entries(root, Result.unwrap_or(Os.list_dir(root), []), 0, [])
     } else {
         collect_path_items(root, "")
     }
@@ -3525,7 +3575,11 @@ let main (): Unit = {
         let html = doc_has_flag(argv, "--html", 0);
         let out = doc_out_dir(argv, 0, "docs");
         let home = doc_flag_value(argv, "--home", 0, "");
-        if argv[1] == "--stdlib" { cmd_doc_stdlib(out, html, home) } else { cmd_doc(argv[1], out, html, home) }
+        // `--stdlib` is unaffected: it has no project, so it has no
+        // dependencies to include or leave out.
+        let with_deps = doc_has_flag(argv, "--with-deps", 0);
+        if argv[1] == "--stdlib" { cmd_doc_stdlib(out, html, home) }
+        else { cmd_doc(argv[1], out, html, home, with_deps) }
     } else if argv.len() < 2 {
         usage(());
     } else if argv[0] == "query" && argv.len() >= 5 {

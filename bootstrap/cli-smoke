@@ -99,6 +99,60 @@ check $? "plum doc --html on a project exited nonzero: $(head -n 1 "$work/doch.l
 [ -f "$work/dochtml/index.html" ] && [ -f "$work/dochtml/style.css" ]
 check $? "plum doc --html did not write index.html and style.css"
 
+# --- plum doc does not publish a DEPENDENCY's API ----------------------
+#
+# Issue #49. `plum doc myapp` documented every package `myapp` depends
+# on, under `myapp`'s name, in `myapp`'s output directory -- a
+# consequence of dependencies reaching every command through
+# `collect_project` rather than a decision anyone made.
+#
+# The dependency here declares a module whose name could not collide
+# with the consumer's (`vendored`), so a page for it is unambiguous
+# evidence and not a naming accident. Both directions are checked: the
+# default must NOT write it, and `--with-deps` must.
+
+mkdir -p "$work/vendor/vendored"
+cat > "$work/vendor/plum.pkg" <<'EOF'
+Package { name: "vendor", version: "0.1.0" }
+EOF
+cat > "$work/vendor/vendored/vendored.plum" <<'EOF'
+/// Something the consumer did not write.
+pub let borrowed (): Int = 7
+EOF
+cat > "$work/proj/plum.pkg" <<'EOF'
+Package {
+    name: "proj",
+    version: "0.1.0",
+    deps: [ Dep { name: "vendor", path: "../vendor" } ],
+}
+EOF
+
+SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" doc "$work/proj" -o "$work/docs2" > "$work/doc2.log" 2>&1
+check $? "plum doc on a project with a dependency exited nonzero: $(head -n 1 "$work/doc2.log")"
+[ -f "$work/docs2/greet.md" ]; check $? "plum doc dropped the project's OWN module"
+! ls "$work/docs2" | grep -q 'vendor'; check $? "plum doc published a dependency's page by default"
+! grep -rq 'borrowed' "$work/docs2"; check $? "a dependency's declaration reached the default output"
+
+SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" doc "$work/proj" -o "$work/docs3" --with-deps > "$work/doc3.log" 2>&1
+check $? "plum doc --with-deps exited nonzero: $(head -n 1 "$work/doc3.log")"
+[ -f "$work/docs3/greet.md" ]; check $? "--with-deps dropped the project's own module"
+[ -f "$work/docs3/vendor.vendored.md" ]
+check $? "--with-deps did not write the dependency's page (expected vendor.vendored.md)"
+grep -q 'borrowed' "$work/docs3/vendor.vendored.md"
+check $? "--with-deps wrote the page without the declaration"
+
+# The note only fires where it helps: this project HAS its own module,
+# so it must not be told to pass a flag it does not need.
+! grep -q 'with-deps' "$work/doc2.log"
+check $? "plum doc suggested --with-deps to a project that documented its own modules"
+
+# Building still sees the dependency. The split is `doc`'s alone, and a
+# `doc` change that quietly stopped `build` resolving packages would be
+# a far worse bug than the one being fixed.
+printf 'use greet;\nuse vendor.vendored as v;\nlet main (): Unit = println(greet.hello(v.borrowed().to_string()))\n' > "$work/proj/main.plum"
+SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" check "$work/proj" > "$work/depcheck.log" 2>&1
+check $? "the project stopped type-checking against its dependency: $(head -n 1 "$work/depcheck.log")"
+
 # --- native/ source selection -----------------------------------------
 #
 # `native/*.c` is compiled for every target; `native/<os>/*.c` only when

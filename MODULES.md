@@ -435,7 +435,23 @@ mechanism works on your own code:
 ```sh
 plum doc my-project -o docs           # Markdown, one page per module
 plum doc my-project -o docs --html    # a browsable site, with search
+plum doc my-project -o docs --with-deps   # and every package it depends on
 ```
+
+**Your modules, not your dependencies'.** `plum doc my-project`
+documents the modules in `my-project` and stops there. What you publish
+under your own name is your own API.
+
+`--with-deps` adds the packages your manifest names, under their package
+names — `parsec.json` rather than `json`, so it stays clear whose code
+you are reading. It is worth knowing about: there is no registry and no
+hosted documentation yet, so generating a dependency's pages locally is
+currently the only way to read its API. If a project has dependencies
+and nothing `pub` of its own, `plum doc` says so rather than leaving you
+with an empty index.
+
+`--stdlib` is unaffected either way — it has no project, so it has no
+dependencies.
 
 `plum highlight <file>` prints Plum source as marked-up HTML, using the
 compiler's own lexer rather than a regex approximation of it. It is what
