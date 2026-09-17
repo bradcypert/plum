@@ -88,6 +88,54 @@ let non_empty_env (name: String): Option[String] =
 
 pub let package_cache (unit: Unit): String = Path.join(cache_root(()), "pkg")
 
+// The cache is deliberately readable by hand, but a command is still
+// better than asking every caller to rediscover the layout with `find`.
+// A package entry is a full Git object ID directory; stopping at that
+// boundary matters, since a package is allowed to contain a directory
+// whose name happens to look like a commit.
+pub let cached_packages (unit: Unit): Array[String] =
+    Array.sort_string(cache_package_dirs(package_cache(()),
+        Result.unwrap_or(Os.list_dir(package_cache(())), []), 0, []))
+
+let cache_package_dirs (dir: String) (names: Array[String]) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= names.len() { acc }
+    else {
+        let path = Path.join(dir, names[i]);
+        let next = if Result.unwrap_or(Os.is_directory(path), false) {
+            if is_commit_dir(names[i]) { acc.push(path) }
+            else { cache_package_dirs(path, Result.unwrap_or(Os.list_dir(path), []), 0, acc) }
+        } else { acc };
+        cache_package_dirs(dir, names, i + 1, next)
+    }
+
+let is_commit_dir (name: String): Bool =
+    name.len() == 40 && Array.fold(chars_of(name), true, |ok, c|
+        ok && Array.contains(chars_of("0123456789abcdef"), c))
+
+// Sum file sizes beneath one package, not the directory metadata. A
+// directory's own size is filesystem-dependent and tells a caller
+// nothing useful about how much source it holds.
+pub let cached_package_size (dir: String): Int =
+    cache_size_entries(dir, Result.unwrap_or(Os.list_dir(dir), []), 0, 0)
+
+let cache_size_entries (dir: String) (names: Array[String]) (i: Int) (acc: Int): Int =
+    if i >= names.len() { acc }
+    else {
+        let path = Path.join(dir, names[i]);
+        let next = if Result.unwrap_or(Os.is_directory(path), false) {
+            acc + cached_package_size(path)
+        } else { acc + Result.unwrap_or(Os.file_size(path), 0) };
+        cache_size_entries(dir, names, i + 1, next)
+    }
+
+// Empty only fetched packages. The cache root is controlled by an
+// environment variable and may one day hold other Plum cache kinds, so
+// `plum cache clean` must not erase the root wholesale.
+pub let clear_package_cache (unit: Unit): Result[Unit, String] =
+    if Result.unwrap_or(Os.exists(package_cache(())), false) {
+        Os.remove_tree(package_cache(()))
+    } else { Ok(()) }
+
 // Where one commit of one repository lives.
 //
 // `<cache>/pkg/github.com/someone/parsec/<rev>/`. Readable on purpose:

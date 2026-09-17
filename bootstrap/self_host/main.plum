@@ -2282,7 +2282,7 @@ pub let plum_version (): String = "0.0.37"
 
 let usage (): Unit = {
     println("plum ".concat(plum_version()));
-    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | check-manifest <file> | fetch [<project-dir>] | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--with-deps] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
+    println("usage: plum (tokens|dump-tokens|ast|dump-ast|run|emit-llvm) <file> | check <file-or-project-dir> | build <project-dir> [-o <out>] [--release] [--trace] [--target <triple>] | test <project-dir> [--release] | highlight <file> | check-manifest <file> | fetch [<project-dir>] | cache (list|clean) | doc (<project-dir>|--stdlib) [-o <out>] [--html] [--with-deps] [--home \"Label=url\"] | new <name> | version | help | lsp | complete <project-dir>");
     println("");
     println("  --trace             a stack trace on stderr when the program dies.");
     println("                      Tail recursion still runs in constant stack space.");
@@ -3335,6 +3335,54 @@ let cmd_fetch (dir: String): Unit = {
     println("fetch: ${found.len().to_string()} dependency(s) resolved for ${dir}")
 }
 
+// `plum cache list` and `plum cache clean` -- the global cache is a
+// tool-owned directory in a user's home, so its growth must be visible
+// and reversible rather than an accidental side effect of `fetch`.
+let cmd_cache_list (): Unit = {
+    let entries = pkg.cached_packages(());
+    println("cache: ${pkg.cache_root(())}");
+    report_cached_packages(entries, 0);
+    println("cache: ${entries.len().to_string()} package(s), ${cached_file_count(entries, 0, 0).to_string()} file(s), ${cached_byte_count(entries, 0, 0).to_string()} bytes")
+}
+
+let report_cached_packages (entries: Array[String]) (i: Int): Unit =
+    if i >= entries.len() { () }
+    else {
+        println("  ${entries[i]}  ${pkg.cached_package_size(entries[i]).to_string()} bytes");
+        report_cached_packages(entries, i + 1)
+    }
+
+let cached_byte_count (entries: Array[String]) (i: Int) (acc: Int): Int =
+    if i >= entries.len() { acc }
+    else { cached_byte_count(entries, i + 1, acc + pkg.cached_package_size(entries[i])) }
+
+let cached_file_count (entries: Array[String]) (i: Int) (acc: Int): Int =
+    if i >= entries.len() { acc }
+    else { cached_file_count(entries, i + 1, acc + cached_files_under(entries[i])) }
+
+let cached_files_under (dir: String): Int =
+    cached_files_in(dir, Result.unwrap_or(Os.list_dir(dir), []), 0, 0)
+
+let cached_files_in (dir: String) (names: Array[String]) (i: Int) (acc: Int): Int =
+    if i >= names.len() { acc }
+    else {
+        let path = Path.join(dir, names[i]);
+        let next = if Result.unwrap_or(Os.is_directory(path), false) {
+            acc + cached_files_under(path)
+        } else { acc + 1 };
+        cached_files_in(dir, names, i + 1, next)
+    }
+
+let cmd_cache_clean (): Unit = {
+    let entries = pkg.cached_packages(());
+    let files = cached_file_count(entries, 0, 0);
+    let bytes = cached_byte_count(entries, 0, 0);
+    match pkg.clear_package_cache(()) {
+        Ok(_) => println("cache: removed ${entries.len().to_string()} package(s), ${files.to_string()} file(s), ${bytes.to_string()} bytes"),
+        Err(e) => panic_raw("could not clean package cache: ${e}"),
+    }
+}
+
 let report_fetched (deps: Array[pkg.Dep]) (i: Int): Unit =
     if i >= deps.len() { () }
     else {
@@ -3644,6 +3692,16 @@ let main (): Unit = {
         // `plum fetch` is run from inside the project far more often
         // than it is pointed at one.
         cmd_fetch(if argv.len() >= 2 { argv[1] } else { "." })
+    } else if argv.len() == 2 && argv[0] == "cache" && argv[1] == "list" {
+        cmd_cache_list(())
+    } else if argv.len() == 2 && argv[0] == "cache" && argv[1] == "clean" {
+        cmd_cache_clean(())
+    } else if argv.len() >= 1 && argv[0] == "cache" {
+        // A cache subcommand is never a source file. Without this,
+        // `plum cache typo` reaches the generic single-file path below
+        // and reports that it could not read `typo`, which hides the
+        // actual mistake.
+        usage(())
     } else if argv.len() >= 1 && argv[0] == "lsp" {
         // No file argument: the server talks over stdin/stdout.
         lsp_serve(())

@@ -303,6 +303,8 @@ a dependency that is not in the cache is an error telling you to run
 ```sh
 plum fetch            # download what plum.pkg names, into the cache
 plum fetch my-project # or point it at a project
+plum cache list       # show fetched packages and their total size
+plum cache clean      # remove fetched packages; they can be fetched again
 ```
 
 Fetched packages live in a **global cache**, shared between your
@@ -311,6 +313,13 @@ projects, not in a directory inside this one — `$PLUM_CACHE`, else
 directory, so two projects wanting two versions of one package is two
 directories rather than a conflict. The path is readable on purpose:
 `<cache>/pkg/github.com/someone/parsec/<commit>/`.
+
+`plum cache list` uses that same root and reports each cached commit plus
+the file count and exact byte total. `plum cache clean` removes only
+`<cache>/pkg`, not the cache root itself: `PLUM_CACHE` is user-controlled
+and future Plum cache kinds must not be erased as a side effect. Cleaning
+is safe; a removed dependency is simply fetched again on the next explicit
+`plum fetch`.
 
 **`git` is only needed if you fetch.** Plum shells out to it rather than
 implementing TLS; a project with only `path` dependencies never needs

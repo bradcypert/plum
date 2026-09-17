@@ -551,6 +551,37 @@ EOF
         fail=$((fail + 1))
     fi
 
+    # The cache is visible through Plum, not only by knowing its on-disk
+    # layout. `PLUM_CACHE` must govern these commands too -- a cache
+    # command that ignored it would inspect or erase the developer's real
+    # home cache while this harness stayed green.
+    mkdir -p "$work/cache/other"
+    printf 'not a package\n' > "$work/cache/other/keep"
+    cache_list="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" cache list 2>&1)"
+    case "$cache_list" in
+        *"cache: $work/cache"*"2 package(s)"*"file(s),"*"bytes"*) pass=$((pass + 1)) ;;
+        *) printf 'FAIL  %-44s\n        got: %s\n' "cache list uses PLUM_CACHE" "$(printf '%s' "$cache_list" | head -n 4)"
+           fail=$((fail + 1)) ;;
+    esac
+
+    # Clean removes fetched packages, but never the configurable cache
+    # root wholesale. The latter may gain other Plum cache kinds, and is
+    # user-controlled today, so deleting it would be an unsafe promise.
+    clean_out="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" cache clean 2>&1)"
+    if [ $? -eq 0 ] && [ ! -e "$work/cache/pkg" ] && [ -f "$work/cache/other/keep" ]; then
+        pass=$((pass + 1))
+    else
+        printf 'FAIL  %-44s\n        got: %s\n' "cache clean removes packages only" "$(printf '%s' "$clean_out" | head -n 2)"
+        fail=$((fail + 1))
+    fi
+    expect_c "an empty cache is reported" "cache: $work/cache
+cache: 0 package(s), 0 file(s), 0 bytes" "$plum" cache list
+
+    # Emptying the cache is safe precisely because builds never fetch:
+    # they name the missing dependency and leave the cache alone until a
+    # caller explicitly asks to fetch it again.
+    expect_c_err "a cleaned cache needs explicit fetch" "Run \`plum fetch\`" "$plum" check "$work/consumer"
+
     # A `rev` that is not a full commit hash is refused by the MANIFEST,
     # before anything is cloned. A branch moves, and a dependency that
     # moves is not pinned.
