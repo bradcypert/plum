@@ -53,8 +53,8 @@ character for character. `Map` is a real hash map, so the mirror
 has to be exact in one way that is easy to miss: bucket index is
 `String.hash(..) % bucket_count`, which means `Map.keys` and
 `Map.values` enumerate in HASH order. A hash that disagreed with
-the real compiler's would print the same map in a different order
-See `@plum_str_hash_raw` in runtime.plum, and the sign-bit mask
+the real compiler's would print the same map in a different order.
+`String.hash` is FNV-1a in the prelude, including the sign-bit mask
 that a first attempt got wrong.
 
 ## `struct JsonEntry`

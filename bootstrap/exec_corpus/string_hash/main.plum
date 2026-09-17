@@ -1,0 +1,17 @@
+// `String.hash` is FNV-1a over UTF-8 BYTES, not characters. These
+// values were recorded before moving it out of handwritten LLVM IR, so
+// the implementation has to preserve Map's bucket order exactly rather
+// than merely remain a plausible hash function.
+
+let show (s: String): Unit = println(String.hash(s).to_string())
+
+let main (): Unit = {
+    show("");
+    show("a");
+    show("hello");
+    show("é");
+    match Bytes.from_array([104, 0, 105]).as_string() {
+        Ok(s) => show(s),
+        Err(_) => (),
+    }
+}

@@ -2941,7 +2941,6 @@ let cg_runtime_fn (name: String): Option[String] =
     else if name == "read_file_bytes_raw" { Some("@plum_read_file_raw") }
     else if name == "write_file_bytes_raw" { Some("@plum_write_file_raw") }
     else if name == "append_file_bytes_raw" { Some("@plum_os_append_file") }
-    else if name == "string_hash_raw" { Some("@plum_str_hash_raw") }
     // Wrapping arithmetic. Runtime symbols rather than an inline
     // instruction so that they follow the same path as every other
     // primitive, and because `-O2` inlines a three-line function anyway.

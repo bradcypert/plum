@@ -85,6 +85,10 @@ A hash of the string's bytes, for bucketing.
 Not stable across releases and not cryptographic — do not persist
 it, and do not use it for anything security-related.
 
+FNV-1a, kept in Plum now that `Int.wrapping_mul` can express its
+modulo-2^64 multiply. The final sign-bit mask is required: `Map`
+uses the result with `%`, which needs a non-negative index.
+
 ## `let String.is_ascii_ws (c: String): Bool`
 
 Whether a one-character string is an ASCII space, tab, newline or
