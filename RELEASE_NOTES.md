@@ -1,68 +1,145 @@
 Plum is a small, statically typed, compiled language.
 
-Plum can hash now, and a quadratic went with it.
+Plum can depend on code it did not ship with.
 
-## `Crypto.sha256`
+## `plum fetch`
 
-```plum fragment
-use Crypto;
-use Encoding;
+A dependency can name a repository and a commit:
 
-let digest (s: String): String =
-    Encoding.hex_encode(Crypto.sha256(Bytes.from_string(s)))
+```plum manifest
+// plum.pkg
+Package {
+    name: "myapp",
+    version: "0.1.0",
+    deps: [
+        Dep {
+            name: "parsec",
+            git: "https://github.com/someone/parsec",
+            rev: "9f2a1c4e8b7d3f6a0c5e2b9d4a8f1c3e7b6d0a52",
+            sha256: "3b8f1d0c6a24e7593f8c1b0d4a6e29f7c53b8d1a0f462e97c8b3d5a1f0e6c294",
+        },
+    ],
+}
 ```
 
-Pure Plum. No C shim, no platform branch.
-
-It is a new module rather than a function in `Encoding`, because hex,
-base64 and percent-encoding are all reversible transformations and a
-digest is one-way. They compose without being neighbours, as above.
-
-**Cryptographic**, unlike `String.hash`, which is FNV-1a for bucketing
-and says so in its own documentation. Use `Crypto.sha256` when the
-answer has to mean something to somebody else.
-
-It is writable in Plum at all because of two earlier releases:
-`Int.wrapping_add` from 0.0.29, added because hashing needs it, and the
-bitwise operators from 0.0.26. `Int` is 64 bits, so the 32-bit lanes are
-masked explicitly.
-
-Checked against all four of NIST's published vectors, which is firmer
-ground than most things here get: the expected answer is what the
-standard says rather than what this compiler produced last time.
-
-## `String.repeat` was quadratic
-
-```plum fragment
-String.repeat("-", 40)
+```sh
+plum fetch     # download it, into a cache shared across your projects
+plum run .     # and everything after that is unchanged
 ```
 
-That was fine. This was not:
+Path dependencies landed in 0.0.34 and were the whole of the package
+system until now. This is the half that lets code come from somewhere
+you have not already got.
 
-| characters | allocated, before | after |
-|---|---|---|
-| 25,000 | 313 MB | 19.6 MB |
-| 100,000 | 5.0 GB | 313 MB |
-| 1,000,000 | never finished | 657 MB, 44ms |
+## Building never touches the network
 
-It was written as `s.concat(String.repeat(s, n - 1))`, which
-concatenates onto a string one character shorter each time, so the bytes
-allocated are 1+2+3+...+n.
+A dependency that has not been fetched is an error, not a download:
 
-`String.pad_left`, `pad_right` and `pad_center` are all built on it, so
-padding to a large width was quadratic too.
+```
+dependency `parsec` has not been fetched.
+  https://github.com/someone/parsec at 9f2a1c4e8b7d
+  Run `plum fetch` to download it.
+```
 
-It is a loop with a self-rebinding accumulator now, which the compiler
-can grow in place. The allocation counter shows the difference: 100,000
-concatenations used to cause 100,000 allocations and now cause 6,251.
+Cargo and Go both fetch implicitly, and it is a real convenience. It is
+also a build that reaches the network without being asked. Fetching
+implicitly can be added later; it cannot be taken back once builds
+depend on it.
 
-Found by SHA-256's million-character test vector, which would not run.
-It is the seventh accidental quadratic in this project, and the first
-found by a test vector rather than by a harness.
+## The manifest is the lockfile
+
+There is no second file, no resolver, no version solving and no
+registry. A dependency is a URL and a commit, and `sha256` pins the
+bytes at that commit.
+
+The hash is checked on **every build**, not only on the fetch that
+downloaded it — a cache entry is a directory on a disk that other
+programs can reach, and verifying only what was just downloaded checks
+the one case that was never in doubt. `plum fetch` prints the hash of
+what it got, so pinning a dependency is a copy and a paste.
+
+A `rev` is a full commit hash, and that is enforced:
+
+```
+plum.pkg: dependency `parsec` has `rev: "main"`, which is not a commit.
+  A `rev` is a full 40-character commit hash. A branch or a tag moves, and a dependency that moves is not pinned.
+```
+
+An abbreviated hash is refused for the same reason one level down: it is
+a pin that can become ambiguous as a repository grows.
+
+## A global cache
+
+`$PLUM_CACHE`, else `$XDG_CACHE_HOME/plum`, else `~/.cache/plum`, laid
+out so you can read it:
+
+```
+<cache>/pkg/github.com/someone/parsec/9f2a1c4e8b7d3f6a0c5e2b9d4a8f1c3e7b6d0a52/
+```
+
+Shared between your projects rather than copied into each one, which is
+safe *because* of the hash: packages are addressed by URL and commit and
+verified by content, so two projects naming the same commit are naming
+the same bytes. Each commit is its own directory, so two projects
+wanting two versions is two directories rather than a conflict.
+
+## Plum did not write its own TLS
+
+It shells out to `git`, which makes git a **conditional** dependency:
+needed to fetch packages, and for nothing else. A project whose
+dependencies are all local paths never needs it, and neither does
+building the compiler. Missing, it says so by name rather than failing
+as something that looks like a network problem.
+
+The tempting argument for the other side is a false one, and it is worth
+recording. "Nobody writes their own TLS" is not true: Go wrote
+`crypto/tls` in Go and `go get` uses it, Zig wrote `std.crypto.tls` in
+Zig precisely so its toolchain would not need OpenSSL, and Java has done
+TLS in Java since the 90s. Languages whose identity is "no C
+dependencies" wrote their own.
+
+What actually rules it out here is the starting point. Go and Zig built
+their TLS on crypto their languages already had. Plum has SHA-256, as of
+last release, and three encodings. No AES, no ChaCha20, no elliptic
+curve, no bignum, no constant-time comparison. TLS from there is a
+research programme, and this project's property tests can prove sorting
+correct while being completely unable to tell you whether your AES is
+constant-time.
+
+**The bootstrap path stays `seed -> compiler` with no network, forever.**
+Nothing here is on it.
+
+## `plum doc` documents your project, not your dependencies
+
+`plum doc myapp` used to write pages for every package `myapp` depends
+on, under `myapp`'s name, in `myapp`'s output directory. Four of five
+pages describing code the project did not write.
+
+It was a consequence rather than a decision: dependencies reach every
+command through one function, which is exactly the design that let
+`check`, `run`, `build`, `test`, `doc` and the language server all see
+them without any of them learning what a package is. `doc` is the one
+command where it is wrong, because its output is something you publish
+under your own name.
+
+`--with-deps` keeps the old behaviour, and it earns its place: with no
+registry and no hosted documentation, generating a dependency's pages
+locally is currently the only way to read its API.
 
 ## Also in this release
 
-- A name declared inside a standard-library module could delete a
-  compiler builtin of the same name from the generated reference. They
-  are different functions that merely spell alike. Not reachable today,
-  which is why it was worth fixing before it became so.
+- **An interrupted `gen-seed` destroyed the bootstrap seed.** It wrote
+  straight over `bootstrap/seed/plum.ll` with a shell redirect, which
+  truncates before the compiler emits a byte — so a Ctrl+C left the one
+  file a clean clone cannot build without at zero bytes, silently, until
+  somebody tried. It writes to a scratch file and moves it into place
+  now, and refuses to install an empty emission.
+
+- **The harness timings in `MAINTENANCE.md` were wrong by up to 7x**, and
+  the pre-commit loop documented as "about two minutes" takes thirteen.
+  Nobody had measured them since the repository was much smaller. They
+  are measured, dated, and reproducible with a script now
+  (`bootstrap/time-harnesses --measure`), and its cheap half runs in the
+  loop to check the table still names every harness that exists. A
+  developer who budgets two minutes and spends thirteen stops running
+  the loop, which is the opposite of what the table is for.
