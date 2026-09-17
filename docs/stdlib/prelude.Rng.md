@@ -19,20 +19,14 @@ than mutating in place, so a generator is as ordinary a value as an
 from a seed, or write a test that cannot flake, is what it buys. A
 `Ref[Rng]` is the opt-in for in-place update.
 
---- Which generator, and why not a better one ---
+--- Which generator, and why ---
 
-This is L'Ecuyer's combined multiplicative generator (1988): two
-Lehmer streams with different moduli, subtracted. Period is about
-2^61, which is ample for games and tests.
-
-It is NOT the generator anyone would reach for first. The modern
-answers (PCG, xoshiro, splitmix64) all need wrapping 64-bit
-multiplication and bitwise xor/shift, and Plum has NEITHER: `*`
-traps on overflow, and there is no `^`, `&` or `<<` token in the
-language at all. What is left is arithmetic that stays inside an
-`Int` by construction, and among those this is the best understood.
-Both streams' largest intermediate is about 8.6e13, comfortably
-inside i64's 9.2e18.
+SplitMix64: a small, modern 64-bit generator with a full 2^64
+period. It is fast, has excellent bit diffusion, and is the right
+generator when reproducibility and simple state matter more than
+cryptographic secrecy. The wrapping multiply and logical shifts it
+needs became expressible when `Int.wrapping_mul` and bitwise
+operators landed.
 
 **Not for cryptography, keys, tokens or passwords.** It is a
 statistical generator and its entire state is recoverable from two
@@ -40,11 +34,9 @@ outputs.
 
 ## `let Rng.from_seed (seed: Int): Rng`
 
-Any `Int` is a legal seed. It is folded into the two streams'
-legal ranges (each must be non-zero and below its own modulus),
-so no caller has to know what those ranges are, including
-`Rng.from_seed(0)`, which a naive mapping would turn into a
-generator that only ever returns one number.
+Any `Int` is a legal seed, including zero and negatives. SplitMix64
+has no forbidden state, unlike generators whose all-zero state gets
+stuck, so the seed is kept exactly rather than folded into a range.
 
 ## `let Rng.float (r: Rng): (Rng, Float)`
 
