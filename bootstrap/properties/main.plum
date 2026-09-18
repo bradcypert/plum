@@ -30,19 +30,29 @@ use Path;
 
 // --- A generator ---
 
-// A linear congruential generator, kept small ON PURPOSE. Plum checks
-// integer overflow and aborts on it (`cg_overflow_guard`), so the usual
-// 64-bit LCG constants would kill the test process rather than wrap.
-// With `seed < 2^31` the product below peaks near 2.4e18, comfortably
-// inside `Int`.
-let PRNG_MOD (): Int = 2147483648
+// SplitMix64's state transition and mixer. The old 31-bit LCG existed
+// solely because ordinary `*` traps on overflow; wrapping arithmetic now
+// makes a full-width deterministic generator possible. State and output
+// are deliberately separate: advancing the state is a permutation over
+// all 64 bits, while the mixer supplies well-diffused non-negative bits
+// for choosing property inputs.
+let PRNG_GAMMA: Int = -7046029254386353131
+let PRNG_MIX_1: Int = -4658895280553007687
+let PRNG_MIX_2: Int = -7723592293110705685
+let PRNG_RANGE: Int = 9223372036854775807
 
-let next_seed (seed: Int): Int = (seed * 1103515245 + 12345) % PRNG_MOD()
+let next_seed (seed: Int): Int = Int.wrapping_add(seed, PRNG_GAMMA)
 
-// A value in [lo, hi]. `Int.abs` is applied to the seed rather than the
-// result so a negative range still lands inside it.
+let random_bits (seed: Int): Int = {
+    let z1 = Int.wrapping_mul(seed ^ Int.shr_logical(seed, 30), PRNG_MIX_1);
+    let z2 = Int.wrapping_mul(z1 ^ Int.shr_logical(z1, 27), PRNG_MIX_2);
+    (z2 ^ Int.shr_logical(z2, 31)) & PRNG_RANGE
+}
+
+// A value in [lo, hi], from the mixed output rather than from the raw
+// (possibly negative) state.
 let rand_between (seed: Int) (lo: Int) (hi: Int): Int =
-    lo + (Int.abs(seed) % (hi - lo + 1))
+    lo + (random_bits(seed) % (hi - lo + 1))
 
 // --- Reporting ---
 
@@ -127,7 +137,7 @@ pub let test_float_roundtrip (): Unit = {
 // produce empty parts that must survive the round trip.
 let sep_string (seed: Int) (left: Int) (acc: String): String =
     if left <= 0 { acc } else {
-        let pick = Int.abs(seed) % 3;
+        let pick = random_bits(seed) % 3;
         let c = if pick == 0 { "a" } else if pick == 1 { "b" } else { "," };
         sep_string(next_seed(seed), left - 1, acc.concat(c))
     }
@@ -157,7 +167,7 @@ pub let test_split_join (): Unit = {
 // property violation.
 let ascii_string (seed: Int) (left: Int) (acc: String): String =
     if left <= 0 { acc } else {
-        let pick = Int.abs(seed) % 4;
+        let pick = random_bits(seed) % 4;
         let c = if pick == 0 { "a" } else if pick == 1 { "Z" } else if pick == 2 { "m" } else { "7" };
         ascii_string(next_seed(seed), left - 1, acc.concat(c))
     }
@@ -232,9 +242,9 @@ pub let test_arithmetic (): Unit = arith_props(2024, 200)
 // `json_parse` and `String.parse_float` and had its value computation
 // rerouted through `strtod` on 2026-08-25. Nothing else guards it.
 let json_leaf (seed: Int): JsonValue = {
-    let pick = Int.abs(seed) % 5;
+    let pick = random_bits(seed) % 5;
     if pick == 0 { JsonNull }
-    else if pick == 1 { JsonBool(Int.abs(seed) % 2 == 0) }
+    else if pick == 1 { JsonBool(random_bits(seed) % 2 == 0) }
     else if pick == 2 { JsonNumber(rand_between(seed, 0 - 100000, 100000).to_float()) }
     else if pick == 3 {
         // Exponent territory, where the number parser is most likely to
@@ -247,7 +257,7 @@ let json_leaf (seed: Int): JsonValue = {
 let json_value (seed: Int) (depth: Int): JsonValue =
     if depth <= 0 { json_leaf(seed) }
     else {
-        let pick = Int.abs(seed) % 4;
+        let pick = random_bits(seed) % 4;
         if pick == 0 { JsonArray(json_items(seed, rand_between(seed, 0, 3), depth - 1, [])) }
         else if pick == 1 {
             JsonObject([
@@ -296,7 +306,7 @@ let array_laws (seed: Int) (left: Int): Unit =
         // Two functions that must never disagree about the same
         // question.
         if xs.len() > 0 {
-            let probe = xs[Int.abs(seed) % xs.len()];
+            let probe = xs[random_bits(seed) % xs.len()];
             check_eq("contains agrees with index_of", case.concat(" find ").concat(probe.to_string()),
                 xs.contains(probe).to_string(),
                 Option.is_some(xs.index_of(probe)).to_string())
