@@ -71,6 +71,31 @@ for programs that are drawing.
 Makes everything written so far visible. Nothing a terminal program
 draws is on screen until this returns.
 
+## `let display_width (text: String): Int`
+
+The number of terminal cells `text` occupies.
+
+This is Unicode 16.0 display width, not a byte or codepoint count:
+CJK and emoji take two cells, combining marks take none, and ANSI
+escape sequences are ignored. East-Asian ambiguous characters are
+narrow, the portable default when the terminal locale is unknown.
+
+## `let truncate (text: String) (cells: Int): String`
+
+The longest prefix that fits in `cells` terminal cells.
+
+Never splits combining marks, Hangul, flags, or an emoji joined
+with ZWJ: each either fits whole or is left out.
+ANSI escape sequences consume no cells and are retained only when
+they occur before the returned boundary. A non-positive width gives
+the empty string.
+
+## `let pad_right (text: String) (cells: Int): String`
+
+`text` followed by spaces until it occupies `cells` terminal cells.
+It never truncates; use `Terminal.truncate` when a fixed column must
+fit. ANSI escapes are preserved and do not affect the added spaces.
+
 ## `handle RawMode`
 
 Raw mode, held. The terminal is restored when this value dies,

@@ -16,7 +16,24 @@ use Terminal;
 
 let show (label: String) (b: Bool): Unit = println("${label} ${b}")
 
+let red_x (): String = match Bytes.as_string(Bytes.from_array([27, 91, 51, 49, 109, 120, 27, 91, 48, 109])) {
+    Ok(s) => s,
+    Err(_) => "",
+}
+
 let main (): Unit = {
+    // Cells, not bytes or codepoints. These cases are all deterministic
+    // without a real terminal: the Unicode table belongs to Plum, not the
+    // host's locale or libc version.
+    println("width ascii ${Terminal.display_width("abc")}");
+    println("width cjk ${Terminal.display_width("日本")}");
+    println("width combining ${Terminal.display_width("é")}");
+    println("width emoji ${Terminal.display_width("👩‍💻")}");
+    println("width ansi ${Terminal.display_width(red_x())}");
+    println("cut wide ${Terminal.truncate("ab日本", 4)}");
+    println("cut cluster ${Terminal.truncate("éx", 1)}");
+    println("pad ${Terminal.pad_right("日", 4)}|");
+
     // Piped, so all three are false. Asked per stream because they
     // genuinely differ: a program in a pipeline routinely has a
     // terminal on stderr and a pipe on stdout.
