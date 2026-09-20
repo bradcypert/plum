@@ -303,6 +303,7 @@ a dependency that is not in the cache is an error telling you to run
 ```sh
 plum fetch            # download what plum.pkg names, into the cache
 plum fetch my-project # or point it at a project
+plum vendor           # copy Git dependencies into ./vendor
 plum cache list       # show fetched packages and their total size
 plum cache clean      # remove fetched packages; they can be fetched again
 ```
@@ -320,6 +321,13 @@ the file count and exact byte total. `plum cache clean` removes only
 and future Plum cache kinds must not be erased as a side effect. Cleaning
 is safe; a removed dependency is simply fetched again on the next explicit
 `plum fetch`.
+
+`plum vendor` copies every resolved Git dependency, including transitive
+ones, into `vendor/` below the project. It keeps `git`, `rev` and `sha256`
+in the manifest: builds prefer the matching vendored tree and verify its
+hash. The layout mirrors the cache (`vendor/github.com/acme/parsec/<commit>/`)
+so two commits coexist, and `vendor/` is never scanned as one of the
+project's own modules. A vendored project builds with no cache or network.
 
 **`git` is only needed if you fetch.** Plum shells out to it rather than
 implementing TLS; a project with only `path` dependencies never needs

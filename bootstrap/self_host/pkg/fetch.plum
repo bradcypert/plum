@@ -151,6 +151,37 @@ pub let cache_dir (git: String) (rev: String): String =
     Path.join(join_segments(package_cache(()), url_segments(git), 0),
         sanitize_segment(rev))
 
+// The project-local counterpart of `cache_dir`. Keep the same identity
+// below `vendor/`: a package name alone cannot distinguish two commits
+// of one repository, and the manifest remains the authority for both.
+pub let vendor_dir (root: String) (git: String) (rev: String): String =
+    Path.join(Path.join(root, "vendor"), Path.join(join_segments("", url_segments(git), 0), sanitize_segment(rev)))
+
+pub let vendor_dep (root: String) (d: Dep): String = {
+    let src = fetch_dep(d);
+    let dst = vendor_dir(root, d.git, d.rev);
+    if Result.unwrap_or(Os.is_directory(dst), false) { verify(d, dst) }
+    else {
+        let scratch = "${dst}.partial";
+        match Os.remove_tree(scratch) { Ok(_) => (), Err(_) => () };
+        ensure_parent(dst);
+        match Os.make_dir(scratch) {
+            Ok(_) => (),
+            Err(e) => panic_raw("could not create vendoring scratch directory ${scratch}: ${e}"),
+        };
+        match Os.copy_tree(src, scratch) {
+            Ok(_) => (),
+            Err(e) => panic_raw("could not vendor `${d.name}` into ${dst}: ${e}"),
+        };
+        match Os.rename_file(scratch, dst) {
+            Ok(_) => (),
+            Err(e) => panic_raw("could not move vendored `${d.name}` into ${dst}: ${e}"),
+        };
+        verify(d, dst)
+    };
+    dst
+}
+
 // The URL, as directory names.
 //
 // Every segment is sanitized and `.`/`..`/empty can never survive, so a

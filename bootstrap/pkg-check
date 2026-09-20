@@ -447,12 +447,27 @@ if ! command -v git > /dev/null 2>&1; then
 else
     export PLUM_CACHE="$work/cache"
 
-    mkdir -p "$work/remote/greet"
-    cat > "$work/remote/plum.pkg" <<'EOF'
-Package { name: "greeter", version: "0.1.0" }
+    # Make the fetched package depend on another fetched package. This
+    # gives `vendor` a real transitive closure to copy, rather than merely
+    # proving that it handles one direct dependency.
+    mkdir -p "$work/remote-core/core"
+    cat > "$work/remote-core/plum.pkg" <<'EOF'
+Package { name: "core", version: "0.1.0" }
 EOF
+    cat > "$work/remote-core/core/core.plum" <<'EOF'
+pub let prefix (): String = "hello, "
+EOF
+    git -C "$work/remote-core" init -q
+    git -C "$work/remote-core" add -A
+    git -C "$work/remote-core" -c user.email=t@t -c user.name=t commit -qm one > /dev/null 2>&1
+    core_rev="$(git -C "$work/remote-core" rev-parse HEAD)"
+
+    mkdir -p "$work/remote/greet"
+    printf 'Package { name: "greeter", version: "0.1.0", deps: [ Dep { name: "core", git: "%s", rev: "%s" } ] }\n' \
+        "$work/remote-core" "$core_rev" > "$work/remote/plum.pkg"
     cat > "$work/remote/greet/greet.plum" <<'EOF'
-pub let hello (who: String): String = "hello, ".concat(who)
+use core.core;
+pub let hello (who: String): String = core.prefix().concat(who)
 EOF
     git -C "$work/remote" init -q
     git -C "$work/remote" add -A
@@ -518,15 +533,36 @@ EOF
     git_manifest ", sha256: \"$got_hash\""
     expect_c "the printed hash is accepted" "hello, world" "$plum" run "$work/consumer"
 
+    # Vendoring keeps the Git provenance in the manifest, but copies the
+    # complete verified closure into the project. This first assertion is
+    # deliberately non-destructive: the cache lifecycle below also needs
+    # both greeter commits.
+    if SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" vendor "$work/consumer" > "$work/vendor.log" 2>&1 \
+       && [ -d "$work/consumer/vendor" ]; then
+        pass=$((pass + 1))
+    else
+        printf 'FAIL  %-44s %s\n' "plum vendor copies dependencies" "$(head -n 2 "$work/vendor.log")"
+        fail=$((fail + 1))
+    fi
+    expect_c "a vendored dependency still runs" "hello, world" "$plum" run "$work/consumer"
+    # The offline proof gets its OWN consumer copy and temporarily hides
+    # the cache rather than deleting it: later checks deliberately need
+    # two cache revisions to coexist. A vendored build must not inspect
+    # that hidden directory at all.
+    cp -a "$work/consumer" "$work/vendored-consumer"
+    mv "$work/cache/pkg" "$work/cache/pkg.offline"
+    expect_c "a vendored dependency builds offline" "hello, world" "$plum" run "$work/vendored-consumer"
+    mv "$work/cache/pkg.offline" "$work/cache/pkg"
+
     # A wrong one is refused, and refused on a build rather than only on
     # a fetch: the cache is already populated here, so this is the path
     # that verifies bytes nobody just downloaded.
     git_manifest ', sha256: "0000000000000000000000000000000000000000000000000000000000000000"'
     expect_c_err "a wrong hash stops the build" "does not match its \`sha256\`" "$plum" check "$work/consumer"
 
-    # Two commits of one repository are two cache entries, not a
-    # conflict. This is the property a global cache has to have and a
-    # single-checkout-per-repo cache does not.
+    # Two commits of one repository are two cache entries, alongside the
+    # already-fetched transitive dependency. This is the property a global
+    # cache has to have and a single-checkout-per-repo cache does not.
     echo 'pub let extra (): Int = 1' >> "$work/remote/greet/greet.plum"
     git -C "$work/remote" add -A
     git -C "$work/remote" -c user.email=t@t -c user.name=t commit -qm two > /dev/null 2>&1
@@ -536,8 +572,8 @@ EOF
     SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" fetch "$work/consumer" > "$work/fetch2.log" 2>&1
     rev="$rev_keep"
     n="$(find "$work/cache" -maxdepth 8 -type d -name '????????????????????????????????????????' | wc -l)"
-    if [ "$n" -eq 2 ]; then pass=$((pass + 1)); else
-        printf 'FAIL  %-44s expected 2 commit directories in the cache, found %s\n' "two commits coexist" "$n"
+    if [ "$n" -eq 3 ]; then pass=$((pass + 1)); else
+        printf 'FAIL  %-44s expected 3 commit directories in the cache, found %s\n' "two commits coexist" "$n"
         fail=$((fail + 1))
     fi
 
@@ -559,7 +595,7 @@ EOF
     printf 'not a package\n' > "$work/cache/other/keep"
     cache_list="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" cache list 2>&1)"
     case "$cache_list" in
-        *"cache: $work/cache"*"2 package(s)"*"file(s),"*"bytes"*) pass=$((pass + 1)) ;;
+        *"cache: $work/cache"*"3 package(s)"*"file(s),"*"bytes"*) pass=$((pass + 1)) ;;
         *) printf 'FAIL  %-44s\n        got: %s\n' "cache list uses PLUM_CACHE" "$(printf '%s' "$cache_list" | head -n 4)"
            fail=$((fail + 1)) ;;
     esac
