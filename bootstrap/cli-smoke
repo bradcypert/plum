@@ -229,6 +229,41 @@ check $? "plum build wrote the failure to stdout, not stderr: $(head -n 1 "$work
 ! grep -q 'unsupported target' "$work/fail.out"
 check $? "plum build printed the failure on stdout as well as stderr"
 
+# --- plum build . names the binary after the directory (#53) ----------
+#
+# Without -o, the binary is named after the project path. For `.`, that
+# name was `.` (the current directory): clang failed with EISDIR and
+# left the IR as `..ll`. `./` became `a.out` because the last
+# slash-separated part is empty. Resolve `.` / `..` (and a trailing
+# slash) against the working directory so the name is the directory's.
+
+mkdir -p "$work/myapp"
+printf 'let main (): Unit = println("from-dot")\n' > "$work/myapp/main.plum"
+( cd "$work/myapp" && SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$root/$plum" build . ) > "$work/dot.out" 2> "$work/dot.err"
+check $? "plum build . exited nonzero: $(head -n 1 "$work/dot.err"; head -n 1 "$work/dot.out")"
+[ -x "$work/myapp/myapp" ]
+check $? "plum build . did not write a binary named after the directory"
+[ "$("$work/myapp/myapp" 2>&1)" = "from-dot" ]
+check $? "the binary from plum build . did not run"
+! [ -e "$work/myapp/..ll" ]
+check $? "plum build . left IR named ..ll"
+
+mkdir -p "$work/parent/child"
+printf 'let main (): Unit = println("from-dotdot")\n' > "$work/parent/main.plum"
+( cd "$work/parent/child" && SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$root/$plum" build .. ) > "$work/dotdot.out" 2> "$work/dotdot.err"
+check $? "plum build .. exited nonzero: $(head -n 1 "$work/dotdot.err"; head -n 1 "$work/dotdot.out")"
+[ -x "$work/parent/child/parent" ]
+check $? "plum build .. did not write a binary named after the parent directory"
+[ "$("$work/parent/child/parent" 2>&1)" = "from-dotdot" ]
+check $? "the binary from plum build .. did not run"
+
+mkdir -p "$work/slashproj"
+printf 'let main (): Unit = println("from-slash")\n' > "$work/slashproj/main.plum"
+( cd "$work/slashproj" && SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-180}" "$root/$plum" build ./ ) > "$work/slash.out" 2> "$work/slash.err"
+check $? "plum build ./ exited nonzero: $(head -n 1 "$work/slash.err"; head -n 1 "$work/slash.out")"
+[ -x "$work/slashproj/slashproj" ]
+check $? "plum build ./ did not write a binary named after the directory"
+
 # --- dump-tokens / dump-ast -------------------------------------------
 #
 # Their non-dump siblings are pinned byte-for-byte by 98 corpus goldens.

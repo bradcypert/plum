@@ -2575,11 +2575,20 @@ let native_applies (name: String) (os: String): Bool =
 // after the project directory -- plus `.exe` when the TARGET is
 // Windows, because a PE that is not named `.exe` will not run there and
 // nothing downstream would have told you why.
+//
+// `.` and `..` (and a path that ends in one, or in a trailing slash)
+// are not names. `basename_of(".")` was `.`, so `plum build .` asked
+// the linker to write the current directory (issue #53). Resolve
+// against the working directory first, then take Path.basename of the
+// cleaned path.
 let output_path (argv: Array[String]) (target: String): String =
     match find_flag_value(argv, "-o", 0) {
         Some(v) => v,
         None => {
-            let base = basename_of(argv[1]);
+            let base = match Os.cwd() {
+                Ok(cwd) => default_output_name(argv[1], cwd),
+                Err(_) => default_output_name(argv[1], "."),
+            };
             if target_os(target) == "windows" && !base.ends_with(".exe") { base.concat(".exe") } else { base }
         },
     }
@@ -2589,12 +2598,16 @@ let find_flag_value (argv: Array[String]) (flag: String) (i: Int): Option[String
     else if argv[i] == flag { Some(argv[i + 1]) }
     else { find_flag_value(argv, flag, i + 1) }
 
-let basename_of (path: String): String = {
-    let parts = path.split("/");
-    if Array.is_empty(parts) { "a.out" } else {
-        let last = parts[parts.len() - 1];
-        if last == "" { "a.out" } else { last }
-    }
+// The output name without `-o`. `cwd` is the process working directory
+// so `.` and `..` become that directory's name (or its parent's), not
+// a path the linker cannot open.
+let default_output_name (project: String) (cwd: String): String =
+    default_output_name_in(Os.platform() == "windows", project, cwd)
+
+let default_output_name_in (windows: Bool) (project: String) (cwd: String): String = {
+    let joined = if Path.is_absolute_in(windows, project) { project } else { Path.join_in(windows, cwd, project) };
+    let base = Path.basename_in(windows, Path.clean_in(windows, joined));
+    if base == "." || base == ".." || base == "" || base == Path.separator_in(windows) { "a.out" } else { base }
 }
 
 // `build` = `emit-llvm` + `clang`. The IR was already being produced
@@ -3983,3 +3996,18 @@ let recombines (p: String): Unit =
     eq("recombine ${p}",
         Path.join_in(true, Path.dirname_in(true, p), Path.basename_in(true, p)),
         Path.clean_in(true, p))
+
+pub let test_output_name_unix (): Unit = {
+    eq("dot", default_output_name_in(false, ".", "/tmp/myapp"), "myapp");
+    eq("dotdot", default_output_name_in(false, "..", "/tmp/myapp"), "tmp");
+    eq("slash-dot", default_output_name_in(false, "./", "/tmp/myapp"), "myapp");
+    eq("named", default_output_name_in(false, "myapp", "/tmp"), "myapp");
+    eq("rel-dot", default_output_name_in(false, "foo/.", "/tmp"), "foo");
+    eq("abs", default_output_name_in(false, "/abs/myapp", "/other"), "myapp")
+}
+
+pub let test_output_name_windows (): Unit = {
+    eq("dot", default_output_name_in(true, ".", "C:\\tmp\\myapp"), "myapp");
+    eq("dotdot", default_output_name_in(true, "..", "C:\\tmp\\myapp"), "tmp");
+    eq("named", default_output_name_in(true, "myapp", "C:\\tmp"), "myapp")
+}
