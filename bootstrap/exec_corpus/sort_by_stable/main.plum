@@ -1,0 +1,13 @@
+// Array.sort_by is documented as STABLE under a "less than or equal"
+// predicate. Insertion used to place `x` before the first `le(x, y)`,
+// so `<=` reversed ties (issue #55). Duplicate keys with distinct ids
+// are the only way to see that; `sort_int([3, 1, 2, 1])` cannot.
+
+struct P { k: Int, id: Int }
+
+let ids (ps: Array[P]): Array[Int] = ps.map(|p| p.id)
+
+let main (): Unit = {
+    let ps = [P { k: 1, id: 0 }, P { k: 0, id: 1 }, P { k: 1, id: 2 }, P { k: 0, id: 3 }, P { k: 1, id: 4 }, P { k: 0, id: 5 }];
+    println(ids(Array.sort_by(ps, |a, b| a.k <= b.k)).to_string())
+}
