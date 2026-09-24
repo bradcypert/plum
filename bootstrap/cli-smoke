@@ -204,6 +204,31 @@ printf '%s' "$uout" | grep -q 'not a target directory'
 check $? "an unknown native/ subdirectory was not reported: $(printf '%s' "$uout" | tail -n 1)"
 rm -rf "$work/nat/native/win32"
 
+# --- plum build reports failure (#52) ---------------------------------
+#
+# compile_project returns an error STRING. Until this check existed,
+# build_project printed it to stdout and returned, so a failed build
+# exited 0. `plum check` already exits 1; build should too, and the
+# message belongs on stderr so `plum build . -o app && ./app` is a
+# trustworthy pipeline.
+#
+# An unsupported target is a compile_project error that does not wait
+# on clang: it is the same `if err == ""` branch a clang/link failure
+# takes, without depending on clang's wording.
+
+mkdir -p "$work/failbuild"
+printf 'let main (): Unit = println("ok")\n' > "$work/failbuild/main.plum"
+SH_MEM="${SH_MEM:-512M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" \
+    "$plum" build "$work/failbuild" --target i386-unknown-linux-gnu -o "$work/failbuild/out" \
+    > "$work/fail.out" 2> "$work/fail.err"
+status=$?
+[ "$status" -ne 0 ]
+check $? "plum build exited $status on a failed compile; expected non-zero"
+grep -q 'unsupported target' "$work/fail.err"
+check $? "plum build wrote the failure to stdout, not stderr: $(head -n 1 "$work/fail.err" 2>/dev/null)$(head -n 1 "$work/fail.out")"
+! grep -q 'unsupported target' "$work/fail.out"
+check $? "plum build printed the failure on stdout as well as stderr"
+
 # --- dump-tokens / dump-ast -------------------------------------------
 #
 # Their non-dump siblings are pinned byte-for-byte by 98 corpus goldens.

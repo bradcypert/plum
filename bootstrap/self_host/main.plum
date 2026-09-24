@@ -3014,11 +3014,22 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
     }
 }
 
+// A failed compile is a failed command. `println` wrote the error to
+// stdout and returned, so `plum build` (and `plum run` on the same
+// path) exited 0 -- issue #52. `plum check` already exits 1 on a type
+// error; `exit_with` is the same mechanism `cmd_test` uses when the
+// report has already been written. stderr, so `plum build . -o app &&
+// ./app` sees the failure as a status rather than as a missing binary.
+let fail_cmd (err: String): Unit = {
+    Os.write_stderr(err.concat("\n"));
+    Os.exit_with(1)
+}
+
 let build_project (argv: Array[String]): Unit = {
     let target = match find_flag_value(argv, "--target", 0) { Some(t) => t, None => native_target() };
     let out = output_path(argv, target);
     let err = compile_project(argv[1], out, link_args(argv, argv[1], target), target, wants_release(argv), wants_trace(argv));
-    if err == "" { println("wrote ".concat(out)) } else { println(err) }
+    if err == "" { println("wrote ".concat(out)) } else { fail_cmd(err) }
 }
 
 // `run` COMPILES and executes, rather than walking the AST.
@@ -3056,7 +3067,7 @@ let run_project (argv: Array[String]): Unit = {
             // looks like `--target` after the project directory is one
             // of the PROGRAM's own arguments, not ours.
             let err = compile_project(argv[1], out, link_args(argv, argv[1], native_target()), native_target(), wants_release(argv), wants_trace(argv));
-            if err != "" { println(err) }
+            if err != "" { fail_cmd(err) }
             else {
                 let args = Array.slice(argv, 2, argv.len());
                 let code = unsafe { process_run_inherit(out.as_cstr(), tab_join(args, 0, "").as_cstr(), args.len()) };
