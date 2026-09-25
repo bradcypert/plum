@@ -1,0 +1,194 @@
+/// The terminal PLATFORM LAYER (issue #3): is this a terminal, how big
+/// is it, and writing to it.
+///
+/// Deliberately the small half. Turning input bytes into semantic key
+/// events (`Key.Up`, `Ctrl+C`) is #35, and it is pure Plum with no
+/// C in it, which is why it is not here. What belongs in a standard
+/// library is the part that needs a shim and has no design space to get
+/// wrong: `isatty` is `isatty`. How to model a modifier key is taste,
+/// and taste does not belong in an API nobody can change.
+///
+/// Raw mode and the alternate screen come next, as `handle` types, so
+/// the terminal is restored on every exit path including a panic --
+/// which is the machinery a TUI otherwise writes in C.
+extern "C" {
+    fn term_is_tty(which: Int) -> Int;
+    fn term_size_query() -> Int;
+    fn term_size_cols() -> Int;
+    fn term_size_rows() -> Int;
+    fn term_write(s: CStr) -> Int;
+    fn term_flush() -> Int;
+    fn term_display_width(s: CStr) -> Int;
+    fn term_truncate_bytes(s: CStr, cells: Int) -> Int;
+}
+
+/// Which stream to ask about. A closed set of small integers across the
+/// extern boundary, the same shape `Os.Mode` and `Os.Seek` use: an
+/// extern taking a file descriptor NUMBER would let a caller pass
+/// anything at all.
+pub enum Stream { Stdin, Stdout, Stderr }
+
+let stream_code (s: Stream): Int = match s { Stdin => 0, Stdout => 1, Stderr => 2 }
+
+/// Whether that stream is attached to a terminal.
+///
+/// This is the check behind "should I use colour?" and "is this being
+/// piped somewhere?", and the answer differs per stream: a program in a
+/// pipeline routinely has a terminal on stderr and a pipe on stdout.
+/// Asking about the wrong one is how progress bars end up in log files.
+pub let is_tty (s: Stream): Bool = unsafe { term_is_tty(stream_code(s)) == 1 }
+
+/// The size of the terminal, in character cells.
+pub struct Size { pub cols: Int, pub rows: Int }
+
+/// The terminal's size, in character cells, measured on STDOUT. The
+/// size of the thing being drawn to. A program whose stdin is a pipe and
+/// whose stdout is a terminal still has a size worth knowing.
+///
+/// `Err` when there is no terminal to ask, which is not a failure the
+/// caller caused: output redirected to a file has no size. A program
+/// that wants to carry on regardless should pick its own default rather
+/// than be handed one, because 80x24 is a guess and this module should
+/// not make guesses on anyone's behalf.
+///
+/// **Poll this rather than waiting to be told.** POSIX reports a resize
+/// with `SIGWINCH`, Plum has no signal handling, and this module is not
+/// the place to introduce it. Comparing the size between iterations of
+/// an event loop costs one syscall against a redraw, and works the same
+/// way on Windows, which has no such signal at all.
+pub let size (): Result[Size, String] = unsafe {
+    if term_size_query() != 0 { Err("Terminal.size: not a terminal, or its size is unknown") }
+    else { Ok(Size { cols: term_size_cols(), rows: term_size_rows() }) }
+}
+
+/// Writes to stdout with NO trailing newline and NO flush.
+///
+/// Both omissions are deliberate. A terminal program positions its own
+/// output with escape sequences, so an automatic newline would corrupt
+/// every frame it draws; and flushing per write turns one redraw into
+/// hundreds of syscalls. Build a frame, then `flush` it.
+///
+/// `println` is still the right thing for line-oriented output. This is
+/// for programs that are drawing.
+pub let write (text: String): Result[Unit, String] = unsafe {
+    if term_write(text.as_cstr()) == 0 { Ok(()) }
+    else { Err("Terminal.write: could not write to stdout") }
+}
+
+/// Makes everything written so far visible. Nothing a terminal program
+/// draws is on screen until this returns.
+pub let flush (): Result[Unit, String] = unsafe {
+    if term_flush() == 0 { Ok(()) } else { Err("Terminal.flush: could not flush stdout") }
+}
+
+/// The number of terminal cells `text` occupies.
+///
+/// This is Unicode 16.0 display width, not a byte or codepoint count:
+/// CJK and emoji take two cells, combining marks take none, and ANSI
+/// escape sequences are ignored. East-Asian ambiguous characters are
+/// narrow, the portable default when the terminal locale is unknown.
+pub let display_width (text: String): Int = unsafe { term_display_width(text.as_cstr()) }
+
+/// The longest prefix that fits in `cells` terminal cells.
+///
+/// Never splits combining marks, Hangul, flags, or an emoji joined
+/// with ZWJ: each either fits whole or is left out.
+/// ANSI escape sequences consume no cells and are retained only when
+/// they occur before the returned boundary. A non-positive width gives
+/// the empty string.
+pub let truncate (text: String) (cells: Int): String = {
+    let bytes = unsafe { term_truncate_bytes(text.as_cstr(), cells) };
+    match Bytes.as_string(Bytes.slice(text.as_bytes(), 0, bytes)) {
+        Ok(prefix) => prefix,
+        Err(_) => "", // the shim returns a UTF-8 boundary by contract.
+    }
+}
+
+/// `text` followed by spaces until it occupies `cells` terminal cells.
+/// It never truncates; use `Terminal.truncate` when a fixed column must
+/// fit. ANSI escapes are preserved and do not affect the added spaces.
+pub let pad_right (text: String) (cells: Int): String = {
+    let width = display_width(text);
+    if width >= cells { text } else { text.concat(String.repeat(" ", cells - width)) }
+}
+
+// --- Modes, as handles ---
+//
+// Each of these changes the terminal and puts it back when the value
+// dies -- on a normal return, at the end of a block, on an `Err`, and
+// on a PANIC. That last one is why they are handles rather than a pair
+// of functions: a crash that leaves a terminal in raw mode with no
+// cursor does not just lose the program, it takes the user's shell with
+// it, and that is exactly the machinery a TUI otherwise writes in C.
+//
+// They are independent, and release LIFO, so
+//
+//     let raw = Terminal.enter_raw()?;
+//     let screen = Terminal.enter_alt_screen()?;
+//
+// leaves the alternate screen BEFORE restoring the mode, which is the
+// right order, without anyone arranging it. Either works without the
+// other: a filter wants raw mode and no alternate screen.
+//
+// Entering twice is COUNTED, not refused. The first entry saves the
+// state and applies the change, later ones only count, and the last to
+// die restores. That means a library and its caller can both ask
+// without knowing about each other, and it does not depend on the two
+// dying in any particular order.
+extern "C" {
+    fn term_enter_raw() -> Int;
+    fn term_leave_raw(h: Int);
+    fn term_enter_alt() -> Int;
+    fn term_leave_alt(h: Int);
+    fn term_hide_cursor() -> Int;
+    fn term_show_cursor(h: Int);
+}
+
+/// Raw mode, held. The terminal is restored when this value dies,
+/// including on a panic.
+///
+/// While it lives, Ctrl+C arrives as a BYTE (0x03) rather than a
+/// signal — see `Terminal.enter_raw`.
+pub handle RawMode { on_drop: term_leave_raw }
+/// The alternate screen, held. The previous screen and the user's
+/// scrollback come back when this value dies.
+pub handle AltScreen { on_drop: term_leave_alt }
+/// A hidden cursor, held. The cursor is shown again when this value
+/// dies, including on a panic — which is what stops a crash leaving a
+/// terminal with no cursor.
+pub handle HiddenCursor { on_drop: term_show_cursor }
+
+/// Line editing and echo off, so a program sees each keystroke as it
+/// happens rather than a line at a time.
+///
+/// **Ctrl+C stops being a signal and becomes a byte** (0x03). That is
+/// what raw mode means everywhere, and here it is also what keeps
+/// cleanup working: the default action for SIGINT ends the process
+/// without running any cleanup, so a Ctrl+C in raw mode with signals
+/// still enabled would leave the terminal raw. Delivered as a byte, a
+/// program can exit normally and everything is restored. A raw-mode
+/// program is responsible for noticing 0x03 and quitting.
+///
+/// `Err` when stdin is not a terminal; there is nothing to put into
+/// raw mode, and pretending otherwise would leave a program reading a
+/// pipe and waiting for keys that cannot come.
+pub let enter_raw (): Result[RawMode, String] = unsafe {
+    if term_enter_raw() == 0 { Ok(RawMode.from_raw(0)) }
+    else { Err("Terminal.enter_raw: stdin is not a terminal") }
+}
+
+/// The xterm alternate screen: a blank screen that leaves the user's
+/// scrollback untouched, and gives their shell back exactly as it was.
+/// What a full-screen program should use instead of clearing.
+pub let enter_alt_screen (): Result[AltScreen, String] = unsafe {
+    if term_enter_alt() == 0 { Ok(AltScreen.from_raw(0)) }
+    else { Err("Terminal.enter_alt_screen: could not switch screens") }
+}
+
+/// Hides the cursor while the value lives. A program drawing its own
+/// frames does not want a blinking block wherever the last write
+/// happened to end.
+pub let hide_cursor (): Result[HiddenCursor, String] = unsafe {
+    if term_hide_cursor() == 0 { Ok(HiddenCursor.from_raw(0)) }
+    else { Err("Terminal.hide_cursor: could not hide the cursor") }
+}

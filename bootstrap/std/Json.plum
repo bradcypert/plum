@@ -1,0 +1,329 @@
+/// A decoder is a value that turns a `JsonValue` into a `T`, or says
+/// why it cannot, carrying the PATH it is currently looking at so a
+/// failure names the field rather than the document.
+pub struct Decoder[T] { run: (JsonValue, String) -> Result[T, String] }
+
+// --- Paths ---
+//
+// The empty path is the document itself, and reads as "the root"
+// rather than as an empty string in a message.
+
+let at_str (p: String): String = if String.is_empty(p) { "the root" } else { p }
+
+let expected (what: String) (p: String): String =
+    "expected ".concat(what).concat(" at ").concat(at_str(p))
+
+let join_key (p: String) (k: String): String =
+    if String.is_empty(p) { k } else { p.concat(".").concat(k) }
+
+let join_index (p: String) (i: Int): String =
+    p.concat("[").concat(i.to_string()).concat("]")
+
+// --- Primitives ---
+
+/// The `JsonValue` itself, undecoded. For a field whose shape is not
+/// known ahead of time, or one to be handled separately.
+pub let value (): Decoder[JsonValue] = Decoder { run: |v, p| Ok(v) }
+
+/// Decodes a JSON string. `Err` on any other kind of value, naming the
+/// path where it was found.
+pub let string (): Decoder[String] =
+    Decoder { run: |v, p| match v {
+        JsonString(s) => Ok(s),
+        _ => Err(expected("String", p)),
+    } }
+
+/// Decodes `true` or `false`. A JSON string reading `\"true\"` is not a
+/// boolean and is rejected.
+pub let bool (): Decoder[Bool] =
+    Decoder { run: |v, p| match v {
+        JsonBool(b) => Ok(b),
+        _ => Err(expected("Bool", p)),
+    } }
+
+/// Decodes any JSON number as a `Float`. JSON has one number type, so
+/// this accepts integers too — `Json.int` is the one that refuses a
+/// fractional value.
+pub let float (): Decoder[Float] =
+    Decoder { run: |v, p| match v {
+        JsonNumber(f) => Ok(f),
+        _ => Err(expected("Number", p)),
+    } }
+
+/// JSON has one number type, so an `Int` decoder has to decide what to
+/// do with `41.5`. It REFUSES rather than truncating: a fractional value
+/// where a count was expected is a disagreement about the document, and
+/// silently producing 41 hides it until something downstream is wrong
+/// for a reason nobody can trace back to here.
+pub let int (): Decoder[Int] =
+    Decoder { run: |v, p| match v {
+        JsonNumber(f) => if f == Float.round(f) { Ok(f.to_int()) } else { Err(expected("a whole Number", p)) },
+        _ => Err(expected("Number", p)),
+    } }
+
+/// Decodes JSON `null` as a value of your choosing. For a field whose
+/// absence has a meaning the type does not carry — `null_as(0)` on a
+/// count, say.
+pub let null_as [T] (fallback: T): Decoder[T] =
+    Decoder { run: |v, p| match v {
+        JsonNull => Ok(fallback),
+        _ => Err(expected("null", p)),
+    } }
+
+// --- Structure ---
+
+let lookup (entries: Array[JsonEntry]) (key: String) (i: Int): Option[JsonValue] =
+    if i >= entries.len() { None }
+    else if entries[i].key == key { Some(entries[i].value) }
+    else { lookup(entries, key, i + 1) }
+
+/// Requires the key to be present. Its absence is a different failure
+/// from its value being the wrong shape, and says so.
+pub let field [T] (key: String) (inner: Decoder[T]): Decoder[T] =
+    Decoder { run: |v, p| match v {
+        JsonObject(entries) => match lookup(entries, key, 0) {
+            Some(found) => inner.run(found, join_key(p, key)),
+            None => Err("no field `".concat(key).concat("` at ").concat(at_str(p))),
+        },
+        _ => Err(expected("Object", p)),
+    } }
+
+/// Absent or null both give `None`, which is what an optional field in
+/// a real API means. `field(k, nullable(d))` is the other reading --
+/// the key must be there, and its value may be null, and both
+/// spellings exist because both situations do.
+pub let optional_field [T] (key: String) (inner: Decoder[T]): Decoder[Option[T]] =
+    Decoder { run: |v, p| match v {
+        JsonObject(entries) => match lookup(entries, key, 0) {
+            None => Ok(None),
+            Some(found) => match found {
+                JsonNull => Ok(None),
+                _ => Result.map(inner.run(found, join_key(p, key)), |x| Some(x)),
+            },
+        },
+        _ => Err(expected("Object", p)),
+    } }
+
+/// Allows the VALUE to be null, giving `None`. The key must still be
+/// present: `field(k, nullable(d))` says "present, may be null", and
+/// `optional_field(k, d)` says "may be absent".
+pub let nullable [T] (inner: Decoder[T]): Decoder[Option[T]] =
+    Decoder { run: |v, p| match v {
+        JsonNull => Ok(None),
+        _ => Result.map(inner.run(v, p), |x| Some(x)),
+    } }
+
+/// A LIST of keys rather than a dotted string: a key containing a dot
+/// is ordinary JSON, and a path syntax would have to invent an escape
+/// for it. It is also nothing but nested `field`s, which is why the
+/// path in an error comes out right without this function knowing
+/// anything about paths.
+pub let at [T] (keys: Array[String]) (inner: Decoder[T]): Decoder[T] =
+    at_acc(keys, keys.len() - 1, inner)
+
+let at_acc [T] (keys: Array[String]) (i: Int) (acc: Decoder[T]): Decoder[T] =
+    if i < 0 { acc } else { at_acc(keys, i - 1, field(keys[i], acc)) }
+
+/// Decodes one element of an array by position, extending the reported
+/// path with `[i]`.
+///
+/// `Err` when the value is not an array, and when the index is past its
+/// end — which names the length, since that is the thing the caller got
+/// wrong.
+pub let index [T] (i: Int) (inner: Decoder[T]): Decoder[T] =
+    Decoder { run: |v, p| match v {
+        JsonArray(items) =>
+            if i < 0 || i >= items.len() {
+                Err("index ".concat(i.to_string())
+                    .concat(" out of range (length ").concat(items.len().to_string())
+                    .concat(") at ").concat(at_str(p)))
+            } else {
+                inner.run(items[i], join_index(p, i))
+            },
+        _ => Err(expected("Array", p)),
+    } }
+
+/// Decodes every element of an array with the same decoder.
+///
+/// Stops at the FIRST element that fails and reports that element's
+/// index. Collecting every failure would need a second error type and
+/// would still leave the caller without a value.
+pub let list [T] (inner: Decoder[T]): Decoder[Array[T]] =
+    Decoder { run: |v, p| match v {
+        JsonArray(items) => list_acc(inner, items, p, 0, []),
+        _ => Err(expected("Array", p)),
+    } }
+
+/// Stops at the first element that fails, and reports THAT element's
+/// index. Collecting every failure would need a second error type and
+/// would still leave a caller with no value.
+let list_acc [T] (inner: Decoder[T]) (items: Array[JsonValue]) (p: String) (i: Int) (acc: Array[T]): Result[Array[T], String] =
+    if i >= items.len() { Ok(acc) }
+    else {
+        match inner.run(items[i], join_index(p, i)) {
+            Err(e) => Err(e),
+            Ok(x) => list_acc(inner, items, p, i + 1, acc.push(x)),
+        }
+    }
+
+// --- Combining ---
+//
+// One `mapN` per arity, because Plum has no variadics and no way to
+// partially apply an n-ary closure. Six covers a struct with six
+// fields; past that, `and_then` composes without limit.
+
+/// Transforms what a decoder produced. The usual way to turn a decoded
+/// field into something else without writing a new decoder.
+pub let map [A, T] (a: Decoder[A]) (f: (A) -> T): Decoder[T] =
+    Decoder { run: |v, p| Result.map(a.run(v, p), f) }
+
+/// Combines two decoders. The usual way to build a struct: one decoder
+/// per field, and a function that assembles them.
+///
+/// Reports the FIRST failure, left to right, so an error names one
+/// field rather than every field that could not be read.
+pub let map2 [A, B, T] (a: Decoder[A]) (b: Decoder[B]) (f: (A, B) -> T): Decoder[T] =
+    Decoder { run: |v, p| match a.run(v, p) {
+        Err(e) => Err(e),
+        Ok(x1) => match b.run(v, p) {
+            Err(e) => Err(e),
+            Ok(x2) => Ok(f(x1, x2)),
+        },
+    } }
+
+/// Combines 3 decoders — see `Json.map2`. There is one of these per
+/// arity because Plum has no variadics; past six, `and_then` composes
+/// without limit.
+pub let map3 [A, B, C, T] (a: Decoder[A]) (b: Decoder[B]) (c: Decoder[C]) (f: (A, B, C) -> T): Decoder[T] =
+    Decoder { run: |v, p| match a.run(v, p) {
+        Err(e) => Err(e),
+        Ok(x1) => match b.run(v, p) {
+            Err(e) => Err(e),
+            Ok(x2) => match c.run(v, p) {
+                Err(e) => Err(e),
+                Ok(x3) => Ok(f(x1, x2, x3)),
+            },
+        },
+    } }
+
+/// Combines 4 decoders — see `Json.map2`. There is one of these per
+/// arity because Plum has no variadics; past six, `and_then` composes
+/// without limit.
+pub let map4 [A, B, C, D, T] (a: Decoder[A]) (b: Decoder[B]) (c: Decoder[C]) (d: Decoder[D]) (f: (A, B, C, D) -> T): Decoder[T] =
+    Decoder { run: |v, p| match a.run(v, p) {
+        Err(e) => Err(e),
+        Ok(x1) => match b.run(v, p) {
+            Err(e) => Err(e),
+            Ok(x2) => match c.run(v, p) {
+                Err(e) => Err(e),
+                Ok(x3) => match d.run(v, p) {
+                    Err(e) => Err(e),
+                    Ok(x4) => Ok(f(x1, x2, x3, x4)),
+                },
+            },
+        },
+    } }
+
+/// Combines 5 decoders — see `Json.map2`. There is one of these per
+/// arity because Plum has no variadics; past six, `and_then` composes
+/// without limit.
+pub let map5 [A, B, C, D, E, T] (a: Decoder[A]) (b: Decoder[B]) (c: Decoder[C]) (d: Decoder[D]) (e: Decoder[E]) (f: (A, B, C, D, E) -> T): Decoder[T] =
+    Decoder { run: |v, p| match a.run(v, p) {
+        Err(err) => Err(err),
+        Ok(x1) => match b.run(v, p) {
+            Err(err) => Err(err),
+            Ok(x2) => match c.run(v, p) {
+                Err(err) => Err(err),
+                Ok(x3) => match d.run(v, p) {
+                    Err(err) => Err(err),
+                    Ok(x4) => match e.run(v, p) {
+                        Err(err) => Err(err),
+                        Ok(x5) => Ok(f(x1, x2, x3, x4, x5)),
+                    },
+                },
+            },
+        },
+    } }
+
+/// Combines 6 decoders — see `Json.map2`. There is one of these per
+/// arity because Plum has no variadics; past six, `and_then` composes
+/// without limit.
+pub let map6 [A, B, C, D, E, F, T] (a: Decoder[A]) (b: Decoder[B]) (c: Decoder[C]) (d: Decoder[D]) (e: Decoder[E]) (g: Decoder[F]) (f: (A, B, C, D, E, F) -> T): Decoder[T] =
+    Decoder { run: |v, p| match a.run(v, p) {
+        Err(err) => Err(err),
+        Ok(x1) => match b.run(v, p) {
+            Err(err) => Err(err),
+            Ok(x2) => match c.run(v, p) {
+                Err(err) => Err(err),
+                Ok(x3) => match d.run(v, p) {
+                    Err(err) => Err(err),
+                    Ok(x4) => match e.run(v, p) {
+                        Err(err) => Err(err),
+                        Ok(x5) => match g.run(v, p) {
+                            Err(err) => Err(err),
+                            Ok(x6) => Ok(f(x1, x2, x3, x4, x5, x6)),
+                        },
+                    },
+                },
+            },
+        },
+    } }
+
+// --- Choosing ---
+
+/// A decoder that ignores the input and always produces the same
+/// value. Useful as a branch of `and_then`, or as a default in
+/// `one_of`.
+pub let succeed [T] (x: T): Decoder[T] = Decoder { run: |v, p| Ok(x) }
+
+/// A user-written failure gets the same ` at <path>` treatment as a
+/// built-in one, so the message should be a clause and not a sentence.
+pub let fail [T] (msg: String): Decoder[T] =
+    Decoder { run: |v, p| Err(msg.concat(" at ").concat(at_str(p))) }
+
+/// Runs a decoder chosen by what the first one produced: a version
+/// field deciding how to read the rest of the payload, which no amount
+/// of `mapN` can express.
+pub let and_then [A, T] (a: Decoder[A]) (f: (A) -> Decoder[T]): Decoder[T] =
+    Decoder { run: |v, p| match a.run(v, p) {
+        Err(e) => Err(e),
+        Ok(x) => {
+            let next = f(x);
+            next.run(v, p)
+        },
+    } }
+
+/// The first alternative that succeeds. The individual failures are
+/// DISCARDED: `one_of` is used where several shapes are equally
+/// acceptable, and a caller told that the value was neither a String
+/// nor a Number learns more from that than from both attempts quoted
+/// back at them.
+pub let one_of [T] (options: Array[Decoder[T]]): Decoder[T] =
+    Decoder { run: |v, p| one_of_acc(options, v, p, 0) }
+
+let one_of_acc [T] (options: Array[Decoder[T]]) (v: JsonValue) (p: String) (i: Int): Result[T, String] =
+    if i >= options.len() { Err("no alternative matched at ".concat(at_str(p))) }
+    else {
+        match options[i].run(v, p) {
+            Ok(x) => Ok(x),
+            Err(e) => one_of_acc(options, v, p, i + 1),
+        }
+    }
+
+// --- Running ---
+
+/// Runs a decoder against an already-parsed `JsonValue`.
+///
+/// `Json.decode_string` is the one that parses first. Use this when the
+/// same document is decoded more than once.
+pub let decode [T] (d: Decoder[T]) (v: JsonValue): Result[T, String] = d.run(v, "")
+
+/// Parses and decodes in one step. A parse error arrives phrased by
+/// `json_parse` and unchanged, so a caller has ONE error path rather
+/// than two, which is the difference between `match` and nested
+/// `match`.
+pub let decode_string [T] (d: Decoder[T]) (text: String): Result[T, String] =
+    match json_parse(text) {
+        Err(e) => Err(e),
+        Ok(v) => d.run(v, ""),
+    }

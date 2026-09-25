@@ -1,0 +1,264 @@
+/// The runtime primitive. Intercepted by `cg_runtime_fn`, which keys
+/// on the bare name and so does not care that it now lives in a
+/// module rather than in the prelude.
+let os_time_raw (ignored: Bool): Int = 0
+
+/// Seconds since the Unix epoch, from the system clock.
+///
+/// Seconds, and an `Int`, because that is what every platform's
+/// `time()` agrees on. Anything richer (a calendar date, a
+/// timezone, a formatted string) is a library on top of this and
+/// not a runtime concern; the primitive is the part a program
+/// cannot write for itself.
+pub let now (): Int = os_time_raw(true)
+
+// --- Durations and clocks ---
+//
+// `Time.now()` above stays SECONDS, and every calendar function
+// below stays arithmetic on it. Changing it would break every
+// caller and every documented `iso8601` answer to buy precision
+// that belongs in a separate type anyway.
+extern "C" {
+    fn time_now_nanos() -> Int;
+    fn time_monotonic_nanos() -> Int;
+    fn time_sleep_nanos(n: Int) -> Int;
+}
+
+/// A length of time, held as NANOSECONDS.
+///
+/// A real type rather than an `Int` of milliseconds, because a
+/// bare number does not say which unit it is and every caller has
+/// to agree by convention. `#7` will want timeouts, `Http` will
+/// want them, `Terminal` will want them, and the alternative is
+/// each module growing its own `timeout_ms: Int` that cannot be
+/// passed to the others.
+///
+/// The field is PRIVATE: a `Duration` is built through a
+/// constructor that names its unit, which is the whole point of
+/// having the type. Nanoseconds internally because a signed 64-bit
+/// count of them spans ~292 years, which is more than any duration
+/// needs, and because losing sub-millisecond precision would make
+/// the type useless for the timing code that wants it most.
+pub struct Duration { nanos: Int }
+
+/// A point on the MONOTONIC clock, whose origin is deliberately
+/// unspecified. Two instants can be subtracted; one on its own
+/// means nothing, which is why this is a distinct type from a wall
+/// clock reading rather than another `Int`.
+pub struct Instant { nanos: Int }
+
+/// Constructors, each naming its unit. Multiplication can overflow,
+/// and Plum aborts on integer overflow rather than wrapping, so
+/// `Time.seconds(10000000000)` is a crash and not a silently wrong
+/// duration.
+pub let nanos (n: Int): Duration = Duration { nanos: n }
+/// A duration of `n` microseconds. Negative durations are allowed and mean
+/// what they say.
+pub let micros (n: Int): Duration = Duration { nanos: n * 1000 }
+/// A duration of `n` milliseconds. Negative durations are allowed and mean
+/// what they say.
+pub let millis (n: Int): Duration = Duration { nanos: n * 1000000 }
+/// A duration of `n` seconds. Negative durations are allowed and mean
+/// what they say.
+pub let seconds (n: Int): Duration = Duration { nanos: n * 1000000000 }
+/// A duration of `n` minutes. Negative durations are allowed and mean
+/// what they say.
+pub let minutes (n: Int): Duration = seconds(n * 60)
+/// A duration of `n` hours. Negative durations are allowed and mean
+/// what they say.
+pub let hours (n: Int): Duration = minutes(n * 60)
+/// A duration of no time at all.
+pub let zero (): Duration = Duration { nanos: 0 }
+
+/// Accessors, TRUNCATING toward zero the way `/` does: a duration of
+/// 1500 microseconds is 1 millisecond, not 2. Ask in the unit you
+/// care about rather than rounding one answer into another.
+pub let Duration.as_nanos (d: Duration): Int = d.nanos
+/// The duration in microseconds, TRUNCATED toward zero. Use
+/// `Duration.as_nanos` when the remainder matters.
+pub let Duration.as_micros (d: Duration): Int = d.nanos / 1000
+/// The duration in milliseconds, TRUNCATED toward zero. Use
+/// `Duration.as_nanos` when the remainder matters.
+pub let Duration.as_millis (d: Duration): Int = d.nanos / 1000000
+/// The duration in whole seconds, TRUNCATED toward zero. Use
+/// `Duration.as_nanos` when the remainder matters.
+pub let Duration.as_seconds (d: Duration): Int = d.nanos / 1000000000
+/// Whether this is exactly no time. A negative duration is not zero.
+pub let Duration.is_zero (d: Duration): Bool = d.nanos == 0
+
+/// Adds two durations.
+pub let Duration.add (a: Duration) (b: Duration): Duration = Duration { nanos: a.nanos + b.nanos }
+/// Subtracts `b` from `a`. The result may be negative, which is a
+/// legal duration and is what `Time.between` returns for two instants
+/// given the other way round.
+pub let Duration.sub (a: Duration) (b: Duration): Duration = Duration { nanos: a.nanos - b.nanos }
+/// Multiplies a duration by a whole number.
+pub let Duration.scale (d: Duration) (n: Int): Duration = Duration { nanos: d.nanos * n }
+
+/// A duration can be NEGATIVE. `sub` may produce one, and refusing
+/// to represent it would only move the problem to every caller of
+/// `sub`. `sleep` treats a non-positive duration as no wait at all.
+pub let Duration.negate (d: Duration): Duration = Duration { nanos: 0 - d.nanos }
+
+/// --- Comparison ---
+///
+/// Functions rather than `<`, because this checker offers ordered
+/// comparison on `Int`, `Float` and `String` and on nothing else --
+/// a struct has no `<`. `==` works, since that is structural.
+///
+/// If ordered comparison ever reaches single-field wrappers, `<`
+/// starts working on a `Duration` for free and these stay as the
+/// spelling that always worked.
+pub let Duration.compare (a: Duration) (b: Duration): Int =
+    if a.nanos < b.nanos { 0 - 1 } else if a.nanos > b.nanos { 1 } else { 0 }
+/// Whether `a` is shorter than `b`.
+///
+/// Spelled out rather than `<`, because ordered comparison in this
+/// language works on `Int`, `Float` and `String` and not on structs.
+/// `==` does work, since that one is structural.
+pub let Duration.lt (a: Duration) (b: Duration): Bool = a.nanos < b.nanos
+/// Whether `a` is no longer than `b`.
+///
+/// Spelled out rather than `<`, because ordered comparison in this
+/// language works on `Int`, `Float` and `String` and not on structs.
+/// `==` does work, since that one is structural.
+pub let Duration.le (a: Duration) (b: Duration): Bool = a.nanos <= b.nanos
+/// Whether `a` is longer than `b`.
+///
+/// Spelled out rather than `<`, because ordered comparison in this
+/// language works on `Int`, `Float` and `String` and not on structs.
+/// `==` does work, since that one is structural.
+pub let Duration.gt (a: Duration) (b: Duration): Bool = a.nanos > b.nanos
+/// Whether `a` is at least as long as `b`.
+///
+/// Spelled out rather than `<`, because ordered comparison in this
+/// language works on `Int`, `Float` and `String` and not on structs.
+/// `==` does work, since that one is structural.
+pub let Duration.ge (a: Duration) (b: Duration): Bool = a.nanos >= b.nanos
+/// The shorter of two durations.
+pub let Duration.min (a: Duration) (b: Duration): Duration = if a.nanos <= b.nanos { a } else { b }
+/// The longer of two durations.
+pub let Duration.max (a: Duration) (b: Duration): Duration = if a.nanos >= b.nanos { a } else { b }
+
+// --- Clocks ---
+
+/// Wall clock, in milliseconds since the Unix epoch. The same clock
+/// `now()` reads, at a resolution `now()` cannot express.
+///
+/// It can jump: setting the system clock or an NTP correction moves
+/// it, backwards included. Use it to say WHEN something happened;
+/// use `instant` to measure how long something took.
+pub let now_millis (): Int = unsafe { time_now_nanos() / 1000000 }
+
+/// A reading of the monotonic clock, for measuring elapsed time.
+/// Never moves backwards and is unaffected by the system clock being
+/// set.
+pub let instant (): Instant = unsafe { Instant { nanos: time_monotonic_nanos() } }
+
+/// How long since `t0`. Never negative, because the clock it reads
+/// cannot go backwards.
+pub let since (t0: Instant): Duration = unsafe { Duration { nanos: time_monotonic_nanos() - t0.nanos } }
+
+/// The time between two instants, `later - earlier`. Negative if they
+/// are given the wrong way round, which is information rather than an
+/// error.
+pub let between (earlier: Instant) (later: Instant): Duration = Duration { nanos: later.nanos - earlier.nanos }
+
+/// Sleeps for AT LEAST `d`, never at most: a sleep overshoots by
+/// whatever the scheduler decides, and no caller can be promised
+/// otherwise. A non-positive duration returns immediately.
+///
+/// Windows sleeps in whole milliseconds, so a sub-millisecond request
+/// rounds UP to one there rather than down to nothing.
+pub let sleep (d: Duration): Unit = unsafe { time_sleep_nanos(d.nanos); () }
+
+// --- Calendars ---
+//
+// Everything below is ordinary Plum on top of `Time.now()`, which is
+// the line the 0.0.7 notes drew and this keeps: the CLOCK is the part
+// a program cannot write for itself, and the CALENDAR is arithmetic
+// anyone could write but nobody should have to. Porting a real CLI
+// produced 40 lines of `civil_from_days` in a program that wanted a
+// timestamp in a README, which is what moved it here.
+//
+// UTC only. A timezone database is a data-shipping problem, not an
+// arithmetic one, and Plum ships no data.
+
+/// Floor division and modulo, which is NOT what `/` and `%` do: those
+/// truncate toward zero, so `-1 / 86400` is `0` and the day before the
+/// epoch would land in 1970. Every calendar function below needs the
+/// floor, and dates before 1970 are real dates.
+let plum__floor_div (a: Int) (b: Int): Int = {
+    let q = a / b;
+    if a - q * b != 0 && (a < 0) != (b < 0) { q - 1 } else { q }
+}
+
+let plum__floor_mod (a: Int) (b: Int): Int = a - plum__floor_div(a, b) * b
+
+/// A civil date and time, as UTC. `weekday` is 0 for Sunday.
+pub struct DateTime {
+    pub year: Int, pub month: Int, pub day: Int,
+    pub hour: Int, pub minute: Int, pub second: Int,
+    pub weekday: Int,
+}
+
+/// Howard Hinnant's `civil_from_days`: exact for every date in the
+/// proleptic Gregorian calendar, with no lookup table and no leap-year
+/// special case. It shifts the year to start in March so the leap day
+/// falls at the END of the cycle, which is what removes the special
+/// case rather than hiding it.
+///
+/// The inner divisions all operate on non-negative values, so plain `/`
+/// is right there; only `era` can go negative and it uses the floor.
+pub let utc (epoch: Int): DateTime = {
+    let days = plum__floor_div(epoch, 86400);
+    let secs = plum__floor_mod(epoch, 86400);
+    let z = days + 719468;
+    let era = plum__floor_div(z, 146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    DateTime {
+        year: yoe + era * 400 + (if m <= 2 { 1 } else { 0 }),
+        month: m,
+        day: d,
+        hour: secs / 3600,
+        minute: secs / 60 - secs / 3600 * 60,
+        second: secs - secs / 60 * 60,
+        // 1970-01-01 was a Thursday, which is index 4.
+        weekday: plum__floor_mod(days + 4, 7),
+    }
+}
+
+/// The English name of a weekday, 0 being Sunday, as `Time.utc`
+/// reports it. Out-of-range numbers give an empty string.
+pub let weekday_name (weekday: Int): String =
+    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][plum__floor_mod(weekday, 7)]
+
+/// The English name of a month, 1 being January, as `Time.utc` reports
+/// it. Out-of-range numbers give an empty string.
+pub let month_name (month: Int): String =
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][plum__floor_mod(month - 1, 12)]
+
+let plum__two (n: Int): String = String.pad_left(n.to_string(), 2, "0")
+
+/// `2026-08-27T01:40:28Z`, in ISO 8601, which is the one to reach for
+/// when a machine reads it back or when it needs to sort as text.
+pub let iso8601 (epoch: Int): String = {
+    let t = utc(epoch);
+    let date = String.pad_left(t.year.to_string(), 4, "0").concat("-").concat(plum__two(t.month)).concat("-").concat(plum__two(t.day));
+    date.concat("T").concat(plum__two(t.hour)).concat(":").concat(plum__two(t.minute)).concat(":").concat(plum__two(t.second)).concat("Z")
+}
+
+/// `Thu, 27 Aug 2026 01:40:28 GMT`, the HTTP date format (RFC 7231),
+/// which is what a `Last-Modified` header and a good many generated
+/// files want.
+pub let rfc7231 (epoch: Int): String = {
+    let t = utc(epoch);
+    let head = weekday_name(t.weekday).concat(", ").concat(plum__two(t.day)).concat(" ").concat(month_name(t.month));
+    let time = plum__two(t.hour).concat(":").concat(plum__two(t.minute)).concat(":").concat(plum__two(t.second));
+    head.concat(" ").concat(t.year.to_string()).concat(" ").concat(time).concat(" GMT")
+}
