@@ -421,7 +421,8 @@ will poison the enclosing project's diagnostics.
 
 ## Where a change goes
 
-**A new prelude function** → `bootstrap/self_host/codegen/prelude.plum`.
+**A new prelude function** → `bootstrap/std/prelude.plum` (ordinary
+Plum, baked in via `@embed_file` from `codegen/prelude.plum`).
 If the compiler itself will use it, remember the two-generation rule.
 There is one prelude now; a second one in the Rust interpreter used to
 drift from it, and that is how the missing networking stack was
@@ -596,7 +597,8 @@ Worth knowing before you "fix" them:
 - **`parser.std_module_names()` is THE list of stdlib modules.**
   `codegen` looks source up by those names; `typecheck` uses them for
   the missing-`use` hint. Adding a module means adding the name there
-  and the source in `codegen/stdlib.plum` — a name with no source fails
+  and a file `bootstrap/std/<Name>.plum` plus a `@embed_file` arm in
+  `codegen/stdlib.plum` — a name with no source fails
   the build loudly, which is the intended direction.
 - **`use` is load-bearing for stdlib modules only.** For directory
   modules it is still documentation the compiler does not check; module
@@ -849,7 +851,8 @@ Worth knowing before you "fix" them:
 - **`Os`, `Time`, `Net`, `Http` and `Process` are modules; the type namespaces
   are not, and cannot be.** `T.f(x)` is the method-call mechanism, so
   `Array.map` being in scope is what makes `xs.map(f)` work. Adding a
-  module means a name in `parser.std_module_names()` and source in
+  module means a name in `parser.std_module_names()`, a file
+  `bootstrap/std/<Name>.plum`, and a `@embed_file` arm in
   `codegen/stdlib.plum`.
 - **A new fixture that calls `Os.` needs `use Os;`.** The harnesses
   will catch it, but the error is a type error at build time rather

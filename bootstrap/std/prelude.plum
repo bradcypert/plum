@@ -1,0 +1,1636 @@
+/// A value that may not be there.
+///
+/// Plum has no null, so absence is spelled here and the checker makes
+/// you handle it.
+pub enum Option[T] { Some(T), None }
+/// A value, or an explanation of why there isn't one.
+///
+/// Failure is an ordinary value: no exceptions, so a function that can
+/// fail says so in its type.
+pub enum Result[T, E] { Ok(T), Err(E) }
+
+/// Whether there is a value.
+pub let Option.is_some[T] (o: Option[T]): Bool = match o { Some(_) => true, None => false }
+/// Whether there is no value.
+pub let Option.is_none[T] (o: Option[T]): Bool = match o { Some(_) => false, None => true }
+/// The value, or `fallback` when there is none.
+///
+/// `fallback` is evaluated whether or not it is needed. Use
+/// `unwrap_or_else` when computing it costs something.
+pub let Option.unwrap_or[T] (o: Option[T]) (fallback: T): T = match o { Some(v) => v, None => fallback }
+/// The value, or the result of calling `f` when there is none. The
+/// lazy `unwrap_or`: `f` runs only when it has to.
+pub let Option.unwrap_or_else[T] (o: Option[T]) (f: () -> T): T = match o { Some(v) => v, None => f() }
+/// Transforms the value if there is one, leaving `None` alone.
+pub let Option.map[T, U] (o: Option[T]) (f: (T) -> U): Option[U] = match o { Some(v) => Some(f(v)), None => None }
+/// Chains an operation that may itself find nothing.
+///
+/// `map` with a function returning `Option` would give
+/// `Option[Option[U]]`; this is the one that keeps it flat.
+pub let Option.and_then[T, U] (o: Option[T]) (f: (T) -> Option[U]): Option[U] = match o { Some(v) => f(v), None => None }
+/// Turns nothing into an error, so an `Option` can join a chain of
+/// `Result`s.
+pub let Option.ok_or[T, E] (o: Option[T]) (err: E): Result[T, E] = match o { Some(v) => Ok(v), None => Err(err) }
+
+/// Whether this succeeded.
+pub let Result.is_ok[T, E] (r: Result[T, E]): Bool = match r { Ok(_) => true, Err(_) => false }
+/// Whether this failed.
+pub let Result.is_err[T, E] (r: Result[T, E]): Bool = match r { Ok(_) => false, Err(_) => true }
+/// The value, or `fallback` on failure — DISCARDING the error. Reach
+/// for `unwrap_or_else` when the error should shape the answer.
+pub let Result.unwrap_or[T, E] (r: Result[T, E]) (fallback: T): T = match r { Ok(v) => v, Err(_) => fallback }
+/// The value, or the result of calling `f` with the error. The
+/// recovery that gets to see what went wrong.
+pub let Result.unwrap_or_else[T, E] (r: Result[T, E]) (f: (E) -> T): T = match r { Ok(v) => v, Err(e) => f(e) }
+/// Transforms the value on success, leaving an error untouched.
+pub let Result.map[T, E, U] (r: Result[T, E]) (f: (T) -> U): Result[U, E] = match r { Ok(v) => Ok(f(v)), Err(e) => Err(e) }
+/// Transforms the ERROR, leaving a success untouched. For adding
+/// context to a failure on its way up.
+pub let Result.map_err[T, E, F] (r: Result[T, E]) (f: (E) -> F): Result[T, F] = match r { Ok(v) => Ok(v), Err(e) => Err(f(e)) }
+/// Chains an operation that may itself fail, stopping at the first
+/// error. The flat version of `map` over a fallible step.
+pub let Result.and_then[T, E, U] (r: Result[T, E]) (f: (T) -> Result[U, E]): Result[U, E] = match r { Ok(v) => f(v), Err(e) => Err(e) }
+
+/// Whether the array has no elements.
+pub let Array.is_empty[T] (xs: Array[T]): Bool = xs.len() == 0
+
+let plum__array_concat_acc[T] (a: Array[T]) (b: Array[T]) (i: Int): Array[T] =
+    if i >= b.len() { a } else { plum__array_concat_acc(a.push(b[i]), b, i + 1) }
+/// A new array with `b`'s elements after `a`'s. Neither input is
+/// changed.
+pub let Array.concat[T] (a: Array[T]) (b: Array[T]): Array[T] = plum__array_concat_acc(a, b, 0)
+
+let plum__array_contains_acc[T] (xs: Array[T]) (needle: T) (i: Int): Bool =
+    if i >= xs.len() { false } else if xs[i] == needle { true } else { plum__array_contains_acc(xs, needle, i + 1) }
+/// Whether any element equals `needle`, compared structurally.
+pub let Array.contains[T] (xs: Array[T]) (needle: T): Bool = plum__array_contains_acc(xs, needle, 0)
+
+let plum__array_any_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =
+    if i >= xs.len() { false } else if f(xs[i]) { true } else { plum__array_any_acc(xs, f, i + 1) }
+/// Whether `f` holds for at least one element. Stops at the first
+/// that passes; false for an empty array.
+pub let Array.any[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_any_acc(xs, f, 0)
+
+/// Clamped at both ends, like the real prelude's own: a slice past
+/// the end is the tail, not a crash, which matters because this
+/// backend emits no bounds check of its own.
+let plum__array_slice_acc[T] (xs: Array[T]) (i: Int) (end: Int) (acc: Array[T]): Array[T] =
+    if i >= end { acc } else if i >= xs.len() { acc } else { plum__array_slice_acc(xs, i + 1, end, acc.push(xs[i])) }
+/// The elements from `start` up to but NOT including `end`.
+///
+/// Out-of-range bounds are clamped rather than an error, and a `start`
+/// past `end` gives an empty array — so slicing near the end of an
+/// array needs no arithmetic to stay safe.
+pub let Array.slice[T] (xs: Array[T]) (start: Int) (end: Int): Array[T] =
+    plum__array_slice_acc(xs, if start < 0 { 0 } else { start }, end, [])
+
+let plum__array_reverse_acc[T] (xs: Array[T]) (i: Int) (acc: Array[T]): Array[T] =
+    if i < 0 { acc } else { plum__array_reverse_acc(xs, i - 1, acc.push(xs[i])) }
+/// A new array in the opposite order.
+pub let Array.reverse[T] (xs: Array[T]): Array[T] = plum__array_reverse_acc(xs, xs.len() - 1, [])
+
+let plum__array_all_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Bool =
+    if i >= xs.len() { true } else if f(xs[i]) { plum__array_all_acc(xs, f, i + 1) } else { false }
+/// Whether `f` holds for every element. Stops at the first that
+/// fails; TRUE for an empty array, which is the convention everywhere
+/// and still surprises people.
+pub let Array.all[T] (xs: Array[T]) (f: (T) -> Bool): Bool = plum__array_all_acc(xs, f, 0)
+
+let plum__array_find_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[T] =
+    if i >= xs.len() { None } else if f(xs[i]) { Some(xs[i]) } else { plum__array_find_acc(xs, f, i + 1) }
+/// The first element `f` accepts, or `None`.
+pub let Array.find[T] (xs: Array[T]) (f: (T) -> Bool): Option[T] = plum__array_find_acc(xs, f, 0)
+
+let plum__array_find_index_acc[T] (xs: Array[T]) (f: (T) -> Bool) (i: Int): Option[Int] =
+    if i >= xs.len() { None } else if f(xs[i]) { Some(i) } else { plum__array_find_index_acc(xs, f, i + 1) }
+/// The index of the first element `f` accepts, or `None`.
+pub let Array.find_index[T] (xs: Array[T]) (f: (T) -> Bool): Option[Int] = plum__array_find_index_acc(xs, f, 0)
+
+/// The index of the first element equal to `needle`, or `None`.
+pub let Array.index_of[T] (xs: Array[T]) (needle: T): Option[Int] = Array.find_index(xs, |x| x == needle)
+/// The first element, or `None` when the array is empty.
+pub let Array.first[T] (xs: Array[T]): Option[T] = if Array.is_empty(xs) { None } else { Some(xs[0]) }
+/// The last element, or `None` when the array is empty.
+pub let Array.last[T] (xs: Array[T]): Option[T] = if Array.is_empty(xs) { None } else { Some(xs[xs.len() - 1]) }
+/// The first `n` elements, or all of them if there are fewer. Never
+/// an error.
+pub let Array.take[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, 0, n)
+/// Everything after the first `n` elements, or nothing if there are
+/// fewer.
+pub let Array.drop[T] (xs: Array[T]) (n: Int): Array[T] = Array.slice(xs, n, xs.len())
+
+/// The sum, which OVERFLOWS like any other addition and stops the
+/// program rather than wrapping.
+pub let Array.sum_int (xs: Array[Int]): Int = Array.fold(xs, 0, |acc, x| acc + x)
+/// The sum, left to right. Floating-point addition is not
+/// associative, so a different order can give a different last digit.
+pub let Array.sum_float (xs: Array[Float]): Float = Array.fold(xs, 0.0, |acc, x| acc + x)
+
+// --- Numbers ---
+
+/// The absolute value.
+///
+/// `Int.abs` of the most negative `Int` cannot be represented and
+/// overflows, which stops the program rather than returning a negative
+/// "absolute" value.
+pub let Int.abs (a: Int): Int = if a < 0 { 0 - a } else { a }
+/// The smaller of two.
+pub let Int.min (a: Int) (b: Int): Int = if a < b { a } else { b }
+/// The larger of two.
+pub let Int.max (a: Int) (b: Int): Int = if a > b { a } else { b }
+/// `x` held between `lo` and `hi` inclusive. A `lo` above `hi` gives
+/// `hi`, since the upper bound is applied last.
+pub let Int.clamp (x: Int) (lo: Int) (hi: Int): Int = Int.min(Int.max(x, lo), hi)
+
+/// An UNSIGNED right shift: zeros are shifted in, never the sign
+/// bit. `>>` is arithmetic, because `Int` is signed and `-8 >> 1`
+/// should be -4; hashing wants the other one, and writing it by
+/// hand is exactly the sort of thing that is wrong at n = 0 and
+/// n = 64 in every codebase that tries.
+///
+/// The mask is `~(-1 << (64 - n))` and NOT `(1 << (64 - n)) - 1`,
+/// which is the spelling everyone reaches for first and which traps
+/// here: at n = 1 that is `(1 << 63) - 1`, and `1 << 63` is
+/// `Int`'s most negative value, so subtracting one from it is an
+/// integer overflow. The complement builds the same mask out of a
+/// shift and a NOT, neither of which can overflow.
+///
+/// The two ends are handled before the mask because the mask cannot
+/// express them: at n = 0 it would need all 64 bits, and `64 - 0`
+/// is a shift of 64, which this language defines as zero.
+pub let Int.shr_logical (x: Int) (n: Int): Int =
+    if n <= 0 { x }
+    else if n >= 64 { 0 }
+    else { (x >> n) & ~((0 - 1) << (64 - n)) }
+
+/// The number of one bits. Counted a nibble at a time through a
+/// lookup rather than bit by bit, so it is 16 steps and not 64.
+pub let Int.count_ones (x: Int): Int = plum__popcount(x, 0, 0)
+
+let plum__popcount (x: Int) (i: Int) (acc: Int): Int =
+    if i >= 16 { acc }
+    else { plum__popcount(x, i + 1, acc + PLUM_NIBBLE_ONES[Int.shr_logical(x, i * 4) & 15]) }
+
+let PLUM_NIBBLE_ONES: Array[Int] = [0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4]
+
+/// The absolute value. `abs` of NaN is NaN.
+pub let Float.abs (a: Float): Float = if a < 0.0 { 0.0 - a } else { a }
+/// The smaller of two. NaN does not compare, so a NaN argument gives
+/// an answer that is not meaningful.
+pub let Float.min (a: Float) (b: Float): Float = if a < b { a } else { b }
+/// The larger of two. See `Float.min` on NaN.
+pub let Float.max (a: Float) (b: Float): Float = if a > b { a } else { b }
+/// `x` held between `lo` and `hi` inclusive.
+pub let Float.clamp (x: Float) (lo: Float) (hi: Float): Float = Float.min(Float.max(x, lo), hi)
+
+/// --- Strings ---
+///
+/// All of these are built on `chars_of`, which is the one primitive
+/// in `runtime.plum`. That is what makes them codepoint-safe rather
+/// than byte-indexed, so `String.slice` can never split a multi-byte
+/// character in half, because it never sees bytes at all.
+/// The string with its CHARACTERS reversed, not its bytes — so text
+/// outside ASCII survives.
+pub let String.reverse (s: String): String = Array.concat_all(Array.reverse(chars_of(s)))
+/// Whether the string has no bytes.
+pub let String.is_empty (s: String): Bool = s.len() == 0
+/// Characters from `start` up to but not including `end`, counted in
+/// CODEPOINTS rather than bytes. Out-of-range bounds are clamped.
+pub let String.slice (s: String) (start: Int) (end: Int): String = Array.concat_all(Array.slice(chars_of(s), start, end))
+/// The string joined to itself `n` times. `n` of zero or less gives
+/// an empty string.
+/// Repeats `s` `n` times.
+///
+/// A LOOP with a self-rebinding accumulator, not recursion. It was
+/// `s.concat(String.repeat(s, n - 1))`, which concatenates onto a
+/// string one shorter each time, so the bytes allocated are
+/// 1+2+3+...+n: quadratic. 25k characters allocated 313MB, 50k
+/// allocated 1.25GB, 100k allocated 5.0GB, and a million never
+/// finished.
+///
+/// `out = out.concat(s)` is the shape the backend can grow in place,
+/// because the slot is overwritten with the result and nothing can
+/// observe a mutation. Found while writing SHA-256, whose test
+/// vector needs a million characters.
+pub let String.repeat (s: String) (n: Int): String = {
+    let mut out = "";
+    for i in 0..n { out = out.concat(s); };
+    out
+}
+
+/// The number of CHARACTERS in `s`, which is not `s.len()`.
+///
+/// `.len()` is bytes; everything else in this section is codepoints.
+/// The two agree on ASCII and part company on anything else, so a
+/// program that lines text up in columns wants this one; padding
+/// computed from a byte count puts an accented name in the wrong place.
+/// The number of CHARACTERS (codepoints). `String.len` is the number
+/// of BYTES, and the two differ for anything outside ASCII.
+pub let String.char_len (s: String): Int = chars_of(s).len()
+
+/// Pad `s` to `width` CHARACTERS with `fill`, on the left or the right.
+///
+/// A `fill` that is not exactly one character returns `s` untouched, as
+/// does a string already at least `width` wide. Both are deliberate: a
+/// formatting helper that returns a `Result` is a formatting helper
+/// nobody uses, and truncating to fit loses data that padding was never
+/// asked to remove.
+/// Padded on the LEFT to `width` characters — right-aligned text.
+///
+/// `fill` must be a single character. A string already at or past the
+/// width is returned unchanged: this pads, it never truncates.
+pub let String.pad_left (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, true)
+/// Padded on the RIGHT to `width` characters — left-aligned text.
+/// Never truncates; see `String.pad_left`.
+pub let String.pad_right (s: String) (width: Int) (fill: String): String = plum__pad(s, width, fill, false)
+
+// --- Formatting numbers (issue #23) ---
+//
+// String interpolation already exists -- `"${a} + ${b} = ${a + b}"` --
+// so building output is not the gap. What was missing is CONTROL over
+// how a number renders inside one: `${1.0 / 3.0}` gives
+// 0.3333333333333333 and there was no way to ask for two places, and
+// `${flags}` printing 20 is the wrong view of a bit field.
+//
+// These are the functions a `${x:.2}` syntax would lower to. Shipping
+// them first means that syntax, if it ever arrives, can be designed
+// against real usage rather than guessed -- and it stays purely
+// additive, since it would be sugar over exactly these.
+
+/// Centred padding, completing the set beside `pad_left`/`pad_right`.
+/// An odd remainder goes on the RIGHT, so a column of centred headings
+/// lines up on its left edge rather than drifting.
+pub let String.pad_center (s: String) (width: Int) (fill: String): String = {
+    let n = String.char_len(s);
+    if String.char_len(fill) != 1 || n >= width { s }
+    else {
+        let total = width - n;
+        let left = total / 2;
+        String.repeat(fill, left).concat(s).concat(String.repeat(fill, total - left))
+    }
+}
+
+/// Exactly `decimals` places after the point, rounded HALF TO EVEN.
+///
+/// --- Why the rounding is done here and not by the C library ---
+///
+/// `snprintf("%.*f")` is correctly rounded on every platform and does
+/// not give the same answer on all of them. glibc and Microsoft's CRT
+/// agree on every value whose expansion is not an exact tie (2.675 is
+/// really 2.674999..., and both render it 2.67) and disagree on ties:
+/// glibc rounds 0.5, 1.5, 2.5, 3.5 to 0, 2, 2, 4 and the Microsoft CRT
+/// to 1, 2, 3, 4.
+///
+/// A language whose programs print different
+/// numbers depending on the machine has a worse problem than one whose
+/// rounding is a line longer, so the decision is made here: the library
+/// is asked for a high-precision expansion, and the rounding is applied
+/// to the digits.
+///
+/// --- Why half to EVEN ---
+///
+/// It is IEEE 754's default (`roundTiesToEven`), which is what glibc
+/// inherits from the ambient rounding mode rather than choosing, and it
+/// is unbiased: rounding every tie away from zero accumulates. Summing
+/// the thousand ties 0.5 .. 999.5 gives 500,500 rounded away and
+/// 500,000 rounded to even, against an exact 500,000.
+///
+/// **`Float.round` rounds half AWAY from zero and that is not an
+/// inconsistency.** C specifies `round()` that way regardless of the FP
+/// mode, because it is arithmetic: "the nearest integer, ties away",
+/// while this is rendering. Every language with both has this pair.
+///
+/// --- Why 18 digits is enough to tell a tie from a near-miss ---
+///
+/// A tie has to be exact. The gap between neighbouring doubles near any
+/// value whose fractional digits matter is enormously larger than
+/// 1e-18: next to 2.5 it is about 4.4e-16, so the value after 2.5
+/// renders as 2.500000000000000444 and is visibly not a tie. Above
+/// about 1e3 the fraction is all zeros anyway.
+pub let Float.to_fixed (x: Float) (decimals: Int): String = {
+    let d = Int.clamp(decimals, 0, 17);
+    let raw = float_fixed_raw(x, 18);
+    // `inf` and `nan` have no digits to round.
+    if !String.contains(raw, ".") { raw } else { plum__round_decimals(raw, d) }
+}
+
+let plum__round_decimals (s: String) (d: Int): String = {
+    let neg = String.starts_with(s, "-");
+    let body = if neg { String.slice(s, 1, String.char_len(s)) } else { s };
+    let dot = Option.unwrap_or(String.index_of(body, "."), String.char_len(body));
+    let ip = String.slice(body, 0, dot);
+    let fp = String.slice(body, dot + 1, String.char_len(body));
+    let keep = String.slice(fp, 0, d);
+    let rest = String.slice(fp, d, String.char_len(fp));
+    let digits = ip.concat(keep);
+    let bumped = if plum__rounds_up(digits, rest) { plum__inc_decimal(digits) } else { digits };
+    let n = String.char_len(bumped);
+    let out_ip = String.slice(bumped, 0, n - d);
+    let out_fp = String.slice(bumped, n - d, n);
+    let text = if d == 0 { out_ip } else { out_ip.concat(".").concat(out_fp) };
+    // The sign survives a value that rounds to zero: `-0.00` says the
+    // value was below zero, which is information. C does this too.
+    if neg { "-".concat(text) } else { text }
+}
+
+/// `rest` is everything being discarded. Above half rounds up, below
+/// half rounds down, and an EXACT half goes to whichever direction
+/// leaves the last kept digit even.
+let plum__rounds_up (kept: String) (rest: String): Bool =
+    if String.is_empty(rest) { false }
+    else {
+        let first = plum__digit_at(rest, 0);
+        if first > 5 { true }
+        else if first < 5 { false }
+        else if plum__any_nonzero(rest, 1) { true }
+        else {
+            // An exact tie. Round to even.
+            let last = if String.is_empty(kept) { 0 } else { plum__digit_at(kept, String.char_len(kept) - 1) };
+            last - (last / 2) * 2 == 1
+        }
+    }
+
+let plum__digit_at (s: String) (i: Int): Int =
+    Option.unwrap_or(String.index_of("0123456789", String.slice(s, i, i + 1)), 0)
+
+let plum__any_nonzero (s: String) (i: Int): Bool =
+    if i >= String.char_len(s) { false }
+    else if plum__digit_at(s, i) != 0 { true }
+    else { plum__any_nonzero(s, i + 1) }
+
+/// Adds one to a decimal digit string, growing it when every digit
+/// carries: "999" becomes "1000", which is what makes 9.99 round to
+/// 10.0 without a special case.
+let plum__inc_decimal (s: String): String = plum__inc_acc(s, String.char_len(s) - 1, "")
+
+let plum__inc_acc (s: String) (i: Int) (acc: String): String =
+    if i < 0 { "1".concat(acc) }
+    else {
+        let v = plum__digit_at(s, i) + 1;
+        if v < 10 { String.slice(s, 0, i).concat(plum__radix_digit(v)).concat(acc) }
+        else { plum__inc_acc(s, i - 1, "0".concat(acc)) }
+    }
+
+/// --- Radix ---
+///
+/// SIGNED, and reversible: `Int.to_radix(-255, 16)` is "-ff", which
+/// `String.parse_int` would read back. That is the opposite of what C
+/// and Rust print for `%x` on a negative, and it is the choice that
+/// keeps `to_radix` a number conversion rather than a bit dump. For the
+/// bit pattern, `Int.to_bits` says so in its name.
+///
+/// Radix is clamped to 2..36: one digit per character, `0-9a-z`.
+pub let Int.to_radix (n: Int) (radix: Int): String = {
+    let r = Int.clamp(radix, 2, 36);
+    if n == 0 { "0" }
+    // The most negative Int has no positive counterpart, so it cannot
+    // be negated before conversion. Its last digit is peeled off first,
+    // in the negative, and the rest divides safely.
+    else if n < 0 { "-".concat(plum__radix_acc(0 - (n / r), r, plum__radix_digit(0 - (n - (n / r) * r)))) }
+    else { plum__radix_acc(n, r, "") }
+}
+
+let plum__radix_acc (n: Int) (r: Int) (acc: String): String =
+    if n == 0 { acc } else { plum__radix_acc(n / r, r, plum__radix_digit(n - (n / r) * r).concat(acc)) }
+
+/// Built from the digit's VALUE rather than looked up in a table.
+///
+/// A global `chars_of("0123..z")` is the obvious spelling and cost
+/// every program 37 allocations at startup, 36 strings and the
+/// array, whether or not it ever formatted a number, because
+/// globals are initialised eagerly and are not dead-code eliminated.
+/// `bootstrap/alloc-check` caught it as a uniform +37 across every
+/// fixture, which is what a constant offset in that harness means.
+///
+/// This pays about two allocations per digit instead, and only when
+/// a conversion actually happens. 48 is '0' and 87 is 'a' - 10.
+let plum__radix_digit (v: Int): String =
+    match Bytes.as_string(Bytes.from_array([if v < 10 { 48 + v } else { 87 + v }])) {
+        Ok(c) => c,
+        Err(_) => "?",
+    }
+
+/// Lowercase hex, SIGNED: `-255` is `-ff`, not a two's-complement bit
+/// pattern. `Int.to_hex_bits` is the one that shows the bits.
+pub let Int.to_hex (n: Int): String = Int.to_radix(n, 16)
+/// Binary, SIGNED: `-1` is `-1`. `Int.to_bits` shows all 64 bits.
+pub let Int.to_binary (n: Int): String = Int.to_radix(n, 2)
+/// Octal, signed. See `Int.to_radix` for other bases.
+pub let Int.to_octal (n: Int): String = Int.to_radix(n, 8)
+
+/// The BIT PATTERN: all 64 bits, two's complement, most significant
+/// first. This is the one to reach for with a bit field, where a signed
+/// reading is not what is wanted. `Int.to_bits(-1)` is sixty-four
+/// ones, while `Int.to_binary(-1)` is "-1". Both are right about
+/// different questions.
+pub let Int.to_bits (n: Int): String = plum__bits_acc(n, 63, "")
+
+let plum__bits_acc (n: Int) (i: Int) (acc: String): String =
+    if i < 0 { acc }
+    else { plum__bits_acc(n, i - 1, acc.concat(if Int.shr_logical(n, i) & 1 == 1 { "1" } else { "0" })) }
+
+/// The same, in hex: sixteen digits, two's complement, zero padded.
+pub let Int.to_hex_bits (n: Int): String = plum__hex_bits_acc(n, 60, "")
+
+let plum__hex_bits_acc (n: Int) (i: Int) (acc: String): String =
+    if i < 0 { acc }
+    else { plum__hex_bits_acc(n, i - 4, acc.concat(plum__radix_digit(Int.shr_logical(n, i) & 15))) }
+
+let plum__pad (s: String) (width: Int) (fill: String) (left: Bool): String = {
+    let n = String.char_len(s);
+    if String.char_len(fill) != 1 || n >= width { s }
+    else {
+        let padding = String.repeat(fill, width - n);
+        if left { padding.concat(s) } else { s.concat(padding) }
+    }
+}
+
+/// `print` is `println` without the newline. Its `env_var` and
+/// file/process neighbours moved to the `Os` module in 0.0.9;
+/// output stayed here, because a program that prints is not
+/// thereby doing operating-system work.
+let print_raw (s: String): Bool = false
+
+/// Writes to standard output with NO trailing newline. `println` is
+/// the one that adds one.
+pub let print (s: String): Unit = { print_raw(s); () }
+
+let wrapping_add_raw (a: Int) (b: Int): Int = 0
+let wrapping_sub_raw (a: Int) (b: Int): Int = 0
+let wrapping_mul_raw (a: Int) (b: Int): Int = 0
+
+/// Addition that WRAPS on overflow, two's complement, instead of
+/// stopping the program.
+///
+/// `+` is the one to reach for. It aborts on overflow, deliberately,
+/// because an integer that silently became negative is a wrong
+/// answer that keeps running. This is for the cases where wrapping is
+/// the SPECIFICATION rather than an accident: hashes, checksums,
+/// fixed-width binary protocols, and generators like PCG or
+/// splitmix64 that are defined mod 2^64.
+///
+/// It is a named function and not an operator so that it is visible
+/// at the call site. Wrapping should be asked for, not defaulted to.
+pub let Int.wrapping_add (a: Int) (b: Int): Int = wrapping_add_raw(a, b)
+
+/// Subtraction that WRAPS on overflow. See `Int.wrapping_add`.
+pub let Int.wrapping_sub (a: Int) (b: Int): Int = wrapping_sub_raw(a, b)
+
+/// Multiplication that WRAPS on overflow. See `Int.wrapping_add`.
+///
+/// This is the one most algorithms actually need: FNV-1a, xxHash and
+/// splitmix64 are all a wrapping multiply by a large constant
+/// followed by a mix.
+pub let Int.wrapping_mul (a: Int) (b: Int): Int = wrapping_mul_raw(a, b)
+
+let plum__string_hash_acc (b: Bytes) (i: Int) (n: Int) (h: Int): Int =
+    if i >= n { h & 9223372036854775807 }
+    else { plum__string_hash_acc(b, i + 1, n, Int.wrapping_mul(h ^ Option.unwrap_or(Bytes.at(b, i), 0), 1099511628211)) }
+
+/// A hash of the string's bytes, for bucketing.
+///
+/// Not stable across releases and not cryptographic — do not persist
+/// it, and do not use it for anything security-related.
+///
+/// FNV-1a, kept in Plum now that `Int.wrapping_mul` can express its
+/// modulo-2^64 multiply. The final sign-bit mask is required: `Map`
+/// uses the result with `%`, which needs a non-negative index.
+pub let String.hash (s: String): Int = {
+    let b = s.as_bytes();
+    plum__string_hash_acc(b, 0, b.len(), -3750763034362895579)
+}
+
+/// Whether a one-character string is an ASCII space, tab, newline or
+/// carriage return. Unicode spaces are not included.
+pub let String.is_ascii_ws (c: String): Bool = c == " " || c == "\t" || c == "\n" || c == "\r"
+
+let plum__string_matches_at (cs: Array[String]) (needle: Array[String]) (base: Int) (j: Int): Bool =
+    if j >= needle.len() { true }
+    else if cs[base + j] != needle[j] { false }
+    else { plum__string_matches_at(cs, needle, base, j + 1) }
+
+let plum__string_index_of_acc (cs: Array[String]) (needle: Array[String]) (i: Int): Option[Int] =
+    if i + needle.len() > cs.len() { None }
+    else if plum__string_matches_at(cs, needle, i, 0) { Some(i) }
+    else { plum__string_index_of_acc(cs, needle, i + 1) }
+/// The CHARACTER index where `needle` first appears, or `None`.
+pub let String.index_of (s: String) (needle: String): Option[Int] = plum__string_index_of_acc(chars_of(s), chars_of(needle), 0)
+
+/// --- Namespaced forms of the string METHODS ---
+///
+/// `.len()`, `.split()`, `.replace()` and friends are compiler
+/// PRIMITIVES lowered straight to IR, so they existed only as
+/// methods, while `String.slice`/`index_of`/`lines`/`repeat`/
+/// `trim_start`/`trim_end` are ordinary prelude functions and so
+/// existed only namespaced. That split tracks how each one happens
+/// to be implemented, which is invisible from outside and produced
+/// a genuinely confusing surface: `"x".trim()` worked and
+/// `String.trim("x")` did not, while `String.trim_start("x")`
+/// worked and `"x".trim_start()` did not. Same family, opposite
+/// rules, no way to tell which without trying.
+///
+/// The rule now: `String.f(s, ..)` always works. Some also have
+/// method sugar. These wrappers cost nothing when unused --
+/// dead-function elimination drops them.
+/// The number of BYTES. `String.char_len` is the character count, and
+/// the two differ for anything outside ASCII.
+pub let String.len (s: String): Int = s.len()
+/// Splits on every occurrence of `sep`.
+///
+/// A separator at either end produces an empty piece, so splitting
+/// `\",a,\"` on `\",\"` gives three pieces. Splitting on an empty
+/// separator gives the characters.
+pub let String.split (s: String) (sep: String): Array[String] = s.split(sep)
+/// Whether `needle` appears anywhere.
+pub let String.contains (s: String) (needle: String): Bool = s.contains(needle)
+/// Whether the string begins with `prefix`.
+pub let String.starts_with (s: String) (prefix: String): Bool = s.starts_with(prefix)
+/// Whether the string ends with `suffix`.
+pub let String.ends_with (s: String) (suffix: String): Bool = s.ends_with(suffix)
+/// Every occurrence of `from` replaced with `to`. An empty `from`
+/// leaves the string alone rather than looping.
+pub let String.replace (s: String) (from: String) (to: String): String = s.replace(from, to)
+/// Uppercased. ASCII only: letters outside it are left as they are,
+/// so this is not a general Unicode case mapping.
+pub let String.to_upper (s: String): String = s.to_upper()
+/// Lowercased. ASCII only — see `String.to_upper`.
+pub let String.to_lower (s: String): String = s.to_lower()
+/// Whitespace removed from both ends, including Unicode spaces.
+pub let String.trim (s: String): String = s.trim()
+
+let bytes_of_str_raw (s: String): Bytes = bytes_of_str_raw(s)
+let str_of_bytes_raw (b: Bytes): String = ""
+let bytes_len_raw (b: Bytes): Int = 0
+let bytes_at_raw (b: Bytes) (i: Int): Int = 0
+let bytes_slice_raw (b: Bytes) (start: Int) (end: Int): Bytes = bytes_slice_raw(b, start, end)
+let bytes_concat_raw (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)
+let bytes_from_array_raw (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)
+
+/// No bytes.
+pub let Bytes.empty (): Bytes = bytes_of_str_raw("")
+
+/// How many bytes.
+pub let Bytes.len (b: Bytes): Int = bytes_len_raw(b)
+/// Whether there are no bytes.
+pub let Bytes.is_empty (b: Bytes): Bool = bytes_len_raw(b) == 0
+
+/// Free in both directions at runtime; the DIRECTION is what differs.
+/// Every String is bytes, so this one is total.
+/// The string's bytes, as UTF-8. No copy of the text is decoded, so
+/// this is the cheap direction.
+pub let String.as_bytes (s: String): Bytes = bytes_of_str_raw(s)
+/// The string's UTF-8 bytes. The same as `String.as_bytes`, named for
+/// a caller thinking in bytes.
+pub let Bytes.from_string (s: String): Bytes = bytes_of_str_raw(s)
+
+/// Not every Bytes is a String, so this one is not. This is the ONE
+/// place the UTF-8 promise is established rather than assumed. The
+/// reason the two types are distinct at all.
+/// Written in Plum, not as a runtime primitive, because it needs
+/// nothing the two byte primitives above do not already provide --
+/// and this prelude's rule is that only what CANNOT be written here
+/// goes into hand-written IR.
+///
+/// Full UTF-8, not just a lead-byte check: the ranges below reject
+/// overlong encodings (C0/C1, and E0/F0 with a too-small second
+/// byte), the UTF-16 surrogate block (ED A0..BF, which is why ED is
+/// singled out), and anything past U+10FFFF (F5..FF, and F4 with a
+/// second byte over 8F). A validator that only checked continuation
+/// bytes would accept all four, and each one is a real way for a
+/// decoder downstream to disagree about what this buffer says.
+let plum__is_cont (b: Bytes) (i: Int): Bool = {
+    let v = bytes_at_raw(b, i);
+    v >= 128 && v <= 191
+}
+
+let plum__utf8_ok (b: Bytes) (i: Int) (n: Int): Bool =
+    if i >= n { true }
+    else {
+        let c = bytes_at_raw(b, i);
+        // ASCII.
+        if c < 128 { plum__utf8_ok(b, i + 1, n) }
+        // A continuation byte with no lead (80..BF), or an overlong
+        // two-byte form (C0/C1).
+        else if c < 194 { false }
+        // Two bytes: C2..DF.
+        else if c < 224 {
+            if i + 1 >= n { false }
+            else if !plum__is_cont(b, i + 1) { false }
+            else { plum__utf8_ok(b, i + 2, n) }
+        }
+        // Three bytes: E0..EF. E0 must not be overlong (second byte
+        // A0..BF) and ED must not encode a surrogate (second byte
+        // 80..9F).
+        else if c < 240 {
+            if i + 2 >= n { false }
+            else {
+                let c1 = bytes_at_raw(b, i + 1);
+                let lo = if c == 224 { 160 } else { 128 };
+                let hi = if c == 237 { 159 } else { 191 };
+                if c1 < lo || c1 > hi { false }
+                else if !plum__is_cont(b, i + 2) { false }
+                else { plum__utf8_ok(b, i + 3, n) }
+            }
+        }
+        // Four bytes: F0..F4. F0 must not be overlong (second byte
+        // 90..BF) and F4 must not exceed U+10FFFF (second byte
+        // 80..8F).
+        else if c < 245 {
+            if i + 3 >= n { false }
+            else {
+                let c1 = bytes_at_raw(b, i + 1);
+                let lo = if c == 240 { 144 } else { 128 };
+                let hi = if c == 244 { 143 } else { 191 };
+                if c1 < lo || c1 > hi { false }
+                else if !plum__is_cont(b, i + 2) { false }
+                else if !plum__is_cont(b, i + 3) { false }
+                else { plum__utf8_ok(b, i + 4, n) }
+            }
+        }
+        // F5..FF: past the end of the encodable range.
+        else { false }
+    }
+
+/// Whether these bytes are valid UTF-8, without building a string.
+pub let Bytes.is_utf8 (b: Bytes): Bool = plum__utf8_ok(b, 0, bytes_len_raw(b))
+/// Decodes UTF-8 into a string.
+///
+/// `Err` when the bytes are not valid UTF-8 — which is why this is a
+/// `Result` and `String.as_bytes` is not. Bytes arrive from files and
+/// sockets, and not all of them are text.
+pub let Bytes.as_string (b: Bytes): Result[String, String] =
+    if Bytes.is_utf8(b) { Ok(str_of_bytes_raw(b)) }
+    else { Err("Bytes.as_string: not valid UTF-8") }
+
+/// BYTE indices, throughout. `Bytes.slice` can and will split a
+/// multi-byte character in half, which is the operation `String`
+/// deliberately does not offer, and the reason a program reaching for
+/// bytes reached for them.
+///
+/// Clamped rather than aborting, matching `Array.slice`.
+/// Bytes from `start` up to but not including `end`, with bounds
+/// clamped. A slice can split a multi-byte character, so the result is
+/// not guaranteed to be valid UTF-8.
+pub let Bytes.slice (b: Bytes) (start: Int) (end: Int): Bytes = {
+    let n = bytes_len_raw(b);
+    let lo = if start < 0 { 0 } else if start > n { n } else { start };
+    let hi = if end < lo { lo } else if end > n { n } else { end };
+    bytes_slice_raw(b, lo, hi)
+}
+
+/// The two runs of bytes, joined.
+pub let Bytes.concat (a: Bytes) (b: Bytes): Bytes = bytes_concat_raw(a, b)
+
+/// `None` rather than an abort for an out-of-range index: a byte
+/// buffer is usually being walked by a parser that does not know how
+/// long it is yet, and `Option` is how the rest of this prelude says
+/// "nothing there" (`Array.first`, `Map.get`).
+/// The byte at `i` as a number 0-255, or `None` when out of range.
+pub let Bytes.at (b: Bytes) (i: Int): Option[Int] =
+    if i < 0 { None } else if i >= bytes_len_raw(b) { None } else { Some(bytes_at_raw(b, i)) }
+
+/// Each element is one byte, 0-255. Values outside that range are
+/// masked to their low 8 bits rather than rejected. `from_array` is
+/// a construction helper, and a `Result` here would put error handling
+/// in front of every literal buffer.
+/// Bytes from numbers. Values outside 0-255 are truncated to their
+/// low eight bits.
+pub let Bytes.from_array (xs: Array[Int]): Bytes = bytes_from_array_raw(xs)
+
+/// The way back in from C, and the counterpart to `.as_cstr()`.
+///
+/// Takes an explicit LENGTH, which is the whole difference from
+/// `CStr.as_string()`: that one stops at the first NUL because a
+/// `char*` alone cannot say how long it is, and any C API returning
+/// bytes has to hand back a count separately. Given the count, this
+/// is binary-safe. Given a wrong one, it reads whatever is
+/// next in memory, exactly as the equivalent C would.
+///
+/// COPIES into a fresh cell. C buffers are routinely static, reused
+/// on the next call, or freed by the callee; the copy is what makes
+/// the result an ordinary owned Plum value.
+let bytes_from_cstr_raw (c: CStr) (len: Int): Bytes = bytes_from_cstr_raw(c, len)
+/// Copies `len` bytes from a C pointer.
+///
+/// For `extern \"C\"` results only, and `unsafe` for the obvious reason:
+/// nothing checks that the pointer is valid or that `len` is right.
+pub let Bytes.from_cstr (c: CStr) (len: Int): Bytes =
+    if len <= 0 { Bytes.empty() } else { bytes_from_cstr_raw(c, len) }
+
+let plum__bytes_to_array_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[Int]): Array[Int] =
+    if i >= n { acc } else { plum__bytes_to_array_acc(b, i + 1, n, acc.push(bytes_at_raw(b, i))) }
+/// The bytes as numbers 0-255.
+pub let Bytes.to_array (b: Bytes): Array[Int] = plum__bytes_to_array_acc(b, 0, bytes_len_raw(b), [])
+
+/// Lowercase hex, two characters per byte, no separator.
+///
+/// This is what `.to_string()` would have to be if `Bytes` had one,
+/// and the reason it does not: hex is A rendering, not THE rendering,
+/// and picking it silently would make `.to_string()` mean something
+/// different on this type than on every other. Named explicitly, the
+/// caller decides.
+let plum__hex_digit (v: Int): String =
+    if v == 0 { "0" } else if v == 1 { "1" } else if v == 2 { "2" } else if v == 3 { "3" }
+    else if v == 4 { "4" } else if v == 5 { "5" } else if v == 6 { "6" } else if v == 7 { "7" }
+    else if v == 8 { "8" } else if v == 9 { "9" } else if v == 10 { "a" } else if v == 11 { "b" }
+    else if v == 12 { "c" } else if v == 13 { "d" } else if v == 14 { "e" } else { "f" }
+
+let plum__bytes_hex_acc (b: Bytes) (i: Int) (n: Int) (acc: Array[String]): Array[String] =
+    if i >= n { acc }
+    else {
+        let v = bytes_at_raw(b, i);
+        plum__bytes_hex_acc(b, i + 1, n, acc.push(plum__hex_digit(v / 16)).push(plum__hex_digit(v % 16)))
+    }
+/// Lowercase hex, two characters per byte. `Encoding.hex_decode`
+/// reads it back.
+pub let Bytes.to_hex (b: Bytes): String = Array.concat_all(plum__bytes_hex_acc(b, 0, bytes_len_raw(b), []))
+
+/// The one string operation that had NEITHER form: there was no way
+/// to join an array of strings with a separator at all.
+let plum__join_acc (parts: Array[String]) (sep: String) (i: Int) (acc: Array[String]): Array[String] =
+    if i >= parts.len() { acc }
+    else if i == 0 { plum__join_acc(parts, sep, 1, acc.push(parts[0])) }
+    else { plum__join_acc(parts, sep, i + 1, acc.push(sep).push(parts[i])) }
+
+/// Namespaced under `Array`, not `String`, since 2026-08-25: both
+/// take an `Array[String]`. `String.` used to mean two different
+/// things, "first parameter is a String" for most of it and
+/// "produces a String" for these two, and `x.f(a)` = `T.f(x, a)`
+/// needs it to mean exactly one. `parts.join(", ")` now works and
+/// reads the right way round.
+pub let Array.join (parts: Array[String]) (sep: String): String = Array.concat_all(plum__join_acc(parts, sep, 0, []))
+
+let plum__string_digit_value (c: String): Result[Int, String] = match c {
+    "0" => Ok(0), "1" => Ok(1), "2" => Ok(2), "3" => Ok(3), "4" => Ok(4),
+    "5" => Ok(5), "6" => Ok(6), "7" => Ok(7), "8" => Ok(8), "9" => Ok(9),
+    _ => Err("expected a digit, found ".concat(c)),
+}
+
+/// Int's minimum, which CANNOT be written as a literal: its
+/// magnitude is out of range as a positive number, so the lexer
+/// rejects `9223372036854775808` before any sign is applied.
+let plum__int_min (u: Unit): Int = 0 - 9223372036854775807 - 1
+
+let plum__string_parse_int_acc (cs: Array[String]) (i: Int) (acc: Int) (any: Bool) (negative: Bool): Result[Int, String] =
+    if i >= cs.len() { if any { Ok(acc) } else { Err("expected at least one digit") } }
+    else { match plum__string_digit_value(cs[i]) {
+        // Range is checked BEFORE multiplying, not after. `*` and
+        // `+` on Int abort the program on overflow (2026-08-21), so
+        // an out-of-range literal used to KILL a program that had
+        // asked for a `Result` precisely so it could handle bad
+        // input -- `String.parse_int("99999999999999999999")` printed
+        // `integer overflow` and exited 1 instead of returning Err.
+        // Before that change the backends wrapped and returned a
+        // garbage number instead, which was no better.
+        //
+        // 922337203685477580 is Int::MAX / 10: one more and `acc * 10`
+        // itself overflows.
+        // Accumulated NEGATIVELY for a negative number, rather
+        // than building the magnitude and negating at the end.
+        // The magnitude of Int's minimum is one larger than its
+        // maximum, so `-9223372036854775808` -- a perfectly good
+        // Int -- overflowed while still positive and came back as
+        // `integer out of range`. Found by a property test on
+        // 2026-08-25; the Rust interpreter had the identical bug,
+        // so `interp-check` agreed with it and saw nothing.
+        Ok(d) => if negative {
+            if acc < 0 - 922337203685477580 { Err("integer out of range") }
+                     else if acc * 10 < plum__int_min(()) + d { Err("integer out of range") }
+                     else { plum__string_parse_int_acc(cs, i + 1, acc * 10 - d, true, negative) }
+        } else if acc > 922337203685477580 { Err("integer out of range") }
+                 else if acc * 10 > 9223372036854775807 - d { Err("integer out of range") }
+                 else { plum__string_parse_int_acc(cs, i + 1, acc * 10 + d, true, negative) },
+        Err(e) => Err(e),
+    } }
+
+/// Parses a decimal integer, with an optional leading `-`.
+///
+/// `Err` on anything else, including an empty string, surrounding
+/// spaces, and a number too large for an `Int`. No `0x` or `0b`
+/// prefixes — this is the inverse of `to_string`, not a literal
+/// parser.
+pub let String.parse_int (s: String): Result[Int, String] = {
+    let cs = chars_of(s);
+    if Array.is_empty(cs) { Err("empty string") }
+    else if cs[0] == "-" { plum__string_parse_int_acc(Array.slice(cs, 1, cs.len()), 0, 0, false, true) }
+    else { plum__string_parse_int_acc(cs, 0, 0, false, false) }
+}
+
+/// `String.parse_float` DELEGATES to the JSON number parser below,
+/// exactly as the real prelude does.
+///
+/// It used to have a hand-written parser here, on the reasoning that
+/// dragging a JSON parser in to read a float would be absurd. That
+/// reasoning cost twice. The hand-written version accumulated the
+/// fraction digit by digit against a repeatedly-divided 0.1, so
+/// `0.000001` parsed as 1.0000000000000002e-06, invisible until
+/// floats started printing every digit that matters. And its own
+/// comment admitted the second cost: "no exponent, which is a real
+/// narrowing, stated rather than discovered". Stated, but it made
+/// the two compilers DISAGREE. `String.parse_float("1e3")` gave
+/// 1000 under the real compiler and an error here.
+///
+/// The JSON parser was already in this same prelude, already
+/// handling exponents, already correct. Reusing it is not absurd;
+/// writing a second one was.
+pub let String.parse_float (s: String): Result[Float, String] = {
+    let cs = chars_of(s);
+    match parse_number(cs, 0) {
+        Ok(r) => if r.next_pos == cs.len() { Ok(r.value) } else { Err("trailing characters after number") },
+        Err(e) => Err(e),
+    }
+}
+
+// --- Sorting ---
+
+/// Insertion sort. Quadratic and deliberately so: it is stable, it is
+/// obviously correct by reading, and every array this compiler sorts
+/// is small.
+///
+/// Insert before the first element that is STRICTLY greater
+/// (`!le(sorted[i], x)`), not the first that `le` considers `x`
+/// smaller-or-equal. With a `<=` predicate the latter reversed ties
+/// (issue #55); going after equals is what makes `le` stable.
+let plum__array_sort_insert_acc[T] (sorted: Array[T]) (x: T) (le: (T, T) -> Bool) (i: Int): Array[T] =
+    if i >= sorted.len() { sorted.push(x) }
+    else if !le(sorted[i], x) { Array.concat(Array.take(sorted, i).push(x), Array.drop(sorted, i)) }
+    else { plum__array_sort_insert_acc(sorted, x, le, i + 1) }
+
+let plum__array_sort_insert[T] (sorted: Array[T]) (x: T) (le: (T, T) -> Bool): Array[T] = plum__array_sort_insert_acc(sorted, x, le, 0)
+
+let plum__array_sort_by_acc[T] (arr: Array[T]) (le: (T, T) -> Bool) (i: Int) (acc: Array[T]): Array[T] =
+    if i >= arr.len() { acc } else { plum__array_sort_by_acc(arr, le, i + 1, plum__array_sort_insert(acc, arr[i], le)) }
+
+/// Sorted by a \"less than or equal\" predicate.
+///
+/// STABLE: elements `le` considers equivalent keep their original
+/// order, which is what makes sorting by one key and then another
+/// produce the ordering people expect.
+pub let Array.sort_by[T] (arr: Array[T]) (le: (T, T) -> Bool): Array[T] = plum__array_sort_by_acc(arr, le, 0, [])
+
+/// Sorted ascending.
+pub let Array.sort_int (arr: Array[Int]): Array[Int] = Array.sort_by(arr, |a: Int, b: Int| a <= b)
+/// Sorted ascending. NaN does not compare, so an array containing one
+/// has no meaningful order.
+pub let Array.sort_float (arr: Array[Float]): Array[Float] = Array.sort_by(arr, |a: Float, b: Float| a <= b)
+
+// `Array.sort_string` is deliberately ABSENT: the real prelude compares
+// via `a.runes()`, and this compiler has no `.runes()` primitive. It
+// belongs with `Float.sqrt` and friends -- the group that needs a
+// runtime primitive rather than prelude source -- not here.
+
+// --- Zip ---
+
+/// A named struct, not a tuple, exactly as the real prelude has it.
+pub struct Zipped[A, B] { pub first: A, pub second: B }
+
+let plum__array_zip_acc[T, U] (a: Array[T]) (b: Array[U]) (i: Int) (acc: Array[Zipped[T, U]]): Array[Zipped[T, U]] =
+    if i >= a.len() || i >= b.len() { acc } else { plum__array_zip_acc(a, b, i + 1, acc.push(Zipped { first: a[i], second: b[i] })) }
+
+/// Pairs elements positionally, stopping at the shorter array.
+pub let Array.zip[T, U] (a: Array[T]) (b: Array[U]): Array[Zipped[T, U]] = plum__array_zip_acc(a, b, 0, [])
+
+// --- String trimming ---
+
+let plum__string_ws_prefix_len_acc (chars: Array[String]) (i: Int): Int =
+    if i >= chars.len() { i } else if String.is_ascii_ws(chars[i]) { plum__string_ws_prefix_len_acc(chars, i + 1) } else { i }
+
+/// Whitespace removed from the start.
+pub let String.trim_start (s: String): String = {
+    let chars = chars_of(s);
+    Array.concat_all(Array.drop(chars, plum__string_ws_prefix_len_acc(chars, 0)))
+}
+
+/// Whitespace removed from the end.
+pub let String.trim_end (s: String): String = String.reverse(String.trim_start(String.reverse(s)))
+
+/// Split on newlines.
+///
+/// A trailing newline produces a final empty piece, since the text
+/// after it is empty — which is what makes joining the result back
+/// with newlines give the original.
+pub let String.lines (s: String): Array[String] = s.split("\n")
+
+// --- Numbers that need the runtime ---
+
+/// The real prelude writes these as `unsafe { sqrt(x) }` and friends.
+/// This backend has no `extern "C"`/`unsafe` support, so they reach the
+/// same libm functions as runtime primitives instead.
+let sqrt_raw (x: Float): Float = 0.0
+let pow_raw (b: Float) (e: Float): Float = 0.0
+let floor_raw (x: Float): Float = 0.0
+let ceil_raw (x: Float): Float = 0.0
+let round_raw (x: Float): Float = 0.0
+let sin_raw (x: Float): Float = 0.0
+let cos_raw (x: Float): Float = 0.0
+let tan_raw (x: Float): Float = 0.0
+let asin_raw (x: Float): Float = 0.0
+let acos_raw (x: Float): Float = 0.0
+let atan_raw (x: Float): Float = 0.0
+let atan2_raw (y: Float) (x: Float): Float = 0.0
+let log_raw (x: Float): Float = 0.0
+let log2_raw (x: Float): Float = 0.0
+let log10_raw (x: Float): Float = 0.0
+let exp_raw (x: Float): Float = 0.0
+let float_fixed_raw (x: Float) (decimals: Int): String = ""
+let random_raw (ignored: Bool): Float = 0.0
+
+/// The square root. Negative input gives NaN rather than failing.
+pub let Float.sqrt (x: Float): Float = sqrt_raw(x)
+/// `base` raised to `exp`. A fractional exponent of a negative base
+/// gives NaN.
+pub let Float.pow (base: Float) (exp: Float): Float = pow_raw(base, exp)
+/// The largest whole number no greater than `x` — toward negative
+/// infinity, so `floor(-2.5)` is `-3.0`.
+pub let Float.floor (x: Float): Float = floor_raw(x)
+/// The smallest whole number no less than `x`.
+pub let Float.ceil (x: Float): Float = ceil_raw(x)
+/// The nearest whole number, halves AWAY FROM ZERO: `round(2.5)` is
+/// `3.0` and `round(-2.5)` is `-3.0`.
+///
+/// `Float.to_fixed` rounds halves to EVEN, which is not an
+/// inconsistency — it is what C, Python, Rust and Java all do, because
+/// rounding is arithmetic and formatting is rendering.
+pub let Float.round (x: Float): Float = round_raw(x)
+
+/// A float in `[0.0, 1.0)` from a process-wide generator seeded from
+/// the clock.
+///
+/// Different every run, and NOT reproducible. `Rng.from_seed` is the
+/// one for a test or a replay.
+pub let Float.random (): Float = random_raw(true)
+/// A float in `[lo, hi)`, from the same unseeded generator as
+/// `Float.random`.
+pub let Float.random_range (lo: Float) (hi: Float): Float = lo + (hi - lo) * Float.random(())
+
+/// --- Trigonometry, logs and constants (issue #20) ---
+///
+/// Angles are RADIANS everywhere, which is what libm takes and what the
+/// inverse functions return. `Float.radians` and `Float.degrees` convert
+/// at the edges, so a program that thinks in degrees converts once
+/// rather than scattering `* 3.14159 / 180.0`.
+/// Sine of an angle in RADIANS.
+pub let Float.sin (x: Float): Float = sin_raw(x)
+/// Cosine of an angle in radians.
+pub let Float.cos (x: Float): Float = cos_raw(x)
+/// Tangent of an angle in radians. Grows without bound near odd
+/// multiples of pi/2 rather than failing.
+pub let Float.tan (x: Float): Float = tan_raw(x)
+/// The angle in radians whose sine is `x`, in `[-pi/2, pi/2]`. NaN
+/// outside `[-1, 1]`.
+pub let Float.asin (x: Float): Float = asin_raw(x)
+/// The angle in radians whose cosine is `x`, in `[0, pi]`. NaN
+/// outside `[-1, 1]`.
+pub let Float.acos (x: Float): Float = acos_raw(x)
+/// The angle in radians whose tangent is `x`. `Float.atan2` is the
+/// one that knows which quadrant.
+pub let Float.atan (x: Float): Float = atan_raw(x)
+
+/// `atan2(y, x)`, in that order, matching libm, Go, Python
+/// and Java all use, and the reason it exists: it knows which QUADRANT
+/// the point is in, which `atan(y / x)` cannot, and it does not divide
+/// by zero when `x` is 0.
+pub let Float.atan2 (y: Float) (x: Float): Float = atan2_raw(y, x)
+
+/// Natural log. `log2` and `log10` are separate rather than
+/// `log(x) / log(2.0)`, because libm computes them directly and the
+/// division loses accuracy at exactly the powers people check.
+/// The natural logarithm. NaN for a negative argument, and negative
+/// infinity at zero.
+pub let Float.log (x: Float): Float = log_raw(x)
+/// Base-2 logarithm, computed directly rather than as a division —
+/// which is what keeps `log2(8.0)` exactly `3.0`.
+pub let Float.log2 (x: Float): Float = log2_raw(x)
+/// Base-10 logarithm, computed directly. See `Float.log2`.
+pub let Float.log10 (x: Float): Float = log10_raw(x)
+/// `e` raised to `x`.
+pub let Float.exp (x: Float): Float = exp_raw(x)
+
+/// Constants as FUNCTIONS, because `Float.` is a type namespace and
+/// `T.f(x)` is how a name gets into it. Written out to the last digit a
+/// double can hold rather than computed, so they are exact literals and
+/// not a rounding of something else.
+/// Pi, to the last digit a double holds.
+pub let Float.pi (): Float = 3.141592653589793
+/// Two pi — a full turn, which is the more useful constant when
+/// working with angles.
+pub let Float.tau (): Float = 6.283185307179586
+/// Euler's number.
+pub let Float.e (): Float = 2.718281828459045
+
+/// Degrees to radians. Every trigonometric function here takes
+/// radians, so this is the conversion at the edge.
+pub let Float.radians (degrees: Float): Float = degrees * 3.141592653589793 / 180.0
+/// Radians to degrees.
+pub let Float.degrees (radians: Float): Float = radians * 180.0 / 3.141592653589793
+
+/// --- Seeded, reproducible random numbers (issue #20) ---
+///
+/// `Float.random` reads a process-global generator seeded from the
+/// clock, which is right for "give me something different each run" and
+/// useless for a test or a replay. An `Rng` is a VALUE: same seed, same
+/// sequence, on every platform and every run.
+///
+/// Every call returns the NEXT GENERATOR alongside the number, rather
+/// than mutating in place, so a generator is as ordinary a value as an
+/// `Int`. Threading it by hand is the cost; being able to replay a game
+/// from a seed, or write a test that cannot flake, is what it buys. A
+/// `Ref[Rng]` is the opt-in for in-place update.
+///
+/// --- Which generator, and why ---
+///
+/// SplitMix64: a small, modern 64-bit generator with a full 2^64
+/// period. It is fast, has excellent bit diffusion, and is the right
+/// generator when reproducibility and simple state matter more than
+/// cryptographic secrecy. The wrapping multiply and logical shifts it
+/// needs became expressible when `Int.wrapping_mul` and bitwise
+/// operators landed.
+///
+/// **Not for cryptography, keys, tokens or passwords.** It is a
+/// statistical generator and its entire state is recoverable from two
+/// outputs.
+pub struct Rng { state: Int }
+
+let RNG_GAMMA: Int = -7046029254386353131
+let RNG_MIX_1: Int = -4658895280553007687
+let RNG_MIX_2: Int = -7723592293110705685
+let RNG_RANGE: Int = 9223372036854775807
+
+/// Any `Int` is a legal seed, including zero and negatives. SplitMix64
+/// has no forbidden state, unlike generators whose all-zero state gets
+/// stuck, so the seed is kept exactly rather than folded into a range.
+pub let Rng.from_seed (seed: Int): Rng = Rng { state: seed }
+
+let plum__mod_floor (a: Int) (m: Int): Int = {
+    let r = a - (a / m) * m;
+    if r < 0 { r + m } else { r }
+}
+
+/// The raw step: advance by SplitMix64's golden-ratio increment, then
+/// mix all 64 bits. The sign-bit mask gives callers `[0, 2^63)`, which
+/// keeps range arithmetic non-negative without weakening the generator
+/// state or its period.
+let rng_step (r: Rng): (Rng, Int) = {
+    let next = Rng { state: Int.wrapping_add(r.state, RNG_GAMMA) };
+    let z1 = Int.wrapping_mul(next.state ^ Int.shr_logical(next.state, 30), RNG_MIX_1);
+    let z2 = Int.wrapping_mul(z1 ^ Int.shr_logical(z1, 27), RNG_MIX_2);
+    (next, (z2 ^ Int.shr_logical(z2, 31)) & RNG_RANGE)
+}
+
+/// A `Float` in `[0.0, 1.0)`. The upper bound is excluded, which is what
+/// makes `lo + (hi - lo) * f` stay below `hi`.
+pub let Rng.float (r: Rng): (Rng, Float) = {
+    let (next, z) = rng_step(r);
+    (next, z.to_float() / 9223372036854775808.0)
+}
+
+/// A float in `[lo, hi)`, and the next generator.
+pub let Rng.float_range (r: Rng) (lo: Float) (hi: Float): (Rng, Float) = {
+    let (next, f) = Rng.float(r);
+    (next, lo + (hi - lo) * f)
+}
+
+/// `[lo, hi)`, the upper bound EXCLUDED, so `int_range(r, 0, xs.len())`
+/// is an index into `xs` and needs no `- 1` anywhere.
+///
+/// Rejection sampling, not `z % span`. The modulo is biased whenever the
+/// span does not divide the generator's range evenly: the low values
+/// come up more often, by about one part in `range / span`. That is
+/// invisible in a game and fatal in a shuffle, and the loop costs an
+/// extra step only on the fraction of draws that land in the leftover
+/// tail.
+///
+/// An empty or backwards range returns `lo` and does not draw, because
+/// there is no number to return and a panic here would make an ordinary
+/// off-by-one crash a program at random.
+pub let Rng.int_range (r: Rng) (lo: Int) (hi: Int): (Rng, Int) = {
+    let span = hi - lo;
+    if span <= 0 { (r, lo) } else { rng_below(r, span, lo) }
+}
+
+let rng_below (r: Rng) (span: Int) (lo: Int): (Rng, Int) = {
+    let range = RNG_RANGE;
+    let limit = range - plum__mod_floor(range, span);
+    let (next, z) = rng_step(r);
+    if z >= limit { rng_below(next, span, lo) } else { (next, lo + plum__mod_floor(z, span)) }
+}
+
+/// A boolean, evenly, and the next generator.
+pub let Rng.bool (r: Rng): (Rng, Bool) = {
+    let (next, v) = Rng.int_range(r, 0, 2);
+    (next, v == 1)
+}
+
+/// Fisher-Yates, walking from the end so every permutation is equally
+/// likely. The naive version, swapping each element with any other, is
+/// not uniform, and looks fine until somebody counts.
+pub let Rng.shuffle[T] (r: Rng) (xs: Array[T]): (Rng, Array[T]) =
+    rng_shuffle_acc(r, xs, xs.len() - 1)
+
+let rng_shuffle_acc[T] (r: Rng) (xs: Array[T]) (i: Int): (Rng, Array[T]) =
+    if i <= 0 { (r, xs) } else {
+        let (next, j) = Rng.int_range(r, 0, i + 1);
+        rng_shuffle_acc(next, plum__swap(xs, i, j), i - 1)
+    }
+
+let plum__swap[T] (xs: Array[T]) (i: Int) (j: Int): Array[T] =
+    if i == j { xs } else {
+        let a = xs[i];
+        let b = xs[j];
+        xs.set(i, b).set(j, a)
+    }
+
+/// One element, or `None` from an empty array.
+pub let Rng.choice[T] (r: Rng) (xs: Array[T]): (Rng, Option[T]) =
+    if Array.is_empty(xs) { (r, None) } else {
+        let (next, i) = Rng.int_range(r, 0, xs.len());
+        (next, Some(xs[i]))
+    }
+
+// --- String ordering ---
+
+/// Byte-lexicographic, which for UTF-8 IS codepoint order, so this
+/// agrees with the real prelude's rune-by-rune comparison without
+/// needing a `.runes()` decoder.
+let string_concat_all_raw (parts: Array[String]): String = ""
+
+/// Joins in ONE allocation. Building a large string by repeated
+/// `.concat` is quadratic; this is what the compiler's own emitter
+/// uses for anything that accumulates.
+pub let Array.concat_all (parts: Array[String]): String = string_concat_all_raw(parts)
+
+/// Decimal text to the NEAREST double, via libc `strtod`.
+///
+/// `parse_number` below validates the grammar and finds where the
+/// number ends, and that part was always right. What it got wrong was
+/// the VALUE: building it as `mantissa * 10^exp` in floating point
+/// accumulates rounding error, so `9.21258e-07` parsed to a double
+/// one ulp away and `parse_float(x.to_string()) != x`. `to_string`
+/// goes to real lengths to guarantee that round trip, retrying
+/// at 15, 16 and 17 digits until `strtod` agrees, so the inverse
+/// has to be the same `strtod`, not an approximation of it.
+///
+/// Found by a property test on 2026-08-25. The Rust interpreter
+/// computed the identical wrong double, so `interp-check` agreed
+/// with it and saw nothing.
+let parse_float_raw (s: String): Float = 0.0
+
+let string_cmp_raw (a: String) (b: String): Int = 0
+
+/// Sorted by BYTE order, not by any locale's alphabet — so uppercase
+/// sorts before lowercase, and accented letters sort after `z`.
+pub let Array.sort_string (arr: Array[String]): Array[String] = Array.sort_by(arr, |a: String, b: String| a <= b)
+
+// --- Assertions ---
+//
+// Mirrored from the real prelude, message for message: a test that
+// fails should read the same whichever compiler ran it.
+
+/// Stops the program unless `cond` holds.
+///
+/// For a condition the code depends on, not for input validation:
+/// there is no way to catch this.
+pub let assert (cond: Bool): Unit =
+    if cond { () } else { panic_raw("assertion failed") }
+
+/// Stops the program unless the two are equal, printing BOTH — which
+/// is the difference from `assert(a == b)` and the reason to prefer
+/// it in a test.
+pub let assert_eq[T] (a: T) (b: T): Unit =
+    if a == b { () } else {
+        panic_raw("assertion failed: left != right\n  left:  ".concat(a.to_string()).concat("\n  right: ").concat(b.to_string()))
+    }
+
+/// Stops the program if the two are equal, printing them.
+pub let assert_ne[T] (a: T) (b: T): Unit =
+    if a != b { () } else {
+        panic_raw("assertion failed: left == right\n  left:  ".concat(a.to_string()).concat("\n  right: ").concat(b.to_string()))
+    }
+
+// --- Collections: Map and Set ---
+
+/// Mirrored from `crates/plumc/src/lib.rs`'s STDLIB_COLLECTIONS_SRC,
+/// character for character. `Map` is a real hash map, so the mirror
+/// has to be exact in one way that is easy to miss: bucket index is
+/// `String.hash(..) % bucket_count`, which means `Map.keys` and
+/// `Map.values` enumerate in HASH order. A hash that disagreed with
+/// the real compiler's would print the same map in a different order.
+/// `String.hash` is FNV-1a in the prelude, including the sign-bit mask
+/// that a first attempt got wrong.
+pub struct MapEntry[K, V] { key: K, value: V }
+/// A hash map from `K` to `V`.
+///
+/// PERSISTENT: `Map.insert` returns a new map and leaves the original
+/// alone, so a map can be shared without copying defensively. Keys
+/// need `Eq`.
+pub struct Map[K, V] { buckets: Array[Array[MapEntry[K, V]]], size: Int }
+
+let MAP_INITIAL_BUCKETS: Int = 8
+let MAP_LOAD_FACTOR_NUM: Int = 3
+let MAP_LOAD_FACTOR_DEN: Int = 4
+
+let map_make_buckets[K, V] (n: Int): Array[Array[MapEntry[K, V]]] = {
+    let mut buckets = [];
+    for i in 0..n { buckets = buckets.push([]); };
+    buckets
+}
+
+let value_hash[T] (x: T): Int = String.hash(x.to_string())
+
+let map_bucket_index[K] (k: K) (bucket_count: Int): Int = value_hash(k) % bucket_count
+
+let map_bucket_find_index[K: Eq, V] (bucket: Array[MapEntry[K, V]]) (k: K) (i: Int): Int =
+    if i >= bucket.len() { -1 }
+    else if bucket[i].key == k { i }
+    else { map_bucket_find_index(bucket, k, i + 1) }
+
+/// An empty map.
+pub let Map.new[K, V] (): Map[K, V] = Map { buckets: map_make_buckets(MAP_INITIAL_BUCKETS), size: 0 }
+
+let map_rehash[K, V] (m: Map[K, V]) (new_bucket_count: Int): Map[K, V] = {
+    let mut new_buckets = map_make_buckets(new_bucket_count);
+    for bucket in m.buckets {
+        for entry in bucket {
+            let idx = map_bucket_index(entry.key, new_bucket_count);
+            new_buckets = new_buckets.set(idx, new_buckets[idx].push(entry));
+        }
+    };
+    Map { buckets: new_buckets, size: m.size }
+}
+
+/// A NEW map with `k` set to `v`, replacing any previous value. The
+/// original is unchanged.
+pub let Map.insert[K: Eq, V] (m: Map[K, V]) (k: K) (v: V): Map[K, V] = {
+    let idx = map_bucket_index(k, m.buckets.len());
+    let bucket = m.buckets[idx];
+    let existing_i = map_bucket_find_index(bucket, k, 0);
+    let inserted = if existing_i >= 0 {
+        Map { buckets: m.buckets.set(idx, bucket.set(existing_i, MapEntry { key: k, value: v })), size: m.size }
+    } else {
+        Map { buckets: m.buckets.set(idx, bucket.push(MapEntry { key: k, value: v })), size: m.size + 1 }
+    };
+    if inserted.size * MAP_LOAD_FACTOR_DEN > inserted.buckets.len() * MAP_LOAD_FACTOR_NUM {
+        map_rehash(inserted, inserted.buckets.len() * 2)
+    } else {
+        inserted
+    }
+}
+
+/// The value for `k`, or `None`.
+pub let Map.get[K: Eq, V] (m: Map[K, V]) (k: K): Option[V] = {
+    let bucket = m.buckets[map_bucket_index(k, m.buckets.len())];
+    let i = map_bucket_find_index(bucket, k, 0);
+    if i >= 0 { Some(bucket[i].value) } else { None }
+}
+
+/// Whether `k` has a value.
+pub let Map.contains[K: Eq, V] (m: Map[K, V]) (k: K): Bool =
+    map_bucket_find_index(m.buckets[map_bucket_index(k, m.buckets.len())], k, 0) >= 0
+
+/// A new map without `k`. Removing an absent key is not an error.
+pub let Map.remove[K: Eq, V] (m: Map[K, V]) (k: K): Map[K, V] = {
+    let idx = map_bucket_index(k, m.buckets.len());
+    let bucket = m.buckets[idx];
+    let i = map_bucket_find_index(bucket, k, 0);
+    if i >= 0 { Map { buckets: m.buckets.set(idx, bucket.remove(i)), size: m.size - 1 } } else { m }
+}
+
+/// How many entries.
+pub let Map.len[K, V] (m: Map[K, V]): Int = m.size
+
+/// Every key, in no particular order — buckets, not insertion order.
+pub let Map.keys[K, V] (m: Map[K, V]): Array[K] = {
+    let mut acc = [];
+    for bucket in m.buckets { for entry in bucket { acc = acc.push(entry.key); } };
+    acc
+}
+
+/// Every value, in the same order as `Map.keys`.
+pub let Map.values[K, V] (m: Map[K, V]): Array[V] = {
+    let mut acc = [];
+    for bucket in m.buckets { for entry in bucket { acc = acc.push(entry.value); } };
+    acc
+}
+
+let map_from_arrays_acc[K: Eq, V] (keys: Array[K]) (values: Array[V]) (i: Int) (acc: Map[K, V]): Map[K, V] =
+    if i >= keys.len() { acc } else { map_from_arrays_acc(keys, values, i + 1, Map.insert(acc, keys[i], values[i])) }
+/// A map from parallel arrays, stopping at the shorter. A repeated
+/// key keeps the LAST value.
+pub let Map.from_arrays[K: Eq, V] (keys: Array[K]) (values: Array[V]): Map[K, V] = map_from_arrays_acc(keys, values, 0, Map.new(()))
+
+/// A set of `T`, persistent like `Map` — `Set.insert` returns a new
+/// set. Members need `Eq`.
+pub struct Set[T] { inner: Map[T, Unit] }
+
+/// An empty set.
+pub let Set.new[T] (): Set[T] = Set { inner: Map.new(()) }
+/// A new set with `x` added. Adding a member twice changes nothing.
+pub let Set.insert[T: Eq] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.insert(s.inner, x, ()) }
+/// Whether `x` is a member.
+pub let Set.contains[T: Eq] (s: Set[T]) (x: T): Bool = Map.contains(s.inner, x)
+/// A new set without `x`.
+pub let Set.remove[T: Eq] (s: Set[T]) (x: T): Set[T] = Set { inner: Map.remove(s.inner, x) }
+/// How many members.
+pub let Set.len[T] (s: Set[T]): Int = Map.len(s.inner)
+/// Every member, in no particular order.
+pub let Set.to_array[T] (s: Set[T]): Array[T] = Map.keys(s.inner)
+
+/// Everything in either set.
+pub let Set.union[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {
+    let mut result = b;
+    for x in Set.to_array(a) { result = Set.insert(result, x); };
+    result
+}
+
+/// Only what is in both.
+pub let Set.intersection[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {
+    let mut result = Set.new(());
+    for x in Set.to_array(a) { if Set.contains(b, x) { result = Set.insert(result, x); } };
+    result
+}
+
+/// What is in `a` and not in `b`.
+pub let Set.difference[T: Eq] (a: Set[T]) (b: Set[T]): Set[T] = {
+    let mut result = Set.new(());
+    for x in Set.to_array(a) { if !Set.contains(b, x) { result = Set.insert(result, x); } };
+    result
+}
+
+let set_from_array_acc[T: Eq] (arr: Array[T]) (i: Int) (acc: Set[T]): Set[T] =
+    if i >= arr.len() { acc } else { set_from_array_acc(arr, i + 1, Set.insert(acc, arr[i])) }
+/// A set of the array's elements, discarding duplicates.
+pub let Set.from_array[T: Eq] (arr: Array[T]): Set[T] = set_from_array_acc(arr, 0, Set.new(()))
+
+// --- JSON ---
+
+/// Mirrored from `crates/plumc/src/lib.rs`'s STDLIB_JSON_SRC, minus its
+/// own `chars_of` (the runtime already provides that one, since it is the
+/// single thing this prelude cannot write in Plum). Everything else is
+/// character-for-character the real compiler's, so the two agree on
+/// number formatting, escape handling and parse errors by construction
+/// rather than by inspection.
+pub struct JsonEntry { pub key: String, pub value: JsonValue }
+/// A parsed JSON document.
+///
+/// Faithful to what was written: numbers are all `Float`, since JSON
+/// has one number type. `use Json;` brings in decoders that turn one
+/// of these into your own types.
+pub enum JsonValue {
+    JsonNull,
+    JsonBool(Bool),
+    JsonNumber(Float),
+    JsonString(String),
+    JsonArray(Array[JsonValue]),
+    JsonObject(Array[JsonEntry]),
+}
+/// What a JSON parse step consumed: a value, and where to carry on
+/// from. Public because the parser's own pieces return it; a caller
+/// wants `json_parse`.
+pub struct ParseResult[T] { pub value: T, pub next_pos: Int }
+
+let skip_ws (chars: Array[String]) (pos: Int): Int =
+    if pos >= chars.len() { pos }
+    else {
+        let c = chars[pos];
+        if c == " " || c == "\t" || c == "\n" || c == "\r" { skip_ws(chars, pos + 1) } else { pos }
+    }
+
+let digit_value (c: String): Result[Float, String] =
+    if c == "0" { Ok(0.0) }
+    else if c == "1" { Ok(1.0) }
+    else if c == "2" { Ok(2.0) }
+    else if c == "3" { Ok(3.0) }
+    else if c == "4" { Ok(4.0) }
+    else if c == "5" { Ok(5.0) }
+    else if c == "6" { Ok(6.0) }
+    else if c == "7" { Ok(7.0) }
+    else if c == "8" { Ok(8.0) }
+    else if c == "9" { Ok(9.0) }
+    else { Err("not a digit") }
+
+let pow10 (n: Int): Float = if n <= 0 { 1.0 } else { pow10(n - 1) * 10.0 }
+let pow10_float (n: Float): Float = if n <= 0.0 { 1.0 } else { pow10_float(n - 1.0) * 10.0 }
+
+let parse_digits_acc (chars: Array[String]) (pos: Int) (acc: Float) (any: Bool): Result[ParseResult[Float], String] =
+    if pos >= chars.len() {
+        if any { Ok(ParseResult { value: acc, next_pos: pos }) } else { Err("expected digit") }
+    } else {
+        match digit_value(chars[pos]) {
+            Ok(d) => parse_digits_acc(chars, pos + 1, acc * 10.0 + d, true),
+            Err(_) => if any { Ok(ParseResult { value: acc, next_pos: pos }) } else { Err("expected digit") },
+        }
+    }
+
+let parse_digits (chars: Array[String]) (pos: Int): Result[ParseResult[Float], String] = parse_digits_acc(chars, pos, 0.0, false)
+
+let parse_number (chars: Array[String]) (pos: Int): Result[ParseResult[Float], String] = {
+    let neg = pos < chars.len() && chars[pos] == "-";
+    let start = if neg { pos + 1 } else { pos };
+    match parse_digits(chars, start) {
+        Err(e) => Err(e),
+        Ok(int_r) => {
+            let has_frac = int_r.next_pos < chars.len() && chars[int_r.next_pos] == ".";
+            match (if has_frac { parse_digits(chars, int_r.next_pos + 1) } else { Ok(ParseResult { value: 0.0, next_pos: int_r.next_pos }) }) {
+                Err(e) => Err(e),
+                Ok(frac_r) => {
+                    let frac_digit_count = if has_frac { frac_r.next_pos - (int_r.next_pos + 1) } else { 0 };
+                    let frac_val = if has_frac { frac_r.value / pow10(frac_digit_count) } else { 0.0 };
+                    let mag_no_exp = int_r.value + frac_val;
+                    let exp_pos = frac_r.next_pos;
+                    let has_exp = exp_pos < chars.len() && (chars[exp_pos] == "e" || chars[exp_pos] == "E");
+                    if !has_exp {
+                        Ok(ParseResult { value: parse_float_raw(Array.concat_all(Array.slice(chars, pos, exp_pos))), next_pos: exp_pos })
+                    } else {
+                        let after_e = exp_pos + 1;
+                        let exp_neg = after_e < chars.len() && chars[after_e] == "-";
+                        let exp_pos_sign = after_e < chars.len() && chars[after_e] == "+";
+                        let exp_digit_start = if exp_neg || exp_pos_sign { after_e + 1 } else { after_e };
+                        match parse_digits(chars, exp_digit_start) {
+                            Err(e) => Err(e),
+                            Ok(exp_r) => {
+                                let exp_count = exp_r.value;
+                                let factor = pow10_float(exp_count);
+                                Ok(ParseResult { value: parse_float_raw(Array.concat_all(Array.slice(chars, pos, exp_r.next_pos))), next_pos: exp_r.next_pos })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+let match_literal_at (chars: Array[String]) (pos: Int) (lit: Array[String]) (i: Int): Bool =
+    if i >= lit.len() { true }
+    else if pos + i >= chars.len() { false }
+    else if chars[pos + i] == lit[i] { match_literal_at(chars, pos, lit, i + 1) }
+    else { false }
+
+let parse_literal (chars: Array[String]) (pos: Int) (word: String) (value: JsonValue): Result[ParseResult[JsonValue], String] = {
+    let lit = chars_of(word);
+    if match_literal_at(chars, pos, lit, 0) { Ok(ParseResult { value: value, next_pos: pos + lit.len() }) }
+    else { Err("invalid literal") }
+}
+
+let parse_string_body (chars: Array[String]) (pos: Int) (acc: String): Result[ParseResult[String], String] =
+    if pos >= chars.len() { Err("unterminated string") }
+    else {
+        let c = chars[pos];
+        if c == "\"" { Ok(ParseResult { value: acc, next_pos: pos + 1 }) }
+        else if c == "\\" {
+            if pos + 1 >= chars.len() { Err("unterminated escape") }
+            else {
+                let e = chars[pos + 1];
+                if e == "\"" { parse_string_body(chars, pos + 2, acc.concat("\"")) }
+                else if e == "\\" { parse_string_body(chars, pos + 2, acc.concat("\\")) }
+                else if e == "/" { parse_string_body(chars, pos + 2, acc.concat("/")) }
+                else if e == "n" { parse_string_body(chars, pos + 2, acc.concat("\n")) }
+                else if e == "r" { parse_string_body(chars, pos + 2, acc.concat("\r")) }
+                else if e == "t" { parse_string_body(chars, pos + 2, acc.concat("\t")) }
+                else { Err("unsupported escape sequence") }
+            }
+        }
+        else { parse_string_body(chars, pos + 1, acc.concat(c)) }
+    }
+
+let parse_string (chars: Array[String]) (pos: Int): Result[ParseResult[String], String] =
+    if pos >= chars.len() || chars[pos] != "\"" { Err("expected opening quote") }
+    else { parse_string_body(chars, pos + 1, "") }
+
+let parse_value (chars: Array[String]) (pos: Int): Result[ParseResult[JsonValue], String] =
+    if pos >= chars.len() { Err("unexpected end of input") }
+    else {
+        let c = chars[pos];
+        if c == "\"" {
+            match parse_string(chars, pos) {
+                Ok(r) => Ok(ParseResult { value: JsonString(r.value), next_pos: r.next_pos }),
+                Err(e) => Err(e),
+            }
+        }
+        else if c == "{" { parse_object(chars, pos) }
+        else if c == "[" { parse_array(chars, pos) }
+        else if c == "t" { parse_literal(chars, pos, "true", JsonBool(true)) }
+        else if c == "f" { parse_literal(chars, pos, "false", JsonBool(false)) }
+        else if c == "n" { parse_literal(chars, pos, "null", JsonNull) }
+        else {
+            match digit_value(c) {
+                Ok(_) => match parse_number(chars, pos) {
+                    Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),
+                    Err(e) => Err(e),
+                },
+                Err(_) => if c == "-" {
+                    match parse_number(chars, pos) {
+                        Ok(r) => Ok(ParseResult { value: JsonNumber(r.value), next_pos: r.next_pos }),
+                        Err(e) => Err(e),
+                    }
+                } else { Err("unexpected character") },
+            }
+        }
+    }
+
+let parse_array (chars: Array[String]) (pos: Int): Result[ParseResult[JsonValue], String] = {
+    let p1 = skip_ws(chars, pos + 1);
+    if p1 < chars.len() && chars[p1] == "]" { Ok(ParseResult { value: JsonArray([]), next_pos: p1 + 1 }) }
+    else { parse_array_entries(chars, p1, []) }
+}
+
+let parse_array_entries (chars: Array[String]) (pos: Int) (acc: Array[JsonValue]): Result[ParseResult[JsonValue], String] =
+    match parse_value(chars, pos) {
+        Err(e) => Err(e),
+        Ok(val_r) => {
+            let new_acc = acc.push(val_r.value);
+            let p1 = skip_ws(chars, val_r.next_pos);
+            if p1 < chars.len() && chars[p1] == "," { parse_array_entries(chars, skip_ws(chars, p1 + 1), new_acc) }
+            else if p1 < chars.len() && chars[p1] == "]" { Ok(ParseResult { value: JsonArray(new_acc), next_pos: p1 + 1 }) }
+            else { Err("expected ',' or ']'") }
+        }
+    }
+
+let parse_object (chars: Array[String]) (pos: Int): Result[ParseResult[JsonValue], String] = {
+    let p1 = skip_ws(chars, pos + 1);
+    if p1 < chars.len() && chars[p1] == "}" { Ok(ParseResult { value: JsonObject([]), next_pos: p1 + 1 }) }
+    else { parse_object_entries(chars, p1, []) }
+}
+
+let parse_object_entries (chars: Array[String]) (pos: Int) (acc: Array[JsonEntry]): Result[ParseResult[JsonValue], String] =
+    match parse_string(chars, pos) {
+        Err(e) => Err(e),
+        Ok(key_r) => {
+            let p1 = skip_ws(chars, key_r.next_pos);
+            if p1 >= chars.len() || chars[p1] != ":" { Err("expected ':'") }
+            else {
+                let p2 = skip_ws(chars, p1 + 1);
+                match parse_value(chars, p2) {
+                    Err(e) => Err(e),
+                    Ok(val_r) => {
+                        let new_acc = acc.push(JsonEntry { key: key_r.value, value: val_r.value });
+                        let p3 = skip_ws(chars, val_r.next_pos);
+                        if p3 < chars.len() && chars[p3] == "," { parse_object_entries(chars, skip_ws(chars, p3 + 1), new_acc) }
+                        else if p3 < chars.len() && chars[p3] == "}" { Ok(ParseResult { value: JsonObject(new_acc), next_pos: p3 + 1 }) }
+                        else { Err("expected ',' or '}'") }
+                    }
+                }
+            }
+        }
+    }
+
+/// Parses JSON text.
+///
+/// `Err` with a message naming what was expected. Accepts one complete
+/// value and rejects trailing text after it.
+pub let json_parse (s: String): Result[JsonValue, String] = {
+    let chars = chars_of(s);
+    let start = skip_ws(chars, 0);
+    match parse_value(chars, start) {
+        Err(e) => Err(e),
+        Ok(r) => {
+            let after = skip_ws(chars, r.next_pos);
+            if after == chars.len() { Ok(r.value) } else { Err("trailing characters after JSON value") }
+        }
+    }
+}
+
+let json_escape_chars (chars: Array[String]) (pos: Int) (acc: String): String =
+    if pos >= chars.len() { acc }
+    else {
+        let c = chars[pos];
+        let escaped =
+            if c == "\"" { "\\\"" }
+            else if c == "\\" { "\\\\" }
+            else if c == "\n" { "\\n" }
+            else if c == "\r" { "\\r" }
+            else if c == "\t" { "\\t" }
+            else { c };
+        json_escape_chars(chars, pos + 1, acc.concat(escaped))
+    }
+
+let json_escape (s: String): String = json_escape_chars(chars_of(s), 0, "")
+
+let json_quote (s: String): String = "\"".concat(json_escape(s)).concat("\"")
+
+let join_with_commas (parts: Array[String]) (pos: Int) (acc: String): String =
+    if pos >= parts.len() { acc }
+    else if pos == 0 { join_with_commas(parts, pos + 1, parts[pos]) }
+    else { join_with_commas(parts, pos + 1, acc.concat(",").concat(parts[pos])) }
+
+/// Renders a `JsonValue` as compact JSON — no spaces, no newlines.
+///
+/// Object keys come out in the order they are held, which for a parsed
+/// document is the order they were read.
+pub let json_stringify (v: JsonValue): String = match v {
+    JsonNull => "null",
+    JsonBool(b) => if b { "true" } else { "false" },
+    JsonNumber(n) => n.to_string(),
+    JsonString(s) => json_quote(s),
+    JsonArray(arr) => "[".concat(join_with_commas(Array.map(arr, |x: JsonValue| json_stringify(x)), 0, "")).concat("]"),
+    JsonObject(entries) => "{".concat(join_with_commas(Array.map(entries, |e: JsonEntry| json_quote(e.key).concat(":").concat(json_stringify(e.value))), 0, "")).concat("}"),
+}
+/// `pub` because the PARSER generates calls to these when it
+/// desugars `requires`/`ensures`, and that generated code lands in
+/// the user's own module. Nobody writes them by hand.
+pub let __contract_require (cond: Bool) (msg: String): Unit =
+    if cond { () } else { panic_raw(msg) }
+
+pub let __contract_ensure (cond: Bool) (msg: String): Unit =
+    if cond { () } else { panic_raw(msg) }
+

@@ -1,0 +1,355 @@
+/// One header. `name` is as it appeared on the wire; header names are
+/// case-insensitive in HTTP, so compare with care.
+pub struct Header { pub name: String, pub value: String }
+/// A complete response: status, headers, and the whole body.
+pub struct Response { pub status: Int, pub headers: Array[Header], pub body: String }
+/// A response's head, before the body has been read.
+///
+/// `leftover_body` is whatever arrived in the same read as the headers
+/// — a body does not begin on a tidy packet boundary, so those bytes
+/// have to be handed on rather than dropped.
+pub struct Head { pub status: Int, pub headers: Array[Header], pub leftover_body: String }
+/// An incoming request, as a handler receives it.
+pub struct Request { pub method: String, pub path: String, pub headers: Array[Header], pub body: String }
+/// A request's first line, split.
+pub struct RequestLine { pub method: String, pub path: String }
+/// A request's head, before its body has been read. `leftover_body`
+/// carries the bytes that arrived alongside the headers.
+pub struct RequestHead { pub method: String, pub path: String, pub headers: Array[Header], pub leftover_body: String }
+
+/// URL parsing lives in `Url` now; this only decides which URLs an
+/// HTTP CLIENT is willing to act on, which is a different question
+/// and the only part that ever belonged here.
+///
+/// The two rejection messages are unchanged, deliberately: they are
+/// what a user sees and what `bootstrap/net-smoke` asserts. What did
+/// change is that a URL this client cannot USE is now told apart from
+/// a URL that is not well-formed. `nope://h/x` parses fine and is
+/// refused for its scheme, while `h/x` is refused for having none,
+/// and those used to be the same message.
+///
+/// `https` is checked BEFORE the general scheme test so it keeps its
+/// specific answer: it is a URL this client will support later, not
+/// one it will never accept. See #22.
+let http_parse_url (url: String): Result[Url.Url, String] =
+    match Url.parse(url) {
+        Err(e) => Err("http client: ".concat(e)),
+        Ok(u) =>
+            if u.scheme == "https" { Err("http client: https:// is not supported yet") }
+            else if u.scheme != "http" { Err("http client: url must start with http://") }
+            else { Ok(u) },
+    }
+
+let http_build_request (method: String) (parsed: Url.Url) (headers: Array[Header]) (body: String): String = {
+    let extra_header_lines = Array.fold(headers, "", |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n"));
+    let content_length_line = if String.is_empty(body) { "" } else { "Content-Length: ".concat(body.len().to_string()).concat("\r\n") };
+    method.concat(" ").concat(Url.request_target(parsed)).concat(" HTTP/1.1\r\n")
+        .concat("Host: ").concat(Url.authority(parsed)).concat("\r\n")
+        .concat("Connection: close\r\n")
+        .concat(content_length_line)
+        .concat(extra_header_lines)
+        .concat("\r\n")
+        .concat(body)
+}
+
+/// Reads (and accumulates) until the blank-line header/body separator
+/// has actually arrived — it may take more than one `tcp_read` call to
+/// see it at all, and a single `tcp_read` may ALSO return part of the
+/// body past it in the same chunk (`http_parse_head` below splits that
+/// back out). An empty read here means the peer closed before the
+/// headers even finished, always a real error, never a legitimate
+/// empty response.
+let http_recv_headers_acc (fd: Int) (acc: String): Result[String, String] =
+    match String.index_of(acc, "\r\n\r\n") {
+        Some(_) => Ok(acc),
+        None => {
+            let chunk = Net.read(fd, 4096);
+            if String.is_empty(chunk) { Err("http client: connection closed before the response headers were complete") }
+            else { http_recv_headers_acc(fd, acc.concat(chunk)) }
+        },
+    }
+
+let http_parse_status_line (line: String): Result[Int, String] = {
+    let parts = String.trim_end(line).split(" ");
+    if parts.len() < 2 { Err("http client: malformed status line: ".concat(line)) }
+    else { match String.parse_int(parts[1]) {
+        Err(e) => Err("http client: malformed status code: ".concat(e)),
+        Ok(code) => Ok(code),
+    } }
+}
+
+let http_parse_header_line (line: String): Option[Header] =
+    match String.index_of(line, ": ") {
+        None => None,
+        Some(i) => Some(Header { name: String.slice(line, 0, i), value: String.trim_end(String.slice(line, i + 2, line.len())) }),
+    }
+
+let http_parse_headers (lines: Array[String]): Array[Header] =
+    Array.fold(lines, [], |acc, line| match http_parse_header_line(line) {
+        None => acc,
+        Some(h) => acc.push(h),
+    })
+
+let http_find_header (headers: Array[Header]) (name: String): Option[String] =
+    Option.map(Array.find(headers, |h| h.name == name), |h| h.value)
+
+/// Splits the raw, already-fully-received header block (see `http_recv_
+/// headers_acc` above) into the parsed status/headers plus whatever body
+/// bytes rode along in the same read.
+let http_parse_head (raw: String): Result[Head, String] = {
+    let sep_index = match String.index_of(raw, "\r\n\r\n") { Some(i) => i, None => raw.len() };
+    let leftover_body = if sep_index + 4 <= raw.len() { String.slice(raw, sep_index + 4, raw.len()) } else { "" };
+    let lines = String.slice(raw, 0, sep_index).split("\n");
+    if lines.len() == 0 { Err("http client: empty response") }
+    else { Result.map(http_parse_status_line(lines[0]), |status| Head {
+        status: status,
+        headers: http_parse_headers(Array.drop(lines, 1)),
+        leftover_body: leftover_body,
+    }) }
+}
+
+let http_recv_body_by_length_acc (fd: Int) (acc: String) (remaining: Int): Result[String, String] =
+    if remaining <= 0 { Ok(acc) }
+    else {
+        let chunk = Net.read(fd, remaining);
+        if String.is_empty(chunk) { Err("http client: connection closed before the full response body was received") }
+        else { http_recv_body_by_length_acc(fd, acc.concat(chunk), remaining - chunk.len()) }
+    }
+
+let http_recv_body_until_close_acc (fd: Int) (acc: String): String = {
+    let chunk = Net.read(fd, 4096);
+    if String.is_empty(chunk) { acc } else { http_recv_body_until_close_acc(fd, acc.concat(chunk)) }
+}
+
+/// Takes `headers`/`leftover_body` directly (not a whole `Head`) —
+/// but, UNLIKE the rest of this module's shared parsing helpers, this
+/// one is response-side ONLY, not reused for requests (see `http_read_
+/// request_body` below for why the two genuinely differ, not just a
+/// convenience split).
+let http_read_body (fd: Int) (headers: Array[Header]) (leftover_body: String): Result[String, String] =
+    match http_find_header(headers, "Content-Length") {
+        Some(cl) => match String.parse_int(cl) {
+            Err(e) => Err("http: invalid Content-Length header: ".concat(e)),
+            Ok(content_length) => http_recv_body_by_length_acc(fd, leftover_body, content_length - leftover_body.len()),
+        },
+        None => match http_find_header(headers, "Transfer-Encoding") {
+            Some(te) => Err("http: Transfer-Encoding (".concat(te).concat(") is not supported yet")),
+            None => Ok(http_recv_body_until_close_acc(fd, leftover_body)),
+        },
+    }
+
+/// The REQUEST-side sibling of `http_read_body` above — same `Content-
+/// Length`/`Transfer-Encoding` handling, but a DELIBERATELY different
+/// answer when NEITHER is present: an EMPTY body (`leftover_body` as-
+/// is), never "read until the connection closes." Originally shared
+/// `http_read_body` directly for both — a real, live DEADLOCK surfaced
+/// exactly that assumption was wrong, not just imprecise: a bodyless
+/// `GET` (no `Content-Length`, since there's no body to measure) has no
+/// reason to ever close its OWN write side, so a server blocked
+/// "reading until close" on it hangs forever waiting for a body that
+/// will never arrive — confirmed directly (a real test hung against a
+/// real socket, root-caused by isolating each step with `println`
+/// debugging until the exact hang site was found), not merely
+/// theorized. The response side's OWN "no length header -> read until
+/// close" answer stays correct on ITS side: every request this client
+/// sends already includes `Connection: close`, so that read is bounded
+/// by the SERVER eventually closing once it's done writing — a
+/// guarantee nothing analogous exists for on the request side.
+let http_read_request_body (fd: Int) (headers: Array[Header]) (leftover_body: String): Result[String, String] =
+    match http_find_header(headers, "Content-Length") {
+        Some(cl) => match String.parse_int(cl) {
+            Err(e) => Err("http: invalid Content-Length header: ".concat(e)),
+            Ok(content_length) => http_recv_body_by_length_acc(fd, leftover_body, content_length - leftover_body.len()),
+        },
+        None => match http_find_header(headers, "Transfer-Encoding") {
+            Some(te) => Err("http: Transfer-Encoding (".concat(te).concat(") is not supported yet")),
+            None => Ok(leftover_body),
+        },
+    }
+
+/// Pipe + `Result.and_then`/`Result.map`, not nested `match` — a
+/// deliberate house-style adoption (see DESIGN.md's own "?/early-return
+/// sugar" section for the full writeup: real `?`-style early return
+/// would need a language feature Plum doesn't have at all, `return`,
+/// plus a `From`-style error-conversion mechanism the closed trait set
+/// has no room for — this gets most of the real readability benefit
+/// today, for free, confirmed by rewriting this exact chain both ways
+/// and running BOTH against the real shipped counterpart before
+/// choosing this one). `|ignored| ..` discards `tcp_write`'s own `Int`
+/// (bytes-written count) — the next step doesn't need it, only that the
+/// write succeeded at all.
+let http_do_request (fd: Int) (method: String) (parsed: Url.Url) (headers: Array[Header]) (body: String): Result[Response, String] =
+    Net.write(fd, http_build_request(method, parsed, headers, body))
+        |> Result.and_then(_, |ignored| http_recv_headers_acc(fd, ""))
+        |> Result.and_then(_, http_parse_head)
+        |> Result.and_then(_, |head| Result.map(http_read_body(fd, head.headers, head.leftover_body), |response_body| Response { status: head.status, headers: head.headers, body: response_body }))
+
+/// `fd` has to stay reachable for the FINAL cleanup step regardless of
+/// `http_do_request`'s own outcome — closure capture (`fd` bound by the
+/// outer `and_then`, still in scope in the block passed to the inner
+/// one) does this without needing the old two-armed "close then re-wrap
+/// Ok/Err separately" match at all.
+pub let request (method: String) (url: String) (headers: Array[Header]) (body: String): Result[Response, String] =
+    http_parse_url(url)
+        |> Result.and_then(_, |parsed| Net.connect_to(parsed.host, parsed.port) |> Result.and_then(_, |fd| {
+            let result = http_do_request(fd, method, parsed, headers, body);
+            Net.close(fd);
+            result
+        }))
+
+/// Fetches a URL and reads the whole response.
+///
+/// **HTTP only — `https://` is not supported** and is rejected rather
+/// than silently attempted in the clear.
+///
+/// Redirects are NOT followed: a 301 or 302 comes back as itself, with
+/// its `Location` header, so the caller decides. Following one changes
+/// which host you are talking to, which is not a decision a library
+/// should make quietly.
+pub let get (url: String): Result[Response, String] = request("GET", url, [], "")
+
+/// POSTs a body and reads the whole response. Sets `Content-Length`;
+/// set `Content-Type` yourself if the server needs one.
+///
+/// HTTP only, and redirects are not followed — see `Http.get`.
+pub let post (url: String) (body: String): Result[Response, String] = request("POST", url, [], body)
+
+// --- HTTP server ---
+
+let http_parse_request_line (line: String): Result[RequestLine, String] = {
+    let parts = String.trim_end(line).split(" ");
+    if parts.len() < 2 { Err("http server: malformed request line: ".concat(line)) }
+    else { Ok(RequestLine { method: parts[0], path: parts[1] }) }
+}
+
+/// Same shape as `http_parse_head` above, just parsing a request's own
+/// first line (`METHOD path HTTP/1.1`) instead of a response's status
+/// line — everything past that (splitting headers from leftover body
+/// bytes, `http_parse_headers`) is identical, reused unchanged.
+let http_parse_request_head (raw: String): Result[RequestHead, String] = {
+    let sep_index = match String.index_of(raw, "\r\n\r\n") { Some(i) => i, None => raw.len() };
+    let leftover_body = if sep_index + 4 <= raw.len() { String.slice(raw, sep_index + 4, raw.len()) } else { "" };
+    let lines = String.slice(raw, 0, sep_index).split("\n");
+    if lines.len() == 0 { Err("http server: empty request") }
+    else { Result.map(http_parse_request_line(lines[0]), |rl| RequestHead {
+        method: rl.method,
+        path: rl.path,
+        headers: http_parse_headers(Array.drop(lines, 1)),
+        leftover_body: leftover_body,
+    }) }
+}
+
+/// A small, fixed table covering the reason phrases any real client
+/// actually looks at — not the full IANA registry. An unrecognized code
+/// still produces a syntactically valid status line (`"Unknown"`), just
+/// a less informative one; never a hard error, since the STATUS CODE
+/// itself (not its phrase) is what every real HTTP client actually acts
+/// on.
+let http_status_reason (code: Int): String = match code {
+    200 => "OK", 201 => "Created", 204 => "No Content",
+    301 => "Moved Permanently", 302 => "Found",
+    400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden", 404 => "Not Found", 405 => "Method Not Allowed",
+    500 => "Internal Server Error", 501 => "Not Implemented", 502 => "Bad Gateway", 503 => "Service Unavailable",
+    _ => "Unknown",
+}
+
+/// The wire-format inverse of `http_build_request` — unlike that
+/// function, `Content-Length` is ALWAYS sent (even `0` for an empty
+/// body), not just when the body is non-empty: a request omitting it
+/// for a bodyless `GET` is common/idiomatic, but a SERVER leaving a
+/// client to guess whether a response has a body at all is not.
+let http_response_to_wire (resp: Response): String = {
+    let extra_header_lines = Array.fold(resp.headers, "", |acc, h| acc.concat(h.name).concat(": ").concat(h.value).concat("\r\n"));
+    "HTTP/1.1 ".concat(resp.status.to_string()).concat(" ").concat(http_status_reason(resp.status)).concat("\r\n")
+        .concat("Content-Length: ").concat(resp.body.len().to_string()).concat("\r\n")
+        .concat("Connection: close\r\n")
+        .concat(extra_header_lines)
+        .concat("\r\n")
+        .concat(resp.body)
+}
+
+/// Reads exactly one request off `conn`, runs `handler`, writes exactly
+/// one response back — never touches `conn`'s own lifecycle (opening/
+/// closing), that's `serve_once`/`http_serve_loop`'s job below, so
+/// this stays testable on its own without a real listening socket
+/// (any connected `fd` pair works, e.g. the SAME loopback-pair shape
+/// `tcp_round_trip`'s own test already uses).
+let http_handle_connection (conn: Int) (handler: (Request) -> Response): Result[Unit, String] =
+    http_recv_headers_acc(conn, "")
+        |> Result.and_then(_, http_parse_request_head)
+        |> Result.and_then(_, |head| http_read_request_body(conn, head.headers, head.leftover_body) |> Result.and_then(_, |body| {
+            let request = Request { method: head.method, path: head.path, headers: head.headers, body: body };
+            let response = handler(request);
+            Result.map(Net.write(conn, http_response_to_wire(response)), |sent| ())
+        }))
+
+/// Handles exactly ONE connection then returns — listens, accepts once,
+/// closes both the connection and the listening socket, and gives back
+/// whatever `http_handle_connection` produced. Real, useful on its own
+/// (a one-shot server, or a test fixture — this is what THIS module's
+/// own tests exercise directly), not just a building block for `http_
+/// serve` below.
+pub let serve_once (port: Int) (handler: (Request) -> Response): Result[Unit, String] =
+    match Net.listen_on(port) {
+        Err(e) => Err(e),
+        Ok(server) => match Net.accept(server) {
+            Err(e) => { Net.close(server); Err(e) },
+            Ok(conn) => {
+                let result = http_handle_connection(conn, handler);
+                Net.close(conn);
+                Net.close(server);
+                result
+            },
+        },
+    }
+
+/// The REAL long-running server: accept, hand the connection off to its
+/// own task, repeat — forever. Concurrent by design: `spawn` puts each
+/// connection's `http_handle_connection`/close on its own real OS
+/// thread (see DESIGN.md's Concurrency section — "OS threads first")
+/// so one slow client (a slow body, a slow handler) can't stall every
+/// OTHER connection behind it the way a single sequential accept-loop
+/// would. A single misbehaving/erroring connection does NOT bring the
+/// server down (the spawned task's `Result` is deliberately never
+/// joined, let alone matched — a bare discarded statement, same idiom
+/// `println`'s own `write(1, s.as_cstr(), n);` already established for
+/// a discarded non-`Unit` extern return) — only a hard failure to
+/// ACCEPT (a real listener-level problem, not a per-connection one)
+/// stops the loop, matching `Err` propagating out of `tcp_accept_
+/// connection` itself.
+///
+/// `handler` must be a plain top-level function or a closure that
+/// captures NOTHING (both cross a `spawn` boundary equally, see
+/// DESIGN.md's "native-codegen zero-capture closure fix" section) — a
+/// closure that DOES capture live local state still can't cross: the
+/// interpreter rejects it with a clear error at the `spawn` site, and
+/// native codegen rejects it with a clean runtime abort (can't be
+/// proven safe/unsafe at compile time — the same free-variable slot
+/// could hold either shape depending on what's passed in).
+///
+/// Deliberately not directly compile-and-run tested for the INFINITE-
+/// LOOP shape itself (no `while`/loop-with-an-exit exists in this
+/// language, and this function genuinely has none by design — a real
+/// server keeps serving), same as before this change; what IS new here
+/// (spawn-per-connection actually running two connections concurrently,
+/// not serially) is covered by `http_serve_loop_handles_two_connections_
+/// concurrently_not_serially` below.
+let http_serve_loop (server: Int) (handler: (Request) -> Response): Result[Unit, String] =
+    match Net.accept(server) {
+        Err(e) => Err(e),
+        Ok(conn) => {
+            spawn { http_handle_connection(conn, handler); Net.close(conn) };
+            http_serve_loop(server, handler)
+        },
+    }
+
+/// Serves HTTP on a port, calling `handler` once per request, forever.
+///
+/// **Never returns** unless the listen itself fails. One connection is
+/// handled at a time — a slow handler blocks the next request, which is
+/// fine for a local tool and is not a production server.
+pub let serve (port: Int) (handler: (Request) -> Response): Result[Unit, String] =
+    match Net.listen_on(port) {
+        Err(e) => Err(e),
+        Ok(server) => http_serve_loop(server, handler),
+    }

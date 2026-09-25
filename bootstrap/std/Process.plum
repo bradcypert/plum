@@ -1,0 +1,178 @@
+/// argv is passed to the child. A TAB join is only the extern
+/// packing; see `native_stdlib/process_shim.c`. Empty `env` means
+/// inherit the parent environment; non-empty entries are `NAME=value`
+/// overlays. `stdin: None` is an empty stdin, not the parent's.
+
+let process_run_ex_raw (program: String) (args_joined: String) (argc: Int) (env_joined: String) (envc: Int) (stdin: String) (stdin_len: Int) (has_stdin: Int): Int = 0
+let process_ex_exit_code_raw (handle: Int): Int = 0
+let process_ex_stdout_raw (handle: Int): String = ""
+let process_ex_stderr_raw (handle: Int): String = ""
+let process_ex_free_raw (handle: Int): Bool = false
+
+/// What to run, and how.
+///
+/// `args` does NOT include the program itself. `env` of `[]` inherits
+/// the parent's environment; non-empty entries are `NAME=value`
+/// overlays on top of it, not a replacement. `stdin: None` gives the
+/// child an EMPTY stdin, not the parent's.
+pub struct Options { pub program: String, pub args: Array[String], pub env: Array[String], pub stdin: Option[String] }
+/// What a finished process left behind.
+///
+/// `exit_code` is the child's own status: a non-zero one is an ordinary
+/// result, not an error. Failing to START the process is the `Err`.
+pub struct ProcessResult { pub exit_code: Int, pub stdout: String, pub stderr: String }
+
+let join_args_acc (args: Array[String]) (i: Int) (acc: String): String =
+    if i >= args.len() { acc }
+    else if i == 0 { join_args_acc(args, i + 1, args[i]) }
+    else { join_args_acc(args, i + 1, acc.concat("\t").concat(args[i])) }
+
+/// A non-zero exit code is an ordinary `Ok`. `Err` means the process
+/// could not be started at all, including a program that was not found.
+pub let run (opts: Options): Result[ProcessResult, String] = {
+    let joined = join_args_acc(opts.args, 0, "");
+    let env_joined = join_args_acc(opts.env, 0, "");
+    let stdin_s = Option.unwrap_or(opts.stdin, "");
+    let stdin_len = stdin_s.len();
+    let has_stdin = if Option.is_some(opts.stdin) { 1 } else { 0 };
+    let handle = process_run_ex_raw(opts.program, joined, opts.args.len(), env_joined, opts.env.len(), stdin_s, stdin_len, has_stdin);
+    if handle < 0 { Err("Process.run: could not start process: ".concat(opts.program)) }
+    else {
+        let result = ProcessResult {
+            exit_code: process_ex_exit_code_raw(handle),
+            stdout: process_ex_stdout_raw(handle),
+            stderr: process_ex_stderr_raw(handle),
+        };
+        let freed = process_ex_free_raw(handle);
+        Ok(result)
+    }
+}
+
+// --- Asynchronous children (issue #7) ---
+//
+// `run` blocks until the child is done, which is right for a build
+// step and wrong for anything that has to stay responsive while the
+// child works. `start` is the other shape: start it, carry on, look in
+// on it.
+//
+// `Child` is a `handle` (issue #9), so a child that nothing can reach
+// any more is KILLED and reaped when the value dies. That is not the
+// gentle choice and is the honest one: the value that could have
+// polled it, waited for it, signalled it or read its output has just
+// been destroyed, so leaving the process alive would leak something no
+// part of the program can name -- along with the temp files it is
+// still writing to. A child meant to outlive its scope needs a design
+// decision this module has not made yet; see DESIGN.md.
+//
+// Output is readable ONLY once the child has exited. Reading it early
+// would mean defining what a partial read of a file somebody is still
+// writing means, and nothing needs that yet.
+extern "C" {
+    fn process_spawn(program: CStr, args: CStr, argc: Int, env: CStr, envc: Int, input: CStr, input_len: Int, has_input: Int) -> Int;
+    fn process_poll(h: Int) -> Int;
+    fn process_child_wait(h: Int, timeout_nanos: Int) -> Int;
+    fn process_terminate(h: Int, hard: Int) -> Int;
+    fn process_child_pid(h: Int) -> Int;
+    fn process_child_free(h: Int);
+}
+
+/// A running child process.
+///
+/// **Killed and reaped when this value dies** — on a normal return, at
+/// the end of a block, on an `Err`, and on a panic. Once the handle is
+/// gone nothing can poll the process, wait for it, signal it or read
+/// its output, so leaving it running would leak something the program
+/// can no longer name.
+///
+/// Its output is readable only after it has exited, and then any number
+/// of times.
+pub handle Child { on_drop: process_child_free }
+
+/// Every length is bound BEFORE any `as_cstr`, which is the ordering
+/// `Net.write` and `File.write` both spell out: the pointer is an
+/// interior one into the string's cell, and reading a length afterwards
+/// in the same argument list is how that bug was found on the wire.
+/// Named `start`, not `spawn`: `spawn` is a KEYWORD, the
+/// concurrency construct, so `Process.spawn(..)` does not parse at
+/// all. Making it parse would mean teaching the parser that a
+/// keyword after `.` is a member name, which is real grammar work
+/// for a naming preference. `start` also pairs with `wait`.
+pub let start (opts: Options): Result[Child, String] = unsafe {
+    let joined = join_args_acc(opts.args, 0, "");
+    let env_joined = join_args_acc(opts.env, 0, "");
+    let input = Option.unwrap_or(opts.stdin, "");
+    let input_len = input.len();
+    let argc = opts.args.len();
+    let envc = opts.env.len();
+    let has_input = if Option.is_some(opts.stdin) { 1 } else { 0 };
+    let h = process_spawn(opts.program.as_cstr(), joined.as_cstr(), argc,
+                          env_joined.as_cstr(), envc, input.as_cstr(), input_len, has_input);
+    if h < 0 { Err("Process.start: could not start process: ".concat(opts.program)) }
+    else { Ok(Child.from_raw(h)) }
+}
+
+/// The captured result, which the shim filled in when it collected the
+/// child's status. Readable any number of times.
+let result_of (h: Int): ProcessResult =
+    ProcessResult {
+        exit_code: process_ex_exit_code_raw(h),
+        stdout: process_ex_stdout_raw(h),
+        stderr: process_ex_stderr_raw(h),
+    }
+
+/// The operating system's identifier for the child, for a caller that
+/// has to report it or hand it to something else.
+pub let Child.pid (c: Child): Int = unsafe { process_child_pid(Child.raw(c)) }
+
+/// `None` means still running. This is the call an application loop
+/// makes: it never blocks, so a loop can poll a child, redraw, and poll
+/// again.
+pub let Child.poll (c: Child): Result[Option[ProcessResult], String] = unsafe {
+    let h = Child.raw(c);
+    let r = process_poll(h);
+    if r < 0 { Err("Child.poll: not a running child") }
+    else if r == 0 { Ok(None) }
+    else { Ok(Some(result_of(h))) }
+}
+
+/// Blocks until the child exits. Calling it on a child that has already
+/// exited returns the same result again rather than failing.
+pub let Child.wait (c: Child): Result[ProcessResult, String] = unsafe {
+    let h = Child.raw(c);
+    let r = process_child_wait(h, 0 - 1);
+    if r != 1 { Err("Child.wait: could not wait for child") }
+    else { Ok(result_of(h)) }
+}
+
+/// Waits, but not forever. `None` means the time ran out and the child
+/// is still going. It has NOT been signalled, so the caller can wait
+/// again, give up, or `terminate` it.
+pub let Child.wait_timeout (c: Child) (d: Time.Duration): Result[Option[ProcessResult], String] = unsafe {
+    let h = Child.raw(c);
+    let r = process_child_wait(h, d.as_nanos());
+    if r < 0 { Err("Child.wait_timeout: could not wait for child") }
+    else if r == 0 { Ok(None) }
+    else { Ok(Some(result_of(h))) }
+}
+
+/// Asks the child to stop, and returns at once; the child may still be
+/// running when this returns, so a caller that needs it gone should
+/// `wait` afterwards.
+///
+/// **On Windows this is `kill`.** There is no SIGTERM, so a child that
+/// would have cleaned up after a polite request does not get the
+/// chance. A program relying on that behaviour is relying on something
+/// only POSIX offers.
+///
+/// Signalling a child that has already exited succeeds: the caller
+/// asked for it to be gone, and it is.
+pub let Child.terminate (c: Child): Result[Unit, String] = unsafe {
+    if process_terminate(Child.raw(c), 0) == 0 { Ok(()) }
+    else { Err("Child.terminate: could not signal child") }
+}
+
+/// Cannot be refused, and gives the child no chance to clean up.
+pub let Child.kill (c: Child): Result[Unit, String] = unsafe {
+    if process_terminate(Child.raw(c), 1) == 0 { Ok(()) }
+    else { Err("Child.kill: could not signal child") }
+}
