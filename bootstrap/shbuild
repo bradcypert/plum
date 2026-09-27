@@ -55,4 +55,8 @@ fi
 # See the note in `bootstrap/corpus-check`: derived, not listed.
 clang -O2 -Wno-override-module "$ll" \
     "$root"/native_stdlib/*.c \
+    "$root"/vendor/mbedtls/library/*.c \
+    -I"$root/vendor/mbedtls/include" \
+    -I"$root/vendor/mbedtls/library" \
+    -I"$root"/vendor/mbedtls/include/mbedtls \
     -lm -o "$out"

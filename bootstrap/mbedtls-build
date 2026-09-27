@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Build the pinned Mbed TLS sources vendored under vendor/mbedtls.
+#
+# This deliberately produces a private archive in a caller-provided output
+# directory; it never installs a library into the host system.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+out="${1:-$root/.mbedtls-build}"
+mkdir -p "$out"
+
+cc="${CC:-clang}"
+cflags=(-O2 -I"$root/vendor/mbedtls/include" -I"$root/vendor/mbedtls/include/mbedtls")
+objs=()
+for src in "$root"/vendor/mbedtls/library/*.c; do
+    obj="$out/$(basename "${src%.c}").o"
+    "$cc" "${cflags[@]}" -c "$src" -o "$obj"
+    objs+=("$obj")
+done
+ar rcs "$out/libplum_mbedtls.a" "${objs[@]}"
+echo "$out/libplum_mbedtls.a"

@@ -34,6 +34,12 @@ carries the bytes that arrived alongside the headers.
 
 ## `let request (method: String) (url: String) (headers: Array[Header]) (body: String): Result[Response, String]`
 
+HTTP and HTTPS share this request API. HTTPS uses a native TLS
+session with certificate and hostname verification; the TLS library
+and trust-store lookup remain implementation details of the runtime.
+Plum embeds a pinned Mbed TLS source snapshot. Unix builds use the
+conventional system CA paths; Windows loads the system ROOT store.
+
 `fd` has to stay reachable for the FINAL cleanup step regardless of
 `http_do_request`'s own outcome — closure capture (`fd` bound by the
 outer `and_then`, still in scope in the block passed to the inner
@@ -44,8 +50,8 @@ Ok/Err separately" match at all.
 
 Fetches a URL and reads the whole response.
 
-**HTTP only — `https://` is not supported** and is rejected rather
-than silently attempted in the clear.
+HTTPS performs certificate and hostname verification using the
+runtime's native TLS trust-store integration.
 
 Redirects are NOT followed: a 301 or 302 comes back as itself, with
 its `Location` header, so the caller decides. Following one changes
@@ -57,7 +63,7 @@ should make quietly.
 POSTs a body and reads the whole response. Sets `Content-Length`;
 set `Content-Type` yourself if the server needs one.
 
-HTTP only, and redirects are not followed — see `Http.get`.
+HTTP or HTTPS, and redirects are not followed — see `Http.get`.
 
 ## `let serve_once (port: Int) (handler: (Request) -> Response): Result[Unit, String]`
 

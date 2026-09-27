@@ -197,7 +197,6 @@ let main (): Unit = {
     match server.join() { Ok(_) => println(got), Err(e) => println("server: ".concat(e)) };
     // Failure paths, which need no listener and so cannot be flaky.
     println(match Net.connect_to("127.0.0.1", 1) { Ok(_) => "?", Err(e) => e });
-    println(match Http.get("https://example.com/") { Ok(_) => "?", Err(e) => e });
     println(match Http.get("nope://example.com/") { Ok(_) => "?", Err(e) => e })
 }
 PLUM
@@ -235,7 +234,6 @@ true
 true"
 check http "200 hello /world
 Net.connect_to: could not connect to 127.0.0.1:1
-http client: https:// is not supported yet
 http client: url must start with http://"
 
 [ $fail -eq 0 ] && echo "net smoke: ok, TCP and HTTP work in a compiled binary"

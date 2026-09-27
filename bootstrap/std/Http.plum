@@ -17,6 +17,25 @@ pub struct RequestLine { pub method: String, pub path: String }
 /// carries the bytes that arrived alongside the headers.
 pub struct RequestHead { pub method: String, pub path: String, pub headers: Array[Header], pub leftover_body: String }
 
+extern "C" {
+    fn tls_connect(host: CStr, port: Int) -> Int;
+    fn tls_send(handle: Int, buf: CStr, len: Int) -> Int;
+    fn tls_recv_n(handle: Int, max_len: Int) -> Int;
+    fn tls_recv_data() -> CStr;
+    fn tls_close(handle: Int) -> Unit;
+}
+
+let http_tls_read (handle: Int) (max_len: Int): String = unsafe {
+    let n = tls_recv_n(handle, max_len);
+    if n <= 0 { "" } else { tls_recv_data().as_string() }
+}
+
+let http_tls_write (handle: Int) (data: String): Result[Int, String] = unsafe {
+    let len = data.len();
+    let n = tls_send(handle, data.as_cstr(), len);
+    if n < 0 { Err("https client: write failed") } else { Ok(n) }
+}
+
 /// URL parsing lives in `Url` now; this only decides which URLs an
 /// HTTP CLIENT is willing to act on, which is a different question
 /// and the only part that ever belonged here.
@@ -28,16 +47,12 @@ pub struct RequestHead { pub method: String, pub path: String, pub headers: Arra
 /// refused for its scheme, while `h/x` is refused for having none,
 /// and those used to be the same message.
 ///
-/// `https` is checked BEFORE the general scheme test so it keeps its
-/// specific answer: it is a URL this client will support later, not
-/// one it will never accept. See #22.
 let http_parse_url (url: String): Result[Url.Url, String] =
     match Url.parse(url) {
         Err(e) => Err("http client: ".concat(e)),
         Ok(u) =>
-            if u.scheme == "https" { Err("http client: https:// is not supported yet") }
-            else if u.scheme != "http" { Err("http client: url must start with http://") }
-            else { Ok(u) },
+            if u.scheme == "https" || u.scheme == "http" { Ok(u) }
+            else { Err("http client: url must start with http:// or https://") },
     }
 
 let http_build_request (method: String) (parsed: Url.Url) (headers: Array[Header]) (body: String): String = {
@@ -59,13 +74,13 @@ let http_build_request (method: String) (parsed: Url.Url) (headers: Array[Header
 /// back out). An empty read here means the peer closed before the
 /// headers even finished, always a real error, never a legitimate
 /// empty response.
-let http_recv_headers_acc (fd: Int) (acc: String): Result[String, String] =
+let http_recv_headers_acc (fd: Int) (secure: Int) (acc: String): Result[String, String] =
     match String.index_of(acc, "\r\n\r\n") {
         Some(_) => Ok(acc),
         None => {
-            let chunk = Net.read(fd, 4096);
+            let chunk = if secure == 1 { http_tls_read(fd, 4096) } else { Net.read(fd, 4096) };
             if String.is_empty(chunk) { Err("http client: connection closed before the response headers were complete") }
-            else { http_recv_headers_acc(fd, acc.concat(chunk)) }
+            else { http_recv_headers_acc(fd, secure, acc.concat(chunk)) }
         },
     }
 
@@ -108,17 +123,17 @@ let http_parse_head (raw: String): Result[Head, String] = {
     }) }
 }
 
-let http_recv_body_by_length_acc (fd: Int) (acc: String) (remaining: Int): Result[String, String] =
+let http_recv_body_by_length_acc (fd: Int) (secure: Int) (acc: String) (remaining: Int): Result[String, String] =
     if remaining <= 0 { Ok(acc) }
     else {
-        let chunk = Net.read(fd, remaining);
+        let chunk = if secure == 1 { http_tls_read(fd, remaining) } else { Net.read(fd, remaining) };
         if String.is_empty(chunk) { Err("http client: connection closed before the full response body was received") }
-        else { http_recv_body_by_length_acc(fd, acc.concat(chunk), remaining - chunk.len()) }
+        else { http_recv_body_by_length_acc(fd, secure, acc.concat(chunk), remaining - chunk.len()) }
     }
 
-let http_recv_body_until_close_acc (fd: Int) (acc: String): String = {
-    let chunk = Net.read(fd, 4096);
-    if String.is_empty(chunk) { acc } else { http_recv_body_until_close_acc(fd, acc.concat(chunk)) }
+let http_recv_body_until_close_acc (fd: Int) (secure: Int) (acc: String): String = {
+    let chunk = if secure == 1 { http_tls_read(fd, 4096) } else { Net.read(fd, 4096) };
+    if String.is_empty(chunk) { acc } else { http_recv_body_until_close_acc(fd, secure, acc.concat(chunk)) }
 }
 
 /// Takes `headers`/`leftover_body` directly (not a whole `Head`) —
@@ -126,15 +141,15 @@ let http_recv_body_until_close_acc (fd: Int) (acc: String): String = {
 /// one is response-side ONLY, not reused for requests (see `http_read_
 /// request_body` below for why the two genuinely differ, not just a
 /// convenience split).
-let http_read_body (fd: Int) (headers: Array[Header]) (leftover_body: String): Result[String, String] =
+let http_read_body (fd: Int) (secure: Int) (headers: Array[Header]) (leftover_body: String): Result[String, String] =
     match http_find_header(headers, "Content-Length") {
         Some(cl) => match String.parse_int(cl) {
             Err(e) => Err("http: invalid Content-Length header: ".concat(e)),
-            Ok(content_length) => http_recv_body_by_length_acc(fd, leftover_body, content_length - leftover_body.len()),
+            Ok(content_length) => http_recv_body_by_length_acc(fd, secure, leftover_body, content_length - leftover_body.len()),
         },
         None => match http_find_header(headers, "Transfer-Encoding") {
             Some(te) => Err("http: Transfer-Encoding (".concat(te).concat(") is not supported yet")),
-            None => Ok(http_recv_body_until_close_acc(fd, leftover_body)),
+            None => Ok(http_recv_body_until_close_acc(fd, secure, leftover_body)),
         },
     }
 
@@ -159,7 +174,7 @@ let http_read_request_body (fd: Int) (headers: Array[Header]) (leftover_body: St
     match http_find_header(headers, "Content-Length") {
         Some(cl) => match String.parse_int(cl) {
             Err(e) => Err("http: invalid Content-Length header: ".concat(e)),
-            Ok(content_length) => http_recv_body_by_length_acc(fd, leftover_body, content_length - leftover_body.len()),
+            Ok(content_length) => http_recv_body_by_length_acc(fd, 0, leftover_body, content_length - leftover_body.len()),
         },
         None => match http_find_header(headers, "Transfer-Encoding") {
             Some(te) => Err("http: Transfer-Encoding (".concat(te).concat(") is not supported yet")),
@@ -178,11 +193,11 @@ let http_read_request_body (fd: Int) (headers: Array[Header]) (leftover_body: St
 /// choosing this one). `|ignored| ..` discards `tcp_write`'s own `Int`
 /// (bytes-written count) — the next step doesn't need it, only that the
 /// write succeeded at all.
-let http_do_request (fd: Int) (method: String) (parsed: Url.Url) (headers: Array[Header]) (body: String): Result[Response, String] =
-    Net.write(fd, http_build_request(method, parsed, headers, body))
-        |> Result.and_then(_, |ignored| http_recv_headers_acc(fd, ""))
+let http_do_request (fd: Int) (secure: Int) (method: String) (parsed: Url.Url) (headers: Array[Header]) (body: String): Result[Response, String] =
+    (if secure == 1 { http_tls_write(fd, http_build_request(method, parsed, headers, body)) } else { Net.write(fd, http_build_request(method, parsed, headers, body)) })
+        |> Result.and_then(_, |ignored| http_recv_headers_acc(fd, secure, ""))
         |> Result.and_then(_, http_parse_head)
-        |> Result.and_then(_, |head| Result.map(http_read_body(fd, head.headers, head.leftover_body), |response_body| Response { status: head.status, headers: head.headers, body: response_body }))
+        |> Result.and_then(_, |head| Result.map(http_read_body(fd, secure, head.headers, head.leftover_body), |response_body| Response { status: head.status, headers: head.headers, body: response_body }))
 
 /// `fd` has to stay reachable for the FINAL cleanup step regardless of
 /// `http_do_request`'s own outcome — closure capture (`fd` bound by the
@@ -191,16 +206,22 @@ let http_do_request (fd: Int) (method: String) (parsed: Url.Url) (headers: Array
 /// Ok/Err separately" match at all.
 pub let request (method: String) (url: String) (headers: Array[Header]) (body: String): Result[Response, String] =
     http_parse_url(url)
-        |> Result.and_then(_, |parsed| Net.connect_to(parsed.host, parsed.port) |> Result.and_then(_, |fd| {
-            let result = http_do_request(fd, method, parsed, headers, body);
-            Net.close(fd);
-            result
-        }))
+        |> Result.and_then(_, |parsed| if parsed.scheme == "https" {
+            let fd = unsafe { tls_connect(parsed.host.as_cstr(), parsed.port) };
+            if fd < 0 { Err("https client: TLS connection failed") }
+            else { let result = http_do_request(fd, 1, method, parsed, headers, body); unsafe { tls_close(fd) }; result }
+        } else {
+            Net.connect_to(parsed.host, parsed.port) |> Result.and_then(_, |fd| {
+                let result = http_do_request(fd, 0, method, parsed, headers, body);
+                Net.close(fd);
+                result
+            })
+        })
 
 /// Fetches a URL and reads the whole response.
 ///
-/// **HTTP only — `https://` is not supported** and is rejected rather
-/// than silently attempted in the clear.
+/// Supports both `http://` and `https://`; HTTPS uses the native TLS
+/// transport with platform trust-store and hostname verification.
 ///
 /// Redirects are NOT followed: a 301 or 302 comes back as itself, with
 /// its `Location` header, so the caller decides. Following one changes
@@ -211,7 +232,7 @@ pub let get (url: String): Result[Response, String] = request("GET", url, [], ""
 /// POSTs a body and reads the whole response. Sets `Content-Length`;
 /// set `Content-Type` yourself if the server needs one.
 ///
-/// HTTP only, and redirects are not followed — see `Http.get`.
+/// Redirects are not followed — see `Http.get`.
 pub let post (url: String) (body: String): Result[Response, String] = request("POST", url, [], body)
 
 // --- HTTP server ---
@@ -275,7 +296,7 @@ let http_response_to_wire (resp: Response): String = {
 /// (any connected `fd` pair works, e.g. the SAME loopback-pair shape
 /// `tcp_round_trip`'s own test already uses).
 let http_handle_connection (conn: Int) (handler: (Request) -> Response): Result[Unit, String] =
-    http_recv_headers_acc(conn, "")
+    http_recv_headers_acc(conn, 0, "")
         |> Result.and_then(_, http_parse_request_head)
         |> Result.and_then(_, |head| http_read_request_body(conn, head.headers, head.leftover_body) |> Result.and_then(_, |body| {
             let request = Request { method: head.method, path: head.path, headers: head.headers, body: body };

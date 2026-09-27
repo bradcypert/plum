@@ -2419,7 +2419,7 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
                     let cfiles = write_shims(scratch);
                     // Native, for the same reason `run` is: each test
                     // runs as a child of this binary.
-                    let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll])), cfiles),
+                    let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll, "-I", scratch, "-I", scratch.concat("/mbedtls/include"), "-I", scratch.concat("/mbedtls/library")])), cfiles),
                         Array.concat(link_args([], dir, native_target()), Array.concat(platform_libs(native_target()), ["-o", bin])));
                     match run_process(cc_program(), argv) {
                         Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
@@ -2732,7 +2732,7 @@ let compile_objs (srcs: Array[String]) (i: Int) (scratch: String) (flags: Array[
     }
 
 let compile_two_phase (srcs: Array[String]) (out: String) (extra: Array[String]) (scratch: String) (target: String) (release: Bool): String = {
-    let flags = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module"]));
+    let flags = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", "-I", scratch, "-I", scratch.concat("/mbedtls/include"), "-I", scratch.concat("/mbedtls/library")]));
     let built = compile_objs(srcs, 0, scratch, flags, []);
     if built.err != "" { built.err }
     else {
@@ -2765,7 +2765,8 @@ let run_dsymutil (out: String): Unit =
     }
 
 let platform_libs (target: String): Array[String] =
-    if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32"] } else { ["-lm"] }
+    if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32", "-lcrypt32"] }
+    else { ["-lm", "-lmbedtls", "-lmbedx509", "-lmbedcrypto"] }
 
 // Every 64-bit architecture this compiler is willing to emit for.
 //
@@ -2905,9 +2906,10 @@ let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (i: Int) (acc: 
     if i >= files.len() { acc }
     else {
         let path = Path.join(dir, files[i].name);
+        doc_make_dirs(Path.dirname(path));
         match Os.write_file(path, files[i].source) {
             Err(_) => write_shims_acc(files, dir, i + 1, acc),
-            Ok(_) => write_shims_acc(files, dir, i + 1, acc.push(path)),
+            Ok(_) => write_shims_acc(files, dir, i + 1, if files[i].compile { acc.push(path) } else { acc }),
         }
     }
 
@@ -3000,7 +3002,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
             // the current directory, so this compiler only worked when
             // run from the repo root. See `shims/shims.plum`.
             let cfiles = write_shims(scratch);
-            let base = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll]));
+            let base = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll, "-I", scratch, "-I", scratch.concat("/mbedtls/include"), "-I", scratch.concat("/mbedtls/library")]));
             let argv2 = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), base), cfiles), extra), Array.concat(platform_libs(target), ["-o", out]));
             // Mach-O debug builds take a different route entirely -- see
             // `compile_two_phase`. Everything else compiles and links in
