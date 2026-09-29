@@ -2320,7 +2320,12 @@ let discover_tests (items: Array[parser.ItemNode]) (i: Int) (acc: Array[String])
                 // of reporting a failure. Caught immediately -- this
                 // compiler's own `cmd_test`/`cmd_test_one` were named
                 // `test_*` at first and were "discovered".
-                if last.starts_with("test_") && takes_no_args(def.params) {
+                // The RETURN TYPE is the same kind of filter. A
+                // `test_*` that returns a value is a helper, and the
+                // dispatcher is a `Unit` main: collecting it produced
+                // `Int != Unit` pointed at some other function
+                // (issue #57).
+                if last.starts_with("test_") && takes_no_args(def.params) && returns_unit(def.ret_ty) {
                     acc.push(qualify_test(items[i].module, def.name))
                 } else { acc }
             },
@@ -2347,10 +2352,23 @@ let takes_no_args (params: Array[parser.ParamNode]): Bool =
         }
     }
 
-// A test PASSES unless running it ERRORS; its return value is ignored.
-// That is the real compiler's rule, and it is why these are typically
-// `Bool`-returning functions nothing inspects: the assertion mechanism
-// is `require`/`panic`, not the result.
+// Declared `(): Unit`, or `(): ()` which is the same type. Unannotated
+// `test_*` helpers are skipped the same way argument-taking ones are:
+// the dispatcher is a Unit main, and a non-Unit return showed up as
+// `Int != Unit` on some other function (issue #57).
+let returns_unit (ty: Option[parser.Ty]): Bool =
+    match ty {
+        Some(t) => match t {
+            TyPath(parts) => parts.len() == 1 && parts[0] == "Unit",
+            TyTuple(elems) => Array.is_empty(elems),
+            _ => false,
+        },
+        None => false,
+    }
+
+// A test PASSES unless running it ERRORS. Discovery only collects
+// `test_*` functions that take no arguments and return Unit, so the
+// dispatcher can type-check as a Unit main (issue #57).
 //
 // Each test runs in its OWN PROCESS. `panic_raw` aborts rather than
 // returning a catchable error, so a harness that ran every test in one

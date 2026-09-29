@@ -77,6 +77,12 @@ let test_dotted_field_update (): Unit = {
 let test_fails_on_purpose (): Unit = assert_eq(2 + 2, 5)
 
 let test_runs_after_a_failure (): Unit = assert(true)
+
+// A helper named `test_*` that returns a value is not a test. Collecting
+// it made `plum test` fail with `Int != Unit` pointed at `main`
+// (issue #57).
+let test_fixture (): Int = 1
+let test_helper_is_not_a_test (): Unit = assert_eq(test_fixture(()), 1)
 PLUM
 
 # Two SUBDIRECTORY modules, each declaring a test of the same name --
@@ -110,12 +116,14 @@ check_run() {
     # distinguishing them.
     echo "$out" | grep -q 'test alpha.test_parse ... ok' || { echo "FAIL [$label]: a test in a submodule did not run"; fail=1; }
     echo "$out" | grep -q 'test beta.test_parse ... ok' || { echo "FAIL [$label]: a same-named test in a second submodule did not run"; fail=1; }
+    echo "$out" | grep -q 'test test_helper_is_not_a_test ... ok' || { echo "FAIL [$label]: a Unit test that calls a test_* helper did not run"; fail=1; }
+    echo "$out" | grep -q 'test test_fixture' && { echo "FAIL [$label]: a test_* helper returning Int was collected as a test"; fail=1; }
     # A ROOT-module test keeps its bare name, so existing projects report
     # exactly what they reported before.
     echo "$out" | grep -q 'test test_assertions ... ok' || { echo "FAIL [$label]: a root-module test lost its bare name"; fail=1; }
-    # 9 passed proves the run continued past the failure, and counts the
-    # two submodule tests.
-    echo "$out" | grep -q 'FAILED. 9 passed; 1 failed' || { echo "FAIL [$label]: wrong tally"; echo "$out" | tail -3; fail=1; }
+    # 10 passed proves the run continued past the failure, counts the
+    # two submodule tests, and did not collect `test_fixture`.
+    echo "$out" | grep -q 'FAILED. 10 passed; 1 failed' || { echo "FAIL [$label]: wrong tally"; echo "$out" | tail -3; fail=1; }
 }
 
 check_run self-hosted ./sh
