@@ -3969,15 +3969,42 @@ let cg_capture_releases (env: Array[CgSlot]) (i: Int) (acc: String): String =
 let cg_capture_stores (env: Array[CgSlot]) (i: Int) (cell: String) (n: Int) (acc: String): StoreEmit =
     if i >= env.len() { StoreEmit { code: acc, n: n } }
     else {
-        let lty = cg_llvm_ty(env[i].ty);
-        let v = cg_reg(n);
-        let slot = cg_reg(n + 1);
-        let line = "  ${v} = load ${lty}, ptr ${env[i].ptr}\n"
-            .concat(cg_inc(env[i].ty, v))
-            .concat("  ").concat(slot).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_capture_offset(i).to_string()).concat("\n")
-            .concat("  store ").concat(lty).concat(" ").concat(v).concat(", ptr ").concat(slot).concat("\n");
-        cg_capture_stores(env, i + 1, cell, n + 2, acc.concat(line))
+        match env[i].ty {
+            CgHandle(name) => if name == "Sender" || name == "Receiver" {
+                // Channel ends are shared resources, but their Plum wrapper
+                // cells are not thread-safe to share: each spawned closure
+                // needs its own refcount header. Keep the C queue alive with
+                // a mutex-protected retain, then let the ordinary generated
+                // release function call channel_release for this fresh cell.
+                let src = cg_reg(n);
+                let h = cg_reg(n + 1);
+                let fresh = cg_reg(n + 2);
+                let hp = cg_reg(n + 3);
+                let slot = cg_reg(n + 4);
+                let line = "  ${src} = load ptr, ptr ${env[i].ptr}\n"
+                    .concat(cg_handle_load(h, src))
+                    .concat("  call void @channel_retain(i64 ").concat(h).concat(")\n")
+                    .concat("  ").concat(fresh).concat(" = call ptr @plum_alloc(i64 16)\n")
+                    .concat("  ").concat(hp).concat(" = getelementptr i8, ptr ").concat(fresh).concat(", i64 8\n")
+                    .concat("  store i64 ").concat(h).concat(", ptr ").concat(hp).concat("\n")
+                    .concat("  ").concat(slot).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_capture_offset(i).to_string()).concat("\n")
+                    .concat("  store ptr ").concat(fresh).concat(", ptr ").concat(slot).concat("\n");
+                cg_capture_stores(env, i + 1, cell, n + 5, acc.concat(line))
+            } else { cg_capture_store_one(env, i, cell, n, acc) },
+            _ => cg_capture_store_one(env, i, cell, n, acc),
+        }
     }
+
+let cg_capture_store_one (env: Array[CgSlot]) (i: Int) (cell: String) (n: Int) (acc: String): StoreEmit = {
+    let lty = cg_llvm_ty(env[i].ty);
+    let v = cg_reg(n);
+    let slot = cg_reg(n + 1);
+    let line = "  ${v} = load ${lty}, ptr ${env[i].ptr}\n"
+        .concat(cg_inc(env[i].ty, v))
+        .concat("  ").concat(slot).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_capture_offset(i).to_string()).concat("\n")
+        .concat("  store ").concat(lty).concat(" ").concat(v).concat(", ptr ").concat(slot).concat("\n");
+    cg_capture_stores(env, i + 1, cell, n + 2, acc.concat(line))
+}
 
 // Calling a closure VALUE: load the code pointer, pass the cell itself
 // back as the environment argument.

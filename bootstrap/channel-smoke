@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Repeats the shared-channel-end regression fixture. A single execution can
+# miss the lifetime race; repeated native runs make issue #69 observable.
+set -uo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$root" || exit 1
+
+plum="${1:-./sh.real}"
+work="$(mktemp -d -t plum-channel-XXXXXX)"
+trap 'rm -rf "$work"' EXIT
+
+fixture=bootstrap/exec_corpus/channel_shared_ends
+if ! "$plum" build "$fixture" -o "$work/channel" >"$work/build.log" 2>&1; then
+    echo "channel-smoke: build failed"
+    sed -n '1,12p' "$work/build.log"
+    exit 1
+fi
+
+fail=0
+for run in $(seq 1 20); do
+    if ! timeout 30 "$work/channel" >"$work/out" 2>"$work/err"; then
+        echo "channel-smoke: run $run failed"
+        sed -n '1,20p' "$work/err"
+        fail=1
+        break
+    fi
+    if ! cmp -s "$fixture/expected.txt" "$work/out"; then
+        echo "channel-smoke: run $run output differed"
+        diff -u "$fixture/expected.txt" "$work/out" || true
+        fail=1
+        break
+    fi
+done
+
+if [ "$fail" -eq 0 ]; then
+    echo "channel-smoke: 20 runs passed"
+fi
+exit "$fail"

@@ -4364,30 +4364,24 @@ attempted under this chunk's stated correctness priority.
 **Concurrency: channels/`select`** (disconnect detection explicitly
 NOT part of this — `send()` always succeeds, `.recv()`/`select` block,
 potentially forever, if nothing is ever sent, rather than replicating
-the interpreter's Arc/Drop-based disconnect errors; the underlying
-queue/mutex/condvar is a permanent, accepted leak, same precedent as
-`spawn`'s own captures). Builds directly on `spawn`/`.join()`'s
-toolkit: `CgType::Sender(Box<CgType>)`/`CgType::Receiver(Box<CgType>)`,
-neither refcounted (`dec_fn_for → None` — there is no refcount word
-anywhere in the shared queue struct's layout; treating one as
-refcounted would corrupt the mutex sitting at offset 0) nor deep-copied
-when crossing a thread boundary (`deepcopy_fn_for → None` for a THIRD,
-different reason than `Closure`/`Task`: a `Sender`/`Receiver`
-legitimately crosses — unlike those two — but as a VERBATIM POINTER
-COPY, since both ends must keep pointing at the SAME shared queue or
-the channel silently splits into two mutually-invisible halves).
+the interpreter's Arc/Drop-based disconnect errors; the queue is freed
+when its last retained end is released. Builds directly on
+`spawn`/`.join()`'s
+toolkit: `CgType::Sender(Box<CgType>)`/`CgType::Receiver(Box<CgType>)`
+are refcounted wrapper cells over a shared native queue. They are
+specially deep-copied when crossing a thread boundary: each spawned
+closure gets a fresh `{ rc, handle }` cell, while `channel_retain`
+increments the queue's own count under its mutex. Sharing the wrapper
+cell itself would race its non-atomic Plum refcount even though the
+queue operations are locked.
 `crosses_spawn_boundary` was renamed `crosses_thread_boundary` and
 reused (not duplicated) at the new channel-send call site.
 
-One `malloc`'d, permanently-leaked 104-byte queue struct per
-`channel[T]()`: `{ [40 x i8] mutex, [48 x i8] cond, ptr head, ptr
-tail }` (`pthread_mutex_t`/`pthread_cond_t` confirmed fixed-size opaque
-buffers on this platform, same precedent as `pthread_t`'s plain-`i64`
-treatment). Both the `Sender` and `Receiver` values `channel[T]()`
-produces are literally the SAME pointer to this one struct — no
-`Arc`-style indirection needed, unlike the interpreter (codegen's
-shared `malloc` arena has no analogous need for an owned, `Clone`-able
-handle). Queue node: `{ i64 value_word, ptr next }` (16 bytes,
+One native queue struct per `channel[T]()` carries the mutex, condition
+variable, queue pointers, and native end count. The `Sender` and
+`Receiver` wrapper cells each contain `{ i64 rc, i64 handle }`; spawned
+copies allocate additional cells but retain the same queue. Queue node:
+`{ i64 value_word, ptr next }` (16 bytes,
 `malloc`'d per `send`, `free`'d by whichever `recv`/`select` poll pops
 it), using the same uniform single-word representation every other box
 in this backend already uses.

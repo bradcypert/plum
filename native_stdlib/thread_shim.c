@@ -178,6 +178,17 @@ long long channel_new(void) {
     return (long long)(intptr_t)c;
 }
 
+// A channel end's Plum wrapper cell is copied into each spawned closure,
+// but every copy still points at this one queue. Retain the queue under
+// its mutex so the per-thread wrapper cells can be released independently.
+void channel_retain(long long handle) {
+    plum_chan *c = (plum_chan *)(intptr_t)handle;
+    if (!c) return;
+    pthread_mutex_lock(&c->lock);
+    c->refs++;
+    pthread_mutex_unlock(&c->lock);
+}
+
 void channel_send(long long handle, void *value) {
     plum_chan *c = (plum_chan *)(intptr_t)handle;
     if (!c) return;
