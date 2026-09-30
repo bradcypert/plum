@@ -33,16 +33,46 @@
 # Plum is refcounted, so a leak is a MISCOMPILE, not untidiness, and it
 # is invisible in the output comparison. `--no-asan` skips it.
 #
-# Usage:  bootstrap/corpus-check [--no-asan]
+# Usage:  bootstrap/corpus-check [--no-asan] [--shard INDEX/COUNT]
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
+asan=1
+shard_index=1
+shard_count=1
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --no-asan) asan=0; shift ;;
+        --shard)
+            if [[ ! "${2:-}" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]]; then
+                echo "corpus-check: --shard requires INDEX/COUNT, starting at 1" >&2
+                exit 1
+            fi
+            shard_index="${BASH_REMATCH[1]}"
+            shard_count="${BASH_REMATCH[2]}"
+            if [ "$shard_index" -gt "$shard_count" ]; then
+                echo "corpus-check: shard index exceeds shard count" >&2
+                exit 1
+            fi
+            shift 2 ;;
+        *) echo "usage: bootstrap/corpus-check [--no-asan] [--shard INDEX/COUNT]" >&2; exit 1 ;;
+    esac
+done
+
+# All shards traverse the same fixture order. Each fixture belongs to
+# exactly one shard, across execution, abort and type-error corpora.
+export LC_ALL=C
+fixture_index=0
+in_shard() {
+    local selected=$((fixture_index % shard_count + 1))
+    fixture_index=$((fixture_index + 1))
+    [ "$selected" -eq "$shard_index" ]
+}
+
 work="$(mktemp -d -t plum-corpus-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
-
-asan=1
-[ "${1:-}" = "--no-asan" ] && asan=0
+if [ "$shard_count" -gt 1 ]; then echo "corpus-check: shard $shard_index/$shard_count"; fi
 
 # The shims `sh build` embeds (see `bootstrap/gen-shims`). Linked
 # unconditionally: which one a fixture reaches is not worth deriving,
@@ -110,6 +140,7 @@ echo "exec_corpus: compile, run, compare$([ $asan -eq 1 ] && echo ' (ASan, detec
 for dir in bootstrap/exec_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
+    in_shard || continue
     [ -f "$dir/expected.txt" ] || { fail_with "$name" "no expected.txt"; continue; }
 
     # The checker's verdict, first. `emit-llvm` reports checker errors on
@@ -174,6 +205,7 @@ echo "abort_corpus: every fixture must DIE with the right message"
 for dir in bootstrap/abort_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
+    in_shard || continue
 
     # `--release`, so no shadow call stack: these fixtures assert the
     # abort MESSAGE, and a debug build also prints a stack trace to
@@ -220,6 +252,7 @@ echo "typecheck_corpus: every fixture must be REJECTED"
 for dir in bootstrap/typecheck_corpus/*/; do
     name="$(basename "$dir")"
     [ -f "$dir/main.plum" ] || continue
+    in_shard || continue
 
     if SH_MEM="${SH_MEM:-256M}" SH_TIMEOUT="${SH_TIMEOUT:-120}" ./sh check "$dir" > "$work/tc-$name.out" 2>&1; then
         fail_with "$name" "ACCEPTED an ill-typed program"
@@ -263,6 +296,10 @@ for dir in bootstrap/typecheck_corpus/*/; do
 done
 
 echo
+if [ $((ok + fail)) -eq 0 ]; then
+    echo "corpus-check: no fixtures selected for shard $shard_index/$shard_count" >&2
+    exit 1
+fi
 if [ $fail -eq 0 ]; then
     echo "corpus-check: $ok fixtures pass, no Rust compiler involved"
 else

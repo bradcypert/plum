@@ -16,96 +16,120 @@ on:
   workflow_dispatch:
 
 jobs:
-  bootstrap:
-    name: build from seed and validate
+  build:
+    name: build Linux compiler from seed
     runs-on: ubuntu-latest
-    # The full seed, self-hosting and sanitizer suite can exceed 30
-    # minutes on a slower runner. Allow headroom for the remaining
-    # formatting, LSP and networking checks while keeping a finite cap.
-    timeout-minutes: 45
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
-
       - name: install clang
         run: |
           sudo apt-get update
           sudo apt-get install -y clang
           clang --version
-
-      # BEST EFFORT, and it must never fail the build. Only
-      # `examples/asteroids` needs raylib, through its own native shim.
-      # With the headers present the example is LINKED as well as
-      # emitted; without them `bootstrap/example-sweep` reports it as
-      # emitted-but-not-linked and carries on.
-      #
-      # This is here because the first release attempt died on exactly
-      # this: raylib happened to be installed on the developer's
-      # machine, so the sweep passed locally and failed on a clean
-      # runner.
-      - name: raylib, if it is available
-        continue-on-error: true
-        run: sudo apt-get install -y libraylib-dev || echo "raylib not available; asteroids will be emit-only"
-
-      # Two builds, not one. The first proves the SEED still works; the
-      # second proves the compiler it produced can build today's source.
-      # `bootstrap/check-seed` asserts the stronger property -- that the
-      # result is byte-identical to the current compiler -- and runs
-      # below.
       - name: seed -> compiler
         run: |
           ./bootstrap/from-seed -o sh.seed
           ./sh.seed build bootstrap/self_host -o sh.real
           ./sh version
-
       - name: the seed is still current
-        run: ./bootstrap/check-seed
+        run: ./bootstrap/check-seed --seed-compiler ./sh.seed
+      # A tar preserves executable permissions across artifact downloads.
+      # Every consumer uses this run's compiler; no cross-run compiler cache.
+      - name: archive freshly built compiler
+        run: tar -czf plum-linux-compiler.tar.gz sh.real
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plum-linux-compiler
+          path: plum-linux-compiler.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: true
+          retention-days: 7
 
+  bootstrap_proofs:
+    name: Linux compiler self-hosting and memory checks
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-compiler.tar.gz
       - name: the compiler reproduces itself
         run: ./bootstrap/bootstrap-check
-
-      # Peak RSS, asserted. `./sh`'s cgroup ceiling needs a user session
-      # bus that no runner has, so it silently degrades here and every
-      # `SH_MEM` in `bootstrap/` is inert on CI. This uses `getrusage`
-      # instead, and is the only thing standing between a memory
-      # regression and nobody noticing.
       - name: the compiler stays within its memory ceilings
         run: ./bootstrap/mem-check
-
-      # Wrong line info does not crash, it misleads -- so it needs a
-      # test more than most things, not less.
       - name: debug builds carry Plum line information
         run: ./bootstrap/debug-info-check
-
       - name: it can build itself with no Rust, from any directory
         run: ./bootstrap/self-sufficiency
 
+  corpus:
+    name: Linux sanitizer corpus (${{ matrix.shard }}/2)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v5
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-compiler.tar.gz
       - name: corpus
-        run: ./bootstrap/corpus-check
+        run: ./bootstrap/corpus-check --shard ${{ matrix.shard }}/2
 
+  checks:
+    name: Linux CLI, docs and source checks
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: install clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          clang --version
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-linux-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-linux-compiler.tar.gz
+      # Formatting writes temporary Plum files beside source files.
+      # This checkout is isolated from the self-hosting builds above.
+      - name: raylib, if it is available
+        continue-on-error: true
+        run: sudo apt-get install -y libraylib-dev || echo "raylib not available; asteroids will be emit-only"
       - name: examples
         run: ./bootstrap/example-sweep
-
       - name: embedded C shims match native_stdlib/
         run: ./bootstrap/check-shims
-
       - name: no runtime declare goes unused
         run: ./bootstrap/check-declares
-
       - name: plum test really runs tests
         run: ./bootstrap/test-smoke
-
-      # Invariants checked against generated inputs, not recorded
-      # answers. This catches the class `interp-check` cannot: a bug
-      # the compiler and the interpreter SHARE. Both bugs it found on
-      # the day it was written were of that kind, and the interpreter
-      # agreed with the compiler on both.
       - name: properties hold
         run: ./bootstrap/property-check
-
-      # The tutorial's snippets are compiled and run against the output
-      # it claims. Documentation is the one part of this repository
-      # that has rotted repeatedly, and it is the only part prose alone
-      # cannot test.
       - name: the tutorial still works
         run: ./bootstrap/doc-check
       - name: every builtin method is offered by completion
@@ -114,64 +138,44 @@ jobs:
         run: ./bootstrap/check-doc-names
       - name: the generated docs match the compiler
         run: ./bootstrap/check-docs
-      # The same lossless token stream `lossless-check` and the
-      # formatter stand on, used for a third thing: strip the tags out
-      # of `plum highlight` and the source comes back byte for byte.
-      # Documentation is code people copy.
       - name: highlighting does not corrupt code
         run: ./bootstrap/highlight-check
       - name: debug and release builds differ
         run: ./bootstrap/check-build-modes
-
-      # The commands a USER types that nothing else here runs. `plum new`
-      # is the first one a person ever types, and its scaffold embeds a
-      # test; `plum doc DIR` is the user-facing half of a command only
-      # ever exercised as `--stdlib`.
       - name: the user-facing commands work
         run: ./bootstrap/cli-smoke
-
-      # Path dependencies resolve, and -- the half that will matter in
-      # two years -- a manifest is still data. `plum.pkg` is read by the
-      # real parser, which is what makes a second config format
-      # unnecessary and is exactly what invites `setup.py`. The
-      # rejections are asserted so that relaxing them is deliberate.
       - name: packages resolve and manifests stay data
         run: ./bootstrap/pkg-check
-
-      # Allocation counts. Refcount churn creeps back in silently, and
-      # the language's central claim is a number nobody was looking at
-      # until this existed. Fails on a rise, reports a fall.
       - name: allocations have not risen
         run: ./bootstrap/alloc-check
-
-      # Two properties about SOURCE rather than about behaviour, and
-      # neither was gated here until 2026-08-30 -- so a formatting drift
-      # or a broken token span could land on main while every local run
-      # stayed green.
-      #
-      # `lossless-check` is the floor the formatter stands on: every
-      # `.plum` file round-trips through the token stream byte for byte,
-      # and nothing but whitespace and comments sits between tokens.
-      # `fmt-check` is the formatter itself -- every file already
-      # formatted, `fmt` changing only what it claims to, and the
-      # `fmt_corpus` fixtures reformatted as recorded.
       - name: the token stream loses nothing
         run: ./bootstrap/lossless-check
-
       - name: everything is already formatted
         run: ./bootstrap/fmt-check
-
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke
-
       - name: TCP and HTTP work in a compiled binary
         run: ./bootstrap/net-smoke
-
       - name: the version string is consistent
         run: ./bootstrap/check-version
-
       - name: plum help is a real command
         run: ./bootstrap/help-check
+
+  # Preserve the existing Linux check name for branch protection. A failed
+  # or skipped dependency must fail this check, rather than appear green.
+  bootstrap:
+    name: build from seed and validate
+    if: ${{ always() }}
+    needs: [build, bootstrap_proofs, corpus, checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every Linux validation job passed
+        run: |
+          test "${{ needs.build.result }}" = success
+          test "${{ needs.bootstrap_proofs.result }}" = success
+          test "${{ needs.corpus.result }}" = success
+          test "${{ needs.checks.result }}" = success
 
   # Does the compiler work somewhere that is not the developer's Linux
   # box? Only `bootstrap/platform-smoke` runs here, deliberately -- see

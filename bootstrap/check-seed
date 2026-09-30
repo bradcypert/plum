@@ -29,10 +29,30 @@
 # behind the language the compiler's own source now uses. That is
 # expected occasionally and should be a deliberate commit, not a
 # reflex: each refresh puts 6MB of generated text into history.
+#
+# CI can reuse the seed executable it just built in the same job with
+# --seed-compiler PATH. Today's source is still rebuilt independently,
+# from another working directory, and its output is still compared.
+# Without that option this always builds the seed with clang alone.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
+seed_compiler=""
+if [ "$#" -gt 0 ]; then
+    if [ "$#" -ne 2 ] || [ "$1" != "--seed-compiler" ] || [ -z "$2" ]; then
+        echo "usage: bootstrap/check-seed [--seed-compiler PATH]" >&2
+        exit 1
+    fi
+    case "$2" in
+        /*) seed_compiler="$2" ;;
+        *) seed_compiler="$root/$2" ;;
+    esac
+    if [ ! -x "$seed_compiler" ]; then
+        echo "check-seed: no executable seed compiler at $seed_compiler" >&2
+        exit 1
+    fi
+fi
 work="$(mktemp -d -t plum-seed-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
@@ -63,12 +83,17 @@ if [ "$shim_hash" != "$recorded" ]; then
     exit 1
 fi
 
-echo "seed -> compiler (clang only) ..."
-./bootstrap/from-seed -o "$work/sh.seed" > "$work/build.log" 2>&1 || {
-    echo "clang could not build the seed:" >&2; cat "$work/build.log" >&2; exit 1; }
+if [ -z "$seed_compiler" ]; then
+    echo "seed -> compiler (clang only) ..."
+    ./bootstrap/from-seed -o "$work/sh.seed" > "$work/build.log" 2>&1 || {
+        echo "clang could not build the seed:" >&2; cat "$work/build.log" >&2; exit 1; }
+    seed_compiler="$work/sh.seed"
+else
+    echo "using supplied seed compiler: $seed_compiler"
+fi
 
 echo "seed compiler -> today's source ..."
-(cd "$work" && SH_MEM="${SH_MEM:-1G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" ./sh.seed build "$root/bootstrap/self_host" -o "$work/sh.next" > "$work/next.log" 2>&1) || {
+(cd "$work" && SH_MEM="${SH_MEM:-1G}" SH_TIMEOUT="${SH_TIMEOUT:-600}" "$seed_compiler" build "$root/bootstrap/self_host" -o "$work/sh.next" > "$work/next.log" 2>&1) || {
     echo "the seed compiler could not build today's source -- run bootstrap/gen-seed:" >&2
     head -20 "$work/next.log" >&2; exit 1; }
 
