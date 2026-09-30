@@ -1,0 +1,61 @@
+// Channel wrappers and their immutable containers must be private to each
+// task. Exercise arrays, generic records, tuples and recursive enum payloads.
+struct Box[T] { item: T, marker: Int }
+enum Chain[T] { Empty, Link(T, Chain[T]) }
+
+let sender_round (): Unit = {
+    let (tx, rx) = channel[Int]();
+    let ends = [tx];
+    let tasks = Array.map([0, 1, 2, 3, 4, 5, 6, 7], |t| spawn {
+        for i in 0..10000 { ends[0].send(i) }
+    });
+    for i in 0..80000 { rx.recv() };
+    for task in tasks { task.join() };
+    println("nested senders done")
+}
+
+let receiver_round (): Unit = {
+    let (tx, rx) = channel[Int]();
+    // Empty arrays and payload-free variants must also copy safely. The
+    // repeated receiver aliases exercise independent retains of one queue.
+    let ends: Chain[Box[(Array[Receiver[Int]], Int)]] =
+        Link(Box { item: ([rx, rx], 42), marker: 7 },
+            Link(Box { item: ([], 0), marker: 0 }, Empty));
+    let tasks = Array.map([0, 1, 2, 3, 4, 5, 6, 7], |t| spawn {
+        match ends {
+            Link(box, tail) => {
+                let (receivers, marker) = box.item;
+                for i in 0..10000 { receivers[i % 2].recv() };
+                if marker != 42 || box.marker != 7 { panic_raw("bad copied fields") };
+                match tail {
+                    Link(empty, rest) => {
+                        let (receivers, marker) = empty.item;
+                        if receivers.len() != 0 || marker != 0 { panic_raw("bad empty array") };
+                        match rest { Empty => (), _ => panic_raw("bad empty variant") }
+                    },
+                    _ => panic_raw("bad recursive payload"),
+                }
+            },
+            Empty => panic_raw("missing receiver"),
+        }
+    });
+    for i in 0..80000 { tx.send(i) };
+    for task in tasks { task.join() };
+    println("nested receivers done")
+}
+
+// The parent drops the entire aggregate before the worker receives. Its
+// cloned end must keep the native queue alive until the task finishes.
+let delayed_receiver (rx: Receiver[Int]): Task[Int] = {
+    let ends = Box { item: ([rx], 2), marker: 1 };
+    spawn { let (receivers, marker) = ends.item; receivers[0].recv() }
+}
+
+let main (): Unit = {
+    sender_round();
+    receiver_round();
+    let (tx, rx) = channel[Int]();
+    let task = delayed_receiver(rx);
+    tx.send(123);
+    println(task.join().to_string())
+}

@@ -4374,6 +4374,11 @@ closure gets a fresh `{ rc, handle }` cell, while `channel_retain`
 increments the queue's own count under its mutex. Sharing the wrapper
 cell itself would race its non-atomic Plum refcount even though the
 queue operations are locked.
+This capture copy also walks immutable arrays, structs, tuples, and enum
+payloads containing channel ends, allocating fresh container cells along
+the path to each end. Recursive enum types use generated per-type copy
+functions, and each copied end retains the same native queue. Mutable
+`Ref` cells and closure values retain their existing identity semantics.
 `crosses_spawn_boundary` was renamed `crosses_thread_boundary` and
 reused (not duplicated) at the new channel-send call site.
 
