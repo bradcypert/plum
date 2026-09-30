@@ -23,6 +23,7 @@ at all, so nothing noticed until the Rust backend was deleted and HTTP
 programs stopped being compilable by anything.
 """
 
+import os
 import pathlib
 import sys
 
@@ -63,8 +64,10 @@ HEADER = '''// The C shims this compiler links into every binary it produces --
 // to the CURRENT DIRECTORY, which meant `sh build` only worked when run
 // from the repo root -- a compiler that works in one directory is not a
 // compiler you can install. The real compiler embeds the same sources
-// through `include_str!`, for the same reason; Plum has no equivalent,
-// so the embedding is generated.
+// through `include_str!`, for the same reason. `@embed_file` reads each
+// source at compile time and stores it as one string in the compiler.
+// Avoid line arrays: vendored TLS has hundreds of thousands of lines,
+// and parsing those arrays inflated compiler memory and build time.
 //
 // `net_shim.c` IS here, since 2026-08-21. It was left out on the
 // reasoning that the runtime declares nothing from it -- true, and
@@ -77,36 +80,22 @@ pub let shim_files (): Array[ShimFile] = [
 '''
 
 
-def escape(line: str) -> str:
-    return line.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def render(name: str, compile: bool, text: str) -> str:
-    lines = text.split("\n")
-    body = "\n".join('        "%s",' % escape(l) for l in lines)
+def render(name: str, compile: bool, path: pathlib.Path) -> str:
+    # Resolve against shims.plum, independent of the build's working directory.
+    # Emit literal fields in declaration order for static aggregate layout.
+    rel = pathlib.Path(os.path.relpath(path, OUT.parent)).as_posix()
     return (
         '    ShimFile {\n'
         '        name: "%s",\n'
+        '        source: @embed_file("%s"),\n'
         '        compile: %s,\n'
-        '        source: join_lines([\n%s\n        ]),\n'
-        '    },\n' % (name, "true" if compile else "false", body)
+        '    },\n' % (name, rel, "true" if compile else "false")
     )
 
 
 def generate() -> str:
-    out = [HEADER]
-    for name, compile, path in SHIMS:
-        text = path.read_text()
-        out.append(render(name, compile, text))
-    out.append(']\n\n')
-    out.append(
-        '// One shim source, reassembled. `Array.fold` over `concat` is\n'
-        '// quadratic in the number of lines, which for a few hundred is\n'
-        '// irrelevant and for anything larger would not be.\n'
-        'let join_lines (lines: Array[String]): String =\n'
-        '    Array.fold(lines, "", |acc, l| acc.concat(l).concat("\\n"))\n'
-    )
-    return "".join(out)
+    return HEADER + "".join(render(name, compile, path)
+                            for name, compile, path in SHIMS) + "]\n"
 
 
 # Headers that DO NOT EXIST on Windows, even under MinGW-w64. A shim

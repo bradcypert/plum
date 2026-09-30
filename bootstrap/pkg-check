@@ -212,7 +212,9 @@ expect_ok "another target's libraries are ignored" "1.4142135623730951" "$plum" 
 cat > "$work/parsec/plum.pkg" <<'EOF'
 Package { name: "parsec", link: [ "m" ], link_posix: [ "plum_no_such_library" ], deps: [ Dep { name: "core", path: "../core" } ] }
 EOF
-if SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" run "$work/app" 2>&1 | grep -q 'plum_no_such_library'; then
+got="$(SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" run "$work/app" 2>&1)"
+rc=$?
+if [ "$rc" -ne 0 ] && [[ "$got" == *plum_no_such_library* ]]; then
     pass=$((pass + 1))
 else
     printf 'FAIL  %-44s this platform ignored link_posix
@@ -571,7 +573,7 @@ EOF
     git_manifest ""
     SH_TIMEOUT="${SH_TIMEOUT:-120}" "$plum" fetch "$work/consumer" > "$work/fetch2.log" 2>&1
     rev="$rev_keep"
-    n="$(find "$work/cache" -maxdepth 8 -type d -name '????????????????????????????????????????' | wc -l)"
+    n="$(find "$work/cache" -type d -name '????????????????????????????????????????' | wc -l)"
     if [ "$n" -eq 3 ]; then pass=$((pass + 1)); else
         printf 'FAIL  %-44s expected 3 commit directories in the cache, found %s\n' "two commits coexist" "$n"
         fail=$((fail + 1))
@@ -632,7 +634,7 @@ cache: 0 package(s), 0 file(s), 0 bytes" "$plum" cache list
     # A partial fetch must not be mistaken for a complete one. The
     # failed checkout above left `<dir>.partial`; the cache entry itself
     # must not exist, or the next build would compile half a package.
-    [ -z "$(find "$work/cache" -maxdepth 8 -type d -name '0123456789*' -not -name '*.partial')" ]
+    [ -z "$(find "$work/cache" -type d -name '0123456789*' -not -name '*.partial')" ]
     if [ $? -eq 0 ]; then pass=$((pass + 1)); else
         printf 'FAIL  %-44s a failed fetch left a usable cache entry\n' "a failed fetch is not usable"
         fail=$((fail + 1))

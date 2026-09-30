@@ -1,0 +1,31 @@
+// Regression fixture for issue #69.
+//
+// A channel end is shared by several spawned tasks. The queue itself is
+// synchronized in the native shim; this deliberately exercises the
+// wrapper-cell lifetime across the spawn boundary.
+// Join every worker so leak checking observes complete task cleanup.
+
+let sender_round (): Unit = {
+    let (tx, rx) = channel[Int]();
+    let tasks = Array.map([0, 1, 2, 3, 4, 5, 6, 7], |t| spawn {
+        for i in 0..10000 { tx.send(i) }
+    });
+    for i in 0..80000 { rx.recv() };
+    for task in tasks { task.join() };
+    println("senders done")
+}
+
+let receiver_round (): Unit = {
+    let (tx, rx) = channel[Int]();
+    let tasks = Array.map([0, 1, 2, 3, 4, 5, 6, 7], |t| spawn {
+        for i in 0..10000 { rx.recv() }
+    });
+    for i in 0..80000 { tx.send(i) };
+    for task in tasks { task.join() };
+    println("receivers done")
+}
+
+let main (): Unit = {
+    sender_round();
+    receiver_round()
+}

@@ -182,6 +182,7 @@ pub let cg_runtime (unit: Unit): String = cg_lines([
     "declare i64 @thread_spawn(ptr, ptr)",
     "declare ptr @thread_join(i64)",
     "declare i64 @channel_new()",
+    "declare void @channel_retain(i64)",
     "declare void @channel_send(i64, ptr)",
     "declare ptr @channel_recv(i64)",
     "; `select`: the arms' handles in an array, the winner's index back,",

@@ -1,0 +1,9 @@
+use Http;
+
+// Resolving Http also requires the bundled TLS implementation at link time.
+// An invalid URL exercises that path without relying on an external server.
+let main (): Unit =
+    match Http.get("ftp://example.com") {
+        Err(e) => println(e),
+        Ok(_) => panic_raw("expected an unsupported URL error"),
+    }

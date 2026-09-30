@@ -2434,11 +2434,12 @@ let compile_and_run_tests (dir: String) (program: parser.ProgramNode) (names: Ar
             let outcome = match Os.write_file(ll, ir) {
                 Err(e) => TestRun { failed: 1, detail: "could not write test IR: ".concat(e) },
                 Ok(_) => {
-                    let cfiles = write_shims(scratch);
+                    let extra = link_args([], dir, native_target());
+                    let cfiles = write_shims(scratch, needs_tls(ir, extra));
                     // Native, for the same reason `run` is: each test
                     // runs as a child of this binary.
                     let argv = Array.concat(Array.concat(Array.concat(cc_prefix_args(), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll, "-I", scratch, "-I", scratch.concat("/mbedtls/include"), "-I", scratch.concat("/mbedtls/library")])), cfiles),
-                        Array.concat(link_args([], dir, native_target()), Array.concat(platform_libs(native_target()), ["-o", bin])));
+                        Array.concat(extra, Array.concat(platform_libs(native_target()), ["-o", bin])));
                     match run_process(cc_program(), argv) {
                         Err(e) => TestRun { failed: 1, detail: "could not link tests: ".concat(e) },
                         Ok(r) => if r.exit_code == 0 { run_tests(bin, names, 0, TestRun { failed: 0, detail: "" }) }
@@ -2783,8 +2784,8 @@ let run_dsymutil (out: String): Unit =
     }
 
 let platform_libs (target: String): Array[String] =
-    if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32", "-lcrypt32"] }
-    else { ["-lm", "-lmbedtls", "-lmbedx509", "-lmbedcrypto"] }
+    if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32", "-lcrypt32", "-lbcrypt"] }
+    else { ["-lm"] }
 
 // Every 64-bit architecture this compiler is willing to emit for.
 //
@@ -2912,22 +2913,33 @@ let dep_native_files (deps: Array[pkg.Dep]) (os: String) (i: Int) (acc: Array[St
 // Compiles a project to `out`. Returns an error message, or "" on
 // success -- shared by `build` and `run`, which differ only in what
 // they do with the binary afterwards.
-// Writes every embedded shim into `dir`, returning their paths. A
-// failure to write one is reported as an empty path list, which clang
-// then fails on with a message naming the missing symbol -- not ideal,
-// but strictly better than the silent wrong-directory behaviour this
-// replaced.
-let write_shims (dir: String): Array[String] =
-    write_shims_acc(shims.shim_files(()), dir, 0, [])
+// TLS sources are needed only when the program declares a TLS function.
+// Custom native inputs can reference TLS without a Plum declaration, so
+// keep the complete bundle whenever the build supplies native inputs.
+let needs_tls (ir: String) (extra: Array[String]): Bool =
+    extra.len() > 0 || declares_tls(ir.split("\n"), 0)
 
-let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (i: Int) (acc: Array[String]): Array[String] =
+let declares_tls (lines: Array[String]) (i: Int): Bool =
+    if i >= lines.len() { false }
+    else if lines[i].starts_with("declare ")
+        && (lines[i].contains("@tls_") || lines[i].contains("@mbedtls_") || lines[i].contains("@psa_")) { true }
+    else { declares_tls(lines, i + 1) }
+
+// Writes the required embedded shims into `dir`, returning the paths
+// clang should compile. Headers accompany their library sources.
+let write_shims (dir: String) (tls: Bool): Array[String] =
+    write_shims_acc(shims.shim_files(()), dir, tls, 0, [])
+
+let write_shims_acc (files: Array[shims.ShimFile]) (dir: String) (tls: Bool) (i: Int) (acc: Array[String]): Array[String] =
     if i >= files.len() { acc }
-    else {
+    else if !tls && (files[i].name == "tls_shim.c" || files[i].name.starts_with("mbedtls/")) {
+        write_shims_acc(files, dir, tls, i + 1, acc)
+    } else {
         let path = Path.join(dir, files[i].name);
         doc_make_dirs(Path.dirname(path));
         match Os.write_file(path, files[i].source) {
-            Err(_) => write_shims_acc(files, dir, i + 1, acc),
-            Ok(_) => write_shims_acc(files, dir, i + 1, if files[i].compile { acc.push(path) } else { acc }),
+            Err(_) => write_shims_acc(files, dir, tls, i + 1, acc),
+            Ok(_) => write_shims_acc(files, dir, tls, i + 1, if files[i].compile { acc.push(path) } else { acc }),
         }
     }
 
@@ -3019,7 +3031,7 @@ let compile_with_scratch (dir: String) (out: String) (extra: Array[String]) (scr
             // from `native_stdlib/` on disk: that path was relative to
             // the current directory, so this compiler only worked when
             // run from the repo root. See `shims/shims.plum`.
-            let cfiles = write_shims(scratch);
+            let cfiles = write_shims(scratch, needs_tls(ir, extra));
             let base = Array.concat(target_args(target), Array.concat(cc_mode_args(release), ["-Wno-override-module", ll, "-I", scratch, "-I", scratch.concat("/mbedtls/include"), "-I", scratch.concat("/mbedtls/library")]));
             let argv2 = Array.concat(Array.concat(Array.concat(Array.concat(cc_prefix_args(), base), cfiles), extra), Array.concat(platform_libs(target), ["-o", out]));
             // Mach-O debug builds take a different route entirely -- see
@@ -3547,15 +3559,15 @@ let resolve_dep (dir: String) (d: pkg.Dep) (root: String) (fetch: Bool): pkg.Dep
         } else {
             if fetch { pkg.fetch_dep(d); () }
             else if !Result.unwrap_or(Os.is_directory(cached), false) {
-            // The whole reason `plum build` does not fetch: this is an
-            // error a person can act on, rather than a download starting
-            // in the middle of a build they did not expect to touch the
-            // network.
-            panic_raw("dependency `${d.name}` has not been fetched.\n  ${d.git} at ${String.slice(d.rev, 0, 12)}\n  Run `plum fetch` to download it.")
+                // The whole reason `plum build` does not fetch: this is an
+                // error a person can act on, rather than a download starting
+                // in the middle of a build they did not expect to touch the
+                // network.
+                panic_raw("dependency `${d.name}` has not been fetched.\n  ${d.git} at ${String.slice(d.rev, 0, 12)}\n  Run `plum fetch` to download it.")
             } else {
-            // Verified on every build, not only on the fetch that
-            // downloaded it. A cache entry is a directory other programs
-            // can reach.
+                // Verified on every build, not only on the fetch that
+                // downloaded it. A cache entry is a directory other programs
+                // can reach.
                 pkg.verify_cached(d, cached)
             };
             cached

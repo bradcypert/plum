@@ -545,15 +545,12 @@ let cg_label (n: Int): String = "L".concat(n.to_string())
 // escaped. Everything else — including multi-byte UTF-8 — passes
 // through as raw bytes, which is exactly right: `c"..."` is a byte
 // string, and a codepoint's own bytes need no special handling.
-let cg_escape_llvm (s: String): String = Array.concat_all(Array.map(chars_of(s), |c| cg_escape_char(c)))
-
-let cg_escape_char (c: String): String =
-    if c == "\"" { "\\22" }
-    else if c == "\\" { "\\5C" }
-    else if c == "\n" { "\\0A" }
-    else if c == "\t" { "\\09" }
-    else if c == "\r" { "\\0D" }
-    else { c }
+// Replace whole byte strings rather than allocating a cell for every
+// character in an embedded file. Escape backslashes first, so later
+// replacements do not escape the backslashes they introduce.
+let cg_escape_llvm (s: String): String =
+    s.replace("\\", "\\5C").replace("\"", "\\22")
+        .replace("\n", "\\0A").replace("\t", "\\09").replace("\r", "\\0D")
 
 // A string literal is emitted as a COMPLETE, STATIC cell — refcount,
 // length and bytes — not as raw bytes to be copied into a fresh cell at
@@ -1023,8 +1020,10 @@ let cg_tail_releases (p: CgProgram) (k: Int): String =
 let cg_str_constant (n: Int) (s: String): String = {
     let bytes = s.len();
     let arr = bytes + 1;
-    "@.str${n} = private global { i64, i64, [${arr} x i8] } { i64 -1, i64 "
-        .concat(bytes.to_string()).concat(", [").concat(arr.to_string()).concat(" x i8] c\"").concat(cg_escape_llvm(s)).concat("\\00\" }\n")
+    Array.concat_all([
+        "@.str${n} = private global { i64, i64, [${arr} x i8] } { i64 -1, i64 ${bytes}, [${arr} x i8] c\"",
+        cg_escape_llvm(s), "\\00\" }\n",
+    ])
 }
 
 // --- Constant aggregates ---
@@ -1047,7 +1046,7 @@ let cg_str_constant (n: Int) (s: String): String = {
 // This is hoisting, not reuse. There is no cell to recycle because
 // none is ever allocated.
 struct ConstVal { ty: String, val: String, globals: String, n: Int }
-struct ConstList { tys: Array[String], vals: Array[String], globals: String, n: Int }
+struct ConstList { tys: Array[String], vals: Array[String], globals: Array[String], n: Int }
 
 let cg_const_of (p: CgProgram) (n: Int) (e: typecheck.TExpr): Option[ConstVal] =
     match e.node {
@@ -1076,11 +1075,11 @@ let cg_const_list (p: CgProgram) (xs: Array[typecheck.TExpr]) (i: Int) (acc: Con
         match cg_const_of(p, acc.n, xs[i]) {
             None => None,
             Some(c) => cg_const_list(p, xs, i + 1,
-                ConstList { tys: acc.tys.push(c.ty), vals: acc.vals.push(c.val), globals: acc.globals.concat(c.globals), n: c.n }),
+                ConstList { tys: acc.tys.push(c.ty), vals: acc.vals.push(c.val), globals: acc.globals.push(c.globals), n: c.n }),
         }
     }
 
-let cg_const_empty (n: Int): ConstList = ConstList { tys: [], vals: [], globals: "", n: n }
+let cg_const_empty (n: Int): ConstList = ConstList { tys: [], vals: [], globals: [], n: n }
 
 // Cells are eight bytes per slot whatever the slot holds, which every
 // offset rule in this backend depends on. An `i1` is the only
@@ -1103,9 +1102,12 @@ let cg_const_cell (c: ConstList) (head_ty: String) (head_val: String) (pad: Int)
     let g = "@.const".concat(c.n.to_string());
     let padding = if pad > 0 { ", [${pad} x i8]" } else { "" };
     let pad_val = if pad > 0 { ", [${pad} x i8] zeroinitializer" } else { "" };
-    ConstVal { ty: "ptr", val: g, n: c.n + 1,
-        globals: c.globals.concat(g).concat(" = private global <{ ").concat(head_ty).concat(cg_const_tys(c.tys, 0, "")).concat(padding).concat(" }> <{ ")
-            .concat(head_val).concat(cg_const_vals(c.tys, c.vals, 0, "")).concat(pad_val).concat(" }>\n") }
+    let cell = g.concat(" = private global <{ ").concat(head_ty).concat(cg_const_tys(c.tys, 0, "")).concat(padding).concat(" }> <{ ")
+        .concat(head_val).concat(cg_const_vals(c.tys, c.vals, 0, "")).concat(pad_val).concat(" }>\n");
+    // Embedded files can make the nested declarations megabytes long.
+    // Collect fragments and copy them once, rather than copying every
+    // earlier declaration for each new field or array element.
+    ConstVal { ty: "ptr", val: g, globals: Array.concat_all(c.globals.push(cell)), n: c.n + 1 }
 }
 
 let cg_const_array (p: CgProgram) (n: Int) (xs: Array[typecheck.TExpr]): Option[ConstVal] =
@@ -1140,14 +1142,21 @@ let cg_const_variant (p: CgProgram) (n: Int) (ename: String) (tag: String) (args
 let cg_const_emit (c: ConstVal) (ty: CgTy): Emit =
     Emit { code: "", allocas: "", releases: "", globals: c.globals, val: c.val, ty: ty, n: c.n }
 
-// The hoisted cell if the literal is constant, otherwise whatever the
-// ordinary emitter produced. `otherwise` is evaluated either way --
-// these emitters are pure string-builders, so the cost of the unused
-// one is the strings it built, not any effect it had.
-let cg_or_const (p: CgProgram) (n: Int) (e: typecheck.TExpr) (otherwise: Emit): Emit =
+// Try the constant representation before emitting a runtime fallback.
+// Building both forms eagerly duplicated the whole embedded source bundle
+// and discarded the runtime form whenever the aggregate was constant.
+let cg_or_const (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): Emit =
     match cg_const_of(p, n, e) {
-        Some(c) => cg_const_emit(c, otherwise.ty),
-        None => otherwise,
+        Some(c) => cg_const_emit(c, cg_ty(p, e)),
+        None => match e.node {
+            TArrayLit(elems) => cg_array_lit(p, env, n, elems, cg_ty(p, e)),
+            TArrayLitReuse(elems, cands) => cg_array_lit_reuse(p, env, n, elems, cands, cg_ty(p, e)),
+            TStructLit(name, fields, spread) => cg_struct_lit(p, env, n, name, fields, spread),
+            TStructReuse(name, fields, cands) => cg_struct_reuse(p, env, n, name, fields, cands),
+            TVariantReuse(ename, tag, args, cands) => cg_variant_reuse(p, env, n, ename, tag, args, cands),
+            TVariantNew(ename, tag, args) => cg_variant_call(p, env, n, ename, tag, args),
+            _ => { cg_fail("constant fallback requires an aggregate"); cg_unit_emit(n) },
+        },
     }
 
 // --- Expression emission ---
@@ -1236,14 +1245,14 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms, cg_ty(p, e), false, ""),
         TFor(pattern, lo, hi, body) => cg_for(p, env, n, pattern, lo, hi, body),
         TForArray(pattern, arr, body) => cg_for_array(p, env, n, pattern, arr, body),
-        TArrayLit(elems) => cg_or_const(p, n, e, cg_array_lit(p, env, n, elems, cg_ty(p, e))),
-        TArrayLitReuse(elems, cands) => cg_or_const(p, n, e, cg_array_lit_reuse(p, env, n, elems, cands, cg_ty(p, e))),
+        TArrayLit(elems) => cg_or_const(p, env, n, e),
+        TArrayLitReuse(elems, cands) => cg_or_const(p, env, n, e),
         TIndex(base, idx) => cg_index(p, env, n, base, idx, cg_ty(p, e)),
         TClosure(params, body) => cg_closure(p, env, n, params, body, cg_concrete(p, typecheck.texpr_ty(p.subst, e))),
-        TStructLit(name, fields, spread) => cg_or_const(p, n, e, cg_struct_lit(p, env, n, name, fields, spread)),
-        TStructReuse(name, fields, cands) => cg_or_const(p, n, e, cg_struct_reuse(p, env, n, name, fields, cands)),
-        TVariantReuse(ename, tag, args, cands) => cg_or_const(p, n, e, cg_variant_reuse(p, env, n, ename, tag, args, cands)),
-        TVariantNew(ename, tag, args) => cg_or_const(p, n, e, cg_variant_call(p, env, n, ename, tag, args)),
+        TStructLit(name, fields, spread) => cg_or_const(p, env, n, e),
+        TStructReuse(name, fields, cands) => cg_or_const(p, env, n, e),
+        TVariantReuse(ename, tag, args, cands) => cg_or_const(p, env, n, e),
+        TVariantNew(ename, tag, args) => cg_or_const(p, env, n, e),
         TFnCall(m, name, args, targs) => cg_fn_call(p, env, n, m, name, args, targs, cg_ty(p, e), false, ""),
         TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
@@ -3843,7 +3852,7 @@ let cg_closure (p: CgProgram) (env: Array[CgSlot]) (n: Int) (params: Array[Strin
         .concat("  store ptr ").concat(fn_name).concat(", ptr ").concat(cell).concat("_c\n")
         .concat("  ").concat(cell).concat("_r = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_closure_rel_offset(()).to_string()).concat("\n")
         .concat("  store ptr ").concat(fn_name).concat("_rel, ptr ").concat(cell).concat("_r\n");
-    let caps = cg_capture_stores(used, 0, cell, inner.n + 1, "");
+    let caps = cg_capture_stores(p, used, 0, cell, inner.n + 1, "");
     // The companion release function walks exactly the captures this
     // literal took, by name and type, and is emitted alongside the
     // lifted function itself — the two are generated together because
@@ -3966,17 +3975,22 @@ let cg_capture_releases (env: Array[CgSlot]) (i: Int) (acc: String): String =
         cg_capture_releases(env, i + 1, acc.concat(line))
     }
 
-let cg_capture_stores (env: Array[CgSlot]) (i: Int) (cell: String) (n: Int) (acc: String): StoreEmit =
+// Copy the immutable path to every captured channel end. Copying only a
+// bare Sender/Receiver leaves wrappers inside arrays and records shared.
+let cg_capture_stores (p: CgProgram) (env: Array[CgSlot]) (i: Int) (cell: String) (n: Int) (acc: String): StoreEmit =
     if i >= env.len() { StoreEmit { code: acc, n: n } }
     else {
+        let ity = cg_concrete(p, env[i].ity);
         let lty = cg_llvm_ty(env[i].ty);
-        let v = cg_reg(n);
-        let slot = cg_reg(n + 1);
-        let line = "  ${v} = load ${lty}, ptr ${env[i].ptr}\n"
-            .concat(cg_inc(env[i].ty, v))
-            .concat("  ").concat(slot).concat(" = getelementptr i8, ptr ").concat(cell).concat(", i64 ").concat(cg_capture_offset(i).to_string()).concat("\n")
-            .concat("  store ").concat(lty).concat(" ").concat(v).concat(", ptr ").concat(slot).concat("\n");
-        cg_capture_stores(env, i + 1, cell, n + 2, acc.concat(line))
+        let src = cg_reg(n);
+        let v = cg_reg(n + 1);
+        let slot = cg_reg(n + 2);
+        let copied = cg_contains_channel(p, ity);
+        let line = "  ${src} = load ${lty}, ptr ${env[i].ptr}\n"
+            .concat(if copied { "  ${v} = call ptr ${cg_channel_copy_sym(ity)}(ptr ${src})\n" } else { cg_inc(env[i].ty, src) })
+            .concat("  ${slot} = getelementptr i8, ptr ${cell}, i64 ${cg_capture_offset(i)}\n")
+            .concat("  store ${lty} ").concat(if copied { v } else { src }).concat(", ptr ${slot}\n");
+        cg_capture_stores(p, env, i + 1, cell, n + 3, acc.concat(line))
     }
 
 // Calling a closure VALUE: load the code pointer, pass the cell itself
@@ -6673,6 +6687,115 @@ let cg_emit_rel_fn (p: CgProgram) (t: typecheck.ITy): String =
         _ => "",
     }
 
+// Channel wrappers use thread-local Plum counts over a synchronized queue.
+// Immutable containers containing them need fresh cells too. Ref and closure
+// values are opaque shared identities, rather than structural value copies.
+let cg_channel_copy_sym (t: typecheck.ITy): String = "@plum_channel_copy_".concat(cg_ity_mangle(t))
+
+let cg_contains_channel (p: CgProgram) (t: typecheck.ITy): Bool =
+    Array.any(cg_channel_copy_types(p, t, []), |ty| match ty {
+        ITStruct(name, _) => name == "Sender" || name == "Receiver",
+        _ => false,
+    })
+
+// Collect once per walk, including through recursive enum declarations.
+let cg_channel_copy_types (p: CgProgram) (t: typecheck.ITy) (seen: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if !cg_is_heap(cg_of_ity(t)) || cg_ty_in(seen, t, 0) { seen }
+    else {
+        let acc = seen.push(t);
+        match t {
+            ITStruct(name, args) =>
+                if cg_is_handle(p, name) { acc }
+                else if name == "Array" { cg_channel_copy_types(p, args[0], acc) }
+                else { cg_channel_copy_types_list(p, cg_struct_field_itys(p, t, name), 0, acc) },
+            ITTuple(elems) => cg_channel_copy_types_list(p, elems, 0, acc),
+            ITEnum(name, args) => cg_channel_copy_types_variants(p, cg_find_enum(p, name).variants, args, 0, acc),
+            _ => acc,
+        }
+    }
+
+let cg_channel_copy_types_list (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (seen: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= ts.len() { seen }
+    else { cg_channel_copy_types_list(p, ts, i + 1, cg_channel_copy_types(p, ts[i], seen)) }
+
+let cg_channel_copy_types_variants (p: CgProgram) (vs: Array[CgVariant]) (args: Array[typecheck.ITy]) (i: Int) (seen: Array[typecheck.ITy]): Array[typecheck.ITy] =
+    if i >= vs.len() { seen }
+    else { cg_channel_copy_types_variants(p, vs, args, i + 1, cg_channel_copy_types_list(p, cg_variant_payload_tys(p, vs[i], args), 0, seen)) }
+
+let cg_emit_channel_copy_fns (p: CgProgram) (ts: Array[typecheck.ITy]): String =
+    Array.concat_all(Array.map(Array.filter(ts, |t| cg_contains_channel(p, t)), |t| cg_emit_channel_copy_fn(p, t)))
+
+let cg_channel_copy_head (t: typecheck.ITy): String =
+    "define ptr ${cg_channel_copy_sym(t)}(ptr %p) {\nentry:\n"
+        .concat("  %nil = icmp eq ptr %p, null\n  br i1 %nil, label %empty, label %live\n")
+        .concat("empty:\n  ret ptr null\nlive:\n")
+
+let cg_channel_copy_value (p: CgProgram) (t: typecheck.ITy) (src: String) (dst: String): String =
+    if cg_contains_channel(p, t) { "  ${dst} = call ptr ${cg_channel_copy_sym(t)}(ptr ${src})\n" }
+    else { cg_inc(cg_of_ity(t), src) }
+
+let cg_channel_copy_fields (p: CgProgram) (ts: Array[typecheck.ITy]) (i: Int) (prefix: String) (payload: Bool): String =
+    if i >= ts.len() { "" }
+    else {
+        let r = prefix.concat(i.to_string());
+        let off = if payload { cg_payload_offset(i) } else { cg_field_offset(i) };
+        let lty = cg_llvm_ty(cg_of_ity(ts[i]));
+        "  %${r}s = getelementptr i8, ptr %p, i64 ${off}\n"
+            .concat("  %${r}v = load ${lty}, ptr %${r}s\n")
+            .concat(cg_channel_copy_value(p, ts[i], "%${r}v", "%${r}c"))
+            .concat("  %${r}d = getelementptr i8, ptr %out, i64 ${off}\n")
+            .concat("  store ${lty} ").concat(if cg_contains_channel(p, ts[i]) { "%${r}c" } else { "%${r}v" }).concat(", ptr %${r}d\n")
+            .concat(cg_channel_copy_fields(p, ts, i + 1, prefix, payload))
+    }
+
+let cg_emit_channel_copy_record (p: CgProgram) (t: typecheck.ITy) (ts: Array[typecheck.ITy]): String =
+    cg_channel_copy_head(t)
+        .concat("  %out = call ptr @plum_alloc(i64 ${8 + 8 * ts.len()})\n")
+        .concat(cg_channel_copy_fields(p, ts, 0, "f", false))
+        .concat("  ret ptr %out\n}\n\n")
+
+let cg_emit_channel_copy_fn (p: CgProgram) (t: typecheck.ITy): String =
+    match t {
+        ITStruct(name, args) =>
+            if name == "Sender" || name == "Receiver" {
+                cg_channel_copy_head(t).concat(cg_handle_load("%h", "%p"))
+                    .concat("  call void @channel_retain(i64 %h)\n")
+                    .concat(cg_handle_cell("%out", "%h"))
+                    .concat("  ret ptr %out\n}\n\n")
+            } else if name == "Array" { cg_emit_channel_copy_array(p, t, args[0]) }
+            else { cg_emit_channel_copy_record(p, t, cg_struct_field_itys(p, t, name)) },
+        ITTuple(elems) => cg_emit_channel_copy_record(p, t, elems),
+        ITEnum(name, args) => {
+            let vs = cg_find_enum(p, name).variants;
+            cg_channel_copy_head(t)
+                .concat("  %out = call ptr @plum_alloc(i64 ${cg_enum_cell_size(p, name)})\n")
+                .concat("  %tp = getelementptr i8, ptr %p, i64 8\n  %tag = load i64, ptr %tp\n")
+                .concat("  %dt = getelementptr i8, ptr %out, i64 8\n  store i64 %tag, ptr %dt\n")
+                .concat("  switch i64 %tag, label %done [\n")
+                .concat(Array.concat_all(Array.map(vs, |v| "    i64 ${v.tag}, label %V${v.tag}\n")))
+                .concat("  ]\n")
+                .concat(Array.concat_all(Array.map(vs, |v| "V${v.tag}:\n"
+                    .concat(cg_channel_copy_fields(p, cg_variant_payload_tys(p, v, args), 0, "v${v.tag}f", true))
+                    .concat("  br label %done\n"))))
+                .concat("done:\n  ret ptr %out\n}\n\n")
+        },
+        _ => "",
+    }
+
+let cg_emit_channel_copy_array (p: CgProgram) (t: typecheck.ITy) (elem: typecheck.ITy): String =
+    cg_channel_copy_head(t)
+        .concat("  %lp = getelementptr i8, ptr %p, i64 8\n  %len = load i64, ptr %lp\n")
+        .concat("  %bytes = mul i64 %len, 8\n  %size = add i64 %bytes, 16\n")
+        .concat("  %out = call ptr @plum_alloc(i64 %size)\n")
+        .concat("  %dl = getelementptr i8, ptr %out, i64 8\n  store i64 %len, ptr %dl\n")
+        .concat("  br label %loop\nloop:\n  %i = phi i64 [ 0, %live ], [ %next, %body ]\n")
+        .concat("  %more = icmp slt i64 %i, %len\n  br i1 %more, label %body, label %done\nbody:\n")
+        .concat("  %off0 = mul i64 %i, 8\n  %off = add i64 %off0, 16\n")
+        .concat("  %sp = getelementptr i8, ptr %p, i64 %off\n  %v = load ptr, ptr %sp\n")
+        .concat(cg_channel_copy_value(p, elem, "%v", "%copy"))
+        .concat("  %dp = getelementptr i8, ptr %out, i64 %off\n  store ptr %copy, ptr %dp\n")
+        .concat("  %next = add i64 %i, 1\n  br label %loop\ndone:\n  ret ptr %out\n}\n\n")
+
 let cg_emit_struct_rel (t: typecheck.ITy) (field_tys: Array[typecheck.ITy]): String =
     cg_rel_head(t).concat(cg_rel_children(field_tys, 0, 0, "", false)).concat(cg_rel_tail(()))
 
@@ -6926,18 +7049,21 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     // every equality type already found.
     let rels = cg_rel_types_of(p, insts, 0, cg_rel_close_list(p, eqs, 0, []));
     let gl = cg_emit_globals(p, 0, 1000000, "", "");
-    cg_runtime(())
-        .concat(cg_emit_extern_decls(program.items, 0, ""))
-        .concat(cg_emit_eq_fns(p, eqs, 0, ""))
-        .concat(cg_emit_rel_fns(p, rels, 0, ""))
-        .concat(cg_emit_str_fns(p, rels, 0, ""))
-        .concat(gl.slots)
-        .concat(cg_emit_insts(p, insts, 0, 0, ""))
-        .concat(gl.init)
-        .concat(cg_entry_named("@".concat(cg_sym("", entry, []))))
+    Array.concat_all([
+        cg_runtime(()),
+        cg_emit_extern_decls(program.items, 0, ""),
+        cg_emit_eq_fns(p, eqs, 0, ""),
+        cg_emit_rel_fns(p, rels, 0, ""),
+        cg_emit_channel_copy_fns(p, rels),
+        cg_emit_str_fns(p, rels, 0, ""),
+        gl.slots,
+        cg_emit_insts(p, insts, 0, 0, ""),
+        gl.init,
+        cg_entry_named("@".concat(cg_sym("", entry, []))),
         // Last, because the nodes are allocated as functions are
         // emitted and nothing knows the full set until they are.
-        .concat(cg_dbg_module(()))
+        cg_dbg_module(()),
+    ])
 }
 
 // Each top-level 0-parameter binding gets a module-level SLOT and one

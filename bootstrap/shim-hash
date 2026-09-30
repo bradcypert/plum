@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Fingerprint all sources and headers embedded in the bootstrap seed."""
+import hashlib
+import pathlib
+import runpy
+
+root = pathlib.Path(__file__).resolve().parent.parent
+files = runpy.run_path(str(root / "bootstrap/gen-shims"))["SHIMS"]
+digest = hashlib.sha256()
+for name, compile, path in files:
+    digest.update(name.encode() + b"\0" + bytes([compile]))
+    digest.update(path.read_bytes() + b"\0")
+print(digest.hexdigest())

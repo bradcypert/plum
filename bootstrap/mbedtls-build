@@ -11,6 +11,10 @@ mkdir -p "$out"
 
 cc="${CC:-clang}"
 cflags=(-O2 -I"$root/vendor/mbedtls/include" -I"$root/vendor/mbedtls/include/mbedtls")
+if [ -n "${CFLAGS:-}" ]; then
+    read -r -a extra_flags <<< "$CFLAGS"
+    cflags+=("${extra_flags[@]}")
+fi
 objs=()
 for src in "$root"/vendor/mbedtls/library/*.c; do
     obj="$out/$(basename "${src%.c}").o"

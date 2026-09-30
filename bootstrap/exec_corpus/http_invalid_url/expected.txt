@@ -1,0 +1,1 @@
+http client: url must start with http:// or https://

@@ -19,9 +19,10 @@ jobs:
   bootstrap:
     name: build from seed and validate
     runs-on: ubuntu-latest
-    # A runner that never arrives must fail in minutes, not in
-    # GitHub's default 24 hours. See the retired-image note above.
-    timeout-minutes: 30
+    # The full seed, self-hosting and sanitizer suite can exceed 30
+    # minutes on a slower runner. Allow headroom for the remaining
+    # formatting, LSP and networking checks while keeping a finite cap.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 

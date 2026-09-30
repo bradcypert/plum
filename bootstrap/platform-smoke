@@ -68,7 +68,8 @@ for dir in bootstrap/exec_corpus/*/; do
     # is to test what a user actually runs, including the parts of the
     # compiler that shell out to other programs.
     if ! "$plum" build "$dir" -o "$work/$name.bin" > "$work/$name.log" 2>&1; then
-        printf 'FAIL  %-24s did not build: %s\n' "$name" "$(head -n 1 "$work/$name.log")"
+        printf 'FAIL  %-24s did not build\n' "$name"
+        cat "$work/$name.log"
         fail=$((fail + 1))
         continue
     fi

@@ -104,6 +104,10 @@ fail=0
 # Running WITHOUT one is the fallback rather than an error: the timeout
 # is belt-and-braces against a hung compiler, and CI already caps the
 # whole job. Losing it costs a slower failure, not a wrong measurement.
+# Re-measured on Linux x86_64 after embedded TLS (2026-09-30): 120 MB
+# to emit and 40 MB to check. Embedding files directly replaced the
+# per-line string arrays that had raised emission to 570 MB. The
+# existing 128/64 MB ceilings still pass; no guard increase is needed.
 peak_kb() {
     python3 - "$@" <<'PY'
 import resource, shutil, subprocess, sys
@@ -145,11 +149,11 @@ case "$(uname -s)" in
     *)      emit_ceiling=131072; check_ceiling=65536 ;;
 esac
 
-# 75 MB on Linux and up to 128 MB on macOS today; 744 MB measured on the
+# 120 MB on Linux with compact TLS embedding; 744 MB measured on the
 # pre-fix compiler, before tail calls in a cycle returned early.
 check "$emit_ceiling" "emit-llvm, whole compiler" emit-llvm bootstrap/self_host
 
-# 29 MB on Linux and up to 46 MB on macOS; 83 MB on that same pre-fix
+# 40 MB on Linux with compact TLS embedding; 83 MB on that same pre-fix
 # compiler.
 check "$check_ceiling" "check, whole compiler" check bootstrap/self_host
 

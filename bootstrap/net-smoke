@@ -234,7 +234,7 @@ true
 true"
 check http "200 hello /world
 Net.connect_to: could not connect to 127.0.0.1:1
-http client: url must start with http://"
+http client: url must start with http:// or https://"
 
 [ $fail -eq 0 ] && echo "net smoke: ok, TCP and HTTP work in a compiled binary"
 exit $fail
