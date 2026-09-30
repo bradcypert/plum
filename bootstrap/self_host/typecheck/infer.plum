@@ -3424,7 +3424,7 @@ let bind_pattern_ty (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv)
                 BindResult { env: r.env, subst: r.subst, state: r.state,
                     pattern: POr(bind_literal_or_alts(p2, r.state, r.subst, env, alts, scrutinee_ty, 1, [r.pattern])) }
             } else {
-                fail_tc("or-patterns are supported only between literal patterns");
+                fail_tc("or-patterns aren't supported yet -- write one arm per alternative");
                 BindResult { env: env, subst: acc, state: state, pattern: pattern }
             }
         },
