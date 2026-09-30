@@ -5350,7 +5350,19 @@ let cg_pattern (p: CgProgram) (env: Array[CgSlot]) (n: Int) (pattern: parser.PPa
         // one shape — so it contributes no test of its own, only the
         // sub-patterns'.
         PTuple(pats) => cg_pat_fields(p, env, n, cg_tuple_index_names(pats, 0, []), cg_tuple_elem_itys(sity), cg_tuple_field_pats(pats, 0, []), 0, sval, "1", "", "", "", "", ""),
-        POr(_) => { cg_fail("or-patterns aren't supported yet"); PatEmit { code: "", binds: "", allocas: "", releases: "", globals: "", test: "0", env: env, n: n } },
+        POr(ps) => cg_pat_literal_or(p, env, n, ps, sval, sity, 0, "", "", ""),
+    }
+
+let cg_pat_literal_or (p: CgProgram) (env: Array[CgSlot]) (n: Int) (patterns: Array[parser.PPattern]) (sval: String) (sity: typecheck.ITy) (i: Int) (code: String) (globals: String) (test: String): PatEmit =
+    if i >= patterns.len() { PatEmit { code: code, binds: "", allocas: "", releases: "", globals: globals, test: test, env: env, n: n } }
+    else {
+        let alt = cg_pattern(p, env, n, patterns[i], sval, sity);
+        if i == 0 { cg_pat_literal_or(p, env, alt.n, patterns, sval, sity, i + 1, code.concat(alt.code), globals.concat(alt.globals), alt.test) }
+        else {
+            let reg = cg_reg(alt.n);
+            let combine = "  ${reg} = or i1 ${test}, ${alt.test}\n";
+            cg_pat_literal_or(p, env, alt.n + 1, patterns, sval, sity, i + 1, code.concat(alt.code).concat(combine), globals.concat(alt.globals), reg)
+        }
     }
 
 let cg_pat_cmp (env: Array[CgSlot]) (n: Int) (op: String) (sval: String) (lit: String): PatEmit = {

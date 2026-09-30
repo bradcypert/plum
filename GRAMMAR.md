@@ -506,7 +506,7 @@ noted here so it isn't forgotten as an implementation detail.
 ```
 Pattern        ::= OrPattern
 OrPattern      ::= PrimaryPattern { "|" PrimaryPattern }
-PrimaryPattern ::= Literal
+PrimaryPattern ::= Literal | "-" IntegerLiteral
                   | "_"
                   | Identifier
                   | PathType

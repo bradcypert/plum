@@ -926,6 +926,11 @@ let parse_or_pattern_acc (tokens: Array[lexer.Token]) (pos: Int) (acc: Array[PPa
 let parse_primary_pattern (tokens: Array[lexer.Token]) (pos: Int): PatResult =
     match tokens[pos] {
         TokInt(n) => PatResult { value: PInt(n), next_pos: pos + 1 },
+        // Minus is a separate token; in a pattern it prefixes only an integer literal.
+        TokMinus => match tokens[pos + 1] {
+            TokInt(n) => PatResult { value: PInt(0 - n), next_pos: pos + 2 },
+            _ => { fail_at(pos, "expected an integer literal after '-' in pattern"); PatResult { value: PWildcard, next_pos: pos + 1 } },
+        },
         TokFloat(f) => PatResult { value: PFloat(f), next_pos: pos + 1 },
         TokStr(s) => PatResult { value: PStr(s), next_pos: pos + 1 },
         TokTrue => PatResult { value: PBool(true), next_pos: pos + 1 },
