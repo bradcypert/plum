@@ -38,6 +38,8 @@ cd "$root"
 work="$(mktemp -d -t plum-sweep-XXXXXX)"
 trap 'rm -rf "$work"' EXIT
 
+tls_archive="$(./bootstrap/mbedtls-build "$work/mbedtls")" || exit 1
+
 
 # Examples that cannot be run non-interactively, with the reason. They
 # are still EMITTED and reported on — only the output comparison is
@@ -187,6 +189,7 @@ for dir in examples/*/; do
         # See the note in `bootstrap/corpus-check`: derived, not listed.
         clang -O2 -Wno-override-module "$work/$name.ll" \
             native_stdlib/*.c \
+            -Ivendor/mbedtls/include "$tls_archive" \
             $clang_flags -lm -o "$work/$name.bin"
     }
 

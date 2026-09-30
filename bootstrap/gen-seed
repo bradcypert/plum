@@ -42,14 +42,11 @@ fi
 mv "$scratch" bootstrap/seed/plum.ll
 echo "wrote bootstrap/seed/plum.ll ($(wc -l < bootstrap/seed/plum.ll) lines, $(du -h bootstrap/seed/plum.ll | cut -f1))"
 
-# A fingerprint of the shim sources baked into the seed just now.
+# A fingerprint of the native shims and vendored TLS sources and headers
+# baked into the seed just now.
 # `check-seed` compares it, because nothing else can: the seed embeds
 # the shims as IR string constants, and the seed's OUTPUT is identical
 # whether the embedded copy is current or three edits stale. See
 # `check-seed` for why a stale one matters.
-plum_shim_hash() {
-    if command -v sha256sum > /dev/null 2>&1; then cat native_stdlib/*.c | sha256sum | awk '{print $1}'
-    else cat native_stdlib/*.c | shasum -a 256 | awk '{print $1}'; fi
-}
-plum_shim_hash > bootstrap/seed/shims.sha256
+./bootstrap/shim-hash > bootstrap/seed/shims.sha256
 echo "wrote bootstrap/seed/shims.sha256 ($(cat bootstrap/seed/shims.sha256))"

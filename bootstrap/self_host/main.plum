@@ -2783,8 +2783,8 @@ let run_dsymutil (out: String): Unit =
     }
 
 let platform_libs (target: String): Array[String] =
-    if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32", "-lcrypt32"] }
-    else { ["-lm", "-lmbedtls", "-lmbedx509", "-lmbedcrypto"] }
+    if target_os(target) == "windows" { ["-lm", "-lpthread", "-lws2_32", "-lcrypt32", "-lbcrypt"] }
+    else { ["-lm"] }
 
 // Every 64-bit architecture this compiler is willing to emit for.
 //
@@ -3547,15 +3547,15 @@ let resolve_dep (dir: String) (d: pkg.Dep) (root: String) (fetch: Bool): pkg.Dep
         } else {
             if fetch { pkg.fetch_dep(d); () }
             else if !Result.unwrap_or(Os.is_directory(cached), false) {
-            // The whole reason `plum build` does not fetch: this is an
-            // error a person can act on, rather than a download starting
-            // in the middle of a build they did not expect to touch the
-            // network.
-            panic_raw("dependency `${d.name}` has not been fetched.\n  ${d.git} at ${String.slice(d.rev, 0, 12)}\n  Run `plum fetch` to download it.")
+                // The whole reason `plum build` does not fetch: this is an
+                // error a person can act on, rather than a download starting
+                // in the middle of a build they did not expect to touch the
+                // network.
+                panic_raw("dependency `${d.name}` has not been fetched.\n  ${d.git} at ${String.slice(d.rev, 0, 12)}\n  Run `plum fetch` to download it.")
             } else {
-            // Verified on every build, not only on the fetch that
-            // downloaded it. A cache entry is a directory other programs
-            // can reach.
+                // Verified on every build, not only on the fetch that
+                // downloaded it. A cache entry is a directory other programs
+                // can reach.
                 pkg.verify_cached(d, cached)
             };
             cached

@@ -29,7 +29,7 @@ typedef struct {
 
 static int plum_load_ca(mbedtls_x509_crt *ca) {
 #if defined(_WIN32)
-    HCERTSTORE store = CertOpenSystemStoreA(NULL, "ROOT");
+    HCERTSTORE store = CertOpenSystemStoreA(0, "ROOT");
     if (store == NULL) return -1;
     int loaded = 0;
     PCCERT_CONTEXT cert = NULL;

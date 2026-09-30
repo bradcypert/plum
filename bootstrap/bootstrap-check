@@ -44,6 +44,8 @@ fi
 # reason for any of them to be selective.
 clang -O2 -Wno-override-module "$work/stage2.ll" \
     native_stdlib/*.c \
+    -Ivendor/mbedtls/include \
+    "$(./bootstrap/mbedtls-build "$work/mbedtls")" \
     -lm -o "$work/sh2"
 
 echo "stage 2 -> IR ..."
