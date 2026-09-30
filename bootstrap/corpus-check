@@ -85,6 +85,23 @@ fi
 tls_archive="$(CFLAGS="${cflags[*]}" ./bootstrap/mbedtls-build "$work/mbedtls")" || exit 1
 cflags+=(-Ivendor/mbedtls/include)
 
+# Runtime shims are identical for every fixture. Compile them once for
+# execution fixtures, and once without instrumentation for abort fixtures.
+# Fixture-specific native code still compiles alongside its generated IR.
+shim_objects=()
+abort_shim_objects=()
+for c in "${shims[@]}"; do
+    name="$(basename "${c%.c}")"
+    obj="$work/$name.o"
+    clang "${cflags[@]}" -c "$c" -o "$obj" || exit 1
+    shim_objects+=("$obj")
+    if [ $asan -eq 1 ]; then
+        obj="$work/$name-abort.o"
+        clang -O2 -Ivendor/mbedtls/include -c "$c" -o "$obj" || exit 1
+    fi
+    abort_shim_objects+=("$obj")
+done
+
 ok=0; fail=0
 
 fail_with() { printf 'FAIL  %-24s %s\n' "$1" "$2"; fail=$((fail + 1)); }
@@ -118,7 +135,7 @@ for dir in bootstrap/exec_corpus/*/; do
     fi
 
     if ! clang "${cflags[@]}" -Wno-override-module "$work/$name.ll" \
-            "${shims[@]}" "${native[@]}" "$tls_archive" -lm -o "$work/$name.bin" > "$work/$name.link" 2>&1; then
+            "${shim_objects[@]}" "${native[@]}" "$tls_archive" -lm -o "$work/$name.bin" > "$work/$name.link" 2>&1; then
         fail_with "$name" "emitted IR did not link: $(head -n 1 "$work/$name.link")"
         continue
     fi
@@ -179,7 +196,7 @@ for dir in bootstrap/abort_corpus/*/; do
     # These fixtures ABORT, so ASan's leak check would report whatever
     # was live at the abort -- which is not a leak, it is a program that
     # stopped. Built plain.
-    if ! clang -O2 -Wno-override-module -Ivendor/mbedtls/include "$work/ab-$name.ll" "${shims[@]}" "${abnative[@]}" "$tls_archive" "${tls_link_flags[@]}" -lm -o "$work/ab-$name.bin" > "$work/ab-$name.link" 2>&1; then
+    if ! clang -O2 -Wno-override-module -Ivendor/mbedtls/include "$work/ab-$name.ll" "${abort_shim_objects[@]}" "${abnative[@]}" "$tls_archive" "${tls_link_flags[@]}" -lm -o "$work/ab-$name.bin" > "$work/ab-$name.link" 2>&1; then
         fail_with "$name" "emitted IR did not link: $(head -n 1 "$work/ab-$name.link")"; continue
     fi
 

@@ -1,0 +1,4 @@
+// LLVM escapes must preserve literal escape-like text, control bytes,
+// and multi-byte UTF-8. Backslashes introduced by escaping other bytes
+// must not themselves be escaped a second time.
+let main (): Unit = println(Bytes.from_string("\"\\22\\\n\t\rλ🙂").to_hex())
