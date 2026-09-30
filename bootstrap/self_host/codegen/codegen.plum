@@ -1020,8 +1020,10 @@ let cg_tail_releases (p: CgProgram) (k: Int): String =
 let cg_str_constant (n: Int) (s: String): String = {
     let bytes = s.len();
     let arr = bytes + 1;
-    "@.str${n} = private global { i64, i64, [${arr} x i8] } { i64 -1, i64 "
-        .concat(bytes.to_string()).concat(", [").concat(arr.to_string()).concat(" x i8] c\"").concat(cg_escape_llvm(s)).concat("\\00\" }\n")
+    Array.concat_all([
+        "@.str${n} = private global { i64, i64, [${arr} x i8] } { i64 -1, i64 ${bytes}, [${arr} x i8] c\"",
+        cg_escape_llvm(s), "\\00\" }\n",
+    ])
 }
 
 // --- Constant aggregates ---
@@ -1044,7 +1046,7 @@ let cg_str_constant (n: Int) (s: String): String = {
 // This is hoisting, not reuse. There is no cell to recycle because
 // none is ever allocated.
 struct ConstVal { ty: String, val: String, globals: String, n: Int }
-struct ConstList { tys: Array[String], vals: Array[String], globals: String, n: Int }
+struct ConstList { tys: Array[String], vals: Array[String], globals: Array[String], n: Int }
 
 let cg_const_of (p: CgProgram) (n: Int) (e: typecheck.TExpr): Option[ConstVal] =
     match e.node {
@@ -1073,11 +1075,11 @@ let cg_const_list (p: CgProgram) (xs: Array[typecheck.TExpr]) (i: Int) (acc: Con
         match cg_const_of(p, acc.n, xs[i]) {
             None => None,
             Some(c) => cg_const_list(p, xs, i + 1,
-                ConstList { tys: acc.tys.push(c.ty), vals: acc.vals.push(c.val), globals: acc.globals.concat(c.globals), n: c.n }),
+                ConstList { tys: acc.tys.push(c.ty), vals: acc.vals.push(c.val), globals: acc.globals.push(c.globals), n: c.n }),
         }
     }
 
-let cg_const_empty (n: Int): ConstList = ConstList { tys: [], vals: [], globals: "", n: n }
+let cg_const_empty (n: Int): ConstList = ConstList { tys: [], vals: [], globals: [], n: n }
 
 // Cells are eight bytes per slot whatever the slot holds, which every
 // offset rule in this backend depends on. An `i1` is the only
@@ -1100,9 +1102,12 @@ let cg_const_cell (c: ConstList) (head_ty: String) (head_val: String) (pad: Int)
     let g = "@.const".concat(c.n.to_string());
     let padding = if pad > 0 { ", [${pad} x i8]" } else { "" };
     let pad_val = if pad > 0 { ", [${pad} x i8] zeroinitializer" } else { "" };
-    ConstVal { ty: "ptr", val: g, n: c.n + 1,
-        globals: c.globals.concat(g).concat(" = private global <{ ").concat(head_ty).concat(cg_const_tys(c.tys, 0, "")).concat(padding).concat(" }> <{ ")
-            .concat(head_val).concat(cg_const_vals(c.tys, c.vals, 0, "")).concat(pad_val).concat(" }>\n") }
+    let cell = g.concat(" = private global <{ ").concat(head_ty).concat(cg_const_tys(c.tys, 0, "")).concat(padding).concat(" }> <{ ")
+        .concat(head_val).concat(cg_const_vals(c.tys, c.vals, 0, "")).concat(pad_val).concat(" }>\n");
+    // Embedded files can make the nested declarations megabytes long.
+    // Collect fragments and copy them once, rather than copying every
+    // earlier declaration for each new field or array element.
+    ConstVal { ty: "ptr", val: g, globals: Array.concat_all(c.globals.push(cell)), n: c.n + 1 }
 }
 
 let cg_const_array (p: CgProgram) (n: Int) (xs: Array[typecheck.TExpr]): Option[ConstVal] =
@@ -1137,14 +1142,21 @@ let cg_const_variant (p: CgProgram) (n: Int) (ename: String) (tag: String) (args
 let cg_const_emit (c: ConstVal) (ty: CgTy): Emit =
     Emit { code: "", allocas: "", releases: "", globals: c.globals, val: c.val, ty: ty, n: c.n }
 
-// The hoisted cell if the literal is constant, otherwise whatever the
-// ordinary emitter produced. `otherwise` is evaluated either way --
-// these emitters are pure string-builders, so the cost of the unused
-// one is the strings it built, not any effect it had.
-let cg_or_const (p: CgProgram) (n: Int) (e: typecheck.TExpr) (otherwise: Emit): Emit =
+// Try the constant representation before emitting a runtime fallback.
+// Building both forms eagerly duplicated the whole embedded source bundle
+// and discarded the runtime form whenever the aggregate was constant.
+let cg_or_const (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): Emit =
     match cg_const_of(p, n, e) {
-        Some(c) => cg_const_emit(c, otherwise.ty),
-        None => otherwise,
+        Some(c) => cg_const_emit(c, cg_ty(p, e)),
+        None => match e.node {
+            TArrayLit(elems) => cg_array_lit(p, env, n, elems, cg_ty(p, e)),
+            TArrayLitReuse(elems, cands) => cg_array_lit_reuse(p, env, n, elems, cands, cg_ty(p, e)),
+            TStructLit(name, fields, spread) => cg_struct_lit(p, env, n, name, fields, spread),
+            TStructReuse(name, fields, cands) => cg_struct_reuse(p, env, n, name, fields, cands),
+            TVariantReuse(ename, tag, args, cands) => cg_variant_reuse(p, env, n, ename, tag, args, cands),
+            TVariantNew(ename, tag, args) => cg_variant_call(p, env, n, ename, tag, args),
+            _ => { cg_fail("constant fallback requires an aggregate"); cg_unit_emit(n) },
+        },
     }
 
 // --- Expression emission ---
@@ -1233,14 +1245,14 @@ let cg_expr (p: CgProgram) (env: Array[CgSlot]) (n: Int) (e: typecheck.TExpr): E
         TMatch(scrutinee, arms) => cg_match(p, env, n, scrutinee, arms, cg_ty(p, e), false, ""),
         TFor(pattern, lo, hi, body) => cg_for(p, env, n, pattern, lo, hi, body),
         TForArray(pattern, arr, body) => cg_for_array(p, env, n, pattern, arr, body),
-        TArrayLit(elems) => cg_or_const(p, n, e, cg_array_lit(p, env, n, elems, cg_ty(p, e))),
-        TArrayLitReuse(elems, cands) => cg_or_const(p, n, e, cg_array_lit_reuse(p, env, n, elems, cands, cg_ty(p, e))),
+        TArrayLit(elems) => cg_or_const(p, env, n, e),
+        TArrayLitReuse(elems, cands) => cg_or_const(p, env, n, e),
         TIndex(base, idx) => cg_index(p, env, n, base, idx, cg_ty(p, e)),
         TClosure(params, body) => cg_closure(p, env, n, params, body, cg_concrete(p, typecheck.texpr_ty(p.subst, e))),
-        TStructLit(name, fields, spread) => cg_or_const(p, n, e, cg_struct_lit(p, env, n, name, fields, spread)),
-        TStructReuse(name, fields, cands) => cg_or_const(p, n, e, cg_struct_reuse(p, env, n, name, fields, cands)),
-        TVariantReuse(ename, tag, args, cands) => cg_or_const(p, n, e, cg_variant_reuse(p, env, n, ename, tag, args, cands)),
-        TVariantNew(ename, tag, args) => cg_or_const(p, n, e, cg_variant_call(p, env, n, ename, tag, args)),
+        TStructLit(name, fields, spread) => cg_or_const(p, env, n, e),
+        TStructReuse(name, fields, cands) => cg_or_const(p, env, n, e),
+        TVariantReuse(ename, tag, args, cands) => cg_or_const(p, env, n, e),
+        TVariantNew(ename, tag, args) => cg_or_const(p, env, n, e),
         TFnCall(m, name, args, targs) => cg_fn_call(p, env, n, m, name, args, targs, cg_ty(p, e), false, ""),
         TClosureCall(callee, args) => cg_call_closure_value(p, env, n, cg_expr(p, env, n, callee), args),
         TMethodCall(name, base, args) => cg_method_call(p, env, n, name, base, args, cg_ty(p, e)),
@@ -7037,19 +7049,21 @@ pub let cg_emit_program_entry (program0: parser.ProgramNode) (entry: String): St
     // every equality type already found.
     let rels = cg_rel_types_of(p, insts, 0, cg_rel_close_list(p, eqs, 0, []));
     let gl = cg_emit_globals(p, 0, 1000000, "", "");
-    cg_runtime(())
-        .concat(cg_emit_extern_decls(program.items, 0, ""))
-        .concat(cg_emit_eq_fns(p, eqs, 0, ""))
-        .concat(cg_emit_rel_fns(p, rels, 0, ""))
-        .concat(cg_emit_channel_copy_fns(p, rels))
-        .concat(cg_emit_str_fns(p, rels, 0, ""))
-        .concat(gl.slots)
-        .concat(cg_emit_insts(p, insts, 0, 0, ""))
-        .concat(gl.init)
-        .concat(cg_entry_named("@".concat(cg_sym("", entry, []))))
+    Array.concat_all([
+        cg_runtime(()),
+        cg_emit_extern_decls(program.items, 0, ""),
+        cg_emit_eq_fns(p, eqs, 0, ""),
+        cg_emit_rel_fns(p, rels, 0, ""),
+        cg_emit_channel_copy_fns(p, rels),
+        cg_emit_str_fns(p, rels, 0, ""),
+        gl.slots,
+        cg_emit_insts(p, insts, 0, 0, ""),
+        gl.init,
+        cg_entry_named("@".concat(cg_sym("", entry, []))),
         // Last, because the nodes are allocated as functions are
         // emitted and nothing knows the full set until they are.
-        .concat(cg_dbg_module(()))
+        cg_dbg_module(()),
+    ])
 }
 
 // Each top-level 0-parameter binding gets a module-level SLOT and one
