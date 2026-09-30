@@ -379,6 +379,8 @@ Every declaration, linked to the page that documents it.
 - [`enum Option`](prelude.Option.md#Option)
 - [`let Option.is_some (o: Option[T]): Bool`](prelude.Option.md#Option.is_some)
 - [`let Option.is_none (o: Option[T]): Bool`](prelude.Option.md#Option.is_none)
+- [`let Option.or (o: Option[T]) (fallback: Option[T]): Option[T]`](prelude.Option.md#Option.or)
+- [`let Option.or_else (o: Option[T]) (f: () -> Option[T]): Option[T]`](prelude.Option.md#Option.or_else)
 - [`let Option.unwrap_or (o: Option[T]) (fallback: T): T`](prelude.Option.md#Option.unwrap_or)
 - [`let Option.unwrap_or_else (o: Option[T]) (f: () -> T): T`](prelude.Option.md#Option.unwrap_or_else)
 - [`let Option.map (o: Option[T]) (f: (T) -> U): Option[U]`](prelude.Option.md#Option.map)

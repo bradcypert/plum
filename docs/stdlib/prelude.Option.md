@@ -19,6 +19,18 @@ Whether there is a value.
 
 Whether there is no value.
 
+## `let Option.or (o: Option[T]) (fallback: Option[T]): Option[T]`
+
+The first option when it contains a value, or `fallback` otherwise.
+
+`fallback` is evaluated whether or not it is needed. Use `or_else`
+when finding the fallback costs something.
+
+## `let Option.or_else (o: Option[T]) (f: () -> Option[T]): Option[T]`
+
+The first option when it contains a value, or the result of calling
+`f` otherwise. The lazy `or`: `f` runs only when it has to.
+
 ## `let Option.unwrap_or (o: Option[T]) (fallback: T): T`
 
 The value, or `fallback` when there is none.

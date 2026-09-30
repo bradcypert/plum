@@ -13,6 +13,14 @@ pub enum Result[T, E] { Ok(T), Err(E) }
 pub let Option.is_some[T] (o: Option[T]): Bool = match o { Some(_) => true, None => false }
 /// Whether there is no value.
 pub let Option.is_none[T] (o: Option[T]): Bool = match o { Some(_) => false, None => true }
+/// The first option when it contains a value, or `fallback` otherwise.
+///
+/// `fallback` is evaluated whether or not it is needed. Use `or_else`
+/// when finding the fallback costs something.
+pub let Option.or[T] (o: Option[T]) (fallback: Option[T]): Option[T] = match o { Some(_) => o, None => fallback }
+/// The first option when it contains a value, or the result of calling
+/// `f` otherwise. The lazy `or`: `f` runs only when it has to.
+pub let Option.or_else[T] (o: Option[T]) (f: () -> Option[T]): Option[T] = match o { Some(_) => o, None => f() }
 /// The value, or `fallback` when there is none.
 ///
 /// `fallback` is evaluated whether or not it is needed. Use
@@ -1633,4 +1641,3 @@ pub let __contract_require (cond: Bool) (msg: String): Unit =
 
 pub let __contract_ensure (cond: Bool) (msg: String): Unit =
     if cond { () } else { panic_raw(msg) }
-
