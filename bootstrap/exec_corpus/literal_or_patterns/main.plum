@@ -1,0 +1,12 @@
+let classify (code: Int): String = match code {
+    -1 => "closed",
+    0 | 1 | 2 | 3 => "small",
+    _ => "other",
+}
+
+let main (): Unit = {
+    println(classify(-1));
+    println(classify(0));
+    println(classify(3));
+    println(classify(4))
+}

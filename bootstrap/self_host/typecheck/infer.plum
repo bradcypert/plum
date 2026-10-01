@@ -3419,21 +3419,28 @@ let bind_pattern_ty (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv)
         // environment. Every alternative is still RESOLVED, because
         // each one reaches the backend as its own test.
         POr(alts) => {
-            // The grammar has or-patterns, the parser builds them and
-            // this function binds them -- and the BACKEND has never
-            // emitted one. So `match n { 1 | 2 => .. }` passed
-            // `plum check` and then failed the build with "or-patterns
-            // aren't supported yet".
-            //
-            // Rejected here so the message arrives in the editor rather
-            // than at build time. This removes no capability: the
-            // program did not compile before either. It only stops the
-            // checker from saying otherwise.
-            fail_tc("or-patterns aren't supported yet -- write one arm per alternative");
-            let r = bind_pattern_ty(p2, state, acc, env, alts[0], scrutinee_ty);
-            BindResult { env: r.env, subst: r.subst, state: r.state,
-                pattern: POr(bind_or_alts(p2, r.state, r.subst, env, alts, scrutinee_ty, 1, [r.pattern])) }
+            if all_literal_patterns(alts, 0) {
+                let r = bind_pattern_ty(p2, state, acc, env, alts[0], scrutinee_ty);
+                BindResult { env: r.env, subst: r.subst, state: r.state,
+                    pattern: POr(bind_literal_or_alts(p2, r.state, r.subst, env, alts, scrutinee_ty, 1, [r.pattern])) }
+            } else {
+                fail_tc("or-patterns aren't supported yet -- write one arm per alternative");
+                BindResult { env: env, subst: acc, state: state, pattern: pattern }
+            }
         },
+    }
+
+let is_literal_pattern (pattern: parser.PPattern): Bool =
+    match pattern { PInt(_) => true, PFloat(_) => true, PStr(_) => true, PBool(_) => true, _ => false }
+
+let all_literal_patterns (patterns: Array[parser.PPattern]) (i: Int): Bool =
+    if i >= patterns.len() { true } else { is_literal_pattern(patterns[i]) && all_literal_patterns(patterns, i + 1) }
+
+let bind_literal_or_alts (p2: Program2) (state: FreshState) (acc: Subst) (env: TyEnv) (alts: Array[parser.PPattern]) (scrutinee_ty: ITy) (i: Int) (out: Array[parser.PPattern]): Array[parser.PPattern] =
+    if i >= alts.len() { out }
+    else {
+        let r = bind_pattern_ty(p2, state, acc, env, alts[i], scrutinee_ty);
+        bind_literal_or_alts(p2, r.state, r.subst, env, alts, scrutinee_ty, i + 1, out.push(r.pattern))
     }
 
 // Resolves the alternatives after the first, keeping their rewritten

@@ -5585,9 +5585,8 @@ stdio JSON-RPC is what catches gaps in when that logic actually runs.
   - A catch-all in any NON-last position mixed among Ctor-tag arms
     (only the trailing position gets the `DEFAULT_ARM_TAG` sentinel
     treatment today).
-  - Or-patterns over LITERAL alternatives (`1 | 2 => ..`) — today's
-    `Pattern::Or` support only covers tag-shaped (Variant/Tuple/Struct)
-    alternatives.
+  - Or-patterns mixing literal and tag-shaped alternatives. Literal-only
+    alternatives such as `-1 | 0 => ..` are supported.
   - Or-patterns whose alternatives contain a NESTED Variant/Tuple/
     Struct sub-pattern (`A((x, y)) | B((x, y)) => ..`) — rejected at
     both `infer_or_pattern` and `lower_match` today; lowering's
