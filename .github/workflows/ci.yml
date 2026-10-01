@@ -420,7 +420,7 @@ jobs:
           ./sh.seed build bootstrap/self_host -o sh.real
 
       - name: archive freshly built compiler
-        run: tar -czf plum-windows-compiler.tar.gz sh.real.exe
+        run: tar -czf plum-windows-compiler.tar.gz sh.real
       - uses: actions/upload-artifact@v4
         with:
           name: plum-windows-compiler
