@@ -1573,10 +1573,8 @@ let reparse_interp_expr_at (src: String) (outer_pos: Int): PExpr = {
     let inner_tokens = lexer.tokenize(src);
     match inner_tokens[0] {
         TokIf => {
-            // Blocks inside `${...}` are unsupported; bind the result to
-            // a variable first (LANGUAGE.md).
             let spanned = lexer.tokenize_spanned(src);
-            fail_interp_at(outer_pos, src, spanned.starts[0], "a block can't appear inside ${...}; bind it to a variable first");
+            fail_interp_at(outer_pos, src, spanned.starts[0], "a block can't appear inside \${...}; bind it to a variable first");
             EInt(0)
         },
         _ => parse_expr(inner_tokens, 0).value,
