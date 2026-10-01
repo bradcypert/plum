@@ -207,16 +207,12 @@ jobs:
   #
   # (Cost is not the reason. This repository is public, so Actions
   # minutes are free on every runner size.)
-  platforms:
-    name: ${{ matrix.os }} builds and runs real programs
-    runs-on: ${{ matrix.os }}
+  platforms-build:
+    name: build macOS compiler from seed
+    runs-on: macos-15
     # A runner that never arrives must fail in minutes, not in
     # GitHub's default 24 hours. See the retired-image note above.
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-15]
     steps:
       - uses: actions/checkout@v5
 
@@ -231,9 +227,43 @@ jobs:
           ./bootstrap/from-seed -o sh.seed
           ./sh.seed build bootstrap/self_host -o sh.real
 
-      - name: the compiler it built works
+      - name: archive freshly built compiler
+        run: tar -czf plum-macos-compiler.tar.gz sh.real
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plum-macos-compiler
+          path: plum-macos-compiler.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  platforms-smoke:
+    name: macOS platform smoke
+    needs: platforms-build
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-macos-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-macos-compiler.tar.gz
+      - name: real programs work on macOS
         run: ./bootstrap/platform-smoke ./sh.real
 
+  platforms-memory-and-debug:
+    name: macOS memory and debug checks
+    needs: platforms-build
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-macos-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-macos-compiler.tar.gz
       # Peak RSS, asserted. `./sh`'s cgroup ceiling needs a user session
       # bus that no runner has, so it silently degrades here and every
       # `SH_MEM` in `bootstrap/` is inert on CI. This uses `getrusage`
@@ -260,8 +290,34 @@ jobs:
       #
       # `lsp-smoke` needs a Python only to BUILD the session -- a stream
       # of Content-Length-framed JSON. macOS runners have one.
+  platforms-lsp:
+    name: macOS language server smoke
+    needs: platforms-build
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-macos-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-macos-compiler.tar.gz
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke ./sh.real
+
+  platforms:
+    name: macos-15 builds and runs real programs
+    if: ${{ always() }}
+    needs: [platforms-build, platforms-smoke, platforms-memory-and-debug, platforms-lsp]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every macOS validation passed
+        run: |
+          test "${{ needs.platforms-build.result }}" = success
+          test "${{ needs.platforms-smoke.result }}" = success
+          test "${{ needs.platforms-memory-and-debug.result }}" = success
+          test "${{ needs.platforms-lsp.result }}" = success
 
   # Linux on arm64 -- a second ARCHITECTURE on the reference OS.
   #
@@ -332,8 +388,8 @@ jobs:
   # build the session, hence `python` in the install list below --
   # MSYS2 spells it without the 3, which is why the harness looks for
   # both names.
-  windows:
-    name: windows x86_64 builds and runs real programs
+  windows-build:
+    name: build Windows compiler from seed
     runs-on: windows-latest
     # A runner that never arrives must fail in minutes, not in
     # GitHub's default 24 hours. See the retired-image note above.
@@ -363,11 +419,84 @@ jobs:
           ./bootstrap/from-seed -o sh.seed
           ./sh.seed build bootstrap/self_host -o sh.real
 
-      - name: the compiler it built works
+      - name: archive freshly built compiler
+        run: tar -czf plum-windows-compiler.tar.gz sh.real
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plum-windows-compiler
+          path: plum-windows-compiler.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  windows-smoke:
+    name: Windows platform smoke
+    needs: windows-build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-lld
+            diffutils
+            tar
+            python
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-windows-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-windows-compiler.tar.gz
+      - name: real programs work on Windows
         run: ./bootstrap/platform-smoke ./sh.real
 
+  windows-lsp:
+    name: Windows language server smoke
+    needs: windows-build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-lld
+            diffutils
+            tar
+            python
+      - uses: actions/download-artifact@v4
+        with:
+          name: plum-windows-compiler
+      - name: restore freshly built compiler
+        run: tar -xzf plum-windows-compiler.tar.gz
       # The last untested feature on any published platform. The
       # language server re-invokes the compiler through `Os.self_exe`,
       # which is `GetModuleFileNameA` here -- written blind, never run.
       - name: the language server answers a real session
         run: ./bootstrap/lsp-smoke ./sh.real
+
+  windows:
+    name: windows x86_64 builds and runs real programs
+    if: ${{ always() }}
+    needs: [windows-build, windows-smoke, windows-lsp]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every Windows validation passed
+        run: |
+          test "${{ needs.windows-build.result }}" = success
+          test "${{ needs.windows-smoke.result }}" = success
+          test "${{ needs.windows-lsp.result }}" = success
